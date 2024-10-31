@@ -29,7 +29,11 @@ init([]) ->
     SupFlags = #{strategy => one_for_all,
                 intensity => 0,
                 period => 1},
-    ChildSpecs = [],
+
+    RocksDBOptions = hb_opts:get(local_store),
+    ChildSpecs = [
+        #{id => hb_store_rocksdb, start => {hb_store_rocksdb, start_link, [RocksDBOptions]}}
+    ],
     {ok, {SupFlags, ChildSpecs}}.
 
 %% internal functions
