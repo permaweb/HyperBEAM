@@ -1,6 +1,6 @@
--define(DEFAULT_SIG, << 0:4096 >>).
--define(DEFAULT_ID, << 0:256 >>).
--define(DEFAULT_OWNER, << 0:4096 >>).
+-define(DEFAULT_SIG, <<0:4096>>).
+-define(DEFAULT_ID, <<0:256>>).
+-define(DEFAULT_OWNER, <<0:4096>>).
 
 %% @doc A transaction.
 -record(tx, {
@@ -13,7 +13,7 @@
 	%% last ?MAX_TX_ANCHOR_DEPTH blocks.
 	last_tx = <<>>,
 	%% The public key the transaction is signed with.
-	owner =	?DEFAULT_OWNER,
+	owner = ?DEFAULT_OWNER,
 	%% A list of arbitrary key-value pairs. Keys and values are binaries.
 	tags = [],
 	%% The address of the recipient, if any. The SHA2-256 hash of the public key.

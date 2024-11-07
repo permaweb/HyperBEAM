@@ -13,11 +13,33 @@
 %%% {error, no_viable_store}.
 
 behavior_info(callbacks) ->
-    [
-        {start, 1}, {stop, 1}, {reset, 1}, {make_group, 2}, {make_link, 3},
-        {type, 2}, {read, 2}, {write, 3},
-        {list, 2}, {path, 2}, {add_path, 3}
-    ].
+	[
+		% starts. 0 usages
+		{start, 1},
+		% stops. 0 usages
+		{stop, 1},
+		% removes the data. 1 usage
+		{reset, 1},
+
+		% just does ensure_dir
+		{make_group, 2},
+		% creates a simlink
+		{make_link, 3},
+		% can be composite(I guess nested keys) //simple//notfound
+		{type, 2},
+
+		% read or error/not_found
+		{read, 2},
+		% write file with value
+		{write, 3},
+
+		% list all files in dir???
+		{list, 2},
+		% just outputs path??
+		{path, 2},
+		% just joins two path togegher
+		{add_path, 3}
+	].
 
 %%% Library wrapper implementations.
 
@@ -37,7 +59,8 @@ reset(Modules) -> call_function(Modules, reset, []).
 
 type(Modules, Path) -> call_function(Modules, type, [Path]).
 
-path(Modules, Path) -> call_function(Modules, path, [Path]).
+path(Modules, Path) ->
+	call_function(Modules, path, [Path]).
 
 add_path(Modules, Path1, Path2) -> call_function(Modules, add_path, [Path1, Path2]).
 
@@ -47,30 +70,32 @@ list(Modules, Path) -> call_function(Modules, list, [Path]).
 
 %% @doc Call a function on the first module that succeeds.
 call_function(X, _Function, _Args) when not is_list(X) ->
-    call_function([X], _Function, _Args);
+	call_function([X], _Function, _Args);
 call_function([], _Function, _Args) ->
-    not_found;
+	not_found;
 call_function([{Mod, Opts} | Rest], Function, Args) ->
-    try apply(Mod, Function, [Opts | Args]) of
-        not_found ->
-            call_function(Rest, Function, Args);
-        Result ->
-            Result
-    catch
-        _:_ ->
-            call_function(Rest, Function, Args)
-    end.
+	try apply(Mod, Function, [Opts | Args]) of
+		not_found ->
+			call_function(Rest, Function, Args);
+		Result ->
+			Result
+	catch
+		_Class:_Reason:_StackTrace ->
+			% We should really log error here, as otherwise the error is swallowed
+			% and the debugging is comple
+			call_function(Rest, Function, Args)
+	end.
 
 %% @doc Call a function on all given modules.
 call_all(X, _Function, _Args) when not is_list(X) ->
-    call_all([X], _Function, _Args);
+	call_all([X], _Function, _Args);
 call_all([], _Function, _Args) ->
-    ok;
+	ok;
 call_all([{Mod, Opts} | Rest], Function, Args) ->
-    try
-        apply(Mod, Function, [Opts | Args])
-    catch
-        _:_ ->
-            ok
-    end,
-    call_all(Rest, Function, Args).
+	try
+		apply(Mod, Function, [Opts | Args])
+	catch
+		_:_ ->
+			ok
+	end,
+	call_all(Rest, Function, Args).
