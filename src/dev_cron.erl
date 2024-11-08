@@ -5,71 +5,142 @@
 %%% to passively 'call' themselves without user interaction.
 
 -include("include/ao.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
--record(state, {
-    time,
-    last_run
+-define(CRON_INTERVAL, <<"Cron-Interval">>).
+
+-record(schedule, {
+	name :: binary(),
+	unit :: binary(),
+	scalar :: non_neg_integer()
 }).
 
-init(State = #{ process := ProcM }, Params) ->
-    case lists:keyfind(<<"Time">>, 1, Params) of
-        {<<"Time">>, CronTime} ->
-            MilliSecs = parse_time(CronTime),
-            %% TODO: What's the most sensible way to initialize the last_run?
-            %% Current behavior: Timer starts after _first_ message.
-            {ok, State#{ cron => #state { time = MilliSecs, last_run = timestamp(ProcM) } }};
-        false ->
-            {ok, State#{ cron => inactive }}
-    end.
+-record(state, {
+	time,
+	last_run
+}).
 
-parse_time(BinString) ->
-    [AmountStr, UnitStr] = binary:split(BinString, <<"-">>),
-    Amount = binary_to_integer(AmountStr),
-    Unit = string:lowercase(binary_to_list(UnitStr)),
-    case Unit of
-        "millisecond" ++ _ -> Amount;
-        "second" ++ _ -> Amount * 1000;
-        "minute" ++ _ -> Amount * 60 * 1000;
-        "hour" ++ _ -> Amount * 60 * 60 * 1000;
-        "day" ++ _ -> Amount * 24 * 60 * 60 * 1000;
-        _ -> throw({error, invalid_time_unit, UnitStr})
-    end.
+init(State = #{process := ProcM}, Params) ->
+	case lists:keyfind(<<"Cron-Interval">>, 1, Params) of
+		{<<"Cron-Interval">>, CronTime} ->
+			?no_prod("Makes many incorrect assumptions about Cron Interval format and shape of message"),
+			Schedule = parse_interval(CronTime),
+			MilliSecs = Schedule#schedule.scalar,
+			%% TODO: What's the most sensible way to initialize the last_run?
+			%% Current behavior: Timer starts after _first_ message.
+			{ok, State#{cron => #state{time = MilliSecs, last_run = timestamp(ProcM)}}};
+		false ->
+			{ok, State#{cron => inactive}}
+	end.
 
-execute(_M, State = #{ cron := inactive }) ->
-    {ok, State};
-execute(M, State = #{ pass := 1, cron := #state { last_run = undefined } }) ->
-    {ok, State#{ cron := #state { last_run = timestamp(M) } }};
-execute(Message, State = #{ pass := 1, cron := #state { time = MilliSecs, last_run = LastRun }, schedule := Sched }) ->
-    case timestamp(Message) - LastRun of
-        Time when Time > MilliSecs ->
-            NextCronMsg = create_cron(State, CronTime = timestamp(Message) + MilliSecs),
-            {pass,
-                State#{
-                    cron := #state { last_run = CronTime },
-                    schedule := [NextCronMsg | Sched]
-                }
-            };
-        _ ->
-            {ok, State}
-    end;
+execute(_M, State = #{cron := inactive}) ->
+	{ok, State};
+execute(M, State = #{pass := 1, cron := #state{last_run = undefined}}) ->
+	{ok, State#{cron := #state{last_run = timestamp(M)}}};
+execute(Message, State = #{pass := 1, cron := #state{time = MilliSecs, last_run = LastRun}, schedule := Sched}) ->
+	case timestamp(Message) - LastRun of
+		Time when Time > MilliSecs ->
+			NextCronMsg = create_cron(State, CronTime = timestamp(Message) + MilliSecs),
+			{pass, State#{
+				cron := #state{last_run = CronTime},
+				schedule := [NextCronMsg | Sched]
+			}};
+		_ ->
+			{ok, State}
+	end;
 execute(_, S) ->
-    {ok, S}.
+	{ok, S}.
 
 timestamp(M) ->
-    % TODO: Process this properly
-    case lists:keyfind(<<"Timestamp">>, 1, M#tx.tags) of
-        {<<"Timestamp">>, TSBin} ->
-            list_to_integer(binary_to_list(TSBin));
-        false ->
-            0
-    end.
+	% TODO: Process this properly
+	case lists:keyfind(<<"Timestamp">>, 1, M#tx.tags) of
+		{<<"Timestamp">>, TSBin} ->
+			list_to_integer(binary_to_list(TSBin));
+		false ->
+			0
+	end.
 
 create_cron(_State, CronTime) ->
-    #tx{
-        tags = [
-            {<<"Action">>, <<"Cron">>},
-            {<<"Timestamp">>, list_to_binary(integer_to_list(CronTime))}
-        ]
-    }.
+	#tx{
+		tags = [
+			{<<"Action">>, <<"Cron">>},
+			{<<"Timestamp">>, list_to_binary(integer_to_list(CronTime))}
+		]
+	}.
+
+parse_crons(Tags) -> parse_crons([], Tags).
+
+parse_crons(Crons, []) ->
+	lists:reverse(Crons);
+parse_crons(Crons, [{?CRON_INTERVAL, Value} | RestTags]) ->
+	parse_crons([{parse_interval(Value), []} | Crons], RestTags);
+parse_crons([], [_ | RestTags]) ->
+	% Cron-Tag-* are associated with the most-recent Cron-Interval
+	% so if there are no Intervals yet found, then there is nothing to do
+	parse_crons([], RestTags);
+parse_crons(Crons, [Tag | RestTags]) ->
+	parse_crons(maybe_append_cron_tag(Crons, Tag), RestTags).
+
+maybe_append_cron_tag(Crons, {Name, Value}) ->
+	Parsed = binary_to_list(Name),
+	case Parsed of
+		"Cron-Tag-" ++ _ ->
+			[{Interval, CronTags} | Rest] = Crons,
+			TagName = list_to_binary(string:slice(Parsed, length("Cron-Tag-"))),
+			[{Interval, CronTags ++ [{TagName, Value}]} | Rest];
+		_ ->
+			Crons
+	end.
+
+parse_interval(Interval) ->
+	[AmountStr, UnitStr] = lists:map(
+		fun(S) -> string:trim(S) end,
+		string:split(Interval, <<"-">>)
+	),
+	Amount = binary_to_integer(AmountStr),
+	Unit = string:lowercase(binary_to_list(UnitStr)),
+	case Unit of
+		"millisecond" ++ _ -> to_time_schedule(Interval, Amount);
+		"second" ++ _ -> to_time_schedule(Interval, Amount * 1000);
+		"minute" ++ _ -> to_time_schedule(Interval, Amount * 60 * 1000);
+		"hour" ++ _ -> to_time_schedule(Interval, Amount * 60 * 60 * 1000);
+		"day" ++ _ -> to_time_schedule(Interval, Amount * 24 * 60 * 60 * 1000);
+		"week" ++ _ -> to_time_schedule(Interval, Amount * 7 * 24 * 60 * 60 * 1000);
+		"year" ++ _ -> to_time_schedule(Interval, Amount * 365 * 24 * 60 * 60 * 1000);
+		"block" ++ _ -> to_block_schedule(Interval, Amount);
+		_ -> throw({error, invalid_cron_interval, UnitStr})
+	end.
+
+to_time_schedule(Name, Millis) -> #schedule{name = Name, unit = <<"millisecond">>, scalar = Millis}.
+to_block_schedule(Name, Blocks) -> #schedule{name = Name, unit = <<"block">>, scalar = Blocks}.
 
 uses() -> all.
+
+%%%
+%%% TESTS
+%%%
+
+parse_crons_test() ->
+	Tags = [
+		{<<"Foo">>, <<"Bar">>},
+		{?CRON_INTERVAL, <<"10-blocks">>},
+		{<<"Cron-Tag-Action">>, <<"notify">>},
+		{<<"Cron-Tag-Action-Function">>, <<"transfer">>},
+		{<<"Random">>, <<"Tag">>},
+		{?CRON_INTERVAL, <<" 10-minutes ">>},
+		{<<"Cron-Tag-Action">>, <<"notify">>},
+		{<<"Cron-Tag-Action-Function">>, <<"transfer">>},
+		{?CRON_INTERVAL, <<"1-hour">>},
+		{<<"Another">>, <<"Tag">>},
+		{<<"Cron-Tag-Action">>, <<"transfer">>}
+	],
+	[{BSchedule, BTags}, {MSchedule, MTags}, {HSchedule, HTags}] = parse_crons(Tags),
+
+	?assertEqual(#schedule{name = <<"10-blocks">>, unit = <<"block">>, scalar = 10}, BSchedule),
+	?assertEqual([{<<"Action">>, <<"notify">>}, {<<"Action-Function">>, <<"transfer">>}], BTags),
+
+	?assertEqual(#schedule{name = <<" 10-minutes ">>, unit = <<"millisecond">>, scalar = 10 * 60 * 1000}, MSchedule),
+	?assertEqual([{<<"Action">>, <<"notify">>}, {<<"Action-Function">>, <<"transfer">>}], MTags),
+
+	?assertEqual(#schedule{name = <<"1-hour">>, unit = <<"millisecond">>, scalar = 60 * 60 * 1000}, HSchedule),
+	?assertEqual([{<<"Action">>, <<"transfer">>}], HTags).
