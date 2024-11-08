@@ -16,46 +16,105 @@
 }).
 
 -record(state, {
-	time,
-	last_run
+	% The most recent timestamp and block height
+	last_run :: {non_neg_integer(), non_neg_integer()},
+	% The timestamp and block height at the point
+	% of the process spawn
+	spawn :: {non_neg_integer(), non_neg_integer()},
+	crons :: [#schedule{}]
 }).
 
-init(State = #{process := ProcM}, Params) ->
-	case lists:keyfind(<<"Cron-Interval">>, 1, Params) of
-		{<<"Cron-Interval">>, CronTime} ->
-			?no_prod("Makes many incorrect assumptions about Cron Interval format and shape of message"),
-			Schedule = parse_interval(CronTime),
-			MilliSecs = Schedule#schedule.scalar,
-			%% TODO: What's the most sensible way to initialize the last_run?
-			%% Current behavior: Timer starts after _first_ message.
-			{ok, State#{cron => #state{time = MilliSecs, last_run = timestamp(ProcM)}}};
-		false ->
-			{ok, State#{cron => inactive}}
+init(State = #{timestamp := Timestamp, block_height := BlockHeight, process := Process}, _Params) ->
+	ProcessTimestamp = timestamp(Process),
+	ProcessBlockHeight = binary_to_integer(ar_util:find_value(Process#tx.tags, <<"Block-Height">>)),
+	?no_prod("How will the timestamp and block_height be initialized on state? Presumably a checkpoint?"),
+	% Default to values from process, which is to say the beginning of its schedule
+	LastTimestamp = Timestamp orelse ProcessTimestamp,
+	LastBlockHeight = BlockHeight orelse ProcessBlockHeight,
+	case parse_crons(Process#tx.tags) of
+		[] ->
+			{ok, State#{cron => inactive}};
+		Crons ->
+			{
+				ok,
+				State#{
+					cron => #state{
+						last_run = {LastTimestamp, LastBlockHeight},
+						spawn = {ProcessTimestamp, ProcessBlockHeight},
+						crons = Crons
+					}
+				}
+			}
 	end.
 
-execute(_M, State = #{cron := inactive}) ->
+execute(_Msg, State = #{cron := inactive}) ->
 	{ok, State};
-execute(M, State = #{pass := 1, cron := #state{last_run = undefined}}) ->
-	{ok, State#{cron := #state{last_run = timestamp(M)}}};
-execute(Message, State = #{pass := 1, cron := #state{time = MilliSecs, last_run = LastRun}, schedule := Sched}) ->
-	case timestamp(Message) - LastRun of
-		Time when Time > MilliSecs ->
-			NextCronMsg = create_cron(State, CronTime = timestamp(Message) + MilliSecs),
-			{pass, State#{
-				cron := #state{last_run = CronTime},
-				schedule := [NextCronMsg | Sched]
-			}};
-		_ ->
-			{ok, State}
-	end;
-execute(_, S) ->
-	{ok, S}.
+execute(
+	Msg,
+	State = #{
+		schedule := Sched,
+		cron := #state{
+			last_run = LastRun,
+			spawn = Spawn,
+			crons = Crons
+		}
+	}
+) ->
+	CurTime = timestamp(Msg),
+	{NewLastRun, NewSched} = maybe_append_cron_msgs(Crons, Sched, LastRun, CurTime),
+	{
+		ok,
+		State#{
+			schedule := NewSched,
+			cron := #state{last_run = NewLastRun, spawn = Spawn, crons = Crons}
+		}
+	}.
+
+% execute(_M, State = #{cron := inactive}) ->
+% 	{ok, State};
+% execute(M, State = #{pass := 1, cron := #state{last_run = undefined}}) ->
+% 	{ok, State#{cron := #state{last_run = timestamp(M)}}};
+% execute(Message, State = #{pass := 1, cron := #state{time = MilliSecs, last_run = LastRun}, schedule := Sched}) ->
+% 	case timestamp(Message) - LastRun of
+% 		Time when Time > MilliSecs ->
+% 			NextCronMsg = create_cron(State, CronTime = timestamp(Message) + MilliSecs),
+% 			{pass, State#{
+% 				cron := #state{last_run = CronTime},
+% 				schedule := [NextCronMsg | Sched]
+% 			}};
+% 		_ ->
+% 			{ok, State}
+% 	end;
+% execute(_, S) ->
+% 	{ok, S}.
 
 uses() -> all.
 
 %%% ================================
 %%% Private Functions
 %%% ================================
+
+% TODO: implement matching crons using last run and cur time
+% and appending crons to Schedule
+maybe_append_cron_msgs(Crons, Sched, LastRun, CurTime) ->
+	NewSched = Sched,
+	{LastRun, NewSched}.
+
+create_cron_msg(State = #{process := Process}, {_, CronTags}, Timestamp, BlockHeight) ->
+	?no_prod("What about derived top-lvl like Timestamp, Block-Height, From, Cron, etc.?"),
+	#tx{
+		owner = Process#tx.owner,
+		target = Process#tx.id,
+		tags =
+			[
+				{<<"Data-Protocol">>, <<"ao">>},
+				{<<"Variant">>, <<"ao.TN.2">>},
+				{<<"Process">>, Process#tx.id},
+				{<<"Target">>, Process#tx.id},
+				{<<"Timestamp">>, list_to_binary(integer_to_list(Timestamp))},
+				{<<"Block-Height">>, list_to_binary(integer_to_list(BlockHeight))}
+			] ++ CronTags
+	}.
 
 timestamp(Tx) -> binary_to_integer(ar_util:find_value(Tx#tx.tags, <<"Timestamp">>)).
 
