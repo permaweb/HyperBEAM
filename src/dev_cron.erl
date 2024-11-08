@@ -51,23 +51,40 @@ execute(Message, State = #{pass := 1, cron := #state{time = MilliSecs, last_run 
 execute(_, S) ->
 	{ok, S}.
 
-timestamp(M) ->
-	% TODO: Process this properly
-	case lists:keyfind(<<"Timestamp">>, 1, M#tx.tags) of
-		{<<"Timestamp">>, TSBin} ->
-			list_to_integer(binary_to_list(TSBin));
-		false ->
-			0
+uses() -> all.
+
+%%% ================================
+%%% Private Functions
+%%% ================================
+
+timestamp(Tx) -> binary_to_integer(ar_util:find_value(Tx#tx.tags, <<"Timestamp">>)).
+
+block(Height) ->
+	{Timestamp, Height, _} = ao_client:arweave_timestamp(Height),
+	{Timestamp, Height}.
+
+%%% @doc Given a Time, find the block that was the "current" block on arweave,
+%%% at the given time.
+%%%
+%%% It is STRONGLY recommended to utilize a Low and High height
+%%% to help constrain the search space. This impl employs a binary search, querying
+%%% arweave for block metadata.
+%%%
+%%% TODO: maybe should be abstracted behind ao_client:arweave_timestamp({timestamp, Time}, Low, High)
+find_block_at_time(LowHeight, HighHeight, Time) -> find_block_at_time(LowHeight, HighHeight, Time, LowHeight).
+find_block_at_time(LowHeight, HighHeight, _Time, CurHeight) when LowHeight > HighHeight ->
+	block(CurHeight);
+find_block_at_time(LowHeight, HighHeight, Time, CurHeight) ->
+	Mid = LowHeight + (HighHeight - LowHeight) div 2,
+	{CurTime, _} = block(Mid),
+	if
+		CurTime =< Time -> find_block_at_time(Mid + 1, HighHeight, Time, Mid);
+		true -> find_block_at_time(LowHeight, Mid - 1, Time, CurHeight)
 	end.
 
-create_cron(_State, CronTime) ->
-	#tx{
-		tags = [
-			{<<"Action">>, <<"Cron">>},
-			{<<"Timestamp">>, list_to_binary(integer_to_list(CronTime))}
-		]
-	}.
-
+%%%
+%%% Parse a set of ao tags into a list of Cron Schedules
+%%%
 parse_crons(Tags) -> parse_crons([], Tags).
 
 parse_crons(Crons, []) ->
@@ -114,11 +131,18 @@ parse_interval(Interval) ->
 to_time_schedule(Name, Millis) -> #schedule{name = Name, unit = <<"millisecond">>, scalar = Millis}.
 to_block_schedule(Name, Blocks) -> #schedule{name = Name, unit = <<"block">>, scalar = Blocks}.
 
-uses() -> all.
-
 %%%
 %%% TESTS
 %%%
+
+find_block_at_time_test() ->
+	TargetBlock = {1731090175, 1543761},
+	{TargetTime, _} = TargetBlock,
+
+	ExactTime = find_block_at_time(1543732, 1543773, TargetTime),
+	?assertEqual(TargetBlock, ExactTime),
+	AfterTime = find_block_at_time(1543722, 1543773, TargetTime + 100),
+	?assertEqual(TargetBlock, AfterTime).
 
 parse_crons_test() ->
 	Tags = [

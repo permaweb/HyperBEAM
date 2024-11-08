@@ -1,6 +1,6 @@
 -module(ao_client).
 %% Arweave node API
--export([arweave_timestamp/0]).
+-export([arweave_timestamp/0, arweave_timestamp/1]).
 %% Arweave bundling and data access API
 -export([upload/1, download/1]).
 %% Scheduling Unit API
@@ -15,9 +15,11 @@
 -include("include/ao.hrl").
 
 %%% Arweave node API
-
-arweave_timestamp() ->
-	{ok, {{_, 200, _}, _, Body}} = httpc:request(ao:get(gateway) ++ "/block/current"),
+%%% TODO: could we add a caching layer here ie. an LRU?
+arweave_timestamp() -> arweave_timestamp("current").
+arweave_timestamp(Height) when is_integer(Height) -> arweave_timestamp("height/" ++ integer_to_list(Height));
+arweave_timestamp(BlockPath) ->
+	{ok, {{_, 200, _}, _, Body}} = httpc:request(ao:get(gateway) ++ "/block/" ++ BlockPath),
 	{Fields} = jiffy:decode(Body),
 	{_, Timestamp} = lists:keyfind(<<"timestamp">>, 1, Fields),
 	{_, Hash} = lists:keyfind(<<"indep_hash">>, 1, Fields),
