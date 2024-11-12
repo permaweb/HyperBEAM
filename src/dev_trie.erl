@@ -880,3 +880,67 @@ bulk_update_cases_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"toro">>, UpdatedTrie, #{})),
     ?assertEqual(not_found, hb_ao:get(<<"appapp">>, UpdatedTrie, #{})),
     ?assertEqual(not_found, hb_ao:get(<<"tt">>, UpdatedTrie, #{})).
+
+%% @doc Test to observe commitment accumulation with sequential trie updates
+%% Simulates the pattern seen in token transfers: repeated updates to same keys
+commitment_accumulation_test() ->
+    hb:init(),
+    InitialState = #{
+        <<"device">> => <<"token@1.0">>,
+        <<"balances">> => #{
+            <<"device">> => <<"trie@1.0">>,
+            <<"alice-id">> => 1000000000
+        }
+    },
+    CountCommitments = 
+        fun(S) ->
+            BalTrie = hb_ao:get(<<"balances">>, S, #{}),
+            case hb_ao:get(<<"commitments">>, BalTrie, #{}) of
+                not_found -> 0;
+                M when is_map(M) -> maps:size(M)
+            end
+        end,
+    FinalState = lists:foldl(
+        fun(N, State) ->
+            Balances = 
+                hb_ao:get(
+                    <<"balances">>, 
+                    State, 
+                    #{ <<"device">> => <<"trie@1.0">> }, 
+                    #{}
+                ),
+            {ok, NewBalances} = hb_ao:resolve(
+                Balances,
+                #{
+                    <<"path">> => <<"set">>, 
+                    <<"alice-id">> => 1000000000 - N, 
+                    <<"bob-id">> => N
+                },
+                #{}
+            ),
+            NewState = hb_maps:put(<<"balances">>, NewBalances, State, #{}),
+            case N of
+                10 -> 
+                    ?event({
+                        after_transfer_10, 
+                        {commitment_count, CountCommitments(NewState)}
+                    });
+                100 -> 
+                    ?event({
+                        after_transfer_100, 
+                        {commitment_count, CountCommitments(NewState)}
+                    });
+                _ -> ok
+            end,
+            NewState
+        end,
+        InitialState,
+        lists:seq(1, 100)
+    ),
+    FinalBalances = hb_ao:get(<<"balances">>, FinalState, #{}),
+    AliceBalance = hb_ao:get(<<"alice-id">>, FinalBalances, #{}, #{}),
+    BobBalance = hb_ao:get(<<"bob-id">>, FinalBalances, #{}, #{}),
+    ?event({final_analysis, {commitment_count, CountCommitments(FinalState)},
+            {alice_balance, AliceBalance}, {bob_balance, BobBalance}}),
+    ?assertEqual(999999900, AliceBalance),
+    ?assertEqual(100, BobBalance).
