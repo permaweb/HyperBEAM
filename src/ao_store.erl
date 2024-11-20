@@ -78,6 +78,7 @@ call_function([{Mod, Opts, _Props} | Rest], Function, Args) ->
             Result
     catch
         _:_ ->
+			% TODO: Please log me!
             call_function(Rest, Function, Args)
     end.
 
@@ -90,7 +91,8 @@ call_all([{Mod, Opts, _Props} | Rest], Function, Args) ->
     try
         apply(Mod, Function, [Opts | Args])
     catch
-        _:_ ->
-            ok
+        _Error:_Reason:_Bt ->
+			% TODO: Please log me!
+			ok
     end,
     call_all(Rest, Function, Args).
