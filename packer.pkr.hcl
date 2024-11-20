@@ -10,7 +10,7 @@ packer {
 # Define required variables
 variable "project_id" {
   type    = string
-  default = "arweave-437622"
+  default = "hyperbeam-cd"
 }
 
 variable "region" {
@@ -23,15 +23,16 @@ variable "zone" {
   default = "us-east1-c"
 }
 
-variable "image_family" {
+variable "image_name" {
   type    = string
-  default = "ao-image"
+  default = "hyperbeam-image"
 }
 
 # Source block to define GCP builder
 source "googlecompute" "ubuntu" {
   project_id          = var.project_id
   source_image_family = "ubuntu-2204-lts"
+  image_name          = var.image_name
   zone                = var.zone
   machine_type        = "n1-standard-1"
   ssh_username        = "packer"
@@ -65,31 +66,31 @@ build {
   # Upload the pre-built release (with ERTS included) to the instance
   provisioner "file" {
     source      = "./_build/default/rel/ao"
-    destination = "/tmp/ao"
+    destination = "/tmp/hyperbeam"
   }
 
   provisioner "shell" {
     inline = [
       # Move the release to /opt with sudo
-      "sudo mv /tmp/ao /opt/ao",
-      "sudo chmod -R 755 /opt/ao",
+      "sudo mv /tmp/hyperbeam /opt/hyperbeam",
+      "sudo chmod -R 755 /opt/hyperbeam",
 
       # Create a symlink to make it easier to run the app
-      "sudo ln -s /opt/ao/bin/ao /usr/local/bin/ao",
+      "sudo ln -s /opt/hyperbeam/bin/hyperbeam /usr/local/bin/hyperbeam",
 
       # (Optional) If you want to create a systemd service to manage the app
-      "echo '[Unit]' | sudo tee /etc/systemd/system/ao.service",
-      "echo 'Description=Permaweb Node' | sudo tee -a /etc/systemd/system/ao.service",
-      "echo '[Service]' | sudo tee -a /etc/systemd/system/ao.service",
-      "echo 'Type=simple' | sudo tee -a /etc/systemd/system/ao.service",
-      "echo 'ExecStart=/opt/ao/bin/ao foreground' | sudo tee -a /etc/systemd/system/ao.service",
-      "echo 'Restart=on-failure' | sudo tee -a /etc/systemd/system/ao.service",
-      "echo '[Install]' | sudo tee -a /etc/systemd/system/ao.service",
-      "echo 'WantedBy=multi-user.target' | sudo tee -a /etc/systemd/system/ao.service",
+      "echo '[Unit]' | sudo tee /etc/systemd/system/hyperbeam.service",
+      "echo 'Description=Permaweb Node' | sudo tee -a /etc/systemd/system/hyperbeam.service",
+      "echo '[Service]' | sudo tee -a /etc/systemd/system/hyperbeam.service",
+      "echo 'Type=simple' | sudo tee -a /etc/systemd/system/hyperbeam.service",
+      "echo 'ExecStart=/opt/hyperbeam/bin/hyperbeam foreground' | sudo tee -a /etc/systemd/system/hyperbeam.service",
+      "echo 'Restart=on-failure' | sudo tee -a /etc/systemd/system/hyperbeam.service",
+      "echo '[Install]' | sudo tee -a /etc/systemd/system/hyperbeam.service",
+      "echo 'WantedBy=multi-user.target' | sudo tee -a /etc/systemd/system/hyperbeam.service",
 
       # Enable and start the service
-      "sudo systemctl enable ao",
-      "sudo systemctl start ao"
+      "sudo systemctl enable hyperbeam",
+      "sudo systemctl start hyperbeam"
     ]
   }
 

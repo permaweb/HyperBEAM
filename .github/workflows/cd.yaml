@@ -1,0 +1,138 @@
+name: Build and Deploy AO/HyperBEAM
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  GCP_IMAGE_NAME: hyperbeam-image
+  GCP_PROJECT: hyperbeam-cd
+  GCP_INSTANCE_NAME: hyperbeam
+  GCP_ZONE: us-central1-a
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_name: ${{ steps.set_image_name.outputs.image_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.CD_SERVICE_ACCOUNT }}
+
+      - name: Setup GCloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Setup build tools (Erlang, Packer and Rebar3)
+        run: | 
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update
+          sudo apt-get install -y packer git libssl-dev ncurses-dev make cmake gcc g++
+          git clone https://github.com/erlang/otp.git && cd otp && git checkout maint-27 && ./configure && make -j8 && sudo make install
+          git clone https://github.com/erlang/rebar3.git && cd rebar3 && ./bootstrap && sudo mv rebar3 /usr/local/bin/
+
+      - name: Build and release AO/HyperBEAM with Rebar3
+        run: | 
+          rebar3 clean
+          rebar3 get-deps
+          rebar3 compile
+          rebar3 release
+
+      - name: Set image name with timestamp and commit SHA
+        id: set_image_name
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          TIMESTAMPED_IMAGE_NAME="${{ env.GCP_IMAGE_NAME }}-${SHORT_SHA}-$(date +%Y%m%d-%H%M%S)"
+          echo "image_name=${TIMESTAMPED_IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Packer Image
+        run: | 
+          packer init .
+          packer validate .
+          packer build -var "image_name=${{ steps.set_image_name.outputs.image_name }}" -var "project_id=${{ env.GCP_PROJECT }}" .
+
+      - name: Tag image for reference
+        run: |
+          gcloud compute images add-labels ${{ steps.set_image_name.outputs.image_name }} \
+            --project=${{ env.GCP_PROJECT }} \
+            --labels=workflow_run=${{ github.run_id }},commit_sha=${{ github.sha }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - id: auth
+        name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.CD_SERVICE_ACCOUNT }}
+
+      - name: Setup GCloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Create Confidential VM
+        run: |
+          gcloud compute instances create ${{ env.GCP_INSTANCE_NAME }} \
+            --zone=${{ env.GCP_ZONE }}  \
+            --machine-type=n2d-standard-2 \
+            --min-cpu-platform="AMD Milan" \
+            --confidential-compute-type=SEV_SNP \
+            --maintenance-policy=TERMINATE \
+            --image-family=ubuntu-2404-lts-amd64 \
+            --image-project=ubuntu-os-cloud \
+            --project=${{ env.GCP_PROJECT }} \
+            --network-interface=network-tier=PREMIUM,nic-type=GVNIC,stack-type=IPV4_ONLY,subnet=default \
+            --tags=http-server,https-server \
+            --shielded-secure-boot \
+            --shielded-vtpm \
+            --shielded-integrity-monitoring \
+            --create-disk=auto-delete=yes,boot=yes,device-name=${{ env.GCP_INSTANCE_NAME }},image=projects/${{ env.GCP_PROJECT }}/global/images/${{ needs.build.outputs.image_name }},mode=rw,size=20,type=pd-balanced
+
+  test:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for deployment
+        run: sleep 60  # Add appropriate wait time for your service to start
+
+      - name: Run tests
+        run: |
+          # Add your test commands here
+          echo "Running tests..."
+
+  cleanup:
+    needs: [build, test]  # Added build to needs to access the image name
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - id: auth
+        name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.CD_SERVICE_ACCOUNT }}
+
+      - name: Setup GCloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Delete Confidential VM
+        run: |
+          gcloud compute instances delete ${{ env.GCP_INSTANCE_NAME }} \
+            --project=${{ env.GCP_PROJECT }} \
+            --zone=${{ env.GCP_ZONE }} \
+            --quiet
+
+      - name: Clean up old images
+        run: |
+          # Keep only the last 5 images
+          gcloud compute images list \
+            --project=${{ env.GCP_PROJECT }} \
+            --filter="name ~ '^${{ env.GCP_IMAGE_NAME }}-'" \
+            --format="get(name)" \
+            --sort-by=~creationTimestamp \
+            | tail -n +6 \
+            | xargs -r gcloud compute images delete --quiet --project=${{ env.GCP_PROJECT }}
