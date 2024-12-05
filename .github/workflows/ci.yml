@@ -1,0 +1,42 @@
+name: HyperBEAM CI
+
+on:
+  push:
+    branches:
+      - 'main' # Trigger action for merges to main
+  pull_request:
+    branches:
+      - 'main' # Trigger action for pushes to all PRs to main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # Use the latest Ubuntu runner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Cache rebar3 dependencies
+        uses: actions/cache@v4
+        with:
+            path: |
+                ~/.cache/rebar3
+                _build
+            key: ci-${{ runner.os }}-rebar3-${{ hashFiles('rebar.lock') }}
+            restore-keys: |
+                ci-${{ runner.os }}-rebar3
+      - name: Set up Erlang
+        uses: erlef/setup-beam@v1
+        with:
+            otp-version: '27.0'
+            rebar3-version: '3.24.0'
+
+      - name: Install dependencies
+        run: rebar3 get-deps
+
+      - name: Compile
+        run: rebar3 compile
+
+      - name: Run tests
+        run: rebar3 eunit
+        timeout-minutes: 5
