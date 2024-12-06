@@ -21,8 +21,6 @@ rebar3.crashdump
 *~
 
 *.json
-!package.json
-!package-lock.json
 node_modules
 !.vscode/*
 
@@ -36,3 +34,5 @@ rebar.lock
 .DS_STORE
 TEST-data*
 test-cache/*
+
+.githooks/_/.setup

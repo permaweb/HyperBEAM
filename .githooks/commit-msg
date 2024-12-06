@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Regex for Conventional Commits (Plus Git Vernacular for Merges and Reverts)
+CONVENTIONAL_COMMITS_REGEX="^((Merge[ a-z-]* branch.*)|(Revert*)|((build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\(.*\))?!?: .*))"
+
+# Get the commit message
+COMMIT_MSG=$(cat "$1")
+
+# Check if the commit message matches the Conventional Commits format
+if [[ ! $COMMIT_MSG =~ $CONVENTIONAL_COMMITS_REGEX ]]; then
+  echo "❌ Error: Commit message does not follow the Conventional Commits format."
+  echo ""
+  echo "Expected format: <type>(<scope>): <description>"
+  echo ""
+  echo "✅ Examples:"
+  echo "  feat(parser): add ability to parse arrays"
+  echo "  fix(login): handle edge case with empty passwords"
+  echo "  docs: update README with installation instructions"
+  echo ""
+  echo "Allowed types: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test"
+  exit 1
+fi
+
+# If the commit message is valid, allow the commit
+exit 0
