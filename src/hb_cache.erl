@@ -423,7 +423,7 @@ composite_unsigned_item_test() ->
     ).
 
 %% Test storing and retrieving a composite signed item
-composite_signed_item_test() ->
+test_composite_signed_item() ->
     ItemData = #{
         <<"key1">> => create_signed_tx(<<"value1">>),
         <<"key2">> => create_signed_tx(<<"value2">>)
@@ -489,3 +489,6 @@ latest_output_retrieval_test() ->
     ok = write_output(Store, fmt_id(Proc, signed), 1, Item2),
     ?assertEqual({1, Item2}, latest(Store, fmt_id(Proc, signed))),
     ?assertEqual({0, Item1}, latest(Store, fmt_id(Proc, signed), 0)).
+
+slow_test_() ->
+    [{timeout, 30, fun test_composite_signed_item/0}].
