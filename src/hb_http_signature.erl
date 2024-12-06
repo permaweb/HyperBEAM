@@ -27,7 +27,42 @@
 	{string, binary()},
 	{binary(), integer() | boolean() | {string | token | binary, binary()}}
 }.
--type signature_params() :: #{binary() => binary() | integer()}.
+
+%%% @doc a map that contains signature parameters metadata as described
+%%% in https://datatracker.ietf.org/doc/html/rfc9421#name-signature-parameters
+%%% 
+%%% All values are optional, but in our use-case "alg" and "keyid" will
+%%% almost always be provided.
+%%% 
+%%% #{
+%%% 	created => 1733165109, % a unix timestamp
+%%% 	expires => 1733165209, % a unix timestamp
+%%% 	nonce => <<"foobar">,
+%%% 	alg => <<"rsa-pss-sha512">>,
+%%% 	keyid => <<"6eVuWgpNgv3bxfNgFrIiTkzE8Yb0V2omShxS4uKyzpw">>
+%%% 	tag => <<"HyperBEAM">>
+%%% }
+-type signature_params() :: #{atom() | binary() | string() => binary() | integer()}.
+
+%%% @doc The state encapsulated as the "Authority".
+%%% It includes an ordered list of parsed component identifiers, used for extracting values
+%%% from the Request/Response Message Context, as well as the signature parameters
+%%% used when creating the signature and encode in the signature base.
+%%% 
+%%% This is effectively the State of an Authority, used to sign a Request/Response Message
+%%% Context.
+%%%
+%%% #{
+%%% 	component_identifiers => [{item, {string, <<"@method">>}, []}]
+%%% 	sig_params => #{
+%%% 		created => 1733165109, % a unix timestamp
+%%% 		expires => 1733165209, % a unix timestamp
+%%% 		nonce => <<"foobar">,
+%%% 		alg => <<"rsa-pss-sha512">>,
+%%% 		keyid => <<"6eVuWgpNgv3bxfNgFrIiTkzE8Yb0V2omShxS4uKyzpw">>
+%%% 		tag => <<"HyperBEAM">>
+%%% 	}
+%%% }
 -type authority_state() :: #{
 	component_identifiers => [component_identifier()],
 	% TODO: maybe refine this to be more explicit w.r.t valid signature params
@@ -47,11 +82,23 @@
 %%% verify(Authority, SigName, Msg) -> {ok}
 %%%
 
--spec authority(binary(), #{binary() => binary() | integer()}, binary()) -> authority_state().
+%%% @doc A helper to validate and produce an "Authority" State
+-spec authority(
+	[binary() | component_identifier()],
+	#{binary() => binary() | integer()},
+	binary()
+) -> authority_state().
 authority(ComponentIdentifiers, SigParams, Key) ->
+	% TODO: overwrite keyid in SigParams given the Key?
 	#{
-		% Since parsing is performed here, this provides a feedback loop
-		% for properly shaped component identifiers
+		% parse each component identifier into a Structured Field Item:
+		% 
+		% <<"\"Example-Dict\";key=\"foo\"">> -> {item, {string, <<"Example-Dict">>}, [{<<"key">>, {string, <<"foo">>}}]}
+		% See hb_http_structuted_fields for parsed Structured Fields full data structures
+		% 
+		% sf_item/1 handles when the argument is already parsed.
+		% This provides a feedback loop, in case any encoded component identifier is
+		% not properly encoded
 		component_identifiers => lists:map(fun sf_item/1, ComponentIdentifiers),
 		% TODO: add checks to allow only valid signature parameters
 		% https://datatracker.ietf.org/doc/html/rfc9421#name-signature-parameters
@@ -169,10 +216,8 @@ identifier_to_component(ParsedIdentifier = {item, {_Kind, Value}, _Params}, Req,
 %%% This implements a portion of RFC-9421
 %%% See https://datatracker.ietf.org/doc/html/rfc9421#name-http-fields
 extract_field(Identifier, Req, Res) when map_size(Res) == 0 ->
-	extract_field(Identifier, Req, Res, req);
-extract_field(Identifier, Req, Res) ->
-	extract_field(Identifier, Req, Res, res).
-extract_field({item, {_Kind, IParsed}, IParams}, Req, Res, _Subject) ->
+	extract_field(Identifier, Req, Res);
+extract_field({item, {_Kind, IParsed}, IParams}, Req, Res) ->
 	[IsStrictFormat, IsByteSequenceEncoded, DictKey] = [
 		find_sf_strict_format_param(IParams),
 		find_sf_byte_sequence_param(IParams),
@@ -190,24 +235,20 @@ extract_field({item, {_Kind, IParsed}, IParams}, Req, Res, _Subject) ->
 			% so we filter, instead of find
 			MaybeRawFields = lists:filter(
 				fun({Key, _Value}) -> Key =:= Lowered end,
-				% Fields are case-insensitive, so we perform a case-insensitive search across the Msg fields
+				% Field names are normalized to lowercase in the signature base and also are case insensitive.
+				% So by converting all the names to lowercase here, we simoultaneously normalize them, and prepare
+				% them for comparison in one pass.
 				[
 					{lower_bin(Key), Value}
 				 || {Key, Value} <- maps:to_list(
 						maps:get(
 							% The field will almost certainly be a header, but could also be a trailer
 							% https://datatracker.ietf.org/doc/html/rfc9421#section-2.1-18.10.1
-							case IsTrailerField of
-								true -> trailers;
-								false -> headers
-							end,
+							case IsTrailerField of true -> trailers; false -> headers end,
 							% The header may exist on any message in the context of the signature
 							% which could be the Request or Response Message
 							% https://datatracker.ietf.org/doc/html/rfc9421#section-2.1-18.8.1
-							case IsRequestIdentifier of
-								true -> Req;
-								false -> Res
-							end#{}
+							case IsRequestIdentifier of true -> Req; false -> Res end
 						)
 					)
 				]
@@ -519,7 +560,10 @@ random_an_binary(Length) ->
 	RandomChars = [lists:nth(Index, Characters) || Index <- RandomIndexes],
 	list_to_binary(RandomChars).
 
+%%% @doc Recursively trim space characters from the beginning of the binary
 trim_ws(<<$\s, Bin/bits>>) -> trim_ws(Bin);
+%%% @doc No space characters at the beginning so now trim them from the end
+%%% recrusively
 trim_ws(Bin) -> trim_ws_end(Bin, byte_size(Bin) - 1).
 
 trim_ws_end(_, -1) ->
@@ -528,15 +572,23 @@ trim_ws_end(Value, N) ->
 	case binary:at(Value, N) of
 		$\s ->
 			trim_ws_end(Value, N - 1);
+		% No more space characters matches on the end
+		% So extract the bytes up to N, and this is our trimmed value
 		_ ->
 			S = N + 1,
-			<<Value2:S/binary, _/bits>> = Value,
-			Value2
+			<<Trimmed:S/binary, _/bits>> = Value,
+			Trimmed
 	end.
 
 %%%
 %%% TESTS
 %%%
+
+trim_ws_test() ->
+	<<"hello world">> = trim_ws(<<"      hello world      ">>),
+	<<>> = trim_ws(<<"">>),
+	<<>> = trim_ws(<<"         ">>),
+	ok.
 
 sign_test() ->
 	Req = #{
