@@ -1,6 +1,6 @@
 -module(hb_http_signature).
 
--export([authority/3, sign/2, sign/3]).
+-export([authority/3, sign/2, sign/3, verify/2, verify/3]).
 
 % https://datatracker.ietf.org/doc/html/rfc9421#section-2.2.7-14
 -define(EMPTY_QUERY_PARAMS, $?).
@@ -86,10 +86,19 @@
 -spec authority(
 	[binary() | component_identifier()],
 	#{binary() => binary() | integer()},
-	binary()
+	{} %TODO: type out a key_pair
 ) -> authority_state().
-authority(ComponentIdentifiers, SigParams, Key) ->
-	% TODO: overwrite keyid in SigParams given the Key?
+authority(ComponentIdentifiers, SigParams, PubKey = {KeyType, _Pub}) when is_atom(KeyType) ->
+    authority(ComponentIdentifiers, SigParams, {{}, PubKey});
+authority(ComponentIdentifiers, SigParams, PrivKey = {KeyType, _Priv, Pub}) when is_atom(KeyType) ->
+    authority(ComponentIdentifiers, SigParams, {PrivKey, {KeyType, Pub}});
+authority(ComponentIdentifiers, SigParams, KeyPair = {_Priv, {_KeyType, PubKey}}) ->
+	% TODO: should we check if keyid if already set and throw if so?
+    % for now, just overwriting
+    % 
+    % The keyid in the signature params will always be the public key
+    % of the signer
+    SigParamsWithKeyId = maps:put(keyid, PubKey, SigParams),
 	#{
 		% parse each component identifier into a Structured Field Item:
 		%
@@ -102,11 +111,12 @@ authority(ComponentIdentifiers, SigParams, Key) ->
 		component_identifiers => lists:map(fun sf_item/1, ComponentIdentifiers),
 		% TODO: add checks to allow only valid signature parameters
 		% https://datatracker.ietf.org/doc/html/rfc9421#name-signature-parameters
-		sig_params => SigParams,
-		key => Key
+		sig_params => SigParamsWithKeyId,
+        % TODO: validate the key is supported?
+		key_pair => KeyPair
 	}.
 
-%%% @doc using the provided Authority and Request Message Context, create a Name, Signature and SignatureInput
+%%% @doc using the provided Authority and Request Message Context, and create a Signature and SignatureInput
 %%% that can be used to additional signatures to a corresponding HTTP Message
 -spec sign(authority_state(), request_message()) -> {ok, {binary(), binary(), binary()}}.
 sign(Authority, Req) ->
@@ -115,30 +125,68 @@ sign(Authority, Req) ->
 %%% that can be used to additional signatures to a corresponding HTTP Message
 -spec sign(authority_state(), request_message(), response_message()) -> {ok, {binary(), binary(), binary()}}.
 sign(Authority, Req, Res) ->
-	ComponentIdentifiers = maps:get(component_identifiers, Authority),
-	SignatureComponentsLine = signature_components_line(ComponentIdentifiers, Req, Res),
-	SignatureParamsLine = signature_params_line(ComponentIdentifiers, maps:get(sig_params, Authority)),
-	SignatureBase = signature_base(SignatureComponentsLine, SignatureParamsLine),
-	SignatureInput = SignatureParamsLine,
-	% Create signature using SignatureBase and authority#key
-	Signature = create_signature(Authority, SignatureBase),
-	Name = random_an_binary(5),
-	{ok, {Name, SignatureInput, Signature}}.
+    {Priv, _Pub} = maps:get(key_pair, Authority),
+	{SignatureInput, SignatureBase} = signature_base(Authority, Req, Res),
+	Signature = ar_wallet:sign(Priv, SignatureBase, sha512),
+	{ok, {SignatureInput, Signature}}.
 
-%%% @doc perform the actual signing of the signature base, using the provided key
-%%% TODO: needs to be implemented
-create_signature(Authority, SignatureBase) ->
-    Key = maps:get(key, Authority),
-    % TODO: implement
-    Signature = <<"SIGNED", SignatureBase/binary>>,
-    Signature.
+%%% @doc same verify/3, but with an empty Request Message Context
+verify(Verifier, Msg) ->
+    % Assume that the Msg is a response message, and use an empty Request message context
+    %
+    % A corollary is that a signature containing any components from the request will produce
+    % an error. It is the caller's responsibility to provide the required Message Context
+    % in order to verify the signature
+    verify(Verifier, #{}, Msg).
+
+%%% @doc Given the signature name, and the Request/Response Message Context
+%%% verify the named signature by constructing the signature base and comparing
+verify(#{ sig_name := SigName, key := Key }, Req, Res) ->
+    % Signature and Signature-Input fields are each themself a dictionary structured field.
+    % Ergo, we can use our same utilities to extract the value at the desired key, in this case,
+    % the signature name. Because our utilities already implement the relevant portions
+    % of RFC-9421, we get the error handling here as well.
+    % 
+    %  See https://datatracker.ietf.org/doc/html/rfc9421#section-3.2-3.2
+    SigNameParams = [{<<"key">>}, {string, bin(SigName)}],
+    SignatureIdentifier = {item, {string, <<"signature">>}, SigNameParams},
+    SignatureInputIdentifier = {item, {string, <<"signature-input">>}, SigNameParams},
+    % extract signature and signature params
+    case {extract_field(SignatureIdentifier, Req, Res), extract_field(SignatureInputIdentifier, Req, Res)} of
+        {{ok, Signature}, {ok, SignatureInput}} -> 
+            % The value encoded within signature input is also a structured field,
+            % that encodes the ComponentIdentifiers and the Signature Params.
+            % 
+            % So we parse this value, and then use it to construct out signature base
+            {list, ComponentIdentifiers, SigParams} = hb_http_structured_fields:list(SignatureInput),
+            Authority = authority(ComponentIdentifiers, SigParams, Key),
+            {_, SignatureBase} = signature_base(Authority, Req, Res),
+            {_Priv, Pub} = maps:get(key_pair, Authority),
+            % Now verify the signature base signed with the provided key matches the signature
+            ar_wallet:verify(Pub, SignatureBase, Signature);
+        % An issue with parsing the signature
+        {SignatureErr, {ok, _}} -> SignatureErr;
+        % An issue with parsing the signature input
+        {{ok, _}, SignatureInputErr} -> SignatureInputErr;
+        % An issue with parsing both, so just return the first one from the signature parsing
+        % TODO: maybe could merge the errors?
+        {SignatureErr, _} -> SignatureErr
+    end.
 
 %%% @doc create the signature base that will be signed in order to create the Signature and SignatureInput.
 %%%
 %%% This implements a portion of RFC-9421
 %%% See https://datatracker.ietf.org/doc/html/rfc9421#name-creating-the-signature-base
-signature_base(ComponentsLine, ParamsLine) ->
-	<<ComponentsLine/binary, <<"\n">>/binary, <<"\"@signature-params\": ">>/binary, ParamsLine/binary>>.
+signature_base(Authority, Req, Res) when is_map(Authority) ->
+    ComponentIdentifiers = maps:get(component_identifiers, Authority),
+	ComponentsLine = signature_components_line(ComponentIdentifiers, Req, Res),
+	ParamsLine = signature_params_line(ComponentIdentifiers, maps:get(sig_params, Authority)),
+    SignatureBase = <<ComponentsLine/binary, <<"\n">>/binary, <<"\"@signature-params\": ">>/binary, ParamsLine/binary>>,
+	{ParamsLine, SignatureBase}.
+
+join_signature_base(ComponentsLine, ParamsLine) ->
+    SignatureBase = <<ComponentsLine/binary, <<"\n">>/binary, <<"\"@signature-params\": ">>/binary, ParamsLine/binary>>,
+    SignatureBase.
 
 %%% @doc Given a list of Component Identifiers and a Request/Response Message context, create the
 %%% "signature-base-line" portion of the signature base
@@ -557,13 +605,6 @@ bin(Item) when is_integer(Item) ->
 bin(Item) ->
     iolist_to_binary(Item).
 
-random_an_binary(Length) ->
-	Characters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-	ListLength = length(Characters),
-	RandomIndexes = [rand:uniform(ListLength) || _ <- lists:seq(1, Length)],
-	RandomChars = [lists:nth(Index, Characters) || Index <- RandomIndexes],
-	list_to_binary(RandomChars).
-
 %%% @doc Recursively trim space characters from the beginning of the binary
 trim_ws(<<$\s, Bin/bits>>) -> trim_ws(Bin);
 %%% @doc No space characters at the beginning so now trim them from the end
@@ -618,20 +659,68 @@ sign_test() ->
 		{item, {string, <<"foo">>}, [{<<"req">>, true}]},
 		"\"foo\";key=\"a\""
 	],
-	SigParams = #{created => 1733165109501, nonce => "foobar", keyid => "key1"},
-	Authority = authority(ComponentIdentifiers, SigParams, <<"foo-key">>),
+	SigParams = #{},
+    Key = hb:wallet(),
+	Authority = authority(ComponentIdentifiers, SigParams, Key),
 
-	{ok, {_Name, SignatureInput, Signature}} = sign(Authority, Req, Res),
-	% TODO: assertions on Signature once signing is implemented
+    ?assertMatch(
+        {ok, {_SignatureInput, _Signature}},
+        sign(Authority, Req, Res)
+    ),
 	ok.
 
-signature_base_test() ->
+verify_test() ->
+    Req = #{
+		url => <<"https://foo.bar/id-123/Data?another=one&fizz=buzz">>,
+		method => "get",
+		headers => #{
+			<<"foo">> => <<"req-b-bar">>
+		},
+		trailers => #{}
+	},
+	Res = #{
+		status => 202,
+		headers => #{
+			"fizz" => "res-l-bar",
+			<<"Foo">> => "a=1, b=2;x=1;y=2, c=(a b   c), d"
+		},
+		trailers => #{}
+	},
+	ComponentIdentifiers = [
+		{item, {string, <<"@method">>}, []},
+		<<"\"@path\"">>,
+		{item, {string, <<"foo">>}, [{<<"req">>, true}]},
+		"\"foo\";key=\"a\""
+	],
+	SigParams = #{},
+    Key = {_Priv, Pub} = hb:wallet(),
+	Authority = authority(ComponentIdentifiers, SigParams, Key),
+
+    % Create the signature and signature input
+    {ok, {SignatureInput, Signature}} = sign(Authority, Req, Res),
+
+    SigName = <<"awesome">>,
+    NewHeaders = maps:merge(
+        maps:get(headers, Res),
+        #{
+            <<"signature">> => hb_http_structured_fields:dictionary(#{ SigName => {item, {string, Signature}, []} }),
+            <<"signature-input">> => hb_http_structured_fields:dictionary(#{ SigName => {item, {string, SignatureInput}, []} })
+        }    
+    ),
+
+    SignedRes = maps:put(headers, NewHeaders, Res),
+
+    Result = verify(#{ sig_name => SigName, key => Pub }, Req, SignedRes),
+    erlang:display(Result),
+	ok.
+
+join_signature_base_test() ->
 	ParamsLine =
 		<<"(\"@method\" \"@path\" \"foo\";req \"foo\";key=\"a\");created=1733165109501;nonce=\"foobar\";keyid=\"key1\"">>,
 	ComponentsLine = <<"\"@method\": GET\n\"@path\": /id-123/Data\n\"foo\";req: req-b-bar\n\"foo\";key=\"a\": 1">>,
 	?assertEqual(
 		<<ComponentsLine/binary, <<"\n">>/binary, <<"\"@signature-params\": ">>/binary, ParamsLine/binary>>,
-		signature_base(ComponentsLine, ParamsLine)
+		join_signature_base(ComponentsLine, ParamsLine)
 	).
 
 signature_components_line_test() ->

@@ -1,6 +1,6 @@
 %%% @doc Utilities for manipulating wallets.
 -module(ar_wallet).
--export([sign/2, verify/3, to_address/1, to_address/2, new/0, new/1]).
+-export([sign/2, sign/3, hmac/1, hmac/2, verify/3, to_address/1, to_address/2, new/0, new/1]).
 -export([new_keyfile/2, load_keyfile/1, load_key/1]).
 
 -include("include/ar.hrl").
@@ -20,11 +20,15 @@ new(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} ->
     {{KeyType, Priv, Pub}, {KeyType, Pub}}.
 
 %% @doc Sign some data with a private key.
-sign({{rsa, PublicExpnt}, Priv, Pub}, Data)
-    when PublicExpnt =:= 65537 ->
+sign(Key, Data) ->
+    sign(Key, Data, sha256).
+
+%% @doc sign some data, hashed using the provided DigestType.
+%% TODO: support signing for other key types
+sign({{rsa, PublicExpnt}, Priv, Pub}, Data, DigestType) when PublicExpnt =:= 65537 ->
     rsa_pss:sign(
         Data,
-        sha256,
+        DigestType,
         #'RSAPrivateKey'{
             publicExponent = PublicExpnt,
             modulus = binary:decode_unsigned(Pub),
@@ -32,12 +36,19 @@ sign({{rsa, PublicExpnt}, Priv, Pub}, Data)
         }
     ).
 
+hmac(Data) ->
+    hmac(Data, sha256).
+
+hmac(Data, DigestType) -> crypto:mac(hmac, DigestType, <<"ar">>, Data).
+
 %% @doc Verify that a signature is correct.
-verify({{rsa, PublicExpnt}, Pub}, Data, Sig)
-    when PublicExpnt =:= 65537 ->
+verify(Key, Data, Sig) ->
+    verify(Key, Data, Sig, sha256).
+
+verify({{rsa, PublicExpnt}, Pub}, Data, Sig, DigestType) when PublicExpnt =:= 65537 ->
     rsa_pss:verify(
         Data,
-        sha256,
+        DigestType,
         Sig,
         #'RSAPublicKey'{
             publicExponent = PublicExpnt,
