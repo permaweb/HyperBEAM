@@ -30,10 +30,10 @@
 
 %%% @doc a map that contains signature parameters metadata as described
 %%% in https://datatracker.ietf.org/doc/html/rfc9421#name-signature-parameters
-%%% 
+%%%
 %%% All values are optional, but in our use-case "alg" and "keyid" will
 %%% almost always be provided.
-%%% 
+%%%
 %%% #{
 %%% 	created => 1733165109, % a unix timestamp
 %%% 	expires => 1733165209, % a unix timestamp
@@ -48,7 +48,7 @@
 %%% It includes an ordered list of parsed component identifiers, used for extracting values
 %%% from the Request/Response Message Context, as well as the signature parameters
 %%% used when creating the signature and encode in the signature base.
-%%% 
+%%%
 %%% This is effectively the State of an Authority, used to sign a Request/Response Message
 %%% Context.
 %%%
@@ -92,10 +92,10 @@ authority(ComponentIdentifiers, SigParams, Key) ->
 	% TODO: overwrite keyid in SigParams given the Key?
 	#{
 		% parse each component identifier into a Structured Field Item:
-		% 
+		%
 		% <<"\"Example-Dict\";key=\"foo\"">> -> {item, {string, <<"Example-Dict">>}, [{<<"key">>, {string, <<"foo">>}}]}
 		% See hb_http_structuted_fields for parsed Structured Fields full data structures
-		% 
+		%
 		% sf_item/1 handles when the argument is already parsed.
 		% This provides a feedback loop, in case any encoded component identifier is
 		% not properly encoded
@@ -585,9 +585,9 @@ trim_ws_end(Value, N) ->
 %%%
 
 trim_ws_test() ->
-	<<"hello world">> = trim_ws(<<"      hello world      ">>),
-	<<>> = trim_ws(<<"">>),
-	<<>> = trim_ws(<<"         ">>),
+	?assertEqual(<<"hello world">>, trim_ws(<<"      hello world      ">>)),
+	?assertEqual(<<>>, trim_ws(<<"">>)),
+	?assertEqual(<<>>, trim_ws(<<"         ">>)),
 	ok.
 
 sign_test() ->
@@ -654,8 +654,10 @@ signature_components_line_test() ->
 		{item, {string, <<"foo">>}, [{<<"req">>, true}]},
 		<<"\"foo\";key=\"a\"">>
 	],
-	<<"\"@method\": GET\n\"@path\": /id-123/Data\n\"foo\";req: req-b-bar\n\"foo\";key=\"a\": 1">> =
-		signature_components_line(ComponentIdentifiers, Req, Res).
+	?assertEqual(
+		<<"\"@method\": GET\n\"@path\": /id-123/Data\n\"foo\";req: req-b-bar\n\"foo\";key=\"a\": 1">>,
+		signature_components_line(ComponentIdentifiers, Req, Res)
+	).
 
 signature_params_line_test() ->
 	Params = #{created => 1733165109501, nonce => "foobar", keyid => "key1"},
@@ -663,8 +665,10 @@ signature_params_line_test() ->
 		<<"\"Content-Length\"">>, <<"\"@method\"">>, "\"@Path\"", "\"content-type\";req", "\"example-dict\";sf"
 	],
 	Result = signature_params_line(ContentIdentifiers, Params),
-	<<"(\"content-length\" \"@method\" \"@path\" \"content-type\";req \"example-dict\";sf);created=1733165109501;nonce=\"foobar\";keyid=\"key1\"">> =
-		Result.
+	?assertEqual(
+		<<"(\"content-length\" \"@method\" \"@path\" \"content-type\";req \"example-dict\";sf);created=1733165109501;nonce=\"foobar\";keyid=\"key1\"">>,
+		Result
+	).
 
 extract_field_msg_access_test() ->
 	Req = #{
@@ -689,23 +693,34 @@ extract_field_msg_access_test() ->
 		}
 	},
 	% req header + binary key + binary value
-	{ok, {<<"\"foo\";req">>, <<"req-b-bar">>}} = extract_field({item, {string, <<"foo">>}, [{<<"req">>, true}]}, Req, Res),
+	?assertEqual(
+		{ok, {<<"\"foo\";req">>, <<"req-b-bar">>}},
+		extract_field({item, {string, <<"foo">>}, [{<<"req">>, true}]}, Req, Res)
+	),
 
 	% req trailer + atom key + binary value
-	{ok, {<<"\"another\";req;tr">>, <<"req-tr-atom-one">>}} = extract_field(
-		{item, {string, <<"another">>}, [{<<"req">>, true}, {<<"tr">>, true}]}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"another\";req;tr">>, <<"req-tr-atom-one">>}},
+		extract_field({item, {string, <<"another">>}, [{<<"req">>, true}, {<<"tr">>, true}]}, Req, Res)
 	),
 
 	% res header + list key + list value
-	{ok, {<<"\"fizz\"">>, <<"res-l-bar">>}} = extract_field({item, {string, <<"fizz">>}, []}, Req, Res),
+	?assertEqual(
+		{ok, {<<"\"fizz\"">>, <<"res-l-bar">>}},
+		extract_field({item, {string, <<"fizz">>}, []}, Req, Res)
+	),
 
 	% res trailer + binary uppercase key + binary value
-	{ok, {<<"\"woo\";tr">>, <<"res-tr-uppercase-woo">>}} = extract_field(
-		{item, {string, <<"woo">>}, [{<<"tr">>, true}]}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"woo\";tr">>, <<"res-tr-uppercase-woo">>}},
+		extract_field({item, {string, <<"woo">>}, [{<<"tr">>, true}]}, Req, Res)
 	),
 
 	% multiple fields, with obs and newlines
-	{ok, {<<"\"a-field\"">>, <<"first one, second">>}} = extract_field({item, {string, <<"a-field">>}, []}, Req, Res).
+	?assertEqual(
+		{ok, {<<"\"a-field\"">>, <<"first one, second">>}},
+		extract_field({item, {string, <<"a-field">>}, []}, Req, Res)
+	).
 
 extract_field_bs_test() ->
 	Req = #{},
@@ -722,14 +737,19 @@ extract_field_bs_test() ->
 
 	% https://datatracker.ietf.org/doc/html/rfc9421#section-2.1.3-4
 
-	{ok, {<<"\"foo\";bs">>, <<":Zm9vYmFy:">>}} = extract_field({item, {string, <<"foo">>}, [{<<"bs">>, true}]}, Req, Res),
-
-	{ok, {<<"\"a-field\";bs">>, <<":Zmlyc3Q=:, :c2Vjb25k:">>}} = extract_field(
-		{item, {string, <<"a-field">>}, [{<<"bs">>, true}]}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"foo\";bs">>, <<":Zm9vYmFy:">>}},
+		extract_field({item, {string, <<"foo">>}, [{<<"bs">>, true}]}, Req, Res)
 	),
 
-	{ok, {<<"\"b-field\";bs">>, <<":Zmlyc3QsIHNlY29uZA==:">>}} = extract_field(
-		{item, {string, <<"b-field">>}, [{<<"bs">>, true}]}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"a-field\";bs">>, <<":Zmlyc3Q=:, :c2Vjb25k:">>}},
+		extract_field({item, {string, <<"a-field">>}, [{<<"bs">>, true}]}, Req, Res)
+	),
+
+	?assertEqual(
+		{ok, {<<"\"b-field\";bs">>, <<":Zmlyc3QsIHNlY29uZA==:">>}},
+		extract_field({item, {string, <<"b-field">>}, [{<<"bs">>, true}]}, Req, Res)
 	).
 
 extract_field_sf_test() ->
@@ -742,37 +762,56 @@ extract_field_sf_test() ->
 		trailers => #{}
 	},
 	% https://datatracker.ietf.org/doc/html/rfc9421#section-2.1.2-6
-	{ok, {<<"\"foo\"">>, <<"a=1, b=2;x=1;y=2, c=(a b   c), d">>}} = extract_field(
-		{item, {string, <<"foo">>}, []}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"foo\"">>, <<"a=1, b=2;x=1;y=2, c=(a b   c), d">>}},
+		extract_field({item, {string, <<"foo">>}, []}, Req, Res)
 	),
 
-	{ok, {<<"\"foo\";sf">>, <<"a=1, b=2;x=1;y=2, c=(a b c), d=?1">>}} = extract_field(
-		{item, {string, <<"foo">>}, [{<<"sf">>, true}]}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"foo\";sf">>, <<"a=1, b=2;x=1;y=2, c=(a b c), d=?1">>}},
+		extract_field({item, {string, <<"foo">>}, [{<<"sf">>, true}]}, Req, Res)
 	),
 
-	{ok, {<<"\"foo\";key=\"a\"">>, <<"1">>}} = extract_field(
-		{item, {string, <<"foo">>}, [{<<"key">>, {string, <<"a">>}}]}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"foo\";key=\"a\"">>, <<"1">>}},
+		extract_field({item, {string, <<"foo">>}, [{<<"key">>, {string, <<"a">>}}]}, Req, Res)
 	),
 	% inner-list
-	{ok, {<<"\"foo\";key=\"c\"">>, <<"(a b c)">>}} = extract_field(
-		{item, {string, <<"foo">>}, [{<<"key">>, {string, <<"c">>}}]}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"foo\";key=\"c\"">>, <<"(a b c)">>}},
+		extract_field({item, {string, <<"foo">>}, [{<<"key">>, {string, <<"c">>}}]}, Req, Res)
 	),
 	% boolean
-	{ok, {<<"\"foo\";key=\"d\"">>, <<"?1">>}} = extract_field(
-		{item, {string, <<"foo">>}, [{<<"key">>, {string, <<"d">>}}]}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"foo\";key=\"d\"">>, <<"?1">>}},
+		extract_field({item, {string, <<"foo">>}, [{<<"key">>, {string, <<"d">>}}]}, Req, Res)
 	),
 	% params
-	{ok, {<<"\"foo\";key=\"b\"">>, <<"2;x=1;y=2">>}} = extract_field(
-		{item, {string, <<"foo">>}, [{<<"key">>, {string, <<"b">>}}]}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"foo\";key=\"b\"">>, <<"2;x=1;y=2">>}},
+		extract_field({item, {string, <<"foo">>}, [{<<"key">>, {string, <<"b">>}}]}, Req, Res)
 	).
 
 extract_field_error_conflicting_params_test() ->
-	{conflicting_params_error, _} = extract_field(
-		{item, {string, <<"foo">>}, [{<<"bs">>, true}, {<<"sf">>, true}]}, #{}, #{}
-	),
-	{conflicting_params_error, _} = extract_field(
-		{item, {string, <<"foo">>}, [{<<"bs">>, true}, {<<"key">>, {string, <<"foo">>}}]}, #{}, #{}
-	).
+	Req = #{
+		url => <<"https://foo.bar/id-123/Data?another=one&fizz=buzz">>,
+		method => "get",
+		headers => #{
+			<<"foo">> => "a=1, b=2;x=1;y=2, c=(a b   c), d"
+		},
+		trailers => #{}
+	},
+	Res = #{
+		status => 202,
+		headers => #{},
+		trailers => #{}
+	},
+	Expected = conflicting_params_error,
+	{E, _} = extract_field({item, {string, <<"foo">>}, [{<<"bs">>, true}, {<<"sf">>, true}]}, Req, Res),
+	?assertEqual(Expected, E),
+
+	{E2, _} = extract_field({item, {string, <<"foo">>}, [{<<"bs">>, true}, {<<"key">>, {string, <<"foo">>}}]}, Req, Res),
+	?assertEqual(Expected, E2).
 
 extract_field_error_field_not_found_test() ->
 	Req = #{
@@ -788,16 +827,19 @@ extract_field_error_field_not_found_test() ->
 		headers => #{},
 		trailers => #{}
 	},
+	Expected = field_not_found_error,
 	% req headers
-	{field_not_found_error, _} = extract_field({item, {string, <<"not-foo">>}, [{<<"req">>, true}]}, Req, Res),
+	{E, _} = extract_field({item, {string, <<"not-foo">>}, [{<<"req">>, true}]}, Req, Res),
+	?assertEqual(Expected, E),
 	% req trailers
-	{field_not_found_error, _} = extract_field(
-		{item, {string, <<"not-foo">>}, [{<<"req">>, true}, {<<"tr">>, true}]}, Req, Res
-	),
+	{E2, _} = extract_field({item, {string, <<"not-foo">>}, [{<<"req">>, true}, {<<"tr">>, true}]}, Req, Res),
+	?assertEqual(Expected, E2),
 	% res headers
-	{field_not_found_error, _} = extract_field({item, {string, <<"not-foo">>}, []}, Req, Res),
+	{E3, _} = extract_field({item, {string, <<"not-foo">>}, []}, Req, Res),
+	?assertEqual(Expected, E3),
 	% res trailers
-	{field_not_found_error, _} = extract_field({item, {string, <<"not-foo">>}, [{<<"tr">>, true}]}, Req, Res).
+	{E4, _} = extract_field({item, {string, <<"not-foo">>}, [{<<"tr">>, true}]}, Req, Res),
+	?assertEqual(Expected, E4).
 
 extract_field_error_not_sf_dictionary_test() ->
 	Req = #{
@@ -813,9 +855,9 @@ extract_field_error_not_sf_dictionary_test() ->
 		headers => #{},
 		trailers => #{}
 	},
-	{sf_not_dictionary_error, _M} = extract_field(
-		{item, {string, <<"foo">>}, [{<<"req">>, true}, {<<"key">>, {string, <<"smth">>}}]}, Req, Res
-	).
+	Expected = sf_not_dictionary_error,
+	{E, _M} = extract_field({item, {string, <<"foo">>}, [{<<"req">>, true}, {<<"key">>, {string, <<"smth">>}}]}, Req, Res),
+	?assertEqual(Expected, E).
 
 extract_field_error_sf_dictionary_key_not_found_test() ->
 	Req = #{
@@ -831,9 +873,9 @@ extract_field_error_sf_dictionary_key_not_found_test() ->
 		headers => #{},
 		trailers => #{}
 	},
-	{sf_dicionary_key_not_found_error, _M} = extract_field(
-		{item, {string, <<"foo">>}, [{<<"req">>, true}, {<<"key">>, {string, <<"smth">>}}]}, Req, Res
-	).
+	Expected = sf_dicionary_key_not_found_error,
+	{E, _M} = extract_field({item, {string, <<"foo">>}, [{<<"req">>, true}, {<<"key">>, {string, <<"smth">>}}]}, Req, Res),
+	?assertEqual(Expected, E).
 
 derive_component_test() ->
 	Url = <<"https://foo.bar/id-123/Data?another=one&fizz=buzz">>,
@@ -847,54 +889,86 @@ derive_component_test() ->
 	},
 
 	% normalize method (uppercase) + method
-	{ok, {<<"\"@method\"">>, <<"GET">>}} = derive_component({item, {string, <<"@method">>}, []}, Req, Res),
+	?assertEqual(
+		{ok, {<<"\"@method\"">>, <<"GET">>}},
+		derive_component({item, {string, <<"@method">>}, []}, Req, Res)
+	),
 
-	{ok, {<<"\"@target-uri\"">>, Url}} = derive_component({item, {string, <<"@target-uri">>}, []}, Req, Res),
+	?assertEqual(
+		{ok, {<<"\"@target-uri\"">>, Url}},
+		derive_component({item, {string, <<"@target-uri">>}, []}, Req, Res)
+	),
 
-	{ok, {<<"\"@authority\"">>, <<"foo.bar">>}} = derive_component({item, {string, <<"@authority">>}, []}, Req, Res),
+	?assertEqual(
+		{ok, {<<"\"@authority\"">>, <<"foo.bar">>}},
+		derive_component({item, {string, <<"@authority">>}, []}, Req, Res)
+	),
 
-	{ok, {<<"\"@scheme\"">>, <<"https">>}} = derive_component({item, {string, <<"@scheme">>}, []}, Req, Res),
+	?assertEqual(
+		{ok, {<<"\"@scheme\"">>, <<"https">>}},
+		derive_component({item, {string, <<"@scheme">>}, []}, Req, Res)
+	),
 
-	{ok, {<<"\"@request-target\"">>, <<"/id-123/Data?another=one&fizz=buzz">>}} = derive_component(
-		{item, {string, <<"@request-target">>}, []}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"@request-target\"">>, <<"/id-123/Data?another=one&fizz=buzz">>}},
+		derive_component({item, {string, <<"@request-target">>}, []}, Req, Res)
 	),
 
 	% absolute form
-	{ok, {<<"\"@request-target\"">>, Url}} = derive_component(
-		{item, {string, <<"@request-target">>}, []}, maps:merge(Req, #{is_absolute_form => true}), Res
+	?assertEqual(
+		{ok, {<<"\"@request-target\"">>, Url}},
+		derive_component({item, {string, <<"@request-target">>}, []}, maps:merge(Req, #{is_absolute_form => true}), Res)
 	),
 
-	{ok, {<<"\"@path\"">>, <<"/id-123/Data">>}} = derive_component({item, {string, <<"@path">>}, []}, Req, Res),
+	?assertEqual(
+		{ok, {<<"\"@path\"">>, <<"/id-123/Data">>}},
+		derive_component({item, {string, <<"@path">>}, []}, Req, Res)
+	),
 
-	{ok, {<<"\"@query\"">>, <<"another=one&fizz=buzz">>}} = derive_component({item, {string, <<"@query">>}, []}, Req, Res),
+	?assertEqual(
+		{ok, {<<"\"@query\"">>, <<"another=one&fizz=buzz">>}},
+		derive_component({item, {string, <<"@query">>}, []}, Req, Res)
+	),
 
 	% no query params
-	{ok, {<<"\"@query\"">>, <<"?">>}} = derive_component(
-		{item, {string, <<"@query">>}, []}, maps:merge(Req, #{url => <<"https://foo.bar/id-123/Data">>}), Res
+	?assertEqual(
+		{ok, {<<"\"@query\"">>, <<"?">>}},
+		derive_component({item, {string, <<"@query">>}, []}, maps:merge(Req, #{url => <<"https://foo.bar/id-123/Data">>}), Res)
 	),
 
 	% empty query params
-	{ok, {<<"\"@query\"">>, <<"?">>}} = derive_component(
-		{item, {string, <<"@query">>}, []}, maps:merge(Req, #{url => <<"https://foo.bar/id-123/Data?">>}), Res
+	?assertEqual(
+		{ok, {<<"\"@query\"">>, <<"?">>}},
+		derive_component({item, {string, <<"@query">>}, []}, maps:merge(Req, #{url => <<"https://foo.bar/id-123/Data?">>}), Res)
 	),
 
-	{ok, {<<"\"@query-param\";name=\"fizz\"">>, <<"buzz">>}} = derive_component(
-		{item, {string, <<"@query-param">>}, [{<<"name">>, {string, <<"fizz">>}}]}, Req, Res
+	?assertEqual(
+		{ok, {<<"\"@query-param\";name=\"fizz\"">>, <<"buzz">>}},
+		derive_component({item, {string, <<"@query-param">>}, [{<<"name">>, {string, <<"fizz">>}}]}, Req, Res)
 	),
 
 	% normalize identifier (lowercase) + @status
-	{ok, {<<"\"@status\"">>, 202}} = derive_component({item, {string, <<"@Status">>}, []}, Req, Res),
+	?assertEqual(
+		{ok, {<<"\"@status\"">>, 202}},
+		derive_component({item, {string, <<"@Status">>}, []}, Req, Res)
+	),
 	ok.
 
 derive_component_error_req_param_on_request_target_test() ->
 	Result = derive_component({item, {string, <<"@query-param">>}, [{<<"req">>, true}]}, #{}, #{}, req),
-	{req_identifier_error, <<"A Component Identifier may not contain a req parameter if the target is a request message">>} =
-		Result.
+	?assertEqual(
+		{req_identifier_error, <<"A Component Identifier may not contain a req parameter if the target is a request message">>},
+		Result
+	).
 
 derive_component_error_query_param_no_name_test() ->
 	Result = derive_component({item, {string, <<"@query-param">>}, [{<<"noname">>, {string, <<"foo">>}}]}, #{}, #{}, req),
-	{req_identifier_error, <<"@query_param Derived Component Identifier must specify a name parameter">>} = Result.
+	?assertEqual(
+		{req_identifier_error, <<"@query_param Derived Component Identifier must specify a name parameter">>},
+		Result
+	).
 
 derive_component_error_status_req_target_test() ->
 	Result = derive_component({item, {string, <<"@status">>}, []}, #{}, #{}, req),
-	{res_identifier_error, _M} = Result.
+	{E, _M} = Result,
+	?assertEqual(res_identifier_error, E).
