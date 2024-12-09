@@ -162,7 +162,9 @@ signature_components_line(ComponentIdentifiers, Req, Res) ->
 %%%
 %%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.3.2.4
 signature_params_line(ComponentIdentifiers, SigParams) when is_map(SigParams) ->
-    signature_params_line(ComponentIdentifiers, maps:to_list(SigParams));
+    AsList = maps:to_list(SigParams),
+    Sorted = lists:sort(fun({Key1, _}, {Key2, _}) -> Key1 < Key2 end, AsList),
+    signature_params_line(ComponentIdentifiers, Sorted);
 signature_params_line(ComponentIdentifiers, SigParams) when is_list(SigParams) ->
 	SfList = [
 		{
@@ -240,6 +242,8 @@ extract_field({item, {_Kind, IParsed}, IParams}, Req, Res) ->
 				% them for comparison in one pass.
 				[
 					{lower_bin(Key), Value}
+                % TODO: how can we maintain the order msg fields, especially in the case where there are
+                % multiple fields with the same name, and order must be preserved
 				 || {Key, Value} <- maps:to_list(
 						maps:get(
 							% The field will almost certainly be a header, but could also be a trailer
@@ -666,7 +670,7 @@ signature_params_line_test() ->
 	],
 	Result = signature_params_line(ContentIdentifiers, Params),
 	?assertEqual(
-		<<"(\"content-length\" \"@method\" \"@path\" \"content-type\";req \"example-dict\";sf);created=1733165109501;nonce=\"foobar\";keyid=\"key1\"">>,
+		<<"(\"content-length\" \"@method\" \"@path\" \"content-type\";req \"example-dict\";sf);created=1733165109501;keyid=\"key1\";nonce=\"foobar\"">>,
 		Result
 	).
 
