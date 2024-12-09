@@ -30,7 +30,6 @@ node_modules
 c_src/*.o
 c_src/*.d
 priv/*
-rebar.lock
 .DS_STORE
 TEST-data*
 test-cache/*

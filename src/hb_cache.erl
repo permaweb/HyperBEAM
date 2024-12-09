@@ -1,9 +1,17 @@
 -module(hb_cache).
 %%% TX API
 -export([
-    read_output/3, write/2, write_output/4, write_assignment/2,
-    outputs/2, assignments/2, latest/2, latest/3, latest/4, 
-    read/2, lookup/2, read_assignment/3, read_message/2
+    read_output/3,
+    write/2,
+    write_output/4,
+    write_assignment/2,
+    outputs/2,
+    assignments/2,
+    latest/2, latest/3, latest/4,
+    read/2,
+    lookup/2,
+    read_assignment/3,
+    read_message/2
 ]).
 %%% Message API
 -export([
@@ -16,6 +24,7 @@
 -define(TEST_DIR, "test-cache").
 -define(TEST_STORE_MODULE, hb_store_fs).
 -define(TEST_STORE, [{?TEST_STORE_MODULE, #{ prefix => ?TEST_DIR }}]).
+
 -define(COMPUTE_CACHE_DIR, "computed").
 -define(ASSIGNMENTS_DIR, "assignments").
 
@@ -25,28 +34,28 @@
 %%% 'processor' that can be applied to a new message, yielding a result.
 %%% As a consequence, a simple way of understanding AO's computation model is to
 %%% think of it as a dictionary: Every message is a key, yielding its computed value.
-%%% 
+%%%
 %%% Each message itself can be raw data with an associated header (containing metadata),
-%%% or a bundle of other messages (its children). These children are expressed as 
+%%% or a bundle of other messages (its children). These children are expressed as
 %%% either maps or list of other messages.
-%%% 
-%%% We store each of the messages in a cache on disk. The cache is a simple 
-%%% wrapper that allows us to look up either the direct key (a message's ID -- 
+%%%
+%%% We store each of the messages in a cache on disk. The cache is a simple
+%%% wrapper that allows us to look up either the direct key (a message's ID --
 %%% either signed or unsigned) or a 'subpath'. We also store a cache of the linkages
-%%% between messages as symlinks. In the backend, we store each message as either a 
-%%% directory -- if it contains further data items inside -- or as a file, if it is 
+%%% between messages as symlinks. In the backend, we store each message as either a
+%%% directory -- if it contains further data items inside -- or as a file, if it is
 %%% a simple value.
-%%% 
+%%%
 %%% The file structure of the store is as follows:
 %%%
 %%% Root: ?DEFAULT_DATA_DIR
 %%% Messages: ?DEFAULT_DATA_DIR/messages
 %%% Computed outputs: ?DEFAULT_DATA_DIR/computed
-%%% 
+%%%
 %%% Outputs by process: ?DEFAULT_DATA_DIR/computed/ProcessID
 %%% Outputs by slot on process: ?DEFAULT_DATA_DIR/computed/ProcessID/slot/[n]
 %%% Outputs by message on process: ?DEFAULT_DATA_DIR/computed/ProcessID/MessageID[/Subpath]
-%%% 
+%%%
 %%% Outputs are stored as symlinks to the actual file or directory containing the message.
 %%% Messages that are composite are represented as directories containing their childen
 %%% (by ID and by subpath), as well as their base message stored at `.base`.
@@ -83,7 +92,8 @@ latest(Store, ProcID, Limit, Path) ->
             end
     end.
 
-first_slot_with_path(_Store, _ProcID, [], _Limit, _Path) -> not_found;
+first_slot_with_path(_Store, _ProcID, [], _Limit, _Path) ->
+    not_found;
 first_slot_with_path(Store, ProcID, [AfterLimit | Rest], Limit, Path) when AfterLimit > Limit ->
     first_slot_with_path(Store, ProcID, Rest, Limit, Path);
 first_slot_with_path(Store, ProcID, [LatestSlot | Rest], Limit, Path) ->
@@ -388,10 +398,6 @@ fmt_id(ID, _Type) -> ID.
 %%% Tests
 
 %% Helpers
-test_cache() ->
-    hb_store:reset(?TEST_STORE),
-    ?TEST_STORE.
-
 create_unsigned_tx(Data) ->
     ar_bundles:normalize(
         #tx{
@@ -405,39 +411,76 @@ create_unsigned_tx(Data) ->
 create_signed_tx(Data) ->
     ar_bundles:sign_item(create_unsigned_tx(Data), ar_wallet:new()).
 
+create_store_test(TestStore) ->
+    Backend = element(1, TestStore),
+    T =
+        fun(Title) ->
+            NewTitle = Title ++ " [backend: ~p]",
+            TitleWithBackend = io_lib:format(NewTitle, [Backend]),
+            lists:flatten(TitleWithBackend)
+        end,
+    {
+        foreach,
+        fun() ->
+            case Backend of
+                hb_store_rocksdb -> hb_store_rocksdb:start_link([TestStore]);
+                _ -> hb_store:start([TestStore])
+            end,
+            [TestStore]
+        end,
+        fun(Store) -> hb_store:reset(Store) end,
+        [
+            {T("simple_path_resolution_test"), fun() -> simple_path_resolution_test(TestStore) end},
+            {T("resursive_path_resolution_test"), fun() -> resursive_path_resolution_test(TestStore) end},
+            {T("hierarchical_path_resolution_test"), fun() -> hierarchical_path_resolution_test(TestStore) end},
+            {T("store_simple_unsigned_item_test"), fun() -> store_simple_unsigned_item_test(TestStore) end},
+            {T("simple_signed_item_test"), fun() -> simple_signed_item_test(TestStore) end},
+            % {T("composite_unsigned_item_test"), fun() -> composite_unsigned_item_test(TestStore) end},
+            % {T("composite_signed_item_test"), fun() -> composite_signed_item_test(TestStore) end},
+            {T("deeply_nested_item_test"), fun() -> deeply_nested_item_test(TestStore) end},
+            {T("write_and_read_output_test"), fun() -> write_and_read_output_test(TestStore) end},
+            {T("latest_output_retrieval_test"), fun() -> latest_output_retrieval_test(TestStore) end}
+        ]
+    }.
+
+rocksdb_store_test_() ->
+    create_store_test({hb_store_rocksdb, #{prefix => "test-cache"}}).
+
+fs_store_test_() ->
+    create_store_test({hb_store_fs, #{prefix => "test-cache"}}).
+
 %% Test path resolution dynamics.
-simple_path_resolution_test() ->
-    hb_store:write(TestStore = test_cache(), "test-file", <<"test-data">>),
+simple_path_resolution_test(TestStore) ->
+    hb_store:write(TestStore, "test-file", <<"test-data">>),
     hb_store:make_link(TestStore, "test-file", "test-link"),
     ?assertEqual({ok, <<"test-data">>}, hb_store:read(TestStore, "test-link")).
 
-resursive_path_resolution_test() ->
-    hb_store:write(TestStore = test_cache(), "test-file", <<"test-data">>),
+resursive_path_resolution_test(TestStore) ->
+    hb_store:write(TestStore, "test-file", <<"test-data">>),
     hb_store:make_link(TestStore, "test-file", "test-link"),
     hb_store:make_link(TestStore, "test-link", "test-link2"),
     ?assertEqual({ok, <<"test-data">>}, hb_store:read(TestStore, "test-link2")).
 
-hierarchical_path_resolution_test() ->
-    TestStore = test_cache(),
+hierarchical_path_resolution_test(TestStore) ->
     hb_store:make_group(TestStore, "test-dir1"),
     hb_store:write(TestStore, ["test-dir1", "test-file"], <<"test-data">>),
     hb_store:make_link(TestStore, ["test-dir1"], "test-link"),
     ?assertEqual({ok, <<"test-data">>}, hb_store:read(TestStore, ["test-link", "test-file"])).
 
 %% Test storing and retrieving a simple unsigned item
-store_simple_unsigned_item_test() ->
+store_simple_unsigned_item_test(TestStore) ->
     Item = create_unsigned_tx(<<"Simple unsigned data item">>),
     %% Write the simple unsigned item
-    ok = write(TestStore = test_cache(), Item),
+    ok = write(TestStore, Item),
     %% Read the item back
     {ok, RetrievedItem} = read(TestStore, ["messages", fmt_id(Item)]),
     ?assertEqual(Item, RetrievedItem).
 
 %% Test storing and retrieving a simple signed item
-simple_signed_item_test() ->
+simple_signed_item_test(TestStore) ->
     Item = create_signed_tx(<<"Simple signed data item">>),
     %% Write the simple signed item
-    ok = write(TestStore = test_cache(), Item),
+    ok = write(TestStore, Item),
     %% Read the item back
     {ok, RetrievedItemUnsigned} = read_message(TestStore, ar_bundles:id(Item, unsigned)),
     {ok, RetrievedItemSigned} = read_message(TestStore, ar_bundles:id(Item, signed)),
@@ -446,52 +489,52 @@ simple_signed_item_test() ->
     ?assertEqual(Item, RetrievedItemSigned),
     ?assertEqual(true, ar_bundles:verify_item(RetrievedItemSigned)).
 
-%% Test storing and retrieving a composite unsigned item
-composite_unsigned_item_test_ignore() ->
-    ItemData = #{
-        <<"key1">> => create_unsigned_tx(<<"value1">>),
-        <<"key2">> => create_unsigned_tx(<<"value2">>)
-    },
-    Item = ar_bundles:deserialize(create_unsigned_tx(ItemData)),
-    ok = write(TestStore = test_cache(), Item),
-    {ok, RetrievedItem} = ?event(read_message(TestStore, ar_bundles:id(Item))),
-    ?assertEqual(
-        ar_bundles:id((maps:get(<<"key1">>, Item#tx.data)), unsigned),
-        ar_bundles:id((maps:get(<<"key1">>, RetrievedItem#tx.data)), unsigned)
-    ),
-    ?assertEqual(
-        ar_bundles:id((maps:get(<<"key2">>, Item#tx.data)), unsigned),
-        ar_bundles:id((maps:get(<<"key2">>, RetrievedItem#tx.data)), unsigned)
-    ),
-    ?assertEqual(
-        ar_bundles:id(Item, unsigned),
-        ar_bundles:id(RetrievedItem, unsigned)
-    ).
+% %% Test storing and retrieving a composite unsigned item
+% composite_unsigned_item_test_ignore() ->
+%     ItemData = #{
+%         <<"key1">> => create_unsigned_tx(<<"value1">>),
+%         <<"key2">> => create_unsigned_tx(<<"value2">>)
+%     },
+%     Item = ar_bundles:deserialize(create_unsigned_tx(ItemData)),
+%     ok = write(TestStore = test_cache(), Item),
+%     {ok, RetrievedItem} = ?event(read_message(TestStore, ar_bundles:id(Item))),
+%     ?assertEqual(
+%         ar_bundles:id((maps:get(<<"key1">>, Item#tx.data)), unsigned),
+%         ar_bundles:id((maps:get(<<"key1">>, RetrievedItem#tx.data)), unsigned)
+%     ),
+%     ?assertEqual(
+%         ar_bundles:id((maps:get(<<"key2">>, Item#tx.data)), unsigned),
+%         ar_bundles:id((maps:get(<<"key2">>, RetrievedItem#tx.data)), unsigned)
+%     ),
+%     ?assertEqual(
+%         ar_bundles:id(Item, unsigned),
+%         ar_bundles:id(RetrievedItem, unsigned)
+%     ).
 
 %% Test storing and retrieving a composite signed item
-composite_signed_item_test_ignore() ->
-    ItemData = #{
-        <<"key1">> => create_signed_tx(<<"value1">>),
-        <<"key2">> => create_signed_tx(<<"value2">>)
-    },
-    Item = ar_bundles:deserialize(create_signed_tx(ItemData)),
-    ok = write(TestStore = test_cache(), Item),
-    {ok, RetrievedItem} = ?event(read_message(TestStore, ar_bundles:id(Item, signed))),
-    ?assertEqual(
-        ar_bundles:id((maps:get(<<"key1">>, Item#tx.data)), unsigned),
-        ar_bundles:id((maps:get(<<"key1">>, RetrievedItem#tx.data)), unsigned)
-    ),
-    ?assertEqual(
-        ar_bundles:id((maps:get(<<"key2">>, Item#tx.data)), signed),
-        ar_bundles:id((maps:get(<<"key2">>, RetrievedItem#tx.data)), signed)
-    ),
-    ?assertEqual(ar_bundles:id(Item, unsigned), ar_bundles:id(RetrievedItem, unsigned)),
-    ?assertEqual(ar_bundles:id(Item, signed), ar_bundles:id(RetrievedItem, signed)),
-    ?assertEqual(true, ar_bundles:verify_item(Item)),
-    ?assertEqual(true, ar_bundles:verify_item(RetrievedItem)).
+% composite_signed_item_test_ignore() ->
+%     ItemData = #{
+%         <<"key1">> => create_signed_tx(<<"value1">>),
+%         <<"key2">> => create_signed_tx(<<"value2">>)
+%     },
+%     Item = ar_bundles:deserialize(create_signed_tx(ItemData)),
+%     ok = write(TestStore = test_cache(), Item),
+%     {ok, RetrievedItem} = ?event(read_message(TestStore, ar_bundles:id(Item, signed))),
+%     ?assertEqual(
+%         ar_bundles:id((maps:get(<<"key1">>, Item#tx.data)), unsigned),
+%         ar_bundles:id((maps:get(<<"key1">>, RetrievedItem#tx.data)), unsigned)
+%     ),
+%     ?assertEqual(
+%         ar_bundles:id((maps:get(<<"key2">>, Item#tx.data)), signed),
+%         ar_bundles:id((maps:get(<<"key2">>, RetrievedItem#tx.data)), signed)
+%     ),
+%     ?assertEqual(ar_bundles:id(Item, unsigned), ar_bundles:id(RetrievedItem, unsigned)),
+%     ?assertEqual(ar_bundles:id(Item, signed), ar_bundles:id(RetrievedItem, signed)),
+%     ?assertEqual(true, ar_bundles:verify_item(Item)),
+%     ?assertEqual(true, ar_bundles:verify_item(RetrievedItem)).
 
 %% Test deeply nested item storage and retrieval
-deeply_nested_item_test() ->
+deeply_nested_item_test(TestStore) ->
     %% Create nested data
     DeepValueTx = create_signed_tx(<<"deep_value">>),
     Level3Tx = create_unsigned_tx(#{
@@ -504,7 +547,7 @@ deeply_nested_item_test() ->
         <<"level1_key">> => Level2Tx
     }),
     %% Write the nested item
-    ok = write(TestStore = test_cache(), Level1Tx),
+    ok = write(TestStore, Level1Tx),
     %% Read the deep value back using subpath
     {ok, RetrievedItem} = read_message(TestStore, [fmt_id(Level1Tx), "level1_key", "level2_key", "level3_key"]),
     %% Assert that the retrieved item matches the original deep value
@@ -514,9 +557,8 @@ deeply_nested_item_test() ->
         ar_bundles:id(RetrievedItem, unsigned)
     ).
 
-write_and_read_output_test() ->
-    Store = test_cache(),
-    Proc = create_signed_tx(#{ <<"test-item">> => create_unsigned_tx(<<"test-body-data">>) }),
+write_and_read_output_test(Store) ->
+    Proc = create_signed_tx(#{<<"test-item">> => create_unsigned_tx(<<"test-body-data">>)}),
     Item1 = create_signed_tx(<<"Simple signed output #1">>),
     Item2 = create_signed_tx(<<"Simple signed output #2">>),
     ok = write_output(Store, fmt_id(Proc, signed), 0, Item1),
@@ -526,8 +568,8 @@ write_and_read_output_test() ->
     ?assertEqual({ok, Item2}, read_output(Store, fmt_id(Proc, signed), 1)),
     ?assertEqual({ok, Item1}, read_output(Store, fmt_id(Proc, signed), ar_bundles:id(Item1, unsigned))).
 
-latest_output_retrieval_test() ->
-    Store = test_cache(),
+latest_output_retrieval_test(Store) ->
+    % Store = test_cache(),
     Proc = create_signed_tx(#{ <<"test-item">> => create_unsigned_tx(<<"test-body-data">>) }),
     Item1 = create_signed_tx(<<"Simple signed output #1">>),
     Item2 = create_signed_tx(<<"Simple signed output #2">>),
