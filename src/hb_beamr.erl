@@ -172,7 +172,10 @@ aos64_standalone_wex_test() ->
     #{<<"Output">> := #{ <<"data">> := Data }} = Resp,
     ?assertEqual(<<"2">>, Data).
 
-checkpoint_and_resume_test() ->
+slow_test_() ->
+    [ {timeout, 30, fun test_checkpoint_and_resume/0}].
+
+test_checkpoint_and_resume() ->
     Env = gen_test_env(),
     Msg1 = gen_test_aos_msg("TestVar = 0"),
     Msg2 = gen_test_aos_msg("TestVar = 1"),
