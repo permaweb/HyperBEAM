@@ -367,6 +367,11 @@ do_resolve(CurrPath, [LookupKey | Rest]) ->
         Result ->
             maybe_convert_to_binary(Result)
     end.
+
+join(Key) when is_list(Key) ->
+    KeyList = hb_store:join(Key),
+    maybe_convert_to_binary(KeyList);
+join(Key) when is_binary(Key) -> Key.
 %%%=============================================================================
 %%% Tests
 %%%=============================================================================
@@ -383,11 +388,6 @@ get_or_start_server() ->
         {error, {already_started, Pid}} ->
             Pid
     end.
-
-join(Key) when is_list(Key) ->
-    KeyList = hb_store:join(Key),
-    maybe_convert_to_binary(KeyList);
-join(Key) when is_binary(Key) -> Key.
 
 write_read_test_() ->
     {foreach,
