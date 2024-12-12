@@ -11,6 +11,7 @@
 -export([load/2, sign/2, verify/1]).
 -export([serialize/1, serialize/2, deserialize/1, deserialize/2, signers/1]).
 -export([message_to_tx/1, tx_to_message/1]).
+-export([message_to_http/1]).
 %%% Debugging tools:
 -export([print/1, format/1, format/2]).
 -include("include/hb.hrl").
@@ -329,6 +330,124 @@ message_to_tx(M) when is_map(M) ->
 message_to_tx(Other) ->
     ?event({unexpected_message_form, {explicit, Other}}),
     throw(invalid_tx).
+
+%%% @doc Maps the native HyperBEAM Message 
+%%% to an "HTTP" message. An HTTP Message has the following shape:
+%%% 
+%%% #{ 
+%%%     headers => [
+%%%         {<<"Example-Header">>, <<"Value">>}
+%%%     ],
+%%%     body: <<"Some body">>
+%%% }
+%%% 
+%%% 
+%%% For each HyperBEAM Message Key:
+%%% 
+%%% The Key will be ignored if:
+%%% - The field is private (according to hb_private:is_private/1)
+%%% - The field is one of ?REGEN_KEYS
+%%%
+%%% The Key will be mapped according to the following rules:
+%%%     signatures -> {SignatureInput, Signature} header Tuples, each encoded as a Structured Field Dictionary
+%%%     body:
+%%%         - If a map, then every value is assumed another Msg to recursively transform, then combine in
+%%%           a multipart response sent as the body
+%%%         - Otherwise, make this the body of the Http Message
+%%%     _ -> {Name/binary, Value/binary} header Tuple
+%%%         - If the header is a VALID list of dictionary, then attempt to encode as a structured field headers
+%%%         - header is considered valid if:
+%%%             - Header size is <2KB
+%%%             - Only a single depth, as only a single depth is supported by structured fields
+%%%     
+message_to_http(Msg) ->
+    PublicMsg = hb_private:reset(Msg),
+    MinimizedMsg = minimize(PublicMsg),
+    NormalizedMsg = normalize_keys(MinimizedMsg),
+    Http = lists:foldl(
+        fun
+            ({<<"signatures">>, Signatures}, Http) -> signatures_to_http(Http, Signatures);
+            ({<<"body">>, Body}, Http) -> body_to_http(Http, Body);
+            ({Name, Value}, Http) -> field_to_http(Http, {Name, Value})
+        end,
+        #{ headers => [], body => <<>> },
+        maps:to_list(NormalizedMsg)    
+    ),
+    Http.
+
+signatures_to_http(Http, Signatures) when is_map(Signatures) ->
+    signatures_to_http(Http, maps:to_list(Signatures));
+signatures_to_http(Http, Signatures) when is_list(Signatures) ->
+    {SfSigInputs, SfSigs} = lists:foldl(
+        fun ({SigName, SignatureMap = #{ inputs := Inputs, signature := Signature }}, {SfSigInputs, SfSigs}) ->
+            NextSigInput = hb_http_signature:sf_signature_params(Inputs, SignatureMap),
+            NextSig = hb_http_signature:sf_signature(Signature),
+            NextName = hb_converge:key_to_binary(SigName),
+            {
+                [{NextName, NextSigInput} | SfSigInputs],
+                [{NextName, NextSig} | SfSigs] 
+            }
+        end,
+        % Start with empty Structured Field Dictionaries
+        {[], []},
+        Signatures
+    ),
+    Headers = maps:get(headers, Http),
+    % Upsert these headers to ensure they are not duplicated
+    H1 = lists:keystore(<<"Signature">>, 1, Headers, {<<"Signature">>, hb_structured_fields:dictionary(SfSigs)}),
+    NewHeaders = lists:keystore(<<"Signature-Input">>, 1, H1, {<<"Signature-Input">>, hb_http_structured_fields:dictionary(SfSigInputs)}),
+    maps:put(headers, NewHeaders, Http).
+
+field_to_http(Http, {Name, Map}) when is_map(Map) ->
+    {not_implemented, Map};
+field_to_http(Http, {Name, List}) when is_list(List) ->
+    {not_implemented, List};
+field_to_http(Http, {Name, Value}) ->
+    NormalizedName = hb_converge:key_to_binary(Name),
+    NormalizedValue = hb_converge:key_to_binary(Value),
+    Headers = maps:get(headers, Http),
+    NewHeaders = lists:append(Headers, [{NormalizedName, hb_structured_fields:dictionary(NormalizedValue)}]),
+    maps:put(headers, NewHeaders, Http).
+
+body_to_http(Http, Body) when is_map(Body)->
+    % recursively call message_to_http for each Msg and
+    % and then programattically join in the body using the Boundary,
+    % according to multipart/form-data semantics
+    ?no_prod("What should the Boundary be?"),
+    Boundary = base64:encode(crypto:strong_rand_bytes(32)),
+    Parts = maps:map(
+        fun (Key, Msg) ->
+            ?no_prod("What should the name be?"),
+            NormalizedKey = hb_converge:key_to_binary(Key),
+            #{ headers := SubHeaders, body := SubBody } = message_to_http(Msg),
+            % Serialize the headers, to be included in the part of the multipart response
+            SerializedHeaders = lists:foldl(
+                fun ({Name, Value}, Acc) ->
+                    <<Acc/binary, "\n", Name/binary, ": ", Value/binary>>
+                end,
+                <<"Content-Disposition: form-data; name=", NormalizedKey/binary>>,
+                SubHeaders
+            ),
+            % Content-Disposition: form-data; name="fgserbvrebserfe"
+            % Content-Type: image/png
+            % 
+            % <body>
+            <<SerializedHeaders/binary, <<"\n\n">>, SubBody/binary>>
+        end,
+        Body 
+    ),
+    JoinedBody = lists:join(<<<<"--">>, Boundary/binary>>, Parts),
+    Headers = maps:get(headers, Http),
+    % Upsert a Content-Type header to make the Msg multipart
+    NewHeaders = lists:keystore(<<"Content-Type">>, 1, Headers,
+        {<<"Content-Type">>, <<"multipart/form-data; boundary=", Boundary/binary>>}
+    ),
+    body_to_http(
+        maps:put(headers, NewHeaders, Http),
+        iolist_to_binary(JoinedBody)    
+    );
+body_to_http(Http, Body) when is_binary(Body) ->
+    maps:merge(Http, #{ body => Body }).
 
 %% @doc Convert non-binary values to binary for serialization.
 decode_value(decimal, Value) ->

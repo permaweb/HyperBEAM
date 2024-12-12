@@ -16,12 +16,9 @@
 
 -module(hb_http_structured_fields).
 
--export([parse_dictionary/1]).
--export([parse_item/1]).
--export([parse_list/1]).
--export([dictionary/1]).
--export([item/1]).
--export([list/1]).
+-export([parse_dictionary/1, parse_item/1, parse_list/1]).
+-export([dictionary/1, item/1, list/1]).
+-export([to_dictionary/1, to_list/1, to_item/1, to_item/2]).
 
 -include("include/hb_http.hrl").
 
@@ -45,6 +42,85 @@
         (C =:= $u) or (C =:= $v) or (C =:= $w) or (C =:= $x) or (C =:= $y) or
         (C =:= $z)
 ).
+
+%% Mapping
+
+to_dictionary(Map) when is_map(Map) ->
+   to_dictionary(maps:to_list(Map));
+to_dictionary(Pairs) when is_list(Pairs) ->
+    to_dictionary([], Pairs).
+
+to_dictionary(Dict, []) ->
+    {ok, Dict};
+to_dictionary(_Dict, [{ Name, Value } | _Rest]) when is_map(Value) ->
+    {too_deep, Name};
+to_dictionary(Dict, [{Name, Value} | Rest]) when is_list(Value) ->
+    to_dictionary(
+        [{key_to_binary(Name), to_inner_list(Value)} | Dict],
+        Rest
+    );
+to_dictionary(Dict, [{Name, Value} | Rest]) ->
+    to_dictionary(
+        [{key_to_binary(Name), to_item(Value)} | Dict],
+        Rest
+    ).
+
+to_item(Item) ->
+    to_item(Item, []).
+to_item(Item, Params) ->
+    {ok, {item, to_bare_item(Item), [to_param(Param) || Param <- Params]}}.
+
+to_list(List) when is_list(List) ->
+    to_list([], List).
+to_list(Acc, []) ->
+    {ok, Acc};
+to_list(Acc, [Item | Rest]) when is_map(Item) ->
+    {too_deep, Item};
+to_list(Acc, [Item | Rest]) ->
+    % Item
+    % foo -> Item no params
+    % [foo, [...]] Item + params
+    % [[...]] inner list no params
+    % [ [...], [...] ] inner list plus params
+    {not_implemented}.
+
+to_inner_list(List) ->
+    to_inner_list(List, []).
+to_inner_list(List, Params) when is_list(List) ->
+    to_inner_list([], List, Params).
+
+to_inner_list(Inner, [], Params) ->
+    {ok, {list, Inner, [to_param(Param) || Param <- Params]}};
+to_inner_list(_Inner, [Item | _Rest], _Params) when is_map(Item) ->
+    {too_deep, Item};
+
+% TODO: implement for list + params
+
+to_inner_list(Inner, [Item | Rest], Params) ->
+    to_inner_list(
+        [to_item(Item) | Inner],
+        Rest,
+        Params    
+    ).
+
+to_param({Name, Value}) when is_atom(Name)->
+    to_param({atom_to_binary(Name), Value});
+to_param({Name, Value}) ->
+    NormalizedName = iolist_to_binary(Name),
+    {NormalizedName, to_bare_item(Value)}.
+
+to_bare_item(BareItem) ->
+     case BareItem of
+        % Serialize -> Parse numbers in order to ensure their lengths adhere to structured fields
+        I when is_integer(I) -> parse_bare_item(bare_item(I));
+        F when is_float(F) -> parse_bare_item(bare_item({decimal, {F, 0}}));
+        A when is_atom(A) -> {token, atom_to_binary(A)};
+        B when is_boolean(B) -> B;
+        S when is_binary(S) or is_list(S) -> {string, iolist_to_binary(S)}
+    end.
+
+key_to_binary(Key) when is_atom(Key) -> atom_to_binary(Key);
+key_to_binary(Key) -> iolist_to_binary(Key).
 
 %% Parsing.
 
