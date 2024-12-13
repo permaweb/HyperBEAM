@@ -406,7 +406,7 @@ field_to_http(Http, {Name, Value}) ->
     NormalizedName = hb_converge:key_to_binary(Name),
     NormalizedValue = hb_converge:key_to_binary(Value),
     Headers = maps:get(headers, Http),
-    NewHeaders = lists:append(Headers, [{NormalizedName, hb_structured_fields:dictionary(NormalizedValue)}]),
+    NewHeaders = lists:append(Headers, [{NormalizedName, NormalizedValue}]),
     maps:put(headers, NewHeaders, Http).
 
 body_to_http(Http, Body) when is_map(Body)->
