@@ -2,12 +2,20 @@
 %%% as described in RFC-9421 https://datatracker.ietf.org/doc/html/rfc9421
 
 -module(hb_http_signature).
+
+% Signing/Verifying
 -export([authority/3, sign/2, sign/3, verify/2, verify/3]).
--define(EMPTY_QUERY_PARAMS, $?).
--include("include/hb.hrl").
--include_lib("eunit/include/eunit.hrl").
+% Mapping
+-export([sf_signature/1, sf_signature_params/2, sf_signature_param/1]).
 
 % https://datatracker.ietf.org/doc/html/rfc9421#section-2.2.7-14
+-define(EMPTY_QUERY_PARAMS, $?).
+% https://datatracker.ietf.org/doc/html/rfc9421#name-signature-parameters
+-define(SIGNATURE_PARAMS, [created, expired, nonce, alg, keyid, tag]).
+
+-include("include/hb.hrl").
+
+-include_lib("eunit/include/eunit.hrl").
 
 -type fields() :: #{
 	binary() | atom() | string() => binary() | atom() | string()
@@ -218,34 +226,11 @@ signature_components_line(ComponentIdentifiers, Req, Res) ->
 	ComponentsLine = lists:join(<<"\n">>, ComponentsLines),
 	bin(ComponentsLine).
 
-%%%
 %%% @doc construct the "signature-params-line" part of the signature base.
 %%%
 %%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.3.2.4
-signature_params_line(ComponentIdentifiers, SigParams) when is_map(SigParams) ->
-    AsList = maps:to_list(SigParams),
-    Sorted = lists:sort(fun({Key1, _}, {Key2, _}) -> Key1 < Key2 end, AsList),
-    signature_params_line(ComponentIdentifiers, Sorted);
-signature_params_line(ComponentIdentifiers, SigParams) when is_list(SigParams) ->
-	SfList = [
-		{
-			list,
-			lists:map(
-				fun(ComponentIdentifier) ->
-					{item, {_Kind, Value}, Params} = sf_item(ComponentIdentifier),
-					{item, {string, lower_bin(Value)}, Params}
-				end,
-				ComponentIdentifiers
-			),
-			lists:map(
-				fun
-					({K, V}) when is_integer(V) -> {bin(K), V};
-					({K, V}) -> {bin(K), {string, bin(V)}}
-				end,
-				SigParams
-			)
-		}
-	],
+signature_params_line(ComponentIdentifiers, SigParams) ->
+	SfList = sf_signature_params(ComponentIdentifiers, SigParams),
 	Res = hb_http_structured_fields:list(SfList),
 	bin(Res).
 
@@ -501,6 +486,64 @@ derive_component({item, {_Kind, IParsed}, IParams}, Req, Res, Subject) ->
 %%%
 %%% Strucutured Field Utilities
 %%%
+
+%%% @doc construct the structured field Parameter for the signature parameter,
+%%% checking whether the parameter name is valid according RFC-9421
+%%% 
+%%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.3-3
+sf_signature_param({Name, Param}) ->
+    NormalizedName = bin(Name),
+    NormalizedNames = lists:map(fun bin/1, ?SIGNATURE_PARAMS),
+    case lists:member(NormalizedName, NormalizedNames) of
+        false -> {unknown_signature_param, NormalizedName};
+        % all signature params are either integer or string values
+        true -> case Param of
+            I when is_integer(I) -> {ok, {NormalizedName, Param}};
+            P when is_atom(P) orelse is_list(P) orelse is_binary(P) -> {ok, {NormalizedName, {string, bin(P)}}};
+            P -> {invalid_signature_param_value, P}
+        end
+    end.
+
+%%% @doc construct the structured field List for the
+%%% "signature-params-line" part of the signature base.
+%%% 
+%%% Can be parsed into a binary by simply passing to hb_structured_fields:list/1
+%%%
+%%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.3.2.4
+sf_signature_params(ComponentIdentifiers, SigParams) when is_map(SigParams) ->
+    AsList = maps:to_list(SigParams),
+    Sorted = lists:sort(fun({Key1, _}, {Key2, _}) -> Key1 < Key2 end, AsList),
+    sf_signature_params(ComponentIdentifiers, Sorted);
+sf_signature_params(ComponentIdentifiers, SigParams) when is_list(SigParams) ->
+    [
+		{
+			list,
+			lists:map(
+                fun(ComponentIdentifier) ->
+					{item, {_Kind, Value}, Params} = sf_item(ComponentIdentifier),
+					{item, {string, lower_bin(Value)}, Params}
+				end,
+                ComponentIdentifiers
+            ),
+			lists:foldl(
+                fun (RawParam, Params) ->
+                    case sf_signature_param(RawParam) of
+                        {ok, Param} -> Params ++ [Param];
+                        % Ignore unknown signature parameters
+                        {unknown_signature_param, _} -> Params
+                        % TODO: what to do about invalid_signature_param_value?
+                        % For now will cause badmatch
+                    end
+                end,
+                [],
+                SigParams  
+            )
+		}
+	].
+
+% TODO: should this also handle the Signature already being encoded?
+sf_signature(Signature) ->
+    {item, {binary, Signature}, []}.
 
 %%% @doc Attempt to parse the binary into a data structure that represents
 %%% an HTTP Structured Field.

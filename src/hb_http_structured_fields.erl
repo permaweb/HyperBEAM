@@ -1,10 +1,11 @@
 -module(hb_http_structured_fields).
--export([parse_dictionary/1]).
--export([parse_item/1]).
--export([parse_list/1]).
--export([dictionary/1]).
--export([item/1]).
--export([list/1]).
+
+-export([parse_dictionary/1, parse_item/1, parse_list/1]).
+-export([dictionary/1, item/1, list/1]).
+-export([to_dictionary/1, to_list/1, to_item/1, to_item/2]).
+
+-include_lib("eunit/include/eunit.hrl").
+
 -include("include/hb_http.hrl").
 
 %%% The mapping between Erlang and structured headers types is as follow:
@@ -43,6 +44,105 @@
         (C =:= $u) or (C =:= $v) or (C =:= $w) or (C =:= $x) or (C =:= $y) or
         (C =:= $z)
 ).
+
+%% Mapping
+
+% Dictionary
+to_dictionary(Map) when is_map(Map) ->
+   to_dictionary(maps:to_list(Map));
+to_dictionary(Pairs) when is_list(Pairs) ->
+    to_dictionary([], Pairs).
+
+to_dictionary(Dict, []) ->
+    {ok, Dict};
+to_dictionary(_Dict, [{ Name, Value } | _Rest]) when is_map(Value) ->
+    {too_deep, Name};
+to_dictionary(Dict, [{Name, Value} | Rest]) ->
+    case to_item_or_inner_list(Value) of
+        {ok, ItemOrInner} -> to_dictionary([{key_to_binary(Name), ItemOrInner} | Dict], Rest);
+        E -> E
+    end.
+
+% Item
+to_item({item, Kind, Params}) when is_list(Params) ->
+    {ok, {item, to_bare_item(Kind), [to_param(Pair) || Pair <- Params] }};
+to_item(Item) ->
+    to_item(Item, []).
+to_item(Item, Params) when is_list(Params) ->
+    to_item({ item, to_bare_item(Item), Params}).
+
+% List
+to_list(List) when is_list(List) ->
+    to_list([], List).
+to_list(Acc, []) ->
+    {ok, lists:reverse(Acc)};
+to_list(Acc, [ItemOrInner | Rest]) ->
+    Res = to_item_or_inner_list(ItemOrInner),
+    case Res of
+        {ok, Elem} -> to_list([Elem | Acc], Rest);
+        E -> E
+    end.
+
+% Inner List
+to_inner_list({list, Inner, Params}) when is_list(Inner) andalso is_list(Params) ->
+    {ok, {list, [to_inner_item(I) || I <-- Inner], [to_param(Pair) || Pair <- Params]}};
+to_inner_list(Inner) ->
+    to_inner_list(Inner, []).
+
+to_inner_list(Inner, Params) when is_list(Inner) andalso is_list(Params) ->
+    to_inner_list([], Inner, Params).
+
+to_inner_list(Inner, [], Params) when is_list(Params) ->
+    {ok, {list, lists:reverse(Inner), [to_param(Param) || Param <- Params]}};
+to_inner_list(_List, [Item | _Rest], _Params) when is_list(Item) orelse is_map(Item) ->
+    {too_deep, Item};
+to_inner_list(Inner, [Item | Rest], Params) ->
+    case to_item(Item) of
+        {ok, I} -> to_inner_list([I | Inner], Rest, Params);
+        E -> E
+    end.
+
+to_item_or_inner_list(ItemOrInner) ->
+    case ItemOrInner of
+        Map when is_map(Map) -> {too_deep, Map};
+        % pre-parsed inner list
+        {list, Inner, Params} -> to_inner_list(Inner, Params);
+        Item when not is_list(Item) -> to_item(Item);
+        Inner when is_list(Inner) -> to_inner_list(Inner)
+    end.
+
+to_inner_item(Item) when is_list(Item) ->
+    {too_deep, Item};
+to_inner_item(Item) ->
+    case to_item(Item) of
+        {ok, I} -> I;
+        E -> E
+    end.
+
+% Parameters
+to_param({Name, Value}) ->
+    NormalizedName = key_to_binary(Name),
+    {NormalizedName, to_bare_item(Value)}.
+
+% Bare Items
+to_bare_item(BareItem) ->
+     case BareItem of
+        % Assume tuple is already parsed
+        BI when is_tuple(BI) -> BI;
+        % Serialize -> Parse numbers in order to ensure their lengths adhere to structured fields
+        B when is_boolean(B) -> B;
+        I when is_integer(I) ->
+            {Int, _} = parse_bare_item(bare_item(I)),
+            Int;
+        F when is_float(F) ->
+            {Dec, _} = parse_bare_item(bare_item({decimal, {F, 0}})),
+            Dec;
+        A when is_atom(A) -> {token, atom_to_binary(A)};
+        S when is_binary(S) or is_list(S) -> {string, iolist_to_binary(S)}
+    end.
+
+key_to_binary(Key) when is_atom(Key) -> atom_to_binary(Key);
+key_to_binary(Key) -> iolist_to_binary(Key).
 
 %% Parsing.
 
@@ -538,3 +638,98 @@ struct_hd_identity_test_() ->
     || File <- Files
     ]).
 -endif.
+
+to_dictionary_test() ->
+    {ok, SfDictionary} = to_dictionary(#{
+        foo => bar,
+        <<"fizz">> => <<"buzz">>,
+        <<"item-with">> => { item, <<"params">>, [{first, param}, {another, true}] },
+        <<"int-item">> => 1,
+        <<"int-item-with-params">> => { item, 1, [{int, <<"param">>}] },
+        <<"no">> => <<"params">>,
+        <<"empty">> => {item, params, []},
+        inner => [<<"a">>, b, true, 3],
+        inner_with_params => {list, [{item, 1, []}, 2], [{first, param}]},
+        inner_inner_params => [{item, 1, [{heres, <<"one">>}]}, 2]
+    }),
+    ?assertEqual(
+        {<<"foo">>, {item, {token,<<"bar">>}, []}},
+        lists:keyfind(<<"foo">>, 1, SfDictionary)    
+    ),
+    ?assertEqual(
+        {<<"fizz">>, {item, {string,<<"buzz">>}, []}},
+        lists:keyfind(<<"fizz">>, 1, SfDictionary)    
+    ),
+    ?assertEqual(
+        {<<"item-with">>, {item, {string,<<"params">>}, [{<<"first">>, {token,<<"param">>}}, {<<"another">>, true}]}},
+        lists:keyfind(<<"item-with">>, 1, SfDictionary)    
+    ),
+    ?assertEqual(
+        {<<"int-item">>, {item, 1, []}},
+        lists:keyfind(<<"int-item">>, 1, SfDictionary)    
+    ),
+    ?assertEqual(
+        {<<"int-item-with-params">>, {item, 1, [{<<"int">>, {string, <<"param">>}}]}}, 
+        lists:keyfind(<<"int-item-with-params">>, 1, SfDictionary)
+    ),
+    ?assertEqual(
+        {<<"no">>, {item, {string, <<"params">>}, []}}, 
+        lists:keyfind(<<"no">>, 1, SfDictionary)
+    ),
+    ?assertEqual(
+        {<<"empty">>, {item, {token, <<"params">>}, []}}, 
+        lists:keyfind(<<"empty">>, 1, SfDictionary)
+    ),
+    ?assertEqual(
+        {<<"inner">>, {list , [{item, {string, <<"a">>}, []}, {item, {token, <<"b">>}, []}, {item, true, []}, {item, 3, []}], []}},
+        lists:keyfind(<<"inner">>, 1, SfDictionary)
+    ),
+    ?assertEqual(
+        {<<"inner_with_params">>, {list , [{item, 1, []}, {item, 2, []}], [{<<"first">>, {token, <<"param">>}}]}},
+        lists:keyfind(<<"inner_with_params">>, 1, SfDictionary)
+    ),
+    ?assertEqual(
+       {<<"inner_inner_params">>, {list, [{item, 1, [{<<"heres">>, {string, <<"one">>}}]}, {item, 2, []}], []}},
+        lists:keyfind(<<"inner_inner_params">>, 1, SfDictionary)
+    ),
+    dictionary(SfDictionary).
+
+to_dictionary_depth_test() ->
+    {too_deep, _} = to_dictionary(#{
+        foo => #{ bar => buzz }
+    }),
+    {too_deep, _} = to_dictionary(#{
+        foo => [1, 2, [3]]
+    }),
+    ok.
+
+to_item_test() ->
+    ?assertEqual(to_item(1), {ok, {item, 1, []}}),
+    ?assertEqual(to_item(true), {ok, {item, true, []}}),
+    ?assertEqual(to_item(<<"foobar">>), {ok, {item, {string, <<"foobar">>}, []}}),
+    ?assertEqual(to_item("foobar"), {ok, {item, {string, <<"foobar">>}, []}}),
+    ?assertEqual(to_item(foobar), {ok, {item, {token, <<"foobar">>}, []}}),
+    ?assertEqual(
+        to_item({item, "foobar", [{first, param}]}),
+        {ok, {item, {string, <<"foobar">>}, [{<<"first">>, {token, <<"param">>}}]}}
+    ),
+    ok.
+
+to_list_test() ->
+    ?assertEqual(
+        to_list([1,2,<<"three">>, [4, <<"five">>], {list, [6, <<"seven">>], [{first, param}]}]),
+        {ok, [
+            {item, 1, []},
+            {item, 2, []},
+            {item, {string, <<"three">>}, []},
+            {list, [{ item, 4, []}, {item, {string, <<"five">>}, []}], []},
+            {list, [{ item, 6, []}, {item, {string, <<"seven">>}, []}], [{<<"first">>, {token, <<"param">>}}]}
+        ]}
+    ),
+    ok.
+
+to_list_depth_test() ->
+    {too_deep, _} = to_list([1,2,3, [4, [5]]]),
+    {too_deep, _} = to_list([1,2,3, #{ foo => bar } ]),
+    {too_deep, _} = to_list([1,2,3, [#{ foo => bar }] ]),
+    ok.
