@@ -27,21 +27,27 @@ jobs:
       - name: Setup GCloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Setup build tools (Erlang, Packer and Rebar3)
+      - name: Setup Packer
         run: | 
           curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
           sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
           sudo apt-get update
           sudo apt-get install -y packer git libssl-dev ncurses-dev make cmake gcc g++
-          git clone https://github.com/erlang/otp.git && cd otp && git checkout maint-27 && ./configure && make -j8 && sudo make install
-          git clone https://github.com/erlang/rebar3.git && cd rebar3 && ./bootstrap && sudo mv rebar3 /usr/local/bin/
 
-      - name: Build and release AO/HyperBEAM with Rebar3
-        run: | 
-          rebar3 clean
-          rebar3 get-deps
-          rebar3 compile
-          rebar3 release
+      - name: Set up Erlang
+        uses: erlef/setup-beam@v1
+        with:
+            otp-version: '27.0'
+            rebar3-version: '3.24.0'
+
+      - name: Install dependencies
+        run: rebar3 get-deps
+
+      - name: Compile
+        run: rebar3 compile
+
+      - name: Release
+        run: rebar3 release
 
       - name: Set image name with timestamp and commit SHA
         id: set_image_name
