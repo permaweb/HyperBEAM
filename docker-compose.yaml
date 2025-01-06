@@ -1,0 +1,12 @@
+services:
+  hyperbeam:
+    build: .
+    environment:
+      - HB_STORE=${HB_STORE:-/data/store}
+      - HB_KEY=${HB_KEY:-/hyperbeam-key.json}
+      - HB_PORT=8734
+    ports:
+      - "8734:8734"
+    volumes:
+      - ${HB_STORE:-./data}:/data
+      - ${HB_KEY:-./hyperbeam-key.json}:/hyperbeam-key.json
