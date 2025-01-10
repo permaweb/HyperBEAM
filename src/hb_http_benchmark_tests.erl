@@ -3,8 +3,9 @@
 
 % Allows to decrease or increase expected performance based on the current machine specification
 % the smaller number implies more operations expected to be performed.
-% 1 - sam's machine
-% 4 - oleg's machine
+% 1 - for faster machines
+% 4-10 - for slower machines 
+
 -define(PERFORMANCE_DIVIDER, 1).
 
 unsigned_resolve_benchmark_test() ->
