@@ -1,0 +1,19 @@
+# Erlang build artifacts
+_build
+deps
+*.beam
+*.dump
+
+# Git
+.git
+.gitignore
+
+# Docker files
+Dockerfile
+docker-compose.yml
+
+# Other
+*.md
+*.log
+*.swp
+.env
