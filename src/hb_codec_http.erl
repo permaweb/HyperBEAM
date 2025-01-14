@@ -44,6 +44,9 @@
 
 % The max header length is 4KB
 -define(MAX_HEADER_LENGTH, 4096).
+% https://datatracker.ietf.org/doc/html/rfc7231#section-3.1.1.4
+-define(CRLF, <<"\r\n">>).
+-define(DOUBLE_CRLF, <<?CRLF/binary, ?CRLF/binary>>).
 
 %%% @doc Convert an HTTP Message into a TABM.
 %%% HTTP Structured Field is encoded into it's equivalent TABM encoding.
@@ -249,14 +252,14 @@ from_body(TABM, ContentType, Body) ->
     end.
 
 append_body_part(TABM, Part) ->
-    % Extract the Headers block and Body. Only split on the FIRST \n\n
-    [RawHeadersBlock, RawBody] = case binary:split(Part, [<<"\n\n">>], []) of
+    % Extract the Headers block and Body. Only split on the FIRST double CRLF
+    [RawHeadersBlock, RawBody] = case binary:split(Part, [?DOUBLE_CRLF], []) of
         % no body
         [RHB] -> [RHB, <<>>];
         [RHB, RB] -> [RHB, RB]
     end,
     % Extract individual headers
-    RawHeaders = binary:split(RawHeadersBlock, <<"\n">>, [global]),
+    RawHeaders = binary:split(RawHeadersBlock, ?CRLF, [global]),
     % Now we parse each header, splitting into {Key, Value}
     Headers = lists:filtermap(
         fun
@@ -336,12 +339,12 @@ to(TABM) when is_map(TABM) ->
             % Transform body into a binary, delimiting each part with the Boundary
             BodyList = maps:fold(
                 fun (_, BodyPart, Acc) ->
-                    [<<"--", Boundary/binary, "\n", BodyPart/binary>> | Acc]
+                    [<<"--", Boundary/binary, ?CRLF/binary, BodyPart/binary>> | Acc]
                 end,
                 [],
                 Body
             ),
-            BodyBin = iolist_to_binary(lists:join(<<"\n">>, lists:reverse(BodyList))),
+            BodyBin = iolist_to_binary(lists:join(?CRLF, lists:reverse(BodyList))),
             #{ 
                 headers => [
                     {
@@ -351,7 +354,7 @@ to(TABM) when is_map(TABM) ->
                     | maps:get(headers, Http)
                 ],
                 % End the body with a final terminating Boundary
-                body => <<BodyBin/binary, "\n--", Boundary/binary, "--">>
+                body => <<BodyBin/binary, ?CRLF/binary, "--", Boundary/binary, "--">>
             }
     end,
     NewHttp.
@@ -365,14 +368,14 @@ encode_http_msg (_Http = #{ headers := SubHeaders, body := SubBody }) ->
         [],
         SubHeaders
     ),
-    EncodedHeaders = iolist_to_binary(lists:join(<<"\n">>, lists:reverse(HeaderList))),
+    EncodedHeaders = iolist_to_binary(lists:join(?CRLF, lists:reverse(HeaderList))),
     case SubBody of
         <<>> -> EncodedHeaders;
         % Some-Headers: some-value
         % Content-Type: image/png
         % 
         % <body>
-        _ -> <<EncodedHeaders/binary, "\n\n", SubBody/binary>>
+        _ -> <<EncodedHeaders/binary, ?DOUBLE_CRLF/binary, SubBody/binary>>
     end.
 
 signatures_to_http(Http, Signatures) when is_map(Signatures) ->
@@ -489,7 +492,7 @@ field_to_http(Http, {Name, Value}, Opts) when is_binary(Value) ->
         body ->
             Body = maps:get(body, Http),
             Disposition = maps:get(disposition, Opts, <<"Content-Disposition: form-data;name=", NormalizedName/binary>>),
-            BodyPart = <<Disposition/binary, "\n", Value/binary>>,
+            BodyPart = <<Disposition/binary, ?CRLF/binary, Value/binary>>,
             NewBody = maps:put(NormalizedName, BodyPart, Body),
             maps:put(body, NewBody, Http)
     end.
