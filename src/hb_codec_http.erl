@@ -194,14 +194,14 @@ find_header(Headers, Name) ->
 find_header(Headers, Name, Opts) when is_list(Headers) ->
     Matcher = case lists:member(strict, Opts) of
         true -> fun ({N, _Value}) -> N =:= Name end;
-        _ -> fun ({N, _Value}) -> hb_util:to_lower(N) =:= hb_util:to_lower(N) end
+        _ -> fun ({N, _Value}) -> hb_util:to_lower(N) =:= hb_util:to_lower(Name) end
     end,
     case lists:filter(Matcher, Headers) of
-        [] -> undefined;
-        Headers -> case lists:member(global, Opts) of
-            true -> Headers;
+        [] -> {undefined, undefined};
+        Found -> case lists:member(global, Opts) of
+            true -> Found;
             _ ->
-                [First | _] = Headers,
+                [First | _] = Found,
                 First
         end
     end.
