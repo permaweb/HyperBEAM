@@ -13,7 +13,8 @@
         prometheus,
         prometheus_cowboy,
         os_mon,
-        rocksdb
+        rocksdb,
+        quicer
     ]},
     {env, []},
     {modules, []},
