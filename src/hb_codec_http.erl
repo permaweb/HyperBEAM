@@ -125,14 +125,14 @@ find_header(Headers, Name) ->
 find_header(Headers, Name, Opts) when is_list(Headers) ->
     Matcher = case lists:member(strict, Opts) of
         true -> fun ({N, _Value}) -> N =:= Name end;
-        _ -> fun ({N, _Value}) -> hb_util:to_lower(N) =:= hb_util:to_lower(N) end
+        _ -> fun ({N, _Value}) -> hb_util:to_lower(N) =:= hb_util:to_lower(Name) end
     end,
     case lists:filter(Matcher, Headers) of
         [] -> undefined;
-        Headers -> case lists:member(global, Opts) of
-            true -> Headers;
+        Found -> case lists:member(global, Opts) of
+            true -> Found;
             _ ->
-                [First | _] = Headers,
+                [First | _] = Found,
                 First
         end
     end.
@@ -153,6 +153,7 @@ dequote(Bin) when is_binary(Bin) ->
 
 from_body(TABM, _ContentType, <<>>) -> TABM;
 from_body(TABM, ContentType, Body) ->
+    ?event(debug, {content_type, ContentType}),
     {item, {_, _BodyType}, Params} = hb_http_structured_fields:parse_item(ContentType),
     case lists:keyfind(<<"boundary">>, 1, Params) of
         % The body is not a multipart, so just set as is to the Body key on the TABM

@@ -199,6 +199,7 @@ empty_inbox(Ref) ->
 reply(Req, Message) ->
     reply(Req, message_to_status(Message), Message).
 reply(Req, Status, RawMessage) ->
+    ?event(debug, {msg, RawMessage}),
     Message = hb_converge:ensure_message(RawMessage),
     TX = hb_message:convert(Message, tx, converge, #{}),
     ?event(http,
@@ -277,8 +278,7 @@ read_body(Req0, Acc) ->
 
 simple_converge_resolve_test() ->
     URL = hb_http_server:start_test_node(),
-    {ok, Res} =
-        post(
+    {ok, Res} = post(
             URL,
             #{
                 path => <<"Key1">>,
@@ -291,6 +291,9 @@ simple_converge_resolve_test() ->
             },
             #{}
         ),
+    ?event(debug, Res),
+    % not working, returning an error, I think because the singleton
+    % preprocess is not found 
     ?assertEqual(<<"Value2">>, hb_converge:get(<<"Key2/Key3">>, Res, #{})).
 
 wasm_compute_request(ImageFile, Func, Params) ->
