@@ -130,8 +130,10 @@ init(Req, ServerID) ->
     % Parse the HTTP request into HyerBEAM's message format.
     ReqSingleton = hb_http:req_to_tabm_singleton(Req, NodeMsg),
     ?event(http, {http_inbound, ReqSingleton}),
-    {ok, Res} = dev_meta:handle(NodeMsg, ReqSingleton),
-    hb_http:reply(Req, Res).
+    case dev_meta:handle(NodeMsg, ReqSingleton) of
+        {ok, Res} -> hb_http:reply(Req, Res);
+        {error, _} -> hb_http:reply(Req, 404, <<"Not Found">>)
+    end.
 
 %% @doc Return the complete Ranch ETS table for the node for debugging.
 ranch_ets() ->

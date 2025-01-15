@@ -291,6 +291,9 @@ simple_converge_resolve_test() ->
             },
             #{}
         ),
+    ?event(debug, Res),
+    % not working, returning an error, I think because the singleton
+    % preprocess is not found 
     ?assertEqual(<<"Value2">>, hb_converge:get(<<"Key2/Key3">>, Res, #{})).
 
 wasm_compute_request(ImageFile, Func, Params) ->
