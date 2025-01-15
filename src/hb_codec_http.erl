@@ -153,7 +153,6 @@ dequote(Bin) when is_binary(Bin) ->
 
 from_body(TABM, _ContentType, <<>>) -> TABM;
 from_body(TABM, ContentType, Body) ->
-    ?event(debug, {content_type, ContentType}),
     {item, {_, _BodyType}, Params} = hb_http_structured_fields:parse_item(ContentType),
     case lists:keyfind(<<"boundary">>, 1, Params) of
         % The body is not a multipart, so just set as is to the Body key on the TABM

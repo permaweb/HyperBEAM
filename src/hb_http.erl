@@ -199,7 +199,6 @@ empty_inbox(Ref) ->
 reply(Req, Message) ->
     reply(Req, message_to_status(Message), Message).
 reply(Req, Status, RawMessage) ->
-    ?event(debug, {msg, RawMessage}),
     Message = hb_converge:ensure_message(RawMessage),
     TX = hb_message:convert(Message, tx, converge, #{}),
     ?event(http,
@@ -278,7 +277,7 @@ read_body(Req0, Acc) ->
 
 simple_converge_resolve_test() ->
     URL = hb_http_server:start_test_node(),
-    {ok, Res} = 
+    {ok, Res} =
         post(
             URL,
             #{
