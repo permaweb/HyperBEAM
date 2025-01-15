@@ -278,7 +278,8 @@ read_body(Req0, Acc) ->
 
 simple_converge_resolve_test() ->
     URL = hb_http_server:start_test_node(),
-    {ok, Res} = post(
+    {ok, Res} = 
+        post(
             URL,
             #{
                 path => <<"Key1">>,
