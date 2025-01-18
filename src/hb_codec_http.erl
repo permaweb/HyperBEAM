@@ -94,7 +94,7 @@ from_signature(Map, RawSig, RawSigInput) ->
 
             SigMap = lists:foldl(
                 fun({PName, PBareItem}, PAcc) ->
-                    maps:put(PName, PBareItem, PAcc)
+                    maps:put(PName, from_sf_bare_item(PBareItem), PAcc)
                 end,
                 #{ <<"signature">> => Sig, <<"inputs">> => Inputs },
                  % Signature parameters are converted into top-level keys on the signature Map
@@ -108,6 +108,16 @@ from_signature(Map, RawSig, RawSigInput) ->
     ),
     % Finally place the Signatures as a top-level Map on the parent Map
     maps:put(<<"signatures">>, Signatures, Map).
+
+from_sf_bare_item (BareItem) ->
+    case BareItem of
+        I when is_integer(I) -> I;
+        B when is_boolean(B) -> B;
+        D = {decimal, _} -> list_to_float(hb_http_structured_fields:bare_item(D));
+        {string, S} -> S;
+        {token, T} -> binary_to_existing_atom(T);
+        {binary, B} -> B
+    end.
 
 find_header(Headers, Name) ->
     find_header(Headers, Name, []).
