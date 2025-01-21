@@ -53,7 +53,7 @@ static ErlDrvTermData atom_import;
 static ErlDrvTermData atom_execution_result;
 
 #ifndef HB_DEBUG
-#define HB_DEBUG 0
+#define HB_DEBUG 1
 #endif
 
 #define DRV_DEBUG(format, ...) beamr_print(HB_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
@@ -69,6 +69,24 @@ void beamr_print(int print, const char* file, int line, const char* format, ...)
         printf("\r\n");
     }
     va_end(args);
+}
+
+ImportResponse* alloc_import_response() {
+    ImportResponse* ir = driver_alloc(sizeof(ImportResponse));
+    ir->response_ready = NULL;
+    ir->cond = NULL;
+    ir->ready = 0;
+    ir->error_message = NULL;
+    ir->result_terms = NULL;
+    ir->result_length = 0;
+    return ir;
+}
+
+void free_import_response(ImportResponse ** ir) {
+    erl_drv_cond_destroy((*ir)->cond);
+    erl_drv_mutex_destroy((*ir)->response_ready);
+    driver_free(*ir);
+    *ir = NULL;
 }
 
 const char* wasm_externtype_to_kind_string(const wasm_externtype_t* type) {
@@ -355,7 +373,7 @@ wasm_trap_t* generic_import_handler(void* env, const wasm_val_vec_t* args, wasm_
     msg[msg_index++] = 5;
 
     // Initialize the result vector and set the required result types
-    proc->current_import = driver_alloc(sizeof(ImportResponse));
+    proc->current_import = alloc_import_response();
 
     // Create and initialize a is_running and condition variable for the response
     proc->current_import->response_ready = erl_drv_mutex_create("response_mutex");
@@ -377,8 +395,7 @@ wasm_trap_t* generic_import_handler(void* env, const wasm_val_vec_t* args, wasm_
         wasm_name_t message;
         wasm_name_new_from_string_nt(&message, proc->current_import->error_message);
         wasm_trap_t* trap = wasm_trap_new(proc->store, &message);
-        driver_free(proc->current_import);
-        proc->current_import = NULL;
+        free_import_response(&(proc->current_import));
         return trap;
     }
 
@@ -397,11 +414,7 @@ wasm_trap_t* generic_import_handler(void* env, const wasm_val_vec_t* args, wasm_
 
     // Clean up
     DRV_DEBUG("Cleaning up import response");
-    erl_drv_cond_destroy(proc->current_import->cond);
-    erl_drv_mutex_destroy(proc->current_import->response_ready);
-    driver_free(proc->current_import);
-
-    proc->current_import = NULL;
+    free_import_response(&(proc->current_import));
     return NULL;
 }
 
