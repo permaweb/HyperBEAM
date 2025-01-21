@@ -614,6 +614,9 @@ static void async_call(void* raw) {
         DRV_DEBUG("Source term: %d", proc->current_args[i].value.i_val);
     }
 
+    driver_free(proc->current_args);
+    proc->current_args = NULL;
+
     if(res == -1) {
         send_error(proc, "Failed to convert terms to wasm vals");
         drv_unlock(proc->is_running);
