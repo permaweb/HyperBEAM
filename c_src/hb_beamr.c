@@ -399,6 +399,8 @@ wasm_trap_t* generic_import_handler(void* env, const wasm_val_vec_t* args, wasm_
     DRV_DEBUG("Cleaning up import response");
     erl_drv_cond_destroy(proc->current_import->cond);
     erl_drv_mutex_destroy(proc->current_import->response_ready);
+    // Clean up the result_terms of current_import as it's not cleaned automatically
+    driver_free(proc->current_import->result_terms);
     driver_free(proc->current_import);
 
     proc->current_import = NULL;
