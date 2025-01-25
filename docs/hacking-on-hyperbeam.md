@@ -92,4 +92,15 @@ If you would like to re-build HyperBEAM in-place, while it is running, just
 run `hb:build()`. This will invoke `rebar3` and build any modules changed 
 since the last invocation.
 
+## Profiling with eflame (building flamecharts)
+
+1. Benchmark a given function (in Erlang shell) with
+   `eflame:apply(hb, address, []).`
+   This will store traces under "stacks.out" in the project folder.
+
+2. Convert stacks.out into svg file (in shell):
+  `_build/default/lib/eflame/stack_to_flame.sh < stacks.out > hb_address_flame.svg`
+
+3. Open the svg file in browser.
+
 Happy hacking!
