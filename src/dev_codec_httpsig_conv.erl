@@ -125,12 +125,12 @@ from_body(TABM, ContentType, Body) ->
             % By taking into account all parts of the surrounding boundary above,
             % we get precisely the sub-part that we're interested without any
             % additional parsing
-            Parts = binary:split(BodyPart, [<<"--", Boundary/binary>>], [global]),
+            Parts = binary:split(BodyPart, [<<?CRLF/binary, "--", Boundary/binary>>], [global]),
             % Finally, for each part within the sub-part, we need to parse it,
             % potentially recursively as a sub-TABM, and then add it to the
             % current TABM
-            {ok, NewTABM} = from_body_parts(TABM, Parts),
-            NewTABM
+            {ok, FlattendTABM} = from_body_parts(TABM, Parts),
+            dev_codec_flat:from(FlattendTABM)
     end.
 
 from_body_parts (TABM, []) -> {ok, TABM};
@@ -190,6 +190,10 @@ from_body_parts(TABM, [Part | Rest]) ->
                         % So simply use the the raw body binary as the part
                         RawBody;
                     _ ->
+                        % TODO: this branch may no longer be needed
+                        % since we flatten the maps prior to HTTP encoding
+                        % 
+                        % For now, keeping recursive logic.
                         % We need to recursively parse the sub part into its own TABM
                         from(RestHeaders#{ <<"body">> => RawBody })
                 end,
@@ -273,29 +277,30 @@ attestations_from_signature(Map, HPs, RawSig, RawSigInput) ->
 to(Bin) when is_binary(Bin) -> Bin;
 to(TABM) -> to(TABM, []).
 to(TABM, Opts) when is_map(TABM) ->
-    % PublicMsg = hb_private:reset(TABM)s
-    % MinimizedMsg = hb_message:minimize(PublicMsg),
     % Calculate the initial encoding from the TABM
     Enc0 =
         maps:fold(
-            fun(<<"body">>, Value, AccMap) ->
+            fun
+                (<<"body">>, Value, AccMap) ->
                     AccMap#{ <<"body">> => #{ <<"body">> => Value } };
-                (Key, Value, AccMap) -> field_to_http(AccMap, {Key, Value}, #{})
+                (Key, Value, AccMap) ->
+                    field_to_http(AccMap, {Key, Value}, #{})
             end,
             #{},
             maps:without([<<"attestations">>, <<"signature">>, <<"signature-input">>], TABM)
         ),
     ?event({prepared_body_map, {msg, Enc0}}),
     BodyMap = maps:get(<<"body">>, Enc0, #{}),
+    FlattenedBodyMap = dev_codec_flat:to(BodyMap),
     Enc1 =
-        case {BodyMap, lists:member(sub_part, Opts)} of
+        case {FlattenedBodyMap, lists:member(sub_part, Opts)} of
             {X, _} when map_size(X) =:= 0 ->
                 % If the body map is empty, then simply set the body to be a 
                 % corresponding empty binary.
                 ?event({encoding_empty_body, {msg, Enc0}}),
                 maps:put(<<"body">>, <<>>, Enc0);
             {#{ <<"body">> := UserBody }, false}
-                    when map_size(BodyMap) =:= 1 andalso is_binary(UserBody) ->
+                    when map_size(FlattenedBodyMap) =:= 1 andalso is_binary(UserBody) ->
                 % Simply set the sole body binary as the body of the
                 % HTTP message, no further encoding required
                 % 
@@ -311,27 +316,9 @@ to(TABM, Opts) when is_map(TABM) ->
             _ ->
                 % Otherwise, we need to encode the body map as the
                 % multipart body of the HTTP message
-                ?event({encoding_multipart, {bodymap, {explicit, BodyMap}}}),
-                % We need to generate a unique, reproducible boundary for the
-                % multipart body, however we cannot use the id of the message as
-                % the boundary, as the id is not known until the message is
-                % encoded. Subsequently, we generate each body part individually,
-                % concatenate them, and apply a SHA2-256 hash to the result.
-                % This ensures that the boundary is unique, reproducible, and
-                % secure.
-                ProcessedBodyParts = maps:map(fun encode_body_part/2, BodyMap),
-                PartList = to_sorted_list(ProcessedBodyParts),
-                BodyBin =
-                    iolist_to_binary(
-                        lists:join(?CRLF,
-                            lists:map(
-                                fun ({_PartName, PartBin}) -> PartBin end,
-                                PartList
-                            )
-                        )
-                    ),
-                RawBoundary = crypto:hash(sha256, BodyBin),
-                Boundary = hb_util:encode(RawBoundary),
+                ?event({encoding_multipart, {bodymap, {explicit, FlattenedBodyMap}}}),
+                PartList = to_sorted_list(maps:map(fun encode_body_part/2, FlattenedBodyMap)), 
+                Boundary = boundary_from_parts(PartList),
                 % Transform body into a binary, delimiting each part with the
                 % boundary
                 BodyList = lists:foldl(
@@ -372,6 +359,26 @@ to(TABM, Opts) when is_map(TABM) ->
         not_found -> Enc1
     end.
 
+% We need to generate a unique, reproducible boundary for the
+% multipart body, however we cannot use the id of the message as
+% the boundary, as the id is not known until the message is
+% encoded. Subsequently, we generate each body part individually,
+% concatenate them, and apply a SHA2-256 hash to the result.
+% This ensures that the boundary is unique, reproducible, and
+% secure.
+boundary_from_parts(PartList) ->
+    BodyBin =
+        iolist_to_binary(
+            lists:join(?CRLF,
+                lists:map(
+                    fun ({_PartName, PartBin}) -> PartBin end,
+                    PartList
+                )
+            )
+        ),
+    RawBoundary = crypto:hash(sha256, BodyBin),
+    hb_util:encode(RawBoundary).
+
 %% Extract all hashpaths from the attestations of a given message
 hashpaths_from_message(Msg) ->
     maps:fold(
@@ -410,6 +417,10 @@ encode_body_part(PartName, BodyPart) ->
     % satisfies that requirement, but also encodes the
     % HB message field that resolves to the sub-message
     case BodyPart of
+        % TODO: this branch may no longer be needed
+        % since we flatten the maps prior to HTTP encoding
+        % 
+        % For now, keeping recursive logic
         BPMap when is_map(BPMap) ->
             WithDisposition = maps:put(
                 <<"content-disposition">>,
@@ -419,25 +430,15 @@ encode_body_part(PartName, BodyPart) ->
             SubHttp = to(WithDisposition, [sub_part]),
             encode_http_msg(SubHttp);
         BPBin when is_binary(BPBin) ->
-            case PartName of
-                % A properly encoded inlined body part MUST have a CRLF between
-                % it and the header block, so we MUST use two CRLF:
-                % - first to signal end of the Content-Disposition header
-                % - second to signal the end of the header block
-                <<"body">> -> 
-                    <<
-                        "content-disposition: ", Disposition/binary, ?CRLF/binary,
-                        ?CRLF/binary,
-                        BPBin/binary
-                    >>;
-                % All other binary values are encoded as a header in their
-                % respective sub-part
-                _ ->
-                    <<
-                        "content-disposition: ", Disposition/binary, ?CRLF/binary,
-                        BPBin/binary
-                    >>
-            end
+            % A properly encoded inlined body part MUST have a CRLF between
+            % it and the header block, so we MUST use two CRLF:
+            % - first to signal end of the Content-Disposition header
+            % - second to signal the end of the header block
+            <<
+                "content-disposition: ", Disposition/binary, ?CRLF/binary,
+                ?CRLF/binary,
+                BPBin/binary
+            >>
     end.
 
 %%% @doc Given a map or KVList, return a sorted list of its key-value pairs.
@@ -500,11 +501,10 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
     %
     % Note that a "where" Opts may force the location of the encoded
     % value -- this is only a default location if not specified in Opts 
-    DefaultWhere =
-        case {maps:get(where, Opts, headers), byte_size(Value)} of
-            {headers, Fits} when Fits =< ?MAX_HEADER_LENGTH -> headers;
-            _ -> body
-        end,
+    DefaultWhere = case {maps:get(where, Opts, headers), byte_size(Value)} of
+        {headers, Fits} when Fits =< ?MAX_HEADER_LENGTH -> headers;
+        _ -> body
+    end,
     case maps:get(where, Opts, DefaultWhere) of
         headers ->
             Httpsig#{ NormalizedName => Value };
