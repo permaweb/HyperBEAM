@@ -94,7 +94,9 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     // Clean up
     DRV_DEBUG("Cleaning up import response");
     erl_drv_cond_destroy(proc->current_import->cond);
+    proc->current_import->cond = NULL;
     erl_drv_mutex_destroy(proc->current_import->response_ready);
+    proc->current_import->response_ready = NULL;
     driver_free(proc->current_import);
 
     proc->current_import = NULL;

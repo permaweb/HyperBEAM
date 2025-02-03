@@ -55,6 +55,11 @@
 %%% Utility API:
 -export([serialize/1, deserialize/2, stub/3]).
 
+% Tests that helped to detect segfaults in DEBUG 1 mode
+-ifdef(TEST).
+-export([load_pow_calculator/0, pow_calculator/3, pow_calculator_for_large_power/0]).
+-endif.
+
 -include("src/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -279,6 +284,21 @@ imported_function_test() ->
                 {ok, [Arg1 * Arg2], Msg1}
             end),
     ?assertEqual(32, Result).
+
+load_pow_calculator() ->
+    {ok, File} = file:read_file("test/pow_calculator.wasm"),
+    {ok, WASM, _Imports, _Exports} = start(File),
+    WASM.
+
+pow_calculator(WASM, Base, Power) ->
+    call(WASM, <<"pow">>, [Base, Power],
+        fun(Msg1, #{ args := [Arg1, Arg2] }, _Opts) ->
+            {ok, [Arg1 * Arg2], Msg1}
+        end).
+
+pow_calculator_for_large_power() ->
+    WASM = load_pow_calculator(),
+    pow_calculator(WASM, 1, 100000).
 
 %% @doc Test that WASM Memory64 modules load and execute correctly.
 wasm64_test() ->
