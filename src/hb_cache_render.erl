@@ -1,71 +1,73 @@
 %%% @doc A module that helps to render given Key graphs into the .dot files
 -module(hb_cache_render).
 
--export([render/1, render/2, render/3]).
+-export([render/1, render/3]).
 
 % Preparing data for testing
 -export([prepare_unsigned_data/0, prepare_signed_data/0, prepare_deeply_nested_complex_message/0]).
 
 -include("src/include/hb.hrl").
-
 -include_lib("kernel/include/file.hrl").
 
-%% @doc Render the given Key into svg
-render(Key) ->
-    render("TEST-cache-fs", Key).
-
-render(BaseDir, Key) -> 
-    {ok, IoDevice} = file:open("diagram.dot", [write]),
+% @doc Render the given Key into svg
+render("*") ->
+    Store = get_test_store(),
+    {ok, Keys} = hb_store:list(Store, "/"),
+    render(Keys);
+render(StartKeys) ->
+    Store = get_test_store(),
+    os:cmd("rm new_render_diagram.dot"),
+    {ok, IoDevice} = file:open("new_render_diagram.dot", [write]),
     ok = file:write(IoDevice, <<"digraph filesystem {\n">>),
     ok = file:write(IoDevice, <<"  node [shape=circle];\n">>),
-
-    render(IoDevice, BaseDir, Key),
+    lists:foreach(fun(Key) -> render(IoDevice, Store, Key) end, StartKeys),
     ok = file:write(IoDevice, <<"}\n">>),
-    
     file:close(IoDevice),
-    os:cmd("dot -Tsvg diagram.dot -o dotfile.svg"),
-    os:cmd("open dotfile.svg").
+    os:cmd("dot -Tsvg new_render_diagram.dot -o new_render_diagram.svg"),
+    os:cmd("open new_render_diagram.svg"),
+    ok.
 
-render(IoDevice, Dir, Key) ->
-    Path = filename:join([Dir, Key]),
-    case file:list_dir_all(Path) of
-        {ok, SubKeys} -> 
-            % We are inside the folder
-            add_dir(IoDevice, Key),
-
-            lists:foreach(
-                fun(SubKey) ->
-                    case type(filename:join([Path, SubKey])) of
-                        {link, Link} -> 
-                            % Follow the link and get the data
-                            LinkName = filename:join([Path, SubKey]),
-                            ok = add_link(IoDevice, LinkName, SubKey),
-                            insert_arc(IoDevice, Key, LinkName, "contains"),
-                            
-                            % Get the data after link
-                            LinkedKey = filename:basename(Link),
-                            DirName = filename:dirname(Link),
-                            insert_arc(IoDevice, LinkName, LinkedKey, "links-to"),
-
-                            % Follow the link and render what it has
-                            render(IoDevice, DirName, LinkedKey);
-
-                        composite -> 
-                            insert_arc(IoDevice, Key, SubKey, "contains"),
-                            render(IoDevice, Path, SubKey);
-                        raw -> 
-                            insert_arc(IoDevice, Key, SubKey, "contains"),
-                            add_data(IoDevice, SubKey)
-                    end
-                end,
-                SubKeys
-            );
-        {error, enoent} ->
-            ?event({path_not_found, {path, Path}});
-
-        {error, enotdir} -> 
-            add_data(IoDevice, Key)
+render(IoDevice, Store, Key) ->
+    ResolvedPath = hb_store:resolve(Store, Key),
+    JoinedPath = hb_store:join(Key),
+    IsLink = ResolvedPath /= JoinedPath,
+    case hb_store:type(Store, Key) of
+        simple ->
+            case IsLink of
+                false ->
+                    % just add the data node
+                    add_data(IoDevice, ResolvedPath);
+                true ->
+                    % Add link (old node) -> add actual data node (with resolved path)
+                    add_link(IoDevice, JoinedPath, JoinedPath),
+                    add_data(IoDevice, ResolvedPath),
+                    insert_arc(IoDevice, JoinedPath, ResolvedPath, "links-to")
+                end;
+        composite ->
+            add_dir(IoDevice, JoinedPath),
+            % Composite item also can be a link to another folder
+            case IsLink of
+                false ->
+                    {ok, SubItems} = hb_store:list(Store, Key),
+                    lists:foreach(
+                        fun(SubItem) ->
+                            insert_arc(IoDevice, hb_store:join(Key), hb_store:join([Key, SubItem]), "contains"),
+                            render(IoDevice, Store, [Key, SubItem])
+                        end,
+                        SubItems);
+                true ->
+                    add_link(IoDevice, JoinedPath, JoinedPath),
+                    insert_arc(IoDevice, JoinedPath, ResolvedPath, "links-to"),
+                    render(IoDevice, Store, ResolvedPath)
+            end;
+        no_viable_store ->
+            ignore;
+        _OtherType ->
+            ignore
     end.
+
+get_test_store() ->
+    hb_opts:get(store, no_viable_store,  #{store => {hb_store_fs,#{prefix => "TEST-cache-fs"}}}).
 
 % Helper functions
 add_link(IoDevice, Id, Label) ->
@@ -76,19 +78,6 @@ add_data(IoDevice, Id) ->
 
 add_dir(IoDevice, Id) ->
     insert_circle(IoDevice, Id, Id, "yellow").
-
-type(Path) ->
-    case file:read_file_info(Path) of
-        {ok, #file_info{type = directory}} -> composite;
-        {ok, #file_info{type = regular}} -> raw;
-        _ ->
-            case file:read_link(Path) of
-                {ok, Link} ->
-                    {link, Link};
-                _ ->
-                    not_found
-            end
-        end.
 
 insert_arc(IoDevice, ID1, ID2, Label) ->
     ok = io:format(IoDevice, "  \"~s\" -> \"~s\" [label=\"~s\"];~n", [ID1, ID2, Label]).
@@ -142,7 +131,7 @@ test_unsigned(Data) ->
         <<"base-test-key">> => <<"base-test-value">>,
         <<"data">> => Data
     }.
-    
+
 % test_signed(Data) -> test_signed(Data, ar_wallet:new()).
 test_signed(Data, Wallet) ->
     hb_message:attest(test_unsigned(Data), Wallet).
