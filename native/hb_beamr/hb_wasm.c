@@ -2,6 +2,7 @@
 #include "include/hb_logging.h"
 #include "include/hb_helpers.h"
 #include "include/hb_driver.h"
+#include "include/hb_wasm_webgpu.h"
 
 extern ErlDrvTermData atom_ok;
 extern ErlDrvTermData atom_import;
@@ -201,11 +202,17 @@ void wasm_initialize_runtime(void* raw) {
         hook->proc = proc;
         hook->signature = type_str;
 
+        wasm_func_callback_with_env_t callback = wasm_handle_import;
+
+        if (set_callback_webgpu(module_name->data, name->data, &callback)) {
+            DRV_DEBUG("Using WebGPU callback for %s.%s [%s]", module_name->data, name->data, type_str);
+        }
+
         hook->stub_func =
             wasm_func_new_with_env(
                 proc->store,
                 wasm_externtype_as_functype_const(type),
-                wasm_handle_import,
+                callback,
                 hook,
                 NULL
             );
