@@ -8,15 +8,17 @@
 #include <wgpu.h>
 
 #ifdef WASM_64
-#define WASM_INT_TYPE WASM_I64
-#define WASM_INT_NATIVE_TYPE int64_t
-#define WASM_POINTER_TYPE WASM_I64
-#define WASM_POINTER_NAME i64
+#define WASM_INT_KIND WASM_I64
+#define WASM_INT_C_TYPE int64_t
+#define WASM_POINTER_C_TYPE int64_t
+#define WASM_POINTER_KIND WASM_I64
+#define WASM_VAL_INT_PROP i64
 #else
-#define WASM_INT_TYPE WASM_I32
-#define WASM_INT_NATIVE_TYPE int32_t
-#define WASM_POINTER_TYPE WASM_I32
-#define WASM_POINTER_NAME i32
+#define WASM_INT_KIND WASM_I32
+#define WASM_INT_C_TYPE int32_t
+#define WASM_POINTER_C_TYPE int32_t
+#define WASM_POINTER_KIND WASM_I32
+#define WASM_VAL_INT_PROP i32
 #endif
 
 #define WGPU_LOG_LEVEL WGPULogLevel_Trace
@@ -32,7 +34,7 @@ void webgpu_log_callback(WGPULogLevel level, const char *message,
 #ifndef WASM_MEMORY_ERROR
 #define WASM_MEMORY_ERROR(msg)                                                 \
     do {                                                                       \
-        fprintf(stderr, "WASM Memory Error: %s\n", msg);                       \
+        DRV_PRINT(stderr, "WASM Memory Error: %s\n", msg);                     \
     } while (0)
 #endif
 
@@ -103,6 +105,26 @@ int wasm_copy_struct_safe(wasm_memory_t *memory, uint32_t offset,
 
     // Copy bytes from WASM memory into the native struct.
     memcpy(out_struct, mem_base + offset, struct_size);
+    return 0;
+}
+
+int wasm_copy_array_safe(wasm_memory_t *memory, uint32_t offset,
+                         void *out_array, size_t array_size, size_t align) {
+    assert(memory != NULL);
+    assert(out_array != NULL);
+
+    // Get the start of the memory and its size.
+    byte_t *mem_base = wasm_memory_data(memory);
+    size_t mem_size = wasm_memory_data_size(memory);
+
+    // Bounds check the initial pointer
+    if (offset >= mem_size || offset + array_size > mem_size) {
+        WASM_MEMORY_ERROR("Array out of bounds");
+        return 1;
+    }
+
+    // Copy bytes from WASM memory into the native struct.
+    memcpy(out_array, mem_base + offset, array_size);
     return 0;
 }
 
@@ -177,39 +199,17 @@ int wasm_get_buffer_pointer_safe(wasm_memory_t *memory,
     return 0;
 }
 
-#define GET_WASM_SYS_INT(data) (data).of.WASM_POINTER_NAME
+#define GET_WASM_SYS_INT(data) (data).of.WASM_VAL_INT_PROP
 
-static inline WASM_INT_NATIVE_TYPE wasm_val_to_native_int(wasm_val_t wasm_val) {
-    if (wasm_val.kind != WASM_INT_TYPE) {
+static inline WASM_INT_C_TYPE wasm_val_to_native_int(wasm_val_t wasm_val) {
+    if (wasm_val.kind != WASM_INT_KIND) {
         DRV_DEBUG("wasm_val_to_native_int: expected %s, got kind: %d",
-                  WASM_INT_TYPE, wasm_val.kind);
+                  WASM_INT_KIND, wasm_val.kind);
     } else {
-        DRV_DEBUG("wasm_val_to_native_int: got kind: %d", WASM_INT_TYPE);
+        DRV_DEBUG("wasm_val_to_native_int: got kind: %d", WASM_INT_KIND);
     }
     return GET_WASM_SYS_INT(wasm_val);
 }
-
-static inline uintptr_t wasm_val_to_native_ptr(byte_t *wasm_base_ptr,
-                                               wasm_val_t wasm_val) {
-    if (wasm_val.kind != WASM_POINTER_TYPE) {
-        DRV_DEBUG("wasm_val_to_native_ptr: expected %s, got kind: %d",
-                  WASM_POINTER_TYPE, wasm_val.kind);
-        return 0;
-    }
-    uintptr_t wasm_ptr = GET_WASM_SYS_INT(wasm_val);
-    if (wasm_ptr == 0) {
-        DRV_DEBUG("wasm_val_to_native_ptr: wasm pointer is NULL");
-        return 0;
-    }
-    uintptr_t native_ptr = (uintptr_t)(wasm_base_ptr + wasm_ptr);
-    DRV_DEBUG("Converted wasm pointer (%p) to native pointer (%p)",
-              (void *)wasm_ptr, (void *)native_ptr);
-    return native_ptr;
-}
-#define WASM_TO_NATIVE_STRUCT(type, wasm_val)                                  \
-    ((type *)wasm_val_to_native_ptr(wasm_base_ptr, wasm_val));
-#define WASM_EXTERN_TO_NATIVE_STRUCT(type, wasm_val)                           \
-    ((type *)GET_WASM_SYS_INT(wasm_val));
 
 // Boilerplate for handlers
 #define HANDLER_INIT(name, args_expected)                                      \
@@ -294,13 +294,13 @@ uintptr_t get_mapping(ExternRefRegistry *registry, size_t index) {
 
 typedef struct {
     Proc *proc;
-    WASM_INT_NATIVE_TYPE func_index;
+    WASM_INT_C_TYPE func_index;
 } CallbackContext;
 
 ExternRefRegistry DEVICES = {.count = 0, .mappings = {}};
 
 typedef struct {
-    WASM_INT_NATIVE_TYPE queue;
+    WASM_INT_C_TYPE queue;
     uint64_t submissionIndex;
 } WASMWrappedSubmissionIndex;
 
@@ -337,8 +337,7 @@ extract_wrapped_submission_index(wasm_memory_t *memory,
     return wrapped_submission_index;
 }
 
-// WGPUBool wgpuDevicePoll(WGPUDevice device, WGPUBool wait, WGPU_NULLABLE
-// WGPUWrappedSubmissionIndex const * wrappedSubmissionIndex);
+// WGPUBool wgpuDevicePoll(WGPUDevice device, WGPUBool wait, WGPU_NULLABLE WGPUWrappedSubmissionIndex const * wrappedSubmissionIndex);
 wasm_trap_t *wgpuDevicePollImport(void *env, const wasm_val_vec_t *args,
                                   wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuDevicePoll, 3);
@@ -348,11 +347,12 @@ wasm_trap_t *wgpuDevicePollImport(void *env, const wasm_val_vec_t *args,
         &DEVICES, wasm_val_to_native_int(args->data[0]));
 
     // Get wait
-    WGPUBool wait = args->data[1].of.i32 != 0;
+    WGPUBool wait = (WGPUBool)wasm_val_to_native_int(args->data[1]);
 
     // Get wrappedSubmissionIndex
     WGPUWrappedSubmissionIndex *wrappedSubmissionIndex =
-        extract_wrapped_submission_index(wasm_memory, args->data[2].of.i32);
+        extract_wrapped_submission_index(wasm_memory,
+                                         wasm_val_to_native_int(args->data[2]));
 
     // Print arguments
     DRV_DEBUG("device = %p, wait = %d, wrappedSubmissionIndex = %p", device,
@@ -361,7 +361,7 @@ wasm_trap_t *wgpuDevicePollImport(void *env, const wasm_val_vec_t *args,
     // Call the native function
     WGPUBool result = wgpuDevicePoll(device, wait, wrappedSubmissionIndex);
 
-    results->data[0].kind = WASM_INT_TYPE;
+    results->data[0].kind = WASM_INT_KIND;
     results->data[0].of.i32 = result;
 
     return NULL;
@@ -369,14 +369,76 @@ wasm_trap_t *wgpuDevicePollImport(void *env, const wasm_val_vec_t *args,
 
 ExternRefRegistry INSTANCES = {.count = 0, .mappings = {}};
 
-// WGPU_EXPORT WGPUInstance wgpuCreateInstance(WGPU_NULLABLE
-// WGPUInstanceDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
+// WASM-friendly struct definitions to match memory layout
+typedef struct {
+    uint32_t next;  // 4 bytes for WASM pointer
+    uint32_t sType; // 4 bytes for enum
+} WASMChainedStruct;
+
+typedef struct {
+    WASM_INT_C_TYPE nextInChain;
+} WASMInstanceDescriptor;
+
+WGPUInstanceDescriptor *extract_instance_descriptor(wasm_memory_t *memory,
+                                                    uint32_t descriptor_ptr) {
+    DRV_DEBUG("Extracting instance descriptor from offset: 0x%x",
+              descriptor_ptr);
+    if (descriptor_ptr == 0) {
+        DRV_DEBUG("Null descriptor pointer");
+        return NULL;
+    }
+
+    // First copy the base descriptor structure using our WASM-friendly struct
+    WASMInstanceDescriptor wasm_descriptor = {0};
+    if (wasm_copy_struct_safe(memory, descriptor_ptr, &wasm_descriptor,
+                              sizeof(WASMInstanceDescriptor), 4)) {
+        DRV_DEBUG("Failed to copy instance descriptor");
+        return NULL;
+    }
+
+    DRV_DEBUG("WASM descriptor - chain: 0x%x", wasm_descriptor.nextInChain);
+
+    // Allocate the result structure
+    WGPUInstanceDescriptor *result = malloc(sizeof(WGPUInstanceDescriptor));
+    if (!result) {
+        DRV_DEBUG("Failed to allocate instance descriptor");
+        return NULL;
+    }
+    memset(result, 0, sizeof(WGPUInstanceDescriptor));
+
+    // Handle the chain if present
+    if (wasm_descriptor.nextInChain != 0) {
+        DRV_DEBUG("Chain pointer from WASM: 0x%x", wasm_descriptor.nextInChain);
+
+        // First copy just the chain header to check the type
+        WASMChainedStruct wasm_chain = {0};
+        if (wasm_copy_struct_safe(memory, wasm_descriptor.nextInChain,
+                                  &wasm_chain, sizeof(WASMChainedStruct), 4)) {
+            DRV_DEBUG("Failed to copy chain header");
+            free(result);
+            return NULL;
+        }
+
+        DRV_DEBUG("Chain header - next: 0x%x, sType: %u", wasm_chain.next,
+                  wasm_chain.sType);
+
+        switch (wasm_chain.sType) {
+        default:
+            DRV_DEBUG("Unhandled sType: %u", wasm_chain.sType);
+            break;
+        }
+    }
+
+    return result;
+}
+
+// WGPU_EXPORT WGPUInstance wgpuCreateInstance(WGPU_NULLABLE WGPUInstanceDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuCreateInstanceImport(void *env, const wasm_val_vec_t *args,
                                       wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuCreateInstanceImport, 1);
 
-    WGPUInstanceDescriptor *descriptor =
-        WASM_TO_NATIVE_STRUCT(WGPUInstanceDescriptor, args->data[0]);
+    WGPUInstanceDescriptor *descriptor = extract_instance_descriptor(
+        wasm_memory, args->data[0].of.WASM_VAL_INT_PROP);
 
     DRV_DEBUG("Parameters: descriptor=%p", (uintptr_t)descriptor);
     WGPUInstance instance = wgpuCreateInstance(descriptor);
@@ -386,7 +448,7 @@ wasm_trap_t *wgpuCreateInstanceImport(void *env, const wasm_val_vec_t *args,
 
     DRV_DEBUG("Setting result to WGPUInstance WASM_EXTERNREF");
     results->size = 1;
-    results->data[0].kind = WASM_INT_TYPE;
+    results->data[0].kind = WASM_INT_KIND;
     results->data[0].of.i32 = instance_index;
 
     return NULL;
@@ -409,7 +471,7 @@ void wgpuInstanceRequestAdapterCallbackNative(WGPURequestAdapterStatus status,
 
     DRV_DEBUG("Getting the callback context");
     Proc *proc = wgpuInstanceRequestAdapterCallbackContext.proc;
-    WASM_INT_NATIVE_TYPE callback_index =
+    WASM_INT_C_TYPE callback_index =
         wgpuInstanceRequestAdapterCallbackContext.func_index;
 
     DRV_DEBUG("Getting __indirect_function_table");
@@ -426,15 +488,15 @@ void wgpuInstanceRequestAdapterCallbackNative(WGPURequestAdapterStatus status,
         "Creating args/results for wgpuInstanceRequestAdapterCallbackWasm");
     wasm_val_vec_t args;
     wasm_val_vec_new_uninitialized(&args, 4);
-    args.data[0].kind = WASM_INT_TYPE;
+    args.data[0].kind = WASM_INT_KIND;
     args.data[0].of.i32 = status;
-    args.data[1].kind = WASM_INT_TYPE;
+    args.data[1].kind = WASM_INT_KIND;
     args.data[1].of.i32 = adapter_index;
-    args.data[2].kind = WASM_INT_TYPE;
+    args.data[2].kind = WASM_INT_KIND;
     // TODO: Allocate memory for the message, copy data, and set the ref
     args.data[2].of.i32 = 0;
-    args.data[3].kind = WASM_INT_TYPE;
-    args.data[3].of.i32 = (WASM_INT_NATIVE_TYPE)userdata;
+    args.data[3].kind = WASM_INT_KIND;
+    args.data[3].of.i32 = (WASM_INT_C_TYPE)userdata;
     args.num_elems = 4;
 
     // create results (void)
@@ -455,10 +517,86 @@ void wgpuInstanceRequestAdapterCallbackNative(WGPURequestAdapterStatus status,
     DRV_DEBUG("Successfully called wgpuInstanceRequestAdapterCallbackWasm");
 }
 
-// WGPU_EXPORT void wgpuInstanceRequestAdapter(WGPUInstance instance,
-// WGPU_NULLABLE WGPURequestAdapterOptions const * options,
-// WGPUInstanceRequestAdapterCallback callback, WGPU_NULLABLE void * userdata)
-// WGPU_FUNCTION_ATTRIBUTE;
+ExternRefRegistry SURFACES = {.count = 0, .mappings = {}};
+
+// WASM-friendly adapter options struct
+typedef struct {
+    WASM_POINTER_C_TYPE nextInChain;
+    WASM_POINTER_C_TYPE compatibleSurface;
+    WASM_INT_C_TYPE powerPreference;
+    WASM_POINTER_C_TYPE backendType;
+    uint32_t forceFallbackAdapter; // WGPUBool is defined as `uint32_t`
+} WASMRequestAdapterOptions;
+
+WGPURequestAdapterOptions *extract_adapter_options(wasm_memory_t *memory,
+                                                   uint32_t descriptor_ptr) {
+    DRV_DEBUG("Extracting adapter options from offset: 0x%x", descriptor_ptr);
+    if (descriptor_ptr == 0) {
+        DRV_DEBUG("Null descriptor pointer");
+        return NULL;
+    }
+
+    // First copy the base descriptor structure using our WASM-friendly struct
+    WASMRequestAdapterOptions wasm_descriptor = {0};
+    if (wasm_copy_struct_safe(memory, descriptor_ptr, &wasm_descriptor,
+                              sizeof(WASMRequestAdapterOptions), 4)) {
+        DRV_DEBUG("Failed to copy adapter options");
+        return NULL;
+    }
+
+    DRV_DEBUG("WASM descriptor - chain: 0x%x, surface: 0x%x, powerPreference: "
+              "%u, backendType: %u, forceFallbackAdapter: %u",
+              wasm_descriptor.nextInChain, wasm_descriptor.compatibleSurface,
+              wasm_descriptor.powerPreference, wasm_descriptor.backendType,
+              wasm_descriptor.forceFallbackAdapter);
+
+    // Allocate the result structure
+    WGPURequestAdapterOptions *result =
+        malloc(sizeof(WGPURequestAdapterOptions));
+    if (!result) {
+        DRV_DEBUG("Failed to allocate adapter options");
+        return NULL;
+    }
+    memset(result, 0, sizeof(WGPURequestAdapterOptions));
+
+    // Handle the chain if present
+    if (wasm_descriptor.nextInChain != 0) {
+        DRV_DEBUG("Chain pointer from WASM: 0x%x", wasm_descriptor.nextInChain);
+
+        // First copy just the chain header to check the type
+        WASMChainedStruct wasm_chain = {0};
+        if (wasm_copy_struct_safe(memory, wasm_descriptor.nextInChain,
+                                  &wasm_chain, sizeof(WASMChainedStruct), 4)) {
+            DRV_DEBUG("Failed to copy chain header");
+            free(result);
+            return NULL;
+        }
+
+        DRV_DEBUG("Chain header - next: 0x%x, sType: %u", wasm_chain.next,
+                  wasm_chain.sType);
+
+        switch (wasm_chain.sType) {
+        default:
+            DRV_DEBUG("Unhandled sType: %u", wasm_chain.sType);
+            break;
+        }
+    }
+
+    // Convert compatible surface if present
+    if (wasm_descriptor.compatibleSurface != 0) {
+        result->compatibleSurface = (WGPUSurface)get_mapping(
+            &SURFACES, wasm_descriptor.compatibleSurface);
+    }
+
+    // Copy the remaining fields
+    result->powerPreference = wasm_descriptor.powerPreference;
+    result->backendType = wasm_descriptor.backendType;
+    result->forceFallbackAdapter = wasm_descriptor.forceFallbackAdapter;
+
+    return result;
+}
+
+// WGPU_NULLABLE WGPURequestAdapterOptions const * options, WGPUInstanceRequestAdapterCallback callback, WGPU_NULLABLE void * userdata) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuInstanceRequestAdapterImport(void *env,
                                               const wasm_val_vec_t *args,
                                               wasm_val_vec_t *results) {
@@ -476,11 +614,11 @@ wasm_trap_t *wgpuInstanceRequestAdapterImport(void *env,
     WGPUInstance instance =
         (WGPUInstance)get_mapping(&INSTANCES, instance_mapping_index);
 
-    WGPURequestAdapterOptions *options =
-        WASM_TO_NATIVE_STRUCT(WGPURequestAdapterOptions, args->data[1]);
+    WGPURequestAdapterOptions *options = extract_adapter_options(
+        wasm_memory, args->data[1].of.WASM_VAL_INT_PROP);
 
     // an index into the module’s function table
-    WASM_INT_NATIVE_TYPE callback_index = wasm_val_to_native_int(args->data[2]);
+    WASM_INT_C_TYPE callback_index = wasm_val_to_native_int(args->data[2]);
     WGPUInstanceRequestAdapterCallback callback = NULL;
     if (callback_index == 0) {
         DRV_DEBUG("wgpuInstanceRequestAdapterCallbackWasmFuncTableRef is 0, "
@@ -494,8 +632,7 @@ wasm_trap_t *wgpuInstanceRequestAdapterImport(void *env,
         wgpuInstanceRequestAdapterCallbackContext.func_index = callback_index;
     }
     // Keep this as a WASM pointer since it's not used in the native code
-    WASM_INT_NATIVE_TYPE userdata_wasm_ptr =
-        wasm_val_to_native_int(args->data[3]);
+    WASM_INT_C_TYPE userdata_wasm_ptr = wasm_val_to_native_int(args->data[3]);
 
     // Call the actual function
     DRV_DEBUG("Parameters: instance=%p, options=%p, callback=%p, userdata=%p",
@@ -524,7 +661,7 @@ void wgpuInstanceRequestDeviceCallbackNative(WGPURequestDeviceStatus status,
 
     DRV_DEBUG("Getting the callback context");
     Proc *proc = wgpuInstanceRequestDeviceCallbackContext.proc;
-    WASM_INT_NATIVE_TYPE callback_index =
+    WASM_INT_C_TYPE callback_index =
         wgpuInstanceRequestDeviceCallbackContext.func_index;
 
     DRV_DEBUG("Getting __indirect_function_table");
@@ -541,15 +678,15 @@ void wgpuInstanceRequestDeviceCallbackNative(WGPURequestDeviceStatus status,
         "Creating args/results for wgpuInstanceRequestDeviceCallbackNative");
     wasm_val_vec_t args;
     wasm_val_vec_new_uninitialized(&args, 4);
-    args.data[0].kind = WASM_INT_TYPE;
+    args.data[0].kind = WASM_INT_KIND;
     args.data[0].of.i32 = status;
-    args.data[1].kind = WASM_INT_TYPE;
+    args.data[1].kind = WASM_INT_KIND;
     args.data[1].of.i32 = device_index;
-    args.data[2].kind = WASM_INT_TYPE;
+    args.data[2].kind = WASM_INT_KIND;
     // TODO: Allocate memory for the message, copy data, and set the ref
     args.data[2].of.i32 = 0;
-    args.data[3].kind = WASM_INT_TYPE;
-    args.data[3].of.i32 = (WASM_INT_NATIVE_TYPE)userdata;
+    args.data[3].kind = WASM_INT_KIND;
+    args.data[3].of.i32 = (WASM_INT_C_TYPE)userdata;
     args.num_elems = 4;
 
     // create results (void)
@@ -570,9 +707,217 @@ void wgpuInstanceRequestDeviceCallbackNative(WGPURequestDeviceStatus status,
     DRV_DEBUG("Successfully called wgpuInstanceRequestDeviceCallbackWasm");
 }
 
-// WGPU_EXPORT void wgpuAdapterRequestDevice(WGPUAdapter adapter, WGPU_NULLABLE
-// WGPUDeviceDescriptor const * descriptor, WGPUAdapterRequestDeviceCallback
-// callback, WGPU_NULLABLE void * userdata) WGPU_FUNCTION_ATTRIBUTE;
+// Extract required features array from WASM memory
+WGPUFeatureName *extract_required_features(wasm_memory_t *memory,
+                                           WASM_POINTER_C_TYPE features_ptr,
+                                           size_t feature_count) {
+    if (features_ptr == 0 || feature_count == 0) {
+        return NULL;
+    }
+
+    WGPUFeatureName *features = malloc(sizeof(WGPUFeatureName) * feature_count);
+    if (!features) {
+        DRV_DEBUG("Failed to allocate memory for features");
+        return NULL;
+    }
+
+    // Copy feature array from WASM memory
+    if (wasm_copy_array_safe(memory, features_ptr, features,
+                             sizeof(WGPUFeatureName), feature_count)) {
+        DRV_DEBUG("Failed to copy features array");
+        free(features);
+        return NULL;
+    }
+
+    return features;
+}
+
+// Extract required limits from WASM memory
+WGPURequiredLimits *extract_required_limits(wasm_memory_t *memory,
+                                            WASM_POINTER_C_TYPE limits_ptr) {
+    if (limits_ptr == 0) {
+        return NULL;
+    }
+
+    WGPURequiredLimits *limits = malloc(sizeof(WGPURequiredLimits));
+    if (!limits) {
+        DRV_DEBUG("Failed to allocate memory for limits");
+        return NULL;
+    }
+
+    // Copy limits structure from WASM memory
+    if (wasm_copy_struct_safe(memory, limits_ptr, limits,
+                              sizeof(WGPURequiredLimits), 8)) {
+        DRV_DEBUG("Failed to copy limits structure");
+        free(limits);
+        return NULL;
+    }
+
+    // Handle chain if present
+    if (limits->nextInChain) {
+        DRV_DEBUG("Chain handling for limits not implemented");
+        limits->nextInChain = NULL;
+    }
+
+    return limits;
+}
+
+// Extract queue descriptor from WASM memory
+WGPUQueueDescriptor *extract_queue_descriptor(wasm_memory_t *memory,
+                                              WASM_POINTER_C_TYPE queue_ptr) {
+    if (queue_ptr == 0) {
+        return NULL;
+    }
+
+    WGPUQueueDescriptor *queue = malloc(sizeof(WGPUQueueDescriptor));
+    if (!queue) {
+        DRV_DEBUG("Failed to allocate memory for queue descriptor");
+        return NULL;
+    }
+
+    // Copy queue descriptor structure from WASM memory
+    if (wasm_copy_struct_safe(memory, queue_ptr, queue,
+                              sizeof(WGPUQueueDescriptor), 8)) {
+        DRV_DEBUG("Failed to copy queue descriptor");
+        free(queue);
+        return NULL;
+    }
+
+    // Handle chain if present
+    if (queue->nextInChain) {
+        DRV_DEBUG("Chain handling for queue descriptor not implemented");
+        queue->nextInChain = NULL;
+    }
+
+    // Copy label if present
+    if (queue->label) {
+        char *label = wasm_copy_string_safe(memory, (uintptr_t)queue->label);
+        if (!label) {
+            DRV_DEBUG("Failed to copy queue label");
+            free(queue);
+            return NULL;
+        }
+        queue->label = label;
+    }
+
+    return queue;
+}
+
+// Extract uncaptured error callback info from WASM memory
+WGPUUncapturedErrorCallbackInfo *
+extract_uncaptured_error_callback_info(wasm_memory_t *memory,
+                                       WASM_POINTER_C_TYPE callback_ptr) {
+    if (callback_ptr == 0) {
+        return NULL;
+    }
+
+    WGPUUncapturedErrorCallbackInfo *callback =
+        malloc(sizeof(WGPUUncapturedErrorCallbackInfo));
+    if (!callback) {
+        DRV_DEBUG("Failed to allocate memory for error callback info");
+        return NULL;
+    }
+
+    // Copy callback info structure from WASM memory
+    if (wasm_copy_struct_safe(memory, callback_ptr, callback,
+                              sizeof(WGPUUncapturedErrorCallbackInfo), 8)) {
+        DRV_DEBUG("Failed to copy error callback info");
+        free(callback);
+        return NULL;
+    }
+
+    // Handle chain if present
+    if (callback->nextInChain) {
+        DRV_DEBUG("Chain handling for error callback not implemented");
+        callback->nextInChain = NULL;
+    }
+
+    // Store the callback function index and userdata
+    // Note: The actual callback invocation will need to be handled separately
+    // since we can't directly call WASM functions from here
+    callback->callback = (WGPUErrorCallback)callback->callback;
+    callback->userdata = (void *)callback->userdata;
+
+    return callback;
+}
+
+typedef struct {
+    WASM_POINTER_C_TYPE nextInChain;
+    WASM_POINTER_C_TYPE label;
+    WASM_INT_C_TYPE requiredFeatureCount;
+    WASM_POINTER_C_TYPE requiredFeatures;
+    WASM_POINTER_C_TYPE requiredLimits;
+    WASM_POINTER_C_TYPE defaultQueue;
+    WASM_POINTER_C_TYPE deviceLostCallback;
+    WASM_POINTER_C_TYPE deviceLostUserdata;
+    WASM_POINTER_C_TYPE uncapturedErrorCallbackInfo;
+} WASMDeviceDescriptor;
+
+WGPUDeviceDescriptor *extract_device_descriptor(wasm_memory_t *memory,
+                                                uint32_t descriptor_ptr) {
+    DRV_DEBUG("Extracting device descriptor from offset: 0x%x", descriptor_ptr);
+    if (descriptor_ptr == 0) {
+        DRV_DEBUG("Null descriptor pointer");
+        return NULL;
+    }
+
+    WASMDeviceDescriptor wasm_desc = {0}; // Initialize to zero
+    if (wasm_copy_struct_safe(memory, descriptor_ptr, &wasm_desc,
+                              sizeof(WASMDeviceDescriptor), 8)) {
+        DRV_DEBUG("Failed to copy device descriptor");
+        return NULL;
+    }
+
+    WGPUDeviceDescriptor *result = malloc(sizeof(WGPUDeviceDescriptor));
+    if (!result) {
+        DRV_DEBUG("Failed to allocate device descriptor");
+        return NULL;
+    }
+    memset(result, 0, sizeof(WGPUDeviceDescriptor));
+
+    // Handle the chain if present
+    if (wasm_desc.nextInChain != 0) {
+        DRV_DEBUG("Chain pointer from WASM: 0x%x", wasm_desc.nextInChain);
+
+        // First copy just the chain header to check the type
+        WASMChainedStruct wasm_chain = {0};
+        if (wasm_copy_struct_safe(memory, wasm_desc.nextInChain, &wasm_chain,
+                                  sizeof(WASMChainedStruct), 4)) {
+            DRV_DEBUG("Failed to copy chain header");
+            free(result);
+            return NULL;
+        }
+
+        DRV_DEBUG("Chain header - next: 0x%x, sType: %u", wasm_chain.next,
+                  wasm_chain.sType);
+
+        switch (wasm_chain.sType) {
+        default:
+            DRV_DEBUG("Unhandled sType: %u", wasm_chain.sType);
+            break;
+        }
+    }
+
+    // Copy the remaining fields
+    result->requiredFeatureCount = wasm_desc.requiredFeatureCount;
+    result->requiredFeatures = extract_required_features(
+        memory, wasm_desc.requiredFeatures, wasm_desc.requiredFeatureCount);
+    result->requiredLimits =
+        extract_required_limits(memory, wasm_desc.requiredLimits);
+    result->defaultQueue =
+        *extract_queue_descriptor(memory, wasm_desc.defaultQueue);
+    result->deviceLostCallback =
+        (void *)wasm_desc
+            .deviceLostCallback; // TODO: Create deviceLostCallbackNative?
+    result->deviceLostUserdata = (void *)wasm_desc.deviceLostUserdata;
+    result->uncapturedErrorCallbackInfo =
+        *extract_uncaptured_error_callback_info(
+            memory, wasm_desc.uncapturedErrorCallbackInfo);
+
+    return result;
+}
+
+// WGPU_EXPORT void wgpuAdapterRequestDevice(WGPUAdapter adapter, WGPU_NULLABLE WGPUDeviceDescriptor const * descriptor, WGPUAdapterRequestDeviceCallback callback, WGPU_NULLABLE void * userdata) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuAdapterRequestDeviceImport(void *env,
                                             const wasm_val_vec_t *args,
                                             wasm_val_vec_t *results) {
@@ -584,12 +929,12 @@ wasm_trap_t *wgpuAdapterRequestDeviceImport(void *env,
         (WGPUAdapter *)get_mapping(&ADAPTERS, adapter_mapping_index);
     DRV_DEBUG("adapter = %p", adapter);
 
-    WGPUDeviceDescriptor *descriptor =
-        WASM_TO_NATIVE_STRUCT(WGPUDeviceDescriptor, args->data[1]);
+    WGPUDeviceDescriptor *descriptor = extract_device_descriptor(
+        wasm_memory, args->data[1].of.WASM_VAL_INT_PROP);
     DRV_DEBUG("descriptor = %p", descriptor);
 
     // an index into the module’s function table
-    WASM_INT_NATIVE_TYPE callback_index = wasm_val_to_native_int(args->data[2]);
+    WASM_INT_C_TYPE callback_index = wasm_val_to_native_int(args->data[2]);
     WGPUAdapterRequestDeviceCallback callback = NULL;
     if (callback_index == 0) {
         DRV_DEBUG("wgpuInstanceRequestDeviceCallbackWasmFuncTableRef is 0, "
@@ -604,8 +949,7 @@ wasm_trap_t *wgpuAdapterRequestDeviceImport(void *env,
     }
 
     // Keep this as a WASM pointer since it's not used in the native code
-    WASM_INT_NATIVE_TYPE userdata_wasm_ptr =
-        wasm_val_to_native_int(args->data[3]);
+    WASM_INT_C_TYPE userdata_wasm_ptr = wasm_val_to_native_int(args->data[3]);
 
     // Call the actual function
     DRV_DEBUG("Parameters: adapter=%p, descriptor=%p, callback=%p, userdata=%p",
@@ -619,8 +963,7 @@ wasm_trap_t *wgpuAdapterRequestDeviceImport(void *env,
 
 ExternRefRegistry QUEUES = {.count = 0, .mappings = {}};
 
-// WGPU_EXPORT WGPUQueue wgpuDeviceGetQueue(WGPUDevice device)
-// WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT WGPUQueue wgpuDeviceGetQueue(WGPUDevice device) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuDeviceGetQueueImport(void *env, const wasm_val_vec_t *args,
                                       wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuDeviceGetQueue, 1);
@@ -636,7 +979,7 @@ wasm_trap_t *wgpuDeviceGetQueueImport(void *env, const wasm_val_vec_t *args,
 
     // Return the queue handle
     results->size = 1;
-    results->data[0].kind = WASM_INT_TYPE;
+    results->data[0].kind = WASM_INT_KIND;
     results->data[0].of.i32 = (uint64_t)queue_mapping_index;
 
     return NULL;
@@ -645,12 +988,6 @@ wasm_trap_t *wgpuDeviceGetQueueImport(void *env, const wasm_val_vec_t *args,
 ExternRefRegistry SHADER_MODULES = {.count = 0, .mappings = {}};
 
 ExternRefRegistry CHAIN_STRUCTS = {.count = 0, .mappings = {}};
-
-// WASM-friendly struct definitions to match memory layout
-typedef struct {
-    uint32_t next;  // 4 bytes for WASM pointer
-    uint32_t sType; // 4 bytes for enum
-} WASMChainedStruct;
 
 typedef struct {
     WASMChainedStruct chain;
@@ -779,8 +1116,7 @@ error:
     return NULL;
 }
 
-// WGPU_EXPORT WGPUShaderModule wgpuDeviceCreateShaderModule(WGPUDevice device,
-// WGPUShaderModuleDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT WGPUShaderModule wgpuDeviceCreateShaderModule(WGPUDevice device, WGPUShaderModuleDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuDeviceCreateShaderModuleImport(void *env,
                                                 const wasm_val_vec_t *args,
                                                 wasm_val_vec_t *results) {
@@ -793,7 +1129,7 @@ wasm_trap_t *wgpuDeviceCreateShaderModuleImport(void *env,
     if (!device) {
         DRV_DEBUG("Invalid device handle");
         results->size = 1;
-        results->data[0].kind = WASM_INT_TYPE;
+        results->data[0].kind = WASM_INT_KIND;
         results->data[0].of.i32 = 0;
         return NULL;
     }
@@ -807,7 +1143,7 @@ wasm_trap_t *wgpuDeviceCreateShaderModuleImport(void *env,
     if (!descriptor) {
         DRV_DEBUG("Failed to extract shader module descriptor");
         results->size = 1;
-        results->data[0].kind = WASM_INT_TYPE;
+        results->data[0].kind = WASM_INT_KIND;
         results->data[0].of.i32 = 0;
         return NULL;
     }
@@ -843,8 +1179,8 @@ wasm_trap_t *wgpuDeviceCreateShaderModuleImport(void *env,
 
     // Return the shader module handle
     results->size = 1;
-    results->data[0].kind = WASM_INT_TYPE;
-    results->data[0].of.WASM_POINTER_NAME =
+    results->data[0].kind = WASM_INT_KIND;
+    results->data[0].of.WASM_VAL_INT_PROP =
         (uint64_t)shader_module_mapping_index;
 
     return NULL;
@@ -914,8 +1250,7 @@ WGPUBufferDescriptor *extract_buffer_descriptor(wasm_memory_t *memory,
     return result;
 }
 
-// WGPU_EXPORT WGPUBuffer wgpuDeviceCreateBuffer(WGPUDevice device,
-// WGPUBufferDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT WGPUBuffer wgpuDeviceCreateBuffer(WGPUDevice device, WGPUBufferDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuDeviceCreateBufferImport(void *env, const wasm_val_vec_t *args,
                                           wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuDeviceCreateBuffer, 2);
@@ -927,8 +1262,8 @@ wasm_trap_t *wgpuDeviceCreateBufferImport(void *env, const wasm_val_vec_t *args,
     if (!device) {
         DRV_DEBUG("Invalid device handle");
         results->size = 1;
-        results->data[0].kind = WASM_INT_TYPE;
-        results->data[0].of.WASM_POINTER_NAME = 0;
+        results->data[0].kind = WASM_INT_KIND;
+        results->data[0].of.WASM_VAL_INT_PROP = 0;
         return NULL;
     }
 
@@ -941,8 +1276,8 @@ wasm_trap_t *wgpuDeviceCreateBufferImport(void *env, const wasm_val_vec_t *args,
     if (!descriptor) {
         DRV_DEBUG("Failed to extract buffer descriptor");
         results->size = 1;
-        results->data[0].kind = WASM_INT_TYPE;
-        results->data[0].of.WASM_POINTER_NAME = 0;
+        results->data[0].kind = WASM_INT_KIND;
+        results->data[0].of.WASM_VAL_INT_PROP = 0;
         return NULL;
     }
 
@@ -967,8 +1302,8 @@ wasm_trap_t *wgpuDeviceCreateBufferImport(void *env, const wasm_val_vec_t *args,
 
     // Return the buffer handle
     results->size = 1;
-    results->data[0].kind = WASM_INT_TYPE;
-    results->data[0].of.WASM_POINTER_NAME = (uint64_t)buffer_mapping_index;
+    results->data[0].kind = WASM_INT_KIND;
+    results->data[0].of.WASM_VAL_INT_PROP = (uint64_t)buffer_mapping_index;
 
     return NULL;
 }
@@ -1069,9 +1404,7 @@ extract_compute_pipeline_descriptor(wasm_memory_t *memory,
     return result;
 }
 
-// WGPU_EXPORT WGPUComputePipeline wgpuDeviceCreateComputePipeline(WGPUDevice
-// device, WGPUComputePipelineDescriptor const * descriptor)
-// WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT WGPUComputePipeline wgpuDeviceCreateComputePipeline(WGPUDevice device, WGPUComputePipelineDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuDeviceCreateComputePipelineImport(void *env,
                                                    const wasm_val_vec_t *args,
                                                    wasm_val_vec_t *results) {
@@ -1080,7 +1413,6 @@ wasm_trap_t *wgpuDeviceCreateComputePipelineImport(void *env,
     // Get device from registry
     WGPUDevice device = (WGPUDevice)get_mapping(
         &DEVICES, wasm_val_to_native_int(args->data[0]));
-    DRV_DEBUG("Retrieved device: %p", (void *)device);
 
     // Extract the descriptor
     WGPUComputePipelineDescriptor *descriptor =
@@ -1088,8 +1420,8 @@ wasm_trap_t *wgpuDeviceCreateComputePipelineImport(void *env,
             wasm_memory, wasm_val_to_native_int(args->data[1]));
     if (!descriptor) {
         DRV_DEBUG("Failed to extract compute pipeline descriptor");
-        results->data[0].kind = WASM_INT_TYPE;
-        results->data[0].of.WASM_POINTER_NAME = 0;
+        results->data[0].kind = WASM_INT_KIND;
+        results->data[0].of.WASM_VAL_INT_PROP = 0;
         return NULL;
     }
 
@@ -1121,17 +1453,15 @@ wasm_trap_t *wgpuDeviceCreateComputePipelineImport(void *env,
     // Add pipeline to registry and return its index
     size_t pipeline_index =
         add_mapping(&COMPUTE_PIPELINES, (uintptr_t)pipeline);
-    results->data[0].kind = WASM_INT_TYPE;
-    results->data[0].of.WASM_POINTER_NAME = pipeline_index;
+    results->data[0].kind = WASM_INT_KIND;
+    results->data[0].of.WASM_VAL_INT_PROP = pipeline_index;
 
     return NULL;
 }
 
 ExternRefRegistry BIND_GROUP_LAYOUTS = {.count = 0, .mappings = {}};
 
-// WGPU_EXPORT WGPUBindGroupLayout
-// wgpuComputePipelineGetBindGroupLayout(WGPUComputePipeline computePipeline,
-// uint32_t groupIndex) WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT WGPUBindGroupLayout wgpuComputePipelineGetBindGroupLayout(WGPUComputePipeline computePipeline, uint32_t groupIndex) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuComputePipelineGetBindGroupLayoutImport(
     void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuComputePipelineGetBindGroupLayout, 2);
@@ -1151,8 +1481,8 @@ wasm_trap_t *wgpuComputePipelineGetBindGroupLayoutImport(
 
     // Add layout to registry and return its index
     size_t layout_index = add_mapping(&BIND_GROUP_LAYOUTS, (uintptr_t)layout);
-    results->data[0].kind = WASM_INT_TYPE;
-    results->data[0].of.WASM_POINTER_NAME = layout_index;
+    results->data[0].kind = WASM_INT_KIND;
+    results->data[0].of.WASM_VAL_INT_PROP = layout_index;
 
     return NULL;
 }
@@ -1164,21 +1494,21 @@ ExternRefRegistry SAMPLERS = {.count = 0, .mappings = {}};
 ExternRefRegistry BIND_GROUPS = {.count = 0, .mappings = {}};
 
 typedef struct {
-    uint32_t nextInChain; // wasm32 pointer
-    uint32_t label;       // wasm32 pointer
-    uint32_t layout;      // wasm32 pointer
+    uint32_t nextInChain;
+    uint32_t label;
+    uint32_t layout;
     uint32_t entryCount;
-    uint32_t entries; // wasm32 pointer
+    uint32_t entries;
 } WASMBindGroupDescriptor;
 
 typedef struct {
-    uint32_t nextInChain; // wasm32 pointer
+    uint32_t nextInChain;
     uint32_t binding;
-    uint32_t buffer; // wasm32 pointer
+    uint32_t buffer;
     uint64_t offset;
     uint64_t size;
-    uint32_t sampler;     // wasm32 pointer
-    uint32_t textureView; // wasm32 pointer
+    uint32_t sampler;
+    uint32_t textureView;
 } WASMBindGroupEntry;
 
 // Helper function to extract bind group entries from WASM memory
@@ -1406,14 +1736,13 @@ extract_bind_group_descriptor(wasm_memory_t *memory, uint32_t descriptor_ptr) {
     return descriptor;
 }
 
-// WGPU_EXPORT WGPUBindGroup wgpuDeviceCreateBindGroup(WGPUDevice device,
-// WGPUBindGroupDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT WGPUBindGroup wgpuDeviceCreateBindGroup(WGPUDevice device, WGPUBindGroupDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuDeviceCreateBindGroupImport(void *env,
                                              const wasm_val_vec_t *args,
                                              wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuDeviceCreateBindGroup, 2);
 
-    WASM_INT_NATIVE_TYPE device_index = wasm_val_to_native_int(args->data[0]);
+    WASM_INT_C_TYPE device_index = wasm_val_to_native_int(args->data[0]);
     DRV_DEBUG("Retrieved device index: %u", device_index);
 
     // Get device from registry
@@ -1425,8 +1754,8 @@ wasm_trap_t *wgpuDeviceCreateBindGroupImport(void *env,
         wasm_memory, wasm_val_to_native_int(args->data[1]));
     if (!descriptor) {
         DRV_DEBUG("Failed to extract bind group descriptor");
-        results->data[0].kind = WASM_INT_TYPE;
-        results->data[0].of.WASM_POINTER_NAME = 0;
+        results->data[0].kind = WASM_INT_KIND;
+        results->data[0].of.WASM_VAL_INT_PROP = 0;
         return NULL;
     }
 
@@ -1460,8 +1789,8 @@ wasm_trap_t *wgpuDeviceCreateBindGroupImport(void *env,
 
     // Add bind group to registry and return its index
     size_t bind_group_index = add_mapping(&BIND_GROUPS, (uintptr_t)bind_group);
-    results->data[0].kind = WASM_INT_TYPE;
-    results->data[0].of.WASM_POINTER_NAME = bind_group_index;
+    results->data[0].kind = WASM_INT_KIND;
+    results->data[0].of.WASM_VAL_INT_PROP = bind_group_index;
 
     return NULL;
 }
@@ -1469,8 +1798,8 @@ wasm_trap_t *wgpuDeviceCreateBindGroupImport(void *env,
 ExternRefRegistry COMMAND_ENCODERS = {.count = 0, .mappings = {}};
 
 typedef struct {
-    uint32_t nextInChain; // wasm32 pointer
-    uint32_t label;       // wasm32 pointer
+    uint32_t nextInChain;
+    uint32_t label;
 } WASMCommandEncoderDescriptor;
 
 // Helper function to extract command encoder descriptor from WASM memory
@@ -1534,16 +1863,14 @@ extract_command_encoder_descriptor(wasm_memory_t *memory,
     return descriptor;
 }
 
-// WGPU_EXPORT WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice
-// device, WGPU_NULLABLE WGPUCommandEncoderDescriptor const * descriptor)
-// WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT WGPUCommandEncoder wgpuDeviceCreateCommandEncoder(WGPUDevice device, WGPU_NULLABLE WGPUCommandEncoderDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuDeviceCreateCommandEncoderImport(void *env,
                                                   const wasm_val_vec_t *args,
                                                   wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuDeviceCreateCommandEncoder, 2);
 
     // Get device from registry
-    WASM_INT_NATIVE_TYPE device_index = wasm_val_to_native_int(args->data[0]);
+    WASM_INT_C_TYPE device_index = wasm_val_to_native_int(args->data[0]);
     DRV_DEBUG("Retrieved device index: %u", device_index);
 
     WGPUDevice device = (WGPUDevice)get_mapping(&DEVICES, device_index);
@@ -1557,8 +1884,8 @@ wasm_trap_t *wgpuDeviceCreateCommandEncoderImport(void *env,
             extract_command_encoder_descriptor(wasm_memory, descriptor_ptr);
         if (!descriptor) {
             DRV_DEBUG("Failed to extract command encoder descriptor");
-            results->data[0].kind = WASM_INT_TYPE;
-            results->data[0].of.WASM_POINTER_NAME = 0;
+            results->data[0].kind = WASM_INT_KIND;
+            results->data[0].of.WASM_VAL_INT_PROP = 0;
             return NULL;
         }
     }
@@ -1577,8 +1904,8 @@ wasm_trap_t *wgpuDeviceCreateCommandEncoderImport(void *env,
 
     // Add command encoder to registry and return its index
     size_t encoder_index = add_mapping(&COMMAND_ENCODERS, (uintptr_t)encoder);
-    results->data[0].kind = WASM_INT_TYPE;
-    results->data[0].of.WASM_POINTER_NAME = encoder_index;
+    results->data[0].kind = WASM_INT_KIND;
+    results->data[0].of.WASM_VAL_INT_PROP = encoder_index;
 
     return NULL;
 }
@@ -1636,10 +1963,7 @@ extract_compute_pass_descriptor(wasm_memory_t *memory,
     return descriptor;
 }
 
-// WGPU_EXPORT WGPUComputePassEncoder
-// wgpuCommandEncoderBeginComputePass(WGPUCommandEncoder commandEncoder,
-// WGPU_NULLABLE WGPUComputePassDescriptor const * descriptor)
-// WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT WGPUComputePassEncoder wgpuCommandEncoderBeginComputePass(WGPUCommandEncoder commandEncoder, WGPU_NULLABLE WGPUComputePassDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *
 wgpuCommandEncoderBeginComputePassImport(void *env, const wasm_val_vec_t *args,
                                          wasm_val_vec_t *results) {
@@ -1650,23 +1974,22 @@ wgpuCommandEncoderBeginComputePassImport(void *env, const wasm_val_vec_t *args,
         &COMMAND_ENCODERS, wasm_val_to_native_int(args->data[0]));
 
     // Extract the descriptor from WASM memory if provided
-    WGPUComputePassDescriptor *descriptor =
-        extract_compute_pass_descriptor(wasm_memory, args->data[1].of.i32);
+    WGPUComputePassDescriptor *descriptor = extract_compute_pass_descriptor(
+        wasm_memory, wasm_val_to_native_int(args->data[1]));
 
     // Call the native function
     WGPUComputePassEncoder encoder =
         wgpuCommandEncoderBeginComputePass(commandEncoder, descriptor);
 
     // Store the result in the extern ref registry
-    results->data[0].kind = WASM_INT_TYPE;
+    results->data[0].kind = WASM_INT_KIND;
     results->data[0].of.i32 =
         add_mapping(&COMPUTE_PASS_ENCODERS, (uintptr_t)encoder);
 
     return NULL;
 }
 
-// WGPU_EXPORT void wgpuComputePassEncoderSetPipeline(WGPUComputePassEncoder
-// computePassEncoder, WGPUComputePipeline pipeline) WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT void wgpuComputePassEncoderSetPipeline(WGPUComputePassEncoder computePassEncoder, WGPUComputePipeline pipeline) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuComputePassEncoderSetPipelineImport(void *env,
                                                      const wasm_val_vec_t *args,
                                                      wasm_val_vec_t *results) {
@@ -1686,10 +2009,7 @@ wasm_trap_t *wgpuComputePassEncoderSetPipelineImport(void *env,
     return NULL;
 }
 
-// WGPU_EXPORT void wgpuComputePassEncoderSetBindGroup(WGPUComputePassEncoder
-// computePassEncoder, uint32_t groupIndex, WGPU_NULLABLE WGPUBindGroup group,
-// size_t dynamicOffsetCount, uint32_t const * dynamicOffsets)
-// WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT void wgpuComputePassEncoderSetBindGroup(WGPUComputePassEncoder computePassEncoder, uint32_t groupIndex, WGPU_NULLABLE WGPUBindGroup group, size_t dynamicOffsetCount, uint32_t const * dynamicOffsets) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *
 wgpuComputePassEncoderSetBindGroupImport(void *env, const wasm_val_vec_t *args,
                                          wasm_val_vec_t *results) {
@@ -1704,7 +2024,7 @@ wgpuComputePassEncoderSetBindGroupImport(void *env, const wasm_val_vec_t *args,
 
     // Get the bind group from the third argument
     WGPUBindGroup group = NULL;
-    if (args->data[2].of.i32 != 0) {
+    if (wasm_val_to_native_int(args->data[2]) != 0) {
         group = (WGPUBindGroup)get_mapping(
             &BIND_GROUPS, wasm_val_to_native_int(args->data[2]));
     }
@@ -1713,14 +2033,15 @@ wgpuComputePassEncoderSetBindGroupImport(void *env, const wasm_val_vec_t *args,
     // arguments
     size_t dynamicOffsetCount = wasm_val_to_native_int(args->data[3]);
     const uint32_t *dynamicOffsets = NULL;
-    if (dynamicOffsetCount > 0 && args->data[4].of.i32 != 0) {
+    if (dynamicOffsetCount > 0 && wasm_val_to_native_int(args->data[4]) != 0) {
         // Get pointer to dynamic offsets array in WASM memory
-        dynamicOffsets = (const uint32_t *)(wasm_memory_data(wasm_memory) +
-                                            args->data[4].of.i32);
+        dynamicOffsets =
+            (const uint32_t *)(wasm_memory_data(wasm_memory) +
+                               wasm_val_to_native_int(args->data[4]));
 
         // Validate that the offsets array is within bounds
         size_t required_size = dynamicOffsetCount * sizeof(uint32_t);
-        if (args->data[4].of.i32 + required_size >
+        if (wasm_val_to_native_int(args->data[4]) + required_size >
             wasm_memory_data_size(wasm_memory)) {
             DRV_DEBUG("Dynamic offsets array out of bounds");
             return NULL;
@@ -1734,10 +2055,7 @@ wgpuComputePassEncoderSetBindGroupImport(void *env, const wasm_val_vec_t *args,
     return NULL;
 }
 
-// WGPU_EXPORT void
-// wgpuComputePassEncoderDispatchWorkgroups(WGPUComputePassEncoder
-// computePassEncoder, uint32_t workgroupCountX, uint32_t workgroupCountY,
-// uint32_t workgroupCountZ) WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT void wgpuComputePassEncoderDispatchWorkgroups(WGPUComputePassEncoder computePassEncoder, uint32_t workgroupCountX, uint32_t workgroupCountY, uint32_t workgroupCountZ) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuComputePassEncoderDispatchWorkgroupsImport(
     void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuComputePassEncoderDispatchWorkgroups, 4);
@@ -1758,8 +2076,7 @@ wasm_trap_t *wgpuComputePassEncoderDispatchWorkgroupsImport(
     return NULL;
 }
 
-// WGPU_EXPORT void wgpuComputePassEncoderEnd(WGPUComputePassEncoder
-// computePassEncoder) WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT void wgpuComputePassEncoderEnd(WGPUComputePassEncoder computePassEncoder) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuComputePassEncoderEndImport(void *env,
                                              const wasm_val_vec_t *args,
                                              wasm_val_vec_t *results) {
@@ -1775,9 +2092,7 @@ wasm_trap_t *wgpuComputePassEncoderEndImport(void *env,
     return NULL;
 }
 
-// Must be implemented: https://github.com/gfx-rs/wgpu-native/issues/412
-// WGPU_EXPORT void wgpuComputePassEncoderRelease(WGPUComputePassEncoder
-// computePassEncoder) WGPU_FUNCTION_ATTRIBUTE;
+// Must be implemented: https://github.com/gfx-rs/wgpu-native/issues/412 WGPU_EXPORT void wgpuComputePassEncoderRelease(WGPUComputePassEncoder computePassEncoder) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuComputePassEncoderReleaseImport(void *env,
                                                  const wasm_val_vec_t *args,
                                                  wasm_val_vec_t *results) {
@@ -1793,10 +2108,7 @@ wasm_trap_t *wgpuComputePassEncoderReleaseImport(void *env,
     return NULL;
 }
 
-// WGPU_EXPORT void wgpuCommandEncoderCopyBufferToBuffer(WGPUCommandEncoder
-// commandEncoder, WGPUBuffer source, uint64_t sourceOffset, WGPUBuffer
-// destination, uint64_t destinationOffset, uint64_t size)
-// WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT void wgpuCommandEncoderCopyBufferToBuffer(WGPUCommandEncoder commandEncoder, WGPUBuffer source, uint64_t sourceOffset, WGPUBuffer destination, uint64_t destinationOffset, uint64_t size) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuCommandEncoderCopyBufferToBufferImport(
     void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuCommandEncoderCopyBufferToBuffer, 9);
@@ -1882,9 +2194,7 @@ extract_command_buffer_descriptor(wasm_memory_t *memory,
     return descriptor;
 }
 
-// WGPU_EXPORT WGPUCommandBuffer wgpuCommandEncoderFinish(WGPUCommandEncoder
-// commandEncoder, WGPU_NULLABLE WGPUCommandBufferDescriptor const * descriptor)
-// WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT WGPUCommandBuffer wgpuCommandEncoderFinish(WGPUCommandEncoder commandEncoder, WGPU_NULLABLE WGPUCommandBufferDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuCommandEncoderFinishImport(void *env,
                                             const wasm_val_vec_t *args,
                                             wasm_val_vec_t *results) {
@@ -1894,8 +2204,8 @@ wasm_trap_t *wgpuCommandEncoderFinishImport(void *env,
     WGPUCommandEncoder encoder = (WGPUCommandEncoder)get_mapping(
         &COMMAND_ENCODERS, wasm_val_to_native_int(args->data[0]));
 
-    WGPUCommandBufferDescriptor *descriptor =
-        extract_command_buffer_descriptor(wasm_memory, args->data[1].of.i32);
+    WGPUCommandBufferDescriptor *descriptor = extract_command_buffer_descriptor(
+        wasm_memory, wasm_val_to_native_int(args->data[1]));
 
     // Call the native function
     WGPUCommandBuffer command_buffer =
@@ -1905,15 +2215,13 @@ wasm_trap_t *wgpuCommandEncoderFinishImport(void *env,
     size_t command_buffer_index =
         add_mapping(&COMMAND_BUFFERS, (uintptr_t)command_buffer);
     DRV_DEBUG("created command_buffer_index = %zu", command_buffer_index);
-    results->data[0].kind = WASM_INT_TYPE;
+    results->data[0].kind = WASM_INT_KIND;
     results->data[0].of.i32 = command_buffer_index;
 
     return NULL;
 }
 
-// WGPU_EXPORT void wgpuQueueWriteBuffer(WGPUQueue queue, WGPUBuffer buffer,
-// uint64_t bufferOffset, void const * data, size_t size)
-// WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT void wgpuQueueWriteBuffer(WGPUQueue queue, WGPUBuffer buffer, uint64_t bufferOffset, void const * data, size_t size) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuQueueWriteBufferImport(void *env, const wasm_val_vec_t *args,
                                         wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuQueueWriteBuffer, 6);
@@ -1932,7 +2240,8 @@ wasm_trap_t *wgpuQueueWriteBufferImport(void *env, const wasm_val_vec_t *args,
 
     uintptr_t native_buffer_ptr;
     int data_ptr_status = wasm_get_buffer_pointer_safe(
-        wasm_memory, args->data[4].of.i32, size, &native_buffer_ptr);
+        wasm_memory, wasm_val_to_native_int(args->data[4]), size,
+        &native_buffer_ptr);
 
     DRV_DEBUG("queue = %p, buffer = %p, bufferOffset = %llu, size = %zu, "
               "native_buffer_ptr = %p",
@@ -1949,8 +2258,7 @@ wasm_trap_t *wgpuQueueWriteBufferImport(void *env, const wasm_val_vec_t *args,
     return NULL;
 }
 
-// WGPU_EXPORT void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount,
-// WGPUCommandBuffer const * commands) WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT void wgpuQueueSubmit(WGPUQueue queue, size_t commandCount, WGPUCommandBuffer const * commands) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuQueueSubmitImport(void *env, const wasm_val_vec_t *args,
                                    wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuQueueSubmit, 3);
@@ -1962,11 +2270,11 @@ wasm_trap_t *wgpuQueueSubmitImport(void *env, const wasm_val_vec_t *args,
     // Get command count
     size_t commandCount = wasm_val_to_native_int(args->data[1]);
 
-    WASM_INT_NATIVE_TYPE command_buffer_index_ptr =
+    WASM_INT_C_TYPE command_buffer_index_ptr =
         wasm_val_to_native_int(args->data[2]);
     // Get wasm memory at `command_buffer_index_ptr`
-    WASM_INT_NATIVE_TYPE command_buffer_index =
-        *(WASM_INT_NATIVE_TYPE *)(wasm_base_ptr + command_buffer_index_ptr);
+    WASM_INT_C_TYPE command_buffer_index =
+        *(WASM_INT_C_TYPE *)(wasm_base_ptr + command_buffer_index_ptr);
     DRV_DEBUG("command_buffer_index_ptr = %p, command_buffer_index = %u",
               command_buffer_index_ptr, command_buffer_index);
     WGPUCommandBuffer command_buffer =
@@ -1990,7 +2298,7 @@ void wgpuBufferMapAsyncCallbackNative(WGPUBufferMapAsyncStatus status,
 
     DRV_DEBUG("Getting the callback context");
     Proc *proc = wgpuBufferMapAsyncCallbackContext.proc;
-    WASM_INT_NATIVE_TYPE callback_index =
+    WASM_INT_C_TYPE callback_index =
         wgpuBufferMapAsyncCallbackContext.func_index;
 
     DRV_DEBUG("Getting __indirect_function_table");
@@ -2006,10 +2314,10 @@ void wgpuBufferMapAsyncCallbackNative(WGPUBufferMapAsyncStatus status,
     DRV_DEBUG("Creating args/results for wgpuBufferMapAsyncImportCallbackWasm");
     wasm_val_vec_t args;
     wasm_val_vec_new_uninitialized(&args, 4);
-    args.data[0].kind = WASM_INT_TYPE;
+    args.data[0].kind = WASM_INT_KIND;
     args.data[0].of.i32 = status;
-    args.data[1].kind = WASM_INT_TYPE;
-    args.data[1].of.i32 = (WASM_INT_NATIVE_TYPE)userdata;
+    args.data[1].kind = WASM_INT_KIND;
+    args.data[1].of.i32 = (WASM_INT_C_TYPE)userdata;
     args.num_elems = 2;
 
     // create results (void)
@@ -2030,9 +2338,7 @@ void wgpuBufferMapAsyncCallbackNative(WGPUBufferMapAsyncStatus status,
     DRV_DEBUG("Successfully called wgpuBufferMapAsyncImportCallbackWasm");
 }
 
-// WGPU_EXPORT void wgpuBufferMapAsync(WGPUBuffer buffer, WGPUMapModeFlags mode,
-// size_t offset, size_t size, WGPUBufferMapAsyncCallback callback,
-// WGPU_NULLABLE void * userdata) WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT void wgpuBufferMapAsync(WGPUBuffer buffer, WGPUMapModeFlags mode, size_t offset, size_t size, WGPUBufferMapAsyncCallback callback, WGPU_NULLABLE void * userdata) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuBufferMapAsyncImport(void *env, const wasm_val_vec_t *args,
                                       wasm_val_vec_t *results) {
     HANDLER_INIT(wgpuBufferMapAsync, 6);
@@ -2045,7 +2351,7 @@ wasm_trap_t *wgpuBufferMapAsyncImport(void *env, const wasm_val_vec_t *args,
     size_t size = (size_t)wasm_val_to_native_int(args->data[3]);
 
     // an index into the module’s function table
-    WASM_INT_NATIVE_TYPE callback_index = wasm_val_to_native_int(args->data[4]);
+    WASM_INT_C_TYPE callback_index = wasm_val_to_native_int(args->data[4]);
     WGPUBufferMapAsyncCallback callback = NULL;
     if (callback_index == 0) {
         DRV_DEBUG("wgpuBufferMapAsyncCallbackWasmFuncTableRef is 0, using NULL "
@@ -2059,8 +2365,7 @@ wasm_trap_t *wgpuBufferMapAsyncImport(void *env, const wasm_val_vec_t *args,
         wgpuBufferMapAsyncCallbackContext.func_index = callback_index;
     }
     // Keep this as a WASM pointer since it's not used in the native code
-    WASM_INT_NATIVE_TYPE userdata_wasm_ptr =
-        wasm_val_to_native_int(args->data[5]);
+    WASM_INT_C_TYPE userdata_wasm_ptr = wasm_val_to_native_int(args->data[5]);
 
     DRV_DEBUG("buffer = %p, mode = %d, offset = %zu, size = %zu, callback = "
               "%p, userdata = %p",
@@ -2071,8 +2376,7 @@ wasm_trap_t *wgpuBufferMapAsyncImport(void *env, const wasm_val_vec_t *args,
     return NULL;
 }
 
-// WGPU_EXPORT void * wgpuBufferGetMappedRange(WGPUBuffer buffer, size_t offset,
-// size_t size) WGPU_FUNCTION_ATTRIBUTE;
+// WGPU_EXPORT void * wgpuBufferGetMappedRange(WGPUBuffer buffer, size_t offset, size_t size) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuBufferGetMappedRangeImport(void *env,
                                             const wasm_val_vec_t *args,
                                             wasm_val_vec_t *results) {
@@ -2098,7 +2402,7 @@ wasm_trap_t *wgpuBufferGetMappedRangeImport(void *env,
     wasm_val_vec_new_uninitialized(&wm_args, 1);
     wm_args.size = 1;
     wm_args.num_elems = 1;
-    wm_args.data[0].kind = WASM_INT_TYPE;
+    wm_args.data[0].kind = WASM_INT_KIND;
     wm_args.data[0].of.i32 = size;
 
     // create results (void)
@@ -2114,7 +2418,8 @@ wasm_trap_t *wgpuBufferGetMappedRangeImport(void *env,
         return NULL;
     }
 
-    WASM_INT_NATIVE_TYPE wasm_malloc_res = wm_results.data[0].of.i32;
+    WASM_INT_C_TYPE wasm_malloc_res =
+        wasm_val_to_native_int(wm_results.data[0]);
     DRV_DEBUG("Called wasm_malloc with result %p", wasm_malloc_res);
 
     if (wasm_malloc_res == 0) {
@@ -2130,7 +2435,7 @@ wasm_trap_t *wgpuBufferGetMappedRangeImport(void *env,
         memcpy((void *)wasm_buffer_write_native_ptr, mapped, size);
     }
 
-    results->data[0].kind = WASM_POINTER_TYPE;
+    results->data[0].kind = WASM_POINTER_KIND;
     results->data[0].of.i32 = wasm_malloc_res;
 
     return NULL;
