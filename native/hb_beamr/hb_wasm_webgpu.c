@@ -299,6 +299,8 @@ typedef struct {
 
 ExternRefRegistry DEVICES = {.count = 0, .mappings = {}};
 
+ExternRefRegistry QUEUES = {.count = 0, .mappings = {}};
+
 typedef struct {
     WASM_INT_C_TYPE queue;
     uint64_t submissionIndex;
@@ -330,7 +332,7 @@ extract_wrapped_submission_index(wasm_memory_t *memory,
     memset(wrapped_submission_index, 0, sizeof(WGPUWrappedSubmissionIndex));
 
     wrapped_submission_index->queue =
-        (WGPUQueue)wasm_wrapped_submission_index.queue;
+        (WGPUQueue)get_mapping(&QUEUES, wasm_wrapped_submission_index.queue);
     wrapped_submission_index->submissionIndex =
         wasm_wrapped_submission_index.submissionIndex;
 
@@ -496,7 +498,7 @@ void wgpuInstanceRequestAdapterCallbackNative(WGPURequestAdapterStatus status,
     // TODO: Allocate memory for the message, copy data, and set the ref
     args.data[2].of.i32 = 0;
     args.data[3].kind = WASM_INT_KIND;
-    args.data[3].of.i32 = (WASM_INT_C_TYPE)userdata;
+    args.data[3].of.i32 = (WASM_INT_C_TYPE)(uintptr_t)userdata;
     args.num_elems = 4;
 
     // create results (void)
@@ -637,9 +639,9 @@ wasm_trap_t *wgpuInstanceRequestAdapterImport(void *env,
     // Call the actual function
     DRV_DEBUG("Parameters: instance=%p, options=%p, callback=%p, userdata=%p",
               (void *)instance, (void *)options, (void *)callback,
-              (void *)userdata_wasm_ptr);
+              (void *)(uintptr_t)userdata_wasm_ptr);
     wgpuInstanceRequestAdapter(instance, options, callback,
-                               (void *)userdata_wasm_ptr);
+                               (void *)(uintptr_t)userdata_wasm_ptr);
 
     return NULL;
 }
@@ -686,7 +688,7 @@ void wgpuInstanceRequestDeviceCallbackNative(WGPURequestDeviceStatus status,
     // TODO: Allocate memory for the message, copy data, and set the ref
     args.data[2].of.i32 = 0;
     args.data[3].kind = WASM_INT_KIND;
-    args.data[3].of.i32 = (WASM_INT_C_TYPE)userdata;
+    args.data[3].of.i32 = (WASM_INT_C_TYPE)(uintptr_t)userdata;
     args.num_elems = 4;
 
     // create results (void)
@@ -909,7 +911,8 @@ WGPUDeviceDescriptor *extract_device_descriptor(wasm_memory_t *memory,
     result->deviceLostCallback =
         (void *)wasm_desc
             .deviceLostCallback; // TODO: Create deviceLostCallbackNative?
-    result->deviceLostUserdata = (void *)wasm_desc.deviceLostUserdata;
+    result->deviceLostUserdata =
+        (void *)(uintptr_t)wasm_desc.deviceLostUserdata;
     result->uncapturedErrorCallbackInfo =
         *extract_uncaptured_error_callback_info(
             memory, wasm_desc.uncapturedErrorCallbackInfo);
@@ -925,8 +928,8 @@ wasm_trap_t *wgpuAdapterRequestDeviceImport(void *env,
 
     size_t adapter_mapping_index = wasm_val_to_native_int(args->data[0]);
     DRV_DEBUG("adapter_mapping_index = %zu", adapter_mapping_index);
-    WGPUAdapter *adapter =
-        (WGPUAdapter *)get_mapping(&ADAPTERS, adapter_mapping_index);
+    WGPUAdapter adapter =
+        (WGPUAdapter)get_mapping(&ADAPTERS, adapter_mapping_index);
     DRV_DEBUG("adapter = %p", adapter);
 
     WGPUDeviceDescriptor *descriptor = extract_device_descriptor(
@@ -954,14 +957,12 @@ wasm_trap_t *wgpuAdapterRequestDeviceImport(void *env,
     // Call the actual function
     DRV_DEBUG("Parameters: adapter=%p, descriptor=%p, callback=%p, userdata=%p",
               (void *)adapter, (void *)descriptor, (void *)callback,
-              (void *)userdata_wasm_ptr);
+              (void *)(uintptr_t)userdata_wasm_ptr);
     wgpuAdapterRequestDevice(adapter, descriptor, callback,
-                             (void *)userdata_wasm_ptr);
+                             (void *)(uintptr_t)userdata_wasm_ptr);
 
     return NULL;
 }
-
-ExternRefRegistry QUEUES = {.count = 0, .mappings = {}};
 
 // WGPU_EXPORT WGPUQueue wgpuDeviceGetQueue(WGPUDevice device) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuDeviceGetQueueImport(void *env, const wasm_val_vec_t *args,
@@ -2313,11 +2314,11 @@ void wgpuBufferMapAsyncCallbackNative(WGPUBufferMapAsyncStatus status,
 
     DRV_DEBUG("Creating args/results for wgpuBufferMapAsyncImportCallbackWasm");
     wasm_val_vec_t args;
-    wasm_val_vec_new_uninitialized(&args, 4);
+    wasm_val_vec_new_uninitialized(&args, 2);
     args.data[0].kind = WASM_INT_KIND;
     args.data[0].of.i32 = status;
     args.data[1].kind = WASM_INT_KIND;
-    args.data[1].of.i32 = (WASM_INT_C_TYPE)userdata;
+    args.data[1].of.i32 = (WASM_INT_C_TYPE)(uintptr_t)userdata;
     args.num_elems = 2;
 
     // create results (void)
@@ -2367,11 +2368,13 @@ wasm_trap_t *wgpuBufferMapAsyncImport(void *env, const wasm_val_vec_t *args,
     // Keep this as a WASM pointer since it's not used in the native code
     WASM_INT_C_TYPE userdata_wasm_ptr = wasm_val_to_native_int(args->data[5]);
 
+    // Call the actual function
     DRV_DEBUG("buffer = %p, mode = %d, offset = %zu, size = %zu, callback = "
               "%p, userdata = %p",
-              buffer, mode, offset, size, callback, (void *)userdata_wasm_ptr);
+              buffer, mode, offset, size, callback,
+              (void *)(uintptr_t)userdata_wasm_ptr);
     wgpuBufferMapAsync(buffer, mode, offset, size, callback,
-                       (void *)userdata_wasm_ptr);
+                       (void *)(uintptr_t)userdata_wasm_ptr);
 
     return NULL;
 }
@@ -2441,8 +2444,7 @@ wasm_trap_t *wgpuBufferGetMappedRangeImport(void *env,
     return NULL;
 }
 
-static const struct
-{
+static const struct {
     const char *name;
     void *func;
 } webgpu_functions[] = {
