@@ -197,3 +197,20 @@ by [Forward Research](https://fwd.arweave.net). Pull Requests are always welcome
 
 To get started building on HyperBEAM, check out the [hacking on HyperBEAM](./docs/hacking-on-hyperbeam.md)
 guide.
+
+## Documentation
+
+HyperBEAM implementation documentation is generated into the [`doc` directory](./doc)
+using [`edoc`](https://www.erlang.org/doc/apps/edoc/chapter.html#content).
+You can regenerate the documentation by running:
+
+```sh
+rebar3 edoc
+```
+
+Then you can serve them locally by running the following command, then navigating
+to `http://localhost:8000/index.html`.
+
+```sh
+erl -s inets -eval 'inets:start(httpd,[{server_name,"HyperBEAM_Docs"},{document_root, "doc"},{server_root, "doc"},{port, 8000},{mime_types,[{"html","text/html"},{"htm","text/html"},{"js","text/javascript"},{"css","text/css"},{"gif","image/gif"},{"jpg","image/jpeg"},{"jpeg","image/jpeg"},{"png","image/png"}]}]).'
+```
