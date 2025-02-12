@@ -137,8 +137,7 @@ process_cache_suite_test_() ->
         [
             {Name, Opts}
         ||
-            {Name, Opts} <- hb_store:test_stores(),
-            Name =/= hb_store_rocksdb % Disable rocksdb for now
+            {Name, Opts} <- hb_store:test_stores()
         ]
     ).
 

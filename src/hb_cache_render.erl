@@ -1,30 +1,51 @@
 %%% @doc A module that helps to render given Key graphs into the .dot files
 -module(hb_cache_render).
 
--export([render/1, render/3]).
+-export([render/0, render/1, render/2]).
 
 % Preparing data for testing
--export([prepare_unsigned_data/0, prepare_signed_data/0, prepare_deeply_nested_complex_message/0]).
+-export([prepare_unsigned_data/1, prepare_signed_data/1, prepare_deeply_nested_complex_message/1]).
 
 -include("src/include/hb.hrl").
--include_lib("kernel/include/file.hrl").
+
+-type store_type() :: hb_store_fs | hb_store_rocksdb.
+-type key() :: binary().
+
+-define(DIAGRAM_FILENAME, "store_diagram.dot").
+-define(SVG_FILENAME, "store_diagram.svg").
+
+render() ->
+    case hb_opts:get(store, no_viable_store, #{}) of
+        no_viable_store -> no_viable_store;
+        {StoreType, _} -> render(StoreType)
+    end.
 
 % @doc Render the given Key into svg
-render("*") ->
-    Store = get_test_store(),
-    {ok, Keys} = hb_store:list(Store, "/"),
-    render(Keys);
-render(StartKeys) ->
-    Store = get_test_store(),
-    os:cmd("rm new_render_diagram.dot"),
-    {ok, IoDevice} = file:open("new_render_diagram.dot", [write]),
+-spec render(store_type()) -> ok.
+render(StoreType) ->
+    Store = get_test_store(StoreType),
+    Keys =
+        case Store of
+            {hb_store_fs, _} ->
+                {ok, K} = hb_store:list(Store, "/"),
+                K;
+            {hb_store_rocksdb, _} ->
+                lists:map(fun({Key, _V}) -> Key end, hb_store_rocksdb:list())
+        end,
+    render(Keys, StoreType).
+
+-spec render([key()], store_type()) -> ok.
+render(StartKeys, StoreType) ->
+    Store = get_test_store(StoreType),
+    os:cmd(["rm ", ?DIAGRAM_FILENAME]),
+    {ok, IoDevice} = file:open(?DIAGRAM_FILENAME, [write]),
     ok = file:write(IoDevice, <<"digraph filesystem {\n">>),
     ok = file:write(IoDevice, <<"  node [shape=circle];\n">>),
     lists:foreach(fun(Key) -> render(IoDevice, Store, Key) end, StartKeys),
     ok = file:write(IoDevice, <<"}\n">>),
     file:close(IoDevice),
-    os:cmd("dot -Tsvg new_render_diagram.dot -o new_render_diagram.svg"),
-    os:cmd("open new_render_diagram.svg"),
+    os:cmd(["dot -Tsvg ", ?DIAGRAM_FILENAME, " -o ", ?SVG_FILENAME]),
+    os:cmd(["open ", ?SVG_FILENAME]),
     ok.
 
 render(IoDevice, Store, Key) ->
@@ -61,13 +82,17 @@ render(IoDevice, Store, Key) ->
                     render(IoDevice, Store, ResolvedPath)
             end;
         no_viable_store ->
+            ?event(rocksdb, {no_viable_store, Store}),
             ignore;
-        _OtherType ->
+        OtherType ->
+            ?event(rocksdb, {uknown_type, OtherType}),
             ignore
     end.
 
-get_test_store() ->
-    hb_opts:get(store, no_viable_store,  #{store => {hb_store_fs,#{prefix => "TEST-cache-fs"}}}).
+get_test_store(hb_store_fs) ->
+    {hb_store_fs, #{prefix => "TEST-cache-fs"}};
+get_test_store(hb_store_rocksdb) ->
+    {hb_store_rocksdb, #{prefix => "TEST-cache-rocksdb"}}.
 
 % Helper functions
 add_link(IoDevice, Id, Label) ->
@@ -86,20 +111,20 @@ insert_circle(IoDevice, ID, Label, Color) ->
     ok = io:format(IoDevice, "  \"~s\" [label=\"~s\", color=~s, style=filled];~n", [ID, Label, Color]).
 
 % Preparing the test data
-prepare_unsigned_data() ->
-    Opts = #{store => {hb_store_fs,#{prefix => "TEST-cache-fs"}}},
+prepare_unsigned_data(StoreType) ->
+    Opts = #{store => get_test_store(StoreType)},
     Item = test_unsigned(#{ <<"key">> => <<"Simple unsigned data item">> }),
     {ok, _Path} = hb_cache:write(Item, Opts).
 
-prepare_signed_data() ->
-    Opts = #{store => {hb_store_fs,#{prefix => "TEST-cache-fs"}}},
+prepare_signed_data(StoreType) ->
+    Opts = #{store => get_test_store(StoreType)},
     Wallet = ar_wallet:new(),
     Item = test_signed(#{ <<"l2-test-key">> => <<"l2-test-value">> }, Wallet),
     %% Write the simple unsigned item
     {ok, _Path} = hb_cache:write(Item, Opts).
 
-prepare_deeply_nested_complex_message() ->
-    Opts = #{store => {hb_store_fs,#{prefix => "TEST-cache-fs"}}},
+prepare_deeply_nested_complex_message(StoreType) ->
+    Opts = #{store => get_test_store(StoreType)},
     Wallet = ar_wallet:new(),
 
     %% Create nested data

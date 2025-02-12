@@ -211,25 +211,25 @@ generate_test_suite(Suite, Stores) ->
 %% @doc Test path resolution dynamics.
 simple_path_resolution_test(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:write(Store, "test-file", <<"test-data">>),
-    hb_store:make_link(Store, "test-file", "test-link"),
-    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, "test-link")).
+    ok = hb_store:write(Store, <<"test-file">>, <<"test-data">>),
+    hb_store:make_link(Store, <<"test-file">>, <<"test-link">>),
+    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, <<"test-link">>)).
 
 %% @doc Ensure that we can resolve links recursively.
 resursive_path_resolution_test(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:write(Store, "test-file", <<"test-data">>),
-    hb_store:make_link(Store, "test-file", "test-link"),
-    hb_store:make_link(Store, "test-link", "test-link2"),
-    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, "test-link2")).
+    hb_store:write(Store, <<"test-file">>, <<"test-data">>),
+    hb_store:make_link(Store, <<"test-file">>, <<"test-link">>),
+    hb_store:make_link(Store, <<"test-link">>, <<"test-link2">>),
+    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, <<"test-link2">>)).
 
 %% @doc Ensure that we can resolve links through a directory.
 hierarchical_path_resolution_test(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:make_group(Store, "test-dir1"),
-    hb_store:write(Store, ["test-dir1", "test-file"], <<"test-data">>),
-    hb_store:make_link(Store, ["test-dir1"], "test-link"),
-    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, ["test-link", "test-file"])).
+    hb_store:make_group(Store, <<"test-dir1">>),
+    hb_store:write(Store, [<<"test-dir1">>, <<"test-file">>], <<"test-data">>),
+    hb_store:make_link(Store, [<<"test-dir1">>], <<"test-link">>),
+    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, [<<"test-link">>, <<"test-file">>])).
 
 store_suite_test_() ->
     hb_store:generate_test_suite([

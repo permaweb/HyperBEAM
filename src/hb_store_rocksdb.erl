@@ -2,17 +2,15 @@
 %%% @doc A process wrapper over rocksdb storage. Replicates functionality of the
 %%%      hb_fs_store module.
 %%%
-%%%      The data is stored in two Column Families:
-%%%      1. Default - for raw data (e.g. message records)
-%%%      2. Meta - for meta information
-%%%        `(<<"raw">>/<<"link">>/<<"composite">> or <<"group">>)'
+%%%     Encodes the item types with the help of prefixes, see `encode_value/2'
+%%%     and `decode_value/1'
 %%% @end
 %%%-----------------------------------------------------------------------------
 -module(hb_store_rocksdb).
 -behaviour(gen_server).
 -behaviour(hb_store).
 -export([start/1, start_link/1, stop/1, scope/1]).
--export([read/2, write/3, list/2, reset/1]).
+-export([read/2, write/3, list/2, reset/1, list/0]).
 -export([make_link/3, make_group/2, type/2, add_path/3, path/2, resolve/2]).
 -export([init/1, terminate/2, handle_cast/2, handle_info/2, handle_call/3]).
 -export([code_change/3]).
@@ -22,6 +20,8 @@
 
 -type key() :: binary() | list().
 -type value() :: binary() | list().
+
+-type value_type() :: link | raw | group.
 
 start_link({hb_store_rocksdb, #{ prefix := Dir}}) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, Dir, []);
@@ -36,7 +36,7 @@ start_link(Store) ->
     ignore.
 
 start(Opts) ->
-    start_link([{hb_store_rocksdb, Opts}]).
+    start_link({hb_store_rocksdb, Opts}).
 
 -spec stop(any()) -> ok.
 stop(_Opts) ->
@@ -59,18 +59,20 @@ path(_Opts, Path) ->
     Opts :: map(),
     Key :: key() | list(),
     Result :: {ok, value()} | not_found | {error, {corruption, string()}} | {error, any()}.
-read(Opts, RawKey) ->
-    Key = join(RawKey),
-    case meta(Key) of
+read(Opts, RawPath) ->
+    ?event({read, RawPath}),
+    Path = resolve(Opts, RawPath),
+    case do_read(Opts, Path) of
         not_found ->
-            case resolve(Opts, Key) of
-                not_found ->
-                    not_found;
-                ResolvedPath ->
-                    gen_server:call(?MODULE, {read, join(ResolvedPath)}, ?TIMEOUT)
-            end;
-        _Result ->
-            gen_server:call(?MODULE, {read, Key}, ?TIMEOUT)
+            not_found;
+        {error, _Reason} = Err -> Err;
+        {ok, {raw, Result}} ->
+            {ok, Result};
+        {ok, {link, Link}} ->
+            ?event({link_found, Path, Link}),
+            read(Opts, Link);
+        {ok, {group, _Result}} ->
+            not_found
     end.
 
 %% @doc Write given Key and Value to the database
@@ -79,50 +81,58 @@ read(Opts, RawKey) ->
     Key :: key(),
     Value :: value(),
     Result :: ok | {error, any()}.
-write(_Opts, RawKey, Value) ->
-    Key = join(RawKey),
-    gen_server:call(?MODULE, {write, Key, Value}, ?TIMEOUT).
+write(Opts, RawKey, Value) ->
+    Key = hb_store:join(RawKey),
+    EncodedValue = encode_value(raw, Value),
+    ?event({writing, Key, byte_size(EncodedValue)}),
+    do_write(Opts, Key, EncodedValue).
 
-%% @doc Return meta information about the given Key
--spec meta(key()) -> {ok, binary()} | not_found.
-meta(Key) ->
-    gen_server:call(?MODULE, {meta, join(Key)}, ?TIMEOUT).
-
-%% @doc List key/values stored in the storage so far.
-%%      *Note*: This function is slow, and probably should not be used on
-%%      production. Right now it's used for debugging purposes.
-%%
-%%      This can't work as it works for FS store, especially for large sets
-%%      of data.
+%% @doc Returns the full list of items stored under the given path. Where the path
+%% child items is relevant to the path of parentItem. (Same as in `hb_store_fs').
 -spec list(Opts, Path) -> Result when
     Opts :: any(),
     Path :: any(),
-    Result :: [string()].
-list(_Opts, Path) ->
-    Result = gen_server:call(?MODULE, {list, hb_store:join(Path)}, ?TIMEOUT),
-    {ok, Result}.
+    Result :: {ok, [string()]} | {error, term()}.
+
+list(Opts, Path) ->
+    case do_read(Opts, Path) of
+        not_found -> {error, not_found};
+        {error, _Reason} = Err ->
+            ?event(rocksdb, {could_not_list_folder, Err}),
+            Err;
+        {ok, {group, Value}} ->
+            {ok, sets:to_list(Value)};
+        {ok, {link, LinkedPath}} ->
+            list(Opts, LinkedPath);
+        Reason ->
+            ?event(rocksdb, {could_not_list_folder, Reason}),
+            {ok, []}
+    end.
 
 %% @doc Replace links in a path with the target of the link.
 -spec resolve(Opts, Path) -> Result when
     Opts :: any(),
     Path :: binary() | list(),
     Result :: not_found | string().
-resolve(_Opts, RawKey) ->
-    Key = hb_store:join(RawKey),
-    Path = filename:split(Key),
+resolve(Opts, Path) ->
+    PathList = hb_path:term_to_path_parts(hb_store:join(Path)),
 
-    case do_resolve("", Path) of
-        not_found -> not_found;
-        <<"">> -> "";
-        Result when is_list(Result) -> Result;
-        % converting back to list, so hb_cache can remove common prefix
-        BinResult -> binary_to_list(BinResult)
+    ResolvedPath = do_resolve(Opts, "", PathList),
+    ResolvedPath.
+
+do_resolve(_Opts, FinalPath, []) ->
+    FinalPath;
+do_resolve(Opts, CurrentPath, [CurrentPath | Rest]) ->
+    do_resolve(Opts, CurrentPath, Rest);
+do_resolve(Opts, CurrentPath, [Next | Rest]) ->
+    PathPart = hb_store:join([CurrentPath, Next]),
+    case do_read(Opts, PathPart) of
+        not_found -> do_resolve(Opts, PathPart, Rest);
+        {error, _Reason} = Err -> Err;
+        {ok, {link, LinkValue}} ->
+            do_resolve(Opts, LinkValue, Rest);
+        {ok, _OtherType} -> do_resolve(Opts, PathPart, Rest)
     end.
-
-%% @doc Helper function that is useful when it's required to get a direct data
-%%      under the given key, as it is, without following links
-read_no_follow(Key) ->
-    gen_server:call(?MODULE, {read_no_follow, join(Key)}, ?TIMEOUT).
 
 %% @doc Get type of the current item
 -spec type(Opts, Key) -> Result when
@@ -130,40 +140,48 @@ read_no_follow(Key) ->
     Key :: binary(),
     Result :: composite | simple | not_found.
 
-type(_Opts, RawKey) ->
+type(Opts, RawKey) ->
     Key = hb_store:join(RawKey),
-    case meta(Key) of
-        not_found ->
-            not_found;
-        {ok, <<"composite">>} ->
-            composite;
-        {ok, <<"group">>} ->
-            composite;
-        {ok, <<"link">>} ->
-            simple;
-        {ok, _} ->
-            simple
+    case do_read(Opts, Key) of
+        not_found -> not_found;
+        {ok, {raw, _Item}} -> simple;
+        {ok, {link, NewKey}} -> type(Opts, NewKey);
+        {ok, {group, _Item}} -> composite
     end.
 
 %% @doc Creates group under the given path.
-%%      Creates an entry in the database and store `<<"group">>' as a type in
-%%      the meta family.
-make_group(_Opts, Path) ->
-    BinPath = join(Path),
-    gen_server:call(?MODULE, {make_group, BinPath}, ?TIMEOUT).
+-spec make_group(Opts, Key) -> Result when
+    Opts :: any(),
+    Key :: binary(),
+    Result :: ok | {error, already_added}.
+make_group(_Opts, Key) ->
+    gen_server:call(?MODULE, {make_group, Key}, ?TIMEOUT).
 
 -spec make_link(any(), key(), key()) -> ok.
 make_link(_, Key1, Key1) ->
     ok;
 
-make_link(_Opts, Existing, New) ->
+make_link(Opts, Existing, New) ->
     ExistingBin = convert_if_list(Existing),
     NewBin = convert_if_list(New),
-    gen_server:call(?MODULE, {make_link, ExistingBin, NewBin}, ?TIMEOUT).
+
+    % Create: NewValue -> ExistingBin
+    case do_read(Opts, NewBin) of
+        not_found ->
+            do_write(Opts, NewBin, encode_value(link, ExistingBin));
+        _ ->
+            ok
+    end.
 
 %% @doc Add two path components together. // is not used
 add_path(_Opts, Path1, Path2) ->
     Path1 ++ Path2.
+
+%% @doc List all items registered in rocksdb store. Should be used only
+%% for testing/debugging, as the underlying operation is doing full traversal
+%% on the KV storage, and is slow.
+list() ->
+    gen_server:call(?MODULE, list, ?TIMEOUT).
 
 %%%=============================================================================
 %%% Gen server callbacks
@@ -171,12 +189,10 @@ add_path(_Opts, Path1, Path2) ->
 init(Dir) ->
     filelib:ensure_dir(Dir),
     case open_rockdb(Dir) of
-        {ok, DBHandle, [DefaultH, MetaH]} ->
+        {ok, DBHandle} ->
             State = #{
                 db_handle => DBHandle,
-                dir => Dir,
-                data_family => DefaultH,
-                meta_family => MetaH
+                dir => Dir
             },
             {ok, State};
         {error, Reason} ->
@@ -189,42 +205,44 @@ handle_cast(_Request, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-handle_call({write, Key, Value}, _From, State) ->
-    ok = write_meta(State, Key, <<"raw">>, #{}),
-    Result = write_data(State, Key, Value, #{}),
-    {reply, Result, State};
-handle_call({make_group, Key}, _From, State) ->
-    ok = write_meta(State, Key, <<"group">>, #{}),
-    Result = write_data(State, Key, <<"group">>, #{}),
-    {reply, Result, State};
-handle_call({make_link, Key1, Key2}, _From, State) ->
-    ok = write_meta(State, Key2, <<"link">>, #{}),
-    Result = write_data(State, Key2, Key1, #{}),
-    {reply, Result, State};
-handle_call({read, Key}, _From, DBInfo) ->
-    Result = get(DBInfo, Key, #{}),
-    {reply, Result, DBInfo};
-handle_call({read_no_follow, BaseKey}, _From, State) ->
-    Result = get_data(State, BaseKey, #{}),
-    {reply, Result, State};
-handle_call({meta, Key}, _From, State) ->
-    Result = get_meta(State, Key, #{}),
-    {reply, Result, State};
+handle_call({do_write, Key, Value}, _From, #{db_handle := DBHandle} = State) ->
+    BaseName = filename:basename(Key),
+    rocksdb:put(DBHandle, Key, Value, #{}),
+    case filename:dirname(Key) of
+        <<".">> ->
+            ignore;
+        BaseDir ->
+            ensure_dir(DBHandle, BaseDir),
+            {ok, RawDirContent}  = rocksdb:get(DBHandle, BaseDir, #{}),
+            NewDirContent = maybe_append_key_to_group(BaseName, RawDirContent),
+            ok = rocksdb:put(DBHandle, BaseDir, NewDirContent, #{})
+    end,
+    {reply, ok, State};
+handle_call({do_read, Key}, _From, #{db_handle := DBHandle} = State) ->
+    Response =
+        case rocksdb:get(DBHandle, Key, #{}) of
+            {ok, Result} ->
+                {Type, Value} = decode_value(Result),
+                {ok, {Type, Value}};
+            not_found ->
+                not_found;
+            {error, _Reason} = Err ->
+                Err
+        end,
+    {reply, Response, State};
 handle_call(reset, _From, #{db_handle := DBHandle, dir := Dir}) ->
     ok = rocksdb:close(DBHandle),
     ok = rocksdb:destroy(ensure_list(Dir), []),
-    {ok, NewDBHandle, [DefaultH, MetaH]} = open_rockdb(Dir),
-    NewState = #{
-        db_handle => NewDBHandle,
-        dir => Dir,
-        data_family => DefaultH,
-        meta_family => MetaH
-    },
+    {ok, NewDBHandle} = open_rockdb(Dir),
+    NewState = #{db_handle => NewDBHandle, dir => Dir},
     {reply, ok, NewState};
-handle_call({list, Path}, _From, State = #{db_handle := DBHandle}) ->
+handle_call(list, _From, State = #{db_handle := DBHandle}) ->
     {ok, Iterator} = rocksdb:iterator(DBHandle, []),
-    Items = collect(Iterator, Path),
+    Items = collect(Iterator),
     {reply, Items, State};
+handle_call({make_group, Path}, _From, #{db_handle := DBHandle} = State) ->
+    Result = ensure_dir(DBHandle, Path),
+    {reply, Result, State};
 handle_call(_Request, _From, State) ->
     {reply, handle_call_unrecognized_message, State}.
 
@@ -237,12 +255,62 @@ code_change(_OldVsn, State, _Extra) ->
 %%%=============================================================================
 %%% Private
 %%%=============================================================================
+%% @doc Write given Key and Value to the database
+-spec do_write(Opts, Key, Value) -> Result when
+    Opts :: map(),
+    Key :: key(),
+    Value :: value(),
+    Result :: ok | {error, any()}.
+do_write(_Opts, Key, Value) ->
+    gen_server:call(?MODULE, {do_write, Key, Value}, ?TIMEOUT).
+
+do_read(_Opts, Key) ->
+    gen_server:call(?MODULE, {do_read, Key}, ?TIMEOUT).
+
+-spec encode_value(value_type(), binary()) -> binary().
+encode_value(link, Value)  -> <<1, Value/binary>>;
+encode_value(raw, Value)   -> <<2, Value/binary>>;
+encode_value(group, Value) -> <<3, (term_to_binary(Value))/binary>>.
+
+-spec decode_value(binary()) -> {value_type(), binary()}.
+decode_value(<<1, Value/binary>>) -> {link, Value};
+decode_value(<<2, Value/binary>>) -> {raw, Value};
+decode_value(<<3, Value/binary>>) -> {group, binary_to_term(Value)}.
+
+ensure_dir(DBHandle, BaseDir) ->
+    PathParts = hb_path:term_to_path_parts(BaseDir),
+    [First | Rest] = PathParts,
+    Result = ensure_dir(DBHandle, First, Rest),
+    Result.
+ensure_dir(DBHandle, CurrentPath, []) ->
+    maybe_create_dir(DBHandle, CurrentPath, nil),
+    ok;
+ensure_dir(DBHandle, CurrentPath, [Next]) ->
+    maybe_create_dir(DBHandle, CurrentPath, Next),
+    ensure_dir(DBHandle, hb_store:join([CurrentPath, Next]), []);
+ensure_dir(DBHandle, CurrentPath, [Next | Rest]) ->
+    maybe_create_dir(DBHandle, CurrentPath, Next),
+    ensure_dir(DBHandle, hb_store:join([CurrentPath, Next]), Rest).
+
+maybe_create_dir(DBHandle, DirPath, Value) ->
+    CurrentValueSet =
+        case rocksdb:get(DBHandle, DirPath, #{}) of
+            not_found -> sets:new();
+            {ok, CurrentValue} ->
+                {group, DecodedOldValue} = decode_value(CurrentValue),
+                DecodedOldValue
+        end,
+    NewValueSet =
+        case Value of
+            nil -> CurrentValueSet;
+            _ -> sets:add_element(Value, CurrentValueSet)
+        end,
+    rocksdb:put(DBHandle, DirPath, encode_value(group, NewValueSet), #{}).
 
 open_rockdb(RawDir) ->
     filelib:ensure_dir(Dir = ensure_list(RawDir)),
-    ColumnFamilies = [{"default", []}, {"meta", []}],
-    Options = [{create_if_missing, true}, {create_missing_column_families, true}],
-    rocksdb:open_with_cf(Dir, Options, ColumnFamilies).
+    Options = [{create_if_missing, true}],
+    rocksdb:open(Dir, Options).
 
 % Helper function to convert lists to binaries
 convert_if_list(Value) when is_list(Value) ->
@@ -254,100 +322,44 @@ convert_if_list(Value) ->
 ensure_list(Value) when is_binary(Value) -> binary_to_list(Value);
 ensure_list(Value) -> Value.
 
-get_data(#{data_family := F, db_handle := Handle}, Key, Opts) ->
-    rocksdb:get(Handle, F, Key, Opts).
-
-get_meta(#{meta_family := F, db_handle := Handle}, Key, Opts) ->
-    rocksdb:get(Handle, F, Key, Opts).
-
-write_meta(DBInfo, Key, Value, Opts) ->
-    #{meta_family := ColumnFamily, db_handle := Handle} = DBInfo,
-    rocksdb:put(Handle, ColumnFamily, Key, Value, Opts).
-
-write_data(DBInfo, Key, Value, Opts) ->
-    #{data_family := ColumnFamily, db_handle := Handle} = DBInfo,
-    rocksdb:put(Handle, ColumnFamily, Key, Value, Opts).
-
-% Note: this function is not yet optimized for tail recursion,
-% which might be needed if we expect big amount of nested links
-get(DBInfo, Key, Opts) ->
-    case get_data(DBInfo, Key, Opts) of
-        {ok, Value} ->
-            case get_meta(DBInfo, Key, Opts) of
-                {ok, <<"link">>} ->
-                    % Automatically follow the link
-                    get(DBInfo, Value, Opts);
-                {ok, <<"raw">>} ->
-                    {ok, Value};
-                _OtherMeta ->
-                    {ok, Value}
-            end;
-        not_found ->
-            not_found
-    end.
-
-collect(Iterator, Path) ->
-    case rocksdb:iterator_move(Iterator, <<>>) of
-        {error, invalid_iterator} -> [];
-        {ok, Key, _Value} -> 
-            collect(Iterator, Path, maybe_add_key(Key, Path, []))
-    end.
-
-
-collect(Iterator, Path, Acc) ->
-    case rocksdb:iterator_move(Iterator, next) of
-        {ok, Key, _Value} ->
-            % Continue iterating, accumulating the key-value pair in the list
-            NewAcc = maybe_add_key(Key, Path, Acc),
-            collect(Iterator, Path, NewAcc);
-        {error, invalid_iterator} ->
-            % Reached the end of the iterator, return the accumulated list
-            lists:reverse(Acc)
-    end.
-
-maybe_add_key(Key, Prefix, Keys) ->
-    case re:split(Key, Prefix, [{return, binary}]) of
-        [Key] -> Keys; % The split did not really split anything
-        [<<>>, <<"/", Suffix/binary>>] -> [erlang:binary_to_list(Suffix) | Keys];
-        [<<>>, Suffix] -> [erlang:binary_to_list(Suffix) | Keys];
-        _ -> Keys
-    end.
-
-
 maybe_convert_to_binary(Value) when is_list(Value) ->
     list_to_binary(Value);
 maybe_convert_to_binary(Value) when is_binary(Value) ->
     Value.
 
-do_resolve(CurrPath, []) ->
-    CurrPath;
-do_resolve(CurrPath, [LookupKey | Rest]) ->
-    LookupPath = hb_store:join([CurrPath, LookupKey]),
-
-    NewCurrentPath =
-        case meta(LookupPath) of
-            {ok, <<"link">>} ->
-                read_no_follow(LookupPath);
-            {ok, <<"raw">>} ->
-                {ok, LookupPath};
-            {ok, <<"group">>} ->
-                do_resolve(LookupPath, Rest);
-            not_found ->
-                do_resolve(LookupPath, Rest)
-        end,
-    case NewCurrentPath of
-        not_found ->
-            list_to_binary(CurrPath);
-        {ok, Path} ->
-            do_resolve(Path, Rest);
-        Result ->
-            maybe_convert_to_binary(Result)
-    end.
-
 join(Key) when is_list(Key) ->
     KeyList = hb_store:join(Key),
     maybe_convert_to_binary(KeyList);
 join(Key) when is_binary(Key) -> Key.
+
+collect(Iterator) ->
+    case rocksdb:iterator_move(Iterator, <<>>) of
+        {error, invalid_iterator} -> [];
+        {ok, Key, Value} ->
+            DecodedValue = decode_value(Value),
+            collect(Iterator, [{Key, DecodedValue}])
+    end.
+
+collect(Iterator, Acc) ->
+    case rocksdb:iterator_move(Iterator, next) of
+        {ok, Key, Value} ->
+            % Continue iterating, accumulating the key-value pair in the list
+            DecodedValue = decode_value(Value),
+            collect(Iterator, [{Key, DecodedValue} | Acc]);
+        {error, invalid_iterator} ->
+            % Reached the end of the iterator, return the accumulated list
+            lists:reverse(Acc)
+    end.
+
+maybe_append_key_to_group(Key, CurrentDirContents) ->
+    case decode_value(CurrentDirContents) of
+        {group, GroupSet} ->
+            BaseName = filename:basename(Key),
+            NewGroupSet = sets:add_element(BaseName, GroupSet),
+            encode_value(group, NewGroupSet);
+        _ ->
+            CurrentDirContents
+    end.
 %%%=============================================================================
 %%% Tests
 %%%=============================================================================
@@ -357,8 +369,8 @@ join(Key) when is_binary(Key) -> Key.
 -include_lib("eunit/include/eunit.hrl").
 
 get_or_start_server() ->
-    Store = lists:keyfind(hb_store_rocksdb, 1, hb_store:test_stores()),
-    case start_link(Store) of
+    % Store = lists:keyfind(hb_store_rocksdb2, 1, hb_store:test_stores()),
+    case start_link({hb_store_rocksdb, #{ prefix => "TEST-cache-rocks" }}) of
         {ok, Pid} ->
             Pid;
         {error, {already_started, Pid}} ->
@@ -371,16 +383,16 @@ write_read_test_() ->
             Pid = get_or_start_server(),
             unlink(Pid)
         end,
-        fun(_) -> hb_store_rocksdb:reset([]) end, [
+        fun(_) -> reset([]) end,
+        [
             {"can read/write data", fun() ->
                 ok = write(#{}, <<"test_key">>, <<"test_value">>),
-                {ok, Value} = read(ignored_options, <<"test_key">>),
+                {ok, Value} = read(#{}, <<"test_key">>),
 
                 ?assertEqual(<<"test_value">>, Value)
             end},
             {"returns not_found for non existing keys", fun() ->
                 Value = read(#{}, <<"non_existing">>),
-
                 ?assertEqual(not_found, Value)
             end},
             {"follows links", fun() ->
@@ -399,23 +411,29 @@ api_test_() ->
             unlink(Pid)
         end,
         fun(_) -> reset([]) end, [
-            {"list/2 lists keys under given path", fun() ->
-                ok = write(#{}, <<"messages/key1">>, <<>>),
-                ok = write(#{}, <<"messages/key2">>, <<>>),
-                ok = write(#{}, <<"other_path/key3">>, <<>>),
+            {"write/3 can automatically create folders", fun() ->
+                ok = write(#{}, <<"messages/key1">>, <<"val1">>),
+                ok = write(#{}, <<"messages/key2">>, <<"val2">>),
+
                 {ok, Items} = list(#{}, <<"messages">>),
-                ?assertEqual(["key1", "key2"], Items)
+                ?assertEqual(
+                    lists:sort([<<"key1">>, <<"key2">>]),
+                    lists:sort(Items)
+                ),
+                {ok, Item} = read(#{}, <<"messages/key1">>),
+                ?assertEqual(<<"val1">>, Item)
             end},
-            {"list/2 resolves given path before listing", fun() ->
-                ok = write(#{}, <<"process/slot/1">>, <<>>),
-                ok = write(#{}, <<"process/slot/2">>, <<>>),
-                ok = write(#{}, <<"messages/key">>, <<>>),
-                {ok, Items} = list(#{}, ["process", "slot"]),
-                ?assertEqual(["1", "2"], Items)
+            {"list/2 lists keys under given path", fun() ->
+                ok = write(#{}, <<"messages/key1">>, <<"val1">>),
+                ok = write(#{}, <<"messages/key2">>, <<"val2">>),
+                ok = write(#{}, <<"other_path/key3">>, <<"val3">>),
+                {ok, Items} = list(#{}, <<"messages">>),
+                ?assertEqual(
+                    lists:sort([<<"key1">>, <<"key2">>]), lists:sort(Items)
+                )
             end},
             {"list/2 when database is empty", fun() ->
-                {ok, Items} = list(#{}, <<"process/slot">>),
-                ?assertEqual([], Items)
+                ?assertEqual({error, not_found}, list(#{}, <<"process/slot">>))
             end},
             {"make_link/3 creates a link to actual data", fun() ->
                 ok = write(ignored_options, <<"key1">>, <<"test_value">>),
@@ -423,12 +441,6 @@ api_test_() ->
                 {ok, Value} = read([], <<"key2">>),
 
                 ?assertEqual(<<"test_value">>, Value)
-            end},
-            {"make_group/2 creates a group", fun() ->
-                ok = make_group(#{}, <<"folder_path">>),
-
-                {ok, Value} = meta(<<"folder_path">>),
-                ?assertEqual(<<"group">>, Value)
             end},
             {"make_link/3 does not create links if keys are same", fun() ->
                 ok = make_link([], <<"key1">>, <<"key1">>),
@@ -454,10 +466,15 @@ api_test_() ->
                 end
             },
             {
-                "type/2 treats links as simple items",
+                "type/2 resolves links before checking real type of the following item",
                 fun() ->
-                    make_link(#{}, <<"ExistingKey">>, <<"NewKey">>),
-                    ?assertEqual(simple, type(#{}, <<"NewKey">>))
+                    ok = write(#{}, <<"messages/key1">>, <<"val1">>),
+                    ok = write(#{}, <<"messages/key2">>, <<"val2">>),
+
+                    make_link(#{}, <<"messages">>, <<"CompositeKey">>),
+                    make_link(#{}, <<"messages/key2">>, <<"SimpleKey">>),
+                    ?assertEqual(composite, type(#{}, <<"CompositeKey">>)),
+                    ?assertEqual(simple, type(#{}, <<"SimpleKey">>))
                 end
             },
             {
@@ -468,168 +485,90 @@ api_test_() ->
                 end
             },
             {
-                "resolve/2 resolutions for computed folder",
+                "resolve/2 resolves raw/groups items",
                 fun() ->
-                    % ├── computed
-                    % │   └── 7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw
-                    % │       ├── 76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc -> messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc
-                    % │       ├── 8ZSzLqadFI0DyaUMEMvEcM9N5zkWqLU2lu7XhVejLGE -> messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc
-                    % │       ├── LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE -> messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg
-                    % │       ├── Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg -> messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg
-                    % │       ├── slot
-                    % │       │   ├── 0 -> messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg
-                    % │       │   └── 1 -> messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc
-                    % ├── messages
-                    % │   ├── 76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc [raw]
-                    % │   ├── 8ZSzLqadFI0DyaUMEMvEcM9N5zkWqLU2lu7XhVejLGE -> messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc
-                    % │   ├── LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE -> messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg
-                    % │   └── Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg [raw]
-
-                    % Resolution examples:
-                    % ["computed","7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw", "LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE"] -> "messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg"
-                    % ["computed","7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw", ["slot", "1"]] -> "messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc"
-
-                    % Create raw items in messages
-                    write(#{}, <<"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc/item">>, <<"Value">>),
-                    write(#{}, <<"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg/item">>, <<"Value">>),
-
-                    % Create symbolic links in messages
-                    make_link(
-                        #{},
-                        <<"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc">>,
-                        <<"messages/8ZSzLqadFI0DyaUMEMvEcM9N5zkWqLU2lu7XhVejLGE">>
-                    ),
-                    make_link(
-                        #{},
-                        <<"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg">>,
-                        <<"messages/LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE">>
-                    ),
-
-                    % Create subdirectory in computed
-                    make_group(#{}, <<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw">>),
-
-                    % Create symbolic links in computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw
-                    make_link(
-                        #{},
-                        <<"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc">>,
-                        <<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc">>
-                    ),
-                    make_link(
-                        #{},
-                        <<"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc">>,
-                        <<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/8ZSzLqadFI0DyaUMEMvEcM9N5zkWqLU2lu7XhVejLGE">>
-                    ),
-                    make_link(
-                        #{},
-                        <<"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg">>,
-                        <<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE">>
-                    ),
-                    make_link(
-                        #{},
-                        <<"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg">>,
-                        <<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg">>
-                    ),
-
-                    % Create subdirectory computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/slot
-                    make_group(#{}, <<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/slot">>),
-
-                    % Create symbolic links in computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/slot
-                    make_link(
-                        #{},
-                        <<"messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg">>,
-                        <<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/slot/0">>
-                    ),
-                    make_link(
-                        #{},
-                        <<"messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc">>,
-                        <<"computed/7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw/slot/1">>
-                    ),
-
-                    % Test
-                    ?assertEqual(
-                        "messages/Vsf2Eto5iQ9fghmH5RsUm4b9h0fb_CCYTVTjnHEDGQg",
-                        resolve(#{}, [
-                            "computed", "7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw", "LbfBoMI7xNYpBFv1Fsl2FSa8QYA2k9NtbzQTOKlN2TE"
-                        ])
-                    ),
+                    write(#{}, <<"top_level/level1/item1">>, <<"1">>),
+                    write(#{}, <<"top_level/level1/item2">>, <<"1">>),
+                    write(#{}, <<"top_level/level1/item3">>, <<"1">>),
 
                     ?assertEqual(
-                        "messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc",
-                        resolve(#{}, ["computed", "7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw", ["slot", "1"]])
-                    ),
-
-                    ?assertEqual(
-                        "messages/76vSvK1yAlcGTPLyP7xEVUG7kiBxQrvTxhQor_KC8Wc",
-                        resolve(#{}, ["computed", "7bi8NdEPLJwcD5ADWQ5PIoDlBpBWSw-9N7VXYe25Lvw", "slot", "1"])
+                        <<"top_level/level1/item3">>,
+                        resolve(#{},  <<"top_level/level1/item3">>)
                     )
                 end
             },
-            {"resolving interlinked item paths", fun() ->
-                % messages
-                % ├── csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc [raw]
-                % ├── -7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME
-                % │   ├── item
-                % │   └── level1_key -> messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo
-                % ├── UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo
-                % │   ├── item
-                % │   └── level2_key -> messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE
-                % └── FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE
-                % 	├── item
-                % 	└── level3_key -> messages/csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc
-                %
+            {
+                "resolve/2 follows links",
+                fun() ->
+                    write(#{}, <<"data/the_data_item">>, <<"the_data">>),
+                    make_link(#{}, <<"data/the_data_item">>, <<"top_level/level1/item">>),
 
-                % resolve("messages", "-7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME", ["level1_key", "level2_key", "level3_key"])
-                %      -> "messages/csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc"
+                    ?assertEqual(
+                        <<"data/the_data_item">>,
+                        resolve(#{},  <<"top_level/level1/item">>)
+                    )
+                end
+            },
+            {
+                "make_group/2 creates a folder",
+                fun() ->
+                    ?assertEqual(ok, make_group(#{}, <<"messages">>)),
 
-                % Create the raw item in messages
-                write(#{}, <<"messages/csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc/item">>, <<"Value">>),
+                    ?assertEqual(
+                        list(#{}, <<"messages">>),
+                        {ok, []}
+                    )
+                end
+            },
+            {
+                "make_group/2 does not override folder contents",
+                fun() ->
+                    write(#{}, <<"messages/id">>, <<"1">>),
+                    write(#{}, <<"messages/attestations">>, <<"2">>),
 
-                % Create the subdirectory under messages
-                make_group(#{}, <<"messages/-7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME">>),
+                    ?assertEqual(ok, make_group(#{}, <<"messages">>)),
 
-                % Add item in the subdirectory
-                write(#{}, <<"messages/-7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME/item">>, <<"Value">>),
-
-                % Create symbolic link to level1_key
-                make_link(
-                    #{},
-                    <<"messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo">>,
-                    <<"messages/-7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME/level1_key">>
-                ),
-
-                % Create group for messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo
-                make_group(#{}, <<"messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo">>),
-
-                % Add item in messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo
-                write(#{}, <<"messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo/item">>, <<"Value">>),
-
-                % Create symbolic link to level2_key
-                make_link(
-                    #{},
-                    <<"messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE">>,
-                    <<"messages/UsxVZBMaIbe15LPrzqImczl7fhUPdmK3ANhGjuHkxGo/level2_key">>
-                ),
-
-                % Create group for messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE
-                make_group(#{}, <<"messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE">>),
-
-                % Add item in messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE
-                write(#{}, <<"messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE/item">>, <<"Value">>),
-
-                % Create symbolic link to level3_key
-                make_link(
-                    #{},
-                    <<"messages/csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc">>,
-                    <<"messages/FGQgh1nQBwqi_kx7wpEIMAT2ltRsbieoZBHaUBK8riE/level3_key">>
-                ),
-
-                ?assertEqual(
-                    "messages/csZNlQe-ehlhmCU8shC3vjhrW2qsaMAsQzs-ALjokOc",
-                    resolve(#{}, [
-                        "messages", "-7ZAg8BW_itF-f9y4L0cY0xfz34iZBZ6jlDa9Tb23ME", ["level1_key", "level2_key", "level3_key"]
-                    ])
-                )
-            end}
+                    ?assertEqual(
+                        list(#{}, <<"messages">>),
+                        {ok, [<<"attestations">>, <<"id">>]}
+                    )
+                end
+            },
+            {
+                "make_group/2 making deep nested groups",
+                fun() ->
+                    make_group(#{}, <<"messages/ids/items">>),
+                    ?assertEqual(
+                        {ok, [<<"ids">>]},
+                        list(#{}, <<"messages">>)
+                    ),
+                    ?assertEqual(
+                        {ok, [<<"items">>]},
+                        list(#{}, <<"messages/ids">>)
+                    ),
+                    ?assertEqual(
+                        {ok, []},
+                        list(#{}, <<"messages/ids/items">>)
+                    )
+                end
+            },
+            {
+                "write/3 automatically does deep groups",
+                fun() ->
+                    write(#{}, <<"messages/ids/item1">>, <<"1">>),
+                    write(#{}, <<"messages/ids/item2">>, <<"2">>),
+                    ?assertEqual(
+                        {ok, [<<"ids">>]},
+                        list(#{}, <<"messages">>)
+                    ),
+                    ?assertEqual(
+                        {ok, [<<"item2">>, <<"item1">>]},
+                        list(#{}, <<"messages/ids">>)
+                    ),
+                    ?assertEqual(read(#{}, <<"messages/ids/item1">>),{ok, <<"1">>}),
+                    ?assertEqual(read(#{}, <<"messages/ids/item2">>), {ok, <<"2">>})
+                end
+            }
         ]}.
 
 -endif.
