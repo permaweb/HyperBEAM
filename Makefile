@@ -6,7 +6,7 @@ compile:
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
 
-WGPU_NATIVE_DET_VERSION = faial-static # TODO: Replace with tag
+WGPU_NATIVE_DET_VERSION = example_wasm_working # TODO: Replace with tag
 WGPU_NATIVE_DET_DIR = _build/wgpu-native-det
 
 ifdef HB_DEBUG
