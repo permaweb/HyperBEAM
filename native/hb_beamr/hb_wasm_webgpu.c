@@ -1111,6 +1111,22 @@ wasm_trap_t *wgpuComputePassEncoderReleaseImport(void *env,
     return NULL;
 }
 
+// Must be implemented: https://github.com/gfx-rs/wgpu-native/issues/412 WGPU_EXPORT void wgpuRenderPassEncoderRelease(WGPUComputePassEncoder computePassEncoder) WGPU_FUNCTION_ATTRIBUTE;
+wasm_trap_t *wgpuRenderPassEncoderReleaseImport(void *env,
+                                                 const wasm_val_vec_t *args,
+                                                 wasm_val_vec_t *results) {
+    HANDLER_INIT(wgpuRenderPassEncoderRelease, 1);
+
+    // Get the compute pass encoder from the argument
+    WGPURenderPassEncoder encoder = (WGPURenderPassEncoder)registry_item_get_mapping(
+        &registry.renderPassEncoders, wasm_val_to_native_int(args->data[0]));
+
+    // Call the native function
+    wgpuRenderPassEncoderRelease(encoder);
+
+    return NULL;
+}
+
 // WGPU_EXPORT void wgpuCommandEncoderCopyBufferToBuffer(WGPUCommandEncoder commandEncoder, WGPUBuffer source, uint64_t sourceOffset, WGPUBuffer destination, uint64_t destinationOffset, uint64_t size) WGPU_FUNCTION_ATTRIBUTE;
 wasm_trap_t *wgpuCommandEncoderCopyBufferToBufferImport(
     void *env, const wasm_val_vec_t *args, wasm_val_vec_t *results) {
@@ -1349,11 +1365,11 @@ wasm_trap_t *wgpuBufferGetMappedRangeImport(void *env,
 
     void *mapped = wgpuBufferGetMappedRange(buffer, offset, size);
 
-    // Debug print out memory
-    DRV_DEBUG("mapped = %p, size = %zu", mapped, size);
-    for (int i = 0; i < size; i++) {
-        DRV_DEBUG("%02x", ((byte_t *)mapped)[i]);
-    }
+    // // Debug print out memory
+    // DRV_DEBUG("mapped = %p, size = %zu", mapped, size);
+    // for (int i = 0; i < size; i++) {
+    //     DRV_DEBUG("%02x", ((byte_t *)mapped)[i]);
+    // }
 
     wasm_func_t *wasm_malloc = get_exported_function(proc, "malloc");
 
@@ -1399,6 +1415,15 @@ wasm_trap_t *wgpuBufferGetMappedRangeImport(void *env,
     results->data[0].of.i32 = wasm_malloc_res;
 
     return NULL;
+}
+
+// WGPU_EXPORT void const * wgpuBufferGetConstMappedRange(WGPUBuffer buffer, size_t offset, size_t size) WGPU_FUNCTION_ATTRIBUTE;
+wasm_trap_t *wgpuBufferGetConstMappedRangeImport(void *env,
+                                                const wasm_val_vec_t *args,
+                                                wasm_val_vec_t *results) {
+    DRV_DEBUG("wgpuBufferGetConstMappedRangeImport called, resolving to wgpuBufferGetMappedRangeImport");
+
+    return wgpuBufferGetMappedRangeImport(env, args, results);
 }
 
 // WGPU_EXPORT WGPUTexture wgpuDeviceCreateTexture(WGPUDevice device, WGPUTextureDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
@@ -1457,7 +1482,7 @@ wasm_trap_t *wgpuTextureCreateViewImport(void *env, const wasm_val_vec_t *args,
 
     WGPUTextureViewDescriptor *descriptor = NULL;
     extract_texture_view_descriptor(
-        &registry, wasm_memory, (byte_t *)wasm_val_to_native_int(args->data[1]), descriptor);
+        &registry, wasm_memory, (byte_t *)wasm_val_to_native_int(args->data[1]), &descriptor);
     if (!descriptor) {
         DRV_DEBUG("Failed to extract texture view descriptor");
         results->data[0].kind = WASM_INT_KIND;
@@ -1493,8 +1518,9 @@ wasm_trap_t *wgpuCommandEncoderBeginRenderPassImport(void *env, const wasm_val_v
         return NULL;
     }
 
-    WGPURenderPassDescriptor *descriptor = NULL; extract_render_pass_descriptor(
-        &registry, wasm_memory, (byte_t *)wasm_val_to_native_int(args->data[1]), descriptor);
+    WGPURenderPassDescriptor *descriptor = NULL;
+    extract_render_pass_descriptor(
+        &registry, wasm_memory, (byte_t *)wasm_val_to_native_int(args->data[1]), &descriptor);
 
     WGPURenderPassEncoder encoder = wgpuCommandEncoderBeginRenderPass(commandEncoder, descriptor);
 
@@ -1576,6 +1602,128 @@ wasm_trap_t *wgpuRenderPassEncoderEndImport(void *env, const wasm_val_vec_t *arg
     return NULL;
 }
 
+wasm_trap_t *wgpuTextureGetHeightImport(void *env, const wasm_val_vec_t *args,
+                                        wasm_val_vec_t *results) {
+    HANDLER_INIT(wgpuTextureGetHeight, 1);
+
+    WGPUTexture texture = (WGPUTexture)registry_item_get_mapping(
+        &registry.textures, wasm_val_to_native_int(args->data[0]));
+    if (!texture) {
+        DRV_DEBUG("Failed to get texture");
+        return NULL;
+    }
+
+    uint32_t height = wgpuTextureGetHeight(texture);
+
+    results->size = 1;
+    results->data[0].kind = WASM_INT_KIND;
+    results->data[0].of.i32 = height;
+    return NULL;
+}
+
+wasm_trap_t *wgpuTextureGetWidthImport(void *env, const wasm_val_vec_t *args,
+                                        wasm_val_vec_t *results) {
+    HANDLER_INIT(wgpuTextureGetWidth, 1);
+
+    WGPUTexture texture = (WGPUTexture)registry_item_get_mapping(
+        &registry.textures, wasm_val_to_native_int(args->data[0]));
+    if (!texture) {
+        DRV_DEBUG("Failed to get texture");
+        return NULL;
+    }
+
+    uint32_t width = wgpuTextureGetWidth(texture);
+
+    results->size = 1;
+    results->data[0].kind = WASM_INT_KIND;
+    results->data[0].of.i32 = width;
+    return NULL;
+}
+
+// WGPU_EXPORT void wgpuBufferUnmap(WGPUBuffer buffer) WGPU_FUNCTION_ATTRIBUTE;
+wasm_trap_t *wgpuBufferUnmapImport(void *env, const wasm_val_vec_t *args,
+                                   wasm_val_vec_t *results) {
+    HANDLER_INIT(wgpuBufferUnmap, 1);
+
+    WGPUBuffer buffer = (WGPUBuffer)registry_item_get_mapping(
+        &registry.buffers, wasm_val_to_native_int(args->data[0]));
+    if (!buffer) {
+        DRV_DEBUG("Failed to get buffer");
+        return NULL;
+    }
+
+    wgpuBufferUnmap(buffer);
+
+    return NULL;
+}
+
+// WGPU_EXPORT void wgpuQueueRelease(WGPUQueue queue) WGPU_FUNCTION_ATTRIBUTE;
+wasm_trap_t *wgpuQueueReleaseImport(void *env, const wasm_val_vec_t *args,
+                              wasm_val_vec_t *results) {
+    HANDLER_INIT(wgpuQueueRelease, 1);
+
+    WGPUQueue queue = (WGPUQueue)registry_item_get_mapping(
+        &registry.queues, wasm_val_to_native_int(args->data[0]));
+    if (!queue) {
+        DRV_DEBUG("Failed to get queue");
+        return NULL;
+    }
+
+    wgpuQueueRelease(queue);
+
+    return NULL;
+}
+
+// WGPU_EXPORT void wgpuCommandEncoderCopyTextureToBuffer(WGPUCommandEncoder commandEncoder, WGPUImageCopyTexture const * source, WGPUImageCopyBuffer const * destination, WGPUExtent3D const * copySize) WGPU_FUNCTION_ATTRIBUTE;
+wasm_trap_t *wgpuCommandEncoderCopyTextureToBufferImport(void *env, const wasm_val_vec_t *args,
+                                                         wasm_val_vec_t *results) {
+    HANDLER_INIT(wgpuCommandEncoderCopyTextureToBuffer, 4);
+
+    WGPUCommandEncoder commandEncoder = (WGPUCommandEncoder)registry_item_get_mapping(
+        &registry.commandEncoders, wasm_val_to_native_int(args->data[0]));
+    if (!commandEncoder) {
+        DRV_DEBUG("Failed to get command encoder");
+        return NULL;
+    }
+
+    WASM_POINTER_OBJECT_C_TYPE command_encoder_id = wasm_val_to_native_int(args->data[0]);
+    DRV_DEBUG("Retrieved command encoder id: %u", command_encoder_id);
+    WGPUCommandEncoder command_encoder = (WGPUCommandEncoder)registry_item_get_mapping(
+        &registry.commandEncoders, command_encoder_id);
+    if (!command_encoder) {
+        DRV_DEBUG("Failed to get command encoder");
+        return NULL;
+    }
+
+    WGPUImageCopyTexture *texture = NULL;
+    extract_image_copy_texture(
+        &registry, wasm_memory, (byte_t *)wasm_val_to_native_int(args->data[1]), &texture);
+    if (!texture) {
+        DRV_DEBUG("Failed to extract image copy texture");
+        return NULL;
+    }
+
+    WGPUImageCopyBuffer *buffer = NULL;
+    extract_image_copy_buffer(
+        &registry, wasm_memory, (byte_t *)wasm_val_to_native_int(args->data[2]), &buffer);
+    if (!buffer) {
+        DRV_DEBUG("Failed to extract image copy buffer");
+        return NULL;
+    }
+
+    WGPUExtent3D *extent = NULL;
+    extract_extent_3D(
+        &registry, wasm_memory, (byte_t *)wasm_val_to_native_int(args->data[3]), &extent);
+    if (!extent) {
+        DRV_DEBUG("Failed to extract extent");
+        return NULL;
+    }
+
+    wgpuCommandEncoderCopyTextureToBuffer(command_encoder, texture, buffer, extent);
+
+    return NULL;
+}
+
 static const struct {
     const char *name;
     void *func;
@@ -1616,6 +1764,8 @@ static const struct {
     {"wgpuComputePassEncoderEnd", wgpuComputePassEncoderEndImport},
     // WGPU_EXPORT void wgpuComputePassEncoderRelease(WGPUComputePassEncoder computePassEncoder) WGPU_FUNCTION_ATTRIBUTE;
     {"wgpuComputePassEncoderRelease", wgpuComputePassEncoderReleaseImport},
+    // WGPU_EXPORT void wgpuRenderPassEncoderRelease(WGPURenderPassEncoder renderPassEncoder) WGPU_FUNCTION_ATTRIBUTE;
+    {"wgpuRenderPassEncoderRelease", wgpuRenderPassEncoderReleaseImport},
     // WGPU_EXPORT void wgpuCommandEncoderCopyBufferToBuffer(WGPUCommandEncoder commandEncoder, WGPUBuffer source, uint64_t sourceOffset, WGPUBuffer destination, uint64_t destinationOffset, uint64_t size) WGPU_FUNCTION_ATTRIBUTE;
     {"wgpuCommandEncoderCopyBufferToBuffer", wgpuCommandEncoderCopyBufferToBufferImport},
     // WGPU_EXPORT WGPUCommandBuffer wgpuCommandEncoderFinish(WGPUCommandEncoder commandEncoder, WGPU_NULLABLE WGPUCommandBufferDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
@@ -1628,6 +1778,8 @@ static const struct {
     {"wgpuBufferMapAsync", wgpuBufferMapAsyncImport},
     // WGPU_EXPORT void * wgpuBufferGetMappedRange(WGPUBuffer buffer, size_t offset, size_t size) WGPU_FUNCTION_ATTRIBUTE;
     {"wgpuBufferGetMappedRange", wgpuBufferGetMappedRangeImport},
+    // WGPU_EXPORT void const * wgpuBufferGetConstMappedRange(WGPUBuffer buffer, size_t offset, size_t size) WGPU_FUNCTION_ATTRIBUTE;
+    {"wgpuBufferGetConstMappedRange", wgpuBufferGetConstMappedRangeImport},
     // WGPU_EXPORT WGPUTexture wgpuDeviceCreateTexture(WGPUDevice device, WGPUTextureDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
     {"wgpuDeviceCreateTexture", wgpuDeviceCreateTextureImport},
     // WGPU_EXPORT WGPUTextureView wgpuTextureCreateView(WGPUTexture texture, WGPU_NULLABLE WGPUTextureViewDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
@@ -1640,6 +1792,16 @@ static const struct {
     {"wgpuRenderPassEncoderDraw", wgpuRenderPassEncoderDrawImport},
     // WGPU_EXPORT void wgpuRenderPassEncoderEnd(WGPURenderPassEncoder renderPassEncoder) WGPU_FUNCTION_ATTRIBUTE;
     {"wgpuRenderPassEncoderEnd", wgpuRenderPassEncoderEndImport},
+    // WGPU_EXPORT uint32_t wgpuTextureGetHeight(WGPUTexture texture) WGPU_FUNCTION_ATTRIBUTE;
+    {"wgpuTextureGetHeight", wgpuTextureGetHeightImport},
+    // WGPU_EXPORT uint32_t wgpuTextureGetWidth(WGPUTexture texture) WGPU_FUNCTION_ATTRIBUTE;
+    {"wgpuTextureGetWidth", wgpuTextureGetWidthImport},
+    // WGPU_EXPORT void wgpuBufferUnmap(WGPUBuffer buffer) WGPU_FUNCTION_ATTRIBUTE;
+    {"wgpuBufferUnmap", wgpuBufferUnmapImport},
+    // WGPU_EXPORT void wgpuQueueRelease(WGPUQueue queue) WGPU_FUNCTION_ATTRIBUTE;
+    {"wgpuQueueRelease", wgpuQueueReleaseImport},
+    // WGPU_EXPORT void wgpuCommandEncoderCopyTextureToBuffer(WGPUCommandEncoder commandEncoder, WGPUImageCopyTexture const * source, WGPUImageCopyBuffer const * destination, WGPUExtent3D const * copySize) WGPU_FUNCTION_ATTRIBUTE;
+    {"wgpuCommandEncoderCopyTextureToBuffer", wgpuCommandEncoderCopyTextureToBufferImport},
 };
 
 wasm_trap_t *environ_sizes_get_import(void *env, const wasm_val_vec_t *args,
@@ -1661,20 +1823,6 @@ wasm_trap_t *environ_get_import(void *env, const wasm_val_vec_t *args,
     results->data[1].of.i32 = 0;
     return NULL;
 }
-
-
-// function _fd_write(fd, iov, iovcnt, pnum) {
-// try {
-
-//     var stream = SYSCALLS.getStreamFromFD(fd);
-//     var num = doWritev(stream, iov, iovcnt);
-//     HEAPU32[((pnum)>>2)] = num;
-//     return 0;
-// } catch (e) {
-// if (typeof FS == 'undefined' || !(e.name === 'ErrnoError')) throw e;
-// return e.errno;
-// }
-// }
 
 typedef struct {
     WASM_POINTER_C_TYPE buf_ptr;
@@ -1722,8 +1870,41 @@ wasm_trap_t *fd_write_import(void *env, const wasm_val_vec_t *args,
     return NULL;
 }
 
+static int MEMCPY_CALL_COUNT = 0;
+
+wasm_trap_t *emscripten_memcpy_js_import(void *env, const wasm_val_vec_t *args,
+                                        wasm_val_vec_t *results) {
+    // HANDLER_INIT(emscripten_memcpy_js, 3);
+
+    ImportHook *import_hook = (ImportHook *)env;
+    Proc *proc = import_hook->proc;
+    wasm_store_t *store = proc->store;
+    wasm_memory_t *wasm_memory = get_memory(proc);
+    byte_t *wasm_base_ptr = wasm_memory_data(wasm_memory);
+
+    // __emscripten_memcpy_js = (dest, src, num)
+
+    WASM_POINTER_C_TYPE wasm_dest = wasm_val_to_native_int(args->data[0]);
+    WASM_POINTER_C_TYPE wasm_src = wasm_val_to_native_int(args->data[1]);
+    WASM_INT_C_TYPE num = wasm_val_to_native_int(args->data[2]);
+
+    byte_t *dest = wasm_base_ptr + wasm_dest;
+    byte_t *src = wasm_base_ptr + wasm_src;
+
+    // printf("memcpy: #%d @ %dB, (%p) -> (%p)", ++MEMCPY_CALL_COUNT, num, wasm_src, wasm_dest);
+
+    // DRV_DEBUG("emscripten_memcpy_js_import: dest=%p, src=%p, num=%d", dest, src, num);
+    // TODO: !!! Make this safe :)
+    memcpy(dest, src, num);
+
+    // printf(" ...done!\n");
+
+    return 0;
+}
+
 int set_callback_webgpu(wasm_byte_t *module_name, wasm_byte_t *name,
                         wasm_func_callback_with_env_t *callback_out) {
+    // wasi fns
     if (strcmp(module_name, "wasi_snapshot_preview1") == 0) {
         if (strcmp(name, "environ_sizes_get") == 0) {
             *callback_out = environ_sizes_get_import;
@@ -1736,6 +1917,16 @@ int set_callback_webgpu(wasm_byte_t *module_name, wasm_byte_t *name,
             return 1;
         }
     }
+
+    // emscripten fns
+    if (strcmp(module_name, "env") == 0) {
+        if (strcmp(name, "_emscripten_memcpy_js") == 0) {
+            *callback_out = emscripten_memcpy_js_import;
+            return 1;
+        }
+    }
+
+    // webgpu fns
     if (strcmp(module_name, "env") == 0) {
         for (size_t i = 0;
              i < sizeof(webgpu_functions) / sizeof(webgpu_functions[0]); i++) {
@@ -1746,5 +1937,6 @@ int set_callback_webgpu(wasm_byte_t *module_name, wasm_byte_t *name,
             }
         }
     }
+
     return 0;
 }

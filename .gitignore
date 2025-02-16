@@ -34,6 +34,7 @@ priv/*
 TEST-data*
 test-cache/*
 TEST-cache**/**
+test/*.out.bmp
 
 diagram.dot
 diagram.svg
