@@ -7,15 +7,12 @@
  * @brief Attempts to register a WebGPU function callback for a given import.
  *
  * This function checks if the provided module and function name match any
- * WebGPU functions that we support. If a match is found, sets the callback
+ * WebGPU functions that we support. If a match is found, returns the callback
  * pointer to the corresponding WebGPU function implementation.
  *
  * @param module_name The name of the module being imported (e.g. "env")
- * @param name The name of the function being imported (e.g.
- * "wgpuCreateInstance")
- * @param callback_out Pointer to the callback function pointer to be set
- * @return int 1 if a matching WebGPU function was found and callback was set, 0
- * otherwise
+ * @param name The name of the function being imported (e.g. "wgpuCreateInstance")
+ * @return The callback function pointer if a match is found, NULL otherwise
  */
 wasm_func_callback_with_env_t webgpu_wasm_callback(wasm_byte_t *module_name, wasm_byte_t *name);
 
