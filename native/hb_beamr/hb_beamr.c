@@ -71,6 +71,44 @@ static void wasm_driver_stop(ErlDrvData raw) {
         wasm_store_delete(proc->store);
         DRV_DEBUG("Deleted WASM store");
     }
+
+    for (size_t i = 0; i < proc->mod_bin->stubs_size; i++) {
+        if (proc->mod_bin->stubs[i]) {
+            DRV_DEBUG("Free stub function %d", i);
+            // Delete created WASM function, so the 
+            // wasm_func_new_with_env_finalizer is also called to free memory
+            // allocated for stubs.
+            wasm_func_delete(proc->mod_bin->stubs[i]);  
+        }
+    }
+    // Free the binary data itself
+    if(proc->mod_bin->binary != NULL){
+        driver_free(proc->mod_bin->binary);
+        DRV_DEBUG("Free memory allocated for WASM binary %d", proc->mod_bin->size);
+        proc->mod_bin->binary = NULL;
+    }
+
+    // Free the memory allocated for mode
+    if(proc->mod_bin->mode != NULL){
+        driver_free(proc->mod_bin->mode);
+        DRV_DEBUG("Free memory allocated for WASM binary mode %d", sizeof(*proc->mod_bin->mode));
+        proc->mod_bin->mode = NULL;
+    }
+
+    driver_free(proc->mod_bin);
+
+    // Cleanup memory allocatef for current args
+    if(proc->current_args != NULL){
+        driver_free(proc->current_args);
+        proc->current_args = NULL;
+    }
+
+    // Clenup memory allocated for storing current function
+    if(proc->current_function != NULL){
+        driver_free(proc->current_function);
+        proc->current_function = NULL;
+    }
+
     DRV_DEBUG("Freeing proc");
     driver_free(proc);
     DRV_DEBUG("Freed proc");
@@ -105,7 +143,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         int size, type, mode_size;
         char* mode;
         ei_get_type(buff, &index, &type, &size);
-        //DRV_DEBUG("WASM binary size: %d bytes. Type: %c", size, type);
+        DRV_DEBUG("WASM binary size: %d bytes. Type: %c", size, type);
         void* wasm_binary = driver_alloc(size);
         long size_l = (long)size;
         ei_decode_binary(buff, &index, wasm_binary, &size_l);
@@ -114,12 +152,13 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         mode = driver_alloc(mode_size + 1);
         ei_decode_atom(buff, &index, mode);
         LoadWasmReq* mod_bin = driver_alloc(sizeof(LoadWasmReq));
-        mod_bin->proc = proc;
+        DRV_DEBUG("Allocated %d bytes for wasm binary", sizeof(LoadWasmReq));
         mod_bin->binary = wasm_binary;
         mod_bin->size = size;
         mod_bin->mode = mode;
+        proc->mod_bin = mod_bin;
         //DRV_DEBUG("Calling for async thread to init");
-        driver_async(proc->port, NULL, wasm_initialize_runtime, mod_bin, NULL);
+        driver_async(proc->port, NULL, wasm_initialize_runtime, proc, NULL);
     } else if (strcmp(command, "call") == 0) {
         if (!proc->is_initialized) {
             send_error(proc, "Cannot run WASM function as module not initialized.");
@@ -212,7 +251,6 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         }
         byte_t* memory_data = wasm_memory_data(get_memory(proc));
         DRV_DEBUG("Memory location to read from: %p", memory_data + ptr);
-        
         char* out_binary = driver_alloc(size_l);
         memcpy(out_binary, memory_data + ptr, size_l);
 
@@ -227,7 +265,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         msg[msg_index++] = size_l;
         msg[msg_index++] = ERL_DRV_TUPLE;
         msg[msg_index++] = 2;
-        
+
         int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
         DRV_DEBUG("Read response sent: %d", msg_res);
     }
@@ -235,7 +273,6 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         DRV_DEBUG("Size received");
         long size = get_memory_size(proc);
         DRV_DEBUG("Size: %ld", size);
-
         ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 6);
         int msg_index = 0;
         msg[msg_index++] = ERL_DRV_ATOM;

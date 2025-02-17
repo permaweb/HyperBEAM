@@ -267,7 +267,8 @@ simple_wasm_test() ->
     {ok, File} = file:read_file("test/test.wasm"),
     {ok, WASM, _Imports, _Exports} = start(File),
     {ok, [Result]} = call(WASM, "fac", [5.0]),
-    ?assertEqual(120.0, Result).
+    ?assertEqual(120.0, Result),
+    hb_beamr:stop(WASM).
 
 %% @doc Test that imported functions can be called from the WASM module.
 imported_function_test() ->
@@ -278,14 +279,16 @@ imported_function_test() ->
             fun(Msg1, #{ args := [Arg1, Arg2] }, _Opts) ->
                 {ok, [Arg1 * Arg2], Msg1}
             end),
-    ?assertEqual(32, Result).
+    ?assertEqual(32, Result),
+    hb_beamr:stop(WASM).
 
 %% @doc Test that WASM Memory64 modules load and execute correctly.
 wasm64_test() ->
     {ok, File} = file:read_file("test/test-64.wasm"),
     {ok, WASM, _ImportMap, _Exports} = start(File),
     {ok, [Result]} = call(WASM, "fac", [5.0]),
-    ?assertEqual(120.0, Result).
+    ?assertEqual(120.0, Result),
+    hb_beamr:stop(WASM).
 
 %% @doc Ensure that processes outside of the initial one can interact with
 %% the WASM executor.
@@ -294,7 +297,8 @@ multiclient_test() ->
     ExecPID = spawn(fun() ->
         receive {wasm, WASM} ->
             {ok, [Result]} = call(WASM, "fac", [5.0]),
-            Self ! {result, Result}
+            Self ! {result, Result},
+            stop(WASM)
         end
     end),
     _StartPID = spawn(fun() ->
@@ -324,4 +328,4 @@ benchmark_test() ->
         "Executed ~s calls through Beamr in ~p seconds (~.2f call/s)",
         [hb_util:human_int(Iterations), BenchTime, Iterations / BenchTime]
     ),
-    ok.
+    hb_beamr:stop(WASM).
