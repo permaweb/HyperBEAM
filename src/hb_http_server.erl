@@ -155,7 +155,30 @@ start_http2(ServerID, ProtoOpts, NodeMsg) ->
     ),
     {ok, Port, Listener}.
 
+%% @doc Entrypoint for all HTTP requests. Receives the Cowboy request option and
+%% the server ID, which can be used to lookup the node message.
 init(Req, ServerID) ->
+    case cowboy_req:method(Req) of
+        <<"OPTIONS">> ->
+            cors_reply(Req, ServerID);
+        _ ->
+            handle_request(Req, ServerID)
+    end.
+
+%% @doc Reply to CORS preflight requests.
+cors_reply(Req, _ServerID) ->
+    cowboy_req:reply(204, #{
+        <<"access-control-allow-origin">> => <<"*">>,
+        <<"access-control-allow-methods">> => <<"GET, POST, PUT, DELETE, OPTIONS">>,
+        <<"access-control-allow-headers">> =>
+            cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>)
+    }, Req).
+
+%% @doc Handle all non-CORS preflight requests as Converge requests. Execution 
+%% starts by parsing the HTTP request into HyerBEAM's message format, then
+%% passing the message directly to `meta@1.0` which handles calling Converge in
+%% the appropriate way.
+handle_request(Req, ServerID) ->
     NodeMsg = get_opts(#{ http_server => ServerID }),
     ?event(http, {http_inbound, Req}),
     % Parse the HTTP request into HyerBEAM's message format.
@@ -164,15 +187,9 @@ init(Req, ServerID) ->
     {ok, Res} = dev_meta:handle(NodeMsg, ReqSingleton),
     hb_http:reply(Req, Res, NodeMsg).
 
-%% @doc Return the complete Ranch ETS table for the node for debugging.
-ranch_ets() ->
-    case ets:info(ranch_server) of
-        undefined -> [];
-        _ -> ets:tab2list(ranch_server)
-    end.
-
+%% @doc Return the list of allowed methods for the HTTP server.
 allowed_methods(Req, State) ->
-    {[<<"GET">>, <<"POST">>, <<"PUT">>, <<"DELETE">>], Req, State}.
+    {[<<"GET">>, <<"POST">>, <<"PUT">>, <<"DELETE">>, <<"OPTIONS">>], Req, State}.
 
 %% @doc Update the `Opts' map that the HTTP server uses for all future
 %% requests.
