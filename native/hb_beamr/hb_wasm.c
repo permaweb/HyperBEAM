@@ -167,6 +167,17 @@ void wasm_initialize_runtime(void* raw) {
     init_msg[msg_i++] = ERL_DRV_ATOM;
     init_msg[msg_i++] = atom_execution_result;
 
+    // TODO: use dlopen
+    // DRV_DEBUG("Extension list size: %d", mod_bin->ext_list_len);
+    bool ext_webgpu = false;
+    for (int i = 0; i < mod_bin->ext_list_len; ++i) {
+        // DRV_DEBUG("Extension: %s", mod_bin->ext_list[i]);
+        if (strcmp(mod_bin->ext_list[i], "webgpu") == 0) {
+            DRV_DEBUG("Found WebGPU extension");
+            ext_webgpu = true;
+        }
+    }
+
     // Process imports
     for (int i = 0; i < imports.size; ++i) {
         //DRV_DEBUG("Processing import %d", i);
@@ -207,8 +218,11 @@ void wasm_initialize_runtime(void* raw) {
 
         wasm_func_callback_with_env_t callback = wasm_handle_import;
 
+        // TODO: use dlsym
+        if (ext_webgpu) {
         if (set_callback_webgpu(module_name->data, name->data, &callback)) {
             DRV_DEBUG("Using WebGPU callback for %s.%s [%s]", module_name->data, name->data, type_str);
+            }
         }
 
         hook->stub_func =
