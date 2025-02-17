@@ -17,7 +17,6 @@
  * @return int 1 if a matching WebGPU function was found and callback was set, 0
  * otherwise
  */
-int set_callback_webgpu(wasm_byte_t *module_name, wasm_byte_t *name,
-                        wasm_func_callback_with_env_t *callback_out);
+wasm_func_callback_with_env_t webgpu_wasm_callback(wasm_byte_t *module_name, wasm_byte_t *name);
 
 #endif // HB_WASM_WEBGPU_DET_H

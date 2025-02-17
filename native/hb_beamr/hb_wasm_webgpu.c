@@ -1902,27 +1902,22 @@ wasm_trap_t *emscripten_memcpy_js_import(void *env, const wasm_val_vec_t *args,
     return 0;
 }
 
-int set_callback_webgpu(wasm_byte_t *module_name, wasm_byte_t *name,
-                        wasm_func_callback_with_env_t *callback_out) {
+wasm_func_callback_with_env_t webgpu_wasm_callback(wasm_byte_t *module_name, wasm_byte_t *name) {
     // wasi fns
     if (strcmp(module_name, "wasi_snapshot_preview1") == 0) {
         if (strcmp(name, "environ_sizes_get") == 0) {
-            *callback_out = environ_sizes_get_import;
-            return 1;
+            return environ_sizes_get_import;
         } else if (strcmp(name, "environ_get") == 0) {
-            *callback_out = environ_get_import;
-            return 1;
+            return environ_get_import;
         } else if (strcmp(name, "fd_write") == 0) {
-            *callback_out = fd_write_import;
-            return 1;
+            return fd_write_import;
         }
     }
 
     // emscripten fns
     if (strcmp(module_name, "env") == 0) {
         if (strcmp(name, "_emscripten_memcpy_js") == 0) {
-            *callback_out = emscripten_memcpy_js_import;
-            return 1;
+            return emscripten_memcpy_js_import;
         }
     }
 
@@ -1931,12 +1926,10 @@ int set_callback_webgpu(wasm_byte_t *module_name, wasm_byte_t *name,
         for (size_t i = 0;
              i < sizeof(webgpu_functions) / sizeof(webgpu_functions[0]); i++) {
             if (strcmp(webgpu_functions[i].name, name) == 0) {
-                void *const func = webgpu_functions[i].func;
-                *callback_out = func;
-                return 1;
+                return webgpu_functions[i].func;
             }
         }
     }
 
-    return 0;
+    return NULL;
 }

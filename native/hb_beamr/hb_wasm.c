@@ -220,8 +220,10 @@ void wasm_initialize_runtime(void* raw) {
 
         // TODO: use dlsym
         if (ext_webgpu) {
-        if (set_callback_webgpu(module_name->data, name->data, &callback)) {
-            DRV_DEBUG("Using WebGPU callback for %s.%s [%s]", module_name->data, name->data, type_str);
+            wasm_func_callback_with_env_t webgpu_callback = webgpu_wasm_callback(module_name->data, name->data);
+            if (webgpu_callback) {
+                DRV_DEBUG("Using WebGPU callback for %s.%s [%s]", module_name->data, name->data, type_str);
+                callback = webgpu_callback;
             }
         }
 
