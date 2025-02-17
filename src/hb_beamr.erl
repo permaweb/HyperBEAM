@@ -72,13 +72,16 @@ load_driver() ->
 start(WasmBinary) when is_binary(WasmBinary) ->
     start(WasmBinary, wasm).
 start(WasmBinary, Mode) when is_binary(WasmBinary) ->
+    % TODO: Load extensions conditionally
+    start(WasmBinary, Mode, [webgpu]).
+start(WasmBinary, Mode, Exts) when is_binary(WasmBinary) ->
     ?event({loading_module, {bytes, byte_size(WasmBinary)}, Mode}),
     Self = self(),
     WASM = spawn(
         fun() ->
             ok = load_driver(),
             Port = open_port({spawn, "hb_beamr"}, []),
-            Port ! {self(), {command, term_to_binary({init, WasmBinary, Mode})}},
+            Port ! {self(), {command, term_to_binary({init, WasmBinary, Mode, Exts})}},
             ?event({waiting_for_init_from, Port}),
             worker(Port, Self)
         end

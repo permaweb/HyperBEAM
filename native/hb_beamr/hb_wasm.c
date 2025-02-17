@@ -2,6 +2,7 @@
 #include "include/hb_logging.h"
 #include "include/hb_helpers.h"
 #include "include/hb_driver.h"
+#include "include/hb_wasm_webgpu.h"
 
 extern ErlDrvTermData atom_ok;
 extern ErlDrvTermData atom_import;
@@ -166,6 +167,17 @@ void wasm_initialize_runtime(void* raw) {
     init_msg[msg_i++] = ERL_DRV_ATOM;
     init_msg[msg_i++] = atom_execution_result;
 
+    // TODO: use dlopen
+    // DRV_DEBUG("Extension list size: %d", mod_bin->ext_list_len);
+    bool ext_webgpu = false;
+    for (int i = 0; i < mod_bin->ext_list_len; ++i) {
+        // DRV_DEBUG("Extension: %s", mod_bin->ext_list[i]);
+        if (strcmp(mod_bin->ext_list[i], "webgpu") == 0) {
+            DRV_DEBUG("Found WebGPU extension");
+            ext_webgpu = true;
+        }
+    }
+
     // Process imports
     for (int i = 0; i < imports.size; ++i) {
         //DRV_DEBUG("Processing import %d", i);
@@ -204,11 +216,22 @@ void wasm_initialize_runtime(void* raw) {
         hook->proc = proc;
         hook->signature = type_str;
 
+        wasm_func_callback_with_env_t callback = wasm_handle_import;
+
+        // TODO: use dlsym
+        if (ext_webgpu) {
+            wasm_func_callback_with_env_t webgpu_callback = webgpu_wasm_callback(module_name->data, name->data);
+            if (webgpu_callback) {
+                DRV_DEBUG("Using WebGPU callback for %s.%s [%s]", module_name->data, name->data, type_str);
+                callback = webgpu_callback;
+            }
+        }
+
         hook->stub_func =
             wasm_func_new_with_env(
                 proc->store,
                 wasm_externtype_as_functype_const(type),
-                wasm_handle_import,
+                callback,
                 hook,
                 NULL
             );

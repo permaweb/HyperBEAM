@@ -102,7 +102,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         // Start async initialization
         proc->pid = driver_caller(proc->port);
         //DRV_DEBUG("Caller PID: %d", proc->pid);
-        int size, type, mode_size;
+        int size, type, mode_size, ext_list_len;
         char* mode;
         ei_get_type(buff, &index, &type, &size);
         //DRV_DEBUG("WASM binary size: %d bytes. Type: %c", size, type);
@@ -113,11 +113,25 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         // the init message size + '\0' character
         mode = driver_alloc(mode_size + 1);
         ei_decode_atom(buff, &index, mode);
+        // DRV_DEBUG("Mode: %s", mode);
+
+        ei_get_type(buff, &index, &type, &ext_list_len);
+        ei_decode_list_header(buff, &index, &ext_list_len);
+        // DRV_DEBUG("Extension list size: %d, Type: %c", ext_list_len, type);
+        char **ext_list = driver_alloc(ext_list_len);
+        for (int i = 0; i < ext_list_len; i++) {
+            ext_list[i] = driver_alloc(MAXATOMLEN);
+            ei_decode_atom(buff, &index, ext_list[i]);
+            // DRV_DEBUG("Extension: %s", ext_list[i]);
+        }
+
         LoadWasmReq* mod_bin = driver_alloc(sizeof(LoadWasmReq));
         mod_bin->proc = proc;
         mod_bin->binary = wasm_binary;
         mod_bin->size = size;
         mod_bin->mode = mode;
+        mod_bin->ext_list_len = ext_list_len;
+        mod_bin->ext_list = ext_list;
         //DRV_DEBUG("Calling for async thread to init");
         driver_async(proc->port, NULL, wasm_initialize_runtime, mod_bin, NULL);
     } else if (strcmp(command, "call") == 0) {
