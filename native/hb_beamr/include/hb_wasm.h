@@ -62,5 +62,4 @@ int wasm_execute_indirect_function(Proc* proc, const char *function_name, const 
  */
 int wasm_execute_exported_function(Proc* proc, const *function_name, wasm_val_t* params, wasm_val_t * results);
 
-
 #endif 
