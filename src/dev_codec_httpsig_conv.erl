@@ -157,8 +157,7 @@ from_body_parts(TABM, [Part | Rest]) ->
                 dev_codec_structured_conv:parse_item(RawDisposition),
             {ok, PartName} = case Disposition of
                 <<"inline">> ->
-                    % The inline part is the body
-                    {ok, <<"body">>};
+                    {ok, inline_key(TABM)};
                 _ ->
                     % Otherwise, we need to extract the name of the part
                     % from the Content-Disposition parameters
@@ -282,6 +281,7 @@ to(TABM, Opts) when is_map(TABM) ->
     ?event({prepared_body_map, {msg, Enc0}}),
     BodyMap = maps:get(<<"body">>, Enc0, #{}),
     FlattenedBodyMap = dev_codec_flat:to(BodyMap),
+    InlineKey = inline_key(Enc0),
     Enc1 =
         case {FlattenedBodyMap, lists:member(sub_part, Opts)} of
             {X, _} when map_size(X) =:= 0 ->
@@ -307,7 +307,10 @@ to(TABM, Opts) when is_map(TABM) ->
                 % Otherwise, we need to encode the body map as the
                 % multipart body of the HTTP message
                 ?event({encoding_multipart, {bodymap, {explicit, FlattenedBodyMap}}}),
-                PartList = to_sorted_list(maps:map(fun encode_body_part/2, FlattenedBodyMap)), 
+                PartList = to_sorted_list(maps:map(
+                    fun(Key, Value) -> encode_body_part(Key, Value, InlineKey)  end,
+                    FlattenedBodyMap)
+                ),
                 Boundary = boundary_from_parts(PartList),
                 % Transform body into a binary, delimiting each part with the
                 % boundary
@@ -404,7 +407,7 @@ extract_hashpaths(Map) ->
     ).
 
 %% @doc Encode a multipart body part to a flat binary.
-encode_body_part(PartName, BodyPart) ->
+encode_body_part(PartName, BodyPart, InlineKey) ->
     % We'll need to prepend a Content-Disposition header
     % to the part, using the field name as the form part
     % name.
@@ -413,7 +416,7 @@ encode_body_part(PartName, BodyPart) ->
         case PartName of
             % The body is always made the inline part of
             % the multipart body
-            <<"body">> -> <<"inline">>;
+            InlineKey -> <<"inline">>;
             _ -> <<"form-data;name=", "\"", PartName/binary, "\"">>
         end,
     % Sub-parts MUST have at least one header, according to the
@@ -443,6 +446,26 @@ encode_body_part(PartName, BodyPart) ->
                 ?CRLF/binary,
                 BPBin/binary
             >>
+    end.
+
+inline_key(Msg) ->
+    % The message can named a key whose value will be placed
+    % in the body as the inline part
+    % Otherwise, the Msg <<"body">> is used
+    % Otherwise, the Msg <<"data">> is used
+    InlineBodyKey = maps:get(<<"inline-body-key">>, Msg, bad_match),
+    case [
+        maps:is_key(InlineBodyKey, Msg),
+        maps:is_key(<<"body">>, Msg),
+        maps:is_key(<<"data">>, Msg)
+    ] of
+        [true, _, _] -> InlineBodyKey;
+        [_, true, _] -> <<"body">>;
+        [_, _, true] -> <<"data">>;
+        % default to body being the inlined part.
+        % This makes this utility compatible for both encoding
+        % and decoding httpsig@1.0 messages
+        _ -> <<"body">>
     end.
 
 %%% @doc Given a map or KVList, return a sorted list of its key-value pairs.
