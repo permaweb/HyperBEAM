@@ -232,6 +232,8 @@ event(Topic, X, Mod, Func, Line) -> event(Topic, X, Mod, Func, Line, #{}).
 event(Topic, X, Mod, undefined, Line, Opts) -> event(Topic, X, Mod, "", Line, Opts);
 event(Topic, X, Mod, Func, undefined, Opts) -> event(Topic, X, Mod, Func, "", Opts);
 event(Topic, X, ModAtom, Func, Line, Opts) when is_atom(ModAtom) ->
+    % Increment by message adding Topic as label
+    hb_event_counts:increment(X, Topic),
     % Check if the module has the `hb_debug' attribute set to `print'.
     case lists:member({hb_debug, [print]}, ModAtom:module_info(attributes)) of
         true -> hb_util:debug_print(X, atom_to_list(ModAtom), Func, Line);
