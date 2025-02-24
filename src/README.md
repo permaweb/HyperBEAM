@@ -79,7 +79,7 @@ This device is responsible for relaying messages between nodes and other HTTP(S)
 
 ```
 
-Example usage: curl /~relay@.1.0/call?method=GET?0.path=https://www.arweave.net/
+curl /~relay@.1.0/call?method=GET?0.path=https://www.arweave.net/
 
 ```
 
