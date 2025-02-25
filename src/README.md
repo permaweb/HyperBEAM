@@ -282,6 +282,6 @@ rebar3 shell --eval "hb:start_mainnet(#{
 
 ## Conclusion
 
-Setting up a HyperBEAM node involves understanding and configuring various devices based on your specific requirements. By carefully selecting and stacking devices, you can create a node that meets your computational needs, security requirements, and monetization goals.
+Setting up a HyperBEAM node involves understanding and configuring various devices based on your specific requirements. By selecting and stacking devices, you can create a node that meets your computational needs, security requirements, and monetization goals.
 
 For more detailed information about each device, refer to the HyperBEAM code repositories. Remember that the AO-Core protocol is designed to be flexible, allowing you to adapt your node to various use cases by combining different devices and computational models.
