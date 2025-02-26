@@ -1,0 +1,142 @@
+From 1a98319ca430c80353d3819c9a00033c4457452c Mon Sep 17 00:00:00 2001
+From: Elliot Sayes <elliot@sayes.cloud>
+Date: Sun, 16 Feb 2025 22:11:08 +0800
+Subject: [PATCH] defer-post-instantiate-functions
+
+---
+ core/iwasm/aot/aot_runtime.c          | 14 +++++++-------
+ core/iwasm/aot/aot_runtime.h          |  4 ++++
+ core/iwasm/common/wasm_c_api.c        | 23 +++++++++++++++++++++++
+ core/iwasm/interpreter/wasm_runtime.c | 12 ++++++------
+ core/iwasm/interpreter/wasm_runtime.h |  4 ++++
+ 5 files changed, 44 insertions(+), 13 deletions(-)
+
+diff --git a/core/iwasm/aot/aot_runtime.c b/core/iwasm/aot/aot_runtime.c
+index 7e6d6360..e02c769e 100644
+--- a/core/iwasm/aot/aot_runtime.c
++++ b/core/iwasm/aot/aot_runtime.c
+@@ -1525,8 +1525,8 @@ lookup_post_instantiate_func(AOTModuleInstance *module_inst,
+     return func;
+ }
+ 
+-static bool
+-execute_post_instantiate_functions(AOTModuleInstance *module_inst,
++bool
++execute_post_instantiate_functions_aot(AOTModuleInstance *module_inst,
+                                    bool is_sub_inst, WASMExecEnv *exec_env_main)
+ {
+     AOTModule *module = (AOTModule *)module_inst->module;
+@@ -2084,11 +2084,11 @@ aot_instantiate(AOTModule *module, AOTModuleInstance *parent,
+     }
+ #endif
+ 
+-    if (!execute_post_instantiate_functions(module_inst, is_sub_inst,
+-                                            exec_env_main)) {
+-        set_error_buf(error_buf, error_buf_size, module_inst->cur_exception);
+-        goto fail;
+-    }
++    // if (!execute_post_instantiate_functions_aot(module_inst, is_sub_inst,
++    //                                         exec_env_main)) {
++    //     set_error_buf(error_buf, error_buf_size, module_inst->cur_exception);
++    //     goto fail;
++    // }
+ 
+ #if WASM_ENABLE_MEMORY_TRACING != 0
+     wasm_runtime_dump_module_inst_mem_consumption(
+diff --git a/core/iwasm/aot/aot_runtime.h b/core/iwasm/aot/aot_runtime.h
+index bf5e4366..6b763312 100644
+--- a/core/iwasm/aot/aot_runtime.h
++++ b/core/iwasm/aot/aot_runtime.h
+@@ -855,6 +855,10 @@ aot_set_module_name(AOTModule *module, const char *name, char *error_buf,
+ const char *
+ aot_get_module_name(AOTModule *module);
+ 
++bool
++execute_post_instantiate_functions_aot(AOTModuleInstance *module_inst,
++                                   bool is_sub_inst, WASMExecEnv *exec_env_main);
++
+ #ifdef __cplusplus
+ } /* end of extern "C" */
+ #endif
+diff --git a/core/iwasm/common/wasm_c_api.c b/core/iwasm/common/wasm_c_api.c
+index 5c1e9efd..3bf45337 100644
+--- a/core/iwasm/common/wasm_c_api.c
++++ b/core/iwasm/common/wasm_c_api.c
+@@ -5094,6 +5094,29 @@ wasm_instance_new_with_args_ex(wasm_store_t *store, const wasm_module_t *module,
+         }
+     }
+ 
++    /* call post-instantiate functions */
++#if WASM_ENABLE_INTERP != 0
++    WASMModuleInstance *wasm_module_inst =
++        (WASMModuleInstance *)instance->inst_comm_rt;
++    if (!execute_post_instantiate_functions(wasm_module_inst, false,
++                                            wasm_module_inst->exec_env_singleton)) {
++        snprintf(sub_error_buf, sizeof(sub_error_buf),
++                 wasm_module_inst->cur_exception);
++        goto failed;
++    }
++#endif
++#if WASM_ENABLE_AOT != 0
++     AOTModuleInstance *aot_module_inst =
++            (AOTModuleInstance *)instance->inst_comm_rt;
++    if (!execute_post_instantiate_functions_aot(aot_module_inst, false,
++                                                aot_module_inst->exec_env_singleton)) {
++        snprintf(sub_error_buf, sizeof(sub_error_buf),
++                 aot_module_inst->cur_exception);
++        goto failed;
++    }
++#endif
++
++
+     /* build the exports list */
+ #if WASM_ENABLE_INTERP != 0
+     if (instance->inst_comm_rt->module_type == Wasm_Module_Bytecode) {
+diff --git a/core/iwasm/interpreter/wasm_runtime.c b/core/iwasm/interpreter/wasm_runtime.c
+index accb4031..70017efe 100644
+--- a/core/iwasm/interpreter/wasm_runtime.c
++++ b/core/iwasm/interpreter/wasm_runtime.c
+@@ -1552,7 +1552,7 @@ lookup_post_instantiate_func(WASMModuleInstance *module_inst,
+     return func;
+ }
+ 
+-static bool
++bool
+ execute_post_instantiate_functions(WASMModuleInstance *module_inst,
+                                    bool is_sub_inst, WASMExecEnv *exec_env_main)
+ {
+@@ -3257,11 +3257,11 @@ wasm_instantiate(WASMModule *module, WASMModuleInstance *parent,
+                 &module_inst->e->functions[module->start_function];
+     }
+ 
+-    if (!execute_post_instantiate_functions(module_inst, is_sub_inst,
+-                                            exec_env_main)) {
+-        set_error_buf(error_buf, error_buf_size, module_inst->cur_exception);
+-        goto fail;
+-    }
++    // if (!execute_post_instantiate_functions(module_inst, is_sub_inst,
++    //                                         exec_env_main)) {
++    //     set_error_buf(error_buf, error_buf_size, module_inst->cur_exception);
++    //     goto fail;
++    // }
+ 
+ #if WASM_ENABLE_MEMORY_TRACING != 0
+     wasm_runtime_dump_module_inst_mem_consumption(
+diff --git a/core/iwasm/interpreter/wasm_runtime.h b/core/iwasm/interpreter/wasm_runtime.h
+index 00e9ad10..62c19d5d 100644
+--- a/core/iwasm/interpreter/wasm_runtime.h
++++ b/core/iwasm/interpreter/wasm_runtime.h
+@@ -889,6 +889,10 @@ wasm_set_module_name(WASMModule *module, const char *name, char *error_buf,
+ const char *
+ wasm_get_module_name(WASMModule *module);
+ 
++bool
++execute_post_instantiate_functions(WASMModuleInstance *module_inst,
++                                   bool is_sub_inst, WASMExecEnv *exec_env_main);
++
+ #ifdef __cplusplus
+ }
+ #endif
+-- 
+2.47.1
+
