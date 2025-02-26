@@ -9,7 +9,7 @@
 %%% 
 %%% For more details, see the HTTP Structured Fields (RFC-9651) specification.
 -module(dev_codec_structured).
--export([to/1, from/1, attest/3, verify/3]).
+-export([to/1, from/1, attest/3, attested/3, verify/3]).
 -export([decode_value/2, encode_value/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -22,95 +22,117 @@ attested(Msg, Req, Opts) -> dev_codec_httpsig:attested(Msg, Req, Opts).
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
 from(Bin) when is_binary(Bin) -> Bin;
 from(Msg) when is_map(Msg) ->
-    maps:from_list(lists:flatten(
-        lists:map(
+    {Types, Values} = lists:foldl(
+        fun (Key, {Types, Values}) ->
+            case maps:find(Key, Msg) of
+                {ok, <<>>} ->
+                    BinKey = hb_converge:normalize_key(Key),
+                    {[{BinKey, <<"empty-binary">>} | Types], Values};
+                {ok, Value} when is_binary(Value) ->
+                    {Types, [{Key, Value} | Values]};
+                {ok, Map} when is_map(Map) ->
+                    {Types, [{Key, from(Map)} | Values]};
+                {ok, Msgs = [Msg1|_]} when is_map(Msg1) ->
+                    % We have a list of maps. Convert to a numbered map and
+                    % recurse.
+                    {Types, [{Key, from(hb_converge:normalize_keys(Msgs))} | Values]};
+                {ok, []} ->
+                    BinKey = hb_converge:normalize_key(Key),
+                    {[{BinKey, <<"empty-list">>} | Types], Values};
+                {ok, Value} when
+                        is_atom(Value) or is_integer(Value)
+                        or is_list(Value) or is_float(Value) ->
+                    BinKey = hb_converge:normalize_key(Key),
+                    {Type, BinValue} = encode_value(Value),
+                    {[{BinKey, Type} | Types], [{BinKey, BinValue} | Values]};
+                {ok, {resolve, Operations}} when is_list(Operations) ->
+                    {Types, [{Key, {resolve, Operations}} | Values]};
+                {ok, _UnsupportedValue} ->
+                    {Types, Values}
+            end
+        end,
+        {[],[]},
+        lists:filter(
             fun(Key) ->
-                case maps:find(Key, Msg) of
-                    {ok, <<>>} ->
-                        BinKey = hb_converge:normalize_key(Key),
-                        {<<"converge-type-", BinKey/binary>>, <<"empty-binary">>};
-                    {ok, Value} when is_binary(Value) ->
-                        {Key, Value};
-                    {ok, Map} when is_map(Map) ->
-                        {Key, from(Map)};
-                    {ok, Msgs = [Msg1|_]} when is_map(Msg1) ->
-                        % We have a list of maps. Convert to a numbered map and
-                        % recurse.
-                        {Key, from(hb_converge:normalize_keys(Msgs))};
-                    {ok, []} ->
-                        BinKey = hb_converge:normalize_key(Key),
-                        {<<"converge-type-", BinKey/binary>>, <<"empty-list">>};
-                    {ok, Value} when
-                            is_atom(Value) or is_integer(Value)
-                            or is_list(Value) or is_float(Value) ->
-                        ItemKey = hb_converge:normalize_key(Key),
-                        {Type, BinaryValue} = encode_value(Value),
-                        [
-                            {<<"converge-type-", ItemKey/binary>>, Type},
-                            {ItemKey, BinaryValue}
-                        ];
-                    {ok, {resolve, Operations}} when is_list(Operations) ->
-                        {Key, {resolve, Operations}};
-                    {ok, _UnsupportedValue} ->
-                        []
-                end
+                % Filter keys that the user could set directly, but
+                % should be regenerated when moving msg -> TX, as well
+                % as private keys.
+                not lists:member(Key, ?REGEN_KEYS) andalso
+                    not hb_private:is_private(Key)
             end,
-            lists:filter(
-                fun(Key) ->
-                    % Filter keys that the user could set directly, but
-                    % should be regenerated when moving msg -> TX, as well
-                    % as private keys.
-                    not lists:member(Key, ?REGEN_KEYS) andalso
-                        not hb_private:is_private(Key)
-                end,
-                maps:keys(Msg)
-            )
+            maps:keys(Msg)
         )
-    ));
+    ),
+    % Encode the AoTypes as a structured dictionary
+    % And include as a field on the produced TABM
+    WithTypes = case Types of 
+        [] -> Values;
+        T ->
+            AoTypes = iolist_to_binary(dev_codec_structured_conv:dictionary(
+                lists:map(
+                    fun({Key, Value}) ->
+                        {ok, Item} = dev_codec_structured_conv:to_item(Value),
+                        {Key, Item}
+                    end,
+                    lists:reverse(T)
+                )    
+            )),
+            [{<<"ao-types">>, AoTypes} | Values]
+    end,
+    maps:from_list(lists:reverse(WithTypes));
 from(Other) -> hb_path:to_binary(Other).
 
 %% @doc Convert a TABM into a native HyperBEAM message.
 to(Bin) when is_binary(Bin) -> Bin;
 to(TABM0) ->
-    % First, handle special cases of empty items, which `ar_bundles' cannot
-    % handle. Needs to be transformed into a list (unfortunately) so that we
-    % can also remove the "Converge-Type-" prefix from the key.
-    TABM1 =
-        maps:from_list(
+    Types = case maps:get(<<"ao-types">>, TABM0, <<>>) of
+        <<>> -> #{};
+        Bin -> maps:from_list(
             lists:map(
-                fun({<<"converge-type-", Key/binary>>, <<"empty-binary">>}) ->
-                    {Key, <<>>};
-                ({<<"converge-type-", Key/binary>>, <<"empty-list">>}) ->
-                    {Key, []};
-                ({Key, Value}) ->
-                    {Key, Value}
-                end,
-                maps:to_list(TABM0)
+                fun({Key, {item, {_, Value}, _}}) -> {Key, Value} end,
+                dev_codec_structured_conv:parse_dictionary(Bin)    
             )
-        ),
-    % 1. Remove any keys from output that have a "Converge-Type-" prefix;
-    % 2. Decode any binary values that have a "Converge-Type-" prefix;
+        )
+    end,
+    % "empty values" will each have a type, but no corresponding value
+    % (because its empty)
+    % 
+    % So we first loop through Types and map over the each empty type to its
+    % equivalent empty value
+    TABM1 = maps:from_list(
+        maps:fold(
+            fun (Key, <<"empty-binary">>, Acc) -> [{Key, <<>>} | Acc];
+                (Key, <<"empty-list">>, Acc) -> [{Key, []} | Acc];
+                (_Key, _Value, Acc) -> Acc
+            end,
+            [],
+            Types
+        )
+    ),
+    % 1. Remove 'ao-types' field
+    % 2. Decode any binary values that have a type;
     % 3. Recursively decode any maps that we encounter;
     % 4. Return the remaining keys and values as a map.
-    hb_message:filter_default_keys(maps:filtermap(
-        fun(<<"converge-type-", _/binary>>, _) ->
-            % Remove any keys from output that have a "Converge-Type-" prefix.
-            false;
-        (RawKey, BinaryValue) when is_binary(BinaryValue) ->
-            Key = hb_converge:normalize_key(RawKey),
-            case maps:find(<<"converge-type-", Key/binary>>, TABM1) of
-                error -> {true, BinaryValue};
+    hb_message:filter_default_keys(maps:fold(
+        fun (<<"ao-types">>, _Value, Acc) -> Acc;
+        (RawKey, BinValue, Acc) when is_binary(BinValue) ->
+            case maps:find(hb_converge:normalize_key(RawKey), Types) of
+                % The value is a binary, no parsing required
+                error -> Acc#{ RawKey => BinValue };
+                % Parse according to its type
                 {ok, Type} ->
-                    {true, decode_value(Type, BinaryValue)}
+                    Decoded = decode_value(Type, BinValue),
+                    Acc#{ RawKey => Decoded }
             end;
-        (_Key, ChildTABM) when is_map(ChildTABM) ->
-            {true, to(ChildTABM)};
-        (_Key, Value) ->
+        (RawKey, ChildTABM, Acc) when is_map(ChildTABM) ->
+            Acc#{ RawKey => to(ChildTABM)};
+        (RawKey, Value, Acc) ->
             % We encountered a key that already has a converted type.
             % We can just return it as is.
-            {true, Value}
+            Acc#{ RawKey => Value }
         end,
-        TABM1
+        TABM1,
+        TABM0
     )).
 
 %% @doc Convert a term to a binary representation, emitting its type for
@@ -139,7 +161,7 @@ encode_value(Values) when is_list(Values) ->
                     {
                         string,
                         <<
-                            "(converge-type-", Type/binary, ") ",
+                            "(ao-type-", Type/binary, ") ",
                             Encoded/binary
                         >>
                     },
@@ -177,7 +199,7 @@ decode_value(atom, Value) ->
     binary_to_existing_atom(AtomString);
 decode_value(list, Value) ->
     lists:map(
-        fun({item, {string, <<"(converge-type-", Rest/binary>>}, _}) ->
+        fun({item, {string, <<"(ao-type-", Rest/binary>>}, _}) ->
             [Type, Item] = binary:split(Rest, <<") ">>),
             decode_value(Type, Item);
            ({item, Item, _}) -> dev_codec_structured_conv:from_bare_item(Item)

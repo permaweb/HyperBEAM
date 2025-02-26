@@ -1043,9 +1043,12 @@ load_device(ID, Opts) ->
             true -> ID;
             false -> normalize_key(ID)
         end,
-    case maps:get(NormKey, hb_opts:get(preloaded_devices, #{}, Opts), unsupported) of
-        unsupported -> {error, module_not_admissable};
-        Mod -> load_device(Mod, Opts)
+    case lists:search(
+        fun (#{ <<"name">> := Name }) -> Name =:= NormKey end,
+        hb_opts:get(preloaded_devices, [], Opts)
+    ) of
+        false -> {error, module_not_admissable};
+        {value, #{ <<"module">> := Mod }} -> load_device(Mod, Opts)
     end.
 
 %% @doc Get the info map for a device, optionally giving it a message if the

@@ -447,16 +447,19 @@ reply(Req, Status, RawMessage, Opts) ->
 %% @doc Add permissive CORS headers to a message, if the message has not already
 %% specified CORS headers.
 add_cors_headers(Msg, ReqHdr) ->
+    CorHeaders = #{
+        <<"access-control-allow-origin">> => <<"*">>,
+        <<"access-control-allow-methods">> => <<"GET, POST, PUT, DELETE, OPTIONS">>
+    },
+     WithAllowHeaders = case ReqHdr of
+        <<>> -> CorHeaders;
+        _ -> CorHeaders#{
+             <<"access-control-allow-headers">> => ReqHdr
+        }
+    end,
     % Keys in the given message will overwrite the defaults listed below if 
     % included, due to `maps:merge`'s precidence order.
-    maps:merge(
-        #{
-            <<"access-control-allow-origin">> => <<"*">>,
-            <<"access-control-allow-methods">> => <<"GET, POST, PUT, DELETE, OPTIONS">>,
-            <<"access-control-allow-headers">> => ReqHdr
-        },
-        Msg
-    ).
+    maps:merge(WithAllowHeaders, Msg).
 
 %% @doc Generate the headers and body for a HTTP response message.
 prepare_reply(Req, Message, Opts) ->

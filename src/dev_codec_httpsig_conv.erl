@@ -37,7 +37,7 @@
 -define(CRLF, <<"\r\n">>).
 -define(DOUBLE_CRLF, <<?CRLF/binary, ?CRLF/binary>>).
 
-%% @doc Convert an HTTP Message into a TABM.
+%% @doc Convert a HTTP Message into a TABM.
 %% HTTP Structured Field is encoded into it's equivalent TABM encoding.
 from(Bin) when is_binary(Bin) -> Bin;
 from(HTTP) ->
@@ -46,11 +46,13 @@ from(HTTP) ->
     % are handled separately.
     Headers = maps:without([<<"body">>, <<"body-keys">>], HTTP),
     ContentType = maps:get(<<"content-type">>, Headers, undefined),
+    {_, InlinedKey} = inline_key(HTTP),
+    ?event({inlined_body_key, InlinedKey}),
     % Next, we need to potentially parse the body and add to the TABM
     % potentially as sub-TABMs.
     MsgWithoutSigs = maps:without(
         [<<"signature">>, <<"signature-input">>, <<"attestations">>],
-        from_body(Headers, ContentType, Body)
+        from_body(Headers, InlinedKey, ContentType, Body)
     ),
     ?event({from_body, {headers, Headers}, {body, Body}, {msgwithoutatts, MsgWithoutSigs}}),
     % Extract all hashpaths from the attestations of the message
@@ -67,8 +69,8 @@ from(HTTP) ->
     ?event({message_without_atts, Res, Removed}),
     Res.
 
-from_body(TABM, _ContentType, <<>>) -> TABM;
-from_body(TABM, ContentType, Body) ->
+from_body(TABM, _InlinedKey, _ContentType, <<>>) -> TABM;
+from_body(TABM, InlinedKey, ContentType, Body) ->
     ?event({from_body, {from_headers, TABM}, {content_type, {explicit, ContentType}}, {body, Body}}),
     Params =
         case ContentType of
@@ -80,9 +82,9 @@ from_body(TABM, ContentType, Body) ->
         end,
     case lists:keyfind(<<"boundary">>, 1, Params) of
         false ->
-            % The body is not a multipart, so just set as is to the body key on
+            % The body is not a multipart, so just set as is to the Inlined key on
             % the TABM.
-            maps:put(<<"body">>, Body, TABM);
+            maps:put(InlinedKey, Body, TABM);
         {_, {_Type, Boundary}} ->
             % We need to manually parse the multipart body into key/values on the
             % TABM.
@@ -109,17 +111,28 @@ from_body(TABM, ContentType, Body) ->
             % Finally, for each part within the sub-part, we need to parse it,
             % potentially recursively as a sub-TABM, and then add it to the
             % current TABM
-            {ok, FlattendTABM} = from_body_parts(TABM, Parts),
-            BodyKeys = maps:get(<<"body-keys">>, FlattendTABM, []),
-            Flat = dev_codec_flat:from(maps:without([<<"body-keys">>], FlattendTABM)),
-            case BodyKeys of
-                [] -> Flat;
-                _ -> maps:put(<<"body-keys">>, BodyKeys, Flat)
-            end
+            {ok, FlattendTABM} = from_body_parts(TABM, InlinedKey, Parts),
+            FullTABM = dev_codec_flat:from(FlattendTABM),
+            FullTABM
     end.
 
-from_body_parts (TABM, []) -> {ok, TABM};
-from_body_parts(TABM, [Part | Rest]) ->
+from_body_parts (TABM, _InlinedKey, []) ->
+    % Ensure the accumulated body keys, if any, are encoded
+    % adhering to the TABM structure that all values must be
+    % maps or binaries
+    % 
+    % This prevents needing to have exceptions for <<"body-keys">>
+    % during parsing (it's just another binary)
+    WithEncodedBodyKeys =
+        case maps:get(<<"body-keys">>, TABM, undefined) of
+            undefined -> TABM;
+            % Assume already encoded
+            Bin when is_binary(Bin) -> TABM;
+            List when is_list(List) ->
+                TABM#{ <<"body-keys">> => encode_body_keys(List) }
+        end,
+    {ok, WithEncodedBodyKeys};
+from_body_parts(TABM, InlinedKey, [Part | Rest]) ->
     % Extract the Headers block and Body. Only split on the FIRST double CRLF
     [RawHeadersBlock, RawBody] =
         case binary:split(Part, [?DOUBLE_CRLF], []) of
@@ -157,8 +170,7 @@ from_body_parts(TABM, [Part | Rest]) ->
                 dev_codec_structured_conv:parse_item(RawDisposition),
             {ok, PartName} = case Disposition of
                 <<"inline">> ->
-                    % The inline part is the body
-                    {ok, <<"body">>};
+                    {ok, InlinedKey};
                 _ ->
                     % Otherwise, we need to extract the name of the part
                     % from the Content-Disposition parameters
@@ -182,12 +194,12 @@ from_body_parts(TABM, [Part | Rest]) ->
                         % We need to recursively parse the sub part into its own TABM
                         from(RestHeaders#{ <<"body">> => RawBody })
                 end,
-            CurrentBodyKeys = maps:get(<<"body-keys">>, TABM, []),
+            BodyKey = hd(binary:split(PartName, <<"/">>)),
             TABMNext = TABM#{
                 PartName => ParsedPart,
-                <<"body-keys">> => CurrentBodyKeys ++ [PartName]
+                <<"body-keys">> => maps:get(<<"body-keys">>, TABM, []) ++ [BodyKey]
             },
-            from_body_parts(TABMNext, Rest)
+            from_body_parts(TABMNext, InlinedKey, Rest)
     end.
 
 %% @doc Populate the `/attestations' key on the TABM with the dictionary of 
@@ -267,21 +279,28 @@ attestations_from_signature(Map, HPs, RawSig, RawSigInput) ->
 to(Bin) when is_binary(Bin) -> Bin;
 to(TABM) -> to(TABM, []).
 to(TABM, Opts) when is_map(TABM) ->
+    {InlineFieldPairs, InlineKey} = inline_key(TABM),
     % Calculate the initial encoding from the TABM
     Enc0 =
         maps:fold(
             fun
                 (<<"body">>, Value, AccMap) ->
-                    AccMap#{ <<"body">> => #{ <<"body">> => Value } };
+                    OldBody = maps:get(<<"body">>, AccMap, #{}),
+                    AccMap#{ <<"body">> => OldBody#{ <<"body">> => Value } };
+                (Key, Value, AccMap) when Key =:= InlineKey ->
+                    OldBody = maps:get(<<"body">>, AccMap, #{}),
+                    AccMap#{ <<"body">> => OldBody#{ InlineKey => Value } };
                 (Key, Value, AccMap) ->
                     field_to_http(AccMap, {Key, Value}, #{})
             end,
-            #{},
+            % Ensure the Encoded Msg has any fields that denote
+            % the inline-body-key
+            maps:from_list(InlineFieldPairs),
             maps:without([<<"attestations">>, <<"signature">>, <<"signature-input">>], TABM)
         ),
     ?event({prepared_body_map, {msg, Enc0}}),
     BodyMap = maps:get(<<"body">>, Enc0, #{}),
-    FlattenedBodyMap = dev_codec_flat:to(BodyMap),
+    FlattenedBodyMap = lift_maps(BodyMap),
     Enc1 =
         case {FlattenedBodyMap, lists:member(sub_part, Opts)} of
             {X, _} when map_size(X) =:= 0 ->
@@ -289,7 +308,7 @@ to(TABM, Opts) when is_map(TABM) ->
                 % corresponding empty binary.
                 ?event({encoding_empty_body, {msg, Enc0}}),
                 maps:put(<<"body">>, <<>>, Enc0);
-            {#{ <<"body">> := UserBody }, false}
+            {#{ <<InlineKey/binary>> := UserBody }, false}
                     when map_size(FlattenedBodyMap) =:= 1 andalso is_binary(UserBody) ->
                 % Simply set the sole body binary as the body of the
                 % HTTP message, no further encoding required
@@ -307,7 +326,10 @@ to(TABM, Opts) when is_map(TABM) ->
                 % Otherwise, we need to encode the body map as the
                 % multipart body of the HTTP message
                 ?event({encoding_multipart, {bodymap, {explicit, FlattenedBodyMap}}}),
-                PartList = to_sorted_list(maps:map(fun encode_body_part/2, FlattenedBodyMap)), 
+                PartList = to_sorted_list(maps:map(
+                    fun(Key, Value) -> encode_body_part(Key, Value, InlineKey)  end,
+                    FlattenedBodyMap)
+                ),
                 Boundary = boundary_from_parts(PartList),
                 % Transform body into a binary, delimiting each part with the
                 % boundary
@@ -325,17 +347,15 @@ to(TABM, Opts) when is_map(TABM) ->
                     [],
                     PartList
                 ),
-                BodyKeys =
-                    iolist_to_binary(dev_codec_structured_conv:list(lists:map(
-                        fun ({PartName, _}) -> {item, {string, PartName}, []} end,
-                        PartList
-                    ))),
                 % Finally, join each part of the multipart body into a single binary
                 % to be used as the body of the Http Message
                 FinalBody = iolist_to_binary(lists:join(?CRLF, lists:reverse(BodyList))),
                 % Ensure we append the Content-Type to be a multipart response
                 Enc0#{
-                    <<"body-keys">> => BodyKeys,
+                    % TODO: is this needed here?
+                    % We ought not be sending body-keys over the wire, so we either need
+                    % to remove this here, or at the edge
+                    <<"body-keys">> => encode_body_keys(PartList),
                     <<"content-type">> =>
                         <<"multipart/form-data; boundary=", "\"" , Boundary/binary, "\"">>,
                     <<"body">> => <<FinalBody/binary, ?CRLF/binary, "--", Boundary/binary, "--">>
@@ -344,7 +364,13 @@ to(TABM, Opts) when is_map(TABM) ->
     % Add the content-digest to the HTTP message. `generate_content_digest/1'
     % will return a map with the `content-digest' key set, but the body removed,
     % so we merge the two maps together to maintain the body and the content-digest.
-    Enc2 = maps:merge(Enc1, dev_codec_httpsig:add_content_digest(Enc1)),
+    Enc2 = case maps:get(<<"body">>, Enc1) of
+        <<>> -> Enc1;
+        _ -> maps:merge(
+            Enc1,
+            dev_codec_httpsig:add_content_digest(Enc1)
+        )
+    end,
     % Finally, add the signatures to the HTTP message
     case maps:get(<<"attestations">>, TABM, not_found) of
         #{ <<"hmac-sha256">> :=
@@ -358,6 +384,59 @@ to(TABM, Opts) when is_map(TABM) ->
             };
         _ -> Enc2
     end.
+
+encode_body_keys(PartList) when is_list(PartList) ->
+    iolist_to_binary(dev_codec_structured_conv:list(lists:map(
+        fun
+            ({PartName, _}) -> {item, {string, PartName}, []};
+            (PartName) when is_binary(PartName) -> {item, {string, PartName}, []}
+        end,
+        PartList
+    ))).
+
+% Only lift maps to the top level
+% while preserving the hiearchy using keys compatible
+% with the flat@1.0 codec
+lift_maps(Map) ->
+    lift_maps(Map, <<>>, #{}).
+lift_maps(Map, Parent, Top) when is_map(Map) ->
+    {Flattened, NewTop} = maps:fold(
+        fun(Key, Value, {CurMap, CurTop}) ->
+            FlatK = case Parent of
+                <<>> -> Key;
+                _ -> <<Parent/binary, "/", Key/binary>>
+            end,
+            
+            case Value of
+                _ when is_map(Value) ->
+                    NewTop = lift_maps(Value, FlatK, CurTop),
+                    {CurMap, NewTop};
+                _ ->
+                    case byte_size(Value) > ?MAX_HEADER_LENGTH of
+                        % the value is too large to be encoded as a header
+                        % within a part, so instead lift it to be a top level
+                        % part
+                        true ->
+                            NewTop = maps:put(FlatK, Value, CurTop),
+                            {CurMap, NewTop};
+                        % Encode the value in the current part
+                        false ->
+                            NewCurMap = maps:put(Key, Value, CurMap),
+                            {NewCurMap, CurTop}
+                    end
+            end
+        end,
+        {#{}, Top},
+        Map
+    ),
+    case maps:size(Flattened) of
+        0 -> NewTop;
+        _ -> case Parent of
+            <<>> -> maps:merge(NewTop, Flattened);
+            _ -> NewTop#{ Parent => Flattened }
+        end
+    end.
+
 
 % We need to generate a unique, reproducible boundary for the
 % multipart body, however we cannot use the id of the message as
@@ -400,7 +479,7 @@ extract_hashpaths(Map) ->
     ).
 
 %% @doc Encode a multipart body part to a flat binary.
-encode_body_part(PartName, BodyPart) ->
+encode_body_part(PartName, BodyPart, InlineKey) ->
     % We'll need to prepend a Content-Disposition header
     % to the part, using the field name as the form part
     % name.
@@ -409,7 +488,7 @@ encode_body_part(PartName, BodyPart) ->
         case PartName of
             % The body is always made the inline part of
             % the multipart body
-            <<"body">> -> <<"inline">>;
+            InlineKey -> <<"inline">>;
             _ -> <<"form-data;name=", "\"", PartName/binary, "\"">>
         end,
     % Sub-parts MUST have at least one header, according to the
@@ -417,17 +496,13 @@ encode_body_part(PartName, BodyPart) ->
     % satisfies that requirement, but also encodes the
     % HB message field that resolves to the sub-message
     case BodyPart of
-        % TODO: this branch may no longer be needed
-        % since we flatten the maps prior to HTTP encoding
-        % 
-        % For now, keeping recursive logic
         BPMap when is_map(BPMap) ->
             WithDisposition = maps:put(
                 <<"content-disposition">>,
                 Disposition,
                 BPMap
             ),
-            SubHttp = to(WithDisposition, [sub_part]),
+            SubHttp = to(WithDisposition),
             encode_http_msg(SubHttp);
         BPBin when is_binary(BPBin) ->
             % A properly encoded inlined body part MUST have a CRLF between
@@ -439,6 +514,38 @@ encode_body_part(PartName, BodyPart) ->
                 ?CRLF/binary,
                 BPBin/binary
             >>
+    end.
+
+%% @doc given a message, returns a binary tuple:
+%% - A list of pairs to add to the msg, if any
+%% - the field name for the inlined key
+%%
+%% In order to preserve the field name of the inlined
+%% part, an additional field may need to be added
+inline_key(Msg) ->
+    % The message can named a key whose value will be placed
+    % in the body as the inline part
+    % Otherwise, the Msg <<"body">> is used
+    % Otherwise, the Msg <<"data">> is used
+    InlineBodyKey = maps:get(<<"inline-body-key">>, Msg, false),
+    ?event({inlined, InlineBodyKey}),
+    case [
+        InlineBodyKey,
+        maps:is_key(<<"body">>, Msg),
+        maps:is_key(<<"data">>, Msg)
+    ] of
+        % inline-body-key already exists, so no need to add one
+        [Explicit, _, _] when Explicit =/= false -> {[], InlineBodyKey};
+        % inline-body-key defaults to <<"body">> (see below)
+        % So no need to add one
+        [_, true, _] -> {[], <<"body">>};
+        % We need to preserve the inline-body-key, as the <<"data">> field,
+        % so that it is preserved during encoding and decoding
+        [_, _, true] -> {[{<<"inline-body-key">>, <<"data">>}], <<"data">>};
+        % default to body being the inlined part.
+        % This makes this utility compatible for both encoding
+        % and decoding httpsig@1.0 messages
+        _ -> {[], <<"body">>}
     end.
 
 %%% @doc Given a map or KVList, return a sorted list of its key-value pairs.
@@ -494,3 +601,84 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
             OldBody = maps:get(<<"body">>, Httpsig, #{}),
             Httpsig#{ <<"body">> => OldBody#{ NormalizedName => Value } }
     end.
+
+lift_maps_test() ->
+   Map = #{
+        <<"a">> => <<"1">>,
+        <<"b">> => #{
+            <<"x">> => <<"10">>,
+            <<"y">> => #{
+                <<"z">> => <<"20">>
+            },
+            <<"foo">> => #{
+                <<"bar">> => #{
+                    <<"fizz">> => <<"buzz">>
+                }
+            } 
+        },
+        <<"c">> => #{
+            <<"d">> => <<"30">>
+        },
+        <<"e">> => <<"2">>,
+        <<"buf">> => <<"hello">>,
+        <<"nested">> => #{
+            <<"foo">> => <<"iiiiii">>,
+            <<"here">> => #{
+                <<"bar">> => <<"adfasdlfkjsdfkjdlsajadsf">>
+            }
+        }
+    },
+    Lifted = lift_maps(Map),
+    ?assertEqual(
+        Lifted,
+        #{
+            <<"a">> => <<"1">>,
+            <<"b">> => #{<<"x">> => <<"10">>},
+            <<"b/foo/bar">> => #{<<"fizz">> => <<"buzz">>},
+            <<"b/y">> => #{<<"z">> => <<"20">>},
+            <<"buf">> => <<"hello">>,
+            <<"c">> => #{<<"d">> => <<"30">>},
+            <<"e">> => <<"2">>,
+            <<"nested">> => #{<<"foo">> => <<"iiiiii">>},
+            <<"nested/here">> => #{<<"bar">> => <<"adfasdlfkjsdfkjdlsajadsf">>}
+        }
+    ),
+    ok.
+
+% The lifted maps encoding is a subset of the flat encoding,
+% where on keys with maps values are flattened.
+%
+% So despite needing a special encoder to produce it
+% We can simply apply the flat encoder to it to get back
+% the original
+% 
+% The test asserts that is indeed the case
+lift_maps_flat_compatible_test() ->
+    Map = #{
+        <<"a">> => <<"1">>,
+        <<"b">> => #{
+            <<"x">> => <<"10">>,
+            <<"y">> => #{
+                <<"z">> => <<"20">>
+            },
+            <<"foo">> => #{
+                <<"bar">> => #{
+                    <<"fizz">> => <<"buzz">>
+                }
+            } 
+        },
+        <<"c">> => #{
+            <<"d">> => <<"30">>
+        },
+        <<"e">> => <<"2">>,
+        <<"buf">> => <<"hello">>,
+        <<"nested">> => #{
+            <<"foo">> => <<"iiiiii">>,
+            <<"here">> => #{
+                <<"bar">> => <<"adfasdlfkjsdfkjdlsajadsf">>
+            }
+        }
+    },
+    Lifted = lift_maps(Map),
+    ?assertEqual(dev_codec_flat:from(Lifted), Map),
+    ok.
