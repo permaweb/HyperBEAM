@@ -7,7 +7,11 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     ncurses-dev \
     libssl-dev \
-    sudo
+    sudo \
+    python3 \
+    python3-pip \
+    curl \ 
+    ninja-build
 
 RUN git clone https://github.com/erlang/otp.git && \
     cd otp && \
