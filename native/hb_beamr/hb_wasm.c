@@ -512,7 +512,7 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     return result;
 }
 
-int wasm_execute_exported_function(Proc* proc, const *function_name, wasm_val_t* params, wasm_val_t * results) {
+int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_val_t* params, wasm_val_t* results) {
     DRV_DEBUG("=== Calling Runtime Export Function ===");
     DRV_DEBUG("=   Function name: %s", function_name);
 
