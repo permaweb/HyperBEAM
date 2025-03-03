@@ -206,6 +206,7 @@ ans104_no_data_item_test() ->
     {ok, Res} = read(<<"0Tb9mULcx8MjYVgXleWMVvqo1_jaw_P6AO_CJMTj0XE">>, #{}),
     ?event(gateway, {get_ans104_test, Res}),
     ?event(gateway, {signer, hb_message:signers(Res)}),
+    % ?assert(hb_message:verify(Res)).
     ?assert(true).
 
 %% @doc Test that we can get the scheduler location.
@@ -214,6 +215,7 @@ scheduler_location_test() ->
     _Node = hb_http_server:start_node(#{}),
     {ok, Res} = scheduler_location(<<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>, #{}),
     ?event(gateway, {get_scheduler_location_test, Res}),
+    ?assert(hb_message:verify(Res)),
     ?assertEqual(<<"Scheduler-Location">>, hb_converge:get(<<"Type">>, Res, #{})),
     ?event(gateway, {scheduler_location, {explicit, hb_converge:get(<<"url">>, Res, #{})}}),
     % Will need updating when Legacynet terminates.

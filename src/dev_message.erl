@@ -257,8 +257,14 @@ exec_for_attestation(Func, Base, Attestation, Req, Opts) ->
             3,
             Opts
         ),
-    Encoded = hb_message:convert(AttestionMessage, tabm, Opts),
-    apply(AttFun, [Encoded, Req, Opts]).
+    % Remove `priv' from the message before running hb_message:convert
+    Encodable = maps:remove(<<"priv">>, AttestionMessage),
+    Encoded = hb_message:convert(Encodable, tabm, Opts),
+    % Re-inject `priv' into the message.
+    PrivMap = maps:get(<<"priv">>, AttestionMessage, #{}),
+    EncodedFixed = Encoded#{ <<"priv">> => PrivMap },
+    Applied = apply(AttFun, [EncodedFixed, Req, Opts]),
+    {ok, Applied}.
 
 %% @doc Return the list of attested keys from a message.
 %% @doc Set keys in a message. Takes a map of key-value pairs and sets them in
