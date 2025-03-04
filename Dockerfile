@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:22.04 AS builder
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -30,7 +30,26 @@ WORKDIR /app
 
 COPY . .
 
-RUN rebar3 clean && \
-    rebar3 compile
+# compile the project
+RUN rebar3 clean && rebar3 get-deps && rebar3 compile
+
+# create the release
+RUN rebar3 as prod release
 
 CMD ["/bin/bash"]
+
+FROM ubuntu:22.04 AS runner
+
+RUN apt-get update && apt-get install -y \
+    libssl-dev \
+    ncurses-dev \
+    ca-certificates && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /app/_build/prod/rel/hb /app
+
+RUN chmod +x /app/bin/hb
+
+CMD ["/app/bin/hb", "foreground", "--eval", "hb:start_mainnet(#{})"]

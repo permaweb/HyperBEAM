@@ -66,8 +66,18 @@ can use the provided Dockerfile to build a container image.
 Add your wallet to the `wallets` directory and modify the `config.flat` file to use the correct port.
 
 ```bash
-docker build --platform=linux/amd64 -t hyperbeam .
-# run the container with 8GB of memory and mount the wallet and config.flat file
+docker build --platform=linux/amd64 --target=builder -t hyperbeam .
+```
+
+To target a lean image to run just the node, you can use the following command:
+
+```bash
+docker build --platform=linux/amd64 --target=runner -t hyperbeam .
+```
+
+Once you have the image built, you can run the container with the following command:
+
+```bash
 docker run --memory="8g" --memory-swap="8g" \
 -it \
 -v $(pwd)/wallets/<wallet-file>:/app/hyperbeam-key.json \
