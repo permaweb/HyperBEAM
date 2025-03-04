@@ -83,8 +83,7 @@ docker run --memory="8g" --memory-swap="8g" \
 -v $(pwd)/wallets/<wallet-file>:/app/hyperbeam-key.json \
 -v $(pwd)/config.flat:/app/config.flat \
 -p 10000:10000 \
-hyperbeam \
-rebar3 shell
+hyperbeam
 ```
 
 If you intend to offer TEE-based computation of AO-Core devices, please see the
