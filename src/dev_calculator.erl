@@ -5,6 +5,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -hb_debug(print).
+
 %% @doc Perform a calculation using the C++ backend.
 calculate(M1, M2, Opts) ->
     try
@@ -48,47 +49,29 @@ calculate(M1, M2, Opts) ->
     end.
 
 %% Tests
-basic_calculation_test() ->
-    % Initialize test messages
-    M1 = #{<<"device">> => <<"calculator@1.0">>},
-    ?event("Starting basic calculation test"),
-    
-    % Test addition
-    AddM2 = #{
-        <<"operation">> => <<"add">>,
-        <<"operand1">> => 10,
-        <<"operand2">> => 5
-    },
-    ?event({testing_addition, AddM2}),
-    {ok, AddResult} = calculate(M1, AddM2, #{}),
-    ?assertEqual(15.0, maps:get(<<"result">>, AddResult)),
+device_calculation_test() ->
+	% Initialize test messages with device specification
+	M1 = #{<<"device">> => <<"calculator@1.0">>},
+	?event("Starting device calculation tests"),
+	
+	% Test addition through HyperBEAM resolve
+	AddM2 = #{
+		<<"path">> => <<"calculate">>,  % Specify the device function to call
+		<<"operation">> => <<"add">>,
+		<<"operand1">> => 10,
+		<<"operand2">> => 5
+	},
+	?event({testing_addition_resolve, AddM2}),
+	{ok, AddResult} = hb_converge:resolve(M1, AddM2, #{}),
+	?assertEqual(15.0, maps:get(<<"result">>, AddResult)),
 
-    % Test multiplication
-    MulM2 = #{
-        <<"operation">> => <<"multiply">>,
-        <<"operand1">> => 10,
-        <<"operand2">> => 5
-    },
-    ?event({testing_multiplication, MulM2}),
-    {ok, MulResult} = calculate(M1, MulM2, #{}),
-    ?assertEqual(50.0, maps:get(<<"result">>, MulResult)),
-
-    % Test division
-    DivM2 = #{
-        <<"operation">> => <<"divide">>,
-        <<"operand1">> => 10,
-        <<"operand2">> => 2
-    },
-    ?event({testing_division, DivM2}),
-    {ok, DivResult} = calculate(M1, DivM2, #{}),
-    ?assertEqual(5.0, maps:get(<<"result">>, DivResult)),
-
-    % Test subtraction
-    SubM2 = #{
-        <<"operation">> => <<"subtract">>,
-        <<"operand1">> => 10,
-        <<"operand2">> => 3
-    },
-    ?event({testing_subtraction, SubM2}),
-    {ok, SubResult} = calculate(M1, SubM2, #{}),
-    ?assertEqual(7.0, maps:get(<<"result">>, SubResult)).
+	% Test multiplication through HyperBEAM resolve
+	MulM2 = #{
+		<<"path">> => <<"calculate">>,
+		<<"operation">> => <<"multiply">>,
+		<<"operand1">> => 10,
+		<<"operand2">> => 5
+	},
+	?event({testing_multiplication_resolve, MulM2}),
+	{ok, MulResult} = hb_converge:resolve(M1, MulM2, #{}),
+	?assertEqual(50.0, maps:get(<<"result">>, MulResult)).

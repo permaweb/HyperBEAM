@@ -102,7 +102,7 @@
 %%% Exports for tests in hb_ao_test_vectors.erl:
 -export([deep_set/4, is_exported/4]).
 -include("include/hb.hrl").
-
+-hb_debug(print).
 -define(TEMP_OPTS, [add_key, force_message, cache_control, spawn_worker]).
 
 %% @doc Get the value of a message's key by running its associated device
@@ -1093,6 +1093,7 @@ message_to_device(Msg, Opts) ->
             % The message does not specify a device, so we use the default device.
             default_module();
         {ok, DevID} ->
+			?event(DevID),
             case load_device(DevID, Opts) of
                 {error, Reason} ->
                     % Error case: A device is specified, but it is not loadable.
@@ -1226,6 +1227,7 @@ normalize_keys(Other) -> Other.
 %% a tuple of the form {error, Reason} is returned.
 load_device(Map, _Opts) when is_map(Map) -> {ok, Map};
 load_device(ID, _Opts) when is_atom(ID) ->
+	?event("Alex"),
     try ID:module_info(), {ok, ID}
     catch _:_ -> {error, not_loadable}
     end;
