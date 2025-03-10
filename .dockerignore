@@ -1,0 +1,9 @@
+.git*
+.vscode
+.idea
+.DS_Store
+.env
+.env.local
+.env.development
+.env.production
+wallets/**.json
