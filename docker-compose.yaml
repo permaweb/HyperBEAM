@@ -1,3 +1,7 @@
+networks:
+  hyperbeam-network:
+    driver: bridge
+
 services:
   hyperbeam:
     build:
@@ -5,7 +9,8 @@ services:
       dockerfile: Dockerfile
     image: ghcr.io/dtfiedler/hyperbeam:latest
     container_name: hyperbeam
-    network_mode: host # note: not recommended for production
+    networks:
+      - hyperbeam-network
     restart: unless-stopped
     mem_limit: 8g
     mem_reservation: 8g
@@ -20,7 +25,8 @@ services:
   cu:
     image: ghcr.io/permaweb/ao-cu:latest
     container_name: cu
-    network_mode: host # note: not recommended for production
+    networks:
+      - hyperbeam-network
     volumes:
       - ${CU_WALLET_FILE:-./wallets/wallet.json}:/usr/app/wallet.json
     ports:
