@@ -38,6 +38,7 @@ static ErlDrvData wasm_driver_start(ErlDrvPort port, char *buff) {
     proc->is_running = erl_drv_mutex_create("wasm_instance_mutex");
     proc->is_initialized = 0;
     proc->start_time = time(NULL);
+    memset(&(proc->registry), 0, sizeof(BindWGPUObjectMappingRegistry));
     return (ErlDrvData)proc;
 }
 
