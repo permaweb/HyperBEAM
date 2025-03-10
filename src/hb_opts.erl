@@ -126,6 +126,7 @@ default_message() ->
         debug_committers => false,
         debug_show_priv => if_present,
 		trusted => #{},
+        preprocessor => #{ <<"device">> => <<"relay@1.0">> },
         routes => [
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
@@ -155,6 +156,20 @@ default_message() ->
                         <<"prefix">> => <<"https://arweave.net">>,
                         <<"opts">> => #{ http_client => gun }
                     }
+            },
+            #{
+              <<"template">> => <<"/.*~process@1.0/.*">>,
+              <<"strategy">> => <<"Nearest">>,
+              <<"nodes">> => [
+                  #{
+                      <<"prefix">> => <<"https://compute-1.forward.computer">>,
+                      <<"wallet">> => <<"Md2SWBtd2ZKaLAxNm5U61jv4t3w0py6kfGJ8zTrGdLg">>
+                   },
+                   #{
+                      <<"prefix">> => <<"https://compute-2.forward.computer">>,
+                      <<"wallet">> => <<"jFd5B3NCyH4kOUnhj36_iGDXhtqwCPCWtdJN5Q0qtBg">>
+                   }
+              ]
             }
         ],
         store =>

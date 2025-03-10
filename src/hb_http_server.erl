@@ -31,6 +31,11 @@ start() ->
                 ?event(boot, {failed_to_load_config, Loc, Reason}),
                 #{}
         end,
+    MergedConfig =
+        maps:merge(
+            hb_opts:default_message(),
+            Loaded
+        ),
     PrivWallet =
         hb:wallet(
             hb_opts:get(
@@ -39,7 +44,7 @@ start() ->
                 Loaded
             )
         ),
-    FormattedConfig = hb_util:debug_fmt(Loaded, 2),
+    FormattedConfig = hb_util:debug_fmt(MergedConfig, 2),
     io:format("~n"
         "===========================================================~n"
         "==    ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗           ==~n"
