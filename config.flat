@@ -1,1 +1,8 @@
 port: 10000
+routes/1/template: /result/.*
+routes/1/node/prefix: http://cu:6363
+routes/2/template = /graphql
+routes/2/nodes/1/prefix = https://arweave-search.goldsky.com
+routes/2/nodes/1/opts/http_client/httpc
+routes/2/nodes/2/prefix = https://arweave.net
+routes/2/nodes/2/opts/http_client = gun
