@@ -6,10 +6,17 @@ compile:
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
 
+WGPU_NATIVE_DET_VERSION = gen-wasm-imports # TODO: Replace with tag
+WGPU_NATIVE_DET_DIR = _build/wgpu-native-det
+
 ifdef HB_DEBUG
 	WAMR_FLAGS = -DWAMR_ENABLE_LOG=1 -DWAMR_BUILD_DUMP_CALL_STACK=1 -DCMAKE_BUILD_TYPE=Debug
+	WGPU_NATIVE_DET_BUILD=debug
+	WGPU_NATIVE_DET_MAKE_COMMAND=lib-native
 else
 	WAMR_FLAGS = -DCMAKE_BUILD_TYPE=Release
+	WGPU_NATIVE_DET_BUILD=release
+	WGPU_NATIVE_DET_MAKE_COMMAND=lib-native-release
 endif
 
 UNAME_S := $(shell uname -s)
@@ -22,20 +29,25 @@ ifeq ($(UNAME_S),Darwin)
     else
         WAMR_BUILD_TARGET = X86_64
     endif
+    SHARED_LIB_EXT = dylib
 else
     WAMR_BUILD_PLATFORM = linux
     WAMR_BUILD_TARGET = X86_64
+    SHARED_LIB_EXT = so
 endif
 
 wamr: $(WAMR_DIR)/lib/libvmlib.a
 
+wgpu-native-det: $(WGPU_NATIVE_DET_DIR)/lib/libwgpu_native.$(SHARED_LIB_EXT)
+
 debug: debug-clean $(WAMR_DIR)
-	HB_DEBUG=1 make $(WAMR_DIR)/lib/libvmlib.a
+	HB_DEBUG=1 make wamr wgpu-native-det
 	CFLAGS="-DHB_DEBUG=1" rebar3 compile
 
 debug-clean:
 	rm -rf priv
-	rm -rf $(WAMR_DIR)
+	rm -rf $(WAMR_DIR)/lib
+	rm -rf $(WGPU_NATIVE_DET_DIR)/target $(WGPU_NATIVE_DET_DIR)/lib
 
 # Clone the WAMR repository at our target release
 $(WAMR_DIR):
@@ -69,6 +81,20 @@ $(WAMR_DIR)/lib/libvmlib.a: $(WAMR_DIR)
         -DWAMR_BUILD_MEMORY_PROFILING=1 \
         -DWAMR_BUILD_DUMP_CALL_STACK=1
 	make -C $(WAMR_DIR)/lib -j8
+
+$(WGPU_NATIVE_DET_DIR):
+	git clone \
+		https://github.com/elliotsayes/wgpu-native.git \
+		$(WGPU_NATIVE_DET_DIR) \
+		-b $(WGPU_NATIVE_DET_VERSION) \
+		--single-branch
+    # Must clone `webgpu-headers` submodule
+	git -C $(WGPU_NATIVE_DET_DIR) submodule update --init --recursive
+
+$(WGPU_NATIVE_DET_DIR)/lib/libwgpu_native.$(SHARED_LIB_EXT): $(WGPU_NATIVE_DET_DIR)
+	make -C $(WGPU_NATIVE_DET_DIR) $(WGPU_NATIVE_DET_MAKE_COMMAND)
+	rm -rf $(WGPU_NATIVE_DET_DIR)/lib && mkdir -p $(WGPU_NATIVE_DET_DIR)/lib
+	cp $(WGPU_NATIVE_DET_DIR)/target/$(WGPU_NATIVE_DET_BUILD)/libwgpu_native.$(SHARED_LIB_EXT) $(WGPU_NATIVE_DET_DIR)/lib
 
 clean:
 	rebar3 clean

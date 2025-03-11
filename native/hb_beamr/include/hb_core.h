@@ -9,6 +9,7 @@
 #include <stdarg.h>
 #include <time.h>
 #include <pthread.h>
+#include "wasm_webgpu_c_api_inc.h"
 
 // Structure to represent the response for an import operation
 typedef struct {
@@ -40,6 +41,7 @@ typedef struct {
     ErlDrvTermData pid;            // PID of the Erlang process
     int is_initialized;            // Flag to check if the process is initialized
     time_t start_time;             // Start time of the process
+    BindWGPUObjectMappingRegistry registry;
 } Proc;
 
 // Structure to represent an import hook
@@ -57,6 +59,8 @@ typedef struct {
     long size;                     // Size of the binary
     Proc* proc;                    // The associated process
     char* mode;                    // Mode of the WASM module
+    int ext_list_len;              // Size of the extension list
+    char** ext_list;               // List of extensions
 } LoadWasmReq;
 
 // NO_PROD: Import these from headers instead

@@ -308,6 +308,53 @@ basic_aos_exec_test() ->
         = jiffy:decode(Output, [return_maps]),
     ?assertEqual(<<"2">>, Data).
 
+webgpu_compute_test() ->
+    Init = generate_wasi_stack("test/webgpu-compute-emscripten.wasm", <<"handle">>, []),
+    Msg = gen_test_aos_msg(""),
+    Env = gen_test_env(),
+    Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
+    {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
+    ?assertNotEqual(0, Ptr1),
+    hb_beamr_io:write(Instance, Ptr1, Msg),
+    {ok, Ptr2} = hb_beamr_io:malloc(Instance, byte_size(Env)),
+    ?assertNotEqual(0, Ptr2),
+    hb_beamr_io:write(Instance, Ptr2, Env),
+    % Read the strings to validate they are correctly passed
+    {ok, MsgBin} = hb_beamr_io:read(Instance, Ptr1, byte_size(Msg)),
+    {ok, EnvBin} = hb_beamr_io:read(Instance, Ptr2, byte_size(Env)),
+    ?assertEqual(Env, EnvBin),
+    ?assertEqual(Msg, MsgBin),
+    Ready = Init#{ <<"wasm-params">> => [Ptr1, Ptr2] },
+    {ok, StateRes} = hb_converge:resolve(Ready, <<"compute">>, #{}),
+    [Ptr] = hb_converge:get(<<"results/wasm/output">>, StateRes),
+    {ok, Output} = hb_beamr_io:read_string(Instance, Ptr),
+    ?assertEqual(<<"times: [2, 4, 6, 200, 400, 600]\n">>, Output).
+
+webgpu_triangle_test() ->
+    Init = generate_wasi_stack("test/webgpu-triangle-bmp-xs.wasm", <<"handle">>, []),
+    Msg = gen_test_aos_msg(""),
+    Env = gen_test_env(),
+    Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
+    {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
+    ?assertNotEqual(0, Ptr1),
+    hb_beamr_io:write(Instance, Ptr1, Msg),
+    {ok, Ptr2} = hb_beamr_io:malloc(Instance, byte_size(Env)),
+    ?assertNotEqual(0, Ptr2),
+    hb_beamr_io:write(Instance, Ptr2, Env),
+    % Read the strings to validate they are correctly passed
+    {ok, MsgBin} = hb_beamr_io:read(Instance, Ptr1, byte_size(Msg)),
+    {ok, EnvBin} = hb_beamr_io:read(Instance, Ptr2, byte_size(Env)),
+    ?assertEqual(Env, EnvBin),
+    ?assertEqual(Msg, MsgBin),
+    Ready = Init#{ <<"wasm-params">> => [Ptr1, Ptr2] },
+    {ok, StateRes} = hb_converge:resolve(Ready, <<"compute">>, #{}),
+    [Ptr] = hb_converge:get(<<"results/wasm/output">>, StateRes),
+    {ok, Output} = hb_beamr_io:read(Instance, Ptr, 307322),
+    % Write `Output` to file
+    {ok, FD} = file:open(<<"test/webgpu-triangle-bmp-xs.out.bmp">>, [write, binary]),
+    ok = file:write(FD, Output),
+    file:close(FD).
+
 %%% Test Helpers
 gen_test_env() ->
     <<"{\"Process\":{\"Id\":\"AOS\",\"Owner\":\"FOOBAR\",\"Tags\":[{\"name\":\"Name\",\"value\":\"Thomas\"}, {\"name\":\"Authority\",\"value\":\"FOOBAR\"}]}}\0">>.
