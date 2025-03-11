@@ -281,24 +281,6 @@ wasm_trap_t *wgpuCreateInstanceImport(void *env, const wasm_val_vec_t *args,
     return NULL;
 }
 
-// Must be implemented: https://github.com/gfx-rs/wgpu-native/issues/412 WGPU_EXPORT void wgpuComputePassEncoderRelease(WGPUComputePassEncoder computePassEncoder) WGPU_FUNCTION_ATTRIBUTE;
-wasm_trap_t *wgpuComputePassEncoderReleaseImport(void *env,
-                                                 const wasm_val_vec_t *args,
-                                                 wasm_val_vec_t *results) {
-    HANDLER_INIT(wgpuComputePassEncoderRelease, 1);
-
-    // Get the compute pass encoder from the argument
-    WGPUComputePassEncoder encoder =
-        (WGPUComputePassEncoder)registry_item_get_mapping(
-            &registry->computePassEncoders,
-            wasm_val_to_native_int(args->data[0]));
-
-    // Call the native function
-    wgpuComputePassEncoderRelease(encoder);
-
-    return NULL;
-}
-
 static const struct {
     const char *name;
     void *func;
@@ -307,9 +289,6 @@ static const struct {
     {.name = "wgpuDevicePoll", .func = wgpuDevicePollImport},
     // WGPU_EXPORT WGPUInstance wgpuCreateInstance(WGPU_NULLABLE WGPUInstanceDescriptor const * descriptor) WGPU_FUNCTION_ATTRIBUTE;
     {.name = "wgpuCreateInstance", .func = wgpuCreateInstanceImport},
-    // WGPU_EXPORT void wgpuComputePassEncoderRelease(WGPUComputePassEncoder computePassEncoder) WGPU_FUNCTION_ATTRIBUTE;
-    {.name = "wgpuComputePassEncoderRelease",
-     .func = wgpuComputePassEncoderReleaseImport},
 };
 
 wasm_trap_t *environ_sizes_get_import(void *env, const wasm_val_vec_t *args,
