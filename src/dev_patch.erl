@@ -45,6 +45,10 @@ compute(Msg1, Msg2, Opts) ->
             Outbox
         ),
     OutboxWithoutPatches = maps:without(maps:keys(Patches), Outbox),
+    % Remove the outbox from the message.
+    Msg1WithoutOutbox = hb_converge:set(Msg1, PatchFrom, should_never_happen, Opts),
+    % Set the new outbox.
+    Msg1WithNewOutbox = hb_converge:set(Msg1WithoutOutbox, PatchFrom, OutboxWithoutPatches, Opts),
     % Find the state to apply the patches to.
     % Apply the patches to the state.
     PatchedSubmessage =
@@ -60,26 +64,18 @@ compute(Msg1, Msg2, Opts) ->
                 Res
             end,
             case PatchTo of
-                not_found -> Msg1;
-                PatchTo -> hb_converge:get(PatchTo, Msg1, Opts)
+                not_found -> Msg1WithNewOutbox;
+                PatchTo -> hb_converge:get(PatchTo, Msg1WithNewOutbox, Opts)
             end,
             Patches
         ),
     PatchedState =
         case PatchTo of
             <<"/">> -> PatchedSubmessage;
-            _ -> hb_converge:set(Msg1, PatchTo, PatchedSubmessage, Opts)
+            _ -> hb_converge:set(Msg1WithNewOutbox, PatchTo, PatchedSubmessage, Opts)
         end,
     % Return the patched message.
-    Res = {
-        ok,
-        hb_converge:set(
-            PatchedState,
-            <<"/results/outbox">>,
-            OutboxWithoutPatches,
-            Opts
-        )
-    },
+    Res = {ok, PatchedState},
     ?event({patch_result, Res}),
     Res.
 

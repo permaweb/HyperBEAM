@@ -335,25 +335,25 @@ attested(Self, Req, Opts) ->
     {ok, OnlyAttestedKeys}.
 
 set(Message1, NewValuesMsg, _Opts) ->
-	% Filter keys that are in the default device (this one).
+    % Filter keys that are in the default device (this one).
     {ok, NewValuesKeys} = keys(NewValuesMsg),
-	KeysToSet =
-		lists:filter(
-			fun(Key) ->
-				not lists:member(Key, ?DEVICE_KEYS) andalso
-					(maps:get(Key, NewValuesMsg, undefined) =/= undefined)
-			end,
-			NewValuesKeys
-		),
-	% Find keys in the message that are already set (case-insensitive), and 
-	% note them for removal.
-	ConflictingKeys =
-		lists:filter(
-			fun(Key) ->
-				lists:member(Key, KeysToSet)
-			end,
-			maps:keys(Message1)
-		),
+    KeysToSet =
+        lists:filter(
+            fun(Key) ->
+                not lists:member(Key, ?DEVICE_KEYS) andalso
+                    (maps:get(Key, NewValuesMsg, undefined) =/= undefined)
+            end,
+            NewValuesKeys
+        ),
+    % Find keys in the message that are already set (case-insensitive), and 
+    % note them for removal.
+    ConflictingKeys =
+        lists:filter(
+            fun(Key) ->
+                lists:member(Key, KeysToSet)
+            end,
+            maps:keys(Message1)
+        ),
     UnsetKeys =
         lists:filter(
             fun(Key) ->
@@ -379,24 +379,23 @@ set(Message1, NewValuesMsg, _Opts) ->
             {original_message, Message1}
         }
     ),
-	{
-		ok,
-		maps:merge(
-			maps:without(ConflictingKeys ++ UnsetKeys ++ WithoutAtts, Message1),
-			maps:from_list(
-				lists:filtermap(
-					fun(Key) ->
-                        case maps:get(Key, NewValuesMsg, undefined) of
-                            undefined -> false;
-                            unset -> false;
-                            Value -> {true, {Key, Value}}
-                        end
-					end,
-					KeysToSet
-				)
-			)
-		)
-	}.
+    % Base message with keys removed
+    BaseValues = maps:without(UnsetKeys ++ WithoutAtts, Message1),
+    % Create the map of new values
+    NewValues = maps:from_list(
+        lists:filtermap(
+            fun(Key) ->
+                case maps:get(Key, NewValuesMsg, undefined) of
+                    undefined -> false;
+                    unset -> false;
+                    Value -> {true, {Key, Value}}
+                end
+            end,
+            KeysToSet
+        )
+    ),
+    % Combine with deep_merge
+    {ok, hb_util:deep_merge(BaseValues, NewValues)}.
 
 %% @doc Special case of `set/3' for setting the `path' key. This cannot be set
 %% using the normal `set' function, as the `path' is a reserved key, necessary 
@@ -467,10 +466,10 @@ keys_from_device_test() ->
     ?assertEqual({ok, [<<"a">>]}, hb_converge:resolve(#{ <<"a">> => 1 }, keys, #{})).
 
 case_insensitive_get_test() ->
-	?assertEqual({ok, 1}, case_insensitive_get(<<"a">>, #{ <<"a">> => 1 })),
-	?assertEqual({ok, 1}, case_insensitive_get(<<"a">>, #{ <<"A">> => 1 })),
-	?assertEqual({ok, 1}, case_insensitive_get(<<"A">>, #{ <<"a">> => 1 })),
-	?assertEqual({ok, 1}, case_insensitive_get(<<"A">>, #{ <<"A">> => 1 })).
+    ?assertEqual({ok, 1}, case_insensitive_get(<<"a">>, #{ <<"a">> => 1 })),
+    ?assertEqual({ok, 1}, case_insensitive_get(<<"a">>, #{ <<"A">> => 1 })),
+    ?assertEqual({ok, 1}, case_insensitive_get(<<"A">>, #{ <<"a">> => 1 })),
+    ?assertEqual({ok, 1}, case_insensitive_get(<<"A">>, #{ <<"A">> => 1 })).
 
 private_keys_are_filtered_test() ->
     ?assertEqual(
@@ -496,16 +495,16 @@ key_from_device_test() ->
     ?assertEqual({ok, 1}, hb_converge:resolve(#{ <<"a">> => 1 }, <<"a">>, #{})).
 
 remove_test() ->
-	Msg = #{ <<"key1">> => <<"Value1">>, <<"key2">> => <<"Value2">> },
-	?assertMatch({ok, #{ <<"key2">> := <<"Value2">> }},
-		hb_converge:resolve(
+    Msg = #{ <<"key1">> => <<"Value1">>, <<"key2">> => <<"Value2">> },
+    ?assertMatch({ok, #{ <<"key2">> := <<"Value2">> }},
+        hb_converge:resolve(
             Msg,
             #{ <<"path">> => <<"remove">>, <<"item">> => <<"key1">> },
             #{ hashpath => ignore }
         )
     ),
-	?assertMatch({ok, #{}},
-		hb_converge:resolve(
+    ?assertMatch({ok, #{}},
+        hb_converge:resolve(
             Msg,
             #{ <<"path">> => <<"remove">>, <<"items">> => [<<"key1">>, <<"key2">>] },
             #{ hashpath => ignore }
@@ -513,22 +512,22 @@ remove_test() ->
     ).
 
 set_conflicting_keys_test() ->
-	Msg1 = #{ <<"dangerous">> => <<"Value1">> },
-	Msg2 = #{ <<"path">> => <<"set">>, <<"dangerous">> => <<"Value2">> },
-	?assertMatch({ok, #{ <<"dangerous">> := <<"Value2">> }},
-		hb_converge:resolve(Msg1, Msg2, #{})).
+    Msg1 = #{ <<"dangerous">> => <<"Value1">> },
+    Msg2 = #{ <<"path">> => <<"set">>, <<"dangerous">> => <<"Value2">> },
+    ?assertMatch({ok, #{ <<"dangerous">> := <<"Value2">> }},
+        hb_converge:resolve(Msg1, Msg2, #{})).
 
 unset_with_set_test() ->
-	Msg1 = #{ <<"dangerous">> => <<"Value1">> },
-	Msg2 = #{ <<"path">> => <<"set">>, <<"dangerous">> => unset },
-	?assertMatch({ok, Msg3} when map_size(Msg3) == 0,
-		hb_converge:resolve(Msg1, Msg2, #{ hashpath => ignore })).
+    Msg1 = #{ <<"dangerous">> => <<"Value1">> },
+    Msg2 = #{ <<"path">> => <<"set">>, <<"dangerous">> => unset },
+    ?assertMatch({ok, Msg3} when map_size(Msg3) == 0,
+        hb_converge:resolve(Msg1, Msg2, #{ hashpath => ignore })).
 
 set_ignore_undefined_test() ->
-	Msg1 = #{ <<"test-key">> => <<"Value1">> },
-	Msg2 = #{ <<"path">> => <<"set">>, <<"test-key">> => undefined },
-	?assertEqual({ok, #{ <<"test-key">> => <<"Value1">> }},
-		set(Msg1, Msg2, #{ hashpath => ignore })).
+    Msg1 = #{ <<"test-key">> => <<"Value1">> },
+    Msg2 = #{ <<"path">> => <<"set">>, <<"test-key">> => undefined },
+    ?assertEqual({ok, #{ <<"test-key">> => <<"Value1">> }},
+        set(Msg1, Msg2, #{ hashpath => ignore })).
 
 verify_test() ->
     Unsigned = #{ <<"a">> => <<"b">> },
