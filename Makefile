@@ -6,7 +6,7 @@ compile:
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
 
-WGPU_NATIVE_DET_VERSION = example_wasm_working # TODO: Replace with tag
+WGPU_NATIVE_DET_VERSION = gen-wasm-imports # TODO: Replace with tag
 WGPU_NATIVE_DET_DIR = _build/wgpu-native-det
 
 ifdef HB_DEBUG
@@ -58,7 +58,6 @@ $(WAMR_DIR):
 		--single-branch
 
 $(WAMR_DIR)/lib/libvmlib.a: $(WAMR_DIR)
-	git -C $(WAMR_DIR) apply ../../patch/wamr-defer-post-instantiate-functions.patch; \
 	sed -i '742a tbl_inst->is_table64 = 1;' ./_build/wamr/core/iwasm/aot/aot_runtime.c; \
 	cmake \
 		$(WAMR_FLAGS) \

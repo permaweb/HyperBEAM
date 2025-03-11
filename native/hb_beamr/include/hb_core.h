@@ -9,6 +9,7 @@
 #include <stdarg.h>
 #include <time.h>
 #include <pthread.h>
+#include "wasm_webgpu_c_api_inc.h"
 
 // Structure to represent the response for an import operation
 typedef struct {
@@ -40,6 +41,7 @@ typedef struct {
     ErlDrvTermData pid;            // PID of the Erlang process
     int is_initialized;            // Flag to check if the process is initialized
     time_t start_time;             // Start time of the process
+    BindWGPUObjectMappingRegistry registry;
 } Proc;
 
 // Structure to represent an import hook
