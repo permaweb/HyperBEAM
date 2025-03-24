@@ -12,14 +12,15 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     ImportHook* import_hook = (ImportHook*)env;
     Proc* proc = import_hook->proc;
 
-    // Check if the field name is "invoke"; if not, exit early
-    if (strncmp(import_hook->field_name, "invoke", 6) == 0) {
+    DRV_DEBUG("Proc: %p. Args size: %d", proc, args->size);
+    DRV_DEBUG("Import name: %s.%s [%s]", import_hook->module_name, import_hook->field_name, import_hook->signature);
+
+    // Check if the import name matches "env.invoke_*", if so, call that instead
+    if (strcmp(import_hook->module_name, "env") == 0 && strncmp(import_hook->field_name, "invoke_", 7) == 0) {
+		DRV_DEBUG("Import is indirect function: %s", import_hook->field_name);
         wasm_execute_indirect_function(proc, import_hook->field_name, args, results); 
         return NULL;
     }
-
-    DRV_DEBUG("Proc: %p. Args size: %d", proc, args->size);
-    DRV_DEBUG("Import name: %s.%s [%s]", import_hook->module_name, import_hook->field_name, import_hook->signature);
 
     // Initialize the message object
     ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * ((2+(2*3)) + ((args->size + 1) * 2) + ((results->size + 1) * 2) + 2));
@@ -101,6 +102,162 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     return NULL;
 }
 
+/**
+ * Safely copy a flat struct from a WASM instance's linear memory into native
+ * memory.
+ *
+ * \param memory    Pointer to the WASM memory (obtained from wasm_instance).
+ * \param offset    Offset (index) within WASM memory where the struct starts
+ * (i.e., the struct pointer as i32 from WASM).
+ * \param out_struct Pointer to a native struct where data will be copied.
+ * \param struct_size Size (in bytes) of the struct to copy.
+ * \param align     Required alignment of the struct (in bytes, e.g., 4 for
+ * 32-bit alignment). Use 1 if no specific alignment needed.
+ * \return 0 on success, 1 on failure (with an error reported via
+ * WASM_MEMORY_ERROR macro).
+ *
+ * This function performs bounds checking to ensure the entire struct lies
+ * within the WASM memory, and also checks alignment if `align` > 1. It uses
+ * `wasm_memory_data` to get a direct pointer to the WASM memory buffer and then
+ * copies `struct_size` bytes into the native struct.
+ */
+int wasm_copy_struct_safe(wasm_memory_t *memory, uint32_t offset,
+						  void *out_struct, size_t struct_size, size_t align)
+{
+	assert(memory != NULL);
+	assert(out_struct != NULL);
+
+	// Get the start of the memory and its size.
+	byte_t *mem_base = wasm_memory_data(memory);
+	size_t mem_size = wasm_memory_data_size(memory);
+
+	// Bounds checking: ensure [offset, offset+struct_size) is within memory.
+	// Also protect against overflow in pointer arithmetic.
+	if (offset > mem_size || struct_size > mem_size ||
+		offset > mem_size - struct_size)
+	{
+		DRV_DEBUG("Attempt to read struct out of WASM memory bounds");
+		return 1;
+	}
+
+	// Alignment check (if required).
+	// If the struct in WASM memory is expected to be aligned (e.g., naturally
+	// aligned), verify the offset meets the alignment requirement. This can
+	// catch misaligned pointers.
+	if (align > 1 && (offset % align) != 0)
+	{
+		return 1;
+	}
+
+	// Copy bytes from WASM memory into the native struct.
+	memcpy(out_struct, mem_base + offset, struct_size);
+	return 0;
+}
+
+char *wasm_copy_string_len_safe(wasm_memory_t *memory, uint32_t str_ptr,
+								size_t str_len)
+{
+	if (str_ptr == 0)
+		return NULL;
+
+	byte_t *mem_base = wasm_memory_data(memory);
+	size_t mem_size = wasm_memory_data_size(memory);
+
+	// Bounds check the initial pointer
+	if (str_ptr >= mem_size)
+	{
+		DRV_DEBUG("String pointer out of bounds");
+		return NULL;
+	}
+
+	if (str_len > mem_size - str_ptr)
+	{
+		DRV_DEBUG("String length out of bounds");
+		return NULL;
+	}
+
+	// Get string length safely
+	const char *wasm_str = (const char *)(mem_base + str_ptr);
+
+	// Allocate and copy
+	char *native_str = malloc(str_len + 1);
+	if (!native_str)
+	{
+		DRV_DEBUG("Failed to allocate memory for string");
+		return NULL;
+	}
+
+	memcpy(native_str, wasm_str, str_len);
+	native_str[str_len] = '\0';
+	return native_str;
+}
+
+typedef struct
+{
+	int32_t buf_ptr;
+	int32_t buf_len;
+} WASMIOVec;
+
+wasm_trap_t *fd_write_import(void *env, const wasm_val_vec_t *args,
+							 wasm_val_vec_t *results)
+{
+	DRV_DEBUG("fd_write_import called");
+	ImportHook *import_hook = (ImportHook *)env;
+	Proc *proc = import_hook->proc;
+	wasm_store_t *store = proc->store;
+	wasm_memory_t *wasm_memory = get_memory(proc);
+	byte_t *wasm_base_ptr = wasm_memory_data(wasm_memory);
+	int args_expected = 4;
+	if (args->size != args_expected)
+	{
+		DRV_DEBUG("Incorrect number of arguments: expected %d, got %d", args_expected, (int)args->size);
+		const char *errMsg = "fdwrite: Not enough arguments provided";
+		wasm_byte_vec_t message;
+		wasm_byte_vec_new(&message, strlen(errMsg), errMsg);
+		return wasm_trap_new(proc->store, &message);
+	}
+
+	// extract parameters
+	int32_t fd = args->data[0].of.i32;
+	int32_t iovs = args->data[1].of.i32;
+	int32_t iovs_len = args->data[2].of.i32;
+	int32_t pnum = args->data[3].of.i32;
+
+	DRV_DEBUG("fd=%d, iovs=%p, iovs_len=%d, pnum=%p", fd, iovs, iovs_len, pnum);
+
+	int32_t written = 0;
+	for (int i = 0; i < iovs_len; i++)
+	{
+		int32_t offset = sizeof(WASMIOVec) * i;
+
+		WASMIOVec iovec;
+		memset(&iovec, 0, sizeof(WASMIOVec));
+		if (wasm_copy_struct_safe(wasm_memory, iovs + offset, &iovec,
+								  sizeof(WASMIOVec), 4))
+		{
+			DRV_DEBUG("fd_write_import: failed to copy iov");
+			return NULL;
+		}
+		// DRV_DEBUG("fd_write_import: iovec1.buf_ptr=%p, iovec1.buf_len=%d", iovec.buf_ptr, iovec.buf_len);
+
+		char *str = wasm_copy_string_len_safe(wasm_memory, iovec.buf_ptr,
+											  iovec.buf_len);
+		DRV_DEBUG("fd_write[%d]: %s", fd, str);
+
+		written += iovec.buf_len;
+	}
+
+	// TODO, safely :)
+	// DRV_DEBUG("fd_write_import: written=%d", written);
+	memcpy(wasm_memory_data(wasm_memory) + pnum, (void *)&written, 4);
+
+	// set error output as 0 (success)
+	results->data[0].kind = WASM_I32;
+	results->data[0].of.i32 = 0;
+
+	return NULL;
+}
+
 void wasm_initialize_runtime(void* raw) {
     DRV_DEBUG("Initializing WASM module");
     LoadWasmReq* mod_bin = (LoadWasmReq*)raw;
@@ -180,8 +337,10 @@ void wasm_initialize_runtime(void* raw) {
         // TODO: What happpens here?
         if(!get_function_sig(type, type_str)) {
             // TODO: Handle other types of imports?
+            DRV_DEBUG("Failed to get function signature for %s.%s", module_name->data, name->data);
             continue;
         }
+
         // 13 items in the each import message
         init_msg[msg_i++] = ERL_DRV_ATOM;
         init_msg[msg_i++] = driver_mk_atom((char*)wasm_externtype_to_kind_string(type));
@@ -204,11 +363,18 @@ void wasm_initialize_runtime(void* raw) {
         hook->proc = proc;
         hook->signature = type_str;
 
+        wasm_func_callback_with_env_t callback = wasm_handle_import;
+
+		if (strcmp(module_name->data, "wasi_snapshot_preview1") == 0 && strcmp(name->data, "fd_write") == 0) {
+			DRV_DEBUG("*** Overriding fd_write_import callback **");
+			callback = fd_write_import;
+		}
+
         hook->stub_func =
             wasm_func_new_with_env(
                 proc->store,
                 wasm_externtype_as_functype_const(type),
-                wasm_handle_import,
+                callback,
                 hook,
                 NULL
             );
@@ -290,7 +456,7 @@ void wasm_initialize_runtime(void* raw) {
 
 void wasm_execute_function(void* raw) {
     Proc* proc = (Proc*)raw;
-    DRV_DEBUG("Calling function: %s", proc->current_function);
+    DRV_DEBUG("Execute function: %s", proc->current_function);
     drv_lock(proc->is_running);
     char* function_name = proc->current_function;
 
@@ -317,7 +483,7 @@ void wasm_execute_function(void* raw) {
     int res = erl_terms_to_wasm_vals(&args, proc->current_args);
 
     for(int i = 0; i < args.size; i++) {
-        DRV_DEBUG("Arg %d: %d", i, args.data[i].of.i64);
+        DRV_DEBUG("Arg %d: %d", i, args.data[i].of.i32);
         DRV_DEBUG("Source term: %d", proc->current_args[i].value.i_val);
     }
 
@@ -337,8 +503,9 @@ void wasm_execute_function(void* raw) {
 
     // Call the function
     DRV_DEBUG("Calling function: %s", function_name);
+
+    DRV_DEBUG("wasm_func_call(%p, %p, %p)", func, &args, &results);
     wasm_trap_t* trap = wasm_func_call(func, &args, &results);
-    
 
     if (trap) {
         wasm_message_t trap_msg;
@@ -348,7 +515,7 @@ void wasm_execute_function(void* raw) {
         // int32_t func_offset = wasm_frame_func_offset(origin);
         // char* func_name;
 
-        // DRV_DEBUG("WASM Exception: [func_index: %d, func_offset: %d] %.*s", func_index, func_offset, trap_msg.size, trap_msg.data);
+        DRV_DEBUG("WASM Exception: %.*s", trap_msg.size, trap_msg.data);
         send_error(proc, "%.*s", trap_msg.size, trap_msg.data);
         drv_unlock(proc->is_running);
         return;
@@ -403,10 +570,8 @@ void wasm_execute_function(void* raw) {
 }
 
 int wasm_execute_indirect_function(Proc* proc, const char *field_name, const wasm_val_vec_t* input_args, wasm_val_vec_t* output_results) {
-
-
     DRV_DEBUG("=================================================");
-    DRV_DEBUG("Starting function invocation");
+    DRV_DEBUG("Starting indirect function invocation");
     DRV_DEBUG("=================================================");
 
     wasm_table_t* indirect_function_table = proc->indirect_func_table;
@@ -415,7 +580,7 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     int result = 0;
     DRV_DEBUG("Function name: %s", field_name);
 
-// Extract the function index from the input arguments
+	// Extract the function index from the input arguments
     int function_index = input_args->data[0].of.i32;  
     DRV_DEBUG("Function index retrieved from input_args: %d", function_index);
 
@@ -432,6 +597,13 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
 
     // Log the function's parameter types
     const wasm_valtype_vec_t* param_types = wasm_functype_params(function_type);
+
+    // print all properties of `param_types`
+    DRV_DEBUG("Param types: %p", param_types);
+    DRV_DEBUG("Param types size: %zu", param_types->size);
+    DRV_DEBUG("Param types num_elems: %zu", param_types->num_elems);
+    DRV_DEBUG("Param types data: %p", param_types->data);
+
     DRV_DEBUG("Function at index %d has %zu parameters", function_index, param_types->size);
     for (size_t j = 0; j < param_types->size; ++j) {
         const wasm_valtype_t* param_type = param_types->data[j];
@@ -451,11 +623,13 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
 
     // Prepare the arguments for the function call
     wasm_val_vec_t prepared_args;
-        // If there are no arguments or only one argument (function index), no preparation is needed
+	// If there are no arguments or only one argument (function index), no preparation is needed
     if (input_args->size <= 1) {
-        DRV_DEBUG("Not enough arguments to create new wasm_val_vec_t");
-        return 0;
-    }
+        // DRV_DEBUG("Not enough arguments to create new wasm_val_vec_t");
+        // return 0;
+    } else {
+		DRV_DEBUG("Preparing %zu arguments for function call", input_args->size - 1);
+	}
 
     // Allocate memory for the prepared arguments
     wasm_val_t* prepared_data = malloc(sizeof(wasm_val_t) * (input_args->size - 1));
@@ -469,114 +643,146 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     wasm_val_vec_new(&prepared_args, input_args->size - 1, prepared_data);
     DRV_DEBUG("Prepared %zu arguments for function call", prepared_args.size);
 
-    uint64_t argc = prepared_args.size;
-    uint64_t* argv = malloc(sizeof(uint64_t) * argc);
+    uint32_t argc = prepared_args.size;
+    uint32_t* argv = malloc(sizeof(uint32_t) * argc);
     
-    // Convert prepared arguments to an array of 64-bit integers
-    for (uint64_t i = 0; i < argc; ++i) {
-        argv[i] = prepared_args.data[i].of.i64;
+    // Convert prepared arguments to an array of 32-bit integers
+    for (uint32_t i = 0; i < argc; ++i) {
+        DRV_DEBUG("Arg %d: %d", i, prepared_args.data[i].of.i32);
+        argv[i] = prepared_args.data[i].of.i32;
     }
 
-
     /* ---------------- STACK SAVE -----------------*/
 
-    // const char* stack_save_name = "emscripten_stack_get_current";
-    // wasm_val_t *stack_save_params = NULL;
-    // wasm_val_t stack_save_results[1];
-    // if (call_exported_function_runtime(proc, stack_save_name, stack_save_params, stack_save_results) != 0) {
-    //     DRV_DEBUG("Failed to call stack save function");
-    // }
+    const char* stack_save_name = "emscripten_stack_get_current";
+
+    wasm_val_vec_t stack_save_args;
+    wasm_val_vec_new_uninitialized(&stack_save_args, 0);
+
+    wasm_val_vec_t stack_save_results;
+    wasm_val_vec_new_uninitialized(&stack_save_results, 1);
+
+    if (wasm_execute_exported_function(proc, stack_save_name, &stack_save_args, &stack_save_results) != 0) {
+        DRV_DEBUG("Failed to call stack save function");
+    }
+    wasm_val_t *stack_ptr = &stack_save_results.data[0];
+
+    DRV_DEBUG("Indirect function (%s) stack saved at pointer: %#x", field_name, stack_ptr->of.i32);
 
     /* ---------------- STACK SAVE -----------------*/
+    
+    DRV_DEBUG("wasm_func_call(%p, %p, %p)", func, &prepared_args, output_results);
+    wasm_trap_t* trap = wasm_func_call(func, &prepared_args, output_results);
+    if (trap) {
 
-    // Attempt to call the function and check for any exceptions
-    if (!wasm_runtime_call_indirect(proc->exec_env, function_index, argc, argv)) {
-        if (wasm_runtime_get_exception(proc->exec_env)) {
-            DRV_DEBUG("%s", wasm_runtime_get_exception(proc->exec_env));
+    // // Attempt to call the function and check for any exceptions
+	// DRV_DEBUG("wasm_runtime_call_indirect (%s) (%d, %d)", field_name, function_index, argc);
+    // if (!wasm_runtime_call_indirect(proc->exec_env, function_index, argc, argv)) {
+
+		const char* exception = wasm_runtime_get_exception(func->inst_comm_rt);
+        if (exception) {
+            DRV_DEBUG("wasm_runtime_call_indirect (%s) gave exception: %s", field_name, exception);
+        } else {
+			DRV_DEBUG("wasm_runtime_call_indirect (%s) non-zero return, but no exception", field_name);
+		}
+
+        /* ---------------- STACK RESTORE -----------------*/
+
+        const char* stack_restore_name = "_emscripten_stack_restore";
+
+        wasm_val_vec_t stack_restore_args;
+        wasm_val_vec_new(&stack_restore_args, 1, stack_ptr);
+
+        wasm_val_vec_t stack_restore_results;
+        wasm_val_vec_new_uninitialized(&stack_restore_results, 0);
+
+        if (wasm_execute_exported_function(proc, stack_restore_name, &stack_restore_args, &stack_restore_results) != 0) {
+            DRV_DEBUG("Failed to call stack restore function");
         }
-        DRV_DEBUG("WASM function call failed");
-        result = -1;
+
+        DRV_DEBUG("Indirect function (%s) stack restored to pointer: %#x", field_name, stack_ptr->of.i32);
+
+        /* ---------------- STACK RESTORE -----------------*/
+
+        // /* ---------------- setThrew -----------------*/
+
+        // const char* set_threw_name = "setThrew";
+
+        // wasm_val_t set_threw_args_data[2];
+        // set_threw_args_data[0].kind = WASM_I32;
+        // set_threw_args_data[0].of.i32 = 1;
+        // set_threw_args_data[1].kind = WASM_I32;
+        // set_threw_args_data[1].of.i32 = 0;
+
+        // wasm_val_vec_t set_threw_args;
+        // wasm_val_vec_new(&set_threw_args, 2, set_threw_args_data);
+
+        // wasm_val_vec_t set_threw_results;
+        // wasm_val_vec_new_uninitialized(&set_threw_results, 0);
+
+        // if (wasm_execute_exported_function(proc, set_threw_name, &set_threw_args, &set_threw_results) != 0) {
+        //     DRV_DEBUG("Failed to call setThrew function");
+        // }
+
+        // /* ---------------- setThrew -----------------*/
+
+		result = -1;
     }
-
-    if(result != 0) {
-
     
+    if(result == 0) {
+    	DRV_DEBUG("Indirect function call completed successfully (%s)", field_name);
 
-    }
-
+        // // argv[0] contains the result
+        // DRV_DEBUG("Indirect function call result type size: %zu", result_types->size);
+        // if (result_types->size > 0) {
+        //     DRV_DEBUG("Setting output_results from argv[0]: %d", argv[0]);
+        //     // wasm_val_t* result_data = malloc(sizeof(wasm_val_t));
+        //     output_results->num_elems = 1;
+        //     output_results->size = 1;
+        //     output_results->data[0].kind = WASM_I32;
+        //     output_results->data[0].of.i32 = argv[0];
+        // } else {
+        //     DRV_DEBUG("Setting output_results empty");
+        //     wasm_val_vec_new(&output_results, 0, NULL);
+        // }
+    } else {
+		DRV_DEBUG("Indirect function call failed (%s)", field_name);
+	}
 
     // Free allocated memory
     free(argv);
     free(prepared_args.data);
-    DRV_DEBUG("Function call completed successfully");
     return result;
 }
 
-int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_val_t* params, wasm_val_t * results) {
+int wasm_execute_exported_function(Proc* proc, const char *function_name, const wasm_val_vec_t* input_args, wasm_val_vec_t* output_results) {
     DRV_DEBUG("=== Calling Runtime Export Function ===");
     DRV_DEBUG("=   Function name: %s", function_name);
 
-
-    // Get exported wasm_func_t pointer by function name
+    // Find the function in the exports
     wasm_func_t* func = get_exported_function(proc, function_name);
-    if(!func) {
-        DRV_DEBUG("=   Failed to get exported function");
+    if (!func) {
+        send_error(proc, "Function not found: %s", function_name);
+        drv_unlock(proc->is_running);
         return -1;
     }
-
-    // Get the function type
-    const wasm_functype_t* function_type = wasm_func_type(func);
-    if (!function_type) {
-        DRV_DEBUG("=   Failed to get function type");
-        return -1;
-    }
-
-    // Get the function's parameter types and set the argument types for args
-    const wasm_valtype_vec_t* param_types = wasm_functype_params(function_type);
-    if(!param_types) {
-        DRV_DEBUG("=   Failed to get function parameters");
-        return -1;
-    }
-
-    DRV_DEBUG("=   Function has %zu parameters", param_types->size);
-    for (size_t j = 0; j < param_types->size; ++j) {
-        const wasm_valtype_t* param_type = param_types->data[j];
-        wasm_valkind_t param_kind = wasm_valtype_kind(param_type);
-        params[j].kind = param_kind;
-        DRV_DEBUG("=      Param %zu: %s, %i", j, get_wasm_type_name(param_kind), params[j].of.i64);
-    }
-
-    
-    // Get the function's result types and set the result types for results
-    const wasm_valtype_vec_t* result_types = wasm_functype_results(function_type);
-    if (!result_types) {
-        DRV_DEBUG("=   Failed to get function results");
-        return -1;
-    }
-    DRV_DEBUG("=   Function has %zu results", result_types->size);
-
-    for (size_t k = 0; k < result_types->size; ++k) {
-        const wasm_valtype_t* result_type = result_types->data[k];
-        wasm_valkind_t result_kind = wasm_valtype_kind(result_type);
-        results[k].kind = result_kind;
-        results[k].of.i64 = 0;  // Initialize result value
-        DRV_DEBUG("=      Result %zu: %s, %i", k, get_wasm_type_name(result_kind), results[k].of.i64);
-    }
-
+    DRV_DEBUG("=   Func: %p (%s)", func, func->type);
 
     // Call the exported function
-    if (wasm_runtime_call_wasm_a(proc->exec_env, func->func_comm_rt, result_types->size, results, param_types->size, params)) {
-        DRV_DEBUG("=   Function call successful");
-    } else {
-        const char* exception = wasm_runtime_get_exception(proc->exec_env);
-        DRV_DEBUG("=   Function call failed: %s", exception);
+	DRV_DEBUG("=   Calling function: %s", function_name);
+
+	DRV_DEBUG("=   wasm_func_call(%p, %p, %p)", func, input_args, output_results);
+    wasm_trap_t* trap = wasm_func_call(func, input_args, output_results);
+
+    if (trap) {
+        wasm_message_t trap_msg;
+        wasm_trap_message(trap, &trap_msg);
+        DRV_DEBUG("=   %s export function call gave WASM exception: %.*s", function_name, trap_msg.size, trap_msg.data);
+
         return -1;
     }
 
-    // Retrieve the stack pointer result (as i64)
-    int64_t stack_pointer = results[0].of.i64;  // Assuming the result is i64
-    DRV_DEBUG("Stack pointer: %lld", stack_pointer);
+    DRV_DEBUG("=   %s export function call successful", function_name);
 
     return 0;
 }
-

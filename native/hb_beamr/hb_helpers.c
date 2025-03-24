@@ -179,10 +179,15 @@ wasm_func_t* get_exported_function(Proc* proc, const char* target_name) {
             const wasm_name_t* exp_name = wasm_exporttype_name(export_types.data[i]);
             if (exp_name && exp_name->size == strlen(target_name) + 1 && 
                 strncmp(exp_name->data, target_name, exp_name->size - 1) == 0) {
+				// DRV_DEBUG("Found exported function (%s) at index %d", target_name, i);
                 func = wasm_extern_as_func(ext);
                 break;
             }
         }
+    }
+
+	if (!func) {
+		DRV_DEBUG("Failed to find exported function: %s", target_name);
     }
 
     return func;
