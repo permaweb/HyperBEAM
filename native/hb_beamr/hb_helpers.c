@@ -179,10 +179,15 @@ wasm_func_t* get_exported_function(Proc* proc, const char* target_name) {
             const wasm_name_t* exp_name = wasm_exporttype_name(export_types.data[i]);
             if (exp_name && exp_name->size == strlen(target_name) + 1 && 
                 strncmp(exp_name->data, target_name, exp_name->size - 1) == 0) {
+				// DRV_DEBUG("Found exported function (%s) at index %d", target_name, i);
                 func = wasm_extern_as_func(ext);
                 break;
             }
         }
+    }
+
+	if (!func) {
+		DRV_DEBUG("Failed to find exported function: %s", target_name);
     }
 
     return func;
@@ -202,4 +207,49 @@ wasm_memory_t* get_memory(Proc* proc) {
 long get_memory_size(Proc* proc) {
     wasm_memory_t* memory = get_memory(proc);
     return wasm_memory_size(memory) * 65536;
+}
+
+int stack_entry_push(Proc* proc, wasm_val_t* val) {
+    if (proc->current_stack_count >= HB_WASM_STACK_SIZE) {
+        DRV_DEBUG("Stack pointer limit reached");
+        return -1;
+    }
+    size_t index = proc->current_stack_count;
+    proc->current_stack[index].ptr = val;
+    proc->current_stack[index].exception = NULL;
+    proc->current_stack_count++;
+    return index;
+}
+
+StackEntry* stack_entry_pop(Proc* proc) {
+    if (proc->current_stack_count == 0) {
+        DRV_DEBUG("No stack entries to pop");
+        return NULL;
+    }
+    proc->current_stack_count--;
+    
+    // Copy memory to allow overwriting later
+    StackEntry* res = malloc(sizeof(StackEntry));
+    memcpy(res, &proc->current_stack[proc->current_stack_count], sizeof(StackEntry));
+    
+    // memset(&proc->current_stack[proc->current_stack_count], 0, sizeof(StackEntry));
+
+    return res;
+}
+
+StackEntry* stack_entry_peek(Proc* proc) {
+    if (proc->current_stack_count == 0) {
+        DRV_DEBUG("No stack entries to peek");
+        return NULL;
+    }
+    return &proc->current_stack[proc->current_stack_count - 1];
+}
+
+bool stack_entry_set_exception_tip(Proc* proc, char* exception) {
+    if (proc->current_stack_count == 0) {
+        DRV_DEBUG("No stack entries to set exception");
+        return false;
+    }
+    proc->current_stack[proc->current_stack_count - 1].exception = exception;
+    return true;
 }

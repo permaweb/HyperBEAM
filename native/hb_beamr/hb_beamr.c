@@ -31,6 +31,7 @@ static ErlDrvData wasm_driver_start(ErlDrvPort port, char *buff) {
     DRV_DEBUG("info.erts_version: %s", info.erts_version);
     DRV_DEBUG("info.otp_release: %s", info.otp_release);
     Proc* proc = driver_alloc(sizeof(Proc));
+    memset(proc, 0, sizeof(Proc));
     proc->port = port;
     DRV_DEBUG("Port: %p", proc->port);
     proc->port_term = driver_mk_port(proc->port);
