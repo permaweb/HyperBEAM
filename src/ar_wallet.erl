@@ -15,7 +15,10 @@ new() ->
 new(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} ->
     {[_, Pub], [_, Pub, Priv|_]} = {[_, Pub], [_, Pub, Priv|_]}
         = crypto:generate_key(KeyAlg, {4096, PublicExpnt}),
-    {{KeyType, Priv, Pub}, {KeyType, Pub}}.
+    {{KeyType, Priv, Pub}, {KeyType, Pub}};
+
+new({eddsa, ed25519}) ->
+	crypto:generate_key(eddsa, ed25519).
 
 %% @doc Sign some data with a private key.
 sign(Key, Data) ->
