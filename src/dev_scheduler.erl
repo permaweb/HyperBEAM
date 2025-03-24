@@ -378,10 +378,8 @@ find_server(ProcID, Msg1, ToSched, Opts) ->
                                                     {ok, P} -> P;
                                                     not_found ->
                                                         throw({process_not_available, ProcID})
-                                                end;
-                                            _ -> throw({process_not_available, ProcID})
-                                        end;
-                                    _ -> throw({process_not_available, ProcID})
+                                                end
+                                        end
                                 end;
                             P -> P
                         end,
