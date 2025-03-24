@@ -20,6 +20,13 @@ typedef struct {
     int result_length;              // Length of the result_terms
 } ImportResponse;
 
+typedef struct {
+    wasm_val_t* ptr;
+    char* exception;
+} StackEntry;
+
+#define HB_WASM_STACK_SIZE 256
+
 // Structure to represent a WASM process instance
 typedef struct {
     wasm_engine_t* engine;          // WASM engine instance
@@ -37,6 +44,9 @@ typedef struct {
     ei_term* current_args;         // Arguments for the current function
     int current_args_length;       // Length of the current arguments
     ImportResponse* current_import; // Import response structure
+    StackEntry current_stack[HB_WASM_STACK_SIZE]; // Stack pointers
+    size_t current_stack_count;    // Number of stack pointers
+    uint32_t exception_ptr_last;   // Exception pointer of the last exception
     ErlDrvTermData pid;            // PID of the Erlang process
     int is_initialized;            // Flag to check if the process is initialized
     time_t start_time;             // Start time of the process

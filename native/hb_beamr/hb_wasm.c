@@ -211,7 +211,7 @@ wasm_trap_t *fd_write_import(void *env, const wasm_val_vec_t *args,
 	if (args->size != args_expected)
 	{
 		DRV_DEBUG("Incorrect number of arguments: expected %d, got %d", args_expected, (int)args->size);
-		const char *errMsg = "fdwrite: Not enough arguments provided";
+		const char *errMsg = "fd_write: Incorrect number of arguments provided";
 		wasm_byte_vec_t message;
 		wasm_byte_vec_new(&message, strlen(errMsg), errMsg);
 		return wasm_trap_new(proc->store, &message);
@@ -256,6 +256,439 @@ wasm_trap_t *fd_write_import(void *env, const wasm_val_vec_t *args,
 	results->data[0].of.i32 = 0;
 
 	return NULL;
+}
+
+void do_set_threw(Proc* proc, int32_t arg0, int32_t arg1) {
+    DRV_DEBUG("do_set_threw called with values: %d, %d", arg0, arg1);
+
+    wasm_val_vec_t args;
+    wasm_val_vec_new_uninitialized(&args, 2);
+    args.num_elems = 2;
+    args.data[0].kind = WASM_I32;
+    args.data[0].of.i32 = arg0;
+    args.data[1].kind = WASM_I32;
+    args.data[1].of.i32 = arg1;
+
+    wasm_val_vec_t results;
+    wasm_val_vec_new_uninitialized(&results, 0);
+
+    int ret = wasm_execute_exported_function(proc, "setThrew", &args, &results);
+    if (ret != 0) {
+        DRV_DEBUG("Failed to call setThrew");
+        return;
+    }
+
+    DRV_DEBUG("Successfully called setThrew");
+}
+
+// emscripten JS:
+
+// class ExceptionInfo {
+//  constructor(excPtr) {
+//   this.excPtr = excPtr;
+//   this.ptr = excPtr - 24;
+//  }
+//  set_type(type) {
+//   HEAPU32[(((this.ptr) + (4)) >> 2)] = type;
+//  }
+//  get_type() {
+//   return HEAPU32[(((this.ptr) + (4)) >> 2)];
+//  }
+//  set_destructor(destructor) {
+//   HEAPU32[(((this.ptr) + (8)) >> 2)] = destructor;
+//  }
+//  get_destructor() {
+//   return HEAPU32[(((this.ptr) + (8)) >> 2)];
+//  }
+//  set_caught(caught) {
+//   caught = caught ? 1 : 0;
+//   HEAP8[(this.ptr) + (12)] = caught;
+//  }
+//  get_caught() {
+//   return HEAP8[(this.ptr) + (12)] != 0;
+//  }
+//  set_rethrown(rethrown) {
+//   rethrown = rethrown ? 1 : 0;
+//   HEAP8[(this.ptr) + (13)] = rethrown;
+//  }
+//  get_rethrown() {
+//   return HEAP8[(this.ptr) + (13)] != 0;
+//  }
+//  init(type, destructor) {
+//   this.set_adjusted_ptr(0);
+//   this.set_type(type);
+//   this.set_destructor(destructor);
+//  }
+//  set_adjusted_ptr(adjustedPtr) {
+//   HEAPU32[(((this.ptr) + (16)) >> 2)] = adjustedPtr;
+//  }
+//  get_adjusted_ptr() {
+//   return HEAPU32[(((this.ptr) + (16)) >> 2)];
+//  }
+//  get_exception_ptr() {
+//   var isPointer = ___cxa_is_pointer_type(this.get_type());
+//   if (isPointer) {
+//    return HEAPU32[((this.excPtr) >> 2)];
+//   }
+//   var adjusted = this.get_adjusted_ptr();
+//   if (adjusted !== 0) return adjusted;
+//   return this.excPtr;
+//  }
+// }
+
+wasm_trap_t *cxa_throw_import(void *env, const wasm_val_vec_t *args,
+							 wasm_val_vec_t *results)
+{
+	DRV_DEBUG("cxa_throw_import called");
+	ImportHook *import_hook = (ImportHook *)env;
+	Proc *proc = import_hook->proc;
+	wasm_store_t *store = proc->store;
+	wasm_memory_t *wasm_memory = get_memory(proc);
+	byte_t *wasm_base_ptr = wasm_memory_data(wasm_memory);
+	int args_expected = 3;
+	if (args->size != args_expected)
+	{
+		DRV_DEBUG("Incorrect number of arguments: expected %d, got %d", args_expected, (int)args->size);
+		const char *errMsg = "cxa_throw: Incorrect number of arguments provided";
+		wasm_byte_vec_t message;
+		wasm_byte_vec_new(&message, strlen(errMsg), errMsg);
+		return wasm_trap_new(proc->store, &message);
+	}
+
+    DRV_DEBUG("cxa_throw_import extract parameters");
+
+	// extract parameters
+	int32_t ptr_arg = args->data[0].of.i32;
+	int32_t type = args->data[1].of.i32;
+	int32_t destructor = args->data[2].of.i32;
+
+	DRV_DEBUG("cxa_throw_import extract parameters: ptr_arg: %#x, type: %d, destructor: %d", ptr_arg, type, destructor);
+
+    // var info = new ExceptionInfo(ptr);
+    uint32_t exc_ptr = ptr_arg;
+    uint32_t ptr = exc_ptr - 24;
+
+    // info.init(type, destructor);
+    // set_adjusted_ptr
+    memcpy(&wasm_base_ptr[(ptr + 16)], &ptr, 4);
+    // set_type
+    memcpy(&wasm_base_ptr[(ptr + 4)], &type, 4);
+    // set_destructor
+    memcpy(&wasm_base_ptr[(ptr + 8)], &destructor, 4);
+
+    char* exception_text = malloc(100);
+    sprintf(exception_text, "__cxa_throw at %#x", ptr);
+
+    DRV_DEBUG("Setting exception tip: %s", exception_text);
+
+    bool result = stack_entry_set_exception_tip(proc, exception_text);
+    DRV_DEBUG("stack_entry_set_exception_tip result: %d", result);
+
+    // exceptionLast = ptr;
+    proc->exception_ptr_last = exc_ptr;
+
+    return NULL;
+}
+
+void do_set_temp_ret0(Proc *proc, int32_t value) {
+    DRV_DEBUG("do_set_temp_ret0 called with value: %d", value);
+
+    wasm_val_vec_t args;
+    wasm_val_vec_new_uninitialized(&args, 1);
+    args.num_elems = 1;
+    args.data[0].kind = WASM_I32;
+    args.data[0].of.i32 = value;
+
+    wasm_val_vec_t results;
+    wasm_val_vec_new_uninitialized(&results, 0);
+
+    int ret = wasm_execute_exported_function(proc, "_emscripten_tempret_set", &args, &results);
+    if (ret != 0) {
+        DRV_DEBUG("Failed to call _emscripten_tempret_set");
+        return;
+    }
+
+    DRV_DEBUG("Successfully called _emscripten_tempret_set");
+}
+
+wasm_trap_t *cxa_find_matching_catch_3_import(void *env, const wasm_val_vec_t *args,
+							 wasm_val_vec_t *results)
+{
+	DRV_DEBUG("cxa_find_matching_catch_3_import called");
+	ImportHook *import_hook = (ImportHook *)env;
+	Proc *proc = import_hook->proc;
+	wasm_store_t *store = proc->store;
+	wasm_memory_t *wasm_memory = get_memory(proc);
+	byte_t *wasm_base_ptr = wasm_memory_data(wasm_memory);
+	int args_expected = 1;
+	if (args->size != args_expected)
+	{
+		DRV_DEBUG("Incorrect number of arguments: expected %d, got %d", args_expected, (int)args->size);
+		const char *errMsg = "cxa_find_matching_catch_3: Incorrect number of arguments provided";
+		wasm_byte_vec_t message;
+		wasm_byte_vec_new(&message, strlen(errMsg), errMsg);
+		return wasm_trap_new(proc->store, &message);
+	}
+
+    DRV_DEBUG("cxa_find_matching_catch_3_import extract parameters");
+
+	// extract parameters
+	int32_t ptr_arg = args->data[0].of.i32;
+
+    //  var thrown = exceptionLast;
+    uint32_t thrown = proc->exception_ptr_last;
+
+    //  if (!thrown) {
+    //   setTempRet0(0);
+    //   return 0;
+    //  }
+
+    if (!thrown) {
+        DRV_DEBUG("No exception to find matching catch for");
+        do_set_temp_ret0(proc, 0);
+        results->data[0].kind = WASM_I32;
+        results->data[0].of.i32 = 0;
+        return NULL;
+    }
+
+    //  var info = new ExceptionInfo(thrown);
+    uint32_t exc_ptr = thrown;
+    uint32_t ptr = exc_ptr - 24;
+
+    //  info.set_adjusted_ptr(thrown);
+    memcpy(&wasm_base_ptr[(ptr + 16)], &thrown, 4);
+
+    //  var thrownType = info.get_type();
+    uint32_t thrown_type;
+    memcpy(&thrown_type, &wasm_base_ptr[(ptr + 4)], 4);
+
+    //  if (!thrownType) {
+    //   setTempRet0(0);
+    //   return thrown;
+    //  }
+    if (!thrown_type) {
+        DRV_DEBUG("No thrown type found");
+        do_set_temp_ret0(proc, 0);
+        results->data[0].kind = WASM_I32;
+        results->data[0].of.i32 = thrown;
+        return NULL;
+    }
+
+    //  for (var arg in args) {
+    //   var caughtType = args[arg];
+    //   if (caughtType === 0 || caughtType === thrownType) {
+    //    break;
+    //   }
+    //   var adjusted_ptr_addr = info.ptr + 16;
+    //   if (___cxa_can_catch(caughtType, thrownType, adjusted_ptr_addr)) {
+    //    setTempRet0(caughtType);
+    //    return thrown;
+    //   }
+    //  }
+    // TODO: Translate
+
+    //  setTempRet0(thrownType);
+    do_set_temp_ret0(proc, thrown_type);
+    
+    //  return thrown;
+    results->data[0].kind = WASM_I32;
+    results->data[0].of.i32 = thrown;
+
+    return NULL;
+}
+
+void do_cxa_increment_exception_refcount(Proc *proc, uint32_t exc_ptr) {
+    DRV_DEBUG("do_cxa_increment_exception_refcount called with value: %d", exc_ptr);
+
+    wasm_val_vec_t args;
+    wasm_val_vec_new_uninitialized(&args, 1);
+    args.num_elems = 1;
+    args.data[0].kind = WASM_I32;
+    args.data[0].of.i32 = exc_ptr;
+
+    wasm_val_vec_t results;
+    wasm_val_vec_new_uninitialized(&results, 0);
+
+    int ret = wasm_execute_exported_function(proc, "__cxa_increment_exception_refcount", &args, &results);
+    if (ret != 0) {
+        DRV_DEBUG("Failed to call __cxa_increment_exception_refcount");
+        return;
+    }
+
+    DRV_DEBUG("Incremented exception refcount");
+}
+
+void do_cxa_decrement_exception_refcount(Proc *proc, uint32_t exc_ptr) {
+    DRV_DEBUG("do_cxa_decrement_exception_refcount called with value: %d", exc_ptr);
+
+    wasm_val_vec_t args;
+    wasm_val_vec_new_uninitialized(&args, 1);
+    args.num_elems = 1;
+    args.data[0].kind = WASM_I32;
+    args.data[0].of.i32 = exc_ptr;
+
+    wasm_val_vec_t results;
+    wasm_val_vec_new_uninitialized(&results, 0);
+
+    int ret = wasm_execute_exported_function(proc, "__cxa_decrement_exception_refcount", &args, &results);
+    if (ret != 0) {
+        DRV_DEBUG("Failed to call __cxa_decrement_exception_refcount");
+        return;
+    }
+
+    DRV_DEBUG("Decremented exception refcount");
+}
+
+uint32_t do_cxa_is_pointer_type(Proc *proc, uint32_t type) {
+    DRV_DEBUG("do_cxa_is_pointer_type called with value: %d", type);
+
+    wasm_val_vec_t args;
+    wasm_val_vec_new_uninitialized(&args, 1);
+    args.num_elems = 1;
+    args.data[0].kind = WASM_I32;
+    args.data[0].of.i32 = type;
+
+    wasm_val_vec_t results;
+    wasm_val_vec_new_uninitialized(&results, 1);
+
+    int ret = wasm_execute_exported_function(proc, "__cxa_is_pointer_type", &args, &results);
+    if (ret != 0) {
+        DRV_DEBUG("Failed to call __cxa_is_pointer_type");
+        return 0;
+    }
+
+    return results.data[0].of.i32;
+}
+
+wasm_trap_t *cxa_begin_catch_import(void *env, const wasm_val_vec_t *args,
+							 wasm_val_vec_t *results)
+{
+	DRV_DEBUG("cxa_begin_catch_import called");
+	ImportHook *import_hook = (ImportHook *)env;
+	Proc *proc = import_hook->proc;
+	wasm_store_t *store = proc->store;
+	wasm_memory_t *wasm_memory = get_memory(proc);
+	byte_t *wasm_base_ptr = wasm_memory_data(wasm_memory);
+	int args_expected = 1;
+	if (args->size != args_expected)
+	{
+		DRV_DEBUG("Incorrect number of arguments: expected %d, got %d", args_expected, (int)args->size);
+		const char *errMsg = "cxa_begin_catch: Incorrect number of arguments provided";
+		wasm_byte_vec_t message;
+		wasm_byte_vec_new(&message, strlen(errMsg), errMsg);
+		return wasm_trap_new(proc->store, &message);
+	}
+
+    DRV_DEBUG("cxa_begin_catch_import extract parameters");
+
+	// extract parameters
+	int32_t ptr_arg = args->data[0].of.i32;
+
+	DRV_DEBUG("cxa_begin_catch_import extract parameters: ptr_arg: %d", ptr_arg);
+
+    //  var info = new ExceptionInfo(ptr);
+    uint32_t exc_ptr = ptr_arg;
+    uint32_t ptr = exc_ptr - 24;
+
+    //  if (!info.get_caught()) {
+    bool is_caught = false;
+    memcpy(&is_caught, &wasm_base_ptr[(ptr + 12)], 1);
+    if (!is_caught) {
+        DRV_DEBUG("Exception already caught");
+    
+    //   info.set_caught(true);
+        bool _true = 1;
+        DRV_DEBUG("memcpy(%p, %p, %d)", wasm_base_ptr + (ptr + 12), &_true, 1);
+        memcpy(&wasm_base_ptr[(ptr + 12)], &_true, 1);
+
+    //   uncaughtExceptionCount--;
+        // No need to decrement, never used
+
+    //  }
+    }
+
+    //  info.set_rethrown(false);
+    bool _false = 0;
+    memcpy(&wasm_base_ptr[(ptr + 13)], &_false, 1);
+
+    //  exceptionCaught.push(info);
+    // TODO: Exception Stack
+
+    //  ___cxa_increment_exception_refcount(info.excPtr);
+    do_cxa_increment_exception_refcount(proc, exc_ptr);
+
+    //  return info.get_exception_ptr();
+
+    //  get_exception_ptr() {
+    //   var isPointer = ___cxa_is_pointer_type(this.get_type());
+    uint32_t type;
+    memcpy(&type, &wasm_base_ptr[(ptr + 4)], 4);
+    uint32_t is_pointer = do_cxa_is_pointer_type(proc, type);
+
+    //   if (isPointer) {
+    //    return HEAPU32[((this.excPtr) >> 2)];
+    //   }
+    if (is_pointer) {
+        uint32_t res;
+        memcpy(&res, &wasm_base_ptr[(exc_ptr >> 2)], 4);
+        results->data[0].kind = WASM_I32;
+        results->data[0].of.i32 = res;
+        return NULL;
+    }
+
+    //   var adjusted = this.get_adjusted_ptr();
+    uint32_t adjusted;
+    memcpy(&adjusted, &wasm_base_ptr[(exc_ptr + 16)], 4);
+
+    //   if (adjusted !== 0) return adjusted;
+    if (adjusted != 0) {
+        results->data[0].kind = WASM_I32;
+        results->data[0].of.i32 = adjusted;
+        return NULL;
+    }
+
+    //   return this.excPtr;
+    results->data[0].kind = WASM_I32;
+    results->data[0].of.i32 = exc_ptr;
+
+    return NULL;
+}
+
+
+wasm_trap_t *cxa_end_catch_import(void *env, const wasm_val_vec_t *args,
+							 wasm_val_vec_t *results)
+{
+	DRV_DEBUG("cxa_end_catch_import called");
+	ImportHook *import_hook = (ImportHook *)env;
+	Proc *proc = import_hook->proc;
+	wasm_store_t *store = proc->store;
+	wasm_memory_t *wasm_memory = get_memory(proc);
+	byte_t *wasm_base_ptr = wasm_memory_data(wasm_memory);
+	int args_expected = 0;
+	if (args->size != args_expected)
+	{
+		DRV_DEBUG("Incorrect number of arguments: expected %d, got %d", args_expected, (int)args->size);
+		const char *errMsg = "cxa_end_catch: Incorrect number of arguments provided";
+		wasm_byte_vec_t message;
+		wasm_byte_vec_new(&message, strlen(errMsg), errMsg);
+		return wasm_trap_new(proc->store, &message);
+	}
+
+    //  _setThrew(0, 0);
+    do_set_threw(proc, 0, 0);
+
+    //  var info = exceptionCaught.pop();
+    // TODO: Exception Stack
+    uint32_t exc_ptr = 0x1234;
+    uint32_t ptr = exc_ptr - 24;
+
+    //  ___cxa_decrement_exception_refcount(info.excPtr);
+    do_cxa_decrement_exception_refcount(proc, exc_ptr);
+    
+    //  exceptionLast = 0;
+    proc->exception_ptr_last = 0;
+
+    return NULL;
 }
 
 void wasm_initialize_runtime(void* raw) {
@@ -370,6 +803,22 @@ void wasm_initialize_runtime(void* raw) {
 			callback = fd_write_import;
 		}
 
+		if (strcmp(module_name->data, "env") == 0) {
+            if (strcmp(name->data, "__cxa_throw") == 0) {
+                DRV_DEBUG("*** Overriding cxa_throw_import callback **");
+                callback = cxa_throw_import;
+            } else if (strcmp(name->data, "__cxa_find_matching_catch_3") == 0) {
+                DRV_DEBUG("*** Overriding __cxa_find_matching_catch_3 callback **");
+                callback = cxa_find_matching_catch_3_import;
+            } else if (strcmp(name->data, "__cxa_begin_catch") == 0) {
+                DRV_DEBUG("*** Overriding cxa_begin_catch_import callback **");
+                callback = cxa_begin_catch_import;
+            } else if (strcmp(name->data, "__cxa_end_catch") == 0) {
+                DRV_DEBUG("*** Overriding cxa_end_catch_import callback **");
+                callback = cxa_end_catch_import;
+            }
+		}
+
         hook->stub_func =
             wasm_func_new_with_env(
                 proc->store,
@@ -414,7 +863,7 @@ void wasm_initialize_runtime(void* raw) {
             DRV_DEBUG("Found indirect function table: %s. Index: %d", name->data, i);
             proc->indirect_func_table_ix = i;
             const wasm_tabletype_t* table_type = wasm_externtype_as_tabletype_const(type);
-            const wasm_limits_t* table_limits = wasm_tabletype_limits(table_type);
+            // const wasm_limits_t* table_limits = wasm_tabletype_limits(table_type);
             // Retrieve the indirect function table
             proc->indirect_func_table = wasm_extern_as_table(exported_externs.data[i]);
 
@@ -665,20 +1114,16 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     if (wasm_execute_exported_function(proc, stack_save_name, &stack_save_args, &stack_save_results) != 0) {
         DRV_DEBUG("Failed to call stack save function");
     }
-    wasm_val_t *stack_ptr = &stack_save_results.data[0];
+    DRV_DEBUG("Indirect function (%s) stack at pointer: %#x", field_name, stack_save_results.data[0].of.i32);
 
-    DRV_DEBUG("Indirect function (%s) stack saved at pointer: %#x", field_name, stack_ptr->of.i32);
+    size_t stack_ptr_index = stack_entry_push(proc, &stack_save_results.data[0]);
+    DRV_DEBUG("Stack pointer index: %zu", stack_ptr_index);
 
     /* ---------------- STACK SAVE -----------------*/
     
     DRV_DEBUG("wasm_func_call(%p, %p, %p)", func, &prepared_args, output_results);
     wasm_trap_t* trap = wasm_func_call(func, &prepared_args, output_results);
     if (trap) {
-
-    // // Attempt to call the function and check for any exceptions
-	// DRV_DEBUG("wasm_runtime_call_indirect (%s) (%d, %d)", field_name, function_index, argc);
-    // if (!wasm_runtime_call_indirect(proc->exec_env, function_index, argc, argv)) {
-
 		const char* exception = wasm_runtime_get_exception(func->inst_comm_rt);
         if (exception) {
             DRV_DEBUG("wasm_runtime_call_indirect (%s) gave exception: %s", field_name, exception);
@@ -686,12 +1131,29 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
 			DRV_DEBUG("wasm_runtime_call_indirect (%s) non-zero return, but no exception", field_name);
 		}
 
+		result = -1;
+    }
+    
+    if(result == 0) {
+    	DRV_DEBUG("Indirect function call completed successfully (%s)", field_name);
+    } else {
+		DRV_DEBUG("Indirect function call failed (%s)", field_name);
+	}
+
+    StackEntry* stack_entry = stack_entry_pop(proc);
+    DRV_DEBUG("Stack pointer popped: %p", stack_entry);
+
+    // Check for exception
+    if (stack_entry->exception) {
+        DRV_DEBUG("Stack entry has exception: %s", stack_entry->exception);
+
         /* ---------------- STACK RESTORE -----------------*/
 
         const char* stack_restore_name = "_emscripten_stack_restore";
 
         wasm_val_vec_t stack_restore_args;
-        wasm_val_vec_new(&stack_restore_args, 1, stack_ptr);
+        wasm_val_vec_new(&stack_restore_args, 1, stack_entry->ptr);
+        stack_restore_args.num_elems = 1;
 
         wasm_val_vec_t stack_restore_results;
         wasm_val_vec_new_uninitialized(&stack_restore_results, 0);
@@ -700,54 +1162,12 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
             DRV_DEBUG("Failed to call stack restore function");
         }
 
-        DRV_DEBUG("Indirect function (%s) stack restored to pointer: %#x", field_name, stack_ptr->of.i32);
+        DRV_DEBUG("Indirect function (%s) stack restored to pointer: %#x", field_name, stack_entry->ptr->of.i32);
 
         /* ---------------- STACK RESTORE -----------------*/
 
-        // /* ---------------- setThrew -----------------*/
-
-        // const char* set_threw_name = "setThrew";
-
-        // wasm_val_t set_threw_args_data[2];
-        // set_threw_args_data[0].kind = WASM_I32;
-        // set_threw_args_data[0].of.i32 = 1;
-        // set_threw_args_data[1].kind = WASM_I32;
-        // set_threw_args_data[1].of.i32 = 0;
-
-        // wasm_val_vec_t set_threw_args;
-        // wasm_val_vec_new(&set_threw_args, 2, set_threw_args_data);
-
-        // wasm_val_vec_t set_threw_results;
-        // wasm_val_vec_new_uninitialized(&set_threw_results, 0);
-
-        // if (wasm_execute_exported_function(proc, set_threw_name, &set_threw_args, &set_threw_results) != 0) {
-        //     DRV_DEBUG("Failed to call setThrew function");
-        // }
-
-        // /* ---------------- setThrew -----------------*/
-
-		result = -1;
+        do_set_threw(proc, 1, 0);
     }
-    
-    if(result == 0) {
-    	DRV_DEBUG("Indirect function call completed successfully (%s)", field_name);
-
-        // // argv[0] contains the result
-        // DRV_DEBUG("Indirect function call result type size: %zu", result_types->size);
-        // if (result_types->size > 0) {
-        //     DRV_DEBUG("Setting output_results from argv[0]: %d", argv[0]);
-        //     // wasm_val_t* result_data = malloc(sizeof(wasm_val_t));
-        //     output_results->num_elems = 1;
-        //     output_results->size = 1;
-        //     output_results->data[0].kind = WASM_I32;
-        //     output_results->data[0].of.i32 = argv[0];
-        // } else {
-        //     DRV_DEBUG("Setting output_results empty");
-        //     wasm_val_vec_new(&output_results, 0, NULL);
-        // }
-    } else {
-		DRV_DEBUG("Indirect function call failed (%s)", field_name);
-	}
 
     // Free allocated memory
     free(argv);
