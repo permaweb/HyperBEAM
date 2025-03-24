@@ -547,7 +547,7 @@ sign_auth(Authority, Req, Res) ->
 	{ok, {SignatureInput, Signature}}.
 
 %% @doc Add the signature parameters to the authority state
-add_sig_params(Authority, {KeyType, PubKey}) ->
+add_sig_params(Authority, {_KeyType, PubKey}) ->
     maps:put(
         sig_params,
         maps:merge(

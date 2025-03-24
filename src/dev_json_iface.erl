@@ -405,7 +405,7 @@ test_init() ->
 
 generate_stack(File) ->
     generate_stack(File, <<"WASM">>).
-generate_stack(File, Mode) ->
+generate_stack(File, _Mode) ->
     test_init(),
     Wallet = hb:wallet(),
     Msg0 = dev_wasm:cache_wasm_image(File),

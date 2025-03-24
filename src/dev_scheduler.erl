@@ -1250,7 +1250,7 @@ http_post_schedule_test() ->
         <<"method">> => <<"POST">>,
         <<"body">> => PMsg
     }, W),
-    {ok, Res} = hb_http:post(N, Msg1, #{}),
+    {ok, _Res} = hb_http:post(N, Msg1, #{}),
     {ok, Res2} =
         http_post_schedule_sign(
             N,
