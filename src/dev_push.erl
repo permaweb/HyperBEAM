@@ -82,7 +82,7 @@ do_push(Base, Assignment, Opts) ->
                         case hb_cache:read(Target, Opts) of
                             {ok, PushBase} ->
                                 push_result_message(PushBase, Slot, Key, MsgToPush, Opts);
-                            {error, _} ->
+                            not_found ->
                                 #{
                                     <<"response">> => <<"error">>,
                                     <<"status">> => 404,
