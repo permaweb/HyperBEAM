@@ -167,8 +167,7 @@ is_human_binary(Bin) when is_binary(Bin) ->
     case unicode:characters_to_binary(Bin) of
         {error, _, _} -> false;
         _ -> true
-    end;
-is_human_binary(_) -> false.
+    end.
 
 %% @doc Encode a binary to URL safe base64 binary string.
 encode(Bin) ->
