@@ -310,19 +310,14 @@ store_result(ProcID, Slot, Msg3, Msg2, Opts) ->
     Msg3MaybeWithSnapshot =
         case Slot rem Freq of
             0 ->
-                case snapshot(Msg3, Msg2, Opts) of
-                    {ok, Snapshot} ->
-                        ?event(snapshot,
-                            {got_snapshot, 
-                                {storing_as_slot, Slot},
-                                {snapshot, Snapshot}
-                            }
-                        ),
-                        Msg3#{ <<"snapshot">> => Snapshot };
-                    not_found ->
-                        ?event(no_result_for_snapshot),
-                        Msg3
-                end;
+                {ok, Snapshot} = snapshot(Msg3, Msg2, Opts),
+				?event(snapshot,
+					{got_snapshot,
+						{storing_as_slot, Slot},
+						{snapshot, Snapshot}
+					}
+				),
+				Msg3#{ <<"snapshot">> => Snapshot };
             _ -> 
                 Msg3
         end,

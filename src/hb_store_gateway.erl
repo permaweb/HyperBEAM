@@ -11,7 +11,7 @@ resolve(_, Key) -> Key.
 
 list(StoreOpts, Key) ->
     case read(StoreOpts, Key) of
-        {error, _} -> not_found;
+        not_found -> not_found;
         {ok, Message} -> {ok, maps:keys(Message)}
     end.
 

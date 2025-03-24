@@ -122,7 +122,7 @@ id(Base, Req, NodeOpts) ->
     % doesn't exist, error.
     case hb_converge:find_exported_function(ModBase, DevMod, id, 3, NodeOpts) of
         {ok, Fun} -> apply(Fun, hb_converge:truncate_args(Fun, [ModBase, Req, NodeOpts]));
-        {error, not_found} -> throw({id, id_resolver_not_found_for_device, DevMod})
+        not_found -> throw({id, id_resolver_not_found_for_device, DevMod})
     end.
 
 %% @doc Locate the ID device of a message. The ID device is determined by the 

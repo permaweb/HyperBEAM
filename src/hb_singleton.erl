@@ -360,7 +360,7 @@ parse_inlined_key_val(Bin) ->
 
 %% @doc Attempt Cowboy URL decode, then sanitize the result.
 decode_string(B) ->
-    case catch http_uri:decode(B) of
+    case catch uri_string:unquote(B) of
         DecodedBin when is_binary(DecodedBin) -> DecodedBin;
         _ -> throw({error, cannot_decode, B})
     end.

@@ -460,8 +460,6 @@ check_size(Bin, {range, Start, End}) ->
     check_type(Bin, binary)
         andalso byte_size(Bin) >= Start
         andalso byte_size(Bin) =< End;
-check_size(Bin, X) when not is_list(X) ->
-    check_size(Bin, [X]);
 check_size(Bin, Sizes) ->
     check_type(Bin, binary)
         andalso lists:member(byte_size(Bin), Sizes).

@@ -378,10 +378,8 @@ find_server(ProcID, Msg1, ToSched, Opts) ->
                                                     {ok, P} -> P;
                                                     not_found ->
                                                         throw({process_not_available, ProcID})
-                                                end;
-                                            _ -> throw({process_not_available, ProcID})
-                                        end;
-                                    _ -> throw({process_not_available, ProcID})
+                                                end
+                                        end
                                 end;
                             P -> P
                         end,
@@ -1250,7 +1248,7 @@ http_post_schedule_test() ->
         <<"method">> => <<"POST">>,
         <<"body">> => PMsg
     }, W),
-    {ok, Res} = hb_http:post(N, Msg1, #{}),
+    {ok, _Res} = hb_http:post(N, Msg1, #{}),
     {ok, Res2} =
         http_post_schedule_sign(
             N,

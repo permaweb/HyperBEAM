@@ -68,8 +68,6 @@ signature_data_segment(TX) ->
     ar_deep_hash:hash(List).
 
 %% @doc Verify the transaction's signature.
-verify_signature(_TX, do_not_verify_signature) ->
-    true;
 verify_signature(TX = #tx{ signature_type = SigType }, verify_signature) ->
     SignatureDataSegment = signature_data_segment(TX),
     ar_wallet:verify({SigType, TX#tx.owner}, SignatureDataSegment, TX#tx.signature).

@@ -8,7 +8,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-info(M1) ->
+info(_M1) ->
     #{
         handler => fun handle/4
     }.
