@@ -709,31 +709,22 @@
         const parts = text.split(boundary);
         const results = [];
 
-        parts.forEach((part) => {
-          part = part.trim();
-          if (!part || part === "--") return;
-          const sections = part.split("\r\n\r\n");
-          if (sections.length < 2) return;
-          const header = sections[0].trim();
-          const content = sections
-            .slice(1)
-            .join("\r\n\r\n")
-            .trim()
-            .replaceAll(`"`, "");
-          if (
-            content.toLowerCase().startsWith("atom") ||
-            !content.toLowerCase().startsWith("dev")
-          )
-            return;
-          const nameMatch = header.match(/name="([^"]+)"/);
-          if (!nameMatch) return;
-          const module = nameMatch[1];
-          results.push({
-            name: content.replaceAll(`"`, `''`),
-            content: module,
-          });
-        });
-
+        // parse out module and name from the parts
+        for (const part of parts) {
+          if (!part || part.trim() === "" || part === "--") continue;
+          
+          // Look for module and name in the content
+          const moduleMatch = part.match(/module:\s*"([^"]+)"/);
+          const nameMatch = part.match(/name:\s*([^\r\n]+)/);
+          
+          if (moduleMatch && nameMatch) {
+            results.push({
+              name: moduleMatch[1],
+              content: nameMatch[1].trim()
+            });
+          }
+        }
+        
         document.getElementById("devices-value").innerHTML = results.length;
 
         return results;

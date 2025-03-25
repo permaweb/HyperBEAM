@@ -57,13 +57,33 @@ Then you can clone the HyperBEAM source and build it:
 git clone https://github.com/permaweb/HyperBEAM.git
 cd HyperBEAM
 rebar3 compile
+rebar3 shell # launches the erlang shell with the HyperBEAM module preloaded
 ```
 
 If you would prefer to execute HyperBEAM in a containerized environment, you
 can use the provided Dockerfile to build a container image.
 
+Add your wallet to the `wallets` directory and modify the `config.flat` file to use the correct port.
+
 ```bash
-docker build -t hyperbeam .
+docker build --platform=linux/amd64 --target=builder -t hyperbeam .
+```
+
+To target a lean image to run just the node, you can use the following command:
+
+```bash
+docker build --platform=linux/amd64 --target=runner -t hyperbeam .
+```
+
+Once you have the image built, you can run the container with the following command:
+
+```bash
+docker run --memory="8g" --memory-swap="8g" \
+-it \
+-v $(pwd)/wallets/<wallet-file>:/app/hyperbeam-key.json \
+-v $(pwd)/config.flat:/app/config.flat \
+-p 10000:10000 \
+hyperbeam
 ```
 
 If you intend to offer TEE-based computation of AO-Core devices, please see the
@@ -82,7 +102,7 @@ For example, in order to start a node using a custom port and Arweave wallet,
 you could execute the following command:
 
 ```bash
-rebar3 shell --eval "hb:start_mainnet(#{ port => 9001, key_location => 'path/to/my/wallet.key' })."
+rebar3 shell --eval "hb:start_mainnet(#{ port => 9001, priv_key_location => 'path/to/my/wallet.key' })."
 ```
 
 Node operators can also configure the environment using a `flat@1.0` encoded settings file. An 
