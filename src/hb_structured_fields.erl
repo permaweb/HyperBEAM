@@ -164,6 +164,9 @@ key_to_binary(Key) -> iolist_to_binary(Key).
 -spec parse_dictionary(binary()) -> sh_dictionary().
 parse_dictionary(<<>>) ->
     [];
+parse_dictionary(<<$%, R/bits>>) ->
+    % Handle dictionary keys that start with percent-encoded characters
+    parse_dict_key(R, [], <<$%>>);
 parse_dictionary(<<C, R/bits>>) when ?IS_LC_ALPHA(C) or ?IS_DIGIT(C) or (C =:= $*) ->
     parse_dict_key(R, [], <<C>>).
 
@@ -198,6 +201,8 @@ parse_dict_before_member(<<$\s, R/bits>>, Acc) ->
     parse_dict_before_member(R, Acc);
 parse_dict_before_member(<<$\t, R/bits>>, Acc) ->
     parse_dict_before_member(R, Acc);
+parse_dict_before_member(<<$%, R/bits>>, Acc) ->
+    parse_dict_key(R, Acc, <<$%>>);
 parse_dict_before_member(<<C, R/bits>>, Acc) when ?IS_LC_ALPHA(C) or ?IS_DIGIT(C) or (C =:= $*) ->
     parse_dict_key(R, Acc, <<C>>).
 
