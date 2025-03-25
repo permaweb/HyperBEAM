@@ -84,7 +84,7 @@
 %%% Configuration and environment:
 -export([init/0, now/0, build/0]).
 %%% Base start configurations:
--export([start_simple_pay/0, start_simple_pay/1, start_simple_pay/2]).
+-export([start_simple_pay/0, start_simple_pay/1, start_simple_pay/2, start_simple_pay/3]).
 -export([topup/3, topup/4]).
 -export([start_mainnet/0, start_mainnet/1]).
 %%% Debugging tools:
@@ -149,7 +149,9 @@ start_simple_pay(Addr) ->
     rand:seed(default),
     start_simple_pay(Addr, 10000 + rand:uniform(50000)).
 start_simple_pay(Addr, Port) ->
-    do_start_simple_pay(#{ port => Port, operator => Addr }).
+    start_simple_pay(Addr, Port, <<"simple-pay-key.json">>).
+start_simple_pay(Addr, Port, PrivKeyLocation) ->
+    do_start_simple_pay(#{ port => Port, operator => Addr, priv_key_location => PrivKeyLocation }).
 
 do_start_simple_pay(Opts) ->
     application:ensure_all_started([
@@ -165,6 +167,7 @@ do_start_simple_pay(Opts) ->
         os_mon,
         rocksdb
     ]),
+	Wallet = hb:wallet(hb_opts:get(priv_key_location, no_viable_wallet_path, Opts)),
     Port = maps:get(port, Opts),
     Processor =
         #{
@@ -175,13 +178,14 @@ do_start_simple_pay(Opts) ->
     hb_http_server:start_node(
         Opts#{
             preprocessor => Processor,
-            postprocessor => Processor
+            postprocessor => Processor,
+            priv_wallet => Wallet
         }
     ),
     io:format(
         "Started simple-pay node at http://localhost:~p~n"
         "Operator: ~s~n",
-        [Port, address()]
+        [Port, address(Wallet)]
     ),
     <<"http://localhost:", (integer_to_binary(Port))/binary>>.
 
