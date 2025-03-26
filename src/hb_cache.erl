@@ -217,7 +217,7 @@ do_read(Path, Store, Opts, AlreadyRead) ->
         not_found -> not_found;
         no_viable_store -> not_found;
         simple -> hb_store:read(Store, ResolvedFullPath);
-        _ ->
+        composite ->
             case hb_store:list(Store, ResolvedFullPath) of
                 {ok, Subpaths} ->
                     ?event(
@@ -244,7 +244,8 @@ do_read(Path, Store, Opts, AlreadyRead) ->
                         ),
                     ?event({read_message, Msg}),
                     {ok, Msg};
-                _ -> not_found
+                _ -> 
+                    not_found
             end
     end.
 
