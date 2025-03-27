@@ -349,7 +349,21 @@ find_server(ProcID, Msg1, ToSched, Opts) ->
     case get_hint(ProcID, Opts) of
         {ok, Hint} ->
             ?event({found_hint_in_proc_id, Hint}),
-            generate_redirect(ProcID, Hint, Opts);
+            % Check if the hint points to the local node
+            LocalAddress = hb_util:get_local_address(Opts),
+
+            % If the hint points to the local node, continue with local processing
+            % using the ProcID without hint
+            case hb_util:compare_address(LocalAddress, Hint) of
+                true ->
+                    ?event({hint_points_to_local_node, {hint, Hint}, {local, LocalAddress}}),
+                    % Continue with local processing using the ProcID without hint
+                    CleanProcID = without_hint(ProcID),
+                    find_server(CleanProcID, Msg1, ToSched, Opts#{ scheduler_follow_hints => false });
+                false ->
+                    % Generate redirect to the remote node
+                    generate_redirect(ProcID, Hint, Opts)
+            end;
         not_found ->
             ?event({no_hint_in_proc_id, ProcID}),
             case dev_scheduler_registry:find(ProcID, false, Opts) of
@@ -468,7 +482,7 @@ without_hint(Target) when ?IS_ID(Target) ->
     hb_util:human_id(Target);
 without_hint(Target) ->
     case binary:split(Target, [<<"?">>, <<"&">>], [global]) of
-        [ProcID] when ?IS_ID(ProcID) -> hb_util:human_id(ProcID);
+        [ProcID | _] when ?IS_ID(ProcID) -> hb_util:human_id(ProcID);
         _ -> throw({invalid_operation_target, Target})
     end.
 
@@ -607,7 +621,7 @@ get_schedule(Msg1, Msg2, Opts) ->
             ?event({redirect_received, {redirect, Redirect}}),
             case hb_opts:get(scheduler_follow_redirects, true, Opts) of
                 true ->
-                    case get_remote_schedule(ProcID, From, To, Redirect, Opts) of
+                    case get_remote_schedule(ProcID, From, To, Redirect, Format, Opts) of
                         {ok, Res} ->
                             case Format of
                                 <<"application/aos-2">> ->
@@ -638,99 +652,118 @@ get_schedule(Msg1, Msg2, Opts) ->
     end.
 
 %% @doc Get a schedule from a remote scheduler.
-get_remote_schedule(RawProcID, From, To, Redirect, Opts) ->
+get_remote_schedule(RawProcID, From, To, Redirect, Format, Opts) ->
     ProcID = without_hint(RawProcID),
-    Node = node_from_redirect(Redirect, Opts),
-    Variant = hb_converge:get(<<"variant">>, Redirect, <<"ao.N.1">>, Opts),
-    ?event(
-        {getting_remote_schedule,
-            {node, {string, Node}},
-            {proc_id, {string, ProcID}},
-            {from, From},
-            {to, To}
-        }
-    ),
-    MaybeNonce =
-        if Variant == <<"ao.TN.1">> -> <<"-nonce">>;
-        true -> <<>>
-        end,
-    FromBin =
-        case From of
-            undefined -> <<>>;
-            From ->
-                % The legacy scheduler gives us the slots _after_ the stated 
-                % nonce. So we need to subtract one from the nonce to get the
-                % correct slot.
-                ModFrom =
-                    if Variant == <<"ao.TN.1">> -> From - 1;
-                    true -> From
-                    end,
-                <<
-                    "&from",
-                    MaybeNonce/binary,
-                    "=",
-                    (integer_to_binary(ModFrom))/binary
-                >>
-        end,
-    ToParam =
-        case To of
-            undefined -> <<>>;
-            To ->
-                <<
-                    "&to", MaybeNonce/binary, "=", (integer_to_binary(To))/binary
-                >>
-        end,
-    Path =
-        case Variant of
-            <<"ao.N.1">> ->
-                <<
-                    ProcID/binary,
-                    "/schedule?from=", FromBin/binary, ToParam
-                >>;
-            <<"ao.TN.1">> ->
-                <<
-                    ProcID/binary, "?proc-id=", ProcID/binary,
-                    FromBin/binary, ToParam/binary
-                >>
-        end,
-    ?event({getting_remote_schedule, {node, {string, Node}}, {path, {string, Path}}}),
-    case hb_http:get(Node, Path, Opts#{ http_client => httpc }) of
-        {ok, Res} ->
-            ?event(push, {remote_schedule_result, {res, Res}}, Opts),
-            case hb_util:int(hb_converge:get(<<"status">>, Res, 200, Opts)) of
-                200 ->
-                    case Variant of
-                        <<"ao.N.1">> ->
-                            {ok, Res};
-                        <<"ao.TN.1">> ->
-                            JSONRes =
-                                jiffy:decode(
-                                    hb_converge:get(
-                                        <<"body">>,
-                                        Res,
-                                        <<"">>,
+
+    Assignments = generate_local_schedule(Format, ProcID, From, To, Opts),
+    case Assignments of
+        [] ->
+            Node = node_from_redirect(Redirect, Opts),
+            Variant = hb_converge:get(<<"variant">>, Redirect, <<"ao.N.1">>, Opts),
+            ?event(
+                {getting_remote_schedule,
+                    {node, {string, Node}},
+                    {proc_id, {string, ProcID}},
+                    {from, From},
+                    {to, To}
+                }
+            ),
+            MaybeNonce =
+                if Variant == <<"ao.TN.1">> -> <<"-nonce">>;
+                true -> <<>>
+                end,
+            FromBin =
+                case From of
+                    undefined -> <<>>;
+                    From ->
+                        % The legacy scheduler gives us the slots _after_ the stated
+                        % nonce. So we need to subtract one from the nonce to get the
+                        % correct slot.
+                        ModFrom =
+                            if Variant == <<"ao.TN.1">> -> From - 1;
+                            true -> From
+                            end,
+                        <<
+                            "&from",
+                            MaybeNonce/binary,
+                            "=",
+                            (integer_to_binary(ModFrom))/binary
+                        >>
+                end,
+            ToParam =
+                case To of
+                    undefined -> <<>>;
+                    To ->
+                        <<
+                            "&to", MaybeNonce/binary, "=", (integer_to_binary(To))/binary
+                        >>
+                end,
+            Path =
+                case Variant of
+                    <<"ao.N.1">> ->
+                        <<
+                            ProcID/binary,
+                            "/schedule?from=", FromBin/binary, ToParam
+                        >>;
+                    <<"ao.TN.1">> ->
+                        <<
+                            ProcID/binary, "?proc-id=", ProcID/binary,
+                            FromBin/binary, ToParam/binary
+                        >>
+                end,
+            ?event({getting_remote_schedule, {node, {string, Node}}, {path, {string, Path}}}),
+            case hb_http:get(Node, Path, Opts#{ http_client => httpc }) of
+                {ok, Res} ->
+                    ?event(push, {remote_schedule_result, {res, Res}}, Opts),
+                    case hb_util:int(hb_converge:get(<<"status">>, Res, 200, Opts)) of
+                        200 ->
+                            case Variant of
+                                <<"ao.N.1">> ->
+                                    % Cache the assignments from the remote scheduler
+                                    cache_remote_assignments(ProcID, Res, Opts),
+                                    {ok, Res};
+                                <<"ao.TN.1">> ->
+                                    JSONRes =
+                                        jiffy:decode(
+                                            hb_converge:get(
+                                                <<"body">>,
+                                                Res,
+                                                <<"">>,
+                                                Opts
+                                            ),
+                                            [return_maps]
+                                        ),
+                                    Filtered = filter_json_assignments(JSONRes, To, From),
+                                    Result = dev_scheduler_formats:aos2_to_assignments(
+                                        ProcID,
+                                        Filtered,
                                         Opts
                                     ),
-                                    [return_maps]
-                                ),
-                            Filtered = filter_json_assignments(JSONRes, To, From),
-                            dev_scheduler_formats:aos2_to_assignments(
-                                ProcID,
-                                Filtered,
-                                Opts
-                            )
+                                    % Cache the assignments from the remote legacy scheduler
+                                    case Result of
+                                        {ok, Assignments} ->
+                                            cache_remote_assignments(ProcID, Assignments, Opts),
+                                            Result;
+                                        Error -> Error
+                                    end
+                            end;
+                        307 ->
+                            % NOTE: Shouldn't this be using the `Res' location key to
+                            % regenerate the redirect and recurse on that, instead of
+                            % just using the same redirect?
+                            ?event({recursing_on_same_redirect, {redirect, Redirect}}),
+                            get_remote_schedule(ProcID, From, To, Redirect, Format, Opts)
                     end;
-                307 ->
-                    % NOTE: Shouldn't this be using the `Res' location key to
-                    % regenerate the redirect and recurse on that, instead of
-                    % just using the same redirect?
-                    ?event({recursing_on_same_redirect, {redirect, Redirect}}),
-                    get_remote_schedule(ProcID, From, To, Redirect, Opts)
+                {error, Res} ->
+                    ?event(push, {remote_schedule_result, {res, Res}}, Opts),
+                    {error, Res}
             end;
-        {error, Res} ->
-            ?event(push, {remote_schedule_result, {res, Res}}, Opts),
-            {error, Res}
+
+        Assignments ->
+            ?event({cached_remote_schedule, {proc_id, {string, ProcID}}}),
+            Assignments
     end.
+    
 
 %% @doc Get the node URL from a redirect.
 node_from_redirect(Redirect, Opts) ->
@@ -785,10 +818,61 @@ post_remote_schedule(RawProcID, Redirect, OnlyAttested, Opts) ->
                 <<"body">> => OnlyAttested,
                 <<"method">> => <<"POST">>
             },
-            hb_http:post(Node, PostMsg, RemoteOpts);
+            Result = hb_http:post(Node, PostMsg, RemoteOpts),
+            case Result of
+                {ok, Assignment} ->
+                    cache_remote_assignment(ProcID, Assignment, Opts),
+                    Result;
+                Error -> Error
+            end;
         <<"ao.TN.1">> ->
-            post_legacy_schedule(ProcID, OnlyAttested, Node, RemoteOpts)
+            Result = post_legacy_schedule(ProcID, OnlyAttested, Node, RemoteOpts),
+            case Result of
+                {ok, Assignment} ->
+                    cache_remote_assignment(ProcID, Assignment, Opts),
+                    Result;
+                {error, Error} -> {error, Error}
+            end
     end.
+
+% @doc Cache a single assignment received from a remote scheduler
+cache_remote_assignment(ProcID, Assignment, Opts) ->
+    Slot = hb_converge:get(<<"slot">>, Assignment, not_found, Opts),
+    case Slot of
+        not_found ->
+            ?event({cannot_cache_assignment_no_slot, {proc_id, ProcID}, {assignment, Assignment}});
+        _ ->
+            ?event({caching_remote_assignment, {proc_id, ProcID}, {slot, Slot}}),
+            % Add the process ID to the assignment if it's not already there
+            AssignmentWithProc = 
+                case hb_converge:get(<<"process">>, Assignment, not_found, Opts) of
+                    not_found -> Assignment#{ <<"process">> => ProcID };
+                    _ -> Assignment
+                end,
+            dev_scheduler_cache:write(AssignmentWithProc, Opts)
+    end.
+
+%% @doc Cache assignments received from a remote scheduler
+cache_remote_assignments(ProcID, Response, Opts) ->
+    Assignments = hb_converge:get(<<"assignments">>, Response, [], Opts),
+    ?event({caching_remote_assignments, {proc_id, ProcID}, {count, maps:size(Assignments)}}),
+    
+    % Write each assignment to the cache
+    maps:fold(
+        fun(SlotBin, Assignment, _Acc) ->
+            Slot = hb_util:int(SlotBin),
+            ?event({caching_assignment, {proc_id, ProcID}, {slot, Slot}}),
+            % Add the process ID to the assignment if it's not already there
+            AssignmentWithProc = 
+                case hb_converge:get(<<"process">>, Assignment, not_found, Opts) of
+                    not_found -> Assignment#{ <<"process">> => ProcID };
+                    _ -> Assignment
+                end,
+            dev_scheduler_cache:write(AssignmentWithProc, Opts)
+        end,
+        ok,
+        Assignments
+    ).
 
 post_legacy_schedule(ProcID, OnlyAttested, Node, Opts) ->
     ?event({encoding_for_legacy_scheduler, {node, {string, Node}}}),
@@ -1241,6 +1325,77 @@ http_get_schedule_redirect_test() ->
     ProcID = <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>,
     Res = hb_http:get(N, <<"/", ProcID/binary, "/schedule">>, #{}),
     ?assertMatch({ok, #{ <<"location">> := Location }} when is_binary(Location), Res).
+
+cache_proxied_request_test_() ->
+    {timeout, 10, fun() ->
+        Opts =
+        #{
+            store =>
+                [
+                    #{ <<"store-module">> => hb_store_fs, <<"prefix">> => <<"cache-mainnet">> },
+                    #{ <<"store-module">> => hb_store_gateway, <<"opts">> => #{} }
+                ],
+                scheduler_follow_redirects => true,
+                scheduler_follow_hints => true
+        },
+
+        % Start two separate nodes - one will be the "remote" scheduler
+        {RemoteNode, RemoteWallet} = http_init(Opts),
+        {LocalNode, LocalWallet} = http_init(Opts),
+
+        % Create a process on the remote node
+        RemotePMsg = hb_message:attest(test_process(RemoteWallet), RemoteWallet),
+        RemoteMsg = hb_message:attest(#{
+            <<"path">> => <<"/~scheduler@1.0/schedule">>,
+            <<"method">> => <<"POST">>,
+            <<"body">> => RemotePMsg
+        }, RemoteWallet),
+        {ok, _} = hb_http:post(RemoteNode, RemoteMsg, #{}),
+
+        % Now create a process on the local node with a hint pointing to the remote node
+        RandAddr = hb_util:human_id(crypto:strong_rand_bytes(32)),
+        PMsg = hb_message:attest(test_process(<< RandAddr/binary, "?hint=", RemoteNode/binary>>), LocalWallet),
+
+        Target = hb_util:human_id(hb_message:id(RemotePMsg)),
+
+        % Now create a message targeting the remote process from the local node
+        % This should be scheduled on the remote node, not locally
+        LocalScheduleMsg = hb_message:attest(#{
+            <<"path">> => <<"/~scheduler@1.0/schedule">>,
+            <<"method">> => <<"POST">>,
+            <<"body">> => hb_message:attest(#{
+                <<"type">> => <<"Message">>,
+                <<"target">> => <<Target/binary, "?hint=", RemoteNode/binary>>,
+                <<"test-key">> => <<"scheduled-from-local">>
+            }, LocalWallet)
+        }, LocalWallet),
+
+        % Post the message from the local node targeting the remote process
+        {ok, _LocalResponse} = hb_http:post(LocalNode, LocalScheduleMsg, #{}),
+
+        % Check the remote slot - it should have increased if our message was scheduled remotely
+        RemoteSlotMsg = hb_message:attest(#{
+            <<"path">> => <<"/~scheduler@1.0/slot">>,
+            <<"method">> => <<"GET">>,
+            <<"target">> => hb_util:human_id(hb_message:id(RemotePMsg))
+        }, RemoteWallet),
+        {ok, RemoteSlotResponse} = hb_http:get(RemoteNode, RemoteSlotMsg, #{}),
+        Slot = maps:get(<<"current">>, RemoteSlotResponse),
+        ?assert(Slot > 0),
+
+        {ok, Schedule} = hb_http:get(LocalNode, hb_message:attest(#{
+            <<"path">> => <<"/~scheduler@1.0/schedule">>,
+            <<"method">> => <<"GET">>,
+            <<"target">> => <<Target/binary, "?hint=", RemoteNode/binary>>,
+            <<"from">> => 0,
+            <<"to">> => Slot,
+            <<"accept">> => "application/http"
+        }, LocalWallet), #{}),
+
+        Assignments = hb_converge:get(<<"assignments">>, Schedule, #{}),
+        Message = maps:get(<<"1">>, Assignments),
+        ?assertEqual(<<"scheduled-from-local">>, hb_converge:get(<<"body/test-key">>, Message))
+    end}.
 
 http_post_schedule_test() ->
     {N, W} = http_init(),

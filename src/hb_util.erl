@@ -17,6 +17,7 @@
 -export([ok/1, ok/2]).
 -export([format_trace_short/1]).
 -export([count/2, mean/1, stddev/1, variance/1]).
+-export([get_local_address/1, compare_address/2]).
 -include("include/hb.hrl").
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
@@ -658,3 +659,25 @@ stddev(List) ->
 variance(List) ->
     Mean = mean(List),
     lists:sum([ math:pow(X - Mean, 2) || X <- List ]) / length(List).
+
+%% @doc Get the local node address
+get_local_address(Opts) ->
+    Port = hb_opts:get(port, 8734, Opts),
+    Host = hb_opts:get(host, <<"localhost">>, Opts),
+    Protocol = hb_opts:get(protocol, http1, Opts),
+    ProtoStr =
+        case Protocol of
+            http1 -> <<"http">>;
+            _ -> <<"https">>
+        end,
+    <<ProtoStr/binary, "://", Host/binary, ":", (integer_to_binary(Port))/binary>>.
+
+%% @doc Compare two addresses
+compare_address(Addr1, Addr2) ->
+    ParsedAddr1 = uri_string:parse(Addr1),
+    ParsedAddr2 = uri_string:parse(Addr2),
+	Host1 = maps:get(host, ParsedAddr1),
+	Host2 = maps:get(host, ParsedAddr2),
+	Port1 = maps:get(port, ParsedAddr1),
+	Port2 = maps:get(port, ParsedAddr2),
+	Host1 == Host2 andalso Port1 == Port2.
