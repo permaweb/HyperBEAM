@@ -9,6 +9,7 @@
 content_type(_) -> {ok, <<"application/json">>}.
 
 %% @doc Encode a message to a JSON string.
+to(Msg) when is_binary(Msg) -> iolist_to_binary(json:encode(Msg));
 to(Msg) -> iolist_to_binary(json:encode(hb_private:reset(Msg))).
 
 %% @doc Decode a JSON string to a message.
