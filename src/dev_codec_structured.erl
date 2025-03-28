@@ -89,7 +89,7 @@ from(Msg) when is_map(Msg) ->
                     lists:map(
                         fun({Key, Value}) ->
                             {ok, Item} = hb_structured_fields:to_item(Value),
-                            {Key, Item}
+                            {hb_escape:encode(Key), Item}
                         end,
                         lists:reverse(T)
                     )
@@ -169,7 +169,9 @@ parse_ao_types(Msg) when is_map(Msg) ->
 parse_ao_types(Bin) ->
     maps:from_list(
         lists:map(
-            fun({Key, {item, {_, Value}, _}}) -> {Key, Value} end,
+            fun({Key, {item, {_, Value}, _}}) ->
+                {hb_escape:decode(Key), Value}
+            end,
             hb_structured_fields:parse_dictionary(Bin)    
         )
     ).
