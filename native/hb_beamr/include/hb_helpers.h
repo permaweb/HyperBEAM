@@ -106,7 +106,7 @@ int get_function_sig(const wasm_externtype_t* type, char* type_str);
  * 
  *  returns: A pointer to the exported WASM function, or NULL if the function is not found.
  */
-wasm_func_t* get_exported_function(Proc* proc, const char* target_name);
+wasm_func_t* get_exported_function(wasm_extern_vec_t exports, wasm_exporttype_vec_t export_types, const char* target_name);
 
 /*
  * Function: get_memory
