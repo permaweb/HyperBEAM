@@ -31,7 +31,7 @@ format(Base, _, _) ->
     {ok, #{ <<"body">> => hb_util:bin(hb_message:format(Base)) }}.
 
 return_file(Name) ->
-    {ok, Body} = file:read_file("priv/html/hyperbuddy@1.0/" ++ Name ++ ".html"),
+    {ok, Body} = file:read_file(code:priv_dir(hb) ++ "/html/hyperbuddy@1.0/" ++ Name ++ ".html"),
     {ok, #{
         <<"body">> => Body,
         <<"content-type">> => <<"text/html">>
