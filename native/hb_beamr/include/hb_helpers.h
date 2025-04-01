@@ -130,4 +130,37 @@ wasm_memory_t* get_memory(Proc* proc);
  */
 long get_memory_size(Proc* proc);
 
+/*
+ * Function: stack_entry_push
+ * --------------------
+ * Pushes a stack pointer onto the stack
+ * 
+ *  proc: The process structure containing the WASM instance.
+ *  val: The value to push onto the stack.
+ */
+int stack_entry_push(Proc* proc, wasm_val_t* val);
+
+/*
+ * Function: stack_entry_pop
+ * --------------------
+ * Pops a stack pointer from the stack
+ * 
+ *  proc: The process structure containing the WASM instance.
+ */
+StackEntry* stack_entry_pop(Proc* proc);
+
+/*
+ * Function: stack_entry_peek
+ * --------------------
+ * Pops a stack pointer from the stack
+ */
+StackEntry* stack_entry_peek(Proc* proc);
+
+/*
+ * Function: stack_entry_set_exception_tip
+ * --------------------
+ * Sets the exception tip for the last stack entry
+ */
+bool stack_entry_set_exception_tip(Proc* proc, char* exception);
+
 #endif // HB_HELPERS_H
