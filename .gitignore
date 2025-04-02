@@ -35,3 +35,9 @@ cache-*
 
 *.dot
 *.svg
+mainnet-cache/
+store-inputs/
+debug-cache/
+
+wallet.json
+node_modules/
