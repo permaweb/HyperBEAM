@@ -46,7 +46,7 @@ $(WAMR_DIR):
 	git clone \
 		https://github.com/permaweb/wasm-micro-runtime.git \
 		$(WAMR_DIR) \
-		-b WAMR-$(WAMR_VERSION) \
+		-b patched-2.2.0 \
 		--single-branch
 
 $(WAMR_DIR)/lib/libvmlib.a: $(WAMR_DIR)
