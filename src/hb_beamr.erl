@@ -1,4 +1,3 @@
-
 %%% @doc BEAMR: A WAMR wrapper for BEAM.
 %%% 
 %%% Beamr is a library that allows you to run WASM modules in BEAM, using the
@@ -55,7 +54,7 @@
 %%% Utility API:
 -export([serialize/1, deserialize/2, stub/3]).
 
--include("src/include/hb.hrl").
+-include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Load the driver for the WASM executor.

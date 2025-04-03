@@ -4,7 +4,7 @@
 % Preparing data for testing
 -export([prepare_unsigned_data/0, prepare_signed_data/0,
     prepare_deeply_nested_complex_message/0]).
--include("src/include/hb.hrl").
+-include("include/hb.hrl").
 
 %% @doc Render the given Key into svg
 render(StoreOrOpts) ->

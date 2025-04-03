@@ -37,3 +37,4 @@ cache-*
 *.svg
 
 cu/
+ex_doc/
