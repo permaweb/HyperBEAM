@@ -84,7 +84,7 @@
 %%% Configuration and environment:
 -export([init/0, now/0, build/0]).
 %%% Base start configurations:
--export([start_simple_pay/0, start_simple_pay/1, start_simple_pay/2]).
+-export([start_simple_pay/0, start_simple_pay/1, start_simple_pay/2, start_simple_pay/3, start_simple_pay/4]).
 -export([topup/3, topup/4]).
 -export([start_mainnet/0, start_mainnet/1]).
 %%% Debugging tools:
@@ -146,7 +146,18 @@ start_simple_pay(Addr) ->
     rand:seed(default),
     start_simple_pay(Addr, 10000 + rand:uniform(50000)).
 start_simple_pay(Addr, Port) ->
-    do_start_simple_pay(#{ port => Port, operator => Addr }).
+    start_simple_pay(Addr, Port, 10).
+start_simple_pay(Addr, Port, Price) when is_integer(Price) ->
+    start_simple_pay(Addr, Port, Price, <<"simple-pay-key.json">>);
+start_simple_pay(Addr, Port, PrivKeyLocation) when is_binary(PrivKeyLocation) ->
+    start_simple_pay(Addr, Port, 10, PrivKeyLocation).
+start_simple_pay(Addr, Port, Price, PrivKeyLocation) ->
+    do_start_simple_pay(#{ 
+        port => Port, 
+        operator => Addr, 
+        priv_key_location => PrivKeyLocation,
+        simple_pay_price => Price
+    }).
 
 do_start_simple_pay(Opts) ->
     application:ensure_all_started([
@@ -159,6 +170,7 @@ do_start_simple_pay(Opts) ->
         gun,
         os_mon
     ]),
+	Wallet = hb:wallet(hb_opts:get(priv_key_location, no_viable_wallet_path, Opts)),
     Port = maps:get(port, Opts),
     Processor =
         #{
@@ -169,13 +181,21 @@ do_start_simple_pay(Opts) ->
     hb_http_server:start_node(
         Opts#{
             preprocessor => Processor,
-            postprocessor => Processor
+            postprocessor => Processor,
+            priv_wallet => Wallet
         }
     ),
     io:format(
         "Started simple-pay node at http://localhost:~p~n"
-        "Operator: ~s~n",
-        [Port, address()]
+        "Operator: ~s~n"
+        "Price: ~p~n"
+        "Wallet: ~s~n",
+        [	
+			Port, 
+			address(Wallet),
+			 maps:get(simple_pay_price, Opts, 10), 
+			 hb_opts:get(priv_key_location, no_viable_wallet_path, Opts)
+		]
     ),
     <<"http://localhost:", (integer_to_binary(Port))/binary>>.
 
