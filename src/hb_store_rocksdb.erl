@@ -14,7 +14,7 @@
 -export([make_link/3, make_group/2, type/2, add_path/3, path/2, resolve/2]).
 -export([init/1, terminate/2, handle_cast/2, handle_info/2, handle_call/3]).
 -export([code_change/3]).
--include("src/include/hb.hrl").
+-include("include/hb.hrl").
 
 -define(TIMEOUT, 5000).
 
@@ -53,7 +53,7 @@ start_link(Store) ->
     ignore.
 
 -else.
-%% @doc HyperBEAM was not compiled with RocksDB support, so we ignore the store.
+%% HyperBEAM was not compiled with RocksDB support, so we ignore the store.
 start_link(_Opts) -> ignore.
 
 -endif.

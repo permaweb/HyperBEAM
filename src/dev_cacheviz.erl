@@ -2,7 +2,7 @@
 %%% cache.
 -module(dev_cacheviz).
 -export([dot/3, svg/3]).
--include("src/include/hb.hrl").
+-include("include/hb.hrl").
 
 %% @doc Output the dot representation of the cache, or a specific path within
 %% the cache set by the `target' key in the request.
