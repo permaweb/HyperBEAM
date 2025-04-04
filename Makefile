@@ -102,14 +102,5 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 		echo "  node -v && npm -v"; \
 		exit 1; \
 	fi
-	@if [ ! -f "$(GENESIS_WASM_SERVER_DIR)/.env" ]; then \
-		cd $(GENESIS_WASM_SERVER_DIR) && \
-			npx --yes @permaweb/wallet >> wallet.json && \
-			echo 'NODE_CONFIG_ENV="development"' > .env && \
-			echo "WALLET_FILE=./wallet.json" >> .env && \
-			echo "HB_URL=http://localhost:10000" >> .env && \
-			echo "UNIT_MODE=hbu" >> .env && \
-			echo "PORT=6363" >> .env; \
-	fi
 	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."

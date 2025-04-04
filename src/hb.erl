@@ -266,7 +266,7 @@ debug_wait(T, Mod, Func, Line) ->
 %% @doc Run a function as many times as possible in a given amount of time.
 benchmark(Fun, TLen) ->
     T0 = erlang:system_time(millisecond),
-    until(
+    hb_util:until(
         fun() -> erlang:system_time(millisecond) - T0 > (TLen * 1000) end,
         Fun,
         0
@@ -296,15 +296,3 @@ benchmark(Fun, TLen, Procs) ->
         end,
     Refs = lists:map(StartWorker, lists:seq(1, Procs)),
     lists:sum(lists:map(CollectRes, Refs)).
-
-until(Condition, Fun, Count) ->
-    case Condition() of
-        false ->
-            case apply(Fun, hb_ao:truncate_args(Fun, [Count])) of
-                {count, AddToCount} ->
-                    until(Condition, Fun, Count + AddToCount);
-                _ ->
-                    until(Condition, Fun, Count + 1)
-            end;
-        true -> Count
-    end.

@@ -787,23 +787,23 @@ extract_field({item, {_Kind, IParsed}, IParams}, Req, Res) ->
                 >>
             };
 		_ ->
-			Lowered = lower_bin(IParsed),
+			NormParsed = hb_ao:normalize_key(IParsed),
 			NormalizedItem =
                 hb_structured_fields:item(
-                    {item, {string, Lowered}, IParams}
+                    {item, {string, NormParsed}, IParams}
                 ),
             IsRequestIdentifier = find_request_param(IParams),
 			% There may be multiple fields that match the identifier on the Msg,
 			% so we filter, instead of find
             %?event({extracting_field, {identifier, Lowered}, {req, Req}, {res, Res}}),
-			case maps:get(Lowered, if IsRequestIdentifier -> Req; true -> Res end, not_found) of
+			case maps:get(NormParsed, if IsRequestIdentifier -> Req; true -> Res end, not_found) of
 				not_found ->
 					% https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.2.2.5.2.6
 					{
                         field_not_found_error,
                         <<"Component Identifier for a field MUST be ",
                             "present on the message">>,
-                        {key, Lowered},
+                        {key, NormParsed},
                         {req, Req},
                         {res, Res}
                     };

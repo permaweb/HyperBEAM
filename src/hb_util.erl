@@ -14,7 +14,7 @@
 -export([format_maybe_multiline/2, remove_trailing_noise/2]).
 -export([debug_print/4, debug_fmt/1, debug_fmt/2, eunit_print/2]).
 -export([print_trace/4, trace_macro_helper/5, print_trace_short/4]).
--export([ok/1, ok/2]).
+-export([ok/1, ok/2, until/1, until/2, until/3]).
 -export([format_trace_short/1]).
 -export([count/2, mean/1, stddev/1, variance/1]).
 -include("include/hb.hrl").
@@ -73,6 +73,26 @@ ok(Other, Opts) ->
 		throw -> throw({unexpected, Other});
 		_ -> {unexpected, Other}
 	end.
+
+%% @doc Utility function to wait for a condition to be true. Optionally,
+%% you can pass a function that will be called with the current count of
+%% iterations, returning an integer that will be added to the count. Once the
+%% condition is true, the function will return the count.
+until(Condition) ->
+    until(Condition, 0).
+until(Condition, Count) ->
+    until(Condition, fun() -> receive after 100 -> 1 end end, Count).
+until(Condition, Fun, Count) ->
+    case Condition() of
+        false ->
+            case apply(Fun, hb_ao:truncate_args(Fun, [Count])) of
+                {count, AddToCount} ->
+                    until(Condition, Fun, Count + AddToCount);
+                _ ->
+                    until(Condition, Fun, Count + 1)
+            end;
+        true -> Count
+    end.
 
 %% @doc Return the human-readable form of an ID of a message when given either
 %% a message explicitly, raw encoded ID, or an Erlang Arweave `tx' record.

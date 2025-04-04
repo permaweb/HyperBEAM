@@ -40,7 +40,9 @@
 %% @doc Convert a HTTP Message into a TABM.
 %% HTTP Structured Field is encoded into it's equivalent TABM encoding.
 from(Bin) when is_binary(Bin) -> Bin;
-from(HTTP) ->
+from(RawHTTP) ->
+    % Decode the keys of the HTTP message
+    HTTP = hb_escape:decode_keys(RawHTTP),
     Body = maps:get(<<"body">>, HTTP, <<>>),
     % First, parse all headers excluding the signature-related headers, as they
     % are handled separately.
@@ -293,6 +295,8 @@ commitments_from_signature(Map, HPs, RawSig, RawSigInput) ->
 to(Bin) when is_binary(Bin) -> Bin;
 to(TABM) -> to(TABM, []).
 to(TABM, Opts) when is_map(TABM) ->
+    % Encode the keys of the TABM
+    EncodedTABM = hb_escape:encode_keys(TABM),
     Stripped =
         maps:without(
             [
@@ -301,7 +305,7 @@ to(TABM, Opts) when is_map(TABM) ->
                 <<"signature-input">>,
                 <<"priv">>
             ],
-            TABM
+            EncodedTABM
         ),
     ?event({stripped, Stripped}),
     {InlineFieldHdrs, InlineKey} = inline_key(TABM),

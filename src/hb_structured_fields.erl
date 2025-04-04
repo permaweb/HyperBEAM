@@ -175,7 +175,7 @@ parse_dict_key(<<$=, R0/bits>>, Acc, K) ->
     parse_dict_before_sep(R, lists:keystore(K, 1, Acc, {K, Item}));
 parse_dict_key(<<C, R/bits>>, Acc, K) when
         ?IS_LC_ALPHA(C) or ?IS_DIGIT(C) or
-        (C =:= $_) or (C =:= $-) or (C =:= $.) or (C =:= $*) ->
+        (C =:= $_) or (C =:= $-) or (C =:= $.) or (C =:= $*) or (C =:= $%) ->
     parse_dict_key(R, Acc, <<K/binary, C>>);
 parse_dict_key(<<$;, R0/bits>>, Acc, K) ->
     {Params, R} = parse_before_param(R0, []),
