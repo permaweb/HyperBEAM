@@ -91,7 +91,7 @@
 %%% '''
 -module(hb_ao).
 %%% Main AO-Core API:
--export([resolve/2, resolve/3, resolve_many/2]).
+-export([ensure/1, ensure/2, resolve/2, resolve/3, resolve_many/2]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1]).
 -export([message_to_fun/3, message_to_device/2, load_device/2, find_exported_function/5]).
 -export([force_message/2]).
@@ -105,6 +105,10 @@
 
 -define(TEMP_OPTS, [add_key, force_message, cache_control, spawn_worker]).
 
+%% @doc Ensure that a value is loaded into memory.
+ensure(Value) -> ensure(Value, #{}).
+ensure(Value, Opts) -> hb_cache:ensure_read(Value, Opts).
+
 %% @doc Get the value of a message's key by running its associated device
 %% function. Optionally, takes options that control the runtime environment. 
 %% This function returns the raw result of the device function call:
@@ -116,17 +120,22 @@
 %%      4: Persistent-resolver lookup.
 %%      5: Device lookup.
 %%      6: Execution.
-%%      7: Cryptographic linking.
-%%      8: Result caching.
-%%      9: Notify waiters.
-%%     10: Fork worker.
-%%     11: Recurse or terminate.
+%%      7: Result loading.
+%%      8: Cryptographic linking.
+%%      9: Result caching.
+%%     10: Notify waiters.
+%%     11: Fork worker.
+%%     12: Recurse or terminate.
 
 resolve(SingletonMsg, Opts) when is_map(SingletonMsg) ->
     resolve_many(hb_singleton:from(SingletonMsg), Opts).
 
 resolve(Msg1, Path, Opts) when not is_map(Path) ->
     resolve(Msg1, #{ <<"path">> => Path }, Opts);
+resolve(R1, Msg2, Opts) when ?IS_RESOLVER(R1) ->
+    resolve(R1(Opts), Msg2, Opts);
+resolve(Msg1, R2, Opts) when ?IS_RESOLVER(R2) ->
+    resolve(Msg1, R2(Opts), Opts);
 resolve(Msg1, Msg2, Opts) ->
     PathParts = hb_path:from_message(request, Msg2),
     ?event(ao_core, {stage, 1, prepare_multimessage_resolution, {path_parts, PathParts}}),
@@ -183,6 +192,13 @@ do_resolve_many([Msg1, Msg2 | MsgList], Opts) ->
 resolve_stage(1, {as, DevID, ID}, Msg2, Opts) when ?IS_ID(ID) ->
     % Normalize `as' requests with a raw ID as the path.
     resolve_stage(1, {as, DevID, #{ <<"path">> => ID }}, Msg2, Opts);
+resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := R }}, Msg2, Opts) when ?IS_RESOLVER(R) ->
+    ?event(ao_core, {stage, 1, resolve_subrequest_message_path_to_data, {msg, Raw}, {opts, Opts}}),
+    resolve_stage(1, {as, DevID, #{ <<"path">> => R(Opts) }}, Msg2, Opts);
+resolve_stage(1, {as, DevID, R}, Msg2, Opts) when ?IS_RESOLVER(R) ->
+    % Resolve the sub-request message to its underlying data.
+    ?event(ao_core, {stage, 1, resolve_subrequest_message, {msg, R}, {opts, Opts}}),
+    resolve_stage(1, {as, DevID, R(Opts)}, Msg2, Opts);
 resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Msg2, Opts) when ?IS_ID(ID) ->
     % If the first message is an `as' with an ID, we should load the message and
     % apply the non-path elements of the sub-request to it.
@@ -229,6 +245,14 @@ resolve_stage(1, RawMsg1, Msg2Outer = #{ <<"path">> := {as, DevID, Msg2Inner} },
             if is_map(Msg2Inner) -> Msg2Inner; true -> #{ <<"path">> => Msg2Inner } end
         ),
     subresolve(RawMsg1, DevID, Msg2, Opts);
+resolve_stage(1, R1, Msg2, Opts) when ?IS_RESOLVER(R1) ->
+    % Resolve the base message to its underlying data.
+    ?event(ao_core, {stage, 1, resolve_base_message, {msg, Msg2}, {opts, Opts}}),
+    resolve_stage(1, R1(Opts), Msg2, Opts);
+resolve_stage(1, Msg1, R2, Opts) when ?IS_RESOLVER(R2) ->
+    % Resolve the base message to its underlying data.
+    ?event(ao_core, {stage, 1, resolve_request_message, {msg, Msg1}, {opts, Opts}}),
+    resolve_stage(1, Msg1, R2(Opts), Opts);
 resolve_stage(1, Msg1, Msg2, Opts) when is_list(Msg1) ->
     % Normalize lists to numbered maps (base=1) if necessary.
     ?event(ao_core, {stage, 1, list_normalize}, Opts),
@@ -475,11 +499,18 @@ resolve_stage(6, Func, Msg1, Msg2, ExecName, Opts) ->
                 )
         end,
     resolve_stage(7, Msg1, Msg2, Res, ExecName, Opts);
-resolve_stage(7, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) when is_map(Msg3) ->
-    ?event(ao_core, {stage, 7, ExecName, generate_hashpath}, Opts),
+resolve_stage(7, Msg1, Msg2, {Status, R}, ExecName, Opts) when ?IS_RESOLVER(R) ->
+    ?event(ao_core, {stage, 7, ExecName, executing_result_resolver}, Opts),
+    % The resolution has yielded a data resolver. We run it and continue.
+    % We do this regardless of the status of the resolution.
+    resolve_stage(8, Msg1, Msg2, {Status, R()}, ExecName, Opts);
+resolve_stage(7, Msg1, Msg2, Msg3, ExecName, Opts) ->
+    resolve_stage(8, Msg1, Msg2, Msg3, ExecName, Opts);
+resolve_stage(8, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) when is_map(Msg3) ->
+    ?event(ao_core, {stage, 8, ExecName, generate_hashpath}, Opts),
     % Cryptographic linking. Now that we have generated the result, we
     % need to cryptographically link the output to its input via a hashpath.
-    resolve_stage(8, Msg1, Msg2,
+    resolve_stage(9, Msg1, Msg2,
         case hb_opts:get(hashpath, update, Opts#{ only => local }) of
             update ->
                 Priv = hb_private:from_message(Msg3),
@@ -503,8 +534,8 @@ resolve_stage(7, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) when is_map(Msg3) ->
         ExecName,
         Opts
     );
-resolve_stage(7, Msg1, Msg2, {Status, Msg3}, ExecName, Opts) when is_map(Msg3) ->
-    ?event(ao_core, {stage, 7, ExecName, abnormal_status_reset_hashpath}, Opts),
+resolve_stage(8, Msg1, Msg2, {Status, Msg3}, ExecName, Opts) when is_map(Msg3) ->
+    ?event(ao_core, {stage, 8, ExecName, abnormal_status_reset_hashpath}, Opts),
     ?event(hashpath, {resetting_hashpath_msg3, {msg1, Msg1}, {msg2, Msg2}, {opts, Opts}}),
     % Skip cryptographic linking and reset the hashpath if the result is abnormal.
     Priv = hb_private:from_message(Msg3),
@@ -512,28 +543,28 @@ resolve_stage(7, Msg1, Msg2, {Status, Msg3}, ExecName, Opts) when is_map(Msg3) -
         8, Msg1, Msg2,
         {Status, Msg3#{ <<"priv">> => maps:without([<<"hashpath">>], Priv) }},
         ExecName, Opts);
-resolve_stage(7, Msg1, Msg2, Res, ExecName, Opts) ->
-    ?event(ao_core, {stage, 7, ExecName, non_map_result_skipping_hash_path}, Opts),
+resolve_stage(8, Msg1, Msg2, Res, ExecName, Opts) ->
+    ?event(ao_core, {stage, 8, ExecName, non_map_result_skipping_hash_path}, Opts),
     % Skip cryptographic linking and continue if we don't have a map that can have
     % a hashpath at all.
-    resolve_stage(8, Msg1, Msg2, Res, ExecName, Opts);
-resolve_stage(8, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) ->
-    ?event(ao_core, {stage, 8, ExecName, result_caching}, Opts),
+    resolve_stage(9, Msg1, Msg2, Res, ExecName, Opts);
+resolve_stage(9, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) ->
+    ?event(ao_core, {stage, 9, ExecName, result_caching}, Opts),
     % Result caching: Optionally, cache the result of the computation locally.
     hb_cache_control:maybe_store(Msg1, Msg2, Msg3, Opts),
-    resolve_stage(9, Msg1, Msg2, {ok, Msg3}, ExecName, Opts);
-resolve_stage(8, Msg1, Msg2, Res, ExecName, Opts) ->
-    ?event(ao_core, {stage, 8, ExecName, abnormal_status_skip_caching}, Opts),
-    % Skip result caching if the result is abnormal.
-    resolve_stage(9, Msg1, Msg2, Res, ExecName, Opts);
+    resolve_stage(10, Msg1, Msg2, {ok, Msg3}, ExecName, Opts);
 resolve_stage(9, Msg1, Msg2, Res, ExecName, Opts) ->
-    ?event(ao_core, {stage, 9, ExecName}, Opts),
+    ?event(ao_core, {stage, 9, ExecName, abnormal_status_skip_caching}, Opts),
+    % Skip result caching if the result is abnormal.
+    resolve_stage(10, Msg1, Msg2, Res, ExecName, Opts);
+resolve_stage(10, Msg1, Msg2, Res, ExecName, Opts) ->
+    ?event(ao_core, {stage, 10, ExecName}, Opts),
     % Notify processes that requested the resolution while we were executing and
     % unregister ourselves from the group.
     hb_persistent:unregister_notify(ExecName, Msg2, Res, Opts),
-    resolve_stage(10, Msg1, Msg2, Res, ExecName, Opts);
-resolve_stage(10, _Msg1, _Msg2, {ok, Msg3} = Res, ExecName, Opts) ->
-    ?event(ao_core, {stage, 10, ExecName, maybe_spawn_worker}, Opts),
+    resolve_stage(11, Msg1, Msg2, Res, ExecName, Opts);
+resolve_stage(11, _Msg1, _Msg2, {ok, Msg3} = Res, ExecName, Opts) ->
+    ?event(ao_core, {stage, 11, ExecName, maybe_spawn_worker}, Opts),
     % Check if we should spawn a worker for the current execution
     case {is_map(Msg3), hb_opts:get(spawn_worker, false, Opts#{ prefer => local })} of
         {A, B} when (A == false) or (B == false) ->
@@ -544,8 +575,8 @@ resolve_stage(10, _Msg1, _Msg2, {ok, Msg3} = Res, ExecName, Opts) ->
             hb_persistent:forward_work(WorkerPID, Opts),
             Res
     end;
-resolve_stage(10, _Msg1, _Msg2, OtherRes, ExecName, Opts) ->
-    ?event(ao_core, {stage, 10, ExecName, abnormal_status_skip_spawning}, Opts),
+resolve_stage(11, _Msg1, _Msg2, OtherRes, ExecName, Opts) ->
+    ?event(ao_core, {stage, 11, ExecName, abnormal_status_skip_spawning}, Opts),
     OtherRes.
 
 %% @doc Execute a sub-resolution.
@@ -999,7 +1030,7 @@ message_to_device(Msg, Opts) ->
             % The message does not specify a device, so we use the default device.
             default_module();
         {ok, DevID} ->
-            case load_device(DevID, Opts) of
+            case load_device(ensure(DevID, Opts), Opts) of
                 {error, Reason} ->
                     % Error case: A device is specified, but it is not loadable.
                     throw({error, {device_not_loadable, DevID, Reason}});
@@ -1090,6 +1121,9 @@ is_exported(_Info, _Key) -> true.
 
 %% @doc Convert a key to a binary in normalized form.
 normalize_key(Key) -> normalize_key(Key, #{}).
+normalize_key(Key, Opts) when ?IS_RESOLVER(Key) ->
+    ?event(debug, {normalize_key_resolving, {key, Key}, {opts, Opts}}),
+    normalize_key(Key(), Opts);
 normalize_key(Key, _Opts) when ?IS_ID(Key) -> Key;
 normalize_key(Key, _Opts) when is_binary(Key) -> hb_util:to_lower(Key);
 normalize_key(Key, _Opts) when is_atom(Key) -> atom_to_binary(Key);
@@ -1130,6 +1164,7 @@ normalize_keys(Other) -> Other.
 %% @doc Load a device module from its name or a message ID.
 %% Returns {ok, Executable} where Executable is the device module. On error,
 %% a tuple of the form {error, Reason} is returned.
+load_device(R, Opts) when ?IS_RESOLVER(R) -> load_device(R(), Opts);
 load_device(Map, _Opts) when is_map(Map) -> {ok, Map};
 load_device(ID, _Opts) when is_atom(ID) ->
     try ID:module_info(), {ok, ID}

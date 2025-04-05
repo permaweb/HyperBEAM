@@ -101,10 +101,11 @@ from(Other) -> hb_path:to_binary(Other).
 
 %% @doc Convert a TABM into a native HyperBEAM message.
 to(Bin) when is_binary(Bin) -> Bin;
+to(R) when ?IS_RESOLVER(R) -> to(R());
 to(TABM0) ->
     Types = case maps:get(<<"ao-types">>, TABM0, <<>>) of
         <<>> -> #{};
-        Bin -> parse_ao_types(Bin)
+        Bin -> parse_ao_types(hb_ao:ensure(Bin))
     end,
     % "empty values" will each have a type, but no corresponding value
     % (because its empty)

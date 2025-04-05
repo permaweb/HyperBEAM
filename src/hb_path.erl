@@ -226,6 +226,8 @@ from_message(request, _) -> undefined.
 %% atoms. Notably, it does not support strings as lists of characters.
 term_to_path_parts(Path) ->
     term_to_path_parts(Path, #{ error_strategy => throw }).
+term_to_path_parts(R, _Opts) when ?IS_RESOLVER(R) ->
+    term_to_path_parts(R(), _Opts);
 term_to_path_parts([], _Opts) -> undefined;
 term_to_path_parts(<<>>, _Opts) -> undefined;
 term_to_path_parts(<<"/">>, _Opts) -> [];

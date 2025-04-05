@@ -163,15 +163,19 @@ exec_dummy_device(SigningWallet, Opts) ->
                     <<"data-protocol">> => <<"ao">>,
                     <<"variant">> => <<"ao.N.1">>,
                     <<"content-type">> => <<"application/beam">>,
-                    <<"module-name">> => ModName,
-                    <<"requires-otp-release">> => erlang:system_info(otp_release),
+                    <<"module-name">> => atom_to_binary(ModName),
+                    <<"requires-otp-release">> =>
+                        hb_util:bin(erlang:system_info(otp_release)),
                     <<"body">> => Bin
                 }
             ),
             SigningWallet
         ),
     {ok, ID} = hb_cache:write(DevMsg, Opts),
-    ?assertEqual({ok, DevMsg}, hb_cache:read(ID, Opts)),
+    ?assertEqual(
+        DevMsg,
+        hb_cache:ensure_fully_read(hb_util:ok(hb_cache:read(ID, Opts)), Opts)
+    ),
     % Create a base message with the device ID, then request a dummy path from
     % it.
     hb_ao:resolve(

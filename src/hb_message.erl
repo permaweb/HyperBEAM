@@ -259,7 +259,7 @@ uncommitted(Msg) ->
 %% @doc Return all of the committers on a message that have 'normal', 256 bit, 
 %% addresses.
 signers(Msg) ->
-    lists:filter(fun(Signer) -> ?IS_ID(Signer) end,
+    lists:filter(fun(Signer) -> ?IS_ID(hb_ao:ensure(Signer)) end,
         hb_ao:get(<<"committers">>, Msg, #{})).
 
 %% @doc Get a codec from the options.
@@ -477,8 +477,10 @@ type(Msg) when is_map(Msg) ->
 %%      `primary': Only the primary map's keys must be present.
 match(Map1, Map2) ->
     match(Map1, Map2, strict).
-match(Map1, Map2, Mode) ->
-     Keys1 =
+match(RawMap1, RawMap2, Mode) ->
+    Map1 = maps:map(fun(K, V) -> hb_ao:ensure(V) end, hb_ao:ensure(RawMap1)),
+    Map2 = maps:map(fun(K, V) -> hb_ao:ensure(V) end, hb_ao:ensure(RawMap2)),
+    Keys1 =
         maps:keys(
             NormMap1 = minimize(
                 normalize(hb_ao:normalize_keys(Map1)),
@@ -498,6 +500,7 @@ match(Map1, Map2, Mode) ->
                 fun(Key) -> lists:member(Key, Keys1) end,
                 Keys1
             ),
+    
     ?event({match, {keys1, Keys1}, {keys2, Keys2}, {mode, Mode}, {primary_keys_present, PrimaryKeysPresent}}),
     case (Keys1 == Keys2) or (Mode == only_present) or PrimaryKeysPresent of
         true ->
@@ -583,11 +586,13 @@ commitment(Committer, Msg) ->
     commitment(Committer, Msg, #{}).
 commitment(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
     commitment(#{ <<"committer">> => CommitterID }, Msg, Opts);
-commitment(Spec, #{ <<"commitments">> := Commitments }, _Opts) ->
+commitment(Spec, #{ <<"commitments">> := R }, _Opts) when ?IS_RESOLVER(R) ->
+    commitment(Spec, #{ <<"commitments">> => R() }, _Opts);
+commitment(Spec, #{ <<"commitments">> := Commitments }, Opts) ->
     Matches =
         maps:filtermap(
             fun(ID, CommMsg) ->
-                case match(Spec, CommMsg, primary) of
+                case match(Spec, hb_ao:ensure(CommMsg, Opts), primary) of
                     true -> {true, {ID, CommMsg}};
                     false -> false
                 end

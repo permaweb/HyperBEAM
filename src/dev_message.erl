@@ -140,18 +140,17 @@ id_device(_) ->
 %% @doc Return the committers of a message that are present in the given request.
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
-committers(#{ <<"commitments">> := Commitments }, _, _NodeOpts) ->
-    ?event({commitments, Commitments}),
+committers(#{ <<"commitments">> := Commitments }, _, NodeOpts) ->
     {ok,
         maps:values(
             maps:filtermap(
                 fun(_ID, Commitment) ->
-                    case maps:get(<<"committer">>, Commitment, undefined) of
+                    case maps:get(<<"committer">>, hb_ao:ensure(Commitment, NodeOpts), undefined) of
                         undefined -> false;
                         Committer -> {true, Committer}
                     end
                 end,
-                Commitments
+                hb_ao:ensure(Commitments, NodeOpts)
             )
         )
     };
@@ -249,12 +248,12 @@ committed(Self, Req, Opts) ->
     % Get the target message of the verification request.
     {ok, Base} = hb_message:find_target(Self, Req, Opts),
     CommitmentIDs = commitment_ids_from_request(Base, Req, Opts),
-    Commitments = maps:get(<<"commitments">>, Base, #{}),
+    Commitments = hb_ao:ensure(maps:get(<<"commitments">>, Base, #{}), Opts),
     % Get the list of committed keys from each committer.
     CommitmentKeys =
         lists:map(
             fun(CommitmentID) ->
-                Commitment = maps:get(CommitmentID, Commitments),
+                Commitment = hb_ao:ensure(maps:get(CommitmentID, Commitments), Opts),
                 {ok, CommittedKeys} =
                     exec_for_commitment(
                         committed,
@@ -299,7 +298,7 @@ committed(Self, Req, Opts) ->
 %% @doc Return a message with only the relevant commitments for a given request.
 %% See `commitment_ids_from_request/3' for more information on the request format.
 with_relevant_commitments(Base, Req, Opts) ->
-    Commitments = maps:get(<<"commitments">>, Base, #{}),
+    Commitments = hb_ao:ensure(maps:get(<<"commitments">>, Base, #{}), Opts),
     CommitmentIDs = commitment_ids_from_request(Base, Req, Opts),
     Base#{ <<"commitments">> => maps:with(CommitmentIDs, Commitments) }.
 
@@ -310,7 +309,7 @@ with_relevant_commitments(Base, Req, Opts) ->
 %% may specify `all' or `none' for each group. If no specifiers are provided,
 %% the default is `all' for commitments -- also implying `all' for committers.
 commitment_ids_from_request(Base, Req, Opts) ->
-    Commitments = maps:get(<<"commitments">>, Base, #{}),
+    Commitments = hb_ao:ensure(maps:get(<<"commitments">>, Base, #{}), Opts),
     ReqCommitters =
         case maps:get(<<"committers">>, Req, <<"none">>) of
             X when is_list(X) -> X;
@@ -561,12 +560,14 @@ keys(Msg) ->
 %% underlying Erlang map. First check the public keys, then check case-
 %% insensitively if the key is a binary.
 get(Key, Msg) -> get(Key, Msg, #{ <<"path">> => <<"get">> }).
-get(Key, Msg, _Msg2) ->
+get(Key, Msg, _Msg2) -> get(Key, Msg, _Msg2, #{}).
+get(Key, Msg, _Msg2, Opts) ->
     case hb_private:is_private(Key) of
         true -> {error, not_found};
         false ->
             case maps:get(Key, Msg, not_found) of
-                not_found -> case_insensitive_get(Key, Msg);
+                not_found -> case_insensitive_get(Key, Msg, Opts);
+            	R when ?IS_RESOLVER(R) -> {ok, R()};
                 Value -> {ok, Value}
             end
     end.
@@ -574,11 +575,12 @@ get(Key, Msg, _Msg2) ->
 %% @doc Key matching should be case insensitive, following RFC-9110, so we 
 %% implement a case-insensitive key lookup rather than delegating to
 %% `maps:get/2'. Encode the key to a binary if it is not already.
-case_insensitive_get(Key, Msg) ->
+case_insensitive_get(Key, Msg, Opts) ->
     NormKey = hb_ao:normalize_key(Key),
     NormMsg = hb_ao:normalize_keys(Msg),
     case maps:get(NormKey, NormMsg, not_found) of
         not_found -> {error, not_found};
+        R when ?IS_RESOLVER(R) -> {ok, R()};
         Value -> {ok, Value}
     end.
 
@@ -599,10 +601,10 @@ keys_from_device_test() ->
     ?assertEqual({ok, [<<"a">>]}, hb_ao:resolve(#{ <<"a">> => 1 }, keys, #{})).
 
 case_insensitive_get_test() ->
-	?assertEqual({ok, 1}, case_insensitive_get(<<"a">>, #{ <<"a">> => 1 })),
-	?assertEqual({ok, 1}, case_insensitive_get(<<"a">>, #{ <<"A">> => 1 })),
-	?assertEqual({ok, 1}, case_insensitive_get(<<"A">>, #{ <<"a">> => 1 })),
-	?assertEqual({ok, 1}, case_insensitive_get(<<"A">>, #{ <<"A">> => 1 })).
+	?assertEqual({ok, 1}, case_insensitive_get(<<"a">>, #{ <<"a">> => 1 }, #{})),
+	?assertEqual({ok, 1}, case_insensitive_get(<<"a">>, #{ <<"A">> => 1 }, #{})),
+	?assertEqual({ok, 1}, case_insensitive_get(<<"A">>, #{ <<"a">> => 1 }, #{})),
+	?assertEqual({ok, 1}, case_insensitive_get(<<"A">>, #{ <<"A">> => 1 }, #{})).
 
 private_keys_are_filtered_test() ->
     ?assertEqual(

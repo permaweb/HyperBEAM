@@ -181,7 +181,8 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
     ))#{ <<"status">> => hb_util:int(Status) }.
 
 %% @doc Given a message, return the information needed to make the request.
-message_to_request(M, Opts) ->
+message_to_request(RawM, Opts) ->
+    M = hb_cache:ensure_fully_read(RawM, Opts),
     Method = hb_ao:get(<<"method">>, M, <<"GET">>, Opts),
     % We must remove the path and host from the message, because they are not
     % valid for outbound requests. The path is retrieved from the route, and

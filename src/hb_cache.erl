@@ -23,9 +23,40 @@
 -module(hb_cache).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
 -export([list/2, list_numbered/2]).
+-export([ensure_read/2, ensure_fully_read/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+%% @doc Take a potentially lazily-loaded value and ensure that it is loaded. Does
+%% not recurse into deeper maps or lists.
+ensure_read(Value, Opts) when is_function(Value, 1) ->
+    throw({error, {resolving_arity_1_fun_not_allowed, Value}});
+ensure_read(Value, Opts) when is_function(Value, 0) ->
+    ?event(debug, {lazy_loading_value, {value, Value}}),
+    ensure_read(Value(), Opts);
+ensure_read(Value, _Opts) ->
+    Value.
+
+%% @doc Ensure that a composite object (message/list) is recursively read into
+%% memory. This function forces all potentially lazily loaded values to be read
+%% from the appropriate stores.
+ensure_fully_read(Map, Opts) when is_map(Map) ->
+    maps:map(
+        fun(_Key, V) ->
+            ensure_fully_read(ensure_read(V, Opts), Opts)
+        end,
+        Map
+    );
+ensure_fully_read(List, Opts) when is_list(List) ->
+    lists:map(
+        fun(X) ->
+            ensure_fully_read(ensure_read(X, Opts), Opts)
+        end,
+        List
+    );
+ensure_fully_read(Value, Opts) ->
+    ensure_read(Value, Opts).
 
 %% @doc List all items in a directory, assuming they are numbered.
 list_numbered(Path, Opts) ->
@@ -60,6 +91,7 @@ list(Path, Store) ->
 write(RawMsg, Opts) when is_map(RawMsg) ->
     % Use the _structured_ format for calculating alternative IDs, but the
     % _tabm_ format for writing to the store.
+    ?event(cache, write_root),
     case hb_message:with_only_committed(RawMsg, Opts) of
         {ok, Msg} ->
             AllIDs = calculate_all_ids(RawMsg, Opts),
@@ -184,6 +216,7 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either a
 %% richly typed map or a direct binary.
 read(Path, Opts) ->
+    ?event(cache, {read_root, {path, Path}}),
     case store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts) of
         not_found -> not_found;
         {ok, Res} ->
@@ -214,8 +247,7 @@ store_read(Path, Store, Opts, AlreadyRead) ->
             do_read(Path, Store, Opts, AlreadyRead)
     end.
 
-%% @doc Read a path from the store. Unsafe: May recurse indefinitely if circular
-%% links are present.
+%% @doc Read a path from the store.
 do_read(Path, Store, Opts, AlreadyRead) ->
     ResolvedFullPath = hb_store:resolve(Store, PathToBin = hb_path:to_binary(Path)),
     ?event({reading, {path, PathToBin}, {resolved, ResolvedFullPath}}),
@@ -236,37 +268,54 @@ do_read(Path, Store, Opts, AlreadyRead) ->
                             {subpaths, {explicit, Subpaths}}
                         }
                     ),
+                    % Return a map of subpaths and functions that can be resolved
+                    % in order to read their data.
                     Msg =
                         maps:from_list(
                             lists:map(
                                 fun(Subpath) ->
-                                    ?event({reading_subpath, {path, Subpath}, {store, Store}}),
-                                    Res = store_read(
-                                        [ResolvedFullPath, Subpath],
-                                        Store,
-                                        Opts,
-                                        [ResolvedFullPath | AlreadyRead]
-                                    ),
-                                    case Res of
-                                        not_found ->
-                                            ?event(error,
-                                                {subpath_not_found,
-                                                    {parent, Path},
-                                                    {resolved_parent, {string, ResolvedFullPath}},
-                                                    {subpath, Subpath},
-                                                    {all_subpaths, Subpaths},
-                                                    {store, Store}
-                                                }
+                                    {
+                                        iolist_to_binary([Subpath]),
+                                        fun() ->
+                                            ?event({reading_subpath,
+                                                {path, Subpath},
+                                                {store, Store}
+                                            }),
+                                            Res = store_read(
+                                                [ResolvedFullPath, Subpath],
+                                                Store,
+                                                Opts,
+                                                [ResolvedFullPath | AlreadyRead]
                                             ),
-                                            TriedPath = hb_path:to_binary([ResolvedFullPath, Subpath]),
-                                            throw({subpath_not_found,
-                                                {parent, Path},
-                                                {resolved_parent, ResolvedFullPath},
-                                                {failed_path, TriedPath}
-                                            });
-                                        {ok, Data} ->
-                                            {iolist_to_binary([Subpath]), Data}
-                                    end
+                                            case Res of
+                                                not_found ->
+                                                    ?event(error,
+                                                        {subpath_not_found,
+                                                            {parent, Path},
+                                                            {resolved_parent,
+                                                                {string, ResolvedFullPath}},
+                                                            {subpath, Subpath},
+                                                            {all_subpaths, Subpaths},
+                                                            {store, Store}
+                                                        }
+                                                    ),
+                                                    TriedPath =
+                                                        hb_path:to_binary(
+                                                            [
+                                                                ResolvedFullPath,
+                                                                Subpath
+                                                            ]
+                                                        ),
+                                                    throw({subpath_not_found,
+                                                        {parent, Path},
+                                                        {resolved_parent, ResolvedFullPath},
+                                                        {failed_path, TriedPath}
+                                                    });
+                                                {ok, Data} ->
+                                                    Data
+                                            end
+                                        end
+                                    }
                                 end,
                                 Subpaths
                             )
@@ -339,6 +388,7 @@ test_store_simple_unsigned_message(Opts) ->
     %% Read the item back
     ID = hb_util:human_id(hb_ao:get(id, Item)),
     {ok, RetrievedItem} = read(ID, Opts),
+    ?event(debug, {retrieved_item, {path, {string, ID}}, {item, RetrievedItem}}),
     ?assert(hb_message:match(Item, RetrievedItem)),
     ok.
 
@@ -472,4 +522,4 @@ test_device_map_cannot_be_written_test() ->
 run_test() ->
     Opts = #{ store => StoreOpts = 
         [#{ <<"store-module">> => hb_store_fs, <<"prefix">> => <<"cache-TEST">> }]},
-    test_store_unsigned_empty_message(Opts).
+    test_store_simple_unsigned_message(Opts).

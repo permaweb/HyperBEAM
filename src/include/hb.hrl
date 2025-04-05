@@ -7,6 +7,8 @@
 %% @doc Macro usable in guards that validates whether a term is a
 %% human-readable ID encoding.
 -define(IS_ID(X), (is_binary(X) andalso (byte_size(X) == 43 orelse byte_size(X) == 32))).
+%% @doc Macro for checking if a term is a data resolver.
+-define(IS_RESOLVER(X), (is_function(X, 0))).
 %% @doc List of special keys that are used in the AO-Core protocol.
 -define(AO_CORE_KEYS, [<<"path">>, <<"hashpath">>, <<"priv">>]).
 %% @doc Keys that can be regenerated losslessly.
