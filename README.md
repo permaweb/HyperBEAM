@@ -1,4 +1,4 @@
-<img src="https://arweave.net/kRfjyYMw2w31bO9GZLzMIBdsNDapaGeHIyUXQ56xI3g" />
+<img src="https://arweave.net/SgwU0MDSt4LPRPq-w9xOXJ2hPekwaHP9ugKmp2adD5I" />
 
 This repository contains a reference implementation of AO-Core, along with an
 Erlang-based (BEAM) client implementing a number of devices for the protocol.
