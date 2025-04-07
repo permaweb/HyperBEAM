@@ -231,12 +231,18 @@ handle_resolve(Req, Msgs, NodeMsg) ->
         Res -> embed_status(hb_ao:force_message(Res, NodeMsg))
     end.
 
-%% @doc execute a message from the node message upon the user's request.
+%% @doc Execute a message from the node message upon the user's request. The
+%% invocation of the processor provides a request of the following form:
+%% ```
+%%      /path => preprocess | postprocess
+%%      /request => the original request singleton
+%%      /body => list of messages the user wishes to process
+%% '''
 resolve_processor(PathKey, Processor, Req, Query, NodeMsg) ->
     case hb_opts:get(Processor, undefined, NodeMsg) of
         undefined -> {ok, Query};
         ProcessorMsg ->
-            ?event({resolving_processor, PathKey, ProcessorMsg}),
+            ?event(processor, {processor_resolving, PathKey, ProcessorMsg}),
             Res = hb_ao:resolve(
                 ProcessorMsg,
                 #{
@@ -246,7 +252,7 @@ resolve_processor(PathKey, Processor, Req, Query, NodeMsg) ->
                 },
                 NodeMsg#{ hashpath => ignore }
             ),
-            ?event({processor_result, {type, PathKey}, {res, Res}}),
+            ?event(processor, {processor_result, {type, PathKey}, {res, Res}}),
             Res
     end.
 

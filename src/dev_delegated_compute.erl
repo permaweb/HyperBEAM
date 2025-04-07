@@ -67,7 +67,11 @@ do_compute(ProcID, Msg2, Opts) ->
         ),
     ?event({do_compute_msg, {aos2, {string, Body}}}),
     Res = 
-        hb_ao:resolve(#{ <<"device">> => <<"relay@1.0">>, <<"content-type">> => <<"application/json">> },
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"relay@1.0">>,
+                <<"content-type">> => <<"application/json">>
+            },
             AOS2#{
                 <<"path">> => <<"call">>,
                 <<"relay-method">> => <<"POST">>,
