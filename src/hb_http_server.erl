@@ -174,7 +174,7 @@ new_server(RawNodeMsg) ->
             http3 ->
                 start_http3(ServerID, PrometheusOpts, NodeMsg);
             Pro when Pro =:= http2; Pro =:= http1 ->
-        		% The HTTP/2 server has fallback mode to 1.1 as necessary.
+                % The HTTP/2 server has fallback mode to 1.1 as necessary.
                 start_http2(ServerID, PrometheusOpts, NodeMsg);
             _ -> {error, {unknown_protocol, Protocol}}
         end,
@@ -216,12 +216,23 @@ start_http3(ServerID, ProtoOpts, _NodeMsg) ->
                 []
             ),
             ranch_server:set_addr(ServerID, {<<"localhost">>, GivenPort}),
+            % Bypass ranch's requirement to have a connection supervisor defined to support updating protocol opts
+            % Quicer doesn't use a connection supervisor, so we just spawn one that does nothing
+            ConnSup = spawn(fun() -> http3_conn_sup_loop() end),
+            ranch_server:set_connections_sup(ServerID, ConnSup),
             Parent ! {ok, GivenPort},
             receive stop -> stopped end
         end),
     receive {ok, GivenPort} -> {ok, GivenPort, ServerPID}
     after 2000 ->
         {error, {timeout, staring_http3_server, ServerID}}
+    end.
+
+http3_conn_sup_loop() ->
+    receive
+        _ -> 
+            % Ignore any other messages
+            http3_conn_sup_loop()
     end.
 
 start_http2(ServerID, ProtoOpts, NodeMsg) ->
