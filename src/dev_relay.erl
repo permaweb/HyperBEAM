@@ -13,7 +13,11 @@
 %%%     curl /~relay@.1.0/call?method=GET?0.path=https://www.arweave.net/
 %%% '''
 -module(dev_relay).
+%%% Execute synchronous and asynchronous relay requests.
 -export([call/3, cast/3]).
+%%% Re-route requests that would be executed locally to other peers, according
+%%% to the node's routing table.
+-export([preprocess/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -30,6 +34,7 @@ call(M1, RawM2, Opts) ->
     RelayPath =
         hb_ao:get_first(
             [
+                {BaseTarget, <<"path">>},
                 {RawM2, <<"relay-path">>},
                 {M1, <<"relay-path">>},
                 {M1, <<"path">>}
@@ -39,6 +44,7 @@ call(M1, RawM2, Opts) ->
     RelayMethod =
         hb_ao:get_first(
             [
+                {BaseTarget, <<"method">>},
                 {RawM2, <<"relay-method">>},
                 {M1, <<"relay-method">>},
                 {RawM2, <<"method">>},
@@ -49,6 +55,7 @@ call(M1, RawM2, Opts) ->
     RelayBody =
         hb_ao:get_first(
             [
+                {BaseTarget, <<"body">>},
                 {RawM2, <<"relay-body">>},
                 {M1, <<"relay-body">>},
                 {RawM2, <<"body">>},
@@ -111,8 +118,9 @@ call_get_test() ->
         ),
     ?assertEqual(true, byte_size(Body) > 10_000).
 
-
-preprocess_route_nearest_test() ->
+%% @doc Test that the `preprocess/3' function re-routes a request to remote
+%% peers, according to the node's routing table.
+preprocessor_reroute_to_nearest_test() ->
     Peer1 = <<"https://compute-1.forward.computer">>,
     Peer2 = <<"https://compute-2.forward.computer">>,
     HTTPSOpts = #{ http_client => httpc },
