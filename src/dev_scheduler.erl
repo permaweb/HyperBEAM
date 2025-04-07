@@ -784,7 +784,7 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                 >>
         end,
     ?event({getting_remote_schedule, {node, {string, Node}}, {path, {string, Path}}}),
-    case hb_http:get(Node, Path, Opts#{ http_client => httpc }) of
+    case hb_http:get(Node, Path, Opts#{ http_client => httpc, protocol => http2 }) of
         {ok, Res} ->
             ?event(push, {remote_schedule_result, {res, Res}}, Opts),
             case hb_util:int(hb_ao:get(<<"status">>, Res, 200, Opts)) of
@@ -1000,7 +1000,8 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
                 {path, {string, P}},
                 {process_id, {string, ProcID}}
             }),
-            case hb_http:post(Node, PostMsg, Opts) of
+            LegacyOpts = Opts#{ protocol => http2 },
+            case hb_http:post(Node, PostMsg, LegacyOpts) of
                 {ok, PostRes} ->
                     ?event({remote_schedule_result, PostRes}),
                     JSONRes =
@@ -1011,7 +1012,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
                     % to read and return it.
                     ID = maps:get(<<"id">>, JSONRes),
                     ?event({remote_schedule_result_id, ID, {json, JSONRes}}),
-                    case hb_http:get(Node, << ID/binary, "?process-id=", ProcID/binary>>, Opts) of
+                    case hb_http:get(Node, << ID/binary, "?process-id=", ProcID/binary>>, LegacyOpts) of
                         {ok, AssignmentRes} ->
                             ?event({received_full_assignment, AssignmentRes}),
                             AssignmentJSON =
