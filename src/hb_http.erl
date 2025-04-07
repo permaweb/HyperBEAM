@@ -55,8 +55,9 @@ post(Node, Path, Message, Opts) ->
 request(Message, Opts) ->
     % Special case: We are not given a peer and a path, so we need to
     % preprocess the URL to find them.
-    {ok, Method, Peer, Path, MessageToSend} = message_to_request(Message, Opts),
-    request(Method, Peer, Path, MessageToSend, Opts).
+    {ok, Method, Peer, Path, MessageToSend, NewOpts} =
+        message_to_request(Message, Opts),
+    request(Method, Peer, Path, MessageToSend, NewOpts).
 request(Method, Peer, Path, Opts) ->
     request(Method, Peer, Path, #{}, Opts).
 request(Method, Config = #{ <<"nodes">> := Nodes }, Path, Message, Opts) when is_list(Nodes) ->
@@ -70,12 +71,12 @@ request(Method, #{ <<"opts">> := NodeOpts, <<"uri">> := URI }, _Path, Message, O
     % We also recalculate the request. The order of precidence here is subtle:
     % We favor the args given to the function, but the URI rules take precidence
     % over that.
-    {ok, NewMethod, Node, NewPath, NewMsg} =
+    {ok, NewMethod, Node, NewPath, NewMsg, NewOpts} =
         message_to_request(
             Message#{ <<"path">> => URI, <<"method">> => Method },
             MergedOpts
         ),
-    request(NewMethod, Node, NewPath, NewMsg, MergedOpts);
+    request(NewMethod, Node, NewPath, NewMsg, NewOpts);
 request(Method, Peer, Path, RawMessage, Opts) ->
     ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {message, RawMessage}}),
     Req =
@@ -92,7 +93,6 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             RawMessage,
             Opts
         ),
-    ?event(debug_cu, {req, Req}, Opts),
     StartTime = os:system_time(millisecond),
     {_ErlStatus, Status, Headers, Body} = hb_http_client:req(Req, Opts),
     EndTime = os:system_time(millisecond),
@@ -182,48 +182,59 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
+    % Get the route for the message
+    Res = route_to_request(M, RouteRes = dev_router:route(M, Opts), Opts),
+    ?event(debug_http, {route_res, {route_res, RouteRes}, {full_res, Res}, {msg, M}}),
+    Res.
+
+%% @doc Parse a `dev_router:route' response and return a tuple of request
+%% parameters.
+route_to_request(M, {ok, URI}, Opts) when is_binary(URI) ->
+    route_to_request(M, {ok, #{ <<"uri">> => URI, <<"opts">> => #{} }}, Opts);
+route_to_request(M, {ok, #{ <<"uri">> := XPath, <<"opts">> := ReqOpts}}, Opts) ->
+    % The request is a direct HTTP URL, so we need to split the path into a
+    % host and path.
+    URI = uri_string:parse(XPath),
+    ?event(http_outbound, {parsed_uri, {uri, {explicit, URI}}}),
     Method = hb_ao:get(<<"method">>, M, <<"GET">>, Opts),
     % We must remove the path and host from the message, because they are not
     % valid for outbound requests. The path is retrieved from the route, and
     % the host should already be known to the caller.
     MsgWithoutMeta = maps:without([<<"path">>, <<"host">>], M),
-    % Get the route for the message
-    case dev_router:route(M, Opts) of
-        {ok, URL} when is_binary(URL) ->
-            % The request is a direct HTTP URL, so we need to split the
-            % URL into a host and path.
-            URI = uri_string:parse(URL),
-            ?event(http_outbound, {parsed_uri, {uri, {explicit, URI}}}),
-            Port =
-                case maps:get(port, URI, undefined) of
-                    undefined ->
-                        % If no port is specified, use 80 for HTTP and 443
-                        % for HTTPS.
-                        case URL of
-                            <<"https", _/binary>> -> <<"443">>;
-                            _ -> <<"80">>
-                        end;
-                    X -> integer_to_binary(X)
-                end,
-            Protocol = maps:get(scheme, URI, <<"https">>),
-            Host = maps:get(host, URI, <<"localhost">>),
-            Node = << Protocol/binary, "://", Host/binary, ":", Port/binary  >>,
-            PathParts = [maps:get(path, URI, <<"/">>)] ++
-                case maps:get(query, URI, <<>>) of
-                    <<>> -> [];
-                    Query -> [<<"?", Query/binary>>]
-                end,
-            Path = iolist_to_binary(PathParts),
-            ?event(http_outbound, {parsed_req, {node, Node}, {method, Method}, {path, Path}}),
-            {ok, Method, Node, Path, MsgWithoutMeta};
-        {ok, Routes} ->
-            ?event(http_outbound, {found_routes, {req, M}, {routes, Routes}}),
-            % The result is a route, so we leave it to `request' to handle it.
-            Path = hb_ao:get(<<"path">>, M, <<"/">>, Opts),
-            {ok, Method, Routes, Path, MsgWithoutMeta};
-        {error, Reason} ->
-            {error, {no_viable_route, Reason, {message, M}}}
-    end.
+    Port =
+        case maps:get(port, URI, undefined) of
+            undefined ->
+                % If no port is specified, use 80 for HTTP and 443
+                % for HTTPS.
+                case XPath of
+                    <<"https", _/binary>> -> <<"443">>;
+                    _ -> <<"80">>
+                end;
+            X -> integer_to_binary(X)
+        end,
+    Protocol = maps:get(scheme, URI, <<"https">>),
+    Host = maps:get(host, URI, <<"localhost">>),
+    Node = << Protocol/binary, "://", Host/binary, ":", Port/binary  >>,
+    PathParts = [maps:get(path, URI, <<"/">>)] ++
+        case maps:get(query, URI, <<>>) of
+            <<>> -> [];
+            Query -> [<<"?", Query/binary>>]
+        end,
+    Path = iolist_to_binary(PathParts),
+    ?event(http_outbound, {parsed_req, {node, Node}, {method, Method}, {path, Path}}),
+    {ok, Method, Node, Path, MsgWithoutMeta, hb_util:deep_merge(Opts, ReqOpts)};
+route_to_request(M, {ok, Routes}, Opts) ->
+    ?event(http_outbound, {found_routes, {req, M}, {routes, Routes}}),
+    % The result is a route, so we leave it to `request' to handle it.
+    Path = hb_ao:get(<<"path">>, M, <<"/">>, Opts),
+    Method = hb_ao:get(<<"method">>, M, <<"GET">>, Opts),
+    % We must remove the path and host from the message, because they are not
+    % valid for outbound requests. The path is retrieved from the route, and
+    % the host should already be known to the caller.
+    MsgWithoutMeta = maps:without([<<"path">>, <<"host">>], M),
+    {ok, Method, Routes, Path, MsgWithoutMeta, Opts};
+route_to_request(M, {error, Reason}, _Opts) ->
+    {error, {no_viable_route, {reason, Reason}, {message, M}}}.
 
 %% @doc Turn a set of request arguments into a request message, formatted in the
 %% preferred format.

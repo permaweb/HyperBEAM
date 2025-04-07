@@ -149,15 +149,30 @@ extract_base(RawPath, Opts) when is_binary(RawPath) ->
 %% @doc Generate a `uri' key for each node in a route.
 apply_routes(Msg, R, Opts) ->
     Nodes = hb_ao:get(<<"nodes">>, R, Opts),
+    % TODO: Cleanup duplication here. Ideally we would return only one type --
+    % either maps or lists. We will need to check whether upstream codepaths
+    % can handle coercion from the original given format to the other.
     NodesWithRouteApplied =
         if is_list(Nodes) ->
             lists:map(
-                fun(N) -> N#{ <<"uri">> => hb_util:ok(apply_route(Msg, N)) } end,
+                fun(N) ->
+                    case apply_route(Msg, N) of
+                        {ok, URI} when is_binary(URI) -> N#{ <<"uri">> => URI };
+                        {ok, Map} -> Map;
+                        {error, _} -> N
+                    end
+                end,
                 Nodes
             );
         is_map(Nodes) ->
             maps:map(
-                fun(_, N) -> N#{ <<"uri">> => hb_util:ok(apply_route(Msg, N)) } end,
+                fun(_, N) ->
+                    case apply_route(Msg, N) of
+                        {ok, URI} when is_binary(URI) -> N#{ <<"uri">> => URI };
+                        {ok, Map} -> Map;
+                        {error, _} -> N
+                    end
+                end,
                 Nodes
             )
         end,
@@ -165,9 +180,15 @@ apply_routes(Msg, R, Opts) ->
 
 %% @doc Apply a node map's rules for transforming the path of the message.
 %% Supports the following keys:
+%% - `opts': A map of options to pass to the request.
 %% - `prefix': The prefix to add to the path.
 %% - `suffix': The suffix to add to the path.
 %% - `replace': A regex to replace in the path.
+apply_route(Msg, Route = #{ <<"opts">> := Opts }) ->
+    {ok, #{
+        <<"opts">> => Opts,
+        <<"uri">> => hb_util:ok(apply_route(Msg, maps:without([<<"opts">>], Route)))
+    }};
 apply_route(#{ <<"path">> := Path }, #{ <<"prefix">> := Prefix }) ->
     {ok, <<Prefix/binary, Path/binary>>};
 apply_route(#{ <<"path">> := Path }, #{ <<"suffix">> := Suffix }) ->
