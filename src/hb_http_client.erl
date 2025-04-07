@@ -83,7 +83,7 @@ gun_req(Args, ReestablishedConnection, Opts) ->
 	StartTime = erlang:monotonic_time(),
 	#{ peer := Peer, path := Path, method := Method } = Args,
 	Response =
-        case catch gen_server:call(?MODULE, {get_connection, Args}, infinity) of
+        case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
             {ok, PID} ->
                 ar_rate_limiter:throttle(Peer, Path, Opts),
                 case request(PID, Args, Opts) of
@@ -192,12 +192,12 @@ init_prometheus(Opts) ->
     ?event(started),
 	{ok, #state{ opts = Opts }}.
 
-handle_call({get_connection, Args}, From,
+handle_call({get_connection, Args, Opts}, From,
 		#state{ pid_by_peer = PIDPeer, status_by_pid = StatusByPID } = State) ->
 	Peer = maps:get(peer, Args),
 	case maps:get(Peer, PIDPeer, not_found) of
 		not_found ->
-			{ok, PID} = open_connection(Args, State#state.opts),
+			{ok, PID} = open_connection(Args, maps:merge(State#state.opts, Opts)),
 			MonitorRef = monitor(process, PID),
 			PIDPeer2 = maps:put(Peer, PID, PIDPeer),
 			StatusByPID2 =
