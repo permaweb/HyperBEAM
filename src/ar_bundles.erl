@@ -1,4 +1,5 @@
 -module(ar_bundles).
+-moduledoc "Module for creating, signing, and verifying Arweave data items and bundles.".
 -export([signer/1, is_signed/1]).
 -export([id/1, id/2, reset_ids/1, type/1, map/1, hd/1, member/2, find/2]).
 -export([manifest/1, manifest_item/1, parse_manifest/1]).
@@ -11,7 +12,6 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--moduledoc "Module for creating, signing, and verifying Arweave data items and bundles.".
 
 -define(BUNDLE_TAGS, [
     {<<"bundle-format">>, <<"binary">>},
