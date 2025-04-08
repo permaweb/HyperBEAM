@@ -1,4 +1,4 @@
-<img src="https://arweave.net/SgwU0MDSt4LPRPq-w9xOXJ2hPekwaHP9ugKmp2adD5I" />
+<![hyperbeam_logo-thin](https://github.com/user-attachments/assets/6de4faa6-7417-40a6-92cd-8a79d364dba4)
 
 This repository contains a reference implementation of AO-Core, along with an
 Erlang-based (BEAM) client implementing a number of devices for the protocol.
