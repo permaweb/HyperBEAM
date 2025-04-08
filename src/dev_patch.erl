@@ -40,7 +40,8 @@ compute(Msg1, Msg2, Opts) ->
     Patches =
         maps:filter(
             fun(_, Msg) ->
-                hb_ao:get(<<"method">>, Msg, Opts) == <<"PATCH">>
+                (hb_ao:get(<<"method">>, Msg, Opts) == <<"PATCH">>) orelse
+                    (hb_ao:get(<<"device">>, Msg, Opts) == <<"patch@1.0">>)
             end,
             Outbox
         ),
