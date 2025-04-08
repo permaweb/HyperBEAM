@@ -1,6 +1,8 @@
-%%% @doc A device that generates renders (or renderable dot output) of a node's
-%%% cache.
 -module(dev_cacheviz).
+-moduledoc """
+A device that generates renders (or renderable dot output) of a node's
+cache.
+""".
 -export([dot/3, svg/3]).
 -include("include/hb.hrl").
 

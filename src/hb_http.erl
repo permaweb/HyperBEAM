@@ -15,8 +15,10 @@ start() ->
     httpc:set_options([{max_keep_alive_length, 0}]),
     ok.
 
-%% @doc Gets a URL via HTTP and returns the resulting message in deserialized
+-doc """
+Gets a URL via HTTP and returns the resulting message in deserialized
 %% form.
+""".
 get(Node, Opts) -> get(Node, <<"/">>, Opts).
 get(Node, PathBin, Opts) when is_binary(PathBin) ->
     get(Node, #{ <<"path">> => PathBin }, Opts);
@@ -29,8 +31,10 @@ get(Node, Message, Opts) ->
         Opts
     ).
 
-%% @doc Posts a message to a URL on a remote peer via HTTP. Returns the
+-doc """
+Posts a message to a URL on a remote peer via HTTP. Returns the
 %% resulting message in deserialized form.
+""".
 post(Node, Message, Opts) ->
     post(Node,
         hb_ao:get(
@@ -50,8 +54,10 @@ post(Node, Path, Message, Opts) ->
         Error -> Error
     end.
 
-%% @doc Posts a binary to a URL on a remote peer via HTTP, returning the raw
+-doc """
+Posts a binary to a URL on a remote peer via HTTP, returning the raw
 %% binary body.
+""".
 request(Message, Opts) ->
     % Special case: We are not given a peer and a path, so we need to
     % preprocess the URL to find them.
@@ -165,7 +171,9 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             end
     end.
 
-%% @doc Convert a HTTP response to a httpsig message.
+-doc """
+Convert a HTTP response to a httpsig message.
+""".
 http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
     (hb_message:convert(
         maps:merge(
@@ -180,15 +188,19 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
         Opts
     ))#{ <<"status">> => hb_util:int(Status) }.
 
-%% @doc Given a message, return the information needed to make the request.
+-doc """
+Given a message, return the information needed to make the request.
+""".
 message_to_request(M, Opts) ->
     % Get the route for the message
     Res = route_to_request(M, RouteRes = dev_router:route(M, Opts), Opts),
     ?event(debug_http, {route_res, {route_res, RouteRes}, {full_res, Res}, {msg, M}}),
     Res.
 
-%% @doc Parse a `dev_router:route' response and return a tuple of request
+-doc """
+Parse a `dev_router:route' response and return a tuple of request
 %% parameters.
+""".
 route_to_request(M, {ok, URI}, Opts) when is_binary(URI) ->
     route_to_request(M, {ok, #{ <<"uri">> => URI, <<"opts">> => #{} }}, Opts);
 route_to_request(M, {ok, #{ <<"uri">> := XPath, <<"opts">> := ReqOpts}}, Opts) ->
@@ -236,8 +248,10 @@ route_to_request(M, {ok, Routes}, Opts) ->
 route_to_request(M, {error, Reason}, _Opts) ->
     {error, {no_viable_route, {reason, Reason}, {message, M}}}.
 
-%% @doc Turn a set of request arguments into a request message, formatted in the
+-doc """
+Turn a set of request arguments into a request message, formatted in the
 %% preferred format.
+""".
 prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     Message = hb_ao:normalize_keys(RawMessage),
     BinPeer = if is_binary(Peer) -> Peer; true -> list_to_binary(Peer) end,
@@ -267,17 +281,19 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
             }
     end.
 
-%% @doc Dispatch the same HTTP request to many nodes. Can be configured to
+-doc """
+Dispatch the same HTTP request to many nodes. Can be configured to
 %% await responses from all nodes or just one, and to halt all requests after
 %% after it has received the required number of responses, or to leave all
 %% requests running until they have all completed. Default: Race for first
 %% response.
-%%
+%
 %% Expects a config message of the following form:
 %%      /Nodes/1..n: Hostname | #{ hostname => Hostname, address => Address }
 %%      /Responses: Number of responses to gather
 %%      /Stop-After: Should we stop after the required number of responses?
 %%      /Parallel: Should we run the requests in parallel?
+""".
 multirequest(Config, Method, Path, Message, Opts) ->
     MultiOpts = #{
         nodes := Nodes,
@@ -306,8 +322,10 @@ multirequest(Config, Method, Path, Message, Opts) ->
         Results -> if Responses == 1 -> hd(Results); true -> Results end
     end.
 
-%% @doc Get the multirequest options from the config or message. The options in 
+-doc """
+Get the multirequest options from the config or message. The options in 
 %% the message take precidence over the options in the config.
+""".
 multirequest_opts(Config, Message, Opts) ->
     Opts#{
         nodes =>
@@ -322,7 +340,9 @@ multirequest_opts(Config, Message, Opts) ->
             multirequest_opt(<<"parallel">>, Config, Message, false, Opts)
     }.
 
-%% @doc Get a value for a multirequest option from the config or message.
+-doc """
+Get a value for a multirequest option from the config or message.
+""".
 multirequest_opt(Key, Config, Message, Default, Opts) ->
     hb_ao:get_first(
         [
@@ -333,9 +353,11 @@ multirequest_opt(Key, Config, Message, Default, Opts) ->
         Opts#{ hashpath => ignore }
     ).
 
-%% @doc Serially request a message, collecting responses until the required
+-doc """
+Serially request a message, collecting responses until the required
 %% number of responses have been gathered. Ensure that the statuses are
 %% allowed, according to the configuration.
+""".
 serial_multirequest(_Nodes, 0, _Method, _Path, _Message, _Statuses, _Opts) -> [];
 serial_multirequest([], _, _Method, _Path, _Message, _Statuses, _Opts) -> [];
 serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Statuses, Opts) ->
@@ -354,7 +376,9 @@ serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Statuses, Op
             serial_multirequest(Nodes, Remaining, Method, Path, Message, Statuses, Opts)
     end.
 
-%% @doc Dispatch the same HTTP request to many nodes in parallel.
+-doc """
+Dispatch the same HTTP request to many nodes in parallel.
+""".
 parallel_multirequest(Nodes, Responses, StopAfter, Method, Path, Message, Statuses, Opts) ->
     Ref = make_ref(),
     Parent = self(),
@@ -373,7 +397,9 @@ parallel_multirequest(Nodes, Responses, StopAfter, Method, Path, Message, Status
     ),
     parallel_responses([], Procs, Ref, Responses, StopAfter, Statuses, Opts).
 
-%% @doc Check if a status is allowed, according to the configuration.
+-doc """
+Check if a status is allowed, according to the configuration.
+""".
 allowed_status(_, <<"All">>) -> true;
 allowed_status(_ResponseMsg = #{ <<"status">> := Status }, Statuses) ->
     allowed_status(Status, Statuses);
@@ -390,8 +416,10 @@ allowed_status(Status, Statuses) when is_binary(Statuses) ->
 allowed_status(Status, Statuses) when is_list(Statuses) ->
     lists:member(Status, Statuses).
 
-%% @doc Collect the necessary number of responses, and stop workers if
+-doc """
+Collect the necessary number of responses, and stop workers if
 %% configured to do so.
+""".
 parallel_responses(Res, Procs, Ref, 0, false, _Statuses, _Opts) ->
     lists:foreach(fun(P) -> P ! no_reply end, Procs),
     empty_inbox(Ref),
@@ -427,12 +455,16 @@ parallel_responses(Res, Procs, Ref, Awaiting, StopAfter, Statuses, Opts) ->
             end
     end.
 
-%% @doc Empty the inbox of the current process for all messages with the given
+-doc """
+Empty the inbox of the current process for all messages with the given
 %% reference.
+""".
 empty_inbox(Ref) ->
     receive {Ref, _} -> empty_inbox(Ref) after 0 -> ok end.
 
-%% @doc Reply to the client's HTTP request with a message.
+-doc """
+Reply to the client's HTTP request with a message.
+""".
 reply(Req, TABMReq, Message, Opts) ->
     Status =
         case hb_ao:get(<<"status">>, Message, Opts) of
@@ -491,8 +523,10 @@ reply(Req, TABMReq, Status, RawMessage, Opts) ->
     ),
     {ok, Req2, no_state}.
 
-%% @doc Add permissive CORS headers to a message, if the message has not already
+-doc """
+Add permissive CORS headers to a message, if the message has not already
 %% specified CORS headers.
+""".
 add_cors_headers(Msg, ReqHdr) ->
     CorHeaders = #{
         <<"access-control-allow-origin">> => <<"*">>,
@@ -508,7 +542,9 @@ add_cors_headers(Msg, ReqHdr) ->
     % included, due to `maps:merge''s precidence order.
     maps:merge(WithAllowHeaders, Msg).
 
-%% @doc Generate the headers and body for a HTTP response message.
+-doc """
+Generate the headers and body for a HTTP response message.
+""".
 encode_reply(TABMReq, Message, Opts) ->
     Codec = accept_to_codec(TABMReq, Opts),
     ?event(http, {encoding_reply, {codec, Codec}, {message, Message}}),
@@ -574,7 +610,8 @@ encode_reply(TABMReq, Message, Opts) ->
             }
     end.
 
-%% @doc Calculate the codec name to use for a reply given its initiating Cowboy
+-doc """
+Calculate the codec name to use for a reply given its initiating Cowboy
 %% request, the parsed TABM request, and the response message. The precidence
 %% order for finding the codec is:
 %% 1. The `accept-codec' field in the message
@@ -582,6 +619,7 @@ encode_reply(TABMReq, Message, Opts) ->
 %% 3. The default codec
 %% Options can be specified in mime-type format (`application/*') or in
 %% AO device format (`device@1.0').
+""".
 accept_to_codec(TABMReq, Opts) ->
     AcceptCodec =
         maps:get(
@@ -599,7 +637,9 @@ accept_to_codec(TABMReq, Opts) ->
         _ -> AcceptCodec
     end.
 
-%% @doc Find a codec name from a mime-type.
+-doc """
+Find a codec name from a mime-type.
+""".
 mime_to_codec(<<"application/", Mime/binary>>, Opts) ->
     Name =
         case binary:match(Mime, <<"@">>) of
@@ -614,12 +654,16 @@ mime_to_codec(<<"application/", Mime/binary>>, Opts) ->
 mime_to_codec(<<"device/", Name/binary>>, _Opts) -> Name;
 mime_to_codec(_, _Opts) -> not_specified.
 
-%% @doc Return the default codec for the given options.
+-doc """
+Return the default codec for the given options.
+""".
 default_codec(Opts) ->
     hb_opts:get(default_codec, <<"httpsig@1.0">>, Opts).
 
-%% @doc Call the `content-type' key on a message with the given codec, using
+-doc """
+Call the `content-type' key on a message with the given codec, using
 %% a fast-path for options that are not needed for this one-time lookup.
+""".
 codec_to_content_type(Codec, Opts) ->
     FastOpts =
         Opts#{
@@ -634,7 +678,9 @@ codec_to_content_type(Codec, Opts) ->
         CT -> CT
     end.
 
-%% @doc Convert a cowboy request to a normalized message.
+-doc """
+Convert a cowboy request to a normalized message.
+""".
 req_to_tabm_singleton(Req, Body, Opts) ->
     case cowboy_req:header(<<"codec-device">>, Req, <<"httpsig@1.0">>) of
         <<"httpsig@1.0">> ->
@@ -664,11 +710,13 @@ req_to_tabm_singleton(Req, Body, Opts) ->
             end
     end.
 
-%% @doc HTTPSig messages are inherently mixed into the transport layer, so they
+-doc """
+HTTPSig messages are inherently mixed into the transport layer, so they
 %% require special handling in order to be converted to a normalized message.
 %% In particular, the signatures are verified if present and required by the 
 %% node configuration. Additionally, non-committed fields are removed from the
 %% message if it is signed, with the exception of the `path' and `method' fields.
+""".
 httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
     Msg = dev_codec_httpsig_conv:from(
         RawHeaders#{ <<"body">> => Body }
@@ -710,10 +758,12 @@ httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
             throw({invalid_signature, SignedMsg})
     end.
 
-%% @doc Add the method and path to a message, if they are not already present.
+-doc """
+Add the method and path to a message, if they are not already present.
 %% The precidence order for finding the path is:
 %% 1. The path in the message
 %% 2. The path in the request URI
+""".
 maybe_add_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
     Method = cowboy_req:method(Req),
     MsgPath =

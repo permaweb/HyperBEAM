@@ -1,41 +1,49 @@
-%%% @doc A store module that reads data from another AO node.
-%%% Notably, this store only provides the _read_ side of the store interface.
-%%% The write side could be added, returning an commitment that the data has
-%%% been written to the remote node. In that case, the node would probably want
-%%% to upload it to an Arweave bundler to ensure persistence, too.
 -module(hb_store_remote_node).
+-moduledoc """
+A store module that reads data from another AO node.
+Notably, this store only provides the _read_ side of the store interface.
+The write side could be added, returning an commitment that the data has
+been written to the remote node. In that case, the node would probably want
+to upload it to an Arweave bundler to ensure persistence, too.
+""".
 -export([scope/1, type/2, read/2, write/3, make_link/3, resolve/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Return the scope of this store.
-%%
-%% For the remote store, the scope is always `remote'.
-%%
-%% @param Arg An arbitrary parameter (ignored).
-%% @returns remote.
+-doc """
+Return the scope of this store.
+
+For the remote store, the scope is always `remote'.
+
+@param Arg An arbitrary parameter (ignored).
+@returns remote.
+""".
 scope(Arg) ->
     ?event({remote_scope, {arg, Arg}}),
     remote.
 
-%% @doc Resolve a key path in the remote store.
-%%
-%% For the remote node store, the key is returned as-is.
-%%
-%% @param Data A map containing node configuration.
-%% @param Key The key to resolve.
-%% @returns The resolved key.
+-doc """
+Resolve a key path in the remote store.
+%
+For the remote node store, the key is returned as-is.
+%
+@param Data A map containing node configuration.
+@param Key The key to resolve.
+@returns The resolved key.
+""".
 resolve(#{ <<"node">> := Node }, Key) ->
     ?event({remote_resolve, {node, Node}, {key, Key}}),
     Key.
 
-%% @doc Determine the type of value at a given key.
-%%
-%% Remote nodes support only the `simple' type or `not_found'.
-%%
-%% @param Opts A map of options (including node configuration).
-%% @param Key The key whose value type is determined.
-%% @returns simple if found, or not_found otherwise.
+-doc """
+Determine the type of value at a given key.
+%
+Remote nodes support only the `simple' type or `not_found'.
+%
+@param Opts A map of options (including node configuration).
+@param Key The key whose value type is determined.
+@returns simple if found, or not_found otherwise.
+""".
 type(Opts = #{ <<"node">> := Node }, Key) ->
     ?event({remote_type, {node, Node}, {key, Key}}),
     case read(Opts, Key) of
@@ -43,14 +51,16 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
         _ -> simple
     end.
 
-%% @doc Read a key from the remote node.
-%%
-%% Makes an HTTP GET request to the remote node and returns the
-%% committed message.
-%%
-%% @param Opts A map of options (including node configuration).
-%% @param Key The key to read.
-%% @returns {ok, Msg} on success or not_found if the key is missing.
+-doc """
+Read a key from the remote node.
+%
+Makes an HTTP GET request to the remote node and returns the
+committed message.
+%
+@param Opts A map of options (including node configuration).
+@param Key The key to read.
+@returns {ok, Msg} on success or not_found if the key is missing.
+""".
 read(Opts = #{ <<"node">> := Node }, Key) ->
     ?event({remote_read, {node, Node}, {key, Key}}),
     case hb_http:get(Node, #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key }, Opts) of
@@ -63,16 +73,18 @@ read(Opts = #{ <<"node">> := Node }, Key) ->
             not_found
     end.
 
-%% @doc Write a key to the remote node.
-%%
-%% Constructs an HTTP POST write request. If a wallet is provided,
-%% the message is signed. Returns {ok, Path} on HTTP 200, or
-%% {error, Reason} on failure.
-%%
-%% @param Opts A map of options (including node configuration).
-%% @param Key The key to write.
-%% @param Value The value to store.
-%% @returns {ok, Path} on success or {error, Reason} on failure.
+-doc """
+Write a key to the remote node.
+%
+Constructs an HTTP POST write request. If a wallet is provided,
+the message is signed. Returns {ok, Path} on HTTP 200, or
+{error, Reason} on failure.
+%
+@param Opts A map of options (including node configuration).
+@param Key The key to write.
+@param Value The value to store.
+@returns {ok, Path} on success or {error, Reason} on failure.
+""".
 write(Opts = #{ <<"node">> := Node }, Key, Value) ->
     ?event({write, {node, Node}, {key, Key}, {value, Value}}),
     WriteMsg = #{
@@ -95,11 +107,13 @@ write(Opts = #{ <<"node">> := Node }, Key, Value) ->
             {error, Err}
     end.
 
-%% @doc Link a source to a destination in the remote node.
-%%
-%% Constructs an HTTP POST link request. If a wallet is provided,
-%% the message is signed. Returns {ok, Path} on HTTP 200, or
-%% {error, Reason} on failure.
+-doc """
+Link a source to a destination in the remote node.
+%
+Constructs an HTTP POST link request. If a wallet is provided,
+the message is signed. Returns {ok, Path} on HTTP 200, or
+{error, Reason} on failure.
+""".
 make_link(Opts = #{ <<"node">> := Node }, Source, Destination) ->
     ?event({make_remote_link, {node, Node}, {source, Source},
                                   {destination, Destination}}),
@@ -128,8 +142,10 @@ make_link(Opts = #{ <<"node">> := Node }, Source, Destination) ->
 %%% Tests
 %%%--------------------------------------------------------------------
 
-%% @doc Test that we can create a store, write a random message to it, then
-%% start a remote node with that store, and read the message from it.
+-doc """
+Test that we can create a store, write a random message to it, then
+start a remote node with that store, and read the message from it.
+""".
 read_test() ->
     rand:seed(default),
     LocalStore = #{ 

@@ -1,51 +1,53 @@
-%%% @doc This module contains the device implementation of AO processes
-%%% in AO-Core. The core functionality of the module is in 'routing' requests
-%%% for different functionality (scheduling, computing, and pushing messages)
-%%% to the appropriate device. This is achieved by swapping out the device 
-%%% of the process message with the necessary component in order to run the 
-%%% execution, then swapping it back before returning. Computation is supported
-%%% as a stack of devices, customizable by the user, while the scheduling
-%%% device is (by default) a single device.
-%%% 
-%%% This allows the devices to share state as needed. Additionally, after each
-%%% computation step the device caches the result at a path relative to the
-%%% process definition itself, such that the process message's ID can act as an
-%%% immutable reference to the process's growing list of interactions. See 
-%%% `dev_process_cache' for details.
-%%% 
-%%% The external API of the device is as follows:
-%%% ```
-%%% GET /ID/Schedule:                Returns the messages in the schedule
-%%% POST /ID/Schedule:               Adds a message to the schedule
-%%% 
-%%% GET /ID/Compute/[IDorSlotNum]:   Returns the state of the process after 
-%%%                                  applying a message
-%%% GET /ID/Now:                     Returns the `/Results' key of the latest 
-%%%                                  computed message
-%%% '''
-%%% 
-%%% An example process definition will look like this:
-%%% ```
-%%%     Device: Process/1.0
-%%%     Scheduler-Device: Scheduler/1.0
-%%%     Execution-Device: Stack/1.0
-%%%     Execution-Stack: "Scheduler/1.0", "Cron/1.0", "WASM/1.0", "PoDA/1.0"
-%%%     Cron-Frequency: 10-Minutes
-%%%     WASM-Image: WASMImageID
-%%%     PoDA:
-%%%         Device: PoDA/1.0
-%%%         Authority: A
-%%%         Authority: B
-%%%         Authority: C
-%%%         Quorum: 2
-%%% '''
-%%%
-%%% Runtime options:
-%%%     Cache-Frequency: The number of assignments that will be computed 
-%%%                      before the full (restorable) state should be cached.
-%%%     Cache-Keys:      A list of the keys that should be cached for all 
-%%%                      assignments, in addition to `/Results'.
 -module(dev_process).
+-moduledoc """
+This module contains the device implementation of AO processes
+in AO-Core. The core functionality of the module is in 'routing' requests
+for different functionality (scheduling, computing, and pushing messages)
+to the appropriate device. This is achieved by swapping out the device 
+of the process message with the necessary component in order to run the 
+execution, then swapping it back before returning. Computation is supported
+as a stack of devices, customizable by the user, while the scheduling
+device is (by default) a single device.
+
+This allows the devices to share state as needed. Additionally, after each
+computation step the device caches the result at a path relative to the
+process definition itself, such that the process message's ID can act as an
+immutable reference to the process's growing list of interactions. See 
+`dev_process_cache' for details.
+
+The external API of the device is as follows:
+```
+GET /ID/Schedule:                Returns the messages in the schedule
+POST /ID/Schedule:               Adds a message to the schedule
+
+GET /ID/Compute/[IDorSlotNum]:   Returns the state of the process after 
+                                 applying a message
+GET /ID/Now:                     Returns the `/Results' key of the latest 
+                                 computed message
+'''
+
+An example process definition will look like this:
+```
+    Device: Process/1.0
+    Scheduler-Device: Scheduler/1.0
+    Execution-Device: Stack/1.0
+    Execution-Stack: "Scheduler/1.0", "Cron/1.0", "WASM/1.0", "PoDA/1.0"
+    Cron-Frequency: 10-Minutes
+    WASM-Image: WASMImageID
+    PoDA:
+        Device: PoDA/1.0
+        Authority: A
+        Authority: B
+        Authority: C
+        Quorum: 2
+'''
+
+Runtime options:
+    Cache-Frequency: The number of assignments that will be computed 
+                     before the full (restorable) state should be cached.
+    Cache-Keys:      A list of the keys that should be cached for all 
+                     assignments, in addition to `/Results'.
+""".
 %%% Public API
 -export([info/1, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
 -export([ensure_process_key/2]).
@@ -63,7 +65,9 @@
 %% with the `cache_frequency' option.
 -define(DEFAULT_CACHE_FREQ, 1).
 
-%% @doc When the info key is called, we should return the process exports.
+-doc """
+When the info key is called, we should return the process exports.
+""".
 info(_Msg1) ->
     #{
         worker => fun dev_process_worker:server/3,
@@ -80,11 +84,13 @@ info(_Msg1) ->
         ]
     }.
 
-%% @doc Returns the default device for a given piece of functionality. Expects
-%% the `process/variant' key to be set in the message. The `execution-device'
-%% _must_ be set in all processes aside those marked with `ao.TN.1' variant.
-%% This is in order to ensure that post-mainnet processes do not default to
-%% using infrastructure that should not be present on nodes in the future.
+-doc """
+Returns the default device for a given piece of functionality. Expects
+the `process/variant' key to be set in the message. The `execution-device'
+_must_ be set in all processes aside those marked with `ao.TN.1' variant.
+This is in order to ensure that post-mainnet processes do not default to
+using infrastructure that should not be present on nodes in the future.
+""".
 default_device(Msg1, Key, Opts) ->
     NormKey = hb_ao:normalize_key(Key),
     case {NormKey, hb_ao:get(<<"process/variant">>, {as, dev_message, Msg1}, Opts)} of
@@ -95,7 +101,9 @@ default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
 default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>.
 
-%% @doc Wraps functions in the Scheduler device.
+-doc """
+Wraps functions in the Scheduler device.
+""".
 schedule(Msg1, Msg2, Opts) ->
     run_as(<<"scheduler">>, Msg1, Msg2, Opts).
 
@@ -135,7 +143,9 @@ snapshot(RawMsg1, _Msg2, Opts) ->
         )
     }.
 
-%% @doc Returns the process ID of the current process.
+-doc """
+Returns the process ID of the current process.
+""".
 process_id(Msg1, Msg2, Opts) ->
     case hb_ao:get(<<"process">>, Msg1, Opts#{ hashpath => ignore }) of
         not_found ->
@@ -144,10 +154,12 @@ process_id(Msg1, Msg2, Opts) ->
             hb_message:id(Process, all)
     end.
 
-%% @doc Before computation begins, a boot phase is required. This phase
-%% allows devices on the execution stack to initialize themselves. We set the
-%% `Initialized' key to `True' to indicate that the process has been
-%% initialized.
+-doc """
+Before computation begins, a boot phase is required. This phase
+allows devices on the execution stack to initialize themselves. We set the
+`Initialized' key to `True' to indicate that the process has been
+initialized.
+""".
 init(Msg1, _Msg2, Opts) ->
     ?event({init_called, {msg1, Msg1}, {opts, Opts}}),
     {ok, Initialized} =
@@ -164,8 +176,10 @@ init(Msg1, _Msg2, Opts) ->
         )
     }.
 
-%% @doc Compute the result of an assignment applied to the process state, if it 
-%% is the next message.
+-doc """
+Compute the result of an assignment applied to the process state, if it 
+is the next message.
+""".
 compute(Msg1, Msg2, Opts) ->
     % If we do not have a live state, restore or initialize one.
     ProcBase = ensure_process_key(Msg1, Opts),
@@ -205,8 +219,10 @@ compute(Msg1, Msg2, Opts) ->
             end
     end.
 
-%% @doc Continually get and apply the next assignment from the scheduler until
-%% we reach the target slot that the user has requested.
+-doc """
+Continually get and apply the next assignment from the scheduler until
+we reach the target slot that the user has requested.
+""".
 compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
     CurrentSlot = hb_ao:get(<<"at-slot">>, Msg1, Opts#{ hashpath => ignore }),
     ?event(compute, {starting_compute, {current, CurrentSlot}, {target, TargetSlot}}),
@@ -266,7 +282,9 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
             end
     end.
 
-%% @doc Compute a single slot for a process, given an initialized state.
+-doc """
+Compute a single slot for a process, given an initialized state.
+""".
 compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     % Ensure that the next slot is the slot that we are expecting, just
     % in case there is a scheduler device error.
@@ -300,8 +318,10 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
             {error, Error}
     end.
 
-%% @doc Store the resulting state in the cache, potentially with the snapshot
-%% key.
+-doc """
+Store the resulting state in the cache, potentially with the snapshot
+key.
+""".
 store_result(ProcID, Slot, Msg3, Msg2, Opts) ->
     % Cache the `Memory' key every `Cache-Frequency' slots.
     Freq = hb_opts:get(process_cache_frequency, ?DEFAULT_CACHE_FREQ, Opts),
@@ -337,8 +357,10 @@ store_result(ProcID, Slot, Msg3, Msg2, Opts) ->
             ?event(compute, {caching_completed, {proc_id, ProcID}, {slot, Slot}}, Opts)
     end.
 
-%% @doc Returns the known state of the process at either the current slot, or
-%% the latest slot in the cache depending on the `process_now_from_cache' option.
+-doc """
+Returns the known state of the process at either the current slot, or
+the latest slot in the cache depending on the `process_now_from_cache' option.
+""".
 now(RawMsg1, Msg2, Opts) ->
     Msg1 = ensure_process_key(RawMsg1, Opts),
     ProcessID = process_id(Msg1, #{}, Opts),
@@ -396,14 +418,18 @@ now(RawMsg1, Msg2, Opts) ->
             end
     end.
 
-%% @doc Recursively push messages to the scheduler until we find a message
-%% that does not lead to any further messages being scheduled.
+-doc """
+Recursively push messages to the scheduler until we find a message
+that does not lead to any further messages being scheduled.
+""".
 push(Msg1, Msg2, Opts) ->
     ProcBase = ensure_process_key(Msg1, Opts),
     run_as(<<"push">>, ProcBase, Msg2, Opts).
 
-%% @doc Ensure that the process message we have in memory is live and
-%% up-to-date.
+-doc """
+Ensure that the process message we have in memory is live and
+up-to-date.
+""".
 ensure_loaded(Msg1, Msg2, Opts) ->
     % Get the nonce we are currently on and the inbound nonce.
     TargetSlot = hb_ao:get(<<"slot">>, Msg2, undefined, Opts),
@@ -466,9 +492,11 @@ ensure_loaded(Msg1, Msg2, Opts) ->
             end
     end.
 
-%% @doc Run a message against Msg1, with the device being swapped out for
-%% the device found at `Key'. After execution, the device is swapped back
-%% to the original device if the device is the same as we left it.
+-doc """
+Run a message against Msg1, with the device being swapped out for
+the device found at `Key'. After execution, the device is swapped back
+to the original device if the device is the same as we left it.
+""".
 run_as(Key, Msg1, Msg2, Opts) ->
     BaseDevice = hb_ao:get(<<"device">>, {as, dev_message, Msg1}, Opts),
     ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
@@ -512,14 +540,18 @@ run_as(Key, Msg1, Msg2, Opts) ->
             {Status, BaseResult}
     end.
 
-%% @doc Change the message to for that has the device set as this module.
-%% In situations where the key that is `run_as' returns a message with a 
-%% transformed device, this is useful.
+-doc """
+Change the message to for that has the device set as this module.
+In situations where the key that is `run_as' returns a message with a 
+transformed device, this is useful.
+""".
 as_process(Msg1, Opts) ->
     {ok, Proc} = dev_message:set(Msg1, #{ <<"device">> => <<"process@1.0">> }, Opts),
     Proc.
 
-%% @doc Helper function to store a copy of the `process' key in the message.
+-doc """
+Helper function to store a copy of the `process' key in the message.
+""".
 ensure_process_key(Msg1, Opts) ->
     case hb_ao:get(<<"process">>, Msg1, Opts#{ hashpath => ignore }) of
         not_found ->
@@ -563,8 +595,10 @@ init() ->
     application:ensure_all_started(hb),
     ok.
 
-%% @doc Generate a process message with a random number, and no 
-%% executor.
+-doc """
+Generate a process message with a random number, and no 
+executor.
+""".
 test_base_process() ->
     test_base_process(#{}).
 test_base_process(Opts) ->
@@ -595,8 +629,10 @@ test_wasm_process(WASMImage, Opts) ->
         Wallet
     ).
 
-%% @doc Generate a process message with a random number, and the 
-%% `dev_wasm' device for execution.
+-doc """
+Generate a process message with a random number, and the 
+`dev_wasm' device for execution.
+""".
 test_aos_process() ->
     test_aos_process(#{}).
 test_aos_process(Opts) ->
@@ -632,9 +668,11 @@ test_aos_process(Opts, Stack) ->
         Wallet
     ).
 
-%% @doc Generate a device that has a stack of two `dev_test's for 
-%% execution. This should generate a message state has doubled 
-%% `Already-Seen' elements for each assigned slot.
+-doc """
+Generate a device that has a stack of two `dev_test's for 
+execution. This should generate a message state has doubled 
+`Already-Seen' elements for each assigned slot.
+""".
 dev_test_process() ->
     Wallet = hb:wallet(),
     hb_message:commit(
@@ -983,7 +1021,9 @@ aos_state_patch_test_() ->
         ?assertEqual(<<"banana">>, Data)
     end}.
 
-%% @doc Manually test state restoration without using the cache.
+-doc """
+Manually test state restoration without using the cache.
+""".
 restore_test_() -> {timeout, 30, fun do_test_restore/0}.
 
 do_test_restore() ->

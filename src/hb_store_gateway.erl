@@ -1,11 +1,15 @@
-%%% @doc A store module that reads data from the nodes Arweave gateway and 
-%%% GraphQL routes, additionally including additional store-specific routes.
 -module(hb_store_gateway).
+-moduledoc """
+A store module that reads data from the nodes Arweave gateway and 
+GraphQL routes, additionally including additional store-specific routes.
+""".
 -export([scope/1, type/2, read/2, resolve/2, list/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc The scope of a GraphQL store is always remote, due to performance.
+-doc """
+The scope of a GraphQL store is always remote, due to performance.
+""".
 scope(_) -> remote.
 resolve(_, Key) -> Key.
 
@@ -15,9 +19,11 @@ list(StoreOpts, Key) ->
         {ok, Message} -> {ok, maps:keys(Message)}
     end.
 
-%% @doc Get the type of the data at the given key. We potentially cache the
+-doc """
+Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
+""".
 type(StoreOpts, Key) ->
     ?event({type, StoreOpts, Key}),
     case read(StoreOpts, Key) of
@@ -34,8 +40,10 @@ type(StoreOpts, Key) ->
             end
     end.
 
-%% @doc Read the data at the given key from the GraphQL route. Will only attempt
+-doc """
+Read the data at the given key from the GraphQL route. Will only attempt
 %% to read the data if the key is an ID.
+""".
 read(StoreOpts, Key) ->
     case hb_path:term_to_path_parts(Key) of
         [ID] when ?IS_ID(ID) ->
@@ -52,9 +60,11 @@ read(StoreOpts, Key) ->
             not_found
     end.
 
-%% @doc Cache the data if the cache is enabled. The `store' option may either
+-doc """
+Cache the data if the cache is enabled. The `store' option may either
 %% be `false' to disable local caching, or a store definition to use as the
 %% cache.
+""".
 maybe_cache(StoreOpts, Data) ->
     ?event({maybe_cache, StoreOpts, Data}),
     % Check for store in both the direct map and the legacy opts map
@@ -80,7 +90,9 @@ maybe_cache(StoreOpts, Data) ->
 
 %%% Tests
 
-%% @doc Store is accessible via the default options.
+-doc """
+Store is accessible via the default options.
+""".
 graphql_as_store_test_() ->
 	{timeout, 10, fun() ->
 		hb_http_server:start_node(#{}),
@@ -93,7 +105,9 @@ graphql_as_store_test_() ->
 		)
 	end}.
 
-%% @doc Stored messages are accessible via `hb_cache' accesses.
+-doc """
+Stored messages are accessible via `hb_cache' accesses.
+""".
 graphql_from_cache_test() ->
     hb_http_server:start_node(#{}),
     Opts = #{ store => [#{ <<"store-module">> => hb_store_gateway, <<"opts">> => #{} }] },
@@ -125,7 +139,9 @@ manual_local_cache_test() ->
     ?event({read_from_local, Read}),
     ?assert(hb_message:match(Read, FromRemote)).
 
-%% @doc Ensure that saving to the gateway store works.
+-doc """
+Ensure that saving to the gateway store works.
+""".
 cache_read_message_test() ->
     hb_http_server:start_node(#{}),
     Local = #{ <<"store-module">> => hb_store_fs, <<"prefix">> => <<"cache-TEST">> },
@@ -149,11 +165,13 @@ cache_read_message_test() ->
         ),
     ?assert(hb_message:match(Read, Written)).
 
-%% @doc Routes can be specified in the options, overriding the default routes.
+-doc """
+Routes can be specified in the options, overriding the default routes.
 %% We test this by inversion: If the above cache read test works, then we know 
 %% that the default routes allow access to the item. If the test below were to
 %% produce the same result, despite an empty 'only' route list, then we would
 %% know that the module is not respecting the route list.
+""".
 specific_route_test() ->
     hb_http_server:start_node(#{}),
     Opts = #{
@@ -173,7 +191,9 @@ specific_route_test() ->
         )
     ).
 
-%% @doc Test that the default node config allows for data to be accessed.
+-doc """
+Test that the default node config allows for data to be accessed.
+""".
 external_http_access_test() ->
     Node = hb_http_server:start_node(
         #{

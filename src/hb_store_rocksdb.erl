@@ -1,12 +1,14 @@
-%%%-----------------------------------------------------------------------------
-%%% @doc A process wrapper over rocksdb storage. Replicates functionality of the
-%%%      hb_fs_store module.
-%%%
-%%%     Encodes the item types with the help of prefixes, see `encode_value/2'
-%%%     and `decode_value/1'
-%%% @end
-%%%-----------------------------------------------------------------------------
 -module(hb_store_rocksdb).
+
+-moduledoc """
+A process wrapper over rocksdb storage. Replicates functionality of the
+     hb_fs_store module.
+
+    Encodes the item types with the help of prefixes, see `encode_value/2'
+    and `decode_value/1'
+@end
+%%%-----------------------------------------------------------------------------
+""".
 -behaviour(gen_server).
 -behaviour(hb_store).
 -export([enabled/0, start/1, start_link/1, stop/1, scope/1]).
@@ -23,7 +25,9 @@
 
 -type value_type() :: link | raw | group.
 
-%% @doc Returns whether the RocksDB store is enabled.
+-doc """
+Returns whether the RocksDB store is enabled.
+""".
 -ifdef(ENABLE_ROCKSDB).
 enabled() -> true.
 -else.
@@ -31,7 +35,9 @@ enabled() -> false.
 -endif.
 
 -ifdef(ENABLE_ROCKSDB).
-%% @doc Start the RocksDB store.
+-doc """
+Start the RocksDB store.
+""".
 start_link(#{ <<"store-module">> := hb_store_rocksdb, <<"prefix">> := Dir}) ->
     ?event(rocksdb, {starting, Dir}),
     application:ensure_all_started(rocksdb),
@@ -71,15 +77,21 @@ stop(_Opts) ->
 reset(_Opts) ->
     gen_server:call(?MODULE, reset, ?TIMEOUT).
 
-%% @doc Return scope (local)
+-doc """
+Return scope (local)
+""".
 scope(_) -> local.
 
-%% @doc Return path
+-doc """
+Return path
+""".
 path(_Opts, Path) ->
     hb_store:path(Path).
 
-%% @doc Read data by the key.
-%% Recursively follows link messages
+-doc """
+Read data by the key.
+Recursively follows link messages
+""".
 -spec read(Opts, Key) -> Result when
     Opts :: map(),
     Key :: key() | list(),
@@ -100,7 +112,9 @@ read(Opts, RawPath) ->
             not_found
     end.
 
-%% @doc Write given Key and Value to the database
+-doc """
+Write given Key and Value to the database
+""".
 -spec write(Opts, Key, Value) -> Result when
     Opts :: map(),
     Key :: key(),
@@ -112,8 +126,10 @@ write(Opts, RawKey, Value) ->
     ?event({writing, Key, byte_size(EncodedValue)}),
     do_write(Opts, Key, EncodedValue).
 
-%% @doc Returns the full list of items stored under the given path. Where the path
-%% child items is relevant to the path of parentItem. (Same as in `hb_store_fs').
+-doc """
+Returns the full list of items stored under the given path. Where the path
+child items is relevant to the path of parentItem. (Same as in `hb_store_fs').
+""".
 -spec list(Opts, Path) -> Result when
     Opts :: any(),
     Path :: any(),
@@ -134,7 +150,9 @@ list(Opts, Path) ->
             {ok, []}
     end.
 
-%% @doc Replace links in a path with the target of the link.
+-doc """
+Replace links in a path with the target of the link.
+""".
 -spec resolve(Opts, Path) -> Result when
     Opts :: any(),
     Path :: binary() | list(),
@@ -159,7 +177,9 @@ do_resolve(Opts, CurrentPath, [Next | Rest]) ->
         {ok, _OtherType} -> do_resolve(Opts, PathPart, Rest)
     end.
 
-%% @doc Get type of the current item
+-doc """
+Get type of the current item
+""".
 -spec type(Opts, Key) -> Result when
     Opts :: map(),
     Key :: binary(),
@@ -174,7 +194,9 @@ type(Opts, RawKey) ->
         {ok, {group, _Item}} -> composite
     end.
 
-%% @doc Creates group under the given path.
+-doc """
+Creates group under the given path.
+""".
 -spec make_group(Opts, Key) -> Result when
     Opts :: any(),
     Key :: binary(),
@@ -200,13 +222,17 @@ make_link(Opts, Existing, New) ->
             ok
     end.
 
-%% @doc Add two path components together. // is not used
+-doc """
+Add two path components together. // is not used
+""".
 add_path(_Opts, Path1, Path2) ->
     Path1 ++ Path2.
 
-%% @doc List all items registered in rocksdb store. Should be used only
-%% for testing/debugging, as the underlying operation is doing full traversal
-%% on the KV storage, and is slow.
+-doc """
+List all items registered in rocksdb store. Should be used only
+for testing/debugging, as the underlying operation is doing full traversal
+on the KV storage, and is slow.
+""".
 list() ->
     gen_server:call(?MODULE, list, ?TIMEOUT).
 
@@ -285,7 +311,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%%=============================================================================
 %%% Private
 %%%=============================================================================
-%% @doc Write given Key and Value to the database
+-doc """
+Write given Key and Value to the database
+""".
 -spec do_write(Opts, Key, Value) -> Result when
     Opts :: map(),
     Key :: key(),
@@ -348,7 +376,9 @@ convert_if_list(Value) when is_list(Value) ->
 convert_if_list(Value) ->
     Value.  % Leave unchanged if it's not a list
 
-%% @doc Ensure that the given filename is a list, not a binary.
+-doc """
+Ensure that the given filename is a list, not a binary.
+""".
 ensure_list(Value) when is_binary(Value) -> binary_to_list(Value);
 ensure_list(Value) -> Value.
 

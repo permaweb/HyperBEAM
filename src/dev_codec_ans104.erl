@@ -1,6 +1,8 @@
-%%% @doc Codec for managing transformations from `ar_bundles'-style Arweave TX
-%%% records to and from TABMs.
 -module(dev_codec_ans104).
+-moduledoc """
+Codec for managing transformations from `ar_bundles'-style Arweave TX
+records to and from TABMs.
+""".
 -export([id/1, to/1, from/1, commit/3, verify/3, committed/3, content_type/1]).
 -export([serialize/1, deserialize/1]).
 -include("include/hb.hrl").
@@ -33,16 +35,22 @@
     ]
 ).
 
-%% @doc Return the content type for the codec.
+-doc """
+Return the content type for the codec.
+""".
 content_type(_) -> {ok, <<"application/ans104">>}.
 
-%% @doc Serialize a message or TX to a binary.
+-doc """
+Serialize a message or TX to a binary.
+""".
 serialize(Msg) when is_map(Msg) ->
     serialize(to(Msg));
 serialize(TX) when is_record(TX, tx) ->
     {ok, ar_bundles:serialize(TX)}.
 
-%% @doc Deserialize a binary ans104 message to a TABM.
+-doc """
+Deserialize a binary ans104 message to a TABM.
+""".
 deserialize(#{ <<"body">> := Binary }) ->
     deserialize(Binary);
 deserialize(Binary) when is_binary(Binary) ->
@@ -50,12 +58,16 @@ deserialize(Binary) when is_binary(Binary) ->
 deserialize(TX) when is_record(TX, tx) ->
     {ok, from(TX)}.
 
-%% @doc Return the ID of a message.
+-doc """
+Return the ID of a message.
+""".
 id(Msg) ->
     TABM = dev_codec_structured:from(Msg),
     {ok, hb_util:human_id((to(TABM))#tx.id)}.
 
-%% @doc Sign a message using the `priv_wallet' key in the options.
+-doc """
+Sign a message using the `priv_wallet' key in the options.
+""".
 commit(Msg, _Req, Opts) ->
     ?event({committing, {input, Msg}}),
     Signed = ar_bundles:sign_item(
@@ -107,7 +119,9 @@ commit(Msg, _Req, Opts) ->
         }
     }.
 
-%% @doc Return a list of committed keys from an ANS-104 message.
+-doc """
+Return a list of committed keys from an ANS-104 message.
+""".
 committed(Msg = #{ <<"trusted-keys">> := RawTKeys, <<"commitments">> := Comms }, _Req, Opts) ->
     % If the message has a `trusted-keys' field in the immediate layer, we validate
     % that it also exists in the commitment's sub-map. If it exists there (which
@@ -190,7 +204,9 @@ committed_from_trusted_keys(Msg, TrustedKeys, _Opts) ->
             ++ ?COMMITTED_TAGS
     }.
 
-%% @doc Verify an ANS-104 commitment.
+-doc """
+Verify an ANS-104 commitment.
+""".
 verify(Msg, _Req, _Opts) ->
     MsgWithoutCommitments =
         maps:without(
@@ -205,7 +221,9 @@ verify(Msg, _Req, _Opts) ->
     Res = ar_bundles:verify_item(TX),
     {ok, Res}.
 
-%% @doc Convert a #tx record into a message map recursively.
+-doc """
+Convert a #tx record into a message map recursively.
+""".
 from(Binary) when is_binary(Binary) -> Binary;
 from(TX) when is_record(TX, tx) ->
     case lists:keyfind(<<"ao-type">>, 1, TX#tx.tags) of
@@ -312,8 +330,10 @@ do_from(RawTX) ->
     ?event({message_after_commitments, Res}),
     Res.
 
-%% @doc Deduplicate a list of key-value pairs by key, generating a list of
-%% values for each normalized key if there are duplicates.
+-doc """
+Deduplicate a list of key-value pairs by key, generating a list of
+values for each normalized key if there are duplicates.
+""".
 deduplicating_from_list(Tags) ->
     % Aggregate any duplicated tags into an ordered list of values.
     Aggregated =
@@ -355,7 +375,9 @@ deduplicating_from_list(Tags) ->
     ?event({deduplicating_from_list, {result, Res}}),
     Res.
 
-%% @doc Check whether a list of key-value pairs contains only normalized keys.
+-doc """
+Check whether a list of key-value pairs contains only normalized keys.
+""".
 normal_tags(Tags) ->
     lists:all(
         fun({Key, _}) ->
@@ -364,7 +386,9 @@ normal_tags(Tags) ->
         Tags
     ).
 
-%% @doc Convert an ANS-104 encoded tag list into a HyperBEAM-compatible map.
+-doc """
+Convert an ANS-104 encoded tag list into a HyperBEAM-compatible map.
+""".
 encoded_tags_to_map(Tags) ->
     hb_util:list_to_numbered_map(
         lists:map(
@@ -378,8 +402,10 @@ encoded_tags_to_map(Tags) ->
         )
     ).
 
-%% @doc Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
-%% recreating the original order of the tags.
+-doc """
+Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
+recreating the original order of the tags.
+""".
 tag_map_to_encoded_tags(TagMap) ->
     OrderedList =
         hb_util:message_to_ordered_list(
@@ -392,11 +418,13 @@ tag_map_to_encoded_tags(TagMap) ->
         OrderedList
     ).
 
-%% @doc Internal helper to translate a message to its #tx record representation,
-%% which can then be used by ar_bundles to serialize the message. We call the 
-%% message's device in order to get the keys that we will be checkpointing. We 
-%% do this recursively to handle nested messages. The base case is that we hit
-%% a binary, which we return as is.
+-doc """
+Internal helper to translate a message to its #tx record representation,
+which can then be used by ar_bundles to serialize the message. We call the 
+message's device in order to get the keys that we will be checkpointing. We 
+do this recursively to handle nested messages. The base case is that we hit
+a binary, which we return as is.
+""".
 to(Binary) when is_binary(Binary) ->
     % ar_bundles cannot serialize just a simple binary or get an ID for it, so
     % we turn it into a TX record with a special tag, tx_to_message will
@@ -566,7 +594,7 @@ to(RawTABM) when is_map(RawTABM) ->
 to(_Other) ->
     throw(invalid_tx).
 
-%%% ANS-104-specific testing cases.
+%% ANS-104-specific testing cases.
 
 normal_tags_test() ->
     Msg = #{

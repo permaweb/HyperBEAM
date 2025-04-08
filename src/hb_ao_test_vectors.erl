@@ -1,6 +1,8 @@
-%%% @doc Uses a series of different `Opts' values to test the resolution engine's 
-%%% execution under different circumstances.
 -module(hb_ao_test_vectors).
+-moduledoc """
+Uses a series of different `Opts' values to test the resolution engine's 
+execution under different circumstances.
+""".
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -10,8 +12,10 @@
 run_test() ->
     hb_test_utils:run(start_as, normal, test_suite(), test_opts()).
 
-%% @doc Run each test in the file with each set of options. Start and reset
-%% the store for each test.
+-doc """
+Run each test in the file with each set of options. Start and reset
+the store for each test.
+""".
 run_all_test_() ->
     hb_test_utils:suite_with_opts(test_suite(), test_opts()).
 
@@ -149,9 +153,11 @@ test_opts() ->
 
 %%% Standalone test vectors
 
-%% @doc Ensure that we can read a device from the cache then execute it. By 
-%% extension, this will also allow us to load a device from Arweave due to the
-%% remote store implementations.
+-doc """
+Ensure that we can read a device from the cache then execute it. By 
+extension, this will also allow us to load a device from Arweave due to the
+remote store implementations.
+""".
 exec_dummy_device(SigningWallet, Opts) ->
     % Compile the test device and store it in an accessible cache to the execution
     % environment.
@@ -269,8 +275,10 @@ resolve_binary_key_test(Opts) ->
         )
     ).
 
-%% @doc Generates a test device with three keys, each of which uses
-%% progressively more of the arguments that can be passed to a device key.
+-doc """
+Generates a test device with three keys, each of which uses
+progressively more of the arguments that can be passed to a device key.
+""".
 generate_device_with_keys_using_args() ->
     #{
         key_using_only_state =>
@@ -300,7 +308,9 @@ generate_device_with_keys_using_args() ->
             end
     }.
 
-%% @doc Create a simple test device that implements the default handler.
+-doc """
+Create a simple test device that implements the default handler.
+""".
 gen_default_device() ->
     #{
         info =>
@@ -318,7 +328,9 @@ gen_default_device() ->
             end
     }.
 
-%% @doc Create a simple test device that implements the handler key.
+-doc """
+Create a simple test device that implements the handler key.
+""".
 gen_handler_device() ->
     #{
         info =>
@@ -334,9 +346,11 @@ gen_handler_device() ->
             end
     }.
 
-%% @doc Test that arguments are passed to a device key as expected.
-%% Particularly, we need to ensure that the key function in the device can
-%% specify any arity (1 through 3) and the call is handled correctly.
+-doc """
+Test that arguments are passed to a device key as expected.
+Particularly, we need to ensure that the key function in the device can
+specify any arity (1 through 3) and the call is handled correctly.
+""".
 key_from_id_device_with_args_test(Opts) ->
     Msg =
         #{

@@ -1,9 +1,12 @@
-%%% @doc An abstraction for name registration/deregistration in Hyperbeam.
-%%% Its motivation is to provide a way to register names that are not necessarily
-%%% atoms, but can be any term (for example: hashpaths or `process@1.0' IDs).
-%%% An important characteristic of these functions is that they are atomic:
-%%% There can only ever be one registrant for a given name at a time.
 -module(hb_name).
+-moduledoc """
+An abstraction for name registration/deregistration in Hyperbeam.
+Its motivation is to provide a way to register names that are not necessarily
+atoms, but can be any term (for example: hashpaths or `process@1.0' IDs).
+An important characteristic of these functions is that they are atomic:
+There can only ever be one registrant for a given name at a time.
+""".
+
 -export([start/0, register/1, register/2, unregister/1, lookup/1, all/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -29,8 +32,10 @@ start_ets() ->
     ]),
     ok.
 
-%%% @doc Register a name. If the name is already registered, the registration
-%%% will fail. The name can be any Erlang term.
+-doc """
+Register a name. If the name is already registered, the registration
+will fail. The name can be any Erlang term.
+""".
 register(Name) ->
     start(),
     ?MODULE:register(Name, self()).
@@ -48,7 +53,9 @@ register(Name, Pid) ->
         false -> error
     end.
 
-%%% @doc Unregister a name.
+-doc """
+Unregister a name.
+""".
 unregister(Name) when is_atom(Name) ->
     catch erlang:unregister(Name),
     ets:delete(?NAME_TABLE, Name),  % Cleanup if atom was in ETS
@@ -58,7 +65,9 @@ unregister(Name) ->
     ets:delete(?NAME_TABLE, Name),
     ok.
 
-%%% @doc Lookup a name -> PID.
+-doc """
+Lookup a name -> PID.
+""".
 lookup(Name) when is_atom(Name) ->
     case whereis(Name) of
         undefined ->
@@ -83,7 +92,9 @@ ets_lookup(Name) ->
         [] -> undefined
     end.
 
-%% @doc List the names in the registry.
+-doc """
+List the names in the registry.
+""".
 all() ->
     Registered = 
         ets:tab2list(?NAME_TABLE) ++

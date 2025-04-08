@@ -11,8 +11,10 @@
 %%% other testing functionality -- care should equally be taken to avoid
 %%% using the `test' key in other settings.
 
-%% @doc Exports a default_handler function that can be used to test the
+-doc """
+Exports a default_handler function that can be used to test the
 %% handler resolution mechanism.
+""".
 info(_) ->
 	#{
         <<"default">> => dev_message
@@ -21,9 +23,11 @@ info(_) ->
 test_func(_) ->
 	{ok, <<"GOOD_FUNCTION">>}.
 
-%% @doc Example implementation of a `compute' handler. Makes a running list of
+-doc """
+Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
 %% slot number in the results key.
+""".
 compute(Msg1, Msg2, Opts) ->
     AssignmentSlot = hb_ao:get(<<"slot">>, Msg2, Opts),
     Seen = hb_ao:get(<<"already-seen">>, Msg1, Opts),
@@ -41,13 +45,17 @@ compute(Msg1, Msg2, Opts) ->
         )
     }.
 
-%% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
+-doc """
+Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
+""".
 init(Msg, _Msg2, Opts) ->
     ?event({init_called_on_dev_test, Msg}),
     {ok, hb_ao:set(Msg, #{ <<"already-seen">> => [] }, Opts)}.
 
-%% @doc Example `restore/3' handler. Sets the hidden key `Test/Started' to the
+-doc """
+Example `restore/3' handler. Sets the hidden key `Test/Started' to the
 %% value of `Current-Slot' and checks whether the `Already-Seen' key is valid.
+""".
 restore(Msg, _Msg2, Opts) ->
     ?event({restore_called_on_dev_test, Msg}),
     case hb_ao:get(<<"already-seen">>, Msg, Opts) of
@@ -65,8 +73,10 @@ restore(Msg, _Msg2, Opts) ->
             }
     end.
 
-%% @doc Example implementation of an `imported' function for a WASM
+-doc """
+Example implementation of an `imported' function for a WASM
 %% executor.
+""".
 mul(Msg1, Msg2) ->
     ?event(mul_called),
     State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
@@ -74,11 +84,15 @@ mul(Msg1, Msg2) ->
     ?event({mul_called, {state, State}, {args, [Arg1, Arg2]}}),
     {ok, #{ <<"state">> => State, <<"results">> => [Arg1 * Arg2] }}.
 
-%% @doc Do nothing when asked to snapshot.
+-doc """
+Do nothing when asked to snapshot.
+""".
 snapshot(_Msg1, _Msg2, _Opts) ->
     {ok, #{}}.
 
-%% @doc Set the `postprocessor-called' key to true in the HTTP server.
+-doc """
+Set the `postprocessor-called' key to true in the HTTP server.
+""".
 postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
     ?event({postprocess_called, Opts}),
     hb_http_server:set_opts(Opts#{ <<"postprocessor-called">> => true }),
@@ -86,7 +100,9 @@ postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
 
 %%% Tests
 
-%% @doc Tests the resolution of a default function.
+-doc """
+Tests the resolution of a default function.
+""".
 device_with_function_key_module_test() ->
 	Msg =
 		#{

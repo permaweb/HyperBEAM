@@ -1,6 +1,8 @@
-%%% @doc A wrapper library for gun. This module originates from the Arweave
-%%% project, and has been modified for use in HyperBEAM.
 -module(hb_http_client).
+-moduledoc """
+A wrapper library for gun. This module originates from the Arweave
+project, and has been modified for use in HyperBEAM.
+""".
 -behaviour(gen_server).
 -include("include/hb.hrl").
 -export([start_link/1, req/2]).
@@ -354,14 +356,18 @@ terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
 %%% Private functions.
 %%% ==================================================================
 
-%% @doc Safe wrapper for prometheus_gauge:inc/2.
+-doc """
+Safe wrapper for prometheus_gauge:inc/2.
+""".
 inc_prometheus_gauge(Name) ->
     case application:get_application(prometheus) of
         undefined -> ok;
         _ -> prometheus_gauge:inc(Name)
     end.
 
-%% @doc Safe wrapper for prometheus_gauge:dec/2.
+-doc """
+Safe wrapper for prometheus_gauge:dec/2.
+""".
 dec_prometheus_gauge(Name) ->
     case application:get_application(prometheus) of
         undefined -> ok;

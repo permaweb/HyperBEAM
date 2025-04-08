@@ -1,33 +1,34 @@
-
-%%% @doc A codec for the that marshals TABM encoded messages to and from the
-%%% "HTTP" message structure.
-%%% 
-%%% Every HTTP message is an HTTP multipart message.
-%%% See https://datatracker.ietf.org/doc/html/rfc7578
-%%%
-%%% For each TABM Key:
-%%%
-%%% The Key/Value Pair will be encoded according to the following rules:
-%%%     "signatures" -> {SignatureInput, Signature} header Tuples, each encoded
-%%% 					as a Structured Field Dictionary
-%%%     "body" ->
-%%%         - if a map, then recursively encode as its own HyperBEAM message
-%%%         - otherwise encode as a normal field
-%%%     _ -> encode as a normal field
-%%% 
-%%% Each field will be mapped to the HTTP Message according to the following 
-%%% rules:
-%%%     "body" -> always encoded part of the body as with Content-Disposition
-%%% 			  type of "inline"
-%%%     _ ->
-%%%         - If the byte size of the value is less than the ?MAX_TAG_VALUE,
-%%% 		  then encode as a header, also attempting to encode as a
-%%% 		  structured field.
-%%%         - Otherwise encode the value as a part in the multipart response
-%%% 
 -module(dev_codec_httpsig_conv).
+-moduledoc """
+A codec for the that marshals TABM encoded messages to and from the
+"HTTP" message structure.
+
+Every HTTP message is an HTTP multipart message.
+See https://datatracker.ietf.org/doc/html/rfc7578
+
+For each TABM Key:
+
+The Key/Value Pair will be encoded according to the following rules:
+    "signatures" -> {SignatureInput, Signature} header Tuples, each encoded
+					as a Structured Field Dictionary
+    "body" ->
+        - if a map, then recursively encode as its own HyperBEAM message
+        - otherwise encode as a normal field
+    _ -> encode as a normal field
+
+Each field will be mapped to the HTTP Message according to the following 
+rules:
+    "body" -> always encoded part of the body as with Content-Disposition
+			  type of "inline"
+    _ ->
+        - If the byte size of the value is less than the ?MAX_TAG_VALUE,
+		  then encode as a header, also attempting to encode as a
+		  structured field.
+        - Otherwise encode the value as a part in the multipart response
+
+""".
 -export([to/1, from/1]).
-%%% Helper utilities
+%% Helper utilities
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -37,8 +38,10 @@
 -define(CRLF, <<"\r\n">>).
 -define(DOUBLE_CRLF, <<?CRLF/binary, ?CRLF/binary>>).
 
-%% @doc Convert a HTTP Message into a TABM.
-%% HTTP Structured Field is encoded into it's equivalent TABM encoding.
+-doc """
+Convert a HTTP Message into a TABM.
+HTTP Structured Field is encoded into it's equivalent TABM encoding.
+""".
 from(Bin) when is_binary(Bin) -> Bin;
 from(HTTP) ->
     % Decode the keys of the HTTP message
@@ -104,7 +107,7 @@ from_body(TABM, InlinedKey, ContentType, Body) ->
             % ie.
             % --foo-boundary\r\n
             % My-Awesome: Part
-            %
+            
             % an awesome body\r\n
             % --foo-boundary--
             BegPat = <<"--", Boundary/binary, ?CRLF/binary>>,
@@ -209,8 +212,10 @@ from_body_parts(TABM, InlinedKey, [Part | Rest]) ->
             from_body_parts(TABMNext, InlinedKey, Rest)
     end.
 
-%% @doc Populate the `/commitments' key on the TABM with the dictionary of 
-%% signatures and their corresponding inputs.
+-doc """
+Populate the `/commitments' key on the TABM with the dictionary of 
+signatures and their corresponding inputs.
+""".
 commitments_from_signature(Map, _HPs, not_found, _RawSigInput) ->
     ?event({no_sigs_found_in_from, {msg, Map}}),
     {ok, maps:without([<<"commitments">>], Map)};
@@ -296,8 +301,10 @@ commitments_from_signature(Map, HPs, RawSig, RawSigInput) ->
             Msg
     end.
 
-%%% @doc Convert a TABM into an HTTP Message. The HTTP Message is a simple Erlang Map
-%%% that can translated to a given web server Response API
+-doc """
+Convert a TABM into an HTTP Message. The HTTP Message is a simple Erlang Map
+that can translated to a given web server Response API
+""".
 to(Bin) when is_binary(Bin) -> Bin;
 to(TABM) -> to(TABM, []).
 to(TABM, Opts) when is_map(TABM) ->
@@ -454,15 +461,17 @@ do_to(TABM, Opts) when is_map(TABM) ->
     ?event({final_body_map, {msg, Enc2}}),
     Enc2.
 
-%% @doc Group all elements with:
-%% 1. A key that ?IS_ID returns true for, and
-%% 2. A value that is immediate
-%% into a combined SF dict-_like_ structure. If not encoded, these keys would 
-%% be sent as headers and lower-cased, losing their comparability against the
-%% original keys. The structure follows all SF dict rules, except that it allows
-%% for keys to contain capitals. The HyperBEAM SF parser will accept these keys,
-%% but standard RFC 8741 parsers will not. Subsequently, the resulting `ao-cased`
-%% key is not added to the `ao-types` map.
+-doc """
+Group all elements with:
+1. A key that ?IS_ID returns true for, and
+2. A value that is immediate
+into a combined SF dict-_like_ structure. If not encoded, these keys would 
+be sent as headers and lower-cased, losing their comparability against the
+original keys. The structure follows all SF dict rules, except that it allows
+for keys to contain capitals. The HyperBEAM SF parser will accept these keys,
+but standard RFC 8741 parsers will not. Subsequently, the resulting `ao-cased'
+key is not added to the `ao-types' map.
+""".
 group_ids(Map) ->
     % Find all keys that are IDs
     IDDict = maps:filter(fun(K, V) -> ?IS_ID(K) andalso is_binary(V) end, Map),
@@ -484,7 +493,9 @@ group_ids(Map) ->
         _ -> Stripped#{ <<"ao-ids">> => IDBin }
     end.
 
-%% @doc Decode the `ao-ids' key into a map.
+-doc """
+Decode the `ao-ids' key into a map.
+""".
 ungroup_ids(Msg = #{ <<"ao-ids">> := IDBin }) ->
     % Extract the ID binary from the Map
     EncodedIDsMap = hb_structured_fields:parse_dictionary(IDBin),
@@ -498,7 +509,9 @@ ungroup_ids(Msg = #{ <<"ao-ids">> := IDBin }) ->
     maps:merge(maps:without([<<"ao-ids">>], Msg), maps:from_list(IDsMap));
 ungroup_ids(Msg) -> Msg.
 
-%% @doc Encode a list of body parts into a binary.
+-doc """
+Encode a list of body parts into a binary.
+""".
 encode_body_keys(PartList) when is_list(PartList) ->
     iolist_to_binary(hb_structured_fields:list(lists:map(
         fun
@@ -508,7 +521,9 @@ encode_body_keys(PartList) when is_list(PartList) ->
         PartList
     ))).
 
-%% @doc Merge maps at the same level, if possible.
+-doc """
+Merge maps at the same level, if possible.
+""".
 group_maps(Map) ->
     group_maps(Map, <<>>, #{}).
 group_maps(Map, Parent, Top) when is_map(Map) ->
@@ -556,13 +571,15 @@ group_maps(Map, Parent, Top) when is_map(Map) ->
         end
     end.
 
-%% @doc Generate a unique, reproducible boundary for the
-%% multipart body, however we cannot use the id of the message as
-%% the boundary, as the id is not known until the message is
-%% encoded. Subsequently, we generate each body part individually,
-%% concatenate them, and apply a SHA2-256 hash to the result.
-%% This ensures that the boundary is unique, reproducible, and
-%% secure.
+-doc """
+Generate a unique, reproducible boundary for the
+multipart body, however we cannot use the id of the message as
+the boundary, as the id is not known until the message is
+encoded. Subsequently, we generate each body part individually,
+concatenate them, and apply a SHA2-256 hash to the result.
+This ensures that the boundary is unique, reproducible, and
+secure.
+""".
 boundary_from_parts(PartList) ->
     BodyBin =
         iolist_to_binary(
@@ -586,8 +603,10 @@ hashpaths_from_message(Msg) ->
         maps:get(<<"commitments">>, Msg, #{})
     ).
 
-%% @doc Extract all keys labelled `hashpath*' from the commitments, and add them
-%% to the HTTP message as `hashpath*' keys.
+-doc """
+Extract all keys labelled `hashpath*' from the commitments, and add them
+to the HTTP message as `hashpath*' keys.
+""".
 extract_hashpaths(Map) ->
     maps:filter(
         fun (<<"hashpath", _/binary>>, _) -> true;
@@ -596,7 +615,9 @@ extract_hashpaths(Map) ->
         Map
     ).
 
-%% @doc Encode a multipart body part to a flat binary.
+-doc """
+Encode a multipart body part to a flat binary.
+""".
 encode_body_part(PartName, BodyPart, InlineKey) ->
     % We'll need to prepend a Content-Disposition header
     % to the part, using the field name as the form part
@@ -633,12 +654,14 @@ encode_body_part(PartName, BodyPart, InlineKey) ->
             >>
     end.
 
-%% @doc given a message, returns a binary tuple:
-%% - A list of pairs to add to the msg, if any
-%% - the field name for the inlined key
-%%
-%% In order to preserve the field name of the inlined
-%% part, an additional field may need to be added
+-doc """
+given a message, returns a binary tuple:
+- A list of pairs to add to the msg, if any
+- the field name for the inlined key
+
+In order to preserve the field name of the inlined
+part, an additional field may need to be added
+""".
 inline_key(Msg) ->
     % The message can named a key whose value will be placed
     % in the body as the inline part
@@ -665,7 +688,9 @@ inline_key(Msg) ->
         _ -> {#{}, <<"body">>}
     end.
 
-%% @doc Encode a HTTP message into a binary.
+-doc """
+Encode a HTTP message into a binary.
+""".
 encode_http_msg(Httpsig) ->
     % Serialize the headers, to be included in the part of the multipart response
     HeaderList = lists:foldl(
@@ -686,8 +711,10 @@ encode_http_msg(Httpsig) ->
         SubBody -> <<EncodedHeaders/binary, ?DOUBLE_CRLF/binary, SubBody/binary>>
     end.
 
-%% @doc All maps are encoded into the body of the HTTP message
-%% to be further encoded later.
+-doc """
+All maps are encoded into the body of the HTTP message
+to be further encoded later.
+""".
 field_to_http(Httpsig, {Name, Value}, _Opts) when is_map(Value) ->
     NormalizedName = hb_ao:normalize_key(Name),
     OldBody = maps:get(<<"body">>, Httpsig, #{}),
@@ -699,7 +726,7 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
     % 
     % So we check whether the size of the value is within the threshold
     % to encode as a header, and otherwise default to encoding in the body.
-    %
+    
     % Note that a "where" Opts may force the location of the encoded
     % value -- this is only a default location if not specified in Opts 
     DefaultWhere = case {maps:get(where, Opts, headers), byte_size(Value)} of
@@ -762,14 +789,16 @@ group_maps_test() ->
     ),
     ok.
 
-%% @doc The grouped maps encoding is a subset of the flat encoding,
-%% where on keys with maps values are flattened.
-%%
-%% So despite needing a special encoder to produce it
-%% We can simply apply the flat encoder to it to get back
-%% the original message.
-%% 
-%% The test asserts that is indeed the case.
+-doc """
+The grouped maps encoding is a subset of the flat encoding,
+where on keys with maps values are flattened.
+
+So despite needing a special encoder to produce it
+We can simply apply the flat encoder to it to get back
+the original message.
+
+The test asserts that is indeed the case.
+""".
 group_maps_flat_compatible_test() ->
     Map = #{
         <<"a">> => <<"1">>,

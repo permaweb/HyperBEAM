@@ -1,22 +1,24 @@
-%%% @doc A module for parsing and converting between Erlang and HTTP Structured
-%%% Fields, as described in RFC-9651.
-%%% 
-%%% The mapping between Erlang and structured headers types is as follow:
-%%%
-%%% List: list()
-%%% Inner list: {list, [item()], params()}
-%%% Dictionary: [{binary(), item()}]
-%%%   There is no distinction between empty list and empty dictionary.
-%%% Item with parameters: {item, bare_item(), params()}
-%%% Parameters: [{binary(), bare_item()}]
-%%% Bare item: one bare_item() that can be of type:
-%%% Integer: integer()
-%%% Decimal: {decimal, {integer(), integer()}}
-%%% String: {string, binary()}
-%%% Token: {token, binary()}
-%%% Byte sequence: {binary, binary()}
-%%% Boolean: boolean()
 -module(hb_structured_fields).
+-moduledoc """
+A module for parsing and converting between Erlang and HTTP Structured
+Fields, as described in RFC-9651.
+
+The mapping between Erlang and structured headers types is as follow:
+
+List: list()
+Inner list: {list, [item()], params()}
+Dictionary: [{binary(), item()}]
+  There is no distinction between empty list and empty dictionary.
+Item with parameters: {item, bare_item(), params()}
+Parameters: [{binary(), bare_item()}]
+Bare item: one bare_item() that can be of type:
+Integer: integer()
+Decimal: {decimal, {integer(), integer()}}
+String: {string, binary()}
+Token: {token, binary()}
+Byte sequence: {binary, binary()}
+Boolean: boolean()
+""".
 -export([parse_dictionary/1, parse_item/1, parse_list/1, parse_bare_item/1]).
 -export([dictionary/1, item/1, list/1, bare_item/1, from_bare_item/1]).
 -export([to_dictionary/1, to_list/1, to_item/1, to_item/2]).
@@ -44,7 +46,9 @@
         (C =:= $z)
 ).
 
-%% @doc Convert a map to a dictionary.
+-doc """
+Convert a map to a dictionary.
+""".
 to_dictionary(Map) when is_map(Map) ->
    to_dictionary(maps:to_list(Map));
 to_dictionary(Pairs) when is_list(Pairs) ->
@@ -60,7 +64,9 @@ to_dictionary(Dict, [{Name, Value} | Rest]) ->
         E -> E
     end.
 
-%% @doc Convert an item to a dictionary.
+-doc """
+Convert an item to a dictionary.
+""".
 to_item({item, Kind, Params}) when is_list(Params) ->
     {ok, {item, to_bare_item(Kind), [to_param(Pair) || Pair <- Params] }};
 to_item(Item) ->
@@ -68,7 +74,9 @@ to_item(Item) ->
 to_item(Item, Params) when is_list(Params) ->
     to_item({ item, to_bare_item(Item), Params}).
 
-%% @doc Convert a list to an SF term.
+-doc """
+Convert a list to an SF term.
+""".
 to_list(List) when is_list(List) ->
     to_list([], List).
 to_list(Acc, []) ->
@@ -80,7 +88,9 @@ to_list(Acc, [ItemOrInner | Rest]) ->
         E -> E
     end.
 
-%% @doc Convert an inner list to an SF term.
+-doc """
+Convert an inner list to an SF term.
+""".
 to_inner_list({list, Inner, Params}) when is_list(Inner) andalso is_list(Params) ->
     {ok, {list, [to_inner_item(I) || I <-- Inner], [to_param(Pair) || Pair <- Params]}};
 to_inner_list(Inner) ->
@@ -97,7 +107,9 @@ to_inner_list(Inner, [Item | Rest], Params) ->
         E -> E
     end.
 
-%% @doc Convert an Erlang term to an SF `item' or `inner_list'.
+-doc """
+Convert an Erlang term to an SF `item' or `inner_list'.
+""".
 to_item_or_inner_list(ItemOrInner) ->
     case ItemOrInner of
         Map when is_map(Map) -> {too_deep, Map};
@@ -107,7 +119,9 @@ to_item_or_inner_list(ItemOrInner) ->
         Inner when is_list(Inner) -> to_inner_list(Inner)
     end.
 
-%% @doc Convert an Erlang term to an SF `item'.
+-doc """
+Convert an Erlang term to an SF `item'.
+""".
 to_inner_item(Item) when is_list(Item) ->
     {too_deep, Item};
 to_inner_item(Item) ->
@@ -116,12 +130,16 @@ to_inner_item(Item) ->
         E -> E
     end.
 
-%% @doc Convert an Erlang term to an SF `parameter'.
+-doc """
+Convert an Erlang term to an SF `parameter'.
+""".
 to_param({Name, Value}) ->
     NormalizedName = key_to_binary(Name),
     {NormalizedName, to_bare_item(Value)}.
 
-%% @doc Convert an Erlang term to an SF `bare_item'.
+-doc """
+Convert an Erlang term to an SF `bare_item'.
+""".
 to_bare_item(BareItem) ->
      case BareItem of
         % Assume tuple is already parsed
@@ -138,7 +156,9 @@ to_bare_item(BareItem) ->
         S when is_binary(S) or is_list(S) -> {string, iolist_to_binary(S)}
     end.
 
-%% @doc Convert an SF `bare_item' to an Erlang term.
+-doc """
+Convert an SF `bare_item' to an Erlang term.
+""".
 from_bare_item(BareItem) ->
     case BareItem of
         I when is_integer(I) -> I;
@@ -156,11 +176,15 @@ from_bare_item(BareItem) ->
         {binary, B} -> B
     end.
 
-%% @doc Convert an Erlang term to a binary key.
+-doc """
+Convert an Erlang term to a binary key.
+""".
 key_to_binary(Key) when is_atom(Key) -> atom_to_binary(Key);
 key_to_binary(Key) -> iolist_to_binary(Key).
 
-%% @doc Parse a binary SF dictionary.
+-doc """
+Parse a binary SF dictionary.
+""".
 -spec parse_dictionary(binary()) -> sh_dictionary().
 parse_dictionary(<<>>) ->
     [];
@@ -184,7 +208,9 @@ parse_dict_key(<<$;, R0/bits>>, Acc, K) ->
 parse_dict_key(R, Acc, K) ->
     parse_dict_before_sep(R, lists:keystore(K, 1, Acc, {K, {item, true, []}})).
 
-%% @doc Parse a binary SF dictionary before a separator.
+-doc """
+Parse a binary SF dictionary before a separator.
+""".
 parse_dict_before_sep(<<$\s, R/bits>>, Acc) ->
     parse_dict_before_sep(R, Acc);
 parse_dict_before_sep(<<$\t, R/bits>>, Acc) ->
@@ -194,7 +220,9 @@ parse_dict_before_sep(<<C, R/bits>>, Acc) when C =:= $, ->
 parse_dict_before_sep(<<>>, Acc) ->
     Acc.
 
-%% @doc Parse a binary SF dictionary before a member.
+-doc """
+Parse a binary SF dictionary before a member.
+""".
 parse_dict_before_member(<<$\s, R/bits>>, Acc) ->
     parse_dict_before_member(R, Acc);
 parse_dict_before_member(<<$\t, R/bits>>, Acc) ->
@@ -204,7 +232,9 @@ parse_dict_before_member(<<C, R/bits>>, Acc)
         or (C =:= $%) or (C =:= $_) or (C =:= $-) ->
     parse_dict_key(R, Acc, <<C>>).
 
-%% @doc Parse a binary SF item to an SF `item'.
+-doc """
+Parse a binary SF item to an SF `item'.
+""".
 -spec parse_item(binary()) -> sh_item().
 parse_item(Bin) ->
     {Item, <<>>} = parse_item1(Bin),
@@ -219,14 +249,18 @@ parse_item1(Bin) ->
             {{item, Item, []}, Rest}
     end.
 
-%% @doc Parse a binary SF list.
+-doc """
+Parse a binary SF list.
+""".
 -spec parse_list(binary()) -> sh_list().
 parse_list(<<>>) ->
     [];
 parse_list(Bin) ->
     parse_list_before_member(Bin, []).
 
-%% @doc Parse a binary SF list before a member.
+-doc """
+Parse a binary SF list before a member.
+""".
 parse_list_member(<<$(, R0/bits>>, Acc) ->
     {Item, R} = parse_inner_list(R0, []),
     parse_list_before_sep(R, [Item | Acc]);
@@ -234,7 +268,9 @@ parse_list_member(R0, Acc) ->
     {Item, R} = parse_item1(R0),
     parse_list_before_sep(R, [Item | Acc]).
 
-%% @doc Parse a binary SF list before a separator.
+-doc """
+Parse a binary SF list before a separator.
+""".
 parse_list_before_sep(<<$\s, R/bits>>, Acc) ->
     parse_list_before_sep(R, Acc);
 parse_list_before_sep(<<$\t, R/bits>>, Acc) ->
@@ -244,7 +280,9 @@ parse_list_before_sep(<<$,, R/bits>>, Acc) ->
 parse_list_before_sep(<<>>, Acc) ->
     lists:reverse(Acc).
 
-%% @doc Parse a binary SF list before a member.
+-doc """
+Parse a binary SF list before a member.
+""".
 parse_list_before_member(<<$\s, R/bits>>, Acc) ->
     parse_list_before_member(R, Acc);
 parse_list_before_member(<<$\t, R/bits>>, Acc) ->
@@ -287,7 +325,9 @@ parse_param(<<C, R/bits>>, Acc, K) when
 parse_param(R, Acc, K) ->
     {lists:keystore(K, 1, Acc, {K, true}), R}.
 
-%% @doc Parse an integer or decimal.
+-doc """
+Parse an integer or decimal.
+""".
 parse_bare_item(<<$-, R/bits>>) -> parse_number(R, 0, <<$->>);
 parse_bare_item(<<C, R/bits>>) when ?IS_DIGIT(C) -> parse_number(R, 1, <<C>>);
 parse_bare_item(<<$", R/bits>>) ->
@@ -306,7 +346,9 @@ parse_bare_item(<<"?1", R/bits>>) ->
     % Parse a boolean true.
     {true, R}.
 
-%% @doc Parse an integer or decimal binary.
+-doc """
+Parse an integer or decimal binary.
+""".
 parse_number(<<C, R/bits>>, L, Acc) when ?IS_DIGIT(C) ->
     parse_number(R, L + 1, <<Acc/binary, C>>);
 parse_number(<<$., R/bits>>, L, Acc) ->
@@ -314,7 +356,9 @@ parse_number(<<$., R/bits>>, L, Acc) ->
 parse_number(R, L, Acc) when L =< 15 ->
     {binary_to_integer(Acc), R}.
 
-%% @doc Parse a decimal binary.
+-doc """
+Parse a decimal binary.
+""".
 parse_decimal(<<C, R/bits>>, L1, L2, IntAcc, FracAcc) when ?IS_DIGIT(C) ->
     parse_decimal(R, L1, L2 + 1, IntAcc, <<FracAcc/binary, C>>);
 parse_decimal(R, L1, L2, IntAcc, FracAcc0) when L1 =< 12, L2 >= 1, L2 =< 3 ->
@@ -346,7 +390,9 @@ parse_decimal(R, L1, L2, IntAcc, FracAcc0) when L1 =< 12, L2 >= 1, L2 =< 3 ->
         end,
     {{decimal, {Int * Mul + Frac, -byte_size(FracAcc)}}, R}.
 
-%% @doc Parse a string binary.
+-doc """
+Parse a string binary.
+""".
 parse_string(<<$\\, $", R/bits>>, Acc) ->
     parse_string(R, <<Acc/binary, $">>);
 parse_string(<<$\\, $\\, R/bits>>, Acc) ->
@@ -359,13 +405,17 @@ parse_string(<<C, R/bits>>, Acc) when
         C >= 16#5d, C =< 16#7e ->
     parse_string(R, <<Acc/binary, C>>).
 
-%% @doc Parse a token binary.
+-doc """
+Parse a token binary.
+""".
 parse_token(<<C, R/bits>>, Acc) when ?IS_TOKEN(C) or (C =:= $:) or (C =:= $/) ->
     parse_token(R, <<Acc/binary, C>>);
 parse_token(R, Acc) ->
     {{token, Acc}, R}.
 
-%% @doc Parse a byte sequence binary.
+-doc """
+Parse a byte sequence binary.
+""".
 parse_binary(<<$:, R/bits>>, Acc) ->
     {{binary, base64:decode(Acc)}, R};
 parse_binary(<<C, R/bits>>, Acc) when ?IS_ALPHANUM(C) or (C =:= $+) or (C =:= $/) or (C =:= $=) ->
@@ -429,7 +479,7 @@ parse_struct_hd_test_() ->
 
 %% The tests JSON use arrays for almost everything. Identifying
 %% what is what requires looking deeper in the values:
-%%
+%
 %% dict: [["k", v], ["k2", v2]] (values may have params)
 %% params: [["k", v], ["k2", v2]] (no params for values)
 %% list: [e1, e2, e3]
@@ -446,7 +496,7 @@ expected_to_term([Bare, Params = [[<<_/bits>>, _] | _]]) when
 expected_to_term([]) ->
     [];
 %% Dictionary.
-%%
+%
 %% We exclude empty list from values because that could
 %% be confused with an outer list of strings. There is
 %% currently no conflicts in the tests thankfully.
@@ -489,7 +539,7 @@ e2tp(Params) ->
 %% in the case of multiple headers. To make tests work we modify
 %% the raw value the same way Cowboy does when encountering
 %% multiple headers: by adding a comma and space in between.
-%%
+%
 %% Similarly, the Cowlib parsers expect the leading and trailing
 %% whitespace to be removed before calling the parser.
 raw_to_binary(RawList) ->

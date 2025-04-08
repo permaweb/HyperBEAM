@@ -1,37 +1,39 @@
-%%% @doc A parser that translates AO-Core HTTP API requests in TABM format
-%%% into an ordered list of messages to evaluate. The details of this format
-%%% are described in `docs/ao-core-http-api.md`.
-%%%
-%%% Syntax overview:
-%%% ```
-%%%     Singleton: Message containing keys and a `path` field,
-%%%                which may also contain a query string of key-value pairs.
-%%%
-%%%     Path:
-%%%         - /Part1/Part2/.../PartN/ => [Part1, Part2, ..., PartN]
-%%%         - /ID/Part2/.../PartN => [ID, Part2, ..., PartN]
-%%%
-%%%     Part: (Key + Resolution), Device?, #{ K => V}?
-%%%         - Part => #{ path => Part }
-%%%         - Part&Key=Value => #{ path => Part, Key => Value }
-%%%         - Part&Key => #{ path => Part, Key => true }
-%%%         - Part&k1=v1&k2=v2 => #{ path => Part, k1 => <<"v1">>, k2 => <<"v2">> }
-%%%         - Part~Device => {as, Device, #{ path => Part }}
-%%%         - Part~D&K1=V1 => {as, D, #{ path => Part, K1 => <<"v1">> }}
-%%%         - pt&k1+int=1 => #{ path => pt, k1 => 1 }
-%%%         - pt~d&k1+int=1 => {as, d, #{ path => pt, k1 => 1 }}
-%%%         - (/nested/path) => Resolution of the path /nested/path
-%%%         - (/nested/path&k1=v1) => (resolve /nested/path)#{k1 => v1}
-%%%         - (/nested/path~D&K1=V1) => (resolve /nested/path)#{K1 => V1}
-%%%         - pt&k1+res=(/a/b/c) => #{ path => pt, k1 => (resolve /a/b/c) }
-%%%     Key:
-%%%         - key: <<"value">> => #{ key => <<"value">>, ... } for all messages
-%%%         - n.key: <<"value">> => #{ key => <<"value">>, ... } for Nth message
-%%%         - key+Int: 1 => #{ key => 1, ... }
-%%%         - key+Res: /nested/path => #{ key => (resolve /nested/path), ... }
-%%%         - N.Key+Res=(/a/b/c) => #{ Key => (resolve /a/b/c), ... }
-%%% '''
 -module(hb_singleton).
+-moduledoc """
+A parser that translates AO-Core HTTP API requests in TABM format
+into an ordered list of messages to evaluate. The details of this format
+are described in `docs/ao-core-http-api.md`.
+
+Syntax overview:
+```
+    Singleton: Message containing keys and a `path` field,
+               which may also contain a query string of key-value pairs.
+
+    Path:
+        - /Part1/Part2/.../PartN/ => [Part1, Part2, ..., PartN]
+        - /ID/Part2/.../PartN => [ID, Part2, ..., PartN]
+
+    Part: (Key + Resolution), Device?, #{ K => V}?
+        - Part => #{ path => Part }
+        - Part&Key=Value => #{ path => Part, Key => Value }
+        - Part&Key => #{ path => Part, Key => true }
+        - Part&k1=v1&k2=v2 => #{ path => Part, k1 => <<"v1">>, k2 => <<"v2">> }
+        - Part~Device => {as, Device, #{ path => Part }}
+        - Part~D&K1=V1 => {as, D, #{ path => Part, K1 => <<"v1">> }}
+        - pt&k1+int=1 => #{ path => pt, k1 => 1 }
+        - pt~d&k1+int=1 => {as, d, #{ path => pt, k1 => 1 }}
+        - (/nested/path) => Resolution of the path /nested/path
+        - (/nested/path&k1=v1) => (resolve /nested/path)#{k1 => v1}
+        - (/nested/path~D&K1=V1) => (resolve /nested/path)#{K1 => V1}
+        - pt&k1+res=(/a/b/c) => #{ path => pt, k1 => (resolve /a/b/c) }
+    Key:
+        - key: <<"value">> => #{ key => <<"value">>, ... } for all messages
+        - n.key: <<"value">> => #{ key => <<"value">>, ... } for Nth message
+        - key+Int: 1 => #{ key => 1, ... }
+        - key+Res: /nested/path => #{ key => (resolve /nested/path), ... }
+        - N.Key+Res=(/a/b/c) => #{ Key => (resolve /a/b/c), ... }
+'''
+""".
 -export([from/1, to/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -40,7 +42,9 @@
 -type ao_message() :: map() | binary().
 -type tabm_message() :: map().
 
-%% @doc Convert a list of AO-Core message into TABM message.
+-doc """
+Convert a list of AO-Core message into TABM message.
+""".
 -spec to(list(ao_message())) -> tabm_message().
 to(Messages) ->
     % Iterate through all AO-Core messages folding them into the TABM message
@@ -133,8 +137,10 @@ type(Value) when is_binary(Value) -> binary;
 type(Value) when is_integer(Value) -> integer;
 type(_Value) -> unknown.
 
-%% @doc Normalize a singleton TABM message into a list of executable AO-Core
-%% messages.
+-doc """
+Normalize a singleton TABM message into a list of executable AO-Core
+messages.
+""".
 from(RawMsg) ->
     RawPath = maps:get(<<"path">>, RawMsg, <<>>),
     ?event(parsing, {raw_path, RawPath}),
@@ -160,7 +166,9 @@ from(RawMsg) ->
     ?event(parsing, {result, Result}),
     Result.
 
-%% @doc Parse the relative reference into path, query, and fragment.
+-doc """
+Parse the relative reference into path, query, and fragment.
+""".
 parse_full_path(RelativeRef) ->
     {Path, QKVList} =
         case binary:split(RelativeRef, <<"?">>) of
@@ -173,20 +181,26 @@ parse_full_path(RelativeRef) ->
         maps:from_list(QKVList)
     }.
 
-%% @doc Step 2: Decode, split and sanitize the path. Split by `/' but avoid
-%% subpath components, such that their own path parts are not dissociated from
-%% their parent path.
+-doc """
+Step 2: Decode, split and sanitize the path. Split by `/' but avoid
+subpath components, such that their own path parts are not dissociated from
+their parent path.
+""".
 path_messages(RawBin) when is_binary(RawBin) ->
     lists:map(fun parse_part/1, path_parts([$/], decode_string(RawBin))).
 
-%% @doc Normalize the base path.
+-doc """
+Normalize the base path.
+""".
 normalize_base([]) -> [];
 normalize_base([First|Rest]) when ?IS_ID(First) -> [First|Rest];
 normalize_base([{as, DevID, First}|Rest]) -> [{as, DevID, First}|Rest];
 normalize_base(Rest) -> [#{}|Rest].
 
-%% @doc Split the path into segments, filtering out empty segments and
-%% segments that are too long.
+-doc """
+Split the path into segments, filtering out empty segments and
+segments that are too long.
+""".
 path_parts(Sep, PathBin) when is_binary(PathBin) ->
     Res = lists:filtermap(
         fun(Part) ->
@@ -201,16 +215,20 @@ path_parts(Sep, PathBin) when is_binary(PathBin) ->
     ),
     Res.
 
-%% @doc Extract all of the parts from the binary, given (a list of) separators.
+-doc """
+Extract all of the parts from the binary, given (a list of) separators.
+""".
 all_path_parts(_Sep, <<>>) -> [];
 all_path_parts(Sep, Bin) ->
     {_MatchedSep, Part, Rest} = part(Sep, Bin),
     [Part | all_path_parts(Sep, Rest)].
 
-%% @doc Extract the characters from the binary until a separator is found.
-%% The first argument of the function is an explicit separator character, or
-%% a list of separator characters. Returns a tuple with the separator, the
-%% accumulated characters, and the rest of the binary.
+-doc """
+Extract the characters from the binary until a separator is found.
+The first argument of the function is an explicit separator character, or
+a list of separator characters. Returns a tuple with the separator, the
+accumulated characters, and the rest of the binary.
+""".
 part(Sep, Bin) when not is_list(Sep) ->
     part([Sep], Bin);
 part(Seps, Bin) ->
@@ -229,7 +247,9 @@ part(Seps, <<C:8/integer, Rest/binary>>, Depth, CurrAcc) ->
             part(Seps, Rest, Depth, << CurrAcc/binary, C:8/integer >>)
     end.
 
-%% @doc Step 3: Apply types to values and remove specifiers.
+-doc """
+Step 3: Apply types to values and remove specifiers.
+""".
 apply_types(Msg) ->
     maps:fold(
         fun(Key, Val, Acc) ->
@@ -240,8 +260,10 @@ apply_types(Msg) ->
         Msg
     ).
 
-%% @doc Step 4: Group headers/query by N-scope.
-%% `N.Key' => applies to Nth step. Otherwise => `global'
+-doc """
+Step 4: Group headers/query by N-scope.
+`N.Key' => applies to Nth step. Otherwise => `global'
+""".
 group_scoped(Map, Msgs) ->
     {NScope, Global} =
         maps:fold(
@@ -263,7 +285,9 @@ group_scoped(Map, Msgs) ->
         N <- lists:seq(1, length(Msgs))
     ].
 
-%% @doc Get the scope of a key. Adds 1 to account for the base message.
+-doc """
+Get the scope of a key. Adds 1 to account for the base message.
+""".
 parse_scope(KeyBin) ->
     case binary:split(KeyBin, <<".">>, [global]) of
         [Front, Remainder] ->
@@ -274,7 +298,9 @@ parse_scope(KeyBin) ->
         _ -> global
     end.
 
-%% @doc Step 5: Merge the base message with the scoped messages.
+-doc """
+Step 5: Merge the base message with the scoped messages.
+""".
 build_messages(Msgs, ScopedModifications) ->
     do_build(1, Msgs, ScopedModifications).
 
@@ -299,12 +325,14 @@ do_build(I, [Msg | Rest], ScopedKeys) ->
     ),
     [StepMsg | do_build(I + 1, Rest, ScopedKeys)].
 
-%% @doc Parse a path part into a message or an ID.
-%% Applies the syntax rules outlined in the module doc, in the following order:
-%% 1. ID
-%% 2. Part subpath resolutions
-%% 3. Inlined key-value pairs
-%% 4. Device specifier
+-doc """
+Parse a path part into a message or an ID.
+Applies the syntax rules outlined in the module doc, in the following order:
+1. ID
+2. Part subpath resolutions
+3. Inlined key-value pairs
+4. Device specifier
+""".
 parse_part(ID) when ?IS_ID(ID) -> ID;
 parse_part(Part) ->
     case maybe_subpath(Part) of
@@ -321,9 +349,11 @@ parse_part(Part) ->
             end
     end.
 
-%% @doc Parse part modifiers:
-%% 1. `~Device' => `{as, Device, Msg}'
-%% 2. `&K=V' => `Msg#{ K => V }'
+-doc """
+Parse part modifiers:
+1. `~Device' => `{as, Device, Msg}'
+2. `&K=V' => `Msg#{ K => V }'
+""".
 parse_part_mods([], Msg) -> Msg;
 parse_part_mods(<<>>, Msg) -> Msg;
 parse_part_mods(<<"~", PartMods/binary>>, Msg) ->
@@ -347,9 +377,11 @@ parse_part_mods(<< "&", InlinedMsgBin/binary >>, Msg) ->
         ),
     MsgWithInlined.
 
-%% @doc Extrapolate the inlined key-value pair from a path segment. If the
-%% key has a value, it may provide a type (as with typical keys), but if a
-%% value is not provided, it is assumed to be a boolean `true'.
+-doc """
+Extrapolate the inlined key-value pair from a path segment. If the
+key has a value, it may provide a type (as with typical keys), but if a
+value is not provided, it is assumed to be a boolean `true'.
+""".
 parse_inlined_key_val(Bin) ->
     case part([$=, $&], Bin) of
         {no_match, K, <<>>} -> {K, true};
@@ -358,15 +390,19 @@ parse_inlined_key_val(Bin) ->
             {Key, Val}
     end.
 
-%% @doc Attempt Cowboy URL decode, then sanitize the result.
+-doc """
+Attempt Cowboy URL decode, then sanitize the result.
+""".
 decode_string(B) ->
     case catch uri_string:unquote(B) of
         DecodedBin when is_binary(DecodedBin) -> DecodedBin;
         _ -> throw({error, cannot_decode, B})
     end.
 
-%% @doc Check if the string is a subpath, returning it in parsed form,
-%% or the original string with a specifier.
+-doc """
+Check if the string is a subpath, returning it in parsed form,
+or the original string with a specifier.
+""".
 maybe_subpath(Str) when byte_size(Str) >= 2 ->
     case {binary:first(Str), binary:last(Str)} of
         {$(, $)} ->
@@ -376,7 +412,9 @@ maybe_subpath(Str) when byte_size(Str) >= 2 ->
     end;
 maybe_subpath(Other) -> Other.
 
-%% @doc Parse a key's type (applying it to the value) and device name if present.
+-doc """
+Parse a key's type (applying it to the value) and device name if present.
+""".
 maybe_typed(Key, Value) ->
     case part($+, Key) of
         {no_match, OnlyKey, <<>>} -> {untyped, OnlyKey, Value};
@@ -396,8 +434,10 @@ maybe_typed(Key, Value) ->
             end
     end.
 
-%% @doc Join a list of items with a separator, or return the first item if there
-%% is only one item. If there are no items, return an empty binary.
+-doc """
+Join a list of items with a separator, or return the first item if there
+is only one item. If there are no items, return an empty binary.
+""".
 maybe_join(Items, Sep) ->
     case length(Items) of
         0 -> <<>>;

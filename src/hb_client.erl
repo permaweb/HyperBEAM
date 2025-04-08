@@ -11,10 +11,12 @@
 
 %%% AO-Core API and HyperBEAM Built-In Devices
 
-%% @doc Resolve a message pair on a remote node.
+-doc """
+Resolve a message pair on a remote node.
 %% The message pair is first transformed into a singleton request, by
 %% prefixing the keys in both messages for the path segment that they relate to,
 %% and then adjusting the "Path" field from the second message.
+""".
 resolve(Node, Msg1, Msg2, Opts) ->
     TABM2 =
         hb_ao:set(
@@ -67,7 +69,9 @@ add_route(Node, Route, Opts) ->
 
 %%% Arweave node API
 
-%% @doc Grab the latest block information from the Arweave gateway node.
+-doc """
+Grab the latest block information from the Arweave gateway node.
+""".
 arweave_timestamp() ->
     case hb_opts:get(mode) of
         debug -> {0, 0, <<0:256>>};
@@ -85,7 +89,9 @@ arweave_timestamp() ->
 
 %%% Bundling and data access API
 
-%% @doc Upload a data item to the bundler node.
+-doc """
+Upload a data item to the bundler node.
+""".
 upload(Msg, Opts) ->
     upload(Msg, Opts, hb_ao:get(<<"codec-device">>, Msg, <<"httpsig@1.0">>, Opts)).
 upload(Msg, Opts, <<"httpsig@1.0">>) ->

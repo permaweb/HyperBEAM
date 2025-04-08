@@ -175,8 +175,10 @@ is_user_signed(_) -> true.
 
 %%% Commitment flow: Adding commitments to results.
 
-%% @doc Hook used by the MU pathway (currently) to add commitments to an
+-doc """
+Hook used by the MU pathway (currently) to add commitments to an
 %% outbound message if the computation requests it.
+""".
 push(_Item, S = #{ <<"results">> := ResultsMsg }) ->
     NewRes = commit_to_results(ResultsMsg, S),
     {ok, S#{ <<"results">> => NewRes }}.
@@ -274,8 +276,10 @@ add_commitments(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _S
         false -> NewMsg
     end.
 
-%% @doc Helper function for parallel execution of commitment
+-doc """
+Helper function for parallel execution of commitment
 %% gathering.
+""".
 pfiltermap(Pred, List) ->
     Parent = self(),
     Pids = lists:map(fun(X) -> 
@@ -306,8 +310,10 @@ pfiltermap(Pred, List) ->
             end, Pids)
     ].
 
-%% @doc Find the process that this message is targeting, in order to
+-doc """
+Find the process that this message is targeting, in order to
 %% determine which commitments to add.
+""".
 find_process(Item, #{ <<"logger">> := _Logger, <<"store">> := Store }) ->
     case Item#tx.target of
         X when X =/= <<>> ->

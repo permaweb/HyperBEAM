@@ -1,13 +1,16 @@
-
-%%% @doc A wrapper around the hb_cache module that provides a more
-%%% convenient interface for reading the result of a process at a given slot or
-%%% message ID.
 -module(dev_process_cache).
+-moduledoc """
+A wrapper around the hb_cache module that provides a more
+convenient interface for reading the result of a process at a given slot or
+message ID.
+""".
 -export([latest/2, latest/3, latest/4, read/2, read/3, write/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%% @doc Read the result of a process at a given slot.
+-doc """
+Read the result of a process at a given slot.
+""".
 read(ProcID, Opts) ->
     hb_util:ok(latest(ProcID, Opts)).
 read(ProcID, SlotRef, Opts) ->
@@ -15,7 +18,9 @@ read(ProcID, SlotRef, Opts) ->
     Path = path(ProcID, SlotRef, Opts),
     hb_cache:read(Path, Opts).
 
-%% @doc Write a process computation result to the cache.
+-doc """
+Write a process computation result to the cache.
+""".
 write(ProcID, Slot, Msg, Opts) ->
     % Write the item to the cache in the root of the store.
     {ok, Root} = hb_cache:write(Msg, Opts),
@@ -34,7 +39,9 @@ write(ProcID, Slot, Msg, Opts) ->
     % Return the slot number path.
     {ok, SlotNumPath}.
 
-%% @doc Calculate the path of a result, given a process ID and a slot.
+-doc """
+Calculate the path of a result, given a process ID and a slot.
+""".
 path(ProcID, Ref, Opts) ->
     path(ProcID, Ref, [], Opts).
 path(ProcID, Ref, PathSuffix, Opts) ->
@@ -53,9 +60,11 @@ path(ProcID, Ref, PathSuffix, Opts) ->
         end ++ PathSuffix
     ).
 
-%% @doc Retrieve the latest slot for a given process. Optionally state a limit
+-doc """
+Retrieve the latest slot for a given process. Optionally state a limit
 %% on the slot number to search for, as well as a required path that the slot
 %% must have.
+""".
 latest(ProcID, Opts) -> latest(ProcID, [], Opts).
 latest(ProcID, RequiredPath, Opts) ->
     latest(ProcID, RequiredPath, undefined, Opts).
@@ -107,7 +116,9 @@ latest(ProcID, RawRequiredPath, Limit, Opts) ->
             {ok, SlotNum, Msg}
     end.
 
-%% @doc Find the latest assignment with the requested path suffix.
+-doc """
+Find the latest assignment with the requested path suffix.
+""".
 first_with_path(ProcID, RequiredPath, Slots, Opts) ->
     first_with_path(
         ProcID,
@@ -144,8 +155,10 @@ process_cache_suite_test_() ->
         ]
     ).
 
-%% @doc Test for writing multiple computed outputs, then getting them by
+-doc """
+Test for writing multiple computed outputs, then getting them by
 %% their slot number and by their signed and unsigned IDs.
+""".
 test_write_and_read_output(Opts) ->
     Proc = hb_cache:test_signed(
         #{ <<"test-item">> => hb_cache:test_unsigned(<<"test-body-data">>) }),
@@ -169,7 +182,9 @@ test_write_and_read_output(Opts) ->
         read(ProcID, hb_util:human_id(hb_message:id(Item2, all)), Opts),
     ?assert(hb_message:match(Item2, ReadItem2ByID)).
 
-%% @doc Test for retrieving the latest computed output for a process.
+-doc """
+Test for retrieving the latest computed output for a process.
+""".
 find_latest_outputs(Opts) ->
     % Create test environment.
     Store = hb_opts:get(store, no_viable_store, Opts),

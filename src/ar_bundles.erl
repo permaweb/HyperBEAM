@@ -11,7 +11,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%%% @doc Module for creating, signing, and verifying Arweave data items and bundles.
+-moduledoc "Module for creating, signing, and verifying Arweave data items and bundles.".
 
 -define(BUNDLE_TAGS, [
     {<<"bundle-format">>, <<"binary">>},
@@ -139,17 +139,19 @@ format_line(RawStr, Fmt, Ind) ->
         Fmt
     ).
 
-%% @doc Return the address of the signer of an item, if it is signed.
+-doc "Return the address of the signer of an item, if it is signed.".
 signer(#tx { owner = ?DEFAULT_OWNER }) -> undefined;
 signer(Item) -> crypto:hash(sha256, Item#tx.owner).
 
-%% @doc Check if an item is signed.
+-doc "Check if an item is signed.".
 is_signed(Item) ->
     Item#tx.signature =/= ?DEFAULT_SIG.
 
-%% @doc Return the ID of an item -- either signed or unsigned as specified.
-%% If the item is unsigned and the user requests the signed ID, we return
-%% the atom `not_signed'. In all other cases, we return the ID of the item.
+-doc """
+Return the ID of an item -- either signed or unsigned as specified.
+ If the item is unsigned and the user requests the signed ID, we return
+ the atom `not_signed'. In all other cases, we return the ID of the item.
+""".
 id(Item) -> id(Item, unsigned).
 id(Item, Type) when not is_record(Item, tx) ->
     id(normalize(Item), Type);
@@ -163,7 +165,7 @@ id(#tx { id = ?DEFAULT_ID }, signed) ->
 id(#tx { id = ID }, signed) ->
     ID.
 
-%% @doc Return the first item in a bundle-map/list.
+-doc "Return the first item in a bundle-map/list.".
 hd(#tx { data = #{ <<"1">> := Msg } }) -> Msg;
 hd(#tx { data = [First | _] }) -> First;
 hd(TX = #tx { data = Binary }) when is_binary(Binary) ->
@@ -171,7 +173,7 @@ hd(TX = #tx { data = Binary }) when is_binary(Binary) ->
 hd(#{ <<"1">> := Msg }) -> Msg;
 hd(_) -> undefined.
 
-%% @doc Convert an item containing a map or list into an Erlang map.
+-doc "Convert an item containing a map or list into an Erlang map.".
 map(#tx { data = Map }) when is_map(Map) -> Map;
 map(#tx { data = Data }) when is_list(Data) ->
     maps:from_list(
@@ -184,11 +186,11 @@ map(#tx { data = Data }) when is_list(Data) ->
 map(Item = #tx { data = Data }) when is_binary(Data) ->
     (maybe_unbundle(Item))#tx.data.
 
-%% @doc Check if an item exists in a bundle-map/list.
+-doc "Check if an item exists in a bundle-map/list.".
 member(Key, Item) ->
     find(Key, Item) =/= not_found.
 
-%% @doc Find an item in a bundle-map/list and return it.
+-doc "Find an item in a bundle-map/list and return it.".
 find(Key, Map) when is_map(Map) ->
     case maps:get(Key, Map, not_found) of
         not_found -> find(Key, maps:values(Map));
@@ -213,12 +215,12 @@ find(Key, Item = #tx { data = Data }) ->
 find(_Key, _) ->
     not_found.
 
-%% @doc Return the manifest item in a bundle-map/list.
+-doc "Return the manifest item in a bundle-map/list.".
 manifest_item(#tx { manifest = Manifest }) when is_record(Manifest, tx) ->
     Manifest;
 manifest_item(_Item) -> undefined.
 
-%% @doc Create a new data item. Should only be used for testing.
+-doc "Create a new data item. Should only be used for testing.".
 new_item(Target, Anchor, Tags, Data) ->
     reset_ids(
         #tx{
@@ -231,7 +233,7 @@ new_item(Target, Anchor, Tags, Data) ->
         }
     ).
 
-%% @doc Sign a data item.
+-doc "Sign a data item.".
 sign_item(_, undefined) -> throw(wallet_not_found);
 sign_item(RawItem, {PrivKey, {KeyType, Owner}}) ->
     Item = (normalize_data(RawItem))#tx{format = ans104, owner = Owner, signature_type = KeyType},
@@ -239,7 +241,7 @@ sign_item(RawItem, {PrivKey, {KeyType, Owner}}) ->
     Sig = ar_wallet:sign(PrivKey, data_item_signature_data(Item, signed)),
     reset_ids(Item#tx{signature = Sig}).
 
-%% @doc Verify the validity of a data item.
+-doc "Verify the validity of a data item.".
 verify_item(DataItem) ->
     ValidID = verify_data_item_id(DataItem),
     ValidSignature = verify_data_item_signature(DataItem),
@@ -268,7 +270,7 @@ type(_) ->
 %%% Private functions.
 %%%===================================================================
 
-%% @doc Generate the data segment to be signed for a data item.
+-doc "Generate the data segment to be signed for a data item.".
 data_item_signature_data(RawItem) ->
     data_item_signature_data(RawItem, signed).
 data_item_signature_data(RawItem, unsigned) ->
@@ -288,12 +290,12 @@ data_item_signature_data(RawItem, signed) ->
         <<(NormItem#tx.data)/binary>>
     ]).
 
-%% @doc Verify the data item's ID matches the signature.
+-doc "Verify the data item's ID matches the signature.".
 verify_data_item_id(DataItem) ->
     ExpectedID = crypto:hash(sha256, DataItem#tx.signature),
     DataItem#tx.id == ExpectedID.
 
-%% @doc Verify the data item's signature.
+-doc "Verify the data item's signature.".
 verify_data_item_signature(DataItem) ->
     SignatureData = data_item_signature_data(DataItem),
     %?event({unsigned_id, hb_util:encode(id(DataItem, unsigned)), hb_util:encode(SignatureData)}),
@@ -301,7 +303,7 @@ verify_data_item_signature(DataItem) ->
         {DataItem#tx.signature_type, DataItem#tx.owner}, SignatureData, DataItem#tx.signature
     ).
 
-%% @doc Verify the validity of the data item's tags.
+-doc "Verify the validity of the data item's tags.".
 verify_data_item_tags(DataItem) ->
     ValidCount = length(DataItem#tx.tags) =< 128,
     ValidTags = lists:all(
@@ -314,7 +316,7 @@ verify_data_item_tags(DataItem) ->
 
 normalize(Item) -> reset_ids(normalize_data(Item)).
 
-%% @doc Ensure that a data item (potentially containing a map or list) has a standard, serialized form.
+-doc "Ensure that a data item (potentially containing a map or list) has a standard, serialized form.".
 normalize_data(not_found) -> throw(not_found);
 normalize_data(Bundle) when is_list(Bundle); is_map(Bundle) ->
     ?event({normalize_data, bundle, Bundle}),
@@ -363,12 +365,12 @@ normalize_data(Item = #tx{data = Data}) ->
         end
     ).
 
-%% @doc Reset the data size of a data item. Assumes that the data is already normalized.
+-doc "Reset the data size of a data item. Assumes that the data is already normalized.".
 normalize_data_size(Item = #tx{data = Bin}) when is_binary(Bin) ->
     Item#tx{data_size = byte_size(Bin)};
 normalize_data_size(Item) -> Item.
 
-%% @doc Convert a #tx record to its binary representation.
+-doc "Convert a #tx record to its binary representation.".
 serialize(not_found) -> throw(not_found);
 serialize(TX) -> serialize(TX, binary).
 serialize(TX, binary) when is_binary(TX) -> TX;
@@ -390,10 +392,12 @@ serialize(TX, json) ->
     true = enforce_valid_tx(TX),
     hb_json:encode(hb_message:convert(TX, <<"ans104@1.0">>, #{})).
 
-%% @doc Take an item and ensure that it is of valid form. Useful for ensuring
-%% that a message is viable for serialization/deserialization before execution.
-%% This function should throw simple, easy to follow errors to aid devs in
-%% debugging issues.
+-doc """
+Take an item and ensure that it is of valid form. Useful for ensuring
+ that a message is viable for serialization/deserialization before execution.
+ This function should throw simple, easy to follow errors to aid devs in
+ debugging issues.
+""".
 enforce_valid_tx(List) when is_list(List) ->
     lists:all(fun enforce_valid_tx/1, List);
 enforce_valid_tx(Map) when is_map(Map) ->
@@ -459,7 +463,7 @@ enforce_valid_tx(TX) ->
     ),
     true.
 
-%% @doc Force that a binary is either empty or the given number of bytes.
+-doc "Force that a binary is either empty or the given number of bytes.".
 check_size(Bin, {range, Start, End}) ->
     check_type(Bin, binary)
         andalso byte_size(Bin) >= Start
@@ -468,7 +472,7 @@ check_size(Bin, Sizes) ->
     check_type(Bin, binary)
         andalso lists:member(byte_size(Bin), Sizes).
 
-%% @doc Ensure that a value is of the given type.
+-doc "Ensure that a value is of the given type.".
 check_type(Value, binary) when is_binary(Value) -> true;
 check_type(Value, _) when is_binary(Value) -> false;
 check_type(Value, list) when is_list(Value) -> true;
@@ -479,21 +483,23 @@ check_type(Value, message) ->
     is_record(Value, tx) or is_map(Value) or is_list(Value);
 check_type(_Value, _) -> false.
 
-%% @doc Throw an error if the given value is not ok.
+-doc "Throw an error if the given value is not ok.".
 ok_or_throw(_, true, _) -> true;
 ok_or_throw(_TX, false, Error) ->
     throw(Error).
 
-%% @doc Take an item and ensure that both the unsigned and signed IDs are
-%% appropriately set. This function is structured to fall through all cases
-%% of poorly formed items, recursively ensuring its correctness for each case
-%% until the item has a coherent set of IDs.
-%% The cases in turn are:
-%% - The item has no unsigned_id. This is never valid.
-%% - The item has the default signature and ID. This is valid.
-%% - The item has the default signature but a non-default ID. Reset the ID.
-%% - The item has a signature. We calculate the ID from the signature.
-%% - Valid: The item is fully formed and has both an unsigned and signed ID.
+-doc """
+Take an item and ensure that both the unsigned and signed IDs are
+ appropriately set. This function is structured to fall through all cases
+ of poorly formed items, recursively ensuring its correctness for each case
+ until the item has a coherent set of IDs.
+ The cases in turn are:
+ - The item has no unsigned_id. This is never valid.
+ - The item has the default signature and ID. This is valid.
+ - The item has the default signature but a non-default ID. Reset the ID.
+ - The item has a signature. We calculate the ID from the signature.
+ - Valid: The item is fully formed and has both an unsigned and signed ID.
+""".
 update_ids(Item = #tx { unsigned_id = ?DEFAULT_ID }) ->
     update_ids(
         Item#tx {
@@ -512,9 +518,11 @@ update_ids(Item = #tx { signature = Sig }) when Sig =/= ?DEFAULT_SIG ->
     Item#tx { id = crypto:hash(sha256, Sig) };
 update_ids(TX) -> TX.
 
-%% @doc Re-calculate both of the IDs for an item. This is a wrapper
-%% function around `update_id/1' that ensures both IDs are set from
-%% scratch.
+-doc """
+Re-calculate both of the IDs for an item. This is a wrapper".
+ function around `update_id/1' that ensures both IDs are set from
+ scratch.
+""".
 reset_ids(Item) ->
     update_ids(Item#tx { unsigned_id = ?DEFAULT_ID, id = ?DEFAULT_ID }).
 
@@ -580,21 +588,23 @@ parse_manifest(Item) when is_record(Item, tx) ->
 parse_manifest(Bin) ->
     hb_json:decode(Bin).
 
-%% @doc Only RSA 4096 is currently supported.
-%% Note: the signature type '1' corresponds to RSA 4096 -- but it is is written in
-%% little-endian format which is why we encode to `<<1, 0>>'.
+-doc """
+Only RSA 4096 is currently supported.
+ Note: the signature type '1' corresponds to RSA 4096 -- but it is is written in
+ little-endian format which is why we encode to `<<1, 0>>'.
+""".
 encode_signature_type({rsa, 65537}) ->
     <<1, 0>>;
 encode_signature_type(_) ->
     unsupported_tx_format.
 
-%% @doc Encode an optional field (target, anchor) with a presence byte.
+-doc "Encode an optional field (target, anchor) with a presence byte.".
 encode_optional_field(<<>>) ->
     <<0>>;
 encode_optional_field(Field) ->
     <<1:8/integer, Field/binary>>.
 
-%% @doc Encode a UTF-8 string to binary.
+-doc "Encode a UTF-8 string to binary.".
 utf8_encoded(String) ->
     unicode:characters_to_binary(String, utf8).
 
@@ -603,7 +613,7 @@ encode_tags_size([], <<>>) ->
 encode_tags_size(Tags, EncodedTags) ->
     <<(length(Tags)):64/little-integer, (byte_size(EncodedTags)):64/little-integer>>.
 
-%% @doc Encode tags into a binary format using Apache Avro.
+-doc "Encode tags into a binary format using Apache Avro.".
 encode_tags([]) ->
     <<>>;
 encode_tags(Tags) ->
@@ -623,7 +633,7 @@ encode_tags(Tags) ->
     ZigZagCount = encode_zigzag(TagCount),
     <<ZigZagCount/binary, (list_to_binary(EncodedBlocks))/binary, 0>>.
 
-%% @doc Encode a string for Avro using ZigZag and VInt encoding.
+-doc "Encode a string for Avro using ZigZag and VInt encoding.".
 encode_avro_string(<<>>) ->
     % Zero length strings are treated as a special case, due to the Avro encoder.
     << 0 >>;
@@ -632,13 +642,13 @@ encode_avro_string(String) ->
     Length = byte_size(StringBytes),
     <<(encode_zigzag(Length))/binary, StringBytes/binary>>.
 
-%% @doc Encode an integer using ZigZag encoding.
+-doc "Encode an integer using ZigZag encoding.".
 encode_zigzag(Int) when Int >= 0 ->
     encode_vint(Int bsl 1);
 encode_zigzag(Int) ->
     encode_vint(Int bsl 1, -1).
 
-%% @doc Encode a ZigZag integer to VInt binary format.
+-doc "Encode a ZigZag integer to VInt binary format.".
 encode_vint(ZigZag) ->
     encode_vint(ZigZag, []).
 
@@ -652,7 +662,7 @@ encode_vint(ZigZag, Acc) ->
         _ -> encode_vint(ZigZagShifted, [VIntByte bor 16#80 | Acc])
     end.
 
-%% @doc Convert binary data back to a #tx record.
+-doc "Convert binary data back to a #tx record.".
 deserialize(not_found) -> throw(not_found);
 deserialize(Binary) -> deserialize(Binary, binary).
 deserialize(Item, binary) when is_record(Item, tx) ->
@@ -741,8 +751,10 @@ maybe_unbundle_map(Bundle) ->
             unbundle(Bundle)
     end.
 
-%% @doc An internal helper for finding an item in a single-layer of a bundle.
-%% Does not recurse! You probably want `find/2' in most cases.
+-doc """
+An internal helper for finding an item in a single-layer of a bundle.
+ Does not recurse! You probably want `find/2' in most cases.
+""".
 find_single_layer(UnsignedID, TX) when is_record(TX, tx) ->
     find_single_layer(UnsignedID, TX#tx.data);
 find_single_layer(UnsignedID, Items) ->
@@ -780,16 +792,18 @@ decode_bundle_header(0, ItemsBin, Header) ->
 decode_bundle_header(Count, <<Size:256/integer, ID:32/binary, Rest/binary>>, Header) ->
     decode_bundle_header(Count - 1, Rest, [{ID, Size} | Header]).
 
-%% @doc Decode the signature from a binary format. Only RSA 4096 is currently supported.
-%% Note: the signature type '1' corresponds to RSA 4096 - but it is is written in
-%% little-endian format which is why we match on `<<1, 0>>'.
+-doc """
+Decode the signature from a binary format. Only RSA 4096 is currently supported.
+ Note: the signature type '1' corresponds to RSA 4096 - but it is is written in
+ little-endian format which is why we match on `<<1, 0>>'.
+""".
 decode_signature(<<1, 0, Signature:512/binary, Owner:512/binary, Rest/binary>>) ->
     {{rsa, 65537}, Signature, Owner, Rest};
 decode_signature(Other) ->
     ?event({error_decoding_signature, Other}),
     unsupported_tx_format.
 
-%% @doc Decode tags from a binary format using Apache Avro.
+-doc "Decode tags from a binary format using Apache Avro.".
 decode_tags(<<0:64/little-integer, 0:64/little-integer, Rest/binary>>) ->
     {[], Rest};
 decode_tags(<<_TagCount:64/little-integer, _TagSize:64/little-integer, Binary/binary>>) ->
@@ -804,7 +818,7 @@ decode_optional_field(<<0, Rest/binary>>) ->
 decode_optional_field(<<1:8/integer, Field:32/binary, Rest/binary>>) ->
     {Field, Rest}.
 
-%% @doc Decode Avro blocks (for tags) from binary.
+-doc "Decode Avro blocks (for tags) from binary.".
 decode_avro_tags(<<>>, _) ->
     {[], <<>>};
 decode_avro_tags(Binary, Count) when Count =:= 0 ->
@@ -828,7 +842,7 @@ decode_avro_value(ValueSize, Name, Rest, Count) ->
     {DecodedTags, NonAvroRest} = decode_avro_tags(Rest2, Count - 1),
     {[{Name, Value} | DecodedTags], NonAvroRest}.
 
-%% @doc Decode a VInt encoded ZigZag integer from binary.
+-doc "Decode a VInt encoded ZigZag integer from binary.".
 decode_zigzag(Binary) ->
     {ZigZag, Rest} = decode_vint(Binary, 0, 0),
     case ZigZag band 1 of

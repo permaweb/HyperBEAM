@@ -1,14 +1,16 @@
-%%% @doc A device implementing the codec interface (to/1, from/1) for 
-%%% HyperBEAM's internal, richly typed message format.
-%%% 
-%%% This format mirrors HTTP Structured Fields, aside from its limitations of 
-%%% compound type depths, as well as limited floating point representations.
-%%% 
-%%% As with all AO-Core codecs, its target format (the format it expects to 
-%%% receive in the `to/1' function, and give in `from/1') is TABM.
-%%% 
-%%% For more details, see the HTTP Structured Fields (RFC-9651) specification.
 -module(dev_codec_structured).
+-moduledoc """
+A device implementing the codec interface (to/1, from/1) for 
+HyperBEAM's internal, richly typed message format.
+
+This format mirrors HTTP Structured Fields, aside from its limitations of 
+compound type depths, as well as limited floating point representations.
+
+As with all AO-Core codecs, its target format (the format it expects to 
+receive in the `to/1' function, and give in `from/1') is TABM.
+
+For more details, see the HTTP Structured Fields (RFC-9651) specification.
+""".
 -export([to/1, from/1, commit/3, committed/3, verify/3]).
 -export([decode_value/2, encode_value/1, implicit_keys/1]).
 -include("include/hb.hrl").
@@ -19,7 +21,9 @@ commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
 committed(Msg, Req, Opts) -> dev_codec_httpsig:committed(Msg, Req, Opts).
 
-%% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
+-doc """
+Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
+""".
 from(Bin) when is_binary(Bin) -> Bin;
 from(Msg) when is_map(Msg) ->
     NormKeysMap = hb_ao:normalize_keys(Msg),
@@ -99,7 +103,9 @@ from(Msg) when is_map(Msg) ->
     maps:from_list(lists:reverse(WithTypes));
 from(Other) -> hb_path:to_binary(Other).
 
-%% @doc Convert a TABM into a native HyperBEAM message.
+-doc """
+Convert a TABM into a native HyperBEAM message.
+""".
 to(Bin) when is_binary(Bin) -> Bin;
 to(TABM0) ->
     Types = case maps:get(<<"ao-types">>, TABM0, <<>>) of
@@ -162,8 +168,10 @@ to(TABM0) ->
         TABM0
     )).
 
-%% @doc Parse the `ao-types' field of a TABM and return a map of keys and their
+-doc """
+Parse the `ao-types' field of a TABM and return a map of keys and their
 %% types
+""".
 parse_ao_types(Msg) when is_map(Msg) ->
     parse_ao_types(maps:get(<<"ao-types">>, Msg, <<>>));
 parse_ao_types(Bin) ->
@@ -176,7 +184,9 @@ parse_ao_types(Bin) ->
         )
     ).
 
-%% @doc Find the implicit keys of a TABM.
+-doc """
+Find the implicit keys of a TABM.
+""".
 implicit_keys(Req) ->
     maps:keys(
         maps:filtermap(
@@ -187,8 +197,10 @@ implicit_keys(Req) ->
         )
     ).
 
-%% @doc Convert a term to a binary representation, emitting its type for
+-doc """
+Convert a term to a binary representation, emitting its type for
 %% serialization as a separate tag.
+""".
 encode_value(Value) when is_integer(Value) ->
     [Encoded, _] = hb_structured_fields:item({item, Value, []}),
     {<<"integer">>, Encoded};
@@ -229,7 +241,9 @@ encode_value(Value) when is_binary(Value) ->
 encode_value(Value) ->
     Value.
 
-%% @doc Convert non-binary values to binary for serialization.
+-doc """
+Convert non-binary values to binary for serialization.
+""".
 decode_value(Type, Value) when is_list(Type) ->
     decode_value(list_to_binary(Type), Value);
 decode_value(Type, Value) when is_binary(Type) ->

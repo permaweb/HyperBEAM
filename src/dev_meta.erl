@@ -1,30 +1,36 @@
-%%% @doc The hyperbeam meta device, which is the default entry point
-%%% for all messages processed by the machine. This device executes a
-%%% AO-Core singleton request, after first applying the node's 
-%%% pre-processor, if set. The pre-processor can halt the request by
-%%% returning an error, or return a modified version if it deems necessary --
-%%% the result of the pre-processor is used as the request for the AO-Core
-%%% resolver. Additionally, a post-processor can be set, which is executed after
-%%% the AO-Core resolver has returned a result.
 -module(dev_meta).
+-moduledoc """
+The hyperbeam meta device, which is the default entry point
+for all messages processed by the machine. This device executes a
+AO-Core singleton request, after first applying the node's 
+pre-processor, if set. The pre-processor can halt the request by
+returning an error, or return a modified version if it deems necessary --
+the result of the pre-processor is used as the request for the AO-Core
+resolver. Additionally, a post-processor can be set, which is executed after
+the AO-Core resolver has returned a result.
+""".
 -export([info/1, info/3, handle/2, adopt_node_message/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Ensure that the helper function `adopt_node_message/2' is not exported.
-%% The naming of this method carefully avoids a clash with the exported `info/3'
-%% function. We would like the node information to be easily accessible via the
-%% `info' endpoint, but AO-Core also uses `info' as the name of the function
-%% that grants device information. The device call takes two or fewer arguments,
-%% so we are safe to use the name for both purposes in this case, as the user 
-%% info call will match the three-argument version of the function. If in the 
-%% future the `request' is added as an argument to AO-Core's internal `info'
-%% function, we will need to find a different approach.
+-doc """
+Ensure that the helper function `adopt_node_message/2' is not exported.
+The naming of this method carefully avoids a clash with the exported `info/3'
+function. We would like the node information to be easily accessible via the
+`info' endpoint, but AO-Core also uses `info' as the name of the function
+that grants device information. The device call takes two or fewer arguments,
+so we are safe to use the name for both purposes in this case, as the user 
+info call will match the three-argument version of the function. If in the 
+future the `request' is added as an argument to AO-Core's internal `info'
+function, we will need to find a different approach.
+""".
 info(_) -> #{ exports => [info] }.
 
-%% @doc Normalize and route messages downstream based on their path. Messages
-%% with a `Meta' key are routed to the `handle_meta/2' function, while all
-%% other messages are routed to the `handle_resolve/2' function.
+-doc """
+Normalize and route messages downstream based on their path. Messages
+with a `Meta' key are routed to the `handle_meta/2' function, while all
+other messages are routed to the `handle_resolve/2' function.
+""".
 handle(NodeMsg, RawRequest) ->
     ?event({singleton_tabm_request, RawRequest}),
     NormRequest = hb_singleton:from(RawRequest),
@@ -55,9 +61,11 @@ handle_initialize([_|Rest], NodeMsg) ->
 handle_initialize([], _NodeMsg) ->
     {error, <<"Node must be initialized before use.">>}.
 
-%% @doc Get/set the node message. If the request is a `POST', we check that the
-%% request is signed by the owner of the node. If not, we return the node message
-%% as-is, aside all keys that are private (according to `hb_private').
+-doc """
+Get/set the node message. If the request is a `POST', we check that the
+request is signed by the owner of the node. If not, we return the node message
+as-is, aside all keys that are private (according to `hb_private').
+""".
 info(_, Request, NodeMsg) ->
     case hb_ao:get(<<"method">>, Request, NodeMsg) of
         <<"GET">> ->
@@ -80,8 +88,10 @@ info(_, Request, NodeMsg) ->
         _ -> embed_status({error, <<"Unsupported Meta/info method.">>})
     end.
 
-%% @doc Remove items from the node message that are not encodable into a
-%% message.
+-doc """
+Remove items from the node message that are not encodable into a
+message.
+""".
 filter_node_msg(Msg) when is_map(Msg) ->
     maps:map(fun(_, Value) -> filter_node_msg(Value) end, hb_private:reset(Msg));
 filter_node_msg(Msg) when is_list(Msg) ->
@@ -91,7 +101,9 @@ filter_node_msg(Tuple) when is_tuple(Tuple) ->
 filter_node_msg(Other) ->
     Other.
 
-%% @doc Add dynamic keys to the node message.
+-doc """
+Add dynamic keys to the node message.
+""".
 add_dynamic_keys(NodeMsg) ->
     case hb_opts:get(priv_wallet, no_viable_wallet, NodeMsg) of
         no_viable_wallet ->
@@ -102,8 +114,10 @@ add_dynamic_keys(NodeMsg) ->
             NodeMsg#{ address => Address, <<"address">> => Address }
     end.
 
-%% @doc Validate that the request is signed by the operator of the node, then
-%% allow them to update the node message.
+-doc """
+Validate that the request is signed by the operator of the node, then
+allow them to update the node message.
+""".
 update_node_message(Request, NodeMsg) ->
     RequestSigners = hb_message:signers(Request),
     Operator =
@@ -148,7 +162,9 @@ update_node_message(Request, NodeMsg) ->
             end
     end.
 
-%% @doc Attempt to adopt changes to a node message.
+-doc """
+Attempt to adopt changes to a node message.
+""".
 adopt_node_message(Request, NodeMsg) ->
     ?event({set_node_message_success, Request}),
     MergedOpts =
@@ -171,11 +187,13 @@ adopt_node_message(Request, NodeMsg) ->
             {ok, MergedOpts}
     end.
 
-%% @doc Handle an AO-Core request, which is a list of messages. We apply
-%% the node's pre-processor to the request first, and then resolve the request
-%% using the node's AO-Core implementation if its response was `ok'.
-%% After execution, we run the node's `postprocessor' message on the result of
-%% the request before returning the result it grants back to the user.
+-doc """
+Handle an AO-Core request, which is a list of messages. We apply
+the node's pre-processor to the request first, and then resolve the request
+using the node's AO-Core implementation if its response was `ok'.
+After execution, we run the node's `postprocessor' message on the result of
+the request before returning the result it grants back to the user.
+""".
 handle_resolve(Req, Msgs, NodeMsg) ->
     % Apply the pre-processor to the request.
     case resolve_processor(<<"preprocess">>, preprocessor, Req, Msgs, NodeMsg) of
@@ -231,13 +249,15 @@ handle_resolve(Req, Msgs, NodeMsg) ->
         Res -> embed_status(hb_ao:force_message(Res, NodeMsg))
     end.
 
-%% @doc Execute a message from the node message upon the user's request. The
-%% invocation of the processor provides a request of the following form:
-%% ```
-%%      /path => preprocess | postprocess
-%%      /request => the original request singleton
-%%      /body => list of messages the user wishes to process
-%% '''
+-doc """
+Execute a message from the node message upon the user's request. The
+invocation of the processor provides a request of the following form:
+```
+     /path => preprocess | postprocess
+     /request => the original request singleton
+     /body => list of messages the user wishes to process
+'''
+""".
 resolve_processor(PathKey, Processor, Req, Query, NodeMsg) ->
     case hb_opts:get(Processor, undefined, NodeMsg) of
         undefined -> {ok, Query};
@@ -256,7 +276,9 @@ resolve_processor(PathKey, Processor, Req, Query, NodeMsg) ->
             Res
     end.
 
-%% @doc Wrap the result of a device call in a status.
+-doc """
+Wrap the result of a device call in a status.
+""".
 embed_status({ErlStatus, Res}) when is_map(Res) ->
     case lists:member(<<"status">>, hb_message:committed(Res)) of
         false ->
@@ -269,11 +291,13 @@ embed_status({ErlStatus, Res}) ->
     HTTPCode = status_code({ErlStatus, Res}),
     {ok, #{ <<"status">> => HTTPCode, <<"body">> => Res }}.
 
-%% @doc Calculate the appropriate HTTP status code for an AO-Core result.
-%% The order of precedence is:
-%% 1. The status code from the message.
-%% 2. The HTTP representation of the status code.
-%% 3. The default status code.
+-doc """
+Calculate the appropriate HTTP status code for an AO-Core result.
+The order of precedence is:
+1. The status code from the message.
+2. The HTTP representation of the status code.
+3. The default status code.
+""".
 status_code({ErlStatus, Msg}) ->
     case message_to_status(Msg) of
         default -> status_code(ErlStatus);
@@ -285,7 +309,9 @@ status_code(created) -> 201;
 status_code(not_found) -> 404;
 status_code(unavailable) -> 503.
 
-%% @doc Get the HTTP status code from a transaction (if it exists).
+-doc """
+Get the HTTP status code from a transaction (if it exists).
+""".
 message_to_status(#{ <<"body">> := Status }) when is_atom(Status) ->
     status_code(Status);
 message_to_status(Item) when is_map(Item) ->
@@ -303,7 +329,9 @@ message_to_status(Item) when is_atom(Item) ->
 message_to_status(_Item) ->
     default.
 
-%% @doc Sign the result of a device call if the node is configured to do so.
+-doc """
+Sign the result of a device call if the node is configured to do so.
+""".
 maybe_sign({Status, Res}, NodeMsg) ->
     {Status, maybe_sign(Res, NodeMsg)};
 maybe_sign(Res, NodeMsg) ->
@@ -319,14 +347,18 @@ maybe_sign(Res, NodeMsg) ->
 
 %%% Tests
 
-%% @doc Test that we can get the node message.
+-doc """
+Test that we can get the node message.
+""".
 config_test() ->
     Node = hb_http_server:start_node(#{ test_config_item => <<"test">> }),
     {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
     ?event({res, Res}),
     ?assertEqual(<<"test">>, hb_ao:get(<<"test_config_item">>, Res, #{})).
 
-%% @doc Test that we can't get the node message if the requested key is private.
+-doc """
+Test that we can't get the node message if the requested key is private.
+""".
 priv_inaccessible_test() ->
     Node = hb_http_server:start_node(
         #{
@@ -339,8 +371,10 @@ priv_inaccessible_test() ->
     ?assertEqual(<<"test">>, hb_ao:get(<<"test_config_item">>, Res, #{})),
     ?assertEqual(not_found, hb_ao:get(<<"priv_key">>, Res, #{})).
 
-%% @doc Test that we can't set the node message if the request is not signed by
-%% the owner of the node.
+-doc """
+Test that we can't set the node message if the request is not signed by
+the owner of the node.
+""".
 unauthorized_set_node_msg_fails_test() ->
     Node = hb_http_server:start_node(#{ priv_wallet => ar_wallet:new() }),
     {error, _} =
@@ -359,8 +393,10 @@ unauthorized_set_node_msg_fails_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"evil_config_item">>, Res, #{})),
     ?assertEqual(0, length(hb_ao:get(<<"node_history">>, Res, [], #{}))).
 
-%% @doc Test that we can set the node message if the request is signed by the
-%% owner of the node.
+-doc """
+Test that we can set the node message if the request is signed by the
+owner of the node.
+""".
 authorized_set_node_msg_succeeds_test() ->
     Owner = ar_wallet:new(),
     Node = hb_http_server:start_node(
@@ -387,14 +423,18 @@ authorized_set_node_msg_succeeds_test() ->
     ?assertEqual(<<"test2">>, hb_ao:get(<<"test_config_item">>, Res, #{})),
     ?assertEqual(1, length(hb_ao:get(<<"node_history">>, Res, [], #{}))).
 
-%% @doc Test that an uninitialized node will not run computation.
+-doc """
+Test that an uninitialized node will not run computation.
+""".
 uninitialized_node_test() ->
     Node = hb_http_server:start_node(#{ initialized => false }),
     {error, Res} = hb_http:get(Node, <<"/key1?1.key1=value1">>, #{}),
     ?event({res, Res}),
     ?assertEqual(<<"Node must be initialized before use.">>, Res).
 
-%% @doc Test that a permanent node message cannot be changed.
+-doc """
+Test that a permanent node message cannot be changed.
+""".
 permanent_node_message_test() ->
     Owner = ar_wallet:new(),
     Node = hb_http_server:start_node(
@@ -439,7 +479,9 @@ permanent_node_message_test() ->
     ?assertEqual(<<"test2">>, hb_ao:get(<<"test_config_item">>, Res2, #{})),
     ?assertEqual(1, length(hb_ao:get(<<"node_history">>, Res2, [], #{}))).
 
-%% @doc Test that we can claim the node correctly and set the node message after.
+-doc """
+Test that we can claim the node correctly and set the node message after.
+""".
 claim_node_test() ->
     Owner = ar_wallet:new(),
     Address = ar_wallet:to_address(Owner),
@@ -502,7 +544,9 @@ claim_node_test() ->
 %     hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
 %     ?assert(receive ok -> true after 1000 -> false end).
 
-%% @doc Test that we can halt a request if the preprocessor returns an error.
+-doc """
+Test that we can halt a request if the preprocessor returns an error.
+""".
 halt_request_test() ->
     Node = hb_http_server:start_node(
         #{
@@ -519,7 +563,9 @@ halt_request_test() ->
     {error, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
     ?assertEqual(<<"Bad">>, Res).
 
-%% @doc Test that a preprocessor can modify a request.
+-doc """
+Test that a preprocessor can modify a request.
+""".
 modify_request_test() ->
     Node = hb_http_server:start_node(
         #{

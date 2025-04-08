@@ -1,39 +1,37 @@
-%%% @doc A device that provides a way for WASM execution to interact with
-%%% the HyperBEAM (and AO) systems, using JSON as a shared data representation.
-%%% 
-%%% The interface is easy to use. It works as follows:
-%%% 
-%%% 1. The device is given a message that contains a process definition, WASM
-%%%    environment, and a message that contains the data to be processed,
-%%%    including the image to be used in part of `execute{pass=1}'.
-%%% 2. The device is called with `execute{pass=2}', which reads the result of
-%%%    the process execution from the WASM environment and adds it to the
-%%%    message.
-%%%
-%%% The device has the following requirements and interface:
-%%%     ```
-%%%     M1/Computed when /Pass == 1 ->
-%%%         Assumes:
-%%%             M1/priv/wasm/instance
-%%%             M1/Process
-%%%             M2/Message
-%%%             M2/Assignment/Block-Height
-%%%         Generates:
-%%%             /wasm/handler
-%%%             /wasm/params
-%%%         Side-effects:
-%%%             Writes the process and message as JSON representations into the
-%%%             WASM environment.
-%%% 
-%%%     M1/Computed when M2/Pass == 2 ->
-%%%         Assumes:
-%%%             M1/priv/wasm/instance
-%%%             M2/Results
-%%%             M2/Process
-%%%         Generates:
-%%%             /Results/Outbox
-%%%             /Results/Data'''
 -module(dev_json_iface).
+-moduledoc """
+A device that provides a way for WASM execution to interact with
+the HyperBEAM (and AO) systems, using JSON as a shared data representation.
+The interface is easy to use. It works as follows:
+1. The device is given a message that contains a process definition, WASM
+   environment, and a message that contains the data to be processed,
+   including the image to be used in part of `execute{pass=1}'.
+2. The device is called with `execute{pass=2}', which reads the result of
+   the process execution from the WASM environment and adds it to the
+   message.
+The device has the following requirements and interface:
+    ```
+    M1/Computed when /Pass == 1 ->
+        Assumes:
+            M1/priv/wasm/instance
+            M1/Process
+            M2/Message
+            M2/Assignment/Block-Height
+        Generates:
+            /wasm/handler
+            /wasm/params
+        Side-effects:
+            Writes the process and message as JSON representations into the
+            WASM environment.
+    M1/Computed when M2/Pass == 2 ->
+        Assumes:
+            M1/priv/wasm/instance
+            M2/Results
+            M2/Process
+        Generates:
+            /Results/Outbox
+            /Results/Data'''
+""".
 -export([init/3, compute/3]).
 %%% Public interface helpers:
 -export([message_to_json_struct/1, json_to_message/2]).
@@ -42,11 +40,15 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%% @doc Initialize the device.
+-doc """
+Initialize the device.
+""".
 init(M1, _M2, _Opts) ->
     {ok, hb_ao:set(M1, #{<<"function">> => <<"handle">>})}.
 
-%% @doc On first pass prepare the call, on second pass get the results.
+-doc """
+On first pass prepare the call, on second pass get the results.
+""".
 compute(M1, M2, Opts) ->
     case hb_ao:get(<<"pass">>, M1, Opts) of
         1 -> prep_call(M1, M2, Opts);
@@ -54,8 +56,10 @@ compute(M1, M2, Opts) ->
         _ -> {ok, M1}
     end.
 
-%% @doc Prepare the WASM environment for execution by writing the process string and
+-doc """
+Prepare the WASM environment for execution by writing the process string and
 %% the message as JSON representations into the WASM environment.
+""".
 prep_call(M1, M2, Opts) ->
     ?event({prep_call, M1, M2, Opts}),
     Process = hb_ao:get(<<"process">>, M1, Opts#{ hashpath => ignore }),
@@ -76,7 +80,9 @@ prep_call(M1, M2, Opts) ->
     ProcessJson = hb_json:encode(ProcessProps),
     env_write(ProcessJson, MsgJson, M1, M2, Opts).
 
-%% @doc Normalize a message for AOS-compatibility.
+-doc """
+Normalize a message for AOS-compatibility.
+""".
 denormalize_message(Message) ->
     NormOwnerMsg =
         case hb_message:signers(Message) of
@@ -160,8 +166,10 @@ message_to_json_struct(RawMsg, Features) ->
             end
     }.
 
-%% @doc Prepare the tags of a message as a key-value list, for use in the 
+-doc """
+Prepare the tags of a message as a key-value list, for use in the 
 %% construction of the JSON-Struct message.
+""".
 prepare_tags(Msg) ->
     % Prepare an ANS-104 message for JSON-Struct construction.
     case hb_message:commitment(#{ <<"commitment-device">> => <<"ans104@1.0">> }, Msg, #{}) of
@@ -178,8 +186,10 @@ prepare_tags(Msg) ->
             prepare_header_case_tags(Msg)
     end.
 
-%% @doc Convert a message without an `original-tags' field into a list of
+-doc """
+Convert a message without an `original-tags' field into a list of
 %% key-value pairs, with the keys in HTTP header-case.
+""".
 prepare_header_case_tags(TABM) ->
     % Prepare a non-ANS-104 message for JSON-Struct construction. 
     lists:map(
@@ -200,8 +210,10 @@ prepare_header_case_tags(TABM) ->
         )
     ).
 
-%% @doc Translates a compute result -- either from a WASM execution using the 
+-doc """
+Translates a compute result -- either from a WASM execution using the 
 %% JSON-Iface, or from a `Legacy' CU -- and transforms it into a result message.
+""".
 json_to_message(JSON, Opts) when is_binary(JSON) ->
     json_to_message(hb_json:decode(JSON), Opts);
 json_to_message(Resp, Opts) when is_map(Resp) ->
@@ -256,9 +268,11 @@ header_case_string(Key) ->
     TitleCaseKey = list_to_binary(string:join(TitleCaseWords, "-")),
     TitleCaseKey.
 
-%% @doc Read the computed results out of the WASM environment, assuming that
+-doc """
+Read the computed results out of the WASM environment, assuming that
 %% the environment has been set up by `prep_call/3' and that the WASM executor
 %% has been called with `computed{pass=1}'.
+""".
 results(M1, M2, Opts) ->
     Prefix = dev_stack:prefix(M1, M2, Opts),
     Type = hb_ao:get(<<"results/", Prefix/binary, "/type">>, M1, Opts),
@@ -309,7 +323,9 @@ results(M1, M2, Opts) ->
             end
     end.
 
-%% @doc Read the results out of the execution environment.
+-doc """
+Read the results out of the execution environment.
+""".
 env_read(M1, M2, Opts) ->
     Prefix = dev_stack:prefix(M1, M2, Opts),
     Output = hb_ao:get(<<"results/", Prefix/binary, "/output">>, M1, Opts),
@@ -321,7 +337,9 @@ env_read(M1, M2, Opts) ->
             {ok, Read}
     end.
 
-%% @doc Write the message and process into the execution environment.
+-doc """
+Write the message and process into the execution environment.
+""".
 env_write(ProcessStr, MsgStr, Base, Req, Opts) ->
     Prefix = dev_stack:prefix(Base, Req, Opts),
     Params = 
@@ -344,7 +362,9 @@ env_write(ProcessStr, MsgStr, Base, Req, Opts) ->
         )
     }.
 
-%% @doc Normalize the results of an evaluation.
+-doc """
+Normalize the results of an evaluation.
+""".
 normalize_results(
     Msg = #{ <<"Output">> := #{<<"data">> := Data} }) ->
     {ok,
@@ -357,9 +377,11 @@ normalize_results(#{ <<"Error">> := Error }) ->
 normalize_results(Other) ->
     throw({invalid_results, Other}).
 
-%% @doc After the process returns messages from an evaluation, the
+-doc """
+After the process returns messages from an evaluation, the
 %% signing node needs to add some tags to each message and spawn such that
 %% the target process knows these messages are created by a process.
+""".
 preprocess_results(Msg, _Opts) ->
     Tags = tags_to_map(Msg),
     FilteredMsg =
@@ -379,7 +401,9 @@ preprocess_results(Msg, _Opts) ->
         Tags
     ).
 
-%% @doc Convert a message with tags into a map of their key-value pairs.
+-doc """
+Convert a message with tags into a map of their key-value pairs.
+""".
 tags_to_map(Msg) ->
     NormMsg = hb_ao:normalize_keys(Msg),
     RawTags = maps:get(<<"tags">>, NormMsg, []),
@@ -391,8 +415,10 @@ tags_to_map(Msg) ->
         ],
     maps:from_list(TagList).
 
-%% @doc Post-process messages in the outbox to add the correct `from-process'
+-doc """
+Post-process messages in the outbox to add the correct `from-process'
 %% and `from-image' tags.
+""".
 postprocess_outbox(Msg, Proc, Opts) ->
     AdjustedOutbox =
         maps:map(

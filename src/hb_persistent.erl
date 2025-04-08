@@ -1,14 +1,16 @@
-%%% @doc Creates and manages long-lived AO-Core resolution processes.
-%%% These can be useful for situations where a message is large and expensive
-%%% to serialize and deserialize, or when executions should be deliberately
-%%% serialized to avoid parallel executions of the same computation. This 
-%%% module is called during the core `hb_ao' execution process, so care
-%%% must be taken to avoid recursive spawns/loops.
-%%% 
-%%% Built using the `pg' module, which is a distributed Erlang process group
-%%% manager.
-
 -module(hb_persistent).
+-moduledoc """
+Creates and manages long-lived AO-Core resolution processes.
+These can be useful for situations where a message is large and expensive
+to serialize and deserialize, or when executions should be deliberately
+serialized to avoid parallel executions of the same computation. This 
+module is called during the core `hb_ao' execution process, so care
+must be taken to avoid recursive spawns/loops.
+
+Built using the `pg' module, which is a distributed Erlang process group
+manager.
+""".
+
 -export([start_monitor/0, start_monitor/1, stop_monitor/1]).
 -export([find_or_register/3, unregister_notify/4, await/4, notify/4]).
 -export([group/3, start_worker/3, start_worker/2, forward_work/2]).
@@ -16,11 +18,15 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Ensure that the `pg' module is started.
+-doc """
+Ensure that the `pg' module is started.
+""".
 start() -> hb_name:start().
 
-%% @doc Start a monitor that prints the current members of the group every
-%% n seconds.
+-doc """
+Start a monitor that prints the current members of the group every
+n seconds.
+""".
 start_monitor() ->
     start_monitor(global).
 start_monitor(Group) ->
@@ -96,8 +102,10 @@ do_monitor(Group, Last) ->
     after 0 -> do_monitor(Group, New)
     end.
 
-%% @doc Register the process to lead an execution if none is found, otherwise
-%% signal that we should await resolution.
+-doc """
+Register the process to lead an execution if none is found, otherwise
+signal that we should await resolution.
+""".
 find_or_register(Msg1, Msg2, Opts) ->
     GroupName = group(Msg1, Msg2, Opts),
     find_or_register(GroupName, Msg1, Msg2, Opts).
@@ -121,13 +129,17 @@ find_or_register(GroupName, _Msg1, _Msg2, Opts) ->
             end
     end.
 
-%% @doc Unregister as the leader for an execution and notify waiting processes.
+-doc """
+Unregister as the leader for an execution and notify waiting processes.
+""".
 unregister_notify(ungrouped_exec, _Msg2, _Msg3, _Opts) -> ok;
 unregister_notify(GroupName, Msg2, Msg3, Opts) ->
     unregister_groupname(GroupName, Opts),
     notify(GroupName, Msg2, Msg3, Opts).
 
-%% @doc Find a group with the given name.
+-doc """
+Find a group with the given name.
+""".
 find_execution(Groupname, _Opts) ->
     start(),
     case hb_name:lookup(Groupname) of
@@ -135,8 +147,10 @@ find_execution(Groupname, _Opts) ->
         Pid -> {ok, Pid}
     end.
 
-%% @doc Calculate the group name for a Msg1 and Msg2 pair. Uses the Msg1's
-%% `group' function if it is found in the `info', otherwise uses the default.
+-doc """
+Calculate the group name for a Msg1 and Msg2 pair. Uses the Msg1's
+`group' function if it is found in the `info', otherwise uses the default.
+""".
 group(Msg1, Msg2, Opts) ->
     Grouper =
         maps:get(grouper, hb_ao:info(Msg1, Opts), fun default_grouper/3),
@@ -145,12 +159,16 @@ group(Msg1, Msg2, Opts) ->
         hb_ao:truncate_args(Grouper, [Msg1, Msg2, Opts])
     ).
 
-%% @doc Register for performing an AO-Core resolution.
+-doc """
+Register for performing an AO-Core resolution.
+""".
 register_groupname(Groupname, _Opts) ->
     ?event({registering_as, Groupname}),
     hb_name:register(Groupname).
 
-%% @doc Unregister for being the leader on an AO-Core resolution.
+-doc """
+Unregister for being the leader on an AO-Core resolution.
+""".
 unregister(Msg1, Msg2, Opts) ->
     start(),
     unregister_groupname(group(Msg1, Msg2, Opts), Opts).
@@ -158,9 +176,11 @@ unregister_groupname(Groupname, _Opts) ->
     ?event({unregister_resolver, {explicit, Groupname}}),
     hb_name:unregister(Groupname).
 
-%% @doc If there was already an Erlang process handling this execution,
-%% we should register with them and wait for them to notify us of
-%% completion.
+-doc """
+If there was already an Erlang process handling this execution,
+we should register with them and wait for them to notify us of
+completion.
+""".
 await(Worker, Msg1, Msg2, Opts) ->
     % Get the device's await function, if it exists.
     AwaitFun =
@@ -177,7 +197,9 @@ await(Worker, Msg1, Msg2, Opts) ->
     Worker ! {resolve, self(), GroupName, Msg2, Opts},
     AwaitFun(Worker, GroupName, Msg1, Msg2, Opts).
 
-%% @doc Default await function that waits for a resolution from a worker.
+-doc """
+Default await function that waits for a resolution from a worker.
+""".
 default_await(Worker, GroupName, Msg1, Msg2, Opts) ->
     % Wait for the result.
     receive
@@ -196,10 +218,12 @@ default_await(Worker, GroupName, Msg1, Msg2, Opts) ->
             {error, leader_died}
     end.
 
-%% @doc Check our inbox for processes that are waiting for the resolution
-%% of this execution. Comes in two forms:
-%% 1. Notify on group name alone.
-%% 2. Notify on group name and Msg2.
+-doc """
+Check our inbox for processes that are waiting for the resolution
+of this execution. Comes in two forms:
+1. Notify on group name alone.
+2. Notify on group name and Msg2.
+""".
 notify(GroupName, Msg2, Msg3, Opts) ->
     case is_binary(GroupName) of
         true ->
@@ -217,7 +241,9 @@ notify(GroupName, Msg2, Msg3, Opts) ->
         ok
     end.
 
-%% @doc Forward requests to a newly delegated execution process.
+-doc """
+Forward requests to a newly delegated execution process.
+""".
 forward_work(NewPID, Opts) ->
     Gather =
         fun Gather() ->
@@ -240,7 +266,9 @@ forward_work(NewPID, Opts) ->
     end,
     ok.
 
-%% @doc Helper function that wraps responding with a new Msg3.
+-doc """
+Helper function that wraps responding with a new Msg3.
+""".
 send_response(Listener, GroupName, Msg2, Msg3) ->
     ?event(worker,
         {send_response,
@@ -250,8 +278,10 @@ send_response(Listener, GroupName, Msg2, Msg3) ->
     ),
     Listener ! {resolved, self(), GroupName, Msg2, Msg3}.
 
-%% @doc Start a worker process that will hold a message in memory for
-%% future executions.
+-doc """
+Start a worker process that will hold a message in memory for
+future executions.
+""".
 
 start_worker(Msg, Opts) ->
     start_worker(group(Msg, undefined, Opts), Msg, Opts).
@@ -302,7 +332,9 @@ start_worker(GroupName, Msg, Opts) ->
     ),
     WorkerPID.
 
-%% @doc A server function for handling persistent executions. 
+-doc """
+A server function for handling persistent executions. 
+""".
 default_worker(GroupName, Msg1, Opts) ->
     Timeout = hb_opts:get(worker_timeout, 10000, Opts),
     worker_event(GroupName, default_worker_waiting_for_req, Msg1, undefined, Opts),
@@ -353,7 +385,9 @@ default_worker(GroupName, Msg1, Opts) ->
         unregister(Msg1, undefined, Opts)
     end.
 
-%% @doc Create a group name from a Msg1 and Msg2 pair as a tuple.
+-doc """
+Create a group name from a Msg1 and Msg2 pair as a tuple.
+""".
 default_grouper(Msg1, Msg2, Opts) ->
     %?event({calculating_default_group_name, {msg1, Msg1}, {msg2, Msg2}}),
     % Use Erlang's `phash2` to hash the result of the Grouper function.
@@ -372,10 +406,12 @@ default_grouper(Msg1, Msg2, Opts) ->
         _ -> ungrouped_exec
     end.
 
-%% @doc Log an event with the worker process. If we used the default grouper
-%% function, we should also include the Msg1 and Msg2 in the event. If we did not,
-%% we assume that the group name expresses enough information to identify the
-%% request.
+-doc """
+Log an event with the worker process. If we used the default grouper
+function, we should also include the Msg1 and Msg2 in the event. If we did not,
+we assume that the group name expresses enough information to identify the
+request.
+""".
 worker_event(Group, Data, Msg1, Msg2, Opts) when is_integer(Group) ->
     ?event(worker, {worker_event, Group, Data, {msg1, Msg1}, {msg2, Msg2}}, Opts);
 worker_event(Group, Data, _, _, Opts) ->
@@ -438,7 +474,9 @@ spawn_test_client(Msg1, Msg2, Opts) ->
 wait_for_test_result(Ref) ->
     receive {result, Ref, Res} -> Res end.
 
-%% @doc Test merging and returning a value with a persistent worker.
+-doc """
+Test merging and returning a value with a persistent worker.
+""".
 deduplicated_execution_test() ->
     TestTime = 200,
     Msg1 = #{ <<"device">> => test_device() },
@@ -455,7 +493,9 @@ deduplicated_execution_test() ->
     % Check the time it took is less than the sum of the two test times.
     ?assert(T1 - T0 < (2*TestTime)).
 
-%% @doc Test spawning a default persistent worker.
+-doc """
+Test spawning a default persistent worker.
+""".
 persistent_worker_test() ->
     TestTime = 200,
     Msg1 = #{ <<"device">> => test_device() },
