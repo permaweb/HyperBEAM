@@ -149,33 +149,17 @@ extract_base(RawPath, Opts) when is_binary(RawPath) ->
 %% @doc Generate a `uri' key for each node in a route.
 apply_routes(Msg, R, Opts) ->
     Nodes = hb_ao:get(<<"nodes">>, R, Opts),
-    % TODO: Cleanup duplication here. Ideally we would return only one type --
-    % either maps or lists. We will need to check whether upstream codepaths
-    % can handle coercion from the original given format to the other.
     NodesWithRouteApplied =
-        if is_list(Nodes) ->
-            lists:map(
-                fun(N) ->
-                    case apply_route(Msg, N) of
-                        {ok, URI} when is_binary(URI) -> N#{ <<"uri">> => URI };
-                        {ok, Map} -> Map;
-                        {error, _} -> N
-                    end
-                end,
-                Nodes
-            );
-        is_map(Nodes) ->
-            maps:map(
-                fun(_, N) ->
-                    case apply_route(Msg, N) of
-                        {ok, URI} when is_binary(URI) -> N#{ <<"uri">> => URI };
-                        {ok, Map} -> Map;
-                        {error, _} -> N
-                    end
-                end,
-                Nodes
-            )
-        end,
+        lists:map(
+            fun(N) ->
+                case apply_route(Msg, N) of
+                    {ok, URI} when is_binary(URI) -> N#{ <<"uri">> => URI };
+                    {ok, Map} -> Map;
+                    {error, _} -> N
+                end
+            end,
+            hb_util:message_to_ordered_list(Nodes)
+        ),
     R#{ <<"nodes">> => NodesWithRouteApplied }.
 
 %% @doc Apply a node map's rules for transforming the path of the message.
