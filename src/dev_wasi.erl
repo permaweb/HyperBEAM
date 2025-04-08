@@ -1,10 +1,12 @@
-%%% @doc A virtual filesystem device.
-%%% Implements a file-system-as-map structure, which is traversible externally.
-%%% Each file is a binary and each directory is an AO-Core message.
-%%% Additionally, this module adds a series of WASI-preview-1 compatible
-%%% functions for accessing the filesystem as imported functions by WASM
-%%% modules.
 -module(dev_wasi).
+-moduledoc """
+A virtual filesystem device.
+Implements a file-system-as-map structure, which is traversible externally.
+Each file is a binary and each directory is an AO-Core message.
+Additionally, this module adds a series of WASI-preview-1 compatible
+functions for accessing the filesystem as imported functions by WASM
+modules.
+""".
 -export([init/3, compute/1, stdout/1]).
 -export([path_open/3, fd_write/3, fd_read/3, clock_time_get/3]).
 -include("include/hb.hrl").
@@ -37,10 +39,12 @@
     }
 ).
 
-%% @doc On-boot, initialize the virtual file system with:
+-doc """
+On-boot, initialize the virtual file system with:
 %% - Empty stdio files
 %% - WASI-preview-1 compatible functions for accessing the filesystem
 %% - File descriptors for those files.
+""".
 init(M1, _M2, Opts) ->
     ?event(running_init),
     MsgWithLib =
@@ -71,11 +75,15 @@ init(M1, _M2, Opts) ->
 compute(Msg1) ->
     {ok, Msg1}.
 
-%% @doc Return the stdout buffer from a state message.
+-doc """
+Return the stdout buffer from a state message.
+""".
 stdout(M) ->
     hb_ao:get(<<"vfs/dev/stdout">>, M).
 
-%% @doc Adds a file descriptor to the state message.
+-doc """
+Adds a file descriptor to the state message.
+""".
 %path_open(M, Instance, [FDPtr, LookupFlag, PathPtr|_]) ->
 path_open(Msg1, Msg2, Opts) ->
     FDs = hb_ao:get(<<"file-descriptors">>, Msg1, Opts),
@@ -109,8 +117,10 @@ path_open(Msg1, Msg2, Opts) ->
         }
     }.
 
-%% @doc WASM stdlib implementation of `fd_write', using the WASI-p1 standard
+-doc """
+WASM stdlib implementation of `fd_write', using the WASI-p1 standard
 %% interface.
+""".
 fd_write(Msg1, Msg2, Opts) ->
     State = hb_ao:get(<<"state">>, Msg1, Opts),
     Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
@@ -164,7 +174,9 @@ fd_write(S, Instance, [FDnum, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
         Opts
     ).
 
-%% @doc Read from a file using the WASI-p1 standard interface.
+-doc """
+Read from a file using the WASI-p1 standard interface.
+""".
 fd_read(Msg1, Msg2, Opts) ->
     State = hb_ao:get(<<"state">>, Msg1, Opts),
     Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
@@ -208,7 +220,9 @@ fd_read(S, Instance, [FDNum, VecsPtr, NumVecs, RetPtr], BytesRead, Opts) ->
         Opts
     ).
 
-%% @doc Parse an iovec in WASI-preview-1 format.
+-doc """
+Parse an iovec in WASI-preview-1 format.
+""".
 parse_iovec(Instance, Ptr) ->
     {ok, VecStruct} = hb_beamr_io:read(Instance, Ptr, 16),
     <<

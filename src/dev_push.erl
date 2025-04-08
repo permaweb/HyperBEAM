@@ -1,13 +1,17 @@
-%%% @doc `push@1.0` takes a message or slot number, evaluates it, and recursively
-%%% pushes the resulting messages to other processes. The `push'ing mechanism
-%%% continues until the there are no remaining messages to push.
 -module(dev_push).
+-moduledoc """
+`push@1.0` takes a message or slot number, evaluates it, and recursively
+pushes the resulting messages to other processes. The `push'ing mechanism
+continues until the there are no remaining messages to push.
+""".
 %%% Public API
 -export([push/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Push either a message or an assigned slot number.
+-doc """
+Push either a message or an assigned slot number.
+""".
 push(Base, Req, Opts) ->
     ModBase = dev_process:as_process(Base, Opts),
     ?event(push, {push_base, {base, ModBase}, {req, Req}}, Opts),
@@ -48,7 +52,9 @@ push_with_mode(Base, Req, Opts) ->
             spawn(fun() -> do_push(Base, Req, Opts) end)
     end.
 
-%% @doc Determine if the push is asynchronous.
+-doc """
+Determine if the push is asynchronous.
+""".
 is_async(Base, Req, Opts) ->
     hb_ao:get_first(
         [
@@ -60,7 +66,9 @@ is_async(Base, Req, Opts) ->
         Opts
     ).
 
-%% @doc Push a message or slot number.
+-doc """
+Push a message or slot number.
+""".
 do_push(Base, Assignment, Opts) ->
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
     ID = dev_process:process_id(Base, #{}, Opts),
@@ -168,7 +176,9 @@ push_result_message(Base, FromSlot, Key, MsgToPush, Opts) ->
             end
     end.
 
-%% @doc Augment the message with from-* keys, if it doesn't already have them.
+-doc """
+Augment the message with from-* keys, if it doesn't already have them.
+""".
 normalize_message(MsgToPush, Opts) ->
     hb_ao:set(
         MsgToPush,
@@ -178,14 +188,18 @@ normalize_message(MsgToPush, Opts) ->
         Opts#{ hashpath => ignore }
     ).
 
-%% @doc Find the target process ID for a message to push.
+-doc """
+Find the target process ID for a message to push.
+""".
 target_process(MsgToPush, Opts) ->
     case hb_ao:get(<<"target">>, MsgToPush, Opts) of
         not_found -> undefined;
         RawTarget -> extract(target, RawTarget)
     end.
 
-%% @doc Return either the `target' or the `hint'.
+-doc """
+Return either the `target' or the `hint'.
+""".
 extract(hint, Raw) ->
     {_, Hint} = split_target(Raw),
     Hint;
@@ -258,8 +272,10 @@ schedule_result(Base, MsgToPush, Codec, Opts) ->
             {error, Res}
     end.
 
-%% @doc Set the necessary keys in order for the recipient to know where the
-%% message came from.
+-doc """
+Set the necessary keys in order for the recipient to know where the
+message came from.
+""".
 additional_keys(FromMsg, ToSched, Opts) ->
     hb_ao:set(
         ToSched,
@@ -272,7 +288,9 @@ additional_keys(FromMsg, ToSched, Opts) ->
         Opts#{ hashpath => ignore }
     ).
 
-%% @doc Push a message or a process, prior to pushing the resulting slot number.
+-doc """
+Push a message or a process, prior to pushing the resulting slot number.
+""".
 schedule_initial_message(Base, Req, Opts) ->
     ModReq = Req#{ <<"path">> => <<"schedule">>, <<"method">> => <<"POST">> },
     ?event(push, {initial_push, {base, Base}, {req, ModReq}}, Opts),

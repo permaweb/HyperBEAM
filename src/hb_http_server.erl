@@ -1,23 +1,27 @@
-%%% @doc A router that attaches a HTTP server to the AO-Core resolver.
-%%% Because AO-Core is built to speak in HTTP semantics, this module
-%%% only has to marshal the HTTP request into a message, and then
-%%% pass it to the AO-Core resolver. 
-%%% 
-%%% `hb_http:reply/4' is used to respond to the client, handling the 
-%%% process of converting a message back into an HTTP response.
-%%% 
-%%% The router uses an `Opts' message as its Cowboy initial state, 
-%%% such that changing it on start of the router server allows for
-%%% the execution parameters of all downstream requests to be controlled.
 -module(hb_http_server).
+-moduledoc """
+A router that attaches a HTTP server to the AO-Core resolver.
+Because AO-Core is built to speak in HTTP semantics, this module
+only has to marshal the HTTP request into a message, and then
+pass it to the AO-Core resolver. 
+
+`hb_http:reply/4' is used to respond to the client, handling the 
+process of converting a message back into an HTTP response.
+
+The router uses an `Opts' message as its Cowboy initial state, 
+such that changing it on start of the router server allows for
+the execution parameters of all downstream requests to be controlled.
+""".
 -export([start/0, start/1, allowed_methods/2, init/2, set_opts/1, get_opts/1]).
 -export([start_node/0, start_node/1, set_default_opts/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%% @doc Starts the HTTP server. Optionally accepts an `Opts' message, which
+-doc """
+Starts the HTTP server. Optionally accepts an `Opts' message, which
 %% is used as the source for server configuration settings, as well as the
 %% `Opts' argument to use for all AO-Core resolution requests downstream.
+""".
 start() ->
     ?event(http, {start_store, <<"cache-mainnet">>}),
     Store = hb_opts:get(store, no_store, #{}),
@@ -246,8 +250,10 @@ start_http2(ServerID, ProtoOpts, NodeMsg) ->
     ),
     {ok, Port, Listener}.
 
-%% @doc Entrypoint for all HTTP requests. Receives the Cowboy request option and
+-doc """
+Entrypoint for all HTTP requests. Receives the Cowboy request option and
 %% the server ID, which can be used to lookup the node message.
+""".
 init(Req, ServerID) ->
     case cowboy_req:method(Req) of
         <<"OPTIONS">> -> cors_reply(Req, ServerID);
@@ -256,7 +262,9 @@ init(Req, ServerID) ->
             handle_request(Req, Body, ServerID)
     end.
 
-%% @doc Helper to grab the full body of a HTTP request, even if it's chunked.
+-doc """
+Helper to grab the full body of a HTTP request, even if it's chunked.
+""".
 read_body(Req) -> read_body(Req, <<>>).
 read_body(Req0, Acc) ->
     case cowboy_req:read_body(Req0) of
@@ -264,7 +272,9 @@ read_body(Req0, Acc) ->
         {more, Data, Req} -> read_body(Req, << Acc/binary, Data/binary >>)
     end.
 
-%% @doc Reply to CORS preflight requests.
+-doc """
+Reply to CORS preflight requests.
+""".
 cors_reply(Req, _ServerID) ->
     Req2 = cowboy_req:reply(204, #{
         <<"access-control-allow-origin">> => <<"*">>,
@@ -275,10 +285,12 @@ cors_reply(Req, _ServerID) ->
     ?event(http_debug, {cors_reply, {req, Req}, {req2, Req2}}),
     {ok, Req2, no_state}.
 
-%% @doc Handle all non-CORS preflight requests as AO-Core requests. Execution 
+-doc """
+Handle all non-CORS preflight requests as AO-Core requests. Execution 
 %% starts by parsing the HTTP request into HyerBEAM's message format, then
 %% passing the message directly to `meta@1.0' which handles calling AO-Core in
 %% the appropriate way.
+""".
 handle_request(RawReq, Body, ServerID) ->
     % Insert the start time into the request so that it can be used by the
     % `hb_http' module to calculate the duration of the request.
@@ -317,12 +329,16 @@ handle_request(RawReq, Body, ServerID) ->
             hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
     end.
 
-%% @doc Return the list of allowed methods for the HTTP server.
+-doc """
+Return the list of allowed methods for the HTTP server.
+""".
 allowed_methods(Req, State) ->
     {[<<"GET">>, <<"POST">>, <<"PUT">>, <<"DELETE">>, <<"OPTIONS">>, <<"PATCH">>], Req, State}.
 
-%% @doc Update the `Opts' map that the HTTP server uses for all future
+-doc """
+Update the `Opts' map that the HTTP server uses for all future
 %% requests.
+""".
 set_opts(Opts) ->
     ServerRef = hb_opts:get(http_server, no_server_ref, Opts),
     ok = cowboy:set_env(ServerRef, node_msg, Opts).
@@ -370,7 +386,9 @@ set_default_opts(Opts) ->
         force_signed => true
     }.
 
-%% @doc Test that we can start the server, send a message, and get a response.
+-doc """
+Test that we can start the server, send a message, and get a response.
+""".
 start_node() ->
     start_node(#{}).
 start_node(Opts) ->

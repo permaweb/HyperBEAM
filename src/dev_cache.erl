@@ -1,26 +1,31 @@
-%%% @doc A device that looks up an ID from a local store and returns it,
-%%% honoring the `accept' key to return the correct format. The cache also
-%%% supports writing messages to the store, if the node message has the
-%%% writer's address in its `cache_writers' key.
 -module(dev_cache).
+-moduledoc """
+A device that looks up an ID from a local store and returns it,
+honoring the `accept' key to return the correct format. The cache also
+supports writing messages to the store, if the node message has the
+writer's address in its `cache_writers' key.
+""".
 -export([read/3, write/3, link/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Read data from the cache.
-%% Retrieves data corresponding to a key from a local store.
-%% The key is extracted from the incoming message under &lt;&lt;"target"&gt;&gt;.
-%% The options map may include store configuration.
-%% If the "accept" header is set to &lt;&lt;"application/aos-2"&gt;&gt;, the result is 
-%% converted to a JSON structure and encoded.
-%%
-%% @param M1 Ignored parameter.
-%% @param M2 The request message containing the key (&lt;&lt;"target"&gt;&gt;) and an
-%%            optional "accept" header.
-%% @param Opts A map of configuration options.
-%% @returns {ok, Data} on success,
-%%          not_found if the key does not exist,
-%%          {error, Reason} on failure.
+-doc """
+Read data from the cache.
+
+Retrieves data corresponding to a key from a local store.
+The key is extracted from the incoming message under <<"target>>".
+The options map may include store configuration.
+If the "accept" header is set to <<"application/aos-2>>", the result is
+converted to a JSON structure and encoded.
+
+@param M1 Ignored parameter.
+@param M2 The request message containing the key (<<"target>>") and an
+           optional \"accept\" header.
+@param Opts A map of configuration options.
+@returns {ok, Data} on success;
+         not_found if the key does not exist;
+         {error, Reason} on failure.
+""".
 read(_M1, M2, Opts) ->
     Location = hb_ao:get(<<"target">>, M2, Opts),
     ?event({read, {key_extracted, Location}}),
@@ -53,18 +58,21 @@ read(_M1, M2, Opts) ->
             hb_store:read(Store, Location)
     end.
 
-%% @doc Write data to the cache.
-%% Processes a write request by first verifying that the request comes from a
-%% trusted writer (as defined by the `cache_writers' configuration in the
-%% options). The write type is determined from the message ("single" or "batch")
-%% and the data is stored accordingly.
-%%
-%% @param M1 Ignored parameter.
-%% @param M2 The request message containing the data to write, the write type,
-%%            and any additional parameters.
-%% @param Opts A map of configuration options.
-%% @returns {ok, Path} on success, where Path indicates where the data was
-%%          stored, {error, Reason} on failure.
+-doc """
+Write data to the cache.
+Processes a write request by first verifying that the request comes from a
+trusted writer (as defined by the `cache_writers' configuration in the
+options). The write type is determined from the message ("single" or "batch")
+and the data is stored accordingly.
+
+
+@param M1 Ignored parameter.
+@param M2 The request message containing the data to write, the write type,
+           and any additional parameters.
+@param Opts A map of configuration options.
+@returns {ok, Path} on success, where Path indicates where the data was
+         stored, {error, Reason} on failure.
+""".
 write(_M1, M2, Opts) ->
     case is_trusted_writer(M2, Opts) of
         true ->
@@ -103,7 +111,9 @@ write(_M1, M2, Opts) ->
             }
     end.
 
-%% @doc Link a source to a destination in the cache.
+-doc """
+Link a source to a destination in the cache.
+""".
 link(_Base, Req, Opts) ->
     case is_trusted_writer(Req, Opts) of
         true ->
@@ -118,15 +128,18 @@ link(_Base, Req, Opts) ->
             {error, not_authorized}
     end.
 
-%% @doc Helper function to write a single data item to the cache.
-%% Extracts the body, location, and operation from the message.
-%% Depending on the type of data (map or binary) or if a link operation is
-%% requested, it writes the data to the store using the appropriate function.
-%%
-%% @param Msg The message containing data to be written.
-%% @param Opts A map of configuration options.
-%% @returns {ok, #{status := 200, path := Path}} on success,
-%%          {error, Reason} on failure.
+-doc """
+Helper function to write a single data item to the cache.
+Extracts the body, location, and operation from the message.
+Depending on the type of data (map or binary) or if a link operation is
+requested, it writes the data to the store using the appropriate function.
+
+
+@param Msg The message containing data to be written.
+@param Opts A map of configuration options.
+@returns {ok, #{status := 200, path := Path}} on success,
+         {error, Reason} on failure.
+""".
 write_single(Msg, Opts) ->
     Body = hb_ao:get(<<"body">>, Msg, Opts),
     ?event(dev_cache, {write_single, {body_extracted, Body}}),
@@ -176,14 +189,17 @@ write_single(Msg, Opts) ->
             }
     end.
 
-%% @doc Verify that the request originates from a trusted writer.
-%% Checks that the single signer of the request is present in the list
-%% of trusted cache writer addresses specified in the options.
-%%
-%% @param Req The request message.
-%% @param Opts A map of configuration options.
-%% @returns true if the request is from an authorized writer, false
-%%          otherwise.
+-doc """
+Verify that the request originates from a trusted writer.
+Checks that the single signer of the request is present in the list
+of trusted cache writer addresses specified in the options.
+
+
+@param Req The request message.
+@param Opts A map of configuration options.
+@returns true if the request is from an authorized writer, false
+         otherwise.
+""".
 is_trusted_writer(Req, Opts) ->
     Signers = hb_message:signers(Req),
     ?event(dev_cache, {is_trusted_writer, {signers, Signers}, {req, Req}}),
@@ -203,14 +219,17 @@ is_trusted_writer(Req, Opts) ->
 %%% Test Helpers
 %%%--------------------------------------------------------------------
 
-%% @doc Create a test environment with a local store and node.
-%% Ensures that the required application is started, configures a local
-%% file-system store, resets the store for a clean state, creates a wallet
-%% for signing requests, and starts a node with the store and trusted cache
-%% writer configuration.
-%%
-%% @param StorePrefix A binary specifying the prefix for the local store.
-%% @returns {ok, TestOpts, [LocalStore, Wallet, Address, Node]}
+-doc """
+Create a test environment with a local store and node.
+Ensures that the required application is started, configures a local
+file-system store, resets the store for a clean state, creates a wallet
+for signing requests, and starts a node with the store and trusted cache
+writer configuration.
+
+
+@param StorePrefix A binary specifying the prefix for the local store.
+@returns {ok, TestOpts, [LocalStore, Wallet, Address, Node]}
+""".
 setup_test_env() ->
     Timestamp = integer_to_binary(os:system_time(millisecond)),
     StorePrefix = <<"cache-TEST/remote-", Timestamp/binary>>,
@@ -248,15 +267,18 @@ setup_test_env() ->
     },
     {ok, TestOpts, [LocalStore, Wallet, Address, Node]}.
 
-%% @doc Write data to the cache via HTTP.
-%% Constructs a write request message with the provided data, signs it with the
-%% given wallet, sends it to the node, and verifies that the response indicates
-%% a successful write.
-%%
-%% @param Node The target node.
-%% @param Data The data to be written.
-%% @param Wallet The wallet used to sign the request.
-%% @returns {ok, WriteResponse} on success.
+-doc """
+Write data to the cache via HTTP.
+Constructs a write request message with the provided data, signs it with the
+given wallet, sends it to the node, and verifies that the response indicates
+a successful write.
+
+
+@param Node The target node.
+@param Data The data to be written.
+@param Wallet The wallet used to sign the request.
+@returns {ok, WriteResponse} on success.
+""".
 write_to_cache(Node, Data, Wallet) ->
     ?event(dev_cache, {write_to_cache, {start, Node}}),
     WriteMsg = #{
@@ -278,14 +300,17 @@ write_to_cache(Node, Data, Wallet) ->
     ?event(dev_cache, {write_to_cache, {write_success, Path}}),
     {WriteResponse, Path}.
 
-%% @doc Read data from the cache via HTTP.
-%% Constructs a GET request using the provided path, sends it to the node,
-%% and returns the response.
-%%
-%% @param Node The target node.
-%% @param Path The key or location where the data is stored.
-%% @returns The response read from the cache (either binary or wrapped in
-%%          {ok, Response}).
+-doc """
+Read data from the cache via HTTP.
+Constructs a GET request using the provided path, sends it to the node,
+and returns the response.
+
+
+@param Node The target node.
+@param Path The key or location where the data is stored.
+@returns The response read from the cache (either binary or wrapped in
+         {ok, Response}).
+""".
 read_from_cache(Node, Path) ->
     ?event(dev_cache, {read_from_cache, {start, Node, Path}}),
     ReadMsg = #{
@@ -317,8 +342,10 @@ read_from_cache(Node, Path) ->
 %%% Tests
 %%%--------------------------------------------------------------------
 
-%% @doc Test that the cache can be written to and read from using the hb_cache
-%% API.
+-doc """
+Test that the cache can be written to and read from using the hb_cache
+API.
+""".
 cache_write_message_test() ->
     ?event(dev_cache, {cache_api_test, {start}}),
     {ok, Opts, _} = setup_test_env(),
@@ -334,7 +361,9 @@ cache_write_message_test() ->
     ?event(dev_cache, {cache_api_test}),
     ok.
 
-%% @doc Ensure that we can write direct binaries to the cache.
+-doc """
+Ensure that we can write direct binaries to the cache.
+""".
 cache_write_binary_test() ->
     ?event(dev_cache, {cache_api_test, {start}}),
     {ok, Opts, _} = setup_test_env(),

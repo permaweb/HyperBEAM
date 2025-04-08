@@ -1,12 +1,14 @@
-%%% @doc Implementation of Arweave's GraphQL API to gain access to specific 
-%%% items of data stored on the network.
-%%% 
-%%% This module must be used to get full HyperBEAM `structured@1.0' form messages
-%%% from data items stored on the network, as Arweave gateways do not presently
-%%% expose all necessary fields to retrieve this information outside of the
-%%% GraphQL API. When gateways integrate serving in `httpsig@1.0' form, this
-%%% module will be deprecated.
 -module(hb_gateway_client).
+-moduledoc """
+Implementation of Arweave's GraphQL API to gain access to specific 
+items of data stored on the network.
+
+This module must be used to get full HyperBEAM `structured@1.0' form messages
+from data items stored on the network, as Arweave gateways do not presently
+expose all necessary fields to retrieve this information outside of the
+GraphQL API. When gateways integrate serving in `httpsig@1.0' form, this
+module will be deprecated.
+""".
 %% Raw access primitives:
 -export([read/2, data/2, result_to_message/2]).
 %% Application-specific data access functions:
@@ -14,7 +16,8 @@
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Get a data item (including data and tags) by its ID, using the node's
+-doc """
+Get a data item (including data and tags) by its ID, using the node's
 %% GraphQL peers.
 %% It uses the following GraphQL schema:
 %% type Transaction {
@@ -32,6 +35,7 @@
 %%   winston: String!
 %%   ar: String!
 %% }
+""".
 read(ID, Opts) ->
     Query =
         #{
@@ -57,8 +61,10 @@ read(ID, Opts) ->
             end
     end.
 
-%% @doc Gives the fields of a transaction that are needed to construct an
+-doc """
+Gives the fields of a transaction that are needed to construct an
 %% ANS-104 message.
+""".
 item_spec() ->
     <<"node { ",
         "id ",
@@ -72,11 +78,13 @@ item_spec() ->
         "data { size } "
     "}">>.
 
-%% @doc Get the data associated with a transaction by its ID, using the node's
+-doc """
+Get the data associated with a transaction by its ID, using the node's
 %% Arweave `gateway' peers. The item is expected to be available in its 
 %% unmodified (by caches or other proxies) form at the following location:
 %%      https://&lt;gateway&gt;/raw/&lt;id&gt;
 %% where `&lt;id&gt;' is the base64-url-encoded transaction ID.
+""".
 data(ID, Opts) ->
     Req = #{
         <<"multirequest-accept-status">> => 200,
@@ -99,7 +107,9 @@ data(ID, Opts) ->
             {error, no_viable_gateway}
     end.
 
-%% @doc Find the location of the scheduler based on its ID, through GraphQL.
+-doc """
+Find the location of the scheduler based on its ID, through GraphQL.
+""".
 scheduler_location(Address, Opts) ->
     Query =
         #{
@@ -125,9 +135,11 @@ scheduler_location(Address, Opts) ->
             end
     end.
         
-%% @doc Run a GraphQL request encoded as a binary. The node message may contain 
+-doc """
+Run a GraphQL request encoded as a binary. The node message may contain 
 %% a list of URLs to use, optionally as a tuple with an additional map of options
 %% to use for the request.
+""".
 query(Query, Opts) ->
     Res = hb_http:request(
         #{
@@ -153,8 +165,10 @@ query(Query, Opts) ->
         {error, Reason} -> {error, Reason}
     end.
 
-%% @doc Takes a GraphQL item node, matches it with the appropriate data from a
+-doc """
+Takes a GraphQL item node, matches it with the appropriate data from a
 %% gateway, then returns `{ok, ParsedMsg}'.
+""".
 result_to_message(Item, Opts) ->
     case hb_ao:get(<<"id">>, Item, Opts) of
         ExpectedID when is_binary(ExpectedID) ->
@@ -276,7 +290,9 @@ ans104_no_data_item_test() ->
     ?event(gateway, {signer, hb_message:signers(Res)}),
     ?assert(true).
 
-%% @doc Test that we can get the scheduler location.
+-doc """
+Test that we can get the scheduler location.
+""".
 scheduler_location_test() ->
     % Start a random node so that all of the services come up.
     _Node = hb_http_server:start_node(#{}),

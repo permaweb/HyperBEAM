@@ -1,13 +1,17 @@
-%%% @doc A long-lived server that schedules messages for a process.
-%%% It acts as a deliberate 'bottleneck' to prevent the server accidentally
-%%% assigning multiple messages to the same slot.
 -module(dev_scheduler_server).
+-moduledoc """
+A long-lived server that schedules messages for a process.
+It acts as a deliberate 'bottleneck' to prevent the server accidentally
+assigning multiple messages to the same slot.
+""".
 -export([start/2, schedule/2, stop/1]).
 -export([info/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%% @doc Start a scheduling server for a given computation.
+-doc """
+Start a scheduling server for a given computation.
+""".
 start(ProcID, Opts) ->
     ?event(scheduling, {starting_scheduling_server, {proc_id, ProcID}}),
     spawn_link(
@@ -46,7 +50,9 @@ start(ProcID, Opts) ->
         end
     ).
 
-%% @doc Call the appropriate scheduling server to assign a message.
+-doc """
+Call the appropriate scheduling server to assign a message.
+""".
 schedule(AOProcID, Message) when is_binary(AOProcID) ->
     schedule(dev_scheduler_registry:find(AOProcID), Message);
 schedule(ErlangProcID, Message) ->
@@ -56,7 +62,9 @@ schedule(ErlangProcID, Message) ->
             Assignment
     end.
 
-%% @doc Get the current slot from the scheduling server.
+-doc """
+Get the current slot from the scheduling server.
+""".
 info(ProcID) ->
     ?event({getting_info, {proc_id, ProcID}}),
     ProcID ! {info, self()},
@@ -66,8 +74,10 @@ stop(ProcID) ->
     ?event({stopping_scheduling_server, {proc_id, ProcID}}),
     ProcID ! stop.
 
-%% @doc The main loop of the server. Simply waits for messages to assign and
-%% returns the current slot.
+-doc """
+The main loop of the server. Simply waits for messages to assign and
+returns the current slot.
+""".
 server(State) ->
     receive
         {schedule, Message, Reply} ->
@@ -78,7 +88,9 @@ server(State) ->
         stop -> ok
     end.
 
-%% @doc Assign a message to the next slot.
+-doc """
+Assign a message to the next slot.
+""".
 assign(State, Message, ReplyPID) ->
     try
         do_assign(State, Message, ReplyPID)
@@ -88,7 +100,9 @@ assign(State, Message, ReplyPID) ->
             State
     end.
 
-%% @doc Generate and store the actual assignment message.
+-doc """
+Generate and store the actual assignment message.
+""".
 do_assign(State, Message, ReplyPID) ->
     HashChain = next_hashchain(maps:get(hash_chain, State), Message),
     NextSlot = maps:get(current, State) + 1,
@@ -170,8 +184,10 @@ maybe_inform_recipient(Mode, ReplyPID, Message, Assignment, State) ->
         _ -> ok
     end.
 
-%% @doc Create the next element in a chain of hashes that links this and prior
-%% assignments.
+-doc """
+Create the next element in a chain of hashes that links this and prior
+assignments.
+""".
 next_hashchain(HashChain, Message) ->
     ?event({creating_next_hashchain, {hash_chain, HashChain}, {message, Message}}),
     ID = hb_message:id(Message, all),
@@ -182,7 +198,9 @@ next_hashchain(HashChain, Message) ->
 
 %% TESTS
 
-%% @doc Test the basic functionality of the server.
+-doc """
+Test the basic functionality of the server.
+""".
 new_proc_test_() ->
 	{timeout, 20, fun() -> 
 		Wallet = ar_wallet:new(),

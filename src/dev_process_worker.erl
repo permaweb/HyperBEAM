@@ -1,15 +1,18 @@
-
-%%% @doc A long-lived process worker that keeps state in memory between
-%%% calls. Implements the interface of `hb_ao' to receive and respond 
-%%% to computation requests regarding a process as a singleton.
 -module(dev_process_worker).
+-moduledoc """
+A long-lived process worker that keeps state in memory between
+calls. Implements the interface of `hb_ao' to receive and respond 
+to computation requests regarding a process as a singleton.
+""".
 -export([server/3, stop/1, group/3, await/5, notify_compute/4]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Returns a group name for a request. The worker is responsible for all
-%% computation work on the same process on a single node, so we use the
-%% process ID as the group name.
+-doc """
+Returns a group name for a request. The worker is responsible for all
+computation work on the same process on a single node, so we use the
+process ID as the group name.
+""".
 group(Msg1, undefined, Opts) ->
     hb_persistent:default_grouper(Msg1, undefined, Opts);
 group(Msg1, Msg2, Opts) ->
@@ -37,9 +40,11 @@ process_to_group_name(Msg1, Opts) ->
     ?event({process_to_group_name, {id, ID}, {msg1, Msg1}}),
     hb_util:human_id(ID).
 
-%% @doc Spawn a new worker process. This is called after the end of the first
-%% execution of `hb_ao:resolve/3', so the state we are given is the
-%% already current.
+-doc """
+Spawn a new worker process. This is called after the end of the first
+execution of `hb_ao:resolve/3', so the state we are given is the
+already current.
+""".
 server(GroupName, Msg1, Opts) ->
     ServerOpts = Opts#{
         await_inprogress => false,
@@ -91,7 +96,9 @@ server(GroupName, Msg1, Opts) ->
         {ok, Msg1}
     end.
 
-%% @doc Await a resolution from a worker executing the `process@1.0' device.
+-doc """
+Await a resolution from a worker executing the `process@1.0' device.
+""".
 await(Worker, GroupName, Msg1, Msg2, Opts) ->
     case hb_path:matches(<<"compute">>, hb_path:hd(Msg2, Opts)) of
         false -> 
@@ -131,7 +138,9 @@ await(Worker, GroupName, Msg1, Msg2, Opts) ->
             end
     end.
 
-%% @doc Notify any waiters for a specific slot of the computed results.
+-doc """
+Notify any waiters for a specific slot of the computed results.
+""".
 notify_compute(GroupName, SlotToNotify, Msg3, Opts) ->
     notify_compute(GroupName, SlotToNotify, Msg3, Opts, 0).
 notify_compute(GroupName, SlotToNotify, Msg3, Opts, Count) ->
@@ -158,7 +167,9 @@ send_notification(Listener, GroupName, SlotToNotify, Msg3) ->
     ?event({sending_notification, {group, GroupName}, {slot, SlotToNotify}}),
     Listener ! {resolved, self(), GroupName, {slot, SlotToNotify}, Msg3}.
 
-%% @doc Stop a worker process.
+-doc """
+Stop a worker process.
+""".
 stop(Worker) ->
     exit(Worker, normal).
 

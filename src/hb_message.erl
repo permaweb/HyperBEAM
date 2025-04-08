@@ -1,58 +1,59 @@
-
-%%% @doc This module acts an adapter between messages, as modeled in the
-%%% AO-Core protocol, and their uderlying binary representations and formats.
-%%% 
-%%% Unless you are implementing a new message serialization codec, you should
-%%% not need to interact with this module directly. Instead, use the
-%%% `hb_ao' interfaces to interact with all messages. The `dev_message'
-%%% module implements a device interface for abstracting over the different
-%%% message formats.
-%%% 
-%%% `hb_message' and the HyperBEAM caches can interact with multiple different
-%%% types of message formats:
-%%% 
-%%%     - Richly typed AO-Core structured messages.
-%%%     - Arweave transations.
-%%%     - ANS-104 data items.
-%%%     - HTTP Signed Messages.
-%%%     - Flat Maps.
-%%% 
-%%% This module is responsible for converting between these formats. It does so
-%%% by normalizing messages to a common format: `Type Annotated Binary Messages`
-%%% (TABM). TABMs are deep Erlang maps with keys than only contain either other
-%%% TABMs or binary values. By marshalling all messages into this format, they
-%%% can easily be coerced into other output formats. For example, generating a
-%%% `HTTP Signed Message` format output from an Arweave transaction. TABM is
-%%% also a simple format from a computational perspective (only binary literals
-%%% and O(1) access maps), such that operations upon them are efficient.
-%%% 
-%%% The structure of the conversions is as follows:
-%%% 
-%%% ```
-%%%     Arweave TX/ANS-104 ==> dev_codec_ans104:from/1 ==> TABM
-%%%     HTTP Signed Message ==> dev_codec_httpsig_conv:from/1 ==> TABM
-%%%     Flat Maps ==> dev_codec_flat:from/1 ==> TABM
-%%% 
-%%%     TABM ==> dev_codec_structured:to/1 ==> AO-Core Message
-%%%     AO-Core Message ==> dev_codec_structured:from/1 ==> TABM
-%%% 
-%%%     TABM ==> dev_codec_ans104:to/1 ==> Arweave TX/ANS-104
-%%%     TABM ==> dev_codec_httpsig_conv:to/1 ==> HTTP Signed Message
-%%%     TABM ==> dev_codec_flat:to/1 ==> Flat Maps
-%%%     ...
-%%% '''
-%%% 
-%%% Additionally, this module provides a number of utility functions for
-%%% manipulating messages. For example, `hb_message:sign/2' to sign a message of
-%%% arbitrary type, or `hb_message:format/1' to print an AO-Core/TABM message in
-%%% a human-readable format.
-%%% 
-%%% The `hb_cache' module is responsible for storing and retrieving messages in
-%%% the HyperBEAM stores configured on the node. Each store has its own storage
-%%% backend, but each works with simple key-value pairs. Subsequently, the 
-%%% `hb_cache' module uses TABMs as the internal format for storing and 
-%%% retrieving messages.
 -module(hb_message).
+-moduledoc """
+This module acts an adapter between messages, as modeled in the
+AO-Core protocol, and their uderlying binary representations and formats.
+
+Unless you are implementing a new message serialization codec, you should
+not need to interact with this module directly. Instead, use the
+`hb_ao' interfaces to interact with all messages. The `dev_message'
+module implements a device interface for abstracting over the different
+message formats.
+
+`hb_message' and the HyperBEAM caches can interact with multiple different
+types of message formats:
+
+    - Richly typed AO-Core structured messages.
+    - Arweave transations.
+    - ANS-104 data items.
+    - HTTP Signed Messages.
+    - Flat Maps.
+
+This module is responsible for converting between these formats. It does so
+by normalizing messages to a common format: `Type Annotated Binary Messages`
+(TABM). TABMs are deep Erlang maps with keys than only contain either other
+TABMs or binary values. By marshalling all messages into this format, they
+can easily be coerced into other output formats. For example, generating a
+`HTTP Signed Message` format output from an Arweave transaction. TABM is
+also a simple format from a computational perspective (only binary literals
+and O(1) access maps), such that operations upon them are efficient.
+
+The structure of the conversions is as follows:
+
+```
+    Arweave TX/ANS-104 ==> dev_codec_ans104:from/1 ==> TABM
+    HTTP Signed Message ==> dev_codec_httpsig_conv:from/1 ==> TABM
+    Flat Maps ==> dev_codec_flat:from/1 ==> TABM
+
+    TABM ==> dev_codec_structured:to/1 ==> AO-Core Message
+    AO-Core Message ==> dev_codec_structured:from/1 ==> TABM
+
+    TABM ==> dev_codec_ans104:to/1 ==> Arweave TX/ANS-104
+    TABM ==> dev_codec_httpsig_conv:to/1 ==> HTTP Signed Message
+    TABM ==> dev_codec_flat:to/1 ==> Flat Maps
+    ...
+'''
+
+Additionally, this module provides a number of utility functions for
+manipulating messages. For example, `hb_message:sign/2' to sign a message of
+arbitrary type, or `hb_message:format/1' to print an AO-Core/TABM message in
+a human-readable format.
+
+The `hb_cache' module is responsible for storing and retrieving messages in
+the HyperBEAM stores configured on the node. Each store has its own storage
+backend, but each works with simple key-value pairs. Subsequently, the 
+`hb_cache' module uses TABMs as the internal format for storing and 
+retrieving messages.
+""".
 -export([id/1, id/2, id/3]).
 -export([convert/3, convert/4, uncommitted/1, with_only_committers/2]).
 -export([verify/1, verify/2, commit/2, commit/3, signers/1, type/1, minimize/1]).
@@ -68,17 +69,19 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Convert a message from one format to another. Taking a message in the
-%% source format, a target format, and a set of opts. If not given, the source
-%% is assumed to be `structured@1.0`. Additional codecs can be added by ensuring they
-%% are part of the `Opts` map -- either globally, or locally for a computation.
-%% 
-%% The encoding happens in two phases:
-%% 1. Convert the message to a TABM.
-%% 2. Convert the TABM to the target format.
-%% 
-%% The conversion to a TABM is done by the `structured@1.0' codec, which is always
-%% available. The conversion from a TABM is done by the target codec.
+-doc """
+Convert a message from one format to another. Taking a message in the
+source format, a target format, and a set of opts. If not given, the source
+is assumed to be `structured@1.0`. Additional codecs can be added by ensuring they
+are part of the `Opts` map -- either globally, or locally for a computation.
+
+The encoding happens in two phases:
+1. Convert the message to a TABM.
+2. Convert the TABM to the target format.
+
+The conversion to a TABM is done by the `structured@1.0' codec, which is always
+available. The conversion from a TABM is done by the target codec.
+""".
 convert(Msg, TargetFormat, Opts) ->
     convert(Msg, TargetFormat, <<"structured@1.0">>, Opts).
 convert(Msg, TargetFormat, SourceFormat, Opts) ->
@@ -116,8 +119,10 @@ from_tabm(Msg, TargetFormat, OldPriv, Opts) ->
         OtherTypeRes -> OtherTypeRes
     end.
 
-%% @doc Add the existing `priv' sub-map back to a converted message, honoring
-%% any existing `priv' sub-map that may already be present.
+-doc """
+Add the existing `priv' sub-map back to a converted message, honoring
+any existing `priv' sub-map that may already be present.
+""".
 restore_priv(Msg, EmptyPriv) when map_size(EmptyPriv) == 0 -> Msg;
 restore_priv(Msg, OldPriv) ->
     MsgPriv = maps:get(<<"priv">>, Msg, #{}),
@@ -126,7 +131,9 @@ restore_priv(Msg, OldPriv) ->
     ?event({new_priv, NewPriv}),
     Msg#{ <<"priv">> => NewPriv }.
 
-%% @doc Return the ID of a message.
+-doc """
+Return the ID of a message.
+""".
 id(Msg) -> id(Msg, uncommitted).
 id(Msg, Committers) -> id(Msg, Committers, #{}).
 id(Msg, RawCommitters, Opts) ->
@@ -148,14 +155,16 @@ id(Msg, RawCommitters, Opts) ->
         ),
     hb_util:human_id(ID).
 
-%% @doc Return a message with only the committed keys. If no commitments are
-%% present, the message is returned unchanged. This means that you need to
-%% check if the message is:
-%% - Committed
-%% - Verifies
-%% ...before using the output of this function as the 'canonical' message. This
-%% is such that expensive operations like signature verification are not
-%% performed unless necessary.
+-doc """
+Return a message with only the committed keys. If no commitments are
+present, the message is returned unchanged. This means that you need to
+check if the message is:
+- Committed
+- Verifies
+...before using the output of this function as the 'canonical' message. This
+is such that expensive operations like signature verification are not
+performed unless necessary.
+""".
 with_only_committed(Msg) ->
     with_only_committed(Msg, #{}).
 with_only_committed(Msg, Opts) when is_map(Msg) ->
@@ -185,7 +194,9 @@ with_only_committed(Msg, _) ->
     % If the message is not a map, it cannot be signed.
     {ok, Msg}.
 
-%% @doc Return the message with only the specified committers attached.
+-doc """
+Return the message with only the specified committers attached.
+""".
 with_only_committers(Msg, Committers) when is_map(Msg) ->
     NewCommitments =
         maps:filter(
@@ -199,7 +210,9 @@ with_only_committers(Msg, Committers) when is_map(Msg) ->
 with_only_committers(Msg, _Committers) ->
     throw({unsupported_message_type, Msg}).
 
-%% @doc Sign a message with the given wallet.
+-doc """
+Sign a message with the given wallet.
+""".
 commit(Msg, WalletOrOpts) ->
     commit(
         Msg,
@@ -224,7 +237,9 @@ commit(Msg, Opts, Format) ->
         ),
     Signed.
 
-%% @doc Return the list of committed keys from a message.
+-doc """
+Return the list of committed keys from a message.
+""".
 committed(Msg) -> committed(Msg, all).
 committed(Msg, Committers) -> committed(Msg, Committers, #{}).
 committed(Msg, all, Opts) ->
@@ -235,7 +250,9 @@ committed(Msg, CommittersMsg, Opts) ->
     {ok, CommittedKeys} = dev_message:committed(Msg, CommittersMsg, Opts),
     CommittedKeys.
 
-%% @doc wrapper function to verify a message.
+-doc """
+wrapper function to verify a message.
+""".
 verify(Msg) -> verify(Msg, <<"all">>).
 verify(Msg, signers) -> verify(Msg, hb_message:signers(Msg));
 verify(Msg, Committers) ->
@@ -251,18 +268,24 @@ verify(Msg, Committers) ->
             #{}),
     Res.
 
-%% @doc Return the unsigned version of a message in AO-Core format.
+-doc """
+Return the unsigned version of a message in AO-Core format.
+""".
 uncommitted(Bin) when is_binary(Bin) -> Bin;
 uncommitted(Msg) ->
     maps:remove(<<"commitments">>, Msg).
 
-%% @doc Return all of the committers on a message that have 'normal', 256 bit, 
-%% addresses.
+-doc """
+Return all of the committers on a message that have 'normal', 256 bit, 
+addresses.
+""".
 signers(Msg) ->
     lists:filter(fun(Signer) -> ?IS_ID(Signer) end,
         hb_ao:get(<<"committers">>, Msg, #{})).
 
-%% @doc Get a codec from the options.
+-doc """
+Get a codec from the options.
+""".
 get_codec(TargetFormat, Opts) ->
     try
         hb_ao:message_to_device(
@@ -273,13 +296,17 @@ get_codec(TargetFormat, Opts) ->
         throw({message_codec_not_viable, TargetFormat})
     end.
 
-%% @doc Pretty-print a message.
+-doc """
+Pretty-print a message.
+""".
 print(Msg) -> print(Msg, 0).
 print(Msg, Indent) ->
     io:format(standard_error, "~s", [lists:flatten(format(Msg, Indent))]).
 
-%% @doc Format a message for printing, optionally taking an indentation level
-%% to start from.
+-doc """
+Format a message for printing, optionally taking an indentation level
+to start from.
+""".
 format(Item) -> format(Item, 0).
 format(Bin, Indent) when is_binary(Bin) ->
     hb_util:format_indented(
@@ -454,7 +481,9 @@ format(Item, Indent) ->
     % Whatever we have is not a message map.
     hb_util:format_indented("[UNEXPECTED VALUE] ~p", [Item], Indent).
 
-%% @doc Return the type of an encoded message.
+-doc """
+Return the type of an encoded message.
+""".
 type(TX) when is_record(TX, tx) -> tx;
 type(Binary) when is_binary(Binary) -> binary;
 type(Msg) when is_map(Msg) ->
@@ -470,11 +499,13 @@ type(Msg) when is_map(Msg) ->
         false -> shallow
     end.
 
-%% @doc Check if two maps match, including recursively checking nested maps.
-%% Takes an optional mode argument to control the matching behavior:
-%%      `strict': All keys in both maps be present and match.
-%%      `only_present': Only present keys in both maps must match.
-%%      `primary': Only the primary map's keys must be present.
+-doc """
+Check if two maps match, including recursively checking nested maps.
+Takes an optional mode argument to control the matching behavior:
+     `strict': All keys in both maps be present and match.
+     `only_present': Only present keys in both maps must match.
+     `primary': Only the primary map's keys must be present.
+""".
 match(Map1, Map2) ->
     match(Map1, Map2, strict).
 match(Map1, Map2, Mode) ->
@@ -537,9 +568,11 @@ match(Map1, Map2, Mode) ->
 matchable_keys(Map) ->
     lists:sort(lists:map(fun hb_ao:normalize_key/1, maps:keys(Map))).
 
-%% @doc Filter messages that do not match the 'spec' given. The underlying match
-%% is performed in the `only_present' mode, such that match specifications only
-%% need to specify the keys that must be present.
+-doc """
+Filter messages that do not match the 'spec' given. The underlying match
+is performed in the `only_present' mode, such that match specifications only
+need to specify the keys that must be present.
+""".
 with_commitments(Spec, Msg) ->
     with_commitments(Spec, Msg, #{}).
 with_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, _Opts) ->
@@ -558,8 +591,10 @@ with_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, _Opts) ->
 with_commitments(_Spec, Msg, _Opts) ->
     Msg.
 
-%% @doc Filter messages that match the 'spec' given. Inverts the `with_commitments/2'
-%% function, such that only messages that do _not_ match the spec are returned.
+-doc """
+Filter messages that match the 'spec' given. Inverts the `with_commitments/2'
+function, such that only messages that do _not_ match the spec are returned.
+""".
 without_commitments(Spec, Msg) ->
     without_commitments(Spec, Msg, #{}).
 without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, _Opts) ->
@@ -576,9 +611,11 @@ without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, _Opts) ->
 without_commitments(_Spec, Msg, _Opts) ->
     Msg.
 
-%% @doc Extract a commitment from a message given a `committer' ID, or a spec
-%% message to match against. Returns only the first matching commitment, or
-%% `not_found'.
+-doc """
+Extract a commitment from a message given a `committer' ID, or a spec
+message to match against. Returns only the first matching commitment, or
+`not_found'.
+""".
 commitment(Committer, Msg) ->
     commitment(Committer, Msg, #{}).
 commitment(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
@@ -605,11 +642,13 @@ commitment(_Spec, _Msg, _Opts) ->
     % The message has no commitments, so the spec can never match.
     not_found.
 
-%% @doc Implements a standard pattern in which the target for an operation is
-%% found by looking for a `target' key in the request. If the target is `self',
-%% or not present, the operation is performed on the original message. Otherwise,
-%% the target is expected to be a key in the message, and the operation is
-%% performed on the value of that key.
+-doc """
+Implements a standard pattern in which the target for an operation is
+found by looking for a `target' key in the request. If the target is `self',
+or not present, the operation is performed on the original message. Otherwise,
+the target is expected to be a key in the message, and the operation is
+performed on the value of that key.
+""".
 find_target(Self, Req, Opts) ->
 	GetOpts = Opts#{
         hashpath => ignore,
@@ -628,8 +667,10 @@ find_target(Self, Req, Opts) ->
         end
     }.
 
-%% @doc Remove keys from the map that can be regenerated. Optionally takes an
-%% additional list of keys to include in the minimization.
+-doc """
+Remove keys from the map that can be regenerated. Optionally takes an
+additional list of keys to include in the minimization.
+""".
 minimize(Msg) -> minimize(Msg, []).
 minimize(RawVal, _) when not is_map(RawVal) -> RawVal;
 minimize(Map, ExtraKeys) ->
@@ -644,8 +685,10 @@ minimize(Map, ExtraKeys) ->
         maps:map(fun(_K, V) -> minimize(V) end, Map)
     ).
 
-%% @doc Return a map with only the keys that necessary, without those that can
-%% be regenerated.
+-doc """
+Return a map with only the keys that necessary, without those that can
+be regenerated.
+""".
 normalize(Map) when is_map(Map) orelse is_list(Map) ->
     NormalizedMap = hb_ao:normalize_keys(Map),
     FilteredMap = filter_default_keys(NormalizedMap),
@@ -653,8 +696,10 @@ normalize(Map) when is_map(Map) orelse is_list(Map) ->
 normalize(Other) ->
     Other.
 
-%% @doc Remove keys from a map that have the default values found in the tx
-%% record.
+-doc """
+Remove keys from a map that have the default values found in the tx
+record.
+""".
 filter_default_keys(Map) ->
     DefaultsMap = default_tx_message(),
     maps:filter(
@@ -667,21 +712,27 @@ filter_default_keys(Map) ->
         Map
     ).
 
-%% @doc Get the normalized fields and default values of the tx record.
+-doc """
+Get the normalized fields and default values of the tx record.
+""".
 default_tx_message() ->
     maps:from_list(default_tx_list()).
 
-%% @doc Get the ordered list of fields as AO-Core keys and default values of
-%% the tx record.
+-doc """
+Get the ordered list of fields as AO-Core keys and default values of
+the tx record.
+""".
 default_tx_list() ->
     Keys = lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)),
     lists:zip(Keys, tl(tuple_to_list(#tx{}))).
 
-%%% Tests
+%Tests
 
-%% @doc Test that the filter_default_keys/1 function removes TX fields
-%% that have the default values found in the tx record, but not those that
-%% have been set by the user.
+-doc """
+Test that the filter_default_keys/1 function removes TX fields
+that have the default values found in the tx record, but not those that
+have been set by the user.
+""".
 default_keys_removed_test() ->
     TX = #tx { unsigned_id = << 1:256 >>, last_tx = << 2:256 >> },
     TXMap = #{
@@ -729,7 +780,9 @@ set_body_codec_test(Codec) ->
     Decoded = convert(Encoded, <<"structured@1.0">>, Codec, #{}),
     ?assert(hb_message:match(Msg, Decoded)).
 
-%% @doc Test that we can convert a message into a tx record and back.
+-doc """
+Test that we can convert a message into a tx record and back.
+""".
 single_layer_message_to_encoding_test(Codec) ->
     Msg = #{
         <<"last_tx">> => << 2:256 >>,
@@ -766,8 +819,10 @@ signed_nested_data_key_test(Codec) ->
     Decoded = convert(Encoded, <<"structured@1.0">>, Codec, #{}),
     ?assert(hb_message:match(Msg, Decoded)).
 
-% %% @doc Test that different key encodings are converted to their corresponding
-% %% TX fields.
+% -doc """
+% Test that different key encodings are converted to their corresponding
+% """.
+% TX fields.
 % key_encodings_to_tx_test() ->
 %     Msg = #{
 %         <<"last_tx">> => << 2:256 >>,
@@ -780,7 +835,9 @@ signed_nested_data_key_test(Codec) ->
 %     ?assertEqual(maps:get(<<"owner">>, Msg), TX#tx.owner),
 %     ?assertEqual(maps:get(<<"target">>, Msg), TX#tx.target).
 
-%% @doc Test that the message matching function works.
+-doc """
+Test that the message matching function works.
+""".
 match_test(Codec) ->
     Msg = #{ <<"a">> => 1, <<"b">> => 2 },
     Encoded = convert(Msg, Codec, #{}),
@@ -795,7 +852,9 @@ binary_to_binary_test(Codec) ->
     Decoded = convert(Encoded, <<"structured@1.0">>, Codec, #{}),
     ?assertEqual(Bin, Decoded).
 
-%% @doc Structured field parsing tests.
+-doc """
+Structured field parsing tests.
+""".
 structured_field_atom_parsing_test(Codec) ->
     Msg = #{ highly_unusual_http_header => highly_unusual_value },
     Encoded = convert(Msg, Codec, #{}),
@@ -808,9 +867,11 @@ structured_field_decimal_parsing_test(Codec) ->
     Decoded = convert(Encoded, <<"structured@1.0">>, Codec, #{}),
     ?assert(match(Msg, Decoded)).
 
-%% @doc Test that the data field is correctly managed when we have multiple
-%% uses for it (the 'data' key itself, as well as keys that cannot fit in
-%% tags).
+-doc """
+Test that the data field is correctly managed when we have multiple
+uses for it (the 'data' key itself, as well as keys that cannot fit in
+tags).
+""".
 message_with_large_keys_test(Codec) ->
     Msg = #{
         <<"normal_key">> => <<"normal_value">>,
@@ -822,7 +883,9 @@ message_with_large_keys_test(Codec) ->
     Decoded = convert(Encoded, <<"structured@1.0">>, Codec, #{}),
     ?assert(match(Msg, Decoded)).
 
-%% @doc Check that large keys and data fields are correctly handled together.
+-doc """
+Check that large keys and data fields are correctly handled together.
+""".
 nested_message_with_large_keys_and_content_test(Codec) ->
     MainBodyKey =
         case Codec of
@@ -865,9 +928,11 @@ nested_empty_map_test(Codec) ->
     ?event({decoded, Decoded}),
     ?assert(match(Msg, Decoded)).
 
-%% @doc Test that the data field is correctly managed when we have multiple
+-doc """
+Test that the data field is correctly managed when we have multiple
 %% uses for it (the 'data' key itself, as well as keys that cannot fit in
 %% tags).
+""".
 nested_message_with_large_content_test(Codec) ->
     MainBodyKey =
         case Codec of
@@ -891,7 +956,9 @@ nested_message_with_large_content_test(Codec) ->
     ?event({decoded, Decoded}),
     ?assert(match(Msg, Decoded)).
 
-%% @doc Test that we can convert a 3 layer nested message into a tx record and back.
+-doc """
+Test that we can convert a 3 layer nested message into a tx record and back.
+""".
 deeply_nested_message_with_content_test(Codec) ->
     MainBodyKey =
         case Codec of

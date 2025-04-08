@@ -16,8 +16,10 @@
 start_link(Opts) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
 
-%% @doc Hang until it is safe to make another request to the given Peer with the
-%% given Path. The limits are configured in include/ar_blacklist_middleware.hrl.
+-doc """
+Hang until it is safe to make another request to the given Peer with the
+ given Path. The limits are configured in include/ar_blacklist_middleware.hrl.
+""".
 throttle(Peer, Path, Opts) ->
 	case lists:member(Peer, hb_opts:get(throttle_exempt_peers, [], Opts)) of
 		true ->
@@ -44,11 +46,15 @@ throttle2(Peer, Path, Opts) ->
 			end
 	end.
 
-%% @doc Turn rate limiting off.
+-doc """
+Turn rate limiting off.
+""".
 off() ->
 	gen_server:cast(?MODULE, turn_off).
 
-%% @doc Turn rate limiting on.
+-doc """
+Turn rate limiting on.
+""".
 on() ->
 	gen_server:cast(?MODULE, turn_on).
 

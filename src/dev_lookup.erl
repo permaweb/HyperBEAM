@@ -1,6 +1,8 @@
-%%% @doc A device that looks up an ID from a local store and returns it, honoring
-%%% the `accept' key to return the correct format.
 -module(dev_lookup).
+-moduledoc """
+A device that looks up an ID from a local store and returns it, honoring
+the `accept' key to return the correct format.
+""".
 -export([read/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

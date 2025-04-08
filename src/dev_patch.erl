@@ -1,19 +1,25 @@
-%%% @doc A device that finds `PATCH' requests in the `results/outbox'
-%%% of its message, and applies them to it. This can be useful for processes
-%%% whose computation would like to manipulate data outside of the `results' key
-%%% of its message.
 -module(dev_patch).
+-moduledoc """
+A device that finds `PATCH' requests in the `results/outbox'
+of its message, and applies them to it. This can be useful for processes
+whose computation would like to manipulate data outside of the `results' key
+of its message.
+""".
 -export([init/3, compute/3, normalize/3, snapshot/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
-%% @doc Default process device hooks.
+-doc """
+Default process device hooks.
+""".
 init(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
 normalize(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
 snapshot(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
 
-%% @doc Find `PATCH' requests in the `results/outbox' of the message, and apply
-%% them to the state.
+-doc """
+Find `PATCH' requests in the `results/outbox' of the message, and apply
+them to the state.
+""".
 compute(Msg1, Msg2, Opts) ->
     % Find the input keys.
     PatchFrom = hb_ao:get_first(

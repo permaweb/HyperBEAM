@@ -1,6 +1,8 @@
-%%% @doc This device offers an interface for validating AMD SEV-SNP commitments,
-%%% as well as generating them, if called in an appropriate environment.
 -module(dev_snp).
+-moduledoc """
+This device offers an interface for validating AMD SEV-SNP commitments,
+as well as generating them, if called in an appropriate environment.
+""".
 -export([generate/3, verify/3, trusted/3]).
 -export([init/3]).
 -include("include/hb.hrl").
@@ -49,10 +51,12 @@ real_node_test() ->
         ?assertEqual({ok, true}, Result)
     end.
 
-%% @doc Should take in options to set for the device such as kernel, initrd, firmware,
+-doc """
+Should take in options to set for the device such as kernel, initrd, firmware,
 %% and append hashes and make them available to the device. Only runnable once,
 %% and only if the operator is not set to an address (and thus, the node has not
 %% had any priviledged access).
+""".
 init(M1, _M2, Opts) ->
     case {hb_opts:get(trusted, #{}, Opts), hb_opts:get(operator, undefined, Opts)} of
         {#{snp_hashes := _}, _} ->
@@ -72,7 +76,8 @@ init(M1, _M2, Opts) ->
             {ok, <<"SNP node initialized successfully.">>}
     end.
 
-%% @doc Verify an commitment report message; validating the identity of a 
+-doc """
+Verify an commitment report message; validating the identity of a 
 %% remote node, its ephemeral private address, and the integrity of the report.
 %% The checks that must be performed to validate the report are:
 %% 1. Verify the address and the node message ID are the same as the ones
@@ -84,6 +89,7 @@ init(M1, _M2, Opts) ->
 %%    measurement, are trusted.
 %% 5. Verify the measurement is valid.
 %% 6. Verify the report's certificate chain to hardware root of trust.
+""".
 verify(M1, M2, NodeOpts) ->
     {ok, MsgWithJSONReport} = hb_message:find_target(M1, M2, NodeOpts),
 	% Normalize the request message
@@ -160,10 +166,12 @@ verify(M1, M2, NodeOpts) ->
     ?event({final_validation_result, Valid}),
     {ok, Valid}.
 
-%% @doc Generate an commitment report and emit it as a message, including all of 
+-doc """
+Generate an commitment report and emit it as a message, including all of 
 %% the necessary data to generate the nonce (ephemeral node address + node
 %% message ID), as well as the expected measurement (firmware, kernel, and VMSAs
 %% hashes).
+""".
 generate(_M1, _M2, Opts) ->
 	?event({generate_opts, {explicit, Opts}}),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
@@ -203,13 +211,17 @@ generate(_M1, _M2, Opts) ->
 	?event({snp_report_msg, ReportMsg}),
     {ok, ReportMsg}.
 
-%% @doc Ensure that the node's debug policy is disabled.
+-doc """
+Ensure that the node's debug policy is disabled.
+""".
 is_debug(Report) ->
     (hb_ao:get(<<"policy">>, Report, #{}) band (1 bsl 19)) =/= 0.
 
-%% @doc Ensure that all of the software hashes are trusted. The caller may set
+-doc """
+Ensure that all of the software hashes are trusted. The caller may set
 %% a specific device to use for the `is-trusted' key. The device must then
 %% implement the `trusted' resolver.
+""".
 execute_is_trusted(M1, Msg, NodeOpts) ->
     % Generate a modified version of the base message, with the 
     % `is-trusted-device' key set as the device, if provided by the caller.
@@ -246,9 +258,11 @@ execute_is_trusted(M1, Msg, NodeOpts) ->
     ?event({is_all_software_trusted, Result}),
     {ok, Result}.
 
-%% @doc Default implementation of a resolver for trusted software. Searches the
+-doc """
+Default implementation of a resolver for trusted software. Searches the
 %% `trusted' key in the base message for a list of trusted values, and checks
 %% if the value in the request message is a member of that list.
+""".
 trusted(_Msg1, Msg2, NodeOpts) ->
     Key = hb_ao:get(<<"key">>, Msg2, NodeOpts),
     Body = hb_ao:get(<<"body">>, Msg2, not_found, NodeOpts),
@@ -259,13 +273,17 @@ trusted(_Msg1, Msg2, NodeOpts) ->
     %% Final trust validation
     {ok, PropertyName == Body}.
 
-%% @doc Ensure that the report data matches the expected report data.
+-doc """
+Ensure that the report data matches the expected report data.
+""".
 report_data_matches(Address, NodeMsgID, ReportData) ->
 	?event({generated_nonce, binary_to_list(generate_nonce(Address, NodeMsgID))}),
 	?event({expected_nonce, binary_to_list(ReportData)}),
     generate_nonce(Address, NodeMsgID) == ReportData.
 
-%% @doc Generate the nonce to use in the commitment report.
+-doc """
+Generate the nonce to use in the commitment report.
+""".
 generate_nonce(RawAddress, RawNodeMsgID) ->
 	Address = hb_util:native_id(RawAddress),
 	NodeMsgID = hb_util:native_id(RawNodeMsgID),

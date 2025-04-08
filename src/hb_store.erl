@@ -32,10 +32,12 @@ start(Modules) -> call_all(Modules, start, []).
 
 stop(Modules) -> call_function(Modules, stop, []).
 
-%% @doc Takes a store object and a filter function or match spec, returning a
+-doc """
+Takes a store object and a filter function or match spec, returning a
 %% new store object with only the modules that match the filter. The filter
 %% function takes 2 arguments: the scope and the options. It calls the store's
 %% scope function to get the scope of the module.
+""".
 filter(Module, Filter) when not is_list(Module) ->
     filter([Module], Filter);
 filter(Modules, Filter) ->
@@ -48,9 +50,11 @@ filter(Modules, Filter) ->
         Modules
     ).
 
-%% @doc Limit the store scope to only a specific (set of) option(s).
+-doc """
+Limit the store scope to only a specific (set of) option(s).
 %% Takes either an Opts message or store, and either a single scope or a list
 %% of scopes.
+""".
 scope(Scope, Opts) when is_map(Opts) ->
     case hb_opts:get(store, no_viable_store, Opts) of
         no_viable_store -> Opts;
@@ -65,19 +69,23 @@ scope(Scope, Store) ->
         end
     ).
 
-%% @doc Ask a store for its own scope. If it doesn't have one, return the
+-doc """
+Ask a store for its own scope. If it doesn't have one, return the
 %% default scope (local).
+""".
 get_store_scope(Store) ->
     case call_function(Store, scope, []) of
         no_viable_store -> ?DEFAULT_SCOPE;
         Scope -> Scope
     end.
 
-%% @doc Order a store by a preference of its scopes. This is useful for making
+-doc """
+Order a store by a preference of its scopes. This is useful for making
 %% sure that faster (or perhaps cheaper) stores are used first. If a list is
 %% provided, it will be used as a preference order. If a map is provided,
 %% scopes will be ordered by the scores in the map. Any unknown scopes will
 %% default to a score of 0.
+""".
 sort(Stores, PreferenceOrder) when is_list(PreferenceOrder) ->
     sort(
         Stores,
@@ -102,40 +110,58 @@ sort(Stores, ScoreMap) ->
         Stores
     ).
 
-%% @doc Join a list of path components together.
+-doc """
+Join a list of path components together.
+""".
 join(Path) -> hb_path:to_binary(Path).
 
 %%% The store interface that modules should implement.
 
-%% @doc Read a key from the store.
+-doc """
+Read a key from the store.
+""".
 read(Modules, Key) -> call_function(Modules, read, [Key]).
 
-%% @doc Write a key with a value to the store.
+-doc """
+Write a key with a value to the store.
+""".
 write(Modules, Key, Value) -> call_function(Modules, write, [Key, Value]).
 
-%% @doc Make a group in the store. A group can be seen as a namespace or
+-doc """
+Make a group in the store. A group can be seen as a namespace or
 %% 'directory' in a filesystem.
+""".
 make_group(Modules, Path) -> call_function(Modules, make_group, [Path]).
 
-%% @doc Make a link from one path to another in the store.
+-doc """
+Make a link from one path to another in the store.
+""".
 make_link(Modules, Existing, New) ->
     call_function(Modules, make_link, [Existing, New]).
 
-%% @doc Delete all of the keys in a store. Should be used with extreme
+-doc """
+Delete all of the keys in a store. Should be used with extreme
 %% caution. Lost data can lose money in many/most of hyperbeam's use cases.
+""".
 reset(Modules) -> call_function(Modules, reset, []).
 
-%% @doc Get the type of element of a given path in the store. This can be
+-doc """
+Get the type of element of a given path in the store. This can be
 %% a performance killer if the store is remote etc. Use only when necessary.
+""".
 type(Modules, Path) -> call_function(Modules, type, [Path]).
 
-%% @doc Create a path from a list of path components. If no store implements
+-doc """
+Create a path from a list of path components. If no store implements
 %% the path function, we return the path with the 'default' transformation (id).
+""".
 path(Path) -> join(Path).
 path(_, Path) -> path(Path).
 
-%% @doc Add two path components together. If no store implements the add_path
+-doc """
+Add two path components together. If no store implements the add_path
 %% function, we concatenate the paths.
+""".
 add_path(Path1, Path2) -> Path1 ++ Path2.
 add_path(Store, Path1, Path2) ->
     case call_function(Store, add_path, [Path1, Path2]) of
@@ -143,16 +169,22 @@ add_path(Store, Path1, Path2) ->
         Result -> Result
     end.
 
-%% @doc Follow links through the store to resolve a path to its ultimate target.
+-doc """
+Follow links through the store to resolve a path to its ultimate target.
+""".
 resolve(Modules, Path) -> call_function(Modules, resolve, [Path]).
 
-%% @doc List the keys in a group in the store. Use only in debugging.
+-doc """
+List the keys in a group in the store. Use only in debugging.
 %% The hyperbeam model assumes that stores are built as efficient hash-based
 %% structures, so this is likely to be very slow for most stores.
+""".
 list(Modules, Path) -> call_function(Modules, list, [Path]).
 
-%% @doc Call a function on the first store module that succeeds. Returns its
+-doc """
+Call a function on the first store module that succeeds. Returns its
 %% result, or no_viable_store if none of the stores succeed.
+""".
 call_function(X, _Function, _Args) when not is_list(X) ->
     call_function([X], _Function, _Args);
 call_function([], _Function, _Args) ->
@@ -170,7 +202,9 @@ call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
             call_function(Rest, Function, Args)
     end.
 
-%% @doc Call a function on all modules in the store.
+-doc """
+Call a function on all modules in the store.
+""".
 call_all(X, _Function, _Args) when not is_list(X) ->
     call_all([X], _Function, _Args);
 call_all([], _Function, _Args) ->
@@ -233,14 +267,18 @@ generate_test_suite(Suite, Stores) ->
 
 %%% Tests
 
-%% @doc Test path resolution dynamics.
+-doc """
+Test path resolution dynamics.
+""".
 simple_path_resolution_test(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     ok = hb_store:write(Store, <<"test-file">>, <<"test-data">>),
     hb_store:make_link(Store, <<"test-file">>, <<"test-link">>),
     ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, <<"test-link">>)).
 
-%% @doc Ensure that we can resolve links recursively.
+-doc """
+Ensure that we can resolve links recursively.
+""".
 resursive_path_resolution_test(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     hb_store:write(Store, <<"test-file">>, <<"test-data">>),
@@ -248,7 +286,9 @@ resursive_path_resolution_test(Opts) ->
     hb_store:make_link(Store, <<"test-link">>, <<"test-link2">>),
     ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, <<"test-link2">>)).
 
-%% @doc Ensure that we can resolve links through a directory.
+-doc """
+Ensure that we can resolve links through a directory.
+""".
 hierarchical_path_resolution_test(Opts) ->
     Store = Opts,
     hb_store:make_group(Store, <<"test-dir1">>),

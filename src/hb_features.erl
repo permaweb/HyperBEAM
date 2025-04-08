@@ -1,14 +1,18 @@
-%%% @doc A module that exports a list of feature flags that the node supports
-%%% using the `-ifdef' macro.
-%%% As a consequence, this module acts as a proxy of information between the
-%%% build system and the runtime execution environment.
 -module(hb_features).
+-moduledoc """
+A module that exports a list of feature flags that the node supports
+using the `-ifdef' macro.
+As a consequence, this module acts as a proxy of information between the
+build system and the runtime execution environment.
+""".
 %%% Public API.
 -export([all/0, enabled/1]).
 %%% Individual feature flags.
 -export([http3/0, rocksdb/0, test/0, genesis_wasm/0]).
 
-%% @doc Returns a list of all feature flags that the node supports.
+-doc """
+Returns a list of all feature flags that the node supports.
+""".
 all() ->
     Features =
         lists:filtermap(
@@ -29,7 +33,9 @@ all() ->
         )
     ).
 
-%% @doc Returns true if the feature flag is enabled.
+-doc """
+Returns true if the feature flag is enabled.
+""".
 enabled(Feature) ->
     maps:get(Feature, all(), false).
 

@@ -1,12 +1,16 @@
-%%% @doc Wrapper for incrementing prometheus counters.
 -module(hb_event).
+-moduledoc """
+Wrapper for incrementing prometheus counters.
+""".
 -export([log/1, log/2, log/3, log/4, log/5, log/6, increment/3]).
 -include("include/hb.hrl").
 
 -define(OVERLOAD_QUEUE_LENGTH, 10000).
 
-%% @doc Debugging log logging function. For now, it just prints to standard
+-doc """
+Debugging log logging function. For now, it just prints to standard
 %% error.
+""".
 log(X) -> log(global, X).
 log(Topic, X) -> log(Topic, X, "").
 log(Topic, X, Mod) -> log(Topic, X, Mod, undefined).
@@ -41,11 +45,13 @@ log(Topic, X, ModStr, Func, Line, Opts) ->
         false -> X
     end.
 
-%% @doc Increment the counter for the given topic and message. Registers the
+-doc """
+Increment the counter for the given topic and message. Registers the
 %% counter if it doesn't exist. If the topic is `global', the message is ignored.
 %% This means that events must specify a topic if they want to be counted,
 %% filtering debug messages. Similarly, events with a topic that begins with
 %% `debug' are ignored.
+""".
 increment(global, _Message, _Opts) -> ignored;
 increment(ao_core, _Message, _Opts) -> ignored;
 increment(ao_internal, _Message, _Opts) -> ignored;
@@ -96,7 +102,9 @@ handle_events() ->
             handle_events()
     end.
 
-%% @doc Delay the event server until prometheus is started.
+-doc """
+Delay the event server until prometheus is started.
+""".
 await_prometheus_started() ->
     receive
         Msg ->

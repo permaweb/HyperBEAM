@@ -1,5 +1,5 @@
-%%% @doc The module with utilities for transaction creation, signing, and verification.
 -module(ar_tx).
+-moduledoc "The module with utilities for transaction creation, signing, and verification.".
 
 -export([new/4, new/5, sign/2, verify/1, verify_tx_id/2]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
@@ -10,7 +10,9 @@
 %%% Public interface.
 %%%===================================================================
 
-%% @doc Create a new transaction.
+-doc """
+Create a new transaction.
+""". 
 new(Dest, Reward, Qty, Last) ->
     #tx{
         id = crypto:strong_rand_bytes(32),
@@ -34,18 +36,24 @@ new(Dest, Reward, Qty, Last, SigType) ->
         signature_type = SigType
     }.
 
-%% @doc Cryptographically sign (claim ownership of) a transaction.
+-doc """
+Cryptographically sign (claim ownership of) a transaction.
+""". 
 sign(TX, {PrivKey, {KeyType, Owner}}) ->
     NewTX = TX#tx{ owner = Owner, signature_type = KeyType },
     Sig = ar_wallet:sign(PrivKey, signature_data_segment(NewTX)),
     ID = crypto:hash(sha256, <<Sig/binary>>),
     NewTX#tx{ id = ID, signature = Sig }.
 
-%% @doc Verify whether a transaction is valid.
+-doc """
+Verify whether a transaction is valid.
+""". 
 verify(TX) ->
     do_verify(TX, verify_signature).
 
-%% @doc Verify the given transaction actually has the given identifier.
+-doc """
+Verify the given transaction actually has the given identifier.
+""". 
 verify_tx_id(ExpectedID, #tx{ id = ID } = TX) ->
     ExpectedID == ID andalso verify_signature(TX, verify_signature) andalso verify_hash(TX).
 
@@ -53,7 +61,9 @@ verify_tx_id(ExpectedID, #tx{ id = ID } = TX) ->
 %%% Private functions.
 %%%===================================================================
 
-%% @doc Generate the data segment to be signed for a given TX.
+-doc """
+Generate the data segment to be signed for a given TX.
+""". 
 signature_data_segment(TX) ->
     List = [
         << (integer_to_binary(TX#tx.format))/binary >>,
@@ -67,16 +77,22 @@ signature_data_segment(TX) ->
     ],
     ar_deep_hash:hash(List).
 
-%% @doc Verify the transaction's signature.
+-doc """
+Verify the transaction's signature.
+""". 
 verify_signature(TX = #tx{ signature_type = SigType }, verify_signature) ->
     SignatureDataSegment = signature_data_segment(TX),
     ar_wallet:verify({SigType, TX#tx.owner}, SignatureDataSegment, TX#tx.signature).
 
-%% @doc Verify that the transaction's ID is a hash of its signature.
+-doc """
+Verify that the transaction's ID is a hash of its signature.
+""". 
 verify_hash(#tx{ signature = Sig, id = ID }) ->
     ID == crypto:hash(sha256, << Sig/binary >>).
 
-%% @doc Verify transaction.
+-doc """
+Verify transaction.
+""". 
 do_verify(TX, VerifySignature) ->
     From = ar_wallet:to_address(TX#tx.owner, TX#tx.signature_type),
     Checks = [

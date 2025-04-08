@@ -1,15 +1,17 @@
-%%% @doc This module implements HTTP Message Signatures as described in RFC-9421
-%%% (https://datatracker.ietf.org/doc/html/rfc9421), as an AO-Core device.
-%%% It implements the codec standard (from/1, to/1), as well as the optional
-%%% commitment functions (id/3, sign/3, verify/3). The commitment functions
-%%% are found in this module, while the codec functions are relayed to the 
-%%% `dev_codec_httpsig_conv' module.
 -module(dev_codec_httpsig).
-%%% Device API
+-moduledoc """
+This module implements HTTP Message Signatures as described in RFC-9421
+(https://datatracker.ietf.org/doc/html/rfc9421), as an AO-Core device.
+It implements the codec standard (from/1, to/1), as well as the optional
+commitment functions (id/3, sign/3, verify/3). The commitment functions
+are found in this module, while the codec functions are relayed to the 
+`dev_codec_httpsig_conv' module.
+""".
+%% Device API
 -export([id/3, commit/3, committed/3, verify/3, reset_hmac/1, public_keys/1]).
-%%% Codec API functions
+%% Codec API functions
 -export([to/1, from/1]).
-%%% Public API functions
+%% Public API functions
 -export([add_content_digest/1]).
 -export([add_derived_specifiers/1, remove_derived_specifiers/1]).
 % https://datatracker.ietf.org/doc/html/rfc9421#section-2.2.7-14
@@ -39,8 +41,8 @@
 	{binary(), integer() | boolean() | {string | token | binary, binary()}}
 }.
 
-%%% A list of components that are `derived' in the context of RFC-9421 from the
-%%% request message.
+%% A list of components that are `derived' in the context of RFC-9421 from the
+%% request message.
 -define(DERIVED_COMPONENTS, [
     <<"method">>,
     <<"target-uri">>,
@@ -53,47 +55,47 @@
     <<"status">>
 ]).
 
-%%% Routing functions for the `dev_codec_httpsig_conv' module
+%% Routing functions for the `dev_codec_httpsig_conv' module
 to(Msg) -> dev_codec_httpsig_conv:to(Msg).
 from(Msg) -> dev_codec_httpsig_conv:from(Msg).
 
-%%% A map that contains signature parameters metadata as described
-%%% in https://datatracker.ietf.org/doc/html/rfc9421#name-signature-parameters
-%%%
-%%% All values are optional, but in our use-case "alg" and "keyid" will
-%%% almost always be provided.
-%%%
-%%% #{
-%%% 	created => 1733165109, % a unix timestamp
-%%% 	expires => 1733165209, % a unix timestamp
-%%% 	nonce => <<"foobar">,
-%%% 	alg => <<"rsa-pss-sha512">>,
-%%% 	keyid => <<"6eVuWgpNgv3bxfNgFrIiTkzE8Yb0V2omShxS4uKyzpw">>
-%%% 	tag => <<"HyperBEAM">>
-%%% }
+%% A map that contains signature parameters metadata as described
+%% in https://datatracker.ietf.org/doc/html/rfc9421#name-signature-parameters
+
+%% All values are optional, but in our use-case "alg" and "keyid" will
+%% almost always be provided.
+
+%% #{
+%% 	created => 1733165109, % a unix timestamp
+%% 	expires => 1733165209, % a unix timestamp
+%% 	nonce => <<"foobar">,
+%% 	alg => <<"rsa-pss-sha512">>,
+%% 	keyid => <<"6eVuWgpNgv3bxfNgFrIiTkzE8Yb0V2omShxS4uKyzpw">>
+%% 	tag => <<"HyperBEAM">>
+%% }
 -type signature_params() ::
     #{atom() | binary() | string() => binary() | integer()}.
 
-%%% The state encapsulated as the "Authority".
-%%% It includes an ordered list of parsed component identifiers, used for 
-%%% extracting values from the Request/Response Message Context, as well as 
-%%% the signature parameters used when creating the signature and encode in 
-%%% the signature base.
-%%%
-%%% This is effectively the State of an Authority, used to sign a Request/Response 
-%%% Message Context.
-%%%
-%%% #{
-%%% 	component_identifiers => [{item, {string, <<"@method">>}, []}]
-%%% 	sig_params => #{
-%%% 		created => 1733165109, % a unix timestamp
-%%% 		expires => 1733165209, % a unix timestamp
-%%% 		nonce => <<"foobar">,
-%%% 		alg => <<"rsa-pss-sha512">>,
-%%% 		keyid => <<"6eVuWgpNgv3bxfNgFrIiTkzE8Yb0V2omShxS4uKyzpw">>
-%%% 		tag => <<"HyperBEAM">>
-%%% 	}
-%%% }
+%% The state encapsulated as the "Authority".
+%% It includes an ordered list of parsed component identifiers, used for 
+%% extracting values from the Request/Response Message Context, as well as 
+%% the signature parameters used when creating the signature and encode in 
+%% the signature base.
+
+%% This is effectively the State of an Authority, used to sign a Request/Response 
+%% Message Context.
+
+%% #{
+%% 	component_identifiers => [{item, {string, <<"@method">>}, []}]
+%% 	sig_params => #{
+%% 		created => 1733165109, % a unix timestamp
+%% 		expires => 1733165209, % a unix timestamp
+%% 		nonce => <<"foobar">,
+%% 		alg => <<"rsa-pss-sha512">>,
+%% 		keyid => <<"6eVuWgpNgv3bxfNgFrIiTkzE8Yb0V2omShxS4uKyzpw">>
+%% 		tag => <<"HyperBEAM">>
+%% 	}
+%% }
 -type authority_state() :: #{
 	component_identifiers => [component_identifier()],
 	% TODO: maybe refine this to be more explicit w.r.t valid signature params
@@ -111,10 +113,12 @@ id(Msg, _Params, _Opts) ->
             {ok, hb_util:human_id(ID)}
     end.
 
-%% @doc Find the ID of the message, which is the hmac of the fields referenced in
-%% the signature and signature input. If the message already has a signature-input,
-%% directly, it is treated differently: We relabel it as `x-signature-input' to
-%% avoid key collisions.
+-doc """
+Find the ID of the message, which is the hmac of the fields referenced in
+the signature and signature input. If the message already has a signature-input,
+directly, it is treated differently: We relabel it as `x-signature-input' to
+avoid key collisions.
+""".
 find_id(Msg = #{ <<"commitments">> := Comms }) when map_size(Comms) > 1 ->
     #{ <<"commitments">> := CommsWithoutHmac } =
         hb_message:without_commitments(
@@ -149,14 +153,16 @@ find_id(Msg) ->
     ?event({no_id, Msg}),
     {not_found, Msg}.
 
-%% @doc Main entrypoint for signing a HTTP Message, using the standardized format.
+-doc """
+Main entrypoint for signing a HTTP Message, using the standardized format.
+""".
 commit(MsgToSign, _Req, Opts) ->
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     NormMsg = hb_ao:normalize_keys(MsgToSign),
     % The hashpath, if present, is encoded as a HTTP Sig tag,
     % added as a field on the commitment, and then the field is removed from the Msg,
     % so that it is not included in the actual signature matierial.
-    %
+    
     % In this sense, the hashpath is a property of the commitment
     % and the signature metadata, not the message itself, being signed
     % See https://datatracker.ietf.org/doc/html/rfc9421#section-2.3-4.12
@@ -201,9 +207,11 @@ commit(MsgToSign, _Req, Opts) ->
         OldCommitments#{ ID => Commitment }
     }).
 
-%% @doc Return the list of committed keys from a message. The message will have
-%% had the `commitments' key removed and the signature inputs added to the
-%% root. Subsequently, we can parse that to get the list of committed keys.
+-doc """
+Return the list of committed keys from a message. The message will have
+had the `commitments' key removed and the signature inputs added to the
+root. Subsequently, we can parse that to get the list of committed keys.
+""".
 committed(RawMsg, Req, Opts) ->
     Msg = to(RawMsg),
     case maps:get(<<"signature-input">>, Msg, none) of
@@ -236,8 +244,10 @@ do_committed(SigInputStr, Msg, _Req, _Opts) ->
         true -> {ok, SignedWithImplicit ++ committed_from_body(Msg)}
     end.
 
-%% @doc Return the list of committed keys from a message that are derived from
-%% the body components.
+-doc """
+Return the list of committed keys from a message that are derived from
+the body components.
+""".
 committed_from_body(Msg) ->
     % Body and inline-body-key are always committed if the
     % content-digest is present.
@@ -279,7 +289,9 @@ committed_from_body(Msg) ->
                 lists:sort(lists:uniq(Tops))
         end.
 
-%% @doc If the `body' key is present, replace it with a content-digest.
+-doc """
+If the `body' key is present, replace it with a content-digest.
+""".
 add_content_digest(Msg) ->
     case maps:get(<<"body">>, Msg, not_found) of
         not_found -> Msg;
@@ -298,15 +310,17 @@ add_content_digest(Msg) ->
             }
     end.
 
-%% @doc Convert an address to a signature name that is short, unique to the
-%% address, and lowercase.
+-doc """
+Convert an address to a signature name that is short, unique to the
+address, and lowercase.
+""".
 -spec address_to_sig_name(binary()) -> binary().
 address_to_sig_name(Address) when ?IS_ID(Address) ->
     <<"http-sig-", (hb_util:to_hex(binary:part(hb_util:native_id(Address), 1, 8)))/binary>>;
 address_to_sig_name(OtherRef) ->
     OtherRef.
 
-%%@doc Ensure that the commitments and hmac are properly encoded
+-doc "Ensure that the commitments and hmac are properly encoded".
 reset_hmac(RawMsg) ->
     Msg = hb_message:convert(RawMsg, tabm, #{}),
     WithoutHmac =
@@ -383,8 +397,10 @@ sig_name_from_dict(DictBin) ->
     [{SigNameFromDict, _}] = hb_structured_fields:parse_dictionary(DictBin),
     SigNameFromDict.
 
-%% @doc Generate the ID of the message, with the current signature and signature
-%% input as the components for the hmac.
+-doc """
+Generate the ID of the message, with the current signature and signature
+input as the components for the hmac.
+""".
 hmac(Msg) ->
     % The message already has a signature and signature input, so we can use
     % just those as the components for the hmac
@@ -429,9 +445,11 @@ hmac(Msg) ->
     ?event({hmac_result, {string, hb_util:human_id(HMacValue)}}),
     {ok, HMacValue}.
 
-%% @doc Verify different forms of httpsig committed messages. `dev_message:verify'
-%% already places the keys from the commitment message into the root of the
-%% message.
+-doc """
+Verify different forms of httpsig committed messages. `dev_message:verify'
+already places the keys from the commitment message into the root of the
+message.
+""".
 verify(MsgToVerify, #{ <<"commitment">> := ExpectedID, <<"alg">> := <<"hmac-sha256">> }, _Opts) ->
     % Verify a hmac on the message
     ?event({verify_hmac, {target, MsgToVerify}, {expected_id, ExpectedID}}),
@@ -527,7 +545,9 @@ public_keys(Commitment) ->
         hb_structured_fields:parse_dictionary(SigInputs)
     ).
 
-%%% @doc A helper to validate and produce an "Authority" State
+-doc """
+A helper to validate and produce an "Authority" State
+""".
 -spec authority(
 	[binary() | component_identifier()],
 	#{binary() => binary() | integer()},
@@ -551,9 +571,11 @@ authority(ComponentIdentifiers, SigParams, KeyPair = {{_, _, _}, {_, _}}) ->
 		key_pair => KeyPair
 	}.
 
-%% @doc Takes a list of keys that will be used in the signature inputs and 
-%% ensures that they have deterministic sorting, as well as the coorect
-%% component identifiers if applicable.
+-doc """
+Takes a list of keys that will be used in the signature inputs and 
+ensures that they have deterministic sorting, as well as the coorect
+component identifiers if applicable.
+""".
 normalize_component_identifiers(ComponentIdentifiers) ->
     Stripped =
         lists:map(
@@ -562,7 +584,9 @@ normalize_component_identifiers(ComponentIdentifiers) ->
         ),
     lists:sort(add_derived_specifiers(Stripped)).
 
-%% @doc Normalize key parameters to ensure their names are correct.
+-doc """
+Normalize key parameters to ensure their names are correct.
+""".
 add_derived_specifiers(ComponentIdentifiers) ->
     lists:flatten(
         lists:map(
@@ -576,16 +600,20 @@ add_derived_specifiers(ComponentIdentifiers) ->
         )
     ).
 
-%% @doc Remove derived specifiers from a list of component identifiers.
+-doc """
+Remove derived specifiers from a list of component identifiers.
+""".
 remove_derived_specifiers(ComponentIdentifiers) ->
     lists:map(
         fun(<<"@", Key/binary>>) -> Key; (Key) -> Key end,
         ComponentIdentifiers
     ).
 
-%% @doc using the provided Authority and Request/Response Messages Context,
-%% create a Name, Signature and SignatureInput that can be used to additional
-%% signatures to a corresponding HTTP Message
+-doc """
+using the provided Authority and Request/Response Messages Context,
+create a Name, Signature and SignatureInput that can be used to additional
+signatures to a corresponding HTTP Message
+""".
 -spec sign_auth(authority_state(), request_message(), response_message()) ->
     {ok, {binary(), binary(), binary()}}.
 sign_auth(Authority, Req, Res) ->
@@ -600,7 +628,9 @@ sign_auth(Authority, Req, Res) ->
 	Signature = ar_wallet:sign(Priv, SignatureBase, sha512),
 	{ok, {SignatureInput, Signature}}.
 
-%% @doc Add the signature parameters to the authority state
+-doc """
+Add the signature parameters to the authority state
+""".
 add_sig_params(Authority, {_KeyType, PubKey}) ->
     maps:put(
         sig_params,
@@ -614,18 +644,22 @@ add_sig_params(Authority, {_KeyType, PubKey}) ->
         Authority
     ).
 
-%%% @doc same verify/3, but with an empty Request Message Context
+-doc """
+same verify/3, but with an empty Request Message Context
+""".
 verify_auth(Verifier, Msg) ->
     % Assume that the Msg is a response message, and use an empty Request 
     % message context
-    %
+    
     % A corollary is that a signature containing any components from the request
     % will produce an error. It is the caller's responsibility to provide the
     % required Message Context in order to verify the signature
     verify_auth(Verifier, #{}, Msg).
 
-%%% @doc Given the signature name, and the Request/Response Message Context
-%%% verify the named signature by constructing the signature base and comparing
+-doc """
+Given the signature name, and the Request/Response Message Context
+verify the named signature by constructing the signature base and comparing
+""".
 verify_auth(#{ sig_name := SigName, key := Key }, Req, Res) ->
     % Signature and Signature-Input fields are each themself a dictionary 
     % structured field.
@@ -684,11 +718,13 @@ verify_auth(#{ sig_name := SigName, key := Key }, Req, Res) ->
         {SignatureErr, _} -> SignatureErr
     end.
 
-%%% @doc create the signature base that will be signed in order to create the
-%%% Signature and SignatureInput.
-%%%
-%%% This implements a portion of RFC-9421 see:
-%%% https://datatracker.ietf.org/doc/html/rfc9421#name-creating-the-signature-base
+-doc """
+create the signature base that will be signed in order to create the
+Signature and SignatureInput.
+""".
+
+%% This implements a portion of RFC-9421 see:
+%% https://datatracker.ietf.org/doc/html/rfc9421#name-creating-the-signature-base
 signature_base(Authority, Req, Res) when is_map(Authority) ->
     ComponentIdentifiers = maps:get(component_identifiers, Authority),
     ?event({component_identifiers_for_sig_base, ComponentIdentifiers}),
@@ -707,12 +743,12 @@ join_signature_base(ComponentsLine, ParamsLine) ->
         "\"@signature-params\": ", ParamsLine/binary
     >>.
 
-%%% @doc Given a list of Component Identifiers and a Request/Response Message
-%%% context, create the "signature-base-line" portion of the signature base
-%%% TODO: catch duplicate identifier:
-%%% https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.2.2.5.2.1
-%%%
-%%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.2.1
+-doc """
+Given a list of Component Identifiers and a Request/Response Message
+context, create the "signature-base-line" portion of the signature base
+""".
+%% TODO: catch duplicate identifier:
+%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.2.1
 signature_components_line(ComponentIdentifiers, Req, Res) ->
 	ComponentsLines = lists:map(
 		fun({Name, DirectBinary}) when is_binary(DirectBinary) andalso is_binary(Name) ->
@@ -727,26 +763,30 @@ signature_components_line(ComponentIdentifiers, Req, Res) ->
 	ComponentsLine = lists:join(<<"\n">>, ComponentsLines),
 	bin(ComponentsLine).
 
-%%% @doc construct the "signature-params-line" part of the signature base.
-%%%
-%%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.3.2.4
+-doc """
+construct the "signature-params-line" part of the signature base.
+""".
+
+%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.3.2.4
 signature_params_line(ComponentIdentifiers, SigParams) ->
 	SfList = sf_signature_params(ComponentIdentifiers, SigParams),
 	Res = hb_structured_fields:list(SfList),
 	bin(Res).
 
-%%% @doc Given a Component Identifier and a Request/Response Messages Context
-%%% extract the value represented by the Component Identifier, from the Messages
-%%% Context, and return the normalized form of the identifier, along with the
-%%% extracted encoded value.
-%%%
-%%% Generally speaking, a Component Identifier may reference a "Derived" Component,
-%%% a Message Field, or a sub-component of a Message Field.
-%%%
-%%% Since a Component Identifier is itself a Structured Field, it may also specify
-%%% parameters, which are used to describe behavior such as which Message to
-%%% derive a field or sub-component of the field, and how to encode the value as
-%%% part of the signature base.
+-doc """
+Given a Component Identifier and a Request/Response Messages Context
+extract the value represented by the Component Identifier, from the Messages
+Context, and return the normalized form of the identifier, along with the
+extracted encoded value.
+""".
+
+%% Generally speaking, a Component Identifier may reference a "Derived" Component,
+%% a Message Field, or a sub-component of a Message Field.
+
+%% Since a Component Identifier is itself a Structured Field, it may also specify
+%% parameters, which are used to describe behavior such as which Message to
+%% derive a field or sub-component of the field, and how to encode the value as
+%% part of the signature base.
 identifier_to_component(Identifier, Req, Res) when is_list(Identifier) ->
 	identifier_to_component(list_to_binary(Identifier), Req, Res);
 identifier_to_component(Identifier, Req, Res) when is_atom(Identifier) ->
@@ -764,14 +804,16 @@ identifier_to_component(ParsedIdentifier = {item, {X, Value}, Params}, Req, Res)
 		_ -> extract_field(ParsedIdentifier, Req, Res)
 	end.
 
-%%% @doc Given a Component Identifier and a Request/Response Messages Context
-%%% extract the value represented by the Component Identifier, from the Messages
-%%% Context, specifically a field on a Message within the Messages Context,
-%%% and return the normalized form of the identifier, along with the extracted
-%%% encoded value.
-%%%
-%%% This implements a portion of RFC-9421
-%%% See https://datatracker.ietf.org/doc/html/rfc9421#name-http-fields
+-doc """
+Given a Component Identifier and a Request/Response Messages Context
+extract the value represented by the Component Identifier, from the Messages
+Context, specifically a field on a Message within the Messages Context,
+and return the normalized form of the identifier, along with the extracted
+encoded value.
+""".
+
+%% This implements a portion of RFC-9421
+%% See https://datatracker.ietf.org/doc/html/rfc9421#name-http-fields
 extract_field({item, {_Kind, IParsed}, IParams}, Req, Res) ->
 	IsStrictFormat = find_strict_format_param(IParams),
 	IsByteSequenceEncoded = find_byte_sequence_param(IParams),
@@ -824,8 +866,10 @@ extract_field({item, {_Kind, IParsed}, IParams}, Req, Res) ->
 			end
 	end.
 
-%%% @doc Extract values from the field and return the normalized field,
-%%% along with encoded value
+-doc """
+Extract values from the field and return the normalized field,
+along with encoded value
+""".
 extract_field_value(RawFields, [Key, IsStrictFormat, IsByteSequenceEncoded]) ->
 	% TODO: (maybe this already works?) empty string for empty header
 	HasKey = case Key of false -> false; _ -> true end,
@@ -851,7 +895,7 @@ extract_field_value(RawFields, [Key, IsStrictFormat, IsByteSequenceEncoded]) ->
 				_ ->
                     % In all cases, multiple fields MUST be combined
                     % into a single data structure, before serialization,
-                    %
+                    
                     % See https://datatracker.ietf.org/doc/html/rfc9421#section-2.1.1-2
                     % And https://datatracker.ietf.org/doc/html/rfc9421#section-2.1.2-2
 					Combined = bin(lists:join(<<", ">>, RawFields)),
@@ -878,8 +922,10 @@ extract_field_value(RawFields, [Key, IsStrictFormat, IsByteSequenceEncoded]) ->
 			end
 	end.
 
-%%% @doc Extract a value from a Structured Field, and return the normalized field,
-%%% along with the encoded value
+-doc """
+Extract a value from a Structured Field, and return the normalized field,
+along with the encoded value
+""".
 extract_dictionary_field_value(StructuredField = [Elem | _Rest], Key) ->
 	case Elem of
 		{Name, _} when is_binary(Name) ->
@@ -904,14 +950,16 @@ extract_dictionary_field_value(StructuredField = [Elem | _Rest], Key) ->
             }
 	end.
 
-%%% @doc Given a Component Identifier and a Request/Response Messages Context
-%%% extract the value represented by the Component Identifier, from the Messages
-%%% Context, specifically a "Derived" Component within the Messages Context,
-%%% and return the normalized form of the identifier, along with the extracted
-%%% encoded value.
-%%%
-%%% This implements a portion of RFC-9421
-%%% See https://datatracker.ietf.org/doc/html/rfc9421#name-derived-components
+-doc """
+Given a Component Identifier and a Request/Response Messages Context
+extract the value represented by the Component Identifier, from the Messages
+Context, specifically a "Derived" Component within the Messages Context,
+and return the normalized form of the identifier, along with the extracted
+encoded value.
+""".
+
+%% This implements a portion of RFC-9421
+%% See https://datatracker.ietf.org/doc/html/rfc9421#name-derived-components
 derive_component(Identifier, Req, Res) when map_size(Res) == 0 ->
 	derive_component(Identifier, Req, Res, req);
 derive_component(Identifier, Req, Res) ->
@@ -954,10 +1002,10 @@ derive_component({item, {_Kind, IParsed}, IParams}, Req, Res, Subject) ->
 						URI = uri_string:parse(maps:get(<<"path">>, Req)),
 						% If message contains the absolute form value, then
 						% the value must be the absolut url
-						%
+						
 						% TODO: maybe better way to distinguish besides a flag
 						% on the request?
-						%
+						
 						% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.2.5-10
 						RequestTarget =
 							case maps:get(is_absolute_form, Req, false) of
@@ -1036,14 +1084,16 @@ derive_component({item, {_Kind, IParsed}, IParams}, Req, Res, Subject) ->
 			end
 	end.
 
-%%%
-%%% Strucutured Field Utilities
-%%%
 
-%%% @doc construct the structured field Parameter for the signature parameter,
-%%% checking whether the parameter name is valid according RFC-9421
-%%% 
-%%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.3-3
+%% Strucutured Field Utilities
+
+
+-doc """
+construct the structured field Parameter for the signature parameter,
+checking whether the parameter name is valid according RFC-9421
+
+See https://datatracker.ietf.org/doc/html/rfc9421#section-2.3-3
+""".
 sf_signature_param({Name, Param}) ->
     NormalizedName = bin(Name),
     NormalizedNames = lists:map(fun bin/1, ?SIGNATURE_PARAMS),
@@ -1058,12 +1108,14 @@ sf_signature_param({Name, Param}) ->
         end
     end.
 
-%%% @doc construct the structured field List for the
-%%% "signature-params-line" part of the signature base.
-%%% 
-%%% Can be parsed into a binary by simply passing to hb_structured_fields:list/1
-%%%
-%%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.3.2.4
+-doc """
+construct the structured field List for the
+"signature-params-line" part of the signature base.
+
+Can be parsed into a binary by simply passing to hb_structured_fields:list/1
+""".
+
+%% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.3.2.4
 sf_signature_params(ComponentIdentifiers, SigParams) when is_map(SigParams) ->
     AsList = maps:to_list(SigParams),
     Sorted = lists:sort(fun({Key1, _}, {Key2, _}) -> Key1 < Key2 end, AsList),
@@ -1095,14 +1147,16 @@ sf_signature_params(ComponentIdentifiers, SigParams) when is_list(SigParams) ->
 		}
 	].
 
-%%% @doc Attempt to parse the binary into a data structure that represents
-%%% an HTTP Structured Field.
-%%%
-%%% Lacking some sort of "hint", there isn't a way to know which "kind" of
-%%% Structured Field the binary is, apriori. So we simply try each parser,
-%%% and return the first invocation that doesn't result in an error.
-%%%
-%%% If no parser is successful, then we return an error tuple
+-doc """
+Attempt to parse the binary into a data structure that represents
+an HTTP Structured Field.
+
+Lacking some sort of "hint", there isn't a way to know which "kind" of
+Structured Field the binary is, apriori. So we simply try each parser,
+and return the first invocation that doesn't result in an error.
+
+If no parser is successful, then we return an error tuple
+""".
 sf_parse(Raw) when is_list(Raw) -> sf_parse(list_to_binary(Raw));
 sf_parse(Raw) when is_binary(Raw) ->
 	Parsers = [
@@ -1121,8 +1175,10 @@ sf_parse([Parser | Rest], Raw) ->
         Parsed -> {ok, Parsed}
     end.
 
-%%% @doc Attempt to encode the data structure into an HTTP Structured Field.
-%%% This is the inverse of sf_parse.
+-doc """
+Attempt to encode the data structure into an HTTP Structured Field.
+This is the inverse of sf_parse.
+""".
 sf_encode(StructuredField = {list, _, _}) ->
 	% The value is an inner_list, and so needs to be wrapped with an outer list
 	% before being serialized
@@ -1148,7 +1204,9 @@ sf_encode(Serializer, StructuredField) ->
 		Parsed -> {ok, Parsed}
 	end.
 
-%%% @doc Attempt to parse the provided value into an HTTP Structured Field Item
+-doc """
+Attempt to parse the provided value into an HTTP Structured Field Item
+""".
 sf_item(SfItem = {item, {_Kind, _Parsed}, _Params}) ->
 	SfItem;
 sf_item(ComponentIdentifier) when is_list(ComponentIdentifier) ->
@@ -1156,10 +1214,12 @@ sf_item(ComponentIdentifier) when is_list(ComponentIdentifier) ->
 sf_item(ComponentIdentifier) when is_binary(ComponentIdentifier) ->
     {item, {string, ComponentIdentifier}, []}.
 
-%%% @doc Given a parameter Name, extract the Parameter value from the HTTP
-%%% Structured Field data structure.
-%%%
-%%% If no value is found, then false is returned
+-doc """
+Given a parameter Name, extract the Parameter value from the HTTP
+Structured Field data structure.
+""".
+
+%% If no value is found, then false is returned
 find_sf_param(Name, Params, Default) when is_list(Name) ->
     find_sf_param(list_to_binary(Name), Params, Default);
 find_sf_param(Name, Params, Default) ->
@@ -1172,10 +1232,10 @@ find_sf_param(Name, Params, Default) ->
 		{_, Value} -> Value
 	end.
 
-%%%
-%%% https://datatracker.ietf.org/doc/html/rfc9421#section-6.5.2-1
-%%% using functions allows encapsulating default values
-%%%
+
+%% https://datatracker.ietf.org/doc/html/rfc9421#section-6.5.2-1
+%% using functions allows encapsulating default values
+
 find_strict_format_param(Params) -> find_sf_param(<<"sf">>, Params, false).
 find_key_param(Params) -> find_sf_param(<<"key">>, Params, false).
 find_byte_sequence_param(Params) -> find_sf_param(<<"bs">>, Params, false).
@@ -1183,9 +1243,9 @@ find_trailer_param(Params) -> find_sf_param(<<"tr">>, Params, false).
 find_request_param(Params) -> find_sf_param(<<"req">>, Params, false).
 find_name_param(Params) -> find_sf_param(<<"name">>, Params, false).
 
-%%%
-%%% Data Utilities
-%%%
+
+%% Data Utilities
+
 
 % https://datatracker.ietf.org/doc/html/rfc9421#section-2.1-5
 trim_and_normalize(Bin) ->
@@ -1209,10 +1269,10 @@ bin(Item) when is_integer(Item) ->
 bin(Item) ->
     iolist_to_binary(Item).
 
-%%% @doc Recursively trim space characters from the beginning of the binary
+-doc """
+Recursively trim space characters from the beginning of the binary
+""".
 trim_ws(<<$\s, Bin/bits>>) -> trim_ws(Bin);
-%%% @doc No space characters at the beginning so now trim them from the end
-%%% recrusively
 trim_ws(Bin) -> trim_ws_end(Bin, byte_size(Bin) - 1).
 
 trim_ws_end(_, -1) ->
@@ -1229,14 +1289,16 @@ trim_ws_end(Value, N) ->
 			Trimmed
 	end.
 
-%%%
-%%% TESTS
-%%%
 
-%%% Integration Tests
+%% TESTS
 
-%% @doc Ensure that we can validate a signature on an extremely large and complex
-%% message that is sent over HTTP, signed with the codec.
+
+%% Integration Tests
+
+-doc """
+Ensure that we can validate a signature on an extremely large and complex
+message that is sent over HTTP, signed with the codec.
+""".
 validate_large_message_from_http_test() ->
     Node = hb_http_server:start_node(#{
         force_signed => true,
@@ -1302,7 +1364,7 @@ multicommitted_id_test() ->
     ?assert(hb_message:verify(Signed2, [Addr2, Addr1])),
     ?assert(hb_message:verify(Signed2, all)).
 
-%%% Unit Tests
+%% Unit Tests
 trim_ws_test() ->
 	?assertEqual(<<"hello world">>, trim_ws(<<"      hello world      ">>)),
 	?assertEqual(<<>>, trim_ws(<<"">>)),

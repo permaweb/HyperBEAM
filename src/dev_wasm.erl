@@ -1,39 +1,41 @@
-%%% @doc A device that executes a WASM image on messages using the Memory-64 
-%%% preview standard. In the backend, this device uses `beamr': An Erlang wrapper 
-%%% for WAMR, the WebAssembly Micro Runtime.
-%%% 
-%%% The device has the following requirements and interface:
-%%% ```
-%%%     M1/Init ->
-%%%         Assumes:
-%%%             M1/process
-%%%             M1/[Prefix]/image
-%%%         Generates:
-%%%             /priv/[Prefix]/instance
-%%%             /priv/[Prefix]/import-resolver
-%%%         Side-effects:
-%%%             Creates a WASM executor loaded in memory of the HyperBEAM node.
-%%% 
-%%%     M1/Compute ->
-%%%         Assumes:
-%%%             M1/priv/[Prefix]/instance
-%%%             M1/priv/[Prefix]/import-resolver
-%%%             M1/process
-%%%             M2/message
-%%%             M2/message/function OR M1/function
-%%%             M2/message/parameters OR M1/parameters
-%%%         Generates:
-%%%             /results/[Prefix]/type
-%%%             /results/[Prefix]/output
-%%%         Side-effects:
-%%%             Calls the WASM executor with the message and process.
-%%%     M1/[Prefix]/state ->
-%%%         Assumes:
-%%%             M1/priv/[Prefix]/instance
-%%%         Generates:
-%%%             Raw binary WASM state
-%%% '''
 -module(dev_wasm).
+-moduledoc """
+A device that executes a WASM image on messages using the Memory-64 
+preview standard. In the backend, this device uses `beamr': An Erlang wrapper 
+for WAMR, the WebAssembly Micro Runtime.
+
+The device has the following requirements and interface:
+```
+    M1/Init ->
+        Assumes:
+            M1/process
+            M1/[Prefix]/image
+        Generates:
+            /priv/[Prefix]/instance
+            /priv/[Prefix]/import-resolver
+        Side-effects:
+            Creates a WASM executor loaded in memory of the HyperBEAM node.
+
+    M1/Compute ->
+        Assumes:
+            M1/priv/[Prefix]/instance
+            M1/priv/[Prefix]/import-resolver
+            M1/process
+            M2/message
+            M2/message/function OR M1/function
+            M2/message/parameters OR M1/parameters
+        Generates:
+            /results/[Prefix]/type
+            /results/[Prefix]/output
+        Side-effects:
+            Calls the WASM executor with the message and process.
+    M1/[Prefix]/state ->
+        Assumes:
+            M1/priv/[Prefix]/instance
+        Generates:
+            Raw binary WASM state
+'''
+""".
 -export([info/2, init/3, compute/3, import/3, terminate/3, snapshot/3, normalize/3]).
 %%% API for other devices:
 -export([instance/3]).
@@ -42,14 +44,18 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Export all functions aside the `instance/3' function.
+-doc """
+Export all functions aside the `instance/3' function.
+""".
 info(_Msg1, _Opts) ->
     #{
         exclude => [instance]
     }.
 
-%% @doc Boot a WASM image on the image stated in the `process/image' field of
+-doc """
+Boot a WASM image on the image stated in the `process/image' field of
 %% the message.
+""".
 init(M1, M2, Opts) ->
     ?event(running_init),
     % Where we should read initial parameters from.
@@ -122,7 +128,9 @@ init(M1, M2, Opts) ->
         )
     }.
 
-%% @doc Take a BEAMR import call and resolve it using `hb_ao'.
+-doc """
+Take a BEAMR import call and resolve it using `hb_ao'.
+""".
 default_import_resolver(Msg1, Msg2, Opts) ->
     #{
         instance := WASM,
@@ -152,8 +160,10 @@ default_import_resolver(Msg1, Msg2, Opts) ->
     Response = hb_ao:get(results, Msg3, Opts),
     {ok, Response, NextState}.
 
-%% @doc Call the WASM executor with a message that has been prepared by a prior
+-doc """
+Call the WASM executor with a message that has been prepared by a prior
 %% pass.
+""".
 compute(RawM1, M2, Opts) ->
     % Normalize the message to have an open WASM instance, but no literal `State'.
     % The hashpath is not updated during this process. This allows us to take
@@ -233,8 +243,10 @@ compute(RawM1, M2, Opts) ->
         _ -> {ok, M1}
     end.
 
-%% @doc Normalize the message to have an open WASM instance, but no literal
+-doc """
+Normalize the message to have an open WASM instance, but no literal
 %% `State' key. Ensure that we do not change the hashpath during this process.
+""".
 normalize(RawM1, M2, Opts) ->
     ?event({normalize_raw_m1, RawM1}),
     M3 = 
@@ -270,7 +282,9 @@ normalize(RawM1, M2, Opts) ->
         end,
     dev_message:set(M3, #{ <<"snapshot">> => unset }, Opts).
 
-%% @doc Serialize the WASM state to a binary.
+-doc """
+Serialize the WASM state to a binary.
+""".
 snapshot(M1, M2, Opts) ->
     ?event(snapshot, generating_snapshot),
     Instance = instance(M1, M2, Opts),
@@ -281,7 +295,9 @@ snapshot(M1, M2, Opts) ->
         }
     }.
 
-%% @doc Tear down the WASM executor.
+-doc """
+Tear down the WASM executor.
+""".
 terminate(M1, M2, Opts) ->
     ?event(terminate_called_on_dev_wasm),
     Prefix = dev_stack:prefix(M1, M2, Opts),
@@ -294,21 +310,25 @@ terminate(M1, M2, Opts) ->
         Opts
     )}.
 
-%% @doc Get the WASM instance from the message. Note that this function is exported
+-doc """
+Get the WASM instance from the message. Note that this function is exported
 %% such that other devices can use it, but it is excluded from calls from AO-Core
 %% resolution directly.
+""".
 instance(M1, M2, Opts) ->
     Prefix = dev_stack:prefix(M1, M2, Opts),
     Path = <<Prefix/binary, "/instance">>,
     ?event({searching_for_instance, Path, M1}),
     hb_private:get(Path, M1, Opts#{ hashpath => ignore }).
 
-%% @doc Handle standard library calls by:
+-doc """
+Handle standard library calls by:
 %% 1. Adding the right prefix to the path from BEAMR.
 %% 2. Adding the state to the message at the stdlib path.
 %% 3. Resolving the adjusted-path-Msg2 against the added-state-Msg1.
 %% 4. If it succeeds, return the new state from the message.
 %% 5. If it fails with `not_found', call the stub handler.
+""".
 import(Msg1, Msg2, Opts) ->
     % 1. Adjust the path to the stdlib.
     ModName = hb_ao:get(<<"module">>, Msg2, Opts),
@@ -349,8 +369,10 @@ import(Msg1, Msg2, Opts) ->
             undefined_import_stub(Msg1, Msg2, Opts)
     end.
 
-%% @doc Log the call to the standard library as an event, and write the
+-doc """
+Log the call to the standard library as an event, and write the
 %% call details into the message.
+""".
 undefined_import_stub(Msg1, Msg2, Opts) ->
     ?event({unimplemented_dev_wasm_call, {msg1, Msg1}, {msg2, Msg2}}),
     Prefix = dev_stack:prefix(Msg1, Msg2, Opts),
@@ -400,9 +422,11 @@ input_prefix_test() ->
         hb_ao:resolve(Priv, <<"import-resolver">>, #{})
     ).
 
-%% @doc Test that realistic prefixing for a `dev_process' works --
+-doc """
+Test that realistic prefixing for a `dev_process' works --
 %% including both inputs (from `Process/') and outputs (to the 
 %% Device-Key) work
+""".
 process_prefixes_test() ->
     init(),
     Msg1 =

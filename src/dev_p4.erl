@@ -1,37 +1,39 @@
-%%% @doc The HyperBEAM core payment ledger. This module allows the operator to
-%%% specify another device that can act as a pricing mechanism for transactions
-%%% on the node, as well as orchestrating a payment ledger to calculate whether
-%%% the node should fulfil services for users.
-%%%
-%%% The device requires the following node message settings in order to function:
-%%%
-%%% - `p4_pricing_device': The device that will estimate the cost of a request.
-%%% - `p4_ledger_device': The device that will act as a payment ledger.
-%%%
-%%% The pricing device should implement the following keys:
-%%% ```
-%%%             GET /estimate?type=pre|post&body=[...]&request=RequestMessage
-%%%             GET /price?type=pre|post&body=[...]&request=RequestMessage
-%%% '''
-%%% 
-%%% The `body' key is used to pass either the request or response messages to the
-%%% device. The `type' key is used to specify whether the inquiry is for a request
-%%% (pre) or a response (post) object. Requests carry lists of messages that will
-%%% be executed, while responses carry the results of the execution. The `price'
-%%% key may return `infinity' if the node will not serve a user under any
-%%% circumstances. Else, the value returned by the `price' key will be passed to
-%%% the ledger device as the `amount' key.
-%%%
-%%% The ledger device should implement the following keys:
-%%% ```
-%%%             POST /credit?message=PaymentMessage&request=RequestMessage
-%%%             POST /debit?amount=PriceMessage&type=pre|post&request=RequestMessage
-%%% '''
-%%%
-%%% The `type' key is optional and defaults to `pre'. If `type' is set to `post',
-%%% the debit must be applied to the ledger, whereas the `pre' type is used to
-%%% check whether the debit would succeed before execution.
 -module(dev_p4).
+-moduledoc """
+The HyperBEAM core payment ledger. This module allows the operator to
+specify another device that can act as a pricing mechanism for transactions
+on the node, as well as orchestrating a payment ledger to calculate whether
+the node should fulfil services for users.
+
+The device requires the following node message settings in order to function:
+
+- `p4_pricing_device': The device that will estimate the cost of a request.
+- `p4_ledger_device': The device that will act as a payment ledger.
+
+The pricing device should implement the following keys:
+```
+            GET /estimate?type=pre|post&body=[...]&request=RequestMessage
+            GET /price?type=pre|post&body=[...]&request=RequestMessage
+'''
+
+The `body' key is used to pass either the request or response messages to the
+device. The `type' key is used to specify whether the inquiry is for a request
+(pre) or a response (post) object. Requests carry lists of messages that will
+be executed, while responses carry the results of the execution. The `price'
+key may return `infinity' if the node will not serve a user under any
+circumstances. Else, the value returned by the `price' key will be passed to
+the ledger device as the `amount' key.
+
+The ledger device should implement the following keys:
+```
+            POST /credit?message=PaymentMessage&request=RequestMessage
+            POST /debit?amount=PriceMessage&type=pre|post&request=RequestMessage
+'''
+
+The `type' key is optional and defaults to `pre'. If `type' is set to `post',
+the debit must be applied to the ledger, whereas the `pre' type is used to
+check whether the debit would succeed before execution.
+""".
 -export([preprocess/3, postprocess/3, balance/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -42,9 +44,11 @@
     #{ <<"template">> => <<"/~meta@1.0/*">> }
 ]).
 
-%% @doc Estimate the cost of a transaction and decide whether to proceed with
+-doc """
+Estimate the cost of a transaction and decide whether to proceed with
 %% a request. The default behavior if `pricing_device' or `p4_balances' are
 %% not set is to proceed, so it is important that a user initialize them.
+""".
 preprocess(State, Raw, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing_device">>, State, false, NodeMsg),
     LedgerDevice = hb_ao:get(<<"ledger_device">>, State, false, NodeMsg),
@@ -112,7 +116,9 @@ preprocess(State, Raw, NodeMsg) ->
             end
     end.
 
-%% @doc Postprocess the request after it has been fulfilled.
+-doc """
+Postprocess the request after it has been fulfilled.
+""".
 postprocess(State, RawResponse, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing_device">>, State, false, NodeMsg),
     LedgerDevice = hb_ao:get(<<"ledger_device">>, State, false, NodeMsg),
@@ -174,7 +180,9 @@ postprocess(State, RawResponse, NodeMsg) ->
             end
     end.
 
-%% @doc Get the balance of a user in the ledger.
+-doc """
+Get the balance of a user in the ledger.
+""".
 balance(_, Req, NodeMsg) ->
     Preprocessor =
         hb_opts:get(
@@ -196,8 +204,10 @@ balance(_, Req, NodeMsg) ->
             {error, Error}
     end.
 
-%% @doc The node operator may elect to make certain routes non-chargable, using 
+-doc """
+The node operator may elect to make certain routes non-chargable, using 
 %% the `routes' syntax also used to declare routes in `router@1.0'.
+""".
 is_chargable_req(Req, NodeMsg) ->
     NonChargableRoutes =
         hb_opts:get(
@@ -237,7 +247,9 @@ test_opts(Opts, PricingDev, LedgerDev) ->
         postprocessor => ProcessorMsg
     }.
 
-%% @doc Simple test of p4's capabilities with the `faff@1.0' device.
+-doc """
+Simple test of p4's capabilities with the `faff@1.0' device.
+""".
 faff_test() ->
     GoodWallet = ar_wallet:new(),
     BadWallet = ar_wallet:new(),
@@ -262,7 +274,9 @@ faff_test() ->
     ?assertEqual(<<"Hello, world!">>, Res),
     ?assertMatch({error, _}, hb_http:get(Node, BadSignedReq, #{})).
 
-%% @doc Test that a non-chargable route is not charged for.
+-doc """
+Test that a non-chargable route is not charged for.
+""".
 non_chargable_route_test() ->
     Wallet = ar_wallet:new(),
     Processor =

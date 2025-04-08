@@ -1,29 +1,31 @@
-%%% @doc A device that routes outbound messages from the node to their
-%%% appropriate network recipients via HTTP. All messages are initially
-%%% routed to a single process per node, which then load-balances them
-%%% between downstream workers that perform the actual requests.
-%%% 
-%%% The routes for the router are defined in the `routes' key of the `Opts',
-%%% as a precidence-ordered list of maps. The first map that matches the
-%%% message will be used to determine the route.
-%%% 
-%%% Multiple nodes can be specified as viable for a single route, with the
-%%% `Choose' key determining how many nodes to choose from the list (defaulting
-%%% to 1). The `Strategy' key determines the load distribution strategy,
-%%% which can be one of `Random', `By-Base', or `Nearest'. The route may also 
-%%% define additional parallel execution parameters, which are used by the
-%%% `hb_http' module to manage control of requests.
-%%% 
-%%% The structure of the routes should be as follows:
-%%% ```
-%%%     Node?: The node to route the message to.
-%%%     Nodes?: A list of nodes to route the message to.
-%%%     Strategy?: The load distribution strategy to use.
-%%%     Choose?: The number of nodes to choose from the list.
-%%%     Template?: A message template to match the message against, either as a
-%%%                map or a path regex.
-%%% '''
 -module(dev_router).
+-moduledoc """
+A device that routes outbound messages from the node to their
+appropriate network recipients via HTTP. All messages are initially
+routed to a single process per node, which then load-balances them
+between downstream workers that perform the actual requests.
+
+The routes for the router are defined in the `routes' key of the `Opts',
+as a precidence-ordered list of maps. The first map that matches the
+message will be used to determine the route.
+
+Multiple nodes can be specified as viable for a single route, with the
+`Choose' key determining how many nodes to choose from the list (defaulting
+to 1). The `Strategy' key determines the load distribution strategy,
+which can be one of `Random', `By-Base', or `Nearest'. The route may also 
+define additional parallel execution parameters, which are used by the
+`hb_http' module to manage control of requests.
+
+The structure of the routes should be as follows:
+```
+    Node?: The node to route the message to.
+    Nodes?: A list of nodes to route the message to.
+    Strategy?: The load distribution strategy to use.
+    Choose?: The number of nodes to choose from the list.
+    Template?: A message template to match the message against, either as a
+               map or a path regex.
+'''
+""".
 %%% Device API:
 -export([routes/3, route/2, route/3]).
 %%% Public utilities:
@@ -31,7 +33,9 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%% @doc Device function that returns all known routes.
+-doc """
+Device function that returns all known routes.
+""".
 routes(M1, M2, Opts) ->
     ?event({routes_msg, M1, M2}),
     Routes = hb_opts:get(routes, [], Opts),
@@ -67,27 +71,29 @@ routes(M1, M2, Opts) ->
             {ok, Routes}
     end.
 
-%% @doc Find the appropriate route for the given message. If we are able to 
-%% resolve to a single host+path, we return that directly. Otherwise, we return
-%% the matching route (including a list of nodes under `nodes') from the list of
-%% routes.
-%% 
-%% If we have a route that has multiple resolving nodes, check
-%% the load distribution strategy and choose a node. Supported strategies:
-%% ```
-%%       All:     Return all nodes (default).
-%%       Random:  Distribute load evenly across all nodes, non-deterministically.
-%%       By-Base: According to the base message's hashpath.
-%%       Nearest: According to the distance of the node's wallet address to the
-%%                base message's hashpath.
-%% '''
-%% `By-Base' will ensure that all traffic for the same hashpath is routed to the
-%% same node, minimizing work duplication, while `Random' ensures a more even
-%% distribution of the requests.
-%% 
-%% Can operate as a `~router@1.0' device, which will ignore the base message,
-%% routing based on the Opts and request message provided, or as a standalone
-%% function, taking only the request message and the `Opts' map.
+-doc """
+Find the appropriate route for the given message. If we are able to 
+resolve to a single host+path, we return that directly. Otherwise, we return
+the matching route (including a list of nodes under `nodes') from the list of
+routes.
+
+If we have a route that has multiple resolving nodes, check
+the load distribution strategy and choose a node. Supported strategies:
+```
+      All:     Return all nodes (default).
+      Random:  Distribute load evenly across all nodes, non-deterministically.
+      By-Base: According to the base message's hashpath.
+      Nearest: According to the distance of the node's wallet address to the
+               base message's hashpath.
+'''
+`By-Base' will ensure that all traffic for the same hashpath is routed to the
+same node, minimizing work duplication, while `Random' ensures a more even
+distribution of the requests.
+
+Can operate as a `~router@1.0' device, which will ignore the base message,
+routing based on the Opts and request message provided, or as a standalone
+function, taking only the request message and the `Opts' map.
+""".
 route(Msg, Opts) -> route(undefined, Msg, Opts).
 route(_, Msg, Opts) ->
     Routes = hb_opts:get(routes, [], Opts),
@@ -131,8 +137,10 @@ route(_, Msg, Opts) ->
             end
     end.
 
-%% @doc Extract the base message ID from a request message. Produces a single
-%% binary ID that can be used for routing decisions.
+-doc """
+Extract the base message ID from a request message. Produces a single
+binary ID that can be used for routing decisions.
+""".
 extract_base(#{ <<"path">> := Path }, Opts) ->
     extract_base(Path, Opts);
 extract_base(RawPath, Opts) when is_binary(RawPath) ->
@@ -146,7 +154,9 @@ extract_base(RawPath, Opts) when is_binary(RawPath) ->
             end
     end.
 
-%% @doc Generate a `uri' key for each node in a route.
+-doc """
+Generate a `uri' key for each node in a route.
+""".
 apply_routes(Msg, R, Opts) ->
     Nodes = hb_ao:get(<<"nodes">>, R, Opts),
     NodesWithRouteApplied =
@@ -162,12 +172,14 @@ apply_routes(Msg, R, Opts) ->
         ),
     R#{ <<"nodes">> => NodesWithRouteApplied }.
 
-%% @doc Apply a node map's rules for transforming the path of the message.
-%% Supports the following keys:
-%% - `opts': A map of options to pass to the request.
-%% - `prefix': The prefix to add to the path.
-%% - `suffix': The suffix to add to the path.
-%% - `replace': A regex to replace in the path.
+-doc """
+Apply a node map's rules for transforming the path of the message.
+Supports the following keys:
+- `opts': A map of options to pass to the request.
+- `prefix': The prefix to add to the path.
+- `suffix': The suffix to add to the path.
+- `replace': A regex to replace in the path.
+""".
 apply_route(Msg, Route = #{ <<"opts">> := Opts }) ->
     {ok, #{
         <<"opts">> => Opts,
@@ -185,7 +197,9 @@ apply_route(#{ <<"path">> := Path }, #{ <<"match">> := Match, <<"with">> := With
         _ -> {error, invalid_replace_args}
     end.
 
-%% @doc Find the first matching template in a list of known routes.
+-doc """
+Find the first matching template in a list of known routes.
+""".
 match_routes(ToMatch, Routes, Opts) ->
     match_routes(
         ToMatch,
@@ -213,14 +227,18 @@ match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
         false -> match_routes(ToMatch, Routes, Keys, Opts)
     end.
 
-%% @doc Check if a message matches a message template or path regex.
+-doc """
+Check if a message matches a message template or path regex.
+""".
 template_matches(ToMatch, Template) when is_map(Template) ->
     hb_message:match(Template, ToMatch, primary);
 template_matches(ToMatch, Regex) when is_binary(Regex) ->
     MsgPath = (hb_path:from_message(request, ToMatch)),
     hb_path:regex_matches(MsgPath, Regex).
 
-%% @doc Implements the load distribution strategies if given a cluster.
+-doc """
+Implements the load distribution strategies if given a cluster.
+""".
 choose(0, _, _, _, _) -> [];
 choose(N, <<"Random">>, _, Nodes, _Opts) ->
     Node = lists:nth(rand:uniform(length(Nodes)), Nodes),
@@ -268,9 +286,11 @@ choose(N, <<"Nearest">>, HashPath, Nodes, Opts) ->
         )
     ).
 
-%% @doc Calculate the minimum distance between two numbers
-%% (either progressing backwards or forwards), assuming a
-%% 256-bit field.
+-doc """
+Calculate the minimum distance between two numbers
+(either progressing backwards or forwards), assuming a
+256-bit field.
+""".
 field_distance(A, B) when is_binary(A) ->
     field_distance(binary_to_bignum(A), B);
 field_distance(A, B) when is_binary(B) ->
@@ -279,7 +299,9 @@ field_distance(A, B) ->
     AbsDiff = abs(A - B),
     min(AbsDiff, (1 bsl 256) - AbsDiff).
 
-%% @doc Find the node with the lowest distance to the given hashpath.
+-doc """
+Find the node with the lowest distance to the given hashpath.
+""".
 lowest_distance(Nodes) -> lowest_distance(Nodes, {undefined, infinity}).
 lowest_distance([], X) -> X;
 lowest_distance([{Node, Distance}|Nodes], {CurrentNode, CurrentDistance}) ->
@@ -290,7 +312,9 @@ lowest_distance([{Node, Distance}|Nodes], {CurrentNode, CurrentDistance}) ->
         _ -> lowest_distance(Nodes, {CurrentNode, CurrentDistance})
     end.
 
-%% @doc Cast a human-readable or native-encoded ID to a big integer.
+-doc """
+Cast a human-readable or native-encoded ID to a big integer.
+""".
 binary_to_bignum(Bin) when ?IS_ID(Bin) ->
     << Num:256/unsigned-integer >> = hb_util:native_id(Bin),
     Num.
@@ -320,8 +344,10 @@ strategy_suite_test_() ->
         [<<"Random">>, <<"By-Base">>, <<"Nearest">>]
     ).
 
-%% @doc Ensure that `By-Base' always chooses the same node for the same
-%% hashpath.
+-doc """
+Ensure that `By-Base' always chooses the same node for the same
+hashpath.
+""".
 by_base_determinism_test() ->
     FirstN = 5,
     Nodes = generate_nodes(5),

@@ -1,18 +1,22 @@
-%%% @doc A simple device that allows the operator to specify a price for a
-%%% request and then charge the user for it, on a per message basis.
-%%% The device's ledger is stored in the node message at `simple_pay_ledger`,
-%%% and can be topped-up by either the operator, or an external device. The 
-%%% price is specified in the node message at `simple_pay_price`.
-%%% This device acts as both a pricing device and a ledger device, by p4's
-%%% definition.
 -module(dev_simple_pay).
+-moduledoc """
+A simple device that allows the operator to specify a price for a
+request and then charge the user for it, on a per message basis.
+The device's ledger is stored in the node message at `simple_pay_ledger`,
+and can be topped-up by either the operator, or an external device. The 
+price is specified in the node message at `simple_pay_price`.
+This device acts as both a pricing device and a ledger device, by p4's
+definition.
+""".
 -export([estimate/3, debit/3, balance/3, topup/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Estimate the cost of a request by counting the number of messages in
-%% the request, then multiplying by the per-message price. The operator does
-%% not pay for their own requests.
+-doc """
+Estimate the cost of a request by counting the number of messages in
+the request, then multiplying by the per-message price. The operator does
+not pay for their own requests.
+""".
 estimate(_, EstimateReq, NodeMsg) ->
     Req = hb_ao:get(<<"request">>, EstimateReq, NodeMsg#{ hashpath => ignore }),
     ReqType = hb_ao:get(<<"type">>, EstimateReq, undefined, NodeMsg),
@@ -27,9 +31,11 @@ estimate(_, EstimateReq, NodeMsg) ->
             {ok, length(Messages) * hb_opts:get(simple_pay_price, 1, NodeMsg)}
     end.
 
-%% @doc Preprocess a request by checking the ledger and charging the user. We 
-%% can charge the user at this stage because we know statically what the price
-%% will be
+-doc """
+Preprocess a request by checking the ledger and charging the user. We 
+can charge the user at this stage because we know statically what the price
+will be
+""".
 debit(_, RawReq, NodeMsg) ->
     case hb_ao:get(<<"type">>, RawReq, undefined, NodeMsg) of
         <<"post">> -> {ok, true};
@@ -56,7 +62,9 @@ debit(_, RawReq, NodeMsg) ->
             end
     end.
 
-%% @doc Get the balance of a user in the ledger.
+-doc """
+Get the balance of a user in the ledger.
+""".
 balance(_, RawReq, NodeMsg) ->
     Target =
         case hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }) of
@@ -65,7 +73,9 @@ balance(_, RawReq, NodeMsg) ->
         end,
     {ok, get_balance(Target, NodeMsg)}.
 
-%% @doc Adjust a user's balance, normalizing their wallet ID first.
+-doc """
+Adjust a user's balance, normalizing their wallet ID first.
+""".
 set_balance(Signer, Amount, NodeMsg) ->
     NormSigner = hb_util:human_id(Signer),
     Ledger = hb_opts:get(simple_pay_ledger, #{}, NodeMsg),
@@ -89,13 +99,17 @@ set_balance(Signer, Amount, NodeMsg) ->
     ),
     {ok, NewMsg}.
 
-%% @doc Get the balance of a user in the ledger.
+-doc """
+Get the balance of a user in the ledger.
+""".
 get_balance(Signer, NodeMsg) ->
     NormSigner = hb_util:human_id(Signer),
     Ledger = hb_opts:get(simple_pay_ledger, #{}, NodeMsg),
     hb_ao:get(NormSigner, Ledger, 0, NodeMsg).
 
-%% @doc Top up the user's balance in the ledger.
+-doc """
+Top up the user's balance in the ledger.
+""".
 topup(_, Req, NodeMsg) ->
     ?event({topup, {req, Req}, {node_msg, NodeMsg}}),
     case is_operator(Req, NodeMsg) of
@@ -122,7 +136,9 @@ topup(_, Req, NodeMsg) ->
             {ok, get_balance(Recipient, NewNodeMsg)}
     end.
 
-%% @doc Check if the request is from the operator.
+-doc """
+Check if the request is from the operator.
+""".
 is_operator(Req, NodeMsg) ->
     Signers = hb_message:signers(Req),
     OperatorAddr = hb_util:human_id(hb_opts:get(operator, undefined, NodeMsg)),

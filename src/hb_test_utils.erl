@@ -1,15 +1,19 @@
-%%% @doc Simple utilities for testing HyperBEAM.
 -module(hb_test_utils).
+-moduledoc """
+Simple utilities for testing HyperBEAM.
+""".
 -export([suite_with_opts/2, run/4]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Run each test in a suite with each set of options. Start and reset
-%% the store(s) for each test. Expects suites to be a list of tuples with
-%% the test name, description, and test function.
-%% The list of `Opts' should contain maps with the `name' and `opts' keys.
-%% Each element may also contain a `skip' key with a list of test names to skip.
-%% They can also contain a `desc' key with a description of the options.
+-doc """
+Run each test in a suite with each set of options. Start and reset
+the store(s) for each test. Expects suites to be a list of tuples with
+the test name, description, and test function.
+The list of `Opts' should contain maps with the `name' and `opts' keys.
+Each element may also contain a `skip' key with a list of test names to skip.
+They can also contain a `desc' key with a description of the options.
+""".
 suite_with_opts(Suite, OptsList) ->
     lists:filtermap(
         fun(OptSpec = #{ name := _Name, opts := Opts, desc := ODesc}) ->
@@ -39,9 +43,11 @@ suite_with_opts(Suite, OptsList) ->
         OptsList
     ).
 
-%% @doc Determine if the environment satisfies the given test requirements.
-%% Requirements is a list of atoms, each corresponding to a module that must
-%% return true if it exposes an `enabled/0' function.
+-doc """
+Determine if the environment satisfies the given test requirements.
+Requirements is a list of atoms, each corresponding to a module that must
+return true if it exposes an `enabled/0' function.
+""".
 satisfies_requirements(Requirements) when is_map(Requirements) ->
     satisfies_requirements(maps:get(requires, Requirements, []));
 satisfies_requirements(Requirements) ->

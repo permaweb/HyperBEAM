@@ -1,9 +1,7 @@
-%%%-------------------------------------------------------------------
-%% @doc The main HyperBEAM application module.
-%% @end
-%%%-------------------------------------------------------------------
-
 -module(hb_app).
+-moduledoc """
+The main HyperBEAM application module.
+""".
 
 -behaviour(application).
 

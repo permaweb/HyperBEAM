@@ -1,19 +1,23 @@
-%%% @doc A codec for turning TABMs into/from flat Erlang maps that have 
-%%% (potentially multi-layer) paths as their keys, and a normal TABM binary as 
-%%% their value.
 -module(dev_codec_flat).
+-moduledoc """
+A codec for turning TABMs into/from flat Erlang maps that have 
+(potentially multi-layer) paths as their keys, and a normal TABM binary as 
+their value.
+""".
 -export([from/1, to/1, commit/3, verify/3, committed/3]).
-%%% Testing utilities
+%% Testing utilities
 -export([serialize/1, deserialize/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%%% Route signature functions to the `dev_codec_httpsig' module
+%% Route signature functions to the `dev_codec_httpsig' module
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
 committed(Msg, Req, Opts) -> dev_codec_httpsig:committed(Msg, Req, Opts).
 
-%% @doc Convert a flat map to a TABM.
+-doc """
+Convert a flat map to a TABM.
+""".
 from(Bin) when is_binary(Bin) -> Bin;
 from(Map) when is_map(Map) ->
     maps:fold(
@@ -44,7 +48,9 @@ inject_at_path([Key|Rest], Value, Map) ->
     SubMap = maps:get(Key, Map, #{}),
     maps:put(Key, inject_at_path(Rest, Value, SubMap), Map).
 
-%% @doc Convert a TABM to a flat map.
+-doc """
+Convert a TABM to a flat map.
+""".
 to(Bin) when is_binary(Bin) -> Bin;
 to(Map) when is_map(Map) ->
     maps:fold(
@@ -103,7 +109,7 @@ deserialize(Bin) when is_binary(Bin) ->
     ),
     {ok, hb_message:convert(Flat, <<"structured@1.0">>, <<"flat@1.0">>, #{})}.
 
-%%% Tests
+%% Tests
 
 simple_conversion_test() ->
     Flat = #{[<<"a">>] => <<"value">>},

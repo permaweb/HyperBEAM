@@ -1,20 +1,22 @@
-%%% @doc A simple scheduler scheme for AO.
-%%% This device expects a message of the form:
-%%%     Process: `#{ id, Scheduler: #{ Authority } }'
-%%% ```
-%%% It exposes the following keys for scheduling:
-%%%     `#{ method: GET, path: <<"/info">> }' ->
-%%%         Returns information about the scheduler.
-%%%     `#{ method: GET, path: <<"/slot">> }' -> `slot(Msg1, Msg2, Opts)'
-%%%         Returns the current slot for a process.
-%%%     `#{ method: GET, path: <<"/schedule">> }' -> `get_schedule(Msg1, Msg2, Opts)'
-%%%         Returns the schedule for a process in a cursor-traversable format.
-%%%    ` #{ method: POST, path: <<"/schedule">> }' -> `post_schedule(Msg1, Msg2, Opts)'
-%%%         Schedules a new message for a process, or starts a new scheduler
-%%%         for the given message.
-%%% '''
-
 -module(dev_scheduler).
+-moduledoc """
+A simple scheduler scheme for AO.
+This device expects a message of the form:
+    Process: `#{ id, Scheduler: #{ Authority } }'
+```
+It exposes the following keys for scheduling:
+    `#{ method: GET, path: <<"/info">> }' ->
+        Returns information about the scheduler.
+    `#{ method: GET, path: <<"/slot">> }' -> `slot(Msg1, Msg2, Opts)'
+        Returns the current slot for a process.
+    `#{ method: GET, path: <<"/schedule">> }' -> `get_schedule(Msg1, Msg2, Opts)'
+        Returns the schedule for a process in a cursor-traversable format.
+   ` #{ method: POST, path: <<"/schedule">> }' -> `post_schedule(Msg1, Msg2, Opts)'
+        Schedules a new message for a process, or starts a new scheduler
+        for the given message.
+'''
+""".
+
 %%% AO-Core API functions:
 -export([info/0]).
 %%% Local scheduling functions:
@@ -31,7 +33,9 @@
 %%% The timeout for a lookahead worker.
 -define(LOOKAHEAD_TIMEOUT, 200).
 
-%% @doc Helper to ensure that the environment is started.
+-doc """
+Helper to ensure that the environment is started.
+""".
 start() ->
     % We need the rocksdb backend to run for hb_cache module to work
     application:ensure_all_started(hb),
@@ -40,8 +44,10 @@ start() ->
     rand:seed(exsplus, {I1, I2, I3}),
     ok.
 
-%% @doc This device uses a default_handler to route requests to the correct
-%% function.
+-doc """
+This device uses a default_handler to route requests to the correct
+function.
+""".
 info() -> 
     #{
         exports =>
@@ -58,15 +64,19 @@ info() ->
         default => fun router/4
     }.
 
-%% @doc The default handler for the scheduler device.
+-doc """
+The default handler for the scheduler device.
+""".
 router(_, Msg1, Msg2, Opts) ->
     ?event({scheduler_router_called, {msg2, Msg2}, {opts, Opts}}),
     schedule(Msg1, Msg2, Opts).
 
-%% @doc Load the schedule for a process into the cache, then return the next
-%% assignment. Assumes that Msg1 is a `dev_process' or similar message, having
-%% a `Current-Slot' key. It stores a local cache of the schedule in the
-%% `priv/To-Process' key.
+-doc """
+Load the schedule for a process into the cache, then return the next
+assignment. Assumes that Msg1 is a `dev_process' or similar message, having
+a `Current-Slot' key. It stores a local cache of the schedule in the
+`priv/To-Process' key.
+""".
 next(Msg1, Msg2, Opts) ->
     ?event(debug_next, {scheduler_next_called, {msg1, Msg1}, {msg2, Msg2}}),
     ?event(next, started_next),
@@ -176,8 +186,10 @@ next(Msg1, Msg2, Opts) ->
             }
     end.
 
-%% @doc Non-device exported helper to get the cached assignments held in a
-%% process.
+-doc """
+Non-device exported helper to get the cached assignments held in a
+process.
+""".
 message_cached_assignments(Msg, Opts) ->
     hb_private:get(
         <<"scheduler@1.0/assignments">>,
@@ -186,8 +198,10 @@ message_cached_assignments(Msg, Opts) ->
         Opts
     ).
 
-%% @doc Spawn a new Erlang process to fetch the next assignments from the local
-%% cache, if we have them available.
+-doc """
+Spawn a new Erlang process to fetch the next assignments from the local
+cache, if we have them available.
+""".
 spawn_lookahead_worker(ProcID, Slot, Opts) ->
     Caller = self(),
     spawn(
@@ -208,11 +222,13 @@ spawn_lookahead_worker(ProcID, Slot, Opts) ->
         end
     ).
 
-%% @doc Check if we have a result from a lookahead worker or from our local
-%% cache. If we have a result in the local cache, we may also start a new
-%% lookahead worker to fetch the next assignments if we have them locally, 
-%% ahead of time. This can be enabled/disabled with the `scheduler_lookahead'
-%% option.
+-doc """
+Check if we have a result from a lookahead worker or from our local
+cache. If we have a result in the local cache, we may also start a new
+lookahead worker to fetch the next assignments if we have them locally, 
+ahead of time. This can be enabled/disabled with the `scheduler_lookahead'
+option.
+""".
 check_lookahead_and_local_cache(Msg1, ProcID, TargetSlot, Opts) when is_map(Msg1) ->
     case hb_private:get(<<"scheduler@1.0/lookahead-worker">>, Msg1, Opts) of
         not_found ->
@@ -271,7 +287,9 @@ check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
             {ok, Worker, Assignment}
     end.
 
-%% @doc Returns information about the entire scheduler.
+-doc """
+Returns information about the entire scheduler.
+""".
 status(_M1, _M2, _Opts) ->
     ?event(getting_scheduler_status),
     Wallet = dev_scheduler_registry:get_wallet(),
@@ -287,8 +305,10 @@ status(_M1, _M2, _Opts) ->
         }
     }.
 
-%% @doc Generate a new scheduler location record and register it. We both send 
-%% the new scheduler-location to the given registry, and return it to the caller.
+-doc """
+Generate a new scheduler location record and register it. We both send 
+the new scheduler-location to the given registry, and return it to the caller.
+""".
 register(_Msg1, Req, Opts) ->
     % Ensure that the request is signed by the operator.
     ?event({registering_scheduler, {msg1, _Msg1}, {req, Req}, {opts, Opts}}),
@@ -362,8 +382,10 @@ register(_Msg1, Req, Opts) ->
             {ok, Signed}
     end.
 
-%% @doc A router for choosing between getting the existing schedule, or
-%% scheduling a new message.
+-doc """
+A router for choosing between getting the existing schedule, or
+scheduling a new message.
+""".
 schedule(Msg1, Msg2, Opts) ->
     ?event({resolving_schedule_request, {msg2, Msg2}, {state_msg, Msg1}}),
     case hb_ao:get(<<"method">>, Msg2, <<"GET">>, Opts) of
@@ -371,9 +393,11 @@ schedule(Msg1, Msg2, Opts) ->
         <<"GET">> -> get_schedule(Msg1, Msg2, Opts)
     end.
 
-%% @doc Schedules a new message on the SU. Searches Msg1 for the appropriate ID,
-%% then uses the wallet address of the scheduler to determine if the message is
-%% for this scheduler. If so, it schedules the message and returns the assignment.
+-doc """
+Schedules a new message on the SU. Searches Msg1 for the appropriate ID,
+then uses the wallet address of the scheduler to determine if the message is
+for this scheduler. If so, it schedules the message and returns the assignment.
+""".
 post_schedule(Msg1, Msg2, Opts) ->
     ?event(scheduling_message),
     % Find the target message to schedule:
@@ -434,9 +458,11 @@ post_schedule(Msg1, Msg2, Opts) ->
             }
     end.
 
-%% @doc Post schedule the message. `Msg2` by this point has been refined to only
-%% committed keys, and to only include the `target' message that is to be
-%% scheduled.
+-doc """
+Post schedule the message. `Msg2` by this point has been refined to only
+committed keys, and to only include the `target' message that is to be
+scheduled.
+""".
 do_post_schedule(ProcID, PID, Msg2, Opts) ->
     % Should we verify the message again before scheduling?
     Verified =
@@ -472,7 +498,9 @@ do_post_schedule(ProcID, PID, Msg2, Opts) ->
             {ok, dev_scheduler_server:schedule(PID, Msg2)}
     end.
 
-%% @doc Locate the correct scheduling server for a given process.
+-doc """
+Locate the correct scheduling server for a given process.
+""".
 find_server(ProcID, Msg1, Opts) ->
     find_server(ProcID, Msg1, undefined, Opts).
 find_server(ProcID, Msg1, ToSched, Opts) ->
@@ -546,7 +574,9 @@ find_server(ProcID, Msg1, ToSched, Opts) ->
             end
     end.
 
-%% @doc If a hint is present in the string, return it. Else, return not_found.
+-doc """
+If a hint is present in the string, return it. Else, return not_found.
+""".
 get_hint(Str, Opts) when is_binary(Str) ->
     case hb_opts:get(scheduler_follow_hints, true, Opts) of
         true ->
@@ -563,7 +593,9 @@ get_hint(Str, Opts) when is_binary(Str) ->
     end;
 get_hint(_Str, _Opts) -> not_found.
 
-%% @doc Generate a redirect message to a scheduler.
+-doc """
+Generate a redirect message to a scheduler.
+""".
 generate_redirect(ProcID, SchedulerLocation, Opts) ->
     Variant = hb_ao:get(<<"variant">>, SchedulerLocation, <<"ao.N.1">>, Opts),
     ?event({generating_redirect, {proc_id, ProcID}, {variant, Variant}}),
@@ -590,8 +622,10 @@ generate_redirect(ProcID, SchedulerLocation, Opts) ->
         }
     }.
 
-%% @doc Take a process ID or target with a potential hint and return just the
-%% process ID.
+-doc """
+Take a process ID or target with a potential hint and return just the
+process ID.
+""".
 without_hint(Target) when ?IS_ID(Target) ->
     hb_util:human_id(Target);
 without_hint(Target) ->
@@ -600,7 +634,9 @@ without_hint(Target) ->
         _ -> throw({invalid_operation_target, Target})
     end.
 
-%% @doc Use the SchedulerLocation to the remote path and return a redirect.
+-doc """
+Use the SchedulerLocation to the remote path and return a redirect.
+""".
 find_remote_scheduler(ProcID, Scheduler, Opts) ->
     % Parse the scheduler location to see if it has a hint. If there is a hint,
     % we will use it to construct a redirect message.
@@ -633,7 +669,9 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
             end
     end.
 
-%% @doc Returns information about the current slot for a process.
+-doc """
+Returns information about the current slot for a process.
+""".
 slot(M1, M2, Opts) ->
     ?event({getting_current_slot, {msg, M1}}),
     ProcID = find_target_id(M1, M2, Opts),
@@ -659,7 +697,9 @@ slot(M1, M2, Opts) ->
             end
     end.
 
-%% @doc Get the current slot from a remote scheduler.
+-doc """
+Get the current slot from a remote scheduler.
+""".
 remote_slot(ProcID, Redirect, Opts) ->
     ?event({getting_remote_slot, {proc_id, ProcID}, {redirect, {explicit, Redirect}}}),
     Node = node_from_redirect(Redirect, Opts),
@@ -671,8 +711,10 @@ remote_slot(ProcID, Redirect, Opts) ->
         Opts
     ).
 
-%% @doc Get the current slot from a remote scheduler, based on the variant of
-%% the process's scheduler.
+-doc """
+Get the current slot from a remote scheduler, based on the variant of
+the process's scheduler.
+""".
 remote_slot(<<"ao.N.1">>, ProcID, Node, Opts) ->
     % The process is running on a mainnet AO-Core scheduler, so we can just
     % use the `/slot' endpoint to get the current slot.
@@ -728,9 +770,11 @@ remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
             {error, Res}
     end.
 
-%% @doc Generate and return a schedule for a process, optionally between
-%% two slots -- labelled as `from' and `to'. If the schedule is not local,
-%% we redirect to the remote scheduler or proxy based on the node opts.
+-doc """
+Generate and return a schedule for a process, optionally between
+two slots -- labelled as `from' and `to'. If the schedule is not local,
+we redirect to the remote scheduler or proxy based on the node opts.
+""".
 get_schedule(Msg1, Msg2, Opts) ->
     ProcID = find_target_id(Msg1, Msg2, Opts),
     From =
@@ -783,8 +827,10 @@ get_schedule(Msg1, Msg2, Opts) ->
             end
     end.
 
-%% @doc Get a schedule from a remote scheduler, but first read all of the 
-%% assignments from the local cache that we already know about.
+-doc """
+Get a schedule from a remote scheduler, but first read all of the 
+assignments from the local cache that we already know about.
+""".
 get_remote_schedule(RawProcID, From, To, Redirect, Opts) ->
     % If we are responding to a legacy scheduler request we must add one to the
     % `from' slot to account for the fact that the legacy scheduler gives us
@@ -807,8 +853,10 @@ get_remote_schedule(RawProcID, From, To, Redirect, Opts) ->
         Opts
     ).
 
-%% @doc Get a schedule from a remote scheduler, unless we already have already
-%% read all of the assignments from the local cache.
+-doc """
+Get a schedule from a remote scheduler, unless we already have already
+read all of the assignments from the local cache.
+""".
 do_get_remote_schedule(ProcID, LocalAssignments, From, To, _, Opts)
         when (To =/= undefined) andalso (From >= To) ->
     % We already have all of the assignments from the local cache. Return them
@@ -962,7 +1010,9 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
             {error, Res}
     end.
 
-%% @doc Cache a schedule received from a remote scheduler.
+-doc """
+Cache a schedule received from a remote scheduler.
+""".
 cache_remote_schedule(Schedule, Opts) ->
     Cacher =
         fun() ->
@@ -998,7 +1048,9 @@ cache_remote_schedule(Schedule, Opts) ->
         false -> Cacher()
     end.
 
-%% @doc Get the node URL from a redirect.
+-doc """
+Get the node URL from a redirect.
+""".
 node_from_redirect(Redirect, Opts) ->
     uri_string:recompose(
         (
@@ -1011,7 +1063,9 @@ node_from_redirect(Redirect, Opts) ->
         )#{path => <<"/">>}
     ).
 
-%% @doc Filter JSON assignment results from a remote legacy scheduler.
+-doc """
+Filter JSON assignment results from a remote legacy scheduler.
+""".
 filter_json_assignments(JSONRes, To, From) ->
     Edges = maps:get(<<"edges">>, JSONRes, []),
     Filtered =
@@ -1140,14 +1194,16 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
 
 %%% Private methods
 
-%% @doc Find the schedule ID from a given request. The precidence order for 
-%% search is as follows:
-%% [1. `ToSched/id' -- in the case of `POST schedule', handled locally]
-%% 2. `Msg2/target'
-%% 3. `Msg2/id' when `Msg2' has `type: Process'
-%% 4. `Msg1/process/id'
-%% 5. `Msg1/id' when `Msg1' has `type: Process'
-%% 6. `Msg2/id'
+-doc """
+Find the schedule ID from a given request. The precidence order for 
+search is as follows:
+[1. `ToSched/id' -- in the case of `POST schedule', handled locally]
+2. `Msg2/target'
+3. `Msg2/id' when `Msg2' has `type: Process'
+4. `Msg1/process/id'
+5. `Msg1/id' when `Msg1' has `type: Process'
+6. `Msg2/id'
+""".
 find_target_id(Msg1, Msg2, Opts) ->
     TempOpts = Opts#{ hashpath => ignore },
     Res = case hb_ao:resolve(Msg2, <<"target">>, TempOpts) of
@@ -1180,10 +1236,12 @@ find_target_id(Msg1, Msg2, Opts) ->
     ?event({found_id, {id, Res}, {msg1, Msg1}, {msg2, Msg2}}),
     Res.
 
-%% @doc Search the given base and request message pair to find the message to
-%% schedule. The precidence order for search is as follows:
-%% 1. `Msg2/body'
-%% 2. `Msg2'
+-doc """
+Search the given base and request message pair to find the message to
+schedule. The precidence order for search is as follows:
+1. `Msg2/body'
+2. `Msg2'
+""".
 find_message_to_schedule(_Msg1, Msg2, Opts) ->
     case hb_ao:resolve(Msg2, <<"body">>, Opts#{ hashpath => ignore }) of
         {ok, Body} ->
@@ -1191,7 +1249,9 @@ find_message_to_schedule(_Msg1, Msg2, Opts) ->
         _ -> Msg2
     end.
 
-%% @doc Generate a `GET /schedule' response for a process.
+-doc """
+Generate a `GET /schedule' response for a process.
+""".
 generate_local_schedule(Format, ProcID, From, To, Opts) ->
     ?event(
         {servicing_request_for_assignments,
@@ -1216,7 +1276,9 @@ generate_local_schedule(Format, ProcID, From, To, Opts) ->
     ?event({assignments_bundle_outbound, {format, Format}, {res, Res}}),
     Res.
 
-%% @doc Get the assignments for a process, and whether the request was truncated.
+-doc """
+Get the assignments for a process, and whether the request was truncated.
+""".
 get_local_assignments(ProcID, From, undefined, Opts) ->
     case dev_scheduler_cache:latest(ProcID, Opts) of
         not_found ->
@@ -1237,7 +1299,9 @@ get_local_assignments(ProcID, From, RequestedTo, Opts) ->
         ComputedTo < RequestedTo
     }.
 
-%% @doc Get the assignments for a process.
+-doc """
+Get the assignments for a process.
+""".
 read_local_assignments(_ProcID, From, To, _Opts) when From > To ->
     [];
 read_local_assignments(ProcID, CurrentSlot, To, Opts) ->
@@ -1257,13 +1321,17 @@ read_local_assignments(ProcID, CurrentSlot, To, Opts) ->
             ]
     end.
 
-%% @doc Returns the current state of the scheduler.
+-doc """
+Returns the current state of the scheduler.
+""".
 checkpoint(State) -> {ok, State}.
 
 %%% Tests
 
-%% @doc Generate a _transformed_ process message, not as they are generated 
-%% by users. See `dev_process' for examples of AO process messages.
+-doc """
+Generate a _transformed_ process message, not as they are generated 
+by users. See `dev_process' for examples of AO process messages.
+""".
 test_process() -> test_process(hb:wallet()).
 test_process(Wallet) when not is_binary(Wallet) ->
     test_process(hb_util:human_id(ar_wallet:to_address(Wallet)));

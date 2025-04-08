@@ -10,25 +10,35 @@
 %%% can be swapped out easily. The default implementation is a file-based
 %%% store.
 
-%% @doc Initialize the file system store with the given data directory.
+-doc """
+Initialize the file system store with the given data directory.
+""".
 start(#{ <<"prefix">> := DataDir }) ->
     ok = filelib:ensure_dir(DataDir).
 
-%% @doc Stop the file system store. Currently a no-op.
+-doc """
+Stop the file system store. Currently a no-op.
+""".
 stop(#{ <<"prefix">> := _DataDir }) ->
     ok.
 
-%% @doc The file-based store is always local, for now. In the future, we may
+-doc """
+The file-based store is always local, for now. In the future, we may
 %% want to allow that an FS store is shared across a cluster and thus remote.
+""".
 scope(_) -> local.
 
-%% @doc Reset the store by completely removing its directory and recreating it.
+-doc """
+Reset the store by completely removing its directory and recreating it.
+""".
 reset(#{ <<"prefix">> := DataDir }) ->
     % Use pattern that completely removes directory then recreates it
     os:cmd(binary_to_list(<< "rm -Rf ", DataDir/binary >>)),
     ?event({reset_store, {path, DataDir}}).
 
-%% @doc Read a key from the store, following symlinks as needed.
+-doc """
+Read a key from the store, following symlinks as needed.
+""".
 read(Opts, Key) ->
     read(add_prefix(Opts, resolve(Opts, Key))).
 read(Path) ->
@@ -46,27 +56,33 @@ read(Path) ->
 			end
 	end.
 
-%% @doc Write a value to the specified path in the store.
+-doc """
+Write a value to the specified path in the store.
+""".
 write(Opts, PathComponents, Value) ->
     Path = add_prefix(Opts, PathComponents),
     ?event({writing, Path, byte_size(Value)}),
     filelib:ensure_dir(Path),
     ok = file:write_file(Path, Value).
 
-%% @doc List contents of a directory in the store.
+-doc """
+List contents of a directory in the store.
+""".
 list(Opts, Path) ->
     file:list_dir(add_prefix(Opts, Path)).
 
-%% @doc Replace links in a path successively, returning the final path.
+-doc """
+Replace links in a path successively, returning the final path.
 %% Each element of the path is resolved in turn, with the result of each
 %% resolution becoming the prefix for the next resolution. This allows 
 %% paths to resolve across many links. For example, a structure as follows:
-%%
+%
 %%    /a/b/c: "Not the right data"
 %%    /a/b -> /a/alt-b
 %%    /a/alt-b/c: "Correct data"
-%%
+%
 %% will resolve "a/b/c" to "Correct data".
+""".
 resolve(Opts, RawPath) ->
     Res = resolve(Opts, "", hb_path:term_to_path_parts(hb_store:join(RawPath))),
     ?event({resolved, RawPath, Res}),
@@ -90,7 +106,9 @@ resolve(Opts, CurrPath, [Next|Rest]) ->
             resolve(Opts, PathPart, Rest)
     end.
 
-%% @doc Determine the type of a key in the store.
+-doc """
+Determine the type of a key in the store.
+""".
 type(Opts, Key) ->
     type(add_prefix(Opts, Key)).
 type(Path) ->
@@ -107,7 +125,9 @@ type(Path) ->
             end
     end.
 
-%% @doc Create a directory (group) in the store.
+-doc """
+Create a directory (group) in the store.
+""".
 make_group(Opts = #{ <<"prefix">> := _DataDir }, Path) ->
     P = add_prefix(Opts, Path),
     ?event({making_group, P}),
@@ -119,7 +139,9 @@ make_group(Opts = #{ <<"prefix">> := _DataDir }, Path) ->
         {error, eexist} -> ok
     end.
 
-%% @doc Create a symlink, handling the case where the link would point to itself.
+-doc """
+Create a symlink, handling the case where the link would point to itself.
+""".
 make_link(_, Link, Link) -> ok;
 make_link(Opts, Existing, New) ->
     ?event({symlink,
@@ -131,10 +153,14 @@ make_link(Opts, Existing, New) ->
         add_prefix(Opts, New)
     ).
 
-%% @doc Add the directory prefix to a path.
+-doc """
+Add the directory prefix to a path.
+""".
 add_prefix(#{ <<"prefix">> := Prefix }, Path) ->
     hb_store:join([Prefix, Path]).
 
-%% @doc Remove the directory prefix from a path.
+-doc """
+Remove the directory prefix from a path.
+""".
 remove_prefix(#{ <<"prefix">> := Prefix }, Path) ->
     hb_util:remove_common(Path, Prefix).

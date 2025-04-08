@@ -1,5 +1,7 @@
-%% @doc A collection of utility functions for building with HyperBEAM.
 -module(hb_util).
+-moduledoc """
+A collection of utility functions for building with HyperBEAM.
+""".
 -export([int/1, float/1, atom/1, bin/1, list/1]).
 -export([id/1, id/2, native_id/1, human_id/1, short_id/1, human_int/1, to_hex/1]).
 -export([key_to_atom/2]).
@@ -24,7 +26,9 @@
 %%% HTTP API into the correct types for the HyperBEAM runtime, if they are not
 %%% annotated by the user.
 
-%% @doc Coerce a string to an integer.
+-doc """
+Coerce a string to an integer.
+""".
 int(Str) when is_binary(Str) ->
     list_to_integer(binary_to_list(Str));
 int(Str) when is_list(Str) ->
@@ -32,7 +36,9 @@ int(Str) when is_list(Str) ->
 int(Int) when is_integer(Int) ->
     Int.
 
-%% @doc Coerce a string to a float.
+-doc """
+Coerce a string to a float.
+""".
 float(Str) when is_binary(Str) ->
     list_to_float(binary_to_list(Str));
 float(Str) when is_list(Str) ->
@@ -40,7 +46,9 @@ float(Str) when is_list(Str) ->
 float(Float) when is_float(Float) ->
     Float.
 
-%% @doc Coerce a string to an atom.
+-doc """
+Coerce a string to an atom.
+""".
 atom(Str) when is_binary(Str) ->
     list_to_existing_atom(binary_to_list(Str));
 atom(Str) when is_list(Str) ->
@@ -48,7 +56,9 @@ atom(Str) when is_list(Str) ->
 atom(Atom) when is_atom(Atom) ->
     Atom.
 
-%% @doc Coerce a value to a binary.
+-doc """
+Coerce a value to a binary.
+""".
 bin(Value) when is_atom(Value) ->
     atom_to_binary(Value, utf8);
 bin(Value) when is_integer(Value) ->
@@ -60,13 +70,17 @@ bin(Value) when is_list(Value) ->
 bin(Value) when is_binary(Value) ->
     Value.
 
-%% @doc Coerce a value to a list.
+-doc """
+Coerce a value to a list.
+""".
 list(Value) when is_binary(Value) ->
     binary_to_list(Value);
 list(Value) when is_list(Value) -> Value.
 
-%% @doc Unwrap a tuple of the form `{ok, Value}', or throw/return, depending on
-%% the value of the `error_strategy' option.
+-doc """
+Unwrap a tuple of the form `{ok, Value}', or throw/return, depending on
+the value of the `error_strategy' option.
+""".
 ok(Value) -> ok(Value, #{}).
 ok({ok, Value}, _Opts) -> Value;
 ok(Other, Opts) ->
@@ -75,10 +89,12 @@ ok(Other, Opts) ->
 		_ -> {unexpected, Other}
 	end.
 
-%% @doc Utility function to wait for a condition to be true. Optionally,
-%% you can pass a function that will be called with the current count of
-%% iterations, returning an integer that will be added to the count. Once the
-%% condition is true, the function will return the count.
+-doc """
+Utility function to wait for a condition to be true. Optionally,
+you can pass a function that will be called with the current count of
+iterations, returning an integer that will be added to the count. Once the
+condition is true, the function will return the count.
+""".
 until(Condition) ->
     until(Condition, 0).
 until(Condition, Count) ->
@@ -95,8 +111,10 @@ until(Condition, Fun, Count) ->
         true -> Count
     end.
 
-%% @doc Return the human-readable form of an ID of a message when given either
-%% a message explicitly, raw encoded ID, or an Erlang Arweave `tx' record.
+-doc """
+Return the human-readable form of an ID of a message when given either
+a message explicitly, raw encoded ID, or an Erlang Arweave `tx' record.
+""".
 id(Item) -> id(Item, unsigned).
 id(TX, Type) when is_record(TX, tx) ->
     encode(ar_bundles:id(TX, Type));
@@ -109,28 +127,38 @@ id(Bin, _) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
 id(Data, Type) when is_list(Data) ->
     id(list_to_binary(Data), Type).
 
-%% @doc Convert a binary to a lowercase.
+-doc """
+Convert a binary to a lowercase.
+""".
 to_lower(Str) ->
     string:lowercase(Str).
 
-%% @doc Is the given term a string list?
+-doc """
+Is the given term a string list?
+""".
 is_string_list(MaybeString) ->
     lists:all(fun is_integer/1, MaybeString).
 
-%% @doc Given a map or KVList, return a deterministically sorted list of its
-%% key-value pairs.
+-doc """
+Given a map or KVList, return a deterministically sorted list of its
+key-value pairs.
+""".
 to_sorted_list(Msg) when is_map(Msg) ->
     to_sorted_list(maps:to_list(Msg));
 to_sorted_list(Msg) when is_list(Msg) ->
     lists:sort(fun({Key1, _}, {Key2, _}) -> Key1 < Key2 end, Msg).
 
-%% @doc Given a map or KVList, return a deterministically ordered list of its keys.
+-doc """
+Given a map or KVList, return a deterministically ordered list of its keys.
+""".
 to_sorted_keys(Msg) when is_map(Msg) ->
     to_sorted_keys(maps:keys(Msg));
 to_sorted_keys(Msg) when is_list(Msg) ->
     lists:sort(fun(Key1, Key2) -> Key1 < Key2 end, Msg).
 
-%% @doc Convert keys in a map to atoms, lowering `-' to `_'.
+-doc """
+Convert keys in a map to atoms, lowering `-' to `_'.
+""".
 key_to_atom(Key, _Mode) when is_atom(Key) -> Key;
 key_to_atom(Key, Mode) ->
     WithoutDashes = binary:replace(Key, <<"-">>, <<"_">>, [global]),
@@ -143,21 +171,27 @@ key_to_atom(Key, Mode) ->
             end
     end.
 
-%% @doc Convert a human readable ID to a native binary ID. If the ID is already
-%% a native binary ID, it is returned as is.
+-doc """
+Convert a human readable ID to a native binary ID. If the ID is already
+a native binary ID, it is returned as is.
+""".
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
     decode(Bin);
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     Bin.
 
-%% @doc Convert a native binary ID to a human readable ID. If the ID is already
-%% a human readable ID, it is returned as is.
+-doc """
+Convert a native binary ID to a human readable ID. If the ID is already
+a human readable ID, it is returned as is.
+""".
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     encode(Bin);
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
     Bin.
 
-%% @doc Return a short ID for the different types of IDs used in AO-Core.
+-doc """
+Return a short ID for the different types of IDs used in AO-Core.
+""".
 short_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     short_id(human_id(Bin));
 short_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
@@ -183,30 +217,40 @@ short_id(<< "/", SingleElemHashpath/binary >>) ->
 short_id(Key) when byte_size(Key) < 43 -> Key;
 short_id(_) -> undefined.
 
-%% @doc Determine whether a binary is human-readable.
+-doc """
+Determine whether a binary is human-readable.
+""".
 is_human_binary(Bin) when is_binary(Bin) ->
     case unicode:characters_to_binary(Bin) of
         {error, _, _} -> false;
         _ -> true
     end.
 
-%% @doc Encode a binary to URL safe base64 binary string.
+-doc """
+Encode a binary to URL safe base64 binary string.
+""".
 encode(Bin) ->
     b64fast:encode(Bin).
 
-%% @doc Try to decode a URL safe base64 into a binary or throw an error when
-%% invalid.
+-doc """
+Try to decode a URL safe base64 into a binary or throw an error when
+invalid.
+""".
 decode(Input) ->
     b64fast:decode(Input).
 
-%% @doc Safely encode a binary to URL safe base64.
+-doc """
+Safely encode a binary to URL safe base64.
+""".
 safe_encode(Bin) when is_binary(Bin) ->
     encode(Bin);
 safe_encode(Bin) ->
     Bin.
 
-%% @doc Safely decode a URL safe base64 into a binary returning an ok or error
-%% tuple.
+-doc """
+Safely decode a URL safe base64 into a binary returning an ok or error
+tuple.
+""".
 safe_decode(E) ->
     try
         D = decode(E),
@@ -216,9 +260,11 @@ safe_decode(E) ->
         {error, invalid}
     end.
 
-%% @doc Convert a binary to a hex string. Do not use this for anything other than
-%% generating a lower-case, non-special character id. It should not become part of
-%% the core protocol. We use b64u for efficient encoding.
+-doc """
+Convert a binary to a hex string. Do not use this for anything other than
+generating a lower-case, non-special character id. It should not become part of
+the core protocol. We use b64u for efficient encoding.
+""".
 to_hex(Bin) when is_binary(Bin) ->
     to_lower(
         iolist_to_binary(
@@ -226,7 +272,9 @@ to_hex(Bin) when is_binary(Bin) ->
         )
     ).
 
-%% @doc Deep merge two maps, recursively merging nested maps.
+-doc """
+Deep merge two maps, recursively merging nested maps.
+""".
 deep_merge(Map1, Map2) when is_map(Map1), is_map(Map2) ->
     maps:fold(
         fun(Key, Value2, AccMap) ->
@@ -244,20 +292,26 @@ deep_merge(Map1, Map2) when is_map(Map1), is_map(Map2) ->
         Map2
     ).
 
-%% @doc Label a list of elements with a number.
+-doc """
+Label a list of elements with a number.
+""".
 number(List) ->
     lists:map(
         fun({N, Item}) -> {integer_to_binary(N), Item} end,
         lists:zip(lists:seq(1, length(List)), List)
     ).
 
-%% @doc Convert a list of elements to a map with numbered keys.
+-doc """
+Convert a list of elements to a map with numbered keys.
+""".
 list_to_numbered_map(List) ->
     maps:from_list(number(List)).
 
-%% @doc Take a message with numbered keys and convert it to a list of tuples
-%% with the associated key as an integer and a value. Optionally, it takes a
-%% standard map of HyperBEAM runtime options.
+-doc """
+Take a message with numbered keys and convert it to a list of tuples
+with the associated key as an integer and a value. Optionally, it takes a
+standard map of HyperBEAM runtime options.
+""".
 message_to_ordered_list(Message) ->
     message_to_ordered_list(Message, #{}).
 message_to_ordered_list(Message, _Opts) when ?IS_EMPTY_MESSAGE(Message) ->
@@ -288,9 +342,11 @@ message_to_ordered_list(Message, [Key|Keys], Key, Opts) ->
 message_to_ordered_list(_Message, [Key|_Keys], ExpectedKey, _Opts) ->
     throw({missing_key, {expected, ExpectedKey, {next, Key}}}).
 
-%% @doc Get the first element (the lowest integer key >= 1) of a numbered map.
-%% Optionally, it takes a specifier of whether to return the key or the value,
-%% as well as a standard map of HyperBEAM runtime options.
+-doc """
+Get the first element (the lowest integer key >= 1) of a numbered map.
+Optionally, it takes a specifier of whether to return the key or the value,
+as well as a standard map of HyperBEAM runtime options.
+""".
 hd(Message) -> hd(Message, value).
 hd(Message, ReturnType) ->
     hd(Message, ReturnType, #{ error_strategy => throw }).
@@ -310,7 +366,9 @@ hd(Message, [Key|Rest], Index, ReturnType, Opts) ->
             end
     end.
 
-%% @doc Find the value associated with a key in parsed a JSON structure list.
+-doc """
+Find the value associated with a key in parsed a JSON structure list.
+""".
 find_value(Key, List) ->
     find_value(Key, List, undefined).
 
@@ -325,9 +383,11 @@ find_value(Key, List, Default) ->
         false -> Default
     end.
 
-%% @doc Remove the common prefix from two strings, returning the remainder of the
-%% first string. This function also coerces lists to binaries where appropriate,
-%% returning the type of the first argument.
+-doc """
+Remove the common prefix from two strings, returning the remainder of the
+first string. This function also coerces lists to binaries where appropriate,
+returning the type of the first argument.
+""".
 remove_common(MainStr, SubStr) when is_binary(MainStr) and is_list(SubStr) ->
     remove_common(MainStr, list_to_binary(SubStr));
 remove_common(MainStr, SubStr) when is_list(MainStr) and is_binary(SubStr) ->
@@ -339,16 +399,20 @@ remove_common([X|Rest1], [X|Rest2]) ->
 remove_common([$/|Path], _) -> Path;
 remove_common(Rest, _) -> Rest.
 
-%% @doc Throw an exception if the Opts map has an `error_strategy' key with the
-%% value `throw'. Otherwise, return the value.
+-doc """
+Throw an exception if the Opts map has an `error_strategy' key with the
+value `throw'. Otherwise, return the value.
+""".
 maybe_throw(Val, Opts) ->
     case hb_ao:get(error_strategy, Opts) of
         throw -> throw(Val);
         _ -> Val
     end.
 
-%% @doc Print a message to the standard error stream, prefixed by the amount
-%% of time that has elapsed since the last call to this function.
+-doc """
+Print a message to the standard error stream, prefixed by the amount
+of time that has elapsed since the last call to this function.
+""".
 debug_print(X, Mod, Func, LineNum) ->
     Now = erlang:system_time(millisecond),
     Last = erlang:put(last_debug_print, Now),
@@ -361,7 +425,9 @@ debug_print(X, Mod, Func, LineNum) ->
         ]),
     X.
 
-%% @doc Generate the appropriate level of trace for a given call.
+-doc """
+Generate the appropriate level of trace for a given call.
+""".
 format_debug_trace(Mod, Func, Line) ->
     case hb_opts:get(debug_print_trace, false, #{}) of
         short ->
@@ -370,7 +436,9 @@ format_debug_trace(Mod, Func, Line) ->
             io_lib:format("~p:~w ~p", [Mod, Line, Func])
     end.
 
-%% @doc Convert a term to a string for debugging print purposes.
+-doc """
+Convert a term to a string for debugging print purposes.
+""".
 debug_fmt(X) -> debug_fmt(X, 0).
 debug_fmt(X, Indent) ->
     try do_debug_fmt(X, Indent)
@@ -453,11 +521,15 @@ do_debug_fmt(MsgList, Indent) when is_list(MsgList) ->
 do_debug_fmt(X, Indent) ->
     format_indented("~80p", [X], Indent).
 
-%% @doc If the user attempts to print a wallet, format it as an address.
+-doc """
+If the user attempts to print a wallet, format it as an address.
+""".
 format_address(Wallet, Indent) ->
     format_indented(human_id(ar_wallet:to_address(Wallet)), Indent).
 
-%% @doc Helper function to format tuples with arity greater than 2.
+-doc """
+Helper function to format tuples with arity greater than 2.
+""".
 format_tuple(Tuple, Indent) ->
     to_lines(lists:map(
         fun(Elem) ->
@@ -485,7 +557,9 @@ remove_trailing_noise(Str, Noise) ->
         false -> Str
     end.
 
-%% @doc Format a string with an indentation level.
+-doc """
+Format a string with an indentation level.
+""".
 format_indented(Str, Indent) -> format_indented(Str, "", Indent).
 format_indented(RawStr, Fmt, Ind) ->
     IndentSpaces = hb_opts:get(debug_print_indent),
@@ -499,7 +573,9 @@ format_indented(RawStr, Fmt, Ind) ->
         )
     ).
 
-%% @doc Format a binary as a short string suitable for printing.
+-doc """
+Format a binary as a short string suitable for printing.
+""".
 format_binary(Bin) ->
     case short_id(Bin) of
         undefined ->
@@ -533,15 +609,19 @@ format_binary(Bin) ->
             lists:flatten(io_lib:format("~s", [ShortID]))
     end.
 
-%% @doc Add `,' characters to a number every 3 digits to make it human readable.
+-doc """
+Add `,' characters to a number every 3 digits to make it human readable.
+""".
 human_int(Int) ->
     lists:reverse(add_commas(lists:reverse(integer_to_list(Int)))).
 
 add_commas([A,B,C,Z|Rest]) -> [A,B,C,$,|add_commas([Z|Rest])];
 add_commas(List) -> List.
 
-%% @doc Format a map as either a single line or a multi-line string depending
-%% on the value of the `debug_print_map_line_threshold' runtime option.
+-doc """
+Format a map as either a single line or a multi-line string depending
+on the value of the `debug_print_map_line_threshold' runtime option.
+""".
 format_maybe_multiline(X, Indent) ->
     MaxLen = hb_opts:get(debug_print_map_line_threshold),
     SimpleFmt = io_lib:format("~p", [X]),
@@ -551,7 +631,9 @@ format_maybe_multiline(X, Indent) ->
         _ -> SimpleFmt
     end.
 
-%% @doc Format and print an indented string to standard error.
+-doc """
+Format and print an indented string to standard error.
+""".
 eunit_print(FmtStr, FmtArgs) ->
     io:format(
         standard_error,
@@ -559,11 +641,13 @@ eunit_print(FmtStr, FmtArgs) ->
         [hb_util:format_indented(FmtStr ++ "...", FmtArgs, 4)]
     ).
 
-%% @doc Print the trace of the current stack, up to the first non-hyperbeam
-%% module. Prints each stack frame on a new line, until it finds a frame that
-%% does not start with a prefix in the `stack_print_prefixes' hb_opts.
-%% Optionally, you may call this function with a custom label and caller info,
-%% which will be used instead of the default.
+-doc """
+Print the trace of the current stack, up to the first non-hyperbeam
+module. Prints each stack frame on a new line, until it finds a frame that
+does not start with a prefix in the `stack_print_prefixes' hb_opts.
+Optionally, you may call this function with a custom label and caller info,
+which will be used instead of the default.
+""".
 print_trace(Stack, CallMod, CallFunc, CallLine) ->
     print_trace(Stack, "HB TRACE",
         lists:flatten(io_lib:format("[~s:~w ~p]",
@@ -582,10 +666,12 @@ print_trace(Stack, Label, CallerInfo) ->
             )
         ]).
 
-%% @doc Format a stack trace as a list of strings, one for each stack frame.
-%% Each stack frame is formatted if it matches the `stack_print_prefixes'
-%% option. At the first frame that does not match a prefix in the
-%% `stack_print_prefixes' option, the rest of the stack is not formatted.
+-doc """
+Format a stack trace as a list of strings, one for each stack frame.
+Each stack frame is formatted if it matches the `stack_print_prefixes'
+option. At the first frame that does not match a prefix in the
+`stack_print_prefixes' option, the rest of the stack is not formatted.
+""".
 format_trace([], _) -> [];
 format_trace([Item|Rest], Prefixes) ->
     case element(1, Item) of
@@ -618,7 +704,9 @@ format_trace({Mod, Func, ArityOrTerm, Extras}, _Prefixes) ->
         1
     ).
 
-%% @doc Is the given module part of HyperBEAM?
+-doc """
+Is the given module part of HyperBEAM?
+""".
 is_hb_module(Atom) ->
     is_hb_module(Atom, hb_opts:get(stack_print_prefixes, [], #{})).
 is_hb_module(Atom, Prefixes) when is_atom(Atom) ->
@@ -635,7 +723,9 @@ is_hb_module(Str, Prefixes) ->
 all_hb_modules() ->
     lists:filter(fun(Module) -> is_hb_module(Module) end, erlang:loaded()).
 
-%% @doc Print a trace to the standard error stream.
+-doc """
+Print a trace to the standard error stream.
+""".
 print_trace_short(Trace, Mod, Func, Line) ->
     io:format(standard_error, "=== [ HB SHORT TRACE ~p:~w ~p ] ==> ~s~n",
         [
@@ -644,7 +734,9 @@ print_trace_short(Trace, Mod, Func, Line) ->
         ]
     ).
 
-%% @doc Format a trace to a short string.
+-doc """
+Format a trace to a short string.
+""".
 format_trace_short(Trace) -> 
     lists:join(
         " / ",
@@ -677,12 +769,16 @@ format_trace_short(_, _Latch, {Mod, _, _, [{file, _}, {line, Line}|_]}, _) ->
 format_trace_short(_, _Latch, {Mod, Func, _ArityOrTerm, _Extras}, _Prefixes) ->
     lists:flatten(io_lib:format("~p:~p", [Mod, Func])).
 
-%% @doc Utility function to help macro `?trace/0' remove the first frame of the
-%% stack trace.
+-doc """
+Utility function to help macro `?trace/0' remove the first frame of the
+stack trace.
+""".
 trace_macro_helper(Fun, {_, {_, Stack}}, Mod, Func, Line) ->
     Fun(Stack, Mod, Func, Line).
 
-%% @doc Get the trace of the current process.
+-doc """
+Get the trace of the current process.
+""".
 get_trace() ->
     case catch error(debugging_print) of
         {_, {_, Stack}} ->
@@ -690,7 +786,9 @@ get_trace() ->
         _ -> []
     end.
 
-%% @doc Remove all calls from this module from the top of a trace.
+-doc """
+Remove all calls from this module from the top of a trace.
+""".
 normalize_trace([]) -> [];
 normalize_trace([{Mod, _, _, _}|Rest]) when Mod == ?MODULE ->
     normalize_trace(Rest);

@@ -4,7 +4,9 @@
 
 %%% Assignment cache functions
 
-%% @doc Write an assignment message into the cache.
+-doc """
+Write an assignment message into the cache.
+""".
 write(Assignment, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     % Write the message into the main cache
@@ -39,7 +41,9 @@ write(Assignment, Opts) ->
             {error, Reason}
     end.
 
-%% @doc Get an assignment message from the cache.
+-doc """
+Get an assignment message from the cache.
+""".
 read(ProcID, Slot, Opts) when is_integer(Slot) ->
     read(ProcID, integer_to_list(Slot), Opts);
 read(ProcID, Slot, Opts) ->
@@ -70,7 +74,9 @@ read(ProcID, Slot, Opts) ->
             not_found
     end.
 
-%% @doc Get the assignments for a process.
+-doc """
+Get the assignments for a process.
+""".
 list(ProcID, Opts) ->
     hb_cache:list_numbered(
         hb_store:path(hb_opts:get(store, no_viable_store, Opts), [
@@ -80,7 +86,9 @@ list(ProcID, Opts) ->
         Opts
     ).
 
-%% @doc Get the latest assignment from the cache.
+-doc """
+Get the latest assignment from the cache.
+""".
 latest(ProcID, Opts) ->
     ?event({getting_assignments_from_cache, {proc_id, ProcID}, {opts, Opts}}),
     case dev_scheduler_cache:list(ProcID, Opts) of
@@ -107,7 +115,9 @@ latest(ProcID, Opts) ->
             }
     end.
 
-%% @doc Read the latest known scheduler location for an address.
+-doc """
+Read the latest known scheduler location for an address.
+""".
 read_location(Address, Opts) ->
     Res = hb_cache:read(
         hb_store:path(hb_opts:get(store, no_viable_store, Opts), [
@@ -119,7 +129,9 @@ read_location(Address, Opts) ->
     ?event({read_location_msg, {address, Address}, {res, Res}}),
     Res.
 
-%% @doc Write the latest known scheduler location for an address.
+-doc """
+Write the latest known scheduler location for an address.
+""".
 write_location(LocationMsg, Opts) ->
     Signers = hb_message:signers(LocationMsg),
     ?event({writing_location_msg,

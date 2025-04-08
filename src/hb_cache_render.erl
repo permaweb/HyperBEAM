@@ -1,12 +1,16 @@
-%%% @doc A module that helps to render given Key graphs into the .dot files
 -module(hb_cache_render).
+-moduledoc """
+A module that helps to render given Key graphs into the .dot files
+""".
 -export([render/1, render/2, cache_path_to_dot/2, cache_path_to_dot/3, dot_to_svg/1]).
 % Preparing data for testing
 -export([prepare_unsigned_data/0, prepare_signed_data/0,
     prepare_deeply_nested_complex_message/0]).
 -include("include/hb.hrl").
 
-%% @doc Render the given Key into svg
+-doc """
+Render the given Key into svg
+""".
 render(StoreOrOpts) ->
     render(all, StoreOrOpts).
 render(ToRender, StoreOrOpts) ->
@@ -18,13 +22,17 @@ render(ToRender, StoreOrOpts) ->
     os:cmd("open new_render_diagram.svg"),
     ok.
 
-%% @doc Generate a dot file from a cache path and options/store
+-doc """
+Generate a dot file from a cache path and options/store
+""".
 cache_path_to_dot(ToRender, StoreOrOpts) ->
     cache_path_to_dot(ToRender, #{}, StoreOrOpts).
 cache_path_to_dot(ToRender, RenderOpts, StoreOrOpts) ->
     graph_to_dot(cache_path_to_graph(ToRender, RenderOpts, StoreOrOpts)).
 
-%% @doc Main function to collect graph elements
+-doc """
+Main function to collect graph elements
+""".
 cache_path_to_graph(ToRender, GraphOpts, StoreOrOpts) when is_map(StoreOrOpts) ->
     Store = hb_opts:get(store, no_viable_store, StoreOrOpts),
     cache_path_to_graph(ToRender, GraphOpts, Store);
@@ -44,7 +52,9 @@ cache_path_to_graph(Store, GraphOpts, RootKeys) ->
         RootKeys
     ).
 
-%% @doc Traverse the store recursively to build the graph
+-doc """
+Traverse the store recursively to build the graph
+""".
 traverse_store(Store, Key, Parent, Graph) ->
     % Get the path and check if we've already visited it
     JoinedPath = hb_store:join(Key),
@@ -66,7 +76,9 @@ traverse_store(Store, Key, Parent, Graph) ->
             end
     end.
 
-%% @doc Process a simple (leaf) node
+-doc """
+Process a simple (leaf) node
+""".
 process_simple_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph) ->
     % Add the node to the graph
     case maps:get(render_data, Graph, true) of
@@ -82,7 +94,9 @@ process_simple_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph) ->
             end
     end.
 
-%% @doc Process a composite (directory) node
+-doc """
+Process a composite (directory) node
+""".
 process_composite_node(_Store, "data", _Parent, _ResolvedPath, _JoinedPath, Graph) ->
     % Data is a special case: It contains every binary item in the store.
     % We don't need to render it.
@@ -111,18 +125,24 @@ process_composite_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph) ->
         _ -> Graph2
     end.
 
-%% @doc Add a node to the graph
+-doc """
+Add a node to the graph
+""".
 add_node(Graph, ID, Color) ->
     Nodes = maps:get(nodes, Graph, #{}),
     Graph#{nodes => maps:put(ID, {ID, Color}, Nodes)}.
 
-%% @doc Add an arc to the graph
+-doc """
+Add an arc to the graph
+""".
 add_arc(Graph, From, To, Label) ->
     ?event({insert_arc, {id1, From}, {id2, To}, {label, Label}}),
     Arcs = maps:get(arcs, Graph, #{}),
     Graph#{arcs => maps:put({From, To, Label}, true, Arcs)}.
 
-%% @doc Extract a label from a path
+-doc """
+Extract a label from a path
+""".
 extract_label(Path) ->
     case binary:split(Path, <<"/">>, [global]) of
         [] -> Path;
@@ -134,7 +154,9 @@ extract_label(Path) ->
             end
     end.
 
-%% @doc Generate the DOT file from the graph
+-doc """
+Generate the DOT file from the graph
+""".
 graph_to_dot(Graph) ->
     % Create graph header
     Header = [
@@ -174,7 +196,9 @@ graph_to_dot(Graph) ->
     % Combine all parts and convert to binary
     iolist_to_binary([Header, Nodes, Arcs, Footer]).
 
-%% @doc Convert a dot graph to SVG format
+-doc """
+Convert a dot graph to SVG format
+""".
 dot_to_svg(DotInput) ->
     % Create a port to the dot command
     Port = open_port({spawn, "dot -Tsvg"}, [binary, use_stdio, stderr_to_stdout]),
@@ -183,7 +207,9 @@ dot_to_svg(DotInput) ->
     % Get the SVG output
     collect_output(Port, []).
 
-%% @doc Helper function to collect output from port
+-doc """
+Helper function to collect output from port
+""".
 collect_output(Port, Acc) ->
     receive
         {Port, {data, Data}} ->

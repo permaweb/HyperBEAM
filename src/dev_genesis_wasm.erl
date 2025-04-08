@@ -1,7 +1,9 @@
-%%% @doc A device that mimics an environment suitable for `legacynet' AO 
-%%% processes, using HyperBEAM infrastructure. This allows existing `legacynet'
-%%% AO process definitions to be used in HyperBEAM.
 -module(dev_genesis_wasm).
+-moduledoc """
+A device that mimics an environment suitable for `legacynet' AO 
+processes, using HyperBEAM infrastructure. This allows existing `legacynet'
+AO process definitions to be used in HyperBEAM.
+""".
 -export([init/3, compute/3, normalize/3, snapshot/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
@@ -9,18 +11,26 @@
 %%% Timeout for legacy CU status check.
 -define(STATUS_TIMEOUT, 100).
 
-%% @doc Initialize the device.
+-doc """
+Initialize the device.
+""".
 init(Msg, _Msg2, _Opts) -> {ok, Msg}.
 
-%% @doc Normalize the device.
+-doc """
+Normalize the device.
+""".
 normalize(Msg, _Msg2, _Opts) -> {ok, Msg}.
 
-%% @doc Snapshot the device.
+-doc """
+Snapshot the device.
+""".
 snapshot(Msg, _Msg2, _Opts) -> {ok, Msg}.
 
-%% @doc All the `delegated-compute@1.0' device to execute the request. We then apply
-%% the `patch@1.0' device, applying any state patches that the AO process may have
-%% requested.
+-doc """
+All the `delegated-compute@1.0' device to execute the request. We then apply
+the `patch@1.0' device, applying any state patches that the AO process may have
+requested.
+""".
 compute(Msg, Msg2, Opts) ->
     % Validate whether the genesis-wasm feature is enabled.
     case ensure_started(Opts) of
@@ -51,7 +61,9 @@ compute(Msg, Msg2, Opts) ->
             }}
     end.
 
-%% @doc Ensure the local `genesis-wasm@1.0' is live. If it not, start it.
+-doc """
+Ensure the local `genesis-wasm@1.0' is live. If it not, start it.
+""".
 ensure_started(Opts) ->
     % Check if the `genesis-wasm@1.0` device is already running. The presence
     % of the registered name implies its availability.
@@ -170,8 +182,10 @@ ensure_started(Opts) ->
             true
     end.
 
-%% @doc Check if the genesis-wasm server is running, using the cached process ID
-%% if available.
+-doc """
+Check if the genesis-wasm server is running, using the cached process ID
+if available.
+""".
 is_genesis_wasm_server_running(Opts) ->
     case get(genesis_wasm_pid) of
         undefined ->
@@ -196,8 +210,10 @@ is_genesis_wasm_server_running(Opts) ->
         _ -> true
     end.
 
-%% @doc Check if the genesis-wasm server is running by requesting its status
-%% endpoint.
+-doc """
+Check if the genesis-wasm server is running by requesting its status
+endpoint.
+""".
 status(Opts) ->
     ServerPort =
         integer_to_binary(
@@ -220,7 +236,9 @@ status(Opts) ->
             false
     end.
 
-%% @doc Collect events from the port and log them.
+-doc """
+Collect events from the port and log them.
+""".
 collect_events(Port) ->
     collect_events(Port, <<>>).
 collect_events(Port, Acc) ->
@@ -235,7 +253,9 @@ collect_events(Port, Acc) ->
             ok
     end.
 
-%% @doc Log lines of output from the genesis-wasm server.
+-doc """
+Log lines of output from the genesis-wasm server.
+""".
 log_server_events(Bin) when is_binary(Bin) ->
     log_server_events(binary:split(Bin, <<"\n">>, [global]));
 log_server_events([Remaining]) -> Remaining;

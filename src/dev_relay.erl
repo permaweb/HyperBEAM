@@ -1,18 +1,20 @@
-%%% @doc This module implements the relay device, which is responsible for
-%%% relaying messages between nodes and other HTTP(S) endpoints.
-%%%
-%%% It can be called in either `call' or `cast' mode. In `call' mode, it
-%%% returns a `{ok, Result}' tuple, where `Result' is the response from the 
-%%% remote peer to the message sent. In `cast' mode, the invocation returns
-%%% immediately, and the message is relayed asynchronously. No response is given
-%%% and the device returns `{ok, <<"OK">>}'.
-%%% 
-%%% Example usage:
-%%% 
-%%% ```
-%%%     curl /~relay@.1.0/call?method=GET?0.path=https://www.arweave.net/
-%%% '''
 -module(dev_relay).
+-moduledoc """
+This module implements the relay device, which is responsible for
+relaying messages between nodes and other HTTP(S) endpoints.
+
+It can be called in either `call' or `cast' mode. In `call' mode, it
+returns a `{ok, Result}' tuple, where `Result' is the response from the 
+remote peer to the message sent. In `cast' mode, the invocation returns
+immediately, and the message is relayed asynchronously. No response is given
+and the device returns `{ok, <<"OK">>}'.
+
+Example usage:
+
+```
+    curl /~relay@.1.0/call?method=GET?0.path=https://www.arweave.net/
+'''
+""".
 %%% Execute synchronous and asynchronous relay requests.
 -export([call/3, cast/3]).
 %%% Re-route requests that would be executed locally to other peers, according
@@ -21,14 +23,16 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Execute a `call' request using a node's routes.
-%% 
-%% Supports the following options:
-%% - `target': The target message to relay. Defaults to the original message.
-%% - `relay-path': The path to relay the message to. Defaults to the original path.
-%% - `method': The method to use for the request. Defaults to the original method.
-%% - `requires-sign': Whether the request requires signing before dispatching.
-%% Defaults to `false'.
+-doc """
+Execute a `call' request using a node's routes.
+
+Supports the following options:
+- `target': The target message to relay. Defaults to the original message.
+- `relay-path': The path to relay the message to. Defaults to the original path.
+- `method': The method to use for the request. Defaults to the original method.
+- `requires-sign': Whether the request requires signing before dispatching.
+Defaults to `false'.
+""".
 call(M1, RawM2, Opts) ->
     {ok, BaseTarget} = hb_message:find_target(M1, RawM2, Opts),
     RelayPath =
@@ -82,13 +86,17 @@ call(M1, RawM2, Opts) ->
     % Let `hb_http:request/2' handle finding the peer and dispatching the request.
     hb_http:request(TargetMod2, Opts#{ http_client => Client }).
 
-%% @doc Execute a request in the same way as `call/3', but asynchronously. Always
-%% returns `<<"OK">>'.
+-doc """
+Execute a request in the same way as `call/3', but asynchronously. Always
+returns `<<"OK">>'.
+""".
 cast(M1, M2, Opts) ->
     spawn(fun() -> call(M1, M2, Opts) end),
     {ok, <<"OK">>}.
 
-%% @doc Preprocess a request to check if it should be relayed to a different node.
+-doc """
+Preprocess a request to check if it should be relayed to a different node.
+""".
 preprocess(_M1, M2, Opts) ->
     {ok,
         [
@@ -118,8 +126,10 @@ call_get_test() ->
         ),
     ?assertEqual(true, byte_size(Body) > 10_000).
 
-%% @doc Test that the `preprocess/3' function re-routes a request to remote
-%% peers, according to the node's routing table.
+-doc """
+Test that the `preprocess/3' function re-routes a request to remote
+peers, according to the node's routing table.
+""".
 preprocessor_reroute_to_nearest_test() ->
     Peer1 = <<"https://compute-1.forward.computer">>,
     Peer2 = <<"https://compute-2.forward.computer">>,

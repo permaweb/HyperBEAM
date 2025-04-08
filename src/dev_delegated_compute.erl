@@ -1,14 +1,18 @@
-%%% @doc Simple wrapper module that enables compute on remote machines,
-%%% implementing the JSON-Iface. This can be used either as a standalone, to 
-%%% bring trusted results into the local node, or as the `Execution-Device' of
-%%% an AO process.
 -module(dev_delegated_compute).
+-moduledoc """
+Simple wrapper module that enables compute on remote machines,
+implementing the JSON-Iface. This can be used either as a standalone, to 
+bring trusted results into the local node, or as the `Execution-Device' of
+an AO process.
+""".
 -export([init/3, compute/3, normalize/3, snapshot/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Initialize or normalize the compute-lite device. For now, we don't
+-doc """
+Initialize or normalize the compute-lite device. For now, we don't
 %% need to do anything special here.
+""".
 init(Msg1, _Msg2, _Opts) ->
     {ok, Msg1}.
 normalize(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
@@ -52,7 +56,9 @@ compute(Msg1, Msg2, Opts) ->
             {error, Error}
     end.
 
-%% @doc Execute computation on a remote machine via relay and the JSON-Iface.
+-doc """
+Execute computation on a remote machine via relay and the JSON-Iface.
+""".
 do_compute(ProcID, Msg2, Opts) ->
     ?event({do_compute_msg, {req, Msg2}}),
     Slot = hb_ao:get(<<"slot">>, Msg2, Opts),

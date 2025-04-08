@@ -4,7 +4,7 @@
 -include("include/ar.hrl").
 -include_lib("public_key/include/public_key.hrl").
 
-%%% @doc Utilities for manipulating wallets.
+-moduledoc "Utilities for manipulating wallets.".
 
 -define(WALLET_DIR, ".").
 
@@ -17,12 +17,16 @@ new(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} ->
         = crypto:generate_key(KeyAlg, {4096, PublicExpnt}),
     {{KeyType, Priv, Pub}, {KeyType, Pub}}.
 
-%% @doc Sign some data with a private key.
+-doc """
+Sign some data with a private key.
+""".
 sign(Key, Data) ->
     sign(Key, Data, sha256).
 
-%% @doc sign some data, hashed using the provided DigestType.
-%% TODO: support signing for other key types
+-doc """
+sign some data, hashed using the provided DigestType.
+TODO: support signing for other key types
+""".
 sign({{rsa, PublicExpnt}, Priv, Pub}, Data, DigestType) when PublicExpnt =:= 65537 ->
     rsa_pss:sign(
         Data,
@@ -39,7 +43,9 @@ hmac(Data) ->
 
 hmac(Data, DigestType) -> crypto:mac(hmac, DigestType, <<"ar">>, Data).
 
-%% @doc Verify that a signature is correct.
+-doc """
+Verify that a signature is correct.
+""".
 verify(Key, Data, Sig) ->
     verify(Key, Data, Sig, sha256).
 
@@ -54,7 +60,9 @@ verify({{rsa, PublicExpnt}, Pub}, Data, Sig, DigestType) when PublicExpnt =:= 65
         }
     ).
 
-%% @doc Generate an address from a public key.
+-doc """
+Generate an address from a public key.
+""".
 to_address(Pubkey) ->
     to_address(Pubkey, ?DEFAULT_KEY_TYPE).
 to_address(PubKey, {rsa, 65537}) when bit_size(PubKey) == 256 ->
@@ -66,8 +74,10 @@ to_address({{_, _, PubKey}, {_, PubKey}}, {rsa, 65537}) ->
 to_address(PubKey, {rsa, 65537}) ->
     to_rsa_address(PubKey).
 
-%% @doc Generate a new wallet public and private key, with a corresponding keyfile.
-%% The provided key is used as part of the file name.
+-doc """
+Generate a new wallet public and private key, with a corresponding keyfile.
+The provided key is used as part of the file name.
+""".
 new_keyfile(KeyType, WalletName) when is_list(WalletName) ->
     new_keyfile(KeyType, list_to_binary(WalletName));
 new_keyfile(KeyType, WalletName) ->
@@ -133,9 +143,11 @@ wallet_filepath(Wallet) ->
 wallet_filepath2(Wallet) ->
     filename:join([?WALLET_DIR, binary_to_list(Wallet)]).
 
-%% @doc Read the keyfile for the key with the given address from disk.
-%% Return not_found if arweave_keyfile_[addr].json or [addr].json is not found
-%% in [data_dir]/?WALLET_DIR.
+-doc """
+Read the keyfile for the key with the given address from disk.
+Return not_found if arweave_keyfile_[addr].json or [addr].json is not found
+in [data_dir]/?WALLET_DIR.
+""".
 load_key(Addr) ->
     Path = hb_util:encode(Addr),
     case filelib:is_file(Path) of
@@ -151,7 +163,9 @@ load_key(Addr) ->
             load_keyfile(Path)
     end.
 
-%% @doc Extract the public and private key from a keyfile.
+-doc """
+Extract the public and private key from a keyfile.
+""".
 load_keyfile(File) ->
     {ok, Body} = file:read_file(File),
     Key = hb_json:decode(Body),
