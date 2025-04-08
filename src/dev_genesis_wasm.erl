@@ -122,7 +122,7 @@ ensure_started(Opts) ->
                                                 )
                                             },
                                             {"WALLET_FILE",
-                                                "../../" ++
+                                                filename:absname(
                                                     hb_util:list(
                                                         hb_opts:get(
                                                             priv_key_location,
@@ -130,6 +130,7 @@ ensure_started(Opts) ->
                                                             Opts
                                                         )
                                                     )
+                                                )
                                             }
                                         ]
                                     }
