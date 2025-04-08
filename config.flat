@@ -1,1 +1,16 @@
 port: 10000
+preprocessor/device: relay@1.0
+routes/1/template: /result/.*
+routes/1/node/prefix: http://localhost:6363
+routes/2/template: /graphql
+routes/2/nodes/1/prefix: https://arweave-search.goldsky.com
+routes/2/nodes/2/prefix: https://arweave.net
+routes/3/template: /raw
+routes/3/node/prefix: https://arweave.net
+routes/3/node/opts/http_client: gun
+routes/4/template: /.*~process@1.0/.*
+routes/4/strategy: Nearest
+routes/4/nodes/1/prefix: https://compute-1.forward.computer
+routes/4/nodes/1/wallet: Md2SWBtd2ZKaLAxNm5U61jv4t3w0py6kfGJ8zTrGdLg
+routes/4/nodes/2/prefix: https://compute-2.forward.computer
+routes/4/nodes/2/wallet: jFd5B3NCyH4kOUnhj36_iGDXhtqwCPCWtdJN5Q0qtBg
