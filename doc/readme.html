@@ -306,8 +306,8 @@ guide.</p><h2 id="documentation" class="section-heading">
   <span class="text">Documentation</span>
 </h2>
 <p>HyperBEAM implementation documentation is generated into the <a href="./doc"><code class="inline">doc</code> directory</a>
-using <a href="https://www.erlang.org/doc/apps/edoc/chapter.html#content"><code class="inline">edoc</code></a>.
-You can regenerate the documentation by running:</p><pre><code class="makeup sh" translate="no"><span class="">rebar3 edoc
+using <a href="https://hexdocs.pm/rebar3_ex_doc/readme.html"><code class="inline">ex_doc</code></a>.
+You can regenerate the documentation by running:</p><pre><code class="makeup sh" translate="no"><span class="">rebar3 ex_doc
 </span></code></pre><p>Then you can serve them locally by running the following command, then navigating
 to <code class="inline">http://localhost:8000/index.html</code>.</p><pre><code class="makeup sh" translate="no"><span class="">erl -s inets -eval &#39;inets:start(httpd,[{server_name,&quot;HyperBEAM_Docs&quot;},{document_root, &quot;doc&quot;},{server_root, &quot;doc&quot;},{port, 8000},{mime_types,[{&quot;html&quot;,&quot;text/html&quot;},{&quot;htm&quot;,&quot;text/html&quot;},{&quot;js&quot;,&quot;text/javascript&quot;},{&quot;css&quot;,&quot;text/css&quot;},{&quot;gif&quot;,&quot;image/gif&quot;},{&quot;jpg&quot;,&quot;image/jpeg&quot;},{&quot;jpeg&quot;,&quot;image/jpeg&quot;},{&quot;png&quot;,&quot;image/png&quot;}]}]).&#39;
 </span></code></pre>

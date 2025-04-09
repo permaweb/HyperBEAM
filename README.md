@@ -277,11 +277,11 @@ guide.
 ## Documentation
 
 HyperBEAM implementation documentation is generated into the [`doc` directory](./doc)
-using [`edoc`](https://www.erlang.org/doc/apps/edoc/chapter.html#content).
+using [`ex_doc`](https://hexdocs.pm/rebar3_ex_doc/readme.html).
 You can regenerate the documentation by running:
 
 ```sh
-rebar3 edoc
+rebar3 ex_doc
 ```
 
 Then you can serve them locally by running the following command, then navigating
