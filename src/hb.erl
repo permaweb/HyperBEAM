@@ -163,8 +163,8 @@ do_start_simple_pay(Opts) ->
     Processor =
         #{
             <<"device">> => <<"p4@1.0">>,
-            <<"ledger-device">> => <<"simple-pay@1.0">>,
-            <<"pricing-device">> => <<"simple-pay@1.0">>
+            <<"ledger">> => <<"simple-pay@1.0">>,
+            <<"pricing">> => <<"simple-pay@1.0">>
         },
     hb_http_server:start_node(
         Opts#{

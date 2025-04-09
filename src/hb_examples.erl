@@ -21,8 +21,8 @@ relay_with_payments_test() ->
     ProcessorMsg =
         #{
             <<"device">> => <<"p4@1.0">>,
-            <<"ledger-device">> => <<"simple-pay@1.0">>,
-            <<"pricing-device">> => <<"simple-pay@1.0">>
+            <<"ledger">> => <<"simple-pay@1.0">>,
+            <<"pricing">> => <<"simple-pay@1.0">>
         },
     HostNode =
         hb_http_server:start_node(
@@ -72,8 +72,8 @@ paid_wasm_test() ->
     ProcessorMsg =
         #{
             <<"device">> => <<"p4@1.0">>,
-            <<"ledger-device">> => <<"simple-pay@1.0">>,
-            <<"pricing-device">> => <<"simple-pay@1.0">>
+            <<"ledger">> => <<"simple-pay@1.0">>,
+            <<"pricing">> => <<"simple-pay@1.0">>
         },
     HostNode =
         hb_http_server:start_node(

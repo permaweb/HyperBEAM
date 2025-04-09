@@ -142,8 +142,8 @@ test_opts(Ledger) ->
     ProcessorMsg =
         #{
             <<"device">> => <<"p4@1.0">>,
-            <<"ledger-device">> => <<"simple-pay@1.0">>,
-            <<"pricing-device">> => <<"simple-pay@1.0">>
+            <<"ledger">> => <<"simple-pay@1.0">>,
+            <<"pricing">> => <<"simple-pay@1.0">>
         },
     {
         Address,

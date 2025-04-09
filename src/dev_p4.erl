@@ -5,8 +5,8 @@
 %%%
 %%% The device requires the following pre/postprocessor settings in order to function:
 %%%
-%%% - `pricing-device`: The device that will estimate the cost of a request.
-%%% - `ledger-device`: The device that will act as a payment ledger.
+%%% - `pricing`: The message/device that will estimate the cost of a request.
+%%% - `ledger`: The message/device that will act as a payment ledger.
 %%%
 %%% The pricing device should implement the following keys:
 %%% ```
@@ -42,24 +42,12 @@
     #{ <<"template">> => <<"/~meta@1.0/*">> }
 ]).
 
-%% @doc Get the message(/device in a message) for a component of the framework
-%% from the given state.
-get_message(Key, State, NodeMsg) ->
-    case hb_converge:get(<<Key/binary, "-message">>, State, NodeMsg) of
-        not_found ->
-            case hb_converge:get(<<Key/binary, "-device">>, State, NodeMsg) of
-                not_found -> not_found;
-                DeviceID -> #{ <<"device">> => DeviceID }
-            end;
-        Msg -> Msg
-    end.
-
 %% @doc Estimate the cost of a transaction and decide whether to proceed with
 %% a request. The default behavior if `pricing_device' or `p4_balances' are
 %% not set is to proceed, so it is important that a user initialize them.
 preprocess(State, Raw, NodeMsg) ->
-    PricingDevice = hb_ao:get(<<"pricing_device">>, State, false, NodeMsg),
-    LedgerDevice = hb_ao:get(<<"ledger_device">>, State, false, NodeMsg),
+    PricingMsg = calculate_functional_message(<<"pricing">>, State, NodeMsg),
+    LedgerMsg = calculate_functional_message(<<"ledger">>, State, NodeMsg),
     Messages = hb_ao:get(<<"body">>, Raw, NodeMsg#{ hashpath => ignore }),
     Request = hb_ao:get(<<"request">>, Raw, NodeMsg),
     IsChargable = is_chargable_req(Request, NodeMsg),
@@ -124,8 +112,8 @@ preprocess(State, Raw, NodeMsg) ->
 
 %% @doc Postprocess the request after it has been fulfilled.
 postprocess(State, RawResponse, NodeMsg) ->
-    PricingDevice = hb_ao:get(<<"pricing_device">>, State, false, NodeMsg),
-    LedgerDevice = hb_ao:get(<<"ledger_device">>, State, false, NodeMsg),
+    PricingMsg = calculate_functional_message(<<"pricing">>, State, NodeMsg),
+    LedgerMsg = calculate_functional_message(<<"ledger">>, State, NodeMsg),
     Response =
         hb_ao:get(
             <<"body">>,
@@ -133,8 +121,8 @@ postprocess(State, RawResponse, NodeMsg) ->
             NodeMsg#{ hashpath => ignore }
         ),
     Request = hb_ao:get(<<"request">>, RawResponse, NodeMsg),
-    ?event(payment, {post_processing_with_devices, PricingDevice, LedgerDevice}),
-    case (PricingDevice =/= false) and (LedgerDevice =/= false) of
+    ?event(payment, {post_processing_with_devices, PricingMsg, LedgerMsg}),
+    case (PricingMsg =/= false) and (LedgerMsg =/= false) of
         false -> {ok, Response};
         true ->
             PricingReq = #{
@@ -190,8 +178,7 @@ balance(_, Req, NodeMsg) ->
             preprocessor_not_set,
             NodeMsg
         ),
-    LedgerDevice = hb_ao:get(<<"ledger_device">>, Preprocessor, false, NodeMsg),
-    LedgerMsg = #{ <<"device">> => LedgerDevice },
+    LedgerMsg = calculate_functional_message(<<"ledger">>, Preprocessor, NodeMsg),
     LedgerReq = #{
         <<"path">> => <<"balance">>,
         <<"request">> => Req
@@ -202,6 +189,16 @@ balance(_, Req, NodeMsg) ->
             {ok, Balance};
         {error, Error} ->
             {error, Error}
+    end.
+
+%% @doc Calculate the message to use for one of the functional components of
+%% the device.
+calculate_functional_message(Key, Msg, NodeMsg) ->
+    case hb_ao:get(Key, Msg, false, NodeMsg) of
+        false -> false;
+        Device when is_binary(Device) ->
+            Msg#{ <<"device">> => Device };
+        FunctionalMsg -> FunctionalMsg
     end.
 
 %% @doc The node operator may elect to make certain routes non-chargable, using 
@@ -237,8 +234,8 @@ test_opts(Opts, PricingDev, LedgerDev) ->
     ProcessorMsg =
         #{
             <<"device">> => <<"p4@1.0">>,
-            <<"pricing-device">> => PricingDev,
-            <<"ledger-device">> => LedgerDev
+            <<"pricing">> => PricingDev,
+            <<"ledger">> => LedgerDev
         },
     Opts#{
         preprocessor => ProcessorMsg,
@@ -277,8 +274,8 @@ balance_test() ->
     ProcessorMsg =
         #{
             <<"device">> => <<"p4@1.0">>,
-            <<"ledger-device">> => <<"simple-pay@1.0">>,
-            <<"pricing-device">> => <<"simple-pay@1.0">>
+            <<"ledger">> => <<"simple-pay@1.0">>,
+            <<"pricing">> => <<"simple-pay@1.0">>
         },
     Opts =
         #{
@@ -291,13 +288,13 @@ balance_test() ->
     Res =
         hb_http:get(
             Node,
-            hb_message:attest(
+            hb_message:commit(
                 #{ <<"path">> => <<"/~p4@1.0/balance">> },
                 Wallet
             ),
             #{}
         ),
-    ?assertMatch({ok, #{ <<"body">> := 100 }}, Res).
+    ?assertMatch({ok, 100}, Res).
 
 %% @doc Test that a non-chargable route is not charged for.
 non_chargable_route_test() ->
@@ -305,8 +302,8 @@ non_chargable_route_test() ->
     Processor =
         #{
             <<"device">> => <<"p4@1.0">>,
-            <<"ledger-device">> => <<"simple-pay@1.0">>,
-            <<"pricing-device">> => <<"simple-pay@1.0">>
+            <<"ledger">> => <<"simple-pay@1.0">>,
+            <<"pricing">> => <<"simple-pay@1.0">>
         },
     Node = hb_http_server:start_node(
         #{
