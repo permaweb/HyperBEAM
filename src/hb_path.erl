@@ -19,7 +19,7 @@ dependent on all previous messages.
     Msg3.HashPath = Msg1.Hash(Msg1.HashPath, Msg2.ID)
     Msg3.{...} = AO-Core.apply(Msg1, Msg2)
     ...
-'''
+```
 
 A message's ID itself includes its HashPath, leading to the mixing of
 a Msg2's merkle list into the resulting Msg3's HashPath. This allows a single

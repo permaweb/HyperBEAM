@@ -16,7 +16,7 @@ new integrations of the AO protocol.
 -include("include/hb.hrl").
 
 -doc """
-Generate a `GET /schedule' response for a process as HTTP-sig bundles.
+Generate a `GET /schedule` response for a process as HTTP-sig bundles.
 """.
 assignments_to_bundle(ProcID, Assignments, More, Opts) ->
     TimeInfo = ar_timestamp:get(),

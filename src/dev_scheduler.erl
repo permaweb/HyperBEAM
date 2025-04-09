@@ -2,19 +2,19 @@
 -moduledoc """
 A simple scheduler scheme for AO.
 This device expects a message of the form:
-    Process: `#{ id, Scheduler: #{ Authority } }'
+    Process: `#{ id, Scheduler: #{ Authority } }`
 ```
 It exposes the following keys for scheduling:
-    `#{ method: GET, path: <<"/info">> }' ->
+    `#{ method: GET, path: <<"/info">> }` ->
         Returns information about the scheduler.
-    `#{ method: GET, path: <<"/slot">> }' -> `slot(Msg1, Msg2, Opts)'
+    `#{ method: GET, path: <<"/slot">> }` -> `slot(Msg1, Msg2, Opts)`
         Returns the current slot for a process.
-    `#{ method: GET, path: <<"/schedule">> }' -> `get_schedule(Msg1, Msg2, Opts)'
+    `#{ method: GET, path: <<"/schedule">> }` -> `get_schedule(Msg1, Msg2, Opts)`
         Returns the schedule for a process in a cursor-traversable format.
-   ` #{ method: POST, path: <<"/schedule">> }' -> `post_schedule(Msg1, Msg2, Opts)'
+   ` #{ method: POST, path: <<"/schedule">> }` -> `post_schedule(Msg1, Msg2, Opts)`
         Schedules a new message for a process, or starts a new scheduler
         for the given message.
-'''
+```
 """.
 
 %%% AO-Core API functions:
@@ -1197,11 +1197,11 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
 -doc """
 Find the schedule ID from a given request. The precidence order for 
 search is as follows:
-[1. `ToSched/id` -- in the case of `POST schedule', handled locally]
+[1. `ToSched/id` -- in the case of `POST schedule`, handled locally]
 2. `Msg2/target`
-3. `Msg2/id` when `Msg2` has `type: Process'
+3. `Msg2/id` when `Msg2` has `type: Process`
 4. `Msg1/process/id`
-5. `Msg1/id` when `Msg1` has `type: Process'
+5. `Msg1/id` when `Msg1` has `type: Process`
 6. `Msg2/id`
 """.
 find_target_id(Msg1, Msg2, Opts) ->
@@ -1250,7 +1250,7 @@ find_message_to_schedule(_Msg1, Msg2, Opts) ->
     end.
 
 -doc """
-Generate a `GET /schedule' response for a process.
+Generate a `GET /schedule` response for a process.
 """.
 generate_local_schedule(Format, ProcID, From, To, Opts) ->
     ?event(

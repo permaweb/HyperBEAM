@@ -78,7 +78,7 @@ list(Value) when is_binary(Value) ->
 list(Value) when is_list(Value) -> Value.
 
 -doc """
-Unwrap a tuple of the form `{ok, Value}', or throw/return, depending on
+Unwrap a tuple of the form `{ok, Value}`, or throw/return, depending on
 the value of the `error_strategy` option.
 """.
 ok(Value) -> ok(Value, #{}).

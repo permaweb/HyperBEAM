@@ -24,7 +24,7 @@ The structure of the routes should be as follows:
     Choose?: The number of nodes to choose from the list.
     Template?: A message template to match the message against, either as a
                map or a path regex.
-'''
+```
 """.
 %%% Device API:
 -export([routes/3, route/2, route/3]).
@@ -85,7 +85,7 @@ the load distribution strategy and choose a node. Supported strategies:
       By-Base: According to the base message's hashpath.
       Nearest: According to the distance of the node's wallet address to the
                base message's hashpath.
-'''
+```
 `By-Base` will ensure that all traffic for the same hashpath is routed to the
 same node, minimizing work duplication, while `Random` ensures a more even
 distribution of the requests.

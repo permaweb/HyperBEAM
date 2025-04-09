@@ -4,16 +4,16 @@ This module implements the relay device, which is responsible for
 relaying messages between nodes and other HTTP(S) endpoints.
 
 It can be called in either `call` or `cast` mode. In `call` mode, it
-returns a `{ok, Result}' tuple, where `Result` is the response from the 
+returns a `{ok, Result}` tuple, where `Result` is the response from the 
 remote peer to the message sent. In `cast` mode, the invocation returns
 immediately, and the message is relayed asynchronously. No response is given
-and the device returns `{ok, <<"OK">>}'.
+and the device returns `{ok, <<"OK">>}`.
 
 Example usage:
 
 ```
     curl /~relay@.1.0/call?method=GET?0.path=https://www.arweave.net/
-'''
+```
 """.
 %%% Execute synchronous and asynchronous relay requests.
 -export([call/3, cast/3]).

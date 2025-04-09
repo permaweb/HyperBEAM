@@ -591,7 +591,7 @@ parse_manifest(Bin) ->
 -doc """
 Only RSA 4096 is currently supported.
  Note: the signature type '1' corresponds to RSA 4096 -- but it is is written in
- little-endian format which is why we encode to `<<1, 0>>'.
+ little-endian format which is why we encode to `<<1, 0>>`.
 """.
 encode_signature_type({rsa, 65537}) ->
     <<1, 0>>;
@@ -795,7 +795,7 @@ decode_bundle_header(Count, <<Size:256/integer, ID:32/binary, Rest/binary>>, Hea
 -doc """
 Decode the signature from a binary format. Only RSA 4096 is currently supported.
  Note: the signature type '1' corresponds to RSA 4096 - but it is is written in
- little-endian format which is why we match on `<<1, 0>>'.
+ little-endian format which is why we match on `<<1, 0>>`.
 """.
 decode_signature(<<1, 0, Signature:512/binary, Owner:512/binary, Rest/binary>>) ->
     {{rsa, 65537}, Signature, Owner, Rest};
