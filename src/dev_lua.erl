@@ -332,7 +332,7 @@ pure_lua_process_test() ->
     ?event({results, Results}),
     ?assertEqual(42, hb_ao:get(<<"results/output/body">>, Results, #{})).
 
-pure_lua_process_benchmark_test() ->
+pure_lua_process_benchmark_test_() ->
     {timeout, 30, fun() ->
         BenchMsgs = 200,
         Process = generate_lua_process("test/test.lua"),
@@ -358,19 +358,6 @@ pure_lua_process_benchmark_test() ->
             ]
         )
     end}.
-    % Iterations = hb:benchmark(
-    %     fun(X) ->
-    %         % Compute the latest result.
-    %         ?event({iteration, X})
-    %     end,
-    %     BenchTime
-    % ),
-    % ?event({iterations, Iterations}),
-    % hb_util:eunit_print(
-    %     "Computed ~p pure Lua process executions in ~ps (~.2f calls/s)",
-    %     [Iterations, BenchTime, Iterations / BenchTime]
-    % ),
-    % ?assert(Iterations > 10).
 
 %%% Test helpers
 
@@ -422,6 +409,7 @@ generate_stack(File) ->
                 <<"lua@5.3a">>,
                 <<"multipass@1.0">>
             ],
+        <<"function">> => <<"json_result">>,
         <<"passes">> => 2,
         <<"stack-keys">> => [<<"init">>, <<"compute">>],
         <<"script">> => Script,
@@ -440,6 +428,7 @@ execute_aos_call(Base) ->
     Req =
         hb_message:commit(#{
                 <<"action">> => <<"Eval">>,
+                <<"function">> => <<"json_result">>,
                 <<"data">> => <<"return 2">>
             },
             hb:wallet()

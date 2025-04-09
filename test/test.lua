@@ -34,6 +34,21 @@ function handle(process, message, opts)
     }
 end
 
+--- @function json_result
+--- @tparam table base
+--- @tparam table request
+--- @return table request with the `ok` field set to `true`, the `response`
+--- field set to a table with the `Output` field set to `42`, and
+--- the `messages` field set to an empty table.
+function json_result(base, req, opts)
+    return [[
+        {
+            "ok": true,
+            "response": {"Output": {"data": 42}, "Messages": []}
+        }
+    ]]
+end
+
 --- @function hello
 --- @tparam table base
 --- @tparam table request
