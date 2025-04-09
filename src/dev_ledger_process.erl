@@ -9,7 +9,7 @@
 %% @doc Get the balance of a user.
 balance(LedgerMsg, RawReq, NodeMsg) ->
     Target =
-        case hb_converge:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }) of
+        case hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }) of
             not_found -> hd(hb_message:signers(RawReq));
             Req -> hd(hb_message:signers(Req))
         end,
@@ -22,25 +22,30 @@ balance(LedgerMsg, RawReq, NodeMsg) ->
     try
         {
             ok,
-            binary_to_integer(hb_converge:get(<<"data">>, Results, #{}))
+            binary_to_integer(hb_ao:get(<<"data">>, Results, #{}))
         }
     catch error:badarg ->
-        {error, Results#{ <<"error">> => <<"bad_ledger">> }}
+        {error, #{
+            <<"status">> => 500,
+            <<"error">> => <<"bad_ledger">>,
+            <<"results">> => Results,
+            <<"body">> => <<"Bad ledger response on balance request.">>
+        }}
     end.
 
 debit(State, Req, NodeMsg) ->
-    case hb_converge:get(<<"type">>, Req, NodeMsg#{ hashpath => ignore }) of
+    case hb_ao:get(<<"type">>, Req, NodeMsg#{ hashpath => ignore }) of
         <<"pre">> ->
             % Get the balance and check if it is enough to cover the debit. Do
             % not proceed with the request yet.
             BalanceStr = balance(State, Req, NodeMsg),
-            Amount = hb_converge:get(<<"amount">>, Req, 0, NodeMsg),
+            Amount = hb_ao:get(<<"amount">>, Req, 0, NodeMsg),
             Balance = binary_to_integer(BalanceStr),
             {ok, (Balance - Amount) >= 0};
         <<"post">> ->
-            InnerReq = hb_converge:get(<<"request">>, Req, NodeMsg),
+            InnerReq = hb_ao:get(<<"request">>, Req, NodeMsg),
             Target = hd(hb_message:signers(InnerReq)),
-            Amount = hb_converge:get(<<"amount">>, Req, NodeMsg),
+            Amount = hb_ao:get(<<"amount">>, Req, NodeMsg),
             ?event({debit_call, {req, #{
                 <<"action">> => <<"debit">>,
                 <<"address">> => Target,
@@ -63,17 +68,18 @@ debit(State, Req, NodeMsg) ->
 
 %% @doc Get the result of a message on the ledger process.
 ledger_call(LedgerMsg, Req, NodeMsg) ->
-    Process = hb_converge:get(<<"process">>, LedgerMsg, NodeMsg),
-    ProcessID = hb_converge:get(<<"id">>, Process, NodeMsg),
-    SignedReq = hb_message:attest(Req#{ <<"target">> => ProcessID }, NodeMsg),
-    ScheduleMsg = hb_message:attest(#{
+    Process = hb_ao:get(<<"process">>, LedgerMsg, NodeMsg),
+    ProcessID = hb_ao:get(<<"id">>, Process, NodeMsg),
+    SignedReq = hb_message:commit(Req#{ <<"target">> => ProcessID }, NodeMsg),
+    ScheduleMsg = hb_message:commit(#{
         <<"path">> => <<"schedule">>,
         <<"method">> => <<"POST">>,
         <<"body">> => SignedReq
     }, NodeMsg),
-    {ok, #{ <<"slot">> := Slot }} = hb_converge:resolve(Process, ScheduleMsg, #{}),
+    {ok, #{ <<"slot">> := Slot }} = hb_ao:resolve(Process, ScheduleMsg, #{}),
+    ?event({ledger_call, {slot, Slot}, {process, Process}, {schedule_msg, ScheduleMsg}}),
     {ok, Resp} =
-        hb_converge:resolve_many(
+        hb_ao:resolve_many(
             [
                 Process,
                 #{ <<"path">> => <<"compute">>, <<"slot">> => Slot },
@@ -101,15 +107,17 @@ setup() ->
     ProcessorMsg =
         #{
             <<"device">> => <<"p4@1.0">>,
-            <<"ledger-message">> =>
+            <<"ledger">> =>
                 #{
                     <<"device">> => <<"ledger-process@1.0">>,
                     <<"process">> => Process
                 },
-            <<"pricing-device">> =>
+            <<"pricing">> =>
                 #{
-                    % Statically price every request at 10 for testing.
-                    <<"estimate">> => fun(_) -> {ok, 10} end
+                    <<"device">> => #{
+                        % Statically price every request at 10 for testing.
+                        <<"estimate">> => fun(_) -> {ok, 10} end
+                    }
                 }
         },
     {
@@ -142,7 +150,7 @@ topup(Address, Process, _TokenAddress, Amount, NodeMsg) ->
 get_balance(Node, Wallet) ->
     hb_http:get(
         Node,
-        hb_message:attest(
+        hb_message:commit(
             #{ <<"path">> => <<"/~p4@1.0/balance">> },
             Wallet
         ),
@@ -173,7 +181,7 @@ debit_test_() ->
         % Do an action that will be charged
         hb_http:get(
             Node,
-            hb_message:attest(
+            hb_message:commit(
                 #{ <<"path">> => <<"/k&v=1/v">> },
                 Wallet
             ),

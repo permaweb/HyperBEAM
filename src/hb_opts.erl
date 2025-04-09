@@ -62,6 +62,7 @@ default_message() ->
             #{<<"name">> => <<"hyperbuddy@1.0">>, <<"module">> => dev_hyperbuddy},
             #{<<"name">> => <<"json@1.0">>, <<"module">> => dev_codec_json},
             #{<<"name">> => <<"json-iface@1.0">>, <<"module">> => dev_json_iface},
+            #{<<"name">> => <<"ledger-process@1.0">>, <<"module">> => dev_ledger_process},
             #{<<"name">> => <<"lookup@1.0">>, <<"module">> => dev_lookup},
             #{<<"name">> => <<"lua@5.3a">>, <<"module">> => dev_lua},
             #{<<"name">> => <<"message@1.0">>, <<"module">> => dev_message},
