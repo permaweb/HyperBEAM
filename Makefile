@@ -44,7 +44,7 @@ debug-clean:
 # Clone the WAMR repository at our target release
 $(WAMR_DIR):
 	git clone \
-		https://github.com/bytecodealliance/wasm-micro-runtime.git \
+		https://github.com/permaweb/wasm-micro-runtime.git \
 		$(WAMR_DIR) \
 		-b WAMR-$(WAMR_VERSION) \
 		--single-branch
