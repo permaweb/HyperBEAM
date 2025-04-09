@@ -63,6 +63,7 @@ default_message() ->
             #{<<"name">> => <<"json@1.0">>, <<"module">> => dev_codec_json},
             #{<<"name">> => <<"json-iface@1.0">>, <<"module">> => dev_json_iface},
             #{<<"name">> => <<"lookup@1.0">>, <<"module">> => dev_lookup},
+            #{<<"name">> => <<"lua@5.3a">>, <<"module">> => dev_lua},
             #{<<"name">> => <<"message@1.0">>, <<"module">> => dev_message},
             #{<<"name">> => <<"meta@1.0">>, <<"module">> => dev_meta},
             #{<<"name">> => <<"monitor@1.0">>, <<"module">> => dev_monitor},
@@ -124,7 +125,7 @@ default_message() ->
         debug_metadata => true,
         debug_ids => false,
         debug_committers => false,
-        debug_show_priv => if_present,
+        debug_show_priv => false,
 		trusted => #{},
         routes => [
             #{
