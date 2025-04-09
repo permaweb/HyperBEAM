@@ -44,7 +44,7 @@ The core API is simple:
     deserialize(Port, Mem) -> ok
         Where:
             Port is the port to the LID.
-            Mem is a binary output of a previous `serialize/1' call.
+            Mem is a binary output of a previous `serialize/1` call.
 '''
 
 BEAMR was designed for use in the HyperBEAM project, but is suitable for
@@ -71,8 +71,8 @@ load_driver() ->
 
 -doc """
 Start a WASM executor context. Yields a port to the LID, and the
-%% imports and exports of the WASM module. Optionally, specify a mode 
-%% (wasm or aot) to indicate the type of WASM module being loaded.
+imports and exports of the WASM module. Optionally, specify a mode 
+(wasm or aot) to indicate the type of WASM module being loaded.
 """.
 start(WasmBinary) when is_binary(WasmBinary) ->
     start(WasmBinary, wasm).
@@ -103,10 +103,10 @@ start(WasmBinary, Mode) when is_binary(WasmBinary) ->
 
 -doc """
 A worker process that is responsible for handling a WASM instance.
-%% It wraps the WASM port, handling inputs and outputs from the WASM module.
-%% The last sender to the port is always the recipient of its messages, so
-%% be careful to ensure that there is only one active sender to the port at 
-%% any time.
+It wraps the WASM port, handling inputs and outputs from the WASM module.
+The last sender to the port is always the recipient of its messages, so
+be careful to ensure that there is only one active sender to the port at 
+any time.
 """.
 worker(Port, Listener) ->
     receive
@@ -195,7 +195,7 @@ stub(Msg1, _Msg2, _Opts) ->
 
 -doc """
 Synchonously monitor the WASM executor for a call result and any
-%% imports that need to be handled.
+imports that need to be handled.
 """.
 monitor_call(WASM, ImportFun, StateMsg, Opts) ->
     receive
@@ -286,7 +286,7 @@ driver_loads_test() ->
     ?assertEqual(ok, load_driver()).
 
 -doc """
-Test standalone `hb_beamr' correctly after loading a WASM module.
+Test standalone `hb_beamr` correctly after loading a WASM module.
 """.
 simple_wasm_test() ->
     {ok, File} = file:read_file("test/test.wasm"),
@@ -318,7 +318,7 @@ wasm64_test() ->
 
 -doc """
 Ensure that processes outside of the initial one can interact with
-%% the WASM executor.
+the WASM executor.
 """.
 multiclient_test() ->
     Self = self(),

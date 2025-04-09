@@ -73,9 +73,9 @@ router(_, Msg1, Msg2, Opts) ->
 
 -doc """
 Load the schedule for a process into the cache, then return the next
-assignment. Assumes that Msg1 is a `dev_process' or similar message, having
-a `Current-Slot' key. It stores a local cache of the schedule in the
-`priv/To-Process' key.
+assignment. Assumes that Msg1 is a `dev_process` or similar message, having
+a `Current-Slot` key. It stores a local cache of the schedule in the
+`priv/To-Process` key.
 """.
 next(Msg1, Msg2, Opts) ->
     ?event(debug_next, {scheduler_next_called, {msg1, Msg1}, {msg2, Msg2}}),
@@ -226,7 +226,7 @@ spawn_lookahead_worker(ProcID, Slot, Opts) ->
 Check if we have a result from a lookahead worker or from our local
 cache. If we have a result in the local cache, we may also start a new
 lookahead worker to fetch the next assignments if we have them locally, 
-ahead of time. This can be enabled/disabled with the `scheduler_lookahead'
+ahead of time. This can be enabled/disabled with the `scheduler_lookahead`
 option.
 """.
 check_lookahead_and_local_cache(Msg1, ProcID, TargetSlot, Opts) when is_map(Msg1) ->
@@ -271,7 +271,7 @@ check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
         not_found -> not_found;
         {ok, Assignment} ->
             % We have an assignment in our local cache, so we return it.
-            % Depending on the `scheduler_lookahead' option, we may also
+            % Depending on the `scheduler_lookahead` option, we may also
             % start a new lookahead worker to fetch the next assignments
             % if we have them locally, ahead of time.
             Worker =
@@ -460,7 +460,7 @@ post_schedule(Msg1, Msg2, Opts) ->
 
 -doc """
 Post schedule the message. `Msg2` by this point has been refined to only
-committed keys, and to only include the `target' message that is to be
+committed keys, and to only include the `target` message that is to be
 scheduled.
 """.
 do_post_schedule(ProcID, PID, Msg2, Opts) ->
@@ -717,7 +717,7 @@ the process's scheduler.
 """.
 remote_slot(<<"ao.N.1">>, ProcID, Node, Opts) ->
     % The process is running on a mainnet AO-Core scheduler, so we can just
-    % use the `/slot' endpoint to get the current slot.
+    % use the `/slot` endpoint to get the current slot.
     ?event({getting_slot_from_ao_core_remote,
         {path, {string, <<"/", ProcID/binary, "/slot">>}}}),
     hb_http:get(Node, <<ProcID/binary, "/slot">>, Opts);
@@ -772,7 +772,7 @@ remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
 
 -doc """
 Generate and return a schedule for a process, optionally between
-two slots -- labelled as `from' and `to'. If the schedule is not local,
+two slots -- labelled as `from` and `to`. If the schedule is not local,
 we redirect to the remote scheduler or proxy based on the node opts.
 """.
 get_schedule(Msg1, Msg2, Opts) ->
@@ -833,7 +833,7 @@ assignments from the local cache that we already know about.
 """.
 get_remote_schedule(RawProcID, From, To, Redirect, Opts) ->
     % If we are responding to a legacy scheduler request we must add one to the
-    % `from' slot to account for the fact that the legacy scheduler gives us
+    % `from` slot to account for the fact that the legacy scheduler gives us
     % the slots _after_ the stated nonce.
     ProcID = without_hint(RawProcID),
     {FromLocalCache, _} = get_local_assignments(ProcID, From, To, Opts),
@@ -860,7 +860,7 @@ read all of the assignments from the local cache.
 do_get_remote_schedule(ProcID, LocalAssignments, From, To, _, Opts)
         when (To =/= undefined) andalso (From >= To) ->
     % We already have all of the assignments from the local cache. Return them
-    % as a bundle. We set the 'more' to `undefined' to indicate that there may
+    % as a bundle. We set the 'more' to `undefined` to indicate that there may
     % be more assignments to fetch, but we don't know for sure.
     Res = 
         dev_scheduler_formats:assignments_to_bundle(
@@ -992,7 +992,7 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                     ),
                     Merged;
                 307 ->
-                    % NOTE: Shouldn't this be using the `Res' location key to
+                    % NOTE: Shouldn't this be using the `Res` location key to
                     % regenerate the redirect and recurse on that, instead of
                     % just using the same redirect?
                     ?event({recursing_on_same_redirect, {redirect, Redirect}}),
@@ -1197,12 +1197,12 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
 -doc """
 Find the schedule ID from a given request. The precidence order for 
 search is as follows:
-[1. `ToSched/id' -- in the case of `POST schedule', handled locally]
-2. `Msg2/target'
-3. `Msg2/id' when `Msg2' has `type: Process'
-4. `Msg1/process/id'
-5. `Msg1/id' when `Msg1' has `type: Process'
-6. `Msg2/id'
+[1. `ToSched/id` -- in the case of `POST schedule', handled locally]
+2. `Msg2/target`
+3. `Msg2/id` when `Msg2` has `type: Process'
+4. `Msg1/process/id`
+5. `Msg1/id` when `Msg1` has `type: Process'
+6. `Msg2/id`
 """.
 find_target_id(Msg1, Msg2, Opts) ->
     TempOpts = Opts#{ hashpath => ignore },
@@ -1239,8 +1239,8 @@ find_target_id(Msg1, Msg2, Opts) ->
 -doc """
 Search the given base and request message pair to find the message to
 schedule. The precidence order for search is as follows:
-1. `Msg2/body'
-2. `Msg2'
+1. `Msg2/body`
+2. `Msg2`
 """.
 find_message_to_schedule(_Msg1, Msg2, Opts) ->
     case hb_ao:resolve(Msg2, <<"body">>, Opts#{ hashpath => ignore }) of
@@ -1264,7 +1264,7 @@ generate_local_schedule(Format, ProcID, From, To, Opts) ->
     {Assignments, More} = get_local_assignments(ProcID, From, To, Opts),
     ?event({got_assignments, length(Assignments), {more, More}}),
     % Determine and apply the formatting function to use for generation 
-    % of the response, based on the `Accept' header.
+    % of the response, based on the `Accept` header.
     FormatterFun =
         case Format of
             <<"application/aos-2">> ->
@@ -1330,7 +1330,7 @@ checkpoint(State) -> {ok, State}.
 
 -doc """
 Generate a _transformed_ process message, not as they are generated 
-by users. See `dev_process' for examples of AO process messages.
+by users. See `dev_process` for examples of AO process messages.
 """.
 test_process() -> test_process(hb:wallet()).
 test_process(Wallet) when not is_binary(Wallet) ->

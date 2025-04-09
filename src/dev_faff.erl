@@ -11,14 +11,14 @@ example of how to implement a custom pricing policy, as it implements stubs
 for both the pricing and ledger P4 APIs.
 """.
 %%% Pricing API
-%%% We only implement `estimate/3' as we do not want to charge for requests, so
+%%% We only implement `estimate/3` as we do not want to charge for requests, so
 %%% we are fine with the estimate being the same as the price.
 -export([estimate/3]).
 %%% Ledger API
-%%% We need to implement `debit/3' as it is required by the ledger API, but we
-%%% do not want to charge for requests, so we return `ok' and do not actually
+%%% We need to implement `debit/3` as it is required by the ledger API, but we
+%%% do not want to charge for requests, so we return `ok` and do not actually
 %%% debit the user's account. Similarly, we are not interested in taking payments
-%%% from users, so we do not implement `credit/3'.
+%%% from users, so we do not implement `credit/3`.
 -export([debit/3]).
 -include("include/hb.hrl").
 

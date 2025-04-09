@@ -5,11 +5,11 @@ AO-Core protocol, and their uderlying binary representations and formats.
 
 Unless you are implementing a new message serialization codec, you should
 not need to interact with this module directly. Instead, use the
-`hb_ao' interfaces to interact with all messages. The `dev_message'
+`hb_ao` interfaces to interact with all messages. The `dev_message`
 module implements a device interface for abstracting over the different
 message formats.
 
-`hb_message' and the HyperBEAM caches can interact with multiple different
+`hb_message` and the HyperBEAM caches can interact with multiple different
 types of message formats:
 
     - Richly typed AO-Core structured messages.
@@ -44,14 +44,14 @@ The structure of the conversions is as follows:
 '''
 
 Additionally, this module provides a number of utility functions for
-manipulating messages. For example, `hb_message:sign/2' to sign a message of
-arbitrary type, or `hb_message:format/1' to print an AO-Core/TABM message in
+manipulating messages. For example, `hb_message:sign/2` to sign a message of
+arbitrary type, or `hb_message:format/1` to print an AO-Core/TABM message in
 a human-readable format.
 
-The `hb_cache' module is responsible for storing and retrieving messages in
+The `hb_cache` module is responsible for storing and retrieving messages in
 the HyperBEAM stores configured on the node. Each store has its own storage
 backend, but each works with simple key-value pairs. Subsequently, the 
-`hb_cache' module uses TABMs as the internal format for storing and 
+`hb_cache` module uses TABMs as the internal format for storing and 
 retrieving messages.
 """.
 -export([id/1, id/2, id/3]).
@@ -79,7 +79,7 @@ The encoding happens in two phases:
 1. Convert the message to a TABM.
 2. Convert the TABM to the target format.
 
-The conversion to a TABM is done by the `structured@1.0' codec, which is always
+The conversion to a TABM is done by the `structured@1.0` codec, which is always
 available. The conversion from a TABM is done by the target codec.
 """.
 convert(Msg, TargetFormat, Opts) ->
@@ -120,8 +120,8 @@ from_tabm(Msg, TargetFormat, OldPriv, Opts) ->
     end.
 
 -doc """
-Add the existing `priv' sub-map back to a converted message, honoring
-any existing `priv' sub-map that may already be present.
+Add the existing `priv` sub-map back to a converted message, honoring
+any existing `priv` sub-map that may already be present.
 """.
 restore_priv(Msg, EmptyPriv) when map_size(EmptyPriv) == 0 -> Msg;
 restore_priv(Msg, OldPriv) ->
@@ -408,9 +408,9 @@ format(Map, Indent) when is_map(Map) ->
     % Put the path and device rows into the output at the _top_ of the map.
     PriorityKeys = [{<<"path">>, ValOrUndef(<<"path">>)}, {<<"device">>, ValOrUndef(<<"device">>)}],
     % Add private keys to the output if they are not hidden. Opt takes 3 forms:
-    % 1. `false' -- never show priv
-    % 2. `if_present' -- show priv only if there are keys inside
-    % 2. `always' -- always show priv
+    % 1. `false` -- never show priv
+    % 2. `if_present` -- show priv only if there are keys inside
+    % 2. `always` -- always show priv
     FooterKeys =
         case {hb_opts:get(debug_show_priv, false, #{}), maps:get(<<"priv">>, Map, #{})} of
             {false, _} -> [];
@@ -502,9 +502,9 @@ type(Msg) when is_map(Msg) ->
 -doc """
 Check if two maps match, including recursively checking nested maps.
 Takes an optional mode argument to control the matching behavior:
-     `strict': All keys in both maps be present and match.
-     `only_present': Only present keys in both maps must match.
-     `primary': Only the primary map's keys must be present.
+     `strict`: All keys in both maps be present and match.
+     `only_present`: Only present keys in both maps must match.
+     `primary`: Only the primary map's keys must be present.
 """.
 match(Map1, Map2) ->
     match(Map1, Map2, strict).
@@ -570,7 +570,7 @@ matchable_keys(Map) ->
 
 -doc """
 Filter messages that do not match the 'spec' given. The underlying match
-is performed in the `only_present' mode, such that match specifications only
+is performed in the `only_present` mode, such that match specifications only
 need to specify the keys that must be present.
 """.
 with_commitments(Spec, Msg) ->
@@ -592,7 +592,7 @@ with_commitments(_Spec, Msg, _Opts) ->
     Msg.
 
 -doc """
-Filter messages that match the 'spec' given. Inverts the `with_commitments/2'
+Filter messages that match the 'spec' given. Inverts the `with_commitments/2`
 function, such that only messages that do _not_ match the spec are returned.
 """.
 without_commitments(Spec, Msg) ->
@@ -612,9 +612,9 @@ without_commitments(_Spec, Msg, _Opts) ->
     Msg.
 
 -doc """
-Extract a commitment from a message given a `committer' ID, or a spec
+Extract a commitment from a message given a `committer` ID, or a spec
 message to match against. Returns only the first matching commitment, or
-`not_found'.
+`not_found`.
 """.
 commitment(Committer, Msg) ->
     commitment(Committer, Msg, #{}).
@@ -644,7 +644,7 @@ commitment(_Spec, _Msg, _Opts) ->
 
 -doc """
 Implements a standard pattern in which the target for an operation is
-found by looking for a `target' key in the request. If the target is `self',
+found by looking for a `target` key in the request. If the target is `self`,
 or not present, the operation is performed on the original message. Otherwise,
 the target is expected to be a key in the message, and the operation is
 performed on the value of that key.
@@ -930,8 +930,8 @@ nested_empty_map_test(Codec) ->
 
 -doc """
 Test that the data field is correctly managed when we have multiple
-%% uses for it (the 'data' key itself, as well as keys that cannot fit in
-%% tags).
+uses for it (the 'data' key itself, as well as keys that cannot fit in
+tags).
 """.
 nested_message_with_large_content_test(Codec) ->
     MainBodyKey =

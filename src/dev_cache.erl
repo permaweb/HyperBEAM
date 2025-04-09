@@ -1,9 +1,9 @@
 -module(dev_cache).
 -moduledoc """
 A device that looks up an ID from a local store and returns it,
-honoring the `accept' key to return the correct format. The cache also
+honoring the `accept` key to return the correct format. The cache also
 supports writing messages to the store, if the node message has the
-writer's address in its `cache_writers' key.
+writer's address in its `cache_writers` key.
 """.
 -export([read/3, write/3, link/3]).
 -include("include/hb.hrl").
@@ -61,7 +61,7 @@ read(_M1, M2, Opts) ->
 -doc """
 Write data to the cache.
 Processes a write request by first verifying that the request comes from a
-trusted writer (as defined by the `cache_writers' configuration in the
+trusted writer (as defined by the `cache_writers` configuration in the
 options). The write type is determined from the message ("single" or "batch")
 and the data is stored accordingly.
 

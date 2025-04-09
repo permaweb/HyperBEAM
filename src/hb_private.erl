@@ -13,7 +13,7 @@ The `set` and `get` functions of this module allow you to run those keys
 as AO-Core paths if you would like to have private `devices` in the
 messages non-public zone.
 
-See `hb_ao' for more information about the AO-Core protocol
+See `hb_ao` for more information about the AO-Core protocol
 and private elements of messages.
 """.
 -export([from_message/1, reset/1, is_private/1]).
@@ -22,8 +22,8 @@ and private elements of messages.
 -include("include/hb.hrl").
 
 -doc """
-Return the `private' key from a message. If the key does not exist, an
-%% empty map is returned.
+Return the `private` key from a message. If the key does not exist, an
+empty map is returned.
 """.
 from_message(Msg) when is_map(Msg) ->
     case maps:is_key(<<"priv">>, Msg) of
@@ -34,8 +34,8 @@ from_message(_NonMapMessage) -> #{}.
 
 -doc """
 Helper for getting a value from the private element of a message. Uses
-%% AO-Core resolve under-the-hood, removing the private specifier from the
-%% path if it exists.
+AO-Core resolve under-the-hood, removing the private specifier from the
+path if it exists.
 """.
 get(Key, Msg, Opts) ->
     get(Key, Msg, not_found, Opts).
@@ -100,7 +100,7 @@ remove_private_specifier(InputPath) ->
 
 -doc """
 The opts map that should be used when resolving paths against the
-%% private element of a message.
+private element of a message.
 """.
 priv_ao_opts(Opts) ->
     Opts#{ hashpath => ignore, cache_control => [<<"no-cache">>, <<"no-store">>] }.

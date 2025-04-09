@@ -5,8 +5,8 @@ the HyperBEAM (and AO) systems, using JSON as a shared data representation.
 The interface is easy to use. It works as follows:
 1. The device is given a message that contains a process definition, WASM
    environment, and a message that contains the data to be processed,
-   including the image to be used in part of `execute{pass=1}'.
-2. The device is called with `execute{pass=2}', which reads the result of
+   including the image to be used in part of `execute{pass=1}`.
+2. The device is called with `execute{pass=2}`, which reads the result of
    the process execution from the WASM environment and adds it to the
    message.
 The device has the following requirements and interface:
@@ -58,7 +58,7 @@ compute(M1, M2, Opts) ->
 
 -doc """
 Prepare the WASM environment for execution by writing the process string and
-%% the message as JSON representations into the WASM environment.
+the message as JSON representations into the WASM environment.
 """.
 prep_call(M1, M2, Opts) ->
     ?event({prep_call, M1, M2, Opts}),
@@ -168,7 +168,7 @@ message_to_json_struct(RawMsg, Features) ->
 
 -doc """
 Prepare the tags of a message as a key-value list, for use in the 
-%% construction of the JSON-Struct message.
+construction of the JSON-Struct message.
 """.
 prepare_tags(Msg) ->
     % Prepare an ANS-104 message for JSON-Struct construction.
@@ -187,8 +187,8 @@ prepare_tags(Msg) ->
     end.
 
 -doc """
-Convert a message without an `original-tags' field into a list of
-%% key-value pairs, with the keys in HTTP header-case.
+Convert a message without an `original-tags` field into a list of
+key-value pairs, with the keys in HTTP header-case.
 """.
 prepare_header_case_tags(TABM) ->
     % Prepare a non-ANS-104 message for JSON-Struct construction. 
@@ -212,7 +212,7 @@ prepare_header_case_tags(TABM) ->
 
 -doc """
 Translates a compute result -- either from a WASM execution using the 
-%% JSON-Iface, or from a `Legacy' CU -- and transforms it into a result message.
+JSON-Iface, or from a `Legacy` CU -- and transforms it into a result message.
 """.
 json_to_message(JSON, Opts) when is_binary(JSON) ->
     json_to_message(hb_json:decode(JSON), Opts);
@@ -270,8 +270,8 @@ header_case_string(Key) ->
 
 -doc """
 Read the computed results out of the WASM environment, assuming that
-%% the environment has been set up by `prep_call/3' and that the WASM executor
-%% has been called with `computed{pass=1}'.
+the environment has been set up by `prep_call/3` and that the WASM executor
+has been called with `computed{pass=1}`.
 """.
 results(M1, M2, Opts) ->
     Prefix = dev_stack:prefix(M1, M2, Opts),
@@ -379,8 +379,8 @@ normalize_results(Other) ->
 
 -doc """
 After the process returns messages from an evaluation, the
-%% signing node needs to add some tags to each message and spawn such that
-%% the target process knows these messages are created by a process.
+signing node needs to add some tags to each message and spawn such that
+the target process knows these messages are created by a process.
 """.
 preprocess_results(Msg, _Opts) ->
     Tags = tags_to_map(Msg),
@@ -416,8 +416,8 @@ tags_to_map(Msg) ->
     maps:from_list(TagList).
 
 -doc """
-Post-process messages in the outbox to add the correct `from-process'
-%% and `from-image' tags.
+Post-process messages in the outbox to add the correct `from-process`
+and `from-image` tags.
 """.
 postprocess_outbox(Msg, Proc, Opts) ->
     AdjustedOutbox =

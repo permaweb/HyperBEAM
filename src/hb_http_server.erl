@@ -5,10 +5,10 @@ Because AO-Core is built to speak in HTTP semantics, this module
 only has to marshal the HTTP request into a message, and then
 pass it to the AO-Core resolver. 
 
-`hb_http:reply/4' is used to respond to the client, handling the 
+`hb_http:reply/4` is used to respond to the client, handling the 
 process of converting a message back into an HTTP response.
 
-The router uses an `Opts' message as its Cowboy initial state, 
+The router uses an `Opts` message as its Cowboy initial state, 
 such that changing it on start of the router server allows for
 the execution parameters of all downstream requests to be controlled.
 """.
@@ -18,9 +18,9 @@ the execution parameters of all downstream requests to be controlled.
 -include("include/hb.hrl").
 
 -doc """
-Starts the HTTP server. Optionally accepts an `Opts' message, which
-%% is used as the source for server configuration settings, as well as the
-%% `Opts' argument to use for all AO-Core resolution requests downstream.
+Starts the HTTP server. Optionally accepts an `Opts` message, which
+is used as the source for server configuration settings, as well as the
+`Opts` argument to use for all AO-Core resolution requests downstream.
 """.
 start() ->
     ?event(http, {start_store, <<"cache-mainnet">>}),
@@ -252,7 +252,7 @@ start_http2(ServerID, ProtoOpts, NodeMsg) ->
 
 -doc """
 Entrypoint for all HTTP requests. Receives the Cowboy request option and
-%% the server ID, which can be used to lookup the node message.
+the server ID, which can be used to lookup the node message.
 """.
 init(Req, ServerID) ->
     case cowboy_req:method(Req) of
@@ -287,13 +287,13 @@ cors_reply(Req, _ServerID) ->
 
 -doc """
 Handle all non-CORS preflight requests as AO-Core requests. Execution 
-%% starts by parsing the HTTP request into HyerBEAM's message format, then
-%% passing the message directly to `meta@1.0' which handles calling AO-Core in
-%% the appropriate way.
+starts by parsing the HTTP request into HyerBEAM's message format, then
+passing the message directly to `meta@1.0` which handles calling AO-Core in
+the appropriate way.
 """.
 handle_request(RawReq, Body, ServerID) ->
     % Insert the start time into the request so that it can be used by the
-    % `hb_http' module to calculate the duration of the request.
+    % `hb_http` module to calculate the duration of the request.
     StartTime = os:system_time(millisecond),
     Req = RawReq#{ start_time => StartTime },
     NodeMsg = get_opts(#{ http_server => ServerID }),
@@ -336,8 +336,8 @@ allowed_methods(Req, State) ->
     {[<<"GET">>, <<"POST">>, <<"PUT">>, <<"DELETE">>, <<"OPTIONS">>, <<"PATCH">>], Req, State}.
 
 -doc """
-Update the `Opts' map that the HTTP server uses for all future
-%% requests.
+Update the `Opts` map that the HTTP server uses for all future
+requests.
 """.
 set_opts(Opts) ->
     ServerRef = hb_opts:get(http_server, no_server_ref, Opts),

@@ -1,7 +1,7 @@
 -module(dev_push).
 -moduledoc """
 `push@1.0` takes a message or slot number, evaluates it, and recursively
-pushes the resulting messages to other processes. The `push'ing mechanism
+pushes the resulting messages to other processes. The `push`ing mechanism
 continues until the there are no remaining messages to push.
 """.
 %%% Public API
@@ -198,7 +198,7 @@ target_process(MsgToPush, Opts) ->
     end.
 
 -doc """
-Return either the `target' or the `hint'.
+Return either the `target` or the `hint`.
 """.
 extract(hint, Raw) ->
     {_, Hint} = split_target(Raw),
@@ -534,7 +534,7 @@ push_with_redirect_hint_test_disabled() ->
         ?event(push, {after_push, AfterPush}),
         % Note: This test currently only gets a reply that the message was not
         % trusted by the process. To fix this, we would have to add another 
-        % trusted authority to the `test_aos_process' call. For now, this is 
+        % trusted authority to the `test_aos_process` call. For now, this is 
         % enough to validate that redirects are pushed through correctly.
         ?assertEqual({ok, <<"GOT PONG">>}, AfterPush)
     end}.

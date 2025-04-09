@@ -21,8 +21,8 @@ list(StoreOpts, Key) ->
 
 -doc """
 Get the type of the data at the given key. We potentially cache the
-%% result, so that we don't have to read the data from the GraphQL route
-%% multiple times.
+result, so that we don't have to read the data from the GraphQL route
+multiple times.
 """.
 type(StoreOpts, Key) ->
     ?event({type, StoreOpts, Key}),
@@ -42,7 +42,7 @@ type(StoreOpts, Key) ->
 
 -doc """
 Read the data at the given key from the GraphQL route. Will only attempt
-%% to read the data if the key is an ID.
+to read the data if the key is an ID.
 """.
 read(StoreOpts, Key) ->
     case hb_path:term_to_path_parts(Key) of
@@ -61,9 +61,9 @@ read(StoreOpts, Key) ->
     end.
 
 -doc """
-Cache the data if the cache is enabled. The `store' option may either
-%% be `false' to disable local caching, or a store definition to use as the
-%% cache.
+Cache the data if the cache is enabled. The `store` option may either
+be `false` to disable local caching, or a store definition to use as the
+cache.
 """.
 maybe_cache(StoreOpts, Data) ->
     ?event({maybe_cache, StoreOpts, Data}),
@@ -106,7 +106,7 @@ graphql_as_store_test_() ->
 	end}.
 
 -doc """
-Stored messages are accessible via `hb_cache' accesses.
+Stored messages are accessible via `hb_cache` accesses.
 """.
 graphql_from_cache_test() ->
     hb_http_server:start_node(#{}),
@@ -167,10 +167,10 @@ cache_read_message_test() ->
 
 -doc """
 Routes can be specified in the options, overriding the default routes.
-%% We test this by inversion: If the above cache read test works, then we know 
-%% that the default routes allow access to the item. If the test below were to
-%% produce the same result, despite an empty 'only' route list, then we would
-%% know that the module is not respecting the route list.
+We test this by inversion: If the above cache read test works, then we know 
+that the default routes allow access to the item. If the test below were to
+produce the same result, despite an empty 'only' route list, then we would
+know that the module is not respecting the route list.
 """.
 specific_route_test() ->
     hb_http_server:start_node(#{}),
@@ -245,7 +245,7 @@ resolve_on_gateway_test_() ->
             {ok, <<"Process">>},
             hb_ao:resolve(TestProc, <<"type">>, Opts)
         ),
-        % Next, we resolve the schedule key on the message, as a `process@1.0'
+        % Next, we resolve the schedule key on the message, as a `process@1.0`
         % message.
         {ok, X} =
             hb_ao:resolve(

@@ -1,112 +1,533 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module hb_store_fs</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module hb_store_fs</h1>
-<ul class="index"><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#list-2">list/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#make_group-2">make_group/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#make_link-3">make_link/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read a key from the store, following symlinks as needed.</td></tr>
-<tr><td valign="top"><a href="#reset-1">reset/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td>Replace links in a path successively, returning the final path.</td></tr>
-<tr><td valign="top"><a href="#scope-1">scope/1</a></td><td>The file-based store is always local, for now.</td></tr>
-<tr><td valign="top"><a href="#start-1">start/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#stop-1">stop/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#type-2">type/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#write-3">write/3</a></td><td></td></tr>
-</table>
+    <title>hb_store_fs — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
 
-<h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="list-2">list/2</a></h3>
-<div class="spec">
-<p><code>list(Opts, Path) -&gt; any()</code></p>
-<p> </p>
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
+
+  </head>
+  <body data-type="modules" class="page-module">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+    <span translate="no">hb_store_fs</span> 
+    <small class="app-vsn" translate="no">(hb v0.0.1)</small>
+
+  </h1>
+
+
 </div>
 
-<h3 class="function"><a name="make_group-2">make_group/2</a></h3>
-<div class="spec">
-<p><code>make_group(X1, Path) -&gt; any()</code></p>
-<p> </p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#list/2" data-no-tooltip translate="no">list(Opts, Path)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>List contents of a directory in the store.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#make_group/2" data-no-tooltip translate="no">make_group/2</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Create a directory (group) in the store.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#make_link/3" data-no-tooltip translate="no">make_link/3</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Create a symlink, handling the case where the link would point to itself.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#read/2" data-no-tooltip translate="no">read(Opts, Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Read a key from the store, following symlinks as needed.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#reset/1" data-no-tooltip translate="no">reset/1</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Reset the store by completely removing its directory and recreating it.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#resolve/2" data-no-tooltip translate="no">resolve(Opts, RawPath)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Replace links in a path successively, returning the final path.
+Each element of the path is resolved in turn, with the result of each
+resolution becoming the prefix for the next resolution. This allows 
+paths to resolve across many links. For example, a structure as follows</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#scope/1" data-no-tooltip translate="no">scope/1</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>The file-based store is always local, for now. In the future, we may
+want to allow that an FS store is shared across a cluster and thus remote.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start/1" data-no-tooltip translate="no">start/1</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Initialize the file system store with the given data directory.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#stop/1" data-no-tooltip translate="no">stop/1</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Stop the file system store. Currently a no-op.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#type/2" data-no-tooltip translate="no">type(Opts, Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Determine the type of a key in the store.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#write/3" data-no-tooltip translate="no">write(Opts, PathComponents, Value)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Write a value to the specified path in the store.</p></div>
+
+    </div>
+
 </div>
 
-<h3 class="function"><a name="make_link-3">make_link/3</a></h3>
-<div class="spec">
-<p><code>make_link(Opts, Link, New) -&gt; any()</code></p>
-<p> </p>
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="list/2">
+
+  <div class="detail-header">
+    <a href="#list/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">list(Opts, Path)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L71" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>List contents of a directory in the store.</p>
+  </section>
+</section>
+<section class="detail" id="make_group/2">
+
+  <div class="detail-header">
+    <a href="#make_group/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">make_group/2</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L129" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Create a directory (group) in the store.</p>
+  </section>
+</section>
+<section class="detail" id="make_link/3">
+
+  <div class="detail-header">
+    <a href="#make_link/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">make_link/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L143" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Create a symlink, handling the case where the link would point to itself.</p>
+  </section>
+</section>
+<section class="detail" id="read/2">
+
+  <div class="detail-header">
+    <a href="#read/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">read(Opts, Key)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L42" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Read a key from the store, following symlinks as needed.</p>
+  </section>
+</section>
+<section class="detail" id="reset/1">
+
+  <div class="detail-header">
+    <a href="#reset/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">reset/1</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L34" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Reset the store by completely removing its directory and recreating it.</p>
+  </section>
+</section>
+<section class="detail" id="resolve/2">
+
+  <div class="detail-header">
+    <a href="#resolve/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">resolve(Opts, RawPath)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L84" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Replace links in a path successively, returning the final path.
+Each element of the path is resolved in turn, with the result of each
+resolution becoming the prefix for the next resolution. This allows 
+paths to resolve across many links. For example, a structure as follows:</p><pre><code class="makeup erlang" translate="no"><span class="o">/</span><span class="ss">a</span><span class="o">/</span><span class="ss">b</span><span class="o">/</span><span class="nc">c</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Not the right data&quot;</span><span class="w">
+</span><span class="o">/</span><span class="ss">a</span><span class="o">/</span><span class="ss">b</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="o">/</span><span class="ss">a</span><span class="o">/</span><span class="ss">alt</span><span class="o">-</span><span class="ss">b</span><span class="w">
+</span><span class="o">/</span><span class="ss">a</span><span class="o">/</span><span class="ss">alt</span><span class="o">-</span><span class="ss">b</span><span class="o">/</span><span class="nc">c</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Correct data&quot;</span></code></pre><p>will resolve &quot;a/b/c&quot; to &quot;Correct data&quot;.</p>
+  </section>
+</section>
+<section class="detail" id="scope/1">
+
+  <div class="detail-header">
+    <a href="#scope/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">scope/1</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L29" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>The file-based store is always local, for now. In the future, we may
+want to allow that an FS store is shared across a cluster and thus remote.</p>
+  </section>
+</section>
+<section class="detail" id="start/1">
+
+  <div class="detail-header">
+    <a href="#start/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">start/1</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L16" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Initialize the file system store with the given data directory.</p>
+  </section>
+</section>
+<section class="detail" id="stop/1">
+
+  <div class="detail-header">
+    <a href="#stop/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">stop/1</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L22" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Stop the file system store. Currently a no-op.</p>
+  </section>
+</section>
+<section class="detail" id="type/2">
+
+  <div class="detail-header">
+    <a href="#type/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">type(Opts, Key)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L110" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Determine the type of a key in the store.</p>
+  </section>
+</section>
+<section class="detail" id="write/3">
+
+  <div class="detail-header">
+    <a href="#write/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">write(Opts, PathComponents, Value)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_fs.erl#L62" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Write a value to the specified path in the store.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
 </div>
 
-<h3 class="function"><a name="read-2">read/2</a></h3>
-<div class="spec">
-<p><code>read(Opts, Key) -&gt; any()</code></p>
-<p> </p>
-</div><p>Read a key from the store, following symlinks as needed.</p>
-
-<h3 class="function"><a name="reset-1">reset/1</a></h3>
-<div class="spec">
-<p><code>reset(X1) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="resolve-2">resolve/2</a></h3>
-<div class="spec">
-<p><code>resolve(Opts, RawPath) -&gt; any()</code></p>
-<p> </p>
-</div><p><p>Replace links in a path successively, returning the final path.  
-Each element of the path is resolved in turn, with the result of each  
-resolution becoming the prefix for the next resolution. This allows  
-paths to resolve across many links. For example, a structure as follows:</p>
- 
-     <p>/a/b/c: "Not the right data"     
-/a/b -&gt; /a/alt-b     
-/a/alt-b/c: "Correct data"</p>
- 
-  will resolve "a/b/c" to "Correct data".</p>
-
-<h3 class="function"><a name="scope-1">scope/1</a></h3>
-<div class="spec">
-<p><code>scope(X1) -&gt; any()</code></p>
-<p> </p>
-</div><p>The file-based store is always local, for now. In the future, we may
-  want to allow that an FS store is shared across a cluster and thus remote.</p>
-
-<h3 class="function"><a name="start-1">start/1</a></h3>
-<div class="spec">
-<p><code>start(X1) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="stop-1">stop/1</a></h3>
-<div class="spec">
-<p><code>stop(X1) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="type-2">type/2</a></h3>
-<div class="spec">
-<p><code>type(Opts, Key) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="write-3">write/3</a></h3>
-<div class="spec">
-<p><code>write(Opts, PathComponents, Value) -&gt; any()</code></p>
-<p> </p>
-</div>
-<hr>
-
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  </body>
 </html>

@@ -34,9 +34,9 @@ stop(Modules) -> call_function(Modules, stop, []).
 
 -doc """
 Takes a store object and a filter function or match spec, returning a
-%% new store object with only the modules that match the filter. The filter
-%% function takes 2 arguments: the scope and the options. It calls the store's
-%% scope function to get the scope of the module.
+new store object with only the modules that match the filter. The filter
+function takes 2 arguments: the scope and the options. It calls the store's
+scope function to get the scope of the module.
 """.
 filter(Module, Filter) when not is_list(Module) ->
     filter([Module], Filter);
@@ -52,8 +52,8 @@ filter(Modules, Filter) ->
 
 -doc """
 Limit the store scope to only a specific (set of) option(s).
-%% Takes either an Opts message or store, and either a single scope or a list
-%% of scopes.
+Takes either an Opts message or store, and either a single scope or a list
+of scopes.
 """.
 scope(Scope, Opts) when is_map(Opts) ->
     case hb_opts:get(store, no_viable_store, Opts) of
@@ -71,7 +71,7 @@ scope(Scope, Store) ->
 
 -doc """
 Ask a store for its own scope. If it doesn't have one, return the
-%% default scope (local).
+default scope (local).
 """.
 get_store_scope(Store) ->
     case call_function(Store, scope, []) of
@@ -81,10 +81,10 @@ get_store_scope(Store) ->
 
 -doc """
 Order a store by a preference of its scopes. This is useful for making
-%% sure that faster (or perhaps cheaper) stores are used first. If a list is
-%% provided, it will be used as a preference order. If a map is provided,
-%% scopes will be ordered by the scores in the map. Any unknown scopes will
-%% default to a score of 0.
+sure that faster (or perhaps cheaper) stores are used first. If a list is
+provided, it will be used as a preference order. If a map is provided,
+scopes will be ordered by the scores in the map. Any unknown scopes will
+default to a score of 0.
 """.
 sort(Stores, PreferenceOrder) when is_list(PreferenceOrder) ->
     sort(
@@ -129,7 +129,7 @@ write(Modules, Key, Value) -> call_function(Modules, write, [Key, Value]).
 
 -doc """
 Make a group in the store. A group can be seen as a namespace or
-%% 'directory' in a filesystem.
+'directory' in a filesystem.
 """.
 make_group(Modules, Path) -> call_function(Modules, make_group, [Path]).
 
@@ -141,26 +141,26 @@ make_link(Modules, Existing, New) ->
 
 -doc """
 Delete all of the keys in a store. Should be used with extreme
-%% caution. Lost data can lose money in many/most of hyperbeam's use cases.
+caution. Lost data can lose money in many/most of hyperbeam's use cases.
 """.
 reset(Modules) -> call_function(Modules, reset, []).
 
 -doc """
 Get the type of element of a given path in the store. This can be
-%% a performance killer if the store is remote etc. Use only when necessary.
+a performance killer if the store is remote etc. Use only when necessary.
 """.
 type(Modules, Path) -> call_function(Modules, type, [Path]).
 
 -doc """
 Create a path from a list of path components. If no store implements
-%% the path function, we return the path with the 'default' transformation (id).
+the path function, we return the path with the 'default' transformation (id).
 """.
 path(Path) -> join(Path).
 path(_, Path) -> path(Path).
 
 -doc """
 Add two path components together. If no store implements the add_path
-%% function, we concatenate the paths.
+function, we concatenate the paths.
 """.
 add_path(Path1, Path2) -> Path1 ++ Path2.
 add_path(Store, Path1, Path2) ->
@@ -176,14 +176,14 @@ resolve(Modules, Path) -> call_function(Modules, resolve, [Path]).
 
 -doc """
 List the keys in a group in the store. Use only in debugging.
-%% The hyperbeam model assumes that stores are built as efficient hash-based
-%% structures, so this is likely to be very slow for most stores.
+The hyperbeam model assumes that stores are built as efficient hash-based
+structures, so this is likely to be very slow for most stores.
 """.
 list(Modules, Path) -> call_function(Modules, list, [Path]).
 
 -doc """
 Call a function on the first store module that succeeds. Returns its
-%% result, or no_viable_store if none of the stores succeed.
+result, or no_viable_store if none of the stores succeed.
 """.
 call_function(X, _Function, _Args) when not is_list(X) ->
     call_function([X], _Function, _Args);

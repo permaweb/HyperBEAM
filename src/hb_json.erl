@@ -1,7 +1,7 @@
 -module(hb_json).
 -moduledoc """
 Wrapper for encoding and decoding JSON. Supports maps and Jiffy's old 
-`ejson' format. This module abstracts the underlying JSON library, allowing
+`ejson` format. This module abstracts the underlying JSON library, allowing
 us to switch between libraries as needed in the future.
 """.
 

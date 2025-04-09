@@ -53,7 +53,7 @@ format(Base, _, _) ->
 
 -doc """
 Serve a file from the priv directory. Only serves files that are explicitly
-listed in the `routes' field of the `info/0' return value.
+listed in the `routes` field of the `info/0` return value.
 """.
 serve(<<"keys">>, M1, _M2, _Opts) -> dev_message:keys(M1);
 serve(<<"set">>, M1, M2, Opts) -> dev_message:set(M1, M2, Opts);

@@ -5,16 +5,16 @@ appropriate network recipients via HTTP. All messages are initially
 routed to a single process per node, which then load-balances them
 between downstream workers that perform the actual requests.
 
-The routes for the router are defined in the `routes' key of the `Opts',
+The routes for the router are defined in the `routes` key of the `Opts`,
 as a precidence-ordered list of maps. The first map that matches the
 message will be used to determine the route.
 
 Multiple nodes can be specified as viable for a single route, with the
-`Choose' key determining how many nodes to choose from the list (defaulting
-to 1). The `Strategy' key determines the load distribution strategy,
-which can be one of `Random', `By-Base', or `Nearest'. The route may also 
+`Choose` key determining how many nodes to choose from the list (defaulting
+to 1). The `Strategy` key determines the load distribution strategy,
+which can be one of `Random`, `By-Base`, or `Nearest`. The route may also 
 define additional parallel execution parameters, which are used by the
-`hb_http' module to manage control of requests.
+`hb_http` module to manage control of requests.
 
 The structure of the routes should be as follows:
 ```
@@ -74,7 +74,7 @@ routes(M1, M2, Opts) ->
 -doc """
 Find the appropriate route for the given message. If we are able to 
 resolve to a single host+path, we return that directly. Otherwise, we return
-the matching route (including a list of nodes under `nodes') from the list of
+the matching route (including a list of nodes under `nodes`) from the list of
 routes.
 
 If we have a route that has multiple resolving nodes, check
@@ -86,13 +86,13 @@ the load distribution strategy and choose a node. Supported strategies:
       Nearest: According to the distance of the node's wallet address to the
                base message's hashpath.
 '''
-`By-Base' will ensure that all traffic for the same hashpath is routed to the
-same node, minimizing work duplication, while `Random' ensures a more even
+`By-Base` will ensure that all traffic for the same hashpath is routed to the
+same node, minimizing work duplication, while `Random` ensures a more even
 distribution of the requests.
 
-Can operate as a `~router@1.0' device, which will ignore the base message,
+Can operate as a `~router@1.0` device, which will ignore the base message,
 routing based on the Opts and request message provided, or as a standalone
-function, taking only the request message and the `Opts' map.
+function, taking only the request message and the `Opts` map.
 """.
 route(Msg, Opts) -> route(undefined, Msg, Opts).
 route(_, Msg, Opts) ->
@@ -110,7 +110,7 @@ route(_, Msg, Opts) ->
                 <<"All">> -> {ok, ModR};
                 Strategy ->
                     ChooseN = hb_ao:get(<<"choose">>, R, 1, Opts),
-                    % Get the first element of the path -- the `base' message
+                    % Get the first element of the path -- the `base` message
                     % of the request.
                     Base = extract_base(Msg, Opts),
                     Nodes = hb_ao:get(<<"nodes">>, ModR, Opts),
@@ -155,7 +155,7 @@ extract_base(RawPath, Opts) when is_binary(RawPath) ->
     end.
 
 -doc """
-Generate a `uri' key for each node in a route.
+Generate a `uri` key for each node in a route.
 """.
 apply_routes(Msg, R, Opts) ->
     Nodes = hb_ao:get(<<"nodes">>, R, Opts),
@@ -175,10 +175,10 @@ apply_routes(Msg, R, Opts) ->
 -doc """
 Apply a node map's rules for transforming the path of the message.
 Supports the following keys:
-- `opts': A map of options to pass to the request.
-- `prefix': The prefix to add to the path.
-- `suffix': The suffix to add to the path.
-- `replace': A regex to replace in the path.
+- `opts`: A map of options to pass to the request.
+- `prefix`: The prefix to add to the path.
+- `suffix`: The suffix to add to the path.
+- `replace`: A regex to replace in the path.
 """.
 apply_route(Msg, Route = #{ <<"opts">> := Opts }) ->
     {ok, #{
@@ -345,7 +345,7 @@ strategy_suite_test_() ->
     ).
 
 -doc """
-Ensure that `By-Base' always chooses the same node for the same
+Ensure that `By-Base` always chooses the same node for the same
 hashpath.
 """.
 by_base_determinism_test() ->
@@ -636,7 +636,7 @@ simulation_distribution(SimRes, Nodes) ->
 
 within_norms(SimRes, Nodes, TestSize) ->
     Distribution = simulation_distribution(SimRes, Nodes),
-    % Check that the mean is `TestSize/length(Nodes)'
+    % Check that the mean is `TestSize/length(Nodes)`
     Mean = hb_util:mean(Distribution),
     ?assert(Mean == (TestSize / length(Nodes))),
     % Check that the highest count is not more than 3 standard deviations

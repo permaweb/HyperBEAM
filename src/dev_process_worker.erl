@@ -1,7 +1,7 @@
 -module(dev_process_worker).
 -moduledoc """
 A long-lived process worker that keeps state in memory between
-calls. Implements the interface of `hb_ao' to receive and respond 
+calls. Implements the interface of `hb_ao` to receive and respond 
 to computation requests regarding a process as a singleton.
 """.
 -export([server/3, stop/1, group/3, await/5, notify_compute/4]).
@@ -42,7 +42,7 @@ process_to_group_name(Msg1, Opts) ->
 
 -doc """
 Spawn a new worker process. This is called after the end of the first
-execution of `hb_ao:resolve/3', so the state we are given is the
+execution of `hb_ao:resolve/3`, so the state we are given is the
 already current.
 """.
 server(GroupName, Msg1, Opts) ->
@@ -97,7 +97,7 @@ server(GroupName, Msg1, Opts) ->
     end.
 
 -doc """
-Await a resolution from a worker executing the `process@1.0' device.
+Await a resolution from a worker executing the `process@1.0` device.
 """.
 await(Worker, GroupName, Msg1, Msg2, Opts) ->
     case hb_path:matches(<<"compute">>, hb_path:hd(Msg2, Opts)) of

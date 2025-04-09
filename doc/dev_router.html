@@ -1,70 +1,606 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module dev_router</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module dev_router</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>A device that routes outbound messages from the node to their   
-appropriate network recipients via HTTP.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
 
 
-<h2><a name="description">Description</a></h2><p>A device that routes outbound messages from the node to their   
-appropriate network recipients via HTTP. All messages are initially   
-routed to a single process per node, which then load-balances them   
-between downstream workers that perform the actual requests.</p>
-  
-   <p>The routes for the router are defined in the <code>routes</code> key of the <code>Opts</code>,   
-as a precidence-ordered list of maps. The first map that matches the   
-message will be used to determine the route.</p>
-  
-   <p>Multiple nodes can be specified as viable for a single route, with the
-   <code>Choose</code> key determining how many nodes to choose from the list (defaulting
-   to 1). The <code>Strategy</code> key determines the load distribution strategy,
-   which can be one of <code>Random</code>, <code>By-Base</code>, or <code>Nearest</code>. The route may also
-   define additional parallel execution parameters, which are used by the
-   <code>hb_http</code> module to manage control of requests.</p>
-  
-   The structure of the routes should be as follows:
-   <pre>       Node?: The node to route the message to.
-       Nodes?: A list of nodes to route the message to.
-       Strategy?: The load distribution strategy to use.
-       Choose?: The number of nodes to choose from the list.
-       Template?: A message template to match the message against, either as a
-                  map or a path regex.</pre>
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#match_routes-3">match_routes/3</a></td><td>Find the first matching template in a list of known routes.</td></tr>
-<tr><td valign="top"><a href="#route-3">route/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#routes-3">routes/3</a></td><td>Device function that returns all known routes.</td></tr>
-</table>
+    <title>dev_router — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
 
-<h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="match_routes-3">match_routes/3</a></h3>
-<div class="spec">
-<p><code>match_routes(ToMatch, Routes, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Find the first matching template in a list of known routes.</p>
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
 
-<h3 class="function"><a name="route-3">route/3</a></h3>
-<div class="spec">
-<p><code>route(X1, Msg, Opts) -&gt; any()</code></p>
-<p> </p>
+  </head>
+  <body data-type="modules" class="page-module">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+    <span translate="no">dev_router</span> 
+    <small class="app-vsn" translate="no">(hb v0.0.1)</small>
+
+  </h1>
+
+
+    <section id="moduledoc">
+<p>A device that routes outbound messages from the node to their
+appropriate network recipients via HTTP. All messages are initially
+routed to a single process per node, which then load-balances them
+between downstream workers that perform the actual requests.</p><p>The routes for the router are defined in the <code class="inline">routes</code> key of the <code class="inline">Opts</code>,
+as a precidence-ordered list of maps. The first map that matches the
+message will be used to determine the route.</p><p>Multiple nodes can be specified as viable for a single route, with the
+<code class="inline">Choose</code> key determining how many nodes to choose from the list (defaulting
+to 1). The <code class="inline">Strategy</code> key determines the load distribution strategy,
+which can be one of <code class="inline">Random</code>, <code class="inline">By-Base</code>, or <code class="inline">Nearest</code>. The route may also 
+define additional parallel execution parameters, which are used by the
+<code class="inline">hb_http</code> module to manage control of requests.</p><p>The structure of the routes should be as follows:</p><pre><code class="makeup erlang" translate="no"><span class="w">    </span><span class="n">Node</span><span class="o">?</span><span class="p">:</span><span class="w"> </span><span class="n">The</span><span class="w"> </span><span class="nb">node</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">route</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">message</span><span class="w"> </span><span class="ss">to</span><span class="p">.</span><span class="w">
+    </span><span class="n">Nodes</span><span class="o">?</span><span class="p">:</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="ss">list</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nb">nodes</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">route</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">message</span><span class="w"> </span><span class="ss">to</span><span class="p">.</span><span class="w">
+    </span><span class="n">Strategy</span><span class="o">?</span><span class="p">:</span><span class="w"> </span><span class="n">The</span><span class="w"> </span><span class="ss">load</span><span class="w"> </span><span class="ss">distribution</span><span class="w"> </span><span class="ss">strategy</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">use</span><span class="p">.</span><span class="w">
+    </span><span class="n">Choose</span><span class="o">?</span><span class="p">:</span><span class="w"> </span><span class="n">The</span><span class="w"> </span><span class="ss">number</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nb">nodes</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">choose</span><span class="w"> </span><span class="ss">from</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">list</span><span class="p">.</span><span class="w">
+    </span><span class="n">Template</span><span class="o">?</span><span class="p">:</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="ss">message</span><span class="w"> </span><span class="ss">template</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">match</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">message</span><span class="w"> </span><span class="ss">against</span><span class="p">,</span><span class="w"> </span><span class="ss">either</span><span class="w"> </span><span class="ss">as</span><span class="w"> </span><span class="ss">a</span><span class="w">
+               </span><span class="ss">map</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="ss">regex</span><span class="p">.</span><span class="w">
+</span><span class="ss">&#39;&#39;</span><span class="err">&#39;</span></code></pre>
+    </section>
+
 </div>
 
-<h3 class="function"><a name="routes-3">routes/3</a></h3>
-<div class="spec">
-<p><code>routes(M1, M2, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Device function that returns all known routes.</p>
-<hr>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#add_route_test/0" data-no-tooltip translate="no">add_route_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#by_base_determinism_test/0" data-no-tooltip translate="no">by_base_determinism_test()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Ensure that <code class="inline">By-Base</code> always chooses the same node for the same
+hashpath.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#device_call_from_singleton_test/0" data-no-tooltip translate="no">device_call_from_singleton_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#explicit_route_test/0" data-no-tooltip translate="no">explicit_route_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_routes_test/0" data-no-tooltip translate="no">get_routes_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#match_routes/3" data-no-tooltip translate="no">match_routes(ToMatch, Routes, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find the first matching template in a list of known routes.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#relay_nearest_test/0" data-no-tooltip translate="no">relay_nearest_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#route/2" data-no-tooltip translate="no">route(Msg, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find the appropriate route for the given message. If we are able to 
+resolve to a single host+path, we return that directly. Otherwise, we return
+the matching route (including a list of nodes under <code class="inline">nodes</code>) from the list of
+routes.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#route/3" data-no-tooltip translate="no">route/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#route_regex_matches_test/0" data-no-tooltip translate="no">route_regex_matches_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#route_template_message_matches_test/0" data-no-tooltip translate="no">route_template_message_matches_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#routes/3" data-no-tooltip translate="no">routes(M1, M2, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Device function that returns all known routes.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#strategy_suite_test_/0" data-no-tooltip translate="no">strategy_suite_test_()</a>
+
+      </div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="add_route_test/0">
+
+  <div class="detail-header">
+    <a href="#add_route_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">add_route_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L505" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="by_base_determinism_test/0">
+
+  <div class="detail-header">
+    <a href="#by_base_determinism_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">by_base_determinism_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L351" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Ensure that <code class="inline">By-Base</code> always chooses the same node for the same
+hashpath.</p>
+  </section>
+</section>
+<section class="detail" id="device_call_from_singleton_test/0">
+
+  <div class="detail-header">
+    <a href="#device_call_from_singleton_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">device_call_from_singleton_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L472" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="explicit_route_test/0">
+
+  <div class="detail-header">
+    <a href="#explicit_route_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">explicit_route_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L450" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="get_routes_test/0">
+
+  <div class="detail-header">
+    <a href="#get_routes_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">get_routes_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L487" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="match_routes/3">
+
+  <div class="detail-header">
+    <a href="#match_routes/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">match_routes(ToMatch, Routes, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L203" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Find the first matching template in a list of known routes.</p>
+  </section>
+</section>
+<section class="detail" id="relay_nearest_test/0">
+
+  <div class="detail-header">
+    <a href="#relay_nearest_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">relay_nearest_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L541" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="route/2">
+
+  <div class="detail-header">
+    <a href="#route/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">route(Msg, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L97" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Find the appropriate route for the given message. If we are able to 
+resolve to a single host+path, we return that directly. Otherwise, we return
+the matching route (including a list of nodes under <code class="inline">nodes</code>) from the list of
+routes.</p><p>If we have a route that has multiple resolving nodes, check
+the load distribution strategy and choose a node. Supported strategies:</p><pre><code class="makeup erlang" translate="no"><span class="w">      </span><span class="n">All</span><span class="p">:</span><span class="w">     </span><span class="n">Return</span><span class="w"> </span><span class="ss">all</span><span class="w"> </span><span class="nf">nodes</span><span class="w"> </span><span class="p" data-group-id="4651073208-1">(</span><span class="ss">default</span><span class="p" data-group-id="4651073208-1">)</span><span class="p">.</span><span class="w">
+      </span><span class="n">Random</span><span class="p">:</span><span class="w">  </span><span class="n">Distribute</span><span class="w"> </span><span class="ss">load</span><span class="w"> </span><span class="ss">evenly</span><span class="w"> </span><span class="ss">across</span><span class="w"> </span><span class="ss">all</span><span class="w"> </span><span class="nb">nodes</span><span class="p">,</span><span class="w"> </span><span class="ss">non</span><span class="o">-</span><span class="ss">deterministically</span><span class="p">.</span><span class="w">
+      </span><span class="n">By</span><span class="o">-</span><span class="n">Base</span><span class="p">:</span><span class="w"> </span><span class="n">According</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">base</span><span class="w"> </span><span class="ss">message</span><span class="ss">&#39;s hashpath.
+      Nearest: According to the distance of the node&#39;</span><span class="ss">s</span><span class="w"> </span><span class="ss">wallet</span><span class="w"> </span><span class="ss">address</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">the</span><span class="w">
+               </span><span class="ss">base</span><span class="w"> </span><span class="ss">message</span><span class="ss">&#39;s hashpath.
+&#39;</span><span class="ss">&#39;&#39;</span><span class="w">
+</span><span class="err">`</span><span class="n">By</span><span class="o">-</span><span class="n">Base</span><span class="err">`</span><span class="w"> </span><span class="ss">will</span><span class="w"> </span><span class="ss">ensure</span><span class="w"> </span><span class="ss">that</span><span class="w"> </span><span class="ss">all</span><span class="w"> </span><span class="ss">traffic</span><span class="w"> </span><span class="ss">for</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">same</span><span class="w"> </span><span class="ss">hashpath</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">routed</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">the</span><span class="w">
+</span><span class="ss">same</span><span class="w"> </span><span class="nb">node</span><span class="p">,</span><span class="w"> </span><span class="ss">minimizing</span><span class="w"> </span><span class="ss">work</span><span class="w"> </span><span class="ss">duplication</span><span class="p">,</span><span class="w"> </span><span class="ss">while</span><span class="w"> </span><span class="err">`</span><span class="n">Random</span><span class="err">`</span><span class="w"> </span><span class="ss">ensures</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">more</span><span class="w"> </span><span class="ss">even</span><span class="w">
+</span><span class="ss">distribution</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">requests</span><span class="p">.</span><span class="w">
+
+</span><span class="n">Can</span><span class="w"> </span><span class="ss">operate</span><span class="w"> </span><span class="ss">as</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="err">`</span><span class="err">~</span><span class="ss">router@1</span><span class="p">.</span><span class="mi">0</span><span class="err">`</span><span class="w"> </span><span class="ss">device</span><span class="p">,</span><span class="w"> </span><span class="ss">which</span><span class="w"> </span><span class="ss">will</span><span class="w"> </span><span class="ss">ignore</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">base</span><span class="w"> </span><span class="ss">message</span><span class="p">,</span><span class="w">
+</span><span class="ss">routing</span><span class="w"> </span><span class="ss">based</span><span class="w"> </span><span class="ss">on</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="n">Opts</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="ss">request</span><span class="w"> </span><span class="ss">message</span><span class="w"> </span><span class="ss">provided</span><span class="p">,</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="ss">as</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">standalone</span><span class="w">
+</span><span class="ss">function</span><span class="p">,</span><span class="w"> </span><span class="ss">taking</span><span class="w"> </span><span class="ss">only</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">request</span><span class="w"> </span><span class="ss">message</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="err">`</span><span class="n">Opts</span><span class="err">`</span><span class="w"> </span><span class="ss">map</span><span class="p">.</span></code></pre>
+  </section>
+</section>
+<section class="detail" id="route/3">
+
+  <div class="detail-header">
+    <a href="#route/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">route/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L98" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="route_regex_matches_test/0">
+
+  <div class="detail-header">
+    <a href="#route_regex_matches_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">route_regex_matches_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L426" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="route_template_message_matches_test/0">
+
+  <div class="detail-header">
+    <a href="#route_template_message_matches_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">route_template_message_matches_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L393" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="routes/3">
+
+  <div class="detail-header">
+    <a href="#routes/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">routes(M1, M2, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L39" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Device function that returns all known routes.</p>
+  </section>
+</section>
+<section class="detail" id="strategy_suite_test_/0">
+
+  <div class="detail-header">
+    <a href="#strategy_suite_test_/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">strategy_suite_test_()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_router.erl#L324" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

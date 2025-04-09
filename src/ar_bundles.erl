@@ -22,7 +22,7 @@
     {<<"map-format">>, <<"list">>}
 ]).
 
-% How many bytes of a binary to print with `print/1'.
+% How many bytes of a binary to print with `print/1`.
 -define(BIN_PRINT, 20).
 -define(INDENT_SPACES, 2).
 
@@ -150,7 +150,7 @@ is_signed(Item) ->
 -doc """
 Return the ID of an item -- either signed or unsigned as specified.
  If the item is unsigned and the user requests the signed ID, we return
- the atom `not_signed'. In all other cases, we return the ID of the item.
+ the atom `not_signed`. In all other cases, we return the ID of the item.
 """.
 id(Item) -> id(Item, unsigned).
 id(Item, Type) when not is_record(Item, tx) ->
@@ -520,7 +520,7 @@ update_ids(TX) -> TX.
 
 -doc """
 Re-calculate both of the IDs for an item. This is a wrapper".
- function around `update_id/1' that ensures both IDs are set from
+ function around `update_id/1` that ensures both IDs are set from
  scratch.
 """.
 reset_ids(Item) ->
@@ -753,7 +753,7 @@ maybe_unbundle_map(Bundle) ->
 
 -doc """
 An internal helper for finding an item in a single-layer of a bundle.
- Does not recurse! You probably want `find/2' in most cases.
+ Does not recurse! You probably want `find/2` in most cases.
 """.
 find_single_layer(UnsignedID, TX) when is_record(TX, tx) ->
     find_single_layer(UnsignedID, TX#tx.data);

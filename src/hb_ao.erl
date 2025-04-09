@@ -4,41 +4,41 @@ This module is the root of the device call logic of the
 AO-Core protocol in HyperBEAM.
 
 At the implementation level, every message is simply a collection of keys,
-dictated by its `Device', that can be resolved in order to yield their
+dictated by its `Device`, that can be resolved in order to yield their
 values. Each key may return another message or a raw value:
 
 	`ao(Message1, Message2) -> {Status, Message3}'
 
 Under-the-hood, `AO-Core(Message1, Message2)' leads to the evaluation of
 `DeviceMod:PathPart(Message1, Message2)', which defines the user compute
-to be performed. If `Message1' does not specify a device, `dev_message' is
-assumed. The key to resolve is specified by the `Path' field of the message.
+to be performed. If `Message1` does not specify a device, `dev_message` is
+assumed. The key to resolve is specified by the `Path` field of the message.
 
-After each output, the `HashPath' is updated to include the `Message2'
+After each output, the `HashPath` is updated to include the `Message2`
 that was executed upon it.
 
 Because each message implies a device that can resolve its keys, as well
 as generating a merkle tree of the computation that led to the result,
 you can see AO-Core protocol as a system for cryptographically chaining 
-the execution of `combinators'. See `docs/ao-core-protocol.md' for more 
+the execution of `combinators`. See `docs/ao-core-protocol.md` for more 
 information about AO-Core.
 
 The `Fun(Message1, Message2)' pattern is repeated throughout the HyperBEAM 
-codebase, sometimes with `MessageX' replaced with `MX' or `MsgX' for brevity.
+codebase, sometimes with `MessageX` replaced with `MX` or `MsgX` for brevity.
 
 Message3 can be either a new message or a raw output value (a binary, integer,
 float, atom, or list of such values).
 
 Devices can be expressed as either modules or maps. They can also be 
 referenced by an Arweave ID, which can be used to load a device from 
-the network (depending on the value of the `load_remote_devices' and 
-`trusted_device_signers' environment settings).
+the network (depending on the value of the `load_remote_devices` and 
+`trusted_device_signers` environment settings).
 
 HyperBEAM device implementations are defined as follows:
 ```
     DevMod:ExportedFunc : Key resolution functions. All are assumed to be
                           device keys (thus, present in every message that
-                          uses it) unless specified by `DevMod:info()'.
+                          uses it) unless specified by `DevMod:info()`.
                           Each function takes a set of parameters
                           of the form `DevMod:KeyHandler(Msg1, Msg2, Opts)'.
                           Each of these arguments can be ommitted if not
@@ -47,7 +47,7 @@ HyperBEAM device implementations are defined as follows:
 
     DevMod:info : Optional. Returns a map of options for the device. All 
                   options are optional and assumed to be the defaults if 
-                  not specified. This function can accept a `Message1' as 
+                  not specified. This function can accept a `Message1` as 
                   an argument, allowing it to specify its functionality 
                   based on a specific message if appropriate.
 
@@ -64,12 +64,12 @@ HyperBEAM device implementations are defined as follows:
 
     info/default : A function that should be used to handle all keys that
                    are not explicitly implemented by the device. Defaults to
-                   the `dev_message' device, which contains general keys for 
+                   the `dev_message` device, which contains general keys for 
                    interacting with messages.
 
     info/default_mod : A different device module that should be used to
                    handle all keys that are not explicitly implemented
-                   by the device. Defaults to the `dev_message' device.
+                   by the device. Defaults to the `dev_message` device.
 
     info/grouper : A function that returns the concurrency 'group' name for
                    an execution. Executions with the same group name will
@@ -86,9 +86,9 @@ HyperBEAM device implementations are defined as follows:
 The HyperBEAM resolver also takes a number of runtime options that change
 the way that the environment operates:
 
-`update_hashpath':  Whether to add the `Msg2' to `HashPath' for the `Msg3'.
+`update_hashpath`:  Whether to add the `Msg2` to `HashPath` for the `Msg3`.
 					Default: true.
-`add_key':          Whether to add the key to the start of the arguments.
+`add_key`:          Whether to add the key to the start of the arguments.
 					Default: `<not set>'.
 '''
 """.
@@ -109,21 +109,21 @@ the way that the environment operates:
 
 -doc """
 Get the value of a message's key by running its associated device
-%% function. Optionally, takes options that control the runtime environment. 
-%% This function returns the raw result of the device function call:
-%% `{ok | error, NewMessage}.'
-%% The resolver is composed of a series of discrete phases:
-%%      1: Normalization.
-%%      2: Cache lookup.
-%%      3: Validation check.
-%%      4: Persistent-resolver lookup.
-%%      5: Device lookup.
-%%      6: Execution.
-%%      7: Cryptographic linking.
-%%      8: Result caching.
-%%      9: Notify waiters.
-%%     10: Fork worker.
-%%     11: Recurse or terminate.
+function. Optionally, takes options that control the runtime environment. 
+This function returns the raw result of the device function call:
+`{ok | error, NewMessage}.'
+The resolver is composed of a series of discrete phases:
+      1: Normalization.
+      2: Cache lookup.
+      3: Validation check.
+      4: Persistent-resolver lookup.
+      5: Device lookup.
+      6: Execution.
+      7: Cryptographic linking.
+      8: Result caching.
+      9: Notify waiters.
+     10: Fork worker.
+     11: Recurse or terminate.
 """.
 
 resolve(SingletonMsg, Opts) when is_map(SingletonMsg) ->
@@ -140,14 +140,14 @@ resolve(Msg1, Msg2, Opts) ->
 
 -doc """
 Resolve a list of messages in sequence. Take the output of the first
-%% message as the input for the next message. Once the last message is resolved,
-%% return the result.
-%% A `resolve_many' call with only a single ID will attempt to read the message
-%% directly from the store. No execution is performed.
+message as the input for the next message. Once the last message is resolved,
+return the result.
+A `resolve_many` call with only a single ID will attempt to read the message
+directly from the store. No execution is performed.
 """.
 resolve_many([ID], Opts) when ?IS_ID(ID) ->
     % Note: This case is necessary to place specifically here for two reasons:
-    % 1. It is not in `do_resolve_many' because we need to handle the case
+    % 1. It is not in `do_resolve_many` because we need to handle the case
     %    where a result from a prior invocation is an ID itself. We should not
     %    attempt to resolve such IDs further.
     % 2. The main AO-Core logic looks for linkages between message input
@@ -204,10 +204,10 @@ do_resolve_many([Msg1, Msg2 | MsgList], Opts) ->
     end.
 
 resolve_stage(1, {as, DevID, ID}, Msg2, Opts) when ?IS_ID(ID) ->
-    % Normalize `as' requests with a raw ID as the path.
+    % Normalize `as` requests with a raw ID as the path.
     resolve_stage(1, {as, DevID, #{ <<"path">> => ID }}, Msg2, Opts);
 resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Msg2, Opts) when ?IS_ID(ID) ->
-    % If the first message is an `as' with an ID, we should load the message and
+    % If the first message is an `as` with an ID, we should load the message and
     % apply the non-path elements of the sub-request to it.
     ?event(ao_core, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
     RemMsg1 = maps:without([<<"path">>], Raw),
@@ -242,8 +242,8 @@ resolve_stage(1, Raw = {as, DevID, SubReq}, Msg2, Opts) ->
             OtherRes
     end;
 resolve_stage(1, RawMsg1, Msg2Outer = #{ <<"path">> := {as, DevID, Msg2Inner} }, Opts) ->
-    % Set the device to the specified `DevID' and resolve the message. Merging
-    % the `Msg2Inner' into the `Msg2Outer' message first. We return the result
+    % Set the device to the specified `DevID` and resolve the message. Merging
+    % the `Msg2Inner` into the `Msg2Outer` message first. We return the result
     % of the sub-resolution directly.
     ?event(ao_core, {stage, 1, subresolving_from_request, {dev, DevID}}, Opts),
     Msg2 =
@@ -274,7 +274,7 @@ resolve_stage(2, Msg1, Msg2, Opts) ->
     ?event(ao_core, {stage, 2, cache_lookup}, Opts),
     % Lookup request in the cache. If we find a result, return it.
     % If we do not find a result, we continue to the next stage,
-    % unless the cache lookup returns `halt' (the user has requested that we 
+    % unless the cache lookup returns `halt` (the user has requested that we 
     % only return a result if it is already in the cache).
     case hb_cache_control:maybe_lookup(Msg1, Msg2, Opts) of
         {ok, Msg3} ->
@@ -305,7 +305,7 @@ resolve_stage(4, Msg1, Msg2, Opts) ->
     % Erlang cluster) processes that are already performing the execution.
     % Before we search for a live executor, we check if the device specifies 
     % a function that tailors the 'group' name of the execution. For example, 
-    % the `dev_process' device 'groups' all calls to the same process onto
+    % the `dev_process` device 'groups' all calls to the same process onto
     % calls to a single executor. By default, `{Msg1, Msg2}' is used as the
     % group name.
     case hb_persistent:find_or_register(Msg1, Msg2, maps:without(?TEMP_OPTS, Opts)) of
@@ -488,7 +488,7 @@ resolve_stage(6, Func, Msg1, Msg2, ExecName, Opts) ->
                     }
                 ),
                 % If the function call fails, we raise an error in the manner
-                % indicated by caller's `#Opts'.
+                % indicated by caller's `#Opts`.
                 error_execution(
                     ExecName,
                     Msg2,
@@ -621,7 +621,7 @@ subresolve(RawMsg1, DevID, Req, Opts) ->
 
 -doc """
 Ensure that the message is loaded from the cache if it is an ID. If is
-%% not loadable or already present, we raise an error.
+not loadable or already present, we raise an error.
 """.
 ensure_loaded(MsgID, Opts) when ?IS_ID(MsgID) ->
     case hb_cache:read(MsgID, Opts) of
@@ -715,9 +715,9 @@ error_execution(ExecGroup, Msg2, Whence, {Class, Exception, Stacktrace}, Opts) -
 
 -doc """
 Force the result of a device call into a message if the result is not
-%% requested by the `Opts'. If the result is a literal, we wrap it in a message
-%% and signal the location of the result inside. We also similarly handle ao-result
-%% when the result is a single value and an explicit status code.
+requested by the `Opts`. If the result is a literal, we wrap it in a message
+and signal the location of the result inside. We also similarly handle ao-result
+when the result is a single value and an explicit status code.
 """.
 maybe_force_message({Status, Res}, Opts) ->
     case hb_opts:get(force_message, false, Opts) of
@@ -744,15 +744,14 @@ force_message({Status, Map}, _Opts) ->
 
 -doc """
 Shortcut for resolving a key in a message without its status if it is
-%% `ok'. This makes it easier to write complex logic on top of messages while
-%% maintaining a functional style.
-%% 
-%% Additionally, this function supports the `{as, Device, Msg}' syntax, which
-%% allows the key to be resolved using another device to resolve the key,
-%% while maintaining the tracability of the `HashPath' of the output message.
-%% 
-%% Returns the value of the key if it is found, otherwise returns the default
-%% provided by the user, or `not_found' if no default is provided.
+`ok`. This makes it easier to write complex logic on top of messages while
+maintaining a functional style.
+Additionally, this function supports the `{as, Device, Msg}' syntax, which
+allows the key to be resolved using another device to resolve the key,
+while maintaining the tracability of the `HashPath` of the output message.
+
+Returns the value of the key if it is found, otherwise returns the default
+provided by the user, or `not_found` if no default is provided.
 """.
 get(Path, Msg) ->
     get(Path, Msg, #{}).
@@ -777,7 +776,7 @@ get(Path, Msg, Default, Opts) ->
 
 -doc """
 take a sequence of base messages and paths, then return the value of the
-%% first message that can be resolved using a path.
+first message that can be resolved using a path.
 """.
 get_first(Paths, Opts) -> get_first(Paths, not_found, Opts).
 get_first([], Default, _Opts) -> Default;
@@ -794,11 +793,11 @@ keys(Msg) -> keys(Msg, #{}).
 keys(Msg, Opts) -> keys(Msg, Opts, keep).
 keys(Msg, Opts, keep) ->
     % There is quite a lot of AO-Core-specific machinery here. We:
-    % 1. `get' the keys from the message, via AO-Core in order to trigger the
-    %    `keys' function on its device.
+    % 1. `get` the keys from the message, via AO-Core in order to trigger the
+    %    `keys` function on its device.
     % 2. Ensure that the result is normalized to a message (not just a list)
-    %    with `normalize_keys'.
-    % 3. Now we have a map of the original keys, so we can use `maps:values' to
+    %    with `normalize_keys`.
+    % 3. Now we have a map of the original keys, so we can use `maps:values` to
     %    get a list of them.
     % 4. Normalize each of those keys in turn.
     try
@@ -822,9 +821,9 @@ keys(Msg, Opts, remove) ->
 
 -doc """
 Shortcut for setting a key in the message using its underlying device.
-%% Like the `get/3' function, this function honors the `error_strategy' option.
-%% `set' works with maps and recursive paths while maintaining the appropriate
-%% `HashPath' for each step.
+Like the `get/3` function, this function honors the `error_strategy` option.
+`set` works with maps and recursive paths while maintaining the appropriate
+`HashPath` for each step.
 """.
 set(Msg1, Msg2) ->
     set(Msg1, Msg2, #{}).
@@ -837,7 +836,7 @@ set(RawMsg1, RawMsg2, Opts) when is_map(RawMsg2) ->
         [] -> Msg1;
         [Key|_] ->
             % Get the value to set. Use AO-Core by default, but fall back to
-            % getting via `maps' if it is not found.
+            % getting via `maps` if it is not found.
             Val =
                 case get(Key, Msg2, internal_opts(Opts)) of
                     not_found -> maps:get(Key, Msg2);
@@ -868,7 +867,7 @@ set(Msg1, Key, Value, Opts) ->
 
 -doc """
 Recursively search a map, resolving keys, and set the value of the key
-%% at the given path.
+at the given path.
 """.
 deep_set(Msg, [Key], Value, Opts) ->
     device_set(Msg, Key, Value, Opts);
@@ -894,7 +893,7 @@ deep_set(Msg, [Key|Rest], Value, Opts) ->
     end.
 
 -doc """
-Call the device's `set' function.
+Call the device's `set` function.
 """.
 device_set(Msg, Key, Value, Opts) ->
     Req =
@@ -944,7 +943,7 @@ remove(Msg, Key, Opts) ->
 
 -doc """
 Truncate the arguments of a function to the number of arguments it
-%% actually takes.
+actually takes.
 """.
 truncate_args(Fun, Args) ->
     {arity, Arity} = erlang:fun_info(Fun, arity),
@@ -952,23 +951,21 @@ truncate_args(Fun, Args) ->
 
 -doc """
 Calculate the Erlang function that should be called to get a value for
-%% a given key from a device.
-%
-%% This comes in 7 forms:
-%% 1. The message does not specify a device, so we use the default device.
-%% 2. The device has a `handler' key in its `Dev:info()' map, which is a
-%% function that takes a key and returns a function to handle that key. We pass
-%% the key as an additional argument to this function.
-%% 3. The device has a function of the name `Key', which should be called
-%% directly.
-%% 4. The device does not implement the key, but does have a default handler
-%% for us to call. We pass it the key as an additional argument.
-%% 5. The device does not implement the key, and has no default handler. We use
-%% the default device to handle the key.
-%% Error: If the device is specified, but not loadable, we raise an error.
-%
-%% Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
-%% indicates that the key should be added to the start of the call's arguments.
+a given key from a device.
+This comes in 7 forms:
+1. The message does not specify a device, so we use the default device.
+2. The device has a `handler` key in its `Dev:info()` map, which is a
+function that takes a key and returns a function to handle that key. We pass
+the key as an additional argument to this function.
+3. The device has a function of the name `Key`, which should be called
+directly.
+4. The device does not implement the key, but does have a default handler
+for us to call. We pass it the key as an additional argument.
+5. The device does not implement the key, and has no default handler. We use
+the default device to handle the key.
+Error: If the device is specified, but not loadable, we raise an error.
+Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
+indicates that the key should be added to the start of the call's arguments.
 """.
 message_to_fun(Msg, Key, Opts) ->
     % Get the device module from the message.
@@ -999,7 +996,7 @@ message_to_fun(Msg, Key, Opts) ->
 			?event(ao_devices, {no_override_handler, {dev, Dev}, {key, Key}}),
 			case {find_exported_function(Msg, Dev, Key, 3, Opts), Exported} of
 				{{ok, Func}, true} ->
-					% Case 3: The device has a function of the name `Key'.
+					% Case 3: The device has a function of the name `Key`.
 					{ok, Dev, Func};
 				_ ->
 					case {maps:find(default, Info), Exported} of
@@ -1063,7 +1060,7 @@ message_to_device(Msg, Opts) ->
     end.
 
 -doc """
-Parse a handler key given by a device's `info'.
+Parse a handler key given by a device's `info`.
 """.
 info_handler_to_fun(Handler, _Msg, _Key, _Opts) when is_function(Handler) ->
 	{add_key, Handler};
@@ -1086,13 +1083,11 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 
 -doc """
 Find the function with the highest arity that has the given name, if it
-%% exists.
-%
-%% If the device is a module, we look for a function with the given name.
-%
-%% If the device is a map, we look for a key in the map. First we try to find
-%% the key using its literal value. If that fails, we cast the key to an atom
-%% and try again.
+exists.
+If the device is a module, we look for a function with the given name.
+If the device is a map, we look for a key in the map. First we try to find
+the key using its literal value. If that fails, we cast the key to an atom
+and try again.
 """.
 find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
 	case maps:get(normalize_key(Key), normalize_keys(Dev), not_found) of
@@ -1126,15 +1121,15 @@ find_exported_function(Msg, Mod, Key, Arity, Opts) ->
 	end.
 
 -doc """
-Check if a device is guarding a key via its `exports' list. Defaults to
-%% true if the device does not specify an `exports' list. The `info' function is
-%% always exported, if it exists. Elements of the `exludes' list are not
-%% exported. Note that we check for info _twice_ -- once when the device is
-%% given but the info result is not, and once when the info result is given.
-%% The reason for this is that `info/3' calls other functions that may need to
-%% check if a key is exported, so we must avoid infinite loops. We must, however,
-%% also return a consistent result in the case that only the info result is
-%% given, so we check for it in both cases.
+Check if a device is guarding a key via its `exports` list. Defaults to
+true if the device does not specify an `exports` list. The `info` function is
+always exported, if it exists. Elements of the `exludes` list are not
+exported. Note that we check for info _twice_ -- once when the device is
+given but the info result is not, and once when the info result is given.
+The reason for this is that `info/3` calls other functions that may need to
+check if a key is exported, so we must avoid infinite loops. We must, however,
+also return a consistent result in the case that only the info result is
+given, so we check for it in both cases.
 """.
 is_exported(_Msg, _Dev, info, _Opts) -> true;
 is_exported(Msg, Dev, Key, Opts) ->
@@ -1194,8 +1189,8 @@ normalize_keys(Other) -> Other.
 
 -doc """
 Load a device module from its name or a message ID.
-%% Returns {ok, Executable} where Executable is the device module. On error,
-%% a tuple of the form {error, Reason} is returned.
+Returns {ok, Executable} where Executable is the device module. On error,
+a tuple of the form {error, Reason} is returned.
 """.
 load_device(Map, _Opts) when is_map(Map) -> {ok, Map};
 load_device(ID, _Opts) when is_atom(ID) ->
@@ -1326,7 +1321,7 @@ verify_device_compatibility(Msg, Opts) ->
 
 -doc """
 Get the info map for a device, optionally giving it a message if the
-%% device's info function is parameterized by one.
+device's info function is parameterized by one.
 """.
 info(Msg, Opts) ->
     info(message_to_device(Msg, Opts), Msg, Opts).
@@ -1347,15 +1342,15 @@ info(DevMod, Msg, Opts) ->
 
 -doc """
 The default device is the identity device, which simply returns the
-%% value associated with any key as it exists in its Erlang map. It should also
-%% implement the `set' key, which returns a `Message3' with the values changed
-%% according to the `Message2' passed to it.
+value associated with any key as it exists in its Erlang map. It should also
+implement the `set` key, which returns a `Message3` with the values changed
+according to the `Message2` passed to it.
 """.
 default_module() -> dev_message.
 
 -doc """
 The execution options that are used internally by this module
-%% when calling itself.
+when calling itself.
 """.
 internal_opts(Opts) ->
     maps:merge(Opts, #{

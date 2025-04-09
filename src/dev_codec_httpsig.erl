@@ -5,7 +5,7 @@ This module implements HTTP Message Signatures as described in RFC-9421
 It implements the codec standard (from/1, to/1), as well as the optional
 commitment functions (id/3, sign/3, verify/3). The commitment functions
 are found in this module, while the codec functions are relayed to the 
-`dev_codec_httpsig_conv' module.
+`dev_codec_httpsig_conv` module.
 """.
 %% Device API
 -export([id/3, commit/3, committed/3, verify/3, reset_hmac/1, public_keys/1]).
@@ -41,7 +41,7 @@ are found in this module, while the codec functions are relayed to the
 	{binary(), integer() | boolean() | {string | token | binary, binary()}}
 }.
 
-%% A list of components that are `derived' in the context of RFC-9421 from the
+%% A list of components that are `derived` in the context of RFC-9421 from the
 %% request message.
 -define(DERIVED_COMPONENTS, [
     <<"method">>,
@@ -55,7 +55,7 @@ are found in this module, while the codec functions are relayed to the
     <<"status">>
 ]).
 
-%% Routing functions for the `dev_codec_httpsig_conv' module
+%% Routing functions for the `dev_codec_httpsig_conv` module
 to(Msg) -> dev_codec_httpsig_conv:to(Msg).
 from(Msg) -> dev_codec_httpsig_conv:from(Msg).
 
@@ -116,7 +116,7 @@ id(Msg, _Params, _Opts) ->
 -doc """
 Find the ID of the message, which is the hmac of the fields referenced in
 the signature and signature input. If the message already has a signature-input,
-directly, it is treated differently: We relabel it as `x-signature-input' to
+directly, it is treated differently: We relabel it as `x-signature-input` to
 avoid key collisions.
 """.
 find_id(Msg = #{ <<"commitments">> := Comms }) when map_size(Comms) > 1 ->
@@ -186,7 +186,7 @@ commit(MsgToSign, _Req, Opts) ->
     ID = hb_util:human_id(crypto:hash(sha256, Signature)),
     Address = ar_wallet:to_address(Wallet),
     SigName = address_to_sig_name(Address),
-    % Calculate the id and place the signature into the `commitments' key of the message.
+    % Calculate the id and place the signature into the `commitments` key of the message.
     Commitment =
         #{
             <<"commitment-device">> => <<"httpsig@1.0">>,
@@ -209,7 +209,7 @@ commit(MsgToSign, _Req, Opts) ->
 
 -doc """
 Return the list of committed keys from a message. The message will have
-had the `commitments' key removed and the signature inputs added to the
+had the `commitments` key removed and the signature inputs added to the
 root. Subsequently, we can parse that to get the list of committed keys.
 """.
 committed(RawMsg, Req, Opts) ->
@@ -232,7 +232,7 @@ do_committed(SigInputStr, Msg, _Req, _Opts) ->
     Signed =
         [<<"signature">>, <<"signature-input">>] ++
             remove_derived_specifiers(BinComponentIdentifiers),
-    % Extract the implicit keys from the `ao-types' of the encoded message if
+    % Extract the implicit keys from the `ao-types` of the encoded message if
     % the types key itself was signed.
     SignedWithImplicit = Signed ++
         case lists:member(<<"ao-types">>, Signed) of
@@ -290,7 +290,7 @@ committed_from_body(Msg) ->
         end.
 
 -doc """
-If the `body' key is present, replace it with a content-digest.
+If the `body` key is present, replace it with a content-digest.
 """.
 add_content_digest(Msg) ->
     case maps:get(<<"body">>, Msg, not_found) of
@@ -446,7 +446,7 @@ hmac(Msg) ->
     {ok, HMacValue}.
 
 -doc """
-Verify different forms of httpsig committed messages. `dev_message:verify'
+Verify different forms of httpsig committed messages. `dev_message:verify`
 already places the keys from the commitment message into the root of the
 message.
 """.

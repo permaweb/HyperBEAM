@@ -2,7 +2,7 @@
 -moduledoc """
 Simple wrapper module that enables compute on remote machines,
 implementing the JSON-Iface. This can be used either as a standalone, to 
-bring trusted results into the local node, or as the `Execution-Device' of
+bring trusted results into the local node, or as the `Execution-Device` of
 an AO process.
 """.
 -export([init/3, compute/3, normalize/3, snapshot/3]).
@@ -11,7 +11,7 @@ an AO process.
 
 -doc """
 Initialize or normalize the compute-lite device. For now, we don't
-%% need to do anything special here.
+need to do anything special here.
 """.
 init(Msg1, _Msg2, _Opts) ->
     {ok, Msg1}.

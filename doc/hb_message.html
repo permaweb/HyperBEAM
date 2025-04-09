@@ -1,261 +1,1392 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module hb_message</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module hb_message</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>This module acts an adapter between messages, as modeled in the   
-Converge Protocol, and their uderlying binary representations and formats.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
 
 
-<h2><a name="description">Description</a></h2><p>This module acts an adapter between messages, as modeled in the   
-Converge Protocol, and their uderlying binary representations and formats.</p>
-  
-   <p>Unless you are implementing a new message serialization codec, you should
-   not need to interact with this module directly. Instead, use the
-   <code>hb_converge</code> interfaces to interact with all messages. The <code>dev_message</code>   
-module implements a device interface for abstracting over the different   
-message formats.</p>
-  
-   <p><code>hb_message</code> and the HyperBEAM caches can interact with multiple different   
-types of message formats:</p>
-  
-       <p>- Richly typed Converge structured messages.       
-- Arweave transations.       
-- ANS-104 data items.       
-- HTTP Signed Messages.       
-- Flat Maps.</p>
-  
-   <p>This module is responsible for converting between these formats. It does so
-   by normalizing messages to a common format: <code>Type Annotated Binary Messages`
-   (TABM). TABMs are deep Erlang maps with keys than only contain either other
-   TABMs or binary values. By marshalling all messages into this format, they
-   can easily be coerced into other output formats. For example, generating a
-   `HTTP Signed Message` format output from an Arweave transaction. TABM is
-   also a simple format from a computational perspective (only binary literals
-   and O(1) access maps), such that operations upon them are efficient.
-  
-   The structure of the conversions is as follows:
-  
-   ```
-       Arweave TX/ANS-104 ==&gt; dev_codec_ans104:from/1 ==&gt; TABM
-       HTTP Signed Message ==&gt; dev_codec_httpsig_conv:from/1 ==&gt; TABM
-       Flat Maps ==&gt; dev_codec_flat:from/1 ==&gt; TABM
-  
-       TABM ==&gt; dev_codec_structured:to/1 ==&gt; Converge Message
-       Converge Message ==&gt; dev_codec_structured:from/1 ==&gt; TABM
-  
-       TABM ==&gt; dev_codec_ans104:to/1 ==&gt; Arweave TX/ANS-104
-       TABM ==&gt; dev_codec_httpsig_conv:to/1 ==&gt; HTTP Signed Message
-       TABM ==&gt; dev_codec_flat:to/1 ==&gt; Flat Maps
-       ...</code>''</p>
-  
-   <p>Additionally, this module provides a number of utility functions for
-   manipulating messages. For example, <code>hb_message:sign/2</code> to sign a message of
-   arbitrary type, or <code>hb_message:format/1</code> to print a Converge/TABM message in   
-a human-readable format.</p>
-  
-   The <code>hb_cache</code> module is responsible for storing and retrieving messages in
-   the HyperBEAM stores configured on the node. Each store has its own storage
-   backend, but each works with simple key-value pairs. Subsequently, the
-   <code>hb_cache</code> module uses TABMs as the internal format for storing and
-   retrieving messages.
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#attest-2">attest/2</a></td><td>Sign a message with the given wallet.</td></tr>
-<tr><td valign="top"><a href="#attest-3">attest/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#convert-3">convert/3</a></td><td>Convert a message from one format to another.</td></tr>
-<tr><td valign="top"><a href="#convert-4">convert/4</a></td><td></td></tr>
-<tr><td valign="top"><a href="#default_tx_list-0">default_tx_list/0</a></td><td>Get the ordered list of fields as Converge keys and default values of
-  the tx record.</td></tr>
-<tr><td valign="top"><a href="#filter_default_keys-1">filter_default_keys/1</a></td><td>Remove keys from a map that have the default values found in the tx
-  record.</td></tr>
-<tr><td valign="top"><a href="#find_target-3">find_target/3</a></td><td>Implements a standard pattern in which the target for an operation is
-  found by looking for a <code>target</code> key in the request.</td></tr>
-<tr><td valign="top"><a href="#format-1">format/1</a></td><td>Format a message for printing, optionally taking an indentation level
-  to start from.</td></tr>
-<tr><td valign="top"><a href="#format-2">format/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#from_tabm-3">from_tabm/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message.</td></tr>
-<tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#id-3">id/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#match-2">match/2</a></td><td>Check if two maps match, including recursively checking nested maps.</td></tr>
-<tr><td valign="top"><a href="#match-3">match/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#minimize-1">minimize/1</a></td><td>Remove keys from the map that can be regenerated.</td></tr>
-<tr><td valign="top"><a href="#print-1">print/1</a></td><td>Pretty-print a message.</td></tr>
-<tr><td valign="top"><a href="#signers-1">signers/1</a></td><td>Return all of the attestors on a message that have 'normal', 256 bit,
-  addresses.</td></tr>
-<tr><td valign="top"><a href="#to_tabm-3">to_tabm/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#type-1">type/1</a></td><td>Return the type of an encoded message.</td></tr>
-<tr><td valign="top"><a href="#unattested-1">unattested/1</a></td><td>Return the unsigned version of a message in Converge format.</td></tr>
-<tr><td valign="top"><a href="#verify-1">verify/1</a></td><td>wrapper function to verify a message.</td></tr>
-</table>
+    <title>hb_message — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
 
-<h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="attest-2">attest/2</a></h3>
-<div class="spec">
-<p><code>attest(Msg, WalletOrOpts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Sign a message with the given wallet. Only supports the <code>tx</code> format
-  at the moment.</p>
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
 
-<h3 class="function"><a name="attest-3">attest/3</a></h3>
-<div class="spec">
-<p><code>attest(Msg, Opts, Format) -&gt; any()</code></p>
-<p> </p>
+  </head>
+  <body data-type="modules" class="page-module">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+    <span translate="no">hb_message</span> 
+    <small class="app-vsn" translate="no">(hb v0.0.1)</small>
+
+  </h1>
+
+
+    <section id="moduledoc">
+<p>This module acts an adapter between messages, as modeled in the
+AO-Core protocol, and their uderlying binary representations and formats.</p><p>Unless you are implementing a new message serialization codec, you should
+not need to interact with this module directly. Instead, use the
+<code class="inline">hb_ao</code> interfaces to interact with all messages. The <code class="inline">dev_message</code>
+module implements a device interface for abstracting over the different
+message formats.</p><p><code class="inline">hb_message</code> and the HyperBEAM caches can interact with multiple different
+types of message formats:</p><pre><code class="makeup erlang" translate="no"><span class="o">-</span><span class="w"> </span><span class="n">Richly</span><span class="w"> </span><span class="ss">typed</span><span class="w"> </span><span class="n">AO</span><span class="o">-</span><span class="n">Core</span><span class="w"> </span><span class="ss">structured</span><span class="w"> </span><span class="ss">messages</span><span class="p">.</span><span class="w">
+</span><span class="o">-</span><span class="w"> </span><span class="n">Arweave</span><span class="w"> </span><span class="ss">transations</span><span class="p">.</span><span class="w">
+</span><span class="o">-</span><span class="w"> </span><span class="n">ANS</span><span class="o">-</span><span class="mi">104</span><span class="w"> </span><span class="ss">data</span><span class="w"> </span><span class="ss">items</span><span class="p">.</span><span class="w">
+</span><span class="o">-</span><span class="w"> </span><span class="n">HTTP</span><span class="w"> </span><span class="n">Signed</span><span class="w"> </span><span class="n">Messages</span><span class="p">.</span><span class="w">
+</span><span class="o">-</span><span class="w"> </span><span class="n">Flat</span><span class="w"> </span><span class="n">Maps</span><span class="p">.</span></code></pre><p>This module is responsible for converting between these formats. It does so
+by normalizing messages to a common format: <code class="inline">Type Annotated Binary Messages</code>
+(TABM). TABMs are deep Erlang maps with keys than only contain either other
+TABMs or binary values. By marshalling all messages into this format, they
+can easily be coerced into other output formats. For example, generating a
+<code class="inline">HTTP Signed Message</code> format output from an Arweave transaction. TABM is
+also a simple format from a computational perspective (only binary literals
+and O(1) access maps), such that operations upon them are efficient.</p><p>The structure of the conversions is as follows:</p><pre><code class="makeup erlang" translate="no"><span class="w">    </span><span class="n">Arweave</span><span class="w"> </span><span class="n">TX</span><span class="o">/</span><span class="n">ANS</span><span class="o">-</span><span class="mi">104</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="nc">dev_codec_ans104</span><span class="p">:</span><span class="ss">from</span><span class="p">/</span><span class="mi">1</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="n">TABM</span><span class="w">
+    </span><span class="n">HTTP</span><span class="w"> </span><span class="n">Signed</span><span class="w"> </span><span class="n">Message</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="nc">dev_codec_httpsig_conv</span><span class="p">:</span><span class="ss">from</span><span class="p">/</span><span class="mi">1</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="n">TABM</span><span class="w">
+    </span><span class="n">Flat</span><span class="w"> </span><span class="n">Maps</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="nc">dev_codec_flat</span><span class="p">:</span><span class="ss">from</span><span class="p">/</span><span class="mi">1</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="n">TABM</span><span class="w">
+
+    </span><span class="n">TABM</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="nc">dev_codec_structured</span><span class="p">:</span><span class="ss">to</span><span class="p">/</span><span class="mi">1</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="n">AO</span><span class="o">-</span><span class="n">Core</span><span class="w"> </span><span class="n">Message</span><span class="w">
+    </span><span class="n">AO</span><span class="o">-</span><span class="n">Core</span><span class="w"> </span><span class="n">Message</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="nc">dev_codec_structured</span><span class="p">:</span><span class="ss">from</span><span class="p">/</span><span class="mi">1</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="n">TABM</span><span class="w">
+
+    </span><span class="n">TABM</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="nc">dev_codec_ans104</span><span class="p">:</span><span class="ss">to</span><span class="p">/</span><span class="mi">1</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Arweave</span><span class="w"> </span><span class="n">TX</span><span class="o">/</span><span class="n">ANS</span><span class="o">-</span><span class="mi">104</span><span class="w">
+    </span><span class="n">TABM</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="nc">dev_codec_httpsig_conv</span><span class="p">:</span><span class="ss">to</span><span class="p">/</span><span class="mi">1</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="n">HTTP</span><span class="w"> </span><span class="n">Signed</span><span class="w"> </span><span class="n">Message</span><span class="w">
+    </span><span class="n">TABM</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="nc">dev_codec_flat</span><span class="p">:</span><span class="ss">to</span><span class="p">/</span><span class="mi">1</span><span class="w"> </span><span class="o">==</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Flat</span><span class="w"> </span><span class="n">Maps</span><span class="w">
+    </span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="w">
+</span><span class="ss">&#39;&#39;</span><span class="err">&#39;</span><span class="w">
+
+</span><span class="n">Additionally</span><span class="p">,</span><span class="w"> </span><span class="ss">this</span><span class="w"> </span><span class="ss">module</span><span class="w"> </span><span class="ss">provides</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">number</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">utility</span><span class="w"> </span><span class="ss">functions</span><span class="w"> </span><span class="ss">for</span><span class="w">
+</span><span class="ss">manipulating</span><span class="w"> </span><span class="ss">messages</span><span class="p">.</span><span class="w"> </span><span class="n">For</span><span class="w"> </span><span class="ss">example</span><span class="p">,</span><span class="w"> </span><span class="err">`</span><span class="nc">hb_message</span><span class="p">:</span><span class="ss">sign</span><span class="p">/</span><span class="mi">2</span><span class="err">`</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">sign</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">message</span><span class="w"> </span><span class="k">of</span><span class="w">
+</span><span class="ss">arbitrary</span><span class="w"> </span><span class="ss">type</span><span class="p">,</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="err">`</span><span class="nc">hb_message</span><span class="p">:</span><span class="ss">format</span><span class="p">/</span><span class="mi">1</span><span class="err">`</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">print</span><span class="w"> </span><span class="ss">an</span><span class="w"> </span><span class="n">AO</span><span class="o">-</span><span class="n">Core</span><span class="o">/</span><span class="n">TABM</span><span class="w"> </span><span class="ss">message</span><span class="w"> </span><span class="ss">in</span><span class="w">
+</span><span class="ss">a</span><span class="w"> </span><span class="ss">human</span><span class="o">-</span><span class="ss">readable</span><span class="w"> </span><span class="ss">format</span><span class="p">.</span><span class="w">
+
+</span><span class="n">The</span><span class="w"> </span><span class="err">`</span><span class="ss">hb_cache</span><span class="err">`</span><span class="w"> </span><span class="ss">module</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">responsible</span><span class="w"> </span><span class="ss">for</span><span class="w"> </span><span class="ss">storing</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="ss">retrieving</span><span class="w"> </span><span class="ss">messages</span><span class="w"> </span><span class="ss">in</span><span class="w">
+</span><span class="ss">the</span><span class="w"> </span><span class="n">HyperBEAM</span><span class="w"> </span><span class="ss">stores</span><span class="w"> </span><span class="ss">configured</span><span class="w"> </span><span class="ss">on</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="nb">node</span><span class="p">.</span><span class="w"> </span><span class="n">Each</span><span class="w"> </span><span class="ss">store</span><span class="w"> </span><span class="ss">has</span><span class="w"> </span><span class="ss">its</span><span class="w"> </span><span class="ss">own</span><span class="w"> </span><span class="ss">storage</span><span class="w">
+</span><span class="ss">backend</span><span class="p">,</span><span class="w"> </span><span class="ss">but</span><span class="w"> </span><span class="ss">each</span><span class="w"> </span><span class="ss">works</span><span class="w"> </span><span class="ss">with</span><span class="w"> </span><span class="ss">simple</span><span class="w"> </span><span class="ss">key</span><span class="o">-</span><span class="ss">value</span><span class="w"> </span><span class="ss">pairs</span><span class="p">.</span><span class="w"> </span><span class="n">Subsequently</span><span class="p">,</span><span class="w"> </span><span class="ss">the</span><span class="w"> 
+</span><span class="err">`</span><span class="ss">hb_cache</span><span class="err">`</span><span class="w"> </span><span class="ss">module</span><span class="w"> </span><span class="ss">uses</span><span class="w"> </span><span class="n">TABMs</span><span class="w"> </span><span class="ss">as</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">internal</span><span class="w"> </span><span class="ss">format</span><span class="w"> </span><span class="ss">for</span><span class="w"> </span><span class="ss">storing</span><span class="w"> </span><span class="ow">and</span><span class="w"> 
+</span><span class="ss">retrieving</span><span class="w"> </span><span class="ss">messages</span><span class="p">.</span></code></pre>
+    </section>
+
 </div>
 
-<h3 class="function"><a name="convert-3">convert/3</a></h3>
-<div class="spec">
-<p><code>convert(Msg, TargetFormat, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Convert a message from one format to another. Taking a message in the
-  source format, a target format, and a set of opts. If not given, the source
-  is assumed to be <code>converge`. Additional codecs can be added by ensuring they
-  are part of the `Opts` map -- either globally, or locally for a computation.
- 
-  The encoding happens in two phases:
-  1. Convert the message to a TABM.
-  2. Convert the TABM to the target format.
- 
-  The conversion to a TABM is done by the `converge</code> codec, which is always
-  available. The conversion from a TABM is done by the target codec.</p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
 
-<h3 class="function"><a name="convert-4">convert/4</a></h3>
-<div class="spec">
-<p><code>convert(Msg, TargetFormat, SourceFormat, Opts) -&gt; any()</code></p>
-<p> </p>
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#commit/2" data-no-tooltip translate="no">commit(Msg, WalletOrOpts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Sign a message with the given wallet.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#commit/3" data-no-tooltip translate="no">commit/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#commitment/2" data-no-tooltip translate="no">commitment(Committer, Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Extract a commitment from a message given a <code class="inline">committer</code> ID, or a spec
+message to match against. Returns only the first matching commitment, or
+<code class="inline">not_found</code>.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#commitment/3" data-no-tooltip translate="no">commitment/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#committed/1" data-no-tooltip translate="no">committed(Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the list of committed keys from a message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#committed/2" data-no-tooltip translate="no">committed(Msg, Committers)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#committed/3" data-no-tooltip translate="no">committed/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#convert/3" data-no-tooltip translate="no">convert(Msg, TargetFormat, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Convert a message from one format to another. Taking a message in the
+source format, a target format, and a set of opts. If not given, the source
+is assumed to be <code class="inline">structured@1.0</code>. Additional codecs can be added by ensuring they
+are part of the <code class="inline">Opts</code> map -- either globally, or locally for a computation.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#convert/4" data-no-tooltip translate="no">convert(Msg, TargetFormat, SourceFormat, Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#deep_multisignature_test/0" data-no-tooltip translate="no">deep_multisignature_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#deeply_nested_committed_keys_test/0" data-no-tooltip translate="no">deeply_nested_committed_keys_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#default_keys_removed_test/0" data-no-tooltip translate="no">default_keys_removed_test()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Test that the filter_default_keys/1 function removes TX fields
+that have the default values found in the tx record, but not those that
+have been set by the user.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#default_tx_list/0" data-no-tooltip translate="no">default_tx_list()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get the ordered list of fields as AO-Core keys and default values of
+the tx record.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#filter_default_keys/1" data-no-tooltip translate="no">filter_default_keys(Map)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Remove keys from a map that have the default values found in the tx
+record.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_target/3" data-no-tooltip translate="no">find_target(Self, Req, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Implements a standard pattern in which the target for an operation is
+found by looking for a <code class="inline">target</code> key in the request. If the target is <code class="inline">self</code>,
+or not present, the operation is performed on the original message. Otherwise,
+the target is expected to be a key in the message, and the operation is
+performed on the value of that key.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#format/1" data-no-tooltip translate="no">format(Item)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Format a message for printing, optionally taking an indentation level
+to start from.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#format/2" data-no-tooltip translate="no">format/2</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#id/1" data-no-tooltip translate="no">id(Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the ID of a message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#id/2" data-no-tooltip translate="no">id(Msg, Committers)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#id/3" data-no-tooltip translate="no">id(Msg, RawCommitters, Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#match/2" data-no-tooltip translate="no">match(Map1, Map2)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if two maps match, including recursively checking nested maps.
+Takes an optional mode argument to control the matching behavior</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#match/3" data-no-tooltip translate="no">match(Map1, Map2, Mode)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#match_modes_test/0" data-no-tooltip translate="no">match_modes_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#message_suite_test_/0" data-no-tooltip translate="no">message_suite_test_()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#minimization_test/0" data-no-tooltip translate="no">minimization_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#minimize/1" data-no-tooltip translate="no">minimize(Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Remove keys from the map that can be regenerated. Optionally takes an
+additional list of keys to include in the minimization.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#print/1" data-no-tooltip translate="no">print(Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Pretty-print a message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#run_test/0" data-no-tooltip translate="no">run_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#signers/1" data-no-tooltip translate="no">signers(Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return all of the committers on a message that have 'normal', 256 bit, 
+addresses.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#type/1" data-no-tooltip translate="no">type/1</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the type of an encoded message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#uncommitted/1" data-no-tooltip translate="no">uncommitted/1</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the unsigned version of a message in AO-Core format.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#verify/1" data-no-tooltip translate="no">verify(Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>wrapper function to verify a message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#verify/2" data-no-tooltip translate="no">verify/2</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#with_commitments/2" data-no-tooltip translate="no">with_commitments(Spec, Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Filter messages that do not match the 'spec' given. The underlying match
+is performed in the <code class="inline">only_present</code> mode, such that match specifications only
+need to specify the keys that must be present.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#with_only_committed/1" data-no-tooltip translate="no">with_only_committed(Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return a message with only the committed keys. If no commitments are
+present, the message is returned unchanged. This means that you need to
+check if the message is</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#with_only_committed/2" data-no-tooltip translate="no">with_only_committed/2</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#with_only_committers/2" data-no-tooltip translate="no">with_only_committers/2</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the message with only the specified committers attached.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#without_commitments/2" data-no-tooltip translate="no">without_commitments(Spec, Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Filter messages that match the 'spec' given. Inverts the <a href="#with_commitments/2"><code class="inline">with_commitments/2</code></a>
+function, such that only messages that do <em>not</em> match the spec are returned.</p></div>
+
+    </div>
+
 </div>
 
-<h3 class="function"><a name="default_tx_list-0">default_tx_list/0</a></h3>
-<div class="spec">
-<p><code>default_tx_list() -&gt; any()</code></p>
-<p> </p>
-</div><p>Get the ordered list of fields as Converge keys and default values of
-  the tx record.</p>
+  </section>
 
-<h3 class="function"><a name="filter_default_keys-1">filter_default_keys/1</a></h3>
-<div class="spec">
-<p><code>filter_default_keys(Map) -&gt; any()</code></p>
-<p> </p>
-</div><p>Remove keys from a map that have the default values found in the tx
-  record.</p>
 
-<h3 class="function"><a name="find_target-3">find_target/3</a></h3>
-<div class="spec">
-<p><code>find_target(Self, Req, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Implements a standard pattern in which the target for an operation is
-  found by looking for a <code>target</code> key in the request. If the target is <code>self</code>,
-  or not present, the operation is performed on the original message. Otherwise,
-  the target is expected to be a key in the message, and the operation is
-  performed on the value of that key.</p>
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="commit/2">
 
-<h3 class="function"><a name="format-1">format/1</a></h3>
-<div class="spec">
-<p><code>format(Item) -&gt; any()</code></p>
-<p> </p>
-</div><p>Format a message for printing, optionally taking an indentation level
-  to start from.</p>
+  <div class="detail-header">
+    <a href="#commit/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">commit(Msg, WalletOrOpts)</h1>
 
-<h3 class="function"><a name="format-2">format/2</a></h3>
-<div class="spec">
-<p><code>format(Bin, Indent) -&gt; any()</code></p>
-<p> </p>
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L216" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Sign a message with the given wallet.</p>
+  </section>
+</section>
+<section class="detail" id="commit/3">
+
+  <div class="detail-header">
+    <a href="#commit/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">commit/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L229" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="commitment/2">
+
+  <div class="detail-header">
+    <a href="#commitment/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">commitment(Committer, Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L619" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Extract a commitment from a message given a <code class="inline">committer</code> ID, or a spec
+message to match against. Returns only the first matching commitment, or
+<code class="inline">not_found</code>.</p>
+  </section>
+</section>
+<section class="detail" id="commitment/3">
+
+  <div class="detail-header">
+    <a href="#commitment/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">commitment/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L621" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="committed/1">
+
+  <div class="detail-header">
+    <a href="#committed/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">committed(Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L243" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the list of committed keys from a message.</p>
+  </section>
+</section>
+<section class="detail" id="committed/2">
+
+  <div class="detail-header">
+    <a href="#committed/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">committed(Msg, Committers)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L244" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="committed/3">
+
+  <div class="detail-header">
+    <a href="#committed/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">committed/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L245" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="convert/3">
+
+  <div class="detail-header">
+    <a href="#convert/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">convert(Msg, TargetFormat, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L85" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Convert a message from one format to another. Taking a message in the
+source format, a target format, and a set of opts. If not given, the source
+is assumed to be <code class="inline">structured@1.0</code>. Additional codecs can be added by ensuring they
+are part of the <code class="inline">Opts</code> map -- either globally, or locally for a computation.</p><p>The encoding happens in two phases:</p><ol><li>Convert the message to a TABM.</li><li>Convert the TABM to the target format.</li></ol><p>The conversion to a TABM is done by the <code class="inline">structured@1.0</code> codec, which is always
+available. The conversion from a TABM is done by the target codec.</p>
+  </section>
+</section>
+<section class="detail" id="convert/4">
+
+  <div class="detail-header">
+    <a href="#convert/4" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">convert(Msg, TargetFormat, SourceFormat, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L87" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="deep_multisignature_test/0">
+
+  <div class="detail-header">
+    <a href="#deep_multisignature_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">deep_multisignature_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L1092" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="deeply_nested_committed_keys_test/0">
+
+  <div class="detail-header">
+    <a href="#deeply_nested_committed_keys_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">deeply_nested_committed_keys_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L1331" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="default_keys_removed_test/0">
+
+  <div class="detail-header">
+    <a href="#default_keys_removed_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">default_keys_removed_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L736" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Test that the filter_default_keys/1 function removes TX fields
+that have the default values found in the tx record, but not those that
+have been set by the user.</p>
+  </section>
+</section>
+<section class="detail" id="default_tx_list/0">
+
+  <div class="detail-header">
+    <a href="#default_tx_list/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">default_tx_list()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L725" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Get the ordered list of fields as AO-Core keys and default values of
+the tx record.</p>
+  </section>
+</section>
+<section class="detail" id="filter_default_keys/1">
+
+  <div class="detail-header">
+    <a href="#filter_default_keys/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">filter_default_keys(Map)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L703" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Remove keys from a map that have the default values found in the tx
+record.</p>
+  </section>
+</section>
+<section class="detail" id="find_target/3">
+
+  <div class="detail-header">
+    <a href="#find_target/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">find_target(Self, Req, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L652" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Implements a standard pattern in which the target for an operation is
+found by looking for a <code class="inline">target</code> key in the request. If the target is <code class="inline">self</code>,
+or not present, the operation is performed on the original message. Otherwise,
+the target is expected to be a key in the message, and the operation is
+performed on the value of that key.</p>
+  </section>
+</section>
+<section class="detail" id="format/1">
+
+  <div class="detail-header">
+    <a href="#format/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">format(Item)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L310" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Format a message for printing, optionally taking an indentation level
+to start from.</p>
+  </section>
+</section>
+<section class="detail" id="format/2">
+
+  <div class="detail-header">
+    <a href="#format/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">format/2</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L311" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="id/1">
+
+  <div class="detail-header">
+    <a href="#id/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">id(Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L137" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the ID of a message.</p>
+  </section>
+</section>
+<section class="detail" id="id/2">
+
+  <div class="detail-header">
+    <a href="#id/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">id(Msg, Committers)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L138" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="id/3">
+
+  <div class="detail-header">
+    <a href="#id/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">id(Msg, RawCommitters, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L139" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="match/2">
+
+  <div class="detail-header">
+    <a href="#match/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">match(Map1, Map2)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L509" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Check if two maps match, including recursively checking nested maps.
+Takes an optional mode argument to control the matching behavior:</p><pre><code class="makeup erlang" translate="no"><span class="w"> </span><span class="err">`</span><span class="ss">strict</span><span class="err">`</span><span class="p">:</span><span class="w"> </span><span class="n">All</span><span class="w"> </span><span class="ss">keys</span><span class="w"> </span><span class="ss">in</span><span class="w"> </span><span class="ss">both</span><span class="w"> </span><span class="ss">maps</span><span class="w"> </span><span class="ss">be</span><span class="w"> </span><span class="ss">present</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="ss">match</span><span class="p">.</span><span class="w">
+ </span><span class="err">`</span><span class="ss">only_present</span><span class="err">`</span><span class="p">:</span><span class="w"> </span><span class="n">Only</span><span class="w"> </span><span class="ss">present</span><span class="w"> </span><span class="ss">keys</span><span class="w"> </span><span class="ss">in</span><span class="w"> </span><span class="ss">both</span><span class="w"> </span><span class="ss">maps</span><span class="w"> </span><span class="ss">must</span><span class="w"> </span><span class="ss">match</span><span class="p">.</span><span class="w">
+ </span><span class="err">`</span><span class="ss">primary</span><span class="err">`</span><span class="p">:</span><span class="w"> </span><span class="n">Only</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">primary</span><span class="w"> </span><span class="ss">map</span><span class="err">&#39;</span><span class="ss">s</span><span class="w"> </span><span class="ss">keys</span><span class="w"> </span><span class="ss">must</span><span class="w"> </span><span class="ss">be</span><span class="w"> </span><span class="ss">present</span><span class="p">.</span></code></pre>
+  </section>
+</section>
+<section class="detail" id="match/3">
+
+  <div class="detail-header">
+    <a href="#match/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">match(Map1, Map2, Mode)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L511" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="match_modes_test/0">
+
+  <div class="detail-header">
+    <a href="#match_modes_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">match_modes_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L760" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="message_suite_test_/0">
+
+  <div class="detail-header">
+    <a href="#message_suite_test_/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">message_suite_test_()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L1553" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="minimization_test/0">
+
+  <div class="detail-header">
+    <a href="#minimization_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">minimization_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L751" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="minimize/1">
+
+  <div class="detail-header">
+    <a href="#minimize/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">minimize(Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L674" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Remove keys from the map that can be regenerated. Optionally takes an
+additional list of keys to include in the minimization.</p>
+  </section>
+</section>
+<section class="detail" id="print/1">
+
+  <div class="detail-header">
+    <a href="#print/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">print(Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L302" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Pretty-print a message.</p>
+  </section>
+</section>
+<section class="detail" id="run_test/0">
+
+  <div class="detail-header">
+    <a href="#run_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">run_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L1606" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="signers/1">
+
+  <div class="detail-header">
+    <a href="#signers/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">signers(Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L282" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return all of the committers on a message that have 'normal', 256 bit, 
+addresses.</p>
+  </section>
+</section>
+<section class="detail" id="type/1">
+
+  <div class="detail-header">
+    <a href="#type/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">type/1</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L487" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the type of an encoded message.</p>
+  </section>
+</section>
+<section class="detail" id="uncommitted/1">
+
+  <div class="detail-header">
+    <a href="#uncommitted/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">uncommitted/1</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L274" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the unsigned version of a message in AO-Core format.</p>
+  </section>
+</section>
+<section class="detail" id="verify/1">
+
+  <div class="detail-header">
+    <a href="#verify/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">verify(Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L256" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>wrapper function to verify a message.</p>
+  </section>
+</section>
+<section class="detail" id="verify/2">
+
+  <div class="detail-header">
+    <a href="#verify/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">verify/2</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L257" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="with_commitments/2">
+
+  <div class="detail-header">
+    <a href="#with_commitments/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">with_commitments(Spec, Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L576" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Filter messages that do not match the 'spec' given. The underlying match
+is performed in the <code class="inline">only_present</code> mode, such that match specifications only
+need to specify the keys that must be present.</p>
+  </section>
+</section>
+<section class="detail" id="with_only_committed/1">
+
+  <div class="detail-header">
+    <a href="#with_only_committed/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">with_only_committed(Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L168" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return a message with only the committed keys. If no commitments are
+present, the message is returned unchanged. This means that you need to
+check if the message is:</p><ul><li>Committed</li><li>Verifies
+...before using the output of this function as the 'canonical' message. This
+is such that expensive operations like signature verification are not
+performed unless necessary.</li></ul>
+  </section>
+</section>
+<section class="detail" id="with_only_committed/2">
+
+  <div class="detail-header">
+    <a href="#with_only_committed/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">with_only_committed/2</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L170" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="with_only_committers/2">
+
+  <div class="detail-header">
+    <a href="#with_only_committers/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">with_only_committers/2</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L200" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the message with only the specified committers attached.</p>
+  </section>
+</section>
+<section class="detail" id="without_commitments/2">
+
+  <div class="detail-header">
+    <a href="#without_commitments/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">without_commitments(Spec, Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_message.erl#L598" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Filter messages that match the 'spec' given. Inverts the <a href="#with_commitments/2"><code class="inline">with_commitments/2</code></a>
+function, such that only messages that do <em>not</em> match the spec are returned.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
 </div>
 
-<h3 class="function"><a name="from_tabm-3">from_tabm/3</a></h3>
-<div class="spec">
-<p><code>from_tabm(Msg, TargetFormat, Opts) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="id-1">id/1</a></h3>
-<div class="spec">
-<p><code>id(Msg) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return the ID of a message.</p>
-
-<h3 class="function"><a name="id-2">id/2</a></h3>
-<div class="spec">
-<p><code>id(Msg, Attestors) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="id-3">id/3</a></h3>
-<div class="spec">
-<p><code>id(Msg, RawAttestors, Opts) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="match-2">match/2</a></h3>
-<div class="spec">
-<p><code>match(Map1, Map2) -&gt; any()</code></p>
-<p> </p>
-</div><p>Check if two maps match, including recursively checking nested maps.
-  Takes an optional mode argument to control the matching behavior:
-       <code>strict</code>: All keys in both maps be present and match.
-       <code>only_present</code>: Only present keys in both maps must match.
-       <code>primary</code>: Only the primary map's keys must be present.</p>
-
-<h3 class="function"><a name="match-3">match/3</a></h3>
-<div class="spec">
-<p><code>match(Map1, Map2, Mode) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="minimize-1">minimize/1</a></h3>
-<div class="spec">
-<p><code>minimize(Msg) -&gt; any()</code></p>
-<p> </p>
-</div><p>Remove keys from the map that can be regenerated. Optionally takes an
-  additional list of keys to include in the minimization.</p>
-
-<h3 class="function"><a name="print-1">print/1</a></h3>
-<div class="spec">
-<p><code>print(Msg) -&gt; any()</code></p>
-<p> </p>
-</div><p>Pretty-print a message.</p>
-
-<h3 class="function"><a name="signers-1">signers/1</a></h3>
-<div class="spec">
-<p><code>signers(Msg) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return all of the attestors on a message that have 'normal', 256 bit,
-  addresses.</p>
-
-<h3 class="function"><a name="to_tabm-3">to_tabm/3</a></h3>
-<div class="spec">
-<p><code>to_tabm(Msg, SourceFormat, Opts) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="type-1">type/1</a></h3>
-<div class="spec">
-<p><code>type(TX) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return the type of an encoded message.</p>
-
-<h3 class="function"><a name="unattested-1">unattested/1</a></h3>
-<div class="spec">
-<p><code>unattested(Bin) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return the unsigned version of a message in Converge format.</p>
-
-<h3 class="function"><a name="verify-1">verify/1</a></h3>
-<div class="spec">
-<p><code>verify(Msg) -&gt; any()</code></p>
-<p> </p>
-</div><p>wrapper function to verify a message.</p>
-<hr>
-
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  </body>
 </html>

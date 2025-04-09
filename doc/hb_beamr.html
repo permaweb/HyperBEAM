@@ -1,154 +1,740 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module hb_beamr</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module hb_beamr</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>BEAMR: A WAMR wrapper for BEAM.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
 
 
-<h2><a name="description">Description</a></h2><p>BEAMR: A WAMR wrapper for BEAM.</p>
-  
-   <p>Beamr is a library that allows you to run WASM modules in BEAM, using the   
-Webassembly Micro Runtime (WAMR) as its engine. Each WASM module is   
-executed using a Linked-In Driver (LID) that is loaded into BEAM. It is   
-designed with a focus on supporting long-running WASM executions that   
-interact with Erlang functions and processes easily.</p>
-  
-   <p>Because each WASM module runs as an independent async worker, if you plan
-   to run many instances in parallel, you should be sure to configure the
-   BEAM to have enough async worker threads enabled (see <code>erl +A N` in the
-   Erlang manuals).
-  
-   The core API is simple:
-   ```
-       start(WasmBinary) -&gt; {ok, Port, Imports, Exports}
-           Where:
-               WasmBinary is the WASM binary to load.
-               Port is the port to the LID.
-               Imports is a list of tuples of the form {Module, Function,
-                   Args, Signature}.
-               Exports is a list of tuples of the form {Function, Args,
-                   Signature}.
-       stop(Port) -&gt; ok
-       call(Port, FunctionName, Args) -&gt; {ok, Result}
-           Where:
-               FunctionName is the name of the function to call.
-               Args is a list of Erlang terms (converted to WASM values by
-                   BEAMR) that match the signature of the function.
-               Result is a list of Erlang terms (converted from WASM values).
-       call(Port, FunName, Args[, Import, State, Opts]) -&gt; {ok, Res, NewState}
-           Where:
-               ImportFun is a function that will be called upon each import.
-               ImportFun must have an arity of 2: Taking an arbitrary `state`
-               term, and a map containing the `port`, `module`, `func`, `args`,
-               `signature`, and the `options` map of the import.
-               It must return a tuple of the form {ok, Response, NewState}.
-       serialize(Port) -&gt; {ok, Mem}
-           Where:
-               Port is the port to the LID.
-               Mem is a binary representing the full WASM state.
-       deserialize(Port, Mem) -&gt; ok
-           Where:
-               Port is the port to the LID.
-               Mem is a binary output of a previous `serialize/1</code> call.   
-'''</p>
-  
-   BEAMR was designed for use in the HyperBEAM project, but is suitable for
-   deployment in other Erlang applications that need to run WASM modules. PRs
-   are welcome.
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#call-3">call/3</a></td><td>Call a function in the WASM executor (see moduledoc for more details).</td></tr>
-<tr><td valign="top"><a href="#call-4">call/4</a></td><td></td></tr>
-<tr><td valign="top"><a href="#call-5">call/5</a></td><td></td></tr>
-<tr><td valign="top"><a href="#call-6">call/6</a></td><td></td></tr>
-<tr><td valign="top"><a href="#deserialize-2">deserialize/2</a></td><td>Deserialize a WASM state from a binary.</td></tr>
-<tr><td valign="top"><a href="#serialize-1">serialize/1</a></td><td>Serialize the WASM state to a binary.</td></tr>
-<tr><td valign="top"><a href="#start-1">start/1</a></td><td>Start a WASM executor context.</td></tr>
-<tr><td valign="top"><a href="#start-2">start/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#stop-1">stop/1</a></td><td>Stop a WASM executor context.</td></tr>
-<tr><td valign="top"><a href="#stub-3">stub/3</a></td><td>Stub import function for the WASM executor.</td></tr>
-<tr><td valign="top"><a href="#wasm_send-2">wasm_send/2</a></td><td></td></tr>
-</table>
+    <title>hb_beamr — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
 
-<h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="call-3">call/3</a></h3>
-<div class="spec">
-<p><code>call(PID, FuncRef, Args) -&gt; any()</code></p>
-<p> </p>
-</div><p>Call a function in the WASM executor (see moduledoc for more details).</p>
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
 
-<h3 class="function"><a name="call-4">call/4</a></h3>
-<div class="spec">
-<p><code>call(PID, FuncRef, Args, ImportFun) -&gt; any()</code></p>
-<p> </p>
+  </head>
+  <body data-type="modules" class="page-module">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+    <span translate="no">hb_beamr</span> 
+    <small class="app-vsn" translate="no">(hb v0.0.1)</small>
+
+  </h1>
+
+
+    <section id="moduledoc">
+<p>BEAMR: A WAMR wrapper for BEAM.</p><p>Beamr is a library that allows you to run WASM modules in BEAM, using the
+Webassembly Micro Runtime (WAMR) as its engine. Each WASM module is 
+executed using a Linked-In Driver (LID) that is loaded into BEAM. It is
+designed with a focus on supporting long-running WASM executions that 
+interact with Erlang functions and processes easily.</p><p>Because each WASM module runs as an independent async worker, if you plan
+to run many instances in parallel, you should be sure to configure the 
+BEAM to have enough async worker threads enabled (see <code class="inline">erl +A N</code> in the
+Erlang manuals).</p><p>The core API is simple:</p><pre><code class="makeup erlang" translate="no"><span class="w">    </span><span class="nf">start</span><span class="p" data-group-id="3124905300-1">(</span><span class="n">WasmBinary</span><span class="p" data-group-id="3124905300-1">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="p" data-group-id="3124905300-2">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Port</span><span class="p">,</span><span class="w"> </span><span class="n">Imports</span><span class="p">,</span><span class="w"> </span><span class="n">Exports</span><span class="p" data-group-id="3124905300-2">}</span><span class="w">
+        </span><span class="n">Where</span><span class="p">:</span><span class="w">
+            </span><span class="n">WasmBinary</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="n">WASM</span><span class="w"> </span><span class="ss">binary</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">load</span><span class="p">.</span><span class="w">
+            </span><span class="n">Port</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">port</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="n">LID</span><span class="p">.</span><span class="w">
+            </span><span class="n">Imports</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">list</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">tuples</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">form</span><span class="w"> </span><span class="p" data-group-id="3124905300-3">{</span><span class="n">Module</span><span class="p">,</span><span class="w"> </span><span class="n">Function</span><span class="p">,</span><span class="w">
+                </span><span class="n">Args</span><span class="p">,</span><span class="w"> </span><span class="n">Signature</span><span class="p" data-group-id="3124905300-3">}</span><span class="p">.</span><span class="w">
+            </span><span class="n">Exports</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">list</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">tuples</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">form</span><span class="w"> </span><span class="p" data-group-id="3124905300-4">{</span><span class="n">Function</span><span class="p">,</span><span class="w"> </span><span class="n">Args</span><span class="p">,</span><span class="w">
+                </span><span class="n">Signature</span><span class="p" data-group-id="3124905300-4">}</span><span class="p">.</span><span class="w">
+    </span><span class="nf">stop</span><span class="p" data-group-id="3124905300-5">(</span><span class="n">Port</span><span class="p" data-group-id="3124905300-5">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="ss">ok</span><span class="w">
+    </span><span class="nf">call</span><span class="p" data-group-id="3124905300-6">(</span><span class="n">Port</span><span class="p">,</span><span class="w"> </span><span class="n">FunctionName</span><span class="p">,</span><span class="w"> </span><span class="n">Args</span><span class="p" data-group-id="3124905300-6">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="p" data-group-id="3124905300-7">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Result</span><span class="p" data-group-id="3124905300-7">}</span><span class="w">
+        </span><span class="n">Where</span><span class="p">:</span><span class="w">
+            </span><span class="n">FunctionName</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">name</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">function</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">call</span><span class="p">.</span><span class="w">
+            </span><span class="n">Args</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">list</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="n">Erlang</span><span class="w"> </span><span class="nf">terms</span><span class="w"> </span><span class="p" data-group-id="3124905300-8">(</span><span class="ss">converted</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="n">WASM</span><span class="w"> </span><span class="ss">values</span><span class="w"> </span><span class="ss">by</span><span class="w">
+                </span><span class="n">BEAMR</span><span class="p" data-group-id="3124905300-8">)</span><span class="w"> </span><span class="ss">that</span><span class="w"> </span><span class="ss">match</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">signature</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">function</span><span class="p">.</span><span class="w">
+            </span><span class="n">Result</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">list</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="n">Erlang</span><span class="w"> </span><span class="nf">terms</span><span class="w"> </span><span class="p" data-group-id="3124905300-9">(</span><span class="ss">converted</span><span class="w"> </span><span class="ss">from</span><span class="w"> </span><span class="n">WASM</span><span class="w"> </span><span class="ss">values</span><span class="p" data-group-id="3124905300-9">)</span><span class="p">.</span><span class="w">
+    </span><span class="nf">call</span><span class="p" data-group-id="3124905300-10">(</span><span class="n">Port</span><span class="p">,</span><span class="w"> </span><span class="n">FunName</span><span class="p">,</span><span class="w"> </span><span class="n">Args</span><span class="p" data-group-id="3124905300-11">[</span><span class="p">,</span><span class="w"> </span><span class="n">Import</span><span class="p">,</span><span class="w"> </span><span class="n">State</span><span class="p">,</span><span class="w"> </span><span class="n">Opts</span><span class="p" data-group-id="3124905300-11">]</span><span class="p" data-group-id="3124905300-10">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="p" data-group-id="3124905300-12">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Res</span><span class="p">,</span><span class="w"> </span><span class="n">NewState</span><span class="p" data-group-id="3124905300-12">}</span><span class="w">
+        </span><span class="n">Where</span><span class="p">:</span><span class="w">
+            </span><span class="n">ImportFun</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">function</span><span class="w"> </span><span class="ss">that</span><span class="w"> </span><span class="ss">will</span><span class="w"> </span><span class="ss">be</span><span class="w"> </span><span class="ss">called</span><span class="w"> </span><span class="ss">upon</span><span class="w"> </span><span class="ss">each</span><span class="w"> </span><span class="ss">import</span><span class="p">.</span><span class="w">
+            </span><span class="n">ImportFun</span><span class="w"> </span><span class="ss">must</span><span class="w"> </span><span class="ss">have</span><span class="w"> </span><span class="ss">an</span><span class="w"> </span><span class="ss">arity</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="mi">2</span><span class="p">:</span><span class="w"> </span><span class="n">Taking</span><span class="w"> </span><span class="ss">an</span><span class="w"> </span><span class="ss">arbitrary</span><span class="w"> </span><span class="err">`</span><span class="ss">state</span><span class="err">`</span><span class="w">
+            </span><span class="ss">term</span><span class="p">,</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">map</span><span class="w"> </span><span class="ss">containing</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="err">`</span><span class="ss">port</span><span class="err">`</span><span class="p">,</span><span class="w"> </span><span class="err">`</span><span class="ss">module</span><span class="err">`</span><span class="p">,</span><span class="w"> </span><span class="err">`</span><span class="ss">func</span><span class="err">`</span><span class="p">,</span><span class="w"> </span><span class="err">`</span><span class="ss">args</span><span class="err">`</span><span class="p">,</span><span class="w">
+            </span><span class="err">`</span><span class="ss">signature</span><span class="err">`</span><span class="p">,</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="err">`</span><span class="ss">options</span><span class="err">`</span><span class="w"> </span><span class="ss">map</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">import</span><span class="p">.</span><span class="w">
+            </span><span class="n">It</span><span class="w"> </span><span class="ss">must</span><span class="w"> </span><span class="ss">return</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">tuple</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">form</span><span class="w"> </span><span class="p" data-group-id="3124905300-13">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Response</span><span class="p">,</span><span class="w"> </span><span class="n">NewState</span><span class="p" data-group-id="3124905300-13">}</span><span class="p">.</span><span class="w">
+    </span><span class="nf">serialize</span><span class="p" data-group-id="3124905300-14">(</span><span class="n">Port</span><span class="p" data-group-id="3124905300-14">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="p" data-group-id="3124905300-15">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="n">Mem</span><span class="p" data-group-id="3124905300-15">}</span><span class="w">
+        </span><span class="n">Where</span><span class="p">:</span><span class="w">
+            </span><span class="n">Port</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">port</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="n">LID</span><span class="p">.</span><span class="w">
+            </span><span class="n">Mem</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">binary</span><span class="w"> </span><span class="ss">representing</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">full</span><span class="w"> </span><span class="n">WASM</span><span class="w"> </span><span class="ss">state</span><span class="p">.</span><span class="w">
+    </span><span class="nf">deserialize</span><span class="p" data-group-id="3124905300-16">(</span><span class="n">Port</span><span class="p">,</span><span class="w"> </span><span class="n">Mem</span><span class="p" data-group-id="3124905300-16">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="ss">ok</span><span class="w">
+        </span><span class="n">Where</span><span class="p">:</span><span class="w">
+            </span><span class="n">Port</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">port</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="n">LID</span><span class="p">.</span><span class="w">
+            </span><span class="n">Mem</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">binary</span><span class="w"> </span><span class="ss">output</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">previous</span><span class="w"> </span><span class="err">`</span><span class="ss">serialize</span><span class="p">/</span><span class="mi">1</span><span class="err">`</span><span class="w"> </span><span class="ss">call</span><span class="p">.</span><span class="w">
+</span><span class="ss">&#39;&#39;</span><span class="err">&#39;</span><span class="w">
+
+</span><span class="n">BEAMR</span><span class="w"> </span><span class="ss">was</span><span class="w"> </span><span class="ss">designed</span><span class="w"> </span><span class="ss">for</span><span class="w"> </span><span class="ss">use</span><span class="w"> </span><span class="ss">in</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="n">HyperBEAM</span><span class="w"> </span><span class="ss">project</span><span class="p">,</span><span class="w"> </span><span class="ss">but</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">suitable</span><span class="w"> </span><span class="ss">for</span><span class="w">
+</span><span class="ss">deployment</span><span class="w"> </span><span class="ss">in</span><span class="w"> </span><span class="ss">other</span><span class="w"> </span><span class="n">Erlang</span><span class="w"> </span><span class="ss">applications</span><span class="w"> </span><span class="ss">that</span><span class="w"> </span><span class="ss">need</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">run</span><span class="w"> </span><span class="n">WASM</span><span class="w"> </span><span class="ss">modules</span><span class="p">.</span><span class="w"> </span><span class="n">PRs</span><span class="w">
+</span><span class="ss">are</span><span class="w"> </span><span class="ss">welcome</span><span class="p">.</span></code></pre>
+    </section>
+
 </div>
 
-<h3 class="function"><a name="call-5">call/5</a></h3>
-<div class="spec">
-<p><code>call(PID, FuncRef, Args, ImportFun, StateMsg) -&gt; any()</code></p>
-<p> </p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#benchmark_test/0" data-no-tooltip translate="no">benchmark_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#call/3" data-no-tooltip translate="no">call(PID, FuncRef, Args)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Call a function in the WASM executor (see moduledoc for more details).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#call/4" data-no-tooltip translate="no">call(PID, FuncRef, Args, ImportFun)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#call/5" data-no-tooltip translate="no">call(PID, FuncRef, Args, ImportFun, StateMsg)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#call/6" data-no-tooltip translate="no">call/6</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#deserialize/2" data-no-tooltip translate="no">deserialize(WASM, Bin)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Deserialize a WASM state from a binary.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#driver_loads_test/0" data-no-tooltip translate="no">driver_loads_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#imported_function_test/0" data-no-tooltip translate="no">imported_function_test()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Test that imported functions can be called from the WASM module.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#multiclient_test/0" data-no-tooltip translate="no">multiclient_test()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Ensure that processes outside of the initial one can interact with
+the WASM executor.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#serialize/1" data-no-tooltip translate="no">serialize(WASM)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Serialize the WASM state to a binary.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#simple_wasm_test/0" data-no-tooltip translate="no">simple_wasm_test()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Test standalone <code class="inline">hb_beamr</code> correctly after loading a WASM module.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start/1" data-no-tooltip translate="no">start(WasmBinary)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Start a WASM executor context. Yields a port to the LID, and the
+imports and exports of the WASM module. Optionally, specify a mode 
+(wasm or aot) to indicate the type of WASM module being loaded.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start/2" data-no-tooltip translate="no">start(WasmBinary, Mode)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#stop/1" data-no-tooltip translate="no">stop(WASM)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Stop a WASM executor context.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#stub/3" data-no-tooltip translate="no">stub(Msg1, Msg2, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Stub import function for the WASM executor.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#wasm64_test/0" data-no-tooltip translate="no">wasm64_test()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Test that WASM Memory64 modules load and execute correctly.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#wasm_send/2" data-no-tooltip translate="no">wasm_send(WASM, Message)</a>
+
+      </div>
+
+    </div>
+
 </div>
 
-<h3 class="function"><a name="call-6">call/6</a></h3>
-<div class="spec">
-<p><code>call(PID, FuncRef, Args, ImportFun, StateMsg, Opts) -&gt; any()</code></p>
-<p> </p>
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="benchmark_test/0">
+
+  <div class="detail-header">
+    <a href="#benchmark_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">benchmark_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L341" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="call/3">
+
+  <div class="detail-header">
+    <a href="#call/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">call(PID, FuncRef, Args)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L147" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Call a function in the WASM executor (see moduledoc for more details).</p>
+  </section>
+</section>
+<section class="detail" id="call/4">
+
+  <div class="detail-header">
+    <a href="#call/4" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">call(PID, FuncRef, Args, ImportFun)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L150" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="call/5">
+
+  <div class="detail-header">
+    <a href="#call/5" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">call(PID, FuncRef, Args, ImportFun, StateMsg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L152" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="call/6">
+
+  <div class="detail-header">
+    <a href="#call/6" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">call/6</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L154" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="deserialize/2">
+
+  <div class="detail-header">
+    <a href="#deserialize/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">deserialize(WASM, Bin)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L277" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Deserialize a WASM state from a binary.</p>
+  </section>
+</section>
+<section class="detail" id="driver_loads_test/0">
+
+  <div class="detail-header">
+    <a href="#driver_loads_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">driver_loads_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L285" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="imported_function_test/0">
+
+  <div class="detail-header">
+    <a href="#imported_function_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">imported_function_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L300" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Test that imported functions can be called from the WASM module.</p>
+  </section>
+</section>
+<section class="detail" id="multiclient_test/0">
+
+  <div class="detail-header">
+    <a href="#multiclient_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">multiclient_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L323" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Ensure that processes outside of the initial one can interact with
+the WASM executor.</p>
+  </section>
+</section>
+<section class="detail" id="serialize/1">
+
+  <div class="detail-header">
+    <a href="#serialize/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">serialize(WASM)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L266" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Serialize the WASM state to a binary.</p>
+  </section>
+</section>
+<section class="detail" id="simple_wasm_test/0">
+
+  <div class="detail-header">
+    <a href="#simple_wasm_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">simple_wasm_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L291" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Test standalone <code class="inline">hb_beamr</code> correctly after loading a WASM module.</p>
+  </section>
+</section>
+<section class="detail" id="start/1">
+
+  <div class="detail-header">
+    <a href="#start/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">start(WasmBinary)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L77" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Start a WASM executor context. Yields a port to the LID, and the
+imports and exports of the WASM module. Optionally, specify a mode 
+(wasm or aot) to indicate the type of WASM module being loaded.</p>
+  </section>
+</section>
+<section class="detail" id="start/2">
+
+  <div class="detail-header">
+    <a href="#start/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">start(WasmBinary, Mode)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L79" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="stop/1">
+
+  <div class="detail-header">
+    <a href="#stop/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">stop(WASM)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L140" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Stop a WASM executor context.</p>
+  </section>
+</section>
+<section class="detail" id="stub/3">
+
+  <div class="detail-header">
+    <a href="#stub/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">stub(Msg1, Msg2, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L192" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Stub import function for the WASM executor.</p>
+  </section>
+</section>
+<section class="detail" id="wasm64_test/0">
+
+  <div class="detail-header">
+    <a href="#wasm64_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">wasm64_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L313" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Test that WASM Memory64 modules load and execute correctly.</p>
+  </section>
+</section>
+<section class="detail" id="wasm_send/2">
+
+  <div class="detail-header">
+    <a href="#wasm_send/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">wasm_send(WASM, Message)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_beamr.erl#L133" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
 </div>
 
-<h3 class="function"><a name="deserialize-2">deserialize/2</a></h3>
-<div class="spec">
-<p><code>deserialize(WASM, Bin) -&gt; any()</code></p>
-<p> </p>
-</div><p>Deserialize a WASM state from a binary.</p>
-
-<h3 class="function"><a name="serialize-1">serialize/1</a></h3>
-<div class="spec">
-<p><code>serialize(WASM) -&gt; any()</code></p>
-<p> </p>
-</div><p>Serialize the WASM state to a binary.</p>
-
-<h3 class="function"><a name="start-1">start/1</a></h3>
-<div class="spec">
-<p><code>start(WasmBinary) -&gt; any()</code></p>
-<p> </p>
-</div><p>Start a WASM executor context. Yields a port to the LID, and the
-  imports and exports of the WASM module. Optionally, specify a mode
-  (wasm or aot) to indicate the type of WASM module being loaded.</p>
-
-<h3 class="function"><a name="start-2">start/2</a></h3>
-<div class="spec">
-<p><code>start(WasmBinary, Mode) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="stop-1">stop/1</a></h3>
-<div class="spec">
-<p><code>stop(WASM) -&gt; any()</code></p>
-<p> </p>
-</div><p>Stop a WASM executor context.</p>
-
-<h3 class="function"><a name="stub-3">stub/3</a></h3>
-<div class="spec">
-<p><code>stub(Msg1, Msg2, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Stub import function for the WASM executor.</p>
-
-<h3 class="function"><a name="wasm_send-2">wasm_send/2</a></h3>
-<div class="spec">
-<p><code>wasm_send(WASM, Message) -&gt; any()</code></p>
-<p> </p>
-</div>
-<hr>
-
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  </body>
 </html>

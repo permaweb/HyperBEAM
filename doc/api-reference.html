@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
+
+
+    <title>API Reference — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
+
+
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
+
+  </head>
+  <body data-type="extras" class="page-extra">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+
+    <span>API Reference <small class="app-vsn">hb v0.0.1</small></span>
+  </h1>
+
+
+  <section class="details-list">
+    <h2 id="modules" class="section-heading">
+  <a href="#modules" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Modules</span>
+</h2>
+
+    <div class="summary">
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="ar_bundles.html" translate="no">ar_bundles</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Module for creating, signing, and verifying Arweave data items and bundles.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="ar_deep_hash.html" translate="no">ar_deep_hash</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="ar_rate_limiter.html" translate="no">ar_rate_limiter</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="ar_timestamp.html" translate="no">ar_timestamp</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="ar_tx.html" translate="no">ar_tx</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>The module with utilities for transaction creation, signing, and verification.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="ar_wallet.html" translate="no">ar_wallet</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Utilities for manipulating wallets.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_cache.html" translate="no">dev_cache</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that looks up an ID from a local store and returns it,
+honoring the <code class="inline">accept</code> key to return the correct format. The cache also
+supports writing messages to the store, if the node message has the
+writer's address in its <code class="inline">cache_writers</code> key.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_cacheviz.html" translate="no">dev_cacheviz</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that generates renders (or renderable dot output) of a node's
+cache.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_codec_ans104.html" translate="no">dev_codec_ans104</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Codec for managing transformations from <code class="inline">ar_bundles</code>-style Arweave TX
+records to and from TABMs.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_codec_flat.html" translate="no">dev_codec_flat</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A codec for turning TABMs into/from flat Erlang maps that have 
+(potentially multi-layer) paths as their keys, and a normal TABM binary as 
+their value.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_codec_httpsig.html" translate="no">dev_codec_httpsig</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>This module implements HTTP Message Signatures as described in RFC-9421
+(<a href="https://datatracker.ietf.org/doc/html/rfc9421">https://datatracker.ietf.org/doc/html/rfc9421</a>), as an AO-Core device.
+It implements the codec standard (from/1, to/1), as well as the optional
+commitment functions (id/3, sign/3, verify/3). The commitment functions
+are found in this module, while the codec functions are relayed to the 
+<code class="inline">dev_codec_httpsig_conv</code> module.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_codec_httpsig_conv.html" translate="no">dev_codec_httpsig_conv</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A codec for the that marshals TABM encoded messages to and from the
+&quot;HTTP&quot; message structure.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_codec_json.html" translate="no">dev_codec_json</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A simple JSON codec for HyperBEAM's message format. Takes a
+message as TABM and returns an encoded JSON string representation.
+This codec utilizes the httpsig@1.0 codec for signing and verifying.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_codec_structured.html" translate="no">dev_codec_structured</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device implementing the codec interface (to/1, from/1) for 
+HyperBEAM's internal, richly typed message format.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_cron.html" translate="no">dev_cron</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_cu.html" translate="no">dev_cu</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_dedup.html" translate="no">dev_dedup</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that deduplicates messages send to a process.
+Only runs on the first pass of the <code class="inline">compute</code> key call if executed
+in a stack. Currently the device stores its list of already seen 
+items in memory, but at some point it will likely make sense to 
+drop them in the cache.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_delegated_compute.html" translate="no">dev_delegated_compute</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Simple wrapper module that enables compute on remote machines,
+implementing the JSON-Iface. This can be used either as a standalone, to 
+bring trusted results into the local node, or as the <code class="inline">Execution-Device</code> of
+an AO process.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_faff.html" translate="no">dev_faff</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A module that implements a 'friends and family' pricing policy.
+It will allow users to process requests only if their addresses are
+in the allow-list for the node.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_genesis_wasm.html" translate="no">dev_genesis_wasm</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that mimics an environment suitable for <code class="inline">legacynet</code> AO 
+processes, using HyperBEAM infrastructure. This allows existing <code class="inline">legacynet</code>
+AO process definitions to be used in HyperBEAM.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_green_zone.html" translate="no">dev_green_zone</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>The green zone device, which provides secure communication and identity
+management between trusted nodes. It handles node initialization, joining
+existing green zones, key exchange, and node identity cloning. All operations
+are protected by hardware commitment and encryption.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_hyperbuddy.html" translate="no">dev_hyperbuddy</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that renders a REPL-like interface for AO-Core via HTML.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_json_iface.html" translate="no">dev_json_iface</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that provides a way for WASM execution to interact with
+the HyperBEAM (and AO) systems, using JSON as a shared data representation.
+The interface is easy to use. It works as follows</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_lookup.html" translate="no">dev_lookup</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that looks up an ID from a local store and returns it, honoring
+the <code class="inline">accept</code> key to return the correct format.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_lua.html" translate="no">dev_lua</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that calls a Lua script upon a request and returns the result.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_message.html" translate="no">dev_message</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>The identity device: For non-reserved keys, it simply returns a key 
+from the message as it is found in the message's underlying Erlang map. 
+Private keys (<code class="inline">priv[.*]</code>) are not included.
+Reserved keys are: <code class="inline">id</code>, <code class="inline">commitments</code>, <code class="inline">committers</code>, <code class="inline">keys</code>, <code class="inline">path</code>, 
+<code class="inline">set</code>, <code class="inline">remove</code>, <code class="inline">get</code>, and <code class="inline">verify</code>. Their function comments describe the 
+behaviour of the device when these keys are set.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_meta.html" translate="no">dev_meta</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>The hyperbeam meta device, which is the default entry point
+for all messages processed by the machine. This device executes a
+AO-Core singleton request, after first applying the node's 
+pre-processor, if set. The pre-processor can halt the request by
+returning an error, or return a modified version if it deems necessary --
+the result of the pre-processor is used as the request for the AO-Core
+resolver. Additionally, a post-processor can be set, which is executed after
+the AO-Core resolver has returned a result.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_monitor.html" translate="no">dev_monitor</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_multipass.html" translate="no">dev_multipass</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that triggers repass events until a certain counter has been
+reached. This is useful for certain types of stacks that need various
+execution passes to be completed in sequence across devices.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_p4.html" translate="no">dev_p4</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>The HyperBEAM core payment ledger. This module allows the operator to
+specify another device that can act as a pricing mechanism for transactions
+on the node, as well as orchestrating a payment ledger to calculate whether
+the node should fulfil services for users.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_patch.html" translate="no">dev_patch</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that finds <code class="inline">PATCH</code> requests in the <code class="inline">results/outbox</code>
+of its message, and applies them to it. This can be useful for processes
+whose computation would like to manipulate data outside of the <code class="inline">results</code> key
+of its message.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_poda.html" translate="no">dev_poda</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_process.html" translate="no">dev_process</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>This module contains the device implementation of AO processes
+in AO-Core. The core functionality of the module is in 'routing' requests
+for different functionality (scheduling, computing, and pushing messages)
+to the appropriate device. This is achieved by swapping out the device 
+of the process message with the necessary component in order to run the 
+execution, then swapping it back before returning. Computation is supported
+as a stack of devices, customizable by the user, while the scheduling
+device is (by default) a single device.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_process_cache.html" translate="no">dev_process_cache</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A wrapper around the hb_cache module that provides a more
+convenient interface for reading the result of a process at a given slot or
+message ID.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_process_worker.html" translate="no">dev_process_worker</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A long-lived process worker that keeps state in memory between
+calls. Implements the interface of <code class="inline">hb_ao</code> to receive and respond 
+to computation requests regarding a process as a singleton.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_push.html" translate="no">dev_push</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p><code class="inline">push@1.0</code> takes a message or slot number, evaluates it, and recursively
+pushes the resulting messages to other processes. The <code class="inline">push</code>ing mechanism
+continues until the there are no remaining messages to push.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_relay.html" translate="no">dev_relay</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>This module implements the relay device, which is responsible for
+relaying messages between nodes and other HTTP(S) endpoints.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_router.html" translate="no">dev_router</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that routes outbound messages from the node to their
+appropriate network recipients via HTTP. All messages are initially
+routed to a single process per node, which then load-balances them
+between downstream workers that perform the actual requests.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_scheduler.html" translate="no">dev_scheduler</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A simple scheduler scheme for AO.
+This device expects a message of the form</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_scheduler_cache.html" translate="no">dev_scheduler_cache</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_scheduler_formats.html" translate="no">dev_scheduler_formats</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>This module is used by dev_scheduler in order to produce outputs that
+are compatible with various forms of AO clients. It features two main formats</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_scheduler_registry.html" translate="no">dev_scheduler_registry</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_scheduler_server.html" translate="no">dev_scheduler_server</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A long-lived server that schedules messages for a process.
+It acts as a deliberate 'bottleneck' to prevent the server accidentally
+assigning multiple messages to the same slot.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_simple_pay.html" translate="no">dev_simple_pay</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A simple device that allows the operator to specify a price for a
+request and then charge the user for it, on a per message basis.
+The device's ledger is stored in the node message at <code class="inline">simple_pay_ledger</code>,
+and can be topped-up by either the operator, or an external device. The 
+price is specified in the node message at <code class="inline">simple_pay_price</code>.
+This device acts as both a pricing device and a ledger device, by p4's
+definition.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_snp.html" translate="no">dev_snp</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>This device offers an interface for validating AMD SEV-SNP commitments,
+as well as generating them, if called in an appropriate environment.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_snp_nif.html" translate="no">dev_snp_nif</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_stack.html" translate="no">dev_stack</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that contains a stack of other devices, and manages their
+execution. It can run in two modes: fold (the default), and map.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_test.html" translate="no">dev_test</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_wasi.html" translate="no">dev_wasi</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A virtual filesystem device.
+Implements a file-system-as-map structure, which is traversible externally.
+Each file is a binary and each directory is an AO-Core message.
+Additionally, this module adds a series of WASI-preview-1 compatible
+functions for accessing the filesystem as imported functions by WASM
+modules.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="dev_wasm.html" translate="no">dev_wasm</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A device that executes a WASM image on messages using the Memory-64 
+preview standard. In the backend, this device uses <code class="inline">beamr</code>: An Erlang wrapper 
+for WAMR, the WebAssembly Micro Runtime.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb.html" translate="no">hb</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Hyperbeam is a decentralized node implementing the AO-Core protocol
+on top of Arweave.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_ao.html" translate="no">hb_ao</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>This module is the root of the device call logic of the 
+AO-Core protocol in HyperBEAM.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_ao_test_vectors.html" translate="no">hb_ao_test_vectors</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Uses a series of different <code class="inline">Opts</code> values to test the resolution engine's 
+execution under different circumstances.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_app.html" translate="no">hb_app</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>The main HyperBEAM application module.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_beamr.html" translate="no">hb_beamr</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>BEAMR: A WAMR wrapper for BEAM.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_beamr_io.html" translate="no">hb_beamr_io</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Simple interface for memory management for Beamr instances.
+It allows for reading and writing to memory, as well as allocating and 
+freeing memory by calling the WASM module's exported malloc and free
+functions.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_cache.html" translate="no">hb_cache</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A cache of AO-Core protocol messages and compute results.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_cache_control.html" translate="no">hb_cache_control</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Cache control logic for the AO-Core resolver. It derives cache settings
+from request, response, execution-local node Opts, as well as the global
+node Opts. It applies these settings when asked to maybe store/lookup in 
+response to a request.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_cache_render.html" translate="no">hb_cache_render</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A module that helps to render given Key graphs into the .dot files</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_client.html" translate="no">hb_client</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_crypto.html" translate="no">hb_crypto</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Implements the cryptographic functions and wraps the primitives
+used in HyperBEAM. Abstracted such that this (extremely!) dangerous code 
+can be carefully managed.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_escape.html" translate="no">hb_escape</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Escape and unescape mixed case values for use in HTTP headers.
+This is necessary for encodings of AO-Core messages for transmission in 
+HTTP/2 and HTTP/3, because uppercase header keys are explicitly disallowed.
+While most map keys in HyperBEAM are normalized to lowercase, IDs are not.
+Subsequently, we encode all header keys to lowercase %-encoded URI-style
+strings because transmission.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_event.html" translate="no">hb_event</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Wrapper for incrementing prometheus counters.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_examples.html" translate="no">hb_examples</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>This module contains end-to-end tests for Hyperbeam, accessing through
+the HTTP interface. As well as testing the system, you can use these tests
+as examples of how to interact with HyperBEAM nodes.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_features.html" translate="no">hb_features</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A module that exports a list of feature flags that the node supports
+using the <code class="inline">-ifdef</code> macro.
+As a consequence, this module acts as a proxy of information between the
+build system and the runtime execution environment.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_gateway_client.html" translate="no">hb_gateway_client</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Implementation of Arweave's GraphQL API to gain access to specific 
+items of data stored on the network.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_http.html" translate="no">hb_http</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_http_benchmark_tests.html" translate="no">hb_http_benchmark_tests</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_http_client.html" translate="no">hb_http_client</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A wrapper library for gun. This module originates from the Arweave
+project, and has been modified for use in HyperBEAM.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_http_client_sup.html" translate="no">hb_http_client_sup</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>The supervisor for the gun HTTP client wrapper.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_http_server.html" translate="no">hb_http_server</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A router that attaches a HTTP server to the AO-Core resolver.
+Because AO-Core is built to speak in HTTP semantics, this module
+only has to marshal the HTTP request into a message, and then
+pass it to the AO-Core resolver. </p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_json.html" translate="no">hb_json</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Wrapper for encoding and decoding JSON. Supports maps and Jiffy's old 
+<code class="inline">ejson</code> format. This module abstracts the underlying JSON library, allowing
+us to switch between libraries as needed in the future.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_logger.html" translate="no">hb_logger</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_message.html" translate="no">hb_message</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>This module acts an adapter between messages, as modeled in the
+AO-Core protocol, and their uderlying binary representations and formats.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_metrics_collector.html" translate="no">hb_metrics_collector</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_name.html" translate="no">hb_name</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>An abstraction for name registration/deregistration in Hyperbeam.
+Its motivation is to provide a way to register names that are not necessarily
+atoms, but can be any term (for example: hashpaths or <code class="inline">process@1.0</code> IDs).
+An important characteristic of these functions is that they are atomic:
+There can only ever be one registrant for a given name at a time.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_opts.html" translate="no">hb_opts</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A module for interacting with local and global options inside
+HyperBEAM. Options are set globally, but can also be overridden using an
+an optional local <code class="inline">Opts</code> map argument. Many functions across the HyperBEAM 
+environment accept an <code class="inline">Opts</code> argument, which can be used to customize 
+behavior.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_path.html" translate="no">hb_path</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>This module provides utilities for manipulating the paths of a
+message: Its request path (referred to in messages as just the <code class="inline">Path</code>), and
+its HashPath.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_persistent.html" translate="no">hb_persistent</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Creates and manages long-lived AO-Core resolution processes.
+These can be useful for situations where a message is large and expensive
+to serialize and deserialize, or when executions should be deliberately
+serialized to avoid parallel executions of the same computation. This 
+module is called during the core <code class="inline">hb_ao</code> execution process, so care
+must be taken to avoid recursive spawns/loops.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_private.html" translate="no">hb_private</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>This module provides basic helper utilities for managing the
+private element of a message, which can be used to store state that is
+not included in serialized messages, or those granted to users via the
+APIs. Private elements of a message can be useful for storing state that
+is only relevant temporarily. For example, a device might use the private
+element to store a cache of values that are expensive to recompute. They
+should <em>not</em> be used for encoding state that makes the execution of a
+device non-deterministic (unless you are sure you know what you are doing).</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_process_monitor.html" translate="no">hb_process_monitor</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_router.html" translate="no">hb_router</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_singleton.html" translate="no">hb_singleton</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A parser that translates AO-Core HTTP API requests in TABM format
+into an ordered list of messages to evaluate. The details of this format
+are described in <code class="inline">docs/ao-core-http-api.md</code>.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_store.html" translate="no">hb_store</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_store_fs.html" translate="no">hb_store_fs</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_store_gateway.html" translate="no">hb_store_gateway</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A store module that reads data from the nodes Arweave gateway and 
+GraphQL routes, additionally including additional store-specific routes.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_store_remote_node.html" translate="no">hb_store_remote_node</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A store module that reads data from another AO node.
+Notably, this store only provides the <em>read</em> side of the store interface.
+The write side could be added, returning an commitment that the data has
+been written to the remote node. In that case, the node would probably want
+to upload it to an Arweave bundler to ensure persistence, too.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_store_rocksdb.html" translate="no">hb_store_rocksdb</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A process wrapper over rocksdb storage. Replicates functionality of the</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_structured_fields.html" translate="no">hb_structured_fields</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A module for parsing and converting between Erlang and HTTP Structured
+Fields, as described in RFC-9651.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_sup.html" translate="no">hb_sup</a>
+
+  </div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_test_utils.html" translate="no">hb_test_utils</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Simple utilities for testing HyperBEAM.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="hb_util.html" translate="no">hb_util</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>A collection of utility functions for building with HyperBEAM.</p></div>
+
+</div>
+<div class="summary-row">
+  <div class="summary-signature">
+    <a href="rsa_pss.html" translate="no">rsa_pss</a>
+
+  </div>
+
+    <div class="summary-synopsis"><p>Distributed under the Mozilla Public License v2.0. Original available at: https://github.com/potatosalad/erlang-crypto_rsassa_pss</p></div>
+
+</div>
+
+    </div>
+  </section>
+
+
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="readme.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+README
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

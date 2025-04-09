@@ -55,7 +55,7 @@ from(HTTP) ->
     % Next, we need to potentially parse the body and add to the TABM
     % potentially as sub-TABMs.
     WithBodyKeys = from_body(Headers, InlinedKey, ContentType, Body),
-    % Decode the `ao-ids' key into a map. `ao-ids` is an encoding of literal
+    % Decode the `ao-ids` key into a map. `ao-ids` is an encoding of literal
     % binaries whose keys (given that they are IDs) cannot be distributed as
     % HTTP headers.
     WithIDs = ungroup_ids(WithBodyKeys),
@@ -213,7 +213,7 @@ from_body_parts(TABM, InlinedKey, [Part | Rest]) ->
     end.
 
 -doc """
-Populate the `/commitments' key on the TABM with the dictionary of 
+Populate the `/commitments` key on the TABM with the dictionary of 
 signatures and their corresponding inputs.
 """.
 commitments_from_signature(Map, _HPs, not_found, _RawSigInput) ->
@@ -446,8 +446,8 @@ do_to(TABM, Opts) when is_map(TABM) ->
                     <<"body">> => <<FinalBody/binary, ?CRLF/binary, "--", Boundary/binary, "--">>
                 }
         end,
-    % Add the content-digest to the HTTP message. `generate_content_digest/1'
-    % will return a map with the `content-digest' key set, but the body removed,
+    % Add the content-digest to the HTTP message. `generate_content_digest/1`
+    % will return a map with the `content-digest` key set, but the body removed,
     % so we merge the two maps together to maintain the body and the content-digest.
     Enc2 = case maps:get(<<"body">>, Enc1, <<>>) of
         <<>> -> Enc1;
@@ -469,8 +469,8 @@ into a combined SF dict-_like_ structure. If not encoded, these keys would
 be sent as headers and lower-cased, losing their comparability against the
 original keys. The structure follows all SF dict rules, except that it allows
 for keys to contain capitals. The HyperBEAM SF parser will accept these keys,
-but standard RFC 8741 parsers will not. Subsequently, the resulting `ao-cased'
-key is not added to the `ao-types' map.
+but standard RFC 8741 parsers will not. Subsequently, the resulting `ao-cased`
+key is not added to the `ao-types` map.
 """.
 group_ids(Map) ->
     % Find all keys that are IDs
@@ -494,7 +494,7 @@ group_ids(Map) ->
     end.
 
 -doc """
-Decode the `ao-ids' key into a map.
+Decode the `ao-ids` key into a map.
 """.
 ungroup_ids(Msg = #{ <<"ao-ids">> := IDBin }) ->
     % Extract the ID binary from the Map
@@ -505,7 +505,7 @@ ungroup_ids(Msg = #{ <<"ao-ids">> := IDBin }) ->
             fun({K, {item, {string, Bin}, _}}) -> {K, Bin} end,
             EncodedIDsMap
         ),
-    % Add the decoded IDs to the Map and remove the `ao-ids' key
+    % Add the decoded IDs to the Map and remove the `ao-ids` key
     maps:merge(maps:without([<<"ao-ids">>], Msg), maps:from_list(IDsMap));
 ungroup_ids(Msg) -> Msg.
 
@@ -604,8 +604,8 @@ hashpaths_from_message(Msg) ->
     ).
 
 -doc """
-Extract all keys labelled `hashpath*' from the commitments, and add them
-to the HTTP message as `hashpath*' keys.
+Extract all keys labelled `hashpath*` from the commitments, and add them
+to the HTTP message as `hashpath*` keys.
 """.
 extract_hashpaths(Map) ->
     maps:filter(

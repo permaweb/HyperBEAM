@@ -1,6 +1,6 @@
 -module(hb_ao_test_vectors).
 -moduledoc """
-Uses a series of different `Opts' values to test the resolution engine's 
+Uses a series of different `Opts` values to test the resolution engine's 
 execution under different circumstances.
 """.
 -include_lib("eunit/include/eunit.hrl").
@@ -711,7 +711,7 @@ start_as_test(Opts) ->
         )
     ).
 start_as_with_parameters_test(Opts) ->
-    % Resolve a key on a message that has its device set with `as'.
+    % Resolve a key on a message that has its device set with `as`.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
@@ -728,7 +728,7 @@ start_as_with_parameters_test(Opts) ->
     ).
 
 load_as_test(Opts) ->
-    % Load a message as a device with the `as' keyword.
+    % Load a message as a device with the `as` keyword.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
@@ -748,13 +748,13 @@ load_as_test(Opts) ->
 
 as_path_test(Opts) ->
     % Create a message with the test device, which implements the test_func
-    % function. It normally returns `GOOD_FUNCTION'.
+    % function. It normally returns `GOOD_FUNCTION`.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
     ?assertEqual(<<"GOOD_FUNCTION">>, hb_ao:get(<<"test_func">>, Msg, Opts)),
-    % Now use the `as' keyword to subresolve a key with the message device.
+    % Now use the `as` keyword to subresolve a key with the message device.
     ?assertMatch(
         {ok, #{ <<"test_key">> := <<"MESSAGE">> }},
         hb_ao:resolve(

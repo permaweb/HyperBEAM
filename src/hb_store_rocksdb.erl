@@ -4,8 +4,8 @@
 A process wrapper over rocksdb storage. Replicates functionality of the
      hb_fs_store module.
 
-    Encodes the item types with the help of prefixes, see `encode_value/2'
-    and `decode_value/1'
+    Encodes the item types with the help of prefixes, see `encode_value/2`
+    and `decode_value/1`
 @end
 %%%-----------------------------------------------------------------------------
 """.
@@ -128,7 +128,7 @@ write(Opts, RawKey, Value) ->
 
 -doc """
 Returns the full list of items stored under the given path. Where the path
-child items is relevant to the path of parentItem. (Same as in `hb_store_fs').
+child items is relevant to the path of parentItem. (Same as in `hb_store_fs`).
 """.
 -spec list(Opts, Path) -> Result when
     Opts :: any(),

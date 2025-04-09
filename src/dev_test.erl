@@ -7,13 +7,13 @@
 %%% A simple test device for AO-Core, so that we can test the functionality that
 %%% depends on using Erlang's module system.
 %%% 
-%%% NOTE: This device is labelled `Test-Device/1.0' to avoid conflicts with
+%%% NOTE: This device is labelled `Test-Device/1.0` to avoid conflicts with
 %%% other testing functionality -- care should equally be taken to avoid
-%%% using the `test' key in other settings.
+%%% using the `test` key in other settings.
 
 -doc """
 Exports a default_handler function that can be used to test the
-%% handler resolution mechanism.
+handler resolution mechanism.
 """.
 info(_) ->
 	#{
@@ -24,9 +24,9 @@ test_func(_) ->
 	{ok, <<"GOOD_FUNCTION">>}.
 
 -doc """
-Example implementation of a `compute' handler. Makes a running list of
-%% the slots that have been computed in the state message and places the new
-%% slot number in the results key.
+Example implementation of a `compute` handler. Makes a running list of
+the slots that have been computed in the state message and places the new
+slot number in the results key.
 """.
 compute(Msg1, Msg2, Opts) ->
     AssignmentSlot = hb_ao:get(<<"slot">>, Msg2, Opts),
@@ -46,15 +46,15 @@ compute(Msg1, Msg2, Opts) ->
     }.
 
 -doc """
-Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
+Example `init/3` handler. Sets the `Already-Seen` key to an empty list.
 """.
 init(Msg, _Msg2, Opts) ->
     ?event({init_called_on_dev_test, Msg}),
     {ok, hb_ao:set(Msg, #{ <<"already-seen">> => [] }, Opts)}.
 
 -doc """
-Example `restore/3' handler. Sets the hidden key `Test/Started' to the
-%% value of `Current-Slot' and checks whether the `Already-Seen' key is valid.
+Example `restore/3` handler. Sets the hidden key `Test/Started` to the
+value of `Current-Slot` and checks whether the `Already-Seen` key is valid.
 """.
 restore(Msg, _Msg2, Opts) ->
     ?event({restore_called_on_dev_test, Msg}),
@@ -74,8 +74,8 @@ restore(Msg, _Msg2, Opts) ->
     end.
 
 -doc """
-Example implementation of an `imported' function for a WASM
-%% executor.
+Example implementation of an `imported` function for a WASM
+executor.
 """.
 mul(Msg1, Msg2) ->
     ?event(mul_called),
@@ -91,7 +91,7 @@ snapshot(_Msg1, _Msg2, _Opts) ->
     {ok, #{}}.
 
 -doc """
-Set the `postprocessor-called' key to true in the HTTP server.
+Set the `postprocessor-called` key to true in the HTTP server.
 """.
 postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
     ?event({postprocess_called, Opts}),

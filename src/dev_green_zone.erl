@@ -46,11 +46,11 @@ Sets up the node's cryptographic identity by ensuring that a wallet (keypair)
 exists and generating a shared AES key for secure communication. The wallet,
 AES key, and an empty trusted nodes list are stored in the node's configuration.
 @param M1 Ignored parameter.
-@param M2 Optionally contains a `required-config' map. If not provided, the
+@param M2 Optionally contains a `required-config` map. If not provided, the
           default required config (derived from the nodes base configuration)
           will be used.
 @param Opts A map containing configuration options. If the wallet is not already
-            provided (under key `priv_wallet'), a new one will be created.
+            provided (under key `priv_wallet`), a new one will be created.
 @returns {ok, Msg} where Msg is a binary confirmation message.
 """.
 -spec init(M1 :: term(), M2 :: term(), Opts :: map()) -> {ok, binary()}.
@@ -136,8 +136,8 @@ It returns the encrypted key along with the initialization vector (IV) needed
 for decryption.
 @param M1 Ignored parameter.
 @param M2 Ignored parameter.
-@param Opts A map of configuration options. Must include keys `priv_wallet'
-            and `priv_green_zone_aes'.
+@param Opts A map of configuration options. Must include keys `priv_wallet`
+            and `priv_green_zone_aes`.
 @returns {ok, Map} on success, where Map contains:
           - status: 200
           - encrypted_key: the encrypted private key (Base64 encoded)
@@ -184,7 +184,7 @@ node's encrypted private key and IV, decrypting it using the shared AES key,
 and updating the local node's wallet with the target node's keypair.
 @param M1 The message containing the target node's encrypted private key and IV.
 @param M2 Ignored parameter.
-@param Opts A map of configuration options. Must include `priv_green_zone_aes'.
+@param Opts A map of configuration options. Must include `priv_green_zone_aes`.
 @returns {ok, Map} on success, where Map includes:
           - status: 200
           - message: confirmation text
@@ -371,7 +371,7 @@ join_peer(PeerLocation, PeerID, _M1, M2, InitOpts) ->
 
 -doc """
 If the operator requests it, the node can automatically adopt the 
-necessary configuration to join a green zone. `adopt-config' can be a boolean,
+necessary configuration to join a green zone. `adopt-config` can be a boolean,
 a list of fields that should be included in the node message, alongside the
 required config of the green zone they are joining.
 """.
@@ -422,8 +422,8 @@ maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) ->
 
 -doc """
 Generate the node message that should be set prior to joining a green zone.
-This function takes a required opts message, a request message, and an `adopt-config'
-value. The `adopt-config' value can be a boolean, a list of fields that should be
+This function takes a required opts message, a request message, and an `adopt-config`
+value. The `adopt-config` value can be a boolean, a list of fields that should be
 included in the node message from the request, or a binary string of fields to
 include, separated by commas.
 """.

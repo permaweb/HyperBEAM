@@ -108,7 +108,7 @@ to_inner_list(Inner, [Item | Rest], Params) ->
     end.
 
 -doc """
-Convert an Erlang term to an SF `item' or `inner_list'.
+Convert an Erlang term to an SF `item` or `inner_list`.
 """.
 to_item_or_inner_list(ItemOrInner) ->
     case ItemOrInner of
@@ -120,7 +120,7 @@ to_item_or_inner_list(ItemOrInner) ->
     end.
 
 -doc """
-Convert an Erlang term to an SF `item'.
+Convert an Erlang term to an SF `item`.
 """.
 to_inner_item(Item) when is_list(Item) ->
     {too_deep, Item};
@@ -131,14 +131,14 @@ to_inner_item(Item) ->
     end.
 
 -doc """
-Convert an Erlang term to an SF `parameter'.
+Convert an Erlang term to an SF `parameter`.
 """.
 to_param({Name, Value}) ->
     NormalizedName = key_to_binary(Name),
     {NormalizedName, to_bare_item(Value)}.
 
 -doc """
-Convert an Erlang term to an SF `bare_item'.
+Convert an Erlang term to an SF `bare_item`.
 """.
 to_bare_item(BareItem) ->
      case BareItem of
@@ -157,7 +157,7 @@ to_bare_item(BareItem) ->
     end.
 
 -doc """
-Convert an SF `bare_item' to an Erlang term.
+Convert an SF `bare_item` to an Erlang term.
 """.
 from_bare_item(BareItem) ->
     case BareItem of
@@ -233,7 +233,7 @@ parse_dict_before_member(<<C, R/bits>>, Acc)
     parse_dict_key(R, Acc, <<C>>).
 
 -doc """
-Parse a binary SF item to an SF `item'.
+Parse a binary SF item to an SF `item`.
 """.
 -spec parse_item(binary()) -> sh_item().
 parse_item(Bin) ->

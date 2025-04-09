@@ -1,7 +1,7 @@
 -module(dev_genesis_wasm).
 -moduledoc """
-A device that mimics an environment suitable for `legacynet' AO 
-processes, using HyperBEAM infrastructure. This allows existing `legacynet'
+A device that mimics an environment suitable for `legacynet` AO 
+processes, using HyperBEAM infrastructure. This allows existing `legacynet`
 AO process definitions to be used in HyperBEAM.
 """.
 -export([init/3, compute/3, normalize/3, snapshot/3]).
@@ -27,8 +27,8 @@ Snapshot the device.
 snapshot(Msg, _Msg2, _Opts) -> {ok, Msg}.
 
 -doc """
-All the `delegated-compute@1.0' device to execute the request. We then apply
-the `patch@1.0' device, applying any state patches that the AO process may have
+All the `delegated-compute@1.0` device to execute the request. We then apply
+the `patch@1.0` device, applying any state patches that the AO process may have
 requested.
 """.
 compute(Msg, Msg2, Opts) ->
@@ -62,7 +62,7 @@ compute(Msg, Msg2, Opts) ->
     end.
 
 -doc """
-Ensure the local `genesis-wasm@1.0' is live. If it not, start it.
+Ensure the local `genesis-wasm@1.0` is live. If it not, start it.
 """.
 ensure_started(Opts) ->
     % Check if the `genesis-wasm@1.0` device is already running. The presence

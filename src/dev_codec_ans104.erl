@@ -1,6 +1,6 @@
 -module(dev_codec_ans104).
 -moduledoc """
-Codec for managing transformations from `ar_bundles'-style Arweave TX
+Codec for managing transformations from `ar_bundles`-style Arweave TX
 records to and from TABMs.
 """.
 -export([id/1, to/1, from/1, commit/3, verify/3, committed/3, content_type/1]).
@@ -25,8 +25,8 @@ records to and from TABMs.
 %% The list of tags that a user is explicitly committing to when they sign an
 %% ANS-104 message.
 -define(COMMITTED_TAGS, ?TX_KEYS ++ [<<"data">>]).
-%% List of tags that should be removed during `to'. These relate to the nested
-%% ar_bundles format that is used by the `ans104@1.0' codec.
+%% List of tags that should be removed during `to`. These relate to the nested
+%% ar_bundles format that is used by the `ans104@1.0` codec.
 -define(FILTERED_TAGS,
     [
         <<"bundle-format">>,
@@ -66,7 +66,7 @@ id(Msg) ->
     {ok, hb_util:human_id((to(TABM))#tx.id)}.
 
 -doc """
-Sign a message using the `priv_wallet' key in the options.
+Sign a message using the `priv_wallet` key in the options.
 """.
 commit(Msg, _Req, Opts) ->
     ?event({committing, {input, Msg}}),
@@ -123,7 +123,7 @@ commit(Msg, _Req, Opts) ->
 Return a list of committed keys from an ANS-104 message.
 """.
 committed(Msg = #{ <<"trusted-keys">> := RawTKeys, <<"commitments">> := Comms }, _Req, Opts) ->
-    % If the message has a `trusted-keys' field in the immediate layer, we validate
+    % If the message has a `trusted-keys` field in the immediate layer, we validate
     % that it also exists in the commitment's sub-map. If it exists there (which
     % cannot be written to directly by users), we can trust that the stated keys
     % are present in the message.
@@ -136,8 +136,8 @@ committed(Msg = #{ <<"trusted-keys">> := RawTKeys, <<"commitments">> := Comms },
             throw({trusted_keys_not_found_in_commitment, Msg})
     end;
 committed(Msg = #{ <<"original-tags">> := TagMap, <<"commitments">> := Comms }, _Req, Opts) ->
-    % If the message has an `original-tags' field, the committed fields are only
-    % those keys, and maps that are nested in the `data' field.
+    % If the message has an `original-tags` field, the committed fields are only
+    % those keys, and maps that are nested in the `data` field.
     ?event({committed_from_original_tags, {input, Msg}}),
     case hb_ao:get(hd(hb_ao:keys(Comms)), Comms, #{}) of
         #{ <<"original-tags">> := TagMap } ->
@@ -155,7 +155,7 @@ committed(Msg = #{ <<"original-tags">> := TagMap, <<"commitments">> := Comms }, 
 committed(Msg, Req, Opts) ->
     ?event({running_committed, {input, Msg}}),
     % Remove other commitments that were not 'promoted' to the base layer message
-    % by `message@1.0/committed'. This is safe because `to' will only proceed if 
+    % by `message@1.0/committed`. This is safe because `to` will only proceed if 
     % there is a single signature on the message. Subsequently, we can trust that
     % the keys signed by that single commitment speak for 'all' of the 
     % commitments.
@@ -179,7 +179,7 @@ committed(Msg, Req, Opts) ->
                     true -> dev_codec_structured:implicit_keys(Msg);
                     false -> []
                 end,
-            % Return the immediate and nested keys. The `data' field is always
+            % Return the immediate and nested keys. The `data` field is always
             % committed, so we include it in the list of keys.
             {ok, TagKeys ++ NestedKeys ++ Implicit ++ ?COMMITTED_TAGS};
         _ ->
@@ -436,9 +436,9 @@ to(Binary) when is_binary(Binary) ->
 to(TX) when is_record(TX, tx) -> TX;
 to(RawTABM) when is_map(RawTABM) ->
     % The path is a special case so we normalized it first. It may have been
-    % modified by `hb_ao' in order to set it to the current key that is
+    % modified by `hb_ao` in order to set it to the current key that is
     % being executed. We should check whether the path is in the
-    % `priv/AO-Core/Original-Path' field, and if so, use that instead of the
+    % `priv/AO-Core/Original-Path` field, and if so, use that instead of the
     % stated path. This normalizes the path, such that the signed message will
     % continue to validate correctly.
     TABM = hb_ao:normalize_keys(maps:without([<<"commitments">>], RawTABM)),

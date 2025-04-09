@@ -177,7 +177,7 @@ is_user_signed(_) -> true.
 
 -doc """
 Hook used by the MU pathway (currently) to add commitments to an
-%% outbound message if the computation requests it.
+outbound message if the computation requests it.
 """.
 push(_Item, S = #{ <<"results">> := ResultsMsg }) ->
     NewRes = commit_to_results(ResultsMsg, S),
@@ -278,7 +278,7 @@ add_commitments(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _S
 
 -doc """
 Helper function for parallel execution of commitment
-%% gathering.
+gathering.
 """.
 pfiltermap(Pred, List) ->
     Parent = self(),
@@ -312,7 +312,7 @@ pfiltermap(Pred, List) ->
 
 -doc """
 Find the process that this message is targeting, in order to
-%% determine which commitments to add.
+determine which commitments to add.
 """.
 find_process(Item, #{ <<"logger">> := _Logger, <<"store">> := Store }) ->
     case Item#tx.target of

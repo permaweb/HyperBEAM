@@ -7,7 +7,7 @@ This format mirrors HTTP Structured Fields, aside from its limitations of
 compound type depths, as well as limited floating point representations.
 
 As with all AO-Core codecs, its target format (the format it expects to 
-receive in the `to/1' function, and give in `from/1') is TABM.
+receive in the `to/1` function, and give in `from/1`) is TABM.
 
 For more details, see the HTTP Structured Fields (RFC-9651) specification.
 """.
@@ -16,7 +16,7 @@ For more details, see the HTTP Structured Fields (RFC-9651) specification.
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%%% Route signature functions to the `dev_codec_httpsig' module
+%%% Route signature functions to the `dev_codec_httpsig` module
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
 committed(Msg, Req, Opts) -> dev_codec_httpsig:committed(Msg, Req, Opts).
@@ -169,8 +169,8 @@ to(TABM0) ->
     )).
 
 -doc """
-Parse the `ao-types' field of a TABM and return a map of keys and their
-%% types
+Parse the `ao-types` field of a TABM and return a map of keys and their
+types
 """.
 parse_ao_types(Msg) when is_map(Msg) ->
     parse_ao_types(maps:get(<<"ao-types">>, Msg, <<>>));
@@ -199,7 +199,7 @@ implicit_keys(Req) ->
 
 -doc """
 Convert a term to a binary representation, emitting its type for
-%% serialization as a separate tag.
+serialization as a separate tag.
 """.
 encode_value(Value) when is_integer(Value) ->
     [Encoded, _] = hb_structured_fields:item({item, Value, []}),

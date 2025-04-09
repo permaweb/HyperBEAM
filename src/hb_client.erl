@@ -13,9 +13,9 @@
 
 -doc """
 Resolve a message pair on a remote node.
-%% The message pair is first transformed into a singleton request, by
-%% prefixing the keys in both messages for the path segment that they relate to,
-%% and then adjusting the "Path" field from the second message.
+The message pair is first transformed into a singleton request, by
+prefixing the keys in both messages for the path segment that they relate to,
+and then adjusting the "Path" field from the second message.
 """.
 resolve(Node, Msg1, Msg2, Opts) ->
     TABM2 =

@@ -39,9 +39,9 @@ Add-One-Device and Add-Two-Device.
 
 A device stack responds to special statuses upon responses as follows:
 
-    `skip': Skips the rest of the device stack for the current pass.
+    `skip`: Skips the rest of the device stack for the current pass.
 
-    `pass': Causes the stack to increment its pass number and re-execute
+    `pass`: Causes the stack to increment its pass number and re-execute
             the stack from the first device, maintaining the state 
             accumulated so far. Only available in fold mode.
 
@@ -52,13 +52,13 @@ The dev_stack adds additional metadata to the message in order to track
 the state of its execution as it progresses through devices. These keys
 are as follows:
 
-    `Stack-Pass': The number of times the stack has reset and re-executed
+    `Stack-Pass`: The number of times the stack has reset and re-executed
     from the first device for the current message.
 
-    `Input-Prefix': The prefix that the device should use for its outputs
+    `Input-Prefix`: The prefix that the device should use for its outputs
     and inputs.
 
-    `Output-Prefix': The device that was previously executed.
+    `Output-Prefix`: The device that was previously executed.
 
 All counters used by the stack are initialized to 1.
 
@@ -67,18 +67,18 @@ number of options that are passed to it as keys in the message. Each of
 these options is also passed through to the devices contained within the
 stack during execution. These options include:
 
-    `Error-Strategy': Determines how the stack handles errors from devices.
-    See `maybe_error/5' for more information.
+    `Error-Strategy`: Determines how the stack handles errors from devices.
+    See `maybe_error/5` for more information.
 
-    `Allow-Multipass': Determines whether the stack is allowed to automatically
-    re-execute from the first device when the `pass' tag is returned. See
-    `maybe_pass/3' for more information.
+    `Allow-Multipass`: Determines whether the stack is allowed to automatically
+    re-execute from the first device when the `pass` tag is returned. See
+    `maybe_pass/3` for more information.
 
-Under-the-hood, dev_stack uses a `default' handler to resolve all calls to
-devices, aside `set/2' which it calls itself to mutate the message's `device'
+Under-the-hood, dev_stack uses a `default` handler to resolve all calls to
+devices, aside `set/2` which it calls itself to mutate the message's `device`
 key in order to change which device is currently being executed. This method
 allows dev_stack to ensure that the message's HashPath is always correct,
-even as it delegates calls to other devices. An example flow for a `dev_stack'
+even as it delegates calls to other devices. An example flow for a `dev_stack`
 execution is as follows:
 ```
 	/Msg1/AlicesExcitingKey ->
@@ -92,7 +92,7 @@ execution is as follows:
 		returns {ok, /MsgN+1} ->
 	/MsgN+1'''
 
-In this example, the `device' key is mutated a number of times, but the
+In this example, the `device` key is mutated a number of times, but the
 resulting HashPath remains correct and verifiable.
 """.
 
@@ -134,9 +134,9 @@ output_prefix(Msg1, _Msg2, Opts) ->
     hb_ao:get(<<"output-prefix">>, {as, dev_message, Msg1}, <<"">>, Opts).
 
 -doc """
-The device stack key router. Sends the request to `resolve_stack',
-%% except for `set/2' which is handled by the default implementation in
-%% `dev_message'.
+The device stack key router. Sends the request to `resolve_stack`,
+except for `set/2` which is handled by the default implementation in
+`dev_message`.
 """.
 router(<<"keys">>, Message1, Message2, _Opts) ->
 	?event({keys_called, {msg1, Message1}, {msg2, Message2}}),
@@ -166,12 +166,12 @@ router(Message1, Message2, Opts) ->
 
 -doc """
 Return a message which, when given a key, will transform the message
-%% such that the device named `Key' from the `Device-Stack' key in the message
-%% takes the place of the original `Device' key. This allows users to call
-%% a single device from the stack:
-%%
-%% 	/Msg1/Transform/DeviceName/keyInDevice ->
-%% 		keyInDevice executed on DeviceName against Msg1.
+such that the device named `Key` from the `Device-Stack` key in the message
+takes the place of the original `Device` key. This allows users to call
+a single device from the stack:
+
+	/Msg1/Transform/DeviceName/keyInDevice ->
+	keyInDevice executed on DeviceName against Msg1.
 """.
 transformer_message(Msg1, Opts) ->
 	?event({creating_transformer, {for, Msg1}}),
@@ -197,10 +197,10 @@ transformer_message(Msg1, Opts) ->
 	}.
 
 -doc """
-Return Message1, transformed such that the device named `Key' from the
-%% `Device-Stack' key in the message takes the place of the original `Device'
-%% key. This transformation allows dev_stack to correctly track the HashPath
-%% of the message as it delegates execution to devices contained within it.
+Return Message1, transformed such that the device named `Key` from the
+`Device-Stack` key in the message takes the place of the original `Device`
+key. This transformation allows dev_stack to correctly track the HashPath
+of the message as it delegates execution to devices contained within it.
 """.
 transform(Msg1, Key, Opts) ->
 	% Get the device stack message from Msg1.
@@ -271,7 +271,7 @@ transform(Msg1, Key, Opts) ->
 
 -doc """
 The main device stack execution engine. See the moduledoc for more
-%% information.
+information.
 """.
 resolve_fold(Message1, Message2, Opts) ->
 	{ok, InitDevMsg} = dev_message:get(<<"device">>, Message1),
@@ -354,8 +354,8 @@ resolve_fold(Message1, Message2, DevNum, Opts) ->
 
 -doc """
 Map over the devices in the stack, accumulating the output in a single
-%% message of keys and values, where keys are the same as the keys in the
-%% original message (typically a number).
+message of keys and values, where keys are the same as the keys in the
+original message (typically a number).
 """.
 resolve_map(Message1, Message2, Opts) ->
     ?event({resolving_map, {msg1, Message1}, {msg2, Message2}}),
@@ -426,7 +426,7 @@ generate_append_device(Separator, Status) ->
 
 -doc """
 Test that the transform function can be called correctly internally
-%% by other functions in the module.
+by other functions in the module.
 """.
 transform_internal_call_device_test() ->
 	AppendDev = generate_append_device(<<"_">>),
@@ -449,7 +449,7 @@ transform_internal_call_device_test() ->
 
 -doc """
 Ensure we can generate a transformer message that can be called to
-%% return a version of msg1 with only that device attached.
+return a version of msg1 with only that device attached.
 """.
 transform_external_call_device_test() ->
 	Msg1 = #{

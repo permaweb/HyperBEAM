@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
+
+
+    <title>hb_ao — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
+
+
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
+
+  </head>
+  <body data-type="modules" class="page-module">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+    <span translate="no">hb_ao</span> 
+    <small class="app-vsn" translate="no">(hb v0.0.1)</small>
+
+  </h1>
+
+
+    <section id="moduledoc">
+<p>This module is the root of the device call logic of the 
+AO-Core protocol in HyperBEAM.</p><p>At the implementation level, every message is simply a collection of keys,
+dictated by its <code class="inline">Device</code>, that can be resolved in order to yield their
+values. Each key may return another message or a raw value:</p><pre><code class="makeup erlang" translate="no"><span class="err">`</span><span class="nf">ao</span><span class="p" data-group-id="2382346291-1">(</span><span class="n">Message1</span><span class="p">,</span><span class="w"> </span><span class="n">Message2</span><span class="p" data-group-id="2382346291-1">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="p" data-group-id="2382346291-2">{</span><span class="n">Status</span><span class="p">,</span><span class="w"> </span><span class="n">Message3</span><span class="p" data-group-id="2382346291-2">}</span><span class="err">&#39;</span></code></pre><p>Under-the-hood, <code class="inline">AO-Core(Message1, Message2)' leads to the evaluation of</code>DeviceMod:PathPart(Message1, Message2)', which defines the user compute
+to be performed. If <code class="inline">Message1</code> does not specify a device, <code class="inline">dev_message</code> is
+assumed. The key to resolve is specified by the <code class="inline">Path</code> field of the message.</p><p>After each output, the <code class="inline">HashPath</code> is updated to include the <code class="inline">Message2</code>
+that was executed upon it.</p><p>Because each message implies a device that can resolve its keys, as well
+as generating a merkle tree of the computation that led to the result,
+you can see AO-Core protocol as a system for cryptographically chaining 
+the execution of <code class="inline">combinators</code>. See <code class="inline">docs/ao-core-protocol.md</code> for more 
+information about AO-Core.</p><p>The <code class="inline">Fun(Message1, Message2)' pattern is repeated throughout the HyperBEAM codebase, sometimes with</code>MessageX<code class="inline">replaced with</code>MX<code class="inline">or</code>MsgX<code class="inline">for brevity. Message3 can be either a new message or a raw output value (a binary, integer, float, atom, or list of such values). Devices can be expressed as either modules or maps. They can also be referenced by an Arweave ID, which can be used to load a device from the network (depending on the value of the</code>load_remote_devices<code class="inline">and</code>trusted_device_signers<code class="inline">environment settings). HyperBEAM device implementations are defined as follows: ``` DevMod:ExportedFunc : Key resolution functions. All are assumed to be device keys (thus, present in every message that uses it) unless specified by</code>DevMod:info()<code class="inline">. Each function takes a set of parameters of the form</code>DevMod:KeyHandler(Msg1, Msg2, Opts)'.
+                          Each of these arguments can be ommitted if not
+                          needed. Non-exported functions are not assumed
+                          to be device keys.</p><p>    DevMod:info : Optional. Returns a map of options for the device. All 
+                  options are optional and assumed to be the defaults if 
+                  not specified. This function can accept a <code class="inline">Message1</code> as 
+                  an argument, allowing it to specify its functionality 
+                  based on a specific message if appropriate.</p><p>    info/exports : Overrides the export list of the Erlang module, such that
+                  only the functions in this list are assumed to be device
+                  keys. Defaults to all of the functions that DevMod 
+                  exports in the Erlang environment.</p><p>    info/excludes : A list of keys that should not be resolved by the device,
+                    despite being present in the Erlang module exports list.</p><p>    info/handler : A function that should be used to handle <em>all</em> keys for 
+                   messages using the device.</p><p>    info/default : A function that should be used to handle all keys that
+                   are not explicitly implemented by the device. Defaults to
+                   the <code class="inline">dev_message</code> device, which contains general keys for 
+                   interacting with messages.</p><p>    info/default_mod : A different device module that should be used to
+                   handle all keys that are not explicitly implemented
+                   by the device. Defaults to the <code class="inline">dev_message</code> device.</p><p>    info/grouper : A function that returns the concurrency 'group' name for
+                   an execution. Executions with the same group name will
+                   be executed by sending a message to the associated process
+                   and waiting for a response. This allows you to control 
+                   concurrency of execution and to allow executions to share
+                   in-memory state as applicable. Default: A derivation of
+                   Msg1+Msg2. This means that concurrent calls for the same
+                   output will lead to only a single execution.</p><p>    info/worker : A function that should be run as the 'server' loop of
+                  the executor for interactions using the device.</p><p>The HyperBEAM resolver also takes a number of runtime options that change
+the way that the environment operates:</p><p><code class="inline">update_hashpath</code>:  Whether to add the <code class="inline">Msg2</code> to <code class="inline">HashPath</code> for the <code class="inline">Msg3</code>.
+					Default: true.
+<code class="inline">add_key</code>:          Whether to add the key to the start of the arguments.
+					Default: `&lt;not set&gt;'.
+'''</p>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#deep_set/4" data-no-tooltip translate="no">deep_set/4</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Recursively search a map, resolving keys, and set the value of the key
+at the given path.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#find_exported_function/5" data-no-tooltip translate="no">find_exported_function/5</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Find the function with the highest arity that has the given name, if it
+exists.
+If the device is a module, we look for a function with the given name.
+If the device is a map, we look for a key in the map. First we try to find
+the key using its literal value. If that fails, we cast the key to an atom
+and try again.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#force_message/2" data-no-tooltip translate="no">force_message/2</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get/2" data-no-tooltip translate="no">get(Path, Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Shortcut for resolving a key in a message without its status if it is
+<code class="inline">ok</code>. This makes it easier to write complex logic on top of messages while
+maintaining a functional style.
+Additionally, this function supports the <code class="inline">{as, Device, Msg}' syntax, which allows the key to be resolved using another device to resolve the key, while maintaining the tracability of the</code>HashPath<code class="inline">of the output message. Returns the value of the key if it is found, otherwise returns the default provided by the user, or</code>not_found` if no default is provided.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get/3" data-no-tooltip translate="no">get(Path, Msg, Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get/4" data-no-tooltip translate="no">get/4</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_first/2" data-no-tooltip translate="no">get_first(Paths, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>take a sequence of base messages and paths, then return the value of the
+first message that can be resolved using a path.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_first/3" data-no-tooltip translate="no">get_first/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#info/2" data-no-tooltip translate="no">info(Msg, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get the info map for a device, optionally giving it a message if the
+device's info function is parameterized by one.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#is_exported/4" data-no-tooltip translate="no">is_exported/4</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Check if a device is guarding a key via its <code class="inline">exports</code> list. Defaults to
+true if the device does not specify an <code class="inline">exports</code> list. The <code class="inline">info</code> function is
+always exported, if it exists. Elements of the <code class="inline">exludes</code> list are not
+exported. Note that we check for info <em>twice</em> -- once when the device is
+given but the info result is not, and once when the info result is given.
+The reason for this is that <code class="inline">info/3</code> calls other functions that may need to
+check if a key is exported, so we must avoid infinite loops. We must, however,
+also return a consistent result in the case that only the info result is
+given, so we check for it in both cases.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#keys/1" data-no-tooltip translate="no">keys(Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Shortcut to get the list of keys from a message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#keys/2" data-no-tooltip translate="no">keys(Msg, Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#keys/3" data-no-tooltip translate="no">keys/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#load_device/2" data-no-tooltip translate="no">load_device/2</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Load a device module from its name or a message ID.
+Returns {ok, Executable} where Executable is the device module. On error,
+a tuple of the form {error, Reason} is returned.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#message_to_device/2" data-no-tooltip translate="no">message_to_device(Msg, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Extract the device module from a message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#message_to_fun/3" data-no-tooltip translate="no">message_to_fun(Msg, Key, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Calculate the Erlang function that should be called to get a value for
+a given key from a device.
+This comes in 7 forms</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#normalize_key/1" data-no-tooltip translate="no">normalize_key(Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Convert a key to a binary in normalized form.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#normalize_key/2" data-no-tooltip translate="no">normalize_key/2</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#normalize_keys/1" data-no-tooltip translate="no">normalize_keys/1</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Ensure that a message is processable by the AO-Core resolver: No lists.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#remove/2" data-no-tooltip translate="no">remove(Msg, Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Remove a key from a message, using its underlying device.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#remove/3" data-no-tooltip translate="no">remove(Msg, Key, Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#resolve/2" data-no-tooltip translate="no">resolve(SingletonMsg, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get the value of a message's key by running its associated device
+function. Optionally, takes options that control the runtime environment. 
+This function returns the raw result of the device function call:
+`{ok | error, NewMessage}.'
+The resolver is composed of a series of discrete phases:
+      1: Normalization.
+      2: Cache lookup.
+      3: Validation check.
+      4: Persistent-resolver lookup.
+      5: Device lookup.
+      6: Execution.
+      7: Cryptographic linking.
+      8: Result caching.
+      9: Notify waiters.
+     10: Fork worker.
+     11: Recurse or terminate.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#resolve/3" data-no-tooltip translate="no">resolve/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#resolve_many/2" data-no-tooltip translate="no">resolve_many/2</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Resolve a list of messages in sequence. Take the output of the first
+message as the input for the next message. Once the last message is resolved,
+return the result.
+A <code class="inline">resolve_many</code> call with only a single ID will attempt to read the message
+directly from the store. No execution is performed.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#set/2" data-no-tooltip translate="no">set(Msg1, Msg2)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Shortcut for setting a key in the message using its underlying device.
+Like the <a href="#get/3"><code class="inline">get/3</code></a> function, this function honors the <code class="inline">error_strategy</code> option.
+<code class="inline">set</code> works with maps and recursive paths while maintaining the appropriate
+<code class="inline">HashPath</code> for each step.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#set/3" data-no-tooltip translate="no">set(RawMsg1, RawMsg2, Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#set/4" data-no-tooltip translate="no">set(Msg1, Key, Value, Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#truncate_args/2" data-no-tooltip translate="no">truncate_args(Fun, Args)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Truncate the arguments of a function to the number of arguments it
+actually takes.</p></div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="deep_set/4">
+
+  <div class="detail-header">
+    <a href="#deep_set/4" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">deep_set/4</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L872" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Recursively search a map, resolving keys, and set the value of the key
+at the given path.</p>
+  </section>
+</section>
+<section class="detail" id="find_exported_function/5">
+
+  <div class="detail-header">
+    <a href="#find_exported_function/5" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">find_exported_function/5</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L1092" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Find the function with the highest arity that has the given name, if it
+exists.
+If the device is a module, we look for a function with the given name.
+If the device is a map, we look for a key in the map. First we try to find
+the key using its literal value. If that fails, we cast the key to an atom
+and try again.</p>
+  </section>
+</section>
+<section class="detail" id="force_message/2">
+
+  <div class="detail-header">
+    <a href="#force_message/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">force_message/2</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L728" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="get/2">
+
+  <div class="detail-header">
+    <a href="#get/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">get(Path, Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L756" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Shortcut for resolving a key in a message without its status if it is
+<code class="inline">ok</code>. This makes it easier to write complex logic on top of messages while
+maintaining a functional style.
+Additionally, this function supports the <code class="inline">{as, Device, Msg}' syntax, which allows the key to be resolved using another device to resolve the key, while maintaining the tracability of the</code>HashPath<code class="inline">of the output message. Returns the value of the key if it is found, otherwise returns the default provided by the user, or</code>not_found` if no default is provided.</p>
+  </section>
+</section>
+<section class="detail" id="get/3">
+
+  <div class="detail-header">
+    <a href="#get/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">get(Path, Msg, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L758" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="get/4">
+
+  <div class="detail-header">
+    <a href="#get/4" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">get/4</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L760" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="get_first/2">
+
+  <div class="detail-header">
+    <a href="#get_first/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">get_first(Paths, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L781" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>take a sequence of base messages and paths, then return the value of the
+first message that can be resolved using a path.</p>
+  </section>
+</section>
+<section class="detail" id="get_first/3">
+
+  <div class="detail-header">
+    <a href="#get_first/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">get_first/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L782" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="info/2">
+
+  <div class="detail-header">
+    <a href="#info/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">info(Msg, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L1326" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Get the info map for a device, optionally giving it a message if the
+device's info function is parameterized by one.</p>
+  </section>
+</section>
+<section class="detail" id="is_exported/4">
+
+  <div class="detail-header">
+    <a href="#is_exported/4" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">is_exported/4</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L1134" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Check if a device is guarding a key via its <code class="inline">exports</code> list. Defaults to
+true if the device does not specify an <code class="inline">exports</code> list. The <code class="inline">info</code> function is
+always exported, if it exists. Elements of the <code class="inline">exludes</code> list are not
+exported. Note that we check for info <em>twice</em> -- once when the device is
+given but the info result is not, and once when the info result is given.
+The reason for this is that <code class="inline">info/3</code> calls other functions that may need to
+check if a key is exported, so we must avoid infinite loops. We must, however,
+also return a consistent result in the case that only the info result is
+given, so we check for it in both cases.</p>
+  </section>
+</section>
+<section class="detail" id="keys/1">
+
+  <div class="detail-header">
+    <a href="#keys/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">keys(Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L792" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Shortcut to get the list of keys from a message.</p>
+  </section>
+</section>
+<section class="detail" id="keys/2">
+
+  <div class="detail-header">
+    <a href="#keys/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">keys(Msg, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L793" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="keys/3">
+
+  <div class="detail-header">
+    <a href="#keys/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">keys/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L794" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="load_device/2">
+
+  <div class="detail-header">
+    <a href="#load_device/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">load_device/2</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L1195" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Load a device module from its name or a message ID.
+Returns {ok, Executable} where Executable is the device module. On error,
+a tuple of the form {error, Reason} is returned.</p>
+  </section>
+</section>
+<section class="detail" id="message_to_device/2">
+
+  <div class="detail-header">
+    <a href="#message_to_device/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">message_to_device(Msg, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L1048" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Extract the device module from a message.</p>
+  </section>
+</section>
+<section class="detail" id="message_to_fun/3">
+
+  <div class="detail-header">
+    <a href="#message_to_fun/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">message_to_fun(Msg, Key, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L970" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Calculate the Erlang function that should be called to get a value for
+a given key from a device.
+This comes in 7 forms:</p><ol><li>The message does not specify a device, so we use the default device.</li><li>The device has a <code class="inline">handler</code> key in its <code class="inline">Dev:info()</code> map, which is a
+function that takes a key and returns a function to handle that key. We pass
+the key as an additional argument to this function.</li><li>The device has a function of the name <code class="inline">Key</code>, which should be called
+directly.</li><li>The device does not implement the key, but does have a default handler
+for us to call. We pass it the key as an additional argument.</li><li>The device does not implement the key, and has no default handler. We use
+the default device to handle the key.
+Error: If the device is specified, but not loadable, we raise an error.
+Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
+indicates that the key should be added to the start of the call's arguments.</li></ol>
+  </section>
+</section>
+<section class="detail" id="normalize_key/1">
+
+  <div class="detail-header">
+    <a href="#normalize_key/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">normalize_key(Key)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L1150" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Convert a key to a binary in normalized form.</p>
+  </section>
+</section>
+<section class="detail" id="normalize_key/2">
+
+  <div class="detail-header">
+    <a href="#normalize_key/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">normalize_key/2</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L1151" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="normalize_keys/1">
+
+  <div class="detail-header">
+    <a href="#normalize_keys/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">normalize_keys/1</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L1170" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Ensure that a message is processable by the AO-Core resolver: No lists.</p>
+  </section>
+</section>
+<section class="detail" id="remove/2">
+
+  <div class="detail-header">
+    <a href="#remove/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">remove(Msg, Key)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L933" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Remove a key from a message, using its underlying device.</p>
+  </section>
+</section>
+<section class="detail" id="remove/3">
+
+  <div class="detail-header">
+    <a href="#remove/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">remove(Msg, Key, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L934" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="resolve/2">
+
+  <div class="detail-header">
+    <a href="#resolve/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">resolve(SingletonMsg, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L129" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Get the value of a message's key by running its associated device
+function. Optionally, takes options that control the runtime environment. 
+This function returns the raw result of the device function call:
+`{ok | error, NewMessage}.'
+The resolver is composed of a series of discrete phases:
+      1: Normalization.
+      2: Cache lookup.
+      3: Validation check.
+      4: Persistent-resolver lookup.
+      5: Device lookup.
+      6: Execution.
+      7: Cryptographic linking.
+      8: Result caching.
+      9: Notify waiters.
+     10: Fork worker.
+     11: Recurse or terminate.</p>
+  </section>
+</section>
+<section class="detail" id="resolve/3">
+
+  <div class="detail-header">
+    <a href="#resolve/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">resolve/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L132" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="resolve_many/2">
+
+  <div class="detail-header">
+    <a href="#resolve_many/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">resolve_many/2</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L148" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Resolve a list of messages in sequence. Take the output of the first
+message as the input for the next message. Once the last message is resolved,
+return the result.
+A <code class="inline">resolve_many</code> call with only a single ID will attempt to read the message
+directly from the store. No execution is performed.</p>
+  </section>
+</section>
+<section class="detail" id="set/2">
+
+  <div class="detail-header">
+    <a href="#set/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">set(Msg1, Msg2)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L828" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Shortcut for setting a key in the message using its underlying device.
+Like the <a href="#get/3"><code class="inline">get/3</code></a> function, this function honors the <code class="inline">error_strategy</code> option.
+<code class="inline">set</code> works with maps and recursive paths while maintaining the appropriate
+<code class="inline">HashPath</code> for each step.</p>
+  </section>
+</section>
+<section class="detail" id="set/3">
+
+  <div class="detail-header">
+    <a href="#set/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">set(RawMsg1, RawMsg2, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L830" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="set/4">
+
+  <div class="detail-header">
+    <a href="#set/4" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">set(Msg1, Key, Value, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L853" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="truncate_args/2">
+
+  <div class="detail-header">
+    <a href="#truncate_args/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">truncate_args(Fun, Args)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_ao.erl#L948" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Truncate the arguments of a function to the number of arguments it
+actually takes.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

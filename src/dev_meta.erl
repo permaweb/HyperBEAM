@@ -14,22 +14,22 @@ the AO-Core resolver has returned a result.
 -include_lib("eunit/include/eunit.hrl").
 
 -doc """
-Ensure that the helper function `adopt_node_message/2' is not exported.
-The naming of this method carefully avoids a clash with the exported `info/3'
+Ensure that the helper function `adopt_node_message/2` is not exported.
+The naming of this method carefully avoids a clash with the exported `info/3`
 function. We would like the node information to be easily accessible via the
-`info' endpoint, but AO-Core also uses `info' as the name of the function
+`info` endpoint, but AO-Core also uses `info` as the name of the function
 that grants device information. The device call takes two or fewer arguments,
 so we are safe to use the name for both purposes in this case, as the user 
 info call will match the three-argument version of the function. If in the 
-future the `request' is added as an argument to AO-Core's internal `info'
+future the `request` is added as an argument to AO-Core's internal `info`
 function, we will need to find a different approach.
 """.
 info(_) -> #{ exports => [info] }.
 
 -doc """
 Normalize and route messages downstream based on their path. Messages
-with a `Meta' key are routed to the `handle_meta/2' function, while all
-other messages are routed to the `handle_resolve/2' function.
+with a `Meta` key are routed to the `handle_meta/2` function, while all
+other messages are routed to the `handle_resolve/2` function.
 """.
 handle(NodeMsg, RawRequest) ->
     ?event({singleton_tabm_request, RawRequest}),
@@ -62,9 +62,9 @@ handle_initialize([], _NodeMsg) ->
     {error, <<"Node must be initialized before use.">>}.
 
 -doc """
-Get/set the node message. If the request is a `POST', we check that the
+Get/set the node message. If the request is a `POST`, we check that the
 request is signed by the owner of the node. If not, we return the node message
-as-is, aside all keys that are private (according to `hb_private').
+as-is, aside all keys that are private (according to `hb_private`).
 """.
 info(_, Request, NodeMsg) ->
     case hb_ao:get(<<"method">>, Request, NodeMsg) of
@@ -190,8 +190,8 @@ adopt_node_message(Request, NodeMsg) ->
 -doc """
 Handle an AO-Core request, which is a list of messages. We apply
 the node's pre-processor to the request first, and then resolve the request
-using the node's AO-Core implementation if its response was `ok'.
-After execution, we run the node's `postprocessor' message on the result of
+using the node's AO-Core implementation if its response was `ok`.
+After execution, we run the node's `postprocessor` message on the result of
 the request before returning the result it grants back to the user.
 """.
 handle_resolve(Req, Msgs, NodeMsg) ->
@@ -315,7 +315,7 @@ Get the HTTP status code from a transaction (if it exists).
 message_to_status(#{ <<"body">> := Status }) when is_atom(Status) ->
     status_code(Status);
 message_to_status(Item) when is_map(Item) ->
-    % Note: We use `dev_message' directly here, such that we do not cause 
+    % Note: We use `dev_message` directly here, such that we do not cause 
     % additional AO-Core calls for every request. This is particularly important
     % if a remote server is being used for all AO-Core requests by a node.
     case dev_message:get(<<"status">>, Item) of
@@ -582,8 +582,8 @@ modify_request_test() ->
     {ok, Res} = hb_http:get(Node, <<"/added">>, #{}),
     ?assertEqual(<<"value">>, Res).
 
-%% Test that we can use a postprocessor upon a request. Calls the `test@1.0'
-%% device's postprocessor, which sets the `postprocessor-called' key to true in
+%% Test that we can use a postprocessor upon a request. Calls the `test@1.0`
+%% device's postprocessor, which sets the `postprocessor-called` key to true in
 %% the HTTP server.
 % postprocessor_test() ->
 %     Node = hb_http_server:start_node(

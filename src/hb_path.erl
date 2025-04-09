@@ -1,7 +1,7 @@
 -module(hb_path).
 -moduledoc """
 This module provides utilities for manipulating the paths of a
-message: Its request path (referred to in messages as just the `Path'), and
+message: Its request path (referred to in messages as just the `Path`), and
 its HashPath.
 
 A HashPath is a rolling Merkle list of the messages that have been applied 
@@ -41,26 +41,26 @@ will be generated according to Msg1's algorithm choice.
 -include_lib("eunit/include/eunit.hrl").
 
 -doc """
-Extract the first key from a `Message2''s `Path' field.
-%% Note: This function uses the `dev_message:get/2' function, rather than 
-%% a generic call as the path should always be an explicit key in the message.
+Extract the first key from a `Message2`'s `Path` field.
+Note: This function uses the `dev_message:get/2` function, rather than 
+a generic call as the path should always be an explicit key in the message.
 """.
 hd(Msg2, Opts) ->
     %?event({key_from_path, Msg2, Opts}),
     case pop_request(Msg2, Opts) of
         undefined -> undefined;
         {Head, _} ->
-            % `term_to_path' returns the full path, so we need to take the
-            % `hd' of our `Head'.
+            % `term_to_path` returns the full path, so we need to take the
+            % `hd` of our `Head`.
             erlang:hd(term_to_path_parts(Head, Opts))
     end.
 
 -doc """
 Return the message without its first path element. Note that this
-%% is the only transformation in AO-Core that does _not_ make a log of its
-%% transformation. Subsequently, the message's IDs will not be verifiable 
-%% after executing this transformation.
-%% This may or may not be the mainnet behavior we want.
+is the only transformation in AO-Core that does _not_ make a log of its
+transformation. Subsequently, the message's IDs will not be verifiable 
+after executing this transformation.
+This may or may not be the mainnet behavior we want.
 """.
 tl(Msg2, Opts) when is_map(Msg2) ->
     case pop_request(Msg2, Opts) of
@@ -75,9 +75,9 @@ tl(Path, Opts) when is_list(Path) ->
     end.
 
 -doc """
-Return the `Remaining-Path' of a message, from its hidden `AO-Core'
-%% key. Does not use the `get' or set `hb_private' functions, such that it
-%% can be safely used inside the main AO-Core resolve function.
+Return the `Remaining-Path` of a message, from its hidden `AO-Core`
+key. Does not use the `get` or set `hb_private` functions, such that it
+can be safely used inside the main AO-Core resolve function.
 """.
 priv_remaining(Msg, _Opts) ->
     Priv = hb_private:from_message(Msg),
@@ -85,7 +85,7 @@ priv_remaining(Msg, _Opts) ->
     maps:get(<<"remaining">>, AOCore, undefined).
 
 -doc """
-Store the remaining path of a message in its hidden `AO-Core' key.
+Store the remaining path of a message in its hidden `AO-Core` key.
 """.
 priv_store_remaining(Msg, RemainingPath) ->
     Priv = hb_private:from_message(Msg),
@@ -111,8 +111,8 @@ hashpath(RawMsg1, Opts) ->
     case hb_private:from_message(Msg1) of
         #{ <<"hashpath">> := HP } -> HP;
         _ ->
-            % Note: We do not use `hb_message:id' here because it will call
-            % hb_ao:resolve, which will call `hashpath' recursively.
+            % Note: We do not use `hb_message:id` here because it will call
+            % hb_ao:resolve, which will call `hashpath` recursively.
             try
                 hb_util:human_id(
                     hb_util:ok(
@@ -175,7 +175,7 @@ hashpath(Msg1Hashpath, HumanMsg2ID, HashpathAlg, _Opts) ->
 -doc """
 Get the hashpath function for a message from its HashPath-Alg.
 If no hashpath algorithm is specified, the protocol defaults to
-`sha-256-chain'.
+`sha-256-chain`.
 """.
 hashpath_alg(Msg) ->
     case dev_message:get(<<"hashpath-alg">>, Msg) of
@@ -212,9 +212,9 @@ pop_request([Head|Rest], _Opts) ->
     {Head, Rest}.
 
 -doc """
-Queue a message at the back of a request path. `path' is the only
-key that we cannot use dev_message's `set/3' function for (as it expects
-the compute path to be there), so we use `maps:put/3' instead.
+Queue a message at the back of a request path. `path` is the only
+key that we cannot use dev_message's `set/3` function for (as it expects
+the compute path to be there), so we use `maps:put/3` instead.
 """.
 queue_request(Msg, Path) ->
     maps:put(<<"path">>, from_message(request, Msg) ++ term_to_path_parts(Path), Msg).
@@ -234,11 +234,11 @@ verify_hashpath([Msg1, Msg2, Msg3|Rest], Opts) ->
 
 -doc """
 Extract the request path or hashpath from a message. We do not use
-%% AO-Core for this resolution because this function is called from inside AO-Core 
-%% itself. This imparts a requirement: the message's device must store a 
-%% viable hashpath and path in its Erlang map at all times, unless the message
-%% is directly from a user (in which case paths and hashpaths will not have 
-%% been assigned yet).
+AO-Core for this resolution because this function is called from inside AO-Core 
+itself. This imparts a requirement: the message's device must store a 
+viable hashpath and path in its Erlang map at all times, unless the message
+is directly from a user (in which case paths and hashpaths will not have 
+been assigned yet).
 """.
 from_message(hashpath, Msg) -> hashpath(Msg, #{});
 from_message(request, #{ path := Path }) -> term_to_path_parts(Path);
@@ -248,7 +248,7 @@ from_message(request, _) -> undefined.
 
 -doc """
 Convert a term into an executable path. Supports binaries, lists, and
-%% atoms. Notably, it does not support strings as lists of characters.
+atoms. Notably, it does not support strings as lists of characters.
 """.
 term_to_path_parts(Path) ->
     term_to_path_parts(Path, #{ error_strategy => throw }).

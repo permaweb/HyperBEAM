@@ -62,8 +62,8 @@ path(ProcID, Ref, PathSuffix, Opts) ->
 
 -doc """
 Retrieve the latest slot for a given process. Optionally state a limit
-%% on the slot number to search for, as well as a required path that the slot
-%% must have.
+on the slot number to search for, as well as a required path that the slot
+must have.
 """.
 latest(ProcID, Opts) -> latest(ProcID, [], Opts).
 latest(ProcID, RequiredPath, Opts) ->
@@ -157,7 +157,7 @@ process_cache_suite_test_() ->
 
 -doc """
 Test for writing multiple computed outputs, then getting them by
-%% their slot number and by their signed and unsigned IDs.
+their slot number and by their signed and unsigned IDs.
 """.
 test_write_and_read_output(Opts) ->
     Proc = hb_cache:test_signed(
