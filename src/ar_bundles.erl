@@ -317,8 +317,10 @@ normalize(Item) -> reset_ids(normalize_data(Item)).
 %% @doc Ensure that a data item (potentially containing a map or list) has a standard, serialized form.
 normalize_data(not_found) -> throw(not_found);
 normalize_data(Bundle) when is_list(Bundle); is_map(Bundle) ->
+    ?event({normalize_data, bundle, Bundle}),
     normalize_data(#tx{ data = Bundle });
 normalize_data(Item = #tx { data = Data }) when is_list(Data) ->
+    ?event({normalize_data, list, Item}),
     normalize_data(
         Item#tx{
             tags = add_list_tags(Item#tx.tags),
@@ -338,8 +340,10 @@ normalize_data(Item = #tx { data = Data }) when is_list(Data) ->
         }
     );
 normalize_data(Item = #tx{data = Bin}) when is_binary(Bin) ->
+    ?event({normalize_data, binary, Item}),
     normalize_data_size(Item);
 normalize_data(Item = #tx{data = Data}) ->
+    ?event({normalize_data, map, Item}),
     normalize_data_size(
         case serialize_bundle_data(Data, Item#tx.manifest) of
             {Manifest, Bin} ->
@@ -384,7 +388,7 @@ serialize(RawTX, binary) ->
     >>;
 serialize(TX, json) ->
     true = enforce_valid_tx(TX),
-    jiffy:encode(hb_message:convert(TX, <<"ans104@1.0">>, #{})).
+    hb_json:encode(hb_message:convert(TX, <<"ans104@1.0">>, #{})).
 
 %% @doc Take an item and ensure that it is of valid form. Useful for ensuring
 %% that a message is viable for serialization/deserialization before execution.
@@ -460,8 +464,6 @@ check_size(Bin, {range, Start, End}) ->
     check_type(Bin, binary)
         andalso byte_size(Bin) >= Start
         andalso byte_size(Bin) =< End;
-check_size(Bin, X) when not is_list(X) ->
-    check_size(Bin, [X]);
 check_size(Bin, Sizes) ->
     check_type(Bin, binary)
         andalso lists:member(byte_size(Bin), Sizes).
@@ -564,19 +566,19 @@ new_manifest(Index) ->
             {<<"data-protocol">>, <<"bundle-map">>},
             {<<"variant">>, <<"0.0.1">>}
         ],
-        data = jiffy:encode(Index)
+        data = hb_json:encode(Index)
     }),
     TX.
 
 manifest(Map) when is_map(Map) -> Map;
 manifest(#tx { manifest = undefined }) -> undefined;
 manifest(#tx { manifest = ManifestTX }) ->
-    jiffy:decode(ManifestTX#tx.data, [return_maps]).
+    hb_json:decode(ManifestTX#tx.data).
 
 parse_manifest(Item) when is_record(Item, tx) ->
     parse_manifest(Item#tx.data);
 parse_manifest(Bin) ->
-    jiffy:decode(Bin, [return_maps]).
+    hb_json:decode(Bin).
 
 %% @doc Only RSA 4096 is currently supported.
 %% Note: the signature type '1' corresponds to RSA 4096 -- but it is is written in
@@ -623,7 +625,8 @@ encode_tags(Tags) ->
 
 %% @doc Encode a string for Avro using ZigZag and VInt encoding.
 encode_avro_string(<<>>) ->
-    error;
+    % Zero length strings are treated as a special case, due to the Avro encoder.
+    << 0 >>;
 encode_avro_string(String) ->
     StringBytes = unicode:characters_to_binary(String, utf8),
     Length = byte_size(StringBytes),
@@ -679,7 +682,7 @@ deserialize(Binary, binary) ->
 %end;
 deserialize(Bin, json) ->
     try
-        Map = jiffy:decode(Bin, [return_maps]),
+        Map = hb_json:decode(Bin),
         hb_message:convert(Map, <<"ans104@1.0">>, #{})
     catch
         _:_:_Stack ->
@@ -722,7 +725,7 @@ maybe_unbundle_map(Bundle) ->
                 detached -> Bundle#tx { data = detached };
                 Items ->
                     MapItem = find_single_layer(hb_util:decode(MapTXID), Items),
-                    Map = jiffy:decode(MapItem#tx.data, [return_maps]),
+                    Map = hb_json:decode(MapItem#tx.data),
                     Bundle#tx{
                         manifest = MapItem,
                         data =
@@ -817,8 +820,9 @@ decode_avro_name(NameSize, Rest, Count) ->
     {ValueSize, Rest3} = decode_zigzag(Rest2),
     decode_avro_value(ValueSize, Name, Rest3, Count).
 
-decode_avro_value(0, _, Rest, _) ->
-    {[], Rest};
+decode_avro_value(0, Name, Rest, Count) ->
+    {DecodedTags, NonAvroRest} = decode_avro_tags(Rest, Count - 1),
+    {[{Name, <<>>} | DecodedTags], NonAvroRest};
 decode_avro_value(ValueSize, Name, Rest, Count) ->
     <<Value:ValueSize/binary, Rest2/binary>> = Rest,
     {DecodedTags, NonAvroRest} = decode_avro_tags(Rest2, Count - 1),
@@ -852,7 +856,7 @@ ar_bundles_test_() ->
     [
         {timeout, 30, fun test_no_tags/0},
         {timeout, 30, fun test_with_tags/0},
-        {timeout, 30, fun test_bundle_with_zero_length_tag/0},
+        {timeout, 30, fun test_with_zero_length_tag/0},
         {timeout, 30, fun test_unsigned_data_item_id/0},
         {timeout, 30, fun test_unsigned_data_item_normalization/0},
         {timeout, 30, fun test_empty_bundle/0},
@@ -865,6 +869,9 @@ ar_bundles_test_() ->
         {timeout, 30, fun test_extremely_large_bundle/0},
         {timeout, 30, fun test_serialize_deserialize_deep_signed_bundle/0}
     ].
+
+run_test() ->
+    test_with_zero_length_tag().
 
 test_no_tags() ->
     {Priv, Pub} = ar_wallet:new(),
@@ -901,13 +908,19 @@ test_with_tags() ->
     ?assertEqual(true, verify_item(SignedDataItem2)),
     assert_data_item(KeyType, Owner, Target, Anchor, Tags, <<"taggeddata">>, SignedDataItem2).
 
-test_bundle_with_zero_length_tag() ->
-    Item = #tx{
+test_with_zero_length_tag() ->
+    Item = normalize(#tx{
         format = ans104,
-        tags = [{<<"tag1">>, <<"">>}],
-        data = <<"data">>
-    },
-    ?assertThrow({cannot_encode_empty_string, <<"tag1">>, <<>>}, serialize([Item])).
+        tags = [
+            {<<"normal-tag-1">>, <<"tag1">>},
+            {<<"empty-tag">>, <<>>},
+            {<<"normal-tag-2">>, <<"tag2">>}
+        ],
+        data = <<"Typical data field.">>
+    }),
+    Serialized = serialize(Item),
+    Deserialized = deserialize(Serialized),
+    ?assertEqual(Item, Deserialized).
 
 test_unsigned_data_item_id() ->
     Item1 = deserialize(
@@ -941,10 +954,13 @@ test_bundle_with_one_item() ->
         crypto:strong_rand_bytes(32),
         crypto:strong_rand_bytes(32),
         [],
-        ItemData = crypto:strong_rand_bytes(32)
+        ItemData = crypto:strong_rand_bytes(1000)
     ),
+    ?event({item, Item}),
     Bundle = serialize([Item]),
+    ?event({bundle, Bundle}),
     BundleItem = deserialize(Bundle),
+    ?event({bundle_item, BundleItem}),
     ?assertEqual(ItemData, (maps:get(<<"1">>, BundleItem#tx.data))#tx.data).
 
 test_bundle_with_two_items() ->
@@ -1056,7 +1072,6 @@ test_deep_member() ->
     ?assertEqual(false, member(crypto:strong_rand_bytes(32), Item2)).
 
 test_serialize_deserialize_deep_signed_bundle() ->
-    application:ensure_all_started(hb),
     W = ar_wallet:new(),
     % Test that we can serialize, deserialize, and get the same IDs back.
     Item1 = sign_item(#tx{data = <<"item1_data">>}, W),
@@ -1074,13 +1089,3 @@ test_serialize_deserialize_deep_signed_bundle() ->
     Item3 = sign_item(Item2, W),
     ?assertEqual(id(Item3, unsigned), id(Item2, unsigned)),
     ?assert(verify_item(Item3)).
-    % Test that we can write to disk and read back the same ID.
-    % hb_cache:write(hb_message:convert(Item2, converge, tx, #{}), #{}),
-    % {ok, MsgFromDisk} = hb_cache:read(hb_util:encode(id(Item2, unsigned)), #{}),
-    % FromDisk = hb_message:convert(MsgFromDisk, tx, converge, #{}),
-    % format(FromDisk),
-    % ?assertEqual(id(Item2, signed), id(FromDisk, signed)),
-    % % Test that normalizing the item and signing it again yields the same unsigned ID.
-    % NormItem2 = normalize(Item2),
-    % SignedNormItem2 = sign_item(NormItem2, W),
-    % ?assertEqual(id(SignedNormItem2, unsigned), id(Item2, unsigned)).

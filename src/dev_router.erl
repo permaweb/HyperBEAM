@@ -3,16 +3,16 @@
 %%% routed to a single process per node, which then load-balances them
 %%% between downstream workers that perform the actual requests.
 %%% 
-%%% The routes for the router are defined in the `routes` key of the `Opts`,
+%%% The routes for the router are defined in the `routes' key of the `Opts',
 %%% as a precidence-ordered list of maps. The first map that matches the
 %%% message will be used to determine the route.
 %%% 
 %%% Multiple nodes can be specified as viable for a single route, with the
-%%% `Choose` key determining how many nodes to choose from the list (defaulting
-%%% to 1). The `Strategy` key determines the load distribution strategy,
-%%% which can be one of `Random`, `By-Base`, or `Nearest`. The route may also 
+%%% `Choose' key determining how many nodes to choose from the list (defaulting
+%%% to 1). The `Strategy' key determines the load distribution strategy,
+%%% which can be one of `Random', `By-Base', or `Nearest'. The route may also 
 %%% define additional parallel execution parameters, which are used by the
-%%% `hb_http` module to manage control of requests.
+%%% `hb_http' module to manage control of requests.
 %%% 
 %%% The structure of the routes should be as follows:
 %%% ```
@@ -25,7 +25,7 @@
 %%% '''
 -module(dev_router).
 %%% Device API:
--export([routes/3, route/3]).
+-export([routes/3, route/2, route/3]).
 %%% Public utilities:
 -export([match_routes/3]).
 -include_lib("eunit/include/eunit.hrl").
@@ -36,11 +36,11 @@ routes(M1, M2, Opts) ->
     ?event({routes_msg, M1, M2}),
     Routes = hb_opts:get(routes, [], Opts),
     ?event({routes, Routes}),
-    case hb_converge:get(<<"method">>, M2, Opts) of
+    case hb_ao:get(<<"method">>, M2, Opts) of
         <<"POST">> ->
             Owner = hb_opts:get(operator, undefined, Opts),
             RouteOwners = hb_opts:get(route_owners, [Owner], Opts),
-            {ok, Signers} = dev_message:attestors(M2),
+            Signers = hb_message:signers(M2),
             IsTrusted =
                 lists:any(
                     fun(Signer) -> lists:member(Signer, Signers) end,
@@ -48,14 +48,14 @@ routes(M1, M2, Opts) ->
                 ),
             case IsTrusted of
                 true ->
-                    % Minimize the work performed by converge to make the sort
+                    % Minimize the work performed by AO-Core to make the sort
                     % more efficient.
                     SortOpts = Opts#{ hashpath => ignore },
                     NewRoutes =
                         lists:sort(
                             fun(X, Y) ->
-                                hb_converge:get(<<"priority">>, X, SortOpts)
-                                    < hb_converge:get(<<"priority">>, Y, SortOpts)
+                                hb_ao:get(<<"priority">>, X, SortOpts)
+                                    < hb_ao:get(<<"priority">>, Y, SortOpts)
                             end,
                             [M2|Routes]
                         ),
@@ -67,45 +67,122 @@ routes(M1, M2, Opts) ->
             {ok, Routes}
     end.
 
-%% @doc If we have a route that has multiple resolving nodes, check
+%% @doc Find the appropriate route for the given message. If we are able to 
+%% resolve to a single host+path, we return that directly. Otherwise, we return
+%% the matching route (including a list of nodes under `nodes') from the list of
+%% routes.
+%% 
+%% If we have a route that has multiple resolving nodes, check
 %% the load distribution strategy and choose a node. Supported strategies:
 %% ```
-%%       Random: Distribute load evenly across all nodes, non-deterministically.
+%%       All:     Return all nodes (default).
+%%       Random:  Distribute load evenly across all nodes, non-deterministically.
 %%       By-Base: According to the base message's hashpath.
 %%       Nearest: According to the distance of the node's wallet address to the
 %%                base message's hashpath.
 %% '''
-%% `By-Base` will ensure that all traffic for the same hashpath is routed to the
-%% same node, minimizing work duplication, while `Random` ensures a more even
+%% `By-Base' will ensure that all traffic for the same hashpath is routed to the
+%% same node, minimizing work duplication, while `Random' ensures a more even
 %% distribution of the requests.
 %% 
-%% Can operate as a `Router/1.0` device, which will ignore the base message,
+%% Can operate as a `~router@1.0' device, which will ignore the base message,
 %% routing based on the Opts and request message provided, or as a standalone
-%% function, taking only the request message and the `Opts` map.
+%% function, taking only the request message and the `Opts' map.
 route(Msg, Opts) -> route(undefined, Msg, Opts).
 route(_, Msg, Opts) ->
     Routes = hb_opts:get(routes, [], Opts),
     R = match_routes(Msg, Routes, Opts),
     ?event({find_route, {msg, Msg}, {routes, Routes}, {res, R}}),
-    case (R =/= no_matches) andalso hb_converge:get(<<"node">>, R, Opts) of
+    case (R =/= no_matches) andalso hb_ao:get(<<"node">>, R, Opts) of
         false -> {error, no_matches};
         Node when is_binary(Node) -> {ok, Node};
+        Node when is_map(Node) -> apply_route(Msg, Node);
         not_found ->
-            Nodes = hb_converge:get(<<"peers">>, R, Opts),
-            case hb_converge:get(<<"strategy">>, R, Opts) of
-                not_found -> {ok, Nodes};
+            ModR = apply_routes(Msg, R, Opts),
+            case hb_ao:get(<<"strategy">>, R, Opts) of
+                not_found -> {ok, ModR};
+                <<"All">> -> {ok, ModR};
                 Strategy ->
-                    ChooseN = hb_converge:get(<<"choose">>, R, 1, Opts),
-                    Hashpath = hb_path:from_message(hashpath, R),
-                    Chosen = choose(ChooseN, Strategy, Hashpath, Nodes, Opts),
+                    ChooseN = hb_ao:get(<<"choose">>, R, 1, Opts),
+                    % Get the first element of the path -- the `base' message
+                    % of the request.
+                    Base = extract_base(Msg, Opts),
+                    Nodes = hb_ao:get(<<"nodes">>, ModR, Opts),
+                    Chosen = choose(ChooseN, Strategy, Base, Nodes, Opts),
+                    ?event({choose, {strategy, Strategy}, {choose_n, ChooseN}, {base, Base}, {nodes, Nodes}, {chosen, Chosen}}),
                     case Chosen of
-                        [X] when is_map(X) ->
-                            {ok, hb_converge:get(<<"host">>, X, Opts)};
-                        [X] -> {ok, X};
-                        _ ->
-                            {ok, hb_converge:set(<<"peers">>, Chosen, Opts)}
+                        [Node] when is_map(Node) ->
+                            apply_route(Msg, Node);
+                        [NodeURI] -> {ok, NodeURI};
+                        ChosenNodes ->
+                            {ok,
+                                hb_ao:set(
+                                    <<"nodes">>,
+                                    maps:map(
+                                        fun(Node) ->
+                                            hb_util:ok(apply_route(Msg, Node))
+                                        end,
+                                        Chosen
+                                    ),
+                                    Opts
+                                )
+                            }
                     end
             end
+    end.
+
+%% @doc Extract the base message ID from a request message. Produces a single
+%% binary ID that can be used for routing decisions.
+extract_base(#{ <<"path">> := Path }, Opts) ->
+    extract_base(Path, Opts);
+extract_base(RawPath, Opts) when is_binary(RawPath) ->
+    BasePath = hb_path:hd(#{ <<"path">> => RawPath }, Opts),
+    case ?IS_ID(BasePath) of
+        true -> BasePath;
+        false ->
+            case binary:split(BasePath, [<<"~">>, <<"?">>, <<"&">>], [global]) of
+                [BaseMsgID|_] when ?IS_ID(BaseMsgID) -> BaseMsgID;
+                _ -> hb_crypto:sha256(BasePath)
+            end
+    end.
+
+%% @doc Generate a `uri' key for each node in a route.
+apply_routes(Msg, R, Opts) ->
+    Nodes = hb_ao:get(<<"nodes">>, R, Opts),
+    NodesWithRouteApplied =
+        lists:map(
+            fun(N) ->
+                case apply_route(Msg, N) of
+                    {ok, URI} when is_binary(URI) -> N#{ <<"uri">> => URI };
+                    {ok, Map} -> Map;
+                    {error, _} -> N
+                end
+            end,
+            hb_util:message_to_ordered_list(Nodes)
+        ),
+    R#{ <<"nodes">> => NodesWithRouteApplied }.
+
+%% @doc Apply a node map's rules for transforming the path of the message.
+%% Supports the following keys:
+%% - `opts': A map of options to pass to the request.
+%% - `prefix': The prefix to add to the path.
+%% - `suffix': The suffix to add to the path.
+%% - `replace': A regex to replace in the path.
+apply_route(Msg, Route = #{ <<"opts">> := Opts }) ->
+    {ok, #{
+        <<"opts">> => Opts,
+        <<"uri">> => hb_util:ok(apply_route(Msg, maps:without([<<"opts">>], Route)))
+    }};
+apply_route(#{ <<"path">> := Path }, #{ <<"prefix">> := Prefix }) ->
+    {ok, <<Prefix/binary, Path/binary>>};
+apply_route(#{ <<"path">> := Path }, #{ <<"suffix">> := Suffix }) ->
+    {ok, <<Path/binary, Suffix/binary>>};
+apply_route(#{ <<"path">> := Path }, #{ <<"match">> := Match, <<"with">> := With }) ->
+    % Apply the regex to the path and replace the first occurrence.
+    case re:replace(Path, Match, With, [global]) of
+        NewPath when is_binary(NewPath) ->
+            {ok, NewPath};
+        _ -> {error, invalid_replace_args}
     end.
 
 %% @doc Find the first matching template in a list of known routes.
@@ -113,7 +190,7 @@ match_routes(ToMatch, Routes, Opts) ->
     match_routes(
         ToMatch,
         Routes,
-        hb_converge:keys(hb_converge:normalize_keys(Routes)),
+        hb_ao:keys(hb_ao:normalize_keys(Routes)),
         Opts
     ).
 match_routes(#{ <<"path">> := Explicit = <<"http://", _/binary>> }, _, _, _) ->
@@ -123,9 +200,9 @@ match_routes(#{ <<"path">> := Explicit = <<"https://", _/binary>> }, _, _, _) ->
     #{ <<"node">> => Explicit };
 match_routes(_, _, [], _) -> no_matches;
 match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
-    XM = hb_converge:get(XKey, Routes, Opts),
+    XM = hb_ao:get(XKey, Routes, Opts),
     Template =
-        hb_converge:get(
+        hb_ao:get(
             <<"template">>,
             XM,
             #{},
@@ -168,15 +245,13 @@ choose(N, <<"Nearest">>, HashPath, Nodes, Opts) ->
     NodesWithDistances =
         lists:map(
             fun(Node) ->
-                Wallet = hb_converge:get(<<"Wallet">>, Node, Opts),
+                Wallet = hb_ao:get(<<"wallet">>, Node, Opts),
                 DistanceScore =
-                    hb_crypto:sha256(
-                        <<
-                            Wallet/binary,
-                            BareHashPath/binary
-                        >>
+                    field_distance(
+                        hb_util:native_id(Wallet),
+                        BareHashPath
                     ),
-                {Node, binary_to_bignum(DistanceScore)}
+                {Node, DistanceScore}
             end,
             Nodes
         ),
@@ -192,6 +267,17 @@ choose(N, <<"Nearest">>, HashPath, Nodes, Opts) ->
             )
         )
     ).
+
+%% @doc Calculate the minimum distance between two numbers
+%% (either progressing backwards or forwards), assuming a
+%% 256-bit field.
+field_distance(A, B) when is_binary(A) ->
+    field_distance(binary_to_bignum(A), B);
+field_distance(A, B) when is_binary(B) ->
+    field_distance(A, binary_to_bignum(B));
+field_distance(A, B) ->
+    AbsDiff = abs(A - B),
+    min(AbsDiff, (1 bsl 256) - AbsDiff).
 
 %% @doc Find the node with the lowest distance to the given hashpath.
 lowest_distance(Nodes) -> lowest_distance(Nodes, {undefined, infinity}).
@@ -234,7 +320,7 @@ strategy_suite_test_() ->
         [<<"Random">>, <<"By-Base">>, <<"Nearest">>]
     ).
 
-%% @doc Ensure that `By-Base` always chooses the same node for the same
+%% @doc Ensure that `By-Base' always chooses the same node for the same
 %% hashpath.
 by_base_determinism_test() ->
     FirstN = 5,
@@ -368,7 +454,7 @@ device_call_from_singleton_test() ->
     ?event({msgs, Msgs}),
     ?assertEqual(
         {ok, Routes},
-        hb_converge:resolve_many(Msgs, NodeOpts)
+        hb_ao:resolve_many(Msgs, NodeOpts)
     ).
     
 
@@ -388,7 +474,7 @@ get_routes_test() ->
     Res = hb_http:get(Node, <<"/~router@1.0/routes/1/node">>, #{}),
     ?event({get_routes_test, Res}),
     {ok, Recvd} = Res,
-    ?assertMatch(#{ <<"body">> := <<"our_node">> }, Recvd).
+    ?assertMatch(<<"our_node">>, Recvd).
 
 add_route_test() ->
     Owner = ar_wallet:new(),
@@ -408,7 +494,7 @@ add_route_test() ->
     Res =
         hb_http:post(
             Node,
-            hb_message:attest(
+            hb_message:commit(
                 #{
                     <<"path">> => <<"/~router@1.0/routes">>,
                     <<"template">> => <<"/some/new/path">>,
@@ -420,11 +506,55 @@ add_route_test() ->
             #{}
         ),
     ?event({post_res, Res}),
-    ?assertMatch({ok, #{ <<"body">> := <<"Route added.">> }}, Res),
+    ?assertMatch({ok, <<"Route added.">>}, Res),
     GetRes = hb_http:get(Node, <<"/~router@1.0/routes/2/node">>, #{}),
     ?event({get_res, GetRes}),
     {ok, Recvd} = GetRes,
-    ?assertMatch(#{ <<"body">> := <<"new">> }, Recvd).
+    ?assertMatch(<<"new">>, Recvd).
+
+relay_nearest_test() ->
+    Peer1 = <<"https://compute-1.forward.computer">>,
+    Peer2 = <<"https://compute-2.forward.computer">>,
+    HTTPSOpts = #{ http_client => httpc },
+    {ok, Address1} = hb_http:get(Peer1, <<"/~meta@1.0/info/address">>, HTTPSOpts),
+    {ok, Address2} = hb_http:get(Peer2, <<"/~meta@1.0/info/address">>, HTTPSOpts),
+    Peers = [Address1, Address2],
+    Node =
+        hb_http_server:start_node(#{
+            priv_wallet => ar_wallet:new(),
+            routes => [
+                #{
+                    <<"template">> => <<"/.*~process@1.0/.*">>,
+                    <<"strategy">> => <<"Nearest">>,
+                    <<"nodes">> => [
+                        #{
+                            <<"prefix">> => Peer1,
+                            <<"wallet">> => Address1
+                        },
+                        #{
+                            <<"prefix">> => Peer2,
+                            <<"wallet">> => Address2
+                        }    
+                    ]
+                }
+            ]
+        }),
+    {ok, RelayRes} =
+        hb_http:get(
+            Node,
+            <<
+                "/~relay@1.0/call?relay-path=",
+                    "/CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM~process@1.0",
+                    "/slot"
+            >>,
+            #{}
+        ),
+    HasValidSigner =
+        lists:any(
+            fun(Peer) -> lists:member(Peer, hb_message:signers(RelayRes)) end,
+            Peers
+        ),
+    ?assert(HasValidSigner).
 
 %%% Statistical test utilities
 
@@ -480,7 +610,7 @@ simulation_distribution(SimRes, Nodes) ->
 
 within_norms(SimRes, Nodes, TestSize) ->
     Distribution = simulation_distribution(SimRes, Nodes),
-    % Check that the mean is `TestSize/length(Nodes)`
+    % Check that the mean is `TestSize/length(Nodes)'
     Mean = hb_util:mean(Distribution),
     ?assert(Mean == (TestSize / length(Nodes))),
     % Check that the highest count is not more than 3 standard deviations

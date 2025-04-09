@@ -1,0 +1,162 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module dev_process</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module dev_process</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>This module contains the device implementation of AO processes   
+in Converge.
+
+
+<h2><a name="description">Description</a></h2><p>This module contains the device implementation of AO processes   
+in Converge. The core functionality of the module is in 'routing' requests   
+for different functionality (scheduling, computing, and pushing messages)   
+to the appropriate device. This is achieved by swapping out the device   
+of the process message with the necessary component in order to run the   
+execution, then swapping it back before returning. Computation is supported   
+as a stack of devices, customizable by the user, while the scheduling   
+device is (by default) a single device.</p>
+  
+   <p>This allows the devices to share state as needed. Additionally, after each
+   computation step the device caches the result at a path relative to the
+   process definition itself, such that the process message's ID can act as an
+   immutable reference to the process's growing list of interactions. See
+   <code>dev_process_cache</code> for details.</p>
+  
+   The external API of the device is as follows:
+   <pre>   GET /ID/Schedule:                Returns the messages in the schedule
+   POST /ID/Schedule:               Adds a message to the schedule
+  
+   GET /ID/Compute/[IDorSlotNum]:   Returns the state of the process after
+                                    applying a message
+   GET /ID/Now:                     Returns the `/Results' key of the latest
+                                    computed message</pre>
+  
+   An example process definition will look like this:
+   <pre>       Device: Process/1.0
+       Scheduler-Device: Scheduler/1.0
+       Execution-Device: Stack/1.0
+       Execution-Stack: "Scheduler/1.0", "Cron/1.0", "WASM/1.0", "PoDA/1.0"
+       Cron-Frequency: 10-Minutes
+       WASM-Image: WASMImageID
+       PoDA:
+           Device: PoDA/1.0
+           Authority: A
+           Authority: B
+           Authority: C
+           Quorum: 2</pre>
+  
+   Runtime options:
+       Cache-Frequency: The number of assignments that will be computed
+                        before the full (restorable) state should be cached.
+       Cache-Keys:      A list of the keys that should be cached for all
+                        assignments, in addition to <code>/Results</code>.
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#compute-3">compute/3</a></td><td>Compute the result of an assignment applied to the process state, if it
+  is the next message.</td></tr>
+<tr><td valign="top"><a href="#dev_test_process-0">dev_test_process/0</a></td><td>Generate a device that has a stack of two <code>dev_test</code>s for
+  execution.</td></tr>
+<tr><td valign="top"><a href="#do_test_restore-0">do_test_restore/0</a></td><td></td></tr>
+<tr><td valign="top"><a href="#ensure_process_key-2">ensure_process_key/2</a></td><td>Helper function to store a copy of the <code>process</code> key in the message.</td></tr>
+<tr><td valign="top"><a href="#info-1">info/1</a></td><td>When the info key is called, we should return the process exports.</td></tr>
+<tr><td valign="top"><a href="#now-3">now/3</a></td><td>Returns the <code>/Results</code> key of the latest computed message.</td></tr>
+<tr><td valign="top"><a href="#push-3">push/3</a></td><td>Recursively push messages to the scheduler until we find a message
+  that does not lead to any further messages being scheduled.</td></tr>
+<tr><td valign="top"><a href="#schedule-3">schedule/3</a></td><td>Wraps functions in the Scheduler device.</td></tr>
+<tr><td valign="top"><a href="#slot-3">slot/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#test_aos_process-0">test_aos_process/0</a></td><td>Generate a process message with a random number, and the
+  <code>dev_wasm</code> device for execution.</td></tr>
+<tr><td valign="top"><a href="#test_wasm_process-1">test_wasm_process/1</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="compute-3">compute/3</a></h3>
+<div class="spec">
+<p><code>compute(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Compute the result of an assignment applied to the process state, if it
+  is the next message.</p>
+
+<h3 class="function"><a name="dev_test_process-0">dev_test_process/0</a></h3>
+<div class="spec">
+<p><code>dev_test_process() -&gt; any()</code></p>
+<p> </p>
+</div><p>Generate a device that has a stack of two <code>dev_test</code>s for
+  execution. This should generate a message state has doubled
+  <code>Already-Seen</code> elements for each assigned slot.</p>
+
+<h3 class="function"><a name="do_test_restore-0">do_test_restore/0</a></h3>
+<div class="spec">
+<p><code>do_test_restore() -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="ensure_process_key-2">ensure_process_key/2</a></h3>
+<div class="spec">
+<p><code>ensure_process_key(Msg1, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Helper function to store a copy of the <code>process</code> key in the message.</p>
+
+<h3 class="function"><a name="info-1">info/1</a></h3>
+<div class="spec">
+<p><code>info(Msg1) -&gt; any()</code></p>
+<p> </p>
+</div><p>When the info key is called, we should return the process exports.</p>
+
+<h3 class="function"><a name="now-3">now/3</a></h3>
+<div class="spec">
+<p><code>now(RawMsg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Returns the <code>/Results</code> key of the latest computed message.</p>
+
+<h3 class="function"><a name="push-3">push/3</a></h3>
+<div class="spec">
+<p><code>push(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Recursively push messages to the scheduler until we find a message
+  that does not lead to any further messages being scheduled.</p>
+
+<h3 class="function"><a name="schedule-3">schedule/3</a></h3>
+<div class="spec">
+<p><code>schedule(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Wraps functions in the Scheduler device.</p>
+
+<h3 class="function"><a name="slot-3">slot/3</a></h3>
+<div class="spec">
+<p><code>slot(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="snapshot-3">snapshot/3</a></h3>
+<div class="spec">
+<p><code>snapshot(RawMsg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="test_aos_process-0">test_aos_process/0</a></h3>
+<div class="spec">
+<p><code>test_aos_process() -&gt; any()</code></p>
+<p> </p>
+</div><p>Generate a process message with a random number, and the
+  <code>dev_wasm</code> device for execution.</p>
+
+<h3 class="function"><a name="test_wasm_process-1">test_wasm_process/1</a></h3>
+<div class="spec">
+<p><code>test_wasm_process(WASMImage) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

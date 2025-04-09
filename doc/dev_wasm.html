@@ -1,0 +1,136 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module dev_wasm</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module dev_wasm</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>A device that executes a WASM image on messages using the Memory-64
+   preview standard.
+
+
+<h2><a name="description">Description</a></h2><p>A device that executes a WASM image on messages using the Memory-64
+   preview standard. In the backend, this device uses <code>beamr</code>: An Erlang wrapper   
+for WAMR, the WebAssembly Micro Runtime.</p>
+  
+   The device has the following requirements and interface:
+   <pre>       M1/Init -&gt;
+           Assumes:
+               M1/process
+               M1/[Prefix]/image
+           Generates:
+               /priv/wasm/instance
+               /priv/wasm/import-resolver
+           Side-effects:
+               Creates a WASM executor loaded in memory of the HyperBEAM node.
+  
+       M1/Compute -&gt;
+           Assumes:
+               M1/priv/wasm/instance
+               M1/priv/wasm/import-resolver
+               M1/process
+               M2/message
+               M2/message/wasm-function OR M1/wasm-function
+               M2/message/wasm-params OR M1/wasm-params
+           Generates:
+               /results/wasm/type
+               /results/wasm/body
+           Side-effects:
+               Calls the WASM executor with the message and process.
+       M1/wasm/state -&gt;
+           Assumes:
+               M1/priv/wasm/instance
+           Generates:
+               Raw binary WASM state</pre>
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cache_wasm_image-1">cache_wasm_image/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#compute-3">compute/3</a></td><td>Call the WASM executor with a message that has been prepared by a prior
+  pass.</td></tr>
+<tr><td valign="top"><a href="#import-3">import/3</a></td><td>Handle standard library calls by:
+  1.</td></tr>
+<tr><td valign="top"><a href="#info-2">info/2</a></td><td>Export all functions aside the <code>instance/3</code> function.</td></tr>
+<tr><td valign="top"><a href="#init-3">init/3</a></td><td>Boot a WASM image on the image stated in the <code>process/image</code> field of
+  the message.</td></tr>
+<tr><td valign="top"><a href="#instance-3">instance/3</a></td><td>Get the WASM instance from the message.</td></tr>
+<tr><td valign="top"><a href="#normalize-3">normalize/3</a></td><td>Normalize the message to have an open WASM instance, but no literal
+  <code>State</code> key.</td></tr>
+<tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td>Serialize the WASM state to a binary.</td></tr>
+<tr><td valign="top"><a href="#terminate-3">terminate/3</a></td><td>Tear down the WASM executor.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="cache_wasm_image-1">cache_wasm_image/1</a></h3>
+<div class="spec">
+<p><code>cache_wasm_image(Image) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="compute-3">compute/3</a></h3>
+<div class="spec">
+<p><code>compute(RawM1, M2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Call the WASM executor with a message that has been prepared by a prior
+  pass.</p>
+
+<h3 class="function"><a name="import-3">import/3</a></h3>
+<div class="spec">
+<p><code>import(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Handle standard library calls by:
+  1. Adding the right prefix to the path from BEAMR.
+  2. Adding the state to the message at the stdlib path.
+  3. Resolving the adjusted-path-Msg2 against the added-state-Msg1.
+  4. If it succeeds, return the new state from the message.
+  5. If it fails with <code>not_found</code>, call the stub handler.</p>
+
+<h3 class="function"><a name="info-2">info/2</a></h3>
+<div class="spec">
+<p><code>info(Msg1, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Export all functions aside the <code>instance/3</code> function.</p>
+
+<h3 class="function"><a name="init-3">init/3</a></h3>
+<div class="spec">
+<p><code>init(M1, M2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Boot a WASM image on the image stated in the <code>process/image</code> field of
+  the message.</p>
+
+<h3 class="function"><a name="instance-3">instance/3</a></h3>
+<div class="spec">
+<p><code>instance(M1, M2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Get the WASM instance from the message. Note that this function is exported
+  such that other devices can use it, but it is excluded from calls from Converge
+  resolution directly.</p>
+
+<h3 class="function"><a name="normalize-3">normalize/3</a></h3>
+<div class="spec">
+<p><code>normalize(RawM1, M2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Normalize the message to have an open WASM instance, but no literal
+  <code>State</code> key. Ensure that we do not change the hashpath during this process.</p>
+
+<h3 class="function"><a name="snapshot-3">snapshot/3</a></h3>
+<div class="spec">
+<p><code>snapshot(M1, M2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Serialize the WASM state to a binary.</p>
+
+<h3 class="function"><a name="terminate-3">terminate/3</a></h3>
+<div class="spec">
+<p><code>terminate(M1, M2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Tear down the WASM executor.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

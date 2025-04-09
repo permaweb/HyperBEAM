@@ -2,15 +2,16 @@
 %%% (potentially multi-layer) paths as their keys, and a normal TABM binary as 
 %%% their value.
 -module(dev_codec_flat).
--export([from/1, to/1, attest/3, verify/3]).
+-export([from/1, to/1, commit/3, verify/3, committed/3]).
 %%% Testing utilities
 -export([serialize/1, deserialize/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 %%% Route signature functions to the `dev_codec_httpsig' module
-attest(Msg, Req, Opts) -> dev_codec_httpsig:attest(Msg, Req, Opts).
+commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
+committed(Msg, Req, Opts) -> dev_codec_httpsig:committed(Msg, Req, Opts).
 
 %% @doc Convert a flat map to a TABM.
 from(Bin) when is_binary(Bin) -> Bin;
@@ -25,7 +26,20 @@ from(Map) when is_map(Map) ->
 
 %% Helper function to inject a value at a specific path in a nested map
 inject_at_path([Key], Value, Map) ->
-    maps:put(Key, Value, Map);
+    case maps:get(Key, Map, not_found) of
+        not_found ->
+            Map#{ Key => Value };
+        ExistingMap when is_map(ExistingMap) andalso is_map(Value) ->
+            % If both are maps, merge them
+            Map#{ Key => maps:merge(ExistingMap, Value) };
+        OldValue ->
+            % Otherwise, alert the user and fail
+            throw({path_collision,
+                {key, Key},
+                {existing, OldValue},
+                {value, Value}
+            })
+    end;
 inject_at_path([Key|Rest], Value, Map) ->
     SubMap = maps:get(Key, Map, #{}),
     maps:put(Key, inject_at_path(Rest, Value, SubMap), Map).
@@ -58,13 +72,21 @@ to(Map) when is_map(Map) ->
 
 serialize(Map) when is_map(Map) ->
     Flattened = hb_message:convert(Map, <<"flat@1.0">>, #{}),
-    iolist_to_binary(lists:foldl(
-        fun(Key, Acc) ->
-            [Acc, hb_path:to_binary(Key), <<": ">>, maps:get(Key, Flattened), <<"\n">>]
-        end,
-        <<>>,
-        maps:keys(Flattened)
-    )).
+    {ok,
+        iolist_to_binary(lists:foldl(
+                fun(Key, Acc) ->
+                    [
+                        Acc,
+                        hb_path:to_binary(Key),
+                        <<": ">>,
+                        maps:get(Key, Flattened), <<"\n">>
+                    ]
+                end,
+                <<>>,
+                maps:keys(Flattened)
+            )
+        )
+    }.
 
 deserialize(Bin) when is_binary(Bin) ->
     Flat = lists:foldl(
@@ -79,7 +101,7 @@ deserialize(Bin) when is_binary(Bin) ->
         #{},
         binary:split(Bin, <<"\n">>, [global])
     ),
-    hb_message:convert(Flat, <<"structured@1.0">>, <<"flat@1.0">>, #{}).
+    {ok, hb_message:convert(Flat, <<"structured@1.0">>, <<"flat@1.0">>, #{})}.
 
 %%% Tests
 
@@ -112,6 +134,23 @@ multiple_paths_test() ->
     },
     ?assert(hb_message:match(Nested, dev_codec_flat:from(Flat))),
     ?assert(hb_message:match(Flat, dev_codec_flat:to(Nested))).
+
+path_list_test() ->
+    Nested = #{
+        <<"x">> => #{
+            [<<"y">>, <<"z">>] => #{
+                <<"a">> => <<"2">>
+            },
+            <<"a">> => <<"2">>
+        }
+    },
+    Flat = dev_codec_flat:to(Nested),
+    lists:foreach(
+        fun(Key) ->
+            ?assert(not lists:member($\n, binary_to_list(Key)))
+        end,
+        maps:keys(Flat)
+    ).
 
 binary_passthrough_test() ->
     Bin = <<"raw binary">>,

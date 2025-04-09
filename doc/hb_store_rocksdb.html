@@ -1,0 +1,196 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module hb_store_rocksdb</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module hb_store_rocksdb</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>A process wrapper over rocksdb storage.
+
+<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>, <a href="hb_store.html"><code>hb_store</code></a>.</p>
+
+<h2><a name="description">Description</a></h2><p>A process wrapper over rocksdb storage. Replicates functionality of the        
+hb_fs_store module.</p>
+  
+        The data is stored in two Column Families:
+        1. Default - for raw data (e.g. message records)
+        2. Meta - for meta information
+          <code>(&lt;&lt;"raw"&gt;&gt;/&lt;&lt;"link"&gt;&gt;/&lt;&lt;"composite"&gt;&gt; or &lt;&lt;"group"&gt;&gt;)</code>
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-key">key()</a></h3>
+<p><code>key() = binary() | list()</code></p>
+
+
+<h3 class="typedecl"><a name="type-value">value()</a></h3>
+<p><code>value() = binary() | list()</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_path-3">add_path/3</a></td><td>Add two path components together.</td></tr>
+<tr><td valign="top"><a href="#code_change-3">code_change/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#list-2">list/2</a></td><td>List key/values stored in the storage so far.</td></tr>
+<tr><td valign="top"><a href="#make_group-2">make_group/2</a></td><td>Creates group under the given path.</td></tr>
+<tr><td valign="top"><a href="#make_link-3">make_link/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#path-2">path/2</a></td><td>Return path.</td></tr>
+<tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read data by the key.</td></tr>
+<tr><td valign="top"><a href="#reset-1">reset/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td>Replace links in a path with the target of the link.</td></tr>
+<tr><td valign="top"><a href="#scope-1">scope/1</a></td><td>Return scope (local).</td></tr>
+<tr><td valign="top"><a href="#start-1">start/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#stop-1">stop/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#type-2">type/2</a></td><td>Get type of the current item.</td></tr>
+<tr><td valign="top"><a href="#write-3">write/3</a></td><td>Write given Key and Value to the database.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="add_path-3">add_path/3</a></h3>
+<div class="spec">
+<p><code>add_path(Opts, Path1, Path2) -&gt; any()</code></p>
+<p> </p>
+</div><p>Add two path components together. // is not used</p>
+
+<h3 class="function"><a name="code_change-3">code_change/3</a></h3>
+<div class="spec">
+<p><code>code_change(OldVsn, State, Extra) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
+<div class="spec">
+<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
+<div class="spec">
+<p><code>handle_cast(Request, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
+<div class="spec">
+<p><code>handle_info(Info, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="init-1">init/1</a></h3>
+<div class="spec">
+<p><code>init(Dir) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="list-2">list/2</a></h3>
+<div class="spec">
+<p><code>list(Opts, Path) -&gt; Result</code>
+<ul class="definitions"><li><code>Opts = any()</code></li><li><code>Path = any()</code></li><li><code>Result = [string()]</code></li></ul></p>
+<p> </p>
+</div><p><p>List key/values stored in the storage so far.       
+*Note*: This function is slow, and probably should not be used on       
+production. Right now it's used for debugging purposes.</p>
+ 
+       This can't work as it works for FS store, especially for large sets
+       of data.</p>
+
+<h3 class="function"><a name="make_group-2">make_group/2</a></h3>
+<div class="spec">
+<p><code>make_group(Opts, Path) -&gt; any()</code></p>
+<p> </p>
+</div><p>Creates group under the given path.
+       Creates an entry in the database and store <code>&lt;&lt;"group"&gt;&gt;</code> as a type in
+       the meta family.</p>
+
+<h3 class="function"><a name="make_link-3">make_link/3</a></h3>
+<div class="spec">
+<p><code>make_link(Opts::any(), Key1::<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>, New::<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>) -&gt; ok</code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="path-2">path/2</a></h3>
+<div class="spec">
+<p><code>path(Opts, Path) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return path</p>
+
+<h3 class="function"><a name="read-2">read/2</a></h3>
+<div class="spec">
+<p><code>read(Opts, Key) -&gt; Result</code>
+<ul class="definitions"><li><code>Opts = map()</code></li><li><code>Key = <a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a> | list()</code></li><li><code>Result = {ok, <a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a>} | not_found | {error, {corruption, string()}} | {error, any()}</code></li></ul></p>
+<p> </p>
+</div><p>Read data by the key.
+  Recursively follows link messages</p>
+
+<h3 class="function"><a name="reset-1">reset/1</a></h3>
+<div class="spec">
+<p><code>reset(Opts::[]) -&gt; ok | no_return()</code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="resolve-2">resolve/2</a></h3>
+<div class="spec">
+<p><code>resolve(Opts, Path) -&gt; Result</code>
+<ul class="definitions"><li><code>Opts = any()</code></li><li><code>Path = binary() | list()</code></li><li><code>Result = not_found | string()</code></li></ul></p>
+<p> </p>
+</div><p>Replace links in a path with the target of the link.</p>
+
+<h3 class="function"><a name="scope-1">scope/1</a></h3>
+<div class="spec">
+<p><code>scope(X1) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return scope (local)</p>
+
+<h3 class="function"><a name="start-1">start/1</a></h3>
+<div class="spec">
+<p><code>start(Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
+<div class="spec">
+<p><code>start_link(Stores) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="stop-1">stop/1</a></h3>
+<div class="spec">
+<p><code>stop(Opts::any()) -&gt; ok</code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
+<div class="spec">
+<p><code>terminate(Reason, State) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="type-2">type/2</a></h3>
+<div class="spec">
+<p><code>type(Opts, Key) -&gt; Result</code>
+<ul class="definitions"><li><code>Opts = map()</code></li><li><code>Key = binary()</code></li><li><code>Result = composite | simple | not_found</code></li></ul></p>
+<p> </p>
+</div><p>Get type of the current item</p>
+
+<h3 class="function"><a name="write-3">write/3</a></h3>
+<div class="spec">
+<p><code>write(Opts, Key, Value) -&gt; Result</code>
+<ul class="definitions"><li><code>Opts = map()</code></li><li><code>Key = <a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a></code></li><li><code>Value = <a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a></code></li><li><code>Result = ok | {error, any()}</code></li></ul></p>
+<p> </p>
+</div><p>Write given Key and Value to the database</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

@@ -24,7 +24,7 @@
 estimate(_, Msg, NodeMsg) ->
     ?event(payment, {estimate, {msg, Msg}}),
     % Check if the address is in the allow-list.
-    case hb_converge:get(<<"type">>, Msg, <<"pre">>, NodeMsg) of
+    case hb_ao:get(<<"type">>, Msg, <<"pre">>, NodeMsg) of
         <<"pre">> ->
             case is_admissible(Msg, NodeMsg) of
                 true -> {ok, 0};
@@ -33,18 +33,11 @@ estimate(_, Msg, NodeMsg) ->
         <<"post">> -> {ok, 0}
     end.
 
-
 %% @doc Check whether all of the signers of the request are in the allow-list.
 is_admissible(Msg, NodeMsg) ->
     AllowList = hb_opts:get(faff_allow_list, [], NodeMsg),
-    Req = hb_converge:get(<<"request">>, Msg, NodeMsg),
-    Signers =
-        lists:filtermap(
-            fun(Signer) when not ?IS_ID(Signer) -> false;
-               (Signer) -> {true, hb_util:human_id(Signer)}
-            end,
-            hb_converge:get(<<"attestors">>, Req, undefined, NodeMsg)
-        ),
+    Req = hb_ao:get(<<"request">>, Msg, NodeMsg),
+    Signers = hb_message:signers(Req),
     ?event(payment, {is_admissible, {signers, Signers}, {allow_list, AllowList}}),
     lists:all(
         fun(Signer) -> lists:member(Signer, AllowList) end,

@@ -1,0 +1,195 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module hb_store</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module hb_store</h1>
+<ul class="index"><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_path-2">add_path/2</a></td><td>Add two path components together.</td></tr>
+<tr><td valign="top"><a href="#add_path-3">add_path/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#behavior_info-1">behavior_info/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#filter-2">filter/2</a></td><td>Takes a store object and a filter function or match spec, returning a
+  new store object with only the modules that match the filter.</td></tr>
+<tr><td valign="top"><a href="#generate_test_suite-1">generate_test_suite/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#generate_test_suite-2">generate_test_suite/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#join-1">join/1</a></td><td>Join a list of path components together.</td></tr>
+<tr><td valign="top"><a href="#list-2">list/2</a></td><td>List the keys in a group in the store.</td></tr>
+<tr><td valign="top"><a href="#make_group-2">make_group/2</a></td><td>Make a group in the store.</td></tr>
+<tr><td valign="top"><a href="#make_link-3">make_link/3</a></td><td>Make a link from one path to another in the store.</td></tr>
+<tr><td valign="top"><a href="#path-1">path/1</a></td><td>Create a path from a list of path components.</td></tr>
+<tr><td valign="top"><a href="#path-2">path/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read a key from the store.</td></tr>
+<tr><td valign="top"><a href="#reset-1">reset/1</a></td><td>Delete all of the keys in a store.</td></tr>
+<tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td>Follow links through the store to resolve a path to its ultimate target.</td></tr>
+<tr><td valign="top"><a href="#scope-2">scope/2</a></td><td>Limit the store scope to only a specific (set of) option(s).</td></tr>
+<tr><td valign="top"><a href="#sort-2">sort/2</a></td><td>Order a store by a preference of its scopes.</td></tr>
+<tr><td valign="top"><a href="#start-1">start/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#stop-1">stop/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#test_stores-0">test_stores/0</a></td><td></td></tr>
+<tr><td valign="top"><a href="#type-2">type/2</a></td><td>Get the type of element of a given path in the store.</td></tr>
+<tr><td valign="top"><a href="#write-3">write/3</a></td><td>Write a key with a value to the store.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="add_path-2">add_path/2</a></h3>
+<div class="spec">
+<p><code>add_path(Path1, Path2) -&gt; any()</code></p>
+<p> </p>
+</div><p>Add two path components together. If no store implements the add_path
+  function, we concatenate the paths.</p>
+
+<h3 class="function"><a name="add_path-3">add_path/3</a></h3>
+<div class="spec">
+<p><code>add_path(Store, Path1, Path2) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="behavior_info-1">behavior_info/1</a></h3>
+<div class="spec">
+<p><code>behavior_info(X1) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="filter-2">filter/2</a></h3>
+<div class="spec">
+<p><code>filter(Module, Filter) -&gt; any()</code></p>
+<p> </p>
+</div><p>Takes a store object and a filter function or match spec, returning a
+  new store object with only the modules that match the filter. The filter
+  function takes 2 arguments: the scope and the options. It calls the store's
+  scope function to get the scope of the module.</p>
+
+<h3 class="function"><a name="generate_test_suite-1">generate_test_suite/1</a></h3>
+<div class="spec">
+<p><code>generate_test_suite(Suite) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="generate_test_suite-2">generate_test_suite/2</a></h3>
+<div class="spec">
+<p><code>generate_test_suite(Suite, Stores) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="join-1">join/1</a></h3>
+<div class="spec">
+<p><code>join(Path) -&gt; any()</code></p>
+<p> </p>
+</div><p>Join a list of path components together.</p>
+
+<h3 class="function"><a name="list-2">list/2</a></h3>
+<div class="spec">
+<p><code>list(Modules, Path) -&gt; any()</code></p>
+<p> </p>
+</div><p>List the keys in a group in the store. Use only in debugging.
+  The hyperbeam model assumes that stores are built as efficient hash-based
+  structures, so this is likely to be very slow for most stores.</p>
+
+<h3 class="function"><a name="make_group-2">make_group/2</a></h3>
+<div class="spec">
+<p><code>make_group(Modules, Path) -&gt; any()</code></p>
+<p> </p>
+</div><p>Make a group in the store. A group can be seen as a namespace or
+  'directory' in a filesystem.</p>
+
+<h3 class="function"><a name="make_link-3">make_link/3</a></h3>
+<div class="spec">
+<p><code>make_link(Modules, Existing, New) -&gt; any()</code></p>
+<p> </p>
+</div><p>Make a link from one path to another in the store.</p>
+
+<h3 class="function"><a name="path-1">path/1</a></h3>
+<div class="spec">
+<p><code>path(Path) -&gt; any()</code></p>
+<p> </p>
+</div><p>Create a path from a list of path components. If no store implements
+  the path function, we return the path with the 'default' transformation (id).</p>
+
+<h3 class="function"><a name="path-2">path/2</a></h3>
+<div class="spec">
+<p><code>path(X1, Path) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="read-2">read/2</a></h3>
+<div class="spec">
+<p><code>read(Modules, Key) -&gt; any()</code></p>
+<p> </p>
+</div><p>Read a key from the store.</p>
+
+<h3 class="function"><a name="reset-1">reset/1</a></h3>
+<div class="spec">
+<p><code>reset(Modules) -&gt; any()</code></p>
+<p> </p>
+</div><p>Delete all of the keys in a store. Should be used with extreme
+  caution. Lost data can lose money in many/most of hyperbeam's use cases.</p>
+
+<h3 class="function"><a name="resolve-2">resolve/2</a></h3>
+<div class="spec">
+<p><code>resolve(Modules, Path) -&gt; any()</code></p>
+<p> </p>
+</div><p>Follow links through the store to resolve a path to its ultimate target.</p>
+
+<h3 class="function"><a name="scope-2">scope/2</a></h3>
+<div class="spec">
+<p><code>scope(Store, Scope) -&gt; any()</code></p>
+<p> </p>
+</div><p>Limit the store scope to only a specific (set of) option(s).
+  Takes either a single scope or a list of scopes.</p>
+
+<h3 class="function"><a name="sort-2">sort/2</a></h3>
+<div class="spec">
+<p><code>sort(Stores, PreferenceOrder) -&gt; any()</code></p>
+<p> </p>
+</div><p>Order a store by a preference of its scopes. This is useful for making
+  sure that faster (or perhaps cheaper) stores are used first. If a list is
+  provided, it will be used as a preference order. If a map is provided,
+  scopes will be ordered by the scores in the map. Any unknown scopes will
+  default to a score of 0.</p>
+
+<h3 class="function"><a name="start-1">start/1</a></h3>
+<div class="spec">
+<p><code>start(Modules) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="stop-1">stop/1</a></h3>
+<div class="spec">
+<p><code>stop(Modules) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="test_stores-0">test_stores/0</a></h3>
+<div class="spec">
+<p><code>test_stores() -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="type-2">type/2</a></h3>
+<div class="spec">
+<p><code>type(Modules, Path) -&gt; any()</code></p>
+<p> </p>
+</div><p>Get the type of element of a given path in the store. This can be
+  a performance killer if the store is remote etc. Use only when necessary.</p>
+
+<h3 class="function"><a name="write-3">write/3</a></h3>
+<div class="spec">
+<p><code>write(Modules, Key, Value) -&gt; any()</code></p>
+<p> </p>
+</div><p>Write a key with a value to the store.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

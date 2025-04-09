@@ -1,0 +1,104 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module dev_codec_httpsig</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module dev_codec_httpsig</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>This module implements HTTP Message Signatures as described in RFC-9421
+   (https://datatracker.ietf.org/doc/html/rfc9421), as a Converge device.
+
+
+<h2><a name="description">Description</a></h2>This module implements HTTP Message Signatures as described in RFC-9421
+   (https://datatracker.ietf.org/doc/html/rfc9421), as a Converge device.
+   It implements the codec standard (from/1, to/1), as well as the optional
+   attestation functions (id/3, sign/3, verify/3). The attestation functions
+   are found in this module, while the codec functions are relayed to the
+   <code>dev_codec_httpsig_conv</code> module.
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_content_digest-1">add_content_digest/1</a></td><td>If the <code>body</code> key is present, replace it with a content-digest.</td></tr>
+<tr><td valign="top"><a href="#add_derived_specifiers-1">add_derived_specifiers/1</a></td><td>Normalize key parameters to ensure their names are correct.</td></tr>
+<tr><td valign="top"><a href="#attest-3">attest/3</a></td><td>Main entrypoint for signing a HTTP Message, using the standardized format.</td></tr>
+<tr><td valign="top"><a href="#from-1">from/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#id-3">id/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#public_keys-1">public_keys/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#remove_derived_specifiers-1">remove_derived_specifiers/1</a></td><td>Remove derived specifiers from a list of component identifiers.</td></tr>
+<tr><td valign="top"><a href="#reset_hmac-1">reset_hmac/1</a></td><td>Ensure that the attestations and hmac are properly encoded.</td></tr>
+<tr><td valign="top"><a href="#to-1">to/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify different forms of httpsig attested messages.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="add_content_digest-1">add_content_digest/1</a></h3>
+<div class="spec">
+<p><code>add_content_digest(Msg) -&gt; any()</code></p>
+<p> </p>
+</div><p>If the <code>body</code> key is present, replace it with a content-digest.</p>
+
+<h3 class="function"><a name="add_derived_specifiers-1">add_derived_specifiers/1</a></h3>
+<div class="spec">
+<p><code>add_derived_specifiers(ComponentIdentifiers) -&gt; any()</code></p>
+<p> </p>
+</div><p>Normalize key parameters to ensure their names are correct.</p>
+
+<h3 class="function"><a name="attest-3">attest/3</a></h3>
+<div class="spec">
+<p><code>attest(MsgToSign, Req, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Main entrypoint for signing a HTTP Message, using the standardized format.</p>
+
+<h3 class="function"><a name="from-1">from/1</a></h3>
+<div class="spec">
+<p><code>from(Msg) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="id-3">id/3</a></h3>
+<div class="spec">
+<p><code>id(Msg, Params, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="public_keys-1">public_keys/1</a></h3>
+<div class="spec">
+<p><code>public_keys(Attestation) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="remove_derived_specifiers-1">remove_derived_specifiers/1</a></h3>
+<div class="spec">
+<p><code>remove_derived_specifiers(ComponentIdentifiers) -&gt; any()</code></p>
+<p> </p>
+</div><p>Remove derived specifiers from a list of component identifiers.</p>
+
+<h3 class="function"><a name="reset_hmac-1">reset_hmac/1</a></h3>
+<div class="spec">
+<p><code>reset_hmac(RawMsg) -&gt; any()</code></p>
+<p> </p>
+</div><p>Ensure that the attestations and hmac are properly encoded</p>
+
+<h3 class="function"><a name="to-1">to/1</a></h3>
+<div class="spec">
+<p><code>to(Msg) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="verify-3">verify/3</a></h3>
+<div class="spec">
+<p><code>verify(MsgToVerify, Req, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Verify different forms of httpsig attested messages. <code>dev_message:verify</code>
+  already places the keys from the attestation message into the root of the
+  message.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

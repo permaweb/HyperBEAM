@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>HyperBEAM HTTP Console</title>
+	<!-- Tailwind CSS via CDN -->
+	<script src="https://cdn.tailwindcss.com"></script>
+	<!-- Prism.js for syntax highlighting -->
+	<link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet" />
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-http.min.js"></script>
+	<!-- Import utils.js as a module and make functions globally available -->
+	<script type="module">
+		import * as utils from './utils.js';
+		// Make utils available globally
+		window.utils = utils;
+	</script>
+	<style>
+		body {
+			margin: 0;
+			padding: 0;
+		}
+
+		.terminal {
+			font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+		}
+
+		.command-input {
+			caret-color: #10b981;
+			outline: none;
+		}
+
+		.command-input:focus {
+			outline: none;
+		}
+
+		/* Custom scrollbar */
+		.terminal-output::-webkit-scrollbar {
+			width: 8px;
+		}
+
+		.terminal-output::-webkit-scrollbar-track {
+			background: #f1f5f9;
+		}
+
+		.terminal-output::-webkit-scrollbar-thumb {
+			background: #cbd5e1;
+			border-radius: 4px;
+		}
+
+		.terminal-output::-webkit-scrollbar-thumb:hover {
+			background: #94a3b8;
+		}
+
+		/* Animation for cursor */
+		@keyframes blink {
+
+			0%,
+			100% {
+				opacity: 1;
+			}
+
+			50% {
+				opacity: 0;
+			}
+		}
+
+		.cursor {
+			display: inline-block;
+			width: 8px;
+			height: 18px;
+			background-color: #10b981;
+			animation: blink 1s step-end infinite;
+			vertical-align: middle;
+		}
+
+		/* Headers collapsible styles */
+		.headers-container {
+			margin-bottom: 2px;
+		}
+
+		.headers-toggle {
+			cursor: pointer;
+			user-select: none;
+			display: flex;
+			align-items: center;
+			padding: 1px 0;
+		}
+
+		.headers-toggle:hover {
+			background-color: #f8fafc;
+		}
+
+		.toggle-icon {
+			display: inline-flex;
+			width: 12px;
+			height: 12px;
+			justify-content: center;
+			align-items: center;
+			margin-right: 4px;
+			transition: transform 0.2s;
+		}
+
+		.toggle-icon.expanded {
+			transform: rotate(90deg);
+		}
+
+		.headers-content {
+			display: none;
+			padding: 3px;
+			background-color: #f8fafc;
+			border-radius: 4px;
+			font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+			white-space: pre-wrap;
+			font-size: 0.9rem;
+			line-height: 1.3;
+			word-break: break-word;
+			overflow-wrap: break-word;
+			max-width: 100%;
+		}
+
+		.headers-content.expanded {
+			display: block;
+		}
+
+		.header-title {
+			color: #10b981;
+			font-weight: bold;
+			margin-bottom: 3px;
+		}
+
+		.header-line {
+			display: block;
+			margin-bottom: 1px;
+			overflow-wrap: break-word;
+			word-break: break-all;
+		}
+
+		.header-name {
+			color: #8b5cf6;
+		}
+
+		/* Clickable command styles */
+		.clickable-command {
+			cursor: pointer;
+			transition: background-color 0.1s;
+			padding: 1px 3px;
+			border-radius: 2px;
+		}
+
+		.clickable-command:hover {
+			background-color: rgba(79, 70, 229, 0.1);
+		}
+
+		/* Response body container styles */
+		.response-body-container {
+			margin-top: 4px;
+			margin-bottom: 2px;
+		}
+
+		.response-body-toggle {
+			cursor: pointer;
+			user-select: none;
+			display: flex;
+			align-items: center;
+			padding: 1px 0;
+		}
+
+		.response-body-toggle:hover {
+			background-color: #f8fafc;
+		}
+
+		.response-body-title {
+			color: #6366f1;
+			font-size: 0.875rem;
+			margin-left: 4px;
+		}
+
+		.response-body-content {
+			display: none;
+			padding: 6px;
+			background-color: #f8fafc;
+			border-radius: 4px;
+			font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+			white-space: pre-wrap;
+			font-size: 0.9rem;
+			line-height: 1.3;
+			word-break: break-word;
+			overflow-wrap: break-word;
+			max-width: 100%;
+		}
+
+		.response-body-content.expanded {
+			display: block;
+		}
+
+		/* Multipart response styles */
+		.multipart-container {
+			font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+			font-size: 0.9rem;
+			line-height: 1.4;
+		}
+
+		.multipart-part {
+			margin-bottom: 10px;
+			padding: 10px;
+			background-color: #f8fafc;
+			border: 1px solid #e2e8f0;
+			border-radius: 4px;
+		}
+
+		.multipart-part:last-child {
+			margin-bottom: 0;
+		}
+
+		.multipart-header {
+			padding-bottom: 6px;
+			margin-bottom: 6px;
+			border-bottom: 1px dashed #e2e8f0;
+			color: #6366f1;
+		}
+
+		.multipart-header-line {
+			display: block;
+			margin-bottom: 2px;
+		}
+
+		.multipart-header-name {
+			font-weight: 600;
+			color: #8b5cf6;
+		}
+
+		.multipart-content {
+			white-space: pre-wrap;
+			word-break: break-word;
+		}
+
+		/* Tabs for multipart response */
+		.multipart-tabs {
+			display: flex;
+			border-bottom: 1px solid #e2e8f0;
+			margin-bottom: 12px;
+			margin-top: 0;
+		}
+
+		.multipart-tab {
+			padding: 6px 12px;
+			cursor: pointer;
+			border: 1px solid transparent;
+			border-bottom: none;
+			border-top-left-radius: 4px;
+			border-top-right-radius: 4px;
+			margin-right: 4px;
+			font-size: 0.85rem;
+			font-weight: 500;
+			color: #64748b;
+		}
+
+		.multipart-tab:hover {
+			background-color: #f8fafc;
+		}
+
+		.multipart-tab.active {
+			background-color: #f8fafc;
+			border-color: #e2e8f0;
+			color: #6366f1;
+			margin-bottom: -1px;
+		}
+
+		.multipart-tab-content {
+			display: none;
+		}
+
+		.multipart-tab-content.active {
+			display: block;
+		}
+
+		.multipart-raw {
+			padding: 10px;
+			background-color: #f8fafc;
+			border: 1px solid #e2e8f0;
+			border-radius: 4px;
+			white-space: pre-wrap;
+			word-break: break-word;
+		}
+
+		/* JSON Viewer styles */
+		.json-viewer-wrapper {
+			position: relative;
+			margin-bottom: 4px;
+		}
+
+		.json-viewer {
+			font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+			font-size: 13px;
+			line-height: 1.4;
+			background-color: #f8fafc;
+			border-radius: 4px;
+			padding: 4px;
+			padding-top: 32px;
+			/* Make room for the controls */
+			position: relative;
+		}
+
+		.json-viewer-controls {
+			position: absolute;
+			top: 8px;
+			right: 8px;
+			display: flex;
+			gap: 4px;
+			z-index: 10;
+		}
+
+		.json-viewer-btn {
+			background-color: #e2e8f0;
+			border: 1px solid #cbd5e1;
+			border-radius: 3px;
+			width: 28px;
+			height: 28px;
+			cursor: pointer;
+			color: #475569;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0;
+		}
+
+		.json-viewer-btn:hover {
+			background-color: #10b981;
+			color: white;
+			border-color: #059669;
+		}
+
+		.json-viewer-btn svg {
+			width: 16px;
+			height: 16px;
+		}
+
+		.json-viewer.dark {
+			background-color: #1e293b;
+			color: #e2e8f0;
+		}
+
+		.json-item {
+			margin-bottom: 2px;
+		}
+
+		.json-toggle {
+			display: inline-block;
+			width: 12px;
+			height: 12px;
+			cursor: pointer;
+			position: relative;
+		}
+
+		.json-toggle:before {
+			content: "▶";
+			font-size: 10px;
+			position: absolute;
+			top: -2px;
+			left: 0;
+			color: #10b981;
+		}
+
+		.json-toggle.expanded:before {
+			content: "▼";
+		}
+
+		.json-key {
+			color: #059669;
+			margin-right: 4px;
+			font-weight: 500;
+		}
+
+		.json-type-label {
+			color: #64748b;
+			font-weight: normal;
+		}
+
+		.json-string {
+			color: #65a30d;
+		}
+
+		.json-number {
+			color: #d97706;
+		}
+
+		.json-boolean {
+			color: #7c3aed;
+		}
+
+		.json-null {
+			color: #64748b;
+			font-style: italic;
+		}
+
+		.json-separator {
+			color: #64748b;
+		}
+
+		.json-container {
+			margin-left: 12px;
+		}
+
+		.json-container.collapsed {
+			display: none;
+		}
+
+		.json-count {
+			color: #64748b;
+			font-size: 11px;
+			margin-left: 4px;
+		}
+
+		.json-error {
+			color: #dc2626;
+			padding: 8px;
+		}
+	</style>
+</head>
+
+<body class="bg-white text-gray-800 h-screen flex flex-col">
+	<!-- Header -->
+	<header class="bg-gray-100 border-b border-gray-200 flex justify-between items-center px-3 py-2">
+		<h1 class="text-lg font-bold text-emerald-600">HyperBEAM Console</h1>
+		<div class="flex items-center space-x-3">
+			<div class="flex items-center">
+				<div class="h-2 w-2 rounded-full bg-emerald-500 mr-1 animate-pulse"></div>
+				<span class="text-xs text-emerald-600">Connected</span>
+			</div>
+			<button id="clear-btn" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded text-xs transition">
+				Clear
+			</button>
+			<button id="fullscreen-btn" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded text-xs transition">
+				Full Screen
+			</button>
+		</div>
+	</header>
+
+	<!-- Main Terminal Area -->
+	<main class="flex-1 overflow-hidden">
+		<div class="h-full flex flex-col">
+			<!-- Terminal Output -->
+			<div id="terminal-output" class="terminal-output flex-1 p-3 overflow-y-auto terminal">
+				<div class="text-emerald-600 mb-3">
+					<p>Type 'help' to see available commands</p>
+					<p>Use arrow keys (↑/↓) to navigate command history</p>
+				</div>
+			</div>
+
+			<!-- Terminal Input -->
+			<div class="terminal-input border-t border-gray-200 p-2 flex items-center terminal">
+				<span class="text-emerald-600 mr-2">HyperBEAM></span>
+				<div class="flex-1 relative">
+					<input id="command-input" type="text"
+						class="command-input w-full bg-transparent text-gray-800 focus:outline-none" autocomplete="off"
+						spellcheck="false" />
+				</div>
+			</div>
+		</div>
+	</main>
+
+	<script>
+		document.addEventListener('DOMContentLoaded', () => {
+			const terminalOutput = document.getElementById('terminal-output');
+			const commandInput = document.getElementById('command-input');
+			const clearBtn = document.getElementById('clear-btn');
+			const fullscreenButton = document.getElementById('fullscreen-btn');
+
+			// Command history management
+			const commandHistory = [];
+			let historyPosition = -1;
+			let currentCommand = '';
+
+			// Focus input on page load
+			commandInput.focus();
+
+			// Keep focus on input when clicking anywhere in the terminal
+			document.querySelector('.terminal-input').addEventListener('click', () => {
+				commandInput.focus();
+			});
+
+			// Clear terminal output
+			clearBtn.addEventListener('click', () => {
+				terminalOutput.innerHTML = '';
+				addWelcomeMessage();
+			});
+
+			// Fullscreen functionality
+			// Toggle fullscreen mode
+			fullscreenButton.addEventListener('click', () => {
+				toggleExpandedView();
+			});
+
+			// Function to toggle expanded view
+			function toggleExpandedView() {
+				// Send a message to the parent window to expand the console
+				if (window.parent) {
+					const isExpanded = fullscreenButton.textContent.includes('Exit');
+					window.parent.postMessage({
+						action: isExpanded ? 'exitExpandedConsole' : 'expandConsole'
+					}, '*');
+				}
+			}
+
+			// Listen for messages from parent to update button state
+			window.addEventListener('message', (event) => {
+				if (event.data && event.data.consoleState) {
+					fullscreenButton.textContent = event.data.consoleState === 'expanded' ? 'Exit Full Screen' : 'Full Screen';
+				}
+			});
+
+			// Add welcome message
+			function addWelcomeMessage() {
+				const welcomeDiv = document.createElement('div');
+				welcomeDiv.className = 'text-emerald-600 mb-3';
+				welcomeDiv.innerHTML = `
+            <p>Type 'help' to see available commands</p>
+            <p>Use arrow keys (↑/↓) to navigate command history</p>
+          `;
+				terminalOutput.appendChild(welcomeDiv);
+			}
+
+			// Process command input
+			commandInput.addEventListener('keydown', async (e) => {
+				// Handle arrow key navigation
+				if (e.key === 'ArrowUp') {
+					e.preventDefault();
+					navigateHistory('up');
+				} else if (e.key === 'ArrowDown') {
+					e.preventDefault();
+					navigateHistory('down');
+				} else if (e.key === 'Enter') {
+					e.preventDefault();
+					const command = commandInput.value.trim();
+
+					if (command) {
+						// Add to history only if it's not the same as the last command
+						if (commandHistory.length === 0 || commandHistory[commandHistory.length - 1] !== command) {
+							commandHistory.push(command);
+							// Limit history size to 100 items
+							if (commandHistory.length > 100) {
+								commandHistory.shift();
+							}
+						}
+
+						// Reset history position
+						historyPosition = -1;
+						currentCommand = '';
+
+						// Display command
+						displayCommand(command);
+
+						// Process command
+						await processCommand(command);
+
+						// Clear input
+						commandInput.value = '';
+					}
+				}
+			});
+
+			// Navigate through command history
+			function navigateHistory(direction) {
+				if (commandHistory.length === 0) return;
+
+				if (direction === 'up') {
+					// Save current command if we're just starting to navigate
+					if (historyPosition === -1) {
+						currentCommand = commandInput.value;
+					}
+
+					// Move up in history if possible
+					if (historyPosition < commandHistory.length - 1) {
+						historyPosition++;
+						commandInput.value = commandHistory[commandHistory.length - 1 - historyPosition];
+					}
+				} else if (direction === 'down') {
+					// Move down in history or restore current command
+					if (historyPosition > 0) {
+						historyPosition--;
+						commandInput.value = commandHistory[commandHistory.length - 1 - historyPosition];
+					} else if (historyPosition === 0) {
+						historyPosition = -1;
+						commandInput.value = currentCommand;
+					}
+				}
+
+				// Move cursor to end of input
+				setTimeout(() => {
+					commandInput.selectionStart = commandInput.selectionEnd = commandInput.value.length;
+				}, 0);
+			}
+
+			// Display command in terminal
+			function displayCommand(command) {
+				const commandDiv = document.createElement('div');
+				commandDiv.className = 'mb-1';
+
+				// Make the command clickable
+				const commandSpan = document.createElement('span');
+				commandSpan.className = 'clickable-command';
+				commandSpan.textContent = command;
+				commandSpan.addEventListener('click', function () {
+					commandInput.value = command;
+					commandInput.focus();
+				});
+
+				// Create the prefix
+				const prefixSpan = document.createElement('span');
+				prefixSpan.className = 'text-indigo-600';
+				prefixSpan.textContent = 'HyperBEAM> ';
+
+				// Append elements
+				commandDiv.appendChild(prefixSpan);
+				commandDiv.appendChild(commandSpan);
+
+				terminalOutput.appendChild(commandDiv);
+				scrollToBottom();
+			}
+
+			// Process command
+			async function processCommand(command) {
+				// Trim whitespace
+				command = command.trim();
+
+				// Handle special commands
+				if (command === 'clear') {
+					terminalOutput.innerHTML = '';
+					return;
+				}
+
+				if (command === 'help') {
+					displayHelp();
+					return;
+				}
+
+				if (command === 'history') {
+					displayHistory();
+					return;
+				}
+
+				if (command === 'exit') {
+					displayMessage('Type "clear" to clear the console.');
+					return;
+				}
+
+				if (command === 'json') {
+					displayJson();
+					return;
+				}
+
+				// Check if this is a header setting
+				const headerMatch = command.match(/^set\s+header\s+(\S+)\s+(.*)$/i);
+				if (headerMatch) {
+					const name = headerMatch[1];
+					const value = headerMatch[2];
+					setHeader(name, value);
+					return;
+				}
+
+				// Simple path starting with "/" means GET by default
+				if (command.startsWith('/')) {
+					await makeHttpRequest('GET', command, '');
+					return;
+				}
+
+				// HTTPie-style command (http GET/POST/PUT/DELETE/PATCH)
+				const httpieMatch = command.match(/^http\s+(GET|POST|PUT|DELETE|PATCH)\s+(\S+)(.*)$/i);
+				if (httpieMatch) {
+					const method = httpieMatch[1].toUpperCase();
+					const path = httpieMatch[2];
+					const paramsStr = httpieMatch[3].trim();
+
+					// Parse HTTPie-style parameters
+					const { headers, jsonData } = parseHttpieParams(paramsStr);
+
+					await makeHttpRequest(method, path, jsonData ? JSON.stringify(jsonData) : '', headers);
+					return;
+				}
+
+				// Standard HTTP request commands (GET, PUT, DELETE, PATCH)
+				// POST is handled separately with advanced parsing
+				const httpMatch = command.match(/^(GET|PUT|DELETE|PATCH)\s+(\S+)(\s+(.*))?$/i);
+				if (httpMatch) {
+					const method = httpMatch[1].toUpperCase();
+					const path = httpMatch[2];
+					const body = httpMatch[4] || '';
+
+					await makeHttpRequest(method, path, body);
+					return;
+				}
+
+				// Enhanced POST command with HTTPie-style parameter parsing
+				const postMatch = command.match(/^POST\s+(\S+)(.*)$/i);
+				if (postMatch) {
+					const path = postMatch[1];
+					const paramsStr = postMatch[2].trim();
+
+					// Parse parameters HTTPie-style
+					const { headers, jsonData } = parseHttpieParams(paramsStr);
+
+					// If no structured data was found, treat the entire params string as the body
+					const body = jsonData ? JSON.stringify(jsonData) : paramsStr;
+
+					await makeHttpRequest('POST', path, body, headers);
+					return;
+				}
+
+				// Unknown command
+				displayError(`Unknown command: ${command}. Type 'help' to see available commands.`);
+			}
+
+			// Display JSON data
+			function displayJson() {
+				// Sample JSON data
+				const jsonData = {
+					name: "HyperBEAM",
+					version: "1.0",
+					features: ["HTTP Console", "JSON Viewer", "Device Management"],
+					settings: {
+						theme: "light",
+						autoExpand: false,
+						maxItems: 100
+					},
+					endpoints: {
+						"/~meta@1.0/info": {
+							description: "Node information",
+							method: "GET",
+							parameters: {}
+						},
+						"/~message@1.0/keys": {
+							description: "List available keys",
+							method: "GET",
+							parameters: {}
+						},
+						"/~message@1.0/id": {
+							description: "Access message by ID",
+							method: "POST",
+							parameters: {
+								"accept-codec": "Content type to accept",
+								"body": "Message content"
+							}
+						}
+					}
+				};
+
+				// Create and append the JSON viewer component
+				const jsonViewerElement = createJsonViewer(jsonData);
+				terminalOutput.appendChild(jsonViewerElement);
+				scrollToBottom();
+			}
+
+			/**
+			 * Create a reusable JSON viewer component
+			 * @param {Object|string} jsonData - JSON data to display (object or string)
+			 * @param {Object} options - Optional settings
+			 * @param {string} options.theme - Theme to use ('light' or 'dark')
+			 * @param {boolean} options.initiallyExpanded - Whether to expand all nodes initially
+			 * @returns {HTMLElement} The JSON viewer component element
+			 */
+			function createJsonViewer(jsonData, options = {}) {
+				const { theme = 'light', initiallyExpanded = false } = options;
+
+				// Create wrapper for the JSON viewer
+				const wrapper = document.createElement('div');
+				wrapper.className = 'json-viewer-wrapper';
+
+				// Create container for the JSON viewer
+				const container = document.createElement('div');
+				container.className = `json-viewer ${theme}`;
+
+				// Create controls
+				const controls = document.createElement('div');
+				controls.className = 'json-viewer-controls';
+
+				// Expand all button
+				const expandBtn = document.createElement('button');
+				expandBtn.className = 'json-viewer-btn expand-btn';
+				expandBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"></polyline><polyline points="7 6 12 11 17 6"></polyline></svg>';
+				expandBtn.title = 'Expand All';
+
+				// Collapse all button
+				const collapseBtn = document.createElement('button');
+				collapseBtn.className = 'json-viewer-btn collapse-btn';
+				collapseBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 11 12 6 17 11"></polyline><polyline points="7 18 12 13 17 18"></polyline></svg>';
+				collapseBtn.title = 'Collapse All';
+
+				// Add buttons to controls
+				controls.appendChild(expandBtn);
+				controls.appendChild(collapseBtn);
+
+				// Add controls to wrapper instead of container
+				wrapper.appendChild(controls);
+
+				// Add container to wrapper
+				wrapper.appendChild(container);
+
+				// Create and initialize the JSON viewer
+				let jsonViewerInstance;
+
+				try {
+					// Initialize the SimpleJsonViewer with the container and data
+					if (window.utils && window.utils.SimpleJsonViewer) {
+						jsonViewerInstance = new window.utils.SimpleJsonViewer({
+							container: container,
+							data: jsonData,
+							theme: theme,
+							expand: initiallyExpanded
+						});
+
+						// Add event listeners for expand/collapse buttons
+						expandBtn.addEventListener('click', () => {
+							if (jsonViewerInstance) {
+								jsonViewerInstance.expandAll();
+							}
+						});
+
+						collapseBtn.addEventListener('click', () => {
+							if (jsonViewerInstance) {
+								jsonViewerInstance.collapseAll();
+							}
+						});
+					} else {
+						// Fallback if SimpleJsonViewer is not available
+						const pre = document.createElement('pre');
+						pre.textContent = typeof jsonData === 'string' ? jsonData : JSON.stringify(jsonData, null, 2);
+						container.appendChild(pre);
+
+						// Hide controls if viewer is not available
+						controls.style.display = 'none';
+					}
+				} catch (e) {
+					container.innerHTML = `<div class="json-error">Error rendering JSON: ${e.message}</div>`;
+					controls.style.display = 'none';
+				}
+
+				wrapper.appendChild(container);
+				return wrapper;
+			}
+
+			// Parse HTTPie-style parameters
+			function parseHttpieParams(paramsStr) {
+				const headers = {};
+				let jsonData = null;
+
+				// Split by space but respect quotes
+				const params = paramsStr.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+
+				params.forEach(param => {
+					// Handle header parameters (key==value)
+					if (param.includes('==')) {
+						const [key, value] = param.split('==');
+						headers[key] = value.replace(/^["'](.*)["']$/, '$1'); // Remove quotes if present
+					}
+					// Handle JSON data (key:=value)
+					else if (param.includes(':=')) {
+						const [key, value] = param.split(':=');
+						if (!jsonData) jsonData = {};
+
+						try {
+							// Parse the JSON value
+							const jsonValue = JSON.parse(value.replace(/^["'](.*)["']$/, '$1'));
+							jsonData[key] = jsonValue;
+						} catch (e) {
+							// If not valid JSON, use as string
+							jsonData[key] = value.replace(/^["'](.*)["']$/, '$1');
+						}
+					}
+					// Handle simple JSON data (key=value)
+					else if (param.includes('=') && !param.includes('==')) {
+						const [key, value] = param.split('=');
+						if (!jsonData) jsonData = {};
+						jsonData[key] = value.replace(/^["'](.*)["']$/, '$1');
+					}
+				});
+
+				return { headers, jsonData };
+			}
+
+			// Make HTTP request
+			async function makeHttpRequest(method, path, body, customHeaders = {}) {
+				const responseDiv = document.createElement('div');
+				responseDiv.className = 'mb-3';
+
+				try {
+					// Show loading indicator
+					responseDiv.innerHTML = '<p class="text-blue-500">Sending request...</p>';
+					terminalOutput.appendChild(responseDiv);
+					scrollToBottom();
+
+					// Prepare request options
+					const options = {
+						method: method,
+						headers: {
+							'Accept': 'application/json, text/plain, */*',
+							...customHeaders
+						}
+					};
+
+					// Add body for POST, PUT, PATCH requests
+					if (['POST', 'PUT', 'PATCH'].includes(method) && body) {
+						try {
+							// Try to parse as JSON
+							const jsonBody = JSON.parse(body);
+							options.body = JSON.stringify(jsonBody);
+							options.headers['Content-Type'] = 'application/json';
+						} catch (e) {
+							// Use as plain text
+							options.body = body;
+							options.headers['Content-Type'] = 'text/plain';
+						}
+					}
+
+					// Construct the full URL
+					let url = path;
+					if (!url.startsWith('http')) {
+						// Use current origin if path doesn't include protocol
+						url = window.location.origin + (path.startsWith('/') ? path : '/' + path);
+					}
+
+					// Make the request
+					const response = await fetch(url, options);
+					const contentType = response.headers.get('content-type') || '';
+
+					// Format headers into a JSON object
+					const headersObj = formatHeaders(response.headers);
+
+					// Get response text
+					const responseText = await response.text();
+
+					// Process response based on content type
+					let responseBodyHtml = '';
+					let responseBodyTitle = 'Response Body';
+
+					// Check if response should be treated as JSON
+					const isJsonResponse = contentType.includes('application/json') ||
+						response.headers.get('codec-device')?.includes('json');
+
+					if (isJsonResponse && responseText.trim()) {
+						try {
+							// Try to parse JSON
+							const jsonData = JSON.parse(responseText);
+							responseBodyTitle = 'Response Body (JSON)';
+
+							// Create JSON viewer and insert it later
+							const jsonViewer = createJsonViewer(jsonData, { initiallyExpanded: true });
+							responseBodyHtml = '<div id="json-viewer-container"></div>';
+
+							// We'll add the JSON viewer after the HTML is set
+							setTimeout(() => {
+								const container = responseDiv.querySelector('#json-viewer-container');
+								if (container) {
+									container.appendChild(jsonViewer);
+									container.removeAttribute('id');
+								}
+							}, 0);
+						} catch (e) {
+							// If JSON parsing fails, display as plain text
+							responseBodyTitle = 'Response Body (Invalid JSON)';
+							responseBodyHtml = `<pre class="bg-gray-100 p-2 rounded text-sm overflow-auto max-w-full whitespace-pre-wrap">${escapeHtml(responseText)}</pre>`;
+						}
+					} else if (isMultipartResponse(response.headers)) {
+						const boundary = extractBoundary(response.headers.get('content-type'));
+						// Convert multipart response to JSON and display with JSON viewer
+						const multipartJson = convertMultipartToJson(responseText, boundary);
+						responseBodyTitle = 'Response Body (Multipart)';
+
+						// Create JSON viewer and insert it later
+						const jsonViewer = createJsonViewer(multipartJson, { initiallyExpanded: true });
+						responseBodyHtml = '<div id="multipart-json-viewer-container"></div>';
+
+						// We'll add the JSON viewer after the HTML is set
+						setTimeout(() => {
+							const container = responseDiv.querySelector('#multipart-json-viewer-container');
+							if (container) {
+								container.appendChild(jsonViewer);
+								container.removeAttribute('id');
+							}
+						}, 0);
+					} else if (responseText.trim()) {
+						// For any non-empty plain text response
+						responseBodyHtml = `<pre class="bg-gray-100 p-2 rounded text-sm overflow-auto max-w-full whitespace-pre-wrap">${escapeHtml(responseText)}</pre>`;
+					} else {
+						// Empty response
+						responseBodyHtml = `<div class="text-gray-500 italic">Empty response body</div>`;
+					}
+
+					// Create clickable command for this request
+					const fullCommand = method + ' ' + path + (body ? ' ' + body : '');
+					const clickableCommand = `<span class="clickable-command" onclick="setCommandInput('${escapeHtml(fullCommand.replace(/'/g, "\\'"))}')">${escapeHtml(method)} ${escapeHtml(path)}${body ? ' ...' : ''}</span>`;
+
+					// Display response with status, headers, and body
+					responseDiv.innerHTML = `
+						<div class="flex items-center mb-1">
+							<span class="text-${response.ok ? 'indigo' : 'red'}-600 mr-2">●</span>
+							<span class="text-gray-700">${response.status} ${response.statusText}</span>
+							<span class="ml-auto text-xs text-gray-500">Click to rerun: ${clickableCommand}</span>
+						</div>
+						
+						<!-- Headers Toggle -->
+						<div class="headers-container">
+							<div class="headers-toggle" onclick="toggleHeaders(this)">
+								<span class="toggle-icon">▶</span>
+								<span class="text-indigo-500">Headers</span>
+							</div>
+							<div class="headers-content">
+								<div id="headers-json-container"></div>
+							</div>
+						</div>
+						
+						<!-- Response Body -->
+						<div class="response-body-container">
+							<div class="response-body-toggle" onclick="toggleResponseBody(this)">
+								<span class="toggle-icon expanded">▶</span>
+								<span class="text-indigo-500">${responseBodyTitle}</span>
+							</div>
+							<div class="response-body-content expanded">
+								${responseBodyHtml}
+							</div>
+						</div>
+					`;
+
+					// Add JSON viewer for headers
+					setTimeout(() => {
+						const headersContainer = responseDiv.querySelector('#headers-json-container');
+						if (headersContainer) {
+							const headersViewer = createJsonViewer(headersObj, { initiallyExpanded: false });
+							headersContainer.appendChild(headersViewer);
+							headersContainer.removeAttribute('id');
+						}
+					}, 0);
+
+					// Apply syntax highlighting
+					Prism.highlightAllUnder(responseDiv);
+				} catch (error) {
+					responseDiv.innerHTML = `<p class="text-red-600">Error: ${escapeHtml(error.message)}</p>`;
+				}
+
+				scrollToBottom();
+			}
+
+			// Format headers for display
+			function formatHeaders(headers) {
+				const headersObj = {};
+				const headerEntries = headers.entries ? Array.from(headers.entries()) : [];
+
+				for (const [name, value] of headerEntries) {
+					headersObj[name] = value;
+				}
+
+				return headersObj;
+			}
+
+			// Display response body with toggle
+			function displayResponseBody(container, content, title = 'Response Body') {
+				// Create response body container and toggle
+				const responseBodyContainer = document.createElement('div');
+				responseBodyContainer.className = 'response-body-container';
+
+				const responseBodyToggle = document.createElement('div');
+				responseBodyToggle.className = 'response-body-toggle';
+				responseBodyToggle.innerHTML = `
+					<span class="toggle-icon expanded"></span>
+					<span class="response-body-title">${escapeHtml(title)}</span>
+				`;
+				responseBodyToggle.onclick = function () {
+					window.toggleResponseBody(this);
+				};
+
+				responseBodyContainer.appendChild(responseBodyToggle);
+
+				// Create response body content
+				const responseBodyContent = document.createElement('div');
+				responseBodyContent.className = 'response-body-content expanded';
+				responseBodyContent.innerHTML = `<pre class="bg-gray-100 p-2 rounded text-sm overflow-auto max-w-full whitespace-pre-wrap">${escapeHtml(content)}</pre>`;
+
+				responseBodyContainer.appendChild(responseBodyContent);
+				container.appendChild(responseBodyContainer);
+			}
+
+			// Check if response is multipart/form-data
+			function isMultipartResponse(headers) {
+				const contentType = headers.get('content-type') || '';
+				return contentType.toLowerCase().includes('multipart/form-data');
+			}
+
+			// Extract boundary from Content-Type header
+			function extractBoundary(contentType) {
+				const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+				return boundaryMatch ? (boundaryMatch[1] || boundaryMatch[2]) : '';
+			}
+
+			// Convert multipart response to JSON
+			function convertMultipartToJson(responseText, boundary) {
+				if (!boundary) {
+					return { error: "No boundary found in multipart response" };
+				}
+
+				// Split the response by boundary
+				const boundaryDelimiter = `--${boundary}`;
+				const parts = responseText.split(boundaryDelimiter).filter(part =>
+					part.trim() && !part.startsWith('--')
+				);
+
+				if (parts.length === 0) {
+					return { error: "No parts found in multipart response" };
+				}
+
+				// Parse each part into a JSON object
+				const jsonParts = parts.map((part, index) => {
+					const lines = part.trim().split(/\r?\n/);
+					const headers = {};
+					let contentStartIndex = 0;
+
+					// Parse headers
+					for (let i = 0; i < lines.length; i++) {
+						if (lines[i] === '') {
+							contentStartIndex = i + 1;
+							break;
+						}
+
+						const headerMatch = lines[i].match(/^([^:]+):\s*(.*)$/);
+						if (headerMatch) {
+							const [, name, value] = headerMatch;
+							headers[name.toLowerCase()] = value;
+						}
+					}
+
+					// Extract content
+					const content = lines.slice(contentStartIndex).join('\n');
+
+					// Try to parse content as JSON if it's application/json
+					let parsedContent = content;
+					const contentType = headers['content-type'] || '';
+					if (contentType.includes('application/json')) {
+						try {
+							parsedContent = JSON.parse(content);
+						} catch (e) {
+							// Keep as string if parsing fails
+						}
+					}
+
+					return {
+						partIndex: index + 1,
+						headers: headers,
+						contentType: contentType,
+						content: parsedContent
+					};
+				});
+
+				return {
+					totalParts: jsonParts.length,
+					parts: jsonParts
+				};
+			}
+
+			// Display error message
+			function displayError(message) {
+				const errorDiv = document.createElement('div');
+				errorDiv.className = 'text-red-600 mb-1';
+				errorDiv.textContent = message;
+				terminalOutput.appendChild(errorDiv);
+				scrollToBottom();
+			}
+
+			// Escape HTML to prevent XSS
+			function escapeHtml(text) {
+				const div = document.createElement('div');
+				div.textContent = text;
+				return div.innerHTML;
+			}
+
+			// Scroll terminal to bottom
+			function scrollToBottom() {
+				terminalOutput.scrollTop = terminalOutput.scrollHeight;
+			}
+
+			// Make toggleHeaders and setCommandInput functions available globally
+			window.toggleHeaders = function (element) {
+				const content = element.nextElementSibling;
+				const icon = element.querySelector('.toggle-icon');
+
+				if (content.classList.contains('expanded')) {
+					content.classList.remove('expanded');
+					icon.classList.remove('expanded');
+				} else {
+					content.classList.add('expanded');
+					icon.classList.add('expanded');
+				}
+			};
+
+			// Switch between multipart tabs
+			window.switchMultipartTab = function (tabElement, tabName) {
+				// Get the parent container
+				const tabsContainer = tabElement.parentElement;
+				const tabContentContainer = tabsContainer.parentElement;
+
+				// Deactivate all tabs
+				const tabs = tabsContainer.querySelectorAll('.multipart-tab');
+				tabs.forEach(tab => tab.classList.remove('active'));
+
+				// Activate the clicked tab
+				tabElement.classList.add('active');
+
+				// Hide all tab contents
+				const tabContents = tabContentContainer.querySelectorAll('.multipart-tab-content');
+				tabContents.forEach(content => content.classList.remove('active'));
+
+				// Show the selected tab content
+				const selectedContent = tabContentContainer.querySelector(`.multipart-tab-content[data-tab="${tabName}"]`);
+				if (selectedContent) {
+					selectedContent.classList.add('active');
+				}
+			};
+
+			// Toggle response body visibility
+			window.toggleResponseBody = function (element) {
+				const container = element.closest('.response-body-container');
+				const content = container.querySelector('.response-body-content');
+				const icon = element.querySelector('.toggle-icon');
+
+				if (content.classList.contains('expanded')) {
+					content.classList.remove('expanded');
+					container.classList.remove('expanded');
+					icon.classList.remove('expanded');
+				} else {
+					content.classList.add('expanded');
+					container.classList.add('expanded');
+					icon.classList.add('expanded');
+				}
+			};
+
+			// Function to set command input value (used by clickable commands)
+			window.setCommandInput = function (command) {
+				commandInput.value = command;
+				commandInput.focus();
+			};
+
+			// Display help information
+			function displayHelp() {
+				const helpDiv = document.createElement('div');
+				helpDiv.className = 'mb-3 text-gray-700';
+				helpDiv.innerHTML = `
+            <p class="text-emerald-600 font-bold mb-1">HyperBEAM REPL Commands:</p>
+            <p><span class="text-emerald-600">help</span>    - Show this help text</p>
+            <p><span class="text-emerald-600">clear</span>   - Clear the screen</p>
+            <p><span class="text-emerald-600">history</span> - Show command history</p>
+            <p><span class="text-emerald-600">exit</span>    - Exit the REPL</p>
+			            
+            <p class="text-emerald-600 font-bold mt-2 mb-1">Examples:</p>
+            <p><span class="text-emerald-600">/~meta@1.0/info/address</span> - Simple GET request (no need to type GET)</p>
+            <p><span class="text-emerald-600">GET</span> /~meta@1.0/info/address - Standard GET request</p>
+            <p><span class="text-emerald-600">GET</span> /~message@1.0&hello=world&k=v/k</p>
+            <p><span class="text-emerald-600">POST</span> /~message@1.0/id accept-codec==json@1.0 body:='{"greeting":{"text":"Hello","recipient":"World"}}'</p>
+            
+            <p class="text-emerald-600 font-bold mt-2 mb-1">Useful Paths:</p>
+            <p><span class="text-emerald-600">/~message@1.0/keys</span> - List available keys in message device</p>
+          `;
+				terminalOutput.appendChild(helpDiv);
+				scrollToBottom();
+			}
+
+			// Display command history
+			function displayHistory() {
+				if (commandHistory.length === 0) {
+					displayMessage('No command history.');
+					return;
+				}
+
+				const historyDiv = document.createElement('div');
+				historyDiv.className = 'mb-3';
+				let historyHtml = '<p class="text-emerald-600 font-bold mb-1">Command History:</p>';
+
+				commandHistory.forEach((cmd, index) => {
+					historyHtml += `<p><span class="text-gray-500">${index + 1}.</span> ${escapeHtml(cmd)}</p>`;
+				});
+
+				historyDiv.innerHTML = historyHtml;
+				terminalOutput.appendChild(historyDiv);
+				scrollToBottom();
+			}
+
+			// Display a message
+			function displayMessage(message) {
+				const messageDiv = document.createElement('div');
+				messageDiv.className = 'mb-3 text-gray-700';
+				messageDiv.innerHTML = message;
+				terminalOutput.appendChild(messageDiv);
+				scrollToBottom();
+			}
+		});
+	</script>
+</body>
+
+</html>

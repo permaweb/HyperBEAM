@@ -53,16 +53,16 @@ would like to analyze would HB's path management `dev_message` modules are doing
 while you run your tests, just execute:
 
 ```
-	HB_PRINT=hb_path,hb_converge,converge_result rebar3 eunit --module=your_mod
+	HB_PRINT=hb_path,hb_ao,ao_result rebar3 eunit --module=your_mod
 ```
 
 Some useful logging events are:
 
 ```
-    converge_result: Outputs every Converge computation result (M1, M2, and M3).
+    ao_result: Outputs every AO-Core computation result (M1, M2, and M3).
     worker: Information about spawns and registrations of worker processes.
-    converge_core: Output information about progression through the core 
-    computation loop of Converge. Produces a large volume of output.
+    ao_core: Output information about progression through the core 
+    computation loop of AO-Core. Produces a large volume of output.
 ```
 
 The HB printing system is reasonably intelligent. It has a custom
@@ -91,5 +91,16 @@ change this behavior via the options found in `hb_opts`.
 If you would like to re-build HyperBEAM in-place, while it is running, just 
 run `hb:build()`. This will invoke `rebar3` and build any modules changed 
 since the last invocation.
+
+## Profiling with eflame (building flamecharts)
+
+1. Benchmark a given function (in Erlang shell) with
+   `eflame:apply(hb, address, []).`
+   This will store traces under "stacks.out" in the project folder.
+
+2. Convert stacks.out into svg file (in shell):
+  `_build/default/lib/eflame/stack_to_flame.sh < stacks.out > hb_address_flame.svg`
+
+3. Open the svg file in browser.
 
 Happy hacking!

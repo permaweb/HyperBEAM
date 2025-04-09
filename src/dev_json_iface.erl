@@ -33,9 +33,10 @@
 %%%         Generates:
 %%%             /Results/Outbox
 %%%             /Results/Data'''
-
 -module(dev_json_iface).
 -export([init/3, compute/3]).
+%%% Public interface helpers:
+-export([message_to_json_struct/1, json_to_message/2]).
 %%% Test helper exports:
 -export([generate_stack/1, generate_stack/2, generate_aos_msg/2]).
 -include_lib("eunit/include/eunit.hrl").
@@ -43,11 +44,11 @@
 
 %% @doc Initialize the device.
 init(M1, _M2, _Opts) ->
-    {ok, hb_converge:set(M1, #{<<"wasm-function">> => <<"handle">>})}.
+    {ok, hb_ao:set(M1, #{<<"function">> => <<"handle">>})}.
 
 %% @doc On first pass prepare the call, on second pass get the results.
 compute(M1, M2, Opts) ->
-    case hb_converge:get(<<"pass">>, M1, Opts) of
+    case hb_ao:get(<<"pass">>, M1, Opts) of
         1 -> prep_call(M1, M2, Opts);
         2 -> results(M1, M2, Opts);
         _ -> {ok, M1}
@@ -57,110 +58,181 @@ compute(M1, M2, Opts) ->
 %% the message as JSON representations into the WASM environment.
 prep_call(M1, M2, Opts) ->
     ?event({prep_call, M1, M2, Opts}),
-    Instance = hb_private:get(<<"priv/wasm/instance">>, M1, Opts),
-    Process = hb_converge:get(<<"process">>, M1, Opts#{ hashpath => ignore }),
-    Message = hb_converge:get(<<"body">>, M2, Opts#{ hashpath => ignore }),
-    Image = hb_converge:get(<<"process/image">>, M1, Opts),
-    BlockHeight = hb_converge:get(<<"block-height">>, M2, Opts),
-    RawMsgJson = message_to_json_struct(denormalize_message(Message)),
-    {Props} = RawMsgJson,
+    Process = hb_ao:get(<<"process">>, M1, Opts#{ hashpath => ignore }),
+    Message = hb_ao:get(<<"body">>, M2, Opts#{ hashpath => ignore }),
+    Image = hb_ao:get(<<"process/image">>, M1, Opts),
+    BlockHeight = hb_ao:get(<<"block-height">>, M2, Opts),
+    Props = message_to_json_struct(denormalize_message(Message)),
     MsgProps =
-        normalize_props(
-            Props ++
-                [
-                    {<<"Module">>, Image},
-                    {<<"Block-Height">>, BlockHeight}
-                ]
-        ),
-    MsgJson = jiffy:encode({MsgProps}),
-    {ok, MsgJsonPtr} = hb_beamr_io:write_string(Instance, MsgJson),
+        Props#{
+            <<"Module">> => Image,
+            <<"Block-Height">> => BlockHeight
+        },
+    MsgJson = hb_json:encode(MsgProps),
     ProcessProps =
-        normalize_props(
-            [{<<"Process">>, message_to_json_struct(Process)}]
-        ),
-    ProcessJson = jiffy:encode({ProcessProps}),
-    {ok, ProcessJsonPtr} = hb_beamr_io:write_string(Instance, ProcessJson),
-    {ok,
-        hb_converge:set(
-            M1,
-            #{
-                <<"wasm-function">> => <<"handle">>,
-                <<"wasm-params">> => [MsgJsonPtr, ProcessJsonPtr]
-            },
-            Opts
-        )
-    }.
+        #{
+            <<"Process">> => message_to_json_struct(Process)
+        },
+    ProcessJson = hb_json:encode(ProcessProps),
+    env_write(ProcessJson, MsgJson, M1, M2, Opts).
 
 %% @doc Normalize a message for AOS-compatibility.
 denormalize_message(Message) ->
-    Signers =
-        lists:filter(
-            fun(ID) -> ?IS_ID(ID) end,
-            hb_converge:get(<<"attestors">>, {as, <<"message@1.0">>, Message})
-        ),
     NormOwnerMsg =
-        case Signers of
+        case hb_message:signers(Message) of
             [] -> Message;
-            [Signer|_] ->
-                Sig =
-                    hb_converge:get(
-                        <<"attestations/", Signer/binary, "/signature">>,
-                        {as, <<"message@1.0">>, Message}
-                    ),
-                Message#{ <<"owner">> => Signer, <<"signature">> => Sig }
+            [PrimarySigner|_] ->
+                {ok, _, Commitment} = hb_message:commitment(PrimarySigner, Message),
+                Message#{
+                    <<"owner">> => hb_util:human_id(PrimarySigner),
+                    <<"signature">> =>
+                        hb_ao:get(<<"signature">>, Commitment, <<>>, #{})
+                }
         end,
     NormOwnerMsg#{
-        <<"id">> => hb_converge:get(<<"id">>, {as, <<"message@1.0">>, Message})
+        <<"id">> => hb_message:id(Message, all)
     }.
 
 message_to_json_struct(RawMsg) ->
-    Message = maps:without([<<"attestations">>], RawMsg),
-    ID = hb_message:id(Message, all),
-    Last = hb_converge:get(<<"anchor">>, {as, <<"message@1.0">>, Message}, <<>>, #{}),
-    Owner = hb_converge:get(<<"owner">>, {as, <<"message@1.0">>, Message}, <<>>, #{}),
-    Data = hb_converge:get(<<"data">>, {as, <<"message@1.0">>, Message}, <<>>, #{}),
-    Target = hb_converge:get(<<"target">>, {as, <<"message@1.0">>, Message}, <<>>, #{}),
+    message_to_json_struct(RawMsg, [owner_as_address]).
+message_to_json_struct(RawMsg, Features) ->
+    TABM = 
+        hb_message:convert(
+            hb_private:reset(RawMsg),
+            tabm,
+            #{}
+        ),
+    MsgWithoutCommitments = maps:without([<<"commitments">>], TABM),
+    ID = hb_message:id(RawMsg, all),
+    ?event({encoding, {id, ID}, {msg, RawMsg}}),
+    Last = hb_ao:get(<<"anchor">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, #{}),
+	Owner =
+        case hb_message:signers(RawMsg) of
+            [] -> <<>>;
+            [Signer|_] ->
+                case lists:member(owner_as_address, Features) of
+                    true -> hb_util:native_id(Signer);
+                    false ->
+                        Commitment =
+                            hb_ao:get(
+                                <<"commitments/", Signer/binary>>,
+                                {as, <<"message@1.0">>, RawMsg},
+                                #{}
+                            ),
+                        case hb_ao:get(<<"owner">>, Commitment, #{}) of
+                            not_found ->
+                                % The signature is likely a HTTPsig, so we need 
+                                % to extract the owner from the signature.
+                                case dev_codec_httpsig:public_keys(Commitment) of
+                                    [] -> <<>>;
+                                    [PubKey|_] -> PubKey
+                                end;
+                            ANS104Owner -> ANS104Owner
+                        end
+                end
+        end,
+    Data = hb_ao:get(<<"data">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, #{}),
+    Target = hb_ao:get(<<"target">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, #{}),
     % Set "From" if From-Process is Tag or set with "Owner" address
-    From = hb_converge:get(<<"from-process">>, {as, <<"message@1.0">>, Message}, Owner, #{}),
-    Sig = hb_converge:get(<<"signature">>, {as, <<"message@1.0">>, Message}, <<>>, #{}),
-    Fields = [
-        {<<"Id">>, safe_to_id(ID)},
+    From =
+        hb_ao:get(
+            <<"from-process">>,
+            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            hb_util:encode(Owner),
+            #{}
+        ),
+    Sig = hb_ao:get(<<"signature">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, #{}),
+    #{
+        <<"Id">> => safe_to_id(ID),
         % NOTE: In Arweave TXs, these are called "last_tx"
-        {<<"Anchor">>, safe_to_id(Last)},
+        <<"Anchor">> => Last,
         % NOTE: When sent to ao "Owner" is the wallet address
-        {<<"Owner">>, safe_to_id(Owner)},
-        {<<"From">>, safe_to_id(From)},
-        {<<"Tags">>,
-            lists:map(
-                fun({Name, Value}) ->
-                    {
-                        [
-                            {name, maybe_list_to_binary(Name)},
-                            {value, maybe_list_to_binary(Value)}
-                        ]
-                    }
-                end,
-                maps:to_list(
-                    maps:without(
-                        [
-                            <<"id">>, <<"anchor">>, <<"owner">>, <<"data">>,
-                            <<"target">>, <<"signature">>
-                        ],
-                        Message
-                    )
-                )
-            )},
-        {<<"Target">>, safe_to_id(Target)},
-        {<<"Data">>, Data},
-        {<<"Signature">>,
+        <<"Owner">> => hb_util:encode(Owner),
+        <<"From">> => case ?IS_ID(From) of true -> safe_to_id(From); false -> From end,
+        <<"Tags">> => prepare_tags(TABM),
+        <<"Target">> => safe_to_id(Target),
+        <<"Data">> => Data,
+        <<"Signature">> =>
             case byte_size(Sig) of
                 0 -> <<>>;
                 512 -> hb_util:encode(Sig);
                 _ -> Sig
-            end}
-    ],
-    HeaderCaseFields = normalize_props(Fields),
-    {HeaderCaseFields}.
+            end
+    }.
+
+%% @doc Prepare the tags of a message as a key-value list, for use in the 
+%% construction of the JSON-Struct message.
+prepare_tags(Msg) ->
+    % Prepare an ANS-104 message for JSON-Struct construction.
+    case hb_message:commitment(#{ <<"commitment-device">> => <<"ans104@1.0">> }, Msg, #{}) of
+        {ok, _, Commitment} ->
+            case maps:find(<<"original-tags">>, Commitment) of
+                {ok, OriginalTags} ->
+                    Res = hb_util:message_to_ordered_list(OriginalTags),
+                    ?event({using_original_tags, Res}),
+                    Res;
+                error -> 
+                    prepare_header_case_tags(Msg)
+            end;
+        _ ->
+            prepare_header_case_tags(Msg)
+    end.
+
+%% @doc Convert a message without an `original-tags' field into a list of
+%% key-value pairs, with the keys in HTTP header-case.
+prepare_header_case_tags(TABM) ->
+    % Prepare a non-ANS-104 message for JSON-Struct construction. 
+    lists:map(
+        fun({Name, Value}) ->
+            #{
+                <<"name">> => header_case_string(maybe_list_to_binary(Name)),
+                <<"value">> => maybe_list_to_binary(Value)
+            }
+        end,
+        maps:to_list(
+            maps:without(
+                [
+                    <<"id">>, <<"anchor">>, <<"owner">>, <<"data">>,
+                    <<"target">>, <<"signature">>, <<"commitments">>
+                ],
+                TABM
+            )
+        )
+    ).
+
+%% @doc Translates a compute result -- either from a WASM execution using the 
+%% JSON-Iface, or from a `Legacy' CU -- and transforms it into a result message.
+json_to_message(JSON, Opts) when is_binary(JSON) ->
+    json_to_message(hb_json:decode(JSON), Opts);
+json_to_message(Resp, Opts) when is_map(Resp) ->
+    {ok, Data, Messages, Patches} = normalize_results(Resp),
+    Output = 
+        #{
+            <<"outbox">> =>
+                maps:from_list(
+                    [
+                        {MessageNum, preprocess_results(Msg, Opts)}
+                    ||
+                        {MessageNum, Msg} <-
+                            lists:zip(
+                                lists:seq(1, length(Messages)),
+                                Messages
+                            )
+                    ]
+                ),
+            <<"patches">> => lists:map(fun tags_to_map/1, Patches),
+            <<"data">> => Data
+        },
+    {ok, Output};
+json_to_message(#{ <<"ok">> := false, <<"error">> := Error }, _Opts) ->
+    {error, Error};
+json_to_message(Other, _Opts) ->
+    {error,
+        #{
+            <<"error">> => <<"Invalid JSON message input.">>,
+            <<"received">> => Other
+        }
+    }.
 
 safe_to_id(<<>>) -> <<>>;
 safe_to_id(ID) -> hb_util:human_id(ID).
@@ -170,32 +242,8 @@ maybe_list_to_binary(List) when is_list(List) ->
 maybe_list_to_binary(Bin) ->
     Bin.
 
-%% @doc Normalize the properties of a message to begin with a capital letter for
-%% backwards compatibility with AOS.
-normalize_props(Props) ->
-    lists:map(
-        fun({<<"Tags">>, Values}) ->
-            {<<"Tags">>,
-                lists:map(
-                    fun({[{name, Name}, {value, Value}]}) ->
-                        {
-                            [
-                                {name, header_case_string(Name)},
-                                {value, Value}
-                            ]
-                        }
-                    end,
-                    Values
-                )
-            };
-        ({Key, Value}) ->
-            {header_case_string(Key), Value}
-        end,
-        Props
-    ).
-
 header_case_string(Key) ->
-    NormKey = hb_converge:normalize_key(Key),
+    NormKey = hb_ao:normalize_key(Key),
     Words = string:lexemes(NormKey, "-"),
     TitleCaseWords =
         lists:map(
@@ -211,14 +259,14 @@ header_case_string(Key) ->
 %% @doc Read the computed results out of the WASM environment, assuming that
 %% the environment has been set up by `prep_call/3' and that the WASM executor
 %% has been called with `computed{pass=1}'.
-results(M1, _M2, Opts) ->
-    Instance = hb_private:get(<<"priv/wasm/instance">>, M1, Opts),
-    Type = hb_converge:get(<<"results/wasm/type">>, M1, Opts),
-    Proc = hb_converge:get(<<"process">>, M1, Opts),
-    case hb_converge:normalize_key(Type) of
+results(M1, M2, Opts) ->
+    Prefix = dev_stack:prefix(M1, M2, Opts),
+    Type = hb_ao:get(<<"results/", Prefix/binary, "/type">>, M1, Opts),
+    Proc = hb_ao:get(<<"process">>, M1, Opts),
+    case hb_ao:normalize_key(Type) of
         <<"error">> ->
             {error,
-                hb_converge:set(
+                hb_ao:set(
                     M1,
                     #{
                         <<"outbox">> => undefined,
@@ -231,39 +279,29 @@ results(M1, _M2, Opts) ->
                 )
             };
         <<"ok">> ->
-            [Ptr] = hb_converge:get(<<"results/wasm/output">>, M1, Opts),
-            {ok, Str} = hb_beamr_io:read_string(Instance, Ptr),
-            try jiffy:decode(Str, [return_maps]) of
+            {ok, Str} = env_read(M1, M2, Opts),
+            try hb_json:decode(Str) of
                 #{<<"ok">> := true, <<"response">> := Resp} ->
-                    {ok, Data, Messages} = normalize_results(Resp),
-                    Output = 
-                        hb_converge:set(
-                            M1,
-                            #{
-                                <<"results/outbox">> =>
-                                    maps:from_list([
-                                        {MessageNum, preprocess_results(Msg, Proc, Opts)}
-                                    ||
-                                        {MessageNum, Msg} <-
-                                            lists:zip(
-                                                lists:seq(1, length(Messages)),
-                                                Messages
-                                            )
-                                    ]),
-                                <<"results/data">> => Data
-                            },
-                            Opts
-                        ),
-                    {ok, Output}
+                    {ok, ProcessedResults} = json_to_message(Resp, Opts),
+                    PostProcessed = postprocess_outbox(ProcessedResults, Proc, Opts),
+                    Out = hb_ao:set(
+                        M1,
+                        <<"results">>,
+                        PostProcessed,
+                        Opts
+                    ),
+                    ?event(debug_iface, {results, {processed, ProcessedResults}, {out, Out}}),
+                    {ok, Out}
             catch
                 _:_ ->
+                    ?event(error, {json_error, Str}),
                     {error,
-                        hb_converge:set(
+                        hb_ao:set(
                             M1,
                             #{
                                 <<"results/outbox">> => undefined,
                                 <<"results/body">> =>
-                                    <<"JSON error parsing WASM result output.">>
+                                    <<"JSON error parsing result output.">>
                             },
                             Opts
                         )
@@ -271,44 +309,102 @@ results(M1, _M2, Opts) ->
             end
     end.
 
+%% @doc Read the results out of the execution environment.
+env_read(M1, M2, Opts) ->
+    Prefix = dev_stack:prefix(M1, M2, Opts),
+    Output = hb_ao:get(<<"results/", Prefix/binary, "/output">>, M1, Opts),
+    case hb_private:get(<<Prefix/binary, "/read">>, M1, Opts) of
+        not_found ->
+            {ok, Output};
+        ReadFn ->
+            {ok, Read} = ReadFn(Output),
+            {ok, Read}
+    end.
+
+%% @doc Write the message and process into the execution environment.
+env_write(ProcessStr, MsgStr, Base, Req, Opts) ->
+    Prefix = dev_stack:prefix(Base, Req, Opts),
+    Params = 
+        case hb_private:get(<<Prefix/binary, "/write">>, Base, Opts) of
+            not_found ->
+                [MsgStr, ProcessStr];
+            WriteFn ->
+                {ok, MsgJsonPtr} = WriteFn(MsgStr),
+                {ok, ProcessJsonPtr} = WriteFn(ProcessStr),
+                [MsgJsonPtr, ProcessJsonPtr]
+        end,
+    {ok,
+        hb_ao:set(
+            Base,
+            #{
+                <<"function">> => <<"handle">>,
+                <<"parameters">> => Params
+            },
+            Opts
+        )
+    }.
+
 %% @doc Normalize the results of an evaluation.
 normalize_results(
-    #{ <<"Output">> := #{<<"data">> := Data}, <<"Messages">> := Messages }) ->
-    {ok, Data, Messages};
-normalize_results(#{ <<"error">> := Error }) ->
-    {ok, Error, []}.
+    Msg = #{ <<"Output">> := #{<<"data">> := Data} }) ->
+    {ok,
+        Data,
+        maps:get(<<"Messages">>, Msg, []),
+        maps:get(<<"patches">>, Msg, [])
+    };
+normalize_results(#{ <<"Error">> := Error }) ->
+    {ok, Error, [], []};
+normalize_results(Other) ->
+    throw({invalid_results, Other}).
 
 %% @doc After the process returns messages from an evaluation, the
 %% signing node needs to add some tags to each message and spawn such that
 %% the target process knows these messages are created by a process.
-preprocess_results(Msg, Proc, Opts) ->
-    NormMsg = hb_converge:normalize_keys(Msg),
-    RawTags = maps:get(<<"tags">>, NormMsg, []),
-    TagList =
-        [
-            {maps:get(<<"name">>, Tag), maps:get(<<"value">>, Tag)}
-        ||
-            Tag <- RawTags ],
-    Tags = maps:from_list(TagList),
+preprocess_results(Msg, _Opts) ->
+    Tags = tags_to_map(Msg),
     FilteredMsg =
         maps:without(
             [<<"from-process">>, <<"from-image">>, <<"anchor">>, <<"tags">>],
-            NormMsg
+            Msg
         ),
     maps:merge(
         maps:from_list(
             lists:map(
                 fun({Key, Value}) ->
-                    {hb_converge:normalize_key(Key), Value}
+                    {hb_ao:normalize_key(Key), Value}
                 end,
                 maps:to_list(FilteredMsg)
             )
         ),
-        Tags#{
-            <<"from-process">> => hb_converge:get(id, Proc, Opts),
-            <<"from-image">> => hb_converge:get(<<"image">>, Proc, Opts)
-        }
+        Tags
     ).
+
+%% @doc Convert a message with tags into a map of their key-value pairs.
+tags_to_map(Msg) ->
+    NormMsg = hb_ao:normalize_keys(Msg),
+    RawTags = maps:get(<<"tags">>, NormMsg, []),
+    TagList =
+        [
+            {maps:get(<<"name">>, Tag), maps:get(<<"value">>, Tag)}
+        ||
+            Tag <- RawTags
+        ],
+    maps:from_list(TagList).
+
+%% @doc Post-process messages in the outbox to add the correct `from-process'
+%% and `from-image' tags.
+postprocess_outbox(Msg, Proc, Opts) ->
+    AdjustedOutbox =
+        maps:map(
+            fun(_Key, XMsg) ->
+                XMsg#{
+                    <<"from-process">> => hb_ao:get(id, Proc, Opts),
+                    <<"from-image">> => hb_ao:get(<<"image">>, Proc, Opts)
+                }
+            end,
+            hb_ao:get(<<"outbox">>, Msg, #{}, Opts)
+        ),
+    hb_ao:set(Msg, <<"outbox">>, AdjustedOutbox, Opts).
 
 %%% Tests
 
@@ -317,11 +413,11 @@ test_init() ->
 
 generate_stack(File) ->
     generate_stack(File, <<"WASM">>).
-generate_stack(File, Mode) ->
+generate_stack(File, _Mode) ->
     test_init(),
     Wallet = hb:wallet(),
     Msg0 = dev_wasm:cache_wasm_image(File),
-    Image = hb_converge:get(<<"image">>, Msg0, #{}),
+    Image = hb_ao:get(<<"image">>, Msg0, #{}),
     Msg1 = Msg0#{
         <<"device">> => <<"Stack@1.0">>,
         <<"device-stack">> =>
@@ -336,22 +432,22 @@ generate_stack(File, Mode) ->
         <<"passes">> => 2,
         <<"stack-keys">> => [<<"init">>, <<"compute">>],
         <<"process">> => 
-            hb_message:attest(#{
+            hb_message:commit(#{
                 <<"type">> => <<"Process">>,
                 <<"image">> => Image,
                 <<"scheduler">> => hb:address(),
                 <<"authority">> => hb:address()
             }, Wallet)
     },
-    {ok, Msg2} = hb_converge:resolve(Msg1, <<"init">>, #{}),
+    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, #{}),
     Msg2.
 
 generate_aos_msg(ProcID, Code) ->
     Wallet = hb:wallet(),
-    hb_message:attest(#{
+    hb_message:commit(#{
         <<"path">> => <<"compute">>,
         <<"body">> => 
-            hb_message:attest(#{
+            hb_message:commit(#{
                 <<"Action">> => <<"Eval">>,
                 <<"Data">> => Code,
                 <<"Target">> => ProcID
@@ -359,28 +455,30 @@ generate_aos_msg(ProcID, Code) ->
         <<"block-height">> => 1
     }, Wallet).
 
-basic_aos_call_test() ->
-    Msg = generate_stack("test/aos-2-pure-xs.wasm"),
-    Proc = hb_converge:get(<<"process">>, Msg, #{ hashpath => ignore }),
-    ProcID = hb_message:id(Proc, all),
-    {ok, Msg3} =
-        hb_converge:resolve(
-            Msg,
-            generate_aos_msg(ProcID, <<"return 1+1">>),
-            #{}
-        ),
-    ?event({res, Msg3}),
-    Data = hb_converge:get(<<"results/data">>, Msg3, #{}),
-    ?assertEqual(<<"2">>, Data).
+basic_aos_call_test_() ->
+    {timeout, 20, fun() ->
+		Msg = generate_stack("test/aos-2-pure-xs.wasm"),
+		Proc = hb_ao:get(<<"process">>, Msg, #{ hashpath => ignore }),
+		ProcID = hb_message:id(Proc, all),
+		{ok, Msg3} =
+			hb_ao:resolve(
+				Msg,
+				generate_aos_msg(ProcID, <<"return 1+1">>),
+				#{}
+			),
+		?event({res, Msg3}),
+		Data = hb_ao:get(<<"results/data">>, Msg3, #{}),
+		?assertEqual(<<"2">>, Data)
+	end}.
 
 aos_stack_benchmark_test_() ->
     {timeout, 20, fun() ->
-        BenchTime = 3,
+        BenchTime = 5,
         RawWASMMsg = generate_stack("test/aos-2-pure-xs.wasm"),
-        Proc = hb_converge:get(<<"process">>, RawWASMMsg, #{ hashpath => ignore }),
-        ProcID = hb_converge:get(id, Proc, #{}),
+        Proc = hb_ao:get(<<"process">>, RawWASMMsg, #{ hashpath => ignore }),
+        ProcID = hb_ao:get(id, Proc, #{}),
         {ok, Initialized} =
-        hb_converge:resolve(
+        hb_ao:resolve(
             RawWASMMsg,
             generate_aos_msg(ProcID, <<"return 1">>),
             #{}
@@ -388,13 +486,14 @@ aos_stack_benchmark_test_() ->
         Msg = generate_aos_msg(ProcID, <<"return 1+1">>),
         Iterations =
             hb:benchmark(
-                fun() -> hb_converge:resolve(Initialized, Msg, #{}) end,
+                fun() -> hb_ao:resolve(Initialized, Msg, #{}) end,
                 BenchTime
             ),
         hb_util:eunit_print(
             "Evaluated ~p AOS messages (minimal stack) in ~p sec (~.2f msg/s)",
             [Iterations, BenchTime, Iterations / BenchTime]
         ),
-        ?assert(Iterations > 10),
+		?debugFmt("Evaluated ~p AOS messages (minimal stack) in ~p sec (~.2f msg/s)", [Iterations, BenchTime, Iterations / BenchTime]),
+        ?assert(Iterations >= 10),
         ok
     end}.

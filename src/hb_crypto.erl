@@ -18,7 +18,6 @@
 
 %% @doc Add a new ID to the end of a SHA-256 hash chain.
 sha256_chain(ID1, ID2) when ?IS_ID(ID1) ->
-    ?no_prod("CAUTION: Unaudited cryptographic function invoked."),
     sha256(<<ID1:32/binary, ID2/binary>>);
 sha256_chain(ID1, ID2) ->
     throw({cannot_chain_bad_ids, ID1, ID2}).
@@ -26,7 +25,6 @@ sha256_chain(ID1, ID2) ->
 %% @doc Accumulate two IDs into a single commitment.
 %% Experimental! This is not necessarily a cryptographically-secure operation.
 accumulate(ID1 = << ID1Int:256 >>, ID2) when ?IS_ID(ID1) ->
-    ?no_prod("CAUTION: Experimental cryptographic algorithm invoked."),
     << ID2Int:256 >> = sha256_chain(ID1, ID2),
     << (ID1Int + ID2Int):256 >>;
 accumulate(ID1, ID2) ->

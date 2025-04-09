@@ -49,8 +49,14 @@ filter(Modules, Filter) ->
     ).
 
 %% @doc Limit the store scope to only a specific (set of) option(s).
-%% Takes either a single scope or a list of scopes.
-scope(Store, Scope) ->
+%% Takes either an Opts message or store, and either a single scope or a list
+%% of scopes.
+scope(Scope, Opts) when is_map(Opts) ->
+    case hb_opts:get(store, no_viable_store, Opts) of
+        no_viable_store -> Opts;
+        Store -> Opts#{ store => scope(Scope, Store) }
+    end;
+scope(Scope, Store) ->
     filter(
         Store,
         fun(StoreScope, _) ->
@@ -151,16 +157,16 @@ call_function(X, _Function, _Args) when not is_list(X) ->
     call_function([X], _Function, _Args);
 call_function([], _Function, _Args) ->
     no_viable_store;
-call_function([{Mod, Opts} | Rest], Function, Args) ->
+call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
     ?event({calling, Mod, Function, Args}),
-    try apply(Mod, Function, [Opts | Args]) of
+    try apply(Mod, Function, [Store | Args]) of
         not_found ->
             call_function(Rest, Function, Args);
         Result ->
             Result
     catch
         Class:Reason:Stacktrace ->
-            ?event(error, {store_call_failed, {Class, Reason, Stacktrace}}),
+            ?event(warning, {store_call_failed, {Class, Reason, Stacktrace}}),
             call_function(Rest, Function, Args)
     end.
 
@@ -169,35 +175,54 @@ call_all(X, _Function, _Args) when not is_list(X) ->
     call_all([X], _Function, _Args);
 call_all([], _Function, _Args) ->
     ok;
-call_all([{Mod, Opts} | Rest], Function, Args) ->
+call_all([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
     try
-        apply(Mod, Function, [Opts | Args])
+        apply(Mod, Function, [Store | Args])
     catch
         Class:Reason:Stacktrace ->
-            ?event(error, {store_call_failed, {Class, Reason, Stacktrace}}),
+            ?event(warning, {store_call_failed, {Class, Reason, Stacktrace}}),
             ok
     end,
     call_all(Rest, Function, Args).
 
 %%% Test helpers
 
+-ifdef(ENABLE_ROCKSDB).
 test_stores() ->
     [
-        {hb_store_rocksdb, #{ prefix => "TEST-cache-rocks" }},
-        {hb_store_fs, #{ prefix => "TEST-cache-fs" }}
+        #{
+            <<"store-module">> => hb_store_rocksdb,
+            <<"prefix">> => <<"cache-TEST/rocksdb">>
+        },
+        #{
+            <<"store-module">> => hb_store_fs,
+            <<"prefix">> => <<"cache-TEST/fs">>
+        }
     ].
+-else.
+test_stores() ->
+    [
+        #{
+            <<"store-module">> => hb_store_fs,
+            <<"prefix">> => <<"cache-TEST/fs">>
+        }
+    ].
+-endif.
 
 generate_test_suite(Suite) ->
     generate_test_suite(Suite, test_stores()).
 generate_test_suite(Suite, Stores) ->
     lists:map(
-        fun(Store = {Mod, _Opts}) ->
+        fun(Store = #{ <<"store-module">> := Mod }) ->
             {foreach,
-                fun() -> hb_store:start(Store) end,
-                fun(_) -> hb_store:reset(Store) end,
+				fun() -> hb_store:start(Store), hb_store:reset(Store) end,
+				fun(_) -> hb_store:reset(Store) end,
                 [
                     {atom_to_list(Mod) ++ ": " ++ Desc,
-                        fun() -> Test(#{ store => Store }) end}
+                        fun() -> 
+                            TestResult = Test(Store),
+                            TestResult
+                        end}
                 ||
                     {Desc, Test} <- Suite
                 ]
@@ -211,25 +236,25 @@ generate_test_suite(Suite, Stores) ->
 %% @doc Test path resolution dynamics.
 simple_path_resolution_test(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:write(Store, "test-file", <<"test-data">>),
-    hb_store:make_link(Store, "test-file", "test-link"),
-    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, "test-link")).
+    ok = hb_store:write(Store, <<"test-file">>, <<"test-data">>),
+    hb_store:make_link(Store, <<"test-file">>, <<"test-link">>),
+    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, <<"test-link">>)).
 
 %% @doc Ensure that we can resolve links recursively.
 resursive_path_resolution_test(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:write(Store, "test-file", <<"test-data">>),
-    hb_store:make_link(Store, "test-file", "test-link"),
-    hb_store:make_link(Store, "test-link", "test-link2"),
-    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, "test-link2")).
+    hb_store:write(Store, <<"test-file">>, <<"test-data">>),
+    hb_store:make_link(Store, <<"test-file">>, <<"test-link">>),
+    hb_store:make_link(Store, <<"test-link">>, <<"test-link2">>),
+    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, <<"test-link2">>)).
 
 %% @doc Ensure that we can resolve links through a directory.
 hierarchical_path_resolution_test(Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    hb_store:make_group(Store, "test-dir1"),
-    hb_store:write(Store, ["test-dir1", "test-file"], <<"test-data">>),
-    hb_store:make_link(Store, ["test-dir1"], "test-link"),
-    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, ["test-link", "test-file"])).
+    Store = Opts,
+    hb_store:make_group(Store, <<"test-dir1">>),
+    hb_store:write(Store, [<<"test-dir1">>, <<"test-file">>], <<"test-data">>),
+    hb_store:make_link(Store, [<<"test-dir1">>], <<"test-link">>),
+    ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, [<<"test-link">>, <<"test-file">>])).
 
 store_suite_test_() ->
     hb_store:generate_test_suite([

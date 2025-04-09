@@ -110,7 +110,8 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         long size_l = (long)size;
         ei_decode_binary(buff, &index, wasm_binary, &size_l);
         ei_get_type(buff, &index, &type, &mode_size);
-        mode = driver_alloc(mode_size);
+        // the init message size + '\0' character
+        mode = driver_alloc(mode_size + 1);
         ei_decode_atom(buff, &index, mode);
         LoadWasmReq* mod_bin = driver_alloc(sizeof(LoadWasmReq));
         mod_bin->proc = proc;

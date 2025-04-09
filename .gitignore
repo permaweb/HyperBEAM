@@ -31,9 +31,9 @@ native/hb_beamr/*.d
 
 priv/*
 .DS_STORE
-TEST-data*
-test-cache/*
-TEST-cache**/**
+cache-*
 
-diagram.dot
-diagram.svg
+*.dot
+*.svg
+
+cu/

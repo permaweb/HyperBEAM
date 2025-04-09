@@ -1,7 +1,7 @@
 -module(dev_snp_nif).
 -export([generate_attestation_report/2, compute_launch_digest/1, check_snp_support/0]).
 -export([verify_measurement/2, verify_signature/1]).
--include("cargo.hrl").
+-include("include/cargo.hrl").
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -29,12 +29,11 @@ init() ->
 not_loaded(Line) ->
     erlang:nif_error({not_loaded, [{module, ?MODULE}, {line, Line}]}).
 
-
 generate_attestation_report_test() ->
 	%% Call check_support() to determine if SNP is supported
 	case dev_snp_nif:check_snp_support() of
 		{ok, true} ->
-			%% SNP is supported, generate unique data and test attestation report
+			%% SNP is supported, generate unique data and test commitment report
 			UniqueData = crypto:strong_rand_bytes(64),
 			VMPL = 1,
 			?assertEqual(

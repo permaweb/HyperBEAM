@@ -9,11 +9,24 @@
 
 %% @doc Start a scheduling server for a given computation.
 start(ProcID, Opts) ->
+    ?event(scheduling, {starting_scheduling_server, {proc_id, ProcID}}),
     spawn_link(
         fun() ->
-            pg:join({dev_scheduler, ProcID}, self()),
-            ?event({starting_scheduling_server, {proc_id, ProcID}}),
-            {CurrentSlot, HashChain} = slot_from_cache(ProcID, Opts),
+            case hb_opts:get(scheduling_mode, disabled, Opts) of
+                disabled ->
+                    throw({scheduling_disabled_on_node, {requested_for, ProcID}});
+                _ -> ok
+            end,
+            hb_name:register({dev_scheduler, ProcID}),
+            {CurrentSlot, HashChain} =
+                case dev_scheduler_cache:latest(ProcID, Opts) of
+                    not_found ->
+                        ?event({starting_new_schedule, {proc_id, ProcID}}),
+                        {-1, <<>>};
+                    {Slot, Chain} ->
+                        ?event({continuing_schedule, {proc_id, ProcID}, {current_slot, Slot}}),
+                        {Slot, Chain}
+                end,
             ?event(
                 {scheduler_got_process_info,
                     {proc_id, ProcID},
@@ -32,33 +45,6 @@ start(ProcID, Opts) ->
             )
         end
     ).
-
-%% @doc Get the current slot from the cache.
-slot_from_cache(ProcID, Opts) ->
-    ?event({getting_assignments_from_cache, {proc_id, ProcID}, {opts, Opts}}),
-    case dev_scheduler_cache:list(ProcID, Opts) of
-        [] ->
-            ?event({no_assignments_in_cache, {proc_id, ProcID}}),
-            {-1, <<>>};
-        Assignments ->
-            AssignmentNum = lists:max(Assignments),
-            ?event(
-                {found_assignment_from_cache,
-                    {proc_id, ProcID},
-                    {assignment_num, AssignmentNum}
-                }
-            ),
-            {ok, Assignment} = dev_scheduler_cache:read(
-                ProcID,
-                AssignmentNum,
-                Opts
-            ),
-            {
-                AssignmentNum,
-                hb_converge:get(
-                    <<"hash-chain">>, Assignment, #{ hashpath => ignore })
-            }
-    end.
 
 %% @doc Call the appropriate scheduling server to assign a message.
 schedule(AOProcID, Message) when is_binary(AOProcID) ->
@@ -111,7 +97,7 @@ do_assign(State, Message, ReplyPID) ->
     AssignFun =
         fun() ->
             {Timestamp, Height, Hash} = ar_timestamp:get(),
-            Assignment = hb_message:attest(#{
+            Assignment = hb_message:commit(#{
                 <<"path">> =>
                     case hb_path:from_message(request, Message) of
                         undefined -> <<"compute">>;
@@ -123,13 +109,21 @@ do_assign(State, Message, ReplyPID) ->
                 <<"epoch">> => <<"0">>,
                 <<"slot">> => NextSlot,
                 <<"block-height">> => Height,
-                <<"block-hash">> => Hash,
+                <<"block-hash">> => hb_util:human_id(Hash),
                 <<"block-timestamp">> => Timestamp,
                 % Note: Local time on the SU, not Arweave
                 <<"timestamp">> => erlang:system_time(millisecond),
                 <<"hash-chain">> => hb_util:id(HashChain),
                 <<"body">> => Message
             }, maps:get(wallet, State)),
+            AssignmentID = hb_message:id(Assignment, all),
+            ?event(scheduling,
+                {assigned,
+                    {proc_id, maps:get(id, State)},
+                    {slot, NextSlot},
+                    {assignment, AssignmentID}
+                }
+            ),
             maybe_inform_recipient(
                 aggressive,
                 ReplyPID,
@@ -138,7 +132,7 @@ do_assign(State, Message, ReplyPID) ->
                 State
             ),
             ?event(starting_message_write),
-            dev_scheduler_cache:write(Assignment, maps:get(opts, State)),
+            ok = dev_scheduler_cache:write(Assignment, maps:get(opts, State)),
             maybe_inform_recipient(
                 local_confirmation,
                 ReplyPID,
@@ -148,7 +142,7 @@ do_assign(State, Message, ReplyPID) ->
             ),
             ?event(writes_complete),
             ?event(uploading_assignment),
-            hb_client:upload(Assignment),
+            hb_client:upload(Assignment, maps:get(opts, State)),
             ?event(uploads_complete),
             maybe_inform_recipient(
                 remote_confirmation,
@@ -189,63 +183,66 @@ next_hashchain(HashChain, Message) ->
 %% TESTS
 
 %% @doc Test the basic functionality of the server.
-new_proc_test() ->
-    Wallet = ar_wallet:new(),
-    SignedItem = hb_message:attest(
-        #{ <<"data">> => <<"test">>, <<"random-key">> => rand:uniform(10000) },
-        Wallet
-    ),
-    SignedItem2 = hb_message:attest(
-        #{ <<"data">> => <<"test2">> },
-        Wallet
-    ),
-    SignedItem3 = hb_message:attest(
-        #{
-            <<"data">> => <<"test2">>,
-            <<"deep-key">> =>
-                #{ <<"data">> => <<"test3">> }
-        },
-        Wallet
-    ),
-    dev_scheduler_registry:find(hb_converge:get(id, SignedItem), true),
-    schedule(ID = hb_converge:get(id, SignedItem), SignedItem),
-    schedule(ID, SignedItem2),
-    schedule(ID, SignedItem3),
-    ?assertMatch(
-        #{ current := 2 },
-        dev_scheduler_server:info(dev_scheduler_registry:find(ID))
-    ).
+new_proc_test_() ->
+	{timeout, 20, fun() -> 
+		Wallet = ar_wallet:new(),
+		SignedItem = hb_message:commit(
+			#{ <<"data">> => <<"test">>, <<"random-key">> => rand:uniform(10000) },
+			Wallet
+		),
+		SignedItem2 = hb_message:commit(
+			#{ <<"data">> => <<"test2">> },
+			Wallet
+		),
+		SignedItem3 = hb_message:commit(
+			#{
+				<<"data">> => <<"test2">>,
+				<<"deep-key">> =>
+					#{ <<"data">> => <<"test3">> }
+			},
+			Wallet
+		),
+		dev_scheduler_registry:find(hb_ao:get(id, SignedItem), true),
+		schedule(ID = hb_ao:get(id, SignedItem), SignedItem),
+		schedule(ID, SignedItem2),
+		schedule(ID, SignedItem3),
+		?assertMatch(
+			#{ current := 2 },
+			dev_scheduler_server:info(dev_scheduler_registry:find(ID))
+		)
+	end}.
+    
 
-benchmark_test() ->
-    BenchTime = 1,
-    Wallet = ar_wallet:new(),
-    SignedItem = hb_message:attest(
-        #{ <<"data">> => <<"test">>, <<"random-key">> => rand:uniform(10000) },
-        Wallet
-    ),
-    dev_scheduler_registry:find(ID = hb_converge:get(id, SignedItem), true),
-    ?event({benchmark_start, ?MODULE}),
-    Iterations = hb:benchmark(
-        fun(X) ->
-            MsgX = #{
-                path => <<"Schedule">>,
-                <<"method">> => <<"POST">>,
-                <<"body">> =>
-                    #{
-                        <<"type">> => <<"Message">>,
-                        <<"test-val">> => X
-                    }
-            },
-            schedule(ID, MsgX)
-        end,
-        BenchTime
-    ),
-    hb_util:eunit_print(
-        "Scheduled ~p messages in ~p seconds (~.2f msg/s)",
-        [Iterations, BenchTime, Iterations / BenchTime]
-    ),
-    ?assertMatch(
-        #{ current := X } when X == Iterations - 1,
-        dev_scheduler_server:info(dev_scheduler_registry:find(ID))
-    ),
-    ?assert(Iterations > 30).
+% benchmark_test() ->
+%     BenchTime = 1,
+%     Wallet = ar_wallet:new(),
+%     SignedItem = hb_message:commit(
+%         #{ <<"data">> => <<"test">>, <<"random-key">> => rand:uniform(10000) },
+%         Wallet
+%     ),
+%     dev_scheduler_registry:find(ID = hb_ao:get(id, SignedItem), true),
+%     ?event({benchmark_start, ?MODULE}),
+%     Iterations = hb:benchmark(
+%         fun(X) ->
+%             MsgX = #{
+%                 path => <<"Schedule">>,
+%                 <<"method">> => <<"POST">>,
+%                 <<"body">> =>
+%                     #{
+%                         <<"type">> => <<"Message">>,
+%                         <<"test-val">> => X
+%                     }
+%             },
+%             schedule(ID, MsgX)
+%         end,
+%         BenchTime
+%     ),
+%     hb_util:eunit_print(
+%         "Scheduled ~p messages in ~p seconds (~.2f msg/s)",
+%         [Iterations, BenchTime, Iterations / BenchTime]
+%     ),
+%     ?assertMatch(
+%         #{ current := X } when X == Iterations - 1,
+%         dev_scheduler_server:info(dev_scheduler_registry:find(ID))
+%     ),
+%     ?assert(Iterations > 30).

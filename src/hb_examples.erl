@@ -34,17 +34,17 @@ relay_with_payments_test() ->
         ),
     % Create a message for the client to relay.
     ClientMessage1 =
-        hb_message:attest(
+        hb_message:commit(
             #{<<"path">> => <<"/~relay@1.0/call?relay-path=https://www.google.com">>},
             ClientWallet
         ),
     % Relay the message.
     Res = hb_http:get(HostNode, ClientMessage1, #{}),
-    ?assertEqual({error, <<"Insufficient funds">>}, Res),
+    ?assertMatch({error, #{ <<"body">> := <<"Insufficient funds">> }}, Res),
     % Topup the client's balance.
     % Note: The fields must be in the headers, for now.
     TopupMessage =
-        hb_message:attest(
+        hb_message:commit(
             #{
                 <<"path">> => <<"/~simple-pay@1.0/topup">>,
                 <<"recipient">> => ClientAddress,
@@ -88,12 +88,12 @@ paid_wasm_test() ->
     % Read the WASM file from disk, post it to the host and execute it.
     {ok, WASMFile} = file:read_file(<<"test/test-64.wasm">>),
     ClientMessage1 =
-        hb_message:attest(
+        hb_message:commit(
             #{
                 <<"path">> =>
-                    <<"/~wasm-64@1.0/init/compute/results?wasm-function=fac">>,
+                    <<"/~wasm-64@1.0/init/compute/results?function=fac">>,
                 <<"body">> => WASMFile,
-                <<"wasm-params+list">> => <<"3.0">>
+                <<"parameters+list">> => <<"3.0">>
             },
             ClientWallet
         ),
@@ -102,12 +102,89 @@ paid_wasm_test() ->
     ?assert(length(hb_message:signers(Res)) > 0),
     ?assert(hb_message:verify(Res)),
     % Now we have the results, we can verify them.
-    ?assertMatch(6.0, hb_converge:get(<<"output/1">>, Res, #{})),
+    ?assertMatch(6.0, hb_ao:get(<<"output/1">>, Res, #{})),
     % Check that the client's balance has been deducted.
     ClientMessage2 =
-        hb_message:attest(
+        hb_message:commit(
             #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
             ClientWallet
         ),
     {ok, Res2} = hb_http:get(HostNode, ClientMessage2, #{}),
-    ?assertMatch(20, hb_converge:get(<<"body">>, Res2, #{})).
+    ?assertMatch(40, Res2).
+
+create_schedule_aos2_test_disabled() ->
+    % The legacy process format, according to the ao.tn.1 spec:
+    % Data-Protocol	The name of the Data-Protocol for this data-item	1-1	ao
+    % Variant	The network version that this data-item is for	1-1	ao.TN.1
+    % Type	Indicates the shape of this Data-Protocol data-item	1-1	Process
+    % Module	Links the process to ao module using the module's unique
+    %   Transaction ID (TXID).	1-1	{TXID}
+    % Scheduler	Specifies the scheduler unit by Wallet Address or Name, and can
+    %   be referenced by a recent Scheduler-Location.	1-1	{ADDRESS}
+    % Cron-Interval	An interval at which a particular Cron Message is recevied by the process,
+    %   in the format X-Y, where X is a scalar value, and Y is milliseconds,
+    %   seconds, minutes, hours, days, months, years, or blocks	0-n	1-second
+    % Cron-Tag-{Name}	defines tags for Cron Messages at set intervals,
+    %   specifying relevant metadata.	0-1	
+    % Memory-Limit	Overrides maximum memory, in megabytes or gigabytes, set by 
+    %   Module, can not exceed modules setting	0-1	16-mb
+    % Compute-Limit	Caps the compute cycles for a module per evaluation, ensuring
+    %   efficient, controlled execution	0-1	1000
+    % Pushed-For	Message TXID that this Process is pushed as a result	0-1	{TXID}
+    % Cast	Sets message handling: 'True' for do not push, 'False' for normal
+    %   pushing	0-1	{True or False}
+    % Authority	Defines a trusted wallet address which can send Messages to
+    %   the Process	0-1	{ADDRESS}
+    % On-Boot	Defines a startup script to run when the process is spawned. If
+    %   value "Data" it uses the Data field of the Process Data Item. If it is a
+    %   TXID it will load that TX from Arweave and execute it.	0-1	{Data or TXID}
+    % {Any-Tags}	Custom Tags specific for the initial input of the Process	0-n
+    Node =
+        try hb_http_server:start_node(#{ priv_wallet => hb:wallet() })
+        catch
+            _:_ ->
+                <<"http://localhost:8734">>
+        end,
+    ProcMsg = #{
+        <<"data-protocol">> => <<"ao">>,
+        <<"type">> => <<"Process">>,
+        <<"variant">> => <<"ao.TN.1">>,
+        <<"type">> => <<"Process">>,
+        <<"module">> => <<"bkjb55i07GUCUSWROtKK4HU1mBS_X0TyH3M5jMV6aPg">>,
+        <<"scheduler">> => hb_util:human_id(hb:address()),
+        <<"memory-limit">> => <<"1024-mb">>,
+        <<"compute-limit">> => <<"10000000">>,
+        <<"authority">> => hb_util:human_id(hb:address()),
+        <<"scheduler-location">> => hb_util:human_id(hb:address())
+    },
+    Wallet = hb:wallet(),
+    SignedProc = hb_message:commit(ProcMsg, Wallet),
+    IDNone = hb_message:id(SignedProc, none),
+    IDAll = hb_message:id(SignedProc, all),
+    {ok, Res} = schedule(SignedProc, IDNone, Wallet, Node),
+    ?event({res, Res}),
+    receive after 100 -> ok end,
+    ?event({id, IDNone, IDAll}),
+    {ok, Res2} = hb_http:get(
+        Node,
+        <<"/~scheduler@1.0/slot?target=", IDNone/binary>>,
+        #{}
+    ),
+    ?assertMatch(Slot when Slot >= 0, hb_ao:get(<<"at-slot">>, Res2, #{})).
+
+schedule(ProcMsg, Target) ->
+    schedule(ProcMsg, Target, hb:wallet()).
+schedule(ProcMsg, Target, Wallet) ->
+    schedule(ProcMsg, Target, Wallet, <<"http://localhost:8734">>).
+schedule(ProcMsg, Target, Wallet, Node) ->
+    SignedReq = 
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/~scheduler@1.0/schedule">>,
+                <<"target">> => Target,
+                <<"body">> => ProcMsg
+            },
+            Wallet
+        ),
+    ?event({signed_req, SignedReq}),
+    hb_http:post(Node, SignedReq, #{}).

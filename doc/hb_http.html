@@ -1,0 +1,121 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module hb_http</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module hb_http</h1>
+<ul class="index"><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#get-2">get/2</a></td><td>Gets a URL via HTTP and returns the resulting message in deserialized
+  form.</td></tr>
+<tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#message_to_status-1">message_to_status/1</a></td><td>Get the HTTP status code from a transaction (if it exists).</td></tr>
+<tr><td valign="top"><a href="#post-3">post/3</a></td><td>Posts a message to a URL on a remote peer via HTTP.</td></tr>
+<tr><td valign="top"><a href="#post-4">post/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#reply-3">reply/3</a></td><td>Reply to the client's HTTP request with a message.</td></tr>
+<tr><td valign="top"><a href="#reply-4">reply/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#req_to_tabm_singleton-2">req_to_tabm_singleton/2</a></td><td>Convert a cowboy request to a normalized message.</td></tr>
+<tr><td valign="top"><a href="#request-2">request/2</a></td><td>Posts a binary to a URL on a remote peer via HTTP, returning the raw
+  binary body.</td></tr>
+<tr><td valign="top"><a href="#request-4">request/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#request-5">request/5</a></td><td></td></tr>
+<tr><td valign="top"><a href="#start-0">start/0</a></td><td></td></tr>
+<tr><td valign="top"><a href="#status_code-1">status_code/1</a></td><td>Convert an HTTP status code to an atom.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="get-2">get/2</a></h3>
+<div class="spec">
+<p><code>get(Node, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Gets a URL via HTTP and returns the resulting message in deserialized
+  form.</p>
+
+<h3 class="function"><a name="get-3">get/3</a></h3>
+<div class="spec">
+<p><code>get(Node, PathBin, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="message_to_status-1">message_to_status/1</a></h3>
+<div class="spec">
+<p><code>message_to_status(Item) -&gt; any()</code></p>
+<p> </p>
+</div><p>Get the HTTP status code from a transaction (if it exists).</p>
+
+<h3 class="function"><a name="post-3">post/3</a></h3>
+<div class="spec">
+<p><code>post(Node, Message, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Posts a message to a URL on a remote peer via HTTP. Returns the
+  resulting message in deserialized form.</p>
+
+<h3 class="function"><a name="post-4">post/4</a></h3>
+<div class="spec">
+<p><code>post(Node, Path, Message, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="reply-3">reply/3</a></h3>
+<div class="spec">
+<p><code>reply(Req, Message, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Reply to the client's HTTP request with a message.</p>
+
+<h3 class="function"><a name="reply-4">reply/4</a></h3>
+<div class="spec">
+<p><code>reply(Req, Status, RawMessage, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="req_to_tabm_singleton-2">req_to_tabm_singleton/2</a></h3>
+<div class="spec">
+<p><code>req_to_tabm_singleton(Req, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert a cowboy request to a normalized message.</p>
+
+<h3 class="function"><a name="request-2">request/2</a></h3>
+<div class="spec">
+<p><code>request(Message, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Posts a binary to a URL on a remote peer via HTTP, returning the raw
+  binary body.</p>
+
+<h3 class="function"><a name="request-4">request/4</a></h3>
+<div class="spec">
+<p><code>request(Method, Peer, Path, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="request-5">request/5</a></h3>
+<div class="spec">
+<p><code>request(Method, Config, Path, Message, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="start-0">start/0</a></h3>
+<div class="spec">
+<p><code>start() -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="status_code-1">status_code/1</a></h3>
+<div class="spec">
+<p><code>status_code(Status) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert an HTTP status code to an atom.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

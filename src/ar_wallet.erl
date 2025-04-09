@@ -77,20 +77,18 @@ new_keyfile(KeyType, WalletName) ->
                 {[Expnt, Pb], [Expnt, Pb, Prv, P1, P2, E1, E2, C]} =
                     crypto:generate_key(rsa, {?RSA_PRIV_KEY_SZ, PublicExpnt}),
                 Ky =
-                    jiffy:encode(
-                        {
-                            [
-                                {kty, <<"RSA">>},
-                                {ext, true},
-                                {e, hb_util:encode(Expnt)},
-                                {n, hb_util:encode(Pb)},
-                                {d, hb_util:encode(Prv)},
-                                {p, hb_util:encode(P1)},
-                                {q, hb_util:encode(P2)},
-                                {dp, hb_util:encode(E1)},
-                                {dq, hb_util:encode(E2)},
-                                {qi, hb_util:encode(C)}
-                            ]
+                    hb_json:encode(
+                        #{
+                            kty => <<"RSA">>,
+                            ext => true,
+                            e => hb_util:encode(Expnt),
+                            n => hb_util:encode(Pb),
+                            d => hb_util:encode(Prv),
+                            p => hb_util:encode(P1),
+                            q => hb_util:encode(P2),
+                            dp => hb_util:encode(E1),
+                            dq => hb_util:encode(E2),
+                            qi => hb_util:encode(C)
                         }
                     ),
                 {Pb, Prv, Ky};
@@ -100,30 +98,26 @@ new_keyfile(KeyType, WalletName) ->
                 PubPointMid = byte_size(PubPoint) div 2,
                 <<X:PubPointMid/binary, Y:PubPointMid/binary>> = PubPoint,
                 Ky =
-                    jiffy:encode(
-                        {
-                            [
-                                {kty, <<"EC">>},
-                                {crv, <<"secp256k1">>},
-                                {x, hb_util:encode(X)},
-                                {y, hb_util:encode(Y)},
-                                {d, hb_util:encode(Prv)}
-                            ]
+                    hb_json:encode(
+                        #{
+                            kty => <<"EC">>,
+                            crv => <<"secp256k1">>,
+                            x => hb_util:encode(X),
+                            y => hb_util:encode(Y),
+                            d => hb_util:encode(Prv)
                         }
                     ),
                 {compress_ecdsa_pubkey(OrigPub), Prv, Ky};
             {?EDDSA_SIGN_ALG, ed25519} ->
                 {{_, Prv, Pb}, _} = new(KeyType),
                 Ky =
-                    jiffy:encode(
-                        {
-                            [
-                                {kty, <<"OKP">>},
-                                {alg, <<"EdDSA">>},
-                                {crv, <<"Ed25519">>},
-                                {x, hb_util:encode(Pb)},
-                                {d, hb_util:encode(Prv)}
-                            ]
+                    hb_json:encode(
+                        #{
+                            kty => <<"OKP">>,
+                            alg => <<"EdDSA">>,
+                            crv => <<"Ed25519">>,
+                            x => hb_util:encode(Pb),
+                            d => hb_util:encode(Prv)
                         }
                     ),
                 {Pb, Prv, Ky}
@@ -160,29 +154,29 @@ load_key(Addr) ->
 %% @doc Extract the public and private key from a keyfile.
 load_keyfile(File) ->
     {ok, Body} = file:read_file(File),
-    {Key} = jiffy:decode(Body),
+    Key = hb_json:decode(Body),
     {Pub, Priv, KeyType} =
-        case lists:keyfind(<<"kty">>, 1, Key) of
-            {<<"kty">>, <<"EC">>} ->
-                {<<"x">>, XEncoded} = lists:keyfind(<<"x">>, 1, Key),
-                {<<"y">>, YEncoded} = lists:keyfind(<<"y">>, 1, Key),
-                {<<"d">>, PrivEncoded} = lists:keyfind(<<"d">>, 1, Key),
+        case maps:get(<<"kty">>, Key) of
+            <<"EC">> ->
+                XEncoded = maps:get(<<"x">>, Key),
+                YEncoded = maps:get(<<"y">>, Key),
+                PrivEncoded = maps:get(<<"d">>, Key),
                 OrigPub = iolist_to_binary([<<4:8>>, hb_util:decode(XEncoded),
                         hb_util:decode(YEncoded)]),
                 Pb = compress_ecdsa_pubkey(OrigPub),
                 Prv = hb_util:decode(PrivEncoded),
                 KyType = {?ECDSA_SIGN_ALG, secp256k1},
                 {Pb, Prv, KyType};
-            {<<"kty">>, <<"OKP">>} ->
-                {<<"x">>, PubEncoded} = lists:keyfind(<<"x">>, 1, Key),
-                {<<"d">>, PrivEncoded} = lists:keyfind(<<"d">>, 1, Key),
+            <<"OKP">> ->
+                PubEncoded = maps:get(<<"x">>, Key),
+                PrivEncoded = maps:get(<<"d">>, Key),
                 Pb = hb_util:decode(PubEncoded),
                 Prv = hb_util:decode(PrivEncoded),
                 KyType = {?EDDSA_SIGN_ALG, ed25519},
                 {Pb, Prv, KyType};
             _ ->
-                {<<"n">>, PubEncoded} = lists:keyfind(<<"n">>, 1, Key),
-                {<<"d">>, PrivEncoded} = lists:keyfind(<<"d">>, 1, Key),
+                PubEncoded = maps:get(<<"n">>, Key),
+                PrivEncoded = maps:get(<<"d">>, Key),
                 Pb = hb_util:decode(PubEncoded),
                 Prv = hb_util:decode(PrivEncoded),
                 KyType = {?RSA_SIGN_ALG, 65537},

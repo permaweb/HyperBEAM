@@ -1,0 +1,160 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module dev_stack</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module dev_stack</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>A device that contains a stack of other devices, and manages their   
+execution.
+
+
+<h2><a name="description">Description</a></h2><p>A device that contains a stack of other devices, and manages their   
+execution. It can run in two modes: fold (the default), and map.</p>
+  
+   <p>In fold mode, it runs upon input messages in the order of their keys. A   
+stack maintains and passes forward a state (expressed as a message) as it   
+progresses through devices.</p>
+  
+   For example, a stack of devices as follows:
+   <pre>   Device -&gt; Stack
+   Device-Stack/1/Name -&gt; Add-One-Device
+   Device-Stack/2/Name -&gt; Add-Two-Device</pre>
+  
+   When called with the message:
+   <pre>   #{ Path = "FuncName", binary =&gt; &lt;&lt;"0"&gt;&gt; }</pre>
+  
+   Will produce the output:
+    <pre>   #{ Path = "FuncName", binary =&gt; &lt;&lt;"3"&gt;&gt; }
+   {ok, #{ bin =&gt; &lt;&lt;"3"&gt;&gt; }}</pre>
+  
+   <p>In map mode, the stack will run over all the devices in the stack, and
+   combine their results into a single message. Each of the devices'
+   output values have a key that is the device's name in the <code>Device-Stack`
+   (its number if the stack is a list).
+  
+   You can switch between fold and map modes by setting the `Mode` key in the
+   `Msg2` to either `Fold` or `Map`, or set it globally for the stack by
+   setting the `Mode` key in the `Msg1` message. The key in `Msg2` takes
+   precedence over the key in `Msg1`.
+  
+   The key that is called upon the device stack is the same key that is used
+   upon the devices that are contained within it. For example, in the above
+   scenario we resolve FuncName on the stack, leading FuncName to be called on
+   Add-One-Device and Add-Two-Device.
+  
+   A device stack responds to special statuses upon responses as follows:
+  
+       `skip</code>: Skips the rest of the device stack for the current pass.</p>
+  
+       <p><code>pass</code>: Causes the stack to increment its pass number and re-execute               
+the stack from the first device, maintaining the state               
+accumulated so far. Only available in fold mode.</p>
+  
+   <p>In all cases, the device stack will return the accumulated state to the   
+caller as the result of the call to the stack.</p>
+  
+   <p>The dev_stack adds additional metadata to the message in order to track   
+the state of its execution as it progresses through devices. These keys   
+are as follows:</p>
+  
+       <p><code>Stack-Pass</code>: The number of times the stack has reset and re-executed       
+from the first device for the current message.</p>
+  
+       <p><code>Input-Prefix</code>: The prefix that the device should use for its outputs       
+and inputs.</p>
+  
+       <p><code>Output-Prefix</code>: The device that was previously executed.</p>
+  
+   <p>All counters used by the stack are initialized to 1.</p>
+  
+   <p>Additionally, as implemented in HyperBEAM, the device stack will honor a   
+number of options that are passed to it as keys in the message. Each of   
+these options is also passed through to the devices contained within the   
+stack during execution. These options include:</p>
+  
+       <p><code>Error-Strategy</code>: Determines how the stack handles errors from devices.
+       See <code>maybe_error/5</code> for more information.</p>
+  
+       <p><code>Allow-Multipass</code>: Determines whether the stack is allowed to automatically
+       re-execute from the first device when the <code>pass</code> tag is returned. See
+       <code>maybe_pass/3</code> for more information.</p>
+  
+   Under-the-hood, dev_stack uses a <code>default</code> handler to resolve all calls to
+   devices, aside <code>set/2</code> which it calls itself to mutate the message's <code>device</code>
+   key in order to change which device is currently being executed. This method
+   allows dev_stack to ensure that the message's HashPath is always correct,
+   even as it delegates calls to other devices. An example flow for a <code>dev_stack</code>
+   execution is as follows:
+  <pre>   	/Msg1/AlicesExcitingKey -&gt;
+   		dev_stack:execute -&gt;
+   			/Msg1/Set?device=/Device-Stack/1 -&gt;
+   			/Msg2/AlicesExcitingKey -&gt;
+   			/Msg3/Set?device=/Device-Stack/2 -&gt;
+   			/Msg4/AlicesExcitingKey
+   			... -&gt;
+   			/MsgN/Set?device=[This-Device] -&gt;
+   		returns {ok, /MsgN+1} -&gt;
+   	/MsgN+1</pre>
+  
+   In this example, the <code>device</code> key is mutated a number of times, but the
+   resulting HashPath remains correct and verifiable.
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#generate_append_device-1">generate_append_device/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#info-1">info/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#input_prefix-3">input_prefix/3</a></td><td>Return the input prefix for the stack.</td></tr>
+<tr><td valign="top"><a href="#output_prefix-3">output_prefix/3</a></td><td>Return the output prefix for the stack.</td></tr>
+<tr><td valign="top"><a href="#prefix-3">prefix/3</a></td><td>Return the default prefix for the stack.</td></tr>
+<tr><td valign="top"><a href="#router-4">router/4</a></td><td>The device stack key router.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="generate_append_device-1">generate_append_device/1</a></h3>
+<div class="spec">
+<p><code>generate_append_device(Separator) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="info-1">info/1</a></h3>
+<div class="spec">
+<p><code>info(Msg) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="input_prefix-3">input_prefix/3</a></h3>
+<div class="spec">
+<p><code>input_prefix(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the input prefix for the stack.</p>
+
+<h3 class="function"><a name="output_prefix-3">output_prefix/3</a></h3>
+<div class="spec">
+<p><code>output_prefix(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the output prefix for the stack.</p>
+
+<h3 class="function"><a name="prefix-3">prefix/3</a></h3>
+<div class="spec">
+<p><code>prefix(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the default prefix for the stack.</p>
+
+<h3 class="function"><a name="router-4">router/4</a></h3>
+<div class="spec">
+<p><code>router(Key, Message1, Message2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>The device stack key router. Sends the request to <code>resolve_stack</code>,
+  except for <code>set/2</code> which is handled by the default implementation in
+  <code>dev_message</code>.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

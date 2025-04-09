@@ -12,8 +12,8 @@
 %%% Execution flow:
 %%% 1. Initialization.
 %%% 2. Validation of incoming messages before execution.
-%%% Attestation flow:
-%%% 1. Adding attestations to results, either on a CU or MU.
+%%% Commitment flow:
+%%% 1. Adding commitments to results, either on a CU or MU.
 
 %%% Execution flow: Initialization.
 
@@ -46,27 +46,27 @@ execute(Outer = #tx { data = #{ <<"body">> := Msg } }, S = #{ <<"pass">> := 1 },
                 true ->
                     ?event({poda_validated, ok}),
                     % Add the validations to the VFS.
-                    Atts =
+                    Comms =
                         maps:to_list(
                             case Msg of 
-                                #tx { data = #{ <<"attestations">> := #tx { data = X } }} -> X;
-                                #tx { data = #{ <<"attestations">> := X }} -> X;
-                                #{ <<"attestations">> := X } -> X
+                                #tx { data = #{ <<"commitments">> := #tx { data = X } }} -> X;
+                                #tx { data = #{ <<"commitments">> := X }} -> X;
+                                #{ <<"commitments">> := X } -> X
                             end
                         ),
                     VFS1 =
                         lists:foldl(
-                            fun({_, Attestation}, Acc) ->
-                                Id = ar_bundles:signer(Attestation),
+                            fun({_, Commitment}, Acc) ->
+                                Id = ar_bundles:signer(Commitment),
                                 Encoded = hb_util:encode(Id),
                                 maps:put(
-                                    <<"/attestations/", Encoded/binary>>,
-                                    Attestation#tx.data,
+                                    <<"/commitments/", Encoded/binary>>,
+                                    Commitment#tx.data,
                                     Acc
                                 )
                             end,
                             maps:get(vfs, S, #{}),
-                            Atts
+                            Comms
                         ),
                     % Update the arg prefix to include the unwrapped message.
                     {ok, S#{ <<"vfs">> => VFS1, <<"arg_prefix">> =>
@@ -93,31 +93,31 @@ validate(Msg, Opts) ->
 
 validate_stage(1, Msg, Opts) when is_record(Msg, tx) ->
     validate_stage(1, Msg#tx.data, Opts);
-validate_stage(1, #{ <<"attestations">> := Attestations, <<"body">> := Content }, Opts) ->
-    validate_stage(2, Attestations, Content, Opts);
+validate_stage(1, #{ <<"commitments">> := Commitments, <<"body">> := Content }, Opts) ->
+    validate_stage(2, Commitments, Content, Opts);
 validate_stage(1, _M, _Opts) -> {false, <<"Required PoDA messages missing">>}.
 
-validate_stage(2, #tx { data = Attestations }, Content, Opts) ->
-    validate_stage(2, Attestations, Content, Opts);
-validate_stage(2, Attestations, Content, Opts) ->
-    % Ensure that all attestations are valid and signed by a
+validate_stage(2, #tx { data = Commitments }, Content, Opts) ->
+    validate_stage(2, Commitments, Content, Opts);
+validate_stage(2, Commitments, Content, Opts) ->
+    % Ensure that all commitments are valid and signed by a
     % trusted authority.
     case
         lists:all(
-            fun({_, Att}) ->
-                ar_bundles:verify_item(Att)
+            fun({_, Comm}) ->
+                ar_bundles:verify_item(Comm)
             end,
-            maps:to_list(Attestations)
+            maps:to_list(Commitments)
         ) of
-        true -> validate_stage(3, Content, Attestations, Opts);
-        false -> {false, <<"Invalid attestations">>}
+        true -> validate_stage(3, Content, Commitments, Opts);
+        false -> {false, <<"Invalid commitments">>}
     end;
 
-validate_stage(3, Content, Attestations, Opts = #{ <<"quorum">> := Quorum }) ->
+validate_stage(3, Content, Commitments, Opts = #{ <<"quorum">> := Quorum }) ->
     Validations =
         lists:filter(
-            fun({_, Att}) -> validate_attestation(Content, Att, Opts) end,
-            maps:to_list(Attestations)
+            fun({_, Comm}) -> validate_commitment(Content, Comm, Opts) end,
+            maps:to_list(Commitments)
         ),
     ?event({poda_validations, length(Validations)}),
     case length(Validations) >= Quorum of
@@ -127,21 +127,20 @@ validate_stage(3, Content, Attestations, Opts = #{ <<"quorum">> := Quorum }) ->
         false -> {false, <<"Not enough validations">>}
     end.
 
-validate_attestation(Msg, Att, Opts) ->
+validate_commitment(Msg, Comm, Opts) ->
     MsgID = hb_util:encode(ar_bundles:id(Msg, unsigned)),
-    AttSigner = hb_util:encode(ar_bundles:signer(Att)),
-    ?event({poda_attestation, {signer, AttSigner, maps:get(authorities, Opts)}, {msg_id, MsgID}}),
+    AttSigner = hb_util:encode(ar_bundles:signer(Comm)),
+    ?event({poda_commitment, {signer, AttSigner, maps:get(authorities, Opts)}, {msg_id, MsgID}}),
     ValidSigner = lists:member(AttSigner, maps:get(authorities, Opts)),
-    ?no_prod(use_real_signature_verification),
-    ValidSignature = ar_bundles:verify_item(Att),
-    RelevantMsg = ar_bundles:id(Att, unsigned) == MsgID orelse
-        (lists:keyfind(<<"attestation-for">>, 1, Att#tx.tags)
-            == {<<"attestation-for">>, MsgID}) orelse
-        ar_bundles:member(ar_bundles:id(Msg, unsigned), Att),
+    ValidSignature = ar_bundles:verify_item(Comm),
+    RelevantMsg = ar_bundles:id(Comm, unsigned) == MsgID orelse
+        (lists:keyfind(<<"commitment-for">>, 1, Comm#tx.tags)
+            == {<<"commitment-for">>, MsgID}) orelse
+        ar_bundles:member(ar_bundles:id(Msg, unsigned), Comm),
     case ValidSigner and ValidSignature and RelevantMsg of
         false ->
-            ?event({poda_attestation_invalid,
-                    {attestation, ar_bundles:id(Att, signed)},
+            ?event({poda_commitment_invalid,
+                    {commitment, ar_bundles:id(Comm, signed)},
                     {signer, AttSigner},
                     {valid_signer, ValidSigner},
                     {valid_signature, ValidSignature},
@@ -170,31 +169,31 @@ return_error(S = #{ <<"wallet">> := Wallet }, Reason) ->
     }}.
 
 is_user_signed(#tx { data = #{ <<"body">> := Msg } }) ->
-    ?no_prod(use_real_attestation_detection),
+    ?no_prod(use_real_commitment_detection),
     lists:keyfind(<<"from-process">>, 1, Msg#tx.tags) == false;
 is_user_signed(_) -> true.
 
-%%% Attestation flow: Adding attestations to results.
+%%% Commitment flow: Adding commitments to results.
 
-%% @doc Hook used by the MU pathway (currently) to add attestations to an
+%% @doc Hook used by the MU pathway (currently) to add commitments to an
 %% outbound message if the computation requests it.
 push(_Item, S = #{ <<"results">> := ResultsMsg }) ->
-    NewRes = attest_to_results(ResultsMsg, S),
+    NewRes = commit_to_results(ResultsMsg, S),
     {ok, S#{ <<"results">> => NewRes }}.
 
-attest_to_results(Msg, S) ->
+commit_to_results(Msg, S) ->
     case is_map(Msg#tx.data) of
         true ->
-            % Add attestations to the outbox and spawn items.
+            % Add commitments to the outbox and spawn items.
             maps:map(
                 fun(Key, IndexMsg) ->
-                    ?no_prod("Currently we only attest to the outbox and spawn items."
+                    ?no_prod("Currently we only commit to the outbox and spawn items."
                         "Make it general?"),
                     case lists:member(Key, [<<"/outbox">>, <<"/spawn">>]) of
                         true ->
-                            ?event({poda_starting_to_attest_to_result, Key}),
+                            ?event({poda_starting_to_commit_to_result, Key}),
                             maps:map(
-                                fun(_, DeepMsg) -> add_attestations(DeepMsg, S) end,
+                                fun(_, DeepMsg) -> add_commitments(DeepMsg, S) end,
                                 IndexMsg#tx.data
                             );
                         false -> IndexMsg
@@ -205,7 +204,7 @@ attest_to_results(Msg, S) ->
         false -> Msg
     end.
 
-add_attestations(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _Store, <<"logger">> := _Logger, <<"wallet">> := Wallet }) ->
+add_commitments(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _Store, <<"logger">> := _Logger, <<"wallet">> := Wallet }) ->
     Process = find_process(NewMsg, S),
     case is_record(Process, tx) andalso lists:member({<<"device">>, <<"PODA">>}, Process#tx.tags) of
         true ->
@@ -213,24 +212,24 @@ add_attestations(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _
                 extract_opts(Process#tx.tags),
             ?event({poda_push, InitAuthorities, Quorum}),
             % Aggregate validations from other nodes.
-            % TODO: Filter out attestations from the current node.
+            % TODO: Filter out commitments from the current node.
             MsgID = hb_util:encode(ar_bundles:id(NewMsg, unsigned)),
-            ?event({poda_add_attestations_from, InitAuthorities, {self,hb:address()}}),
-            Attestations = pfiltermap(
+            ?event({poda_add_commitments_from, InitAuthorities, {self,hb:address()}}),
+            Commitments = pfiltermap(
                 fun(Address) ->
                     case hb_router:find(compute, ar_bundles:id(Process, unsigned), Address) of
                         {ok, ComputeNode} ->
-                            ?event({poda_asking_peer_for_attestation, ComputeNode, <<"attest-to">>, MsgID}),
+                            ?event({poda_asking_peer_for_commitment, ComputeNode, <<"commit-to">>, MsgID}),
                             Res = hb_client:compute(
                                 ComputeNode,
                                 ar_bundles:id(Process, signed),
                                 ar_bundles:id(Assignment, signed),
-                                #{ <<"attest-to">> => MsgID }
+                                #{ <<"commit-to">> => MsgID }
                             ),
                             case Res of
-                                {ok, Att} ->
-                                    ?event({poda_got_attestation_from_peer, ComputeNode}),
-                                    {true, Att};
+                                {ok, Comm} ->
+                                    ?event({poda_got_commitment_from_peer, ComputeNode}),
+                                    {true, Comm};
                                 _ -> false
                             end;
                         _ -> false
@@ -238,44 +237,44 @@ add_attestations(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _
                 end,
                 ?event(InitAuthorities -- [hb:address()])
             ),
-            LocalAttestation = ar_bundles:sign_item(
-                #tx{ tags = [{<<"attestation-for">>, MsgID}], data = <<>> },
+            LocalCommitment = ar_bundles:sign_item(
+                #tx{ tags = [{<<"commitment-for">>, MsgID}], data = <<>> },
                 Wallet
             ),
-            CompleteAttestations =
+            CompleteCommitments =
                 ar_bundles:sign_item(
                     ar_bundles:normalize(
                         #tx {
                             data = 
                                 maps:from_list(
                                     lists:zipwith(
-                                        fun(Index, Att) -> {integer_to_binary(Index), Att} end,
-                                        lists:seq(1, length([LocalAttestation | Attestations])),
-                                        AttList = [LocalAttestation | Attestations]
+                                        fun(Index, Comm) -> {integer_to_binary(Index), Comm} end,
+                                        lists:seq(1, length([LocalCommitment | Commitments])),
+                                        AttList = [LocalCommitment | Commitments]
                                     )
                                 )
                         }
                     ),
                     Wallet
                 ),
-            AttestationBundle = ar_bundles:sign_item(
+            CommitmentBundle = ar_bundles:sign_item(
                 ar_bundles:normalize(
                     #tx{
                         target = NewMsg#tx.target,
                         data = #{
-                            <<"attestations">> => CompleteAttestations,
+                            <<"commitments">> => CompleteCommitments,
                             <<"body">> => NewMsg
                         }
                     }
                 ),
                 Wallet
             ),
-            ?event({poda_attestation_bundle_signed, {attestations, length(AttList)}}),
-            AttestationBundle;
+            ?event({poda_commitment_bundle_signed, {commitments, length(AttList)}}),
+            CommitmentBundle;
         false -> NewMsg
     end.
 
-%% @doc Helper function for parallel execution of attestation
+%% @doc Helper function for parallel execution of commitment
 %% gathering.
 pfiltermap(Pred, List) ->
     Parent = self(),
@@ -308,7 +307,7 @@ pfiltermap(Pred, List) ->
     ].
 
 %% @doc Find the process that this message is targeting, in order to
-%% determine which attestations to add.
+%% determine which commitments to add.
 find_process(Item, #{ <<"logger">> := _Logger, <<"store">> := Store }) ->
     case Item#tx.target of
         X when X =/= <<>> ->

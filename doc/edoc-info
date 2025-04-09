@@ -1,0 +1,19 @@
+%% encoding: UTF-8
+{application,hb}.
+{modules,[ar_bundles,ar_deep_hash,ar_http,ar_http_sup,ar_rate_limiter,
+          ar_timestamp,ar_tx,ar_wallet,dev_codec_ans104,dev_codec_flat,
+          dev_codec_httpsig,dev_codec_httpsig_conv,dev_codec_structured,
+          dev_codec_structured_conv,dev_compute_lite,dev_cron,dev_cu,
+          dev_dedup,dev_faff,dev_json_iface,dev_lookup,dev_message,dev_meta,
+          dev_monitor,dev_multipass,dev_p4,dev_poda,dev_process,
+          dev_process_cache,dev_process_worker,dev_relay,dev_router,
+          dev_scheduler,dev_scheduler_cache,dev_scheduler_formats,
+          dev_scheduler_registry,dev_scheduler_server,dev_simple_pay,dev_snp,
+          dev_snp_nif,dev_stack,dev_test,dev_wasi,dev_wasm,hb,hb_app,hb_beamr,
+          hb_beamr_io,hb_cache,hb_cache_control,hb_cache_render,hb_client,
+          hb_converge,hb_converge_test_vectors,hb_crypto,hb_examples,hb_http,
+          hb_http_benchmark_tests,hb_http_server,hb_logger,hb_message,
+          hb_metrics_collector,hb_opts,hb_path,hb_persistent,hb_private,
+          hb_process_monitor,hb_router,hb_singleton,hb_store,hb_store_fs,
+          hb_store_remote_node,hb_store_rocksdb,hb_sup,hb_test,hb_test_utils,
+          hb_util,rsa_pss]}.

@@ -1,0 +1,160 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module dev_message</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module dev_message</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>The identity device: For non-reserved keys, it simply returns a key
+   from the message as it is found in the message's underlying Erlang map.
+
+
+<h2><a name="description">Description</a></h2>The identity device: For non-reserved keys, it simply returns a key
+   from the message as it is found in the message's underlying Erlang map.
+   Private keys (<code>priv[.*]</code>) are not included.
+   Reserved keys are: <code>id</code>, <code>attestations</code>, <code>attestors</code>, <code>keys</code>, <code>path</code>,
+   <code>set</code>, <code>remove</code>, <code>get</code>, and <code>verify</code>. Their function comments describe the
+   behaviour of the device when these keys are set.
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#attest-3">attest/3</a></td><td>Attest to a message, using the <code>attestation-device</code> key to specify the
+  device that should be used to attest to the message.</td></tr>
+<tr><td valign="top"><a href="#attestors-1">attestors/1</a></td><td>Return the attestors of a message that are present in the given request.</td></tr>
+<tr><td valign="top"><a href="#attestors-2">attestors/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#attestors-3">attestors/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#get-2">get/2</a></td><td>Return the value associated with the key as it exists in the message's
+  underlying Erlang map.</td></tr>
+<tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message, using the <code>attestors</code> list if it exists.</td></tr>
+<tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#id-3">id/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#info-0">info/0</a></td><td>Return the info for the identity device.</td></tr>
+<tr><td valign="top"><a href="#keys-1">keys/1</a></td><td>Get the public keys of a message.</td></tr>
+<tr><td valign="top"><a href="#remove-2">remove/2</a></td><td>Remove a key or keys from a message.</td></tr>
+<tr><td valign="top"><a href="#set-3">set/3</a></td><td>Set keys in a message.</td></tr>
+<tr><td valign="top"><a href="#set_path-3">set_path/3</a></td><td>Special case of <code>set/3</code> for setting the <code>path</code> key.</td></tr>
+<tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify a message nested in the body.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="attest-3">attest/3</a></h3>
+<div class="spec">
+<p><code>attest(Self, Req, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Attest to a message, using the <code>attestation-device</code> key to specify the
+  device that should be used to attest to the message. If the key is not set,
+  the default device (<code>httpsig@1.0</code>) is used.</p>
+
+<h3 class="function"><a name="attestors-1">attestors/1</a></h3>
+<div class="spec">
+<p><code>attestors(Base) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the attestors of a message that are present in the given request.</p>
+
+<h3 class="function"><a name="attestors-2">attestors/2</a></h3>
+<div class="spec">
+<p><code>attestors(Base, Req) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="attestors-3">attestors/3</a></h3>
+<div class="spec">
+<p><code>attestors(Base, X2, NodeOpts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="get-2">get/2</a></h3>
+<div class="spec">
+<p><code>get(Key, Msg) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the value associated with the key as it exists in the message's
+  underlying Erlang map. First check the public keys, then check case-
+  insensitively if the key is a binary.</p>
+
+<h3 class="function"><a name="get-3">get/3</a></h3>
+<div class="spec">
+<p><code>get(Key, Msg, Msg2) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="id-1">id/1</a></h3>
+<div class="spec">
+<p><code>id(Base) -&gt; any()</code></p>
+<p> </p>
+</div><p><p>Return the ID of a message, using the <code>attestors</code> list if it exists.
+  If the <code>attestors</code> key is <code>all</code>, return the ID including all known
+  attestations -- <code>none</code> yields the ID without any attestations. If the
+  <code>attestors</code> key is a list/map, return the ID including only the specified  
+attestations.</p>
+ 
+  <p>The <code>id-device</code> key in the message can be used to specify the device that
+  should be used to calculate the ID. If it is not set, the default device
+  (<code>httpsig@1.0</code>) is used.</p>
+ 
+  Note: This function _does not_ use Converge's <code>get/3</code> function, as it
+  as it would require significant computation. We may want to change this
+  if/when non-map message structures are created.</p>
+
+<h3 class="function"><a name="id-2">id/2</a></h3>
+<div class="spec">
+<p><code>id(Base, Req) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="id-3">id/3</a></h3>
+<div class="spec">
+<p><code>id(Base, Req, NodeOpts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="info-0">info/0</a></h3>
+<div class="spec">
+<p><code>info() -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the info for the identity device.</p>
+
+<h3 class="function"><a name="keys-1">keys/1</a></h3>
+<div class="spec">
+<p><code>keys(Msg) -&gt; any()</code></p>
+<p> </p>
+</div><p>Get the public keys of a message.</p>
+
+<h3 class="function"><a name="remove-2">remove/2</a></h3>
+<div class="spec">
+<p><code>remove(Message1, X2) -&gt; any()</code></p>
+<p> </p>
+</div><p>Remove a key or keys from a message.</p>
+
+<h3 class="function"><a name="set-3">set/3</a></h3>
+<div class="spec">
+<p><code>set(Message1, NewValuesMsg, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Set keys in a message. Takes a map of key-value pairs and sets them in
+  the message, overwriting any existing values.</p>
+
+<h3 class="function"><a name="set_path-3">set_path/3</a></h3>
+<div class="spec">
+<p><code>set_path(Message1, X2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Special case of <code>set/3</code> for setting the <code>path</code> key. This cannot be set
+  using the normal <code>set</code> function, as the <code>path</code> is a reserved key, necessary
+  for Converge to know the key to evaluate in requests.</p>
+
+<h3 class="function"><a name="verify-3">verify/3</a></h3>
+<div class="spec">
+<p><code>verify(Self, Req, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Verify a message nested in the body. As with <code>id</code>, the <code>attestors</code>
+  key in the request can be used to specify which attestations should be
+  verified.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

@@ -41,30 +41,30 @@ execute(CarrierMsg, S) ->
                 end
         end,
     {ResType, ModState = #{ results := _ModResults }} =
-        case lists:keyfind(<<"attest-to">>, 1, CarrierMsg#tx.tags) of
-            {_, RawAttestTo} ->
-                AttestTo = hb_util:decode(RawAttestTo),
-                ?event({attest_to_only_message, RawAttestTo}),
-                case ar_bundles:find(AttestTo, Results) of
+        case lists:keyfind(<<"commit-to">>, 1, CarrierMsg#tx.tags) of
+            {_, RawCommitTo} ->
+                CommitTo = hb_util:decode(RawCommitTo),
+                ?event({commit_to_only_message, RawCommitTo}),
+                case ar_bundles:find(CommitTo, Results) of
                     not_found ->
-                        ?event(message_to_attest_to_not_found),
+                        ?event(message_to_commit_to_not_found),
                         {ok,
                             S#{
                                 results =>
                                     #tx {
                                         tags = [{<<"status">>, 404}],
-                                        data = <<"Requested message to attest to not in results bundle.">>
+                                        data = <<"Requested message to commit to not in results bundle.">>
                                     }
                             }
                         };
                     _ ->
-                        ?event(message_to_attest_to_found),
+                        ?event(message_to_commit_to_found),
                         {ok, S#{
                             results => ar_bundles:sign_item(
                                 #tx {
                                     tags = [
                                         {<<"status">>, 200},
-                                        {<<"attestation-for">>, RawAttestTo}
+                                        {<<"commitment-for">>, RawCommitTo}
                                     ],
                                     data = <<>>
                                 },

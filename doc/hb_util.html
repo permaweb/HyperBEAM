@@ -1,0 +1,353 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module hb_util</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module hb_util</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>A collection of utility functions for building with HyperBEAM.
+
+
+<h2><a name="description">Description</a></h2>A collection of utility functions for building with HyperBEAM.
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#count-2">count/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#debug_fmt-1">debug_fmt/1</a></td><td>Convert a term to a string for debugging print purposes.</td></tr>
+<tr><td valign="top"><a href="#debug_print-4">debug_print/4</a></td><td>Print a message to the standard error stream, prefixed by the amount
+  of time that has elapsed since the last call to this function.</td></tr>
+<tr><td valign="top"><a href="#decode-1">decode/1</a></td><td>Try to decode a URL safe base64 into a binary or throw an error when
+  invalid.</td></tr>
+<tr><td valign="top"><a href="#encode-1">encode/1</a></td><td>Encode a binary to URL safe base64 binary string.</td></tr>
+<tr><td valign="top"><a href="#eunit_print-2">eunit_print/2</a></td><td>Format and print an indented string to standard error.</td></tr>
+<tr><td valign="top"><a href="#find_value-2">find_value/2</a></td><td>Find the value associated with a key in parsed a JSON structure list.</td></tr>
+<tr><td valign="top"><a href="#find_value-3">find_value/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#format_binary-1">format_binary/1</a></td><td>Format a binary as a short string suitable for printing.</td></tr>
+<tr><td valign="top"><a href="#format_indented-2">format_indented/2</a></td><td>Format a string with an indentation level.</td></tr>
+<tr><td valign="top"><a href="#format_indented-3">format_indented/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#format_map-1">format_map/1</a></td><td>Format a map as either a single line or a multi-line string depending
+  on the value of the <code>debug_print_map_line_threshold</code> runtime option.</td></tr>
+<tr><td valign="top"><a href="#format_map-2">format_map/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#format_trace_short-1">format_trace_short/1</a></td><td>Format a trace to a short string.</td></tr>
+<tr><td valign="top"><a href="#hd-1">hd/1</a></td><td>Get the first element (the lowest integer key &gt;= 1) of a numbered map.</td></tr>
+<tr><td valign="top"><a href="#hd-2">hd/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#hd-3">hd/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#human_id-1">human_id/1</a></td><td>Convert a native binary ID to a human readable ID.</td></tr>
+<tr><td valign="top"><a href="#human_int-1">human_int/1</a></td><td>Add <code>,</code> characters to a number every 3 digits to make it human readable.</td></tr>
+<tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the human-readable form of an ID of a message when given either
+  a message explicitly, raw encoded ID, or an Erlang Arweave <code>tx</code> record.</td></tr>
+<tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#is_string_list-1">is_string_list/1</a></td><td>Is the given term a string list?.</td></tr>
+<tr><td valign="top"><a href="#list_to_numbered_map-1">list_to_numbered_map/1</a></td><td>Convert a list of elements to a map with numbered keys.</td></tr>
+<tr><td valign="top"><a href="#maybe_throw-2">maybe_throw/2</a></td><td>Throw an exception if the Opts map has an <code>error_strategy</code> key with the
+  value <code>throw</code>.</td></tr>
+<tr><td valign="top"><a href="#mean-1">mean/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#message_to_numbered_list-1">message_to_numbered_list/1</a></td><td>Take a message with numbered keys and convert it to a list of tuples
+  with the associated key as an integer and a value.</td></tr>
+<tr><td valign="top"><a href="#native_id-1">native_id/1</a></td><td>Convert a human readable ID to a native binary ID.</td></tr>
+<tr><td valign="top"><a href="#number-1">number/1</a></td><td>Label a list of elements with a number.</td></tr>
+<tr><td valign="top"><a href="#ok-1">ok/1</a></td><td>Unwrap a tuple of the form <code>{ok, Value}</code>, or throw/return, depending on
+  the value of the <code>error_strategy</code> option.</td></tr>
+<tr><td valign="top"><a href="#ok-2">ok/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#print_trace-4">print_trace/4</a></td><td>Print the trace of the current stack, up to the first non-hyperbeam
+  module.</td></tr>
+<tr><td valign="top"><a href="#print_trace_short-4">print_trace_short/4</a></td><td>Print a trace to the standard error stream.</td></tr>
+<tr><td valign="top"><a href="#remove_common-2">remove_common/2</a></td><td>Remove the common prefix from two strings, returning the remainder of the
+  first string.</td></tr>
+<tr><td valign="top"><a href="#remove_trailing_noise-2">remove_trailing_noise/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#safe_decode-1">safe_decode/1</a></td><td>Safely decode a URL safe base64 into a binary returning an ok or error
+  tuple.</td></tr>
+<tr><td valign="top"><a href="#safe_encode-1">safe_encode/1</a></td><td>Safely encode a binary to URL safe base64.</td></tr>
+<tr><td valign="top"><a href="#short_id-1">short_id/1</a></td><td>Return a short ID for the different types of IDs used in Converge.</td></tr>
+<tr><td valign="top"><a href="#stddev-1">stddev/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#to_hex-1">to_hex/1</a></td><td>Convert a binary to a hex string.</td></tr>
+<tr><td valign="top"><a href="#to_lower-1">to_lower/1</a></td><td>Convert a binary to a lowercase.</td></tr>
+<tr><td valign="top"><a href="#trace_macro_helper-5">trace_macro_helper/5</a></td><td>Utility function to help macro <code>?trace/0</code> remove the first frame of the
+  stack trace.</td></tr>
+<tr><td valign="top"><a href="#variance-1">variance/1</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="count-2">count/2</a></h3>
+<div class="spec">
+<p><code>count(Item, List) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="debug_fmt-1">debug_fmt/1</a></h3>
+<div class="spec">
+<p><code>debug_fmt(X) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert a term to a string for debugging print purposes.</p>
+
+<h3 class="function"><a name="debug_print-4">debug_print/4</a></h3>
+<div class="spec">
+<p><code>debug_print(X, Mod, Func, LineNum) -&gt; any()</code></p>
+<p> </p>
+</div><p>Print a message to the standard error stream, prefixed by the amount
+  of time that has elapsed since the last call to this function.</p>
+
+<h3 class="function"><a name="decode-1">decode/1</a></h3>
+<div class="spec">
+<p><code>decode(Input) -&gt; any()</code></p>
+<p> </p>
+</div><p>Try to decode a URL safe base64 into a binary or throw an error when
+  invalid.</p>
+
+<h3 class="function"><a name="encode-1">encode/1</a></h3>
+<div class="spec">
+<p><code>encode(Bin) -&gt; any()</code></p>
+<p> </p>
+</div><p>Encode a binary to URL safe base64 binary string.</p>
+
+<h3 class="function"><a name="eunit_print-2">eunit_print/2</a></h3>
+<div class="spec">
+<p><code>eunit_print(FmtStr, FmtArgs) -&gt; any()</code></p>
+<p> </p>
+</div><p>Format and print an indented string to standard error.</p>
+
+<h3 class="function"><a name="find_value-2">find_value/2</a></h3>
+<div class="spec">
+<p><code>find_value(Key, List) -&gt; any()</code></p>
+<p> </p>
+</div><p>Find the value associated with a key in parsed a JSON structure list.</p>
+
+<h3 class="function"><a name="find_value-3">find_value/3</a></h3>
+<div class="spec">
+<p><code>find_value(Key, Map, Default) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="format_binary-1">format_binary/1</a></h3>
+<div class="spec">
+<p><code>format_binary(Bin) -&gt; any()</code></p>
+<p> </p>
+</div><p>Format a binary as a short string suitable for printing.</p>
+
+<h3 class="function"><a name="format_indented-2">format_indented/2</a></h3>
+<div class="spec">
+<p><code>format_indented(Str, Indent) -&gt; any()</code></p>
+<p> </p>
+</div><p>Format a string with an indentation level.</p>
+
+<h3 class="function"><a name="format_indented-3">format_indented/3</a></h3>
+<div class="spec">
+<p><code>format_indented(RawStr, Fmt, Ind) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="format_map-1">format_map/1</a></h3>
+<div class="spec">
+<p><code>format_map(Map) -&gt; any()</code></p>
+<p> </p>
+</div><p>Format a map as either a single line or a multi-line string depending
+  on the value of the <code>debug_print_map_line_threshold</code> runtime option.</p>
+
+<h3 class="function"><a name="format_map-2">format_map/2</a></h3>
+<div class="spec">
+<p><code>format_map(Map, Indent) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="format_trace_short-1">format_trace_short/1</a></h3>
+<div class="spec">
+<p><code>format_trace_short(Trace) -&gt; any()</code></p>
+<p> </p>
+</div><p>Format a trace to a short string.</p>
+
+<h3 class="function"><a name="hd-1">hd/1</a></h3>
+<div class="spec">
+<p><code>hd(Message) -&gt; any()</code></p>
+<p> </p>
+</div><p>Get the first element (the lowest integer key &gt;= 1) of a numbered map.
+  Optionally, it takes a specifier of whether to return the key or the value,
+  as well as a standard map of HyperBEAM runtime options.</p>
+
+<h3 class="function"><a name="hd-2">hd/2</a></h3>
+<div class="spec">
+<p><code>hd(Message, ReturnType) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="hd-3">hd/3</a></h3>
+<div class="spec">
+<p><code>hd(Message, ReturnType, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="human_id-1">human_id/1</a></h3>
+<div class="spec">
+<p><code>human_id(Bin) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert a native binary ID to a human readable ID. If the ID is already
+  a human readable ID, it is returned as is.</p>
+
+<h3 class="function"><a name="human_int-1">human_int/1</a></h3>
+<div class="spec">
+<p><code>human_int(Int) -&gt; any()</code></p>
+<p> </p>
+</div><p>Add <code>,</code> characters to a number every 3 digits to make it human readable.</p>
+
+<h3 class="function"><a name="id-1">id/1</a></h3>
+<div class="spec">
+<p><code>id(Item) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the human-readable form of an ID of a message when given either
+  a message explicitly, raw encoded ID, or an Erlang Arweave <code>tx</code> record.</p>
+
+<h3 class="function"><a name="id-2">id/2</a></h3>
+<div class="spec">
+<p><code>id(TX, Type) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="is_string_list-1">is_string_list/1</a></h3>
+<div class="spec">
+<p><code>is_string_list(MaybeString) -&gt; any()</code></p>
+<p> </p>
+</div><p>Is the given term a string list?</p>
+
+<h3 class="function"><a name="list_to_numbered_map-1">list_to_numbered_map/1</a></h3>
+<div class="spec">
+<p><code>list_to_numbered_map(List) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert a list of elements to a map with numbered keys.</p>
+
+<h3 class="function"><a name="maybe_throw-2">maybe_throw/2</a></h3>
+<div class="spec">
+<p><code>maybe_throw(Val, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Throw an exception if the Opts map has an <code>error_strategy</code> key with the
+  value <code>throw</code>. Otherwise, return the value.</p>
+
+<h3 class="function"><a name="mean-1">mean/1</a></h3>
+<div class="spec">
+<p><code>mean(List) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="message_to_numbered_list-1">message_to_numbered_list/1</a></h3>
+<div class="spec">
+<p><code>message_to_numbered_list(Message) -&gt; any()</code></p>
+<p> </p>
+</div><p>Take a message with numbered keys and convert it to a list of tuples
+  with the associated key as an integer and a value. Optionally, it takes a
+  standard map of HyperBEAM runtime options.</p>
+
+<h3 class="function"><a name="native_id-1">native_id/1</a></h3>
+<div class="spec">
+<p><code>native_id(Bin) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert a human readable ID to a native binary ID. If the ID is already
+  a native binary ID, it is returned as is.</p>
+
+<h3 class="function"><a name="number-1">number/1</a></h3>
+<div class="spec">
+<p><code>number(List) -&gt; any()</code></p>
+<p> </p>
+</div><p>Label a list of elements with a number.</p>
+
+<h3 class="function"><a name="ok-1">ok/1</a></h3>
+<div class="spec">
+<p><code>ok(Value) -&gt; any()</code></p>
+<p> </p>
+</div><p>Unwrap a tuple of the form <code>{ok, Value}</code>, or throw/return, depending on
+  the value of the <code>error_strategy</code> option.</p>
+
+<h3 class="function"><a name="ok-2">ok/2</a></h3>
+<div class="spec">
+<p><code>ok(Other, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="print_trace-4">print_trace/4</a></h3>
+<div class="spec">
+<p><code>print_trace(Stack, CallMod, CallFunc, CallLine) -&gt; any()</code></p>
+<p> </p>
+</div><p>Print the trace of the current stack, up to the first non-hyperbeam
+  module. Prints each stack frame on a new line, until it finds a frame that
+  does not start with a prefix in the <code>stack_print_prefixes</code> hb_opts.
+  Optionally, you may call this function with a custom label and caller info,
+  which will be used instead of the default.</p>
+
+<h3 class="function"><a name="print_trace_short-4">print_trace_short/4</a></h3>
+<div class="spec">
+<p><code>print_trace_short(Trace, Mod, Func, Line) -&gt; any()</code></p>
+<p> </p>
+</div><p>Print a trace to the standard error stream.</p>
+
+<h3 class="function"><a name="remove_common-2">remove_common/2</a></h3>
+<div class="spec">
+<p><code>remove_common(MainStr, SubStr) -&gt; any()</code></p>
+<p> </p>
+</div><p>Remove the common prefix from two strings, returning the remainder of the
+  first string. This function also coerces lists to binaries where appropriate,
+  returning the type of the first argument.</p>
+
+<h3 class="function"><a name="remove_trailing_noise-2">remove_trailing_noise/2</a></h3>
+<div class="spec">
+<p><code>remove_trailing_noise(Str, Noise) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="safe_decode-1">safe_decode/1</a></h3>
+<div class="spec">
+<p><code>safe_decode(E) -&gt; any()</code></p>
+<p> </p>
+</div><p>Safely decode a URL safe base64 into a binary returning an ok or error
+  tuple.</p>
+
+<h3 class="function"><a name="safe_encode-1">safe_encode/1</a></h3>
+<div class="spec">
+<p><code>safe_encode(Bin) -&gt; any()</code></p>
+<p> </p>
+</div><p>Safely encode a binary to URL safe base64.</p>
+
+<h3 class="function"><a name="short_id-1">short_id/1</a></h3>
+<div class="spec">
+<p><code>short_id(Bin) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return a short ID for the different types of IDs used in Converge.</p>
+
+<h3 class="function"><a name="stddev-1">stddev/1</a></h3>
+<div class="spec">
+<p><code>stddev(List) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="to_hex-1">to_hex/1</a></h3>
+<div class="spec">
+<p><code>to_hex(Bin) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert a binary to a hex string. Do not use this for anything other than
+  generating a lower-case, non-special character id. It should not become part of
+  the core protocol. We use b64u for efficient encoding.</p>
+
+<h3 class="function"><a name="to_lower-1">to_lower/1</a></h3>
+<div class="spec">
+<p><code>to_lower(Str) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert a binary to a lowercase.</p>
+
+<h3 class="function"><a name="trace_macro_helper-5">trace_macro_helper/5</a></h3>
+<div class="spec">
+<p><code>trace_macro_helper(Fun, X2, Mod, Func, Line) -&gt; any()</code></p>
+<p> </p>
+</div><p>Utility function to help macro <code>?trace/0</code> remove the first frame of the
+  stack trace.</p>
+
+<h3 class="function"><a name="variance-1">variance/1</a></h3>
+<div class="spec">
+<p><code>variance(List) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

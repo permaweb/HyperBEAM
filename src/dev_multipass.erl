@@ -18,8 +18,8 @@ handle(<<"keys">>, M1, _M2, _Opts) ->
 handle(<<"set">>, M1, M2, Opts) ->
     dev_message:set(M1, M2, Opts);
 handle(_Key, M1, _M2, Opts) ->
-    Passes = hb_converge:get(<<"passes">>, {as, dev_message, M1}, 1, Opts),
-    Pass = hb_converge:get(<<"pass">>, {as, dev_message, M1}, 1, Opts),
+    Passes = hb_ao:get(<<"passes">>, {as, dev_message, M1}, 1, Opts),
+    Pass = hb_ao:get(<<"pass">>, {as, dev_message, M1}, 1, Opts),
     case Pass < Passes of
         true -> {pass, M1};
         false -> {ok, M1}
@@ -35,6 +35,6 @@ basic_multipass_test() ->
             <<"pass">> => 1
         },
     Msg2 = Msg1#{ <<"pass">> => 2 },
-    ?assertMatch({pass, _}, hb_converge:resolve(Msg1, <<"Compute">>, #{})),
+    ?assertMatch({pass, _}, hb_ao:resolve(Msg1, <<"Compute">>, #{})),
     ?event(alive),
-    ?assertMatch({ok, _}, hb_converge:resolve(Msg2, <<"Compute">>, #{})).
+    ?assertMatch({ok, _}, hb_ao:resolve(Msg2, <<"Compute">>, #{})).

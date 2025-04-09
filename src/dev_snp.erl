@@ -1,16 +1,16 @@
-%%% @doc This device offers an interface for validating AMD SEV-SNP attestations,
+%%% @doc This device offers an interface for validating AMD SEV-SNP commitments,
 %%% as well as generating them, if called in an appropriate environment.
 -module(dev_snp).
 -export([generate/3, verify/3, trusted/3]).
 -export([init/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
--define(ATTESTED_PARAMETERS, [vcpus, vcpu_type, vmm_type, guest_features,
+-define(COMMITTED_PARAMETERS, [vcpus, vcpu_type, vmm_type, guest_features,
 	firmware, kernel, initrd, append]).
 
 %%% Test constants
-%% Matching attestation report is found in `test/snp-attestation` in 
-%% `dev_codec_flat:serialize/1`'s format. Alternatively, set the `TEST_NODE`
+%% Matching commitment report is found in `test/snp-commitment' in 
+%% `dev_codec_flat:serialize/1''s format. Alternatively, set the `TEST_NODE'
 %% constant to a live node to run the tests against it.
 -define(TEST_NODE, undefined).
 -define(TEST_TRUSTED_SOFTWARE, #{
@@ -60,8 +60,8 @@ init(M1, _M2, Opts) ->
         {_, Addr} when is_binary(Addr) ->
             {error, <<"Cannot enable SNP if operator is already set.">>};
         _ ->
-            SnpHashes = hb_converge:get(<<"body">>, M1, Opts),
-            SNPDecoded = jiffy:decode(SnpHashes, [return_maps]),
+            SnpHashes = hb_ao:get(<<"body">>, M1, Opts),
+            SNPDecoded = hb_json:decode(SnpHashes),
             Hashes = maps:get(<<"snp_hashes">>, SNPDecoded),
             ok = hb_http_server:set_opts(Opts#{
                 % Add our trusted hashes to the device's trusted software list
@@ -72,7 +72,7 @@ init(M1, _M2, Opts) ->
             {ok, <<"SNP node initialized successfully.">>}
     end.
 
-%% @doc Verify an attestation report message; validating the identity of a 
+%% @doc Verify an commitment report message; validating the identity of a 
 %% remote node, its ephemeral private address, and the integrity of the report.
 %% The checks that must be performed to validate the report are:
 %% 1. Verify the address and the node message ID are the same as the ones
@@ -87,8 +87,8 @@ init(M1, _M2, Opts) ->
 verify(M1, M2, NodeOpts) ->
     {ok, MsgWithJSONReport} = hb_message:find_target(M1, M2, NodeOpts),
 	% Normalize the request message
-	ReportJSON = hb_converge:get(<<"report">>, MsgWithJSONReport, NodeOpts),
-	Report = jiffy:decode(ReportJSON, [return_maps]),
+	ReportJSON = hb_ao:get(<<"report">>, MsgWithJSONReport, NodeOpts),
+	Report = hb_json:decode(ReportJSON),
 	Msg =
 		maps:merge(
 			maps:without([<<"report">>], MsgWithJSONReport),
@@ -96,26 +96,27 @@ verify(M1, M2, NodeOpts) ->
 		),
     ?event({verify, Msg}),
     % Step 1: Verify the nonce.
-    Address = hb_converge:get(<<"address">>, Msg, NodeOpts),
+    Address = hb_ao:get(<<"address">>, Msg, NodeOpts),
     ?event({snp_address, Address}),
     NodeMsgID =
-        case hb_converge:get(<<"node-message">>, Msg, NodeOpts#{ hashpath => ignore }) of
+        case hb_ao:get(<<"node-message">>, Msg, NodeOpts#{ hashpath => ignore }) of
             undefined ->
-                case hb_converge:get(<<"node-message-id">>, Msg, NodeOpts) of
+                case hb_ao:get(<<"node-message-id">>, Msg, NodeOpts) of
                     undefined -> {error, missing_node_msg_id};
                     ID -> ID
                 end;
             NodeMsg -> hb_util:ok(dev_message:id(NodeMsg, #{}, NodeOpts))
         end,
     ?event({snp_node_msg_id, NodeMsgID}),
-    Nonce = hb_util:decode(hb_converge:get(<<"nonce">>, Msg, NodeOpts)),
+    Nonce = hb_util:decode(hb_ao:get(<<"nonce">>, Msg, NodeOpts)),
     ?event({snp_nonce, Nonce}),
     NonceMatches = report_data_matches(Address, NodeMsgID, Nonce),
     ?event({nonce_matches, NonceMatches}),
     % Step 2: Verify the address and the signature.
     Signers = hb_message:signers(MsgWithJSONReport),
-    ?event({snp_signers, Signers}),
-    SigIsValid = hb_message:verify(MsgWithJSONReport),
+    ?event({snp_signers, {explicit, Signers}}),
+    ?event({msg_with_json_report, {explicit, MsgWithJSONReport}}),
+    SigIsValid = hb_message:verify(MsgWithJSONReport, Signers),
     ?event({snp_sig_is_valid, SigIsValid}),
     AddressIsValid = lists:member(Address, Signers),
     ?event({address_is_valid, AddressIsValid, {signer, Signers}, {address, Address}}),
@@ -130,13 +131,13 @@ verify(M1, M2, NodeOpts) ->
 		maps:from_list(
 			lists:map(
 				fun({Key, Val}) -> {binary_to_existing_atom(Key), Val} end,
-				maps:to_list(maps:with(lists:map(fun atom_to_binary/1, ?ATTESTED_PARAMETERS), Msg))
+				maps:to_list(maps:with(lists:map(fun atom_to_binary/1, ?COMMITTED_PARAMETERS), Msg))
 			)
 		),
 	?event({args, Args}),
     {ok,Expected} = dev_snp_nif:compute_launch_digest(Args),
     ?event({expected_measurement, Expected}),
-    Measurement = hb_converge:get(<<"measurement">>, Msg, NodeOpts),
+    Measurement = hb_ao:get(<<"measurement">>, Msg, NodeOpts),
     ?event({measurement, {explicit,Measurement}}),
     {ok, MeasurementIsValid} = dev_snp_nif:verify_measurement(ReportJSON, list_to_binary(Expected)),
     ?event({measurement_is_valid, MeasurementIsValid}),
@@ -159,100 +160,102 @@ verify(M1, M2, NodeOpts) ->
     ?event({final_validation_result, Valid}),
     {ok, Valid}.
 
-%% @doc Generate an attestation report and emit it as a message, including all of 
+%% @doc Generate an commitment report and emit it as a message, including all of 
 %% the necessary data to generate the nonce (ephemeral node address + node
 %% message ID), as well as the expected measurement (firmware, kernel, and VMSAs
 %% hashes).
 generate(_M1, _M2, Opts) ->
-    Wallet = hb_opts:get(priv_wallet, no_valid_wallet, Opts),
+	?event({generate_opts, {explicit, Opts}}),
+    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    ?event({snp_wallet, Wallet}),
-    % Remove the `priv*` keys from the options.
+    % ?event({snp_wallet, Wallet}),
+    % Remove the `priv*' keys from the options.
     {ok, PublicNodeMsgID} =
         dev_message:id(
-            NodeMsg =
-                hb_private:reset(Opts),
-                #{ <<"attestors">> => <<"none">> },
+            	NodeMsg = hb_private:reset(Opts),
+                #{ <<"committers">> => <<"none">> },
                 Opts
             ),
 	RawPublicNodeMsgID = hb_util:native_id(PublicNodeMsgID),
 	?event({snp_node_msg, NodeMsg}),
     ?event({snp_node_msg_id, byte_size(RawPublicNodeMsgID)}),
-    % Generate the attestation report.
+    % Generate the commitment report.
 	?event({snp_address,  byte_size(Address)}),
     ReportData = generate_nonce(Address, RawPublicNodeMsgID),
 	?event({snp_report_data, byte_size(ReportData)}),
-    {ok,ReportJSON} = dev_snp_nif:generate_attestation_report(ReportData, 1),
+    {ok, ReportJSON} = dev_snp_nif:generate_attestation_report(ReportData, 1),
 	?event({snp_report_json, ReportJSON}),
 	LocalHashes = hb_opts:get(snp_hashes, {error, not_configured}, Opts),
-    ?event(debug,
+    ?event(
         {snp_report_generated,
             {nonce, ReportData},
             {report, ReportJSON}
         }
     ),
-    ReportMsg = hb_message:attest(LocalHashes#{
+    ReportMsg = hb_message:commit(LocalHashes#{
         <<"nonce">> => hb_util:encode(ReportData),
         <<"address">> => Address,
         <<"node-message">> => NodeMsg,
 		<<"report">> => ReportJSON
     }, Wallet),
+
+	?event({verify_res, hb_message:verify(ReportMsg)}),
 	?event({snp_report_msg, ReportMsg}),
     {ok, ReportMsg}.
 
 %% @doc Ensure that the node's debug policy is disabled.
 is_debug(Report) ->
-    (hb_converge:get(<<"policy">>, Report, #{}) band (1 bsl 19)) =/= 0.
+    (hb_ao:get(<<"policy">>, Report, #{}) band (1 bsl 19)) =/= 0.
 
 %% @doc Ensure that all of the software hashes are trusted. The caller may set
-%% a specific device to use for the `is-trusted` key. The device must then
-%% implement the `trusted` resolver.
+%% a specific device to use for the `is-trusted' key. The device must then
+%% implement the `trusted' resolver.
 execute_is_trusted(M1, Msg, NodeOpts) ->
     % Generate a modified version of the base message, with the 
-    % `is-trusted-device` key set as the device, if provided by the caller.
-    % If not provided, use the default resolver (this module's `trusted`
+    % `is-trusted-device' key set as the device, if provided by the caller.
+    % If not provided, use the default resolver (this module's `trusted'
     % function).
     ModM1 =
-        case hb_converge:get(<<"is-trusted-device">>, M1, NodeOpts) of
+        case hb_ao:get(<<"is-trusted-device">>, M1, NodeOpts) of
             not_found -> M1#{ <<"device">> => <<"snp@1.0">> };
             Device -> {as, Device, M1}
         end,
     %?event({starting_to_validate_software, {mod_m1, {explicit, ModM1}}, {m2, {explicit, Msg}}, {node_opts, {explicit, NodeOpts}}}),
     Result = lists:all(
         fun(ReportKey) ->
-            ReportVal = hb_converge:get(ReportKey, Msg, NodeOpts),
+            ReportVal = hb_ao:get(ReportKey, Msg, NodeOpts),
             QueryMsg = #{
                 <<"path">> => <<"trusted">>,
                 <<"key">> => ReportKey,
                 <<"body">> => ReportVal
             },
-            ?event({is_trusted_query, {base, ModM1}, {query, QueryMsg}}),
+            % ?event({is_trusted_query, {base, ModM1}, {query, QueryMsg}}),
             % Resolve the query message against the modified base message.
-            {ok, KeyIsTrusted} = hb_converge:resolve(ModM1, QueryMsg, NodeOpts),
-            ?event(debug,
-                {is_software_component_trusted,
-                    {key, ReportKey},
-                    {trusted, ReportKey},
-                    {result, KeyIsTrusted}
-                }
-            ),
+            {ok, KeyIsTrusted} = hb_ao:resolve(ModM1, QueryMsg, NodeOpts),
+            % ?event(
+            %     {is_software_component_trusted,
+            %         {key, ReportKey},
+            %         {trusted, ReportKey},
+            %         {result, KeyIsTrusted}
+            %     }
+            % ),
             KeyIsTrusted
         end,
-		?ATTESTED_PARAMETERS
+		?COMMITTED_PARAMETERS
     ),
     ?event({is_all_software_trusted, Result}),
     {ok, Result}.
 
 %% @doc Default implementation of a resolver for trusted software. Searches the
-%% `trusted` key in the base message for a list of trusted values, and checks
+%% `trusted' key in the base message for a list of trusted values, and checks
 %% if the value in the request message is a member of that list.
 trusted(_Msg1, Msg2, NodeOpts) ->
-    Key = hb_converge:get(<<"key">>, Msg2, NodeOpts),
-    Body = hb_converge:get(<<"body">>, Msg2, not_found, NodeOpts),
+    Key = hb_ao:get(<<"key">>, Msg2, NodeOpts),
+    Body = hb_ao:get(<<"body">>, Msg2, not_found, NodeOpts),
     %% Ensure Trusted is always a map
     TrustedSoftware = hb_opts:get(trusted, #{}, NodeOpts),
-    PropertyName = hb_converge:get(Key, TrustedSoftware, not_found, NodeOpts),
-    ?event({trust_key, PropertyName, maps:is_key(Key, TrustedSoftware)}),
+    PropertyName = hb_ao:get(Key, TrustedSoftware, not_found, NodeOpts),
+    % ?event({trust_key, PropertyName, maps:is_key(Key, TrustedSoftware)}),
     %% Final trust validation
     {ok, PropertyName == Body}.
 
@@ -262,13 +265,13 @@ report_data_matches(Address, NodeMsgID, ReportData) ->
 	?event({expected_nonce, binary_to_list(ReportData)}),
     generate_nonce(Address, NodeMsgID) == ReportData.
 
-%% @doc Generate the nonce to use in the attestation report.
+%% @doc Generate the nonce to use in the commitment report.
 generate_nonce(RawAddress, RawNodeMsgID) ->
 	Address = hb_util:native_id(RawAddress),
 	NodeMsgID = hb_util:native_id(RawNodeMsgID),
     << Address/binary, NodeMsgID/binary >>.
 
-%% @doc Generate an attestation report and emit it via HTTP.
+%% Generate an commitment report and emit it via HTTP.
 % generate_test() ->
 % 	Trusted =
 % 		#{
@@ -292,7 +295,7 @@ generate_nonce(RawAddress, RawNodeMsgID) ->
 %     ),
 %     {ok, Report} = hb_http:get(Node, <<"/\~snp@1.0/generate">>, #{}),
 %     ?event({snp_report_rcvd, Report}),
-%     ?assertEqual(Addr, hb_converge:get(<<"address">>, Report, #{})),
+%     ?assertEqual(Addr, hb_ao:get(<<"address">>, Report, #{})),
 % 	ValidationRes = verify(#{ <<"trusted">> => Trusted}, #{ <<"body">> => Report }, #{}),
 % 	?event({snp_validation_res, ValidationRes}),
 %     ?assertEqual({ok, true}, ValidationRes).

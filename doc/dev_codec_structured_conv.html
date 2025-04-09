@@ -1,0 +1,146 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module dev_codec_structured_conv</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module dev_codec_structured_conv</h1>
+<ul class="index"><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+
+
+<h2><a name="types">Data Types</a></h2>
+
+<h3 class="typedecl"><a name="type-sh_bare_item">sh_bare_item()</a></h3>
+<p><code>sh_bare_item() = integer() | <a href="#type-sh_decimal" docgen-rel="seetype" docgen-href="#sh_decimal/0">sh_decimal()</a> | boolean() | {string | token | binary, binary()}</code></p>
+
+
+<h3 class="typedecl"><a name="type-sh_decimal">sh_decimal()</a></h3>
+<p><code>sh_decimal() = {decimal, {integer(), integer()}}</code></p>
+
+
+<h3 class="typedecl"><a name="type-sh_dictionary">sh_dictionary()</a></h3>
+<p><code>sh_dictionary() = [{binary(), <a href="#type-sh_item" docgen-rel="seetype" docgen-href="#sh_item/0">sh_item()</a> | <a href="#type-sh_inner_list" docgen-rel="seetype" docgen-href="#sh_inner_list/0">sh_inner_list()</a>}]</code></p>
+
+
+<h3 class="typedecl"><a name="type-sh_inner_list">sh_inner_list()</a></h3>
+<p><code>sh_inner_list() = {list, [<a href="#type-sh_item" docgen-rel="seetype" docgen-href="#sh_item/0">sh_item()</a>], <a href="#type-sh_params" docgen-rel="seetype" docgen-href="#sh_params/0">sh_params()</a>}</code></p>
+
+
+<h3 class="typedecl"><a name="type-sh_item">sh_item()</a></h3>
+<p><code>sh_item() = {item, <a href="#type-sh_bare_item" docgen-rel="seetype" docgen-href="#sh_bare_item/0">sh_bare_item()</a>, <a href="#type-sh_params" docgen-rel="seetype" docgen-href="#sh_params/0">sh_params()</a>}</code></p>
+
+
+<h3 class="typedecl"><a name="type-sh_list">sh_list()</a></h3>
+<p><code>sh_list() = [<a href="#type-sh_item" docgen-rel="seetype" docgen-href="#sh_item/0">sh_item()</a> | <a href="#type-sh_inner_list" docgen-rel="seetype" docgen-href="#sh_inner_list/0">sh_inner_list()</a>]</code></p>
+
+
+<h3 class="typedecl"><a name="type-sh_params">sh_params()</a></h3>
+<p><code>sh_params() = [{binary(), <a href="#type-sh_bare_item" docgen-rel="seetype" docgen-href="#sh_bare_item/0">sh_bare_item()</a>}]</code></p>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#bare_item-1">bare_item/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#dictionary-1">dictionary/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#from_bare_item-1">from_bare_item/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#item-1">item/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#list-1">list/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#parse_bare_item-1">parse_bare_item/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#parse_dictionary-1">parse_dictionary/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#parse_item-1">parse_item/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#parse_list-1">parse_list/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#to_dictionary-1">to_dictionary/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#to_item-1">to_item/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#to_item-2">to_item/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#to_list-1">to_list/1</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="bare_item-1">bare_item/1</a></h3>
+<div class="spec">
+<p><code>bare_item(Integer) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="dictionary-1">dictionary/1</a></h3>
+<div class="spec">
+<p><code>dictionary(Map::#{binary() =&gt; <a href="#type-sh_item" docgen-rel="seetype" docgen-href="#sh_item/0">sh_item()</a> | <a href="#type-sh_inner_list" docgen-rel="seetype" docgen-href="#sh_inner_list/0">sh_inner_list()</a>} | <a href="#type-sh_dictionary" docgen-rel="seetype" docgen-href="#sh_dictionary/0">sh_dictionary()</a>) -&gt; iolist()</code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="from_bare_item-1">from_bare_item/1</a></h3>
+<div class="spec">
+<p><code>from_bare_item(BareItem) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="item-1">item/1</a></h3>
+<div class="spec">
+<p><code>item(X1::<a href="#type-sh_item" docgen-rel="seetype" docgen-href="#sh_item/0">sh_item()</a>) -&gt; iolist()</code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="list-1">list/1</a></h3>
+<div class="spec">
+<p><code>list(List::<a href="#type-sh_list" docgen-rel="seetype" docgen-href="#sh_list/0">sh_list()</a>) -&gt; iolist()</code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="parse_bare_item-1">parse_bare_item/1</a></h3>
+<div class="spec">
+<p><code>parse_bare_item(X1) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="parse_dictionary-1">parse_dictionary/1</a></h3>
+<div class="spec">
+<p><code>parse_dictionary(X1::binary()) -&gt; <a href="#type-sh_dictionary" docgen-rel="seetype" docgen-href="#sh_dictionary/0">sh_dictionary()</a></code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="parse_item-1">parse_item/1</a></h3>
+<div class="spec">
+<p><code>parse_item(Bin::binary()) -&gt; <a href="#type-sh_item" docgen-rel="seetype" docgen-href="#sh_item/0">sh_item()</a></code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="parse_list-1">parse_list/1</a></h3>
+<div class="spec">
+<p><code>parse_list(Bin::binary()) -&gt; <a href="#type-sh_list" docgen-rel="seetype" docgen-href="#sh_list/0">sh_list()</a></code><br></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="to_dictionary-1">to_dictionary/1</a></h3>
+<div class="spec">
+<p><code>to_dictionary(Map) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="to_item-1">to_item/1</a></h3>
+<div class="spec">
+<p><code>to_item(Item) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="to_item-2">to_item/2</a></h3>
+<div class="spec">
+<p><code>to_item(Item, Params) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="to_list-1">to_list/1</a></h3>
+<div class="spec">
+<p><code>to_list(List) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

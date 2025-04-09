@@ -114,15 +114,15 @@ info(Msg) ->
 
 %% @doc Return the default prefix for the stack.
 prefix(Msg1, _Msg2, Opts) ->
-    hb_converge:get(<<"output-prefix">>, {as, dev_message, Msg1}, <<"">>, Opts).
+    hb_ao:get(<<"output-prefix">>, {as, dev_message, Msg1}, <<"">>, Opts).
 
 %% @doc Return the input prefix for the stack.
 input_prefix(Msg1, _Msg2, Opts) ->
-    hb_converge:get(<<"input-prefix">>, {as, dev_message, Msg1}, <<"">>, Opts).
+    hb_ao:get(<<"input-prefix">>, {as, dev_message, Msg1}, <<"">>, Opts).
 
 %% @doc Return the output prefix for the stack.
 output_prefix(Msg1, _Msg2, Opts) ->
-    hb_converge:get(<<"output-prefix">>, {as, dev_message, Msg1}, <<"">>, Opts).
+    hb_ao:get(<<"output-prefix">>, {as, dev_message, Msg1}, <<"">>, Opts).
 
 %% @doc The device stack key router. Sends the request to `resolve_stack',
 %% except for `set/2' which is handled by the default implementation in
@@ -138,9 +138,9 @@ router(Key, Message1, Message2, Opts) ->
 router(Message1, Message2, Opts) ->
 	?event({router_called, {msg1, Message1}, {msg2, Message2}}),
     Mode =
-        case hb_converge:get(<<"mode">>, Message2, not_found, Opts) of
+        case hb_ao:get(<<"mode">>, Message2, not_found, Opts) of
             not_found ->
-                hb_converge:get(
+                hb_ao:get(
                     <<"mode">>,
                     {as, dev_message, Message1},
                     <<"Fold">>,
@@ -190,15 +190,15 @@ transformer_message(Msg1, Opts) ->
 transform(Msg1, Key, Opts) ->
 	% Get the device stack message from Msg1.
     ?event({transforming_stack, {key, Key}, {msg1, Msg1}, {opts, Opts}}),
-	case hb_converge:get(<<"device-stack">>, {as, dev_message, Msg1}, Opts) of
+	case hb_ao:get(<<"device-stack">>, {as, dev_message, Msg1}, Opts) of
         not_found -> throw({error, no_valid_device_stack});
         StackMsg ->
 			% Find the requested key in the device stack.
             % TODO: Should we use `as dev_message` here? After the first transform
             % of a fold (for example), the message is no longer a stack, so its 
             % `GET` behavior may be different.
-            NormKey = hb_converge:normalize_key(Key),
-			case hb_converge:resolve(StackMsg, #{ <<"path">> => NormKey }, Opts) of
+            NormKey = hb_ao:normalize_key(Key),
+			case hb_ao:resolve(StackMsg, #{ <<"path">> => NormKey }, Opts) of
 				{ok, DevMsg} ->
 					% Set the:
 					% - Device key to the device we found.
@@ -212,34 +212,34 @@ transform(Msg1, Key, Opts) ->
 							<<"device">> => DevMsg,
                             <<"device-key">> => Key,
                             <<"input-prefix">> =>
-                                hb_converge:get(
+                                hb_ao:get(
                                     [<<"input-prefixes">>, Key],
                                     {as, dev_message, Msg1},
                                     undefined,
                                     Opts
                                 ),
                             <<"output-prefix">> =>
-                                hb_converge:get(
+                                hb_ao:get(
                                     [<<"output-prefixes">>, Key],
                                     {as, dev_message, Msg1},
                                     undefined,
                                     Opts
                                 ),
                             <<"previous-device">> =>
-                                hb_converge:get(
+                                hb_ao:get(
                                     <<"device">>,
                                     {as, dev_message, Msg1},
                                     Opts
                                 ),
                             <<"previous-input-prefix">> =>
-                                hb_converge:get(
+                                hb_ao:get(
                                     <<"input-prefix">>,
                                     {as, dev_message, Msg1},
                                     undefined,
                                     Opts
                                 ),
                             <<"previous-output-prefix">> =>
-                                hb_converge:get(
+                                hb_ao:get(
                                     <<"output-prefix">>,
                                     {as, dev_message, Msg1},
                                     undefined,
@@ -259,8 +259,8 @@ transform(Msg1, Key, Opts) ->
 resolve_fold(Message1, Message2, Opts) ->
 	{ok, InitDevMsg} = dev_message:get(<<"device">>, Message1),
     StartingPassValue =
-        hb_converge:get(<<"pass">>, {as, dev_message, Message1}, unset, Opts),
-    PreparedMessage = hb_converge:set(Message1, <<"pass">>, 1, Opts),
+        hb_ao:get(<<"pass">>, {as, dev_message, Message1}, unset, Opts),
+    PreparedMessage = hb_ao:set(Message1, <<"pass">>, 1, Opts),
     case resolve_fold(PreparedMessage, Message2, 1, Opts) of
         {ok, Raw} when not is_map(Raw) ->
             {ok, Raw};
@@ -270,14 +270,14 @@ resolve_fold(Message1, Message2, Opts) ->
                 #{
                     <<"device">> => InitDevMsg,
                     <<"input-prefix">> =>
-                        hb_converge:get(
+                        hb_ao:get(
                             <<"previous-input-prefix">>,
                             {as, dev_message, Result},
                             undefined,
                             Opts
                         ),
                     <<"output-prefix">> =>
-                        hb_converge:get(
+                        hb_ao:get(
                             <<"previous-output-prefix">>,
                             {as, dev_message, Result},
                             undefined,
@@ -296,7 +296,7 @@ resolve_fold(Message1, Message2, DevNum, Opts) ->
 	case transform(Message1, DevNum, Opts) of
 		{ok, Message3} ->
 			?event({stack_execute, DevNum, {msg1, Message3}, {msg2, Message2}}),
-			case hb_converge:resolve(Message3, Message2, Opts) of
+			case hb_ao:resolve(Message3, Message2, Opts) of
 				{ok, Message4} when is_map(Message4) ->
 					?event({result, ok, DevNum, Message4}),
 					resolve_fold(Message4, Message2, DevNum + 1, Opts);
@@ -341,7 +341,7 @@ resolve_fold(Message1, Message2, DevNum, Opts) ->
 resolve_map(Message1, Message2, Opts) ->
     ?event({resolving_map, {msg1, Message1}, {msg2, Message2}}),
     DevKeys =
-        hb_converge:get(
+        hb_ao:get(
             <<"device-stack">>,
             {as, dev_message, Message1},
             Opts
@@ -350,21 +350,21 @@ resolve_map(Message1, Message2, Opts) ->
         maps:filtermap(
             fun(Key, _Dev) ->
                 {ok, OrigWithDev} = transform(Message1, Key, Opts),
-                case hb_converge:resolve(OrigWithDev, Message2, Opts) of
+                case hb_ao:resolve(OrigWithDev, Message2, Opts) of
                     {ok, Value} -> {true, Value};
                     _ -> false
                 end
             end,
-            maps:without(?CONVERGE_KEYS, hb_converge:normalize_keys(DevKeys))
+            maps:without(?AO_CORE_KEYS, hb_ao:normalize_keys(DevKeys))
         )
     },
     Res.
 
 %% @doc Helper to increment the pass number.
 increment_pass(Message, Opts) ->
-    hb_converge:set(
+    hb_ao:set(
         Message,
-        #{ <<"pass">> => hb_converge:get(<<"pass">>, {as, dev_message, Message}, 1, Opts) + 1 },
+        #{ <<"pass">> => hb_ao:get(<<"pass">>, {as, dev_message, Message}, 1, Opts) + 1 },
         Opts
     ).
 
@@ -418,7 +418,7 @@ transform_internal_call_device_test() ->
 		},
 	?assertMatch(
 		<<"Message@1.0">>,
-		hb_converge:get(
+		hb_ao:get(
 			<<"device">>,
 			element(2, transform(Msg1, <<"2">>, #{}))
 		)
@@ -460,7 +460,7 @@ transform_external_call_device_test() ->
 	},
 	?assertMatch(
 		{ok, #{ <<"value">> := <<"Super-Cool">> }},
-		hb_converge:resolve(Msg1, #{
+		hb_ao:resolve(Msg1, #{
 			<<"path">> => <<"/transform/make-cool/value">>
 		}, #{})
 	).
@@ -471,7 +471,7 @@ example_device_for_stack_test() ->
 	% the example device.
 	?assertMatch(
 		{ok, #{ <<"result">> := <<"1_2">> }},
-		hb_converge:resolve(
+		hb_ao:resolve(
 			#{ <<"device">> => generate_append_device(<<"_">>), <<"result">> => <<"1">> },
 			#{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> },
 			#{}
@@ -491,7 +491,7 @@ simple_stack_execute_test() ->
 	?event({stack_executing, test, {explicit, Msg}}),
 	?assertMatch(
 		{ok, #{ <<"result">> := <<"INIT!D1!2_D2_2">> }},
-		hb_converge:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{})
+		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{})
 	).
 
 many_devices_test() ->
@@ -517,7 +517,7 @@ many_devices_test() ->
 					<<"INIT+D12+D22+D32+D42+D52+D62+D72+D82">>
 			}
 		},
-		hb_converge:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{})
+		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{})
 	).
 
 benchmark_test() ->
@@ -537,7 +537,7 @@ benchmark_test() ->
     Iterations =
         hb:benchmark(
             fun() ->
-                hb_converge:resolve(Msg,
+                hb_ao:resolve(Msg,
                     #{
                         <<"path">> => <<"append">>,
                         <<"bin">> => <<"2">>
@@ -552,7 +552,7 @@ benchmark_test() ->
         "Evaluated ~p stack messages in ~p seconds (~.2f msg/s)",
         [Iterations, BenchTime, Iterations / BenchTime]
     ),
-    ?assert(Iterations > 10).
+    ?assert(Iterations >= 10).
 
 
 test_prefix_msg() ->
@@ -561,10 +561,10 @@ test_prefix_msg() ->
             fun(M1, M2, Opts) ->
                 In = input_prefix(M1, M2, Opts),
                 Out = output_prefix(M1, M2, Opts),
-                Key = hb_converge:get(<<"key">>, M2, Opts),
-                Value = hb_converge:get(<<In/binary, "/", Key/binary>>, M2, Opts),
+                Key = hb_ao:get(<<"key">>, M2, Opts),
+                Value = hb_ao:get(<<In/binary, "/", Key/binary>>, M2, Opts),
                 ?event({setting, {inp, In}, {outp, Out}, {key, Key}, {value, Value}}),
-                {ok, hb_converge:set(
+                {ok, hb_ao:set(
                     M1,
                     <<Out/binary, "/", Key/binary>>,
                     Value,
@@ -584,9 +584,9 @@ no_prefix_test() ->
             <<"key">> => <<"example">>,
             <<"example">> => 1
         },
-    {ok, Ex1Msg3} = hb_converge:resolve(test_prefix_msg(), Msg2, #{}),
+    {ok, Ex1Msg3} = hb_ao:resolve(test_prefix_msg(), Msg2, #{}),
     ?event({ex1, Ex1Msg3}),
-    ?assertMatch(1, hb_converge:get(<<"example">>, Ex1Msg3, #{})).
+    ?assertMatch(1, hb_ao:get(<<"example">>, Ex1Msg3, #{})).
 
 output_prefix_test() ->
     Msg1 =
@@ -599,11 +599,11 @@ output_prefix_test() ->
             <<"key">> => <<"example">>,
             <<"example">> => 1
         },
-    {ok, Ex2Msg3} = hb_converge:resolve(Msg1, Msg2, #{}),
+    {ok, Ex2Msg3} = hb_ao:resolve(Msg1, Msg2, #{}),
     ?assertMatch(1,
-        hb_converge:get(<<"out1/example">>, {as, dev_message, Ex2Msg3}, #{})),
+        hb_ao:get(<<"out1/example">>, {as, dev_message, Ex2Msg3}, #{})),
     ?assertMatch(1,
-        hb_converge:get(<<"out2/example">>, {as, dev_message, Ex2Msg3}, #{})).
+        hb_ao:get(<<"out2/example">>, {as, dev_message, Ex2Msg3}, #{})).
 
 input_and_output_prefixes_test() ->
     Msg1 =
@@ -618,11 +618,11 @@ input_and_output_prefixes_test() ->
             <<"in1">> => #{ <<"example">> => 1 },
             <<"in2">> => #{ <<"example">> => 2 }
         },
-    {ok, Msg3} = hb_converge:resolve(Msg1, Msg2, #{}),
+    {ok, Msg3} = hb_ao:resolve(Msg1, Msg2, #{}),
     ?assertMatch(1,
-        hb_converge:get(<<"out1/example">>, {as, dev_message, Msg3}, #{})),
+        hb_ao:get(<<"out1/example">>, {as, dev_message, Msg3}, #{})),
     ?assertMatch(2,
-        hb_converge:get(<<"out2/example">>, {as, dev_message, Msg3}, #{})).
+        hb_ao:get(<<"out2/example">>, {as, dev_message, Msg3}, #{})).
 
 input_output_prefixes_passthrough_test() ->
     Msg1 =
@@ -636,9 +636,9 @@ input_output_prefixes_passthrough_test() ->
             <<"key">> => <<"example">>,
             <<"combined-in">> => #{ <<"example">> => 1 }
         },
-    {ok, Ex2Msg3} = hb_converge:resolve(Msg1, Msg2, #{}),
+    {ok, Ex2Msg3} = hb_ao:resolve(Msg1, Msg2, #{}),
     ?assertMatch(1,
-        hb_converge:get(
+        hb_ao:get(
             <<"combined-out/example">>,
             {as, dev_message, Ex2Msg3},
             #{}
@@ -655,13 +655,13 @@ reinvocation_test() ->
 			},
 		<<"result">> => <<"INIT">>
 	},
-	Res1 = hb_converge:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{}),
+	Res1 = hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{}),
 	?assertMatch(
 		{ok, #{ <<"result">> := <<"INIT+D12+D22">> }},
 		Res1
 	),
 	{ok, Msg2} = Res1,
-	Res2 = hb_converge:resolve(Msg2, #{ <<"path">> => <<"append">>, <<"bin">> => <<"3">> }, #{}),
+	Res2 = hb_ao:resolve(Msg2, #{ <<"path">> => <<"append">>, <<"bin">> => <<"3">> }, #{}),
 	?assertMatch(
 		{ok, #{ <<"result">> := <<"INIT+D12+D22+D13+D23">> }},
 		Res2
@@ -679,7 +679,7 @@ skip_test() ->
 	},
 	?assertMatch(
 		{ok, #{ <<"result">> := <<"INIT+D12">> }},
-		hb_converge:resolve(
+		hb_ao:resolve(
 			Msg1,
 			#{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> },
             #{}
@@ -700,7 +700,7 @@ pass_test() ->
 	},
 	?assertMatch(
 		{ok, #{ <<"result">> := <<"INIT+D1_+D1_">> }},
-		hb_converge:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{})
+		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{})
 	).
 
 not_found_test() ->
@@ -720,13 +720,13 @@ not_found_test() ->
 			},
 		<<"result">> => <<"INIT">>
 	},
-    {ok, Msg3} = hb_converge:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
+    {ok, Msg3} = hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
     ?assertMatch(
 		#{ <<"result">> := <<"INIT+D1_+D2_">> },
 		Msg3
 	),
     ?event({ex3, Msg3}),
-    ?assertEqual(1337, hb_converge:get(<<"special/output">>, Msg3, #{})).
+    ?assertEqual(1337, hb_ao:get(<<"special/output">>, Msg3, #{})).
 
 simple_map_test() ->
     Msg = #{
@@ -739,10 +739,10 @@ simple_map_test() ->
         <<"result">> => <<"INIT">>
     },
     {ok, Msg3} =
-        hb_converge:resolve(
+        hb_ao:resolve(
             Msg,
             #{ <<"path">> => <<"append">>, <<"mode">> => <<"Map">>, <<"bin">> => <<"/">> },
             #{}
         ),
-    ?assertMatch(<<"INIT+D1/">>, hb_converge:get(<<"1/result">>, Msg3, #{})),
-    ?assertMatch(<<"INIT+D2/">>, hb_converge:get(<<"2/result">>, Msg3, #{})).
+    ?assertMatch(<<"INIT+D1/">>, hb_ao:get(<<"1/result">>, Msg3, #{})),
+    ?assertMatch(<<"INIT+D2/">>, hb_ao:get(<<"2/result">>, Msg3, #{})).

@@ -16,26 +16,13 @@
   {git,"https://github.com/ninenines/gun",
        {ref,"8efcedd3a089e6ab5317e4310fed424a4ee130f8"}},
   0},
- {<<"jiffy">>,
-  {git,"https://github.com/ArweaveTeam/jiffy.git",
-       {ref,"74c956defa9116c85d76f77c3e9b5bd6de7bd39a"}},
-  0},
  {<<"prometheus">>,{pkg,<<"prometheus">>,<<"4.11.0">>},0},
  {<<"prometheus_cowboy">>,{pkg,<<"prometheus_cowboy">>,<<"0.1.8">>},0},
  {<<"prometheus_httpd">>,{pkg,<<"prometheus_httpd">>,<<"2.1.11">>},1},
  {<<"quantile_estimator">>,{pkg,<<"quantile_estimator">>,<<"0.2.1">>},1},
- {<<"quicer">>,
-  {git,"https://github.com/qzhuyan/quic.git",
-       {ref,"97d8be9fb8017f4578248f96f5b35f8e357df792"}},
-  0},
  {<<"ranch">>,
   {git,"https://github.com/ninenines/ranch",
        {ref,"a692f44567034dacf5efcaa24a24183788594eb7"}},
-  1},
- {<<"rocksdb">>,{pkg,<<"rocksdb">>,<<"1.8.0">>},0},
- {<<"snabbkaffe">>,
-  {git,"https://github.com/kafka4beam/snabbkaffe.git",
-       {ref,"b59298334ed349556f63405d1353184c63c66534"}},
   1}]}.
 [
 {pkg_hash,[
@@ -43,13 +30,11 @@
  {<<"prometheus">>, <<"B95F8DE8530F541BD95951E18E355A840003672E5EDA4788C5FA6183406BA29A">>},
  {<<"prometheus_cowboy">>, <<"CFCE0BC7B668C5096639084FCD873826E6220EA714BF60A716F5BD080EF2A99C">>},
  {<<"prometheus_httpd">>, <<"F616ED9B85B536B195D94104063025A91F904A4CFC20255363F49A197D96C896">>},
- {<<"quantile_estimator">>, <<"EF50A361F11B5F26B5F16D0696E46A9E4661756492C981F7B2229EF42FF1CD15">>},
- {<<"rocksdb">>, <<"0AE072F9818DAC03E18BA0E4B436450D24040DFB1A526E2198B451FD9FA0284F">>}]},
+ {<<"quantile_estimator">>, <<"EF50A361F11B5F26B5F16D0696E46A9E4661756492C981F7B2229EF42FF1CD15">>}]},
 {pkg_hash_ext,[
  {<<"accept">>, <<"11B18C220BCC2EAB63B5470C038EF10EB6783BCB1FCDB11AA4137DEFA5AC1BB8">>},
  {<<"prometheus">>, <<"719862351AABF4DF7079B05DC085D2BBCBE3AC0AC3009E956671B1D5AB88247D">>},
  {<<"prometheus_cowboy">>, <<"BA286BECA9302618418892D37BCD5DC669A6CC001F4EB6D6AF85FF81F3F4F34C">>},
  {<<"prometheus_httpd">>, <<"0BBE831452CFDF9588538EB2F570B26F30C348ADAE5E95A7D87F35A5910BCF92">>},
- {<<"quantile_estimator">>, <<"282A8A323CA2A845C9E6F787D166348F776C1D4A41EDE63046D72D422E3DA946">>},
- {<<"rocksdb">>, <<"185E645EA480E9325D5EFE362BF3D2A38EDFC31B5145031B0CBEED978E89523C">>}]}
+ {<<"quantile_estimator">>, <<"282A8A323CA2A845C9E6F787D166348F776C1D4A41EDE63046D72D422E3DA946">>}]}
 ].

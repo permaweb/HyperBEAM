@@ -1,6 +1,6 @@
-%%% @doc A parser that translates Converge HTTP API requests in TABM format
+%%% @doc A parser that translates AO-Core HTTP API requests in TABM format
 %%% into an ordered list of messages to evaluate. The details of this format
-%%% are described in `docs/converge-http-api.md`.
+%%% are described in `docs/ao-core-http-api.md`.
 %%%
 %%% Syntax overview:
 %%% ```
@@ -37,23 +37,23 @@
 -include_lib("eunit/include/eunit.hrl").
 -define(MAX_SEGMENT_LENGTH, 512).
 
--type converge_message() :: map() | binary().
+-type ao_message() :: map() | binary().
 -type tabm_message() :: map().
 
-%% @doc Convert a list of converge message into TABM message.
--spec to(list(converge_message())) -> tabm_message().
+%% @doc Convert a list of AO-Core message into TABM message.
+-spec to(list(ao_message())) -> tabm_message().
 to(Messages) ->
-    % Iterate through all converge messages folding them into the TABM message
+    % Iterate through all AO-Core messages folding them into the TABM message
     % Scopes contains the following map: #{Key => [StageIndex, StageIndex2...]}
     % that allows to scope keys to the given stage.
     {TABMMessage, _FinalIndex, Scopes} =
         lists:foldl(
             fun
-                % Special case when Converge message is ID
+                % Special case when AO-Core message is ID
                 (Message, {Acc, Index, ScopedModifications}) when ?IS_ID(Message) ->
                     {append_path(Message, Acc), Index + 1, ScopedModifications};
 
-                % Special case when Converge message contains resolve command
+                % Special case when AO-Core message contains resolve command
                 ({resolve, SubMessages0}, {Acc, Index, ScopedModifications}) ->
                     SubMessages1 = maps:get(<<"path">>, to(SubMessages0)),
                     <<"/", SubMessages2/binary>> = SubMessages1,
@@ -133,7 +133,7 @@ type(Value) when is_binary(Value) -> binary;
 type(Value) when is_integer(Value) -> integer;
 type(_Value) -> unknown.
 
-%% @doc Normalize a singleton TABM message into a list of executable Converge
+%% @doc Normalize a singleton TABM message into a list of executable AO-Core
 %% messages.
 from(RawMsg) ->
     RawPath = maps:get(<<"path">>, RawMsg, <<>>),
@@ -173,7 +173,7 @@ parse_full_path(RelativeRef) ->
         maps:from_list(QKVList)
     }.
 
-%% @doc Step 2: Decode, split and sanitize the path. Split by `/` but avoid
+%% @doc Step 2: Decode, split and sanitize the path. Split by `/' but avoid
 %% subpath components, such that their own path parts are not dissociated from
 %% their parent path.
 path_messages(RawBin) when is_binary(RawBin) ->
@@ -182,6 +182,7 @@ path_messages(RawBin) when is_binary(RawBin) ->
 %% @doc Normalize the base path.
 normalize_base([]) -> [];
 normalize_base([First|Rest]) when ?IS_ID(First) -> [First|Rest];
+normalize_base([{as, DevID, First}|Rest]) -> [{as, DevID, First}|Rest];
 normalize_base(Rest) -> [#{}|Rest].
 
 %% @doc Split the path into segments, filtering out empty segments and
@@ -240,7 +241,7 @@ apply_types(Msg) ->
     ).
 
 %% @doc Step 4: Group headers/query by N-scope.
-%% `N.Key` => applies to Nth step. Otherwise => global
+%% `N.Key' => applies to Nth step. Otherwise => `global'
 group_scoped(Map, Msgs) ->
     {NScope, Global} =
         maps:fold(
@@ -278,6 +279,15 @@ build_messages(Msgs, ScopedModifications) ->
     do_build(1, Msgs, ScopedModifications).
 
 do_build(_, [], _ScopedKeys) -> [];
+do_build(I, [{as, DevID, Msg = #{ <<"path">> := <<"">> }}|Rest], ScopedKeys) ->
+    ScopedKey = lists:nth(I, ScopedKeys),
+    StepMsg = hb_message:convert(
+        Merged = maps:merge(Msg, ScopedKey),
+        <<"structured@1.0">>,
+        #{ topic => ao_internal }
+    ),
+    ?event({merged, {dev, DevID}, {input, Msg}, {merged, Merged}, {output, StepMsg}}),
+    [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys)];
 do_build(I, [Msg|Rest], ScopedKeys) when not is_map(Msg) ->
     [Msg | do_build(I + 1, Rest, ScopedKeys)];
 do_build(I, [Msg | Rest], ScopedKeys) ->
@@ -285,7 +295,7 @@ do_build(I, [Msg | Rest], ScopedKeys) ->
     StepMsg = hb_message:convert(
         maps:merge(Msg, ScopedKey),
         <<"structured@1.0">>,
-        #{ topic => converge_internal }
+        #{ topic => ao_internal }
     ),
     [StepMsg | do_build(I + 1, Rest, ScopedKeys)].
 
@@ -312,8 +322,8 @@ parse_part(Part) ->
     end.
 
 %% @doc Parse part modifiers:
-%% 1. `~Device` => {as, Device, Msg}
-%% 2. `&K=V` => Msg#{ K => V }
+%% 1. `~Device' => `{as, Device, Msg}'
+%% 2. `&K=V' => `Msg#{ K => V }'
 parse_part_mods([], Msg) -> Msg;
 parse_part_mods(<<>>, Msg) -> Msg;
 parse_part_mods(<<"~", PartMods/binary>>, Msg) ->
@@ -339,7 +349,7 @@ parse_part_mods(<< "&", InlinedMsgBin/binary >>, Msg) ->
 
 %% @doc Extrapolate the inlined key-value pair from a path segment. If the
 %% key has a value, it may provide a type (as with typical keys), but if a
-%% value is not provided, it is assumed to be a boolean `true`.
+%% value is not provided, it is assumed to be a boolean `true'.
 parse_inlined_key_val(Bin) ->
     case part([$=, $&], Bin) of
         {no_match, K, <<>>} -> {K, true};
@@ -350,7 +360,7 @@ parse_inlined_key_val(Bin) ->
 
 %% @doc Attempt Cowboy URL decode, then sanitize the result.
 decode_string(B) ->
-    case catch http_uri:decode(B) of
+    case catch uri_string:unquote(B) of
         DecodedBin when is_binary(DecodedBin) -> DecodedBin;
         _ -> throw({error, cannot_decode, B})
     end.
@@ -397,6 +407,32 @@ maybe_join(Items, Sep) ->
 
 %%% Tests
 
+parse_explicit_message_test() ->
+    Singleton1 = #{
+        <<"path">> => <<"/a">>,
+        <<"a">> => <<"b">>
+    },
+    ?assertEqual(
+        [
+            #{ <<"a">> => <<"b">>},
+            #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }
+        ],
+        from(Singleton1)
+    ),
+    DummyID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Singleton2 = #{
+        <<"path">> => <<"/", DummyID/binary, "/a">>
+    },
+    ?assertEqual([DummyID, #{ <<"path">> => <<"a">> }], from(Singleton2)),
+    Singleton3 = #{
+        <<"path">> => <<"/", DummyID/binary, "/a">>,
+        <<"a">> => <<"b">>
+    },
+    ?assertEqual(
+        [DummyID, #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }],
+        from(Singleton3)
+    ).
+
 %%% `to/1' function tests
 to_suite_test_() ->
     [
@@ -420,7 +456,6 @@ simple_to_test() ->
     Expected = #{<<"path">> => <<"/a">>, <<"test-key">> => <<"test-value">>},
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages))).
-
 
 multiple_messages_to_test() ->
     Messages =

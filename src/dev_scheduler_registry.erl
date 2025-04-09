@@ -7,7 +7,7 @@
 %%% only SU processes are supported.
 
 start() ->
-    pg:start(pg),
+    hb_name:start(),
     ok.
 
 get_wallet() ->
@@ -18,19 +18,14 @@ find(ProcID) -> find(ProcID, false).
 find(ProcID, GenIfNotHosted) ->
     find(ProcID, GenIfNotHosted, #{ priv_wallet => hb:wallet() }).
 find(ProcID, GenIfNotHosted, Opts) ->
-    case pg:get_local_members({dev_scheduler, ProcID}) of
-        [] ->
-            maybe_new_proc(ProcID, GenIfNotHosted, Opts);
-        [Pid] ->
-            case is_process_alive(Pid) of
-                true -> Pid;
-                false -> 
-                    maybe_new_proc(ProcID, GenIfNotHosted, Opts)
-            end
+    case hb_name:lookup({dev_scheduler, ProcID}) of
+        undefined -> maybe_new_proc(ProcID, GenIfNotHosted, Opts);
+        Pid -> Pid
     end.
 
 get_processes() ->
-    [ ProcID || {dev_scheduler, ProcID} <- pg:which_groups() ].
+    ?event({getting_processes, hb_name:all()}),
+    [ ProcID || {{dev_scheduler, ProcID}, _} <- hb_name:all() ].
 
 maybe_new_proc(_ProcID, false, _Opts) -> not_found;
 maybe_new_proc(ProcID, _GenIfNotHosted, Opts) -> 

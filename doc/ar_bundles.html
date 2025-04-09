@@ -1,0 +1,218 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module ar_bundles</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module ar_bundles</h1>
+<ul class="index"><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
+
+
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#data_item_signature_data-1">data_item_signature_data/1</a></td><td>Generate the data segment to be signed for a data item.</td></tr>
+<tr><td valign="top"><a href="#decode_tags-1">decode_tags/1</a></td><td>Decode tags from a binary format using Apache Avro.</td></tr>
+<tr><td valign="top"><a href="#deserialize-1">deserialize/1</a></td><td>Convert binary data back to a #tx record.</td></tr>
+<tr><td valign="top"><a href="#deserialize-2">deserialize/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#encode_tags-1">encode_tags/1</a></td><td>Encode tags into a binary format using Apache Avro.</td></tr>
+<tr><td valign="top"><a href="#find-2">find/2</a></td><td>Find an item in a bundle-map/list and return it.</td></tr>
+<tr><td valign="top"><a href="#format-1">format/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#format-2">format/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#hd-1">hd/1</a></td><td>Return the first item in a bundle-map/list.</td></tr>
+<tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of an item -- either signed or unsigned as specified.</td></tr>
+<tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#is_signed-1">is_signed/1</a></td><td>Check if an item is signed.</td></tr>
+<tr><td valign="top"><a href="#manifest-1">manifest/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#manifest_item-1">manifest_item/1</a></td><td>Return the manifest item in a bundle-map/list.</td></tr>
+<tr><td valign="top"><a href="#map-1">map/1</a></td><td>Convert an item containing a map or list into an Erlang map.</td></tr>
+<tr><td valign="top"><a href="#member-2">member/2</a></td><td>Check if an item exists in a bundle-map/list.</td></tr>
+<tr><td valign="top"><a href="#new_item-4">new_item/4</a></td><td>Create a new data item.</td></tr>
+<tr><td valign="top"><a href="#normalize-1">normalize/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#parse_manifest-1">parse_manifest/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#print-1">print/1</a></td><td>Module for creating, signing, and verifying Arweave data items and bundles.</td></tr>
+<tr><td valign="top"><a href="#reset_ids-1">reset_ids/1</a></td><td>Re-calculate both of the IDs for an item.</td></tr>
+<tr><td valign="top"><a href="#serialize-1">serialize/1</a></td><td>Convert a #tx record to its binary representation.</td></tr>
+<tr><td valign="top"><a href="#serialize-2">serialize/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#sign_item-2">sign_item/2</a></td><td>Sign a data item.</td></tr>
+<tr><td valign="top"><a href="#signer-1">signer/1</a></td><td>Return the address of the signer of an item, if it is signed.</td></tr>
+<tr><td valign="top"><a href="#type-1">type/1</a></td><td></td></tr>
+<tr><td valign="top"><a href="#verify_item-1">verify_item/1</a></td><td>Verify the validity of a data item.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="data_item_signature_data-1">data_item_signature_data/1</a></h3>
+<div class="spec">
+<p><code>data_item_signature_data(RawItem) -&gt; any()</code></p>
+<p> </p>
+</div><p>Generate the data segment to be signed for a data item.</p>
+
+<h3 class="function"><a name="decode_tags-1">decode_tags/1</a></h3>
+<div class="spec">
+<p><code>decode_tags(X1) -&gt; any()</code></p>
+<p> </p>
+</div><p>Decode tags from a binary format using Apache Avro.</p>
+
+<h3 class="function"><a name="deserialize-1">deserialize/1</a></h3>
+<div class="spec">
+<p><code>deserialize(Binary) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert binary data back to a #tx record.</p>
+
+<h3 class="function"><a name="deserialize-2">deserialize/2</a></h3>
+<div class="spec">
+<p><code>deserialize(Item, X2) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="encode_tags-1">encode_tags/1</a></h3>
+<div class="spec">
+<p><code>encode_tags(Tags) -&gt; any()</code></p>
+<p> </p>
+</div><p>Encode tags into a binary format using Apache Avro.</p>
+
+<h3 class="function"><a name="find-2">find/2</a></h3>
+<div class="spec">
+<p><code>find(Key, Map) -&gt; any()</code></p>
+<p> </p>
+</div><p>Find an item in a bundle-map/list and return it.</p>
+
+<h3 class="function"><a name="format-1">format/1</a></h3>
+<div class="spec">
+<p><code>format(Item) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="format-2">format/2</a></h3>
+<div class="spec">
+<p><code>format(Item, Indent) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="hd-1">hd/1</a></h3>
+<div class="spec">
+<p><code>hd(Tx) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the first item in a bundle-map/list.</p>
+
+<h3 class="function"><a name="id-1">id/1</a></h3>
+<div class="spec">
+<p><code>id(Item) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the ID of an item -- either signed or unsigned as specified.
+  If the item is unsigned and the user requests the signed ID, we return
+  the atom <code>not_signed</code>. In all other cases, we return the ID of the item.</p>
+
+<h3 class="function"><a name="id-2">id/2</a></h3>
+<div class="spec">
+<p><code>id(Item, Type) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="is_signed-1">is_signed/1</a></h3>
+<div class="spec">
+<p><code>is_signed(Item) -&gt; any()</code></p>
+<p> </p>
+</div><p>Check if an item is signed.</p>
+
+<h3 class="function"><a name="manifest-1">manifest/1</a></h3>
+<div class="spec">
+<p><code>manifest(Map) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="manifest_item-1">manifest_item/1</a></h3>
+<div class="spec">
+<p><code>manifest_item(Tx) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the manifest item in a bundle-map/list.</p>
+
+<h3 class="function"><a name="map-1">map/1</a></h3>
+<div class="spec">
+<p><code>map(Tx) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert an item containing a map or list into an Erlang map.</p>
+
+<h3 class="function"><a name="member-2">member/2</a></h3>
+<div class="spec">
+<p><code>member(Key, Item) -&gt; any()</code></p>
+<p> </p>
+</div><p>Check if an item exists in a bundle-map/list.</p>
+
+<h3 class="function"><a name="new_item-4">new_item/4</a></h3>
+<div class="spec">
+<p><code>new_item(Target, Anchor, Tags, Data) -&gt; any()</code></p>
+<p> </p>
+</div><p>Create a new data item. Should only be used for testing.</p>
+
+<h3 class="function"><a name="normalize-1">normalize/1</a></h3>
+<div class="spec">
+<p><code>normalize(Item) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="parse_manifest-1">parse_manifest/1</a></h3>
+<div class="spec">
+<p><code>parse_manifest(Item) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="print-1">print/1</a></h3>
+<div class="spec">
+<p><code>print(Item) -&gt; any()</code></p>
+<p> </p>
+</div><p>Module for creating, signing, and verifying Arweave data items and bundles.</p>
+
+<h3 class="function"><a name="reset_ids-1">reset_ids/1</a></h3>
+<div class="spec">
+<p><code>reset_ids(Item) -&gt; any()</code></p>
+<p> </p>
+</div><p>Re-calculate both of the IDs for an item. This is a wrapper
+  function around <code>update_id/1</code> that ensures both IDs are set from
+  scratch.</p>
+
+<h3 class="function"><a name="serialize-1">serialize/1</a></h3>
+<div class="spec">
+<p><code>serialize(TX) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert a #tx record to its binary representation.</p>
+
+<h3 class="function"><a name="serialize-2">serialize/2</a></h3>
+<div class="spec">
+<p><code>serialize(TX, X2) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="sign_item-2">sign_item/2</a></h3>
+<div class="spec">
+<p><code>sign_item(RawItem, X2) -&gt; any()</code></p>
+<p> </p>
+</div><p>Sign a data item.</p>
+
+<h3 class="function"><a name="signer-1">signer/1</a></h3>
+<div class="spec">
+<p><code>signer(Tx) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the address of the signer of an item, if it is signed.</p>
+
+<h3 class="function"><a name="type-1">type/1</a></h3>
+<div class="spec">
+<p><code>type(Item) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="verify_item-1">verify_item/1</a></h3>
+<div class="spec">
+<p><code>verify_item(DataItem) -&gt; any()</code></p>
+<p> </p>
+</div><p>Verify the validity of a data item.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

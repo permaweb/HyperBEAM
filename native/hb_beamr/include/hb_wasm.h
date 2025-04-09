@@ -60,7 +60,7 @@ int wasm_execute_indirect_function(Proc* proc, const char *function_name, const 
  *
  *  returns: A 64-bit status code indicating success (0) or failure (-1).
  */
-int wasm_execute_exported_function(Proc* proc, const *function_name, wasm_val_t* params, wasm_val_t * results);
+int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_val_t* params, wasm_val_t * results);
 
 
 #endif 

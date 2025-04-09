@@ -1,6 +1,6 @@
 %%% @doc A virtual filesystem device.
 %%% Implements a file-system-as-map structure, which is traversible externally.
-%%% Each file is a binary and each directory is a Converge message.
+%%% Each file is a binary and each directory is an AO-Core message.
 %%% Additionally, this module adds a series of WASI-preview-1 compatible
 %%% functions for accessing the filesystem as imported functions by WASM
 %%% modules.
@@ -22,15 +22,15 @@
 
 -define(INIT_FDS,
     #{
-        0 => #{
+        <<"0">> => #{
             <<"filename">> => <<"/dev/stdin">>,
             <<"offset">> => 0
         },
-        1 => #{
+        <<"1">> => #{
             <<"filename">> => <<"/dev/stdout">>,
             <<"offset">> => 0
         },
-        2 => #{
+        <<"2">> => #{
             <<"filename">> => <<"/dev/stderr">>,
             <<"offset">> => 0
         }
@@ -44,7 +44,7 @@
 init(M1, _M2, Opts) ->
     ?event(running_init),
     MsgWithLib =
-        hb_converge:set(
+        hb_ao:set(
             M1,
             #{
                 <<"wasm/stdlib/wasi_snapshot_preview1">> =>
@@ -53,14 +53,14 @@ init(M1, _M2, Opts) ->
             Opts
         ),
     MsgWithFDs =
-        hb_converge:set(
+        hb_ao:set(
             MsgWithLib,
             <<"file-descriptors">>,
             ?INIT_FDS,
             Opts
         ),
     CompleteMsg =
-        hb_converge:set(
+        hb_ao:set(
             MsgWithFDs,
             <<"vfs">>,
             ?INIT_VFS,
@@ -71,48 +71,26 @@ init(M1, _M2, Opts) ->
 compute(Msg1) ->
     {ok, Msg1}.
 
-% %% @doc Encode the input message for inclusion in the VFS.
-% execute(M1, M2, Opts) ->
-%     case hb_converge:get(<<"Pass">>, M1, Opts) of
-%         1 ->
-%             MsgToProc = hb_converge:get(<<"Message">>, M2, Opts),
-%             JSON =
-%                 ar_bundles:serialize(
-%                     hb_message:convert(MsgToProc, tx, converge, #{}),
-%                     json
-%                 ),
-%             ?event(setting_message_vfs_key),
-%             {ok,
-%                 hb_converge:set(
-%                     M1,
-%                     <<"vfs/message">>,
-%                     JSON,
-%                     Opts
-%                 )
-%             };
-%         _ -> {ok, M1}
-%     end.
-
 %% @doc Return the stdout buffer from a state message.
 stdout(M) ->
-    hb_converge:get(<<"vfs/dev/stdout">>, M).
+    hb_ao:get(<<"vfs/dev/stdout">>, M).
 
 %% @doc Adds a file descriptor to the state message.
 %path_open(M, Instance, [FDPtr, LookupFlag, PathPtr|_]) ->
 path_open(Msg1, Msg2, Opts) ->
-    FDs = hb_converge:get(<<"file-descriptors">>, Msg1, Opts),
+    FDs = hb_ao:get(<<"file-descriptors">>, Msg1, Opts),
     Instance = hb_private:get(<<"instance">>, Msg1, Opts),
-    [FDPtr, LookupFlag, PathPtr|_] = hb_converge:get(<<"args">>, Msg2, Opts),
+    [FDPtr, LookupFlag, PathPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({path_open, FDPtr, LookupFlag, PathPtr}),
     Path = hb_beamr_io:read_string(Instance, PathPtr),
     ?event({path_open, Path}),
     FD = #{
         <<"index">> := Index
     } =
-        case hb_converge:get(<<"vfs/", Path/binary>>, Msg1, Opts) of
+        case hb_ao:get(<<"vfs/", Path/binary>>, Msg1, Opts) of
             not_found ->
                 #{
-                    <<"index">> => length(hb_converge:keys(FDs)) + 1,
+                    <<"index">> => length(hb_ao:keys(FDs)) + 1,
                     <<"filename">> => Path,
                     <<"offset">> => 0
                 };
@@ -122,7 +100,7 @@ path_open(Msg1, Msg2, Opts) ->
         ok,
         #{
             <<"state">> =>
-                hb_converge:set(
+                hb_ao:set(
                     Msg1,
                     <<"vfs/", Path/binary>>,
                     FD
@@ -134,11 +112,11 @@ path_open(Msg1, Msg2, Opts) ->
 %% @doc WASM stdlib implementation of `fd_write', using the WASI-p1 standard
 %% interface.
 fd_write(Msg1, Msg2, Opts) ->
-    State = hb_converge:get(<<"state">>, Msg1, Opts),
+    State = hb_ao:get(<<"state">>, Msg1, Opts),
     Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
-    [FD, Ptr, Vecs, RetPtr|_] = hb_converge:get(<<"args">>, Msg2, Opts),
+    [FD, Ptr, Vecs, RetPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({fd_write, {fd, FD}, {ptr, Ptr}, {vecs, Vecs}, {retptr, RetPtr}}),
-    Signature = hb_converge:get(<<"func-sig">>, Msg2, Opts),
+    Signature = hb_ao:get(<<"func-sig">>, Msg2, Opts),
     ?event({signature, Signature}),
     fd_write(State, Instance, [FD, Ptr, Vecs, RetPtr], 0, Opts).
 
@@ -151,28 +129,28 @@ fd_write(S, Instance, [_, _Ptr, 0, RetPtr], BytesWritten, _Opts) ->
     {ok, #{ <<"state">> => S, <<"results">> => [0] }};
 fd_write(S, Instance, [FDnum, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
     FDNumStr = integer_to_binary(FDnum),
-    FD = hb_converge:get(<<"file-descriptors/", FDNumStr/binary>>, S, Opts),
-    Filename = hb_converge:get(<<"filename">>, FD, Opts),
-    StartOffset = hb_converge:get(<<"offset">>, FD, Opts),
+    FD = hb_ao:get(<<"file-descriptors/", FDNumStr/binary>>, S, Opts),
+    Filename = hb_ao:get(<<"filename">>, FD, Opts),
+    StartOffset = hb_ao:get(<<"offset">>, FD, Opts),
     {VecPtr, Len} = parse_iovec(Instance, Ptr),
     {ok, Data} = hb_beamr_io:read(Instance, VecPtr, Len),
     Before =
         binary:part(
-            OrigData = hb_converge:get(<<"data">>, FD, Opts),
+            OrigData = hb_ao:get(<<"data">>, FD, Opts),
             0,
             StartOffset
         ),
     After =
         binary:part(OrigData, StartOffset, byte_size(OrigData) - StartOffset),
     S1 =
-        hb_converge:set(
+        hb_ao:set(
             S,
             <<"file-descriptors/", FDNumStr/binary, "/offset">>,
             StartOffset + byte_size(Data),
             Opts
         ),
     S2 =
-        hb_converge:set(
+        hb_ao:set(
             S1,
             <<"vfs/", Filename/binary>>,
             <<Before/binary, Data/binary, After/binary>>,
@@ -188,10 +166,10 @@ fd_write(S, Instance, [FDnum, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
 
 %% @doc Read from a file using the WASI-p1 standard interface.
 fd_read(Msg1, Msg2, Opts) ->
-    State = hb_converge:get(<<"state">>, Msg1, Opts),
+    State = hb_ao:get(<<"state">>, Msg1, Opts),
     Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
-    [FD, VecsPtr, NumVecs, RetPtr|_] = hb_converge:get(<<"args">>, Msg2, Opts),
-    Signature = hb_converge:get(<<"func-sig">>, Msg2, Opts),
+    [FD, VecsPtr, NumVecs, RetPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
+    Signature = hb_ao:get(<<"func-sig">>, Msg2, Opts),
     ?event({signature, Signature}),
     fd_read(State, Instance, [FD, VecsPtr, NumVecs, RetPtr], 0, Opts).
 
@@ -205,20 +183,20 @@ fd_read(S, Instance, [FDNum, VecsPtr, NumVecs, RetPtr], BytesRead, Opts) ->
     % Parse the request
     FDNumStr = integer_to_binary(FDNum),
     Filename =
-        hb_converge:get(
+        hb_ao:get(
             <<"file-descriptors/", FDNumStr/binary, "/filename">>, S, Opts),
     {VecPtr, Len} = parse_iovec(Instance, VecsPtr),
     % Read the bytes from the file
-    Data = hb_converge:get(<<"vfs/", Filename/binary>>, S, Opts),
+    Data = hb_ao:get(<<"vfs/", Filename/binary>>, S, Opts),
     Offset =
-        hb_converge:get(
+        hb_ao:get(
             <<"file-descriptors/", FDNumStr/binary, "/offset">>, S, Opts),
     ReadSize = min(Len, byte_size(Data) - Offset),
     Bin = binary:part(Data, Offset, ReadSize),
     % Write the bytes to the WASM Instance
     ok = hb_beamr_io:write(Instance, VecPtr, Bin),
     fd_read(
-        hb_converge:set(
+        hb_ao:set(
             S,
             <<"file-descriptors/", FDNumStr/binary, "/offset">>,
             Offset + ReadSize,
@@ -242,7 +220,7 @@ parse_iovec(Instance, Ptr) ->
 %%% Misc WASI-preview-1 handlers.
 clock_time_get(Msg1, _Msg2, Opts) ->
     ?event({clock_time_get, {returning, 1}}),
-    State = hb_converge:get(<<"state">>, Msg1, Opts),
+    State = hb_ao:get(<<"state">>, Msg1, Opts),
     {ok, #{ <<"state">> => State, <<"results">> => [1] }}.
 
 %%% Tests
@@ -254,19 +232,19 @@ generate_wasi_stack(File, Func, Params) ->
     init(),
     Msg0 = dev_wasm:cache_wasm_image(File),
     Msg1 = Msg0#{
-        <<"device">> => <<"Stack@1.0">>,
+        <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> => [<<"WASI@1.0">>, <<"WASM-64@1.0">>],
         <<"output-prefixes">> => [<<"wasm">>, <<"wasm">>],
         <<"stack-keys">> => [<<"init">>, <<"compute">>],
-        <<"wasm-function">> => Func,
-        <<"wasm-params">> => Params
+        <<"function">> => Func,
+        <<"params">> => Params
     },
-    {ok, Msg2} = hb_converge:resolve(Msg1, <<"init">>, #{}),
+    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, #{}),
     Msg2.
 
 vfs_is_serializable_test() ->
     StackMsg = generate_wasi_stack("test/test-print.wasm", <<"hello">>, []),
-    VFSMsg = hb_converge:get(<<"vfs">>, StackMsg),
+    VFSMsg = hb_ao:get(<<"vfs">>, StackMsg),
     VFSMsg2 =
         hb_message:minimize(
             hb_message:convert(
@@ -279,11 +257,8 @@ vfs_is_serializable_test() ->
 
 wasi_stack_is_serializable_test() ->
     Msg = generate_wasi_stack("test/test-print.wasm", <<"hello">>, []),
-    Msg2 = hb_message:convert(
-        hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
-        <<"structured@1.0">>,
-        <<"httpsig@1.0">>,
-        #{}),
+    HTTPSigMsg = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
+    Msg2 = hb_message:convert(HTTPSigMsg, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
     ?assert(hb_message:match(Msg, Msg2)).
 
 basic_aos_exec_test() ->
@@ -302,13 +277,13 @@ basic_aos_exec_test() ->
     {ok, EnvBin} = hb_beamr_io:read(Instance, Ptr2, byte_size(Env)),
     ?assertEqual(Env, EnvBin),
     ?assertEqual(Msg, MsgBin),
-    Ready = Init#{ <<"wasm-params">> => [Ptr1, Ptr2] },
-    {ok, StateRes} = hb_converge:resolve(Ready, <<"compute">>, #{}),
-    [Ptr] = hb_converge:get(<<"results/wasm/output">>, StateRes),
+    Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
+    {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
+    [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
     {ok, Output} = hb_beamr_io:read_string(Instance, Ptr),
     ?event({got_output, Output}),
     #{ <<"response">> := #{ <<"Output">> := #{ <<"data">> := Data }} }
-        = jiffy:decode(Output, [return_maps]),
+        = hb_json:decode(Output),
     ?assertEqual(<<"2">>, Data).
 
 %%% Test Helpers

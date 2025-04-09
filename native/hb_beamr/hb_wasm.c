@@ -158,8 +158,11 @@ void wasm_initialize_runtime(void* raw) {
     wasm_module_exports(proc->module, &exports);
 
     // Create Erlang lists for imports
-    ErlDrvTermData* init_msg = driver_alloc(sizeof(ErlDrvTermData) * (2 + (13 * imports.size) + (11 * exports.size)));
+    int init_msg_size = sizeof(ErlDrvTermData) * (2 + 3 + 5 + (13 * imports.size) + (11 * exports.size));
+    ErlDrvTermData* init_msg = driver_alloc(init_msg_size);
     int msg_i = 0;
+
+    // 2 in the init_msg_size
     init_msg[msg_i++] = ERL_DRV_ATOM;
     init_msg[msg_i++] = atom_execution_result;
 
@@ -179,7 +182,7 @@ void wasm_initialize_runtime(void* raw) {
             // TODO: Handle other types of imports?
             continue;
         }
-
+        // 13 items in the each import message
         init_msg[msg_i++] = ERL_DRV_ATOM;
         init_msg[msg_i++] = driver_mk_atom((char*)wasm_externtype_to_kind_string(type));
         init_msg[msg_i++] = ERL_DRV_STRING;
@@ -255,6 +258,7 @@ void wasm_initialize_runtime(void* raw) {
         get_function_sig(type, type_str);
         DRV_DEBUG("Export: %s [%s] -> %s", name->data, kind_str, type_str);
 
+        // 10 elements for each exported function
         init_msg[msg_i++] = ERL_DRV_ATOM;
         init_msg[msg_i++] = driver_mk_atom(kind_str);
         init_msg[msg_i++] = ERL_DRV_STRING;
@@ -267,6 +271,7 @@ void wasm_initialize_runtime(void* raw) {
         init_msg[msg_i++] = 3;
     }
 
+    // 5 closing elements
     init_msg[msg_i++] = ERL_DRV_NIL;
     init_msg[msg_i++] = ERL_DRV_LIST;
     init_msg[msg_i++] = (exports.size) + 1;
@@ -507,7 +512,7 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     return result;
 }
 
-int wasm_execute_exported_function(Proc* proc, const *function_name, wasm_val_t* params, wasm_val_t * results) {
+int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_val_t* params, wasm_val_t * results) {
     DRV_DEBUG("=== Calling Runtime Export Function ===");
     DRV_DEBUG("=   Function name: %s", function_name);
 

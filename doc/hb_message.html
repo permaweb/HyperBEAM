@@ -1,0 +1,261 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module hb_message</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module hb_message</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>This module acts an adapter between messages, as modeled in the   
+Converge Protocol, and their uderlying binary representations and formats.
+
+
+<h2><a name="description">Description</a></h2><p>This module acts an adapter between messages, as modeled in the   
+Converge Protocol, and their uderlying binary representations and formats.</p>
+  
+   <p>Unless you are implementing a new message serialization codec, you should
+   not need to interact with this module directly. Instead, use the
+   <code>hb_converge</code> interfaces to interact with all messages. The <code>dev_message</code>   
+module implements a device interface for abstracting over the different   
+message formats.</p>
+  
+   <p><code>hb_message</code> and the HyperBEAM caches can interact with multiple different   
+types of message formats:</p>
+  
+       <p>- Richly typed Converge structured messages.       
+- Arweave transations.       
+- ANS-104 data items.       
+- HTTP Signed Messages.       
+- Flat Maps.</p>
+  
+   <p>This module is responsible for converting between these formats. It does so
+   by normalizing messages to a common format: <code>Type Annotated Binary Messages`
+   (TABM). TABMs are deep Erlang maps with keys than only contain either other
+   TABMs or binary values. By marshalling all messages into this format, they
+   can easily be coerced into other output formats. For example, generating a
+   `HTTP Signed Message` format output from an Arweave transaction. TABM is
+   also a simple format from a computational perspective (only binary literals
+   and O(1) access maps), such that operations upon them are efficient.
+  
+   The structure of the conversions is as follows:
+  
+   ```
+       Arweave TX/ANS-104 ==&gt; dev_codec_ans104:from/1 ==&gt; TABM
+       HTTP Signed Message ==&gt; dev_codec_httpsig_conv:from/1 ==&gt; TABM
+       Flat Maps ==&gt; dev_codec_flat:from/1 ==&gt; TABM
+  
+       TABM ==&gt; dev_codec_structured:to/1 ==&gt; Converge Message
+       Converge Message ==&gt; dev_codec_structured:from/1 ==&gt; TABM
+  
+       TABM ==&gt; dev_codec_ans104:to/1 ==&gt; Arweave TX/ANS-104
+       TABM ==&gt; dev_codec_httpsig_conv:to/1 ==&gt; HTTP Signed Message
+       TABM ==&gt; dev_codec_flat:to/1 ==&gt; Flat Maps
+       ...</code>''</p>
+  
+   <p>Additionally, this module provides a number of utility functions for
+   manipulating messages. For example, <code>hb_message:sign/2</code> to sign a message of
+   arbitrary type, or <code>hb_message:format/1</code> to print a Converge/TABM message in   
+a human-readable format.</p>
+  
+   The <code>hb_cache</code> module is responsible for storing and retrieving messages in
+   the HyperBEAM stores configured on the node. Each store has its own storage
+   backend, but each works with simple key-value pairs. Subsequently, the
+   <code>hb_cache</code> module uses TABMs as the internal format for storing and
+   retrieving messages.
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#attest-2">attest/2</a></td><td>Sign a message with the given wallet.</td></tr>
+<tr><td valign="top"><a href="#attest-3">attest/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#convert-3">convert/3</a></td><td>Convert a message from one format to another.</td></tr>
+<tr><td valign="top"><a href="#convert-4">convert/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#default_tx_list-0">default_tx_list/0</a></td><td>Get the ordered list of fields as Converge keys and default values of
+  the tx record.</td></tr>
+<tr><td valign="top"><a href="#filter_default_keys-1">filter_default_keys/1</a></td><td>Remove keys from a map that have the default values found in the tx
+  record.</td></tr>
+<tr><td valign="top"><a href="#find_target-3">find_target/3</a></td><td>Implements a standard pattern in which the target for an operation is
+  found by looking for a <code>target</code> key in the request.</td></tr>
+<tr><td valign="top"><a href="#format-1">format/1</a></td><td>Format a message for printing, optionally taking an indentation level
+  to start from.</td></tr>
+<tr><td valign="top"><a href="#format-2">format/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#from_tabm-3">from_tabm/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message.</td></tr>
+<tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#id-3">id/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#match-2">match/2</a></td><td>Check if two maps match, including recursively checking nested maps.</td></tr>
+<tr><td valign="top"><a href="#match-3">match/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#minimize-1">minimize/1</a></td><td>Remove keys from the map that can be regenerated.</td></tr>
+<tr><td valign="top"><a href="#print-1">print/1</a></td><td>Pretty-print a message.</td></tr>
+<tr><td valign="top"><a href="#signers-1">signers/1</a></td><td>Return all of the attestors on a message that have 'normal', 256 bit,
+  addresses.</td></tr>
+<tr><td valign="top"><a href="#to_tabm-3">to_tabm/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#type-1">type/1</a></td><td>Return the type of an encoded message.</td></tr>
+<tr><td valign="top"><a href="#unattested-1">unattested/1</a></td><td>Return the unsigned version of a message in Converge format.</td></tr>
+<tr><td valign="top"><a href="#verify-1">verify/1</a></td><td>wrapper function to verify a message.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="attest-2">attest/2</a></h3>
+<div class="spec">
+<p><code>attest(Msg, WalletOrOpts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Sign a message with the given wallet. Only supports the <code>tx</code> format
+  at the moment.</p>
+
+<h3 class="function"><a name="attest-3">attest/3</a></h3>
+<div class="spec">
+<p><code>attest(Msg, Opts, Format) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="convert-3">convert/3</a></h3>
+<div class="spec">
+<p><code>convert(Msg, TargetFormat, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Convert a message from one format to another. Taking a message in the
+  source format, a target format, and a set of opts. If not given, the source
+  is assumed to be <code>converge`. Additional codecs can be added by ensuring they
+  are part of the `Opts` map -- either globally, or locally for a computation.
+ 
+  The encoding happens in two phases:
+  1. Convert the message to a TABM.
+  2. Convert the TABM to the target format.
+ 
+  The conversion to a TABM is done by the `converge</code> codec, which is always
+  available. The conversion from a TABM is done by the target codec.</p>
+
+<h3 class="function"><a name="convert-4">convert/4</a></h3>
+<div class="spec">
+<p><code>convert(Msg, TargetFormat, SourceFormat, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="default_tx_list-0">default_tx_list/0</a></h3>
+<div class="spec">
+<p><code>default_tx_list() -&gt; any()</code></p>
+<p> </p>
+</div><p>Get the ordered list of fields as Converge keys and default values of
+  the tx record.</p>
+
+<h3 class="function"><a name="filter_default_keys-1">filter_default_keys/1</a></h3>
+<div class="spec">
+<p><code>filter_default_keys(Map) -&gt; any()</code></p>
+<p> </p>
+</div><p>Remove keys from a map that have the default values found in the tx
+  record.</p>
+
+<h3 class="function"><a name="find_target-3">find_target/3</a></h3>
+<div class="spec">
+<p><code>find_target(Self, Req, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Implements a standard pattern in which the target for an operation is
+  found by looking for a <code>target</code> key in the request. If the target is <code>self</code>,
+  or not present, the operation is performed on the original message. Otherwise,
+  the target is expected to be a key in the message, and the operation is
+  performed on the value of that key.</p>
+
+<h3 class="function"><a name="format-1">format/1</a></h3>
+<div class="spec">
+<p><code>format(Item) -&gt; any()</code></p>
+<p> </p>
+</div><p>Format a message for printing, optionally taking an indentation level
+  to start from.</p>
+
+<h3 class="function"><a name="format-2">format/2</a></h3>
+<div class="spec">
+<p><code>format(Bin, Indent) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="from_tabm-3">from_tabm/3</a></h3>
+<div class="spec">
+<p><code>from_tabm(Msg, TargetFormat, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="id-1">id/1</a></h3>
+<div class="spec">
+<p><code>id(Msg) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the ID of a message.</p>
+
+<h3 class="function"><a name="id-2">id/2</a></h3>
+<div class="spec">
+<p><code>id(Msg, Attestors) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="id-3">id/3</a></h3>
+<div class="spec">
+<p><code>id(Msg, RawAttestors, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="match-2">match/2</a></h3>
+<div class="spec">
+<p><code>match(Map1, Map2) -&gt; any()</code></p>
+<p> </p>
+</div><p>Check if two maps match, including recursively checking nested maps.
+  Takes an optional mode argument to control the matching behavior:
+       <code>strict</code>: All keys in both maps be present and match.
+       <code>only_present</code>: Only present keys in both maps must match.
+       <code>primary</code>: Only the primary map's keys must be present.</p>
+
+<h3 class="function"><a name="match-3">match/3</a></h3>
+<div class="spec">
+<p><code>match(Map1, Map2, Mode) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="minimize-1">minimize/1</a></h3>
+<div class="spec">
+<p><code>minimize(Msg) -&gt; any()</code></p>
+<p> </p>
+</div><p>Remove keys from the map that can be regenerated. Optionally takes an
+  additional list of keys to include in the minimization.</p>
+
+<h3 class="function"><a name="print-1">print/1</a></h3>
+<div class="spec">
+<p><code>print(Msg) -&gt; any()</code></p>
+<p> </p>
+</div><p>Pretty-print a message.</p>
+
+<h3 class="function"><a name="signers-1">signers/1</a></h3>
+<div class="spec">
+<p><code>signers(Msg) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return all of the attestors on a message that have 'normal', 256 bit,
+  addresses.</p>
+
+<h3 class="function"><a name="to_tabm-3">to_tabm/3</a></h3>
+<div class="spec">
+<p><code>to_tabm(Msg, SourceFormat, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="type-1">type/1</a></h3>
+<div class="spec">
+<p><code>type(TX) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the type of an encoded message.</p>
+
+<h3 class="function"><a name="unattested-1">unattested/1</a></h3>
+<div class="spec">
+<p><code>unattested(Bin) -&gt; any()</code></p>
+<p> </p>
+</div><p>Return the unsigned version of a message in Converge format.</p>
+
+<h3 class="function"><a name="verify-1">verify/1</a></h3>
+<div class="spec">
+<p><code>verify(Msg) -&gt; any()</code></p>
+<p> </p>
+</div><p>wrapper function to verify a message.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

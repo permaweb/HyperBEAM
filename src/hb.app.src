@@ -9,11 +9,7 @@
         inets,
         ssl,
         cowboy,
-        prometheus,
-        prometheus_cowboy,
         os_mon,
-        rocksdb,
-        quicer,
         gun
     ]},
     {env, []},

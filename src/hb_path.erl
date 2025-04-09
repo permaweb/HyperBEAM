@@ -4,7 +4,7 @@
 %%% 
 %%% A HashPath is a rolling Merkle list of the messages that have been applied 
 %%% in order to generate a given message. Because applied messages can
-%%% themselves be the result of message applications with the Converge Protocol,
+%%% themselves be the result of message applications with the AO-Core protocol,
 %%% the HashPath can be thought of as the tree of messages that represent the
 %%% history of a given message. The initial message on a HashPath is referred to
 %%% by its ID and serves as its user-generated 'root'.
@@ -15,8 +15,9 @@
 %%% ```
 %%%     Msg1.HashPath = Msg1.ID
 %%%     Msg3.HashPath = Msg1.Hash(Msg1.HashPath, Msg2.ID)
-%%%     Msg3.{...} = Converge.apply(Msg1, Msg2)
-%%%     ...'''
+%%%     Msg3.{...} = AO-Core.apply(Msg1, Msg2)
+%%%     ...
+%%% '''
 %%% 
 %%% A message's ID itself includes its HashPath, leading to the mixing of
 %%% a Msg2's merkle list into the resulting Msg3's HashPath. This allows a single
@@ -45,13 +46,13 @@ hd(Msg2, Opts) ->
     case pop_request(Msg2, Opts) of
         undefined -> undefined;
         {Head, _} ->
-            % `term_to_path` returns the full path, so we need to take the
-            % `hd` of our `Head`.
+            % `term_to_path' returns the full path, so we need to take the
+            % `hd' of our `Head'.
             erlang:hd(term_to_path_parts(Head, Opts))
     end.
 
 %% @doc Return the message without its first path element. Note that this
-%% is the only transformation in Converge that does _not_ make a log of its
+%% is the only transformation in AO-Core that does _not_ make a log of its
 %% transformation. Subsequently, the message's IDs will not be verifiable 
 %% after executing this transformation.
 %% This may or may not be the mainnet behavior we want.
@@ -67,23 +68,23 @@ tl(Path, Opts) when is_list(Path) ->
         #{ <<"path">> := Rest } -> Rest
     end.
 
-%% @doc Return the `Remaining-Path' of a message, from its hidden `Converge'
-%% key. Does not use the `get` or set `hb_private` functions, such that it
-%% can be safely used inside the main Converge resolve function.
+%% @doc Return the `Remaining-Path' of a message, from its hidden `AO-Core'
+%% key. Does not use the `get' or set `hb_private' functions, such that it
+%% can be safely used inside the main AO-Core resolve function.
 priv_remaining(Msg, _Opts) ->
     Priv = hb_private:from_message(Msg),
-    Converge = maps:get(<<"converge">>, Priv, #{}),
-    maps:get(<<"remaining">>, Converge, undefined).
+    AOCore = maps:get(<<"ao-core">>, Priv, #{}),
+    maps:get(<<"remaining">>, AOCore, undefined).
 
-%% @doc Store the remaining path of a message in its hidden `Converge' key.
+%% @doc Store the remaining path of a message in its hidden `AO-Core' key.
 priv_store_remaining(Msg, RemainingPath) ->
     Priv = hb_private:from_message(Msg),
-    Converge = maps:get(<<"converge">>, Priv, #{}),
+    AOCore = maps:get(<<"ao-core">>, Priv, #{}),
     Msg#{
         <<"priv">> =>
             Priv#{
-                <<"converge">> =>
-                    Converge#{
+                <<"ao-core">> =>
+                    AOCore#{
                         <<"remaining">> => RemainingPath
                     }
             }
@@ -94,13 +95,24 @@ hashpath(Bin, _Opts) when is_binary(Bin) ->
     % Default hashpath for a binary message is its SHA2-256 hash.
     hb_util:human_id(hb_crypto:sha256(Bin));
 hashpath(RawMsg1, Opts) ->
-    Msg1 = hb_converge:normalize_keys(RawMsg1),
+    Msg1 = hb_ao:normalize_keys(RawMsg1),
     case hb_private:from_message(Msg1) of
         #{ <<"hashpath">> := HP } -> HP;
         _ ->
-            try hb_util:ok(dev_message:id(Msg1, #{ <<"attestors">> => <<"all">> }, Opts))
+            % Note: We do not use `hb_message:id' here because it will call
+            % hb_ao:resolve, which will call `hashpath' recursively.
+            try
+                hb_util:human_id(
+                    hb_util:ok(
+                        dev_message:id(
+                            Msg1,
+                            #{ <<"commitments">> => <<"all">> },
+                            Opts
+                        )
+                    )
+                )
             catch
-                _A:_B:_ST -> throw({badarg, {unsupported_type, Msg1}})
+                _A:_B:_ST -> throw({badarg, {unsupported_type, Msg1}, _ST})
             end
     end.
 hashpath(Msg1, Msg2, Opts) when is_map(Msg1) ->
@@ -110,7 +122,7 @@ hashpath(Msg1, Msg2, Opts) when is_map(Msg1) ->
 hashpath(Msg1, Msg2, Opts) ->
     throw({hashpath_not_viable, Msg1, Msg2, Opts}).
 hashpath(Msg1, Msg2, HashpathAlg, Opts) when is_map(Msg2) ->
-    Msg2WithoutMeta = maps:without(?CONVERGE_KEYS, Msg2),
+    Msg2WithoutMeta = maps:without(?AO_CORE_KEYS, Msg2),
     ReqPath = from_message(request, Msg2),
     case {map_size(Msg2WithoutMeta), ReqPath} of
         {0, _} when ReqPath =/= undefined ->
@@ -119,15 +131,16 @@ hashpath(Msg1, Msg2, HashpathAlg, Opts) when is_map(Msg2) ->
             {ok, Msg2ID} =
                 dev_message:id(
                     Msg2,
-                    #{ <<"attestors">> => <<"all">> },
+                    #{ <<"commitments">> => <<"all">> },
                     Opts
                 ),
             hashpath(Msg1, hb_util:human_id(Msg2ID), HashpathAlg, Opts)
     end;
 hashpath(Msg1Hashpath, HumanMsg2ID, HashpathAlg, _Opts) ->
+    ?event({hashpath, {msg1hp, {explicit, Msg1Hashpath}}, {msg2id, {explicit, HumanMsg2ID}}}),
     HP = 
         case term_to_path_parts(Msg1Hashpath) of
-            [_] -> 
+            [_] ->
                 << Msg1Hashpath/binary, "/", HumanMsg2ID/binary >>;
             [Prev1, Prev2] ->
                 % Calculate the new base of the hashpath. We check whether the key is
@@ -198,7 +211,7 @@ verify_hashpath([Msg1, Msg2, Msg3|Rest], Opts) ->
         end.
 
 %% @doc Extract the request path or hashpath from a message. We do not use
-%% Converge for this resolution because this function is called from inside Converge 
+%% AO-Core for this resolution because this function is called from inside AO-Core 
 %% itself. This imparts a requirement: the message's device must store a 
 %% viable hashpath and path in its Erlang map at all times, unless the message
 %% is directly from a user (in which case paths and hashpaths will not have 
@@ -226,7 +239,7 @@ term_to_path_parts(Binary, Opts) when is_binary(Binary) ->
             )
     end;
 term_to_path_parts(Path = [ASCII | _], _Opts) when is_integer(ASCII) ->
-    [hb_converge:normalize_key(Path)];
+    [hb_ao:normalize_key(Path)];
 term_to_path_parts(List, Opts) when is_list(List) ->
     lists:flatten(lists:map(
         fun(Part) ->
@@ -236,46 +249,49 @@ term_to_path_parts(List, Opts) when is_list(List) ->
     ));
 term_to_path_parts(Atom, _Opts) when is_atom(Atom) -> [Atom];
 term_to_path_parts(Integer, _Opts) when is_integer(Integer) ->
-    [hb_converge:normalize_key(Integer)];
+    [hb_ao:normalize_key(Integer)];
 term_to_path_parts({as, DevName, Msgs}, _Opts) ->
-    [{as, hb_converge:normalize_key(DevName), Msgs}].
+    [{as, hb_ao:normalize_key(DevName), Msgs}].
 
 %% @doc Convert a path of any form to a binary.
 to_binary(Path) ->
     Parts = binary:split(do_to_binary(Path), <<"/">>, [global, trim_all]),
     iolist_to_binary(lists:join(<<"/">>, Parts)).
 
-do_to_binary(String = [ASCII|_]) when is_integer(ASCII) ->
-    to_binary(list_to_binary(String));
 do_to_binary(Path) when is_list(Path) ->
-    iolist_to_binary(
-        lists:join(
-            "/",
-            lists:filtermap(
-                fun(Part) ->
-                    case do_to_binary(Part) of
-                        <<>> -> false;
-                        BinPart -> {true, BinPart}
-                    end
-                end,
-                Path
-            )
-        )
-    );
+    case hb_util:is_string_list(Path) of
+        false ->
+            iolist_to_binary(
+                lists:join(
+                    "/",
+                    lists:filtermap(
+                        fun(Part) ->
+                            case do_to_binary(Part) of
+                                <<>> -> false;
+                                BinPart -> {true, BinPart}
+                            end
+                        end,
+                        Path
+                    )
+                )
+            );
+        true ->
+            to_binary(list_to_binary(Path))
+    end;
 do_to_binary(Path) when is_binary(Path) ->
     Path;
 do_to_binary(Other) ->
-    hb_converge:normalize_key(Other).
+    hb_ao:normalize_key(Other).
 
 %% @doc Check if two keys match.
 matches(Key1, Key2) ->
-    hb_util:to_lower(hb_converge:normalize_key(Key1)) ==
-        hb_util:to_lower(hb_converge:normalize_key(Key2)).
+    hb_util:to_lower(hb_ao:normalize_key(Key1)) ==
+        hb_util:to_lower(hb_ao:normalize_key(Key2)).
 
 %% @doc Check if two keys match using regex.
 regex_matches(Path1, Path2) ->
-    NormP1 = normalize(hb_converge:normalize_key(Path1)),
-    NormP2 = normalize(hb_converge:normalize_key(Path2)),
+    NormP1 = normalize(hb_ao:normalize_key(Path1)),
+    NormP2 = normalize(hb_ao:normalize_key(Path2)),
     try re:run(NormP1, NormP2) =/= nomatch
     catch _A:_B:_C -> false
     end.

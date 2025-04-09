@@ -1,0 +1,154 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module hb_beamr</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module hb_beamr</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>BEAMR: A WAMR wrapper for BEAM.
+
+
+<h2><a name="description">Description</a></h2><p>BEAMR: A WAMR wrapper for BEAM.</p>
+  
+   <p>Beamr is a library that allows you to run WASM modules in BEAM, using the   
+Webassembly Micro Runtime (WAMR) as its engine. Each WASM module is   
+executed using a Linked-In Driver (LID) that is loaded into BEAM. It is   
+designed with a focus on supporting long-running WASM executions that   
+interact with Erlang functions and processes easily.</p>
+  
+   <p>Because each WASM module runs as an independent async worker, if you plan
+   to run many instances in parallel, you should be sure to configure the
+   BEAM to have enough async worker threads enabled (see <code>erl +A N` in the
+   Erlang manuals).
+  
+   The core API is simple:
+   ```
+       start(WasmBinary) -&gt; {ok, Port, Imports, Exports}
+           Where:
+               WasmBinary is the WASM binary to load.
+               Port is the port to the LID.
+               Imports is a list of tuples of the form {Module, Function,
+                   Args, Signature}.
+               Exports is a list of tuples of the form {Function, Args,
+                   Signature}.
+       stop(Port) -&gt; ok
+       call(Port, FunctionName, Args) -&gt; {ok, Result}
+           Where:
+               FunctionName is the name of the function to call.
+               Args is a list of Erlang terms (converted to WASM values by
+                   BEAMR) that match the signature of the function.
+               Result is a list of Erlang terms (converted from WASM values).
+       call(Port, FunName, Args[, Import, State, Opts]) -&gt; {ok, Res, NewState}
+           Where:
+               ImportFun is a function that will be called upon each import.
+               ImportFun must have an arity of 2: Taking an arbitrary `state`
+               term, and a map containing the `port`, `module`, `func`, `args`,
+               `signature`, and the `options` map of the import.
+               It must return a tuple of the form {ok, Response, NewState}.
+       serialize(Port) -&gt; {ok, Mem}
+           Where:
+               Port is the port to the LID.
+               Mem is a binary representing the full WASM state.
+       deserialize(Port, Mem) -&gt; ok
+           Where:
+               Port is the port to the LID.
+               Mem is a binary output of a previous `serialize/1</code> call.   
+'''</p>
+  
+   BEAMR was designed for use in the HyperBEAM project, but is suitable for
+   deployment in other Erlang applications that need to run WASM modules. PRs
+   are welcome.
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#call-3">call/3</a></td><td>Call a function in the WASM executor (see moduledoc for more details).</td></tr>
+<tr><td valign="top"><a href="#call-4">call/4</a></td><td></td></tr>
+<tr><td valign="top"><a href="#call-5">call/5</a></td><td></td></tr>
+<tr><td valign="top"><a href="#call-6">call/6</a></td><td></td></tr>
+<tr><td valign="top"><a href="#deserialize-2">deserialize/2</a></td><td>Deserialize a WASM state from a binary.</td></tr>
+<tr><td valign="top"><a href="#serialize-1">serialize/1</a></td><td>Serialize the WASM state to a binary.</td></tr>
+<tr><td valign="top"><a href="#start-1">start/1</a></td><td>Start a WASM executor context.</td></tr>
+<tr><td valign="top"><a href="#start-2">start/2</a></td><td></td></tr>
+<tr><td valign="top"><a href="#stop-1">stop/1</a></td><td>Stop a WASM executor context.</td></tr>
+<tr><td valign="top"><a href="#stub-3">stub/3</a></td><td>Stub import function for the WASM executor.</td></tr>
+<tr><td valign="top"><a href="#wasm_send-2">wasm_send/2</a></td><td></td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="call-3">call/3</a></h3>
+<div class="spec">
+<p><code>call(PID, FuncRef, Args) -&gt; any()</code></p>
+<p> </p>
+</div><p>Call a function in the WASM executor (see moduledoc for more details).</p>
+
+<h3 class="function"><a name="call-4">call/4</a></h3>
+<div class="spec">
+<p><code>call(PID, FuncRef, Args, ImportFun) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="call-5">call/5</a></h3>
+<div class="spec">
+<p><code>call(PID, FuncRef, Args, ImportFun, StateMsg) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="call-6">call/6</a></h3>
+<div class="spec">
+<p><code>call(PID, FuncRef, Args, ImportFun, StateMsg, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="deserialize-2">deserialize/2</a></h3>
+<div class="spec">
+<p><code>deserialize(WASM, Bin) -&gt; any()</code></p>
+<p> </p>
+</div><p>Deserialize a WASM state from a binary.</p>
+
+<h3 class="function"><a name="serialize-1">serialize/1</a></h3>
+<div class="spec">
+<p><code>serialize(WASM) -&gt; any()</code></p>
+<p> </p>
+</div><p>Serialize the WASM state to a binary.</p>
+
+<h3 class="function"><a name="start-1">start/1</a></h3>
+<div class="spec">
+<p><code>start(WasmBinary) -&gt; any()</code></p>
+<p> </p>
+</div><p>Start a WASM executor context. Yields a port to the LID, and the
+  imports and exports of the WASM module. Optionally, specify a mode
+  (wasm or aot) to indicate the type of WASM module being loaded.</p>
+
+<h3 class="function"><a name="start-2">start/2</a></h3>
+<div class="spec">
+<p><code>start(WasmBinary, Mode) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="stop-1">stop/1</a></h3>
+<div class="spec">
+<p><code>stop(WASM) -&gt; any()</code></p>
+<p> </p>
+</div><p>Stop a WASM executor context.</p>
+
+<h3 class="function"><a name="stub-3">stub/3</a></h3>
+<div class="spec">
+<p><code>stub(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Stub import function for the WASM executor.</p>
+
+<h3 class="function"><a name="wasm_send-2">wasm_send/2</a></h3>
+<div class="spec">
+<p><code>wasm_send(WASM, Message) -&gt; any()</code></p>
+<p> </p>
+</div>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

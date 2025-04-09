@@ -1,0 +1,117 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Module hb_persistent</title>
+<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
+</head>
+<body bgcolor="white">
+<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<hr>
+
+<h1>Module hb_persistent</h1>
+<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>Creates and manages long-lived Converge resolution processes.
+
+
+<h2><a name="description">Description</a></h2><p>Creates and manages long-lived Converge resolution processes.
+   These can be useful for situations where a message is large and expensive
+   to serialize and deserialize, or when executions should be deliberately
+   serialized to avoid parallel executions of the same computation. This
+   module is called during the core <code>hb_converge</code> execution process, so care   
+must be taken to avoid recursive spawns/loops.</p>
+  
+   Built using the <code>pg</code> module, which is a distributed Erlang process group
+   manager.
+<h2><a name="index">Function Index</a></h2>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#await-4">await/4</a></td><td>If there was already an Erlang process handling this execution,
+  we should register with them and wait for them to notify us of
+  completion.</td></tr>
+<tr><td valign="top"><a href="#default_grouper-3">default_grouper/3</a></td><td>Create a group name from a Msg1 and Msg2 pair as a tuple.</td></tr>
+<tr><td valign="top"><a href="#default_worker-3">default_worker/3</a></td><td>A server function for handling persistent executions.</td></tr>
+<tr><td valign="top"><a href="#find_or_register-3">find_or_register/3</a></td><td>Register the process to lead an execution if none is found, otherwise
+  signal that we should await resolution.</td></tr>
+<tr><td valign="top"><a href="#forward_work-2">forward_work/2</a></td><td>Forward requests to a newly delegated execution process.</td></tr>
+<tr><td valign="top"><a href="#group-3">group/3</a></td><td>Calculate the group name for a Msg1 and Msg2 pair.</td></tr>
+<tr><td valign="top"><a href="#notify-4">notify/4</a></td><td>Check our inbox for processes that are waiting for the resolution
+  of this execution.</td></tr>
+<tr><td valign="top"><a href="#start_worker-2">start_worker/2</a></td><td>Start a worker process that will hold a message in memory for
+  future executions.</td></tr>
+<tr><td valign="top"><a href="#start_worker-3">start_worker/3</a></td><td></td></tr>
+<tr><td valign="top"><a href="#unregister_notify-4">unregister_notify/4</a></td><td>Unregister as the leader for an execution and notify waiting processes.</td></tr>
+</table>
+
+<h2><a name="functions">Function Details</a></h2>
+
+<h3 class="function"><a name="await-4">await/4</a></h3>
+<div class="spec">
+<p><code>await(Worker, Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>If there was already an Erlang process handling this execution,
+  we should register with them and wait for them to notify us of
+  completion.</p>
+
+<h3 class="function"><a name="default_grouper-3">default_grouper/3</a></h3>
+<div class="spec">
+<p><code>default_grouper(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Create a group name from a Msg1 and Msg2 pair as a tuple.</p>
+
+<h3 class="function"><a name="default_worker-3">default_worker/3</a></h3>
+<div class="spec">
+<p><code>default_worker(GroupName, Msg1, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>A server function for handling persistent executions.</p>
+
+<h3 class="function"><a name="find_or_register-3">find_or_register/3</a></h3>
+<div class="spec">
+<p><code>find_or_register(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Register the process to lead an execution if none is found, otherwise
+  signal that we should await resolution.</p>
+
+<h3 class="function"><a name="forward_work-2">forward_work/2</a></h3>
+<div class="spec">
+<p><code>forward_work(NewPID, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Forward requests to a newly delegated execution process.</p>
+
+<h3 class="function"><a name="group-3">group/3</a></h3>
+<div class="spec">
+<p><code>group(Msg1, Msg2, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Calculate the group name for a Msg1 and Msg2 pair. Uses the Msg1's
+  <code>group</code> function if it is found in the <code>info</code>, otherwise uses the default.</p>
+
+<h3 class="function"><a name="notify-4">notify/4</a></h3>
+<div class="spec">
+<p><code>notify(GroupName, Msg2, Msg3, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Check our inbox for processes that are waiting for the resolution
+  of this execution. Comes in two forms:
+  1. Notify on group name alone.
+  2. Notify on group name and Msg2.</p>
+
+<h3 class="function"><a name="start_worker-2">start_worker/2</a></h3>
+<div class="spec">
+<p><code>start_worker(Msg, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Start a worker process that will hold a message in memory for
+  future executions.</p>
+
+<h3 class="function"><a name="start_worker-3">start_worker/3</a></h3>
+<div class="spec">
+<p><code>start_worker(GroupName, NotMsg, Opts) -&gt; any()</code></p>
+<p> </p>
+</div>
+
+<h3 class="function"><a name="unregister_notify-4">unregister_notify/4</a></h3>
+<div class="spec">
+<p><code>unregister_notify(GroupName, Msg2, Msg3, Opts) -&gt; any()</code></p>
+<p> </p>
+</div><p>Unregister as the leader for an execution and notify waiting processes.</p>
+<hr>
+
+<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
+<p><i>Generated by EDoc</i></p>
+</body>
+</html>

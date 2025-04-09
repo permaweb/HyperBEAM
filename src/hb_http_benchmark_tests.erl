@@ -24,7 +24,7 @@
 %         BenchTime
 %     ),
 %     hb_util:eunit_print(
-%         "Resolved ~p messages through Converge via HTTP in ~p seconds (~.2f msg/s)",
+%         "Resolved ~p messages through AO-Core via HTTP in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchTime, Iterations / BenchTime]
 %     ),
 %     ?assert(Iterations > 400 / ?PERFORMANCE_DIVIDER).
@@ -58,8 +58,8 @@
 %     #{
 %         <<"path">> => <<"init/compute/results">>,
 %         <<"device">> => <<"wasm-64@1.0">>,
-%         <<"wasm-function">> => Func,
-%         <<"wasm-params">> => Params,
+%         <<"function">> => Func,
+%         <<"parameters">> => Params,
 %         <<"image">> => Bin
 %     }.
 
@@ -153,7 +153,7 @@
 % %     BenchTime = 3,
 % %     BenchWorkers = 16,
 % %     Msg1 = dev_scheduler:test_process(),
-% %     Proc = hb_converge:get(process, Msg1, #{ hashpath => ignore }),
+% %     Proc = hb_ao:get(process, Msg1, #{ hashpath => ignore }),
 % %     ProcID = hb_util:id(Proc),
 % %     ?event({benchmark_start, ?MODULE}),
 % %     Iterations = hb:benchmark(
@@ -187,7 +187,7 @@
 % %     Res = hb_http:post(URL, Msg3),
 % %     ?event({slot_result, Res}),
 % %     hb_util:eunit_print(
-% %         "Scheduled ~p messages through Converge in ~p seconds (~.2f msg/s)",
+% %         "Scheduled ~p messages through AO-Core in ~p seconds (~.2f msg/s)",
 % %         [Iterations, BenchTime, Iterations / BenchTime]
 % %     ),
 % %     ?assert(Iterations > 100).
