@@ -151,6 +151,23 @@ resolve_many([ID], Opts) when ?IS_ID(ID) ->
     try {ok, ensure_loaded(ID, Opts)}
     catch _:_:_ -> {error, not_found}
     end;
+resolve_many(ListMsg, Opts) when is_map(ListMsg) ->
+    % We have been given a message rather than a list of messages, so we should
+    % convert it to a list, assuming that the message is monotonically numbered.
+    ListOfMessages =
+        try hb_util:message_to_ordered_list(ListMsg, internal_opts(Opts))
+        catch
+          Type:Exception:Stacktrace ->
+            throw(
+                {resolve_many_error,
+                    {given_message_not_ordered_list, ListMsg},
+                    {type, Type},
+                    {exception, Exception},
+                    {stacktrace, Stacktrace}
+                }
+            )
+        end,
+    resolve_many(ListOfMessages, Opts);
 resolve_many({as, DevID, Msg}, Opts) ->
     subresolve(#{}, DevID, Msg, Opts);
 resolve_many(MsgList, Opts) ->

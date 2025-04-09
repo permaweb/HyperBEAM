@@ -5,7 +5,8 @@
 -export([key_to_atom/2]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
 -export([find_value/2, find_value/3]).
--export([deep_merge/2, number/1, list_to_numbered_map/1, message_to_ordered_list/1]).
+-export([deep_merge/2, number/1, list_to_numbered_map/1]).
+-export([message_to_ordered_list/1, message_to_ordered_list/2]).
 -export([is_string_list/1, to_sorted_list/1, to_sorted_keys/1]).
 -export([hd/1, hd/2, hd/3]).
 -export([remove_common/2, to_lower/1]).
