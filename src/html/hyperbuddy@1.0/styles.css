@@ -124,13 +124,17 @@ a:hover {
 	max-height: 0;
 }
 
+.video-container {
+	display: flex;
+	align-items: center;
+	height: 175px;
+}
+
 .header-hyperbeam-chain {
 	position: absolute;
 	right: 0;
-	margin-right: -200px;
 	z-index: 1;
-	animation: rotateInfinite 30s linear infinite;
-	transform-origin: center;
+	opacity: 30%;
 }
 
 @keyframes rotateInfinite {
@@ -173,12 +177,8 @@ a:hover {
 .header-left {
 	display: flex;
 	align-items: center;
-	margin-left: -300px;
+	margin-left: -100px;
 	z-index: 2;
-}
-
-.hyperbeam-video {
-	margin-left: -150px;
 }
 
 @media (max-width: 765px) {
@@ -194,12 +194,6 @@ a:hover {
 	display: block;
 }
 
-.header-main h4 {
-	font-size: clamp(16px, 1.75vw, 20px);
-	font-weight: 400;
-	color: var(--text-color-alt1);
-}
-
 .header-logo img {
 	height: 100%;
 }
@@ -211,6 +205,7 @@ a:hover {
 	align-items: flex-end;
 	justify-content: flex-end;
 	margin-right: 80px;
+	z-index: 2;
 }
 
 .subheader-value {
@@ -220,7 +215,7 @@ a:hover {
 }
 
 .subheader-value p {
-	font-size: clamp(14px, 1.75vw, 16px);
+	font-size: clamp(0.7rem, 1.75vw, 0.85rem);
 	font-weight: 400;
 	color: var(--text-color-alt1);
 }
@@ -247,7 +242,7 @@ a:hover {
 .subheader-value button {
 	letter-spacing: 0.5px;
 	padding: 0;
-	font-size: clamp(14px, 1.5vw, 15px);
+	font-size: clamp(0.7rem, 1.5vw, 0.85rem);
 	font-weight: 600;
 	color: var(--text-color-primary);
 	text-decoration: underline;
@@ -288,7 +283,7 @@ a:hover {
 }
 
 .section-header {
-	font-size: clamp(15px, 1.75vw, 18px);
+	font-size: clamp(0.7rem, 1.75vw, 0.85rem);
 	font-weight: 500;
 	padding: 15px;
 	border-bottom: 1px solid var(--border-color);
@@ -307,13 +302,13 @@ a:hover {
 }
 
 .key-metric-value {
-	font-size: clamp(32px, 2.75vw, 48px);
+	font-size: clamp(1.0rem, 2.75vw, 1.8rem);
 	font-weight: 400;
 	color: var(--indicator-color);
 }
 
 .key-metric-label {
-	font-size: clamp(12px, 1.5vw, 13px);
+	font-size: clamp(0.6rem, 1.5vw, 0.75rem);
 	font-weight: 400;
 	color: var(--text-color-alt1);
 	text-transform: uppercase;
@@ -419,7 +414,7 @@ a:hover {
 }
 
 .tab-button {
-	font-size: clamp(15px, 1.75vw, 18px);
+	font-size: clamp(0.75rem, 1.75vw, 0.9rem);
 	font-weight: 500;
 	color: var(--text-color-alt1);
 	cursor: pointer;
@@ -468,14 +463,20 @@ a:hover {
 	}
 }
 
+
 @media (max-width: 1024px) {
+	.header-hyperbeam-chain {
+		width: 300px;
+		margin-top: -50px;
+	}
+
 	.header {
 		position: relative;
 		flex-direction: column;
 		align-items: flex-start;
 		gap: 40px;
-		padding: 20px;
 		overflow: hidden;
+		padding: 30px;
 	}
 
 	.subheader {
@@ -492,51 +493,78 @@ a:hover {
 		flex-direction: column;
 	}
 
+	.tab-content .device-cards-container {
+		grid-template-columns: repeat(1, 1fr);
+
+	}
+
 	/* 
   .section-line {
-    height: fit-content;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 15px;
+	height: fit-content;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 15px;
   } */
+}
+
+@media (max-width: 800px) {
+	.header {
+		padding: 20px;
+	}
+
+	.header-left .light-video {
+		width: 400px;
+	}
+
+	.header-left {
+		margin-left: -70px;
+	}
+
+
+}
+
+
+@media (max-width: 500px) {
+	.header {
+		padding: 20px;
+	}
+
+	.header-left .light-video {
+		width: 300px;
+	}
+
+	.header-left {
+		margin-left: -50px;
+	}
 }
 
 /* Add styles for device cards */
 .device-cards-container {
-	display: flex;
-	flex-wrap: wrap;
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	/* 2 columns */
 	gap: 10px;
-	justify-content: flex-start;
 	padding: 20px 10px 10px 10px;
 	border: 1px solid var(--border-color);
 	border-radius: 0px 0px 5px 5px;
 }
 
 .device-card {
-	flex: 1 1 256px;
-	min-width: 256px;
-	max-width: 100%;
 	background: var(--section-bg-color-alt1);
 	display: flex;
 	border-radius: 5px;
 	flex-direction: row;
 	justify-content: space-between;
 	align-items: center;
-	transition: all 0.1s ease;
 	margin-bottom: 5px;
 	border: 0.5px solid var(--border-color);
-	padding: 30px;
-}
-
-.device-card:hover {
-	transform: translateY(-1px);
-	box-shadow: var(--card-hover-shadow);
-	cursor: pointer;
+	padding: 10px;
+	width: 100%;
 }
 
 .device-name {
-	font-size: clamp(15px, 1.75vw, 18px);
+	font-size: clamp(0.6rem, 1.75vw, 0.9rem);
 	font-weight: 500;
 	color: var(--text-color-primary);
 	white-space: nowrap;
@@ -546,7 +574,7 @@ a:hover {
 }
 
 .device-variant {
-	font-size: clamp(18px, 2.25vw, 24px);
+	font-size: clamp(0.8rem, 2.25vw, 0.9rem);
 	font-weight: 600;
 	white-space: nowrap;
 }
