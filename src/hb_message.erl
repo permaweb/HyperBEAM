@@ -41,7 +41,7 @@ The structure of the conversions is as follows:
     TABM ==> dev_codec_httpsig_conv:to/1 ==> HTTP Signed Message
     TABM ==> dev_codec_flat:to/1 ==> Flat Maps
     ...
-'''
+```
 
 Additionally, this module provides a number of utility functions for
 manipulating messages. For example, `hb_message:sign/2` to sign a message of

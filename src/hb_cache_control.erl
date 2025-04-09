@@ -203,8 +203,8 @@ honoring precidence order. The Opts is used as the first source. Returns a
 map with `store` and `lookup` keys, each of which is a boolean.
 
 For example, if the last source has a `no_store`, the first expresses no
-preference, but the Opts has `cache_control => [always]', then the result 
-will contain a `store => true' entry.
+preference, but the Opts has `cache_control => [always]`, then the result 
+will contain a `store => true` entry.
 """.
 derive_cache_settings(SourceList, Opts) ->
     lists:foldr(

@@ -32,7 +32,7 @@ Syntax overview:
         - key+Int: 1 => #{ key => 1, ... }
         - key+Res: /nested/path => #{ key => (resolve /nested/path), ... }
         - N.Key+Res=(/a/b/c) => #{ Key => (resolve /a/b/c), ... }
-'''
+```
 """.
 -export([from/1, to/1]).
 -include("include/hb.hrl").
@@ -351,8 +351,8 @@ parse_part(Part) ->
 
 -doc """
 Parse part modifiers:
-1. `~Device` => `{as, Device, Msg}'
-2. `&K=V` => `Msg#{ K => V }'
+1. `~Device` => `{as, Device, Msg}`
+2. `&K=V` => `Msg#{ K => V }`
 """.
 parse_part_mods([], Msg) -> Msg;
 parse_part_mods(<<>>, Msg) -> Msg;

@@ -7,10 +7,10 @@ At the implementation level, every message is simply a collection of keys,
 dictated by its `Device`, that can be resolved in order to yield their
 values. Each key may return another message or a raw value:
 
-	`ao(Message1, Message2) -> {Status, Message3}'
+	`ao(Message1, Message2) -> {Status, Message3}`
 
-Under-the-hood, `AO-Core(Message1, Message2)' leads to the evaluation of
-`DeviceMod:PathPart(Message1, Message2)', which defines the user compute
+Under-the-hood, `AO-Core(Message1, Message2)` leads to the evaluation of
+`DeviceMod:PathPart(Message1, Message2)`, which defines the user compute
 to be performed. If `Message1` does not specify a device, `dev_message` is
 assumed. The key to resolve is specified by the `Path` field of the message.
 
@@ -23,7 +23,7 @@ you can see AO-Core protocol as a system for cryptographically chaining
 the execution of `combinators`. See `docs/ao-core-protocol.md` for more 
 information about AO-Core.
 
-The `Fun(Message1, Message2)' pattern is repeated throughout the HyperBEAM 
+The `Fun(Message1, Message2)` pattern is repeated throughout the HyperBEAM 
 codebase, sometimes with `MessageX` replaced with `MX` or `MsgX` for brevity.
 
 Message3 can be either a new message or a raw output value (a binary, integer,
@@ -40,7 +40,7 @@ HyperBEAM device implementations are defined as follows:
                           device keys (thus, present in every message that
                           uses it) unless specified by `DevMod:info()`.
                           Each function takes a set of parameters
-                          of the form `DevMod:KeyHandler(Msg1, Msg2, Opts)'.
+                          of the form `DevMod:KeyHandler(Msg1, Msg2, Opts)`.
                           Each of these arguments can be ommitted if not
                           needed. Non-exported functions are not assumed
                           to be device keys.
@@ -89,8 +89,8 @@ the way that the environment operates:
 `update_hashpath`:  Whether to add the `Msg2` to `HashPath` for the `Msg3`.
 					Default: true.
 `add_key`:          Whether to add the key to the start of the arguments.
-					Default: `<not set>'.
-'''
+					Default: `<not set>`.
+```
 """.
 %%% Main AO-Core API:
 -export([resolve/2, resolve/3, resolve_many/2]).
@@ -111,7 +111,7 @@ the way that the environment operates:
 Get the value of a message's key by running its associated device
 function. Optionally, takes options that control the runtime environment. 
 This function returns the raw result of the device function call:
-`{ok | error, NewMessage}.'
+`{ok | error, NewMessage}.`
 The resolver is composed of a series of discrete phases:
       1: Normalization.
       2: Cache lookup.
@@ -305,8 +305,8 @@ resolve_stage(4, Msg1, Msg2, Opts) ->
     % Erlang cluster) processes that are already performing the execution.
     % Before we search for a live executor, we check if the device specifies 
     % a function that tailors the 'group' name of the execution. For example, 
-    % the `dev_process` device 'groups' all calls to the same process onto
-    % calls to a single executor. By default, `{Msg1, Msg2}' is used as the
+    % the `dev_process` device `groups` all calls to the same process onto
+    % calls to a single executor. By default, `{Msg1, Msg2}` is used as the
     % group name.
     case hb_persistent:find_or_register(Msg1, Msg2, maps:without(?TEMP_OPTS, Opts)) of
         {leader, ExecName} ->
@@ -746,7 +746,7 @@ force_message({Status, Map}, _Opts) ->
 Shortcut for resolving a key in a message without its status if it is
 `ok`. This makes it easier to write complex logic on top of messages while
 maintaining a functional style.
-Additionally, this function supports the `{as, Device, Msg}' syntax, which
+Additionally, this function supports the `{as, Device, Msg}` syntax, which
 allows the key to be resolved using another device to resolve the key,
 while maintaining the tracability of the `HashPath` of the output message.
 

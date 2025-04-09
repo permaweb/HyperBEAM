@@ -182,7 +182,7 @@ commit(MsgToSign, _Req, Opts) ->
     Authority = authority(lists:sort(maps:keys(Enc)), SigParams, Wallet),
     {ok, {SignatureInput, Signature}} = sign_auth(Authority, #{}, Enc),
     [ParsedSignatureInput] = hb_structured_fields:parse_list(SignatureInput),
-    % Set the name as `http-sig-[hex encoding of the first 8 bytes of the public key]'
+    % Set the name as `http-sig-[hex encoding of the first 8 bytes of the public key]`
     ID = hb_util:human_id(crypto:hash(sha256, Signature)),
     Address = ar_wallet:to_address(Wallet),
     SigName = address_to_sig_name(Address),

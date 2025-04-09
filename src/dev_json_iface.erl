@@ -30,7 +30,8 @@ The device has the following requirements and interface:
             M2/Process
         Generates:
             /Results/Outbox
-            /Results/Data'''
+            /Results/Data
+		```
 """.
 -export([init/3, compute/3]).
 %%% Public interface helpers:

@@ -1,13 +1,13 @@
 -module(hb_ao_test_vectors).
 -moduledoc """
-Uses a series of different `Opts` values to test the resolution engine's 
+Uses a series of different `Opts` values to test the resolution engine`s 
 execution under different circumstances.
 """.
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
 %% Easy hook to make a test executable via the command line:
-%% `rebar3 eunit --test hb_ao_test_vectors:run_test'
+%% `rebar3 eunit --test hb_ao_test_vectors:run_test`
 %% Comment/uncomment out as necessary.
 run_test() ->
     hb_test_utils:run(start_as, normal, test_suite(), test_opts()).

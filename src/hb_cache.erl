@@ -313,7 +313,7 @@ read_resolved(_, _, _) -> not_found.
 
 -doc """
 Make a link from one path to another in the store.
-Note: Argument order is `link(Src, Dst, Opts)'.
+Note: Argument order is `link(Src, Dst, Opts)`.
 """.
 link(Existing, New, Opts) ->
     hb_store:make_link(
