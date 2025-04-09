@@ -31,7 +31,7 @@ The device has the following requirements and interface:
         Generates:
             /Results/Outbox
             /Results/Data
-		```
+	```
 """.
 -export([init/3, compute/3]).
 %%% Public interface helpers:

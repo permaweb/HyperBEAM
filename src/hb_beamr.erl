@@ -45,7 +45,7 @@ The core API is simple:
         Where:
             Port is the port to the LID.
             Mem is a binary output of a previous `serialize/1` call.
-'''
+```
 
 BEAMR was designed for use in the HyperBEAM project, but is suitable for
 deployment in other Erlang applications that need to run WASM modules. PRs

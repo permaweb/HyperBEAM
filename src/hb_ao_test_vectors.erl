@@ -1,6 +1,6 @@
 -module(hb_ao_test_vectors).
 -moduledoc """
-Uses a series of different `Opts` values to test the resolution engine`s 
+Uses a series of different `Opts` values to test the resolution engine's 
 execution under different circumstances.
 """.
 -include_lib("eunit/include/eunit.hrl").
