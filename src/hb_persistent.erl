@@ -4,10 +4,10 @@ Creates and manages long-lived AO-Core resolution processes.
 These can be useful for situations where a message is large and expensive
 to serialize and deserialize, or when executions should be deliberately
 serialized to avoid parallel executions of the same computation. This 
-module is called during the core `hb_ao' execution process, so care
+module is called during the core `hb_ao` execution process, so care
 must be taken to avoid recursive spawns/loops.
 
-Built using the `pg' module, which is a distributed Erlang process group
+Built using the `pg` module, which is a distributed Erlang process group
 manager.
 """.
 
@@ -19,7 +19,7 @@ manager.
 -include_lib("eunit/include/eunit.hrl").
 
 -doc """
-Ensure that the `pg' module is started.
+Ensure that the `pg` module is started.
 """.
 start() -> hb_name:start().
 
@@ -149,7 +149,7 @@ find_execution(Groupname, _Opts) ->
 
 -doc """
 Calculate the group name for a Msg1 and Msg2 pair. Uses the Msg1's
-`group' function if it is found in the `info', otherwise uses the default.
+`group` function if it is found in the `info`, otherwise uses the default.
 """.
 group(Msg1, Msg2, Opts) ->
     Grouper =

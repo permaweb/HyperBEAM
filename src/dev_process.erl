@@ -13,7 +13,7 @@ This allows the devices to share state as needed. Additionally, after each
 computation step the device caches the result at a path relative to the
 process definition itself, such that the process message's ID can act as an
 immutable reference to the process's growing list of interactions. See 
-`dev_process_cache' for details.
+`dev_process_cache` for details.
 
 The external API of the device is as follows:
 ```
@@ -22,7 +22,7 @@ POST /ID/Schedule:               Adds a message to the schedule
 
 GET /ID/Compute/[IDorSlotNum]:   Returns the state of the process after 
                                  applying a message
-GET /ID/Now:                     Returns the `/Results' key of the latest 
+GET /ID/Now:                     Returns the `/Results` key of the latest 
                                  computed message
 '''
 
@@ -46,7 +46,7 @@ Runtime options:
     Cache-Frequency: The number of assignments that will be computed 
                      before the full (restorable) state should be cached.
     Cache-Keys:      A list of the keys that should be cached for all 
-                     assignments, in addition to `/Results'.
+                     assignments, in addition to `/Results`.
 """.
 %%% Public API
 -export([info/1, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
@@ -62,7 +62,7 @@ Runtime options:
 -include_lib("include/hb.hrl").
 
 %% The frequency at which the process state should be cached. Can be overridden
-%% with the `cache_frequency' option.
+%% with the `cache_frequency` option.
 -define(DEFAULT_CACHE_FREQ, 1).
 
 -doc """
@@ -86,8 +86,8 @@ info(_Msg1) ->
 
 -doc """
 Returns the default device for a given piece of functionality. Expects
-the `process/variant' key to be set in the message. The `execution-device'
-_must_ be set in all processes aside those marked with `ao.TN.1' variant.
+the `process/variant` key to be set in the message. The `execution-device`
+_must_ be set in all processes aside those marked with `ao.TN.1` variant.
 This is in order to ensure that post-mainnet processes do not default to
 using infrastructure that should not be present on nodes in the future.
 """.
@@ -157,7 +157,7 @@ process_id(Msg1, Msg2, Opts) ->
 -doc """
 Before computation begins, a boot phase is required. This phase
 allows devices on the execution stack to initialize themselves. We set the
-`Initialized' key to `True' to indicate that the process has been
+`Initialized` key to `True` to indicate that the process has been
 initialized.
 """.
 init(Msg1, _Msg2, Opts) ->
@@ -187,7 +187,7 @@ compute(Msg1, Msg2, Opts) ->
     case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Msg2}, Opts) of
         not_found ->
             % The slot is not set, so we need to serve the latest known state.
-            % We do this by setting the `process_now_from_cache' option to `true'.
+            % We do this by setting the `process_now_from_cache` option to `true`.
             now(Msg1, Msg2, Opts#{ process_now_from_cache => true });
         RawSlot ->
             Slot = hb_util:int(RawSlot),
@@ -289,7 +289,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     % Ensure that the next slot is the slot that we are expecting, just
     % in case there is a scheduler device error.
     NextSlot = hb_util:int(hb_ao:get(<<"slot">>, RawInputMsg, Opts)),
-    % If the input message does not have a path, set it to `compute'.
+    % If the input message does not have a path, set it to `compute`.
     InputMsg =
         case hb_path:from_message(request, RawInputMsg) of
             undefined -> RawInputMsg#{ <<"path">> => <<"compute">> };
@@ -323,7 +323,7 @@ Store the resulting state in the cache, potentially with the snapshot
 key.
 """.
 store_result(ProcID, Slot, Msg3, Msg2, Opts) ->
-    % Cache the `Memory' key every `Cache-Frequency' slots.
+    % Cache the `Memory` key every `Cache-Frequency` slots.
     Freq = hb_opts:get(process_cache_frequency, ?DEFAULT_CACHE_FREQ, Opts),
     Msg3MaybeWithSnapshot =
         case Slot rem Freq of
@@ -359,7 +359,7 @@ store_result(ProcID, Slot, Msg3, Msg2, Opts) ->
 
 -doc """
 Returns the known state of the process at either the current slot, or
-the latest slot in the cache depending on the `process_now_from_cache' option.
+the latest slot in the cache depending on the `process_now_from_cache` option.
 """.
 now(RawMsg1, Msg2, Opts) ->
     Msg1 = ensure_process_key(RawMsg1, Opts),
@@ -494,7 +494,7 @@ ensure_loaded(Msg1, Msg2, Opts) ->
 
 -doc """
 Run a message against Msg1, with the device being swapped out for
-the device found at `Key'. After execution, the device is swapped back
+the device found at `Key`. After execution, the device is swapped back
 to the original device if the device is the same as we left it.
 """.
 run_as(Key, Msg1, Msg2, Opts) ->
@@ -542,7 +542,7 @@ run_as(Key, Msg1, Msg2, Opts) ->
 
 -doc """
 Change the message to for that has the device set as this module.
-In situations where the key that is `run_as' returns a message with a 
+In situations where the key that is `run_as` returns a message with a 
 transformed device, this is useful.
 """.
 as_process(Msg1, Opts) ->
@@ -550,7 +550,7 @@ as_process(Msg1, Opts) ->
     Proc.
 
 -doc """
-Helper function to store a copy of the `process' key in the message.
+Helper function to store a copy of the `process` key in the message.
 """.
 ensure_process_key(Msg1, Opts) ->
     case hb_ao:get(<<"process">>, Msg1, Opts#{ hashpath => ignore }) of
@@ -631,7 +631,7 @@ test_wasm_process(WASMImage, Opts) ->
 
 -doc """
 Generate a process message with a random number, and the 
-`dev_wasm' device for execution.
+`dev_wasm` device for execution.
 """.
 test_aos_process() ->
     test_aos_process(#{}).
@@ -669,9 +669,9 @@ test_aos_process(Opts, Stack) ->
     ).
 
 -doc """
-Generate a device that has a stack of two `dev_test's for 
+Generate a device that has a stack of two `dev_test`s for 
 execution. This should generate a message state has doubled 
-`Already-Seen' elements for each assigned slot.
+`Already-Seen` elements for each assigned slot.
 """.
 dev_test_process() ->
     Wallet = hb:wallet(),

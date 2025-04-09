@@ -2,7 +2,7 @@
 -moduledoc """
 A cache of AO-Core protocol messages and compute results.
 
-HyperBEAM stores all paths in key value stores, abstracted by the `hb_store'
+HyperBEAM stores all paths in key value stores, abstracted by the `hb_store`
 module. Each store has its own storage backend, but each works with simple
 key-value pairs. Each store can write binary keys at paths, and link between
 paths.
@@ -56,7 +56,7 @@ list(Path, Store) ->
 -doc """
 Write a message to the cache. For raw binaries, we write the data at
 the hashpath of the data (by default the SHA2-256 hash of the data). We link
-the unattended ID's hashpath for the keys (including `/commitments') on the
+the unattended ID's hashpath for the keys (including `/commitments`) on the
 message to the underlying data and recurse. We then link each commitment ID
 to the uncommitted message, such that any of the committed or uncommitted IDs
 can be read, and once in memory all of the commitments are available. For
@@ -196,7 +196,7 @@ write_binary(Hashpath, Bin, Store, Opts) ->
     {ok, Path}.
 
 -doc """
-Read the message at a path. Returns in `structured@1.0' format: Either a
+Read the message at a path. Returns in `structured@1.0` format: Either a
 richly typed map or a direct binary.
 """.
 read(Path, Opts) ->
@@ -486,7 +486,7 @@ cache_suite_test_() ->
     ]).
 
 -doc """
-Test that message whose device is `#{}' cannot be written. If it were to
+Test that message whose device is `#{}` cannot be written. If it were to
 be written, it would cause an infinite loop.
 """.
 test_device_map_cannot_be_written_test() ->

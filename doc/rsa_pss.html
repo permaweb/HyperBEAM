@@ -1,77 +1,473 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module rsa_pss</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module rsa_pss</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>
-   Distributed under the Mozilla Public License v2.0.
-<p>Copyright © 2014-2015, Andrew Bennett</p>
-
-<p><b>Authors:</b> Andrew Bennett (<a href="mailto:andrew@pixid.com"><code>andrew@pixid.com</code></a>).</p>
-
-<h2><a name="description">Description</a></h2>
-   Distributed under the Mozilla Public License v2.0.
-   Original available at:
-   https://github.com/potatosalad/erlang-crypto_rsassa_pss
-<h2><a name="types">Data Types</a></h2>
-
-<h3 class="typedecl"><a name="type-rsa_digest_type">rsa_digest_type()</a></h3>
-<p><code>rsa_digest_type() = md5 | sha | sha224 | sha256 | sha384 | sha512</code></p>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
 
 
-<h3 class="typedecl"><a name="type-rsa_private_key">rsa_private_key()</a></h3>
-<p><code>rsa_private_key() = #'RSAPrivateKey'{}</code></p>
+    <title>rsa_pss — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
 
 
-<h3 class="typedecl"><a name="type-rsa_public_key">rsa_public_key()</a></h3>
-<p><code>rsa_public_key() = #'RSAPublicKey'{}</code></p>
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
+
+  </head>
+  <body data-type="modules" class="page-module">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#sign-3">sign/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#sign-4">sign/4</a></td><td></td></tr>
-<tr><td valign="top"><a href="#verify-4">verify/4</a></td><td></td></tr>
-<tr><td valign="top"><a href="#verify_legacy-4">verify_legacy/4</a></td><td></td></tr>
-</table>
+    </ul>
+  </div>
 
-<h2><a name="functions">Function Details</a></h2>
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
 
-<h3 class="function"><a name="sign-3">sign/3</a></h3>
-<div class="spec">
-<p><code>sign(Message, DigestType, PrivateKey) -&gt; Signature</code>
-<ul class="definitions"><li><code>Message = binary() | {digest, binary()}</code></li><li><code>DigestType = <a href="#type-rsa_digest_type" docgen-rel="seetype" docgen-href="#rsa_digest_type/0">rsa_digest_type()</a> | atom()</code></li><li><code>PrivateKey = <a href="#type-rsa_private_key" docgen-rel="seetype" docgen-href="#rsa_private_key/0">rsa_private_key()</a></code></li><li><code>Signature = binary()</code></li></ul></p>
-<p> </p>
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/rsa_pss.erl#L12" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+    <span translate="no">rsa_pss</span> 
+    <small class="app-vsn" translate="no">(hb v0.0.1)</small>
+
+  </h1>
+
+
+    <section id="moduledoc">
+<p>Distributed under the Mozilla Public License v2.0. Original available at: https://github.com/potatosalad/erlang-crypto_rsassa_pss</p>
+    </section>
+
 </div>
 
-<h3 class="function"><a name="sign-4">sign/4</a></h3>
-<div class="spec">
-<p><code>sign(Message, DigestType, Salt, PrivateKey) -&gt; Signature</code>
-<ul class="definitions"><li><code>Message = binary() | {digest, binary()}</code></li><li><code>DigestType = <a href="#type-rsa_digest_type" docgen-rel="seetype" docgen-href="#rsa_digest_type/0">rsa_digest_type()</a> | atom()</code></li><li><code>Salt = binary()</code></li><li><code>PrivateKey = <a href="#type-rsa_private_key" docgen-rel="seetype" docgen-href="#rsa_private_key/0">rsa_private_key()</a></code></li><li><code>Signature = binary()</code></li></ul></p>
-<p> </p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:rsa_digest_type/0" data-no-tooltip translate="no">rsa_digest_type/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:rsa_private_key/0" data-no-tooltip translate="no">rsa_private_key/0</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:rsa_public_key/0" data-no-tooltip translate="no">rsa_public_key/0</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#sign/3" data-no-tooltip translate="no">sign(Message, DigestType, PrivateKey)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#sign/4" data-no-tooltip translate="no">sign(Message, DigestType, Salt, PrivateKey)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#verify/4" data-no-tooltip translate="no">verify(Message, DigestType, Signature, PublicKey)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#verify_legacy/4" data-no-tooltip translate="no">verify_legacy(Message, DigestType, Signature, PublicKey)</a>
+
+      </div>
+
+    </div>
+
 </div>
 
-<h3 class="function"><a name="verify-4">verify/4</a></h3>
-<div class="spec">
-<p><code>verify(Message, DigestType, Signature, PublicKey) -&gt; boolean()</code>
-<ul class="definitions"><li><code>Message = binary() | {digest, binary()}</code></li><li><code>DigestType = <a href="#type-rsa_digest_type" docgen-rel="seetype" docgen-href="#rsa_digest_type/0">rsa_digest_type()</a> | atom()</code></li><li><code>Signature = binary()</code></li><li><code>PublicKey = <a href="#type-rsa_public_key" docgen-rel="seetype" docgen-href="#rsa_public_key/0">rsa_public_key()</a></code></li></ul></p>
-<p> </p>
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:rsa_digest_type/0">
+
+  <div class="detail-header">
+    <a href="#t:rsa_digest_type/0" class="detail-link" data-no-tooltip aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">rsa_digest_type/0</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/rsa_pss.erl#L24" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> rsa_digest_type() :: md5 | sha | sha224 | sha256 | sha384 | sha512.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:rsa_private_key/0">
+
+  <div class="detail-header">
+    <a href="#t:rsa_private_key/0" class="detail-link" data-no-tooltip aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">rsa_private_key/0</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/rsa_pss.erl#L23" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> rsa_private_key() ::
+          #'RSAPrivateKey'{version :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+                           modulus :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+                           publicExponent :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+                           privateExponent :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+                           prime1 :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+                           prime2 :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+                           exponent1 :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+                           exponent2 :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+                           coefficient :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(),
+                           otherPrimeInfos :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:rsa_public_key/0">
+
+  <div class="detail-header">
+    <a href="#t:rsa_public_key/0" class="detail-link" data-no-tooltip aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">rsa_public_key/0</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/rsa_pss.erl#L22" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> rsa_public_key() :: #'RSAPublicKey'{modulus :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>(), publicExponent :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="sign/3">
+
+  <div class="detail-header">
+    <a href="#sign/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">sign(Message, DigestType, PrivateKey)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/rsa_pss.erl#L40" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> sign(Message, DigestType, PrivateKey) -> Signature
+              when
+                  Message :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | {digest, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()},
+                  DigestType :: <a href="#t:rsa_digest_type/0">rsa_digest_type</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(),
+                  PrivateKey :: <a href="#t:rsa_private_key/0">rsa_private_key</a>(),
+                  Signature :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="sign/4">
+
+  <div class="detail-header">
+    <a href="#sign/4" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">sign(Message, DigestType, Salt, PrivateKey)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/rsa_pss.erl#L54" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> sign(Message, DigestType, Salt, PrivateKey) -> Signature
+              when
+                  Message :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | {digest, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()},
+                  DigestType :: <a href="#t:rsa_digest_type/0">rsa_digest_type</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(),
+                  Salt :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
+                  PrivateKey :: <a href="#t:rsa_private_key/0">rsa_private_key</a>(),
+                  Signature :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="verify/4">
+
+  <div class="detail-header">
+    <a href="#verify/4" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">verify(Message, DigestType, Signature, PublicKey)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/rsa_pss.erl#L83" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> verify(Message, DigestType, Signature, PublicKey) -> <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:boolean/0">boolean</a>()
+                when
+                    Message :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | {digest, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>()},
+                    DigestType :: <a href="#t:rsa_digest_type/0">rsa_digest_type</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:atom/0">atom</a>(),
+                    Signature :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(),
+                    PublicKey :: <a href="#t:rsa_public_key/0">rsa_public_key</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="verify_legacy/4">
+
+  <div class="detail-header">
+    <a href="#verify_legacy/4" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">verify_legacy(Message, DigestType, Signature, PublicKey)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/rsa_pss.erl#L129" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
 </div>
 
-<h3 class="function"><a name="verify_legacy-4">verify_legacy/4</a></h3>
-<div class="spec">
-<p><code>verify_legacy(Message, DigestType, Signature, PublicKey) -&gt; any()</code></p>
-<p> </p>
-</div>
-<hr>
-
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  </body>
 </html>

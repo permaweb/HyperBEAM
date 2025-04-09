@@ -3,10 +3,10 @@
 Implementation of Arweave's GraphQL API to gain access to specific 
 items of data stored on the network.
 
-This module must be used to get full HyperBEAM `structured@1.0' form messages
+This module must be used to get full HyperBEAM `structured@1.0` form messages
 from data items stored on the network, as Arweave gateways do not presently
 expose all necessary fields to retrieve this information outside of the
-GraphQL API. When gateways integrate serving in `httpsig@1.0' form, this
+GraphQL API. When gateways integrate serving in `httpsig@1.0` form, this
 module will be deprecated.
 """.
 %% Raw access primitives:
@@ -18,23 +18,23 @@ module will be deprecated.
 
 -doc """
 Get a data item (including data and tags) by its ID, using the node's
-%% GraphQL peers.
-%% It uses the following GraphQL schema:
-%% type Transaction {
-%%   id: ID!
-%%   anchor: String!
-%%   signature: String!
-%%   recipient: String!
-%%   owner: Owner { address: String! key: String! }!
-%%   fee: Amount!
-%%   quantity: Amount!
-%%   data: MetaData!
-%%   tags: [Tag { name: String! value: String! }!]!
-%% }
-%% type Amount {
-%%   winston: String!
-%%   ar: String!
-%% }
+GraphQL peers.
+It uses the following GraphQL schema:
+type Transaction {
+  id: ID!
+  anchor: String!
+  signature: String!
+  recipient: String!
+  owner: Owner { address: String! key: String! }!
+  fee: Amount!
+  quantity: Amount!
+  data: MetaData!
+  tags: [Tag { name: String! value: String! }!]!
+}
+type Amount {
+  winston: String!
+  ar: String!
+}
 """.
 read(ID, Opts) ->
     Query =
@@ -63,7 +63,7 @@ read(ID, Opts) ->
 
 -doc """
 Gives the fields of a transaction that are needed to construct an
-%% ANS-104 message.
+ANS-104 message.
 """.
 item_spec() ->
     <<"node { ",
@@ -80,10 +80,10 @@ item_spec() ->
 
 -doc """
 Get the data associated with a transaction by its ID, using the node's
-%% Arweave `gateway' peers. The item is expected to be available in its 
-%% unmodified (by caches or other proxies) form at the following location:
-%%      https://&lt;gateway&gt;/raw/&lt;id&gt;
-%% where `&lt;id&gt;' is the base64-url-encoded transaction ID.
+Arweave `gateway` peers. The item is expected to be available in its 
+unmodified (by caches or other proxies) form at the following location:
+      https://&lt;gateway&gt;/raw/&lt;id&gt;
+where `&lt;id&gt;` is the base64-url-encoded transaction ID.
 """.
 data(ID, Opts) ->
     Req = #{
@@ -137,8 +137,8 @@ scheduler_location(Address, Opts) ->
         
 -doc """
 Run a GraphQL request encoded as a binary. The node message may contain 
-%% a list of URLs to use, optionally as a tuple with an additional map of options
-%% to use for the request.
+a list of URLs to use, optionally as a tuple with an additional map of options
+to use for the request.
 """.
 query(Query, Opts) ->
     Res = hb_http:request(
@@ -167,7 +167,7 @@ query(Query, Opts) ->
 
 -doc """
 Takes a GraphQL item node, matches it with the appropriate data from a
-%% gateway, then returns `{ok, ParsedMsg}'.
+gateway, then returns `{ok, ParsedMsg}'.
 """.
 result_to_message(Item, Opts) ->
     case hb_ao:get(<<"id">>, Item, Opts) of
@@ -224,7 +224,7 @@ result_to_message(ExpectedID, Item, Opts) ->
     TABM = dev_codec_ans104:from(TX),
     ?event({decoded_tabm, TABM}),
     Structured = dev_codec_structured:to(TABM),
-    % Some graphql nodes do not grant the `anchor' or `last_tx' fields, so we
+    % Some graphql nodes do not grant the `anchor` or `last_tx` fields, so we
     % verify the data item and optionally add the explicit keys as committed
     % fields _if_ the node desires it.
     Embedded =

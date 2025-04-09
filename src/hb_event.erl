@@ -9,7 +9,7 @@ Wrapper for incrementing prometheus counters.
 
 -doc """
 Debugging log logging function. For now, it just prints to standard
-%% error.
+error.
 """.
 log(X) -> log(global, X).
 log(Topic, X) -> log(Topic, X, "").
@@ -21,11 +21,11 @@ log(Topic, X, Mod, Func, undefined, Opts) -> log(Topic, X, Mod, Func, "", Opts);
 log(Topic, X, ModAtom, Func, Line, Opts) when is_atom(ModAtom) ->
     % Increment by message adding Topic as label
     increment(Topic, X, Opts),
-    % Check if the module has the `hb_debug' attribute set to `print'.
+    % Check if the module has the `hb_debug` attribute set to `print`.
     case lists:member({hb_debug, [print]}, ModAtom:module_info(attributes)) of
         true -> hb_util:debug_print(X, atom_to_list(ModAtom), Func, Line);
         false -> 
-            % Check if the module has the `hb_debug' attribute set to `no_print'.
+            % Check if the module has the `hb_debug` attribute set to `no_print`.
             case lists:keyfind(hb_debug, 1, ModAtom:module_info(attributes)) of
                 {hb_debug, [no_print]} -> X;
                 _ -> log(Topic, X, atom_to_list(ModAtom), Func, Line, Opts)
@@ -47,10 +47,10 @@ log(Topic, X, ModStr, Func, Line, Opts) ->
 
 -doc """
 Increment the counter for the given topic and message. Registers the
-%% counter if it doesn't exist. If the topic is `global', the message is ignored.
-%% This means that events must specify a topic if they want to be counted,
-%% filtering debug messages. Similarly, events with a topic that begins with
-%% `debug' are ignored.
+counter if it doesn't exist. If the topic is `global`, the message is ignored.
+This means that events must specify a topic if they want to be counted,
+filtering debug messages. Similarly, events with a topic that begins with
+`debug` are ignored.
 """.
 increment(global, _Message, _Opts) -> ignored;
 increment(ao_core, _Message, _Opts) -> ignored;

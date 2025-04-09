@@ -1,84 +1,1023 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module hb_singleton</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module hb_singleton</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>A parser that translates Converge HTTP API requests in TABM format
-   into an ordered list of messages to evaluate.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
 
 
-<h2><a name="description">Description</a></h2>A parser that translates Converge HTTP API requests in TABM format
-   into an ordered list of messages to evaluate. The details of this format
-   are described in <code>docs/converge-http-api.md`.
-  
-   Syntax overview:
-   ```
-       Singleton: Message containing keys and a `path` field,
-                  which may also contain a query string of key-value pairs.
-  
-       Path:
-           - /Part1/Part2/.../PartN/ =&gt; [Part1, Part2, ..., PartN]
-           - /ID/Part2/.../PartN =&gt; [ID, Part2, ..., PartN]
-  
-       Part: (Key + Resolution), Device?, #{ K =&gt; V}?
-           - Part =&gt; #{ path =&gt; Part }
-           - Part&amp;Key=Value =&gt; #{ path =&gt; Part, Key =&gt; Value }
-           - Part&amp;Key =&gt; #{ path =&gt; Part, Key =&gt; true }
-           - Part&amp;k1=v1&amp;k2=v2 =&gt; #{ path =&gt; Part, k1 =&gt; &lt;&lt;"v1"&gt;&gt;, k2 =&gt; &lt;&lt;"v2"&gt;&gt; }
-           - Part~Device =&gt; {as, Device, #{ path =&gt; Part }}
-           - Part~D&amp;K1=V1 =&gt; {as, D, #{ path =&gt; Part, K1 =&gt; &lt;&lt;"v1"&gt;&gt; }}
-           - pt&amp;k1+int=1 =&gt; #{ path =&gt; pt, k1 =&gt; 1 }
-           - pt~d&amp;k1+int=1 =&gt; {as, d, #{ path =&gt; pt, k1 =&gt; 1 }}
-           - (/nested/path) =&gt; Resolution of the path /nested/path
-           - (/nested/path&amp;k1=v1) =&gt; (resolve /nested/path)#{k1 =&gt; v1}
-           - (/nested/path~D&amp;K1=V1) =&gt; (resolve /nested/path)#{K1 =&gt; V1}
-           - pt&amp;k1+res=(/a/b/c) =&gt; #{ path =&gt; pt, k1 =&gt; (resolve /a/b/c) }
-       Key:
-           - key: &lt;&lt;"value"&gt;&gt; =&gt; #{ key =&gt; &lt;&lt;"value"&gt;&gt;, ... } for all messages
-           - n.key: &lt;&lt;"value"&gt;&gt; =&gt; #{ key =&gt; &lt;&lt;"value"&gt;&gt;, ... } for Nth message
-           - key+Int: 1 =&gt; #{ key =&gt; 1, ... }
-           - key+Res: /nested/path =&gt; #{ key =&gt; (resolve /nested/path), ... }
-           - N.Key+Res=(/a/b/c) =&gt; #{ Key =&gt; (resolve /a/b/c), ... }</code>''
-<h2><a name="types">Data Types</a></h2>
-
-<h3 class="typedecl"><a name="type-converge_message">converge_message()</a></h3>
-<p><code>converge_message() = map() | binary()</code></p>
+    <title>hb_singleton — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
 
 
-<h3 class="typedecl"><a name="type-tabm_message">tabm_message()</a></h3>
-<p><code>tabm_message() = map()</code></p>
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
+
+  </head>
+  <body data-type="modules" class="page-module">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#from-1">from/1</a></td><td>Normalize a singleton TABM message into a list of executable Converge
-  messages.</td></tr>
-<tr><td valign="top"><a href="#to-1">to/1</a></td><td>Convert a list of converge message into TABM message.</td></tr>
-</table>
+    </ul>
+  </div>
 
-<h2><a name="functions">Function Details</a></h2>
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
 
-<h3 class="function"><a name="from-1">from/1</a></h3>
-<div class="spec">
-<p><code>from(RawMsg) -&gt; any()</code></p>
-<p> </p>
-</div><p>Normalize a singleton TABM message into a list of executable Converge
-  messages.</p>
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
 
-<h3 class="function"><a name="to-1">to/1</a></h3>
-<div class="spec">
-<p><code>to(Messages::[<a href="#type-converge_message" docgen-rel="seetype" docgen-href="#converge_message/0">converge_message()</a>]) -&gt; <a href="#type-tabm_message" docgen-rel="seetype" docgen-href="#tabm_message/0">tabm_message()</a></code><br></p>
-<p> </p>
-</div><p>Convert a list of converge message into TABM message.</p>
-<hr>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+    <span translate="no">hb_singleton</span> 
+    <small class="app-vsn" translate="no">(hb v0.0.1)</small>
+
+  </h1>
+
+
+    <section id="moduledoc">
+<p>A parser that translates AO-Core HTTP API requests in TABM format
+into an ordered list of messages to evaluate. The details of this format
+are described in <code class="inline">docs/ao-core-http-api.md</code>.</p><p>Syntax overview:</p><pre><code class="makeup erlang" translate="no"><span class="w">    </span><span class="n">Singleton</span><span class="p">:</span><span class="w"> </span><span class="n">Message</span><span class="w"> </span><span class="ss">containing</span><span class="w"> </span><span class="ss">keys</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="err">`</span><span class="ss">path</span><span class="err">`</span><span class="w"> </span><span class="ss">field</span><span class="p">,</span><span class="w">
+               </span><span class="ss">which</span><span class="w"> </span><span class="ss">may</span><span class="w"> </span><span class="ss">also</span><span class="w"> </span><span class="ss">contain</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="k">query</span><span class="w"> </span><span class="ss">string</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">key</span><span class="o">-</span><span class="ss">value</span><span class="w"> </span><span class="ss">pairs</span><span class="p">.</span><span class="w">
+
+    </span><span class="n">Path</span><span class="p">:</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="o">/</span><span class="n">Part1</span><span class="o">/</span><span class="n">Part2</span><span class="o">/</span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="o">/</span><span class="n">PartN</span><span class="o">/</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-1">[</span><span class="n">Part1</span><span class="p">,</span><span class="w"> </span><span class="n">Part2</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="p">,</span><span class="w"> </span><span class="n">PartN</span><span class="p" data-group-id="4754933162-1">]</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="o">/</span><span class="n">ID</span><span class="o">/</span><span class="n">Part2</span><span class="o">/</span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="o">/</span><span class="n">PartN</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-2">[</span><span class="n">ID</span><span class="p">,</span><span class="w"> </span><span class="n">Part2</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="p">,</span><span class="w"> </span><span class="n">PartN</span><span class="p" data-group-id="4754933162-2">]</span><span class="w">
+
+    </span><span class="n">Part</span><span class="p">:</span><span class="w"> </span><span class="p" data-group-id="4754933162-3">(</span><span class="n">Key</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Resolution</span><span class="p" data-group-id="4754933162-3">)</span><span class="p">,</span><span class="w"> </span><span class="n">Device</span><span class="o">?</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4754933162-4">#{</span><span class="w"> </span><span class="n">K</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">V</span><span class="p" data-group-id="4754933162-4">}</span><span class="o">?</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="n">Part</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-5">#{</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">Part</span><span class="w"> </span><span class="p" data-group-id="4754933162-5">}</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="n">Part</span><span class="err">&amp;</span><span class="n">Key</span><span class="o">=</span><span class="n">Value</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-6">#{</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">Part</span><span class="p">,</span><span class="w"> </span><span class="n">Key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">Value</span><span class="w"> </span><span class="p" data-group-id="4754933162-6">}</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="n">Part</span><span class="err">&amp;</span><span class="n">Key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-7">#{</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">Part</span><span class="p">,</span><span class="w"> </span><span class="n">Key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">true</span><span class="w"> </span><span class="p" data-group-id="4754933162-7">}</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="n">Part</span><span class="err">&amp;</span><span class="ss">k1</span><span class="o">=</span><span class="ss">v1</span><span class="err">&amp;</span><span class="ss">k2</span><span class="o">=</span><span class="ss">v2</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-8">#{</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">Part</span><span class="p">,</span><span class="w"> </span><span class="ss">k1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">&lt;&lt;</span><span class="s">&quot;v1&quot;</span><span class="p">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="ss">k2</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">&lt;&lt;</span><span class="s">&quot;v2&quot;</span><span class="p">&gt;&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-8">}</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="n">Part</span><span class="err">~</span><span class="n">Device</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-9">{</span><span class="ss">as</span><span class="p">,</span><span class="w"> </span><span class="n">Device</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4754933162-10">#{</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">Part</span><span class="w"> </span><span class="p" data-group-id="4754933162-10">}</span><span class="p" data-group-id="4754933162-9">}</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="n">Part</span><span class="err">~</span><span class="n">D</span><span class="err">&amp;</span><span class="n">K1</span><span class="o">=</span><span class="n">V1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-11">{</span><span class="ss">as</span><span class="p">,</span><span class="w"> </span><span class="n">D</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4754933162-12">#{</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">Part</span><span class="p">,</span><span class="w"> </span><span class="n">K1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">&lt;&lt;</span><span class="s">&quot;v1&quot;</span><span class="p">&gt;&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-12">}</span><span class="p" data-group-id="4754933162-11">}</span><span class="w">
+</span><span class="w">        </span><span class="p">-</span><span class="w"> </span><span class="na">pt</span><span class="err">&amp;</span><span class="ss">k1</span><span class="o">+</span><span class="ss">int</span><span class="o">=</span><span class="mi">1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-13">#{</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">pt</span><span class="p">,</span><span class="w"> </span><span class="ss">k1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p" data-group-id="4754933162-13">}</span><span class="w">
+</span><span class="w">        </span><span class="p">-</span><span class="w"> </span><span class="na">pt</span><span class="err">~</span><span class="ss">d</span><span class="err">&amp;</span><span class="ss">k1</span><span class="o">+</span><span class="ss">int</span><span class="o">=</span><span class="mi">1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-14">{</span><span class="ss">as</span><span class="p">,</span><span class="w"> </span><span class="ss">d</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="4754933162-15">#{</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">pt</span><span class="p">,</span><span class="w"> </span><span class="ss">k1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p" data-group-id="4754933162-15">}</span><span class="p" data-group-id="4754933162-14">}</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="p" data-group-id="4754933162-16">(</span><span class="o">/</span><span class="ss">nested</span><span class="o">/</span><span class="ss">path</span><span class="p" data-group-id="4754933162-16">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">Resolution</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="o">/</span><span class="ss">nested</span><span class="o">/</span><span class="ss">path</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="p" data-group-id="4754933162-17">(</span><span class="o">/</span><span class="ss">nested</span><span class="o">/</span><span class="ss">path</span><span class="err">&amp;</span><span class="ss">k1</span><span class="o">=</span><span class="ss">v1</span><span class="p" data-group-id="4754933162-17">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-18">(</span><span class="ss">resolve</span><span class="w"> </span><span class="o">/</span><span class="ss">nested</span><span class="o">/</span><span class="ss">path</span><span class="p" data-group-id="4754933162-18">)</span><span class="p" data-group-id="4754933162-19">#{</span><span class="ss">k1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">v1</span><span class="p" data-group-id="4754933162-19">}</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="p" data-group-id="4754933162-20">(</span><span class="o">/</span><span class="ss">nested</span><span class="o">/</span><span class="ss">path</span><span class="err">~</span><span class="n">D</span><span class="err">&amp;</span><span class="n">K1</span><span class="o">=</span><span class="n">V1</span><span class="p" data-group-id="4754933162-20">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-21">(</span><span class="ss">resolve</span><span class="w"> </span><span class="o">/</span><span class="ss">nested</span><span class="o">/</span><span class="ss">path</span><span class="p" data-group-id="4754933162-21">)</span><span class="p" data-group-id="4754933162-22">#{</span><span class="n">K1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="n">V1</span><span class="p" data-group-id="4754933162-22">}</span><span class="w">
+</span><span class="w">        </span><span class="p">-</span><span class="w"> </span><span class="na">pt</span><span class="err">&amp;</span><span class="ss">k1</span><span class="o">+</span><span class="ss">res</span><span class="o">=</span><span class="p" data-group-id="4754933162-23">(</span><span class="o">/</span><span class="ss">a</span><span class="o">/</span><span class="ss">b</span><span class="o">/</span><span class="ss">c</span><span class="p" data-group-id="4754933162-23">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-24">#{</span><span class="w"> </span><span class="ss">path</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ss">pt</span><span class="p">,</span><span class="w"> </span><span class="ss">k1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-25">(</span><span class="ss">resolve</span><span class="w"> </span><span class="o">/</span><span class="ss">a</span><span class="o">/</span><span class="ss">b</span><span class="o">/</span><span class="ss">c</span><span class="p" data-group-id="4754933162-25">)</span><span class="w"> </span><span class="p" data-group-id="4754933162-24">}</span><span class="w">
+    </span><span class="n">Key</span><span class="p">:</span><span class="w">
+</span><span class="w">        </span><span class="p">-</span><span class="w"> </span><span class="na">key</span><span class="p">:</span><span class="w"> </span><span class="p">&lt;&lt;</span><span class="s">&quot;value&quot;</span><span class="p">&gt;&gt;</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-26">#{</span><span class="w"> </span><span class="ss">key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">&lt;&lt;</span><span class="s">&quot;value&quot;</span><span class="p">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="w"> </span><span class="p" data-group-id="4754933162-26">}</span><span class="w"> </span><span class="ss">for</span><span class="w"> </span><span class="ss">all</span><span class="w"> </span><span class="ss">messages</span><span class="w">
+</span><span class="w">        </span><span class="p">-</span><span class="w"> </span><span class="na">n</span><span class="p">.</span><span class="nc">key</span><span class="p">:</span><span class="w"> </span><span class="p">&lt;&lt;</span><span class="s">&quot;value&quot;</span><span class="p">&gt;&gt;</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-27">#{</span><span class="w"> </span><span class="ss">key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">&lt;&lt;</span><span class="s">&quot;value&quot;</span><span class="p">&gt;&gt;</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="w"> </span><span class="p" data-group-id="4754933162-27">}</span><span class="w"> </span><span class="ss">for</span><span class="w"> </span><span class="n">Nth</span><span class="w"> </span><span class="ss">message</span><span class="w">
+</span><span class="w">        </span><span class="p">-</span><span class="w"> </span><span class="na">key</span><span class="o">+</span><span class="n">Int</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-28">#{</span><span class="w"> </span><span class="ss">key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="w"> </span><span class="p" data-group-id="4754933162-28">}</span><span class="w">
+</span><span class="w">        </span><span class="p">-</span><span class="w"> </span><span class="na">key</span><span class="o">+</span><span class="n">Res</span><span class="p">:</span><span class="w"> </span><span class="o">/</span><span class="ss">nested</span><span class="o">/</span><span class="ss">path</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-29">#{</span><span class="w"> </span><span class="ss">key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-30">(</span><span class="ss">resolve</span><span class="w"> </span><span class="o">/</span><span class="ss">nested</span><span class="o">/</span><span class="ss">path</span><span class="p" data-group-id="4754933162-30">)</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="w"> </span><span class="p" data-group-id="4754933162-29">}</span><span class="w">
+        </span><span class="o">-</span><span class="w"> </span><span class="n">N</span><span class="p">.</span><span class="n">Key</span><span class="o">+</span><span class="n">Res</span><span class="o">=</span><span class="p" data-group-id="4754933162-31">(</span><span class="o">/</span><span class="ss">a</span><span class="o">/</span><span class="ss">b</span><span class="o">/</span><span class="ss">c</span><span class="p" data-group-id="4754933162-31">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-32">#{</span><span class="w"> </span><span class="n">Key</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p" data-group-id="4754933162-33">(</span><span class="ss">resolve</span><span class="w"> </span><span class="o">/</span><span class="ss">a</span><span class="o">/</span><span class="ss">b</span><span class="o">/</span><span class="ss">c</span><span class="p" data-group-id="4754933162-33">)</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="p">.</span><span class="p">.</span><span class="w"> </span><span class="p" data-group-id="4754933162-32">}</span><span class="w">
+</span><span class="ss">&#39;&#39;</span><span class="err">&#39;</span></code></pre>
+    </section>
+
+</div>
+
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:ao_message/0" data-no-tooltip translate="no">ao_message()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:tabm_message/0" data-no-tooltip translate="no">tabm_message()</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#basic_hashpath_test/0" data-no-tooltip translate="no">basic_hashpath_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#basic_hashpath_to_test/0" data-no-tooltip translate="no">basic_hashpath_to_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#from/1" data-no-tooltip translate="no">from(RawMsg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Normalize a singleton TABM message into a list of executable AO-Core
+messages.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#inlined_keys_test/0" data-no-tooltip translate="no">inlined_keys_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#inlined_keys_to_test/0" data-no-tooltip translate="no">inlined_keys_to_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#multiple_inlined_keys_test/0" data-no-tooltip translate="no">multiple_inlined_keys_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#multiple_inlined_keys_to_test/0" data-no-tooltip translate="no">multiple_inlined_keys_to_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#multiple_messages_test/0" data-no-tooltip translate="no">multiple_messages_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#multiple_messages_to_test/0" data-no-tooltip translate="no">multiple_messages_to_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#parse_explicit_message_test/0" data-no-tooltip translate="no">parse_explicit_message_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#path_parts_test/0" data-no-tooltip translate="no">path_parts_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#scoped_key_test/0" data-no-tooltip translate="no">scoped_key_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#scoped_key_to_test/0" data-no-tooltip translate="no">scoped_key_to_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#simple_to_test/0" data-no-tooltip translate="no">simple_to_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#single_message_test/0" data-no-tooltip translate="no">single_message_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#subpath_in_inlined_test/0" data-no-tooltip translate="no">subpath_in_inlined_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#subpath_in_inlined_to_test/0" data-no-tooltip translate="no">subpath_in_inlined_to_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#subpath_in_key_test/0" data-no-tooltip translate="no">subpath_in_key_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#subpath_in_key_to_test/0" data-no-tooltip translate="no">subpath_in_key_to_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#subpath_in_path_test/0" data-no-tooltip translate="no">subpath_in_path_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#subpath_in_path_to_test/0" data-no-tooltip translate="no">subpath_in_path_to_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#to/1" data-no-tooltip translate="no">to(Messages)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Convert a list of AO-Core message into TABM message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#to_suite_test_/0" data-no-tooltip translate="no">to_suite_test_()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#typed_key_test/0" data-no-tooltip translate="no">typed_key_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#typed_key_to_test/0" data-no-tooltip translate="no">typed_key_to_test()</a>
+
+      </div>
+
+    </div>
+
+</div>
+
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:ao_message/0">
+
+  <div class="detail-header">
+    <a href="#t:ao_message/0" class="detail-link" data-no-tooltip aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">ao_message()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L42" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> ao_message() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:tabm_message/0">
+
+  <div class="detail-header">
+    <a href="#t:tabm_message/0" class="detail-link" data-no-tooltip aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">tabm_message()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L43" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> tabm_message() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="basic_hashpath_test/0">
+
+  <div class="detail-header">
+    <a href="#basic_hashpath_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">basic_hashpath_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L661" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="basic_hashpath_to_test/0">
+
+  <div class="detail-header">
+    <a href="#basic_hashpath_to_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">basic_hashpath_to_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L515" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="from/1">
+
+  <div class="detail-header">
+    <a href="#from/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">from(RawMsg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L144" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Normalize a singleton TABM message into a list of executable AO-Core
+messages.</p>
+  </section>
+</section>
+<section class="detail" id="inlined_keys_test/0">
+
+  <div class="detail-header">
+    <a href="#inlined_keys_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">inlined_keys_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L759" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="inlined_keys_to_test/0">
+
+  <div class="detail-header">
+    <a href="#inlined_keys_to_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">inlined_keys_to_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L592" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="multiple_inlined_keys_test/0">
+
+  <div class="detail-header">
+    <a href="#multiple_inlined_keys_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">multiple_inlined_keys_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L772" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="multiple_inlined_keys_to_test/0">
+
+  <div class="detail-header">
+    <a href="#multiple_inlined_keys_to_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">multiple_inlined_keys_to_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L616" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="multiple_messages_test/0">
+
+  <div class="detail-header">
+    <a href="#multiple_messages_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">multiple_messages_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L675" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="multiple_messages_to_test/0">
+
+  <div class="detail-header">
+    <a href="#multiple_messages_to_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">multiple_messages_to_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L500" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="parse_explicit_message_test/0">
+
+  <div class="detail-header">
+    <a href="#parse_explicit_message_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">parse_explicit_message_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L450" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="path_parts_test/0">
+
+  <div class="detail-header">
+    <a href="#path_parts_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">path_parts_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L801" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="scoped_key_test/0">
+
+  <div class="detail-header">
+    <a href="#scoped_key_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">scoped_key_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L690" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="scoped_key_to_test/0">
+
+  <div class="detail-header">
+    <a href="#scoped_key_to_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">scoped_key_to_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L527" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="simple_to_test/0">
+
+  <div class="detail-header">
+    <a href="#simple_to_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">simple_to_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L491" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="single_message_test/0">
+
+  <div class="detail-header">
+    <a href="#single_message_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">single_message_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L650" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="subpath_in_inlined_test/0">
+
+  <div class="detail-header">
+    <a href="#subpath_in_inlined_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">subpath_in_inlined_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L786" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="subpath_in_inlined_to_test/0">
+
+  <div class="detail-header">
+    <a href="#subpath_in_inlined_to_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">subpath_in_inlined_to_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L632" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="subpath_in_key_test/0">
+
+  <div class="detail-header">
+    <a href="#subpath_in_key_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">subpath_in_key_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L714" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="subpath_in_key_to_test/0">
+
+  <div class="detail-header">
+    <a href="#subpath_in_key_to_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">subpath_in_key_to_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L550" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="subpath_in_path_test/0">
+
+  <div class="detail-header">
+    <a href="#subpath_in_path_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">subpath_in_path_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L738" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="subpath_in_path_to_test/0">
+
+  <div class="detail-header">
+    <a href="#subpath_in_path_to_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">subpath_in_path_to_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L572" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="to/1">
+
+  <div class="detail-header">
+    <a href="#to/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">to(Messages)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L49" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> to([<a href="#t:ao_message/0">ao_message</a>()]) -> <a href="#t:tabm_message/0">tabm_message</a>().</pre>
+
+      </div>
+
+<p>Convert a list of AO-Core message into TABM message.</p>
+  </section>
+</section>
+<section class="detail" id="to_suite_test_/0">
+
+  <div class="detail-header">
+    <a href="#to_suite_test_/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">to_suite_test_()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L477" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="typed_key_test/0">
+
+  <div class="detail-header">
+    <a href="#typed_key_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">typed_key_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L702" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="typed_key_to_test/0">
+
+  <div class="detail-header">
+    <a href="#typed_key_to_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">typed_key_to_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_singleton.erl#L538" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

@@ -1,7 +1,7 @@
 -module(hb_features).
 -moduledoc """
 A module that exports a list of feature flags that the node supports
-using the `-ifdef' macro.
+using the `-ifdef` macro.
 As a consequence, this module acts as a proxy of information between the
 build system and the runtime execution environment.
 """.
@@ -40,8 +40,8 @@ enabled(Feature) ->
     maps:get(Feature, all(), false).
 
 %%% Individual feature flags.
-%%% These functions use the `-ifdef' macro to conditionally return a boolean
-%%% value based on the presence of the `ENABLE_<FEATURE>' macro during
+%%% These functions use the `-ifdef` macro to conditionally return a boolean
+%%% value based on the presence of the `ENABLE_<FEATURE>` macro during
 %%% compilation.
 
 -ifdef(ENABLE_HTTP3).

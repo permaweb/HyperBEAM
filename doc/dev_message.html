@@ -1,160 +1,1076 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module dev_message</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module dev_message</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>The identity device: For non-reserved keys, it simply returns a key
-   from the message as it is found in the message's underlying Erlang map.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
 
 
-<h2><a name="description">Description</a></h2>The identity device: For non-reserved keys, it simply returns a key
-   from the message as it is found in the message's underlying Erlang map.
-   Private keys (<code>priv[.*]</code>) are not included.
-   Reserved keys are: <code>id</code>, <code>attestations</code>, <code>attestors</code>, <code>keys</code>, <code>path</code>,
-   <code>set</code>, <code>remove</code>, <code>get</code>, and <code>verify</code>. Their function comments describe the
-   behaviour of the device when these keys are set.
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#attest-3">attest/3</a></td><td>Attest to a message, using the <code>attestation-device</code> key to specify the
-  device that should be used to attest to the message.</td></tr>
-<tr><td valign="top"><a href="#attestors-1">attestors/1</a></td><td>Return the attestors of a message that are present in the given request.</td></tr>
-<tr><td valign="top"><a href="#attestors-2">attestors/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#attestors-3">attestors/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#get-2">get/2</a></td><td>Return the value associated with the key as it exists in the message's
-  underlying Erlang map.</td></tr>
-<tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message, using the <code>attestors</code> list if it exists.</td></tr>
-<tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#id-3">id/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#info-0">info/0</a></td><td>Return the info for the identity device.</td></tr>
-<tr><td valign="top"><a href="#keys-1">keys/1</a></td><td>Get the public keys of a message.</td></tr>
-<tr><td valign="top"><a href="#remove-2">remove/2</a></td><td>Remove a key or keys from a message.</td></tr>
-<tr><td valign="top"><a href="#set-3">set/3</a></td><td>Set keys in a message.</td></tr>
-<tr><td valign="top"><a href="#set_path-3">set_path/3</a></td><td>Special case of <code>set/3</code> for setting the <code>path</code> key.</td></tr>
-<tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify a message nested in the body.</td></tr>
-</table>
+    <title>dev_message — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
 
-<h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="attest-3">attest/3</a></h3>
-<div class="spec">
-<p><code>attest(Self, Req, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Attest to a message, using the <code>attestation-device</code> key to specify the
-  device that should be used to attest to the message. If the key is not set,
-  the default device (<code>httpsig@1.0</code>) is used.</p>
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
 
-<h3 class="function"><a name="attestors-1">attestors/1</a></h3>
-<div class="spec">
-<p><code>attestors(Base) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return the attestors of a message that are present in the given request.</p>
+  </head>
+  <body data-type="modules" class="page-module">
+    <script>
 
-<h3 class="function"><a name="attestors-2">attestors/2</a></h3>
-<div class="spec">
-<p><code>attestors(Base, Req) -&gt; any()</code></p>
-<p> </p>
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+    <span translate="no">dev_message</span> 
+    <small class="app-vsn" translate="no">(hb v0.0.1)</small>
+
+  </h1>
+
+
+    <section id="moduledoc">
+<p>The identity device: For non-reserved keys, it simply returns a key 
+from the message as it is found in the message's underlying Erlang map. 
+Private keys (<code class="inline">priv[.*]</code>) are not included.
+Reserved keys are: <code class="inline">id</code>, <code class="inline">commitments</code>, <code class="inline">committers</code>, <code class="inline">keys</code>, <code class="inline">path</code>, 
+<code class="inline">set</code>, <code class="inline">remove</code>, <code class="inline">get</code>, and <code class="inline">verify</code>. Their function comments describe the 
+behaviour of the device when these keys are set.</p>
+    </section>
+
 </div>
 
-<h3 class="function"><a name="attestors-3">attestors/3</a></h3>
-<div class="spec">
-<p><code>attestors(Base, X2, NodeOpts) -&gt; any()</code></p>
-<p> </p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#cannot_get_private_keys_test/0" data-no-tooltip translate="no">cannot_get_private_keys_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#case_insensitive_get_test/0" data-no-tooltip translate="no">case_insensitive_get_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#commit/3" data-no-tooltip translate="no">commit(Self, Req, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Commit to a message, using the <code class="inline">commitment-device</code> key to specify the
+device that should be used to commit to the message. If the key is not set,
+the default device (<code class="inline">httpsig@1.0</code>) is used.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#committed/3" data-no-tooltip translate="no">committed(Self, Req, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the list of committed keys from a message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#committers/1" data-no-tooltip translate="no">committers(Base)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the committers of a message that are present in the given request.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#committers/2" data-no-tooltip translate="no">committers(Base, Req)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#committers/3" data-no-tooltip translate="no">committers/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get/2" data-no-tooltip translate="no">get(Key, Msg)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the value associated with the key as it exists in the message's
+underlying Erlang map. First check the public keys, then check case-
+insensitively if the key is a binary.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get/3" data-no-tooltip translate="no">get(Key, Msg, Msg2)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#get_keys_mod_test/0" data-no-tooltip translate="no">get_keys_mod_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#id/1" data-no-tooltip translate="no">id(Base)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the ID of a message, using the <code class="inline">committers</code> list if it exists.
+If the <code class="inline">committers</code> key is <code class="inline">all</code>, return the ID including all known 
+commitments -- <code class="inline">none</code> yields the ID without any commitments. If the 
+<code class="inline">committers</code> key is a list/map, return the ID including only the specified 
+commitments.
+The <code class="inline">id-device</code> key in the message can be used to specify the device that
+should be used to calculate the ID. If it is not set, the default device
+(<code class="inline">httpsig@1.0</code>) is used.
+Note: This function <em>does not</em> use AO-Core's <a href="#get/3"><code class="inline">get/3</code></a> function, as it
+as it would require significant computation. We may want to change this
+if/when non-map message structures are created.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#id/2" data-no-tooltip translate="no">id(Base, Req)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#id/3" data-no-tooltip translate="no">id/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#info/0" data-no-tooltip translate="no">info()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the info for the identity device.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#is_private_mod_test/0" data-no-tooltip translate="no">is_private_mod_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#key_from_device_test/0" data-no-tooltip translate="no">key_from_device_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#keys/1" data-no-tooltip translate="no">keys/1</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get the public keys of a message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#keys_from_device_test/0" data-no-tooltip translate="no">keys_from_device_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#private_keys_are_filtered_test/0" data-no-tooltip translate="no">private_keys_are_filtered_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#remove/2" data-no-tooltip translate="no">remove/2</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Remove a key or keys from a message.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#remove_test/0" data-no-tooltip translate="no">remove_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#run_test/0" data-no-tooltip translate="no">run_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#set/3" data-no-tooltip translate="no">set(Message1, NewValuesMsg, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Deep merge keys in a message. Takes a map of key-value pairs and sets
+them in the message, overwriting any existing values.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#set_conflicting_keys_test/0" data-no-tooltip translate="no">set_conflicting_keys_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#set_ignore_undefined_test/0" data-no-tooltip translate="no">set_ignore_undefined_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#set_path/3" data-no-tooltip translate="no">set_path/3</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Special case of <a href="#set/3"><code class="inline">set/3</code></a> for setting the <code class="inline">path</code> key. This cannot be set
+using the normal <code class="inline">set</code> function, as the <code class="inline">path</code> is a reserved key, necessary 
+for AO-Core to know the key to evaluate in requests.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#unset_with_set_test/0" data-no-tooltip translate="no">unset_with_set_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#verify/3" data-no-tooltip translate="no">verify(Self, Req, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Verify a message. By default, all commitments are verified. The
+<code class="inline">committers</code> key in the request can be used to specify that only the 
+commitments from specific committers should be verified. Similarly, specific
+commitments can be specified using the <code class="inline">commitments</code> key.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#verify_test/0" data-no-tooltip translate="no">verify_test()</a>
+
+      </div>
+
+    </div>
+
 </div>
 
-<h3 class="function"><a name="get-2">get/2</a></h3>
-<div class="spec">
-<p><code>get(Key, Msg) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return the value associated with the key as it exists in the message's
-  underlying Erlang map. First check the public keys, then check case-
-  insensitively if the key is a binary.</p>
+  </section>
 
-<h3 class="function"><a name="get-3">get/3</a></h3>
-<div class="spec">
-<p><code>get(Key, Msg, Msg2) -&gt; any()</code></p>
-<p> </p>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="cannot_get_private_keys_test/0">
+
+  <div class="detail-header">
+    <a href="#cannot_get_private_keys_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">cannot_get_private_keys_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L631" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="case_insensitive_get_test/0">
+
+  <div class="detail-header">
+    <a href="#case_insensitive_get_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">case_insensitive_get_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L615" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="commit/3">
+
+  <div class="detail-header">
+    <a href="#commit/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">commit(Self, Req, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L174" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Commit to a message, using the <code class="inline">commitment-device</code> key to specify the
+device that should be used to commit to the message. If the key is not set,
+the default device (<code class="inline">httpsig@1.0</code>) is used.</p>
+  </section>
+</section>
+<section class="detail" id="committed/3">
+
+  <div class="detail-header">
+    <a href="#committed/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">committed(Self, Req, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L264" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the list of committed keys from a message.</p>
+  </section>
+</section>
+<section class="detail" id="committers/1">
+
+  <div class="detail-header">
+    <a href="#committers/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">committers(Base)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L149" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the committers of a message that are present in the given request.</p>
+  </section>
+</section>
+<section class="detail" id="committers/2">
+
+  <div class="detail-header">
+    <a href="#committers/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">committers(Base, Req)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L150" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="committers/3">
+
+  <div class="detail-header">
+    <a href="#committers/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">committers/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L151" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="get/2">
+
+  <div class="detail-header">
+    <a href="#get/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">get(Key, Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L575" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the value associated with the key as it exists in the message's
+underlying Erlang map. First check the public keys, then check case-
+insensitively if the key is a binary.</p>
+  </section>
+</section>
+<section class="detail" id="get/3">
+
+  <div class="detail-header">
+    <a href="#get/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">get(Key, Msg, Msg2)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L576" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="get_keys_mod_test/0">
+
+  <div class="detail-header">
+    <a href="#get_keys_mod_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">get_keys_mod_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L602" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="id/1">
+
+  <div class="detail-header">
+    <a href="#id/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">id(Base)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L55" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the ID of a message, using the <code class="inline">committers</code> list if it exists.
+If the <code class="inline">committers</code> key is <code class="inline">all</code>, return the ID including all known 
+commitments -- <code class="inline">none</code> yields the ID without any commitments. If the 
+<code class="inline">committers</code> key is a list/map, return the ID including only the specified 
+commitments.
+The <code class="inline">id-device</code> key in the message can be used to specify the device that
+should be used to calculate the ID. If it is not set, the default device
+(<code class="inline">httpsig@1.0</code>) is used.
+Note: This function <em>does not</em> use AO-Core's <a href="#get/3"><code class="inline">get/3</code></a> function, as it
+as it would require significant computation. We may want to change this
+if/when non-map message structures are created.</p>
+  </section>
+</section>
+<section class="detail" id="id/2">
+
+  <div class="detail-header">
+    <a href="#id/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">id(Base, Req)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L56" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="id/3">
+
+  <div class="detail-header">
+    <a href="#id/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">id/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L57" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="info/0">
+
+  <div class="detail-header">
+    <a href="#info/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">info()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L36" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the info for the identity device.</p>
+  </section>
+</section>
+<section class="detail" id="is_private_mod_test/0">
+
+  <div class="detail-header">
+    <a href="#is_private_mod_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">is_private_mod_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L605" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="key_from_device_test/0">
+
+  <div class="detail-header">
+    <a href="#key_from_device_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">key_from_device_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L641" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="keys/1">
+
+  <div class="detail-header">
+    <a href="#keys/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">keys/1</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L556" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Get the public keys of a message.</p>
+  </section>
+</section>
+<section class="detail" id="keys_from_device_test/0">
+
+  <div class="detail-header">
+    <a href="#keys_from_device_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">keys_from_device_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L612" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="private_keys_are_filtered_test/0">
+
+  <div class="detail-header">
+    <a href="#private_keys_are_filtered_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">private_keys_are_filtered_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L621" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="remove/2">
+
+  <div class="detail-header">
+    <a href="#remove/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">remove/2</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L548" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Remove a key or keys from a message.</p>
+  </section>
+</section>
+<section class="detail" id="remove_test/0">
+
+  <div class="detail-header">
+    <a href="#remove_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">remove_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L644" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="run_test/0">
+
+  <div class="detail-header">
+    <a href="#run_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">run_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L702" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="set/3">
+
+  <div class="detail-header">
+    <a href="#set/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">set(Message1, NewValuesMsg, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L448" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Deep merge keys in a message. Takes a map of key-value pairs and sets
+them in the message, overwriting any existing values.</p>
+  </section>
+</section>
+<section class="detail" id="set_conflicting_keys_test/0">
+
+  <div class="detail-header">
+    <a href="#set_conflicting_keys_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">set_conflicting_keys_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L661" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="set_ignore_undefined_test/0">
+
+  <div class="detail-header">
+    <a href="#set_ignore_undefined_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">set_ignore_undefined_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L673" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="set_path/3">
+
+  <div class="detail-header">
+    <a href="#set_path/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">set_path/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L542" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Special case of <a href="#set/3"><code class="inline">set/3</code></a> for setting the <code class="inline">path</code> key. This cannot be set
+using the normal <code class="inline">set</code> function, as the <code class="inline">path</code> is a reserved key, necessary 
+for AO-Core to know the key to evaluate in requests.</p>
+  </section>
+</section>
+<section class="detail" id="unset_with_set_test/0">
+
+  <div class="detail-header">
+    <a href="#unset_with_set_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">unset_with_set_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L667" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="verify/3">
+
+  <div class="detail-header">
+    <a href="#verify/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">verify(Self, Req, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L198" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Verify a message. By default, all commitments are verified. The
+<code class="inline">committers</code> key in the request can be used to specify that only the 
+commitments from specific committers should be verified. Similarly, specific
+commitments can be specified using the <code class="inline">commitments</code> key.</p>
+  </section>
+</section>
+<section class="detail" id="verify_test/0">
+
+  <div class="detail-header">
+    <a href="#verify_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">verify_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_message.erl#L679" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
 </div>
 
-<h3 class="function"><a name="id-1">id/1</a></h3>
-<div class="spec">
-<p><code>id(Base) -&gt; any()</code></p>
-<p> </p>
-</div><p><p>Return the ID of a message, using the <code>attestors</code> list if it exists.
-  If the <code>attestors</code> key is <code>all</code>, return the ID including all known
-  attestations -- <code>none</code> yields the ID without any attestations. If the
-  <code>attestors</code> key is a list/map, return the ID including only the specified  
-attestations.</p>
- 
-  <p>The <code>id-device</code> key in the message can be used to specify the device that
-  should be used to calculate the ID. If it is not set, the default device
-  (<code>httpsig@1.0</code>) is used.</p>
- 
-  Note: This function _does not_ use Converge's <code>get/3</code> function, as it
-  as it would require significant computation. We may want to change this
-  if/when non-map message structures are created.</p>
-
-<h3 class="function"><a name="id-2">id/2</a></h3>
-<div class="spec">
-<p><code>id(Base, Req) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="id-3">id/3</a></h3>
-<div class="spec">
-<p><code>id(Base, Req, NodeOpts) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="info-0">info/0</a></h3>
-<div class="spec">
-<p><code>info() -&gt; any()</code></p>
-<p> </p>
-</div><p>Return the info for the identity device.</p>
-
-<h3 class="function"><a name="keys-1">keys/1</a></h3>
-<div class="spec">
-<p><code>keys(Msg) -&gt; any()</code></p>
-<p> </p>
-</div><p>Get the public keys of a message.</p>
-
-<h3 class="function"><a name="remove-2">remove/2</a></h3>
-<div class="spec">
-<p><code>remove(Message1, X2) -&gt; any()</code></p>
-<p> </p>
-</div><p>Remove a key or keys from a message.</p>
-
-<h3 class="function"><a name="set-3">set/3</a></h3>
-<div class="spec">
-<p><code>set(Message1, NewValuesMsg, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Set keys in a message. Takes a map of key-value pairs and sets them in
-  the message, overwriting any existing values.</p>
-
-<h3 class="function"><a name="set_path-3">set_path/3</a></h3>
-<div class="spec">
-<p><code>set_path(Message1, X2, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Special case of <code>set/3</code> for setting the <code>path</code> key. This cannot be set
-  using the normal <code>set</code> function, as the <code>path</code> is a reserved key, necessary
-  for Converge to know the key to evaluate in requests.</p>
-
-<h3 class="function"><a name="verify-3">verify/3</a></h3>
-<div class="spec">
-<p><code>verify(Self, Req, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Verify a message nested in the body. As with <code>id</code>, the <code>attestors</code>
-  key in the request can be used to specify which attestations should be
-  verified.</p>
-<hr>
-
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  </body>
 </html>

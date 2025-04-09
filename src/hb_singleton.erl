@@ -182,7 +182,7 @@ parse_full_path(RelativeRef) ->
     }.
 
 -doc """
-Step 2: Decode, split and sanitize the path. Split by `/' but avoid
+Step 2: Decode, split and sanitize the path. Split by `/` but avoid
 subpath components, such that their own path parts are not dissociated from
 their parent path.
 """.
@@ -262,7 +262,7 @@ apply_types(Msg) ->
 
 -doc """
 Step 4: Group headers/query by N-scope.
-`N.Key' => applies to Nth step. Otherwise => `global'
+`N.Key` => applies to Nth step. Otherwise => `global`
 """.
 group_scoped(Map, Msgs) ->
     {NScope, Global} =
@@ -351,8 +351,8 @@ parse_part(Part) ->
 
 -doc """
 Parse part modifiers:
-1. `~Device' => `{as, Device, Msg}'
-2. `&K=V' => `Msg#{ K => V }'
+1. `~Device` => `{as, Device, Msg}'
+2. `&K=V` => `Msg#{ K => V }'
 """.
 parse_part_mods([], Msg) -> Msg;
 parse_part_mods(<<>>, Msg) -> Msg;
@@ -380,7 +380,7 @@ parse_part_mods(<< "&", InlinedMsgBin/binary >>, Msg) ->
 -doc """
 Extrapolate the inlined key-value pair from a path segment. If the
 key has a value, it may provide a type (as with typical keys), but if a
-value is not provided, it is assumed to be a boolean `true'.
+value is not provided, it is assumed to be a boolean `true`.
 """.
 parse_inlined_key_val(Bin) ->
     case part([$=, $&], Bin) of
@@ -473,7 +473,7 @@ parse_explicit_message_test() ->
         from(Singleton3)
     ).
 
-%%% `to/1' function tests
+%%% `to/1` function tests
 to_suite_test_() ->
     [
         fun simple_to_test/0,
@@ -609,7 +609,7 @@ inlined_keys_to_test() ->
             }
         ],
     % NOTE: The implementation above does not convert the given list of messages
-    % into the original format, however it assures that the `to/1' and `from/1'
+    % into the original format, however it assures that the `to/1` and `from/1`
     % operations are idempotent.
     ?assertEqual(Messages, from(to(Messages))).
 
@@ -625,7 +625,7 @@ multiple_inlined_keys_to_test() ->
             }
         ],
     % NOTE: The implementation above does not convert the given list of messages
-    % into the original format, however it assures that the `to/1' and `from/1'
+    % into the original format, however it assures that the `to/1` and `from/1`
     % operations are idempotent.
     ?assertEqual(Messages, from(to(Messages))).
 
@@ -642,11 +642,11 @@ subpath_in_inlined_to_test() ->
                     <<"test">> => <<"1">>},
         #{<<"path">> => <<"part3">>}],
     % NOTE: The implementation above does not convert the given list of messages
-    % into the original format, however it assures that the `to/1' and `from/1'
+    % into the original format, however it assures that the `to/1` and `from/1`
     % operations are idempotent.
     ?assertEqual(Messages, from(to(Messages))).
 
-%%% `from/1' function tests
+%%% `from/1` function tests
 single_message_test() ->
     % This is a singleton TABM message
     Req = #{

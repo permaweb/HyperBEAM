@@ -11,8 +11,8 @@ as well as generating them, if called in an appropriate environment.
 	firmware, kernel, initrd, append]).
 
 %%% Test constants
-%% Matching commitment report is found in `test/snp-commitment' in 
-%% `dev_codec_flat:serialize/1''s format. Alternatively, set the `TEST_NODE'
+%% Matching commitment report is found in `test/snp-commitment` in 
+%% `dev_codec_flat:serialize/1`'s format. Alternatively, set the `TEST_NODE`
 %% constant to a live node to run the tests against it.
 -define(TEST_NODE, undefined).
 -define(TEST_TRUSTED_SOFTWARE, #{
@@ -53,9 +53,9 @@ real_node_test() ->
 
 -doc """
 Should take in options to set for the device such as kernel, initrd, firmware,
-%% and append hashes and make them available to the device. Only runnable once,
-%% and only if the operator is not set to an address (and thus, the node has not
-%% had any priviledged access).
+and append hashes and make them available to the device. Only runnable once,
+and only if the operator is not set to an address (and thus, the node has not
+had any priviledged access).
 """.
 init(M1, _M2, Opts) ->
     case {hb_opts:get(trusted, #{}, Opts), hb_opts:get(operator, undefined, Opts)} of
@@ -78,17 +78,17 @@ init(M1, _M2, Opts) ->
 
 -doc """
 Verify an commitment report message; validating the identity of a 
-%% remote node, its ephemeral private address, and the integrity of the report.
-%% The checks that must be performed to validate the report are:
-%% 1. Verify the address and the node message ID are the same as the ones
-%%    used to generate the nonce.
-%% 2. Verify the address that signed the message is the same as the one used
-%%    to generate the nonce.
-%% 3. Verify that the debug flag is disabled.
-%% 4. Verify that the firmware, kernel, and OS (VMSAs) hashes, part of the
-%%    measurement, are trusted.
-%% 5. Verify the measurement is valid.
-%% 6. Verify the report's certificate chain to hardware root of trust.
+remote node, its ephemeral private address, and the integrity of the report.
+The checks that must be performed to validate the report are:
+1. Verify the address and the node message ID are the same as the ones
+used to generate the nonce.
+2. Verify the address that signed the message is the same as the one used
+to generate the nonce.
+3. Verify that the debug flag is disabled.
+4. Verify that the firmware, kernel, and OS (VMSAs) hashes, part of the
+measurement, are trusted.
+5. Verify the measurement is valid.
+6. Verify the report's certificate chain to hardware root of trust.
 """.
 verify(M1, M2, NodeOpts) ->
     {ok, MsgWithJSONReport} = hb_message:find_target(M1, M2, NodeOpts),
@@ -168,16 +168,16 @@ verify(M1, M2, NodeOpts) ->
 
 -doc """
 Generate an commitment report and emit it as a message, including all of 
-%% the necessary data to generate the nonce (ephemeral node address + node
-%% message ID), as well as the expected measurement (firmware, kernel, and VMSAs
-%% hashes).
+the necessary data to generate the nonce (ephemeral node address + node
+message ID), as well as the expected measurement (firmware, kernel, and VMSAs
+hashes).
 """.
 generate(_M1, _M2, Opts) ->
 	?event({generate_opts, {explicit, Opts}}),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     % ?event({snp_wallet, Wallet}),
-    % Remove the `priv*' keys from the options.
+    % Remove the `priv*` keys from the options.
     {ok, PublicNodeMsgID} =
         dev_message:id(
             	NodeMsg = hb_private:reset(Opts),
@@ -219,13 +219,13 @@ is_debug(Report) ->
 
 -doc """
 Ensure that all of the software hashes are trusted. The caller may set
-%% a specific device to use for the `is-trusted' key. The device must then
-%% implement the `trusted' resolver.
+a specific device to use for the `is-trusted` key. The device must then
+implement the `trusted` resolver.
 """.
 execute_is_trusted(M1, Msg, NodeOpts) ->
     % Generate a modified version of the base message, with the 
-    % `is-trusted-device' key set as the device, if provided by the caller.
-    % If not provided, use the default resolver (this module's `trusted'
+    % `is-trusted-device` key set as the device, if provided by the caller.
+    % If not provided, use the default resolver (this module's `trusted`
     % function).
     ModM1 =
         case hb_ao:get(<<"is-trusted-device">>, M1, NodeOpts) of
@@ -260,8 +260,8 @@ execute_is_trusted(M1, Msg, NodeOpts) ->
 
 -doc """
 Default implementation of a resolver for trusted software. Searches the
-%% `trusted' key in the base message for a list of trusted values, and checks
-%% if the value in the request message is a member of that list.
+`trusted` key in the base message for a list of trusted values, and checks
+if the value in the request message is a member of that list.
 """.
 trusted(_Msg1, Msg2, NodeOpts) ->
     Key = hb_ao:get(<<"key">>, Msg2, NodeOpts),

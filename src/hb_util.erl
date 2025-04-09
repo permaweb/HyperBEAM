@@ -79,7 +79,7 @@ list(Value) when is_list(Value) -> Value.
 
 -doc """
 Unwrap a tuple of the form `{ok, Value}', or throw/return, depending on
-the value of the `error_strategy' option.
+the value of the `error_strategy` option.
 """.
 ok(Value) -> ok(Value, #{}).
 ok({ok, Value}, _Opts) -> Value;
@@ -113,7 +113,7 @@ until(Condition, Fun, Count) ->
 
 -doc """
 Return the human-readable form of an ID of a message when given either
-a message explicitly, raw encoded ID, or an Erlang Arweave `tx' record.
+a message explicitly, raw encoded ID, or an Erlang Arweave `tx` record.
 """.
 id(Item) -> id(Item, unsigned).
 id(TX, Type) when is_record(TX, tx) ->
@@ -157,7 +157,7 @@ to_sorted_keys(Msg) when is_list(Msg) ->
     lists:sort(fun(Key1, Key2) -> Key1 < Key2 end, Msg).
 
 -doc """
-Convert keys in a map to atoms, lowering `-' to `_'.
+Convert keys in a map to atoms, lowering `-` to `_`.
 """.
 key_to_atom(Key, _Mode) when is_atom(Key) -> Key;
 key_to_atom(Key, Mode) ->
@@ -400,8 +400,8 @@ remove_common([$/|Path], _) -> Path;
 remove_common(Rest, _) -> Rest.
 
 -doc """
-Throw an exception if the Opts map has an `error_strategy' key with the
-value `throw'. Otherwise, return the value.
+Throw an exception if the Opts map has an `error_strategy` key with the
+value `throw`. Otherwise, return the value.
 """.
 maybe_throw(Val, Opts) ->
     case hb_ao:get(error_strategy, Opts) of
@@ -610,7 +610,7 @@ format_binary(Bin) ->
     end.
 
 -doc """
-Add `,' characters to a number every 3 digits to make it human readable.
+Add `,` characters to a number every 3 digits to make it human readable.
 """.
 human_int(Int) ->
     lists:reverse(add_commas(lists:reverse(integer_to_list(Int)))).
@@ -620,7 +620,7 @@ add_commas(List) -> List.
 
 -doc """
 Format a map as either a single line or a multi-line string depending
-on the value of the `debug_print_map_line_threshold' runtime option.
+on the value of the `debug_print_map_line_threshold` runtime option.
 """.
 format_maybe_multiline(X, Indent) ->
     MaxLen = hb_opts:get(debug_print_map_line_threshold),
@@ -644,7 +644,7 @@ eunit_print(FmtStr, FmtArgs) ->
 -doc """
 Print the trace of the current stack, up to the first non-hyperbeam
 module. Prints each stack frame on a new line, until it finds a frame that
-does not start with a prefix in the `stack_print_prefixes' hb_opts.
+does not start with a prefix in the `stack_print_prefixes` hb_opts.
 Optionally, you may call this function with a custom label and caller info,
 which will be used instead of the default.
 """.
@@ -668,9 +668,9 @@ print_trace(Stack, Label, CallerInfo) ->
 
 -doc """
 Format a stack trace as a list of strings, one for each stack frame.
-Each stack frame is formatted if it matches the `stack_print_prefixes'
+Each stack frame is formatted if it matches the `stack_print_prefixes`
 option. At the first frame that does not match a prefix in the
-`stack_print_prefixes' option, the rest of the stack is not formatted.
+`stack_print_prefixes` option, the rest of the stack is not formatted.
 """.
 format_trace([], _) -> [];
 format_trace([Item|Rest], Prefixes) ->
@@ -770,7 +770,7 @@ format_trace_short(_, _Latch, {Mod, Func, _ArityOrTerm, _Extras}, _Prefixes) ->
     lists:flatten(io_lib:format("~p:~p", [Mod, Func])).
 
 -doc """
-Utility function to help macro `?trace/0' remove the first frame of the
+Utility function to help macro `?trace/0` remove the first frame of the
 stack trace.
 """.
 trace_macro_helper(Fun, {_, {_, Stack}}, Mod, Func, Line) ->

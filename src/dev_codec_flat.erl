@@ -10,7 +10,7 @@ their value.
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%% Route signature functions to the `dev_codec_httpsig' module
+%% Route signature functions to the `dev_codec_httpsig` module
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
 committed(Msg, Req, Opts) -> dev_codec_httpsig:committed(Msg, Req, Opts).

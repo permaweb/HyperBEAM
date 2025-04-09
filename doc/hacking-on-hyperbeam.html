@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
+
+
+    <title>Hacking on HyperBEAM — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
+
+
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
+
+  </head>
+  <body data-type="extras" class="page-extra">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/docs/hacking-on-hyperbeam.md#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+
+    <span>Hacking on HyperBEAM</span>
+  </h1>
+
+<p>The HyperBEAM codebase has a number of mechanism to make building upon it
+easier. Here is a quick rundown of the must-knows:</p><h2 id="starting-hyperbeam" class="section-heading">
+  <a href="#starting-hyperbeam" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Starting HyperBEAM</span>
+</h2>
+<p>You can start HyperBEAM with rebar3 as follows:</p><pre><code class="makeup erlang" translate="no"><span class="w">	</span><span class="ss">rebar3</span><span class="w"> </span><span class="ss">shell</span></code></pre><p>This will drop you into an Erlang shell with all of the necessary modules 
+loaded. Additionally, starting HyperBEAM this way will initialize its HTTP
+server, such that you can begin to send requests to it. There are a few helpful
+shortcut options you can provide and environment variables:</p><ul><li><code class="inline">HB_STORE=dir</code>: Set a local filesystem store as HB's only location to read and 
+write to. This can be helpful for separating multiple nodes running on the same
+host/in the same directory.</li><li><code class="inline">HB_KEY=file</code>: The key that HyperBEAM will use to sign all messages on the 
+node, unless otherwise indicated.</li><li><code class="inline">HB_PORT=[number]</code>: The port number HB will use to register its HTTP server.</li></ul><p>Check out <code class="inline">hb_opts</code> for the full list.</p><h2 id="running-the-tests" class="section-heading">
+  <a href="#running-the-tests" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Running the tests</span>
+</h2>
+<p>In order to run HyperBEAM's built-in tests, start eunit with rebar3 as follows:</p><pre><code class="makeup erlang" translate="no"><span class="w">	</span><span class="ss">rebar3</span><span class="w"> </span><span class="ss">eunit</span></code></pre><p>This should run all of the tests in every HyperBEAM module. If you would like to
+run only tests from a specific set of modules, just add <code class="inline">--module=list,of,mods</code>.
+To run only a specific test use <code class="inline">--test=your_module:your_test</code>.</p><p>Do not send a PR in which the tests do not pass.</p><h2 id="event-logging-and-debugging" class="section-heading">
+  <a href="#event-logging-and-debugging" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Event logging and debugging</span>
+</h2>
+<p>HyperBEAM provides a flexible mechanism for writing debug prints to the CLI
+(and later, perhaps, other logging systems). Simply call <code class="inline">?event(term())</code> and
+your term will be processed through the logging mechanisms.</p><p>You can control the information that is displayed in the command-line log
+by either setting <code class="inline">debug_print</code> in <code class="inline">hb_opts</code> globally, or passing the 
+<code class="inline">HB_PRINT=[setting]</code> environment variable when you start HyperBEAM. Your 
+<code class="inline">[setting]</code> can be either <code class="inline">true</code> (or <code class="inline">1</code> via the CLI), or a list of module
+names or topics that you would like to see the prints for. For example, if you 
+would like to analyze would HB's path management <code class="inline">dev_message</code> modules are doing
+while you run your tests, just execute:</p><pre><code class="makeup erlang" translate="no"><span class="w">	</span><span class="n">HB_PRINT</span><span class="o">=</span><span class="ss">hb_path</span><span class="p">,</span><span class="ss">hb_ao</span><span class="p">,</span><span class="ss">ao_result</span><span class="w"> </span><span class="ss">rebar3</span><span class="w"> </span><span class="ss">eunit</span><span class="w"> </span><span class="o">--</span><span class="ss">module</span><span class="o">=</span><span class="ss">your_mod</span></code></pre><p>Some useful logging events are:</p><pre><code class="makeup erlang" translate="no"><span class="w">    </span><span class="nc">ao_result</span><span class="p">:</span><span class="w"> </span><span class="n">Outputs</span><span class="w"> </span><span class="ss">every</span><span class="w"> </span><span class="n">AO</span><span class="o">-</span><span class="n">Core</span><span class="w"> </span><span class="ss">computation</span><span class="w"> </span><span class="nf">result</span><span class="w"> </span><span class="p" data-group-id="6539276389-1">(</span><span class="n">M1</span><span class="p">,</span><span class="w"> </span><span class="n">M2</span><span class="p">,</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="n">M3</span><span class="p" data-group-id="6539276389-1">)</span><span class="p">.</span><span class="w">
+    </span><span class="nc">worker</span><span class="p">:</span><span class="w"> </span><span class="n">Information</span><span class="w"> </span><span class="ss">about</span><span class="w"> </span><span class="ss">spawns</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="ss">registrations</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">worker</span><span class="w"> </span><span class="ss">processes</span><span class="p">.</span><span class="w">
+    </span><span class="nc">ao_core</span><span class="p">:</span><span class="w"> </span><span class="n">Output</span><span class="w"> </span><span class="ss">information</span><span class="w"> </span><span class="ss">about</span><span class="w"> </span><span class="ss">progression</span><span class="w"> </span><span class="ss">through</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">core</span><span class="w"> 
+    </span><span class="ss">computation</span><span class="w"> </span><span class="ss">loop</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="n">AO</span><span class="o">-</span><span class="n">Core</span><span class="p">.</span><span class="w"> </span><span class="n">Produces</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">large</span><span class="w"> </span><span class="ss">volume</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">output</span><span class="p">.</span></code></pre><p>The HB printing system is reasonably intelligent. It has a custom
+pretty-printer that can recognize a few useful types of terms in the
+environment:</p><ul><li>Messages</li><li>Arweave transactions and data items</li><li>Tuples of form <code class="inline">{Status, Term}</code></li><li>Binary IDs</li></ul><p>These terms will be printed along with other basic debugging info (modules,
+functions, line numbers). For message prints <code class="inline">#P</code> is used as short-hand for 
+'hashpath', and <code class="inline">*S/U</code> refer to signed and unsigned IDs respectively. All 
+binaries are printed in human-readable base64url format, suffixed with <code class="inline">[*]</code>
+if they are of ID length.</p><p>Additionally, HyperBEAM has a custom pretty-printer for stacktraces that is 
+aware of the boundaries of the machine. It will print traces until the first
+stack frame that references a module prefix that it is unaware of. By default,
+it will print all frames that start with <code class="inline">hb_</code>, <code class="inline">ar_</code>, and <code class="inline">dev_</code>. You can 
+change this behavior via the options found in <code class="inline">hb_opts</code>.</p><h2 id="helpful-utilities" class="section-heading">
+  <a href="#helpful-utilities" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Helpful utilities</span>
+</h2>
+<p>If you would like to re-build HyperBEAM in-place, while it is running, just 
+run <code class="inline">hb:build()</code>. This will invoke <code class="inline">rebar3</code> and build any modules changed 
+since the last invocation.</p><h2 id="profiling-with-eflame-building-flamecharts" class="section-heading">
+  <a href="#profiling-with-eflame-building-flamecharts" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Profiling with eflame (building flamecharts)</span>
+</h2>
+<ol><li><p>Benchmark a given function (in Erlang shell) with
+<code class="inline">eflame:apply(hb, address, []).</code>
+This will store traces under &quot;stacks.out&quot; in the project folder.</p></li><li><p>Convert stacks.out into svg file (in shell):
+<code class="inline">_build/default/lib/eflame/stack_to_flame.sh &lt; stacks.out &gt; hb_address_flame.svg</code></p></li><li><p>Open the svg file in browser.</p></li></ol><p>Happy hacking!</p>
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+      <a href="ao-http-api.html" class="bottom-actions-button" rel="prev">
+        <span class="subheader">
+          ← Previous Page
+        </span>
+        <span class="title">
+AO-Core HTTP API Design notes
+        </span>
+      </a>
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="gathering-metrics-locally.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+gathering-metrics-locally
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+              (<a href="https://preview.hex.pm/preview/hb/0.0.1/show/docs/hacking-on-hyperbeam.md">current file</a>)
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

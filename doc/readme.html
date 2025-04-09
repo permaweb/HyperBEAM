@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
+
+
+    <title>README — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
+
+
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
+
+  </head>
+  <body data-type="extras" class="page-extra">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/README.md#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+
+    <span>README</span>
+  </h1>
+
+<p><img src="https://github.com/user-attachments/assets/fcca891c-137e-4022-beff-360eb2a0d05e" alt="hyperbeam_logo-thin-3"/></p><p>This repository contains a reference implementation of AO-Core, along with an
+Erlang-based (BEAM) client implementing a number of devices for the protocol.</p><p>AO-Core is a protocol built to enable decentralized computations, offering a
+series of universal primitives to achieve this end. Instead of enforcing a single,
+monolithic architecture, AO-Core provides a framework into which any number of
+different computational models, encapsulated as primitive <code class="inline">devices</code>, can be attached.</p><p>AO-Core's protocol offers a framework for decentralized computations, built upon the
+following fundamental primitives:</p><ol><li>Hashpaths: A mechanism for referencing locations in a program's state-space
+prior to execution. These state-space <code class="inline">links</code> are represented as Merklized lists of
+programs inputs and initial states.</li><li>A unified data structure for representing program states as HTTP documents,
+as described in the <a href="https://www.rfc-editor.org/rfc/rfc9110.html">HTTP Semantics RFC</a>.</li><li>A unified protocol for expressing <code class="inline">commitments</code> of the <code class="inline">states</code> found at
+particular <code class="inline">hashpaths</code>. These commitments allow nodes to participate in varied
+economic and cryptographic mechanisms to prove and challenge each-other's
+representations regarding the programs that operate inside the AO-Core protocol.</li><li>A meta-VM that allows any number of different virtual machines and computational
+models (<code class="inline">devices</code>) to be executed inside the AO-Core protocol, while enabling their
+states and inputs to be calculated and committed to in a unified format.</li></ol><h2 id="what-is-hyperbeam" class="section-heading">
+  <a href="#what-is-hyperbeam" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">What is HyperBeam?</span>
+</h2>
+<p>HyperBeam is a client implementation of the AO-Core protocol, written in Erlang.
+It can be seen as the 'node' software for the decentralized operating system that
+AO enables; abstracting hardware provisioning and details from the execution of
+individual programs.</p><p>HyperBEAM node operators can offer the services of their machine to others inside
+the network by electing to execute any number of different <code class="inline">devices</code>, charging 
+users for their computation as necessary.</p><p>Each HyperBEAM node is configured using the <code class="inline">~meta@1.0</code> device, which provides
+an interface for specifying the node's hardware, supported devices, metering and
+payments information, amongst other configuration options.</p><h2 id="getting-started" class="section-heading">
+  <a href="#getting-started" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Getting Started</span>
+</h2>
+<p>To begin using HyperBeam, you will need to install:</p><ul><li>The Erlang runtime (OTP 27)</li><li>Rebar3</li><li>Git</li><li>Docker (optional, for containerized deployment)</li></ul><p>You will also need:</p><ul><li>A wallet and it's keyfile <em>(generate a new wallet and keyfile with <a href="https://www.wander.app">https://www.wander.app</a>)</em></li></ul><p>Then you can clone the HyperBEAM source and build it:</p><pre><code class="makeup bash" translate="no"><span class="">git clone https://github.com/permaweb/HyperBEAM.git
+</span><span class="">cd HyperBEAM
+</span><span class="">rebar3 compile
+</span></code></pre><p>If you would prefer to execute HyperBEAM in a containerized environment, you
+can use the provided Dockerfile to build a container image.</p><pre><code class="makeup bash" translate="no"><span class="">docker build -t hyperbeam .
+</span></code></pre><p>If you intend to offer TEE-based computation of AO-Core devices, please see the
+<a href="https://github.com/permaweb/hb-os"><code class="inline">HyperBEAM OS</code></a> repo for details on configuration and deployment.</p><h2 id="running-hyperbeam" class="section-heading">
+  <a href="#running-hyperbeam" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Running HyperBEAM</span>
+</h2>
+<p>Once the code is compiled, you can start HyperBEAM with:</p><pre><code class="makeup bash" translate="no"><span class=""># Start with default configuration
+</span><span class="">rebar3 shell
+</span></code></pre><p>The default configuration uses settings from <code class="inline">hb_opts.erl</code>, which preloads 
+all devices and sets up default stores on port 10000.</p><h3 id="optional-build-profiles" class="section-heading">
+  <a href="#optional-build-profiles" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Optional Build Profiles</span>
+</h3>
+<p>HyperBEAM supports several optional build profiles that enable additional features:</p><ul><li><code class="inline">genesis_wasm</code>: Enables Genesis WebAssembly support</li><li><code class="inline">rocksdb</code>: Enables RocksDB storage backend (adds RocksDB v1.8.0 dependency)</li><li><code class="inline">http3</code>: Enables HTTP/3 support via QUIC protocol</li></ul><p>Using these profiles allows you to optimize HyperBEAM for your specific use case without adding unnecessary dependencies to the base installation.</p><p>To start a shell with profiles:</p><pre><code class="makeup bash" translate="no"><span class=""># Single profile
+</span><span class="">rebar3 as rocksdb shell
+</span><span class="">
+</span><span class=""># Multiple profiles
+</span><span class="">rebar3 as rocksdb,genesis_wasm shell
+</span></code></pre><p>To create a release with profiles:</p><pre><code class="makeup bash" translate="no"><span class=""># Create release with profiles
+</span><span class="">rebar3 as rocksdb,genesis_wasm release
+</span></code></pre><p>Note: Profiles modify compile-time options that get baked into the release. Choose the profiles you need before starting HyperBEAM.</p><h3 id="verify-installation" class="section-heading">
+  <a href="#verify-installation" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Verify Installation</span>
+</h3>
+<p>To verify that your HyperBEAM node is running correctly, check:</p><pre><code class="makeup bash" translate="no"><span class="">curl http://localhost:10000/~meta@1.0/info
+</span></code></pre><p>If you receive a response with node information, your HyperBEAM
+installation is working properly.</p><h2 id="configuration" class="section-heading">
+  <a href="#configuration" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Configuration</span>
+</h2>
+<p>HyperBEAM can be configured using a <code class="inline">~meta@1.0</code> device, which is initialized
+ using either command line arguments or a configuration file.</p><h3 id="configuration-with-config-flat" class="section-heading">
+  <a href="#configuration-with-config-flat" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Configuration with <code class="inline">config.flat</code></span>
+</h3>
+<p>The simplest way to configure HyperBEAM is using the <code class="inline">config.flat</code> file:</p><ol><li>A file named <code class="inline">config.flat</code> is already included in the project directory</li><li>Update to include your configuration values:</li></ol><pre><code class="makeup erlang" translate="no"><span class="nc">port</span><span class="p">:</span><span class="w"> </span><span class="mi">10000</span><span class="w">
+</span><span class="nc">priv_key_location</span><span class="p">:</span><span class="w"> </span><span class="o">/</span><span class="ss">path</span><span class="o">/</span><span class="ss">to</span><span class="o">/</span><span class="ss">wallet</span><span class="p">.</span><span class="ss">json</span></code></pre><ol start="3"><li>Start HyperBEAM with <code class="inline">rebar3 shell</code></li></ol><p>HyperBEAM will automatically load your configuration and display the active
+settings in the startup log.</p><h3 id="creating-a-release" class="section-heading">
+  <a href="#creating-a-release" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Creating a Release</span>
+</h3>
+<p>For production environments, you can create a standalone release:</p><pre><code class="makeup bash" translate="no"><span class="">rebar3 release
+</span></code></pre><p>This creates a release in <code class="inline">_build/default/rel/hb</code> that can be deployed independently.</p><h3 id="runtime-configuration-changes" class="section-heading">
+  <a href="#runtime-configuration-changes" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Runtime Configuration Changes</span>
+</h3>
+<p>Additionally, if you would like to modify a running node's configuration, you can
+ do so by sending a HTTP Signed Message using any RFC-9421 compatible client
+  in the following form:</p><pre><code class="makeup erlang" translate="no"><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="err">~</span><span class="ss">meta@1</span><span class="p">.</span><span class="mi">0</span><span class="o">/</span><span class="ss">info</span><span class="w">
+</span><span class="n">Your</span><span class="o">-</span><span class="n">Config</span><span class="o">-</span><span class="n">Tag</span><span class="p">:</span><span class="w"> </span><span class="n">Your</span><span class="o">-</span><span class="n">Config</span><span class="o">-</span><span class="n">Tag</span></code></pre><p>The individual headers provided in the message will each be interpreted as additional
+configuration options for the node.</p><h2 id="messages" class="section-heading">
+  <a href="#messages" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Messages</span>
+</h2>
+<p>HyperBEAM describes every piece of data as a <code class="inline">message</code>, which can be interpreted as
+a binary term or as collection of named functions aka. a <code class="inline">Map</code> of functions.</p><p>Every message <em>may</em> specify a <code class="inline">device</code> which is interpreted by the AO-Core compatible
+system in order to operate upon the message's contents, which to say read it, or
+execute it. Executing a named function within a message, providing a map of arguments,
+results in another <code class="inline">message</code>.</p><p>In this way, <code class="inline">messages</code> in AO-Core always <em>beget</em> further <code class="inline">messages</code>, giving rise 
+to a vast computational space, leveraging function application and composition at its core.
+For those familiar with the concept, this programming model is similar to that 
+described by traditional <code class="inline">combinator</code> systems.</p><blockquote><p>Notably, this computation does not require the computor of a message
+to know the values of all the keys contained therin. In other words, keys
+may be <em>lazily</em> evaluated, and only by computors that are interested
+in their outputs, or even <em>sharded</em> across arbitrary sets of nodes, as necessary</p></blockquote><p>If a <code class="inline">message</code> does not explicitly specify a <code class="inline">device</code>, its implied <code class="inline">device</code> is a
+ <code class="inline">message@1.0</code>, which simply returns the binary or <code class="inline">message</code> at a given named function.</p><h2 id="devices" class="section-heading">
+  <a href="#devices" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Devices</span>
+</h2>
+<p>HyperBeam supports a number of different devices, each of which enable different
+services to be offered by the node. There are presently 25 different devices
+included in the <code class="inline">preloaded_devices</code> of a HyperBEAM node, although it is possible
+to add and remove devices as necessary.</p><h3 id="preloaded-devices" class="section-heading">
+  <a href="#preloaded-devices" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Preloaded Devices</span>
+</h3>
+<p>The following devices are included in the <code class="inline">preloaded_devices</code> of a HyperBEAM node:</p><ul><li><p><code class="inline">~meta@1.0</code>: The <code class="inline">~meta@1.0</code> device is used to configure the node's hardware,
+supported devices, metering and payments information, amongst other configuration options.
+Additionally, this device allows external clients to find and validate the configuration
+of nodes in the network.</p></li><li><p><code class="inline">~relay@1.0</code>: The <code class="inline">~relay@1.0</code> device is used to relay messages between nodes
+and the wider HTTP network. It offers an interface for sending and receiving messages
+to and from nodes in the network, using a variety of execution strategies.</p></li><li><p><code class="inline">~wasm64@1.0</code>: The <code class="inline">~wasm64@1.0</code> device is used to execute WebAssembly code, using
+the <a href="https://github.com/bytecodealliance/wasm-micro-runtime">Web Assembly Micro-Runtime (WAMR)</a>
+under-the-hood. WASM modules can be called from any other device, and can also be
+used to execute <code class="inline">devices</code> written in languages such as Rust, C, and C++.</p></li><li><p><code class="inline">~json-iface@1.0</code>: The <code class="inline">~json-iface@1.0</code> device offers a translation layer between
+the JSON-encoded message format used by AOS 2.0 and prior versions, to HyperBEAM's
+native HTTP message format.</p></li><li><p><code class="inline">~compute-lite@1.0</code>: The <code class="inline">~compute-lite@1.0</code> device is a lightweight device wrapping
+a local WASM executor, used for executing legacynet AO processes inside HyperBEAM.
+See the <a href="https://github.com/permaweb/hb-os">HyperBEAM OS</a> repository for an 
+example setup with co-executing HyperBEAM and legacy-CU nodes.</p></li><li><p><code class="inline">~snp@1.0</code>: The <code class="inline">~snp@1.0</code> device is used to generate and validate proofs that 
+the local node, or another node in the network, is executing inside a <a href="https://en.wikipedia.org/wiki/Trusted_execution_environment">Trusted Execution
+Environment (TEE)</a>.
+Nodes executing inside these environments use an ephemeral key pair, provably
+only existing inside the TEE, and can be signed commitments of AO-Core executions
+in a trust-minimized way.</p></li><li><p><code class="inline">p4@1.0</code>: The <code class="inline">p4@1.0</code> device runs as a <code class="inline">pre-processor</code> and <code class="inline">post-processor</code> in
+the framework provided by <code class="inline">~meta@1.0</code>, enabling a framework for node operators to
+sell usage of their machine's hardware to execute AO-Core devices. The <code class="inline">p4@1.0</code>
+framework offers two additional hooks, allowing node operators flexibility in how
+their hardware is offered: A <code class="inline">pricing</code> device, and a <code class="inline">ledger</code> device.</p></li><li><p><code class="inline">~simple-pay@1.0</code>: Implements a simple, flexible pricing device that can be used
+in conjunction with <code class="inline">p4@1.0</code> to offer flat-fees for the execution of AO-Core messages.</p></li><li><p><code class="inline">~faff@1.0</code>: A simple pricing (and ledger) device for <code class="inline">p4@1.0</code>, allowing nodes
+to offer access to their services only to a specific set of users. This device is
+useful if you intend to operate your node onmly for personal use, or for a specific
+subset of users (servicing an individual app, for example).</p></li><li><p><code class="inline">scheduler@1.0</code>: The <code class="inline">scheduler@1.0</code> device is used to assign a linear hashpath
+to an execution, such that all users may access it with a deterministic ordering.
+When used in conjunction with other AO-Core devices, this allows for the creation
+of executions that mirror the behaviour of traditional smart contracting networks.</p></li><li><p><code class="inline">stack@1.0</code>: The <code class="inline">stack@1.0</code> device is used to execute an ordered set of devices,
+over the same inputs. This device allows its users to create complex combinations of
+other devices and apply them as a single unit, with a single hashpath.</p></li><li><p><code class="inline">~process@1.0</code>: Processes enable users to create persistent, shared executions
+that can be accessed by any number of users, each of whom may add additional inputs
+to its hashpath. The <code class="inline">~process@1.0</code> allows users to customize the <code class="inline">execution</code> and
+<code class="inline">scheduler</code> devices that they choose for their process, such that a variety of different
+execution patterns can be created. In addition, the <code class="inline">~process@1.0</code> device offers a
+<code class="inline">push</code> key, which moves messages from a process's execution <code class="inline">outbox</code> into the
+schedule of another execution.</p></li></ul><p>Details on other devices found in the pre-loaded set can be located in their 
+respective documentation.</p><h2 id="contributing" class="section-heading">
+  <a href="#contributing" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Contributing</span>
+</h2>
+<p>HyperBEAM is developed as an open source implementation of the AO-Core protocol 
+by <a href="https://fwd.arweave.net">Forward Research</a>. Pull Requests are always welcome!</p><p>To get started building on HyperBEAM, check out the <a href="hacking-on-hyperbeam.html">hacking on HyperBEAM</a>
+guide.</p><h2 id="documentation" class="section-heading">
+  <a href="#documentation" class="hover-link">
+    <i class="ri-link-m" aria-hidden="true"></i>
+  </a>
+  <span class="text">Documentation</span>
+</h2>
+<p>HyperBEAM implementation documentation is generated into the <a href="./doc"><code class="inline">doc</code> directory</a>
+using <a href="https://www.erlang.org/doc/apps/edoc/chapter.html#content"><code class="inline">edoc</code></a>.
+You can regenerate the documentation by running:</p><pre><code class="makeup sh" translate="no"><span class="">rebar3 edoc
+</span></code></pre><p>Then you can serve them locally by running the following command, then navigating
+to <code class="inline">http://localhost:8000/index.html</code>.</p><pre><code class="makeup sh" translate="no"><span class="">erl -s inets -eval &#39;inets:start(httpd,[{server_name,&quot;HyperBEAM_Docs&quot;},{document_root, &quot;doc&quot;},{server_root, &quot;doc&quot;},{port, 8000},{mime_types,[{&quot;html&quot;,&quot;text/html&quot;},{&quot;htm&quot;,&quot;text/html&quot;},{&quot;js&quot;,&quot;text/javascript&quot;},{&quot;css&quot;,&quot;text/css&quot;},{&quot;gif&quot;,&quot;image/gif&quot;},{&quot;jpg&quot;,&quot;image/jpeg&quot;},{&quot;jpeg&quot;,&quot;image/jpeg&quot;},{&quot;png&quot;,&quot;image/png&quot;}]}]).&#39;
+</span></code></pre>
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+      <a href="api-reference.html" class="bottom-actions-button" rel="prev">
+        <span class="subheader">
+          ← Previous Page
+        </span>
+        <span class="title">
+API Reference
+        </span>
+      </a>
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="intro.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+AO
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+              (<a href="https://preview.hex.pm/preview/hb/0.0.1/show/README.md">current file</a>)
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
+</html>

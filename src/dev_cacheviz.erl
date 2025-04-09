@@ -6,8 +6,10 @@ cache.
 -export([dot/3, svg/3]).
 -include("include/hb.hrl").
 
-%% @doc Output the dot representation of the cache, or a specific path within
-%% the cache set by the `target' key in the request.
+-doc """
+Output the dot representation of the cache, or a specific path within
+the cache set by the `target` key in the request.
+""".
 dot(_, Req, Opts) ->
     Target = hb_ao:get(<<"target">>, Req, all, Opts),
     Dot =
@@ -23,8 +25,10 @@ dot(_, Req, Opts) ->
         ),
     {ok, #{ <<"content-type">> => <<"text/vnd.graphviz">>, <<"body">> => Dot }}.
 
-%% @doc Output the SVG representation of the cache, or a specific path within
-%% the cache set by the `target' key in the request.
+-doc """
+Output the SVG representation of the cache, or a specific path within
+the cache set by the `target` key in the request.
+""".
 svg(Base, Req, Opts) ->
     {ok, #{ <<"body">> := Dot }} = dot(Base, Req, Opts),
     ?event(cacheviz, {dot, Dot}),

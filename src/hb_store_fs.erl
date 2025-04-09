@@ -24,7 +24,7 @@ stop(#{ <<"prefix">> := _DataDir }) ->
 
 -doc """
 The file-based store is always local, for now. In the future, we may
-%% want to allow that an FS store is shared across a cluster and thus remote.
+want to allow that an FS store is shared across a cluster and thus remote.
 """.
 scope(_) -> local.
 
@@ -73,15 +73,13 @@ list(Opts, Path) ->
 
 -doc """
 Replace links in a path successively, returning the final path.
-%% Each element of the path is resolved in turn, with the result of each
-%% resolution becoming the prefix for the next resolution. This allows 
-%% paths to resolve across many links. For example, a structure as follows:
-%
-%%    /a/b/c: "Not the right data"
-%%    /a/b -> /a/alt-b
-%%    /a/alt-b/c: "Correct data"
-%
-%% will resolve "a/b/c" to "Correct data".
+Each element of the path is resolved in turn, with the result of each
+resolution becoming the prefix for the next resolution. This allows 
+paths to resolve across many links. For example, a structure as follows:
+    /a/b/c: "Not the right data"
+    /a/b -> /a/alt-b
+    /a/alt-b/c: "Correct data"
+will resolve "a/b/c" to "Correct data".
 """.
 resolve(Opts, RawPath) ->
     Res = resolve(Opts, "", hb_path:term_to_path_parts(hb_store:join(RawPath))),

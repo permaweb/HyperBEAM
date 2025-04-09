@@ -41,9 +41,9 @@ modules.
 
 -doc """
 On-boot, initialize the virtual file system with:
-%% - Empty stdio files
-%% - WASI-preview-1 compatible functions for accessing the filesystem
-%% - File descriptors for those files.
+- Empty stdio files
+- WASI-preview-1 compatible functions for accessing the filesystem
+- File descriptors for those files.
 """.
 init(M1, _M2, Opts) ->
     ?event(running_init),
@@ -118,8 +118,8 @@ path_open(Msg1, Msg2, Opts) ->
     }.
 
 -doc """
-WASM stdlib implementation of `fd_write', using the WASI-p1 standard
-%% interface.
+WASM stdlib implementation of `fd_write`, using the WASI-p1 standard
+interface.
 """.
 fd_write(Msg1, Msg2, Opts) ->
     State = hb_ao:get(<<"state">>, Msg1, Opts),

@@ -1,8 +1,8 @@
 -module(dev_patch).
 -moduledoc """
-A device that finds `PATCH' requests in the `results/outbox'
+A device that finds `PATCH` requests in the `results/outbox`
 of its message, and applies them to it. This can be useful for processes
-whose computation would like to manipulate data outside of the `results' key
+whose computation would like to manipulate data outside of the `results` key
 of its message.
 """.
 -export([init/3, compute/3, normalize/3, snapshot/3]).
@@ -17,7 +17,7 @@ normalize(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
 snapshot(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
 
 -doc """
-Find `PATCH' requests in the `results/outbox' of the message, and apply
+Find `PATCH` requests in the `results/outbox` of the message, and apply
 them to the state.
 """.
 compute(Msg1, Msg2, Opts) ->

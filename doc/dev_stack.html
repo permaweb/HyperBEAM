@@ -1,160 +1,882 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module dev_stack</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module dev_stack</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>A device that contains a stack of other devices, and manages their   
-execution.
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
 
 
-<h2><a name="description">Description</a></h2><p>A device that contains a stack of other devices, and manages their   
-execution. It can run in two modes: fold (the default), and map.</p>
-  
-   <p>In fold mode, it runs upon input messages in the order of their keys. A   
-stack maintains and passes forward a state (expressed as a message) as it   
-progresses through devices.</p>
-  
-   For example, a stack of devices as follows:
-   <pre>   Device -&gt; Stack
-   Device-Stack/1/Name -&gt; Add-One-Device
-   Device-Stack/2/Name -&gt; Add-Two-Device</pre>
-  
-   When called with the message:
-   <pre>   #{ Path = "FuncName", binary =&gt; &lt;&lt;"0"&gt;&gt; }</pre>
-  
-   Will produce the output:
-    <pre>   #{ Path = "FuncName", binary =&gt; &lt;&lt;"3"&gt;&gt; }
-   {ok, #{ bin =&gt; &lt;&lt;"3"&gt;&gt; }}</pre>
-  
-   <p>In map mode, the stack will run over all the devices in the stack, and
-   combine their results into a single message. Each of the devices'
-   output values have a key that is the device's name in the <code>Device-Stack`
-   (its number if the stack is a list).
-  
-   You can switch between fold and map modes by setting the `Mode` key in the
-   `Msg2` to either `Fold` or `Map`, or set it globally for the stack by
-   setting the `Mode` key in the `Msg1` message. The key in `Msg2` takes
-   precedence over the key in `Msg1`.
-  
-   The key that is called upon the device stack is the same key that is used
-   upon the devices that are contained within it. For example, in the above
-   scenario we resolve FuncName on the stack, leading FuncName to be called on
-   Add-One-Device and Add-Two-Device.
-  
-   A device stack responds to special statuses upon responses as follows:
-  
-       `skip</code>: Skips the rest of the device stack for the current pass.</p>
-  
-       <p><code>pass</code>: Causes the stack to increment its pass number and re-execute               
-the stack from the first device, maintaining the state               
-accumulated so far. Only available in fold mode.</p>
-  
-   <p>In all cases, the device stack will return the accumulated state to the   
-caller as the result of the call to the stack.</p>
-  
-   <p>The dev_stack adds additional metadata to the message in order to track   
-the state of its execution as it progresses through devices. These keys   
-are as follows:</p>
-  
-       <p><code>Stack-Pass</code>: The number of times the stack has reset and re-executed       
-from the first device for the current message.</p>
-  
-       <p><code>Input-Prefix</code>: The prefix that the device should use for its outputs       
-and inputs.</p>
-  
-       <p><code>Output-Prefix</code>: The device that was previously executed.</p>
-  
-   <p>All counters used by the stack are initialized to 1.</p>
-  
-   <p>Additionally, as implemented in HyperBEAM, the device stack will honor a   
-number of options that are passed to it as keys in the message. Each of   
-these options is also passed through to the devices contained within the   
-stack during execution. These options include:</p>
-  
-       <p><code>Error-Strategy</code>: Determines how the stack handles errors from devices.
-       See <code>maybe_error/5</code> for more information.</p>
-  
-       <p><code>Allow-Multipass</code>: Determines whether the stack is allowed to automatically
-       re-execute from the first device when the <code>pass</code> tag is returned. See
-       <code>maybe_pass/3</code> for more information.</p>
-  
-   Under-the-hood, dev_stack uses a <code>default</code> handler to resolve all calls to
-   devices, aside <code>set/2</code> which it calls itself to mutate the message's <code>device</code>
-   key in order to change which device is currently being executed. This method
-   allows dev_stack to ensure that the message's HashPath is always correct,
-   even as it delegates calls to other devices. An example flow for a <code>dev_stack</code>
-   execution is as follows:
-  <pre>   	/Msg1/AlicesExcitingKey -&gt;
-   		dev_stack:execute -&gt;
-   			/Msg1/Set?device=/Device-Stack/1 -&gt;
-   			/Msg2/AlicesExcitingKey -&gt;
-   			/Msg3/Set?device=/Device-Stack/2 -&gt;
-   			/Msg4/AlicesExcitingKey
-   			... -&gt;
-   			/MsgN/Set?device=[This-Device] -&gt;
-   		returns {ok, /MsgN+1} -&gt;
-   	/MsgN+1</pre>
-  
-   In this example, the <code>device</code> key is mutated a number of times, but the
-   resulting HashPath remains correct and verifiable.
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#generate_append_device-1">generate_append_device/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#info-1">info/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#input_prefix-3">input_prefix/3</a></td><td>Return the input prefix for the stack.</td></tr>
-<tr><td valign="top"><a href="#output_prefix-3">output_prefix/3</a></td><td>Return the output prefix for the stack.</td></tr>
-<tr><td valign="top"><a href="#prefix-3">prefix/3</a></td><td>Return the default prefix for the stack.</td></tr>
-<tr><td valign="top"><a href="#router-4">router/4</a></td><td>The device stack key router.</td></tr>
-</table>
+    <title>dev_stack — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
 
-<h2><a name="functions">Function Details</a></h2>
 
-<h3 class="function"><a name="generate_append_device-1">generate_append_device/1</a></h3>
-<div class="spec">
-<p><code>generate_append_device(Separator) -&gt; any()</code></p>
-<p> </p>
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
+
+  </head>
+  <body data-type="modules" class="page-module">
+    <script>
+
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
+
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+    <span translate="no">dev_stack</span> 
+    <small class="app-vsn" translate="no">(hb v0.0.1)</small>
+
+  </h1>
+
+
+    <section id="moduledoc">
+<p>A device that contains a stack of other devices, and manages their
+execution. It can run in two modes: fold (the default), and map.</p><p>In fold mode, it runs upon input messages in the order of their keys. A
+stack maintains and passes forward a state (expressed as a message) as it
+progresses through devices.</p><p>For example, a stack of devices as follows:</p><pre><code class="makeup erlang" translate="no"><span class="n">Device</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="n">Stack</span><span class="w">
+</span><span class="n">Device</span><span class="o">-</span><span class="n">Stack</span><span class="o">/</span><span class="mi">1</span><span class="o">/</span><span class="n">Name</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="n">Add</span><span class="o">-</span><span class="n">One</span><span class="o">-</span><span class="n">Device</span><span class="w">
+</span><span class="n">Device</span><span class="o">-</span><span class="n">Stack</span><span class="o">/</span><span class="mi">2</span><span class="o">/</span><span class="n">Name</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="n">Add</span><span class="o">-</span><span class="n">Two</span><span class="o">-</span><span class="n">Device</span><span class="ss">&#39;&#39;</span><span class="err">&#39;</span><span class="w">
+
+</span><span class="n">When</span><span class="w"> </span><span class="ss">called</span><span class="w"> </span><span class="ss">with</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="nc">message</span><span class="p">:</span></code></pre><p>#{ Path = &quot;FuncName&quot;, binary =&gt; &lt;&lt;&quot;0&quot;&gt;&gt; }'''</p><p>Will produce the output:</p><pre><code class="makeup erlang" translate="no"><span class="p" data-group-id="8209135164-1">#{</span><span class="w"> </span><span class="n">Path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;FuncName&quot;</span><span class="p">,</span><span class="w"> </span><span class="ss">binary</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">&lt;&lt;</span><span class="s">&quot;3&quot;</span><span class="p">&gt;&gt;</span><span class="w"> </span><span class="p" data-group-id="8209135164-1">}</span><span class="w">
+</span><span class="p" data-group-id="8209135164-2">{</span><span class="ss">ok</span><span class="p">,</span><span class="w"> </span><span class="p" data-group-id="8209135164-3">#{</span><span class="w"> </span><span class="ss">bin</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">&lt;&lt;</span><span class="s">&quot;3&quot;</span><span class="p">&gt;&gt;</span><span class="w"> </span><span class="p" data-group-id="8209135164-3">}</span><span class="p" data-group-id="8209135164-2">}</span><span class="ss">&#39;&#39;</span><span class="ss">&#39;
+
+In map mode, the stack will run over all the devices in the stack, and
+combine their results into a single message. Each of the devices&#39;</span><span class="w">
+</span><span class="ss">output</span><span class="w"> </span><span class="ss">values</span><span class="w"> </span><span class="ss">have</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="ss">key</span><span class="w"> </span><span class="ss">that</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">device</span><span class="ss">&#39;s name in the `Device-Stack`
+(its number if the stack is a list).
+
+You can switch between fold and map modes by setting the `Mode` key in the
+`Msg2` to either `Fold` or `Map`, or set it globally for the stack by
+setting the `Mode` key in the `Msg1` message. The key in `Msg2` takes
+precedence over the key in `Msg1`.
+
+The key that is called upon the device stack is the same key that is used
+upon the devices that are contained within it. For example, in the above
+scenario we resolve FuncName on the stack, leading FuncName to be called on
+Add-One-Device and Add-Two-Device.
+
+A device stack responds to special statuses upon responses as follows:
+
+    `skip`: Skips the rest of the device stack for the current pass.
+
+    `pass`: Causes the stack to increment its pass number and re-execute
+            the stack from the first device, maintaining the state 
+            accumulated so far. Only available in fold mode.
+
+In all cases, the device stack will return the accumulated state to the
+caller as the result of the call to the stack.
+
+The dev_stack adds additional metadata to the message in order to track
+the state of its execution as it progresses through devices. These keys
+are as follows:
+
+    `Stack-Pass`: The number of times the stack has reset and re-executed
+    from the first device for the current message.
+
+    `Input-Prefix`: The prefix that the device should use for its outputs
+    and inputs.
+
+    `Output-Prefix`: The device that was previously executed.
+
+All counters used by the stack are initialized to 1.
+
+Additionally, as implemented in HyperBEAM, the device stack will honor a
+number of options that are passed to it as keys in the message. Each of
+these options is also passed through to the devices contained within the
+stack during execution. These options include:
+
+    `Error-Strategy`: Determines how the stack handles errors from devices.
+    See `maybe_error/5` for more information.
+
+    `Allow-Multipass`: Determines whether the stack is allowed to automatically
+    re-execute from the first device when the `pass` tag is returned. See
+    `maybe_pass/3` for more information.
+
+Under-the-hood, dev_stack uses a `default` handler to resolve all calls to
+devices, aside `set/2` which it calls itself to mutate the message&#39;</span><span class="ss">s</span><span class="w"> </span><span class="err">`</span><span class="ss">device</span><span class="err">`</span><span class="w">
+</span><span class="ss">key</span><span class="w"> </span><span class="ss">in</span><span class="w"> </span><span class="ss">order</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">change</span><span class="w"> </span><span class="ss">which</span><span class="w"> </span><span class="ss">device</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">currently</span><span class="w"> </span><span class="ss">being</span><span class="w"> </span><span class="ss">executed</span><span class="p">.</span><span class="w"> </span><span class="n">This</span><span class="w"> </span><span class="ss">method</span><span class="w">
+</span><span class="ss">allows</span><span class="w"> </span><span class="ss">dev_stack</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">ensure</span><span class="w"> </span><span class="ss">that</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">message</span><span class="err">&#39;</span><span class="ss">s</span><span class="w"> </span><span class="n">HashPath</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">always</span><span class="w"> </span><span class="ss">correct</span><span class="p">,</span><span class="w">
+</span><span class="ss">even</span><span class="w"> </span><span class="ss">as</span><span class="w"> </span><span class="ss">it</span><span class="w"> </span><span class="ss">delegates</span><span class="w"> </span><span class="ss">calls</span><span class="w"> </span><span class="ss">to</span><span class="w"> </span><span class="ss">other</span><span class="w"> </span><span class="ss">devices</span><span class="p">.</span><span class="w"> </span><span class="n">An</span><span class="w"> </span><span class="ss">example</span><span class="w"> </span><span class="ss">flow</span><span class="w"> </span><span class="ss">for</span><span class="w"> </span><span class="ss">a</span><span class="w"> </span><span class="err">`</span><span class="ss">dev_stack</span><span class="err">`</span><span class="w">
+</span><span class="ss">execution</span><span class="w"> </span><span class="ss">is</span><span class="w"> </span><span class="ss">as</span><span class="w"> </span><span class="nc">follows</span><span class="p">:</span></code></pre><p>	/Msg1/AlicesExcitingKey -&gt;
+		dev_stack:execute -&gt;
+			/Msg1/Set?device=/Device-Stack/1 -&gt;
+			/Msg2/AlicesExcitingKey -&gt;
+			/Msg3/Set?device=/Device-Stack/2 -&gt;
+			/Msg4/AlicesExcitingKey
+			... -&gt;
+			/MsgN/Set?device=[This-Device] -&gt;
+		returns {ok, /MsgN+1} -&gt;
+	/MsgN+1'''</p><p>In this example, the <code class="inline">device</code> key is mutated a number of times, but the
+resulting HashPath remains correct and verifiable.</p>
+    </section>
+
 </div>
 
-<h3 class="function"><a name="info-1">info/1</a></h3>
-<div class="spec">
-<p><code>info(Msg) -&gt; any()</code></p>
-<p> </p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#benchmark_test/0" data-no-tooltip translate="no">benchmark_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#example_device_for_stack_test/0" data-no-tooltip translate="no">example_device_for_stack_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#generate_append_device/1" data-no-tooltip translate="no">generate_append_device(Separator)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#info/1" data-no-tooltip translate="no">info(Msg)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#input_and_output_prefixes_test/0" data-no-tooltip translate="no">input_and_output_prefixes_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#input_output_prefixes_passthrough_test/0" data-no-tooltip translate="no">input_output_prefixes_passthrough_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#input_prefix/3" data-no-tooltip translate="no">input_prefix(Msg1, Msg2, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the input prefix for the stack.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#many_devices_test/0" data-no-tooltip translate="no">many_devices_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#no_prefix_test/0" data-no-tooltip translate="no">no_prefix_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#not_found_test/0" data-no-tooltip translate="no">not_found_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#output_prefix/3" data-no-tooltip translate="no">output_prefix(Msg1, Msg2, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the output prefix for the stack.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#output_prefix_test/0" data-no-tooltip translate="no">output_prefix_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#pass_test/0" data-no-tooltip translate="no">pass_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#prefix/3" data-no-tooltip translate="no">prefix(Msg1, Msg2, Opts)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return the default prefix for the stack.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#reinvocation_test/0" data-no-tooltip translate="no">reinvocation_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#router/4" data-no-tooltip translate="no">router/4</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>The device stack key router. Sends the request to <code class="inline">resolve_stack</code>,
+except for <code class="inline">set/2</code> which is handled by the default implementation in
+<code class="inline">dev_message</code>.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#simple_map_test/0" data-no-tooltip translate="no">simple_map_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#simple_stack_execute_test/0" data-no-tooltip translate="no">simple_stack_execute_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#skip_test/0" data-no-tooltip translate="no">skip_test()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#transform_external_call_device_test/0" data-no-tooltip translate="no">transform_external_call_device_test()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Ensure we can generate a transformer message that can be called to
+return a version of msg1 with only that device attached.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#transform_internal_call_device_test/0" data-no-tooltip translate="no">transform_internal_call_device_test()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Test that the transform function can be called correctly internally
+by other functions in the module.</p></div>
+
+    </div>
+
 </div>
 
-<h3 class="function"><a name="input_prefix-3">input_prefix/3</a></h3>
-<div class="spec">
-<p><code>input_prefix(Msg1, Msg2, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return the input prefix for the stack.</p>
+  </section>
 
-<h3 class="function"><a name="output_prefix-3">output_prefix/3</a></h3>
-<div class="spec">
-<p><code>output_prefix(Msg1, Msg2, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return the output prefix for the stack.</p>
 
-<h3 class="function"><a name="prefix-3">prefix/3</a></h3>
-<div class="spec">
-<p><code>prefix(Msg1, Msg2, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return the default prefix for the stack.</p>
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="benchmark_test/0">
 
-<h3 class="function"><a name="router-4">router/4</a></h3>
-<div class="spec">
-<p><code>router(Key, Message1, Message2, Opts) -&gt; any()</code></p>
-<p> </p>
-</div><p>The device stack key router. Sends the request to <code>resolve_stack</code>,
-  except for <code>set/2</code> which is handled by the default implementation in
-  <code>dev_message</code>.</p>
-<hr>
+  <div class="detail-header">
+    <a href="#benchmark_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">benchmark_test()</h1>
 
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L548" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="example_device_for_stack_test/0">
+
+  <div class="detail-header">
+    <a href="#example_device_for_stack_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">example_device_for_stack_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L493" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="generate_append_device/1">
+
+  <div class="detail-header">
+    <a href="#generate_append_device/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">generate_append_device(Separator)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L411" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="info/1">
+
+  <div class="detail-header">
+    <a href="#info/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">info(Msg)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L106" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="input_and_output_prefixes_test/0">
+
+  <div class="detail-header">
+    <a href="#input_and_output_prefixes_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">input_and_output_prefixes_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L633" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="input_output_prefixes_passthrough_test/0">
+
+  <div class="detail-header">
+    <a href="#input_output_prefixes_passthrough_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">input_output_prefixes_passthrough_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L652" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="input_prefix/3">
+
+  <div class="detail-header">
+    <a href="#input_prefix/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">input_prefix(Msg1, Msg2, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L127" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the input prefix for the stack.</p>
+  </section>
+</section>
+<section class="detail" id="many_devices_test/0">
+
+  <div class="detail-header">
+    <a href="#many_devices_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">many_devices_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L522" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="no_prefix_test/0">
+
+  <div class="detail-header">
+    <a href="#no_prefix_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">no_prefix_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L605" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="not_found_test/0">
+
+  <div class="detail-header">
+    <a href="#not_found_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">not_found_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L731" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="output_prefix/3">
+
+  <div class="detail-header">
+    <a href="#output_prefix/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">output_prefix(Msg1, Msg2, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L133" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the output prefix for the stack.</p>
+  </section>
+</section>
+<section class="detail" id="output_prefix_test/0">
+
+  <div class="detail-header">
+    <a href="#output_prefix_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">output_prefix_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L616" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="pass_test/0">
+
+  <div class="detail-header">
+    <a href="#pass_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">pass_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L714" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="prefix/3">
+
+  <div class="detail-header">
+    <a href="#prefix/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">prefix(Msg1, Msg2, Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L121" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return the default prefix for the stack.</p>
+  </section>
+</section>
+<section class="detail" id="reinvocation_test/0">
+
+  <div class="detail-header">
+    <a href="#reinvocation_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">reinvocation_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L673" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="router/4">
+
+  <div class="detail-header">
+    <a href="#router/4" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">router/4</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L141" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>The device stack key router. Sends the request to <code class="inline">resolve_stack</code>,
+except for <code class="inline">set/2</code> which is handled by the default implementation in
+<code class="inline">dev_message</code>.</p>
+  </section>
+</section>
+<section class="detail" id="simple_map_test/0">
+
+  <div class="detail-header">
+    <a href="#simple_map_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">simple_map_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L756" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="simple_stack_execute_test/0">
+
+  <div class="detail-header">
+    <a href="#simple_stack_execute_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">simple_stack_execute_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L506" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="skip_test/0">
+
+  <div class="detail-header">
+    <a href="#skip_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">skip_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L695" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="transform_external_call_device_test/0">
+
+  <div class="detail-header">
+    <a href="#transform_external_call_device_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">transform_external_call_device_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L454" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Ensure we can generate a transformer message that can be called to
+return a version of msg1 with only that device attached.</p>
+  </section>
+</section>
+<section class="detail" id="transform_internal_call_device_test/0">
+
+  <div class="detail-header">
+    <a href="#transform_internal_call_device_test/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">transform_internal_call_device_test()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/dev_stack.erl#L431" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Test that the transform function can be called correctly internally
+by other functions in the module.</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
+</div>
+
+  </body>
 </html>

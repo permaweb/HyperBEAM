@@ -7,8 +7,8 @@ the node should fulfil services for users.
 
 The device requires the following node message settings in order to function:
 
-- `p4_pricing_device': The device that will estimate the cost of a request.
-- `p4_ledger_device': The device that will act as a payment ledger.
+- `p4_pricing_device`: The device that will estimate the cost of a request.
+- `p4_ledger_device`: The device that will act as a payment ledger.
 
 The pricing device should implement the following keys:
 ```
@@ -16,13 +16,13 @@ The pricing device should implement the following keys:
             GET /price?type=pre|post&body=[...]&request=RequestMessage
 '''
 
-The `body' key is used to pass either the request or response messages to the
-device. The `type' key is used to specify whether the inquiry is for a request
+The `body` key is used to pass either the request or response messages to the
+device. The `type` key is used to specify whether the inquiry is for a request
 (pre) or a response (post) object. Requests carry lists of messages that will
-be executed, while responses carry the results of the execution. The `price'
-key may return `infinity' if the node will not serve a user under any
-circumstances. Else, the value returned by the `price' key will be passed to
-the ledger device as the `amount' key.
+be executed, while responses carry the results of the execution. The `price`
+key may return `infinity` if the node will not serve a user under any
+circumstances. Else, the value returned by the `price` key will be passed to
+the ledger device as the `amount` key.
 
 The ledger device should implement the following keys:
 ```
@@ -30,8 +30,8 @@ The ledger device should implement the following keys:
             POST /debit?amount=PriceMessage&type=pre|post&request=RequestMessage
 '''
 
-The `type' key is optional and defaults to `pre'. If `type' is set to `post',
-the debit must be applied to the ledger, whereas the `pre' type is used to
+The `type` key is optional and defaults to `pre`. If `type` is set to `post`,
+the debit must be applied to the ledger, whereas the `pre` type is used to
 check whether the debit would succeed before execution.
 """.
 -export([preprocess/3, postprocess/3, balance/3]).
@@ -46,8 +46,8 @@ check whether the debit would succeed before execution.
 
 -doc """
 Estimate the cost of a transaction and decide whether to proceed with
-%% a request. The default behavior if `pricing_device' or `p4_balances' are
-%% not set is to proceed, so it is important that a user initialize them.
+a request. The default behavior if `pricing_device` or `p4_balances` are
+not set is to proceed, so it is important that a user initialize them.
 """.
 preprocess(State, Raw, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing_device">>, State, false, NodeMsg),
@@ -206,7 +206,7 @@ balance(_, Req, NodeMsg) ->
 
 -doc """
 The node operator may elect to make certain routes non-chargable, using 
-%% the `routes' syntax also used to declare routes in `router@1.0'.
+the `routes` syntax also used to declare routes in `router@1.0`.
 """.
 is_chargable_req(Req, NodeMsg) ->
     NonChargableRoutes =
@@ -248,7 +248,7 @@ test_opts(Opts, PricingDev, LedgerDev) ->
     }.
 
 -doc """
-Simple test of p4's capabilities with the `faff@1.0' device.
+Simple test of p4's capabilities with the `faff@1.0` device.
 """.
 faff_test() ->
     GoodWallet = ar_wallet:new(),

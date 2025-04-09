@@ -3,10 +3,10 @@
 This module is used by dev_scheduler in order to produce outputs that
 are compatible with various forms of AO clients. It features two main formats:
 
-- `application/json'
-- `application/http'
+- `application/json`
+- `application/http`
 
-The `application/json' format is a legacy format that is not recommended for
+The `application/json` format is a legacy format that is not recommended for
 new integrations of the AO protocol.
 """.
 -export([assignments_to_bundle/4, assignments_to_aos2/4]).
@@ -93,8 +93,8 @@ assignments_to_aos2(ProcID, Assignments, More, RawOpts) ->
 
 -doc """
 Generate a cursor for an assignment. This should be the slot number, at
-%% least in the case of mainnet `ao.N.1' assignments. In the case of legacynet
-%% (`ao.TN.1') assignments, we may want to use the assignment ID.
+least in the case of mainnet `ao.N.1` assignments. In the case of legacy
+net-SU (`ao.TN.1`) assignments, we may want to use the assignment ID.
 """.
 cursor(Assignment, RawOpts) ->
     Opts = format_opts(RawOpts),
@@ -116,7 +116,7 @@ assignment_to_aos2(Assignment, RawOpts) ->
 
 -doc """
 Convert an AOS2-style JSON structure to a normalized HyperBEAM
-%% assignments response.
+assignments response.
 """.
 aos2_to_assignments(ProcID, Body, RawOpts) ->
     Opts = format_opts(RawOpts),
@@ -143,7 +143,7 @@ aos2_to_assignments(ProcID, Body, RawOpts) ->
 
 -doc """
 Create and normalize an assignment from an AOS2-style JSON structure.
-%% NOTE: This method is destructive to the verifiability of the assignment.
+NOTE: This method is destructive to the verifiability of the assignment.
 """.
 aos2_to_assignment(A, RawOpts) ->
     Opts = format_opts(RawOpts),
@@ -181,8 +181,8 @@ aos2_to_assignment(A, RawOpts) ->
     NormalizedAssignment#{ <<"body">> => NormalizedMessage }.
 
 -doc """
-The `hb_gateway_client' module expects all JSON structures to at least
-%% have a `data' field. This function ensures that.
+The `hb_gateway_client` module expects all JSON structures to at least
+have a `data` field. This function ensures that.
 """.
 aos2_normalize_data(JSONStruct) ->
     case JSONStruct of
@@ -192,10 +192,10 @@ aos2_normalize_data(JSONStruct) ->
 
 -doc """
 Normalize an AOS2 formatted message to ensure that all field NAMES and
-%% types are correct. This involves converting field names to integers and
-%% specific field names to their canonical form.
-%% NOTE: This will result in a message that is not verifiable! It is, however,
-%% necessary for gaining compatibility with the AOS2-style scheduling API.
+types are correct. This involves converting field names to integers and
+specific field names to their canonical form.
+NOTE: This will result in a message that is not verifiable! It is, however,
+necessary for gaining compatibility with the AOS2-style scheduling API.
 """.
 aos2_normalize_types(Msg = #{ <<"timestamp">> := TS }) when is_binary(TS) ->
     aos2_normalize_types(Msg#{ <<"timestamp">> => hb_util:int(TS) });
@@ -223,7 +223,7 @@ aos2_normalize_types(Msg) ->
 
 -doc """
 For all scheduler format operations, we do not calculate hashpaths,
-%% perform cache lookups, or await inprogress results.
+perform cache lookups, or await inprogress results.
 """.
 format_opts(Opts) ->
     Opts#{

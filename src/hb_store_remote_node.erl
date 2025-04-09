@@ -13,7 +13,7 @@ to upload it to an Arweave bundler to ensure persistence, too.
 -doc """
 Return the scope of this store.
 
-For the remote store, the scope is always `remote'.
+For the remote store, the scope is always `remote`.
 
 @param Arg An arbitrary parameter (ignored).
 @returns remote.
@@ -38,7 +38,7 @@ resolve(#{ <<"node">> := Node }, Key) ->
 -doc """
 Determine the type of value at a given key.
 %
-Remote nodes support only the `simple' type or `not_found'.
+Remote nodes support only the `simple` type or `not_found`.
 %
 @param Opts A map of options (including node configuration).
 @param Key The key whose value type is determined.

@@ -1,196 +1,996 @@
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<title>Module hb_store_rocksdb</title>
-<link rel="stylesheet" type="text/css" href="stylesheet.css" title="EDoc">
-</head>
-<body bgcolor="white">
-<div class="navbar"><a name="#navbar_top"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<hr>
-
-<h1>Module hb_store_rocksdb</h1>
-<ul class="index"><li><a href="#description">Description</a></li><li><a href="#types">Data Types</a></li><li><a href="#index">Function Index</a></li><li><a href="#functions">Function Details</a></li></ul>A process wrapper over rocksdb storage.
-
-<p><b>Behaviours:</b> <a href="gen_server.html"><code>gen_server</code></a>, <a href="hb_store.html"><code>hb_store</code></a>.</p>
-
-<h2><a name="description">Description</a></h2><p>A process wrapper over rocksdb storage. Replicates functionality of the        
-hb_fs_store module.</p>
-  
-        The data is stored in two Column Families:
-        1. Default - for raw data (e.g. message records)
-        2. Meta - for meta information
-          <code>(&lt;&lt;"raw"&gt;&gt;/&lt;&lt;"link"&gt;&gt;/&lt;&lt;"composite"&gt;&gt; or &lt;&lt;"group"&gt;&gt;)</code>
-<h2><a name="types">Data Types</a></h2>
-
-<h3 class="typedecl"><a name="type-key">key()</a></h3>
-<p><code>key() = binary() | list()</code></p>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.35.1">
+    <meta name="project" content="hb v0.0.1">
 
 
-<h3 class="typedecl"><a name="type-value">value()</a></h3>
-<p><code>value() = binary() | list()</code></p>
+    <title>hb_store_rocksdb — hb v0.0.1</title>
+    <link rel="stylesheet" href="dist/html-erlang-4IXSOGMD.css" />
 
 
-<h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_path-3">add_path/3</a></td><td>Add two path components together.</td></tr>
-<tr><td valign="top"><a href="#code_change-3">code_change/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_call-3">handle_call/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_cast-2">handle_cast/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#handle_info-2">handle_info/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#init-1">init/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#list-2">list/2</a></td><td>List key/values stored in the storage so far.</td></tr>
-<tr><td valign="top"><a href="#make_group-2">make_group/2</a></td><td>Creates group under the given path.</td></tr>
-<tr><td valign="top"><a href="#make_link-3">make_link/3</a></td><td></td></tr>
-<tr><td valign="top"><a href="#path-2">path/2</a></td><td>Return path.</td></tr>
-<tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read data by the key.</td></tr>
-<tr><td valign="top"><a href="#reset-1">reset/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td>Replace links in a path with the target of the link.</td></tr>
-<tr><td valign="top"><a href="#scope-1">scope/1</a></td><td>Return scope (local).</td></tr>
-<tr><td valign="top"><a href="#start-1">start/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#start_link-1">start_link/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#stop-1">stop/1</a></td><td></td></tr>
-<tr><td valign="top"><a href="#terminate-2">terminate/2</a></td><td></td></tr>
-<tr><td valign="top"><a href="#type-2">type/2</a></td><td>Get type of the current item.</td></tr>
-<tr><td valign="top"><a href="#write-3">write/3</a></td><td>Write given Key and Value to the database.</td></tr>
-</table>
+    <script src="dist/handlebars.runtime-NWIB6V2M.js"></script>
+    <script src="dist/handlebars.templates-K7URE6B4.js"></script>
+    <script src="dist/sidebar_items-BF2C6ECE.js"></script>
+    <script src="docs_config.js"></script>
+    <script async src="dist/html-PVRIOB7F.js"></script>
 
-<h2><a name="functions">Function Details</a></h2>
+  </head>
+  <body data-type="modules" class="page-module">
+    <script>
 
-<h3 class="function"><a name="add_path-3">add_path/3</a></h3>
-<div class="spec">
-<p><code>add_path(Opts, Path1, Path2) -&gt; any()</code></p>
-<p> </p>
-</div><p>Add two path components together. // is not used</p>
+      try {
+        var settings = JSON.parse(localStorage.getItem('ex_doc:settings') || '{}');
 
-<h3 class="function"><a name="code_change-3">code_change/3</a></h3>
-<div class="spec">
-<p><code>code_change(OldVsn, State, Extra) -&gt; any()</code></p>
-<p> </p>
+        if (settings.theme === 'dark' ||
+           ((settings.theme === 'system' || settings.theme == null) &&
+             window.matchMedia('(prefers-color-scheme: dark)').matches)
+           ) {
+          document.body.classList.add('dark')
+        }
+      } catch (error) { }
+    </script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+hb
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.0.1
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-listNav" class="sidebar-listNav" role="tablist">
+      <li>
+        <button id="extras-list-tab-button" role="tab" data-type="extras" aria-controls="extras-tab-panel" aria-selected="true" tabindex="0">
+Pages
+        </button>
+      </li>
+
+        <li>
+          <button id="modules-list-tab-button" role="tab" data-type="modules" aria-controls="modules-tab-panel" aria-selected="false" tabindex="-1">
+            Modules
+          </button>
+        </li>
+
+
+    </ul>
+  </div>
+
+  <div id="extras-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="extras-list-tab-button">
+    <ul id="extras-full-list" class="full-list"></ul>
+  </div>
+
+    <div id="modules-tab-panel" class="sidebar-tabpanel" role="tabpanel" aria-labelledby="modules-list-tab-button" hidden>
+      <ul id="modules-full-list" class="full-list"></ul>
+    </div>
+
+
+</nav>
+
+<main class="content">
+  <output role="status" id="toast"></output>
+
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of hb</span>
+            <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <button type="submit" class="search-button" aria-label="Submit Search">
+            <i class="ri-search-2-line ri-lg" aria-hidden="true" title="Submit search"></i>
+          </button>
+          <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+            <i class="ri-close-line ri-lg" title="Cancel search"></i>
+          </button>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L1" title="View Source" class="icon-action" rel="help">
+        <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+        <span class="sr-only">View Source</span>
+      </a>
+
+    <span translate="no">hb_store_rocksdb</span> 
+    <small class="app-vsn" translate="no">(hb v0.0.1)</small>
+
+  </h1>
+
+
+    <section id="moduledoc">
+<p>A process wrapper over rocksdb storage. Replicates functionality of the</p><pre><code class="makeup erlang" translate="no"><span class="w"> </span><span class="ss">hb_fs_store</span><span class="w"> </span><span class="ss">module</span><span class="p">.</span><span class="w">
+
+</span><span class="n">Encodes</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">item</span><span class="w"> </span><span class="ss">types</span><span class="w"> </span><span class="ss">with</span><span class="w"> </span><span class="ss">the</span><span class="w"> </span><span class="ss">help</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="ss">prefixes</span><span class="p">,</span><span class="w"> </span><span class="ss">see</span><span class="w"> </span><span class="err">`</span><span class="ss">encode_value</span><span class="p">/</span><span class="mi">2</span><span class="err">`</span><span class="w">
+</span><span class="ow">and</span><span class="w"> </span><span class="err">`</span><span class="ss">decode_value</span><span class="p">/</span><span class="mi">1</span><span class="err">`</span></code></pre><p>@end
+%%%-----------------------------------------------------------------------------</p>
+    </section>
+
 </div>
 
-<h3 class="function"><a name="handle_call-3">handle_call/3</a></h3>
-<div class="spec">
-<p><code>handle_call(Request, From, State) -&gt; any()</code></p>
-<p> </p>
+  <section id="summary" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#summary">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Summary</span>
+    </h1>
+<div class="summary-types summary">
+  <h2>
+    <a href="#types">Types</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:key/0" data-no-tooltip translate="no">key()</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#t:value/0" data-no-tooltip translate="no">value()</a>
+
+      </div>
+
+    </div>
+
+</div>
+<div class="summary-functions summary">
+  <h2>
+    <a href="#functions">Functions</a>
+  </h2>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#add_path/3" data-no-tooltip translate="no">add_path(Opts, Path1, Path2)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Add two path components together. // is not used</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#code_change/3" data-no-tooltip translate="no">code_change(OldVsn, State, Extra)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#enabled/0" data-no-tooltip translate="no">enabled()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Returns whether the RocksDB store is enabled.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_call/3" data-no-tooltip translate="no">handle_call/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_cast/2" data-no-tooltip translate="no">handle_cast(Request, State)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#handle_info/2" data-no-tooltip translate="no">handle_info(Info, State)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#init/1" data-no-tooltip translate="no">init(Dir)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#list/0" data-no-tooltip translate="no">list()</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>List all items registered in rocksdb store. Should be used only
+for testing/debugging, as the underlying operation is doing full traversal
+on the KV storage, and is slow.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#list/2" data-no-tooltip translate="no">list(Opts, Path)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Returns the full list of items stored under the given path. Where the path
+child items is relevant to the path of parentItem. (Same as in <code class="inline">hb_store_fs</code>).</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#make_group/2" data-no-tooltip translate="no">make_group(Opts, Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Creates group under the given path.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#make_link/3" data-no-tooltip translate="no">make_link/3</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#path/2" data-no-tooltip translate="no">path(Opts, Path)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return path</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#read/2" data-no-tooltip translate="no">read(Opts, Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Read data by the key.
+Recursively follows link messages</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#reset/1" data-no-tooltip translate="no">reset(Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#resolve/2" data-no-tooltip translate="no">resolve(Opts, Path)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Replace links in a path with the target of the link.</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#scope/1" data-no-tooltip translate="no">scope/1</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Return scope (local)</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start/1" data-no-tooltip translate="no">start/1</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#start_link/1" data-no-tooltip translate="no">start_link(Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#stop/1" data-no-tooltip translate="no">stop(Opts)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#terminate/2" data-no-tooltip translate="no">terminate(Reason, State)</a>
+
+      </div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#type/2" data-no-tooltip translate="no">type(Opts, Key)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Get type of the current item</p></div>
+
+    </div>
+
+    <div class="summary-row">
+      <div class="summary-signature">
+        <a href="#write/3" data-no-tooltip translate="no">write(Opts, Key, Value)</a>
+
+      </div>
+
+        <div class="summary-synopsis"><p>Write given Key and Value to the database</p></div>
+
+    </div>
+
 </div>
 
-<h3 class="function"><a name="handle_cast-2">handle_cast/2</a></h3>
-<div class="spec">
-<p><code>handle_cast(Request, State) -&gt; any()</code></p>
-<p> </p>
+  </section>
+
+
+  <section id="types" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#types">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Types</span>
+    </h1>
+    <div class="types-list">
+<section class="detail" id="t:key/0">
+
+  <div class="detail-header">
+    <a href="#t:key/0" class="detail-link" data-no-tooltip aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">key()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L23" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> key() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="t:value/0">
+
+  <div class="detail-header">
+    <a href="#t:value/0" class="detail-link" data-no-tooltip aria-label="Link to this type">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">value()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L24" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-type</span> value() :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+
+    </div>
+  </section>
+
+  <section id="functions" class="details-list">
+    <h1 class="section-heading">
+      <a class="hover-link" href="#functions">
+        <i class="ri-link-m" aria-hidden="true"></i>
+      </a>
+      <span class="text">Functions</span>
+    </h1>
+    <div class="functions-list">
+<section class="detail" id="add_path/3">
+
+  <div class="detail-header">
+    <a href="#add_path/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">add_path(Opts, Path1, Path2)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L228" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Add two path components together. // is not used</p>
+  </section>
+</section>
+<section class="detail" id="code_change/3">
+
+  <div class="detail-header">
+    <a href="#code_change/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">code_change(OldVsn, State, Extra)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L308" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="enabled/0">
+
+  <div class="detail-header">
+    <a href="#enabled/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">enabled()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L34" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Returns whether the RocksDB store is enabled.</p>
+  </section>
+</section>
+<section class="detail" id="handle_call/3">
+
+  <div class="detail-header">
+    <a href="#handle_call/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">handle_call/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L261" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="handle_cast/2">
+
+  <div class="detail-header">
+    <a href="#handle_cast/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">handle_cast(Request, State)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L255" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="handle_info/2">
+
+  <div class="detail-header">
+    <a href="#handle_info/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">handle_info(Info, State)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L258" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="init/1">
+
+  <div class="detail-header">
+    <a href="#init/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">init(Dir)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L242" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="list/0">
+
+  <div class="detail-header">
+    <a href="#list/0" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">list()</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L236" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>List all items registered in rocksdb store. Should be used only
+for testing/debugging, as the underlying operation is doing full traversal
+on the KV storage, and is slow.</p>
+  </section>
+</section>
+<section class="detail" id="list/2">
+
+  <div class="detail-header">
+    <a href="#list/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">list(Opts, Path)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L138" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> list(Opts, Path) -> Result
+              when Opts :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:any/0">any</a>(), Path :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:any/0">any</a>(), Result :: {ok, [<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>()]} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:term/0">term</a>()}.</pre>
+
+      </div>
+
+<p>Returns the full list of items stored under the given path. Where the path
+child items is relevant to the path of parentItem. (Same as in <code class="inline">hb_store_fs</code>).</p>
+  </section>
+</section>
+<section class="detail" id="make_group/2">
+
+  <div class="detail-header">
+    <a href="#make_group/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">make_group(Opts, Key)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L204" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> make_group(Opts, Key) -> Result
+                    when Opts :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:any/0">any</a>(), Key :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), Result :: ok | {error, already_added}.</pre>
+
+      </div>
+
+<p>Creates group under the given path.</p>
+  </section>
+</section>
+<section class="detail" id="make_link/3">
+
+  <div class="detail-header">
+    <a href="#make_link/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">make_link/3</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L210" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> make_link(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:any/0">any</a>(), <a href="#t:key/0">key</a>(), <a href="#t:key/0">key</a>()) -> ok.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="path/2">
+
+  <div class="detail-header">
+    <a href="#path/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">path(Opts, Path)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L88" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return path</p>
+  </section>
+</section>
+<section class="detail" id="read/2">
+
+  <div class="detail-header">
+    <a href="#read/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">read(Opts, Key)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L99" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> read(Opts, Key) -> Result
+              when
+                  Opts :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(),
+                  Key :: <a href="#t:key/0">key</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>(),
+                  Result :: {ok, <a href="#t:value/0">value</a>()} | not_found | {error, {corruption, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>()}} | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:any/0">any</a>()}.</pre>
+
+      </div>
+
+<p>Read data by the key.
+Recursively follows link messages</p>
+  </section>
+</section>
+<section class="detail" id="reset/1">
+
+  <div class="detail-header">
+    <a href="#reset/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">reset(Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L77" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> reset([]) -> ok | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:no_return/0">no_return</a>().</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="resolve/2">
+
+  <div class="detail-header">
+    <a href="#resolve/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">resolve(Opts, Path)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L160" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> resolve(Opts, Path) -> Result
+                 when Opts :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:any/0">any</a>(), Path :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>() | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:list/0">list</a>(), Result :: not_found | <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:string/0">string</a>().</pre>
+
+      </div>
+
+<p>Replace links in a path with the target of the link.</p>
+  </section>
+</section>
+<section class="detail" id="scope/1">
+
+  <div class="detail-header">
+    <a href="#scope/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">scope/1</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L83" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+<p>Return scope (local)</p>
+  </section>
+</section>
+<section class="detail" id="start/1">
+
+  <div class="detail-header">
+    <a href="#start/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">start/1</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L67" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="start_link/1">
+
+  <div class="detail-header">
+    <a href="#start_link/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">start_link(Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L63" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="stop/1">
+
+  <div class="detail-header">
+    <a href="#stop/1" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">stop(Opts)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L73" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> stop(<a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:any/0">any</a>()) -> ok.</pre>
+
+      </div>
+
+
+  </section>
+</section>
+<section class="detail" id="terminate/2">
+
+  <div class="detail-header">
+    <a href="#terminate/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">terminate(Reason, State)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L305" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+
+  </section>
+</section>
+<section class="detail" id="type/2">
+
+  <div class="detail-header">
+    <a href="#type/2" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">type(Opts, Key)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L188" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> type(Opts, Key) -> Result
+              when Opts :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(), Key :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:binary/0">binary</a>(), Result :: composite | simple | not_found.</pre>
+
+      </div>
+
+<p>Get type of the current item</p>
+  </section>
+</section>
+<section class="detail" id="write/3">
+
+  <div class="detail-header">
+    <a href="#write/3" class="detail-link" data-no-tooltip aria-label="Link to this function">
+      <i class="ri-link-m" aria-hidden="true"></i>
+    </a>
+    <h1 class="signature" translate="no">write(Opts, Key, Value)</h1>
+
+      <a href="https://github.com/permaweb/HyperBEAM/blob/v0.0.1/src/hb_store_rocksdb.erl#L123" class="icon-action" rel="help" aria-label="View Source">
+       <i class="ri-code-s-slash-line" aria-hidden="true"></i>
+     </a>
+
+
+  </div>
+
+  <section class="docstring">
+
+      <div class="specs">
+
+          <pre translate="no"><span class="attribute">-spec</span> write(Opts, Key, Value) -> Result
+               when Opts :: <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:map/0">map</a>(), Key :: <a href="#t:key/0">key</a>(), Value :: <a href="#t:value/0">value</a>(), Result :: ok | {error, <a href="https://www.erlang.org/doc/apps/erts/erlang.html#t:any/0">any</a>()}.</pre>
+
+      </div>
+
+<p>Write given Key and Value to the database</p>
+  </section>
+</section>
+
+    </div>
+  </section>
+
+    <footer class="footer">
+      <p>
+
+          <span class="line">
+            <a href="https://hex.pm/packages/hb/0.0.1" class="footer-hex-package">Hex Package</a>
+
+            <a href="https://preview.hex.pm/preview/hb/0.0.1">Hex Preview</a>
+
+          </span>
+
+        <span class="line">
+          <button class="a-main footer-button display-quick-switch" title="Search HexDocs packages">
+            Search HexDocs
+          </button>
+
+            <a href="hb.epub" title="ePub version">
+              Download ePub version
+            </a>
+
+        </span>
+      </p>
+
+      <p class="built-using">
+        Built using
+        <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.35.1) for the
+
+          <a href="https://erlang.org" title="Erlang" target="_blank" translate="no">Erlang programming language</a>
+
+      </p>
+
+    </footer>
+  </div>
+</main>
 </div>
 
-<h3 class="function"><a name="handle_info-2">handle_info/2</a></h3>
-<div class="spec">
-<p><code>handle_info(Info, State) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="init-1">init/1</a></h3>
-<div class="spec">
-<p><code>init(Dir) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="list-2">list/2</a></h3>
-<div class="spec">
-<p><code>list(Opts, Path) -&gt; Result</code>
-<ul class="definitions"><li><code>Opts = any()</code></li><li><code>Path = any()</code></li><li><code>Result = [string()]</code></li></ul></p>
-<p> </p>
-</div><p><p>List key/values stored in the storage so far.       
-*Note*: This function is slow, and probably should not be used on       
-production. Right now it's used for debugging purposes.</p>
- 
-       This can't work as it works for FS store, especially for large sets
-       of data.</p>
-
-<h3 class="function"><a name="make_group-2">make_group/2</a></h3>
-<div class="spec">
-<p><code>make_group(Opts, Path) -&gt; any()</code></p>
-<p> </p>
-</div><p>Creates group under the given path.
-       Creates an entry in the database and store <code>&lt;&lt;"group"&gt;&gt;</code> as a type in
-       the meta family.</p>
-
-<h3 class="function"><a name="make_link-3">make_link/3</a></h3>
-<div class="spec">
-<p><code>make_link(Opts::any(), Key1::<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>, New::<a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a>) -&gt; ok</code><br></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="path-2">path/2</a></h3>
-<div class="spec">
-<p><code>path(Opts, Path) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return path</p>
-
-<h3 class="function"><a name="read-2">read/2</a></h3>
-<div class="spec">
-<p><code>read(Opts, Key) -&gt; Result</code>
-<ul class="definitions"><li><code>Opts = map()</code></li><li><code>Key = <a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a> | list()</code></li><li><code>Result = {ok, <a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a>} | not_found | {error, {corruption, string()}} | {error, any()}</code></li></ul></p>
-<p> </p>
-</div><p>Read data by the key.
-  Recursively follows link messages</p>
-
-<h3 class="function"><a name="reset-1">reset/1</a></h3>
-<div class="spec">
-<p><code>reset(Opts::[]) -&gt; ok | no_return()</code><br></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="resolve-2">resolve/2</a></h3>
-<div class="spec">
-<p><code>resolve(Opts, Path) -&gt; Result</code>
-<ul class="definitions"><li><code>Opts = any()</code></li><li><code>Path = binary() | list()</code></li><li><code>Result = not_found | string()</code></li></ul></p>
-<p> </p>
-</div><p>Replace links in a path with the target of the link.</p>
-
-<h3 class="function"><a name="scope-1">scope/1</a></h3>
-<div class="spec">
-<p><code>scope(X1) -&gt; any()</code></p>
-<p> </p>
-</div><p>Return scope (local)</p>
-
-<h3 class="function"><a name="start-1">start/1</a></h3>
-<div class="spec">
-<p><code>start(Opts) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="start_link-1">start_link/1</a></h3>
-<div class="spec">
-<p><code>start_link(Stores) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="stop-1">stop/1</a></h3>
-<div class="spec">
-<p><code>stop(Opts::any()) -&gt; ok</code><br></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="terminate-2">terminate/2</a></h3>
-<div class="spec">
-<p><code>terminate(Reason, State) -&gt; any()</code></p>
-<p> </p>
-</div>
-
-<h3 class="function"><a name="type-2">type/2</a></h3>
-<div class="spec">
-<p><code>type(Opts, Key) -&gt; Result</code>
-<ul class="definitions"><li><code>Opts = map()</code></li><li><code>Key = binary()</code></li><li><code>Result = composite | simple | not_found</code></li></ul></p>
-<p> </p>
-</div><p>Get type of the current item</p>
-
-<h3 class="function"><a name="write-3">write/3</a></h3>
-<div class="spec">
-<p><code>write(Opts, Key, Value) -&gt; Result</code>
-<ul class="definitions"><li><code>Opts = map()</code></li><li><code>Key = <a href="#type-key" docgen-rel="seetype" docgen-href="#key/0">key()</a></code></li><li><code>Value = <a href="#type-value" docgen-rel="seetype" docgen-href="#value/0">value()</a></code></li><li><code>Result = ok | {error, any()}</code></li></ul></p>
-<p> </p>
-</div><p>Write given Key and Value to the database</p>
-<hr>
-
-<div class="navbar"><a name="#navbar_bottom"></a><table width="100%" border="0" cellspacing="0" cellpadding="2" summary="navigation bar"><tr><td><a href="overview-summary.html" target="overviewFrame">Overview</a></td><td><a href="http://www.erlang.org/"><img src="erlang.png" align="right" border="0" alt="erlang logo"></a></td></tr></table></div>
-<p><i>Generated by EDoc</i></p>
-</body>
+  </body>
 </html>
