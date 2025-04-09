@@ -9,27 +9,27 @@
 %%%             M1/process
 %%%             M1/[Prefix]/image
 %%%         Generates:
-%%%             /priv/wasm/instance
-%%%             /priv/wasm/import-resolver
+%%%             /priv/[Prefix]/instance
+%%%             /priv/[Prefix]/import-resolver
 %%%         Side-effects:
 %%%             Creates a WASM executor loaded in memory of the HyperBEAM node.
 %%% 
 %%%     M1/Compute ->
 %%%         Assumes:
-%%%             M1/priv/wasm/instance
-%%%             M1/priv/wasm/import-resolver
+%%%             M1/priv/[Prefix]/instance
+%%%             M1/priv/[Prefix]/import-resolver
 %%%             M1/process
 %%%             M2/message
-%%%             M2/message/wasm-function OR M1/wasm-function
-%%%             M2/message/wasm-params OR M1/wasm-params
+%%%             M2/message/function OR M1/function
+%%%             M2/message/parameters OR M1/parameters
 %%%         Generates:
-%%%             /results/wasm/type
-%%%             /results/wasm/body
+%%%             /results/[Prefix]/type
+%%%             /results/[Prefix]/output
 %%%         Side-effects:
 %%%             Calls the WASM executor with the message and process.
-%%%     M1/wasm/state ->
+%%%     M1/[Prefix]/state ->
 %%%         Assumes:
-%%%             M1/priv/wasm/instance
+%%%             M1/priv/[Prefix]/instance
 %%%         Generates:
 %%%             Raw binary WASM state
 %%% '''
@@ -103,6 +103,17 @@ init(M1, M2, Opts) ->
     {ok,
         hb_private:set(M1,
             #{
+                <<Prefix/binary, "/write">> =>
+                    fun(Binary) ->
+                        {ok, Ptr} = hb_beamr_io:write_string(Instance, Binary),
+                        {ok, Ptr}
+                    end,
+                <<Prefix/binary, "/read">> =>
+                    fun Reader([Ptr]) -> Reader(Ptr);
+                        Reader(Ptr) ->
+                            {ok, Binary} = hb_beamr_io:read_string(Instance, Ptr),
+                            {ok, Binary}
+                    end,
                 <<Prefix/binary, "/instance">> => Instance,
                 <<Prefix/binary, "/import-resolver">> =>
                     fun default_import_resolver/3
@@ -159,18 +170,18 @@ compute(RawM1, M2, Opts) ->
             WASMFunction =
                 hb_ao:get_first(
                     [
-                        {M2, <<"body/wasm-function">>},
-                        {M2, <<"wasm-function">>},
-                        {M1, <<"wasm-function">>}
+                        {M2, <<"body/function">>},
+                        {M2, <<"function">>},
+                        {M1, <<"function">>}
                     ],
                     Opts
                 ),
             WASMParams =
                 hb_ao:get_first(
                     [
-                        {M2, <<"body/wasm-params">>},
-                        {M2, <<"wasm-params">>},
-                        {M1, <<"wasm-params">>}
+                        {M2, <<"body/parameters">>},
+                        {M2, <<"parameters">>},
+                        {M1, <<"parameters">>}
                     ],
                     Opts
                 ),
@@ -465,8 +476,8 @@ benchmark_test() ->
             Msg1,
             hb_ao:set(
                 #{
-                    <<"wasm-function">> => <<"fac">>,
-                    <<"wasm-params">> => [5.0]
+                    <<"function">> => <<"fac">>,
+                    <<"parameters">> => [5.0]
                 },
                 #{ hashpath => ignore }
             )
@@ -496,8 +507,8 @@ state_export_and_restore_test() ->
         maps:merge(
             Msg1,
             Extras = #{
-                <<"wasm-function">> => <<"pow">>,
-                <<"wasm-params">> => [2, 2],
+                <<"function">> => <<"pow">>,
+                <<"parameters">> => [2, 2],
                 <<"stdlib">> =>
                     #{
                         <<"my_lib">> =>
@@ -541,8 +552,8 @@ test_run_wasm(File, Func, Params, AdditionalMsg) ->
             Msg1,
             hb_ao:set(
                 #{
-                    <<"wasm-function">> => Func,
-                    <<"wasm-params">> => Params
+                    <<"function">> => Func,
+                    <<"parameters">> => Params
                 },
                 AdditionalMsg,
                 #{ hashpath => ignore }

@@ -91,9 +91,9 @@ paid_wasm_test() ->
         hb_message:commit(
             #{
                 <<"path">> =>
-                    <<"/~wasm-64@1.0/init/compute/results?wasm-function=fac">>,
+                    <<"/~wasm-64@1.0/init/compute/results?function=fac">>,
                 <<"body">> => WASMFile,
-                <<"wasm-params+list">> => <<"3.0">>
+                <<"parameters+list">> => <<"3.0">>
             },
             ClientWallet
         ),

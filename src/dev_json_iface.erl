@@ -44,7 +44,7 @@
 
 %% @doc Initialize the device.
 init(M1, _M2, _Opts) ->
-    {ok, hb_ao:set(M1, #{<<"wasm-function">> => <<"handle">>})}.
+    {ok, hb_ao:set(M1, #{<<"function">> => <<"handle">>})}.
 
 %% @doc On first pass prepare the call, on second pass get the results.
 compute(M1, M2, Opts) ->
@@ -58,7 +58,6 @@ compute(M1, M2, Opts) ->
 %% the message as JSON representations into the WASM environment.
 prep_call(M1, M2, Opts) ->
     ?event({prep_call, M1, M2, Opts}),
-    Instance = hb_private:get(<<"priv/wasm/instance">>, M1, Opts),
     Process = hb_ao:get(<<"process">>, M1, Opts#{ hashpath => ignore }),
     Message = hb_ao:get(<<"body">>, M2, Opts#{ hashpath => ignore }),
     Image = hb_ao:get(<<"process/image">>, M1, Opts),
@@ -70,23 +69,12 @@ prep_call(M1, M2, Opts) ->
             <<"Block-Height">> => BlockHeight
         },
     MsgJson = hb_json:encode(MsgProps),
-    {ok, MsgJsonPtr} = hb_beamr_io:write_string(Instance, MsgJson),
     ProcessProps =
         #{
             <<"Process">> => message_to_json_struct(Process)
         },
     ProcessJson = hb_json:encode(ProcessProps),
-    {ok, ProcessJsonPtr} = hb_beamr_io:write_string(Instance, ProcessJson),
-    {ok,
-        hb_ao:set(
-            M1,
-            #{
-                <<"wasm-function">> => <<"handle">>,
-                <<"wasm-params">> => [MsgJsonPtr, ProcessJsonPtr]
-            },
-            Opts
-        )
-    }.
+    env_write(ProcessJson, MsgJson, M1, M2, Opts).
 
 %% @doc Normalize a message for AOS-compatibility.
 denormalize_message(Message) ->
@@ -271,9 +259,9 @@ header_case_string(Key) ->
 %% @doc Read the computed results out of the WASM environment, assuming that
 %% the environment has been set up by `prep_call/3' and that the WASM executor
 %% has been called with `computed{pass=1}'.
-results(M1, _M2, Opts) ->
-    Instance = hb_private:get(<<"priv/wasm/instance">>, M1, Opts),
-    Type = hb_ao:get(<<"results/wasm/type">>, M1, Opts),
+results(M1, M2, Opts) ->
+    Prefix = dev_stack:prefix(M1, M2, Opts),
+    Type = hb_ao:get(<<"results/", Prefix/binary, "/type">>, M1, Opts),
     Proc = hb_ao:get(<<"process">>, M1, Opts),
     case hb_ao:normalize_key(Type) of
         <<"error">> ->
@@ -291,8 +279,7 @@ results(M1, _M2, Opts) ->
                 )
             };
         <<"ok">> ->
-            [Ptr] = hb_ao:get(<<"results/wasm/output">>, M1, Opts),
-            {ok, Str} = hb_beamr_io:read_string(Instance, Ptr),
+            {ok, Str} = env_read(M1, M2, Opts),
             try hb_json:decode(Str) of
                 #{<<"ok">> := true, <<"response">> := Resp} ->
                     {ok, ProcessedResults} = json_to_message(Resp, Opts),
@@ -303,6 +290,7 @@ results(M1, _M2, Opts) ->
                         PostProcessed,
                         Opts
                     ),
+                    ?event(debug_iface, {results, {processed, ProcessedResults}, {out, Out}}),
                     {ok, Out}
             catch
                 _:_ ->
@@ -313,7 +301,7 @@ results(M1, _M2, Opts) ->
                             #{
                                 <<"results/outbox">> => undefined,
                                 <<"results/body">> =>
-                                    <<"JSON error parsing WASM result output.">>
+                                    <<"JSON error parsing result output.">>
                             },
                             Opts
                         )
@@ -321,10 +309,49 @@ results(M1, _M2, Opts) ->
             end
     end.
 
+%% @doc Read the results out of the execution environment.
+env_read(M1, M2, Opts) ->
+    Prefix = dev_stack:prefix(M1, M2, Opts),
+    Output = hb_ao:get(<<"results/", Prefix/binary, "/output">>, M1, Opts),
+    case hb_private:get(<<Prefix/binary, "/read">>, M1, Opts) of
+        not_found ->
+            {ok, Output};
+        ReadFn ->
+            {ok, Read} = ReadFn(Output),
+            {ok, Read}
+    end.
+
+%% @doc Write the message and process into the execution environment.
+env_write(ProcessStr, MsgStr, Base, Req, Opts) ->
+    Prefix = dev_stack:prefix(Base, Req, Opts),
+    Params = 
+        case hb_private:get(<<Prefix/binary, "/write">>, Base, Opts) of
+            not_found ->
+                [MsgStr, ProcessStr];
+            WriteFn ->
+                {ok, MsgJsonPtr} = WriteFn(MsgStr),
+                {ok, ProcessJsonPtr} = WriteFn(ProcessStr),
+                [MsgJsonPtr, ProcessJsonPtr]
+        end,
+    {ok,
+        hb_ao:set(
+            Base,
+            #{
+                <<"function">> => <<"handle">>,
+                <<"parameters">> => Params
+            },
+            Opts
+        )
+    }.
+
 %% @doc Normalize the results of an evaluation.
 normalize_results(
-    Msg = #{ <<"Output">> := #{<<"data">> := Data}, <<"Messages">> := Messages}) ->
-    {ok, Data, Messages, maps:get(<<"patches">>, Msg, [])};
+    Msg = #{ <<"Output">> := #{<<"data">> := Data} }) ->
+    {ok,
+        Data,
+        maps:get(<<"Messages">>, Msg, []),
+        maps:get(<<"patches">>, Msg, [])
+    };
 normalize_results(#{ <<"Error">> := Error }) ->
     {ok, Error, [], []};
 normalize_results(Other) ->

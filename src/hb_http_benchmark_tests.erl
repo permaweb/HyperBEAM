@@ -58,8 +58,8 @@
 %     #{
 %         <<"path">> => <<"init/compute/results">>,
 %         <<"device">> => <<"wasm-64@1.0">>,
-%         <<"wasm-function">> => Func,
-%         <<"wasm-params">> => Params,
+%         <<"function">> => Func,
+%         <<"parameters">> => Params,
 %         <<"image">> => Bin
 %     }.
 

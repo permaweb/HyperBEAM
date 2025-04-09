@@ -790,8 +790,8 @@ wasm_compute_request(ImageFile, Func, Params, ResultPath) ->
     hb_message:commit(#{
         <<"path">> => <<"/init/compute/results", ResultPath/binary>>,
         <<"device">> => <<"WASM-64@1.0">>,
-        <<"wasm-function">> => Func,
-        <<"wasm-params">> => Params,
+        <<"function">> => Func,
+        <<"parameters">> => Params,
         <<"body">> => Bin
     }, Wallet).
 
@@ -838,8 +838,8 @@ ans104_wasm_test() ->
         <<"accept-codec">> => <<"ans104@1.0">>,
         <<"codec-device">> => <<"ans104@1.0">>,
         <<"device">> => <<"WASM-64@1.0">>,
-        <<"wasm-function">> => <<"fac">>,
-        <<"wasm-params">> => [3.0],
+        <<"function">> => <<"fac">>,
+        <<"parameters">> => [3.0],
         <<"body">> => Bin
     }, Wallet, <<"ans104@1.0">>),
     ?event({msg, Msg}),

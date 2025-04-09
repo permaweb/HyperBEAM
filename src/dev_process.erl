@@ -254,7 +254,8 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                             );
                         {error, Error} ->
                             % If the compute_slot function returns an error,
-                            % we return the error details, along with the current slot.
+                            % we return the error details, along with the current
+                            % slot.
                             {error,
                                 Error#{
                                     <<"phase">> => <<"compute">>,
@@ -693,8 +694,8 @@ schedule_wasm_call(Msg1, FuncName, Params, Opts) ->
             hb_message:commit(
                 #{
                     <<"type">> => <<"Message">>,
-                    <<"wasm-function">> => FuncName,
-                    <<"wasm-params">> => Params
+                    <<"function">> => FuncName,
+                    <<"parameters">> => Params
                 },
                 Wallet
             )
@@ -832,8 +833,8 @@ http_wasm_process_by_id_test() ->
         hb_message:commit(#{
             <<"target">> => ProcID,
             <<"type">> => <<"Message">>,
-            <<"wasm-function">> => <<"fac">>,
-            <<"wasm-params">> => [5.0]
+            <<"function">> => <<"fac">>,
+            <<"parameters">> => [5.0]
         },
         Wallet
     ),
