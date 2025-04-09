@@ -26,7 +26,10 @@
 -export([test_process/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+%%% The maximum number of assignments that we will query/return at a time.
 -define(MAX_ASSIGNMENT_QUERY_LEN, 1000).
+%%% The timeout for a lookahead worker.
+-define(LOOKAHEAD_TIMEOUT, 200).
 
 %% @doc Helper to ensure that the environment is started.
 start() ->
@@ -67,6 +70,7 @@ router(_, Msg1, Msg2, Opts) ->
 next(Msg1, Msg2, Opts) ->
     ?event(debug_next, {scheduler_next_called, {msg1, Msg1}, {msg2, Msg2}}),
     ?event(next, started_next),
+    ?event(next_profiling, started_next),
     Schedule = message_cached_assignments(Msg1, Opts),
     LastProcessed =
         hb_util:int(
@@ -76,19 +80,26 @@ next(Msg1, Msg2, Opts) ->
                 Opts#{ hashpath => ignore }
             )
         ),
+    ?event(next_profiling, got_last_processed),
     ?event(debug_next, {in_message_cache, {schedule, Schedule}}),
     ?event(next, {last_processed, LastProcessed, {message_cache, length(Schedule)}}),
     % Get the assignments from the message cache, local cache, or fetch from
     % the SU. Returns an ordered list of assignments.
-    [NextAssignment|Assignments] =
+    {LookaheadWorker, [NextAssignment|Assignments]} =
         case Schedule of
-            [_Next|_] -> Schedule;
+            [_Next|_] -> {undefined, Schedule};
             _ ->
                 ProcID = dev_process:process_id(Msg1, Msg2, Opts),
-                case dev_scheduler_cache:read(ProcID, New = LastProcessed + 1, Opts) of
-                    {ok, Assignment} ->
-                        ?event(next_debug, {in_cache, {slot, New}, {assignment, Assignment}}),
-                        [Assignment];
+                case check_lookahead_and_local_cache(Msg1, ProcID, LastProcessed + 1, Opts) of
+                    {ok, Worker, Assignment} ->
+                        ?event(next_debug,
+                            {in_cache,
+                                {slot, LastProcessed + 1},
+                                {assignment, Assignment}
+                            }
+                        ),
+                        ?event(next_profiling, read_assignment),
+                        {Worker, [Assignment]};
                     not_found ->
                         {ok, RecvdAssignments} =
                             hb_ao:resolve(
@@ -102,7 +113,7 @@ next(Msg1, Msg2, Opts) ->
                             ),
                         % Convert the assignments to an ordered list of messages,
                         % after removing all keys before the last processed slot.
-                        hb_util:message_to_ordered_list(
+                        {undefined, hb_util:message_to_ordered_list(
                             maps:filter(
                                 fun(<<"priv">>, _) -> false;
                                    (<<"commitments">>, _) -> false;
@@ -110,9 +121,10 @@ next(Msg1, Msg2, Opts) ->
                                 end,
                                 RecvdAssignments
                             )
-                        )
+                        )}
                 end
         end,
+    ?event(next_profiling, got_assignments),
     % Paranoia: Get the slot of the next assignment, to ensure that it is the
     % last processed slot + 1.
     NextAssignmentSlot =
@@ -126,6 +138,7 @@ next(Msg1, Msg2, Opts) ->
         catch
             error:badarg -> invalid_slot
         end,
+    ?event(next_profiling, found_next_assignment_slot),
     ?event(debug_next, {norm_assignments, Assignments}),
     ?event(next, {assignments_to_cache, length(Assignments)}),
     % Remove assignments that are below the last processed slot.
@@ -138,17 +151,21 @@ next(Msg1, Msg2, Opts) ->
     ExpectedSlot = LastProcessed + 1,
     case NextAssignmentSlot of
         ExpectedSlot ->
+            ?event(next_profiling, setting_cache),
             ?event(next, {setting_cache, {assignments, length(Assignments)}}),
             NextState =
                 hb_private:set(
                     Msg1,
-                    <<"scheduler@1.0/assignments">>,
-                    Assignments,
+                    #{ <<"scheduler@1.0">> => #{
+                        <<"assignments">> => Assignments,
+                        <<"lookahead-worker">> => LookaheadWorker
+                    }},
                     Opts
                 ),
             ?event(debug_next,
                 {next_returning, {slot, NextAssignmentSlot}, {message, NextAssignment}}),
             ?event(next, {next_returning, {slot, NextAssignmentSlot}}),
+			?event(next_profiling, returning),
             {ok, #{ <<"body">> => NextAssignment, <<"state">> => NextState }};
         _ ->
             {error,
@@ -168,6 +185,91 @@ message_cached_assignments(Msg, Opts) ->
         [],
         Opts
     ).
+
+%% @doc Spawn a new Erlang process to fetch the next assignments from the local
+%% cache, if we have them available.
+spawn_lookahead_worker(ProcID, Slot, Opts) ->
+    Caller = self(),
+    spawn(
+        fun() ->
+            ?event(next_lookahead,
+                {looking_ahead,
+                    {proc_id, ProcID},
+                    {slot, Slot},
+                    {caller, Caller}
+                }
+            ),
+            case dev_scheduler_cache:read(ProcID, Slot, Opts) of
+                {ok, Assignment} ->
+                    Caller ! {assignment, ProcID, Slot, Assignment};
+                not_found ->
+                    fail
+            end
+        end
+    ).
+
+%% @doc Check if we have a result from a lookahead worker or from our local
+%% cache. If we have a result in the local cache, we may also start a new
+%% lookahead worker to fetch the next assignments if we have them locally, 
+%% ahead of time. This can be enabled/disabled with the `scheduler_lookahead'
+%% option.
+check_lookahead_and_local_cache(Msg1, ProcID, TargetSlot, Opts) when is_map(Msg1) ->
+    case hb_private:get(<<"scheduler@1.0/lookahead-worker">>, Msg1, Opts) of
+        not_found ->
+            check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts);
+        LookaheadWorker ->
+            check_lookahead_and_local_cache(LookaheadWorker, ProcID, TargetSlot, Opts)
+    end;
+check_lookahead_and_local_cache(Worker, ProcID, TargetSlot, Opts) when is_pid(Worker) ->
+    receive
+        {assignment, ProcID, OldSlot, _Assignment} when OldSlot < TargetSlot ->
+            % The lookahead worker has found an assignment for a slot that is
+            % before the target slot. We remove it from the cache and continue
+            % searching.
+            ?event(next_lookahead,
+                {received_expired_assignment,
+                    {slot, OldSlot},
+                    {target_slot, TargetSlot}
+                }
+            ),
+            check_lookahead_and_local_cache(Worker, ProcID, TargetSlot, Opts);
+        {assignment, ProcID, TargetSlot, Assignment} ->
+            % The lookahead worker has found an assignment for the target slot.
+            % We return the assignment and stop searching. We will start a new
+            % lookahead worker to fetch the next slot in the background again.
+            NewWorker = spawn_lookahead_worker(ProcID, TargetSlot + 1, Opts),
+            ?event(next_lookahead,
+                {lookahead_worker_succeeded, {slot, TargetSlot}}
+            ),
+            {ok, NewWorker, Assignment}
+    after ?LOOKAHEAD_TIMEOUT ->
+        ?event(next_lookahead, {lookahead_worker_timed_out, {slot, TargetSlot}}),
+        erlang:exit(Worker, timeout),
+        check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts)
+    end;
+check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
+    % The lookahead worker has not found an assignment for the target
+    % slot yet, so we check our local cache.
+    ?event(next_lookahead, {no_lookahead_worker, {slot, TargetSlot}}),
+    case dev_scheduler_cache:read(ProcID, TargetSlot, Opts) of
+        not_found -> not_found;
+        {ok, Assignment} ->
+            % We have an assignment in our local cache, so we return it.
+            % Depending on the `scheduler_lookahead' option, we may also
+            % start a new lookahead worker to fetch the next assignments
+            % if we have them locally, ahead of time.
+            Worker =
+                case hb_opts:get(scheduler_lookahead, true, Opts) of
+                    false -> unset;
+                    true ->
+                        % We found the assignment in our local cache, so
+                        % optionally spawn a new Erlang process to fetch
+                        % the next assignments if we have them locally, 
+                        % ahead of time.
+                        spawn_lookahead_worker(ProcID, TargetSlot + 1, Opts)
+                end,
+            {ok, Worker, Assignment}
+    end.
 
 %% @doc Returns information about the entire scheduler.
 status(_M1, _M2, _Opts) ->
