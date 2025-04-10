@@ -48,4 +48,4 @@ store-inputs/
 debug-cache/
 
 wallet.json
-node_modules/
+node_modules
