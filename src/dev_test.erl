@@ -1,6 +1,9 @@
 -module(dev_test).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
+-export([update_state/3, increment_counter/3]).
 -export([postprocess/3]).
+-export([info/3]).
+-export([long_task/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -11,12 +14,41 @@
 %%% other testing functionality -- care should equally be taken to avoid
 %%% using the `test' key in other settings.
 
+
 %% @doc Exports a default_handler function that can be used to test the
 %% handler resolution mechanism.
 info(_) ->
 	#{
-        <<"default">> => dev_message
+        <<"default">> => dev_message,
+		handlers => #{
+			<<"info">> => fun info/3,
+			<<"update_state">> => fun update_state/3,
+			<<"increment_counter">> => fun increment_counter/3
+		}
 	}.
+
+% info(_) -> 
+% 	?event({viksit_test_info_called}),
+% 	#{ exports => [info, test_func] }.
+
+info(_Msg1, _Msg2, _Opts) ->
+	InfoBody = #{
+		<<"description">> => <<"Test device for testing the AO-Core framework">>,
+		<<"version">> => <<"1.0">>,
+		<<"paths">> => #{
+			<<"info">> => <<"Get device info">>,
+			<<"test_func">> => <<"Test function">>,
+			<<"compute">> => <<"Compute function">>,
+			<<"init">> => <<"Initialize function">>,
+			<<"restore">> => <<"Restore function">>,
+			<<"mul">> => <<"Multiply function">>,
+			<<"snapshot">> => <<"Snapshot function">>,
+			<<"postprocess">> => <<"Postprocess function">>,
+			<<"update_state">> => <<"Update state function">>
+		}
+	},
+	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
+
 
 test_func(_) ->
 	{ok, <<"GOOD_FUNCTION">>}.
@@ -83,6 +115,47 @@ postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
     ?event({postprocess_called, Opts}),
     hb_http_server:set_opts(Opts#{ <<"postprocessor-called">> => true }),
     {ok, Msgs}.
+
+%% @doc Find a test worker's PID and send it an update message.
+update_state(_Msg, Msg2, _Opts) ->
+    case hb_ao:get(<<"test-id">>, Msg2) of
+        not_found ->
+            {error, <<"No test ID found in message.">>};
+        ID ->
+            LookupResult = hb_name:lookup({<<"test">>, ID}),
+            case LookupResult of
+                undefined ->
+                    {error, <<"No test worker found.">>};
+                Pid ->
+                    Pid ! {update, Msg2},
+                    {ok, Pid}
+            end
+    end.
+
+%% @doc Find a test worker's PID and send it an increment message.
+increment_counter(_Msg1, Msg2, _Opts) ->
+    case hb_ao:get(<<"test-id">>, Msg2) of
+        not_found ->
+            {error, <<"No test ID found in message.">>};
+        ID ->
+            LookupResult = hb_name:lookup({<<"test">>, ID}),
+            case LookupResult of
+                undefined ->
+                    {error, <<"No test worker found for increment.">>};
+                Pid when is_pid(Pid) ->
+                    Pid ! {increment},
+				    {ok, Pid};
+                _ -> % Handle case where registered value isn't a PID
+                    {error, <<"Invalid registration found for test worker.">>}
+            end
+    end.
+
+%% @doc Does nothing, just sleeps for 3 seconds to simulate a long-running task.
+long_task(_Msg1, _Msg2, _Opts) ->
+    ?event({'dev_test:long_task:sleeping'}),
+    timer:sleep(3000),
+    ?event({'dev_test:long_task:waking'}),
+    {ok, #{<<"result">> => <<"slept">>}}.
 
 %%% Tests
 
