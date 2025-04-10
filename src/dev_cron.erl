@@ -1,27 +1,17 @@
--module(dev_cron).
--export([init/2, execute/2, uses/0]).
-
 %%% A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
-
+-module(dev_cron).
+-export([once/3, every/3]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
--record(state, {
-    time,
-    last_run
-}).
+once(Msg, Msg2, Opts) ->
+    {ok, Msg2}.
 
-init(State = #{ <<"process">> := ProcM }, Params) ->
-    case lists:keyfind(<<"time">>, 1, Params) of
-        {<<"time">>, CronTime} ->
-            MilliSecs = parse_time(CronTime),
-            %% TODO: What's the most sensible way to initialize the last_run?
-            %% Current behavior: Timer starts after _first_ message.
-            {ok, State#{ <<"cron">> => #state { time = MilliSecs, last_run = timestamp(ProcM) } }};
-        false ->
-            {ok, State#{ <<"cron">> => inactive }}
-    end.
+every(Msg, Msg2, Opts) ->
+    {ok, Msg2}.
 
+%% @doc Parse a time string into milliseconds.
 parse_time(BinString) ->
     [AmountStr, UnitStr] = binary:split(BinString, <<"-">>),
     Amount = binary_to_integer(AmountStr),
@@ -35,41 +25,33 @@ parse_time(BinString) ->
         _ -> throw({error, invalid_time_unit, UnitStr})
     end.
 
-execute(_M, State = #{ <<"cron">> := inactive }) ->
-    {ok, State};
-execute(M, State = #{ <<"pass">> := 1, <<"cron">> := #state { last_run = undefined } }) ->
-    {ok, State#{ <<"cron">> := #state { last_run = timestamp(M) } }};
-execute(Message, State = #{ <<"pass">> := 1, <<"cron">> := #state { time = MilliSecs, last_run = LastRun }, <<"schedule">> := Sched }) ->
-    case timestamp(Message) - LastRun of
-        Time when Time > MilliSecs ->
-            NextCronMsg = create_cron(State, CronTime = timestamp(Message) + MilliSecs),
-            {pass,
-                State#{
-                    <<"cron">> := #state { last_run = CronTime },
-                    <<"schedule">> := [NextCronMsg | Sched]
-                }
-            };
-        _ ->
-            {ok, State}
-    end;
-execute(_, S) ->
-    {ok, S}.
+%%% Tests
 
-timestamp(M) ->
-    % TODO: Process this properly
-    case lists:keyfind(<<"timestamp">>, 1, M#tx.tags) of
-        {<<"timestamp">>, TSBin} ->
-            list_to_integer(binary_to_list(TSBin));
-        false ->
-            0
+once_executed_test() ->
+    Node = hb_http_server:start_node(),
+    PID = spawn(fun test_worker/0),
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    hb_name:register(PID, {<<"test">>, ID}),
+    hb_http:get(Node,
+        <<"/~cron@1.0/once?test-id=", ID/binary,
+            "&cron-path=/~test@1.0/update_state">>,
+        #{}
+    ),
+    timer:sleep(1000),
+    PID ! {get, self()},
+    receive
+        {state, State} ->
+            ?assertMatch(#{ <<"test-id">> := ID }, State)
+    after 1000 ->
+        throw(no_response_from_worker)
     end.
 
-create_cron(_State, CronTime) ->
-    #tx{
-        tags = [
-            {<<"Action">>, <<"Cron">>},
-            {<<"Timestamp">>, list_to_binary(integer_to_list(CronTime))}
-        ]
-    }.
-
-uses() -> all.
+test_worker() -> test_worker(undefined).
+test_worker(State) ->
+    receive
+        {update, NewState} ->
+            test_worker(NewState);
+        {get, Pid} ->
+            Pid ! {state, State},
+            test_worker(State)
+    end.

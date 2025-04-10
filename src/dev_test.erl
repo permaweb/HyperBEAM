@@ -1,5 +1,6 @@
 -module(dev_test).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
+-export([update_state/3]).
 -export([postprocess/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -83,6 +84,21 @@ postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
     ?event({postprocess_called, Opts}),
     hb_http_server:set_opts(Opts#{ <<"postprocessor-called">> => true }),
     {ok, Msgs}.
+
+%% @doc Find a test worker's PID and send it an update message.
+update_state(_Msg, Msg2, Opts) ->
+    case hb_ao:get(<<"test-id">>, Msg2, Opts) of
+        not_found ->
+            {error, <<"No test ID found in message.">>};
+        ID ->
+            case hb_name:lookup({<<"test">>, ID}) of
+                undefined ->
+                    {error, <<"No test worker found.">>};
+                Pid ->
+                    Pid ! {update, Msg2},
+                    {ok, <<"Update sent.">>}
+            end
+    end.
 
 %%% Tests
 
