@@ -1,25 +1,29 @@
-%%% @doc A module for interacting with local and global options inside
-%%% HyperBEAM. Options are set globally, but can also be overridden using an
-%%% an optional local `Opts' map argument. Many functions across the HyperBEAM 
-%%% environment accept an `Opts' argument, which can be used to customize 
-%%% behavior.
-%%% 
-%%% Options set in an `Opts' map must _never_ change the behavior of a function
-%%% that should otherwise be deterministic. Doing so may lead to loss of funds
-%%% by the HyperBEAM node operator, as the results of their executions will be
-%%% different than those of other node operators. If they are economically 
-%%% staked on the correctness of these results, they may experience punishments
-%%% for non-verifiable behavior. Instead, if a local node setting makes 
-%%% deterministic behavior impossible, the caller should fail the execution 
-%%% with a refusal to execute.
 -module(hb_opts).
+-moduledoc """
+A module for interacting with local and global options inside
+HyperBEAM. Options are set globally, but can also be overridden using an
+an optional local `Opts` map argument. Many functions across the HyperBEAM 
+environment accept an `Opts` argument, which can be used to customize 
+behavior.
+
+Options set in an `Opts` map must _never_ change the behavior of a function
+that should otherwise be deterministic. Doing so may lead to loss of funds
+by the HyperBEAM node operator, as the results of their executions will be
+different than those of other node operators. If they are economically 
+staked on the correctness of these results, they may experience punishments
+for non-verifiable behavior. Instead, if a local node setting makes 
+deterministic behavior impossible, the caller should fail the execution 
+with a refusal to execute.
+""".
 -export([get/1, get/2, get/3, load/1, default_message/0, mimic_default_types/2]).
 -include("include/hb.hrl").
 
-%% @doc The default configuration options of the hyperbeam node.
+-doc """
+The default configuration options of the hyperbeam node.
+""".
 default_message() ->
     #{
-        %%%%%%%% Functional options %%%%%%%%
+        %%%%%%%% Functional options %%%%
         hb_config_location => <<"config.flat">>,
         initialized => true,
         %% What HTTP client should the node use?
@@ -174,7 +178,7 @@ default_message() ->
         % Should we use the latest cached state of a process when computing?
         process_now_from_cache => false,
         % Should we trust the GraphQL API when converting to ANS-104? Some GQL
-        % services do not provide the `anchor' or `last_tx' fields, so their
+        % services do not provide the `anchor` or `last_tx` fields, so their
         % responses are not verifiable.
         ans104_trust_gql => true,
         http_extra_opts =>
@@ -190,17 +194,19 @@ default_message() ->
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,
         % dynamically changing the configuration based on whether we are running
-        % tests or not. To override this, set the `prometheus' option explicitly.
+        % tests or not. To override this, set the `prometheus` option explicitly.
         % prometheus => false
     }.
 
-%% @doc Get an option from the global options, optionally overriding with a
-%% local `Opts' map if `prefer' or `only' is set to `local'. If the `only' 
-%% option is provided in the `local' map, only keys found in the corresponding
-%% (`local' or `global') map will be returned. This function also offers users
-%% a way to specify a default value to return if the option is not set.
-%% 
-%% `prefer' defaults to `local'.
+-doc """
+Get an option from the global options, optionally overriding with a
+local `Opts` map if `prefer` or `only` is set to `local`. If the `only` 
+option is provided in the `local` map, only keys found in the corresponding
+(`local` or `global`) map will be returned. This function also offers users
+a way to specify a default value to return if the option is not set.
+
+`prefer` defaults to `local`.
+""".
 get(Key) -> ?MODULE:get(Key, undefined).
 get(Key, Default) -> ?MODULE:get(Key, Default, #{}).
 get(Key, Default, Opts) when is_binary(Key) ->
@@ -263,7 +269,9 @@ get(Key, Default, Opts) ->
     }
 ).
 
-%% @doc Get an environment variable or configuration key.
+-doc """
+Get an environment variable or configuration key.
+""".
 global_get(Key, Default) ->
     case maps:get(Key, ?ENV_KEYS, Default) of
         Default -> config_lookup(Key, Default);
@@ -278,8 +286,10 @@ global_get(Key, Default) ->
             cached_os_env(EnvKey, DefaultValue)
     end.
 
-%% @doc Cache the result of os:getenv/1 in the process dictionary, as it never
-%% changes during the lifetime of a node.
+-doc """
+Cache the result of os:getenv/1 in the process dictionary, as it never
+changes during the lifetime of a node.
+""".
 cached_os_env(Key, DefaultValue) ->
     case erlang:get({os_env, Key}) of
         undefined ->
@@ -292,8 +302,10 @@ cached_os_env(Key, DefaultValue) ->
         Value -> Value
     end.
 
-%% @doc Get an option from environment variables, optionally consulting the
-%% `hb_features' of the node if a conditional default tuple is provided.
+-doc """
+Get an option from environment variables, optionally consulting the
+`hb_features` of the node if a conditional default tuple is provided.
+""".
 normalize_default({conditional, Feature, IfTest, Else}) ->
     case hb_features:enabled(Feature) of
         true -> IfTest;
@@ -301,13 +313,17 @@ normalize_default({conditional, Feature, IfTest, Else}) ->
     end;
 normalize_default(Default) -> Default.
 
-%% @doc An abstraction for looking up configuration variables. In the future,
-%% this is the function that we will want to change to support a more dynamic
-%% configuration system.
+-doc """
+An abstraction for looking up configuration variables. In the future,
+this is the function that we will want to change to support a more dynamic
+configuration system.
+""".
 config_lookup(Key, Default) -> maps:get(Key, default_message(), Default).
 
-%% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the 
-%% keys to those in the default message.
+-doc """
+Parse a `flat@1.0` encoded file into a map, matching the types of the 
+keys to those in the default message.
+""".
 load(Path) ->
     case file:read_file(Path) of
         {ok, Bin} ->
@@ -319,7 +335,9 @@ load(Path) ->
         _ -> {error, not_found}
     end.
 
-%% @doc Mimic the types of the default message for a given map.
+-doc """
+Mimic the types of the default message for a given map.
+""".
 mimic_default_types(Map, Mode) ->
     Default = default_message(),
     maps:from_list(lists:map(
@@ -388,6 +406,6 @@ load_test() ->
     ?assertEqual(1234, maps:get(port, Conf)),
     % A binary
     ?assertEqual(<<"https://ao.computer">>, maps:get(host, Conf)),
-    % An atom, where the key contained a header-key `-' rather than a `_'.
+    % An atom, where the key contained a header-key `-` rather than a `_`.
     ?assertEqual(false, maps:get(await_inprogress, Conf)).
 -endif.

@@ -1,22 +1,28 @@
-%%% @doc A device that calls a Lua script upon a request and returns the result.
 -module(dev_lua).
+-moduledoc """
+A device that calls a Lua script upon a request and returns the result.
+""".
 -export([info/1, init/3, compute/3, snapshot/3, normalize/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 %%% The default Lua function to call, if not provided by the invoker.
 -define(DEFAULT_LUA_FUNCTION, <<"handle">>).
 
-%% @doc All keys that are not directly available in the base message are 
-%% resolved by calling the Lua function in the script of the same name.
+-doc """
+All keys that are not directly available in the base message are 
+resolved by calling the Lua function in the script of the same name.
+""".
 info(Base) ->
     #{
         default => fun handler/4,
         excludes => [<<"keys">>, <<"set">>] ++ maps:keys(Base)
     }.
 
-%% @doc The handler of all non-message and non-device keys. We call the Lua
-%% function in the script of the same name, passing the request as the 
-%% parameter.
+-doc """
+The handler of all non-message and non-device keys. We call the Lua
+function in the script of the same name, passing the request as the 
+parameter.
+""".
 handler(Key, Base, Req, Opts) ->
     LuaReq =
         Req#{
@@ -38,12 +44,16 @@ handler(Key, Base, Req, Opts) ->
             {error, Error}
     end.
 
-%% @doc Initialize the device state, loading the script into memory if it is 
-%% a reference.
+-doc """
+Initialize the device state, loading the script into memory if it is 
+a reference.
+""".
 init(Base, Req, Opts) ->
     ensure_initialized(Base, Req, Opts).
 
-%% @doc Find the script in the base message, either by ID or by string.
+-doc """
+Find the script in the base message, either by ID or by string.
+""".
 find_script(Base, Opts) ->
     case hb_ao:get(<<"script-id">>, {as, <<"message@1.0">>, Base}, Opts) of
         not_found ->
@@ -67,9 +77,11 @@ find_script(Base, Opts) ->
             end
     end.
 
-%% @doc Initialize the Lua VM if it is not already initialized. Optionally takes
-%% the script as a  Binary string. If not provided, the script will be loaded
-%% from the base message.
+-doc """
+Initialize the Lua VM if it is not already initialized. Optionally takes
+the script as a  Binary string. If not provided, the script will be loaded
+from the base message.
+""".
 ensure_initialized(Base, Req, Opts) ->
     case find_script(Base, Opts) of
         {ok, Script} ->
@@ -89,9 +101,11 @@ ensure_initialized(Base, Req, Script, Opts) ->
             {ok, Base}
     end.
 
-%% @doc Call the Lua script with the given arguments. This key is `multipass@1.0'
-%% compatible: It will only execute the call on the first pass. On subsequent
-%% passes, it will return the base message unchanged.
+-doc """
+Call the Lua script with the given arguments. This key is `multipass@1.0`
+compatible: It will only execute the call on the first pass. On subsequent
+passes, it will return the base message unchanged.
+""".
 compute(Base, Req, RawOpts) ->
     Opts = RawOpts#{ hashpath => ignore },
     case hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, Base}, 1, Opts) of
@@ -145,8 +159,10 @@ do_compute(RawBase, Req, Opts) ->
             }}
     end.
 
-%% @doc Snapshot the Lua state from a live computation. Normalizes its `priv'
-%% state element, then serializes the state to a binary.
+-doc """
+Snapshot the Lua state from a live computation. Normalizes its `priv`
+state element, then serializes the state to a binary.
+""".
 snapshot(Base, _Req, Opts) ->
     case hb_private:get(<<"state">>, Base, Opts) of
         not_found ->
@@ -160,7 +176,9 @@ snapshot(Base, _Req, Opts) ->
             }
     end.
 
-%% @doc Restore the Lua state from a snapshot, if it exists.
+-doc """
+Restore the Lua state from a snapshot, if it exists.
+""".
 normalize(Base, _Req, RawOpts) ->
     Opts = RawOpts#{ hashpath => ignore },
     case hb_private:get(<<"state">>, Base, Opts) of
@@ -193,13 +211,17 @@ normalize(Base, _Req, RawOpts) ->
             {ok, Base}
     end.
 
-%% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message.
+-doc """
+Decode a Lua result into a HyperBEAM `structured@1.0` message.
+""".
 decode(Map = [{_K, _V} | _]) when is_list(Map) ->
     maps:map(fun(_, V) -> decode(V) end, maps:from_list(Map));
 decode(Other) ->
     Other.
 
-%% @doc Encode a HyperBEAM `structured@1.0' message into a Lua result.
+-doc """
+Encode a HyperBEAM `structured@1.0` message into a Lua result.
+""".
 encode(Map) when is_map(Map) ->
     maps:to_list(maps:map(fun(_, V) -> encode(V) end, Map));
 encode(List) when is_list(List) ->
@@ -218,7 +240,9 @@ simple_invocation_test() ->
     },
     ?assertEqual(2, hb_ao:get(<<"compute/results/output/b">>, Base, #{})).
 
-%% @doc Benchmark the performance of Lua executions.
+-doc """
+Benchmark the performance of Lua executions.
+""".
 direct_benchmark_test() ->
     BenchTime = 3,
     {ok, Script} = file:read_file("test/test.lua"),
@@ -243,7 +267,9 @@ direct_benchmark_test() ->
     ),
     ?assert(Iterations > 10).
 
-%% @doc Call AOS with an eval command.
+-doc """
+Call AOS with an eval command.
+""".
 invoke_aos_test_disabled() ->
     % Disabled: aos-2.0.4.lua is an update script, but does not initialize
     % the Lua environment state correctly.
@@ -262,8 +288,10 @@ invoke_aos_test_disabled() ->
     ?event({results, Results}),
     ?assertEqual(42, hb_ao:get(<<"data">>, Results, #{})).
 
-%% @doc Call a non-compute key on a Lua device message and ensure that the
-%% function of the same name in the script is called.
+-doc """
+Call a non-compute key on a Lua device message and ensure that the
+function of the same name in the script is called.
+""".
 invoke_non_compute_key_test() ->
     {ok, Script} = file:read_file("test/test.lua"),
     Base = #{
@@ -284,7 +312,9 @@ invoke_non_compute_key_test() ->
     ?event({result2, Result2}),
     ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
 
-%% @doc Use a Lua script as a preprocessor on the HTTP server via `~meta@1.0'.
+-doc """
+Use a Lua script as a preprocessor on the HTTP server via `~meta@1.0`.
+""".
 lua_http_preprocessor_test() ->
     {ok, Script} = file:read_file("test/test.lua"),
     Node = hb_http_server:start_node(
@@ -298,13 +328,17 @@ lua_http_preprocessor_test() ->
     {ok, Res} = hb_http:get(Node, <<"/hello?hello=world">>, #{}),
     ?assertMatch(#{ <<"body">> := <<"i like turtles">> }, Res).
 
-%% @doc Ensure that we can call a Lua process using the JSON interface.
+-doc """
+Ensure that we can call a Lua process using the JSON interface.
+""".
 lua_json_interface_test() ->
     {ok, Computed} = execute_aos_call(generate_stack("test/test.lua")),
     {ok, Results} = hb_ao:resolve(Computed, <<"results">>, #{}),
     ?assertEqual(42, hb_ao:get(<<"data">>, Results, #{})).
 
-%% @doc Benchmark execution of a Lua stack with a JSON interface.
+-doc """
+Benchmark execution of a Lua stack with a JSON interface.
+""".
 lua_json_interface_benchmark_test() ->
     BenchTime = 3,
     Initialized = generate_stack("test/test.lua"),
@@ -322,7 +356,9 @@ lua_json_interface_benchmark_test() ->
     ),
     ?assert(Iterations > 10).
 
-%% @doc Call a process whose `execution-device' is set to `lua@5.3a'.
+-doc """
+Call a process whose `execution-device` is set to `lua@5.3a`.
+""".
 pure_lua_process_test() ->
     Process = generate_lua_process("test/test.lua"),
     {ok, _} = hb_cache:write(Process, #{}),
@@ -361,7 +397,9 @@ pure_lua_process_benchmark_test_() ->
 
 %%% Test helpers
 
-%% @doc Generate a Lua process message.
+-doc """
+Generate a Lua process message.
+""".
 generate_lua_process(File) ->
     Wallet = hb:wallet(),
     {ok, Script} = file:read_file(File),
@@ -376,7 +414,9 @@ generate_lua_process(File) ->
         <<"test-random-seed">> => rand:uniform(1337)
     }, Wallet).
 
-%% @doc Generate a test message for a Lua process.
+-doc """
+Generate a test message for a Lua process.
+""".
 generate_test_message(Process) ->
     ProcID = hb_message:id(Process, all),
     Wallet = hb:wallet(),
@@ -397,7 +437,9 @@ generate_test_message(Process) ->
         Wallet
     ).
 
-%% @doc Generate a stack message for the Lua process.
+-doc """
+Generate a stack message for the Lua process.
+""".
 generate_stack(File) ->
     Wallet = hb:wallet(),
     {ok, Script} = file:read_file(File),

@@ -1,9 +1,11 @@
-%%% @doc A device that deduplicates messages send to a process.
-%%% Only runs on the first pass of the `compute' key call if executed
-%%% in a stack. Currently the device stores its list of already seen 
-%%% items in memory, but at some point it will likely make sense to 
-%%% drop them in the cache.
 -module(dev_dedup).
+-moduledoc """
+A device that deduplicates messages send to a process.
+Only runs on the first pass of the `compute` key call if executed
+in a stack. Currently the device stores its list of already seen 
+items in memory, but at some point it will likely make sense to 
+drop them in the cache.
+""".
 -export([info/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -13,8 +15,10 @@ info(_M1) ->
         handler => fun handle/4
     }.
 
-%% @doc Forward the keys function to the message device, handle all others
-%% with deduplication. We only act on the first pass.
+-doc """
+Forward the keys function to the message device, handle all others
+with deduplication. We only act on the first pass.
+""".
 handle(<<"keys">>, M1, _M2, _Opts) ->
     dev_message:keys(M1);
 handle(<<"set">>, M1, M2, Opts) ->
@@ -49,7 +53,7 @@ handle(Key, M1, M2, Opts) ->
 dedup_test() ->
     hb:init(),
     % Create a stack with a dedup device and 2 devices that will append to a
-    % `Result' key.
+    % `Result` key.
 	Msg = #{
 		<<"device">> => <<"Stack@1.0">>,
 		<<"device-stack">> =>
@@ -78,7 +82,7 @@ dedup_test() ->
 
 dedup_with_multipass_test() ->
     % Create a stack with a dedup device and 2 devices that will append to a
-    % `Result' key and a `Multipass' device that will repeat the message for 
+    % `Result` key and a `Multipass` device that will repeat the message for 
     % an additional pass. We want to ensure that Multipass is not hindered by
     % the dedup device.
 	Msg = #{

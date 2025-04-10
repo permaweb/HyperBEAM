@@ -1,18 +1,22 @@
-%%% @doc This module contains end-to-end tests for Hyperbeam, accessing through
-%%% the HTTP interface. As well as testing the system, you can use these tests
-%%% as examples of how to interact with HyperBEAM nodes.
 -module(hb_examples).
+-moduledoc """
+This module contains end-to-end tests for Hyperbeam, accessing through
+the HTTP interface. As well as testing the system, you can use these tests
+as examples of how to interact with HyperBEAM nodes.
+""".
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
-%% @doc Start a node running the simple pay meta device, and use it to relay
-%% a message for a client. We must ensure:
-%% 1. When the client has no balance, the relay fails.
-%% 2. The operator is able to topup for the client.
-%% 3. The client has the correct balance after the topup.
-%% 4. The relay succeeds when the client has enough balance.
-%% 5. The received message is signed by the host using http-sig and validates
-%%    correctly.
+-doc """
+Start a node running the simple pay meta device, and use it to relay
+a message for a client. We must ensure:
+1. When the client has no balance, the relay fails.
+2. The operator is able to topup for the client.
+3. The client has the correct balance after the topup.
+4. The relay succeeds when the client has enough balance.
+5. The received message is signed by the host using http-sig and validates
+   correctly.
+""".
 relay_with_payments_test() ->
     HostWallet = ar_wallet:new(),
     ClientWallet = ar_wallet:new(),
@@ -60,11 +64,13 @@ relay_with_payments_test() ->
     ?assert(length(hb_message:signers(Resp)) > 0),
     ?assert(hb_message:verify(Resp)).
 
-%% @doc Gain signed WASM responses from a node and verify them.
-%% 1. Start the client with a small balance.
-%% 2. Execute a simple WASM function on the host node.
-%% 3. Verify the response is correct and signed by the host node.
-%% 4. Get the balance of the client and verify it has been deducted.
+-doc """
+Gain signed WASM responses from a node and verify them.
+1. Start the client with a small balance.
+2. Execute a simple WASM function on the host node.
+3. Verify the response is correct and signed by the host node.
+4. Get the balance of the client and verify it has been deducted.
+""".
 paid_wasm_test() ->
     HostWallet = ar_wallet:new(),
     ClientWallet = ar_wallet:new(),

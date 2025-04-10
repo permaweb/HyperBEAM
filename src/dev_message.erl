@@ -1,10 +1,12 @@
-%%% @doc The identity device: For non-reserved keys, it simply returns a key 
-%%% from the message as it is found in the message's underlying Erlang map. 
-%%% Private keys (`priv[.*]') are not included.
-%%% Reserved keys are: `id', `commitments', `committers', `keys', `path', 
-%%% `set', `remove', `get', and `verify'. Their function comments describe the 
-%%% behaviour of the device when these keys are set.
 -module(dev_message).
+-moduledoc """
+The identity device: For non-reserved keys, it simply returns a key 
+from the message as it is found in the message's underlying Erlang map. 
+Private keys (`priv[.*]`) are not included.
+Reserved keys are: `id`, `commitments`, `committers`, `keys`, `path`, 
+`set`, `remove`, `get`, and `verify`. Their function comments describe the 
+behaviour of the device when these keys are set.
+""".
 %%% Base AO-Core reserved keys:
 -export([info/0, keys/1]).
 -export([set/3, set_path/3, remove/2, get/2, get/3]).
@@ -28,26 +30,28 @@
     <<"verify">>
 ]).
 
-%% @doc Return the info for the identity device.
+-doc """
+Return the info for the identity device.
+""".
 info() ->
     #{
         default => fun get/3
         %exports => ?DEVICE_KEYS
     }.
 
-%% @doc Return the ID of a message, using the `committers' list if it exists.
-%% If the `committers' key is `all', return the ID including all known 
-%% commitments -- `none' yields the ID without any commitments. If the 
-%% `committers' key is a list/map, return the ID including only the specified 
-%% commitments.
-%% 
-%% The `id-device' key in the message can be used to specify the device that
-%% should be used to calculate the ID. If it is not set, the default device
-%% (`httpsig@1.0') is used.
-%% 
-%% Note: This function _does not_ use AO-Core's `get/3' function, as it
-%% as it would require significant computation. We may want to change this
-%% if/when non-map message structures are created.
+-doc """
+Return the ID of a message, using the `committers` list if it exists.
+If the `committers` key is `all`, return the ID including all known 
+commitments -- `none` yields the ID without any commitments. If the 
+`committers` key is a list/map, return the ID including only the specified 
+commitments.
+The `id-device` key in the message can be used to specify the device that
+should be used to calculate the ID. If it is not set, the default device
+(`httpsig@1.0`) is used.
+Note: This function _does not_ use AO-Core's `get/3` function, as it
+as it would require significant computation. We may want to change this
+if/when non-map message structures are created.
+""".
 id(Base) -> id(Base, #{}).
 id(Base, Req) -> id(Base, Req, #{}).
 id(Base, _, NodeOpts) when not is_map(Base) ->
@@ -98,7 +102,7 @@ calculate_ids(Base, Req, NodeOpts) ->
                 );
             Module -> Module
         end,
-    % Apply the function's `id' function with the appropriate arguments. If it
+    % Apply the function's `id` function with the appropriate arguments. If it
     % doesn't exist, error.
     case hb_ao:find_exported_function(Base, DevMod, id, 3, NodeOpts) of
         {ok, Fun} ->
@@ -107,9 +111,11 @@ calculate_ids(Base, Req, NodeOpts) ->
         not_found -> throw({id, id_resolver_not_found_for_device, DevMod})
     end.
 
-%% @doc Locate the ID device of a message. The ID device is determined the
-%% `device` set in _all_ of the commitments. If no commitments are present,
-%% the default device (`httpsig@1.0') is used.
+-doc """
+Locate the ID device of a message. The ID device is determined the
+`device` set in _all_ of the commitments. If no commitments are present,
+the default device (`httpsig@1.0`) is used.
+""".
 id_device(#{ <<"commitments">> := Commitments }) ->
     % Get the device from the first commitment.
     UnfilteredDevs =
@@ -137,7 +143,9 @@ id_device(#{ <<"commitments">> := Commitments }) ->
 id_device(_) ->
     {ok, ?DEFAULT_ID_DEVICE}.
 
-%% @doc Return the committers of a message that are present in the given request.
+-doc """
+Return the committers of a message that are present in the given request.
+""".
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
 committers(#{ <<"commitments">> := Commitments }, _, _NodeOpts) ->
@@ -158,9 +166,11 @@ committers(#{ <<"commitments">> := Commitments }, _, _NodeOpts) ->
 committers(_, _, _) ->
     {ok, []}.
 
-%% @doc Commit to a message, using the `commitment-device' key to specify the
-%% device that should be used to commit to the message. If the key is not set,
-%% the default device (`httpsig@1.0') is used.
+-doc """
+Commit to a message, using the `commitment-device` key to specify the
+device that should be used to commit to the message. If the key is not set,
+the default device (`httpsig@1.0`) is used.
+""".
 commit(Self, Req, Opts) ->
     {ok, Base} = hb_message:find_target(Self, Req, Opts),
     % Encode to a TABM.
@@ -179,10 +189,12 @@ commit(Self, Req, Opts) ->
     {ok, Committed} = apply(AttFun, hb_ao:truncate_args(AttFun, [Encoded, Req, Opts])),
     {ok, hb_message:convert(Committed, <<"structured@1.0">>, Opts)}.
 
-%% @doc Verify a message. By default, all commitments are verified. The
-%% `committers' key in the request can be used to specify that only the 
-%% commitments from specific committers should be verified. Similarly, specific
-%% commitments can be specified using the `commitments' key.
+-doc """
+Verify a message. By default, all commitments are verified. The
+`committers` key in the request can be used to specify that only the 
+commitments from specific committers should be verified. Similarly, specific
+commitments can be specified using the `commitments` key.
+""".
 verify(Self, Req, Opts) ->
     % Get the target message of the verification request.
     {ok, Base} = hb_message:find_target(Self, Req, Opts),
@@ -214,10 +226,12 @@ verify(Self, Req, Opts) ->
     ?event({verify_res, Res}),
     {ok, Res}.
 
-%% @doc Execute a function for a single commitment in the context of its
-%% parent message.
-%% Note: Assumes that the `commitments' key has already been removed from the
-%% message if applicable.
+-doc """
+Execute a function for a single commitment in the context of its
+parent message.
+Note: Assumes that the `commitments` key has already been removed from the
+message if applicable.
+""".
 exec_for_commitment(Func, Base, Commitment, Req, Opts) ->
     ?event({executing_for_commitment, {func, Func}, {base, Base}, {commitment, Commitment}, {req, Req}}),
     CommitmentMessage =
@@ -244,7 +258,9 @@ exec_for_commitment(Func, Base, Commitment, Req, Opts) ->
     Encoded = hb_message:convert(CommitmentMessage, tabm, Opts),
     apply(AttFun, [Encoded, Req, Opts]).
 
-%% @doc Return the list of committed keys from a message.
+-doc """
+Return the list of committed keys from a message.
+""".
 committed(Self, Req, Opts) ->
     % Get the target message of the verification request.
     {ok, Base} = hb_message:find_target(Self, Req, Opts),
@@ -296,19 +312,23 @@ committed(Self, Req, Opts) ->
     ?event({only_committed_keys, OnlyCommittedKeys}),
     {ok, OnlyCommittedKeys}.
 
-%% @doc Return a message with only the relevant commitments for a given request.
-%% See `commitment_ids_from_request/3' for more information on the request format.
+-doc """
+Return a message with only the relevant commitments for a given request.
+See `commitment_ids_from_request/3` for more information on the request format.
+""".
 with_relevant_commitments(Base, Req, Opts) ->
     Commitments = maps:get(<<"commitments">>, Base, #{}),
     CommitmentIDs = commitment_ids_from_request(Base, Req, Opts),
     Base#{ <<"commitments">> => maps:with(CommitmentIDs, Commitments) }.
 
-%% @doc Implements a standardized form of specifying commitment IDs for a
-%% message request. The caller may specify a list of committers (by address)
-%% or a list of commitment IDs directly. They may specify both, in which case
-%% the returned list will be the union of the two lists. In each case, they
-%% may specify `all' or `none' for each group. If no specifiers are provided,
-%% the default is `all' for commitments -- also implying `all' for committers.
+-doc """
+Implements a standardized form of specifying commitment IDs for a
+message request. The caller may specify a list of committers (by address)
+or a list of commitment IDs directly. They may specify both, in which case
+the returned list will be the union of the two lists. In each case, they
+may specify `all` or `none` for each group. If no specifiers are provided,
+the default is `all` for commitments -- also implying `all` for committers.
+""".
 commitment_ids_from_request(Base, Req, Opts) ->
     Commitments = maps:get(<<"commitments">>, Base, #{}),
     ReqCommitters =
@@ -368,8 +388,10 @@ commitment_ids_from_request(Base, Req, Opts) ->
     ?event({commitment_ids_from_request, {base, Base}, {req, Req}, {res, Res}}),
     Res.
 
-%% @doc Returns a list of commitment IDs in a commitments map that are relevant
-%% for a list of given committer addresses.
+-doc """
+Returns a list of commitment IDs in a commitments map that are relevant
+for a list of given committer addresses.
+""".
 commitment_ids_from_committers(CommitterAddrs, Commitments) ->
     % Get the IDs of all commitments for each committer.
     Comms =
@@ -419,8 +441,10 @@ commitment_ids_from_committers(CommitterAddrs, Commitments) ->
             )
     end.
 
-%% @doc Deep merge keys in a message. Takes a map of key-value pairs and sets
-%% them in the message, overwriting any existing values.
+-doc """
+Deep merge keys in a message. Takes a map of key-value pairs and sets
+them in the message, overwriting any existing values.
+""".
 set(Message1, NewValuesMsg, Opts) ->
     OriginalPriv = hb_private:from_message(Message1),
 	% Filter keys that are in the default device (this one).
@@ -510,19 +534,25 @@ set(Message1, NewValuesMsg, Opts) ->
             end
     end.
 
-%% @doc Special case of `set/3' for setting the `path' key. This cannot be set
-%% using the normal `set' function, as the `path' is a reserved key, necessary 
-%% for AO-Core to know the key to evaluate in requests.
+-doc """
+Special case of `set/3` for setting the `path` key. This cannot be set
+using the normal `set` function, as the `path` is a reserved key, necessary 
+for AO-Core to know the key to evaluate in requests.
+""".
 set_path(Message1, #{ <<"value">> := Value }, _Opts) ->
     {ok, Message1#{ <<"path">> => Value }}.
 
-%% @doc Remove a key or keys from a message.
+-doc """
+Remove a key or keys from a message.
+""".
 remove(Message1, #{ <<"item">> := Key }) ->
     remove(Message1, #{ <<"items">> => [Key] });
 remove(Message1, #{ <<"items">> := Keys }) ->
     { ok, maps:without(Keys, Message1) }.
 
-%% @doc Get the public keys of a message.
+-doc """
+Get the public keys of a message.
+""".
 keys(Msg) when not is_map(Msg) ->
     case hb_ao:normalize_keys(Msg) of
         NormMsg when is_map(NormMsg) -> keys(NormMsg);
@@ -537,9 +567,11 @@ keys(Msg) ->
         )
     }.
 
-%% @doc Return the value associated with the key as it exists in the message's
-%% underlying Erlang map. First check the public keys, then check case-
-%% insensitively if the key is a binary.
+-doc """
+Return the value associated with the key as it exists in the message's
+underlying Erlang map. First check the public keys, then check case-
+insensitively if the key is a binary.
+""".
 get(Key, Msg) -> get(Key, Msg, #{ <<"path">> => <<"get">> }).
 get(Key, Msg, _Msg2) ->
     case hb_private:is_private(Key) of
@@ -551,9 +583,11 @@ get(Key, Msg, _Msg2) ->
             end
     end.
 
-%% @doc Key matching should be case insensitive, following RFC-9110, so we 
-%% implement a case-insensitive key lookup rather than delegating to
-%% `maps:get/2'. Encode the key to a binary if it is not already.
+-doc """
+Key matching should be case insensitive, following RFC-9110, so we 
+implement a case-insensitive key lookup rather than delegating to
+`maps:get/2`. Encode the key to a binary if it is not already.
+""".
 case_insensitive_get(Key, Msg) ->
     NormKey = hb_ao:normalize_key(Key),
     NormMsg = hb_ao:normalize_keys(Msg),

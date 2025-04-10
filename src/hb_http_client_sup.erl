@@ -1,5 +1,7 @@
-%%% @doc The supervisor for the gun HTTP client wrapper.
 -module(hb_http_client_sup).
+-moduledoc """
+The supervisor for the gun HTTP client wrapper.
+""".
 -behaviour(supervisor).
 -export([start_link/1, init/1]).
 

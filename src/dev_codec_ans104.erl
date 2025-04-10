@@ -1,6 +1,8 @@
-%%% @doc Codec for managing transformations from `ar_bundles'-style Arweave TX
-%%% records to and from TABMs.
 -module(dev_codec_ans104).
+-moduledoc """
+Codec for managing transformations from `ar_bundles`-style Arweave TX
+records to and from TABMs.
+""".
 -export([id/1, to/1, from/1, commit/3, verify/3, committed/3, content_type/1]).
 -export([serialize/1, deserialize/1]).
 -include("include/hb.hrl").
@@ -23,8 +25,8 @@
 %% The list of tags that a user is explicitly committing to when they sign an
 %% ANS-104 message.
 -define(COMMITTED_TAGS, ?TX_KEYS ++ [<<"data">>]).
-%% List of tags that should be removed during `to'. These relate to the nested
-%% ar_bundles format that is used by the `ans104@1.0' codec.
+%% List of tags that should be removed during `to`. These relate to the nested
+%% ar_bundles format that is used by the `ans104@1.0` codec.
 -define(FILTERED_TAGS,
     [
         <<"bundle-format">>,
@@ -33,16 +35,22 @@
     ]
 ).
 
-%% @doc Return the content type for the codec.
+-doc """
+Return the content type for the codec.
+""".
 content_type(_) -> {ok, <<"application/ans104">>}.
 
-%% @doc Serialize a message or TX to a binary.
+-doc """
+Serialize a message or TX to a binary.
+""".
 serialize(Msg) when is_map(Msg) ->
     serialize(to(Msg));
 serialize(TX) when is_record(TX, tx) ->
     {ok, ar_bundles:serialize(TX)}.
 
-%% @doc Deserialize a binary ans104 message to a TABM.
+-doc """
+Deserialize a binary ans104 message to a TABM.
+""".
 deserialize(#{ <<"body">> := Binary }) ->
     deserialize(Binary);
 deserialize(Binary) when is_binary(Binary) ->
@@ -50,12 +58,16 @@ deserialize(Binary) when is_binary(Binary) ->
 deserialize(TX) when is_record(TX, tx) ->
     {ok, from(TX)}.
 
-%% @doc Return the ID of a message.
+-doc """
+Return the ID of a message.
+""".
 id(Msg) ->
     TABM = dev_codec_structured:from(Msg),
     {ok, hb_util:human_id((to(TABM))#tx.id)}.
 
-%% @doc Sign a message using the `priv_wallet' key in the options.
+-doc """
+Sign a message using the `priv_wallet` key in the options.
+""".
 commit(Msg, _Req, Opts) ->
     ?event({committing, {input, Msg}}),
     Signed = ar_bundles:sign_item(
@@ -107,9 +119,11 @@ commit(Msg, _Req, Opts) ->
         }
     }.
 
-%% @doc Return a list of committed keys from an ANS-104 message.
+-doc """
+Return a list of committed keys from an ANS-104 message.
+""".
 committed(Msg = #{ <<"trusted-keys">> := RawTKeys, <<"commitments">> := Comms }, _Req, Opts) ->
-    % If the message has a `trusted-keys' field in the immediate layer, we validate
+    % If the message has a `trusted-keys` field in the immediate layer, we validate
     % that it also exists in the commitment's sub-map. If it exists there (which
     % cannot be written to directly by users), we can trust that the stated keys
     % are present in the message.
@@ -122,8 +136,8 @@ committed(Msg = #{ <<"trusted-keys">> := RawTKeys, <<"commitments">> := Comms },
             throw({trusted_keys_not_found_in_commitment, Msg})
     end;
 committed(Msg = #{ <<"original-tags">> := TagMap, <<"commitments">> := Comms }, _Req, Opts) ->
-    % If the message has an `original-tags' field, the committed fields are only
-    % those keys, and maps that are nested in the `data' field.
+    % If the message has an `original-tags` field, the committed fields are only
+    % those keys, and maps that are nested in the `data` field.
     ?event({committed_from_original_tags, {input, Msg}}),
     case hb_ao:get(hd(hb_ao:keys(Comms)), Comms, #{}) of
         #{ <<"original-tags">> := TagMap } ->
@@ -141,7 +155,7 @@ committed(Msg = #{ <<"original-tags">> := TagMap, <<"commitments">> := Comms }, 
 committed(Msg, Req, Opts) ->
     ?event({running_committed, {input, Msg}}),
     % Remove other commitments that were not 'promoted' to the base layer message
-    % by `message@1.0/committed'. This is safe because `to' will only proceed if 
+    % by `message@1.0/committed`. This is safe because `to` will only proceed if 
     % there is a single signature on the message. Subsequently, we can trust that
     % the keys signed by that single commitment speak for 'all' of the 
     % commitments.
@@ -165,7 +179,7 @@ committed(Msg, Req, Opts) ->
                     true -> dev_codec_structured:implicit_keys(Msg);
                     false -> []
                 end,
-            % Return the immediate and nested keys. The `data' field is always
+            % Return the immediate and nested keys. The `data` field is always
             % committed, so we include it in the list of keys.
             {ok, TagKeys ++ NestedKeys ++ Implicit ++ ?COMMITTED_TAGS};
         _ ->
@@ -190,7 +204,9 @@ committed_from_trusted_keys(Msg, TrustedKeys, _Opts) ->
             ++ ?COMMITTED_TAGS
     }.
 
-%% @doc Verify an ANS-104 commitment.
+-doc """
+Verify an ANS-104 commitment.
+""".
 verify(Msg, _Req, _Opts) ->
     MsgWithoutCommitments =
         maps:without(
@@ -205,7 +221,9 @@ verify(Msg, _Req, _Opts) ->
     Res = ar_bundles:verify_item(TX),
     {ok, Res}.
 
-%% @doc Convert a #tx record into a message map recursively.
+-doc """
+Convert a #tx record into a message map recursively.
+""".
 from(Binary) when is_binary(Binary) -> Binary;
 from(TX) when is_record(TX, tx) ->
     case lists:keyfind(<<"ao-type">>, 1, TX#tx.tags) of
@@ -312,8 +330,10 @@ do_from(RawTX) ->
     ?event({message_after_commitments, Res}),
     Res.
 
-%% @doc Deduplicate a list of key-value pairs by key, generating a list of
-%% values for each normalized key if there are duplicates.
+-doc """
+Deduplicate a list of key-value pairs by key, generating a list of
+values for each normalized key if there are duplicates.
+""".
 deduplicating_from_list(Tags) ->
     % Aggregate any duplicated tags into an ordered list of values.
     Aggregated =
@@ -355,7 +375,9 @@ deduplicating_from_list(Tags) ->
     ?event({deduplicating_from_list, {result, Res}}),
     Res.
 
-%% @doc Check whether a list of key-value pairs contains only normalized keys.
+-doc """
+Check whether a list of key-value pairs contains only normalized keys.
+""".
 normal_tags(Tags) ->
     lists:all(
         fun({Key, _}) ->
@@ -364,7 +386,9 @@ normal_tags(Tags) ->
         Tags
     ).
 
-%% @doc Convert an ANS-104 encoded tag list into a HyperBEAM-compatible map.
+-doc """
+Convert an ANS-104 encoded tag list into a HyperBEAM-compatible map.
+""".
 encoded_tags_to_map(Tags) ->
     hb_util:list_to_numbered_map(
         lists:map(
@@ -378,8 +402,10 @@ encoded_tags_to_map(Tags) ->
         )
     ).
 
-%% @doc Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
-%% recreating the original order of the tags.
+-doc """
+Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
+recreating the original order of the tags.
+""".
 tag_map_to_encoded_tags(TagMap) ->
     OrderedList =
         hb_util:message_to_ordered_list(
@@ -392,11 +418,13 @@ tag_map_to_encoded_tags(TagMap) ->
         OrderedList
     ).
 
-%% @doc Internal helper to translate a message to its #tx record representation,
-%% which can then be used by ar_bundles to serialize the message. We call the 
-%% message's device in order to get the keys that we will be checkpointing. We 
-%% do this recursively to handle nested messages. The base case is that we hit
-%% a binary, which we return as is.
+-doc """
+Internal helper to translate a message to its #tx record representation,
+which can then be used by ar_bundles to serialize the message. We call the 
+message's device in order to get the keys that we will be checkpointing. We 
+do this recursively to handle nested messages. The base case is that we hit
+a binary, which we return as is.
+""".
 to(Binary) when is_binary(Binary) ->
     % ar_bundles cannot serialize just a simple binary or get an ID for it, so
     % we turn it into a TX record with a special tag, tx_to_message will
@@ -408,9 +436,9 @@ to(Binary) when is_binary(Binary) ->
 to(TX) when is_record(TX, tx) -> TX;
 to(RawTABM) when is_map(RawTABM) ->
     % The path is a special case so we normalized it first. It may have been
-    % modified by `hb_ao' in order to set it to the current key that is
+    % modified by `hb_ao` in order to set it to the current key that is
     % being executed. We should check whether the path is in the
-    % `priv/AO-Core/Original-Path' field, and if so, use that instead of the
+    % `priv/AO-Core/Original-Path` field, and if so, use that instead of the
     % stated path. This normalizes the path, such that the signed message will
     % continue to validate correctly.
     TABM = hb_ao:normalize_keys(maps:without([<<"commitments">>], RawTABM)),
@@ -566,7 +594,7 @@ to(RawTABM) when is_map(RawTABM) ->
 to(_Other) ->
     throw(invalid_tx).
 
-%%% ANS-104-specific testing cases.
+%% ANS-104-specific testing cases.
 
 normal_tags_test() ->
     Msg = #{

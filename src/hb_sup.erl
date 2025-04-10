@@ -34,7 +34,9 @@ init(Opts) ->
         },
     {ok, {SupFlags, [GunChild | StoreChildren]}}.
 
-%% @doc Generate a child spec for stores in the given Opts.
+-doc """
+Generate a child spec for stores in the given Opts.
+""".
 store_children(Store) when not is_list(Store) ->
     store_children([Store]);
 store_children([]) -> [];
