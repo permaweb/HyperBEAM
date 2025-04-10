@@ -7,6 +7,18 @@ extern ErlDrvTermData atom_ok;
 extern ErlDrvTermData atom_import;
 extern ErlDrvTermData atom_execution_result;
 
+void wasm_func_new_with_env_finalizer(void* env){
+    ImportHook* hook = (ImportHook*) env;
+    DRV_DEBUG("Free %d bytes (allocated for imported function stub)", sizeof(*hook));
+
+    // Also clean up the signature, that is a type_str.
+    if(hook->signature){
+        driver_free(hook->signature);
+    }
+    driver_free(hook);
+
+}
+
 wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_vec_t* results) {
     DRV_DEBUG("generic_import_handler called");
     ImportHook* import_hook = (ImportHook*)env;
@@ -14,7 +26,7 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
 
     // Check if the field name is "invoke"; if not, exit early
     if (strncmp(import_hook->field_name, "invoke", 6) == 0) {
-        wasm_execute_indirect_function(proc, import_hook->field_name, args, results); 
+        wasm_execute_indirect_function(proc, import_hook->field_name, args, results);
         return NULL;
     }
 
@@ -93,18 +105,23 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
 
     // Clean up
     DRV_DEBUG("Cleaning up import response");
+    driver_free(msg);
     erl_drv_cond_destroy(proc->current_import->cond);
     erl_drv_mutex_destroy(proc->current_import->response_ready);
-    driver_free(proc->current_import);
 
+    // Cleanup result terms
+    driver_free(proc->current_import->result_terms);
+    proc->current_import->result_terms = NULL;
+
+    driver_free(proc->current_import);
     proc->current_import = NULL;
     return NULL;
 }
 
 void wasm_initialize_runtime(void* raw) {
     DRV_DEBUG("Initializing WASM module");
-    LoadWasmReq* mod_bin = (LoadWasmReq*)raw;
-    Proc* proc = mod_bin->proc;
+    Proc* proc = (Proc*)raw;
+    // Proc* proc = mod_bin->proc;
     drv_lock(proc->is_running);
     // Initialize WASM engine, store, etc.
 
@@ -114,7 +131,7 @@ void wasm_initialize_runtime(void* raw) {
     wasm_runtime_set_log_level(WASM_LOG_LEVEL_ERROR);
 #endif
 
-    DRV_DEBUG("Mode: %s", mod_bin->mode);
+    DRV_DEBUG("Mode: %s", proc->mod_bin->mode);
 
     // if(strcmp(mod_bin->mode, "wasm") == 0) {
     //     DRV_DEBUG("Using WASM mode.");
@@ -131,7 +148,7 @@ void wasm_initialize_runtime(void* raw) {
 
     // Load WASM module
     wasm_byte_vec_t binary;
-    wasm_byte_vec_new(&binary, mod_bin->size, (const wasm_byte_t*)mod_bin->binary);
+    wasm_byte_vec_new(&binary, proc->mod_bin->size, (const wasm_byte_t*)proc->mod_bin->binary);
 
     proc->module = wasm_module_new(proc->store, &binary);
     DRV_DEBUG("Module created: %p", proc->module);
@@ -152,6 +169,8 @@ void wasm_initialize_runtime(void* raw) {
     wasm_module_imports(proc->module, &imports);
     DRV_DEBUG("Imports size: %d", imports.size);
     wasm_extern_t *stubs[imports.size];
+    proc->mod_bin->stubs = driver_alloc(imports.size * sizeof(wasm_func_t*));
+    proc->mod_bin->stubs_size = imports.size;
 
     // Get exports
     wasm_exporttype_vec_t exports;
@@ -159,16 +178,15 @@ void wasm_initialize_runtime(void* raw) {
 
     // Create Erlang lists for imports
     int init_msg_size = sizeof(ErlDrvTermData) * (2 + 3 + 5 + (13 * imports.size) + (11 * exports.size));
+    DRV_DEBUG("Allocate %d bytes for wasm init message to erlang", init_msg_size);
     ErlDrvTermData* init_msg = driver_alloc(init_msg_size);
     int msg_i = 0;
 
     // 2 in the init_msg_size
     init_msg[msg_i++] = ERL_DRV_ATOM;
     init_msg[msg_i++] = atom_execution_result;
-
     // Process imports
     for (int i = 0; i < imports.size; ++i) {
-        //DRV_DEBUG("Processing import %d", i);
         const wasm_importtype_t* import = imports.data[i];
         const wasm_name_t* module_name = wasm_importtype_module(import);
         const wasm_name_t* name = wasm_importtype_name(import);
@@ -176,9 +194,10 @@ void wasm_initialize_runtime(void* raw) {
 
         //DRV_DEBUG("Import: %s.%s", module_name->data, name->data);
 
-        char* type_str = driver_alloc(256);
+        // cleaned by the wasm_func_new_with_env_finalizer
+        char* import_type_str = driver_alloc(256);
         // TODO: What happpens here?
-        if(!get_function_sig(type, type_str)) {
+        if(!get_function_sig(type, import_type_str)) {
             // TODO: Handle other types of imports?
             continue;
         }
@@ -192,17 +211,18 @@ void wasm_initialize_runtime(void* raw) {
         init_msg[msg_i++] = (ErlDrvTermData)name->data;
         init_msg[msg_i++] = name->size - 1;
         init_msg[msg_i++] = ERL_DRV_STRING;
-        init_msg[msg_i++] = (ErlDrvTermData)type_str;
-        init_msg[msg_i++] = strlen(type_str);
+        init_msg[msg_i++] = (ErlDrvTermData)import_type_str;
+        init_msg[msg_i++] = strlen(import_type_str);
         init_msg[msg_i++] = ERL_DRV_TUPLE;
         init_msg[msg_i++] = 4;
 
-        DRV_DEBUG("Creating callback for %s.%s [%s]", module_name->data, name->data, type_str);
+        DRV_DEBUG("Creating callback for %s.%s [%s]", module_name->data, name->data, import_type_str);
+        // the hook is cleared by wasm_func_new_with_env_finalizer
         ImportHook* hook = driver_alloc(sizeof(ImportHook));
         hook->module_name = module_name->data;
         hook->field_name = name->data;
         hook->proc = proc;
-        hook->signature = type_str;
+        hook->signature = import_type_str;
 
         hook->stub_func =
             wasm_func_new_with_env(
@@ -210,9 +230,10 @@ void wasm_initialize_runtime(void* raw) {
                 wasm_externtype_as_functype_const(type),
                 wasm_handle_import,
                 hook,
-                NULL
+                wasm_func_new_with_env_finalizer
             );
         stubs[i] = wasm_func_as_extern(hook->stub_func);
+        proc->mod_bin->stubs[i] = hook->stub_func ;
     }
 
     init_msg[msg_i++] = ERL_DRV_NIL;
@@ -236,8 +257,9 @@ void wasm_initialize_runtime(void* raw) {
 
     // Refresh the exports now that we have an instance
     wasm_module_exports(proc->module, &exports);
+
+    char** export_type_str = driver_alloc(sizeof(char*) * exports.size);
     for (size_t i = 0; i < exports.size; i++) {
-        //DRV_DEBUG("Processing export %d", i);
         const wasm_exporttype_t* export = exports.data[i];
         const wasm_name_t* name = wasm_exporttype_name(export);
         const wasm_externtype_t* type = wasm_exporttype_type(export);
@@ -254,8 +276,14 @@ void wasm_initialize_runtime(void* raw) {
 
         }
 
+        // cleared below in the same function
         char* type_str = driver_alloc(256);
-        get_function_sig(type, type_str);
+        export_type_str[i] = type_str;
+        if ( !get_function_sig(type, type_str) ){
+            DRV_DEBUG("Could not find function sig %s", type_str);
+
+        }
+
         DRV_DEBUG("Export: %s [%s] -> %s", name->data, kind_str, type_str);
 
         // 10 elements for each exported function
@@ -279,10 +307,13 @@ void wasm_initialize_runtime(void* raw) {
     init_msg[msg_i++] = 3;
 
     DRV_DEBUG("Sending init message to Erlang. Elements: %d", msg_i);
-
     int send_res = erl_drv_output_term(proc->port_term, init_msg, msg_i);
     DRV_DEBUG("Send result: %d", send_res);
-
+    // clean up export type strings
+    for (int i = 0; i < exports.size; i++) {
+        driver_free(export_type_str[i]);
+    }
+    driver_free(export_type_str);
     proc->current_import = NULL;
     proc->is_initialized = 1;
     drv_unlock(proc->is_running);
@@ -294,8 +325,12 @@ void wasm_execute_function(void* raw) {
     drv_lock(proc->is_running);
     char* function_name = proc->current_function;
 
-    // Find the function in the exports
-    wasm_func_t* func = get_exported_function(proc, function_name);
+    wasm_extern_vec_t exports;
+    wasm_instance_exports(proc->instance, &exports);
+    wasm_exporttype_vec_t export_types;
+    wasm_module_exports(proc->module, &export_types);
+
+    wasm_func_t* func = get_exported_function(exports, export_types, function_name);
     if (!func) {
         send_error(proc, "Function not found: %s", function_name);
         drv_unlock(proc->is_running);
@@ -303,17 +338,20 @@ void wasm_execute_function(void* raw) {
     }
     DRV_DEBUG("Func: %p", func);
 
-    const wasm_functype_t* func_type = wasm_func_type(func);
+    const wasm_functype_t* func_type = wasm_func_type(func); // cleaned below
     const wasm_valtype_vec_t* param_types = wasm_functype_params(func_type);
     const wasm_valtype_vec_t* result_types = wasm_functype_results(func_type);
 
     wasm_val_vec_t args, results;
+
+    // Also cleared below
     wasm_val_vec_new_uninitialized(&args, param_types->size);
     args.num_elems = param_types->num_elems;
     // CONV: ei_term* -> wasm_val_vec_t
     for(int i = 0; i < param_types->size; i++) {
         args.data[i].kind = wasm_valtype_kind(param_types->data[i]);
     }
+
     int res = erl_terms_to_wasm_vals(&args, proc->current_args);
 
     for(int i = 0; i < args.size; i++) {
@@ -321,12 +359,16 @@ void wasm_execute_function(void* raw) {
         DRV_DEBUG("Source term: %d", proc->current_args[i].value.i_val);
     }
 
+    driver_free(proc->current_args);
+    proc->current_args = NULL;
+
     if(res == -1) {
         send_error(proc, "Failed to convert terms to wasm vals");
         drv_unlock(proc->is_running);
         return;
     }
 
+    // cleared below
     wasm_val_vec_new_uninitialized(&results, result_types->size);
     results.num_elems = result_types->num_elems;
     for (size_t i = 0; i < result_types->size; i++) {
@@ -338,7 +380,6 @@ void wasm_execute_function(void* raw) {
     // Call the function
     DRV_DEBUG("Calling function: %s", function_name);
     wasm_trap_t* trap = wasm_func_call(func, &args, &results);
-    
 
     if (trap) {
         wasm_message_t trap_msg;
@@ -347,7 +388,6 @@ void wasm_execute_function(void* raw) {
         // int32_t func_index = wasm_frame_func_index(origin);
         // int32_t func_offset = wasm_frame_func_offset(origin);
         // char* func_name;
-
         // DRV_DEBUG("WASM Exception: [func_index: %d, func_offset: %d] %.*s", func_index, func_offset, trap_msg.size, trap_msg.data);
         send_error(proc, "%.*s", trap_msg.size, trap_msg.data);
         drv_unlock(proc->is_running);
@@ -381,7 +421,6 @@ void wasm_execute_function(void* raw) {
                 DRV_DEBUG("Unknown result type.", results.data[i].kind);
                 break;
         }
-        
         int res_size = wasm_val_to_erl_term(&msg[msg_index], &results.data[i]);
         msg_index += res_size;
     }
@@ -394,11 +433,15 @@ void wasm_execute_function(void* raw) {
     int response_msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
     driver_free(msg);
     DRV_DEBUG("Msg: %d", response_msg_res);
-
     wasm_val_vec_delete(&results);
+    wasm_val_vec_delete(&args);
+    wasm_functype_delete(func_type);
+    driver_free(proc->current_import);
     proc->current_import = NULL;
-
-	DRV_DEBUG("Unlocking is_running mutex: %p", proc->is_running);
+    wasm_extern_vec_delete(&exports);
+    wasm_exporttype_vec_delete(&export_types);
+    wasm_trap_delete(trap);
+    DRV_DEBUG("Unlocking is_running mutex: %p", proc->is_running);
     drv_unlock(proc->is_running);
 }
 
@@ -416,7 +459,7 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     DRV_DEBUG("Function name: %s", field_name);
 
 // Extract the function index from the input arguments
-    int function_index = input_args->data[0].of.i32;  
+    int function_index = input_args->data[0].of.i32;
     DRV_DEBUG("Function index retrieved from input_args: %d", function_index);
 
     // Get the function reference from the table and cast it to a function
@@ -439,7 +482,7 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
         DRV_DEBUG("Param %zu: %s", j, get_wasm_type_name(param_kind));
     }
 
-    
+
     // Log the function's result types
     const wasm_valtype_vec_t* result_types = wasm_functype_results(function_type);
     DRV_DEBUG("Function at index %d has %zu results", function_index, result_types->size);
@@ -458,7 +501,7 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     }
 
     // Allocate memory for the prepared arguments
-    wasm_val_t* prepared_data = malloc(sizeof(wasm_val_t) * (input_args->size - 1));
+    wasm_val_t* prepared_data = driver_alloc(sizeof(wasm_val_t) * (input_args->size - 1));
 
     // Copy the arguments starting from the second element (skip function index)
     for (size_t i = 1; i < input_args->size; ++i) {
@@ -470,8 +513,8 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     DRV_DEBUG("Prepared %zu arguments for function call", prepared_args.size);
 
     uint64_t argc = prepared_args.size;
-    uint64_t* argv = malloc(sizeof(uint64_t) * argc);
-    
+    uint64_t* argv = driver_alloc(sizeof(uint64_t) * argc);
+
     // Convert prepared arguments to an array of 64-bit integers
     for (uint64_t i = 0; i < argc; ++i) {
         argv[i] = prepared_args.data[i].of.i64;
@@ -500,14 +543,14 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
 
     if(result != 0) {
 
-    
+
 
     }
 
 
-    // Free allocated memory
-    free(argv);
-    free(prepared_args.data);
+    // driver_free allocated memory
+    driver_free(argv);
+    driver_free(prepared_args.data);
     DRV_DEBUG("Function call completed successfully");
     return result;
 }
@@ -516,9 +559,13 @@ int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_v
     DRV_DEBUG("=== Calling Runtime Export Function ===");
     DRV_DEBUG("=   Function name: %s", function_name);
 
-
     // Get exported wasm_func_t pointer by function name
-    wasm_func_t* func = get_exported_function(proc, function_name);
+    wasm_extern_vec_t exports;
+    wasm_instance_exports(proc->instance, &exports);
+    wasm_exporttype_vec_t export_types;
+    wasm_module_exports(proc->module, &export_types);
+    // TODO: Free these exports and export_types
+    wasm_func_t* func = get_exported_function(exports, export_types, function_name);
     if(!func) {
         DRV_DEBUG("=   Failed to get exported function");
         return -1;
@@ -546,7 +593,7 @@ int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_v
         DRV_DEBUG("=      Param %zu: %s, %i", j, get_wasm_type_name(param_kind), params[j].of.i64);
     }
 
-    
+
     // Get the function's result types and set the result types for results
     const wasm_valtype_vec_t* result_types = wasm_functype_results(function_type);
     if (!result_types) {

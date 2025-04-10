@@ -54,7 +54,7 @@
 -export([start/1, start/2, call/3, call/4, call/5, call/6, stop/1, wasm_send/2]).
 %%% Utility API:
 -export([serialize/1, deserialize/2, stub/3]).
-
+-export([benchmark_memory_leak/1]).
 -include("src/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -267,7 +267,8 @@ simple_wasm_test() ->
     {ok, File} = file:read_file("test/test.wasm"),
     {ok, WASM, _Imports, _Exports} = start(File),
     {ok, [Result]} = call(WASM, "fac", [5.0]),
-    ?assertEqual(120.0, Result).
+    ?assertEqual(120.0, Result),
+    hb_beamr:stop(WASM).
 
 %% @doc Test that imported functions can be called from the WASM module.
 imported_function_test() ->
@@ -278,14 +279,16 @@ imported_function_test() ->
             fun(Msg1, #{ args := [Arg1, Arg2] }, _Opts) ->
                 {ok, [Arg1 * Arg2], Msg1}
             end),
-    ?assertEqual(32, Result).
+    ?assertEqual(32, Result),
+    hb_beamr:stop(WASM).
 
 %% @doc Test that WASM Memory64 modules load and execute correctly.
 wasm64_test() ->
     {ok, File} = file:read_file("test/test-64.wasm"),
     {ok, WASM, _ImportMap, _Exports} = start(File),
     {ok, [Result]} = call(WASM, "fac", [5.0]),
-    ?assertEqual(120.0, Result).
+    ?assertEqual(120.0, Result),
+    hb_beamr:stop(WASM).
 
 %% @doc Ensure that processes outside of the initial one can interact with
 %% the WASM executor.
@@ -294,7 +297,8 @@ multiclient_test() ->
     ExecPID = spawn(fun() ->
         receive {wasm, WASM} ->
             {ok, [Result]} = call(WASM, "fac", [5.0]),
-            Self ! {result, Result}
+            Self ! {result, Result},
+            stop(WASM)
         end
     end),
     _StartPID = spawn(fun() ->
@@ -324,4 +328,44 @@ benchmark_test() ->
         "Executed ~s calls through Beamr in ~p seconds (~.2f call/s)",
         [hb_util:human_int(Iterations), BenchTime, Iterations / BenchTime]
     ),
-    ok.
+    hb_beamr:stop(WASM).
+
+% Previousely node was segfaulting when trying to clean up
+% not initialized driver data
+start_stop_test() ->
+    {ok, File} = file:read_file("test/test-64.wasm"),
+    {ok, WASM, _ImportMap, _Exports} = start(File),
+    hb_beamr:stop(WASM).
+
+used_memory() ->
+    erlang:memory(system) - erlang:memory(atom) - erlang:memory(binary) - erlang:memory(ets).
+
+% shows system memory increase after the given number of call iterations
+% benchmark_memory_leak(1000000).
+benchmark_memory_leak(N) ->
+    {ok, File} = file:read_file("test/test-64.wasm"),
+    {ok, WASM, _ImportMap, _Exports} = hb_beamr:start(File),
+    TestSeq = lists:seq(1, N),
+    Base = used_memory(),
+    lists:foreach(
+        fun(X) ->
+            hb_beamr:call(WASM, "fac", [2.0]),
+            % Now = used_memory(),
+            case X rem 50000 of
+                0 ->
+                    hb_util:eunit_print(
+                        "Iteration: ~p, Mem delta: ~p (Kb)\n",
+                        [X, (used_memory() - Base)/1000]
+                    );
+                _ -> 
+                    ignore
+            end,
+            ok
+        end,
+        TestSeq
+    ),
+    hb_beamr:stop(WASM),
+    hb_util:eunit_print(
+        "Final mem delta: ~p (Kb)\n",
+        [(used_memory() - Base)/1000]
+    ).
