@@ -83,8 +83,19 @@ ensure_started(Opts) ->
                                     )
                                 )
                             ),
+						CheckpointDir =
+                            filename:absname(
+                                hb_util:list(
+                                    hb_opts:get(
+                                        genesis_wasm_checkpoints_dir,
+                                        "cache-mainnet/genesis-wasm/checkpoints",
+                                        Opts
+                                    )
+                                )
+                            ),
                         DatabaseUrl = filename:absname(DBDir ++ "/genesis-wasm-db"),
                         filelib:ensure_path(DBDir),
+						filelib:ensure_path(CheckpointDir),
                         Port =
                             open_port(
                                 {spawn_executable,
@@ -133,7 +144,9 @@ ensure_started(Opts) ->
                                                         )
                                                     )
                                                 )
-                                            }
+                                            },
+											{"DISABLE_PROCESS_FILE_CHECKPOINT_CREATION", "false"},
+											{"PROCESS_MEMORY_FILE_CHECKPOINTS_DIR", CheckpointDir}
                                         ]
                                     }
                                 ]
