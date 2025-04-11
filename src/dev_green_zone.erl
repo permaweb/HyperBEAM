@@ -1,27 +1,33 @@
-%%% @doc The green zone device, which provides secure communication and identity
-%%% management between trusted nodes. It handles node initialization, joining
-%%% existing green zones, key exchange, and node identity cloning. All operations
-%%% are protected by hardware commitment and encryption.
 -module(dev_green_zone).
--export([join/3, init/3, become/3, key/3]).
+-moduledoc """
+The green zone device, which provides secure communication and identity
+management between trusted nodes. It handles node initialization, joining
+existing green zones, key exchange, and node identity cloning. All operations
+are protected by hardware commitment and encryption.
+""".
+-export([join/3, init/3, become/3, key/3, 
+         default_zone_required_opts/1, default_zone_bypass_opts/1]).
+-export([list_partitions/3, create_partition/3, format_disk/3, mount_disk/3, change_node_store/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("public_key/include/public_key.hrl").
 
-%% @doc The default required options for a green zone. These are intended as
-%% sane basic requirements for a green zone:
-%% - The node will not load remote devices (or trust extra peers).
-%% - The node will use only the default preloaded devices (found on the
-%%   initiating machine).
-%% - The node uses the default store configuration.
-%% - The node will not change its routes from the defaults.
-%% - The peer's preprocessor and postprocessor are the same as the local node's.
-%% - The node will not schedule messages. Without coordination, peers in the 
-%%   green zone will schedule messages without regard for avoiding
-%%   double-assignment of slots.
-%% - The node must be in a permanent state (no further configuration changes
-%%   being allowed).
-%% Each of these options is derived from the present node's configuration.
+-doc """
+The default required options for a green zone. These are intended as
+sane basic requirements for a green zone:
+- The node will not load remote devices (or trust extra peers).
+- The node will use only the default preloaded devices (found on the
+  initiating machine).
+- The node uses the default store configuration.
+- The node will not change its routes from the defaults.
+- The peer's preprocessor and postprocessor are the same as the local node's.
+- The node will not schedule messages. Without coordination, peers in the 
+  green zone will schedule messages without regard for avoiding
+  double-assignment of slots.
+- The node must be in a permanent state (no further configuration changes
+  being allowed).
+Each of these options is derived from the present node's configuration.
+""".
 default_zone_required_opts(Opts) ->
 	#{
 		trusted_device_signers => hb_opts:get(trusted_device_signers, [], Opts),
@@ -35,17 +41,33 @@ default_zone_required_opts(Opts) ->
         initialized => permanent
 	}.
 
-%% @doc Initialize the green zone.
-%% Sets up the node's cryptographic identity by ensuring that a wallet (keypair)
-%% exists and generating a shared AES key for secure communication. The wallet,
-%% AES key, and an empty trusted nodes list are stored in the node's configuration.
-%% @param M1 Ignored parameter.
-%% @param M2 Optionally contains a `required-config' map. If not provided, the
-%%           default required config (derived from the nodes base configuration)
-%%           will be used.
-%% @param Opts A map containing configuration options. If the wallet is not already
-%%             provided (under key `priv_wallet'), a new one will be created.
-%% @returns {ok, Msg} where Msg is a binary confirmation message.
+-doc """
+Defines options that are allowed to differ from the required options.
+These options will bypass the validation check when a node attempts to join
+a green zone. This allows for flexibility in certain configuration aspects
+while still maintaining the core security requirements.
+@param Opts A map containing configuration options.
+@returns List of option keys that can bypass the required options validation.
+""".
+default_zone_bypass_opts(_Opts) ->
+    [
+        % List of option keys that can be different between nodes
+        store
+    ].
+
+-doc """
+Initialize the green zone.
+Sets up the node's cryptographic identity by ensuring that a wallet (keypair)
+exists and generating a shared AES key for secure communication. The wallet,
+AES key, and an empty trusted nodes list are stored in the node's configuration.
+@param M1 Ignored parameter.
+@param M2 Optionally contains a `required-config' map. If not provided, the
+          default required config (derived from the nodes base configuration)
+          will be used.
+@param Opts A map containing configuration options. If the wallet is not already
+            provided (under key `priv_wallet'), a new one will be created.
+@returns {ok, Msg} where Msg is a binary confirmation message.
+""".
 -spec init(M1 :: term(), M2 :: term(), Opts :: map()) -> {ok, binary()}.
 init(_M1, M2, Opts) ->
     ?event(green_zone, {init, start}),
@@ -54,6 +76,14 @@ init(_M1, M2, Opts) ->
             <<"required-config">>,
             M2,
             default_zone_required_opts(Opts),
+            Opts
+        ),
+    % Get the bypass options
+    BypassOpts =
+        hb_ao:get(
+            <<"bypass-config">>,
+            M2,
+            default_zone_bypass_opts(Opts),
             Opts
         ),
     % Check if a wallet exists; create one if absent.
@@ -82,30 +112,31 @@ init(_M1, M2, Opts) ->
         priv_wallet => NodeWallet,
         priv_green_zone_aes => GreenZoneAES,
         trusted_nodes => #{},
-		green_zone_required_opts => RequiredConfig
+		green_zone_required_opts => RequiredConfig,
+        green_zone_bypass_opts => BypassOpts
     }),
     ?event(green_zone, {init, complete}),
     {ok, <<"Green zone initialized successfully.">>}.
 
-%% @doc Initiate the join process for a node (Node B).
-%%
-%% When Node B wishes to join an existing green zone, it sends a GET request to
-%% its local join endpoint.
-%% This request includes a header with the target peer's address (Node A).
-%%
-%% Based on the presence of a peer address:
-%%   - If the target peer is specified, Node B internally routes the request to 
-%%     the join_peer flow, where it generates an commitment report and prepares
-%%     a POST request to forward to Node A.
-%%   - If no peer address is present, the join request is processed locally via
-%%     the validate_join flow.
-%%
-%% @param M1 The join request message containing a header with the target peer's
-%%           address.
-%% @param M2 Ignored parameter.
-%% @param Opts A map of configuration options.
-%% @returns {ok, Map} on success with join response details, or {error, Reason}
-%% on failure.
+-doc """
+Initiate the join process for a node (Node B).
+When Node B wishes to join an existing green zone, it sends a GET request to
+its local join endpoint. This request includes a header with the target peer's
+address (Node A).
+
+Based on the presence of a peer address:
+  - If the target peer is specified, Node B internally routes the request to 
+    the join_peer flow, where it generates an commitment report and prepares
+    a POST request to forward to Node A.
+  - If no peer address is present, the join request is processed locally via
+    the validate_join flow.
+@param M1 The join request message containing a header with the target peer's
+          address.
+@param M2 Ignored parameter.
+@param Opts A map of configuration options.
+@returns {ok, Map} on success with join response details, or {error, Reason}
+         on failure.
+""".
 -spec join(M1 :: term(), M2 :: term(), Opts :: map()) ->
         {ok, map()} | {error, binary()}.
 join(M1, M2, Opts) ->
@@ -120,26 +151,30 @@ join(M1, M2, Opts) ->
 	end.
 
 
-%% @doc Retrieve and encrypt the node's private key.
-%% Encrypts the node's private key using the shared AES key in AES-256-GCM mode. 
-%% It returns the encrypted key along with the initialization vector (IV) needed
-%% for decryption.
-%% @param M1 Ignored parameter.
-%% @param M2 Ignored parameter.
-%% @param Opts A map of configuration options. Must include keys `priv_wallet'
-%%             and `priv_green_zone_aes'.
-%% @returns {ok, Map} on success, where Map contains:
-%%           - status: 200
-%%           - encrypted_key: the encrypted private key (Base64 encoded)
-%%           - iv: the initialization vector (Base64 encoded)
-%%          Returns {error, Reason} if the node is not part of the green zone.
--spec key(M1 :: term(), M2 :: term(), Opts :: map()) -> {ok, map()} | {error, binary()}.
+-doc """
+Retrieve and encrypt the node's private key.
+Encrypts the node's private key using the shared AES key in AES-256-GCM mode. 
+It returns the encrypted key along with the initialization vector (IV) needed
+for decryption.
+@param M1 Ignored parameter.
+@param M2 Ignored parameter.
+@param Opts A map of configuration options. Must include keys `priv_wallet'
+           and `priv_green_zone_aes'.
+@returns {ok, Map} on success, where Map contains:
+          - status: 200
+          - encrypted_key: the encrypted private key (Base64 encoded)
+          - iv: the initialization vector (Base64 encoded)
+         Returns {error, Reason} if the node is not part of the green zone.
+""".
+-spec key(M1 :: term(), M2 :: term(), Opts :: map()) -> 
+    {ok, map()} | {error, binary()}.
 key(_M1, _M2, Opts) ->
     ?event(green_zone, {get_key, start}),
     % Retrieve the shared AES key and the node's wallet.
     GreenZoneAES = hb_opts:get(priv_green_zone_aes, undefined, Opts),
     {{KeyType, Priv, Pub}, _PubKey} = hb_opts:get(priv_wallet, undefined, Opts),
-	?event(green_zone, {get_key, wallet, hb_util:human_id(ar_wallet:to_address(Pub))}),
+	?event(green_zone, 
+        {get_key, wallet, hb_util:human_id(ar_wallet:to_address(Pub))}),
     case GreenZoneAES of
         undefined ->
             % Log error if no shared AES key is found.
@@ -161,23 +196,26 @@ key(_M1, _M2, Opts) ->
             ?event(green_zone, {get_key, encrypt, complete}),
             {ok, #{
                 <<"status">>        => 200,
-                <<"encrypted_key">> => base64:encode(<<EncryptedKey/binary, Tag/binary>>),
+                <<"encrypted_key">> => 
+                    base64:encode(<<EncryptedKey/binary, Tag/binary>>),
                 <<"iv">>            => base64:encode(IV)
             }}
     end.
 
-%% @doc Clone the identity of a target node.
-%% Allows a node to adopt the identity of a target node by retrieving the target
-%% node's encrypted private key and IV, decrypting it using the shared AES key,
-%% and updating the local node's wallet with the target node's keypair.
-%% @param M1 The message containing the target node's encrypted private key and IV.
-%% @param M2 Ignored parameter.
-%% @param Opts A map of configuration options. Must include `priv_green_zone_aes'.
-%% @returns {ok, Map} on success, where Map includes:
-%%           - status: 200
-%%           - message: confirmation text
-%%           - node: the target node's address
-%%          Returns {error, Reason} if the node is not part of the green zone.
+-doc """
+Clone the identity of a target node.
+Allows a node to adopt the identity of a target node by retrieving the target
+node's encrypted private key and IV, decrypting it using the shared AES key,
+and updating the local node's wallet with the target node's keypair.
+@param M1 The message containing the target node's encrypted private key and IV.
+@param M2 Ignored parameter.
+@param Opts A map of configuration options. Must include `priv_green_zone_aes'.
+@returns {ok, Map} on success, where Map includes:
+          - status: 200
+          - message: confirmation text
+          - node: the target node's address
+         Returns {error, Reason} if the node is not part of the green zone.
+""".
 -spec become(M1 :: term(), M2 :: term(), Opts :: map()) ->
         {ok, map()} | {error, binary()}.
 become(_M1, M2, Opts) ->
@@ -195,14 +233,17 @@ become(_M1, M2, Opts) ->
         _ ->
             % 3. Request the target node's encrypted key from its key endpoint.
             ?event(green_zone, {become, getting_key, NodeLocation, NodeID}),
-            {ok, KeyResp} = hb_http:get(NodeLocation, <<"/~greenzone@1.0/key">>, Opts),
+            {ok, KeyResp} = hb_http:get(NodeLocation, 
+                                       <<"/~greenzone@1.0/key">>, Opts),
             Signers = hb_message:signers(KeyResp),
-            case hb_message:verify(KeyResp, Signers) and lists:member(NodeID, Signers) of
+            case hb_message:verify(KeyResp, Signers) and 
+                 lists:member(NodeID, Signers) of
                 false ->
                     % The response is not from the expected peer.
                     {error, <<"Received incorrect response from peer!">>};
                 true ->
-                    finalize_become(KeyResp, NodeLocation, NodeID, GreenZoneAES, Opts)
+                    finalize_become(KeyResp, NodeLocation, NodeID, 
+                                   GreenZoneAES, Opts)
             end
     end.
 
@@ -257,20 +298,21 @@ finalize_become(KeyResp, NodeLocation, NodeID, GreenZoneAES, Opts) ->
 %%% Internal Functions
 %%%--------------------------------------------------------------------
 
-%% @doc Process an internal join request when a target peer is specified.
-%%
-%% In this flow (executed on Node B):
-%%   1. Node B generates an commitment report and prepares a POST request.
-%%   2. It then forwards the POST request to Node A's join endpoint.
-%%   3. Upon receiving a response from Node A, Node B decrypts the returned 
-%%      zone-key (an encrypted shared AES key) using its local private key, then
-%%      updates its configuration with the shared AES key.
-%%
-%% @param Peer The target peer's (Node A's) address.
-%% @param M1 Ignored parameter.
-%% @param M2 Ignored parameter.
-%% @param Opts A map of configuration options.
-%% @returns {ok, Map} on success with a confirmation message, or {error, Map} on failure.
+-doc """
+Process an internal join request when a target peer is specified.
+In this flow (executed on Node B):
+  1. Node B generates an commitment report and prepares a POST request.
+  2. It then forwards the POST request to Node A's join endpoint.
+  3. Upon receiving a response from Node A, Node B decrypts the returned 
+     zone-key (an encrypted shared AES key) using its local private key, then
+     updates its configuration with the shared AES key.
+@param PeerLocation The target peer's (Node A's) address.
+@param PeerID The target peer's unique identifier.
+@param M1 Ignored parameter.
+@param M2 Ignored parameter.
+@param Opts A map of configuration options.
+@returns {ok, Map} on success with a confirmation message, or {error, Map} on failure.
+""".
 -spec join_peer(
     PeerLocation :: binary(),
     PeerID :: binary(),
@@ -280,7 +322,8 @@ finalize_become(KeyResp, NodeLocation, NodeID, GreenZoneAES, Opts) ->
 join_peer(PeerLocation, PeerID, _M1, M2, InitOpts) ->
 	% Check here if the node is already part of a green zone.
 	GreenZoneAES = hb_opts:get(priv_green_zone_aes, undefined, InitOpts),
-	case (GreenZoneAES == undefined) andalso maybe_set_zone_opts(PeerLocation, PeerID, M2, InitOpts) of
+	case (GreenZoneAES == undefined) andalso 
+         maybe_set_zone_opts(PeerLocation, PeerID, M2, InitOpts) of
 		{ok, Opts} ->
 			Wallet = hb_opts:get(priv_wallet, undefined, Opts),
 			{ok, Report} = dev_snp:generate(#{}, #{}, Opts),
@@ -328,7 +371,11 @@ join_peer(PeerLocation, PeerID, _M1, M2, InitOpts) ->
                                 priv_green_zone_aes => AESKey
                             }),
 							?event(successfully_joined_greenzone),
-                            {ok, #{ <<"body">> => <<"Node joined green zone successfully.">>, <<"status">> => 200}}
+                            {ok, #{ 
+                                <<"body">> => 
+									<<"Node joined green zone successfully.">>, 
+                                <<"status">> => 200
+                            }}
                     end;
 				{error, Reason} ->
 					{error, #{<<"status">> => 400, <<"reason">> => Reason}};
@@ -354,10 +401,18 @@ join_peer(PeerLocation, PeerID, _M1, M2, InitOpts) ->
             {error, Reason}
 	end.
 
-%% @doc If the operator requests it, the node can automatically adopt the 
-%% necessary configuration to join a green zone. `adopt-config' can be a boolean,
-%% a list of fields that should be included in the node message, alongside the
-%% required config of the green zone they are joining.
+-doc """
+If the operator requests it, the node can automatically adopt the 
+necessary configuration to join a green zone. `adopt-config' can be a boolean,
+a list of fields that should be included in the node message, alongside the
+required config of the green zone they are joining.
+@param PeerLocation The location of the peer node to join.
+@param PeerID The ID of the peer node to join.
+@param Req The request message containing the `adopt-config' parameter.
+@param InitOpts A map of initial configuration options.
+@returns {ok, Opts} where Opts is the updated configuration map, or
+         {error, Reason} if the configuration adoption fails.
+""".
 maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) ->
     case hb_ao:get(<<"adopt-config">>, Req, true, InitOpts) of
         false ->
@@ -365,7 +420,8 @@ maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) ->
             % the initial options unchanged.
             {ok, InitOpts};
         AdoptConfig ->
-			?event(green_zone, {adopt_config, AdoptConfig, PeerLocation, PeerID, InitOpts}),
+			?event(green_zone, 
+                {adopt_config, AdoptConfig, PeerLocation, PeerID, InitOpts}),
             % Request the required config from the peer.
             RequiredConfigRes =
                 hb_http:get(
@@ -403,11 +459,17 @@ maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) ->
 			end
     end.
 
-%% @doc Generate the node message that should be set prior to joining a green zone.
-%% This function takes a required opts message, a request message, and an `adopt-config'
-%% value. The `adopt-config' value can be a boolean, a list of fields that should be
-%% included in the node message from the request, or a binary string of fields to
-%% include, separated by commas.
+-doc """
+Generate the node message that should be set prior to joining a green zone.
+This function takes a required opts message, a request message, and an `adopt-config'
+value. The `adopt-config' value can be a boolean, a list of fields that should be
+included in the node message from the request, or a binary string of fields to
+include, separated by commas.
+@param RequiredOpts The required configuration options from the peer node.
+@param Req The request message containing configuration options.
+@param AdoptConfig Boolean, list, or binary string indicating which fields to adopt.
+@returns A map containing the merged configuration to be used as the node message.
+""".
 calculate_node_message(RequiredOpts, Req, true) ->
     % Remove irrelevant fields from the request.
     StrippedReq =
@@ -428,22 +490,22 @@ calculate_node_message(RequiredOpts, Req, List) when is_list(List) ->
 calculate_node_message(RequiredOpts, Req, BinList) when is_binary(BinList) ->
     calculate_node_message(RequiredOpts, hb_util:list(BinList), Req).
 
-%% @doc Validate an incoming join request.
-%%
-%% When Node A receives a POST join request from Node B, this routine is executed:
-%%   1. It extracts the commitment report, the requesting node's address, and 
-%%      the encoded public key.
-%%   2. It verifies the commitment report included in the request.
-%%   3. If the report is valid, Node A adds Node B to its list of trusted nodes.
-%%   4. Node A then encrypts the shared AES key (zone-key) with Node B's public 
-%%      key and returns it along with its public key.
-%%
-%% @param M1 Ignored parameter.
-%% @param Req The join request message containing the commitment report and 
-%%          other join details.
-%% @param Opts A map of configuration options.
-%% @returns {ok, Map} on success with join response details, or {error, Reason}
-%%          if verification fails.
+-doc """
+Validate an incoming join request.
+When Node A receives a POST join request from Node B, this routine is executed:
+  1. It extracts the commitment report, the requesting node's address, and 
+     the encoded public key.
+  2. It verifies the commitment report included in the request.
+  3. If the report is valid, Node A adds Node B to its list of trusted nodes.
+  4. Node A then encrypts the shared AES key (zone-key) with Node B's public 
+     key and returns it along with its public key.
+@param M1 Ignored parameter.
+@param Req The join request message containing the commitment report and 
+          other join details.
+@param Opts A map of configuration options.
+@returns {ok, Map} on success with join response details, or {error, Reason}
+         if verification fails.
+""".
 -spec validate_join(M1 :: term(), Req :: map(), Opts :: map()) ->
         {ok, map()} | {error, binary()}.
 validate_join(_M1, Req, Opts) ->
@@ -504,6 +566,21 @@ validate_peer_opts(Req, Opts) ->
             hb_opts:get(green_zone_required_opts, #{}, Opts)),
     ?event(green_zone, {validate_peer_opts, required_config, RequiredConfig}),
     
+    % Get the list of options that can bypass validation from configuration
+    BypassOpts = hb_opts:get(
+		green_zone_bypass_opts, 
+		default_zone_bypass_opts(Opts), 
+		Opts
+	),
+    ?event(green_zone, {validate_peer_opts, bypass_opts, BypassOpts}),
+    
+    % Remove bypass options from required config for validation
+    FilteredRequiredConfig = maps:without(BypassOpts, RequiredConfig),
+    ?event(green_zone, {validate_peer_opts, 
+		filtered_required_config, 
+		FilteredRequiredConfig
+	}),
+    
     PeerOpts =
         hb_ao:normalize_keys(
             hb_ao:get(<<"node-message">>, Req, undefined, Opts)),
@@ -512,13 +589,14 @@ validate_peer_opts(Req, Opts) ->
     % Add the required config itself to the required options of the peer. This
     % enforces that the new peer will also enforce the required config on peers
     % that join them.
-	FullRequiredOpts = RequiredConfig#{
+	FullRequiredOpts = FilteredRequiredConfig#{
 		green_zone_required_opts => RequiredConfig
 	},
     ?event(green_zone, {validate_peer_opts, full_required_opts, FullRequiredOpts}),
     
     % Debug: Check if PeerOpts is a map
-    ?event(green_zone, {validate_peer_opts, is_map_peer_opts, is_map(PeerOpts)}),
+    ?event(green_zone, 
+          {validate_peer_opts, is_map_peer_opts, is_map(PeerOpts)}),
     
     % Debug: Get node_history safely
     NodeHistory = hb_ao:get(<<"node_history">>, PeerOpts, [], Opts),
@@ -538,7 +616,9 @@ validate_peer_opts(Req, Opts) ->
         Result
     catch
         Error:Reason:Stacktrace ->
-            ?event(green_zone, {validate_peer_opts, match_error, {Error, Reason, Stacktrace}}),
+            ?event(green_zone, 
+                  {validate_peer_opts, match_error, 
+                   {Error, Reason, Stacktrace}}),
             false
     end,
     
@@ -547,14 +627,16 @@ validate_peer_opts(Req, Opts) ->
     ?event(green_zone, {validate_peer_opts, final_result, FinalResult}),
     FinalResult.
 
-%% @doc Add a joining node's details to the trusted nodes list.
-%% Updates the local configuration with the new trusted node's commitment report
-%% and public key.
-%% @param NodeAddr The joining node's address.
-%% @param Report The commitment report provided by the joining node.
-%% @param RequesterPubKey The joining node's public key.
-%% @param Opts A map of configuration options.
-%% @returns ok.
+-doc """
+Add a joining node's details to the trusted nodes list.
+Updates the local configuration with the new trusted node's commitment report
+and public key.
+@param NodeAddr The joining node's address.
+@param Report The commitment report provided by the joining node.
+@param RequesterPubKey The joining node's public key.
+@param Opts A map of configuration options.
+@returns ok.
+""".
 -spec add_trusted_node(
     NodeAddr :: binary(),
     Report :: map(),
@@ -572,13 +654,15 @@ add_trusted_node(NodeAddr, Report, RequesterPubKey, Opts) ->
 		trusted_nodes => UpdatedTrustedNodes
 	}).
 
-%% @doc Encrypt the shared AES key with the requester's RSA public key.
-%% Encrypts the shared AES key using the RSA public key provided by the joining
-%% node. The RSA public key is extracted from a tuple and converted into a
-%% record suitable for encryption.
-%% @param AESKey The shared AES key (256-bit binary).
-%% @param RequesterPubKey The requester's public RSA key.
-%% @returns The AES key encrypted with the RSA public key.
+-doc """
+Encrypt the shared AES key with the requester's RSA public key.
+Encrypts the shared AES key using the RSA public key provided by the joining
+node. The RSA public key is extracted from a tuple and converted into a
+record suitable for encryption.
+@param AESKey The shared AES key (256-bit binary).
+@param RequesterPubKey The requester's public RSA key.
+@returns The AES key encrypted with the RSA public key.
+""".
 -spec encrypt_payload(AESKey :: binary(), RequesterPubKey :: term()) -> binary().
 encrypt_payload(AESKey, RequesterPubKey) ->
     ?event(green_zone, {encrypt_payload, start}),
@@ -592,12 +676,14 @@ encrypt_payload(AESKey, RequesterPubKey) ->
     ?event(green_zone, {encrypt_payload, complete}),
     Encrypted.
 
-%% @doc Decrypt the zone AES key using the node's RSA private key.
-%% Decrypts the encrypted zone AES key using the RSA private key from the node's
-%% wallet.
-%% @param EncZoneKey The encrypted zone AES key (Base64 encoded or binary).
-%% @param Opts A map of configuration options.
-%% @returns {ok, DecryptedKey} on success, where DecryptedKey is the shared AES key.
+-doc """
+Decrypt the zone AES key using the node's RSA private key.
+Decrypts the encrypted zone AES key using the RSA private key from the node's
+wallet.
+@param EncZoneKey The encrypted zone AES key (Base64 encoded or binary).
+@param Opts A map of configuration options.
+@returns {ok, DecryptedKey} on success, where DecryptedKey is the shared AES key.
+""".
 -spec decrypt_zone_key(EncZoneKey :: binary(), Opts :: map()) ->
         {ok, binary()} | {error, binary()}.
 decrypt_zone_key(EncZoneKey, Opts) ->
@@ -607,7 +693,8 @@ decrypt_zone_key(EncZoneKey, Opts) ->
         false -> EncZoneKey
     end,
     % Get wallet and extract key components
-    {{_KeyType = {rsa, E}, Priv, Pub}, _PubKey} = hb_opts:get(priv_wallet, #{}, Opts),
+    {{_KeyType = {rsa, E}, Priv, Pub}, _PubKey} = 
+        hb_opts:get(priv_wallet, #{}, Opts),
     % Create RSA private key record
     RSAPrivKey = #'RSAPrivateKey'{
         publicExponent = E,
@@ -618,12 +705,355 @@ decrypt_zone_key(EncZoneKey, Opts) ->
     ?event(green_zone, {decrypt_zone_key, complete}),
     {ok, DecryptedKey}.
 
+-doc """
+List available partitions in the system.
+This function uses the system command 'fdisk -l' to get a list of all partitions
+and returns the formatted output.
+@param M1 Ignored parameter.
+@param M2 Ignored parameter.
+@param Opts A map of configuration options.
+@returns {ok, Map} where Map contains the partition information.
+""".
+-spec list_partitions(M1 :: term(), M2 :: term(), Opts :: map()) ->
+    {ok, map()} | {error, binary()}.
+list_partitions(_M1, _M2, _Opts) ->
+    ?event(green_zone, {disk, list_partitions, start}),
+    case os:cmd("sudo fdisk -l") of
+        {error, Reason} ->
+            ?event(green_zone, {disk, list_partitions, error, Reason}),
+            {error, list_to_binary(io_lib:format("Failed to list partitions: ~p", 
+                                                [Reason]))};
+        Output ->
+            ?event(green_zone, {disk, list_partitions, complete}),
+            {ok, #{
+                <<"status">> => 200,
+                <<"partitions">> => list_to_binary(Output)
+            }}
+    end.
 
-%% @doc Test RSA operations with the existing wallet structure.
-%% This test function verifies that encryption and decryption using the RSA keys
-%% from the wallet work correctly. It creates a new wallet, encrypts a test
-%% message with the RSA public key, and then decrypts it with the RSA private
-%% key, asserting that the decrypted message matches the original.
+-doc """
+Create a partition on a disk device.
+This function creates a GPT partition table on the specified device and
+creates a single partition that occupies the entire disk.
+@param M1 A map containing the device path.
+@param M2 A map containing optional parameters like partition type.
+@param Opts A map of configuration options.
+@returns {ok, Map} on success where Map includes status and partition information.
+""".
+-spec create_partition(M1 :: map(), M2 :: map(), Opts :: map()) ->
+    {ok, map()} | {error, binary()}.
+create_partition(M1, M2, Opts) ->
+    ?event(green_zone, {disk, create_partition, start}),
+    
+    % Get the device path from the request
+    Device = hb_ao:get(<<"device">>, M1, undefined, Opts),
+    
+    % Get optional parameters
+    PartType = hb_ao:get(<<"partition_type">>, M2, <<"ext4">>, Opts),
+    
+    % Validate device path
+    case Device of
+        undefined ->
+            ?event(green_zone, 
+                  {disk, create_partition, error, <<"no device specified">>}),
+            {error, <<"No device path specified.">>};
+        _ ->
+            % Create a GPT partition table
+            MklabelCmd = "sudo parted " ++ binary_to_list(Device) ++ " mklabel gpt",
+            MklabelResult = os:cmd(MklabelCmd),
+            
+            % Check if creating the partition table succeeded
+            case string:find(MklabelResult, "Error") of
+                nomatch ->
+                    % Create a single partition occupying the entire disk
+                    MkpartCmd = "sudo parted -a optimal " ++ binary_to_list(Device) 
+                                ++ " mkpart primary " ++ binary_to_list(PartType) 
+                                ++ " 0% 100%",
+                    MkpartResult = os:cmd(MkpartCmd),
+                    
+                    % Check if creating the partition succeeded
+                    case string:find(MkpartResult, "Error") of
+                        nomatch ->
+                            % Print partition information
+                            PrintCmd = "sudo parted " ++ binary_to_list(Device) 
+                                      ++ " print",
+                            PartitionInfo = os:cmd(PrintCmd),
+                            
+                            ?event(green_zone, {disk, create_partition, complete}),
+                            {ok, #{
+                                <<"status">> => 200,
+                                <<"message">> => 
+                                    <<"Partition created successfully.">>,
+                                <<"device">> => Device,
+                                <<"partition_info">> => 
+                                    list_to_binary(PartitionInfo)
+                            }};
+                        _ ->
+                            ?event(green_zone, 
+                                  {disk, create_partition, error, 
+                                   list_to_binary(MkpartResult)}),
+                            {error, list_to_binary(MkpartResult)}
+                    end;
+                _ ->
+                    ?event(green_zone, 
+                          {disk, create_partition, error, 
+                           list_to_binary(MklabelResult)}),
+                    {error, list_to_binary(MklabelResult)}
+            end
+    end.
+
+-doc """
+Format a disk or partition with LUKS encryption.
+This function formats the specified device with LUKS encryption using the
+provided AES key for encryption.
+@param M1 A map containing the device path.
+@param M2 A map containing encryption options.
+@param Opts A map of configuration options, must include the AES key.
+@returns {ok, Map} on success where Map includes the status and confirmation message.
+""".
+-spec format_disk(M1 :: map(), M2 :: map(), Opts :: map()) ->
+    {ok, map()} | {error, binary()}.
+format_disk(M1, M2, Opts) ->
+    ?event(green_zone, {disk, format, start}),
+    
+    % Get the device path from the request
+    Device = hb_ao:get(<<"device">>, M1, undefined, Opts),
+    
+    % Get the encryption key (use the green zone AES key if not specified)
+    GreenZoneAES = hb_opts:get(priv_green_zone_aes, undefined, Opts),
+    EncKey = hb_ao:get(<<"encryption_key">>, M2, GreenZoneAES, Opts),
+    
+    % Validate device path and encryption key
+    case {Device, EncKey} of
+        {undefined, _} ->
+            ?event(green_zone, {disk, format, error, <<"no device specified">>}),
+            {error, <<"No device path specified.">>};
+        {_, undefined} ->
+            ?event(green_zone, {disk, format, error, <<"no encryption key">>}),
+            {error, <<"No encryption key available for LUKS formatting.">>};
+        _ ->
+            % Ensure tmp directory exists
+            os:cmd("sudo mkdir -p /root/tmp"),
+            KeyFile = "/root/tmp/luks_key_" ++ os:getpid(),
+            file:write_file(KeyFile, EncKey, [raw]),
+            
+            % Format the partition using LUKS with the provided key
+            % Using --batch to avoid prompts, --key-file to use our key
+            FormatCmd = "sudo cryptsetup luksFormat --batch-mode --key-file " 
+                        ++ KeyFile ++ " " ++ binary_to_list(Device),
+            FormatResult = os:cmd(FormatCmd),
+            
+            % Remove the temporary key file
+            os:cmd("sudo shred -u " ++ KeyFile),
+            
+            % Check if the command succeeded
+            case string:find(FormatResult, "failed") of
+                nomatch ->
+                    ?event(green_zone, {disk, format, complete}),
+                    {ok, #{
+                        <<"status">> => 200,
+                        <<"message">> => 
+                            <<"Disk formatted with LUKS encryption successfully.">>
+                    }};
+                _ ->
+                    ?event(green_zone, {disk, format, error, 
+                                       list_to_binary(FormatResult)}),
+                    {error, list_to_binary(FormatResult)}
+            end
+    end.
+
+-doc """
+Mount a LUKS-encrypted disk.
+This function opens a LUKS-encrypted partition using the provided AES key,
+mounts it to the specified mount point, and updates the configuration with
+the mount information.
+@param M1 A map containing the device path and mount point.
+@param M2 A map containing encryption options.
+@param Opts A map of configuration options, must include the AES key.
+@returns {ok, Map} on success where Map includes the status and confirmation message.
+""".
+-spec mount_disk(M1 :: map(), M2 :: map(), Opts :: map()) ->
+    {ok, map()} | {error, binary()}.
+mount_disk(M1, M2, Opts) ->
+    ?event(green_zone, {disk, mount, start}),
+    
+    % Get parameters from the request
+    Device = hb_ao:get(<<"device">>, M1, undefined, Opts),
+    MountPoint = hb_ao:get(<<"mount_point">>, M1, 
+                          <<"/root/mnt/encrypted_data">>, Opts),
+    VolumeName = hb_ao:get(<<"volume_name">>, M1, 
+                          <<"primary_encrypted_volume">>, Opts),
+    
+    % Get the encryption key (use the green zone AES key if not specified)
+    GreenZoneAES = hb_opts:get(priv_green_zone_aes, undefined, Opts),
+    EncKey = hb_ao:get(<<"encryption_key">>, M2, GreenZoneAES, Opts),
+    
+    % Validate device path and encryption key
+    case {Device, EncKey} of
+        {undefined, _} ->
+            ?event(green_zone, {disk, mount, error, <<"no device specified">>}),
+            {error, <<"No device path specified.">>};
+        {_, undefined} ->
+            ?event(green_zone, {disk, mount, error, <<"no encryption key">>}),
+            {error, <<"No encryption key available to open LUKS volume.">>};
+        _ ->
+            % Ensure tmp directory exists
+            os:cmd("sudo mkdir -p /root/tmp"),
+            KeyFile = "/root/tmp/luks_key_" ++ os:getpid(),
+            file:write_file(KeyFile, EncKey, [raw]),
+            
+            % Open the LUKS volume
+            OpenCmd = "sudo cryptsetup luksOpen --key-file " ++ KeyFile ++ " " 
+                      ++ binary_to_list(Device) ++ " " 
+                      ++ binary_to_list(VolumeName),
+            OpenResult = os:cmd(OpenCmd),
+            
+            % Remove the temporary key file
+            os:cmd("sudo shred -u " ++ KeyFile),
+            
+            % Check if opening the LUKS volume succeeded
+            case string:find(OpenResult, "failed") of
+                nomatch ->
+                    % Create mount point if it doesn't exist
+                    os:cmd("sudo mkdir -p " ++ binary_to_list(MountPoint)),
+                    
+                    % Mount the unlocked LUKS volume
+                    MountCmd = "sudo mount /dev/mapper/" 
+                               ++ binary_to_list(VolumeName) 
+                               ++ " " ++ binary_to_list(MountPoint),
+                    MountResult = os:cmd(MountCmd),
+                    
+                    % Check if mounting succeeded
+                    case string:find(MountResult, "failed") of
+                        nomatch ->
+                            % Save the mount information in the configuration
+                            ok = hb_http_server:set_opts(Opts#{
+                                priv_encrypted_disk => #{
+                                    device => Device,
+                                    mount_point => MountPoint,
+                                    volume_name => VolumeName
+                                }
+                            }),
+                            ?event(green_zone, {disk, mount, complete}),
+                            {ok, #{
+                                <<"status">> => 200,
+                                <<"message">> => 
+                                    <<"Encrypted disk mounted successfully.">>,
+                                <<"mount_point">> => MountPoint
+                            }};
+                        _ ->
+                            % Close the LUKS volume if mounting failed
+                            os:cmd("sudo cryptsetup luksClose " 
+                                  ++ binary_to_list(VolumeName)),
+                            ?event(green_zone, {disk, mount, error, 
+                                              list_to_binary(MountResult)}),
+                            {error, list_to_binary(MountResult)}
+                    end;
+                _ ->
+                    ?event(green_zone, {disk, mount, error, 
+                                      list_to_binary(OpenResult)}),
+                    {error, list_to_binary(OpenResult)}
+            end
+    end.
+
+-doc """
+Change the node's data store location to the mounted encrypted disk.
+This function updates the node's configuration to use the mounted encrypted
+disk as its data store.
+@param M1 A map containing the new store path.
+@param M2 Ignored parameter.
+@param Opts A map of configuration options.
+@returns {ok, Map} on success where Map includes the status and confirmation message,
+         or {error, Reason} if the operation fails.
+""".
+-spec change_node_store(M1 :: map(), M2 :: term(), Opts :: map()) ->
+    {ok, map()} | {error, binary()}.
+change_node_store(M1, _M2, Opts) ->
+    ?event(green_zone, {disk, change_store, start}),
+    
+    % Get the mounted disk information
+    EncryptedDisk = hb_opts:get(priv_encrypted_disk, undefined, Opts),
+    
+    % Get the new store path (default to the mount point + '/store')
+    NewStorePath = case EncryptedDisk of
+        undefined ->
+            hb_ao:get(<<"store_path">>, M1, undefined, Opts);
+        #{mount_point := MountPoint} ->
+            hb_ao:get(<<"store_path">>, M1, 
+                     <<MountPoint/binary, "/store">>, Opts)
+    end,
+    
+    % Validate the store path
+    case NewStorePath of
+        undefined ->
+            ?event(green_zone, {disk, change_store, error, <<"no store path">>}),
+            {error, <<"No encrypted disk mounted or store path specified.">>};
+        _ ->
+            % Create the store directory if it doesn't exist
+            os:cmd("sudo mkdir -p " ++ binary_to_list(NewStorePath)),
+            
+            % Get the current store configuration
+            CurrentStore = hb_opts:get(store, [], Opts),
+            
+            % Update the store configuration with the new path
+            NewStore = update_store_config(CurrentStore, NewStorePath),
+            
+            % Update the node's configuration with the new store
+            ok = hb_http_server:set_opts(Opts#{
+                store => NewStore
+            }),
+            
+            ?event(green_zone, {disk, change_store, complete}),
+            {ok, #{
+                <<"status">> => 200,
+                <<"message">> => 
+                    <<"Node store updated to use encrypted disk.">>,
+                <<"store_path">> => NewStorePath
+            }}
+    end.
+
+-doc """
+Update the store configuration with a new base path.
+This is a helper function for change_node_store.
+@param StoreConfig The current store configuration.
+@param NewPath The new base path for the store.
+@returns Updated store configuration.
+""".
+-spec update_store_config(StoreConfig :: term(), NewPath :: binary()) -> term().
+update_store_config(StoreConfig, NewPath) when is_list(StoreConfig) ->
+    % For a list, update each element
+    [update_store_config(Item, NewPath) || Item <- StoreConfig];
+update_store_config(#{<<"store-module">> := Module} = StoreConfig, NewPath) 
+  when is_map(StoreConfig) ->
+    % Handle various store module types differently
+    case Module of
+        hb_store_fs ->
+            % For filesystem store, replace prefix with the new path
+            StoreConfig#{<<"prefix">> => NewPath};
+        hb_store_rocksdb ->
+            % For RocksDB store, replace prefix with the new path
+            StoreConfig#{<<"prefix">> => NewPath};
+        hb_store_gateway ->
+            % For gateway store, recursively update nested store configurations
+            NestedStore = maps:get(<<"store">>, StoreConfig, []),
+            StoreConfig#{
+                <<"store">> => update_store_config(NestedStore, NewPath)
+            };
+        _ ->
+            % For any other store type, update the prefix
+            StoreConfig#{<<"prefix">> => NewPath}
+    end;
+update_store_config(StoreConfig, _NewPath) ->
+    % Return unchanged for any other format
+    StoreConfig.
+
+-doc """
+Test RSA operations with the existing wallet structure.
+This test function verifies that encryption and decryption using the RSA keys
+from the wallet work correctly. It creates a new wallet, encrypts a test
+message with the RSA public key, and then decrypts it with the RSA private
+key, asserting that the decrypted message matches the original.
+""".
 rsa_wallet_integration_test() ->
     % Create a new wallet using ar_wallet
     Wallet = ar_wallet:new(),
