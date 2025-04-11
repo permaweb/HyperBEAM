@@ -11,5 +11,10 @@
       },
       "problemMatcher": "$erlang"
     },
+    {
+      "label": "Stop HyperBEAM",
+      "type": "shell",
+      "command": "lsof -i tcp:10000 | tail -n 1 | awk '{print $2}' | xargs kill -9"
+    }
   ]
 }

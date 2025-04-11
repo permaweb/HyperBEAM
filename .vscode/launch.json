@@ -2,14 +2,28 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Launch Erlang with Dependencies",
+      "name": "Launch debugger on a function.",
       "type": "erlang",
       "request": "launch",
       "cwd": "${workspaceRoot}",
+      "projectnode": "hb",
+      "cookie": "hb-debug",
       "preLaunchTask": "Rebar3 Compile",
-      "arguments": "-pa _build/default/lib/*/ebin -eval \"ssl:start(), application:ensure_all_started(hb).\"",
-      "stopOnEntry": false,
-      "internalConsoleOptions": "openOnSessionStart"
+      "postDebugTask": "Stop HyperBEAM",
+      "stopOnEntry": true,
+      "internalConsoleOptions": "openOnSessionStart",
+      "module": "hb_debugger",
+      "function": "start_and_break",
+      "args": "[${input:moduleName}, ${input:functionName}, [${input:funcArgs}]]"
+    },
+    {
+      "name": "Attach to a 'rebar3 debugger' node.",
+      "type": "erlang",
+      "request": "attach",
+      "projectnode": "hb",
+      "cookie": "hb-debug",
+      "timeout": 10,
+      "cwd": "${workspaceRoot}"
     },
     {
       "name": "Attach C Debugger to beam.smp",
@@ -34,6 +48,23 @@
         "traceResponse": true
       },
       "internalConsoleOptions": "neverOpen"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "moduleName",
+      "type": "promptString",
+      "description": "Enter module to break in:"
+    },
+    {
+      "id": "functionName", 
+      "type": "promptString",
+      "description": "Enter function to invoke:"
+    },
+    {
+      "id": "funcArgs",
+      "type": "promptString",
+      "description": "(Optional) Pass arguments to the function:"
     }
   ]
 }

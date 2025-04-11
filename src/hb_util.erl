@@ -16,7 +16,7 @@
 -export([debug_print/4, debug_fmt/1, debug_fmt/2, eunit_print/2]).
 -export([print_trace/4, trace_macro_helper/5, print_trace_short/4]).
 -export([ok/1, ok/2, until/1, until/2, until/3]).
--export([format_trace_short/1]).
+-export([format_trace_short/1, is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([count/2, mean/1, stddev/1, variance/1]).
 -include("include/hb.hrl").
 
@@ -590,7 +590,7 @@ format_trace([], _) -> [];
 format_trace([Item|Rest], Prefixes) ->
     case element(1, Item) of
         Atom when is_atom(Atom) ->
-            case trace_is_relevant(Atom, Prefixes) of
+            case is_hb_module(Atom, Prefixes) of
                 true ->
                     [
                         format_trace(Item, Prefixes) |
@@ -618,16 +618,22 @@ format_trace({Mod, Func, ArityOrTerm, Extras}, _Prefixes) ->
         1
     ).
 
-%% @doc Is the trace formatted string relevant to HyperBEAM?
-trace_is_relevant(Atom, Prefixes) when is_atom(Atom) ->
-    trace_is_relevant(atom_to_list(Atom), Prefixes);
-trace_is_relevant(Str, Prefixes) ->
+%% @doc Is the given module part of HyperBEAM?
+is_hb_module(Atom) ->
+    is_hb_module(Atom, hb_opts:get(stack_print_prefixes, [], #{})).
+is_hb_module(Atom, Prefixes) when is_atom(Atom) ->
+    is_hb_module(atom_to_list(Atom), Prefixes);
+is_hb_module(Str, Prefixes) ->
     case string:tokens(Str, "_") of
         [Pre|_] ->
             lists:member(Pre, Prefixes);
         _ ->
             false
     end.
+
+%% @doc Get all loaded modules that are loaded and are part of HyperBEAM.
+all_hb_modules() ->
+    lists:filter(fun(Module) -> is_hb_module(Module) end, erlang:loaded()).
 
 %% @doc Print a trace to the standard error stream.
 print_trace_short(Trace, Mod, Func, Line) ->
@@ -653,7 +659,7 @@ format_trace_short(_Max, _Latch, [], _Prefixes) -> [];
 format_trace_short(0, _Latch, _Trace, _Prefixes) -> [];
 format_trace_short(Max, Latch, [Item|Rest], Prefixes) ->
     Formatted = format_trace_short(Max, Latch, Item, Prefixes),
-    case {Latch, trace_is_relevant(Formatted, Prefixes)} of
+    case {Latch, is_hb_module(Formatted, Prefixes)} of
         {false, true} ->
             [Formatted | format_trace_short(Max - 1, true, Rest, Prefixes)];
         {false, false} ->
