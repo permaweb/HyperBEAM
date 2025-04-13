@@ -145,6 +145,7 @@ int get_function_sig(const wasm_externtype_t* type, char* type_str) {
 
         if(!params || !results) {
             DRV_DEBUG("Export function params/results are NULL");
+            type_str[0] = '\0';
             return 0;
         }
 
@@ -163,14 +164,13 @@ int get_function_sig(const wasm_externtype_t* type, char* type_str) {
 
         return 1;
     }
+    // We need to make sure that the charlist always ends with '\0' as otherwise
+    // strlen function would access wrong memory blocks
+    type_str[0] = '\0';
     return 0;
 }
 
-wasm_func_t* get_exported_function(Proc* proc, const char* target_name) {
-    wasm_extern_vec_t exports;
-    wasm_instance_exports(proc->instance, &exports);
-    wasm_exporttype_vec_t export_types;
-    wasm_module_exports(proc->module, &export_types);
+wasm_func_t* get_exported_function(wasm_extern_vec_t exports, wasm_exporttype_vec_t export_types, const char* target_name) {
     wasm_func_t* func = NULL;
 
     for (size_t i = 0; i < exports.size; ++i) {
@@ -184,7 +184,6 @@ wasm_func_t* get_exported_function(Proc* proc, const char* target_name) {
             }
         }
     }
-
     return func;
 }
 

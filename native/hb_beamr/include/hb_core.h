@@ -10,6 +10,15 @@
 #include <time.h>
 #include <pthread.h>
 
+// Structure to represent the request for loading a WASM binary
+typedef struct {
+    void* binary;                  // Binary data for the WASM module
+    long size;                     // Size of the binary
+    char* mode;                    // Mode of the WASM module
+    wasm_func_t** stubs;           // Pointer to array of stubs
+    int stubs_size;
+} LoadWasmReq;
+
 // Structure to represent the response for an import operation
 typedef struct {
     ErlDrvMutex* response_ready;    // Mutex to synchronize response readiness
@@ -40,6 +49,7 @@ typedef struct {
     ErlDrvTermData pid;            // PID of the Erlang process
     int is_initialized;            // Flag to check if the process is initialized
     time_t start_time;             // Start time of the process
+    LoadWasmReq* mod_bin;
 } Proc;
 
 // Structure to represent an import hook
@@ -50,14 +60,6 @@ typedef struct {
     Proc* proc;                    // The associated process
     wasm_func_t* stub_func;        // WASM function pointer for the import
 } ImportHook;
-
-// Structure to represent the request for loading a WASM binary
-typedef struct {
-    void* binary;                  // Binary data for the WASM module
-    long size;                     // Size of the binary
-    Proc* proc;                    // The associated process
-    char* mode;                    // Mode of the WASM module
-} LoadWasmReq;
 
 // NO_PROD: Import these from headers instead
 
