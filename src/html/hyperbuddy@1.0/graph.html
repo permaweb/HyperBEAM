@@ -16,181 +16,114 @@
             background-color: #f9f9f9;
             color: #333;
         }
-
         
-        .status-indicator {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background-color: #4CAF50;
-            margin-right: 6px;
+        /* Header bar */
+        .header-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 50px;
+            background-color: white;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            z-index: 100;
+            width: 100%;
+            box-sizing: border-box;
         }
         
-        .status-indicator + span {
-            font-size: 14px;
+        /* Logo area */
+        .logo-area {
+            display: flex;
+            align-items: center;
+            margin-right: 24px;
+            font-weight: 500;
+            font-size: 16px;
+            white-space: nowrap;
+        }
+        
+        /* Controls container */
+        .controls-container {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-right: 24px;
+            white-space: nowrap;
+        }
+        
+        /* Button with icon */
+        .icon-button {
+            background: none;
+            border: none;
+            color: #555;
+            padding: 8px;
+            cursor: pointer;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.2s;
+            margin: 0;
+        }
+        
+        .icon-button:hover {
+            background-color: #f0f0f0;
             color: #333;
         }
         
-        .main-content {
-            display: flex;
-            height: 100vh;
-            position: relative;
+        .icon-button.active {
+            background-color: #e6f2ff;
+            color: #0066cc;
         }
         
-        .sidebar {
-            width: 220px;
-            background-color: white;
-            border-right: 1px solid #e0e0e0;
-            overflow-y: auto;
-            padding: 0;
-            transition: transform 0.3s ease;
-            z-index: 10;
-            position: absolute;
-            top: 0;
-            bottom: 0;
-            left: 0;
-			padding-top:40px;
+        .icon-button i {
+            font-size: 16px;
         }
         
-        .sidebar.collapsed {
-            transform: translateX(-220px);
-        }
-        
-        .content {
+        /* Search container */
+        .search-container {
             flex: 1;
             position: relative;
-            overflow: hidden;
-            background-color: #f9f9f9;
-            width: 100%;
-            margin-left: 220px;
-            transition: margin-left 0.3s ease;
-        }
-        
-        .content.full-width {
-            margin-left: 0;
-        }
-        
-        #graph-container {
-            width: 100%;
-            height: 100%;
-        }
-        
-        .sidebar-section {
-            padding: 12px 16px;
-            border-bottom: 1px solid #e0e0e0;
-        }
-        
-        .sidebar-section h2 {
-            margin: 0 0 12px 0;
-            font-size: 14px;
-            font-weight: 500;
-            color: #333;
-        }
-        
-        /* Search bar positioned at top right */
-        .search-container {
-            position: absolute;
-            top: 10px;
-            right: 20px;
-            z-index: 100;
-            display: flex;
-            background-color: white;
-            padding: 6px 10px;
-            border-radius: 4px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            width: 420px;
+            margin: 0px 24px 0px 0px;
         }
         
         .search-container input[type="text"] {
-            flex: 1;
-            margin-bottom: 0;
             width: 100%;
-        }
-        
-        .autocomplete-list {
-            position: absolute;
-            top: 100%;
-            left: 0;
-            right: 0;
-            max-height: 200px;
-            overflow-y: auto;
-            border: 1px solid #e0e0e0;
-            border-radius: 0 0 4px 4px;
-            background: white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            z-index: 101;
-        }
-        
-        .search-container .autocomplete-list {
-            top: 38px;
-            width: 100%;
-        }
-        
-        .autocomplete-item {
             padding: 8px 12px;
-            border-bottom: 1px solid #f0f0f0;
-            font-size: 13px;
-            cursor: pointer;
-        }
-        
-        .autocomplete-item:hover,
-        .autocomplete-item.selected {
-            background-color: #f5f5f5;
-        }
-        
-        button {
-            background-color: #f2f2f2;
             border: 1px solid #e0e0e0;
             border-radius: 4px;
-            padding: 6px 10px;
-            margin: 0 4px 4px 0;
-            cursor: pointer;
             font-size: 13px;
-            color: #333;
-        }
-        
-        button:hover {
-            background-color: #e6e6e6;
-        }
-        
-        input[type="text"] {
-            width: 100%;
-            padding: 6px 8px;
-            border: 1px solid #e0e0e0;
-            border-radius: 4px;
-            margin-bottom: 8px;
             box-sizing: border-box;
-            font-size: 13px;
+            margin: 0;
         }
         
-        .stats-container {
+        .search-container input[type="text"]:focus {
+            outline: none;
+            border-color: #4D90FE;
+            box-shadow: 0 0 0 2px rgba(77, 144, 254, 0.2);
+        }
+        
+        /* Stats display */
+        .stats-display {
             display: flex;
-            margin-bottom: 12px;
+            align-items: center;
+            gap: 16px;
+            margin-left: auto;
+            white-space: nowrap;
         }
         
-        .stat-box {
-            flex: 1;
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
         }
         
         .stat-value {
-            font-size: 16px;
             font-weight: 600;
-        }
-        
-        .stat-label {
-            font-size: 12px;
-            color: #666;
-        }
-        
-        .legend {
-            display: flex;
-            gap: 12px;
-        }
-        
-        .legend-item {
-            display: flex;
-            align-items: center;
-            font-size: 12px;
         }
         
         .legend-color {
@@ -208,48 +141,60 @@
             background-color: #F08080;
         }
         
-        select {
-            width: 100%;
-            padding: 6px 8px;
+        .autocomplete-list {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            max-height: 300px;
+            overflow-y: auto;
             border: 1px solid #e0e0e0;
-            border-radius: 4px;
-            margin-bottom: 8px;
-            background-color: white;
+            border-radius: 0 0 4px 4px;
+            background: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            z-index: 101;
+            margin-top: 2px;
+        }
+        
+        .autocomplete-item {
+            padding: 8px 12px;
+            border-bottom: 1px solid #f0f0f0;
             font-size: 13px;
+            cursor: pointer;
         }
         
-        .button-group {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            margin-bottom: 8px;
+        .autocomplete-item:hover,
+        .autocomplete-item.selected {
+            background-color: #f5f5f5;
         }
         
-        .control-group {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-bottom: 12px;
+        /* Main content */
+        .main-content {
+            height: 100vh;
+            padding-top: 50px; /* Same as header height */
+            box-sizing: border-box;
         }
         
-        .control-btn {
-            min-width: 48px;
-            padding: 6px 8px;
-            text-align: center;
-            font-size: 12px;
-            font-weight: 500;
+        #graph-container {
+            width: 100%;
+            height: 100%;
         }
         
-        .search-group {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 12px;
+        /* Loading indicator */
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 15px 20px;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            font-size: 14px;
+            display: none;
         }
         
-        .search-group button {
-            min-width: 60px;
-        }
-        
+        /* Node info panel */
         .node-info-panel {
             position: absolute;
             bottom: 20px;
@@ -272,92 +217,55 @@
         .node-info-panel p {
             margin: 4px 0;
         }
-        
-        #loading {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: white;
-            padding: 15px 20px;
-            border-radius: 4px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            font-size: 14px;
-            display: none;
-        }
-        
-        #toggle-sidebar {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            z-index: 20;
-            padding: 6px 10px;
-            border-radius: 4px;
-            background-color: white;
-            border: 1px solid #e0e0e0;
-            cursor: pointer;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
     </style>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" />
 </head>
 <body>
-
-    <div class="main-content">
-        <button id="toggle-sidebar">Menu</button>
+    <!-- Header bar -->
+    <div class="header-bar">
+        <div class="logo-area">
+            <span>HyperBEAM Cache Graph</span>
+        </div>
         
-        <!-- New search container at the top right -->
+        <div class="controls-container">
+            <button id="toggle-labels-btn" class="icon-button" title="Toggle Labels">
+                <i class="fas fa-tags"></i>
+            </button>
+            <button id="reset-btn" class="icon-button" title="Reset View">
+                <i class="fas fa-sync-alt"></i>
+            </button>
+        </div>
+        
+        <!-- Search container -->
         <div class="search-container">
             <input type="text" id="search-input" placeholder="Search nodes...">
         </div>
         
-        <div class="sidebar">
-            <div class="sidebar-section">
-                <h2>Controls</h2>
-                <div class="control-group">
-                    <button id="refresh-btn" class="control-btn" title="Refresh Graph Data">
-                        Refresh
-                    </button>
-                    <button id="toggle-labels-btn" class="control-btn" title="Toggle Labels">
-                        Labels
-                    </button>
-                    <button id="toggle-physics-btn" class="control-btn" title="Toggle Physics">
-                        Physics
-                    </button>
-                    <button id="reset-btn" class="control-btn" title="Reset View">
-                        Reset
-                    </button>
-                </div>
+        <!-- Stats display -->
+        <div class="stats-display">
+            <div class="stat-item">
+                <span class="stat-label">Nodes:</span>
+                <span class="stat-value" id="node-count">0</span>
             </div>
-            
-            <div class="sidebar-section">
-                <h2>Statistics</h2>
-                <div class="stats-container">
-                    <div class="stat-box">
-                        <div class="stat-label">Nodes</div>
-                        <div class="stat-value" id="node-count">0</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-label">Links</div>
-                        <div class="stat-value" id="link-count">0</div>
-                    </div>
-                </div>
-                <div class="legend">
-                    <div class="legend-item">
-                        <div class="legend-color legend-simple"></div>
-                        <span>Simple</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-color legend-composite"></div>
-                        <span>Composite</span>
-                    </div>
-                </div>
+            <div class="stat-item">
+                <span class="stat-label">Links:</span>
+                <span class="stat-value" id="link-count">0</span>
+            </div>
+            <div class="stat-item legend-item">
+                <div class="legend-color legend-simple"></div>
+                <span>Simple</span>
+            </div>
+            <div class="stat-item legend-item">
+                <div class="legend-color legend-composite"></div>
+                <span>Composite</span>
             </div>
         </div>
-        
-        <div class="content">
-            <div id="graph-container"></div>
-            <div id="loading">Loading graph data...</div>
-        </div>
+    </div>
+
+    <div class="main-content">
+        <div id="graph-container"></div>
+        <div id="loading">Loading graph data...</div>
     </div>
 
     <!-- Third-party libraries -->
@@ -368,21 +276,5 @@
     
     <!-- Custom scripts -->
     <script src="graph.js"></script>
-    <script>
-        // Add sidebar toggle functionality
-        document.addEventListener('DOMContentLoaded', function() {
-            const toggleSidebarBtn = document.getElementById('toggle-sidebar');
-            const sidebar = document.querySelector('.sidebar');
-            const content = document.querySelector('.content');
-            
-            toggleSidebarBtn.addEventListener('click', function() {
-                sidebar.classList.toggle('collapsed');
-                content.classList.toggle('full-width');
-                
-                // Trigger resize event to update graph
-                window.dispatchEvent(new Event('resize'));
-            });
-        });
-    </script>
 </body>
 </html> 

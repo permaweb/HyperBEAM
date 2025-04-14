@@ -30,8 +30,8 @@ class ThemeManager {
             showLabels: true,
             physicsEnabled: true,
             // Physics settings
-            defaultDistance: 400,
-            highConnectionThreshold: 20,
+            defaultDistance: 150,
+            highConnectionThreshold: 5,
             // Camera settings
             zoomLevel: {
                 default: 1.0,
@@ -139,13 +139,15 @@ class SceneManager {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(this.themeManager.config.colors.background);
         
-        // Create orthographic camera for 2D view
-        this.camera = new THREE.OrthographicCamera(
-            width / -2, width / 2, 
-            height / 2, height / -2, 
-            0.1, 1000
+        // Create perspective camera with large clipping plane to prevent culling
+        const aspectRatio = width / height;
+        this.camera = new THREE.PerspectiveCamera(
+            40,  // Narrower field of view for less distortion
+            aspectRatio,
+            0.1,
+            10000  // Increased far clipping plane
         );
-        this.camera.position.z = 500;
+        this.camera.position.z = 1000;
         
         // Create renderer
         this.renderer = new THREE.WebGLRenderer({ 
@@ -157,11 +159,12 @@ class SceneManager {
         this.renderer.sortObjects = true; // Enable sorting for proper z-ordering
         this.container.appendChild(this.renderer.domElement);
         
-        // Add orbit controls limited to 2D movement
+        // Add orbit controls limited to 2D movement with perspective camera
         this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.1;
         this.controls.enableRotate = false; // Disable 3D rotation
+        this.controls.screenSpacePanning = true;
         
         // Add lighting
         this.scene.add(new THREE.AmbientLight(0xffffff, 0.6));
@@ -180,11 +183,8 @@ class SceneManager {
         const width = this.container.clientWidth;
         const height = this.container.clientHeight;
         
-        // Update camera
-        this.camera.left = width / -2;
-        this.camera.right = width / 2;
-        this.camera.top = height / 2;
-        this.camera.bottom = height / -2;
+        // Update perspective camera aspect ratio
+        this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
         
         // Update renderer
@@ -195,8 +195,8 @@ class SceneManager {
      * Reset the camera view
      */
     resetView() {
-        // Reset camera position
-        this.camera.position.set(0, 0, 500);
+        // Reset camera position for perspective camera
+        this.camera.position.set(0, 0, 1000);
         this.controls.target.set(0, 0, 0);
         this.camera.updateProjectionMatrix();
         this.controls.update();
@@ -213,8 +213,9 @@ class SceneManager {
         // Save starting values
         const startPosition = this.camera.position.clone();
         const startTarget = this.controls.target.clone();
-        const startZoom = this.camera.zoom;
-        const targetZoom = this.themeManager.config.zoomLevel.focused;
+        
+        // Define a fixed Z-offset for viewing the target
+        const zOffset = 600;
         
         // Animation function
         const animateCamera = () => {
@@ -224,18 +225,20 @@ class SceneManager {
             // Ease function - ease out cubic
             const easeProgress = 1 - Math.pow(1 - progress, 3);
             
-            // Update camera position and controls target
+            // Only update the target x and y position, keeping rotation consistent
+            this.controls.target.x = startTarget.x + (position.x - startTarget.x) * easeProgress;
+            this.controls.target.y = startTarget.y + (position.y - startTarget.y) * easeProgress;
+            // Keep z at the same value to maintain default camera angle
+            
+            // Move camera x and y to match target
             this.camera.position.x = startPosition.x + (position.x - startPosition.x) * easeProgress;
             this.camera.position.y = startPosition.y + (position.y - startPosition.y) * easeProgress;
             
-            this.controls.target.x = startTarget.x + (position.x - startTarget.x) * easeProgress;
-            this.controls.target.y = startTarget.y + (position.y - startTarget.y) * easeProgress;
-            this.controls.target.z = startTarget.z + (position.z - startTarget.z) * easeProgress;
+            // Adjust Z with fixed offset
+            const targetZ = position.z + zOffset;
+            this.camera.position.z = startPosition.z + (targetZ - startPosition.z) * easeProgress;
             
-            // Update zoom level
-            this.camera.zoom = startZoom + (targetZoom - startZoom) * easeProgress;
             this.camera.updateProjectionMatrix();
-            
             this.controls.update();
             
             if (progress < 1) {
@@ -584,10 +587,12 @@ class GraphObjectManager {
         const size = this.themeManager.getNodeSize(node.type);
         const color = this.themeManager.getNodeColor(node.type);
         
-        // Create geometry and material
-        const geometry = new THREE.CircleGeometry(size, 32);
-        const material = new THREE.MeshBasicMaterial({ 
+        // Create 3D geometry and material for better visual effect
+        const geometry = new THREE.SphereGeometry(size, 16, 16);
+        const material = new THREE.MeshPhongMaterial({ 
             color,
+            shininess: 2,
+            specular: 0x444444,
             depthWrite: true,
             depthTest: true
         });
@@ -654,8 +659,10 @@ class GraphObjectManager {
         
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
         const line = new THREE.Line(geometry, material);
-        line.computeLineDistances();
-        line.renderOrder = 0;
+        
+        // Important: Disable frustum culling to ensure lines are always visible
+        line.frustumCulled = false;
+        line.renderOrder = 0; // Ensure lines render before nodes
         
         this.sceneManager.addToScene(line);
         
@@ -680,29 +687,47 @@ class GraphObjectManager {
     }
     
     /**
+     * Truncate text and add ellipsis in the middle
+     * @param {string} text - The text to truncate
+     * @returns {string} Truncated text with ellipsis
+     */
+    truncateWithEllipsis(text) {
+        // Show only if longer than 15 characters (6 + 3 + 6)
+        if (!text || text.length <= 15) {
+            return text;
+        }
+        
+        // Take exactly 6 chars from start and 6 from end
+        return text.substring(0, 6) + '...' + text.substring(text.length - 6);
+    }
+    
+    /**
      * Create a label for a node
      * @param {Object} node - The node data
      * @returns {Object} The created label object
      */
     createLabel(node) {
-        const label = new SpriteText(node.label || node.id);
+        // Get display text and truncate it if needed
+        const displayText = this.truncateWithEllipsis(node.label || node.id);
+        const label = new SpriteText(displayText);
         
         // Improved text rendering settings
         label.fontFace = 'Arial, Helvetica, sans-serif';
-        label.fontSize = 12;
+        label.fontSize = 32;
         label.fontWeight = '600';
         label.strokeWidth = 0; // No stroke for sharper text
         label.color = '#000000';
-        label.backgroundColor = 'rgba(255,255,255,0.9)';
+        label.backgroundColor = 'rgba(255,255,255,0.95)';
         label.padding = 3;
-        label.textHeight = 1; // Force better resolution
+        label.textHeight = 5; // Increased for better resolution with larger text
         label.borderWidth = 0; // No border for sharper edges
         
         // Position above node with pixel-perfect positioning
+		const offset_val = 100;	
         const isSimple = node.type === 'simple';
         const offset = isSimple ? 
-            this.themeManager.config.nodeSize.simple + 2 : 
-            this.themeManager.config.nodeSize.composite + 2;
+            this.themeManager.config.nodeSize.simple + offset_val : 
+            this.themeManager.config.nodeSize.composite + offset_val;
         
         // Round to whole pixels to avoid subpixel rendering
         const x = Math.round(node.x || 0);
@@ -730,18 +755,23 @@ class GraphObjectManager {
             (sourceNode.y + targetNode.y) / 2,
             this.themeManager.config.zPos.label
         );
-        
-        const label = new SpriteText(link.label);
+
+		let label_text = link.label;
+		if (link.label.length == 43) {
+			label_text = this.truncateWithEllipsis(link.label);
+		}
+
+        const label = new SpriteText(label_text);
         
         // Improved text rendering settings
         label.fontFace = 'Arial, Helvetica, sans-serif';
-        label.fontSize = 10;
+        label.fontSize = 32;
         label.fontWeight = '600';
         label.strokeWidth = 0; // No stroke for sharper text
         label.color = '#000000';
-        label.backgroundColor = 'rgba(255,255,255,0.9)';
-        label.padding = 2;
-        label.textHeight = 1; // Force better resolution
+        label.backgroundColor = 'rgba(255,255,255,0.95)';
+        label.padding = 3;
+        label.textHeight = 4; // Better resolution for link labels
         label.borderWidth = 0; // No border for sharper edges
         
         // Round to whole pixels to avoid subpixel rendering
@@ -750,6 +780,9 @@ class GraphObjectManager {
         
         label.position.copy(midPoint);
         label.renderOrder = 20;
+        
+        // Hide link labels by default - only show when node is selected
+        label.visible = false;
         
         this.sceneManager.addToScene(label);
         
@@ -768,10 +801,11 @@ class GraphObjectManager {
             
             // Update label position if it exists
             if (node.labelObject) {
+                const offset_val = 6; // Same value as in createLabel
                 const isSimple = node.type === 'simple';
                 const offset = isSimple ? 
-                    this.themeManager.config.nodeSize.simple + 2 : 
-                    this.themeManager.config.nodeSize.composite + 2;
+                    this.themeManager.config.nodeSize.simple + offset_val : 
+                    this.themeManager.config.nodeSize.composite + offset_val;
                     
                 node.labelObject.position.x = node.x || 0;
                 node.labelObject.position.y = (node.y || 0) + offset;
@@ -801,7 +835,9 @@ class GraphObjectManager {
             
             // Update the line geometry
             link.line.geometry.setFromPoints(points);
-            link.line.computeLineDistances();
+            
+            // Ensure frustum culling remains disabled after updates
+            link.line.frustumCulled = false;
             
             // Update the link label position if it exists
             if (link.labelObject) {
@@ -920,6 +956,7 @@ class GraphObjectManager {
     
     /**
      * Toggle visibility of all labels
+     * @returns {boolean} The new label visibility state
      */
     toggleLabels() {
         const showLabels = this.themeManager.toggleLabels();
@@ -934,20 +971,26 @@ class GraphObjectManager {
             }
         });
         
-        // Update link labels
+        // Update link labels - only show for active links connected to selected node
         this.dataManager.graphObjects.links.forEach((link, id) => {
             if (link.labelObject) {
-                link.labelObject.visible = showLabels;
+                // Only show if labels are enabled AND this is an active link
+                const isActive = this.dataManager.activeLinks.has(id);
+                link.labelObject.visible = showLabels && isActive;
             } else if (showLabels && link.label) {
-                // Get source and target nodes
+                // Create label if it doesn't exist yet
                 const sourceNode = this.dataManager.graphObjects.nodes.get(link.sourceId);
                 const targetNode = this.dataManager.graphObjects.nodes.get(link.targetId);
                 
                 if (sourceNode && targetNode) {
                     link.labelObject = this.createLinkLabel(link, sourceNode, targetNode);
+                    // Only show if this is an active link
+                    link.labelObject.visible = this.dataManager.activeLinks.has(id);
                 }
             }
         });
+        
+        return showLabels;
     }
 }
 
@@ -1008,11 +1051,11 @@ class SimulationManager {
         // Create the simulation with all forces
         this.simulation = d3.forceSimulation()
             .force('link', d3.forceLink().id(d => d.id).distance(linkDistance))
-            .force('charge', d3.forceManyBody().strength(-500))
+            .force('charge', d3.forceManyBody().strength(-100))
             .force('center', d3.forceCenter(0, 0))
             .force('collision', d3.forceCollide().radius(collisionRadius))
-            .force('x', d3.forceX().strength(0.01))
-            .force('y', d3.forceY().strength(0.01))
+            .force('x', d3.forceX().strength(0.001))
+            .force('y', d3.forceY().strength(0.05))
             .on('tick', () => {
                 this.tickCounter++;
                 this.onSimulationTick();
@@ -1036,7 +1079,7 @@ class SimulationManager {
         this.simulation.alphaMin(0.0005);  // Lower threshold for stopping
         
         // Reduce velocity decay for more momentum (default is 0.4)
-        this.simulation.velocityDecay(0.3);
+        this.simulation.velocityDecay(0.2);
     }
     
     /**
@@ -1165,6 +1208,7 @@ class UIManager {
         this.loadingEl = document.getElementById('loading');
         this.searchInput = document.getElementById('search-input');
         this.initialMessageEl = null;
+        this.nodeInfoPanel = null;
         
         // Search state
         this.previousSearchValue = '';
@@ -1177,6 +1221,7 @@ class UIManager {
         
         // Initialize UI elements
         this.createAutocompleteUI();
+        this.createNodeInfoPanel();
         this.setupEventListeners();
     }
     
@@ -1185,15 +1230,20 @@ class UIManager {
      */
     setupEventListeners() {
         // Button event listeners
-        document.getElementById('refresh-btn')?.addEventListener('click', () => 
-            this.graphController.loadGraphData());
+        const labelsBtn = document.getElementById('toggle-labels-btn');
+        if (labelsBtn) {
+            // Set initial state based on ThemeManager config
+            // The initial state should be true by default
+            labelsBtn.classList.add('active');
             
-        document.getElementById('toggle-labels-btn')?.addEventListener('click', () => 
-            this.graphController.toggleLabels());
-            
-        document.getElementById('toggle-physics-btn')?.addEventListener('click', () => 
-            this.graphController.togglePhysics());
-            
+            // Add click handler
+            labelsBtn.addEventListener('click', () => {
+                const showLabels = this.graphController.toggleLabels();
+                // Toggle active class based on the returned state
+                labelsBtn.classList.toggle('active', showLabels);
+            });
+        }
+
         document.getElementById('reset-btn')?.addEventListener('click', () => {
             this.graphController.resetView();
             this.hideAutocomplete();
@@ -1557,6 +1607,169 @@ class UIManager {
             this.linkCountEl.textContent = this.dataManager.graphData.links.length;
         }
     }
+    
+    /**
+     * Create the node info panel
+     */
+    createNodeInfoPanel() {
+        if (!this.nodeInfoPanel) {
+            this.nodeInfoPanel = document.createElement('div');
+            this.nodeInfoPanel.className = 'node-info-panel';
+            this.nodeInfoPanel.style.display = 'none';
+            this.container.appendChild(this.nodeInfoPanel);
+        }
+    }
+    
+    /**
+     * Show node information in the info panel
+     * @param {string} nodeId - The ID of the node to display info for
+     */
+    showNodeInfo(nodeId) {
+        if (!this.nodeInfoPanel) this.createNodeInfoPanel();
+        
+        const node = this.dataManager.graphObjects.nodes.get(nodeId);
+        if (!node) return;
+        
+        // Get the node's connections
+        const connectedLinks = this.dataManager.getConnectedLinks(nodeId);
+        const connectionCount = connectedLinks.length;
+        
+        // Get any additional properties
+        const nodeType = node.type || 'Unknown';
+        const nodeLabel = node.label || nodeId;
+        
+        // Build HTML content
+        let html = `
+            <h3>${nodeLabel}</h3>
+            <p><strong>ID:</strong> ${this.truncateWithEllipsis(nodeId)}</p>
+            <p><strong>Type:</strong> ${nodeType}</p>
+            <p><strong>Connections:</strong> ${connectionCount}</p>
+        `;
+        
+        // Add any other properties that exist
+        if (node.data) {
+            html += `<p><strong>Data:</strong> ${JSON.stringify(node.data)}</p>`;
+        }
+        
+        // Add information about connected nodes
+        if (connectionCount > 0) {
+            html += `<p><strong>Connected Nodes:</strong></p>`;
+            html += `<div class="connected-nodes-list" style="max-height: 400px; overflow-y: auto; margin-top: 8px;">`;
+            
+            // Get info about connected nodes
+            const connectedNodes = new Map(); // Use Map to avoid duplicates
+            
+            connectedLinks.forEach(link => {
+                const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+                const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+                
+                // Get the ID of the connected node (not the current node)
+                const connectedNodeId = sourceId === nodeId ? targetId : sourceId;
+                
+                // Store relationship type if available
+                const relationship = link.label || '';
+                
+                // Get the connected node
+                const connectedNode = this.dataManager.graphObjects.nodes.get(connectedNodeId);
+                if (connectedNode && !connectedNodes.has(connectedNodeId)) {
+                    connectedNodes.set(connectedNodeId, {
+                        node: connectedNode,
+                        relationship: relationship
+                    });
+                }
+            });
+            
+            // Display connected nodes (limited to avoid overwhelming the panel)
+            const maxNodesToShow = 50;
+            let nodeCount = 0;
+            
+            connectedNodes.forEach((data, connectedNodeId) => {
+                if (nodeCount < maxNodesToShow) {
+                    const connectedNode = data.node;
+                    const relationship = data.relationship;
+                    
+                    const truncatedId = this.truncateWithEllipsis(connectedNodeId);
+                    const nodeLabel = connectedNode.label || truncatedId;
+                    const nodeType = connectedNode.type || 'Unknown';
+                    
+                    html += `<div class="connected-node-item" data-node-id="${connectedNodeId}" 
+                            style="margin-bottom: 8px; padding: 5px 10px; border-left: 3px solid #eee; 
+                            cursor: pointer; border-radius: 2px;
+                            transition: background-color 0.2s;">`;
+                    html += `<strong>${nodeLabel}</strong>`;
+                    html += `<div style="color: #666; font-size: 0.9em;">${nodeType}</div>`;
+                    
+                    if (relationship) {
+                        html += `<div style="font-style: italic; font-size: 0.85em; margin-top: 2px; color: #888;">
+                            Relationship: ${relationship}</div>`;
+                    }
+                    
+                    html += `</div>`;
+                    
+                    nodeCount++;
+                }
+            });
+            
+            // If there are more nodes than we're showing
+            if (connectedNodes.size > maxNodesToShow) {
+                html += `<div style="font-style: italic; margin-top: 5px;">...and ${connectedNodes.size - maxNodesToShow} more</div>`;
+            }
+            
+            html += `</div>`;
+        }
+        
+        // Set content and show panel
+        this.nodeInfoPanel.innerHTML = html;
+        this.nodeInfoPanel.style.display = 'block';
+        
+        // Add event listeners to connected node items
+        const nodeItems = this.nodeInfoPanel.querySelectorAll('.connected-node-item');
+        nodeItems.forEach(item => {
+            // Hover effect
+            item.addEventListener('mouseover', () => {
+                item.style.backgroundColor = '#f5f5f5';
+                item.style.borderLeftColor = '#4D90FE';
+            });
+            
+            item.addEventListener('mouseout', () => {
+                item.style.backgroundColor = '';
+                item.style.borderLeftColor = '#eee';
+            });
+            
+            // Click to select the node
+            item.addEventListener('click', () => {
+                const clickedNodeId = item.getAttribute('data-node-id');
+                if (clickedNodeId && this.graphController.eventManager) {
+                    this.graphController.eventManager.selectNode(clickedNodeId);
+                    this.graphController.eventManager.focusOnNode(clickedNodeId);
+                }
+            });
+        });
+    }
+    
+    /**
+     * Hide the node info panel
+     */
+    hideNodeInfo() {
+        if (this.nodeInfoPanel) {
+            this.nodeInfoPanel.style.display = 'none';
+        }
+    }
+    
+    /**
+     * Truncate text and add ellipsis in the middle
+     * @param {string} text - The text to truncate
+     * @returns {string} Truncated text with ellipsis
+     */
+    truncateWithEllipsis(text) {
+        // Show only if longer than 15 characters (6 + 3 + 6)
+        if (!text || text.length <= 15) {
+            return text;
+        }
+        
+        // Take exactly 6 chars from start and 6 from end
+        return text.substring(0, 6) + '...' + text.substring(text.length - 6);
+    }
 }
 
 /**
@@ -1673,6 +1886,29 @@ class EventManager {
         
         // Update link colors
         this.updateLinkColors();
+        
+        // First, hide all link labels
+        this.dataManager.graphObjects.links.forEach((link, id) => {
+            if (link.labelObject) {
+                link.labelObject.visible = false;
+            }
+        });
+        
+        // Then show labels for active links
+        this.dataManager.activeLinks.forEach(linkId => {
+            const link = this.dataManager.graphObjects.links.get(linkId);
+            if (link && link.labelObject) {
+                link.labelObject.visible = true;
+            }
+        });
+        
+        // Show node info panel
+        const graphController = this.sceneManager.graphController || 
+            (this.graphObjectManager && this.graphObjectManager.graphController);
+            
+        if (graphController && graphController.uiManager) {
+            graphController.uiManager.showNodeInfo(nodeId);
+        }
     }
     
     /**
@@ -1680,6 +1916,14 @@ class EventManager {
      */
     deselectNode() {
         if (!this.dataManager.selectedNode) return;
+        
+        // Hide all link labels before clearing selection
+        this.dataManager.activeLinks.forEach(linkId => {
+            const link = this.dataManager.graphObjects.links.get(linkId);
+            if (link && link.labelObject) {
+                link.labelObject.visible = false;
+            }
+        });
         
         // Clear selection in data manager
         this.dataManager.clearSelectedNode();
@@ -1689,6 +1933,14 @@ class EventManager {
         
         // Update link colors
         this.updateLinkColors();
+        
+        // Hide node info panel
+        const graphController = this.sceneManager.graphController || 
+            (this.graphObjectManager && this.graphObjectManager.graphController);
+            
+        if (graphController && graphController.uiManager) {
+            graphController.uiManager.hideNodeInfo();
+        }
     }
     
     /**
@@ -1770,11 +2022,16 @@ class GraphController {
         // Initialize component managers
         this.themeManager = new ThemeManager();
         this.sceneManager = new SceneManager(this.container, this.themeManager);
+        this.sceneManager.graphController = this; // Add reference to this controller
+        
         this.dataManager = new DataManager();
         this.graphObjectManager = new GraphObjectManager(this.sceneManager, this.dataManager, this.themeManager);
+        this.graphObjectManager.graphController = this; // Add reference to this controller
+        
         this.simulationManager = new SimulationManager(this.dataManager, this.graphObjectManager, this.themeManager);
         this.uiManager = new UIManager(this.container, this.dataManager, this);
         this.eventManager = new EventManager(this.sceneManager, this.dataManager, this.graphObjectManager);
+        this.eventManager.graphController = this; // Add reference to this controller
         
         // Load data
         this.loadGraphData();
@@ -1787,6 +2044,7 @@ class GraphController {
      * Load graph data from the server
      */
     loadGraphData() {
+		this.clearDisplay();
         // Show loading indicator
         this.uiManager.showLoading(true);
         
@@ -1911,15 +2169,15 @@ class GraphController {
         center.y /= count;
         center.z /= count;
         
-        // Set the camera target
-        this.sceneManager.controls.target.set(center.x, center.y, center.z);
+        // Set the camera target for perspective camera
+        this.sceneManager.controls.target.set(center.x, center.y, 0);
         
-        // Position the camera
-        const distance = 500;
+        // Position the perspective camera
+        const distance = 1000;
         this.sceneManager.camera.position.set(
             center.x, 
             center.y, 
-            center.z + distance
+            distance
         );
         
         // Update the camera and controls
@@ -1931,7 +2189,8 @@ class GraphController {
      * Toggle label visibility
      */
     toggleLabels() {
-        this.graphObjectManager.toggleLabels();
+        const showLabels = this.graphObjectManager.toggleLabels();
+        return showLabels;
     }
     
     /**
