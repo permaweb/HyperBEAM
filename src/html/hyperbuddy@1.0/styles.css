@@ -657,3 +657,39 @@ a:hover {
 	border-bottom: 1px solid var(--border-color);
 	/* border-radius: 5px 5px 0 0; */
 }
+
+/* Graph visualization styles */
+.graph-link {
+	text-decoration: none;
+	color: inherit;
+	display: block;
+	margin: 20px auto;
+	max-width: 600px;
+}
+
+.graph-link-card {
+	background: var(--color-bg-secondary);
+	border-radius: 8px;
+	padding: 20px;
+	transition: all 0.3s ease;
+	box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+	text-align: center;
+	border: 1px solid var(--color-border);
+}
+
+.graph-link-card:hover {
+	transform: translateY(-5px);
+	box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+	background: var(--color-bg-hover);
+}
+
+.graph-link-card h3 {
+	margin-top: 0;
+	color: var(--color-primary);
+	font-size: 1.5rem;
+}
+
+.graph-link-card p {
+	margin-bottom: 0;
+	color: var(--color-text-secondary);
+}
