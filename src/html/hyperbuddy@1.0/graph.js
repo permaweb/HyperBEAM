@@ -1051,11 +1051,11 @@ class SimulationManager {
         // Create the simulation with all forces
         this.simulation = d3.forceSimulation()
             .force('link', d3.forceLink().id(d => d.id).distance(linkDistance))
-            .force('charge', d3.forceManyBody().strength(-100))
+            .force('charge', d3.forceManyBody().strength(-50))
             .force('center', d3.forceCenter(0, 0))
             .force('collision', d3.forceCollide().radius(collisionRadius))
             .force('x', d3.forceX().strength(0.001))
-            .force('y', d3.forceY().strength(0.05))
+            .force('y', d3.forceY().strength(0.0025))
             .on('tick', () => {
                 this.tickCounter++;
                 this.onSimulationTick();
@@ -1249,6 +1249,11 @@ class UIManager {
             this.hideAutocomplete();
             this.previousSearchValue = '';
             this.searchInput.value = '';
+        });
+        
+        // Add click handler for the Load All Nodes button
+        document.getElementById('load-all-btn')?.addEventListener('click', () => {
+            this.graphController.loadAllNodes();
         });
         
         // Set up search input with debounced handling
@@ -1630,6 +1635,9 @@ class UIManager {
         const node = this.dataManager.graphObjects.nodes.get(nodeId);
         if (!node) return;
         
+        // Store the current node ID for the Get Data button
+        this.currentNodeId = nodeId;
+        
         // Get the node's connections
         const connectedLinks = this.dataManager.getConnectedLinks(nodeId);
         const connectionCount = connectedLinks.length;
@@ -1645,6 +1653,30 @@ class UIManager {
             <p><strong>Type:</strong> ${nodeType}</p>
             <p><strong>Connections:</strong> ${connectionCount}</p>
         `;
+        
+        // Only show the Get Data button for composite nodes where the ID doesn't start with "data/"
+        if (nodeType === 'composite' && !nodeId.startsWith('data/')) {
+            html += `
+                <button id="get-node-data" class="node-data-btn" style="
+                    background-color: #4D90FE;
+                    color: white;
+                    border: none;
+                    padding: 6px 12px;
+                    margin: 10px 0;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    font-size: 13px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 100%;
+                ">
+                    <i class="fas fa-download" style="margin-right: 6px;"></i> 
+                    Get Node Data
+                </button>
+                <div id="node-data-result" style="display: none; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
+            `;
+        }
         
         // Add any other properties that exist
         if (node.data) {
@@ -1722,6 +1754,12 @@ class UIManager {
         this.nodeInfoPanel.innerHTML = html;
         this.nodeInfoPanel.style.display = 'block';
         
+        // Add event listener for the Get Data button
+        const getDataBtn = document.getElementById('get-node-data');
+        if (getDataBtn) {
+            getDataBtn.addEventListener('click', () => this.fetchNodeData(nodeId));
+        }
+        
         // Add event listeners to connected node items
         const nodeItems = this.nodeInfoPanel.querySelectorAll('.connected-node-item');
         nodeItems.forEach(item => {
@@ -1748,6 +1786,87 @@ class UIManager {
     }
     
     /**
+     * Fetch data for a specific node from the server
+     * @param {string} nodeId - The ID of the node to fetch data for
+     */
+    fetchNodeData(nodeId) {
+        // Get the result container
+        const resultContainer = document.getElementById('node-data-result');
+        if (!resultContainer) return;
+        
+        // Show loading indicator
+        resultContainer.style.display = 'block';
+        resultContainer.innerHTML = `
+            <div style="display: flex; align-items: center; justify-content: center; padding: 20px;">
+                <div style="border: 3px solid #f3f3f3; border-top: 3px solid #3498db; 
+                    border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite;"></div>
+                <div style="margin-left: 10px;">Loading data...</div>
+            </div>
+            <style>
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+            </style>
+        `;
+        
+        // Construct the URL for the data endpoint
+        const url = `/${nodeId}`;
+        
+        // Fetch the data
+        fetch(url)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                return response.text(); // Using text() instead of json() to handle any type of response
+            })
+            .then(data => {
+                // Try to parse as JSON if possible
+                try {
+                    const jsonData = JSON.parse(data);
+                    this.displayNodeData(jsonData, resultContainer);
+                } catch (e) {
+                    // If not JSON, display as text
+                    this.displayNodeData(data, resultContainer, false);
+                }
+            })
+            .catch(error => {
+                // Show error message
+                resultContainer.innerHTML = `
+                    <div style="color: #e74c3c; padding: 10px; border-left: 3px solid #e74c3c;">
+                        Error loading data: ${error.message}
+                    </div>
+                `;
+            });
+    }
+    
+    /**
+     * Display node data in the result container
+     * @param {Object|string} data - The data to display
+     * @param {HTMLElement} container - The container to display the data in
+     * @param {boolean} isJson - Whether the data is JSON
+     */
+    displayNodeData(data, container, isJson = true) {
+        if (isJson) {
+            // Format JSON for display
+            const formattedJson = JSON.stringify(data, null, 2);
+            container.innerHTML = `
+                <div style="padding: 10px; background-color: #f9f9f9; border-radius: 4px; font-family: monospace; white-space: pre; overflow-x: auto;">
+                    ${formattedJson.replace(/</g, '&lt;').replace(/>/g, '&gt;')}
+                </div>
+            `;
+        } else {
+            // Display as text
+            container.innerHTML = `
+                <div style="padding: 10px; background-color: #f9f9f9; border-radius: 4px; white-space: pre-wrap; overflow-x: auto; font-family: monospace;">
+                    ${data.toString().replace(/</g, '&lt;').replace(/>/g, '&gt;')}
+                </div>
+            `;
+        }
+    }
+
+    /**
      * Hide the node info panel
      */
     hideNodeInfo() {
@@ -1755,7 +1874,7 @@ class UIManager {
             this.nodeInfoPanel.style.display = 'none';
         }
     }
-    
+
     /**
      * Truncate text and add ellipsis in the middle
      * @param {string} text - The text to truncate
@@ -2033,6 +2152,13 @@ class GraphController {
         this.eventManager = new EventManager(this.sceneManager, this.dataManager, this.graphObjectManager);
         this.eventManager.graphController = this; // Add reference to this controller
         
+        // Initialize FPS counter
+        this.fpsCounter = document.getElementById('fps-counter');
+        this.frameCount = 0;
+        this.lastTime = performance.now();
+        this.fps = 0;
+        this.fpsUpdateInterval = 500; // Update FPS display every 500ms
+        
         // Load data
         this.loadGraphData();
         
@@ -2220,8 +2346,72 @@ class GraphController {
     animate() {
         requestAnimationFrame(() => this.animate());
         
+        // Update FPS calculation
+        this.frameCount++;
+        const currentTime = performance.now();
+        const elapsed = currentTime - this.lastTime;
+        
+        // Update FPS counter every interval
+        if (elapsed > this.fpsUpdateInterval) {
+            this.fps = Math.round((this.frameCount * 1000) / elapsed);
+            this.fpsCounter.textContent = `FPS: ${this.fps}`;
+            
+            // Reset counters
+            this.frameCount = 0;
+            this.lastTime = currentTime;
+        }
+        
         // Update scene
         this.sceneManager.update();
+    }
+    
+    /**
+     * Load all nodes in the graph
+     */
+    loadAllNodes() {
+        // Clear current display
+        this.clearDisplay();
+        
+        // Hide the initial message
+        this.uiManager.hideInitialMessage();
+        
+        // Show loading indicator
+        this.uiManager.showLoading(true);
+        
+        console.log(`Loading all ${this.dataManager.graphData.nodes.length} nodes`);
+        
+        // Store all added node IDs
+        const addedNodes = new Set();
+        
+        // Add all nodes to the scene
+        this.dataManager.graphData.nodes.forEach(node => {
+            if (!this.dataManager.graphObjects.nodes.has(node.id)) {
+                this.graphObjectManager.createNodeObject(node);
+                addedNodes.add(node.id);
+            }
+        });
+        
+        // Add all links between the visible nodes
+        this.dataManager.graphData.links.forEach(link => {
+            const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+            const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+            const linkId = `${sourceId}-${targetId}`;
+            
+            // Only add links between nodes that are visible
+            if (addedNodes.has(sourceId) && addedNodes.has(targetId) && 
+                !this.dataManager.graphObjects.links.has(linkId)) {
+                this.graphObjectManager.createLinkObject(link);
+            }
+        });
+        
+        // Update simulation and restart it
+        this.simulationManager.updateSimulation(true);
+        
+        // Center the view on all nodes
+        this.centerOnNodes(Array.from(addedNodes));
+        
+        // Hide loading indicator
+        this.uiManager.showLoading(false);
     }
 }
 

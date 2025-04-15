@@ -217,6 +217,20 @@
         .node-info-panel p {
             margin: 4px 0;
         }
+        
+        /* FPS Counter */
+        #fps-counter {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: monospace;
+            z-index: 100;
+        }
     </style>
     <!-- Font Awesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" />
@@ -234,6 +248,9 @@
             </button>
             <button id="reset-btn" class="icon-button" title="Reset View">
                 <i class="fas fa-sync-alt"></i>
+            </button>
+            <button id="load-all-btn" class="icon-button" title="Load All Nodes">
+                <i class="fas fa-project-diagram"></i>
             </button>
         </div>
         
@@ -266,6 +283,7 @@
     <div class="main-content">
         <div id="graph-container"></div>
         <div id="loading">Loading graph data...</div>
+        <div id="fps-counter">FPS: 0</div>
     </div>
 
     <!-- Third-party libraries -->
