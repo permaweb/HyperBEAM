@@ -53,12 +53,12 @@ once_worker(Path, Req, Opts) ->
 every(_Msg1, Msg2, Opts) ->
 	case {
 		hb_ao:get(<<"cron-path">>, Msg2, Opts),
-		hb_ao:get(<<"every-interval">>, Msg2, Opts)
+		hb_ao:get(<<"interval">>, Msg2, Opts)
 	} of
 		{not_found, _} -> 
 			{error, <<"No cron path found in message.">>};
 		{_, not_found} ->
-			{error, <<"No every-interval found in message.">>};
+			{error, <<"No interval found in message.">>};
 		{CronPath, IntervalString} -> 
 			try 
 				IntervalMillis = parse_time(IntervalString),
@@ -68,7 +68,7 @@ every(_Msg1, Msg2, Opts) ->
 					ok
 				end,
 				ReqMsgID = hb_message:id(Msg2, all),
-				ModifiedMsg2 = maps:remove(<<"cron-path">>, maps:remove(<<"every-interval">>, Msg2)),
+				ModifiedMsg2 = maps:remove(<<"cron-path">>, maps:remove(<<"interval">>, Msg2)),
 				Pid = spawn(fun() -> every_worker_loop(CronPath, ModifiedMsg2, Opts, IntervalMillis) end),
 				Name = {<<"cron@1.0">>, ReqMsgID},
 				hb_name:register(Name, Pid),
@@ -114,7 +114,6 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
 	catch
 		Class:Reason:Stacktrace ->
 			?event({cron_every_worker_error, {path, CronPath}, {error, Class, Reason, Stacktrace}}),
-			timer:sleep(IntervalMillis),
 			every_worker_loop(CronPath, Req, Opts, IntervalMillis)
 	end,
 	timer:sleep(IntervalMillis),
@@ -139,26 +138,21 @@ parse_time(BinString) ->
 stop_once_test() ->
 	% Start a new node
 	Node = hb_http_server:start_node(),
-	
 	% Set up a standard test worker (even though long_task doesn't use its state)
 	TestWorkerPid = spawn(fun test_worker/0),
 	TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
 	hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
-
 	% Create a "once" task targeting the long_task function
 	OnceUrlPath = <<"/~cron@1.0/once?test-id=", TestWorkerNameId/binary,
 				 "&cron-path=/~test-device@1.0/long_task">>,
 	{ok, OnceTaskID} = hb_http:get(Node, OnceUrlPath, #{}),
 	?event({'cron:stop_once:test:created', {task_id, OnceTaskID}}),
-	
 	% Give a short delay to ensure the task has started and called handle, entering the sleep
 	timer:sleep(200),
-	
 	% Verify the once task worker process is registered and alive
 	OncePid = hb_name:lookup({<<"cron@1.0">>, OnceTaskID}),
 	?assert(is_pid(OncePid), "Lookup did not return a PID"),
 	?assert(erlang:is_process_alive(OncePid), "OnceWorker process died prematurely"),
-	
 	% Call stop on the once task while it's sleeping
 	OnceStopPath = <<"/~cron@1.0/stop?task=", OnceTaskID/binary>>,
 	{ok, OnceStopResult} = hb_http:get(Node, OnceStopPath, #{}),
@@ -185,22 +179,18 @@ stop_every_test() ->
 	TestWorkerPid = spawn(fun test_worker/0),
 	TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
 	hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
-	
 	% Create an "every" task that calls the test worker
 	EveryUrlPath = <<"/~cron@1.0/every?test-id=", TestWorkerNameId/binary, 
-				   "&every-interval=500-milliseconds",
+				   "&interval=500-milliseconds",
 				   "&cron-path=/~test-device@1.0/increment_counter">>,
 	{ok, CronTaskID} = hb_http:get(Node, EveryUrlPath, #{}),
 	?event({'cron:stop_every:test:created', {task_id, CronTaskID}}),
-	
 	% Verify the cron worker process was registered and is alive
 	CronWorkerPid = hb_name:lookup({<<"cron@1.0">>, CronTaskID}),
 	?assert(is_pid(CronWorkerPid)),
 	?assert(erlang:is_process_alive(CronWorkerPid)),
-	
 	% Wait a bit to ensure the cron worker has run a few times
 	timer:sleep(1000),
-	
 	% Call stop on the cron task using its ID
 	EveryStopPath = <<"/~cron@1.0/stop?task=", CronTaskID/binary>>,
 	{ok, EveryStopResult} = hb_http:get(Node, EveryStopPath, #{}),
@@ -222,7 +212,6 @@ stop_every_test() ->
 	after 1000 ->
 		throw(no_response_from_worker)
 	end,
-	
 	% Call stop again using the same CronTaskID to verify the error
 	{error, <<"Task not found.">>} = hb_http:get(Node, EveryStopPath, #{}).
 
@@ -265,7 +254,7 @@ every_worker_loop_test() ->
 	ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
 	hb_name:register({<<"test">>, ID}, PID),
 	UrlPath = <<"/~cron@1.0/every?test-id=", ID/binary, 
-		"&every-interval=500-milliseconds",
+		"&interval=500-milliseconds",
 		"&cron-path=/~test-device@1.0/increment_counter">>,
 	?event({'cron:every:test:sendUrl', {url_path, UrlPath}}),
 	{ok, ReqMsgId} = hb_http:get(Node, UrlPath, #{}),

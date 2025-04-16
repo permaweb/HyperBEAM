@@ -27,10 +27,8 @@ info(_) ->
 		}
 	}.
 
-% info(_) -> 
-% 	?event({viksit_test_info_called}),
-% 	#{ exports => [info, test_func] }.
-
+%% @doc Exports a default_handler function that can be used to test the
+%% handler resolution mechanism.
 info(_Msg1, _Msg2, _Opts) ->
 	InfoBody = #{
 		<<"description">> => <<"Test device for testing the AO-Core framework">>,
@@ -153,7 +151,7 @@ increment_counter(_Msg1, Msg2, _Opts) ->
 %% @doc Does nothing, just sleeps for 3 seconds to simulate a long-running task.
 long_task(_Msg1, _Msg2, _Opts) ->
     ?event({'dev_test:long_task:sleeping'}),
-    timer:sleep(3000),
+    timer:sleep(750),
     ?event({'dev_test:long_task:waking'}),
     {ok, #{<<"result">> => <<"slept">>}}.
 
