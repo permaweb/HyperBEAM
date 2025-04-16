@@ -1,4 +1,4 @@
-%%% A device that inserts new messages into the schedule to allow processes
+%%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
 -export([once/3, every/3, stop/3, info/1, info/3]).
@@ -30,7 +30,11 @@ once(_Msg1, Msg2, Opts) ->
 		CronPath ->
 			ReqMsgID = hb_message:id(Msg2, all),
 			% make the path specific for the end device to be used
-			ModifiedMsg2 = maps:remove(<<"cron-path">>, maps:put(<<"path">>, CronPath, Msg2)),
+			ModifiedMsg2 =
+                maps:remove(
+                    <<"cron-path">>,
+                    maps:put(<<"path">>, CronPath, Msg2)
+                ),
 			Name = {<<"cron@1.0">>, ReqMsgID},
 			Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts) end),
 			hb_name:register(Name, Pid),
@@ -39,12 +43,18 @@ once(_Msg1, Msg2, Opts) ->
 
 %% @doc Internal function for scheduling a one-time message.
 once_worker(Path, Req, Opts) ->
-	% Directly call the meta device on the newly constructed 'singleton', just as hb_http_server does.
+	% Directly call the meta device on the newly constructed 'singleton', just
+    % as hb_http_server does.
 	try
 		dev_meta:handle(Opts, Req#{ <<"path">> => Path})
 	catch
 		Class:Reason:Stacktrace ->
-			?event({cron_every_worker_error, {path, Path}, {error, Class, Reason, Stacktrace}}),
+			?event(
+                {cron_every_worker_error,
+                    {path, Path},
+                    {error, Class, Reason, Stacktrace}
+                }
+            ),
 			throw({error, Class, Reason, Stacktrace})
 	end.
 
@@ -68,14 +78,30 @@ every(_Msg1, Msg2, Opts) ->
 					ok
 				end,
 				ReqMsgID = hb_message:id(Msg2, all),
-				ModifiedMsg2 = maps:remove(<<"cron-path">>, maps:remove(<<"interval">>, Msg2)),
-				Pid = spawn(fun() -> every_worker_loop(CronPath, ModifiedMsg2, Opts, IntervalMillis) end),
+				ModifiedMsg2 =
+                    maps:remove(
+                        <<"cron-path">>,
+                        maps:remove(<<"interval">>, Msg2)
+                    ),
+				Pid =
+                    spawn(
+                        fun() ->
+                            every_worker_loop(
+                                CronPath,
+                                ModifiedMsg2,
+                                Opts,
+                                IntervalMillis
+                            )
+                        end
+                    ),
 				Name = {<<"cron@1.0">>, ReqMsgID},
 				hb_name:register(Name, Pid),
 				{ok, ReqMsgID}
 			catch
-				error:{invalid_time_unit, Unit} -> {error, <<"Invalid time unit: ", Unit>>};
-				error:{invalid_interval_value} -> {error, <<"Invalid interval value.">>};
+				error:{invalid_time_unit, Unit} ->
+                    {error, <<"Invalid time unit: ", Unit/binary>>};
+				error:{invalid_interval_value} ->
+                    {error, <<"Invalid interval value.">>};
 				error:{Reason, _Stack} ->
 					{error, {<<"Error parsing interval">>, Reason}}
 			end
@@ -101,19 +127,33 @@ stop(_Msg1, Msg2, Opts) ->
 					{error, <<"Task not found.">>};
 				Error ->
 					?event({cron_stop_lookup_error, {task_id, TaskID}, {error, Error}}),
-					{error, #{<<"error">> => <<"Failed to lookup task or unexpected result">>, <<"details">> => Error}}
+					{error, #{
+                        <<"error">> =>
+                            <<"Failed to lookup task or unexpected result">>,
+                            <<"details">> => Error
+                    }}
 			end
 	end.
 
 every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
 	ReqSingleton = Req#{ <<"path">> => CronPath },
-	?event({cron_every_worker_executing, {path, CronPath}, {req_id, hb_message:id(Req, all)}}),
+	?event(
+        {cron_every_worker_executing,
+            {path, CronPath},
+            {req_id, hb_message:id(Req, all)}
+        }
+    ),
 	try
 		Result = dev_meta:handle(Opts, ReqSingleton),
 		?event({cron_every_worker_executed, {path, CronPath}, {result, Result}})
 	catch
 		Class:Reason:Stacktrace ->
-			?event({cron_every_worker_error, {path, CronPath}, {error, Class, Reason, Stacktrace}}),
+			?event(
+                {cron_every_worker_error,
+                    {path, CronPath},
+                    {error, Class, Reason, Stacktrace}
+                }
+            ),
 			every_worker_loop(CronPath, Req, Opts, IntervalMillis)
 	end,
 	timer:sleep(IntervalMillis),
@@ -147,7 +187,8 @@ stop_once_test() ->
 				 "&cron-path=/~test-device@1.0/long_task">>,
 	{ok, OnceTaskID} = hb_http:get(Node, OnceUrlPath, #{}),
 	?event({'cron:stop_once:test:created', {task_id, OnceTaskID}}),
-	% Give a short delay to ensure the task has started and called handle, entering the sleep
+	% Give a short delay to ensure the task has started and called handle,
+    % entering the sleep
 	timer:sleep(200),
 	% Verify the once task worker process is registered and alive
 	OncePid = hb_name:lookup({<<"cron@1.0">>, OnceTaskID}),
@@ -220,7 +261,8 @@ stop_every_test() ->
 once_executed_test() ->
 	% start a new node 
 	Node = hb_http_server:start_node(),
-	% spawn a worker on the new node that calls test_worker/0 which inits test_worker/1 with a state of undefined
+	% spawn a worker on the new node that calls test_worker/0 which inits
+    % test_worker/1 with a state of undefined
 	PID = spawn(fun test_worker/0),
 	% generate a random id that we can then use later to lookup the worker
 	ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
