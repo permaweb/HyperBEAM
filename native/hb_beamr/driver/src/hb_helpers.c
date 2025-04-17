@@ -63,6 +63,33 @@ int wasm_val_to_erl_term(ErlDrvTermData* term, const wasm_val_t* val) {
     }
 }
 
+int import_arg_to_erl_term(ErlDrvTermData* term, enum wasm_valkind_enum kind, uint64_t* arg_ptr) {
+    DRV_DEBUG("Adding wasm val to erl term");
+    DRV_DEBUG("Val of type %d: %d", kind, *arg_ptr);
+    switch (kind) {
+        case WASM_I32:
+            term[0] = ERL_DRV_INT;
+            term[1] = (ErlDrvTermData) *arg_ptr;
+            return 2;
+        case WASM_I64:
+            term[0] = ERL_DRV_INT64;
+            term[1] = (ErlDrvTermData) *arg_ptr;
+            return 2;
+        case WASM_F32:
+            term[0] = ERL_DRV_FLOAT;
+            term[1] = (ErlDrvTermData) *arg_ptr;
+            return 2;
+        case WASM_F64:
+            term[0] = ERL_DRV_FLOAT;
+            term[1] = (ErlDrvTermData) *arg_ptr;
+            return 2;
+        default:
+            DRV_DEBUG("Unsupported result type: %d", kind);
+            return 0;
+    }
+}
+
+
 int erl_term_to_wasm_val(wasm_val_t* val, ei_term* term) {
     DRV_DEBUG("Converting erl term to wasm val. Term: %d. Size: %d", term->value.i_val, term->size);
     switch (val->kind) {
@@ -91,6 +118,42 @@ int erl_terms_to_wasm_vals(wasm_val_vec_t* vals, ei_term* terms) {
     for(int i = 0; i < vals->size; i++) {
         DRV_DEBUG("Converting term %d: %p", i, &vals->data[i]);
         int res = erl_term_to_wasm_val(&vals->data[i], &terms[i]);
+        if(res == -1) {
+            DRV_DEBUG("Failed to convert term to wasm val");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int erl_term_to_import_result(enum wasm_valkind_enum* val_kind, uint64_t* val, ei_term* term) {
+    DRV_DEBUG("Converting erl term to wasm val. Term: %d. Size: %d", term->value.i_val, term->size);
+    switch (*val_kind) {
+        case WASM_I32:
+            *val = (int) term->value.i_val;
+            break;
+        case WASM_I64:
+            *val = (long) term->value.i_val;
+            break;
+        case WASM_F32:
+            *val = (float) term->value.d_val;
+            break;
+        case WASM_F64:
+            *val = term->value.d_val;
+            break;
+        default:
+            DRV_DEBUG("Unsupported parameter type: %d", *val_kind);
+            return -1;
+    }
+    return 0;
+}
+
+int erl_terms_to_import_results(uint32_t val_count, enum wasm_valkind_enum* val_kinds, uint64_t* vals, ei_term* terms) {
+    DRV_DEBUG("Converting erl terms to wasm vals");
+    DRV_DEBUG("Vals: %d", val_count);
+    for(int i = 0; i < val_count; i++) {
+        DRV_DEBUG("Converting term %d: %p", i, &vals[i]);
+        int res = erl_term_to_import_result(&val_kinds[i], &vals[i], &terms[i]);
         if(res == -1) {
             DRV_DEBUG("Failed to convert term to wasm val");
             return -1;
@@ -138,14 +201,32 @@ ei_term* decode_list(char* buff, int* index) {
     return res;
 }
 
-int get_function_sig(enum wasm_valkind_enum* param_kinds, uint32_t param_count, char* type_str) {
-    type_str[0] = '(';
-    for(int i = 0; i < param_count; i++) {
-        type_str[i + 1] = wasm_valkind_to_char(&param_kinds[i]);
+int get_function_sig(uint32_t param_count, enum wasm_valkind_enum* param_kinds, 
+                       uint32_t result_count, enum wasm_valkind_enum* result_kinds, 
+                       char* type_str) {
+    int current_pos = 0;
+    type_str[current_pos++] = '(';
+    for(uint32_t i = 0; i < param_count; i++) {
+        type_str[current_pos++] = wasm_valkind_to_char(&param_kinds[i]);
     }
-    type_str[param_count + 1] = ')';
-    type_str[param_count + 2] = '\0';
-    return 1;
+    type_str[current_pos++] = ')';
+
+    if (result_count > 0) {
+        // Add result separator
+        type_str[current_pos++] = ' ';
+        type_str[current_pos++] = '-';
+        type_str[current_pos++] = '>';
+        type_str[current_pos++] = ' ';
+
+        type_str[current_pos++] = '(';
+        for(uint32_t i = 0; i < result_count; i++) {
+            type_str[current_pos++] = wasm_valkind_to_char(&result_kinds[i]);
+        }
+        type_str[current_pos++] = ')';
+    }
+
+    type_str[current_pos] = '\0'; // Null-terminate the string
+    return 1; // Assuming success always for now
 }
 
 wasm_func_t* get_exported_function(Proc* proc, const char* target_name) {

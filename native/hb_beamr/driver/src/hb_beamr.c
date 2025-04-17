@@ -64,13 +64,13 @@ static void wasm_driver_stop(ErlDrvData raw) {
     // Cleanup WASM resources
     DRV_DEBUG("Cleaning up WASM resources");
     if (proc->is_initialized) {
-        DRV_DEBUG("Deleting WASM instance");
-        wasm_instance_delete(proc->instance);
-        DRV_DEBUG("Deleted WASM instance");
-        wasm_module_delete(proc->module);
-        DRV_DEBUG("Deleted WASM module");
-        wasm_store_delete(proc->store);
-        DRV_DEBUG("Deleted WASM store");
+        // DRV_DEBUG("Deleting WASM instance");
+        // wasm_instance_delete(proc->instance);
+        // DRV_DEBUG("Deleted WASM instance");
+        // wasm_module_delete(proc->module);
+        // DRV_DEBUG("Deleted WASM module");
+        // wasm_store_delete(proc->store);
+        // DRV_DEBUG("Deleted WASM store");
     }
     DRV_DEBUG("Freeing proc");
     driver_free(proc);

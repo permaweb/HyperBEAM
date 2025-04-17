@@ -2,49 +2,53 @@
 #include "../include/hb_logging.h"
 #include "../include/hb_helpers.h"
 #include "../include/hb_driver.h"
+#include "wasm_export.h"
 
 extern ErlDrvTermData atom_ok;
 extern ErlDrvTermData atom_import;
 extern ErlDrvTermData atom_execution_result;
 
-wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_vec_t* results) {
-    DRV_DEBUG("generic_import_handler called");
-    ImportHook* import_hook = (ImportHook*)env;
-    Proc* proc = import_hook->proc;
+static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t *args) {
+    DRV_DEBUG("generic_import_native_symbol_func called");
 
-    // Check if the field name is "invoke"; if not, exit early
-    if (strncmp(import_hook->field_name, "invoke", 6) == 0) {
-        wasm_execute_indirect_function(proc, import_hook->field_name, args, results); 
-        return NULL;
-    }
+    NativeSymbolAttachment *attachment = (NativeSymbolAttachment *)wasm_runtime_get_function_attachment(exec_env);
+    Proc *proc = attachment->proc;
+    const char *module_name = attachment->module_name;
+    const char *func_name = attachment->field_name;
+    const char *signature = attachment->signature;
+    DRV_DEBUG("Calling import %s.%s [%s]", module_name, func_name, signature);
 
-    DRV_DEBUG("Proc: %p. Args size: %d", proc, args->size);
-    DRV_DEBUG("Import name: %s.%s [%s]", import_hook->module_name, import_hook->field_name, import_hook->signature);
-
+    uint32_t param_count = attachment->param_count;
+    enum wasm_valkind_enum *param_kinds = attachment->param_kinds;
+    uint32_t result_count = attachment->result_count;
+    enum wasm_valkind_enum *result_kinds = attachment->result_kinds;
+    DRV_DEBUG("Param count: %d", param_count);
+    DRV_DEBUG("Result count: %d", result_count);
+    
     // Initialize the message object
-    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * ((2+(2*3)) + ((args->size + 1) * 2) + ((results->size + 1) * 2) + 2));
+    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * ((2+(2*3)) + ((param_count + 1) * 2) + ((result_count + 1) * 2) + 2));
     int msg_index = 0;
     msg[msg_index++] = ERL_DRV_ATOM;
     msg[msg_index++] = atom_import;
     msg[msg_index++] = ERL_DRV_STRING;
-    msg[msg_index++] = (ErlDrvTermData) import_hook->module_name;
-    msg[msg_index++] = strlen(import_hook->module_name);
+    msg[msg_index++] = (ErlDrvTermData) module_name;
+    msg[msg_index++] = strlen(module_name);
     msg[msg_index++] = ERL_DRV_STRING;
-    msg[msg_index++] = (ErlDrvTermData) import_hook->field_name;
-    msg[msg_index++] = strlen(import_hook->field_name);
+    msg[msg_index++] = (ErlDrvTermData) func_name;
+    msg[msg_index++] = strlen(func_name);
 
     // Encode args
-    for (size_t i = 0; i < args->size; i++) {
-        msg_index += wasm_val_to_erl_term(&msg[msg_index], &args->data[i]);
+    for (size_t i = 0; i < param_count; i++) {
+        msg_index += import_arg_to_erl_term(&msg[msg_index], param_kinds[i], &args[i]);
     }
     msg[msg_index++] = ERL_DRV_NIL;
     msg[msg_index++] = ERL_DRV_LIST;
-    msg[msg_index++] = args->size + 1;
+    msg[msg_index++] = param_count + 1;
 
     // Encode function signature
     msg[msg_index++] = ERL_DRV_STRING;
-    msg[msg_index++] = (ErlDrvTermData) import_hook->signature;
-    msg[msg_index++] = strlen(import_hook->signature) - 1;
+    msg[msg_index++] = (ErlDrvTermData) signature;
+    msg[msg_index++] = strlen(signature) - 1;
 
     // Prepare the message to send to the Erlang side
     msg[msg_index++] = ERL_DRV_TUPLE;
@@ -70,26 +74,17 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     // Handle error in the response
     if (proc->current_import->error_message) {
         DRV_DEBUG("Import execution failed. Error message: %s", proc->current_import->error_message);
-        wasm_name_t message;
-        wasm_name_new_from_string_nt(&message, proc->current_import->error_message);
-        wasm_trap_t* trap = wasm_trap_new(proc->store, &message);
-        driver_free(proc->current_import);
-        proc->current_import = NULL;
-        return trap;
+        // TODO: Handle error
+        return;
     }
 
-    // Convert the response back to WASM values
-    const wasm_valtype_vec_t* result_types = wasm_functype_results(wasm_func_type(import_hook->stub_func));
-    for(int i = 0; i < proc->current_import->result_length; i++) {
-        results->data[i].kind = wasm_valtype_kind(result_types->data[i]);
-    }
-    int res = erl_terms_to_wasm_vals(results, proc->current_import->result_terms);
+    // Convert the response back to the function result, writing back to the args pointer
+    int res = erl_terms_to_import_results(result_count, result_kinds, args, proc->current_import->result_terms);
     if(res == -1) {
         DRV_DEBUG("Failed to convert terms to wasm vals");
-        return NULL;
+        // TODO: Handle error
+        return;
     }
-
-    results->num_elems = result_types->num_elems;
 
     // Clean up
     DRV_DEBUG("Cleaning up import response");
@@ -98,13 +93,6 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     driver_free(proc->current_import);
 
     proc->current_import = NULL;
-    return NULL;
-}
-
-static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t *args) {
-    NativeSymbolAttachment *attachment = (NativeSymbolAttachment *)wasm_runtime_get_function_attachment(exec_env);
-    const char *func_name = attachment->field_name;
-    DRV_DEBUG("generic_import_native_symbol_func called with %s\n", func_name);
 }
 
 void wasm_initialize_runtime(void* raw) {
@@ -258,7 +246,21 @@ void wasm_initialize_runtime(void* raw) {
                     continue; // Skip this symbol
                 }
 
-                if(!get_function_sig(param_kinds, param_count, type_str)) {
+                uint32_t result_count = wasm_func_type_get_result_count(type);
+                DRV_DEBUG("Result count: %d", result_count);
+
+                enum wasm_valkind_enum *result_kinds = driver_alloc(sizeof(enum wasm_valkind_enum) * result_count);
+                if (!result_kinds && result_count > 0) {
+                    DRV_DEBUG("Failed to allocate memory for result_kinds for %s.%s", module_name, name);
+                    // TODO: Handle allocation failure
+                    continue; // Skip this symbol
+                }
+                for (uint32_t r_idx = 0; r_idx < result_count; ++r_idx) {
+                    result_kinds[r_idx] = wasm_func_type_get_result_valkind(type, r_idx);
+                    DRV_DEBUG("Result %d kind: %d", r_idx, result_kinds[r_idx]);
+                }
+
+                if(!get_function_sig(param_count, param_kinds, result_count, result_kinds, type_str)) {
                     DRV_DEBUG("Failed to get function signature for %s.%s", module_name, name);
                      if (param_kinds) driver_free(param_kinds);
                      driver_free(type_str);
@@ -267,7 +269,6 @@ void wasm_initialize_runtime(void* raw) {
                 } else {
                     DRV_DEBUG("Got function signature for %s.%s: %s", module_name, name, type_str);
                 }
-                if (param_kinds) driver_free(param_kinds); // Free param_kinds after use
 
                 // Add import details to the init_msg for Erlang
                 init_msg[msg_i++] = ERL_DRV_ATOM;
@@ -292,9 +293,14 @@ void wasm_initialize_runtime(void* raw) {
                     driver_free(type_str); // Free type_str allocated earlier
                     continue;
                 }
+                attachment->proc = proc;
                 attachment->module_name = module_name; // Potential dangling pointer if module_proto is freed
                 attachment->field_name = name;       // Potential dangling pointer if module_proto is freed
                 attachment->signature = type_str;      // Keep allocated type_str, free later
+                attachment->param_kinds = param_kinds;
+                attachment->result_kinds = result_kinds;
+                attachment->param_count = param_count;
+                attachment->result_count = result_count;
 
                 NativeSymbol *native_symbol = driver_alloc(sizeof(NativeSymbol));
                 if (!native_symbol) {
@@ -359,7 +365,8 @@ void wasm_initialize_runtime(void* raw) {
         return;
     }
     DRV_DEBUG("Created runtime-module: %p", module_runtime);
-    
+    proc->module = module_runtime;
+
     wasm_module_inst_t module_inst = wasm_runtime_instantiate(module_runtime, 0x10000, 0x10000, error_buf, 1024);
     if (!module_inst) {
         DRV_DEBUG("Failed to instantiate WASM runtime-module: %s", error_buf);
@@ -368,7 +375,7 @@ void wasm_initialize_runtime(void* raw) {
         return;
     }
     DRV_DEBUG("Created runtime-module instance: %p", module_inst);
-    // proc->instance = module_inst;
+    proc->instance = module_inst;
 
     DRV_DEBUG("Processing exports");
     wasm_table_inst_t indirect_func_table;
@@ -410,11 +417,20 @@ void wasm_initialize_runtime(void* raw) {
                 DRV_DEBUG("Param %d kind: %d", p_idx, param_kinds[p_idx]);
             }
 
-            DRV_DEBUG("get_function_sig(%p, %d, %p)", param_kinds, param_count, type_str);
+            uint32_t result_count = wasm_func_type_get_result_count(type);
+            DRV_DEBUG("Result count: %d", result_count);
 
-            if(!get_function_sig(param_kinds, param_count, type_str)) {
+            enum wasm_valkind_enum *result_kinds = driver_alloc(sizeof(enum wasm_valkind_enum) * result_count);
+            if (!result_kinds && result_count > 0) {
+                DRV_DEBUG("Failed to allocate memory for result_kinds for %s", name);
+                continue; // Skip this symbol
+            }
+
+            DRV_DEBUG("get_function_sig(%p, %d, %p)", param_kinds, param_count, type_str);
+            if(!get_function_sig(param_count, param_kinds, result_count, result_kinds, type_str)) {
                 DRV_DEBUG("Failed to get function signature for %s", name);
                 if (param_kinds) driver_free(param_kinds);
+                if (result_kinds) driver_free(result_kinds);
                 driver_free(type_str);
                 // TODO: Handle other types of imports?
                 continue; // Skip this symbol
@@ -464,7 +480,7 @@ void wasm_execute_function(void* raw) {
     char* function_name = proc->current_function;
 
     // Find the function in the exports
-    wasm_func_t* func = get_exported_function(proc, function_name);
+    wasm_function_inst_t* func = wasm_runtime_lookup_function(proc->instance, function_name);
     if (!func) {
         send_error(proc, "Function not found: %s", function_name);
         drv_unlock(proc->is_running);
@@ -472,53 +488,42 @@ void wasm_execute_function(void* raw) {
     }
     DRV_DEBUG("Func: %p", func);
 
-    const wasm_functype_t* func_type = wasm_func_type(func);
-    const wasm_valtype_vec_t* param_types = wasm_functype_params(func_type);
-    const wasm_valtype_vec_t* result_types = wasm_functype_results(func_type);
+    const uint32_t param_count = wasm_func_get_param_count(func, proc->instance);
+    wasm_valkind_t *param_types = driver_alloc(sizeof(wasm_valkind_t) * param_count);
+    wasm_func_get_param_types(func, proc->instance, param_types);
+    DRV_DEBUG("Param types: %p", param_types);
+
+    const uint32_t result_count = wasm_func_get_result_count(func, proc->instance);
+    wasm_valkind_t *result_types = driver_alloc(sizeof(wasm_valkind_t) * result_count);
+    wasm_func_get_result_types(func, proc->instance, result_types);
+    DRV_DEBUG("Result types: %p", result_types);
 
     wasm_val_vec_t args, results;
-    wasm_val_vec_new_uninitialized(&args, param_types->size);
-    args.num_elems = param_types->num_elems;
-    // CONV: ei_term* -> wasm_val_vec_t
-    for(int i = 0; i < param_types->size; i++) {
-        args.data[i].kind = wasm_valtype_kind(param_types->data[i]);
-    }
-    int res = erl_terms_to_wasm_vals(&args, proc->current_args);
-
-    for(int i = 0; i < args.size; i++) {
-        DRV_DEBUG("Arg %d: %d", i, args.data[i].of.i64);
-        DRV_DEBUG("Source term: %d", proc->current_args[i].value.i_val);
+    wasm_val_vec_new_uninitialized(&args, param_count);
+    wasm_val_vec_new_uninitialized(&results, result_count);
+    
+    for(int i = 0; i < param_count; i++) {
+        args.data[i].kind = param_types[i];
     }
 
-    if(res == -1) {
+    for(int i = 0; i < result_count; i++) {
+        results.data[i].kind = result_types[i];
+    }
+    
+    if (!(erl_terms_to_wasm_vals(&args, proc->current_args) == 0)) {
         send_error(proc, "Failed to convert terms to wasm vals");
         drv_unlock(proc->is_running);
         return;
     }
 
-    wasm_val_vec_new_uninitialized(&results, result_types->size);
-    results.num_elems = result_types->num_elems;
-    for (size_t i = 0; i < result_types->size; i++) {
-        results.data[i].kind = wasm_valtype_kind(result_types->data[i]);
-    }
-
-    proc->exec_env = wasm_runtime_get_exec_env_singleton(func->inst_comm_rt);
+    proc->exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
 
     // Call the function
     DRV_DEBUG("Calling function: %s", function_name);
-    wasm_trap_t* trap = wasm_func_call(func, &args, &results);
-    
+    bool call_success = wasm_runtime_call_wasm_a(proc->exec_env, func, results.size, results.data, args.size, args.data);
 
-    if (trap) {
-        wasm_message_t trap_msg;
-        wasm_trap_message(trap, &trap_msg);
-        // wasm_frame_t* origin = wasm_trap_origin(trap);
-        // int32_t func_index = wasm_frame_func_index(origin);
-        // int32_t func_offset = wasm_frame_func_offset(origin);
-        // char* func_name;
-
-        // DRV_DEBUG("WASM Exception: [func_index: %d, func_offset: %d] %.*s", func_index, func_offset, trap_msg.size, trap_msg.data);
-        send_error(proc, "%.*s", trap_msg.size, trap_msg.data);
+    if (!call_success) {
+        send_error(proc, "!call_success");
         drv_unlock(proc->is_running);
         return;
     }

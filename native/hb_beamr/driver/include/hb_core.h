@@ -22,10 +22,10 @@ typedef struct {
 
 // Structure to represent a WASM process instance
 typedef struct {
-    wasm_engine_t* engine;          // WASM engine instance
-    wasm_instance_t* instance;      // WASM instance
-    wasm_module_t* module;          // WASM module
-    wasm_store_t* store;            // WASM store
+    // wasm_engine_t engine;          // WASM engine instance
+    wasm_module_t module;          // WASM module
+    wasm_module_inst_t instance;      // WASM instance
+    // wasm_store_t* store;            // WASM store
     ErlDrvPort port;                // Erlang port associated with this process
     ErlDrvTermData port_term;       // Erlang term representation of the port
     ErlDrvMutex* is_running;        // Mutex to track if the process is running
@@ -104,9 +104,14 @@ typedef struct {
 } ImportModuleSymbols;
 
 typedef struct {
+    Proc *proc;
     const char *module_name;
     const char *field_name;
     const char *signature;
+    uint32_t param_count;
+    enum wasm_valkind_enum *param_kinds;
+    uint32_t result_count;
+    enum wasm_valkind_enum *result_kinds;
 } NativeSymbolAttachment;
 
 #endif // HB_CORE_H
