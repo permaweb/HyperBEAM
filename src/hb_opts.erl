@@ -238,6 +238,14 @@ default_message() ->
         % Options for the router device
         <<"router@1.0">> => #{
             routes => []
+        },
+        % Ensure that cron device normalizes by default on node restart.
+        on => #{
+            <<"start">> => #{
+                <<"device">> => <<"cron@1.0">>,
+                <<"path">> => <<"normalize">>,
+                <<"hook">> => #{ <<"result">> => <<"ignore">> }
+            }
         }
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value

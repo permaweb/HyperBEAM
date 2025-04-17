@@ -41,7 +41,8 @@ info(_Msg1, _Msg2, _Opts) ->
 			<<"mul">> => <<"Multiply function">>,
 			<<"snapshot">> => <<"Snapshot function">>,
 			<<"response">> => <<"Response function">>,
-			<<"update_state">> => <<"Update state function">>
+			<<"update_state">> => <<"Update state function">>,
+			<<"increment_counter">> => <<"Increment counter function">>
 		}
 	},
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.

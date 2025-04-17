@@ -11,9 +11,9 @@
 %%% the execution parameters of all downstream requests to be controlled.
 -module(hb_http_server).
 -export([start/0, start/1, allowed_methods/2, init/2]).
--export([set_opts/1, set_opts/2, get_opts/0, get_opts/1]).
+-export([set_opts/1, set_opts/2, get_opts/1]).
 -export([set_default_opts/1, set_proc_server_id/1]).
--export([start_node/0, start_node/1]).
+-export([start_node/0, start_node/1, stop_node/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -97,6 +97,7 @@ start() ->
         }
     ).
 start(Opts) ->
+	
     application:ensure_all_started([
         kernel,
         stdlib,
@@ -110,7 +111,10 @@ start(Opts) ->
     hb:init(),
     BaseOpts = set_default_opts(Opts),
     {ok, Listener, _Port} = new_server(BaseOpts),
+	
     {ok, Listener}.
+
+
 
 %% @doc Trigger the creation of a new HTTP server node. Accepts a `NodeMsg'
 %% message, which is used to configure the server. This function executed the
@@ -460,12 +464,22 @@ set_opts(Request, Opts) ->
     },
     {set_opts(FinalOpts), FinalOpts}.
 
-%% @doc Get the node message for the current process.
-get_opts() ->
-    get_opts(#{ http_server => get(server_id) }).
+%% hb_http_server/start_node/1 executes a start hook before cowboy is 
+%% listening. This means there is no valid http_server ref in node_opts.
+%% When we run dev_cron/normalize as part of a start hook, it spawns
+%% workers using the original NodeMsg, which does not contain a valid
+%% http_server ref. This can crash the cowboy:get_env. To solve for this,
+%% we return the original NodeMsg when no Cowboy listener is attached.
+get_opts(NodeMsg = #{ http_server := no_server_ref }) ->
+    NodeMsg;
 get_opts(NodeMsg) ->
     ServerRef = hb_opts:get(http_server, no_server_ref, NodeMsg),
-    cowboy:get_env(ServerRef, node_msg, no_node_msg).
+    try cowboy:get_env(ServerRef, node_msg, no_node_msg)
+    catch error:badarg ->
+      % If the server is not yet started, might happen with dev_hook
+      % So we just return the original NodeMsg.
+      NodeMsg
+    end.
 
 %% @doc Initialize the server ID for the current process.
 set_proc_server_id(ServerID) ->
@@ -531,6 +545,15 @@ start_node(Opts) ->
     {ok, _Listener, Port} = new_server(ServerOpts),
     <<"http://localhost:", (integer_to_binary(Port))/binary, "/">>.
 
+stop_node(Opts) ->
+	?event(http, {node_stopping, Opts}),
+	application:stop(ranch),
+	application:stop(cowboy),
+	% application:stop(gun),
+	% application:stop(inets),
+	?event(http, {node_stopped, Opts}),
+	<<"node stopped">>.
+	
 %%% Tests
 %%% The following only covering the HTTP server initialization process. For tests
 %%% of HTTP server requests/responses, see `hb_http.erl'.
