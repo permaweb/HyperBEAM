@@ -1,7 +1,7 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([once/3, every/3, stop/3, info/1, info/3]).
+-export([load/3, once/3, every/3, stop/3, info/1, info/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -9,6 +9,7 @@
 info(_) -> 
 	#{ exports => [info, once, every, stop] }.
 
+%% @doc Exported function for granting a description of the device.
 info(_Msg1, _Msg2, _Opts) ->
 	InfoBody = #{
 		<<"description">> => <<"Cron device for scheduling messages">>,
@@ -21,6 +22,39 @@ info(_Msg1, _Msg2, _Opts) ->
 		}
 	},
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
+
+%% @doc Modify a given node message to include the cron process.
+cron_opts(Opts) ->
+    {ok, Script} = file:read_file("scripts/cron.lua"),
+    Opts#{
+        node_processes =>
+            (hb_opts:get(node_processes, #{}, Opts))#{
+                <<"cron">> => #{
+                    <<"device">> => <<"process@1.0">>,
+                    <<"execution-device">> => <<"lua@5.3a">>,
+                    <<"function">> => <<"handle">>,
+                    <<"script">> => Script
+                }
+            }
+    }.
+
+%% @doc Reload all registered cron tasks.
+load(_, _, Opts) ->
+    CronOpts = cron_opts(Opts),
+    Msgs =
+        hb_singleton:from(
+            #{
+                <<"path">> => <<"/cron~node-process@1.0/now/crons">>,
+                <<"method">> => <<"GET">>
+            }
+        ),
+    case hb_ao:resolve_many(Msgs, CronOpts) of
+        {ok, Crons} ->
+            % TODO: Restore the crons from the response
+            {ok, Crons};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @doc Exported function for scheduling a one-time message.
 once(_Msg1, Msg2, Opts) ->
@@ -38,6 +72,16 @@ once(_Msg1, Msg2, Opts) ->
 			Name = {<<"cron@1.0">>, ReqMsgID},
 			Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts) end),
 			hb_name:register(Name, Pid),
+            hb_ao:resolve_many(
+                hb_singleton:from(
+                    #{
+                        <<"path">> => <<"/cron~node-process@1.0/schedule">>,
+                        <<"method">> => <<"POST">>,
+                        <<"body">> => ModifiedMsg2
+                    }
+                ),
+                cron_opts(Opts)
+            ),
 			{ok, ReqMsgID}
 	end.
 
@@ -121,6 +165,23 @@ stop(_Msg1, Msg2, Opts) ->
 					?event({cron_stopping_task, {task_id, TaskID}, {pid, Pid}}),
 					exit(Pid, kill),
 					hb_name:unregister(Name),
+                    hb_ao:resolve_many(
+                        hb_singleton:from(
+                            #{
+                                <<"path">> => <<"/cron~node-process@1.0/schedule">>,
+                                <<"method">> => <<"POST">>,
+                                <<"body">> =>
+                                    hb_message:commit(
+                                        #{
+                                            <<"action">> => <<"Stop">>,
+                                            <<"task">> => TaskID
+                                        },
+                                        Opts
+                                    )
+                            }
+                        ),
+                        cron_opts(Opts)
+                    ),
 					{ok, #{<<"status">> => 200, <<"body">> => #{
 						<<"message">> => <<"Task stopped successfully">>,
 						<<"task_id">> => TaskID
