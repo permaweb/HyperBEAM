@@ -1,4 +1,4 @@
-#include "include/hb_logging.h"
+#include "../include/hb_logging.h"
 
 extern ErlDrvTermData atom_error;
 

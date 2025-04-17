@@ -1,0 +1,17 @@
+# CMake build files
+[Bb]uild*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+*.cbp
+
+# Compiled output
+*.o
+*.d
+*.so
+*.dylib
+*.dll
+
+# Other
+.DS_Store

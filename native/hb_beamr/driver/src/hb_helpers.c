@@ -1,5 +1,5 @@
-#include "include/hb_helpers.h"
-#include "include/hb_logging.h"
+#include "../include/hb_helpers.h"
+#include "../include/hb_logging.h"
 
 // Returns the string name corresponding to the wasm type
 const char* get_wasm_type_name(wasm_valkind_t kind) {

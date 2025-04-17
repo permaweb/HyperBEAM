@@ -1,7 +1,7 @@
-#include "include/hb_wasm.h"
-#include "include/hb_logging.h"
-#include "include/hb_helpers.h"
-#include "include/hb_driver.h"
+#include "../include/hb_wasm.h"
+#include "../include/hb_logging.h"
+#include "../include/hb_helpers.h"
+#include "../include/hb_driver.h"
 
 extern ErlDrvTermData atom_ok;
 extern ErlDrvTermData atom_import;
