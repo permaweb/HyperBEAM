@@ -44,9 +44,9 @@ typedef struct {
 
 // Structure to represent an import hook
 typedef struct {
-    char* module_name;             // Name of the module
-    char* field_name;              // Name of the field (function)
-    char* signature;               // Function signature
+    const char* module_name;             // Name of the module
+    const char* field_name;              // Name of the field (function)
+    const char* signature;               // Function signature
     Proc* proc;                    // The associated process
     wasm_func_t* stub_func;        // WASM function pointer for the import
 } ImportHook;
@@ -97,6 +97,16 @@ struct wasm_func_t {
     WASMFunctionInstanceCommon *func_comm_rt; // Function instance data
 };
 
+typedef struct {
+    const char *module_name;
+    NativeSymbol *symbols;
+    int count;
+} ImportModuleSymbols;
 
+typedef struct {
+    const char *module_name;
+    const char *field_name;
+    const char *signature;
+} NativeSymbolAttachment;
 
 #endif // HB_CORE_H

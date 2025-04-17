@@ -23,10 +23,10 @@ const char* get_wasm_type_name(wasm_valkind_t kind);
  * 
  *  returns: A string representing the kind of the external type (e.g., "func", "global", "table", "memory").
  */
-const char* wasm_externtype_to_kind_string(const wasm_externtype_t* type);
+const char* wasm_import_export_kind_to_string(wasm_import_export_kind_t kind);
 
 /*
- * Function: wasm_valtype_kind_to_char
+ * Function: wasm_valkind_to_char
  * --------------------
  * Converts a WASM value type to its corresponding character representation.
  * 
@@ -34,7 +34,7 @@ const char* wasm_externtype_to_kind_string(const wasm_externtype_t* type);
  * 
  *  returns: A character representing the value type (e.g., 'i' for i32, 'f' for f32).
  */
-char wasm_valtype_kind_to_char(const wasm_valtype_t* valtype);
+char wasm_valkind_to_char(enum wasm_valkind_enum* valtype);
 
 /*
  * Function: wasm_val_to_erl_term
@@ -94,7 +94,7 @@ ei_term* decode_list(char* buff, int* index);
  * 
  *  returns: 1 on success, 0 if the external type is not a function or there is an error.
  */
-int get_function_sig(const wasm_externtype_t* type, char* type_str);
+int get_function_sig(enum wasm_valkind_enum* param_kinds, uint32_t param_count, char* type_str);
 
 /*
  * Function: get_exported_function

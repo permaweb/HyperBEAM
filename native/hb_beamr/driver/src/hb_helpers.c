@@ -1,5 +1,6 @@
 #include "../include/hb_helpers.h"
 #include "../include/hb_logging.h"
+#include "wasm_export.h"
 
 // Returns the string name corresponding to the wasm type
 const char* get_wasm_type_name(wasm_valkind_t kind) {
@@ -12,8 +13,8 @@ const char* get_wasm_type_name(wasm_valkind_t kind) {
     }
 }
 
-const char* wasm_externtype_to_kind_string(const wasm_externtype_t* type) {
-    switch (wasm_externtype_kind(type)) {
+const char* wasm_import_export_kind_to_string(wasm_import_export_kind_t kind) {
+    switch (kind) {
         case WASM_EXTERN_FUNC: return "func";
         case WASM_EXTERN_GLOBAL: return "global";
         case WASM_EXTERN_TABLE: return "table";
@@ -23,8 +24,8 @@ const char* wasm_externtype_to_kind_string(const wasm_externtype_t* type) {
 }
 
 // Helper function to convert wasm_valtype_t to char
-char wasm_valtype_kind_to_char(const wasm_valtype_t* valtype) {
-    switch (wasm_valtype_kind(valtype)) {
+char wasm_valkind_to_char(enum wasm_valkind_enum* valkind) {
+    switch (*valkind) {
         case WASM_I32: return 'i';
         case WASM_I64: return 'I';
         case WASM_F32: return 'f';
@@ -137,33 +138,14 @@ ei_term* decode_list(char* buff, int* index) {
     return res;
 }
 
-int get_function_sig(const wasm_externtype_t* type, char* type_str) {
-    if (wasm_externtype_kind(type) == WASM_EXTERN_FUNC) {
-        const wasm_functype_t* functype = wasm_externtype_as_functype_const(type);
-        const wasm_valtype_vec_t* params = wasm_functype_params(functype);
-        const wasm_valtype_vec_t* results = wasm_functype_results(functype);
-
-        if(!params || !results) {
-            DRV_DEBUG("Export function params/results are NULL");
-            return 0;
-        }
-
-        type_str[0] = '(';
-        size_t offset = 1;
-
-        for (size_t i = 0; i < params->size; i++) {
-            type_str[offset++] = wasm_valtype_kind_to_char(params->data[i]);
-        }
-        type_str[offset++] = ')';
-
-        for (size_t i = 0; i < results->size; i++) {
-            type_str[offset++] = wasm_valtype_kind_to_char(results->data[i]);
-        }
-        type_str[offset] = '\0';
-
-        return 1;
+int get_function_sig(enum wasm_valkind_enum* param_kinds, uint32_t param_count, char* type_str) {
+    type_str[0] = '(';
+    for(int i = 0; i < param_count; i++) {
+        type_str[i + 1] = wasm_valkind_to_char(&param_kinds[i]);
     }
-    return 0;
+    type_str[param_count + 1] = ')';
+    type_str[param_count + 2] = '\0';
+    return 1;
 }
 
 wasm_func_t* get_exported_function(Proc* proc, const char* target_name) {

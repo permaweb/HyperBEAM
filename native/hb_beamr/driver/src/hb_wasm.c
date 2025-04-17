@@ -101,6 +101,12 @@ wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_
     return NULL;
 }
 
+static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t *args) {
+    NativeSymbolAttachment *attachment = (NativeSymbolAttachment *)wasm_runtime_get_function_attachment(exec_env);
+    const char *func_name = attachment->field_name;
+    DRV_DEBUG("generic_import_native_symbol_func called with %s\n", func_name);
+}
+
 void wasm_initialize_runtime(void* raw) {
     DRV_DEBUG("Initializing WASM module");
     LoadWasmReq* mod_bin = (LoadWasmReq*)raw;
@@ -123,42 +129,52 @@ void wasm_initialize_runtime(void* raw) {
     //     DRV_DEBUG("Using AOT mode.");
     // }
 
-    proc->engine = wasm_engine_new();
+    // Initialize WAMR runtime
+    RuntimeInitArgs init_args;
+    memset(&init_args, 0, sizeof(RuntimeInitArgs));
+    init_args.mem_alloc_type = Alloc_With_Allocator;
+    init_args.mem_alloc_option.allocator.malloc_func = (void *)malloc;
+    init_args.mem_alloc_option.allocator.realloc_func = (void *)realloc;
+    init_args.mem_alloc_option.allocator.free_func = (void *)free;
+
+    if (!wasm_runtime_full_init(&init_args)) {
+        DRV_DEBUG("Failed to initialize WAMR runtime");
+        return;
+    }
     DRV_DEBUG("Created engine");
-    proc->store = wasm_store_new(proc->engine);
-    DRV_DEBUG("Created store");
 
-
-    // Load WASM module
-    wasm_byte_vec_t binary;
-    wasm_byte_vec_new(&binary, mod_bin->size, (const wasm_byte_t*)mod_bin->binary);
-
-    proc->module = wasm_module_new(proc->store, &binary);
-    DRV_DEBUG("Module created: %p", proc->module);
-    if (!proc->module) {
-        DRV_DEBUG("Failed to create module");
-        send_error(proc, "Failed to create module.");
-        wasm_byte_vec_delete(&binary);
-        wasm_store_delete(proc->store);
-        wasm_engine_delete(proc->engine);
+    char *error_buf = driver_alloc(1024);
+    uint8_t *binary_copy = driver_alloc(mod_bin->size);
+    memcpy(binary_copy, mod_bin->binary, mod_bin->size);
+    wasm_module_t module_proto = wasm_runtime_load(binary_copy, mod_bin->size, error_buf, 1024);
+    if (!module_proto) {
+        DRV_DEBUG("Failed to load WASM proto-module: %s", error_buf);
+        send_error(proc, "Failed to load WASM proto-module: %s", error_buf);
         drv_unlock(proc->is_running);
         return;
     }
-    //wasm_byte_vec_delete(&binary);
-    DRV_DEBUG("Created module");
+    DRV_DEBUG("Created proto-module: %p", module_proto);
 
-    // Get imports
-    wasm_importtype_vec_t imports;
-    wasm_module_imports(proc->module, &imports);
-    DRV_DEBUG("Imports size: %d", imports.size);
-    wasm_extern_t *stubs[imports.size];
+    int32_t import_count = wasm_runtime_get_import_count(module_proto);
+    DRV_DEBUG("Import count: %d", import_count);
+    wasm_import_t *imports = driver_alloc(sizeof(wasm_import_t) * import_count);
 
-    // Get exports
-    wasm_exporttype_vec_t exports;
-    wasm_module_exports(proc->module, &exports);
+    for (int i = 0; i < import_count; i++) {
+        wasm_runtime_get_import_type(module_proto, i, &imports[i]);
+        DRV_DEBUG("imports[%d]: %s.%s [%d]", i, imports[i].module_name, imports[i].name, imports[i].kind);
+    }
+
+    int32_t export_count = wasm_runtime_get_export_count(module_proto);
+    DRV_DEBUG("Export count: %d", export_count);
+    wasm_export_t *exports = driver_alloc(sizeof(wasm_export_t) * export_count);
+
+    for (int i = 0; i < export_count; i++) {
+        wasm_runtime_get_export_type(module_proto, i, &exports[i]);
+        DRV_DEBUG("exports[%d]: %s [%d]", i, exports[i].name, exports[i].kind);
+    }
 
     // Create Erlang lists for imports
-    int init_msg_size = sizeof(ErlDrvTermData) * (2 + 3 + 5 + (13 * imports.size) + (11 * exports.size));
+    int init_msg_size = sizeof(ErlDrvTermData) * (2 + 3 + 5 + (13 * import_count) + (11 * export_count));
     ErlDrvTermData* init_msg = driver_alloc(init_msg_size);
     int msg_i = 0;
 
@@ -166,104 +182,257 @@ void wasm_initialize_runtime(void* raw) {
     init_msg[msg_i++] = ERL_DRV_ATOM;
     init_msg[msg_i++] = atom_execution_result;
 
-    // Process imports
-    for (int i = 0; i < imports.size; ++i) {
-        //DRV_DEBUG("Processing import %d", i);
-        const wasm_importtype_t* import = imports.data[i];
-        const wasm_name_t* module_name = wasm_importtype_module(import);
-        const wasm_name_t* name = wasm_importtype_name(import);
-        const wasm_externtype_t* type = wasm_importtype_type(import);
+    // Scaffold the index of modules and their symbols
+    ImportModuleSymbols *import_modules_symbols = driver_alloc(sizeof(ImportModuleSymbols) * import_count);
+    int found_import_modules_count = 0;
+    for (int i = 0; i < import_count; ++i) {
+        const char* module_name = imports[i].module_name;
+        bool found = false;
+        for (int j = 0; j < found_import_modules_count; ++j) {
+            if (strcmp(import_modules_symbols[j].module_name, module_name) == 0) {
+                found = true;
+                import_modules_symbols[j].count++;
+                break;
+            }
+        }
+        if (!found) {
+            import_modules_symbols[found_import_modules_count].module_name = module_name;
+            import_modules_symbols[found_import_modules_count].count = 1;
+            found_import_modules_count++;
+        }
+    }
 
-        //DRV_DEBUG("Import: %s.%s", module_name->data, name->data);
+    DRV_DEBUG("Found %d import modules", found_import_modules_count);
+    for (int i = 0; i < found_import_modules_count; ++i) {
+        DRV_DEBUG("Import module %d: %s (%d symbols)", i, import_modules_symbols[i].module_name, import_modules_symbols[i].count);
+    }
 
-        char* type_str = driver_alloc(256);
-        // TODO: What happpens here?
-        if(!get_function_sig(type, type_str)) {
-            // TODO: Handle other types of imports?
+    // Build the native symbols
+    for (int i = 0; i < found_import_modules_count; ++i) {
+        // Allocate symbols array directly into the struct in the main array
+        import_modules_symbols[i].symbols = driver_alloc(sizeof(NativeSymbol) * import_modules_symbols[i].count);
+        if (!import_modules_symbols[i].symbols) {
+            DRV_DEBUG("Failed to allocate memory for symbols array for module %s", import_modules_symbols[i].module_name);
+            // TODO: Handle allocation failure (e.g., cleanup previously allocated memory)
             continue;
         }
-        // 13 items in the each import message
-        init_msg[msg_i++] = ERL_DRV_ATOM;
-        init_msg[msg_i++] = driver_mk_atom((char*)wasm_externtype_to_kind_string(type));
-        init_msg[msg_i++] = ERL_DRV_STRING;
-        init_msg[msg_i++] = (ErlDrvTermData)module_name->data;
-        init_msg[msg_i++] = module_name->size - 1;
-        init_msg[msg_i++] = ERL_DRV_STRING;
-        init_msg[msg_i++] = (ErlDrvTermData)name->data;
-        init_msg[msg_i++] = name->size - 1;
-        init_msg[msg_i++] = ERL_DRV_STRING;
-        init_msg[msg_i++] = (ErlDrvTermData)type_str;
-        init_msg[msg_i++] = strlen(type_str);
-        init_msg[msg_i++] = ERL_DRV_TUPLE;
-        init_msg[msg_i++] = 4;
 
-        DRV_DEBUG("Creating callback for %s.%s [%s]", module_name->data, name->data, type_str);
-        ImportHook* hook = driver_alloc(sizeof(ImportHook));
-        hook->module_name = module_name->data;
-        hook->field_name = name->data;
-        hook->proc = proc;
-        hook->signature = type_str;
+        int current_symbol_index = 0; // Index for the current module's symbols array
 
-        hook->stub_func =
-            wasm_func_new_with_env(
-                proc->store,
-                wasm_externtype_as_functype_const(type),
-                wasm_handle_import,
-                hook,
-                NULL
-            );
-        stubs[i] = wasm_func_as_extern(hook->stub_func);
+        // Iterate through all original imports to find ones matching the current module
+        for (int k = 0; k < import_count; ++k) {
+            if (strcmp(imports[k].module_name, import_modules_symbols[i].module_name) == 0) {
+                // Found an import belonging to the current module
+                if (current_symbol_index >= import_modules_symbols[i].count) {
+                     DRV_DEBUG("Error: Found more symbols for module %s than initially counted.", import_modules_symbols[i].module_name);
+                     // This indicates a potential logic error in the counting phase
+                     break; // Stop processing this module
+                }
+
+                wasm_import_t import = imports[k]; // Use the correct import
+                const char* module_name = import.module_name;
+                const char* name = import.name;
+                const wasm_import_export_kind_t kind = import.kind;
+                const wasm_func_type_t type = import.u.func_type;
+                DRV_DEBUG("Building symbol %d for module %s: %s.%s", current_symbol_index, module_name, module_name, name);
+
+                uint32_t param_count = wasm_func_type_get_param_count(type);
+                //DRV_DEBUG("Param count: %d", param_count);
+
+                enum wasm_valkind_enum *param_kinds = driver_alloc(sizeof(enum wasm_valkind_enum) * param_count);
+                 if (!param_kinds && param_count > 0) {
+                    DRV_DEBUG("Failed to allocate memory for param_kinds for %s.%s", module_name, name);
+                    // TODO: Handle allocation failure
+                    continue; // Skip this symbol
+                }
+                for (uint32_t p_idx = 0; p_idx < param_count; ++p_idx) {
+                    param_kinds[p_idx] = wasm_func_type_get_param_valkind(type, p_idx);
+                    //DRV_DEBUG("Param %d kind: %d", p_idx, param_kinds[p_idx]);
+                }
+
+                char* type_str = driver_alloc(256);
+                 if (!type_str) {
+                    DRV_DEBUG("Failed to allocate memory for type_str for %s.%s", module_name, name);
+                    if (param_kinds) driver_free(param_kinds);
+                    // TODO: Handle allocation failure
+                    continue; // Skip this symbol
+                }
+
+                if(!get_function_sig(param_kinds, param_count, type_str)) {
+                    DRV_DEBUG("Failed to get function signature for %s.%s", module_name, name);
+                     if (param_kinds) driver_free(param_kinds);
+                     driver_free(type_str);
+                    // TODO: Handle other types of imports?
+                    continue; // Skip this symbol
+                } else {
+                    DRV_DEBUG("Got function signature for %s.%s: %s", module_name, name, type_str);
+                }
+                if (param_kinds) driver_free(param_kinds); // Free param_kinds after use
+
+                // Add import details to the init_msg for Erlang
+                init_msg[msg_i++] = ERL_DRV_ATOM;
+                init_msg[msg_i++] = driver_mk_atom((char*)wasm_import_export_kind_to_string(kind));
+                init_msg[msg_i++] = ERL_DRV_STRING;
+                init_msg[msg_i++] = (ErlDrvTermData)module_name;
+                init_msg[msg_i++] = strlen(module_name);
+                init_msg[msg_i++] = ERL_DRV_STRING;
+                init_msg[msg_i++] = (ErlDrvTermData)name;
+                init_msg[msg_i++] = strlen(name);
+                init_msg[msg_i++] = ERL_DRV_STRING;
+                init_msg[msg_i++] = (ErlDrvTermData)type_str;
+                init_msg[msg_i++] = strlen(type_str);
+                init_msg[msg_i++] = ERL_DRV_TUPLE;
+                init_msg[msg_i++] = 4;
+
+                DRV_DEBUG("Generating native symbol metadata for %s.%s [%s]", module_name, name, type_str);
+
+                NativeSymbolAttachment *attachment = driver_alloc(sizeof(NativeSymbolAttachment));
+                if (!attachment) {
+                    DRV_DEBUG("Failed to allocate memory for NativeSymbolAttachment");
+                    driver_free(type_str); // Free type_str allocated earlier
+                    continue;
+                }
+                attachment->module_name = module_name; // Potential dangling pointer if module_proto is freed
+                attachment->field_name = name;       // Potential dangling pointer if module_proto is freed
+                attachment->signature = type_str;      // Keep allocated type_str, free later
+
+                NativeSymbol *native_symbol = driver_alloc(sizeof(NativeSymbol));
+                if (!native_symbol) {
+                    DRV_DEBUG("Failed to allocate memory for NativeSymbol");
+                    driver_free(attachment); // Free attachment allocated above
+                    driver_free(type_str); // Free type_str allocated earlier
+                    continue;
+                }
+                native_symbol->symbol = name;         // Potential dangling pointer if module_proto is freed
+                native_symbol->func_ptr = generic_import_native_symbol_func;
+                native_symbol->signature = NULL; // wasm_runtime_register_natives_raw ignores signature
+                native_symbol->attachment = attachment;
+
+                // Copy the struct content into the allocated array
+                import_modules_symbols[i].symbols[current_symbol_index] = *native_symbol;
+
+                // TODO: Memory leak: 'native_symbol' and 'attachment' allocated above are lost here.
+                // We copied the *content* of native_symbol, but not the pointer itself.
+                // The 'attachment' pointer inside the copied struct now points to the allocated attachment.
+                // Need to decide how to manage the lifetime of 'native_symbol', 'attachment', and 'type_str'.
+                // If wasm_runtime_register_natives_raw copies data, we might need to free them after registration.
+                // If it stores pointers, they need to persist.
+
+                current_symbol_index++; // Move to the next slot in the symbols array
+
+                // NOTE: type_str is intentionally NOT freed here because its pointer is stored in 'attachment'.
+                // It needs to be freed later, likely alongside 'attachment' and 'native_symbol'.
+            }
+        }
+         // Optional: Check if we filled the expected number of symbols
+        if (current_symbol_index != import_modules_symbols[i].count) {
+            DRV_DEBUG("Warning: Expected %d symbols for module %s, but found %d.",
+                      import_modules_symbols[i].count, import_modules_symbols[i].module_name, current_symbol_index);
+            // This might indicate an issue with the counting logic or the processing loop
+        }
     }
+
+    DRV_DEBUG("Cleaning up proto-module");
+    wasm_module_delete(&module_proto);
+    wasm_runtime_destroy();
+
+    DRV_DEBUG("Reinitializing runtime");
+    wasm_runtime_full_init(&init_args);
 
     init_msg[msg_i++] = ERL_DRV_NIL;
     init_msg[msg_i++] = ERL_DRV_LIST;
-    init_msg[msg_i++] = imports.size + 1;
+    init_msg[msg_i++] = import_count + 1;
 
-    // Create proc!
-    wasm_extern_vec_t externs;
-    wasm_extern_vec_new(&externs, imports.size, stubs);
-    wasm_trap_t* trap = NULL;
-    proc->instance = wasm_instance_new_with_args(proc->store, proc->module, &externs, &trap, 0x10000, 0x10000);
-    if (!proc->instance) {
-        DRV_DEBUG("Failed to create WASM instance");
-        send_error(proc, "Failed to create WASM instance (although module was created).");
+    DRV_DEBUG("Registering native symbols");
+    for (int i = 0; i < found_import_modules_count; ++i) {
+        ImportModuleSymbols import_module_symbols = import_modules_symbols[i];
+        DRV_DEBUG("Registering native symbols for import module[%d]: %s", i, import_module_symbols.module_name);
+        wasm_runtime_register_natives_raw(import_module_symbols.module_name, import_module_symbols.symbols, import_module_symbols.count);
+    }
+
+    DRV_DEBUG("Initializing runtime module");
+    wasm_module_t module_runtime = wasm_runtime_load(mod_bin->binary, mod_bin->size, error_buf, 1024);
+    if (!module_runtime) {
+        DRV_DEBUG("Failed to load WASM runtime-module: %s", error_buf);
+        send_error(proc, "Failed to load WASM runtime-module: %s", error_buf);
         drv_unlock(proc->is_running);
         return;
     }
+    DRV_DEBUG("Created runtime-module: %p", module_runtime);
+    
+    wasm_module_inst_t module_inst = wasm_runtime_instantiate(module_runtime, 0x10000, 0x10000, error_buf, 1024);
+    if (!module_inst) {
+        DRV_DEBUG("Failed to instantiate WASM runtime-module: %s", error_buf);
+        send_error(proc, "Failed to instantiate WASM runtime-module: %s", error_buf);
+        drv_unlock(proc->is_running);
+        return;
+    }
+    DRV_DEBUG("Created runtime-module instance: %p", module_inst);
+    // proc->instance = module_inst;
 
-    wasm_extern_vec_t exported_externs;
-    wasm_instance_exports(proc->instance, &exported_externs);
+    DRV_DEBUG("Processing exports");
+    wasm_table_inst_t indirect_func_table;
+    if (!wasm_runtime_get_export_table_inst(module_inst, "__indirect_function_table", &indirect_func_table)) {
+        DRV_DEBUG("Failed to find __indirect_function_table");
+        // send_error(proc, "Failed to get indirect function table");
+        // drv_unlock(proc->is_running);
+        // return;
+    }
+    // proc->indirect_func_table = indirect_func_table;
 
-    // Refresh the exports now that we have an instance
-    wasm_module_exports(proc->module, &exports);
-    for (size_t i = 0; i < exports.size; i++) {
-        //DRV_DEBUG("Processing export %d", i);
-        const wasm_exporttype_t* export = exports.data[i];
-        const wasm_name_t* name = wasm_exporttype_name(export);
-        const wasm_externtype_t* type = wasm_exporttype_type(export);
-        char* kind_str = (char*) wasm_externtype_to_kind_string(type);
+    for (size_t i = 0; i < export_count; i++) {
+        wasm_export_t export = exports[i];
+        const char* name = export.name;
+        const wasm_import_export_kind_t kind = export.kind;
+        char* kind_str = (char*) wasm_import_export_kind_to_string(kind);
+        DRV_DEBUG("Processing export: %s [%s]", name, kind_str);
 
-        // Check if the export is the indirect function table
-        if (strcmp(name->data, "__indirect_function_table") == 0) {
-            DRV_DEBUG("Found indirect function table: %s. Index: %d", name->data, i);
-            proc->indirect_func_table_ix = i;
-            const wasm_tabletype_t* table_type = wasm_externtype_as_tabletype_const(type);
-            const wasm_limits_t* table_limits = wasm_tabletype_limits(table_type);
-            // Retrieve the indirect function table
-            proc->indirect_func_table = wasm_extern_as_table(exported_externs.data[i]);
-
-        }
+        const wasm_func_type_t type = export.u.func_type;
 
         char* type_str = driver_alloc(256);
-        get_function_sig(type, type_str);
-        DRV_DEBUG("Export: %s [%s] -> %s", name->data, kind_str, type_str);
+            if (!type_str) {
+            DRV_DEBUG("Failed to allocate memory for type_str for %s", name);
+            continue; // Skip this symbol
+        }
+        
+        if (kind == WASM_IMPORT_EXPORT_KIND_FUNC) {
+            uint32_t param_count = wasm_func_type_get_param_count(type);
+            DRV_DEBUG("Param count: %d", param_count);
+
+            enum wasm_valkind_enum *param_kinds = driver_alloc(sizeof(enum wasm_valkind_enum) * param_count);
+                if (!param_kinds && param_count > 0) {
+                DRV_DEBUG("Failed to allocate memory for param_kinds for %s", name);
+                // TODO: Handle allocation failure
+                continue; // Skip this symbol
+            }
+            for (uint32_t p_idx = 0; p_idx < param_count; ++p_idx) {
+                param_kinds[p_idx] = wasm_func_type_get_param_valkind(type, p_idx);
+                DRV_DEBUG("Param %d kind: %d", p_idx, param_kinds[p_idx]);
+            }
+
+            DRV_DEBUG("get_function_sig(%p, %d, %p)", param_kinds, param_count, type_str);
+
+            if(!get_function_sig(param_kinds, param_count, type_str)) {
+                DRV_DEBUG("Failed to get function signature for %s", name);
+                if (param_kinds) driver_free(param_kinds);
+                driver_free(type_str);
+                // TODO: Handle other types of imports?
+                continue; // Skip this symbol
+            } else {
+                DRV_DEBUG("Got function signature for %s: %s", name, type_str);
+            }
+        } else {
+            type_str[0] = '\0';
+        }
+
+        DRV_DEBUG("Export: %s [%s] -> %s", name, kind_str, type_str);
 
         // 10 elements for each exported function
         init_msg[msg_i++] = ERL_DRV_ATOM;
         init_msg[msg_i++] = driver_mk_atom(kind_str);
         init_msg[msg_i++] = ERL_DRV_STRING;
-        init_msg[msg_i++] = (ErlDrvTermData)name->data;
-        init_msg[msg_i++] = name->size - 1;
+        init_msg[msg_i++] = (ErlDrvTermData)name;
+        init_msg[msg_i++] = strlen(name);
         init_msg[msg_i++] = ERL_DRV_STRING;
         init_msg[msg_i++] = (ErlDrvTermData)type_str;
         init_msg[msg_i++] = strlen(type_str);
@@ -274,7 +443,7 @@ void wasm_initialize_runtime(void* raw) {
     // 5 closing elements
     init_msg[msg_i++] = ERL_DRV_NIL;
     init_msg[msg_i++] = ERL_DRV_LIST;
-    init_msg[msg_i++] = (exports.size) + 1;
+    init_msg[msg_i++] = export_count + 1;
     init_msg[msg_i++] = ERL_DRV_TUPLE;
     init_msg[msg_i++] = 3;
 
