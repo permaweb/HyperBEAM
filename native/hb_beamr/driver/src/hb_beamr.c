@@ -186,10 +186,10 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
             send_error(proc, "Write request out of bounds");
             return;
         }
-        byte_t* memory_data = wasm_memory_data(get_memory(proc));
-        DRV_DEBUG("Memory location to write to: %p", ptr+memory_data);
+        byte_t* memory_base = wasm_memory_get_base_address(get_memory(proc));
+        DRV_DEBUG("Memory location to write to: %p", memory_base + ptr);
 
-        memcpy(memory_data + ptr, wasm_binary, size_bytes);
+        memcpy(memory_base + ptr, wasm_binary, size_bytes);
         DRV_DEBUG("Write complete");
 
         ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 2);
@@ -211,11 +211,11 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
             send_error(proc, "Read request out of bounds");
             return;
         }
-        byte_t* memory_data = wasm_memory_data(get_memory(proc));
-        DRV_DEBUG("Memory location to read from: %p", memory_data + ptr);
+        byte_t* memory_base = wasm_memory_get_base_address(get_memory(proc));
+        DRV_DEBUG("Memory location to read from: %p", memory_base + ptr);
         
         char* out_binary = driver_alloc(size_l);
-        memcpy(out_binary, memory_data + ptr, size_l);
+        memcpy(out_binary, memory_base + ptr, size_l);
 
         DRV_DEBUG("Read complete. Binary: %p", out_binary);
 

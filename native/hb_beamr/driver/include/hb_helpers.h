@@ -128,7 +128,7 @@ wasm_func_t* get_exported_function(Proc* proc, const char* target_name);
  * 
  *  returns: A pointer to the WASM memory object, or NULL if not found.
  */
-wasm_memory_t* get_memory(Proc* proc);
+wasm_memory_inst_t get_memory(Proc* proc);
 
 /*
  * Function: get_memory_size

@@ -251,18 +251,11 @@ wasm_func_t* get_exported_function(Proc* proc, const char* target_name) {
     return func;
 }
 
-wasm_memory_t* get_memory(Proc* proc) {
-    wasm_extern_vec_t exports;
-    wasm_instance_exports(proc->instance, &exports);
-    for (size_t i = 0; i < exports.size; i++) {
-        if (wasm_extern_kind(exports.data[i]) == WASM_EXTERN_MEMORY) {
-            return wasm_extern_as_memory(exports.data[i]);
-        }
-    }
-    return NULL;
+wasm_memory_inst_t get_memory(Proc* proc) {
+    return wasm_runtime_get_default_memory(proc->instance);
 }
 
 long get_memory_size(Proc* proc) {
-    wasm_memory_t* memory = get_memory(proc);
-    return wasm_memory_size(memory) * 65536;
+    wasm_memory_inst_t memory = get_memory(proc);
+    return wasm_memory_get_cur_page_count(memory) * wasm_memory_get_bytes_per_page(memory);
 }

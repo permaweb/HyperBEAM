@@ -26,7 +26,9 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     DRV_DEBUG("Result count: %d", result_count);
     
     // Initialize the message object
-    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * ((2+(2*3)) + ((param_count + 1) * 2) + ((result_count + 1) * 2) + 2));
+    int msg_size = sizeof(ErlDrvTermData) * ((2+(2*3)) + ((param_count + 1) * 2) + ((result_count + 1) * 2) + 2);
+    DRV_DEBUG("Message size: %d", msg_size);
+    ErlDrvTermData* msg = driver_alloc(msg_size);
     int msg_index = 0;
     msg[msg_index++] = ERL_DRV_ATOM;
     msg[msg_index++] = atom_import;
@@ -63,8 +65,15 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     proc->current_import->ready = 0;
 
     DRV_DEBUG("Sending %d terms...", msg_index);
+    DRV_DEBUG("Pre-send state: proc=%p, port=%lu, msg=%p, msg_index=%d", proc, proc->port_term, msg, msg_index);
+    DRV_DEBUG("  module_name (%p): '%s'", module_name, module_name ? module_name : "(null)");
+    DRV_DEBUG("  func_name (%p): '%s'", func_name, func_name ? func_name : "(null)");
+    DRV_DEBUG("  signature (%p): '%s' (len=%zu)", signature, signature ? signature : "(null)", signature ? strlen(signature) : 0);
+    DRV_DEBUG("About to call erl_drv_output_term");
     // Send the message to the caller process
     int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
+    DRV_DEBUG("Call to erl_drv_output_term completed. Res: %d", msg_res);
+    DRV_DEBUG("Message sent. Res: %d", msg_res);
     // Wait for the response (we set this directly after the message was sent
     // so we have the lock, before Erlang sends us data back)
     drv_wait(proc->current_import->response_ready, proc->current_import->cond, &proc->current_import->ready);
@@ -384,8 +393,10 @@ void wasm_initialize_runtime(void* raw) {
         // send_error(proc, "Failed to get indirect function table");
         // drv_unlock(proc->is_running);
         // return;
+    } else {
+        DRV_DEBUG("Found __indirect_function_table");
+        proc->indirect_func_table = indirect_func_table;
     }
-    // proc->indirect_func_table = indirect_func_table;
 
     for (size_t i = 0; i < export_count; i++) {
         wasm_export_t export = exports[i];
@@ -426,7 +437,6 @@ void wasm_initialize_runtime(void* raw) {
                 continue; // Skip this symbol
             }
 
-            DRV_DEBUG("get_function_sig(%p, %d, %p)", param_kinds, param_count, type_str);
             if(!get_function_sig(param_count, param_kinds, result_count, result_kinds, type_str)) {
                 DRV_DEBUG("Failed to get function signature for %s", name);
                 if (param_kinds) driver_free(param_kinds);
@@ -577,14 +587,11 @@ void wasm_execute_function(void* raw) {
 }
 
 int wasm_execute_indirect_function(Proc* proc, const char *field_name, const wasm_val_vec_t* input_args, wasm_val_vec_t* output_results) {
-
-
     DRV_DEBUG("=================================================");
     DRV_DEBUG("Starting function invocation");
     DRV_DEBUG("=================================================");
 
-    wasm_table_t* indirect_function_table = proc->indirect_func_table;
-
+    wasm_table_inst_t indirect_function_table = proc->indirect_func_table;
 
     int result = 0;
     DRV_DEBUG("Function name: %s", field_name);
@@ -594,7 +601,7 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     DRV_DEBUG("Function index retrieved from input_args: %d", function_index);
 
     // Get the function reference from the table and cast it to a function
-    wasm_ref_t* function_ref = wasm_table_get(indirect_function_table, function_index);
+    wasm_ref_t* function_ref = wasm_table_get(&indirect_function_table, function_index);
     const wasm_func_t* func = wasm_ref_as_func(function_ref);
     DRV_DEBUG("Function pointer: %p", func);
 

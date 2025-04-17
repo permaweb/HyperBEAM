@@ -32,7 +32,7 @@ typedef struct {
     char* current_function;        // Current function being executed
     long current_function_ix;   // Index of the current function
     int indirect_func_table_ix;    // Index of the indirect function table
-    wasm_table_t* indirect_func_table; // Indirect function table
+    wasm_table_inst_t indirect_func_table; // Indirect function table
     wasm_exec_env_t exec_env;      // Execution environment for the WASM instance
     ei_term* current_args;         // Arguments for the current function
     int current_args_length;       // Length of the current arguments
@@ -41,15 +41,6 @@ typedef struct {
     int is_initialized;            // Flag to check if the process is initialized
     time_t start_time;             // Start time of the process
 } Proc;
-
-// Structure to represent an import hook
-typedef struct {
-    const char* module_name;             // Name of the module
-    const char* field_name;              // Name of the field (function)
-    const char* signature;               // Function signature
-    Proc* proc;                    // The associated process
-    wasm_func_t* stub_func;        // WASM function pointer for the import
-} ImportHook;
 
 // Structure to represent the request for loading a WASM binary
 typedef struct {
@@ -75,7 +66,6 @@ struct wasm_host_info {
 
 // Structure representing a WASM function (extended with host-specific details)
 struct wasm_func_t {
-    wasm_store_t *store;             // WASM store
     wasm_name_t *module_name;        // Module name for the function
     wasm_name_t *name;               // Function name
     uint16_t kind;                   // Function kind (e.g., export)
