@@ -24,7 +24,11 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     enum wasm_valkind_enum *result_kinds = attachment->result_kinds;
     DRV_DEBUG("Param count: %d", param_count);
     DRV_DEBUG("Result count: %d", result_count);
-    
+    // int param_size = kinds_size(param_kinds, param_count);
+    // int result_size = kinds_size(result_kinds, result_count);
+    // DRV_DEBUG("Param size: %d", param_size);
+    // DRV_DEBUG("Result size: %d", result_size);
+
     // Initialize the message object
     int msg_size = sizeof(ErlDrvTermData) * ((2+(2*3)) + ((param_count + 1) * 2) + ((result_count + 1) * 2) + 2);
     DRV_DEBUG("Message size: %d", msg_size);

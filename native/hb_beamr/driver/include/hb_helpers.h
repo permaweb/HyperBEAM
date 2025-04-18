@@ -141,4 +141,8 @@ wasm_memory_inst_t get_memory(Proc* proc);
  */
 long get_memory_size(Proc* proc);
 
+int kind_size(enum wasm_valkind_enum kind);
+
+int kinds_size(enum wasm_valkind_enum* kinds, int count);
+
 #endif // HB_HELPERS_H

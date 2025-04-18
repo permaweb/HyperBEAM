@@ -69,19 +69,19 @@ int import_arg_to_erl_term(ErlDrvTermData* term, enum wasm_valkind_enum kind, ui
     switch (kind) {
         case WASM_I32:
             term[0] = ERL_DRV_INT;
-            term[1] = (ErlDrvTermData) *arg_ptr;
+            term[1] = (ErlDrvTermData)(int32_t)(*arg_ptr);
             return 2;
         case WASM_I64:
             term[0] = ERL_DRV_INT64;
-            term[1] = (ErlDrvTermData) *arg_ptr;
+            term[1] = (ErlDrvTermData)(int64_t *)(arg_ptr);
             return 2;
         case WASM_F32:
             term[0] = ERL_DRV_FLOAT;
-            term[1] = (ErlDrvTermData) *arg_ptr;
+            term[1] = (ErlDrvTermData)(float *)(arg_ptr);
             return 2;
         case WASM_F64:
             term[0] = ERL_DRV_FLOAT;
-            term[1] = (ErlDrvTermData) *arg_ptr;
+            term[1] = (ErlDrvTermData)(double *)(arg_ptr);
             return 2;
         default:
             DRV_DEBUG("Unsupported result type: %d", kind);
@@ -160,6 +160,27 @@ int erl_terms_to_import_results(uint32_t val_count, enum wasm_valkind_enum* val_
         }
     }
     return 0;
+}
+
+int kind_size(enum wasm_valkind_enum kind) {
+    switch (kind) {
+        case WASM_I32: return 4;
+        case WASM_I64: return 8;
+        case WASM_F32: return 4;
+        case WASM_F64: return 8;
+        default: {
+            DRV_DEBUG("kind_size: unsupported kind: %d", kind);
+            return 0;
+        }
+    }
+}
+
+int kinds_size(enum wasm_valkind_enum* kinds, int count) {
+    int size = 0;
+    for(int i = 0; i < count; i++) {
+        size += kind_size(kinds[i]);
+    }
+    return size;
 }
 
 ei_term* decode_list(char* buff, int* index) {
