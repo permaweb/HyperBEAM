@@ -424,7 +424,7 @@ enforce_valid_tx(TX) ->
         {invalid_field, target, TX#tx.target}
     ),
     ok_or_throw(TX,
-        check_size(TX#tx.signature, [0, byte_size(?DEFAULT_SIG)]),
+        check_size(TX#tx.signature, [0, 65, byte_size(?DEFAULT_SIG)]),
         {invalid_field, signature, TX#tx.signature}
     ),
     lists:foreach(
