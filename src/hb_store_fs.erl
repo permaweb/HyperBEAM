@@ -133,7 +133,30 @@ make_link(Opts, Existing, New) ->
 
 %% @doc Add the directory prefix to a path.
 add_prefix(#{ <<"prefix">> := Prefix }, Path) ->
-    hb_store:join([Prefix, Path]).
+	?event({add_prefix, Prefix, Path}),
+    % Check if the prefix is an absolute path
+    IsAbsolute = is_binary(Prefix) andalso binary:first(Prefix) =:= $/ orelse
+                 is_list(Prefix) andalso hd(Prefix) =:= $/,
+    % Join the paths
+    JoinedPath = hb_store:join([Prefix, Path]),
+    % If the prefix was absolute, ensure the joined path is also absolute
+    case IsAbsolute of
+        true -> 
+            case is_binary(JoinedPath) of
+                true ->
+                    case binary:first(JoinedPath) of
+                        $/ -> JoinedPath;
+                        _ -> <<"/", JoinedPath/binary>>
+                    end;
+                false ->
+                    case JoinedPath of
+                        [$/ | _] -> JoinedPath;
+                        _ -> [$/ | JoinedPath]
+                    end
+            end;
+        false -> 
+            JoinedPath
+    end.
 
 %% @doc Remove the directory prefix from a path.
 remove_prefix(#{ <<"prefix">> := Prefix }, Path) ->

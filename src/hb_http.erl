@@ -846,3 +846,21 @@ ans104_wasm_test() ->
     {ok, Res} = post(URL, Msg, #{}),
     ?event({res, Res}),
     ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, #{})).
+
+send_large_signed_request_test() ->
+    % Note: If the signature scheme ever changes, we will need to do
+    % `hb_message:commit(hb_message:uncommitted(Req), #{})' to get a freshly
+    % signed request.
+    {ok, [Req]} = file:consult(<<"test/large-message.eterm">>),
+    % Get the short trace length from the node message in the large, stored
+    % request. 
+    ?event(debug_http, {request_message, Req}),
+    ?assertMatch(
+        {ok, 5},
+        post(
+            hb_http_server:start_node(),
+            <<"/node-message/short_trace_len">>,
+            Req,
+            #{ http_client => httpc }
+        )
+    ).

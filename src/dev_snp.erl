@@ -192,12 +192,12 @@ generate(_M1, _M2, Opts) ->
             {report, ReportJSON}
         }
     ),
-    ReportMsg = hb_message:commit(LocalHashes#{
+    ReportMsg = LocalHashes#{
         <<"nonce">> => hb_util:encode(ReportData),
         <<"address">> => Address,
         <<"node-message">> => NodeMsg,
 		<<"report">> => ReportJSON
-    }, Wallet),
+    },
 
 	?event({verify_res, hb_message:verify(ReportMsg)}),
 	?event({snp_report_msg, ReportMsg}),

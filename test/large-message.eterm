@@ -1,0 +1,218 @@
+#{
+              <<"address">> =>
+                  <<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU">>,
+              <<"append">> =>
+                  <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>,
+              <<"commitments">> =>
+                  #{<<"88VMQLqJxIwAT5PThjsKMTSVU56jEExem5hwQPbxcqc">> =>
+                        #{<<"alg">> => <<"hmac-sha256">>,
+                          <<"commitment-device">> => <<"httpsig@1.0">>,
+                          <<"signature">> =>
+                              <<"http-sig-037590df99c805ad=:N6AyqYlF04sxNcv+PZedgHW8TrL+9XqsQxQyDWDWywTDF6qeMR5IdokYGwqHRF1O5ygMvD7kqrlTCSJZSfwBiraOPaR3ewASGEn9v0D/ytRApN2rVMVrSVdWXM48L/YAwwYQj1AJ1B6l11GwB7tJQdnK5CjFWZg95KKsOf4cP8pUsNIeJMoOF8y4mcUVu9ncxz5xmCzNVAoLlCZC7LhOpAoQmejPWYlOURdao5bCLAHNgp0MwVVAIMbC7e0dryzIwkPKJ6b9dpdQQ8M3WKLw95BB4dBXCe4I6S8iUL6VhL9sSy9B0vZTax30ndgvh0f/QkObUwp3K41j5TEYhxLXMMgs/aEWzNawZzfeCLICuDd6XxQG0F2QS3UMOgtnZKoWfX2YBq7CS8lkaVrANkh5g2MFMlgJMEnyVFegsREUg8qqO0I6oLbECJsOfWUAe12pv3scMhF9ofi8TJpHuRUKdxhzOA9IWzLS6GO+wkNEQ3IAKCGdZUUci+ntoY5Hm1/R7lSoiEQSOWl41Mx6ZVSWNhZRbdqDOXhYTpTP6NU8Ql2st0vF0uefC5Zljd9cs9wk0D44XTSIZxLQao60j1CX0lLxW03Dh3eHD490/7T7/HVhayJF/Vx5u7evJCdReTNCxhyDCSnV5RKx6++6zX0B/VdxoTWyMO2XA5qG9v5Bs7o=:">>,
+                          <<"signature-input">> =>
+                              <<"http-sig-037590df99c805ad=(\"address\" \"ao-types\" \"append\" \"content-digest\" \"content-type\" \"firmware\" \"guest_features\" \"initrd\" \"kernel\" \"nonce\" \"public-key\" \"report\" \"vcpu_type\" \"vcpus\" \"vmm_type\");alg=\"rsa-pss-sha512\";keyid=\"o987RvpWhYgDA9rte9WJmVnws2z6YX_khhBrQOBCOyxQG5lj3i7aJIXfEwV-X3GPWRSMQ_7inIi4Fw7ocUDIXp4EWhiCSU4JTywxzbwcgRzH42bTk8AsEm7uQrIWqCYbinQ92Qsn3qnW4jhcpa1wPASRlv3vYAQIu6eXKuloXpIjx8rFOLTzTje9NFVWmjypP9oShtjI8Y7VdEjjl5ILMqu5ZfwlIsssbx9J6jDvN9nMCj8-j1YyKh-Uq3aJKeYxeytSSYvGU4mHrG3j2HYooct9LXOwTh89sXsc7gCvSafpI8j7ZFGRrP28FhRhCjzYhiCT88efsWxAjkv1C1JYf5jJLtLFfEl-Y39jpGPXnIaofeMJ9X2X_Xfx86KOKSqoOU-DmFKfPdt4JjqaafI1_Asvxp60enS1BdvgfLr34K8gq6Yyos47FrzhqCW_BWOF77vgp-w5PV-tcs2uO1oKpUghy1eaTeeNdKHjlQj9huOjv7kOMBGfOWtZDW1sO9ChYB3DDTT3AAwo6bVjj0iiiwWGbzWecwT9OPLetRCymVPEFvTQWXK6-1Qu3WNoYqFtC_pFqHo-owxaHS37ySTfB1A04C5a6m3TEP9hLWde52C5frMdfchYuy5pqoNqMb3sznGRQhOwmcWxb3unq9tytAYNmEpQhzZ-sHapTs1Y080\"">>},
+                    <<"oRjdfP_V-aFCZgdDGmHhgijR4Y95nxbHJ_FwUgVYXQs">> =>
+                        #{<<"alg">> => <<"rsa-pss-sha512">>,
+                          <<"commitment-device">> => <<"httpsig@1.0">>,
+                          <<"committer">> =>
+                              <<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU">>,
+                          <<"signature">> =>
+                              <<"http-sig-037590df99c805ad=:N6AyqYlF04sxNcv+PZedgHW8TrL+9XqsQxQyDWDWywTDF6qeMR5IdokYGwqHRF1O5ygMvD7kqrlTCSJZSfwBiraOPaR3ewASGEn9v0D/ytRApN2rVMVrSVdWXM48L/YAwwYQj1AJ1B6l11GwB7tJQdnK5CjFWZg95KKsOf4cP8pUsNIeJMoOF8y4mcUVu9ncxz5xmCzNVAoLlCZC7LhOpAoQmejPWYlOURdao5bCLAHNgp0MwVVAIMbC7e0dryzIwkPKJ6b9dpdQQ8M3WKLw95BB4dBXCe4I6S8iUL6VhL9sSy9B0vZTax30ndgvh0f/QkObUwp3K41j5TEYhxLXMMgs/aEWzNawZzfeCLICuDd6XxQG0F2QS3UMOgtnZKoWfX2YBq7CS8lkaVrANkh5g2MFMlgJMEnyVFegsREUg8qqO0I6oLbECJsOfWUAe12pv3scMhF9ofi8TJpHuRUKdxhzOA9IWzLS6GO+wkNEQ3IAKCGdZUUci+ntoY5Hm1/R7lSoiEQSOWl41Mx6ZVSWNhZRbdqDOXhYTpTP6NU8Ql2st0vF0uefC5Zljd9cs9wk0D44XTSIZxLQao60j1CX0lLxW03Dh3eHD490/7T7/HVhayJF/Vx5u7evJCdReTNCxhyDCSnV5RKx6++6zX0B/VdxoTWyMO2XA5qG9v5Bs7o=:">>,
+                          <<"signature-input">> =>
+                              <<"http-sig-037590df99c805ad=(\"address\" \"ao-types\" \"append\" \"content-digest\" \"content-type\" \"firmware\" \"guest_features\" \"initrd\" \"kernel\" \"nonce\" \"public-key\" \"report\" \"vcpu_type\" \"vcpus\" \"vmm_type\");alg=\"rsa-pss-sha512\";keyid=\"o987RvpWhYgDA9rte9WJmVnws2z6YX_khhBrQOBCOyxQG5lj3i7aJIXfEwV-X3GPWRSMQ_7inIi4Fw7ocUDIXp4EWhiCSU4JTywxzbwcgRzH42bTk8AsEm7uQrIWqCYbinQ92Qsn3qnW4jhcpa1wPASRlv3vYAQIu6eXKuloXpIjx8rFOLTzTje9NFVWmjypP9oShtjI8Y7VdEjjl5ILMqu5ZfwlIsssbx9J6jDvN9nMCj8-j1YyKh-Uq3aJKeYxeytSSYvGU4mHrG3j2HYooct9LXOwTh89sXsc7gCvSafpI8j7ZFGRrP28FhRhCjzYhiCT88efsWxAjkv1C1JYf5jJLtLFfEl-Y39jpGPXnIaofeMJ9X2X_Xfx86KOKSqoOU-DmFKfPdt4JjqaafI1_Asvxp60enS1BdvgfLr34K8gq6Yyos47FrzhqCW_BWOF77vgp-w5PV-tcs2uO1oKpUghy1eaTeeNdKHjlQj9huOjv7kOMBGfOWtZDW1sO9ChYB3DDTT3AAwo6bVjj0iiiwWGbzWecwT9OPLetRCymVPEFvTQWXK6-1Qu3WNoYqFtC_pFqHo-owxaHS37ySTfB1A04C5a6m3TEP9hLWde52C5frMdfchYuy5pqoNqMb3sznGRQhOwmcWxb3unq9tytAYNmEpQhzZ-sHapTs1Y080\"">>}},
+              <<"firmware">> =>
+                  <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
+              <<"guest_features">> => 1,
+              <<"initrd">> =>
+                  <<"da6dffff50373e1d393bf92cb9b552198b1930068176a046dda4e23bb725b3bb">>,
+              <<"kernel">> =>
+                  <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
+              <<"node-message">> =>
+                  #{<<"debug_metadata">> => true,
+                    <<"gateway">> => <<"https://arweave.net">>,
+                    <<"process_now_from_cache">> => false,
+                    <<"debug_print_map_line_threshold">> => 30,
+                    <<"http_client">> => gun,<<"http_keepalive">> => 120000,
+                    <<"short_trace_len">> => 5,
+                    <<"debug_print_trace">> => short,
+                    <<"date">> => <<"Fri, 18 Apr 2025 19:01:31 GMT">>,
+                    <<"scheduler_location_ttl">> => 604800000,
+                    <<"access_control_allow_origin">> => <<"*">>,
+                    <<"compute_mode">> => lazy,<<"preload_devices">> => [],
+                    <<"hb_config_location">> => <<"config.flat">>,
+                    <<"process_workers">> => false,
+                    <<"access_control_allow_methods">> =>
+                        <<"GET, POST, PUT, DELETE, OPTIONS">>,
+                    <<"initialized">> => permanent,<<"only">> => local,
+                    <<"trusted">> =>
+                        #{<<"append">> =>
+                              <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>,
+                          <<"firmware">> =>
+                              <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
+                          <<"guest_features">> => 1,
+                          <<"initrd">> =>
+                              <<"da6dffff50373e1d393bf92cb9b552198b1930068176a046dda4e23bb725b3bb">>,
+                          <<"kernel">> =>
+                              <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
+                          <<"vcpu_type">> => 5,<<"vcpus">> => 1,
+                          <<"vmm_type">> => 1},
+                    <<"snp_hashes">> =>
+                        #{<<"append">> =>
+                              <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>,
+                          <<"firmware">> =>
+                              <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
+                          <<"guest_features">> => 1,
+                          <<"initrd">> =>
+                              <<"da6dffff50373e1d393bf92cb9b552198b1930068176a046dda4e23bb725b3bb">>,
+                          <<"kernel">> =>
+                              <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
+                          <<"vcpu_type">> => 5,<<"vcpus">> => 1,
+                          <<"vmm_type">> => 1},
+                    <<"cache_lookup_hueristics">> => false,
+                    <<"address">> =>
+                        <<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU">>,
+                    <<"store">> =>
+                        [#{<<"prefix">> => <<"cache-mainnet">>,
+                           <<"store-module">> => hb_store_fs},
+                         #{<<"store">> =>
+                               [#{<<"prefix">> => <<"cache-mainnet">>,
+                                  <<"store-module">> => hb_store_fs}],
+                           <<"store-module">> => hb_store_gateway}],
+                    <<"postprocessor">> => undefined,
+                    <<"debug_show_priv">> => false,
+                    <<"routes">> =>
+                        [#{<<"node">> =>
+                               #{<<"prefix">> => <<"http://localhost:6363">>},
+                           <<"template">> => <<"/result/.*">>},
+                         #{<<"nodes">> =>
+                               [#{<<"opts">> =>
+                                      #{<<"http_client">> => httpc,
+                                        <<"protocol">> => http2},
+                                  <<"prefix">> =>
+                                      <<"https://arweave-search.goldsky.com">>},
+                                #{<<"opts">> =>
+                                      #{<<"http_client">> => gun,
+                                        <<"protocol">> => http2},
+                                  <<"prefix">> => <<"https://arweave.net">>}],
+                           <<"template">> => <<"/graphql">>},
+                         #{<<"node">> =>
+                               #{<<"opts">> =>
+                                     #{<<"http_client">> => gun,
+                                       <<"protocol">> => http2},
+                                 <<"prefix">> => <<"https://arweave.net">>},
+                           <<"template">> => <<"/raw">>}],
+                    <<"debug_print">> => false,
+                    <<"bundler_ans104">> => <<"https://up.arweave.net:443">>,
+                    <<"client_error_strategy">> => throw,
+                    <<"http_request_send_timeout">> => 60000,
+                    <<"http_extra_opts">> =>
+                        #{<<"cache_control">> => [<<"always">>],
+                          <<"force_message">> => true},
+                    <<"force_signed">> => true,
+                    <<"server">> => <<"nginx/1.18.0 (Ubuntu)">>,
+                    <<"access_remote_cache_for_client">> => false,
+                    <<"await_inprogress">> => named,
+                    <<"content_type">> =>
+                        <<"multipart/form-data; boundary=\"5zd5yKhUfgSnCzBVlt29-Vs4rQQeUBGuVqNJubt07jI\"">>,
+                    <<"http_connect_timeout">> => 5000,<<"status">> => 200,
+                    <<"body_keys">> =>
+                        <<"\"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\"">>,
+                    <<"stack_print_prefixes">> => ["hb","dev","ar"],
+                    <<"scheduling_mode">> => disabled,
+                    <<"http_server">> =>
+                        <<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU">>,
+                    <<"debug_print_binary_max">> => 60,
+                    <<"debug_ids">> => false,<<"relay_http_client">> => httpc,
+                    <<"debug_stack_depth">> => 40,
+                    <<"preloaded_devices">> =>
+                        [#{<<"module">> => dev_codec_ans104,
+                           <<"name">> => <<"ans104@1.0">>},
+                         #{<<"module">> => dev_cu,
+                           <<"name">> => <<"compute@1.0">>},
+                         #{<<"module">> => dev_cache,
+                           <<"name">> => <<"cache@1.0">>},
+                         #{<<"module">> => dev_cacheviz,
+                           <<"name">> => <<"cacheviz@1.0">>},
+                         #{<<"module">> => dev_cron,
+                           <<"name">> => <<"cron@1.0">>},
+                         #{<<"module">> => dev_dedup,
+                           <<"name">> => <<"dedup@1.0">>},
+                         #{<<"module">> => dev_delegated_compute,
+                           <<"name">> => <<"delegated-compute@1.0">>},
+                         #{<<"module">> => dev_faff,
+                           <<"name">> => <<"faff@1.0">>},
+                         #{<<"module">> => dev_codec_flat,
+                           <<"name">> => <<"flat@1.0">>},
+                         #{<<"module">> => dev_genesis_wasm,
+                           <<"name">> => <<"genesis-wasm@1.0">>},
+                         #{<<"module">> => dev_green_zone,
+                           <<"name">> => <<"greenzone@1.0">>},
+                         #{<<"module">> => dev_codec_httpsig,
+                           <<"name">> => <<"httpsig@1.0">>},
+                         #{<<"module">> => dev_hyperbuddy,
+                           <<"name">> => <<"hyperbuddy@1.0">>},
+                         #{<<"module">> => dev_codec_json,
+                           <<"name">> => <<"json@1.0">>},
+                         #{<<"module">> => dev_json_iface,
+                           <<"name">> => <<"json-iface@1.0">>},
+                         #{<<"module">> => dev_lookup,
+                           <<"name">> => <<"lookup@1.0">>},
+                         #{<<"module">> => dev_lua,
+                           <<"name">> => <<"lua@5.3a">>},
+                         #{<<"module">> => dev_message,
+                           <<"name">> => <<"message@1.0">>},
+                         #{<<"module">> => dev_meta,
+                           <<"name">> => <<"meta@1.0">>},
+                         #{<<"module">> => dev_monitor,
+                           <<"name">> => <<"monitor@1.0">>},
+                         #{<<"module">> => dev_multipass,
+                           <<"name">> => <<"multipass@1.0">>},
+                         #{<<"module">> => dev_p4,<<"name">> => <<"p4@1.0">>},
+                         #{<<"module">> => dev_patch,
+                           <<"name">> => <<"patch@1.0">>},
+                         #{<<"module">> => dev_poda,
+                           <<"name">> => <<"poda@1.0">>},
+                         #{<<"module">> => dev_process,
+                           <<"name">> => <<"process@1.0">>},
+                         #{<<"module">> => dev_push,
+                           <<"name">> => <<"push@1.0">>},
+                         #{<<"module">> => dev_relay,
+                           <<"name">> => <<"relay@1.0">>},
+                         #{<<"module">> => dev_router,
+                           <<"name">> => <<"router@1.0">>},
+                         #{<<"module">> => dev_scheduler,
+                           <<"name">> => <<"scheduler@1.0">>},
+                         #{<<"module">> => dev_simple_pay,
+                           <<"name">> => <<"simple-pay@1.0">>},
+                         #{<<"module">> => dev_snp,
+                           <<"name">> => <<"snp@1.0">>},
+                         #{<<"module">> => dev_stack,
+                           <<"name">> => <<"stack@1.0">>},
+                         #{<<"module">> => dev_codec_structured,
+                           <<"name">> => <<"structured@1.0">>},
+                         #{<<"module">> => dev_test,
+                           <<"name">> => <<"test-device@1.0">>},
+                         #{<<"module">> => dev_wasi,
+                           <<"name">> => <<"wasi@1.0">>},
+                         #{<<"module">> => dev_wasm,
+                           <<"name">> => <<"wasm-64@1.0">>}],
+                    <<"cache_writers">> =>
+                        [<<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU">>],
+                    <<"wasm_allow_aot">> => false,
+                    <<"store_all_signed">> => true,
+                    <<"ans104_trust_gql">> => true,
+                    <<"commitment_device">> => <<"httpsig@1.0">>,
+                    <<"preprocessor">> => undefined,
+                    <<"debug_committers">> => false,<<"port">> => 10000,
+                    <<"load_remote_devices">> => false,
+                    <<"node_history">> => [],<<"mode">> => debug,
+                    <<"trusted_device_signers">> => [],
+                    <<"debug_print_indent">> => 2,
+                    <<"host">> => <<"localhost">>},
+              <<"nonce">> =>
+                  <<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU4bfGIgeSRG0fgGtFEdPTXAcI6szcsMPvbZmwMWraKxA">>,
+              <<"public-key">> =>
+                  <<"g2gCaAJ3A3JzYWIAAQABbQAAAgCj3ztG+laFiAMD2u171YmZWfCzbPphf+SGEGtA4EI7LFAbmWPeLtokhd8TBX5fcY9ZFIxD/uKciLgXDuhxQMhengRaGIJJTglPLDHNvByBHMfjZtOTwCwSbu5CshaoJhuKdD3ZCyfeqdbiOFylrXA8BJGW/e9gBAi7p5cq6WhekiPHysU4tPNON700VVaaPKk/2hKG2MjxjtV0SOOXkgsyq7ll/CUiyyxvH0nqMO832cwKPz6PVjIqH5Srdokp5jF7K1JJi8ZTiYesbePYdiihy30tc7BOHz2xexzuAK9Jp+kjyPtkUZGs/bwWFGEKPNiGIJPzx5+xbECOS/ULUlh/mMku0sV8SX5jf2OkY9echqh94wn1fZf9d/Hzoo4pKqg5T4OYUp8923gmOppp8jX8Cy/GnrR6dLUF2+B8uvfgryCrpjKizjsWvOGoJb8FY4Xvu+Cn7Dk9X61yza47WgqlSCHLV5pN5410oeOVCP2G46O/uQ4wEZ85a1kNbWw70KFgHcMNNPcADCjptWOPSKKLBYZvNZ5zBP048t61ELKZU8QW9NBZcrr7VC7dY2hioW0L+kWoej6jDFodLfvJJN8HUDTgLlrqbdMQ/2EtZ17nYLl+sx19yFi7Lmmqg2oxvezOcZFCE7CZxbFve6er23K0Bg2YSlCHNn6wdqlOzVjTzQ==">>,
+              <<"report">> =>
+                  <<"{\"version\":2,\"guest_svn\":0,\"policy\":196608,\"family_id\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"image_id\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"vmpl\":1,\"sig_algo\":1,\"current_tcb\":{\"bootloader\":4,\"tee\":0,\"_reserved\":[0,0,0,0],\"snp\":22,\"microcode\":213},\"plat_info\":3,\"_author_key_en\":0,\"_reserved_0\":0,\"report_data\":[94,3,117,144,223,153,200,5,173,98,247,84,148,241,12,220,66,8,139,230,238,117,76,124,214,104,220,29,13,102,72,213,56,109,241,136,129,228,145,27,71,224,26,209,68,116,244,215,1,194,58,179,55,44,48,251,219,102,108,12,90,182,138,196],\"measurement\":[57,145,156,83,216,77,75,73,242,17,131,95,71,138,47,87,91,44,72,35,26,227,241,105,23,212,36,168,251,224,172,31,33,175,179,197,217,106,227,52,65,65,10,56,83,147,108,11],\"host_data\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"id_key_digest\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"author_key_digest\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"report_id\":[76,118,205,58,46,223,75,32,141,9,113,137,69,229,230,102,49,239,64,145,130,106,21,147,154,141,222,210,40,40,121,150],\"report_id_ma\":[255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255],\"reported_tcb\":{\"bootloader\":4,\"tee\":0,\"_reserved\":[0,0,0,0],\"snp\":22,\"microcode\":213},\"_reserved_1\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"chip_id\":[6,154,118,21,12,115,53,47,251,19,195,100,155,12,239,102,116,131,103,189,106,202,153,3,114,175,16,182,24,166,229,214,231,126,164,15,129,52,233,142,196,43,43,8,89,238,118,246,21,144,209,16,165,197,134,105,214,250,155,148,50,78,87,203],\"committed_tcb\":{\"bootloader\":4,\"tee\":0,\"_reserved\":[0,0,0,0],\"snp\":22,\"microcode\":213},\"current_build\":20,\"current_minor\":55,\"current_major\":1,\"_reserved_2\":0,\"committed_build\":20,\"committed_minor\":55,\"committed_major\":1,\"_reserved_3\":0,\"launch_tcb\":{\"bootloader\":4,\"tee\":0,\"_reserved\":[0,0,0,0],\"snp\":22,\"microcode\":213},\"_reserved_4\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"signature\":{\"r\":[208,7,136,60,224,138,74,102,17,217,164,154,114,117,150,30,151,247,93,90,52,122,13,58,58,169,124,13,168,74,187,144,221,165,218,93,104,175,212,214,248,23,142,13,132,232,208,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"s\":[67,238,106,198,241,37,137,212,124,29,212,20,95,170,10,247,160,213,57,13,223,123,32,246,242,28,76,121,72,170,113,199,14,128,130,162,198,59,138,105,227,27,136,207,243,245,201,196,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"_reserved\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}">>,
+              <<"vcpu_type">> => 5,<<"vcpus">> => 1,<<"vmm_type">> => 1}.
