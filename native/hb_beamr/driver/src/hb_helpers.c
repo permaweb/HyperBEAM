@@ -261,10 +261,24 @@ wasm_func_t* get_exported_function(Proc* proc, const char* target_name) {
 }
 
 wasm_memory_inst_t get_memory(Proc* proc) {
-    return wasm_runtime_get_default_memory(proc->instance);
+    DRV_DEBUG("Getting memory for instance: %p", proc->instance);
+
+    wasm_memory_inst_t default_memory = wasm_runtime_get_default_memory(proc->instance);
+    if (default_memory) {
+        DRV_DEBUG("Default memory: %p", default_memory);
+        return default_memory;
+    }
+
+    DRV_DEBUG("Failed to get memory");
+    return NULL;
 }
 
 long get_memory_size(Proc* proc) {
+    DRV_DEBUG("Getting memory size");
+
     wasm_memory_inst_t memory = get_memory(proc);
+    if (!memory) return 0;
+
+    DRV_DEBUG("Memory: %p", memory);
     return wasm_memory_get_cur_page_count(memory) * wasm_memory_get_bytes_per_page(memory);
 }

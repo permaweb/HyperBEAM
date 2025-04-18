@@ -211,11 +211,16 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
             send_error(proc, "Read request out of bounds");
             return;
         }
-        byte_t* memory_base = wasm_memory_get_base_address(get_memory(proc));
-        DRV_DEBUG("Memory location to read from: %p", memory_base + ptr);
-        
-        char* out_binary = driver_alloc(size_l);
-        memcpy(out_binary, memory_base + ptr, size_l);
+        char* out_binary = NULL;
+        if (memory_size > 0) {
+            byte_t* memory_base = wasm_memory_get_base_address(get_memory(proc));
+            DRV_DEBUG("Memory location to read from: %p", memory_base + ptr);
+            out_binary = driver_alloc(size_l);
+            memcpy(out_binary, memory_base + ptr, size_l);
+        } else {
+            DRV_DEBUG("No memory found, returning empty binary");
+            out_binary = driver_alloc(0);
+        }
 
         DRV_DEBUG("Read complete. Binary: %p", out_binary);
 
