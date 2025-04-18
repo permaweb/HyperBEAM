@@ -86,7 +86,7 @@ paid_wasm_test() ->
             }
         ),
     % Read the WASM file from disk, post it to the host and execute it.
-    {ok, WASMFile} = file:read_file(<<"test/test-64.wasm">>),
+    {ok, WASMFile} = file:read_file(<<"test/test-64.aot">>),
     ClientMessage1 =
         hb_message:commit(
             #{

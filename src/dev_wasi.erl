@@ -243,7 +243,7 @@ generate_wasi_stack(File, Func, Params) ->
     Msg2.
 
 vfs_is_serializable_test() ->
-    StackMsg = generate_wasi_stack("test/test-print.wasm", <<"hello">>, []),
+    StackMsg = generate_wasi_stack("test/test-print.aot", <<"hello">>, []),
     VFSMsg = hb_ao:get(<<"vfs">>, StackMsg),
     VFSMsg2 =
         hb_message:minimize(
@@ -256,7 +256,7 @@ vfs_is_serializable_test() ->
     ?assert(hb_message:match(VFSMsg, VFSMsg2)).
 
 wasi_stack_is_serializable_test() ->
-    Msg = generate_wasi_stack("test/test-print.wasm", <<"hello">>, []),
+    Msg = generate_wasi_stack("test/test-print.aot", <<"hello">>, []),
     HTTPSigMsg = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
     Msg2 = hb_message:convert(HTTPSigMsg, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
     ?assert(hb_message:match(Msg, Msg2)).

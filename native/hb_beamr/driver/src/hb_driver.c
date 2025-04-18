@@ -1,6 +1,6 @@
-#include "include/hb_driver.h"
-#include "include/hb_logging.h"
-#include "include/hb_helpers.h"
+#include "../include/hb_driver.h"
+#include "../include/hb_logging.h"
+#include "../include/hb_helpers.h"
 
 
 void drv_lock(ErlDrvMutex* mutex) {
