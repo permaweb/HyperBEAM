@@ -280,5 +280,9 @@ long get_memory_size(Proc* proc) {
     if (!memory) return 0;
 
     DRV_DEBUG("Memory: %p", memory);
-    return wasm_memory_get_cur_page_count(memory) * wasm_memory_get_bytes_per_page(memory);
+    uint64_t page_count = wasm_memory_get_cur_page_count(memory);
+    uint64_t page_size = wasm_memory_get_bytes_per_page(memory);
+    uint64_t size = page_count * page_size;
+    DRV_DEBUG("Memory size: %d pages * %dB = %dB", page_count, page_size, size);
+    return size;
 }
