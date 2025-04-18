@@ -210,21 +210,9 @@ int get_function_sig(uint32_t param_count, enum wasm_valkind_enum* param_kinds,
         type_str[current_pos++] = wasm_valkind_to_char(&param_kinds[i]);
     }
     type_str[current_pos++] = ')';
-
-    if (result_count > 0) {
-        // Add result separator
-        type_str[current_pos++] = ' ';
-        type_str[current_pos++] = '-';
-        type_str[current_pos++] = '>';
-        type_str[current_pos++] = ' ';
-
-        type_str[current_pos++] = '(';
-        for(uint32_t i = 0; i < result_count; i++) {
-            type_str[current_pos++] = wasm_valkind_to_char(&result_kinds[i]);
-        }
-        type_str[current_pos++] = ')';
+    for(uint32_t i = 0; i < result_count; i++) {
+        type_str[current_pos++] = wasm_valkind_to_char(&result_kinds[i]);
     }
-
     type_str[current_pos] = '\0'; // Null-terminate the string
     return 1; // Assuming success always for now
 }
