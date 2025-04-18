@@ -419,7 +419,145 @@ aos_process_benchmark_test_() ->
         )
     end}.
 
+%% @doc Test hyper aos ledger blueprint
+aos_ledger_blueprint_credit_test() ->
+    Process = generate_lua_process("test/ledger.lua"),
+    {ok, _} = hb_cache:write(Process, #{}),
+    Message = generate_credit_message(Process),
+    {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore}),
+    {ok, Results} = hb_ao:resolve(
+        Process, 
+        <<"now/results/outbox/1/balances/vh-NTHVvlKZqRxc8LyyTNok65yQ55a_PJ1zWLb9G2JI">>, #{}),
+    ?event(rakis, {results, Results}),
+    ?assertEqual(<<"100000">>, Results).
+
+      
+aos_ledger_blueprint_balance_test() ->
+    Process = generate_lua_process("test/ledger.lua"),
+    {ok, _} = hb_cache:write(Process, #{}),
+    Message = generate_credit_message(Process),
+    {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore}),
+    Message2 = generate_balance_message(Process),
+    {ok, _} = hb_ao:resolve(Process, Message2, #{ hashpath => ignore}),
+    {ok, Results} = hb_ao:resolve(
+        Process, 
+        <<"now/results/outbox/1/data">>, #{}),
+    ?event(rakis, {results, Results}),
+    ?assertEqual(<<"100000">>, Results).
+
+aos_ledger_blueprint_balances_test() ->
+    Process = generate_lua_process("test/ledger.lua"),
+    {ok, _} = hb_cache:write(Process, #{}),
+    Message = generate_credit_message(Process),
+    {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore}),
+    Message2 = generate_balances_message(Process),
+    {ok, _} = hb_ao:resolve(Process, Message2, #{ hashpath => ignore}),
+    {ok, Results} = hb_ao:resolve(
+        Process, 
+        <<"now/results/outbox/1/count">>, #{}),
+    ?event(rakis, {results, Results}),
+    ?assertEqual(<<"1">>, Results).
+
+
+aos_ledger_blueprint_burn_test() ->
+    Process = generate_lua_process("test/ledger.lua"),
+    {ok, _} = hb_cache:write(Process, #{}),
+    Message = generate_credit_message(Process),
+    {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore}),
+    Message2 = generate_burn_message(Process),
+    {ok, _} = hb_ao:resolve(Process, Message2, #{ hashpath => ignore}),
+    {ok, Results} = hb_ao:resolve(
+        Process, 
+        <<"now/results/outbox/1/action">>, #{}),
+    ?event(rakis, {results, Results}),
+    ?assertEqual(<<"Burn-Notice">>, Results).
+
 %%% Test helpers
+
+%% @doc generate balances message.
+generate_burn_message(Process) ->
+    ProcID = hb_message:id(Process, all),
+    Wallet = hb:wallet(),
+    hb_message:commit(#{
+    <<"path">> => <<"schedule">>,
+    <<"method">> => <<"POST">>,
+    <<"body">> => 
+        hb_message:commit(
+          #{
+            <<"target">> => ProcID,
+            <<"type">> => <<"Message">>,
+            <<"quantity">> => <<"10">>,
+            <<"address">> => <<"vh-NTHVvlKZqRxc8LyyTNok65yQ55a_PJ1zWLb9G2JI">>,
+            <<"data">> => "",
+            <<"random-seed">> => rand:uniform(1337),
+            <<"action">> => <<"Burn">>
+           },
+          Wallet)
+    },
+    Wallet).
+
+%% @doc generate balances message.
+generate_balances_message(Process) ->
+    ProcID = hb_message:id(Process, all),
+    Wallet = hb:wallet(),
+    hb_message:commit(#{
+    <<"path">> => <<"schedule">>,
+    <<"method">> => <<"POST">>,
+    <<"body">> => 
+        hb_message:commit(
+          #{
+            <<"target">> => ProcID,
+            <<"type">> => <<"Message">>,
+            <<"data">> => "",
+            <<"random-seed">> => rand:uniform(1337),
+            <<"action">> => <<"Balances">>
+           },
+          Wallet)
+    },
+    Wallet).
+
+%% @doc generate balance message.
+generate_balance_message(Process) ->
+    ProcID = hb_message:id(Process, all),
+    Wallet = hb:wallet(),
+    hb_message:commit(#{
+    <<"path">> => <<"schedule">>,
+    <<"method">> => <<"POST">>,
+    <<"body">> => 
+        hb_message:commit(
+          #{
+            <<"target">> => ProcID,
+            <<"type">> => <<"Message">>,
+            <<"recipient">> => <<"vh-NTHVvlKZqRxc8LyyTNok65yQ55a_PJ1zWLb9G2JI">>,
+            <<"data">> => "",
+            <<"random-seed">> => rand:uniform(1337),
+            <<"action">> => <<"Balance">>
+           },
+          Wallet)
+    },
+    Wallet).
+
+%% @doc generate credit notice message.
+generate_credit_message(Process) ->
+    ProcID = hb_message:id(Process, all),
+    Wallet = hb:wallet(),
+    hb_message:commit(#{
+    <<"path">> => <<"schedule">>,
+    <<"method">> => <<"POST">>,
+    <<"body">> => 
+        hb_message:commit(
+          #{
+            <<"target">> => ProcID,
+            <<"type">> => <<"Message">>,
+            <<"quantity">> => <<"100000">>,
+            <<"sender">> => <<"vh-NTHVvlKZqRxc8LyyTNok65yQ55a_PJ1zWLb9G2JI">>,
+            <<"data">> => "",
+            <<"random-seed">> => rand:uniform(1337),
+            <<"action">> => <<"Credit-Notice">>
+           },
+          Wallet)
+    },
+    Wallet).
 
 %% @doc Generate a Lua process message.
 generate_lua_process(File) ->
@@ -437,7 +575,8 @@ generate_lua_process(File) ->
         ], 
         <<"scheduler-location">> =>
             hb_util:human_id(ar_wallet:to_address(Wallet)),
-        <<"test-random-seed">> => rand:uniform(1337)
+        <<"test-random-seed">> => rand:uniform(1337),
+        <<"token">> => hb_util:human_id(ar_wallet:to_address(Wallet)) 
     }, Wallet).
 
 %% @doc Generate a test message for a Lua process.
