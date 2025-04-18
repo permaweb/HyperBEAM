@@ -21,6 +21,23 @@ function ListTable()
     return {1, 2, 3}
 end
 
+function ao_resolve()
+    local status, res =
+        ao.resolve({
+            path = "/hello",
+            hello = "Hello, AO world!"
+        })
+    return res
+end
+
+function ao_relay()
+    local status, res =
+        ao.resolve({
+            path = "/~relay@1.0/call?relay-path=http://localhost:10000/hello"
+        })
+    return res
+end
+
 --- @function compute
 --- @tparam stringified AO process
 --- @tparam stringified AO message

@@ -93,8 +93,9 @@ initialize(Base, Script, Opts) ->
             true -> sandbox(State1, ?DEFAULT_SANDBOX, Opts);
             Spec -> sandbox(State1, Spec, Opts)
         end,
+    {ok, State3} = add_ao_core_resolver(Base, State2, Opts),
     % Return the base message with the state added to it.
-    {ok, hb_private:set(Base, <<"state">>, State2, Opts)}.
+    {ok, hb_private:set(Base, <<"state">>, State3, Opts)}.
 
 %% @doc Sandbox (render inoperable) a set of Lua functions. Each function is
 %% referred to as if it is a path in AO-Core, with its value being what to 
@@ -111,6 +112,76 @@ sandbox(State, [{Path, Value} | Rest], Opts) ->
 sandbox(State, [Path | Rest], Opts) ->
     {ok, NextState} = luerl:set_table_keys_dec(Path, <<"sandboxed">>, State),
     sandbox(NextState, Rest, Opts).
+
+%% @doc Add a HTTP-style AO-Core resolution function to the Lua environment.
+%% Optionally, limit the devices that the environment can make use of.
+add_ao_core_resolver(Base, State, Opts) ->
+    % Calculate and set the new `preloaded_devices' option.
+    AllDevs = hb_opts:get(preloaded_devices, Opts),
+    DevSandboxDef =
+        hb_ao:get(
+            <<"device-sandbox">>,
+            {as, <<"message@1.0">>, Base},
+            false,
+            Opts
+        ),
+    AdmissibleDevs =
+        case DevSandboxDef of
+            false -> AllDevs;
+            DevNames ->
+                lists:map(
+                    fun(Name) ->
+                        [Dev] =
+                            lists:filter(
+                                fun(X) ->
+                                    hb_ao:get(<<"name">>, X, Opts) == Name
+                                end,
+                                AllDevs
+                            ),
+                        Dev
+                    end,
+                    hb_util:message_to_ordered_list(DevNames)
+                )
+        end,
+    ?event({adding_ao_core_resolver, {devs, AdmissibleDevs}}),
+    ExecOpts = Opts#{ preloaded_devices => AdmissibleDevs },
+    % Initialize the AO-Core resolver.
+    BaseAOTable =
+        case luerl:get_table_keys_dec([ao], State) of
+            {ok, nil, _} ->
+                ?event(no_ao_table),
+                #{};
+            {ok, ExistingTable, _} ->
+                ?event({existing_ao_table, ExistingTable}),
+                decode(ExistingTable)
+        end,
+    ?event({base_ao_table, BaseAOTable}),
+    {ok, State2} =
+        luerl:set_table_keys_dec(
+            [ao],
+            encode(BaseAOTable),
+            State
+        ),
+    % Add the AO-Core resolver to the base AO table.
+    luerl:set_table_keys_dec(
+        [ao, resolve],
+        fun([EncodedMsg], ExecState) ->
+            AOMsg = decode(luerl:decode(EncodedMsg, ExecState)),
+            ?event({ao_core_resolver, {msg, AOMsg}}),
+            ParsedMsgs = hb_singleton:from(AOMsg),
+            ?event({parsed_msgs_to_resolve, ParsedMsgs}),
+            try hb_ao:resolve_many(ParsedMsgs, ExecOpts) of
+                {Status, Res} ->
+                    ?event({resolved_msgs, {status, Status}, {res, Res}}),
+                    {[Status, encode(Res)], ExecState}
+            catch
+                Error ->
+                    ?event({ao_core_resolver_error, Error}),
+                    {error, Error}
+            end
+        end,
+        State2
+    ).
 
 %% @doc Call the Lua script with the given arguments.
 compute(Key, RawBase, Req, Opts) ->
@@ -153,7 +224,7 @@ compute(Key, RawBase, Req, Opts) ->
     ?event(debug_lua, calling_lua_func),
     % ?event(debug_lua, {lua_params, Params}),
     case luerl:call_function_dec([Function], encode(Params), State) of
-        {ok, [LuaResult], NewState} ->
+        {ok, [LuaResult], NewState} when is_map(LuaResult) ->
             ?event(debug_lua, got_lua_result),
             Result = decode(LuaResult),
             ?event(debug_lua, decoded_result),
@@ -162,6 +233,9 @@ compute(Key, RawBase, Req, Opts) ->
                     <<"state">> => NewState
                 }
             }};
+        {ok, [LuaResult], _NewState} ->
+            ?event(debug_lua, got_lua_result),
+            {ok, LuaResult};
         {lua_error, Error, Details} ->
             {error, #{
                 <<"status">> => 500,
@@ -200,7 +274,7 @@ normalize(Base, _Req, RawOpts) ->
                     {msg1, Base}, {device_key, DeviceKey}
                 }
             ),
-            SerializedState = 
+            SerializedState =
                 hb_ao:get(
                     [<<"snapshot">>] ++ DeviceKey ++ [<<"body">>],
                     {as, dev_message, Base},
@@ -251,6 +325,29 @@ sandboxed_failure_test() ->
         <<"sandbox">> => true
     },
     ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
+
+%% @doc Run an AO-Core resolution from the Lua environment.
+ao_core_sandbox_test() ->
+    {ok, Script} = file:read_file("test/test.lua"),
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"script">> => Script,
+        <<"parameters">> => [],
+        <<"device-sandbox">> => [<<"message@1.0">>]
+    },
+    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"ao_relay">>, #{})),
+    ?assertMatch({ok, _}, hb_ao:resolve(Base, <<"ao_resolve">>, #{})).
+
+%% @doc Run an AO-Core resolution from the Lua environment.
+ao_core_resolution_from_lua_test() ->
+    {ok, Script} = file:read_file("test/test.lua"),
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"script">> => Script,
+        <<"parameters">> => []
+    },
+    {ok, Res} = hb_ao:resolve(Base, <<"ao_resolve">>, #{}),
+    ?assertEqual(<<"Hello, AO world!">>, Res).
 
 %% @doc Benchmark the performance of Lua executions.
 direct_benchmark_test() ->
@@ -358,7 +455,6 @@ invoke_aos_test() ->
     Message = generate_test_message(Process),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output/data">>, #{}),
-
     ?assertEqual(<<"1">>, Results).
 
 aos_authority_not_trusted_test() ->
