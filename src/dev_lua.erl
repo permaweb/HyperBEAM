@@ -359,7 +359,6 @@ invoke_aos_test() ->
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output/data">>, #{}),
 
-    ?event(rakis, { results, Results}),
     ?assertEqual(<<"1">>, Results).
 
 aos_authority_not_trusted_test() ->
@@ -384,7 +383,6 @@ aos_authority_not_trusted_test() ->
     ),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output/data">>, #{}),
-    ?event(rakis, { results, Results }),
     ?assertEqual(Results, <<"Message is not trusted.">>).
 
 %% @doc Benchmark the performance of Lua executions.
@@ -421,19 +419,18 @@ aos_process_benchmark_test_() ->
 
 %% @doc Test hyper aos ledger blueprint
 aos_ledger_blueprint_credit_test() ->
-    Process = generate_lua_process("test/ledger.lua"),
+    Process = generate_lua_process("test/hyper-aos.lua", "test/ledger.lua"),
     {ok, _} = hb_cache:write(Process, #{}),
     Message = generate_credit_message(Process),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore}),
     {ok, Results} = hb_ao:resolve(
         Process, 
         <<"now/results/outbox/1/balances/vh-NTHVvlKZqRxc8LyyTNok65yQ55a_PJ1zWLb9G2JI">>, #{}),
-    ?event(rakis, {results, Results}),
     ?assertEqual(<<"100000">>, Results).
 
       
 aos_ledger_blueprint_balance_test() ->
-    Process = generate_lua_process("test/ledger.lua"),
+    Process = generate_lua_process("test/hyper-aos.lua", "test/ledger.lua"),
     {ok, _} = hb_cache:write(Process, #{}),
     Message = generate_credit_message(Process),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore}),
@@ -442,11 +439,10 @@ aos_ledger_blueprint_balance_test() ->
     {ok, Results} = hb_ao:resolve(
         Process, 
         <<"now/results/outbox/1/data">>, #{}),
-    ?event(rakis, {results, Results}),
     ?assertEqual(<<"100000">>, Results).
 
 aos_ledger_blueprint_balances_test() ->
-    Process = generate_lua_process("test/ledger.lua"),
+    Process = generate_lua_process("test/hyper-aos.lua", "test/ledger.lua"),
     {ok, _} = hb_cache:write(Process, #{}),
     Message = generate_credit_message(Process),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore}),
@@ -455,12 +451,11 @@ aos_ledger_blueprint_balances_test() ->
     {ok, Results} = hb_ao:resolve(
         Process, 
         <<"now/results/outbox/1/count">>, #{}),
-    ?event(rakis, {results, Results}),
     ?assertEqual(<<"1">>, Results).
 
 
 aos_ledger_blueprint_burn_test() ->
-    Process = generate_lua_process("test/ledger.lua"),
+    Process = generate_lua_process("test/hyper-aos.lua","test/ledger.lua"),
     {ok, _} = hb_cache:write(Process, #{}),
     Message = generate_credit_message(Process),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore}),
@@ -559,16 +554,26 @@ generate_credit_message(Process) ->
     },
     Wallet).
 
-%% @doc Generate a Lua process message.
 generate_lua_process(File) ->
+    generate_lua_process(File, "").
+
+%% @doc Generate a Lua process message.
+generate_lua_process(File, File2) ->
     Wallet = hb:wallet(),
     {ok, Script} = file:read_file(File),
+
+    FullScript = case file:read_file(File2) of
+        {ok, Script2} -> 
+          <<Script/binary, Script2/binary>>;
+        _ ->
+            Script
+    end,
     hb_message:commit(#{
         <<"device">> => <<"process@1.0">>,
         <<"type">> => <<"Process">>,
         <<"scheduler-device">> => <<"scheduler@1.0">>,
         <<"execution-device">> => <<"lua@5.3a">>,
-        <<"script">> => Script,
+        <<"script">> => FullScript,
         <<"authority">> => [ 
           hb:address(), 
           <<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
