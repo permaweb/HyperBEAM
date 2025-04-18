@@ -82,7 +82,7 @@ get_graph_data(Opts) ->
     
     % Limit to top 500 nodes if there are too many
     NodesList = 
-        case maps:size(NodesMap) > 500 of
+        case maps:size(NodesMap) > 50000 of
             true ->
                 % Take a subset of nodes
                 {ReducedNodes, _} = lists:split(

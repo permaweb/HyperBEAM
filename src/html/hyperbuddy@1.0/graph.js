@@ -4,6 +4,49 @@
  */
 
 /**
+ * Utility function to create a circular texture for node rendering
+ * @param {number} size - Size of the texture in pixels
+ * @param {number|string} color - Color of the circle (hex)
+ * @param {boolean} border - Whether to add a border
+ * @param {number|string} borderColor - Color of the border (hex)
+ * @returns {THREE.Texture} The generated texture
+ */
+function createCircleTexture(size = 64, color = 0xffffff, border = false, borderColor = 0x000000) {
+    // Create a canvas element
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    
+    // Clear canvas with transparent background
+    context.clearRect(0, 0, size, size);
+    
+    // Convert color to string format if it's a number
+    const fillColor = typeof color === 'number' ? '#' + color.toString(16).padStart(6, '0') : color;
+    const strokeColor = typeof borderColor === 'number' ? '#' + borderColor.toString(16).padStart(6, '0') : borderColor;
+    
+    // Draw a circle
+    const radius = size / 2 - 2;
+    context.beginPath();
+    context.arc(size / 2, size / 2, radius, 0, 2 * Math.PI, false);
+    context.fillStyle = fillColor;
+    context.fill();
+    
+    // Add border if requested
+    if (border) {
+        context.lineWidth = 1;
+        context.strokeStyle = strokeColor;
+        context.stroke();
+    }
+    
+    // Create a texture from the canvas
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    
+    return texture;
+}
+
+/**
  * ThemeManager - Handles configuration and visual styling
  */
 class ThemeManager {
@@ -24,14 +67,14 @@ class ThemeManager {
                 neighborNode: 0x4CAF50,   // Green for neighbor nodes
                 link: 0xcccccc,           // Light gray for links
                 activeLink: 0x333333,     // Dark gray for active links
-                hover: 0xffcc88           // Warm orange/yellow for hover
+                hover: 0xfafa33           // Warm orange/yellow for hover
             },
             // Display options
             showLabels: true,
             physicsEnabled: true,
             // Physics settings
             defaultDistance: 150,
-            highConnectionThreshold: 5,
+            highConnectionThreshold: 10,
             // Camera settings
             zoomLevel: {
                 default: 1.0,
@@ -124,6 +167,13 @@ class SceneManager {
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
         
+        // Performance optimization
+        this.frustum = new THREE.Frustum();
+        this.projScreenMatrix = new THREE.Matrix4();
+        this.tmpVector = new THREE.Vector3();
+        this.enableFrustumCulling = true;
+        this.frustumCullingDistance = 1250; // Beyond this distance, apply visibility culling
+        
         // Initialize the scene
         this.initScene();
     }
@@ -145,19 +195,23 @@ class SceneManager {
             40,  // Narrower field of view for less distortion
             aspectRatio,
             0.1,
-            10000  // Increased far clipping plane
+            15000  // Increased far clipping plane
         );
         this.camera.position.z = 1000;
         
         // Create renderer
         this.renderer = new THREE.WebGLRenderer({ 
-            antialias: false,
+            antialias: true,
             alpha: true
         });
         this.renderer.setSize(width, height);
         this.renderer.setClearColor(this.themeManager.config.colors.background, 1);
         this.renderer.sortObjects = true; // Enable sorting for proper z-ordering
         this.container.appendChild(this.renderer.domElement);
+        
+        // Configure raycaster for better point detection
+        this.raycaster = new THREE.Raycaster();
+        this.raycaster.params.Points.threshold = 10; // Increase threshold for easier point selection
         
         // Add orbit controls limited to 2D movement with perspective camera
         this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
@@ -166,11 +220,9 @@ class SceneManager {
         this.controls.enableRotate = false; // Disable 3D rotation
         this.controls.screenSpacePanning = true;
         
-        // Add lighting
-        this.scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(0, 0, 200);
-        this.scene.add(directionalLight);
+        // Set zoom limits - constrain camera between 750 and 15000 on z-axis
+        this.controls.minDistance = 750;
+        this.controls.maxDistance = 15000;
         
         // Handle window resize
         window.addEventListener('resize', () => this.onWindowResize());
@@ -275,10 +327,103 @@ class SceneManager {
         // Update controls
         if (this.controls) {
             this.controls.update();
+            
+            // Enforce camera z-position limits
+            if (this.camera.position.z < 750) {
+                this.camera.position.z = 750;
+            } else if (this.camera.position.z > 15000) {
+                this.camera.position.z = 15000;
+            }
+        }
+        
+        // Apply frustum culling for distant objects
+        if (this.enableFrustumCulling) {
+            this.updateFrustumCulling();
         }
         
         // Render the scene
         this.renderer.render(this.scene, this.camera);
+    }
+    
+    /**
+     * Update frustum and apply visibility culling for better performance
+     */
+    updateFrustumCulling() {
+        // Update the frustum
+        this.projScreenMatrix.multiplyMatrices(
+            this.camera.projectionMatrix, 
+            this.camera.matrixWorldInverse
+        );
+        this.frustum.setFromProjectionMatrix(this.projScreenMatrix);
+        
+        // If we have a reference to the controller, access the dataManager
+        if (this.graphController && this.graphController.dataManager) {
+            const dataManager = this.graphController.dataManager;
+            
+            // Process all nodes
+            dataManager.graphObjects.nodes.forEach(node => {
+                if (!node.object) return;
+                
+                // Get distance from camera
+                this.tmpVector.copy(node.object.position);
+                const distance = this.tmpVector.distanceTo(this.camera.position);
+                
+                // If the node is beyond our threshold, check if it's in the frustum
+                if (distance > this.frustumCullingDistance) {
+                    // Check if the node is in the frustum
+                    const isVisible = this.frustum.containsPoint(node.object.position);
+                    
+                    // Only update visibility if necessary to avoid unnecessary matrix updates
+                    if (node.object.visible !== isVisible) {
+                        node.object.visible = isVisible;
+                        
+                        // Also update label visibility if it exists
+                        if (node.labelObject) {
+                            node.labelObject.visible = isVisible && this.themeManager.config.showLabels;
+                        }
+                    }
+                } else if (!node.object.visible) {
+                    // If node is within threshold distance but not visible, make visible
+                    node.object.visible = true;
+                    if (node.labelObject) {
+                        node.labelObject.visible = this.themeManager.config.showLabels;
+                    }
+                }
+            });
+            
+            // Optional: Process links for better culling
+            // Only show links if both endpoints are visible
+            dataManager.graphObjects.links.forEach(link => {
+                if (!link.line) return;
+                
+                const sourceNode = dataManager.graphObjects.nodes.get(link.sourceId);
+                const targetNode = dataManager.graphObjects.nodes.get(link.targetId);
+                
+                if (sourceNode && targetNode && sourceNode.object && targetNode.object) {
+                    const sourceDist = sourceNode.object.position.distanceTo(this.camera.position);
+                    const targetDist = targetNode.object.position.distanceTo(this.camera.position);
+                    
+                    // If both nodes are distant, check if they're visible
+                    if (sourceDist > this.frustumCullingDistance && targetDist > this.frustumCullingDistance) {
+                        const sourceVisible = sourceNode.object.visible;
+                        const targetVisible = targetNode.object.visible;
+                        
+                        // Only show link if both endpoints are visible
+                        link.line.visible = sourceVisible && targetVisible;
+                        
+                        // Update label visibility if needed
+                        if (link.labelObject) {
+                            link.labelObject.visible = sourceVisible && targetVisible && 
+                                this.themeManager.config.showLabels &&
+                                dataManager.activeLinks.has(`${link.sourceId}-${link.targetId}`);
+                        }
+                    } else if (!link.line.visible) {
+                        // If at least one endpoint is close, show the link
+                        link.line.visible = true;
+                    }
+                }
+            });
+        }
     }
     
     /**
@@ -582,29 +727,23 @@ class GraphObjectManager {
             node.type = this.dataManager.determineNodeType(node.id);
         }
         
-        // Get node type and size
-        const isSimple = node.type === 'simple';
-        const size = this.themeManager.getNodeSize(node.type);
-        const color = this.themeManager.getNodeColor(node.type);
-        
-        // Create 3D geometry and material for better visual effect
-        const geometry = new THREE.SphereGeometry(size, 16, 16);
-        const material = new THREE.MeshPhongMaterial({ 
-            color,
-            shininess: 2,
-            specular: 0x444444,
-            depthWrite: true,
-            depthTest: true
-        });
-        
-        // Create mesh
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.set(node.x || 0, node.y || 0, this.themeManager.config.zPos.node);
-        mesh.userData = { id: node.id, type: node.type, label: node.label };
-        mesh.renderOrder = 10;
-        
-        // Add to scene
-        this.sceneManager.addToScene(mesh);
+        // Add to NodeCloud for efficient rendering
+        if (this.graphController && this.graphController.nodeCloud) {
+            // Add to node cloud
+            const nodeIndex = this.graphController.nodeCloud.addNode(node);
+            
+            // Create a virtual object for compatibility
+            // This is needed because other code expects a THREE.Object3D
+            const virtualObject = {
+                position: new THREE.Vector3(node.x || 0, node.y || 0, this.themeManager.config.zPos.node),
+                visible: true,
+                userData: { id: node.id, type: node.type, label: node.label }
+            };
+            
+            // Store virtual object reference
+            node.object = virtualObject;
+            node.nodeCloudIndex = nodeIndex;
+        }
         
         // Create label if enabled
         let labelObject = null;
@@ -612,12 +751,16 @@ class GraphObjectManager {
             labelObject = this.createLabel(node);
         }
         
-        // Store reference in the node object
-        node.object = mesh;
+        // Store label reference
         node.labelObject = labelObject;
         
         // Store in dataManager
         this.dataManager.storeNodeObject(node.id, node);
+        
+        // Add to spatial grid if simulation manager is available
+        if (this.graphController && this.graphController.simulationManager) {
+            this.graphController.simulationManager.addNodeToSpatialGrid(node);
+        }
         
         return node;
     }
@@ -794,22 +937,29 @@ class GraphObjectManager {
      * @param {Object} node - The node object to update
      */
     updateNodePosition(node) {
-        if (node.object) {
-            // Update the mesh position
-            node.object.position.x = node.x || 0;
-            node.object.position.y = node.y || 0;
+        if (!node) return;
+        
+        if (this.graphController && this.graphController.nodeCloud) {
+            // Update position in the NodeCloud
+            this.graphController.nodeCloud.updateNodePosition(node.id, node.x || 0, node.y || 0);
             
-            // Update label position if it exists
-            if (node.labelObject) {
-                const offset_val = 6; // Same value as in createLabel
-                const isSimple = node.type === 'simple';
-                const offset = isSimple ? 
-                    this.themeManager.config.nodeSize.simple + offset_val : 
-                    this.themeManager.config.nodeSize.composite + offset_val;
-                    
-                node.labelObject.position.x = node.x || 0;
-                node.labelObject.position.y = (node.y || 0) + offset;
+            // Also update the virtual object for compatibility
+            if (node.object && node.object.position) {
+                node.object.position.x = node.x || 0;
+                node.object.position.y = node.y || 0;
             }
+        }
+        
+        // Update label position if it exists
+        if (node.labelObject) {
+            const offset_val = 6; // Same value as in createLabel
+            const isSimple = node.type === 'simple';
+            const offset = isSimple ? 
+                this.themeManager.config.nodeSize.simple + offset_val : 
+                this.themeManager.config.nodeSize.composite + offset_val;
+                
+            node.labelObject.position.x = node.x || 0;
+            node.labelObject.position.y = (node.y || 0) + offset;
         }
     }
     
@@ -857,7 +1007,7 @@ class GraphObjectManager {
      */
     updateNodeColors(nodeId) {
         const node = this.dataManager.graphObjects.nodes.get(nodeId);
-        if (!node || !node.object) return;
+        if (!node) return;
         
         let state = 'default';
         
@@ -870,8 +1020,10 @@ class GraphObjectManager {
             state = 'hover';
         }
         
-        // Set color based on state
-        node.object.material.color.set(this.themeManager.getNodeColor(node.type, state));
+        if (this.graphController && this.graphController.nodeCloud) {
+            // Update the color in the node cloud
+            this.graphController.nodeCloud.updateNodeColor(nodeId, node.type, state);
+        }
     }
     
     /**
@@ -898,9 +1050,9 @@ class GraphObjectManager {
         const node = this.dataManager.graphObjects.nodes.get(nodeId);
         if (!node) return;
         
-        // Remove mesh from scene
-        if (node.object) {
-            this.sceneManager.removeFromScene(node.object);
+        // Remove from NodeCloud if available
+        if (this.graphController && this.graphController.nodeCloud) {
+            this.graphController.nodeCloud.removeNode(nodeId);
         }
         
         // Remove label from scene
@@ -938,10 +1090,16 @@ class GraphObjectManager {
      * Clear all visible nodes and links from the scene
      */
     clearVisibleObjects() {
-        // Remove all objects from the scene
+        // Clear NodeCloud if available
+        if (this.graphController && this.graphController.nodeCloud) {
+            this.graphController.nodeCloud.clear();
+        }
+        
+        // Remove label objects from the scene
         this.dataManager.graphObjects.nodes.forEach((node, id) => {
-            if (node.object) this.sceneManager.removeFromScene(node.object);
-            if (node.labelObject) this.sceneManager.removeFromScene(node.labelObject);
+            if (node.labelObject) {
+                this.sceneManager.removeFromScene(node.labelObject);
+            }
         });
         
         this.dataManager.graphObjects.links.forEach((link, id) => {
@@ -995,6 +1153,568 @@ class GraphObjectManager {
 }
 
 /**
+ * SpatialGrid - Simple spatial partitioning for efficient queries
+ */
+class SpatialGrid {
+    constructor(cellSize = 200) {
+        this.cellSize = cellSize;
+        this.grid = new Map();
+        this.objects = new Set();
+    }
+    
+    /**
+     * Get the cell key for a position
+     * @param {THREE.Vector3} position - The position to get the cell for
+     * @returns {string} The cell key
+     */
+    getCellKey(position) {
+        const x = Math.floor(position.x / this.cellSize);
+        const y = Math.floor(position.y / this.cellSize);
+        const z = Math.floor(position.z / this.cellSize);
+        return `${x},${y},${z}`;
+    }
+    
+    /**
+     * Add an object to the grid
+     * @param {Object} object - The object to add
+     */
+    addObject(object) {
+        if (!object.object || !object.object.position) return;
+        
+        const position = object.object.position;
+        const cellKey = this.getCellKey(position);
+        
+        // Create cell if it doesn't exist
+        if (!this.grid.has(cellKey)) {
+            this.grid.set(cellKey, new Set());
+        }
+        
+        // Add to cell
+        this.grid.get(cellKey).add(object);
+        this.objects.add(object);
+    }
+    
+    /**
+     * Remove an object from the grid
+     * @param {Object} object - The object to remove
+     */
+    removeObject(object) {
+        if (!object.object || !object.object.position) return;
+        
+        // Remove from all cells (in case it moved)
+        this.grid.forEach(cell => {
+            cell.delete(object);
+        });
+        
+        this.objects.delete(object);
+        
+        // Clean up empty cells
+        this.grid.forEach((cell, key) => {
+            if (cell.size === 0) {
+                this.grid.delete(key);
+            }
+        });
+    }
+    
+    /**
+     * Find objects within a radius of a position
+     * @param {THREE.Vector3} position - The center position
+     * @param {number} radius - The radius to search within
+     * @returns {Array} Array of objects within the radius
+     */
+    findNearbyObjects(position, radius) {
+        // Calculate the cell range to check
+        const cellRadius = Math.ceil(radius / this.cellSize);
+        const centerX = Math.floor(position.x / this.cellSize);
+        const centerY = Math.floor(position.y / this.cellSize);
+        const centerZ = Math.floor(position.z / this.cellSize);
+        
+        const result = [];
+        const radiusSquared = radius * radius;
+        
+        // Check each cell in the range
+        for (let x = centerX - cellRadius; x <= centerX + cellRadius; x++) {
+            for (let y = centerY - cellRadius; y <= centerY + cellRadius; y++) {
+                for (let z = centerZ - cellRadius; z <= centerZ + cellRadius; z++) {
+                    const cellKey = `${x},${y},${z}`;
+                    const cell = this.grid.get(cellKey);
+                    
+                    if (cell) {
+                        // Check each object in the cell
+                        cell.forEach(object => {
+                            if (object.object && object.object.position) {
+                                const distSquared = position.distanceToSquared(object.object.position);
+                                if (distSquared <= radiusSquared) {
+                                    result.push(object);
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Clear all objects from the grid
+     */
+    clear() {
+        this.grid.clear();
+        this.objects.clear();
+    }
+    
+    /**
+     * Get the total number of objects in the grid
+     * @returns {number} The number of objects
+     */
+    size() {
+        return this.objects.size;
+    }
+}
+
+/**
+ * NodeCloud - Manages efficient point cloud rendering for graph nodes
+ */
+class NodeCloud {
+    constructor(scene, themeManager) {
+        this.scene = scene;
+        this.sceneManager = null; // Will be set by the EventManager
+        this.themeManager = themeManager;
+        
+        // Capacity tracking
+        this.maxNodes = 1000; // Initial capacity
+        this.nodeCount = 0;
+        
+        // Node tracking
+        this.nodeIndices = new Map(); // Maps node IDs to their index in the arrays
+        this.nodeTypes = new Map();   // Maps node IDs to their types
+        this.positions = null;
+        this.colors = null;
+        this.sizes = null;
+        
+        // Selection tracking
+        this.selectedIndices = new Set();
+        this.neighborIndices = new Set();
+        this.hoverIndex = -1;
+        
+        // Create base texture for all nodes
+        this.baseTexture = createCircleTexture(64, 0xffffff);
+        
+        // Initialize geometry and point cloud
+        this.initialize();
+    }
+    
+    /**
+     * Initialize buffers and point cloud with initial capacity
+     */
+    initialize() {
+        // Create buffer attributes with initial capacity
+        this.positions = new Float32Array(this.maxNodes * 3);
+        this.colors = new Float32Array(this.maxNodes * 3);
+        this.sizes = new Float32Array(this.maxNodes);
+        
+        // Create buffer geometry
+        this.geometry = new THREE.BufferGeometry();
+        this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
+        this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+        this.geometry.setAttribute('size', new THREE.BufferAttribute(this.sizes, 1));
+        
+        // Set draw range to only render active nodes
+        this.geometry.setDrawRange(0, 0);
+        
+        // Create point material
+        this.material = new THREE.ShaderMaterial({
+            uniforms: {
+                pointTexture: { value: this.baseTexture }
+            },
+            vertexShader: `
+                precision highp float;
+                attribute float size;
+                attribute vec3 color;
+                varying vec3 vColor;
+                
+                void main() {
+                    vColor = color;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = size * (1200.0 / -mvPosition.z);
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                precision highp float;
+                uniform sampler2D pointTexture;
+                varying vec3 vColor;
+                
+                void main() {
+                    vec4 texColor = texture2D(pointTexture, gl_PointCoord);
+                    if (texColor.a < 0.5) discard;
+                    gl_FragColor = vec4(vColor, 1.0) * texColor;
+                }
+            `,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.NormalBlending
+        });
+        
+        // Create points
+        this.points = new THREE.Points(this.geometry, this.material);
+        this.points.frustumCulled = false; // Disable frustum culling
+        this.points.renderOrder = 10;
+        
+        // Add to scene
+        this.scene.add(this.points);
+    }
+    
+    /**
+     * Resize buffers if needed
+     */
+    ensureCapacity(requiredNodes) {
+        if (requiredNodes <= this.maxNodes) return;
+        
+        // Calculate new capacity (1.5x required or 2x current, whichever is larger)
+        const newCapacity = Math.max(Math.ceil(requiredNodes * 1.5), this.maxNodes * 2);
+        
+        // Create new arrays
+        const newPositions = new Float32Array(newCapacity * 3);
+        const newColors = new Float32Array(newCapacity * 3);
+        const newSizes = new Float32Array(newCapacity);
+        
+        // Copy existing data
+        newPositions.set(this.positions);
+        newColors.set(this.colors);
+        newSizes.set(this.sizes);
+        
+        // Update references
+        this.positions = newPositions;
+        this.colors = newColors;
+        this.sizes = newSizes;
+        this.maxNodes = newCapacity;
+        
+        // Update buffer attributes
+        this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
+        this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+        this.geometry.setAttribute('size', new THREE.BufferAttribute(this.sizes, 1));
+    }
+    
+    /**
+     * Add a node to the point cloud
+     * @param {Object} node - Node data with position and type
+     * @returns {number} Index of the node in the point cloud
+     */
+    addNode(node) {
+        // Get node ID
+        const nodeId = node.id;
+        
+        // Check if this node is already in the cloud
+        if (this.nodeIndices.has(nodeId)) {
+            return this.nodeIndices.get(nodeId);
+        }
+        
+        // Ensure we have enough capacity
+        this.ensureCapacity(this.nodeCount + 1);
+        
+        // Add to the end of the arrays
+        const index = this.nodeCount;
+        const i3 = index * 3;
+        
+        // Set position
+        this.positions[i3] = node.x || 0;
+        this.positions[i3 + 1] = node.y || 0;
+        this.positions[i3 + 2] = this.themeManager.config.zPos.node;
+        
+        // Store node type for later reference
+        this.nodeTypes.set(nodeId, node.type || 'simple');
+        
+        // Set color based on node type
+        const color = new THREE.Color(this.themeManager.getNodeColor(node.type));
+        this.colors[i3] = color.r;
+        this.colors[i3 + 1] = color.g;
+        this.colors[i3 + 2] = color.b;
+        
+        // Set size based on node type - use larger sizes to make selection easier
+        const baseSize = this.themeManager.getNodeSize(node.type);
+        this.sizes[index] = baseSize * 4; // Increase size to improve interaction
+        
+        // Track this node
+        this.nodeIndices.set(nodeId, index);
+        this.nodeCount++;
+        
+        // Update draw range
+        this.geometry.setDrawRange(0, this.nodeCount);
+        
+        // Mark attributes as needing update
+        this.geometry.attributes.position.needsUpdate = true;
+        this.geometry.attributes.color.needsUpdate = true;
+        this.geometry.attributes.size.needsUpdate = true;
+        
+        return index;
+    }
+    
+    /**
+     * Update a node's position
+     * @param {string} nodeId - ID of the node to update
+     * @param {number} x - New X position
+     * @param {number} y - New Y position
+     */
+    updateNodePosition(nodeId, x, y) {
+        if (!this.nodeIndices.has(nodeId)) return;
+        
+        const index = this.nodeIndices.get(nodeId);
+        const i3 = index * 3;
+        
+        this.positions[i3] = x;
+        this.positions[i3 + 1] = y;
+        
+        // Mark position attribute as needing update
+        this.geometry.attributes.position.needsUpdate = true;
+    }
+    
+    /**
+     * Update a node's color based on state
+     * @param {string} nodeId - ID of the node to update
+     * @param {string} nodeType - Type of the node
+     * @param {string} state - State of the node (default, selected, neighbor, hover)
+     */
+    updateNodeColor(nodeId, nodeType, state = 'default') {
+        if (!this.nodeIndices.has(nodeId)) return;
+        
+        // Store node type if provided
+        if (nodeType) {
+            this.nodeTypes.set(nodeId, nodeType);
+        } else {
+            // Use stored type if available
+            nodeType = this.nodeTypes.get(nodeId) || 'simple';
+        }
+        
+        const index = this.nodeIndices.get(nodeId);
+        const i3 = index * 3;
+        
+        // Get color for this node state
+        const color = new THREE.Color(this.themeManager.getNodeColor(nodeType, state));
+        
+        // Update color in buffer
+        this.colors[i3] = color.r;
+        this.colors[i3 + 1] = color.g;
+        this.colors[i3 + 2] = color.b;
+        
+        // Mark colors attribute as needing update
+        this.geometry.attributes.color.needsUpdate = true;
+    }
+    
+    /**
+     * Update colors for all nodes based on selection state
+     * @param {string} selectedId - ID of the selected node
+     * @param {Set<string>} neighborIds - Set of neighbor node IDs
+     * @param {string} hoveredId - ID of the hovered node
+     */
+    updateColors(selectedId, neighborIds, hoveredId) {
+        // Reset tracking sets
+        this.selectedIndices.clear();
+        this.neighborIndices.clear();
+        this.hoverIndex = -1;
+        
+        // Track indices for faster updates
+        if (selectedId && this.nodeIndices.has(selectedId)) {
+            this.selectedIndices.add(this.nodeIndices.get(selectedId));
+        }
+        
+        neighborIds.forEach(id => {
+            if (this.nodeIndices.has(id)) {
+                this.neighborIndices.add(this.nodeIndices.get(id));
+            }
+        });
+        
+        if (hoveredId && this.nodeIndices.has(hoveredId)) {
+            this.hoverIndex = this.nodeIndices.get(hoveredId);
+        }
+        
+        // Update all node colors based on state
+        for (const [nodeId, index] of this.nodeIndices.entries()) {
+            const i3 = index * 3;
+            let state = 'default';
+            
+            // Determine state based on selection and hover
+            if (index === this.hoverIndex) {
+                state = 'hover';
+            } else if (this.selectedIndices.has(index)) {
+                state = 'selected';
+            } else if (this.neighborIndices.has(index)) {
+                state = 'neighbor';
+            }
+            
+            // Get node type from our stored map
+            const nodeType = this.nodeTypes.get(nodeId) || 'simple';
+            
+            // Get color for this state
+            const color = new THREE.Color(this.themeManager.getNodeColor(nodeType, state));
+            
+            // Update color
+            this.colors[i3] = color.r;
+            this.colors[i3 + 1] = color.g;
+            this.colors[i3 + 2] = color.b;
+        }
+        
+        // Mark attributes as needing update
+        this.geometry.attributes.color.needsUpdate = true;
+    }
+    
+    /**
+     * Find the closest node to a mouse position
+     * @param {THREE.Raycaster} raycaster - The raycaster
+     * @param {number} threshold - Maximum distance to consider a hit (in screen space)
+     * @returns {string|null} ID of the closest node or null if none found
+     */
+    findClosestNode(raycaster, threshold = 0.05) {
+        if (this.nodeCount === 0 || !this.positions) return null;
+        
+        // Get the camera from the scene manager or from the global controller
+        let camera = null;
+        let mousePosition = null;
+        
+        if (this.sceneManager) {
+            camera = this.sceneManager.camera;
+            mousePosition = this.sceneManager.mouse; // This is the normalized mouse position
+        } else if (window.lastGraphController && window.lastGraphController.sceneManager) {
+            camera = window.lastGraphController.sceneManager.camera;
+            mousePosition = window.lastGraphController.sceneManager.mouse;
+        }
+        
+        // If we can't get a camera or mouse position, we can't continue
+        if (!camera || !mousePosition) return null;
+        
+        // Find the closest node based on screen space distance
+        let closestDistance = Infinity;
+        let closestNodeId = null;
+        
+        // Check each node
+        for (const [nodeId, index] of this.nodeIndices.entries()) {
+            const i3 = index * 3;
+            
+            // Get node position
+            const nodePos = new THREE.Vector3(
+                this.positions[i3],
+                this.positions[i3 + 1],
+                this.positions[i3 + 2]
+            );
+            
+            // Project to screen space
+            const screenPos = nodePos.clone().project(camera);
+            
+            // Calculate 2D distance in screen space between mouse and node
+            const dx = screenPos.x - mousePosition.x;
+            const dy = screenPos.y - mousePosition.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // Get node size and adjust threshold based on size
+            const nodeSize = this.sizes[index];
+            const adjustedThreshold = threshold * (1 + (nodeSize / 10));
+            
+            // If this node is closer than the current closest and within threshold, update
+            if (distance < closestDistance && distance < adjustedThreshold) {
+                closestDistance = distance;
+                closestNodeId = nodeId;
+            }
+        }
+        
+        return closestNodeId;
+    }
+    
+    /**
+     * Remove a node from the point cloud
+     * @param {string} nodeId - ID of the node to remove
+     */
+    removeNode(nodeId) {
+        if (!this.nodeIndices.has(nodeId)) return;
+        
+        const indexToRemove = this.nodeIndices.get(nodeId);
+        
+        // Only perform complex removal if not the last node
+        if (indexToRemove !== this.nodeCount - 1) {
+            // Move the last node to this position
+            const lastIndex = this.nodeCount - 1;
+            const lastI3 = lastIndex * 3;
+            const removeI3 = indexToRemove * 3;
+            
+            // Copy position
+            this.positions[removeI3] = this.positions[lastI3];
+            this.positions[removeI3 + 1] = this.positions[lastI3 + 1];
+            this.positions[removeI3 + 2] = this.positions[lastI3 + 2];
+            
+            // Copy color
+            this.colors[removeI3] = this.colors[lastI3];
+            this.colors[removeI3 + 1] = this.colors[lastI3 + 1];
+            this.colors[removeI3 + 2] = this.colors[lastI3 + 2];
+            
+            // Copy size
+            this.sizes[indexToRemove] = this.sizes[lastIndex];
+            
+            // Find which node was at the last position
+            let lastNodeId = null;
+            for (const [id, index] of this.nodeIndices.entries()) {
+                if (index === lastIndex) {
+                    lastNodeId = id;
+                    break;
+                }
+            }
+            
+            // Update the moved node's index
+            if (lastNodeId) {
+                this.nodeIndices.set(lastNodeId, indexToRemove);
+            }
+        }
+        
+        // Remove the node from tracking
+        this.nodeIndices.delete(nodeId);
+        this.nodeCount--;
+        
+        // Update draw range
+        this.geometry.setDrawRange(0, this.nodeCount);
+        
+        // Mark attributes as needing update
+        this.geometry.attributes.position.needsUpdate = true;
+        this.geometry.attributes.color.needsUpdate = true;
+        this.geometry.attributes.size.needsUpdate = true;
+    }
+    
+    /**
+     * Clear all nodes from the point cloud
+     */
+    clear() {
+        this.nodeIndices.clear();
+        this.nodeTypes.clear();
+        this.nodeCount = 0;
+        this.geometry.setDrawRange(0, 0);
+        
+        // Reset state tracking
+        this.selectedIndices.clear();
+        this.neighborIndices.clear();
+        this.hoverIndex = -1;
+    }
+    
+    /**
+     * Update all positions from the node objects
+     * @param {Map} nodes - Map of nodes with current positions
+     */
+    updateAllPositions(nodes) {
+        // Update all node positions from data
+        for (const [nodeId, node] of nodes.entries()) {
+            if (this.nodeIndices.has(nodeId) && node.x !== undefined && node.y !== undefined) {
+                const index = this.nodeIndices.get(nodeId);
+                const i3 = index * 3;
+                
+                this.positions[i3] = node.x;
+                this.positions[i3 + 1] = node.y;
+            }
+        }
+        
+        // Mark position attribute as needing update
+        this.geometry.attributes.position.needsUpdate = true;
+    }
+}
+
+/**
  * SimulationManager - Manages the D3 force-directed simulation
  */
 class SimulationManager {
@@ -1006,8 +1726,16 @@ class SimulationManager {
         this.simulation = null;
         this.isRunning = false;
         
+        // Initialize spatial partitioning
+        this.spatialGrid = null;
+        this.useSpatialIndex = true;
+        this.gridUpdateInterval = 30; // Update grid every 30 frames
+        this.gridUpdateCounter = 0;
+        this.gridCellSize = 200; // Size of each grid cell
+        
         // Initialize the simulation
         this.initSimulation();
+        this.initSpatialIndex();
     }
     
     /**
@@ -1051,11 +1779,11 @@ class SimulationManager {
         // Create the simulation with all forces
         this.simulation = d3.forceSimulation()
             .force('link', d3.forceLink().id(d => d.id).distance(linkDistance))
-            .force('charge', d3.forceManyBody().strength(-50))
+            .force('charge', d3.forceManyBody().strength(-15))
             .force('center', d3.forceCenter(0, 0))
             .force('collision', d3.forceCollide().radius(collisionRadius))
             .force('x', d3.forceX().strength(0.001))
-            .force('y', d3.forceY().strength(0.0025))
+            .force('y', d3.forceY().strength(0.005))
             .on('tick', () => {
                 this.tickCounter++;
                 this.onSimulationTick();
@@ -1073,13 +1801,13 @@ class SimulationManager {
         
         // Adjust alpha settings for longer simulation time
         // Reduce decay rate (default is ~0.0228 which is 1% cooling per tick)
-        this.simulation.alphaDecay(0.01);  // Slower decay (about 0.5% cooling per tick)
+        this.simulation.alphaDecay(0.0228);  // Slower decay (about 0.5% cooling per tick)
         
         // Lower minimum alpha threshold (default is 0.001)
-        this.simulation.alphaMin(0.0005);  // Lower threshold for stopping
+        this.simulation.alphaMin(0.001);  // Lower threshold for stopping
         
         // Reduce velocity decay for more momentum (default is 0.4)
-        this.simulation.velocityDecay(0.2);
+        this.simulation.velocityDecay(0.1);
     }
     
     /**
@@ -1157,16 +1885,35 @@ class SimulationManager {
      */
     onSimulationTick() {
         this.updatePositions();
+        
+        // Update spatial grid periodically
+        if (this.useSpatialIndex) {
+            this.updateSpatialGrid();
+        }
     }
     
     /**
      * Update positions of all nodes and links
      */
     updatePositions() {
-        // Update the position of nodes in the scene
-        this.dataManager.graphObjects.nodes.forEach((node) => {
-            this.graphObjectManager.updateNodePosition(node);
-        });
+        // Check if we have a NodeCloud available
+        if (this.graphController && this.graphController.nodeCloud) {
+            // Bulk update the NodeCloud for better performance
+            this.graphController.nodeCloud.updateAllPositions(this.dataManager.graphObjects.nodes);
+            
+            // Update virtual objects for compatibility with other systems
+            this.dataManager.graphObjects.nodes.forEach(node => {
+                if (node.object && node.object.position) {
+                    node.object.position.x = node.x || 0;
+                    node.object.position.y = node.y || 0;
+                }
+                
+                // Update labels separately
+                if (node.labelObject) {
+                    this.graphObjectManager.updateNodePosition(node);
+                }
+            });
+        }
         
         // Update the position of links in the scene
         this.dataManager.graphObjects.links.forEach((link) => {
@@ -1190,6 +1937,57 @@ class SimulationManager {
                 console.log(`Simulation progress: tick=${this.tickCounter}, alpha=${currentAlpha.toFixed(6)}, ticks/second=${(100 / (timeSinceLastLog / 1000)).toFixed(1)}`);
             }
         }
+    }
+    
+    /**
+     * Initialize spatial index using a simple grid system
+     */
+    initSpatialIndex() {
+        this.spatialGrid = new SpatialGrid(this.gridCellSize);
+    }
+    
+    /**
+     * Add a node to the spatial grid
+     * @param {Object} node - The node to add
+     */
+    addNodeToSpatialGrid(node) {
+        if (!this.useSpatialIndex || !this.spatialGrid || !node.object) return;
+        
+        // Add node to the grid
+        this.spatialGrid.addObject(node);
+    }
+    
+    /**
+     * Update the spatial grid with current node positions
+     */
+    updateSpatialGrid() {
+        if (!this.useSpatialIndex || !this.spatialGrid) return;
+        
+        // Only update periodically for performance
+        this.gridUpdateCounter++;
+        if (this.gridUpdateCounter < this.gridUpdateInterval) return;
+        this.gridUpdateCounter = 0;
+        
+        // Rebuild the grid
+        this.spatialGrid.clear();
+        
+        // Add all current nodes to the grid
+        this.dataManager.graphObjects.nodes.forEach(node => {
+            if (node.object) {
+                this.spatialGrid.addObject(node);
+            }
+        });
+    }
+    
+    /**
+     * Get nodes within a specific radius of a position
+     * @param {THREE.Vector3} position - The center position
+     * @param {number} radius - The radius to search within
+     * @returns {Array} Array of nodes within the radius
+     */
+    getNodesInRadius(position, radius) {
+        // Use spatial grid for more efficient spatial query
+        return this.spatialGrid.findNearbyObjects(position, radius);
     }
 }
 
@@ -1928,16 +2726,17 @@ class EventManager {
     onMouseClick(event) {
         // Calculate mouse position and find intersections
         this.sceneManager.updateMousePosition(event);
-        const intersects = this.sceneManager.getIntersectedObjects();
         
-        // Check if we clicked on a node
-        const nodeIntersect = intersects.find(obj => 
-            obj.object && obj.object.userData && obj.object.userData.id
+        // Set the scene manager on the NodeCloud for camera access
+        this.graphController.nodeCloud.sceneManager = this.sceneManager;
+        
+        const nodeId = this.graphController.nodeCloud.findClosestNode(
+            this.sceneManager.raycaster, 
+            0.08  // Screen space threshold for clicks (0-1 normalized coordinates)
         );
         
-        if (nodeIntersect) {
+        if (nodeId) {
             // We clicked on a node
-            const nodeId = nodeIntersect.object.userData.id;
             this.selectNode(nodeId);
         } else {
             // Clicked on empty space - deselect
@@ -1952,16 +2751,17 @@ class EventManager {
     onDoubleClick(event) {
         // Calculate mouse position and find intersections
         this.sceneManager.updateMousePosition(event);
-        const intersects = this.sceneManager.getIntersectedObjects();
         
-        // Check if we double-clicked on a node
-        const nodeIntersect = intersects.find(obj => 
-            obj.object && obj.object.userData && obj.object.userData.id
+        // Set the scene manager on the NodeCloud for camera access
+        this.graphController.nodeCloud.sceneManager = this.sceneManager;
+        
+        const nodeId = this.graphController.nodeCloud.findClosestNode(
+            this.sceneManager.raycaster, 
+            0.08  // Screen space threshold for double-clicks (0-1 normalized coordinates)
         );
         
-        if (nodeIntersect) {
+        if (nodeId) {
             // Double-clicked on a node - focus camera on this node
-            const nodeId = nodeIntersect.object.userData.id;
             this.focusOnNode(nodeId);
         }
     }
@@ -1971,18 +2771,19 @@ class EventManager {
      * @param {MouseEvent} event - The mouse event
      */
     onMouseMove(event) {
-        // Calculate mouse position and find intersections
+        // Calculate mouse position
         this.sceneManager.updateMousePosition(event);
-        const intersects = this.sceneManager.getIntersectedObjects();
         
-        // Check if we're hovering over a node
-        const nodeIntersect = intersects.find(obj => 
-            obj.object && obj.object.userData && obj.object.userData.id
+        // Set the scene manager on the NodeCloud for camera access
+        this.graphController.nodeCloud.sceneManager = this.sceneManager;
+        
+        const nodeId = this.graphController.nodeCloud.findClosestNode(
+            this.sceneManager.raycaster, 
+            0.04  // Screen space threshold for hover (0-1 normalized coordinates)
         );
         
-        if (nodeIntersect) {
+        if (nodeId) {
             // Hovering over a node
-            const nodeId = nodeIntersect.object.userData.id;
             this.hoverNode(nodeId);
         } else {
             // Not hovering over any node
@@ -2000,8 +2801,12 @@ class EventManager {
         // Set selection in data manager
         this.dataManager.setSelectedNode(nodeId);
         
-        // Update node colors
-        this.updateNodeColors();
+        // Update colors in bulk
+        this.graphController.nodeCloud.updateColors(
+            nodeId,
+            this.dataManager.neighborNodes,
+            this.dataManager.hoveredNode
+        );
         
         // Update link colors
         this.updateLinkColors();
@@ -2047,8 +2852,12 @@ class EventManager {
         // Clear selection in data manager
         this.dataManager.clearSelectedNode();
         
-        // Update node colors
-        this.updateNodeColors();
+        // Update colors in bulk
+        this.graphController.nodeCloud.updateColors(
+            null,  // No selected node
+            new Set(),  // No neighbor nodes
+            this.dataManager.hoveredNode  // Keep hover state
+        );
         
         // Update link colors
         this.updateLinkColors();
@@ -2085,8 +2894,12 @@ class EventManager {
         // Set hover in data manager
         this.dataManager.setHoveredNode(nodeId);
         
-        // Update appearance
-        this.graphObjectManager.updateNodeColors(nodeId);
+        // Update colors in bulk
+        this.graphController.nodeCloud.updateColors(
+            this.dataManager.selectedNode,
+            this.dataManager.neighborNodes,
+            nodeId
+        );
         
         // Change cursor to pointer
         this.sceneManager.renderer.domElement.style.cursor = 'pointer';
@@ -2104,8 +2917,12 @@ class EventManager {
         // Clear hover in data manager
         this.dataManager.clearHoveredNode();
         
-        // Update appearance
-        this.graphObjectManager.updateNodeColors(nodeId);
+        // Update colors in bulk
+        this.graphController.nodeCloud.updateColors(
+            this.dataManager.selectedNode,
+            this.dataManager.neighborNodes,
+            null  // No hover
+        );
         
         // Reset cursor
         this.sceneManager.renderer.domElement.style.cursor = 'auto';
@@ -2131,6 +2948,439 @@ class EventManager {
 }
 
 /**
+ * DebugVisualizer - Generic visualization for debugging graph components
+ */
+class DebugVisualizer {
+    constructor(sceneManager, graphController) {
+        this.sceneManager = sceneManager;
+        this.graphController = graphController;
+        this.debugObjects = [];
+        this.enabled = false;
+        this.lastUpdateTime = 0;
+        this.updateInterval = 1000; // Update debug visuals every second
+        this.activeVisualizations = {
+            grid: true,
+            performance: true,
+            nodes: true
+        };
+        this.stats = {};
+    }
+    
+    /**
+     * Toggle debug visualization
+     * @param {boolean} enabled - Whether to enable or disable visualization
+     */
+    toggle(enabled) {
+        this.enabled = enabled;
+        
+        // Show or hide debug UI elements
+        const debugPanel = document.getElementById('debug-info-panel');
+        const frameGraph = document.getElementById('debug-frame-graph');
+        
+        if (debugPanel) {
+            debugPanel.style.display = enabled ? 'block' : 'none';
+        }
+        
+        if (frameGraph) {
+            frameGraph.style.display = enabled ? 'block' : 'none';
+        }
+        
+        if (enabled) {
+            // Initialize frame history if needed
+            if (!this.frameHistory) {
+                const canvas = document.getElementById('debug-frame-canvas');
+                if (canvas) {
+                    this.frameHistory = new Array(canvas.width).fill(0);
+                }
+            }
+            
+            this.createDebugVisualization();
+        } else {
+            this.clearDebugVisualization();
+        }
+    }
+    
+    /**
+     * Toggle specific visualization types
+     * @param {string} type - Visualization type to toggle
+     */
+    toggleVisualization(type) {
+        if (this.activeVisualizations.hasOwnProperty(type)) {
+            this.activeVisualizations[type] = !this.activeVisualizations[type];
+            if (this.enabled) {
+                this.createDebugVisualization();
+            }
+        }
+    }
+    
+    /**
+     * Create visual representation of debug data
+     */
+    createDebugVisualization() {
+        this.clearDebugVisualization();
+        
+        // Collect debug stats
+        this.collectStats();
+        
+        // Create visualizations based on active settings
+        if (this.activeVisualizations.grid) {
+            this.createSpatialGridVisualization();
+        }
+        
+        if (this.activeVisualizations.nodes) {
+            this.createNodeStatsVisualization();
+        }
+        
+        if (this.activeVisualizations.performance) {
+            this.createPerformanceVisualization();
+        }
+        
+        // Create debug panel with statistics
+        this.createDebugPanel();
+        
+        this.lastUpdateTime = performance.now();
+    }
+    
+    /**
+     * Collect statistics for debug display
+     */
+    collectStats() {
+        // Clear previous stats
+        this.stats = {
+            fps: this.graphController.fps || 0,
+            nodeCount: 0,
+            visibleNodeCount: 0,
+            linkCount: 0,
+            gridStats: {
+                cells: 0,
+                objects: 0,
+                avgPerCell: 0
+            },
+            cameraPosition: {
+                x: 0,
+                y: 0,
+                z: 0
+            },
+            performanceMode: this.graphController.performanceMode
+        };
+        
+        // Collect node and link stats
+        if (this.graphController.dataManager) {
+            const dataManager = this.graphController.dataManager;
+            
+            this.stats.nodeCount = dataManager.graphData.nodes.length;
+            this.stats.visibleNodeCount = dataManager.graphObjects.nodes.size;
+            this.stats.linkCount = dataManager.graphObjects.links.size;
+        }
+        
+        // Collect grid stats
+        if (this.graphController.simulationManager && 
+            this.graphController.simulationManager.spatialGrid) {
+            
+            const grid = this.graphController.simulationManager.spatialGrid;
+            this.stats.gridStats.cells = grid.grid.size;
+            this.stats.gridStats.objects = grid.objects.size;
+            
+            if (grid.grid.size > 0 && grid.objects.size > 0) {
+                this.stats.gridStats.avgPerCell = 
+                    (grid.objects.size / grid.grid.size).toFixed(1);
+            }
+        }
+        
+        // Collect camera position
+        if (this.graphController.sceneManager && this.graphController.sceneManager.camera) {
+            const camera = this.graphController.sceneManager.camera;
+            this.stats.cameraPosition.x = camera.position.x.toFixed(1);
+            this.stats.cameraPosition.y = camera.position.y.toFixed(1);
+            this.stats.cameraPosition.z = camera.position.z.toFixed(1);
+        }
+    }
+    
+    /**
+     * Create spatial grid visualization
+     */
+    createSpatialGridVisualization() {
+        const spatialGrid = this.graphController.simulationManager?.spatialGrid;
+        if (!spatialGrid) return;
+        
+        // Create wireframe boxes for each cell in the grid
+        spatialGrid.grid.forEach((cell, key) => {
+            const [x, y, z] = key.split(',').map(Number);
+            const cellSize = spatialGrid.cellSize;
+            
+            // Create box geometry for the cell
+            const geometry = new THREE.BoxGeometry(cellSize, cellSize, cellSize);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0x00ff00,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.05 + (0.05 * Math.min(cell.size, 10)) // Brighter for more populated cells
+            });
+            
+            const box = new THREE.Mesh(geometry, material);
+            box.position.set(
+                (x + 0.5) * cellSize,
+                (y + 0.5) * cellSize,
+                (z + 0.5) * cellSize
+            );
+            
+            this.sceneManager.addToScene(box);
+            this.debugObjects.push(box);
+            
+            // Add text label showing object count in cell
+            if (cell.size > 0) {
+                const text = new SpriteText(`${cell.size}`, 12);
+                text.color = '#ffff00';
+                text.backgroundColor = 'rgba(0,0,0,0.5)';
+                text.padding = 2;
+                text.position.copy(box.position);
+                this.sceneManager.addToScene(text);
+                this.debugObjects.push(text);
+            }
+        });
+    }
+    
+    /**
+     * Create node statistics visualization
+     */
+    createNodeStatsVisualization() {
+        // Highlight nodes with different colors based on properties
+        const nodeManager = this.graphController.dataManager;
+        const nodeCloud = this.graphController.nodeCloud;
+        
+        if (!nodeManager || !nodeCloud || !nodeCloud.colors) return;
+        
+        // Store original colors to restore later
+        this.originalColors = new Float32Array(nodeCloud.colors.length);
+        this.originalColors.set(nodeCloud.colors); // Make a copy of all colors
+        
+        // Iterate through nodes and update colors in the buffer
+        nodeManager.graphObjects.nodes.forEach((node, id) => {
+            if (nodeCloud.nodeIndices.has(id)) {
+                // Get the node's index in the color buffer
+                const index = nodeCloud.nodeIndices.get(id);
+                const i3 = index * 3;
+                
+                // Get connection count
+                const connectedLinks = nodeManager.getConnectedLinks(id);
+                const connectionCount = connectedLinks.length;
+                
+                // Set color based on connection count
+                let color;
+                if (connectionCount > 10) {
+                    color = new THREE.Color(0xff0000); // Red for highly connected
+                } else if (connectionCount > 5) {
+                    color = new THREE.Color(0xff8800); // Orange for medium
+                } else if (connectionCount > 2) {
+                    color = new THREE.Color(0xffff00); // Yellow for low
+                } else {
+                    color = new THREE.Color(0x00ffff); // Cyan for minimal
+                }
+                
+                // Update the color buffer directly
+                nodeCloud.colors[i3] = color.r;
+                nodeCloud.colors[i3 + 1] = color.g;
+                nodeCloud.colors[i3 + 2] = color.b;
+            }
+        });
+        
+        // Mark the color buffer as needing update
+        if (nodeCloud.geometry && nodeCloud.geometry.attributes.color) {
+            nodeCloud.geometry.attributes.color.needsUpdate = true;
+        }
+    }
+    
+    /**
+     * Create performance metrics visualization
+     */
+    createPerformanceVisualization() {
+        // Update frame history and redraw
+        this.updateFrameGraph();
+    }
+    
+    /**
+     * Update the frame rate graph
+     */
+    updateFrameGraph() {
+        const canvas = document.getElementById('debug-frame-canvas');
+        const fpsLabel = document.getElementById('debug-fps-label');
+        
+        if (!canvas || !fpsLabel) return;
+        
+        // Update FPS label
+        fpsLabel.textContent = `${this.stats.fps} FPS`;
+        
+        // Add current FPS to history
+        if (!this.frameHistory) {
+            this.frameHistory = new Array(canvas.width).fill(0);
+        }
+        
+        this.frameHistory.push(this.stats.fps);
+        this.frameHistory.shift();
+        
+        // Draw frame history
+        const ctx = canvas.getContext('2d');
+        const width = canvas.width;
+        const height = canvas.height;
+        
+        // Clear canvas
+        ctx.clearRect(0, 0, width, height);
+        
+        // Calculate scale - find max FPS in history for scaling
+        const maxFPS = Math.max(60, ...this.frameHistory);
+        const scale = height / maxFPS;
+        
+        // Draw background grid
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 0.5;
+        
+        // Draw horizontal grid lines at 15, 30, 45, 60 FPS
+        [15, 30, 45, 60].forEach(fps => {
+            const y = height - (fps * scale);
+            if (y >= 0 && y <= height) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(width, y);
+                ctx.stroke();
+            }
+        });
+        
+        // Draw FPS graph
+        ctx.strokeStyle = '#4CAF50';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        
+        // Start at bottom-left corner with 0 FPS
+        ctx.moveTo(0, height);
+        
+        // Draw lines for each frame sample
+        this.frameHistory.forEach((fps, x) => {
+            const y = height - (fps * scale);
+            ctx.lineTo(x, y);
+        });
+        
+        // Finish at bottom-right corner
+        ctx.lineTo(width - 1, height);
+        ctx.closePath();
+        
+        // Fill gradient
+        const gradient = ctx.createLinearGradient(0, 0, 0, height);
+        gradient.addColorStop(0, 'rgba(76, 175, 80, 0.7)');
+        gradient.addColorStop(1, 'rgba(76, 175, 80, 0.1)');
+        ctx.fillStyle = gradient;
+        ctx.fill();
+        
+        // Stroke the line on top of the fill
+        ctx.strokeStyle = '#4CAF50';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        
+        this.frameHistory.forEach((fps, x) => {
+            const y = height - (fps * scale);
+            if (x === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        });
+        
+        ctx.stroke();
+    }
+    
+    /**
+     * Create debug panel with statistics
+     */
+    createDebugPanel() {
+        // Update debug panel content using the existing HTML element
+        document.getElementById('debug-nodes').textContent = `${this.stats.visibleNodeCount}/${this.stats.nodeCount}`;
+        document.getElementById('debug-links').textContent = `${this.stats.linkCount}`;
+        document.getElementById('debug-cells').textContent = `${this.stats.gridStats.cells}`;
+        document.getElementById('debug-objects').textContent = `${this.stats.gridStats.objects}`;
+        document.getElementById('debug-avg-per-cell').textContent = `${this.stats.gridStats.avgPerCell}`;
+        
+        // Update camera position
+        document.getElementById('debug-camera-x').textContent = `${this.stats.cameraPosition.x}`;
+        document.getElementById('debug-camera-y').textContent = `${this.stats.cameraPosition.y}`;
+        document.getElementById('debug-camera-z').textContent = `${this.stats.cameraPosition.z}`;
+    }
+    
+    /**
+     * Remove all debug visualization objects
+     */
+    clearDebugVisualization() {
+        // Remove all debug visualization objects from scene
+        this.debugObjects.forEach(obj => {
+            this.sceneManager.removeFromScene(obj);
+        });
+        this.debugObjects = [];
+        
+        // Restore original node colors
+        if (this.originalColors && this.graphController.nodeCloud) {
+            const nodeCloud = this.graphController.nodeCloud;
+            
+            // Copy the original colors back to the nodeCloud color buffer
+            if (nodeCloud.colors && this.originalColors.length === nodeCloud.colors.length) {
+                nodeCloud.colors.set(this.originalColors);
+                
+                // Mark the color buffer as needing update
+                if (nodeCloud.geometry && nodeCloud.geometry.attributes.color) {
+                    nodeCloud.geometry.attributes.color.needsUpdate = true;
+                }
+            }
+            
+            this.originalColors = null;
+        }
+    }
+    
+    /**
+     * Update debug visualization
+     */
+    update() {
+        if (!this.enabled) return;
+        
+        // Update stats more frequently than full visualization refresh
+        this.collectStats();
+        
+        // Update FPS graph and info panel more frequently
+        if (this.activeVisualizations.performance && document.getElementById('debug-frame-canvas')) {
+            this.updateFrameGraph();
+        }
+        
+        // Update info panel if it exists
+        if (document.getElementById('debug-info-panel')) {
+            this.createDebugPanel(); // Updates panel content
+        }
+        
+        // Only update full visualization periodically to avoid performance impact
+        const now = performance.now();
+        if (now - this.lastUpdateTime < this.updateInterval) return;
+        
+        // Recreate visualization
+        this.createDebugVisualization();
+    }
+    
+    /**
+     * Handle keyboard shortcuts for debugging
+     * @param {KeyboardEvent} event - Keyboard event
+     */
+    handleKeyPress(event) {
+        if (!this.enabled) return;
+        
+        switch (event.key) {
+            case '1':
+                this.toggleVisualization('grid');
+                break;
+            case '2':
+                this.toggleVisualization('nodes');
+                break;
+            case '3':
+                this.toggleVisualization('performance');
+                break;
+        }
+    }
+}
+
+/**
  * Main controller class that coordinates all graph components
  */
 class GraphController {
@@ -2147,10 +3397,22 @@ class GraphController {
         this.graphObjectManager = new GraphObjectManager(this.sceneManager, this.dataManager, this.themeManager);
         this.graphObjectManager.graphController = this; // Add reference to this controller
         
+        // Create the node cloud for efficient node rendering
+        this.nodeCloud = new NodeCloud(this.sceneManager.scene, this.themeManager);
+        
         this.simulationManager = new SimulationManager(this.dataManager, this.graphObjectManager, this.themeManager);
+        this.simulationManager.graphController = this; // Add reference to this controller
+        
         this.uiManager = new UIManager(this.container, this.dataManager, this);
         this.eventManager = new EventManager(this.sceneManager, this.dataManager, this.graphObjectManager);
         this.eventManager.graphController = this; // Add reference to this controller
+        
+        // Performance and debug settings
+        this.performanceMode = true; // Always on
+        this.debugMode = false;
+        
+        // Initialize generic debugger
+        this.debugger = new DebugVisualizer(this.sceneManager, this);
         
         // Initialize FPS counter
         this.fpsCounter = document.getElementById('fps-counter');
@@ -2159,11 +3421,104 @@ class GraphController {
         this.fps = 0;
         this.fpsUpdateInterval = 500; // Update FPS display every 500ms
         
+        // Set up UI button handlers
+        this.setupButtonHandlers();
+        
+        // Setup keyboard listeners for debug controls
+        document.addEventListener('keydown', this.handleKeyPress.bind(this));
+        
+        // Store a global reference for convenience (used by NodeCloud)
+        window.lastGraphController = this;
+        
         // Load data
         this.loadGraphData();
         
+        // Always enable performance optimizations
+        this.enablePerformanceMode();
+        
         // Start animation loop
         this.animate();
+    }
+    
+    /**
+     * Set up handlers for UI buttons
+     */
+    setupButtonHandlers() {
+        // Debug mode button
+        const debugBtn = document.getElementById('toggle-debug-btn');
+        if (debugBtn) {
+            debugBtn.addEventListener('click', () => {
+                this.toggleDebugMode();
+                debugBtn.classList.toggle('active', this.debugMode);
+            });
+        }
+    }
+    
+    /**
+     * Enable performance optimizations
+     */
+    enablePerformanceMode() {
+        // Enable spatial grid and frustum culling
+        if (this.simulationManager) {
+            this.simulationManager.useSpatialIndex = true;
+        }
+        if (this.sceneManager) {
+            this.sceneManager.enableFrustumCulling = true;
+        }
+    }
+    
+    /**
+     * Handle keyboard shortcuts
+     * @param {KeyboardEvent} event - Keyboard event
+     */
+    handleKeyPress(event) {
+        // Pass to debugger if debug mode is on
+        if (this.debugMode && this.debugger) {
+            this.debugger.handleKeyPress(event);
+        }
+    }
+    
+    /**
+     * Toggle debug visualization mode
+     */
+    toggleDebugMode() {
+        this.debugMode = !this.debugMode;
+        
+        if (this.debugger) {
+            this.debugger.toggle(this.debugMode);
+        }
+        
+        return this.debugMode;
+    }
+    
+    /**
+     * Animation loop
+     */
+    animate() {
+        requestAnimationFrame(() => this.animate());
+        
+        // Update FPS calculation
+        this.frameCount++;
+        const currentTime = performance.now();
+        const elapsed = currentTime - this.lastTime;
+        
+        // Update FPS counter every interval
+        if (elapsed > this.fpsUpdateInterval) {
+            this.fps = Math.round((this.frameCount * 1000) / elapsed);
+            this.fpsCounter.textContent = `FPS: ${this.fps}`;
+            
+            // Reset counters
+            this.frameCount = 0;
+            this.lastTime = currentTime;
+        }
+        
+        // Update debug visualization if enabled
+        if (this.debugMode && this.debugger) {
+            this.debugger.update();
+        }
+        
+        // Update scene
+        this.sceneManager.update();
     }
     
     /**
@@ -2224,11 +3579,11 @@ class GraphController {
         // Show loading indicator during simulation
         this.uiManager.showLoading(true);
         
-        // Add each matching node and its connections with depth of 5
+        // Add each matching node and its connections with depth of 10
         const addedNodes = new Set();
         
         matchingNodeIds.forEach(nodeId => {
-            // Use getConnectedSubgraph to get nodes and links up to depth 5
+            // Use getConnectedSubgraph to get nodes and links up to depth 10
             const { nodes, links } = this.dataManager.getConnectedSubgraph(nodeId, 10);
             
             // Add all nodes to the scene
@@ -2338,31 +3693,6 @@ class GraphController {
         
         // Show initial message
         this.uiManager.showInitialMessage("Enter a search term to display nodes");
-    }
-    
-    /**
-     * Animation loop
-     */
-    animate() {
-        requestAnimationFrame(() => this.animate());
-        
-        // Update FPS calculation
-        this.frameCount++;
-        const currentTime = performance.now();
-        const elapsed = currentTime - this.lastTime;
-        
-        // Update FPS counter every interval
-        if (elapsed > this.fpsUpdateInterval) {
-            this.fps = Math.round((this.frameCount * 1000) / elapsed);
-            this.fpsCounter.textContent = `FPS: ${this.fps}`;
-            
-            // Reset counters
-            this.frameCount = 0;
-            this.lastTime = currentTime;
-        }
-        
-        // Update scene
-        this.sceneManager.update();
     }
     
     /**
