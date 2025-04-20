@@ -1,7 +1,11 @@
-.PHONY: compile
+.PHONY: all compile debug debug-clean clean wamrc aot_files setup-genesis-wasm
+
+all: compile aot_files
 
 compile:
 	rebar3 compile
+
+WAMRC_INSTALL_PATH = _build/hb_beamr_wasm/_deps/wamr-install/bin/wamrc
 
 GENESIS_WASM_BRANCH = tillathehun0/cu-experimental
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
@@ -15,6 +19,17 @@ debug-clean:
 
 clean:
 	rebar3 clean
+	rm -f $(AOT_FILES)
+
+WASM_FILES := $(wildcard test/*.wasm)
+AOT_FILES := $(patsubst test/%.wasm,test/%.aot,$(WASM_FILES))
+
+test/%.aot: test/%.wasm compile
+	@echo "Compiling $< to $@ (ignoring errors)"
+	-$(WAMRC_INSTALL_PATH) -o $@ $<
+
+aot_files: $(AOT_FILES)
+	@echo "+++ AOT files generated (errors ignored) +++"
 
 $(GENESIS_WASM_SERVER_DIR):
 	mkdir -p $(GENESIS_WASM_SERVER_DIR)

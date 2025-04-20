@@ -3,7 +3,8 @@ project(hb_beamr_wasm C)
 
 # Define WAMR build/install directories
 set(wamr_SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/wamr-src)
-set(wamr_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/wamr-build)
+set(wamr_RUNTIME_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/wamr-runtime-build)
+set(wamrc_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/wamrc-build)
 set(WAMR_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/wamr-install)
 
 # Include WAMR ExternalProject definition
@@ -18,8 +19,9 @@ add_library(hb_beamr_wasm STATIC
     # src/helpers.c
 )
 
-# Ensure WAMR is built and installed before this library
-add_dependencies(hb_beamr_wasm wamr-proj)
+# Ensure WAMR runtime is built and installed before this library
+add_dependencies(hb_beamr_wasm wamr-runtime-proj)
+# If you needed wamrc during the build, add: add_dependencies(hb_beamr_wasm wamrc-compiler-proj)
 
 # Include directories for the library (WAMR includes from install dir)
 target_include_directories(hb_beamr_wasm PUBLIC
