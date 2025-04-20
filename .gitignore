@@ -36,4 +36,7 @@ cache-*
 *.dot
 *.svg
 
+# These are platform-specific files
+test/*.aot
+
 cu/
