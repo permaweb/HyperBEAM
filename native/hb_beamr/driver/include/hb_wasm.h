@@ -32,7 +32,7 @@ void wasm_initialize_runtime(void* raw);
  * 
  *  raw: A pointer to the process structure containing the function call details.
  */
-void wasm_execute_function(void* raw);
+void wasm_execute_exported_function(void* raw);
 
 /*
  * Function:  wasm_execute_indirect_function
@@ -44,23 +44,7 @@ void wasm_execute_function(void* raw);
  *  input_args: The input arguments for the function call.
  *  output_results: The results of the function call will be stored here.
  *
- *  returns: 0 on success or -1 on failure.
  */
-int wasm_execute_indirect_function(Proc* proc, const char *function_name, const wasm_val_vec_t* input_args, wasm_val_vec_t* output_results);
-
-/*
- * Function:  wasm_execute_exported_function
- * --------------------
- * Invokes a specific exported WASM function from the runtime environment.
- * 
- *  proc: The current process structure.
- *  function_name: The name of the function to call.
- *  params: The parameters to pass to the function.
- *  results: The results of the function call will be stored here.
- *
- *  returns: A 64-bit status code indicating success (0) or failure (-1).
- */
-int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_val_t* params, wasm_val_t * results);
-
+void wasm_execute_indirect_function(void *raw);
 
 #endif 

@@ -135,19 +135,19 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         DRV_DEBUG("Decoding args. Buff: %p. Index: %d", buff, index);
         proc->current_args = decode_list(buff, &index);
 
-        driver_async(proc->port, NULL, wasm_execute_function, proc, NULL);
+        driver_async(proc->port, NULL, wasm_execute_exported_function, proc, NULL);
     } 
-    // else if (strcmp(command, "indirect_call") == 0) {
-    //     if (!proc->is_initialized) {
-    //         send_error(proc, "Cannot run WASM indirect function as module not initialized.");
-    //         return;
-    //     }
-    //     DRV_DEBUG("Decoding indirect call");
-    //     ei_decode_long(buff, &index, &proc->current_function_ix);
-    //     proc->current_args = decode_list(buff, &index);
-	//     DRV_DEBUG("Calling indirect call invoker");
-    //      driver_async(proc->port, NULL, async_indirect_call, proc, NULL);
-    // } 
+    else if (strcmp(command, "indirect_call") == 0) {
+        if (!proc->is_initialized) {
+            send_error(proc, "Cannot run WASM indirect function as module not initialized.");
+            return;
+        }
+        DRV_DEBUG("Decoding indirect call");
+        ei_decode_long(buff, &index, &proc->current_function_ix);
+        proc->current_args = decode_list(buff, &index);
+	    DRV_DEBUG("Calling indirect call invoker");
+        driver_async(proc->port, NULL, wasm_execute_indirect_function, proc, NULL);
+    } 
     else if (strcmp(command, "import_response") == 0) {
         // Handle import response
         // TODO: We should probably start a mutex on the current_import object here.

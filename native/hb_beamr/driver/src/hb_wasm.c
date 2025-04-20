@@ -9,9 +9,17 @@ extern ErlDrvTermData atom_import;
 extern ErlDrvTermData atom_execution_result;
 
 static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t *args) {
-    DRV_DEBUG("generic_import_native_symbol_func called");
+    DRV_DEBUG("generic_import_native_symbol_func called, exec_env: %p, args: %p", exec_env, args);
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    DRV_DEBUG("Module instance: %p", module_inst);
 
     NativeSymbolAttachment *attachment = (NativeSymbolAttachment *)wasm_runtime_get_function_attachment(exec_env);
+    DRV_DEBUG("Attachment (%p)", attachment);
+    if (!attachment) {
+        DRV_DEBUG("Skipping import: No attachment found");
+        return;
+    }
+
     Proc *proc = attachment->proc;
     const char *module_name = attachment->module_name;
     const char *func_name = attachment->field_name;
@@ -147,6 +155,7 @@ void wasm_initialize_runtime(void* raw) {
     char *error_buf = driver_alloc(1024);
     uint8_t *binary_copy = driver_alloc(mod_bin->size);
     memcpy(binary_copy, mod_bin->binary, mod_bin->size);
+    DRV_DEBUG("Loading proto-module");
     wasm_module_t module_proto = wasm_runtime_load(binary_copy, mod_bin->size, error_buf, 1024);
     if (!module_proto) {
         DRV_DEBUG("Failed to load WASM proto-module: %s", error_buf);
@@ -351,57 +360,11 @@ void wasm_initialize_runtime(void* raw) {
         }
     }
 
-    DRV_DEBUG("Cleaning up proto-module");
-    wasm_module_delete(&module_proto);
-    wasm_runtime_destroy();
-
-    DRV_DEBUG("Reinitializing runtime");
-    wasm_runtime_full_init(&init_args);
-
     init_msg[msg_i++] = ERL_DRV_NIL;
     init_msg[msg_i++] = ERL_DRV_LIST;
     init_msg[msg_i++] = import_count + 1;
 
-    DRV_DEBUG("Registering native symbols");
-    for (int i = 0; i < found_import_modules_count; ++i) {
-        ImportModuleSymbols import_module_symbols = import_modules_symbols[i];
-        DRV_DEBUG("Registering native symbols for import module[%d]: %s", i, import_module_symbols.module_name);
-        wasm_runtime_register_natives_raw(import_module_symbols.module_name, import_module_symbols.symbols, import_module_symbols.count);
-    }
-
-    DRV_DEBUG("Initializing runtime module");
-    wasm_module_t module_runtime = wasm_runtime_load(mod_bin->binary, mod_bin->size, error_buf, 1024);
-    if (!module_runtime) {
-        DRV_DEBUG("Failed to load WASM runtime-module: %s", error_buf);
-        send_error(proc, "Failed to load WASM runtime-module: %s", error_buf);
-        drv_unlock(proc->is_running);
-        return;
-    }
-    DRV_DEBUG("Created runtime-module: %p", module_runtime);
-    proc->module = module_runtime;
-
-    wasm_module_inst_t module_inst = wasm_runtime_instantiate(module_runtime, 0x10000, 0x10000, error_buf, 1024);
-    if (!module_inst) {
-        DRV_DEBUG("Failed to instantiate WASM runtime-module: %s", error_buf);
-        send_error(proc, "Failed to instantiate WASM runtime-module: %s", error_buf);
-        drv_unlock(proc->is_running);
-        return;
-    }
-    DRV_DEBUG("Created runtime-module instance: %p", module_inst);
-    proc->instance = module_inst;
-
     DRV_DEBUG("Processing exports");
-    wasm_table_inst_t indirect_func_table;
-    if (!wasm_runtime_get_export_table_inst(module_inst, "__indirect_function_table", &indirect_func_table)) {
-        DRV_DEBUG("Failed to find __indirect_function_table");
-        // send_error(proc, "Failed to get indirect function table");
-        // drv_unlock(proc->is_running);
-        // return;
-    } else {
-        DRV_DEBUG("Found __indirect_function_table");
-        proc->indirect_func_table = indirect_func_table;
-    }
-
     for (size_t i = 0; i < export_count; i++) {
         wasm_export_t export = exports[i];
         const char* name = export.name;
@@ -470,6 +433,60 @@ void wasm_initialize_runtime(void* raw) {
         init_msg[msg_i++] = 3;
     }
 
+    DRV_DEBUG("Cleaning up proto-module");
+    wasm_module_delete(&module_proto);
+    wasm_runtime_destroy();
+
+    DRV_DEBUG("Reinitializing runtime");
+    if (!wasm_runtime_full_init(&init_args)) {
+        DRV_DEBUG("Failed to reinitialize runtime");
+        send_error(proc, "Failed to reinitialize runtime");
+        drv_unlock(proc->is_running);
+        return;
+    }
+
+    DRV_DEBUG("Registering native symbols");
+    for (int i = 0; i < found_import_modules_count; ++i) {
+        ImportModuleSymbols import_module_symbols = import_modules_symbols[i];
+        DRV_DEBUG("Registering native symbols for import module[%d]: (%d symbols) %s", i, import_module_symbols.count, import_module_symbols.module_name);
+        for (int j = 0; j < import_module_symbols.count; ++j) {
+            DRV_DEBUG("  - %d: %s %s.%s", j, ((NativeSymbolAttachment *)(import_module_symbols.symbols[j].attachment))->signature, import_module_symbols.module_name, import_module_symbols.symbols[j].symbol);
+        }
+
+        wasm_runtime_register_natives_raw(import_module_symbols.module_name, import_module_symbols.symbols, import_module_symbols.count);
+    }
+
+    DRV_DEBUG("Loading runtime-module");
+    wasm_module_t module_runtime = wasm_runtime_load(mod_bin->binary, mod_bin->size, error_buf, 1024);
+    if (!module_runtime) {
+        DRV_DEBUG("Failed to load WASM runtime-module: %s", error_buf);
+        send_error(proc, "Failed to load WASM runtime-module: %s", error_buf);
+        drv_unlock(proc->is_running);
+        return;
+    }
+    DRV_DEBUG("Created runtime-module: %p", module_runtime);
+    proc->module = module_runtime;
+
+    wasm_module_inst_t module_inst = wasm_runtime_instantiate(module_runtime, 0x10000, 0x10000, error_buf, 1024);
+    if (!module_inst) {
+        DRV_DEBUG("Failed to instantiate WASM runtime-module: %s", error_buf);
+        send_error(proc, "Failed to instantiate WASM runtime-module: %s", error_buf);
+        drv_unlock(proc->is_running);
+        return;
+    }
+    DRV_DEBUG("Created runtime-module instance: %p", module_inst);
+    proc->instance = module_inst;
+
+    wasm_table_inst_t indirect_func_table;
+    if (!wasm_runtime_get_export_table_inst(module_inst, "__indirect_function_table", &indirect_func_table)) {
+        DRV_DEBUG("Failed to find __indirect_function_table");
+        // send_error(proc, "Failed to get indirect function table");
+        // drv_unlock(proc->is_running);
+        // return;
+    } else {
+        DRV_DEBUG("Found __indirect_function_table");
+        proc->indirect_func_table = indirect_func_table;
+    }
     // 5 closing elements
     init_msg[msg_i++] = ERL_DRV_NIL;
     init_msg[msg_i++] = ERL_DRV_LIST;
@@ -487,9 +504,9 @@ void wasm_initialize_runtime(void* raw) {
     drv_unlock(proc->is_running);
 }
 
-void wasm_execute_function(void* raw) {
+void wasm_execute_exported_function(void* raw) {
     Proc* proc = (Proc*)raw;
-    DRV_DEBUG("Calling function: %s", proc->current_function);
+    DRV_DEBUG("Calling exported function: %s", proc->current_function);
     drv_lock(proc->is_running);
     char* function_name = proc->current_function;
 
@@ -533,7 +550,7 @@ void wasm_execute_function(void* raw) {
     proc->exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
 
     // Call the function
-    DRV_DEBUG("Calling function: %s", function_name);
+    DRV_DEBUG("wasm_runtime_call_wasm_a: %s", function_name);
     bool call_success = wasm_runtime_call_wasm_a(proc->exec_env, func, results.size, results.data, args.size, args.data);
 
     if (!call_success) {
@@ -590,178 +607,124 @@ void wasm_execute_function(void* raw) {
     drv_unlock(proc->is_running);
 }
 
-int wasm_execute_indirect_function(Proc* proc, const char *field_name, const wasm_val_vec_t* input_args, wasm_val_vec_t* output_results) {
+void wasm_execute_indirect_function(void *raw) {
+    // Proc* proc, const char *field_name, const wasm_val_vec_t* input_args, wasm_val_vec_t* output_results
+    
+    Proc* proc = (Proc*)raw;
+    long function_ix = proc->current_function_ix;
+
     DRV_DEBUG("=================================================");
-    DRV_DEBUG("Starting function invocation");
+    DRV_DEBUG("Starting indirect function invocation");
     DRV_DEBUG("=================================================");
 
+    DRV_DEBUG("Function index: %ld", function_ix);
+    DRV_DEBUG("Current args: %p", proc->current_args);
+
+    // Look up the indirect function table
     wasm_table_inst_t indirect_function_table = proc->indirect_func_table;
+    wasm_function_inst_t* function_ref = wasm_table_get_func_inst(proc->instance, &indirect_function_table, function_ix);
+    DRV_DEBUG("Function ref: %p", function_ref);
 
-    int result = 0;
-    DRV_DEBUG("Function name: %s", field_name);
+    uint32_t param_count = wasm_func_get_param_count(function_ref, proc->instance);
+    DRV_DEBUG("Param count: %d", param_count);
+    wasm_valkind_t *param_types = driver_alloc(sizeof(wasm_valkind_t) * param_count);
+    wasm_func_get_param_types(function_ref, proc->instance, param_types);
+    DRV_DEBUG("Param types: %p", param_types);
 
-// Extract the function index from the input arguments
-    int function_index = input_args->data[0].of.i32;  
-    DRV_DEBUG("Function index retrieved from input_args: %d", function_index);
-
-    // Get the function reference from the table and cast it to a function
-    wasm_ref_t* function_ref = wasm_table_get(&indirect_function_table, function_index);
-    const wasm_func_t* func = wasm_ref_as_func(function_ref);
-    DRV_DEBUG("Function pointer: %p", func);
-
-    // Retrieve the function type and log its parameters and results
-    const wasm_functype_t* function_type = wasm_func_type(func);
-    if (!function_type) {
-        DRV_DEBUG("Failed to retrieve function type for function at index %d", function_index);
-    }
-
-    // Log the function's parameter types
-    const wasm_valtype_vec_t* param_types = wasm_functype_params(function_type);
-    DRV_DEBUG("Function at index %d has %zu parameters", function_index, param_types->size);
-    for (size_t j = 0; j < param_types->size; ++j) {
-        const wasm_valtype_t* param_type = param_types->data[j];
-        wasm_valkind_t param_kind = wasm_valtype_kind(param_type);
-        DRV_DEBUG("Param %zu: %s", j, get_wasm_type_name(param_kind));
-    }
-
+    uint32_t result_count = wasm_func_get_result_count(function_ref, proc->instance);
+    DRV_DEBUG("Result count: %d", result_count);
+    wasm_valkind_t *result_types = driver_alloc(sizeof(wasm_valkind_t) * result_count);    
+    wasm_func_get_result_types(function_ref, proc->instance, result_types);
+    DRV_DEBUG("Result types: %p", result_types);
     
-    // Log the function's result types
-    const wasm_valtype_vec_t* result_types = wasm_functype_results(function_type);
-    DRV_DEBUG("Function at index %d has %zu results", function_index, result_types->size);
-    for (size_t k = 0; k < result_types->size; ++k) {
-        const wasm_valtype_t* result_type = result_types->data[k];
-        wasm_valkind_t result_kind = wasm_valtype_kind(result_type);
-        DRV_DEBUG("Result %zu: %s", k, get_wasm_type_name(result_kind));
-    }
-
-    // Prepare the arguments for the function call
-    wasm_val_vec_t prepared_args;
-        // If there are no arguments or only one argument (function index), no preparation is needed
-    if (input_args->size <= 1) {
-        DRV_DEBUG("Not enough arguments to create new wasm_val_vec_t");
-        return 0;
-    }
-
-    // Allocate memory for the prepared arguments
-    wasm_val_t* prepared_data = malloc(sizeof(wasm_val_t) * (input_args->size - 1));
-
-    // Copy the arguments starting from the second element (skip function index)
-    for (size_t i = 1; i < input_args->size; ++i) {
-        prepared_data[i - 1] = input_args->data[i];
-    }
-
-    // Create a new wasm_val_vec_t with the prepared arguments
-    wasm_val_vec_new(&prepared_args, input_args->size - 1, prepared_data);
-    DRV_DEBUG("Prepared %zu arguments for function call", prepared_args.size);
-
-    uint64_t argc = prepared_args.size;
-    uint64_t* argv = malloc(sizeof(uint64_t) * argc);
     
-    // Convert prepared arguments to an array of 64-bit integers
-    for (uint64_t i = 0; i < argc; ++i) {
-        argv[i] = prepared_args.data[i].of.i64;
-    }
+    // const wasm_val_vec_t* input_args = proc->current_args;
 
+    // const char* func_name = wasm_func_get(function_ref, proc->instance);
+    // DRV_DEBUG("Function name: %s", func_name);
 
-    /* ---------------- STACK SAVE -----------------*/
+    // int result = 0;
 
-    // const char* stack_save_name = "emscripten_stack_get_current";
-    // wasm_val_t *stack_save_params = NULL;
-    // wasm_val_t stack_save_results[1];
-    // if (call_exported_function_runtime(proc, stack_save_name, stack_save_params, stack_save_results) != 0) {
-    //     DRV_DEBUG("Failed to call stack save function");
+    // // Extract the function index from the input arguments
+    // int function_index = input_args->data[0].of.i32;  
+    // DRV_DEBUG("Function index retrieved from input_args: %d", function_index);
+
+    // // Retrieve the function type and log its parameters and results
+    // const wasm_functype_t* function_type = wasm_func_type(func);
+    // if (!function_type) {
+    //     DRV_DEBUG("Failed to retrieve function type for function at index %d", function_index);
     // }
 
-    /* ---------------- STACK SAVE -----------------*/
-
-    // Attempt to call the function and check for any exceptions
-    if (!wasm_runtime_call_indirect(proc->exec_env, function_index, argc, argv)) {
-        if (wasm_runtime_get_exception(proc->exec_env)) {
-            DRV_DEBUG("%s", wasm_runtime_get_exception(proc->exec_env));
-        }
-        DRV_DEBUG("WASM function call failed");
-        result = -1;
-    }
-
-    if(result != 0) {
+    // // Log the function's parameter types
+    // const wasm_valtype_vec_t* param_types = wasm_functype_params(function_type);
+    // DRV_DEBUG("Function at index %d has %zu parameters", function_index, param_types->size);
+    // for (size_t j = 0; j < param_types->size; ++j) {
+    //     const wasm_valtype_t* param_type = param_types->data[j];
+    //     wasm_valkind_t param_kind = wasm_valtype_kind(param_type);
+    //     DRV_DEBUG("Param %zu: %s", j, get_wasm_type_name(param_kind));
+    // }
 
     
+    // // Log the function's result types
+    // const wasm_valtype_vec_t* result_types = wasm_functype_results(function_type);
+    // DRV_DEBUG("Function at index %d has %zu results", function_index, result_types->size);
+    // for (size_t k = 0; k < result_types->size; ++k) {
+    //     const wasm_valtype_t* result_type = result_types->data[k];
+    //     wasm_valkind_t result_kind = wasm_valtype_kind(result_type);
+    //     DRV_DEBUG("Result %zu: %s", k, get_wasm_type_name(result_kind));
+    // }
 
-    }
+    // // Prepare the arguments for the function call
+    // wasm_val_vec_t prepared_args;
+    //     // If there are no arguments or only one argument (function index), no preparation is needed
+    // if (input_args->size <= 1) {
+    //     DRV_DEBUG("Not enough arguments to create new wasm_val_vec_t");
+    //     send_error(proc, "Not enough arguments to create new wasm_val_vec_t");
+    //     drv_unlock(proc->is_running);
+    //     return;
+    // }
 
+    // // Allocate memory for the prepared arguments
+    // wasm_val_t* prepared_data = malloc(sizeof(wasm_val_t) * (input_args->size - 1));
 
-    // Free allocated memory
-    free(argv);
-    free(prepared_args.data);
-    DRV_DEBUG("Function call completed successfully");
-    return result;
-}
+    // // Copy the arguments starting from the second element (skip function index)
+    // for (size_t i = 1; i < input_args->size; ++i) {
+    //     prepared_data[i - 1] = input_args->data[i];
+    // }
 
-int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_val_t* params, wasm_val_t * results) {
-    DRV_DEBUG("=== Calling Runtime Export Function ===");
-    DRV_DEBUG("=   Function name: %s", function_name);
+    // // Create a new wasm_val_vec_t with the prepared arguments
+    // wasm_val_vec_new(&prepared_args, input_args->size - 1, prepared_data);
+    // DRV_DEBUG("Prepared %zu arguments for function call", prepared_args.size);
 
-
-    // Get exported wasm_func_t pointer by function name
-    wasm_func_t* func = get_exported_function(proc, function_name);
-    if(!func) {
-        DRV_DEBUG("=   Failed to get exported function");
-        return -1;
-    }
-
-    // Get the function type
-    const wasm_functype_t* function_type = wasm_func_type(func);
-    if (!function_type) {
-        DRV_DEBUG("=   Failed to get function type");
-        return -1;
-    }
-
-    // Get the function's parameter types and set the argument types for args
-    const wasm_valtype_vec_t* param_types = wasm_functype_params(function_type);
-    if(!param_types) {
-        DRV_DEBUG("=   Failed to get function parameters");
-        return -1;
-    }
-
-    DRV_DEBUG("=   Function has %zu parameters", param_types->size);
-    for (size_t j = 0; j < param_types->size; ++j) {
-        const wasm_valtype_t* param_type = param_types->data[j];
-        wasm_valkind_t param_kind = wasm_valtype_kind(param_type);
-        params[j].kind = param_kind;
-        DRV_DEBUG("=      Param %zu: %s, %i", j, get_wasm_type_name(param_kind), params[j].of.i64);
-    }
-
+    // uint64_t argc = prepared_args.size;
+    // uint64_t* argv = malloc(sizeof(uint64_t) * argc);
     
-    // Get the function's result types and set the result types for results
-    const wasm_valtype_vec_t* result_types = wasm_functype_results(function_type);
-    if (!result_types) {
-        DRV_DEBUG("=   Failed to get function results");
-        return -1;
-    }
-    DRV_DEBUG("=   Function has %zu results", result_types->size);
+    // // Convert prepared arguments to an array of 64-bit integers
+    // for (uint64_t i = 0; i < argc; ++i) {
+    //     argv[i] = prepared_args.data[i].of.i64;
+    // }
 
-    for (size_t k = 0; k < result_types->size; ++k) {
-        const wasm_valtype_t* result_type = result_types->data[k];
-        wasm_valkind_t result_kind = wasm_valtype_kind(result_type);
-        results[k].kind = result_kind;
-        results[k].of.i64 = 0;  // Initialize result value
-        DRV_DEBUG("=      Result %zu: %s, %i", k, get_wasm_type_name(result_kind), results[k].of.i64);
-    }
+    // // Attempt to call the function and check for any exceptions
+    // if (!wasm_runtime_call_indirect(proc->exec_env, function_index, argc, argv)) {
+    //     if (wasm_runtime_get_exception(proc->exec_env)) {
+    //         DRV_DEBUG("%s", wasm_runtime_get_exception(proc->exec_env));
+    //     }
+    //     DRV_DEBUG("WASM function call failed");
+    //     send_error(proc, "WASM function call failed");
+    //     drv_unlock(proc->is_running);
+    //     return;
+    // }
 
+    // // Send the results back to Erlang
+    // DRV_DEBUG("Results size: %d", results.size);
+    // ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * (7 + (results.size * 2)));
+    // DRV_DEBUG("Allocated msg");
+    // int msg_index = 0;
+    // msg[msg_index++] = ERL_DRV_ATOM;
+    // msg[msg_index++] = atom_execution_result;
 
-    // Call the exported function
-    if (wasm_runtime_call_wasm_a(proc->exec_env, func->func_comm_rt, result_types->size, results, param_types->size, params)) {
-        DRV_DEBUG("=   Function call successful");
-    } else {
-        const char* exception = wasm_runtime_get_exception(proc->exec_env);
-        DRV_DEBUG("=   Function call failed: %s", exception);
-        return -1;
-    }
-
-    // Retrieve the stack pointer result (as i64)
-    int64_t stack_pointer = results[0].of.i64;  // Assuming the result is i64
-    DRV_DEBUG("Stack pointer: %lld", stack_pointer);
-
-    return 0;
+    // // Free allocated memory
+    // free(argv);
+    // free(prepared_args.data);
+    // DRV_DEBUG("Function call completed successfully");
 }
-
