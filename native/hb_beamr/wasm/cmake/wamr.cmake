@@ -50,12 +50,15 @@ set(WAMR_RUNTIME_CMAKE_ARGS
     "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
     "-DWAMR_BUILD_TARGET=${WAMR_BUILD_TARGET}"
     "-DWAMR_BUILD_PLATFORM=${WAMR_BUILD_PLATFORM}"
+    -DWAMR_BUILD_LIBC_WASI=0 # This can conflict with generic NativeSymbols
+    -DWAMR_BUILD_LIBC_UVWASI=0 # This can conflict with generic NativeSymbols
+    -DWAMR_BUILD_LIBC_BUILTIN=0 # This can conflict with generic NativeSymbols
+    -DWAMR_BUILD_LIBC_EMCC=0 # This can conflict with generic NativeSymbols
     -DWAMR_BUILD_MEMORY64=1
     -DWAMR_DISABLE_HW_BOUND_CHECK=1
     -DWAMR_BUILD_EXCE_HANDLING=1
     -DWAMR_BUILD_SHARED_MEMORY=0
     -DWAMR_BUILD_AOT=1
-    -DWAMR_BUILD_LIBC_WASI=0
     -DWAMR_BUILD_FAST_INTERP=0
     -DWAMR_BUILD_INTERP=1
     -DWAMR_BUILD_JIT=0
@@ -92,7 +95,10 @@ set(WAMRC_CMAKE_ARGS
     "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
     "-DWAMR_BUILD_TARGET=${WAMR_BUILD_TARGET}"
     "-DWAMR_BUILD_PLATFORM=${WAMR_BUILD_PLATFORM}"
-    "-DWAMR_BUILD_LIBC_WASI=0" # This can conflict with generic NativeSymbols
+    -DWAMR_BUILD_LIBC_WASI=0 # This can conflict with generic NativeSymbols
+    -DWAMR_BUILD_LIBC_UVWASI=0 # This can conflict with generic NativeSymbols
+    -DWAMR_BUILD_LIBC_BUILTIN=0 # This can conflict with generic NativeSymbols
+    -DWAMR_BUILD_LIBC_EMCC=0 # This can conflict with generic NativeSymbols
     # Flags related to custom LLVM removed
 )
 
