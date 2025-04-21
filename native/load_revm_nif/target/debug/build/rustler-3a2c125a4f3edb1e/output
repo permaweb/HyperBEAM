@@ -1,0 +1,2 @@
+cargo:rerun-if-env-changed=RUSTLER_NIF_VERSION
+cargo:rerun-if-changed=build.rs
