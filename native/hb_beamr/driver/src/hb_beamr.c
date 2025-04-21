@@ -1,7 +1,7 @@
-#include "include/hb_helpers.h"
-#include "include/hb_logging.h"
-#include "include/hb_driver.h"
-#include "include/hb_wasm.h"
+#include "../include/hb_helpers.h"
+#include "../include/hb_logging.h"
+#include "../include/hb_driver.h"
+#include "../include/hb_wasm.h"
 
 // Declare the atoms used in Erlang driver communication
 ErlDrvTermData atom_ok;
@@ -64,13 +64,13 @@ static void wasm_driver_stop(ErlDrvData raw) {
     // Cleanup WASM resources
     DRV_DEBUG("Cleaning up WASM resources");
     if (proc->is_initialized) {
-        DRV_DEBUG("Deleting WASM instance");
-        wasm_instance_delete(proc->instance);
-        DRV_DEBUG("Deleted WASM instance");
-        wasm_module_delete(proc->module);
-        DRV_DEBUG("Deleted WASM module");
-        wasm_store_delete(proc->store);
-        DRV_DEBUG("Deleted WASM store");
+        // DRV_DEBUG("Deleting WASM instance");
+        // wasm_instance_delete(proc->instance);
+        // DRV_DEBUG("Deleted WASM instance");
+        // wasm_module_delete(proc->module);
+        // DRV_DEBUG("Deleted WASM module");
+        // wasm_store_delete(proc->store);
+        // DRV_DEBUG("Deleted WASM store");
     }
     DRV_DEBUG("Freeing proc");
     driver_free(proc);
@@ -169,27 +169,27 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         }
     } else if (strcmp(command, "write") == 0) {
         DRV_DEBUG("Write received");
-        long ptr, size;
-        int type;
+        long ptr;
+        int type, size;
         ei_decode_tuple_header(buff, &index, &arity);
         ei_decode_long(buff, &index, &ptr);
         ei_get_type(buff, &index, &type, &size);
-        long size_l = (long)size;
-        char* wasm_binary;
+        size_t size_l = (long)size;
+        const char* wasm_binary;
         int res = ei_decode_bitstring(buff, &index, &wasm_binary, NULL, &size_l);
         DRV_DEBUG("Decoded binary. Res: %d. Size (bits): %ld", res, size_l);
-        long size_bytes = size_l / 8;
+        size_t size_bytes = size_l / 8;
         DRV_DEBUG("Write received. Ptr: %ld. Bytes: %ld", ptr, size_bytes);
-        long memory_size = get_memory_size(proc);
+        size_t memory_size = get_memory_size(proc);
         if(ptr + size_bytes > memory_size) {
             DRV_DEBUG("Write request out of bounds.");
             send_error(proc, "Write request out of bounds");
             return;
         }
-        byte_t* memory_data = wasm_memory_data(get_memory(proc));
-        DRV_DEBUG("Memory location to write to: %p", ptr+memory_data);
+        byte_t* memory_base = wasm_memory_get_base_address(get_memory(proc));
+        DRV_DEBUG("Memory location to write to: %p", memory_base + ptr);
 
-        memcpy(memory_data + ptr, wasm_binary, size_bytes);
+        memcpy(memory_base + ptr, wasm_binary, size_bytes);
         DRV_DEBUG("Write complete");
 
         ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 2);
@@ -211,11 +211,16 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
             send_error(proc, "Read request out of bounds");
             return;
         }
-        byte_t* memory_data = wasm_memory_data(get_memory(proc));
-        DRV_DEBUG("Memory location to read from: %p", memory_data + ptr);
-        
-        char* out_binary = driver_alloc(size_l);
-        memcpy(out_binary, memory_data + ptr, size_l);
+        char* out_binary = NULL;
+        if (memory_size > 0) {
+            byte_t* memory_base = wasm_memory_get_base_address(get_memory(proc));
+            DRV_DEBUG("Memory location to read from: %p", memory_base + ptr);
+            out_binary = driver_alloc(size_l);
+            memcpy(out_binary, memory_base + ptr, size_l);
+        } else {
+            DRV_DEBUG("No memory found, returning empty binary");
+            out_binary = driver_alloc(0);
+        }
 
         DRV_DEBUG("Read complete. Binary: %p", out_binary);
 

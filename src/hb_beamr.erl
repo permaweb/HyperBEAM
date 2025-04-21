@@ -264,14 +264,14 @@ driver_loads_test() ->
 
 %% @doc Test standalone `hb_beamr' correctly after loading a WASM module.
 simple_wasm_test() ->
-    {ok, File} = file:read_file("test/test.wasm"),
+    {ok, File} = file:read_file("test/test.aot"),
     {ok, WASM, _Imports, _Exports} = start(File),
     {ok, [Result]} = call(WASM, "fac", [5.0]),
     ?assertEqual(120.0, Result).
 
 %% @doc Test that imported functions can be called from the WASM module.
 imported_function_test() ->
-    {ok, File} = file:read_file("test/pow_calculator.wasm"),
+    {ok, File} = file:read_file("test/pow_calculator.aot"),
     {ok, WASM, _Imports, _Exports} = start(File),
     {ok, [Result], _} =
         call(WASM, <<"pow">>, [2, 5],
@@ -282,7 +282,7 @@ imported_function_test() ->
 
 %% @doc Test that WASM Memory64 modules load and execute correctly.
 wasm64_test() ->
-    {ok, File} = file:read_file("test/test-64.wasm"),
+    {ok, File} = file:read_file("test/test-64.aot"),
     {ok, WASM, _ImportMap, _Exports} = start(File),
     {ok, [Result]} = call(WASM, "fac", [5.0]),
     ?assertEqual(120.0, Result).
@@ -298,7 +298,7 @@ multiclient_test() ->
         end
     end),
     _StartPID = spawn(fun() ->
-        {ok, File} = file:read_file("test/test.wasm"),
+        {ok, File} = file:read_file("test/test.aot"),
         {ok, WASM, _ImportMap, _Exports} = start(File),
         ExecPID ! {wasm, WASM}
     end),
@@ -309,7 +309,7 @@ multiclient_test() ->
 
 benchmark_test() ->
     BenchTime = 1,
-    {ok, File} = file:read_file("test/test-64.wasm"),
+    {ok, File} = file:read_file("test/test-64.aot"),
     {ok, WASM, _ImportMap, _Exports} = start(File),
     Iterations = hb:benchmark(
         fun() ->
