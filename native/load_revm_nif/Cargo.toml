@@ -13,3 +13,10 @@ crate-type = ["cdylib"]
 rustler = "0.29.1"
 revm = {git = "https://github.com/bluealloy/revm", branch = "main"}
 serde_json = "1.0.140"
+hex = "0.4.3"
+serde = {version = "1.0.219", features = ["derive"]}
+rlp = "0.5.2"
+secp256k1 = { version = "0.27.0", features = ["recovery"] }
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+ethers-core = "2.0.10"
+ethers = "2.0.14"

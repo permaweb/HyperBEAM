@@ -1,16 +1,11 @@
-pub mod evm;
-pub mod handler;
+pub mod core;
+#[cfg(test)]
+mod tests;
+pub mod tx_utils;
+pub mod utils;
 
-use crate::{evm::MyEvm as CustomEvm, handler::MyHandler};
-use rustler::{Encoder, Env, NifResult, Term};
-use std::hash::Hash;
-use revm::{
-    context::TxEnv,
-    database::InMemoryDB,
-    handler::{ExecuteCommitEvm, ExecuteEvm, Handler},
-    inspector::InspectorHandler,
-    Context, MainContext,
-};
+use crate::core::interpreter::eval;
+use rustler::NifResult;
 
 mod atoms {
     rustler::atoms! {
@@ -24,14 +19,10 @@ fn hello() -> NifResult<String> {
 }
 
 #[rustler::nif]
-fn load_evm() -> NifResult<String> {
-	let mut load_evm = CustomEvm::new(Context::mainnet(), ());
-	// println!("{:?}", load_evm.0);
-	let _res_and_state = load_evm.0.transact(TxEnv::default()).unwrap();
-	println!("{:?}", _res_and_state);
-    let res = _res_and_state.result.output().unwrap().to_string();
-
-    Ok(res)
+fn eval_bytecode(signed_raw_tx: String, state: String) -> NifResult<String> {
+    let state_option = if state.is_empty() { None } else { Some(state) };
+    let evaluated_state: (String, String) = eval(signed_raw_tx, state_option)?;
+    Ok(evaluated_state.0)
 }
 
-rustler::init!("load_revm_nif", [hello, load_evm]);
+rustler::init!("load_revm_nif", [hello, eval_bytecode]);

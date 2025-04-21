@@ -9,12 +9,12 @@ use revm::{
     Inspector,
 };
 
-/// MyEvm variant of the EVM.
-pub struct MyEvm<CTX, INSP>(
+/// CustomEvm variant of the EVM.
+pub struct CustomEvm<CTX, INSP>(
     pub Evm<CTX, INSP, EthInstructions<EthInterpreter, CTX>, EthPrecompiles>,
 );
 
-impl<CTX: ContextTr, INSP> MyEvm<CTX, INSP> {
+impl<CTX: ContextTr, INSP> CustomEvm<CTX, INSP> {
     pub fn new(ctx: CTX, inspector: INSP) -> Self {
         Self(Evm {
             ctx,
@@ -25,7 +25,7 @@ impl<CTX: ContextTr, INSP> MyEvm<CTX, INSP> {
     }
 }
 
-impl<CTX: ContextTr, INSP> EvmTr for MyEvm<CTX, INSP>
+impl<CTX: ContextTr, INSP> EvmTr for CustomEvm<CTX, INSP>
 where
     CTX: ContextTr,
 {
@@ -60,7 +60,7 @@ where
     }
 }
 
-impl<CTX: ContextTr, INSP> InspectorEvmTr for MyEvm<CTX, INSP>
+impl<CTX: ContextTr, INSP> InspectorEvmTr for CustomEvm<CTX, INSP>
 where
     CTX: ContextSetters<Journal: JournalExt>,
     INSP: Inspector<CTX, EthInterpreter>,

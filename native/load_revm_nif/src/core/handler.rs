@@ -13,11 +13,11 @@ use revm::{
     Database,
 };
 
-pub struct MyHandler<EVM> {
+pub struct CustomHandler<EVM> {
     pub _phantom: core::marker::PhantomData<EVM>,
 }
 
-impl<EVM> Default for MyHandler<EVM> {
+impl<EVM> Default for CustomHandler<EVM> {
     fn default() -> Self {
         Self {
             _phantom: core::marker::PhantomData,
@@ -25,7 +25,7 @@ impl<EVM> Default for MyHandler<EVM> {
     }
 }
 
-impl<EVM> Handler for MyHandler<EVM>
+impl<EVM> Handler for CustomHandler<EVM>
 where
     EVM: EvmTr<
         Context: ContextTr<Journal: JournalTr<FinalOutput = JournalOutput>>,
@@ -55,7 +55,7 @@ where
     }
 }
 
-impl<EVM> InspectorHandler for MyHandler<EVM>
+impl<EVM> InspectorHandler for CustomHandler<EVM>
 where
     EVM: InspectorEvmTr<
         Inspector: Inspector<<<Self as Handler>::Evm as EvmTr>::Context, EthInterpreter>,
