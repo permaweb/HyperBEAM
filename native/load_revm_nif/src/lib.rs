@@ -28,7 +28,7 @@ fn eval_bytecode(signed_raw_tx: String, state: String, cout_state_path: String) 
 
 #[rustler::nif]
 fn get_appchain_state(chain_id: &str) -> NifResult<String> {
-	let state = get_state(chain_id);
+    let state = get_state(chain_id);
     Ok(state)
 }
 
