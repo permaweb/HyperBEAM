@@ -1,0 +1,2 @@
+pub const GENESIS_ADDRESS: &str = "0x197f818c1313DC58b32D88078ecdfB40EA822614";
+pub const TX_GAS_LIMIT: u64 = 1_000_000_000; // 1 gigagas
