@@ -6,7 +6,7 @@ use revm::primitives::TxKind;
 
 pub fn recover_signer(raw_tx_hex: &str) -> Address {
     let raw_tx_bytes: Vec<u8> = Vec::from_hex(raw_tx_hex).unwrap();
-    
+
     let tx: Transaction = rlp::decode(&raw_tx_bytes).unwrap();
     let signer = tx.recover_from().unwrap();
     // println!("From: {:?}", tx.recover_from().unwrap());

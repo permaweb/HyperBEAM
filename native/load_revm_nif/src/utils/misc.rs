@@ -1,23 +1,20 @@
-use revm::{
-    primitives::{ Address, U256},
-};
+use revm::primitives::{Address, U256};
 
 pub fn parse_address(addr: &str) -> Result<Address, String> {
     let addr = addr.trim_start_matches("0x");
     if addr.len() != 40 {
         return Err("Address must be 20 bytes (40 hex characters)".to_string());
     }
-    
+
     let bytes = match hex::decode(addr) {
         Ok(b) => b,
         Err(_) => return Err("Invalid hex string".to_string()),
     };
-    
+
     let mut address = [0u8; 20];
     address.copy_from_slice(&bytes);
     Ok(address.into())
 }
-
 
 pub fn parse_u256(value: &str) -> Result<U256, String> {
     if value.starts_with("0x") {
@@ -37,9 +34,15 @@ pub fn parse_u256(value: &str) -> Result<U256, String> {
 pub fn json_error(message: &str) -> String {
     let mut response = serde_json::Map::new();
     response.insert("success".to_string(), serde_json::Value::Bool(false));
-    response.insert("error".to_string(), serde_json::Value::String(message.to_string()));
-    
-    serde_json::to_string(&response).unwrap_or_else(|_| format!("{{\"success\":false,\"error\":\"{}\"}}",
-        message.replace("\"", "\\\"")
-    ))
+    response.insert(
+        "error".to_string(),
+        serde_json::Value::String(message.to_string()),
+    );
+
+    serde_json::to_string(&response).unwrap_or_else(|_| {
+        format!(
+            "{{\"success\":false,\"error\":\"{}\"}}",
+            message.replace("\"", "\\\"")
+        )
+    })
 }
