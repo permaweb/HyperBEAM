@@ -1,0 +1,15 @@
+[package]
+name = "load_revm_nif"
+version = "0.1.0"
+authors = ["Load Network Team"]
+edition = "2021"
+
+[lib]
+name = "load_revm_nif"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.29.1"
+revm = {git = "https://github.com/bluealloy/revm", branch = "main"}
+serde_json = "1.0.140"
