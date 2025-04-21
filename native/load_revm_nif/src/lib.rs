@@ -1,13 +1,11 @@
-pub mod tx_utils;
-pub mod utils;
 pub mod core;
 #[cfg(test)]
 mod tests;
+pub mod tx_utils;
+pub mod utils;
 
 use crate::core::interpreter::eval;
 use rustler::NifResult;
-
-
 
 mod atoms {
     rustler::atoms! {
@@ -21,9 +19,10 @@ fn hello() -> NifResult<String> {
 }
 
 #[rustler::nif]
-fn interprete(signed_raw_tx: String, state: Option<String>) -> NifResult<String> {
-    let evaluated_state: (String, String) = eval(signed_raw_tx, state)?;
+fn eval_bytecode(signed_raw_tx: String, state: String) -> NifResult<String> {
+    let state_option = if state.is_empty() { None } else { Some(state) };
+    let evaluated_state: (String, String) = eval(signed_raw_tx, state_option)?;
     Ok(evaluated_state.0)
 }
 
-rustler::init!("load_revm_nif", [hello, interprete]);
+rustler::init!("load_revm_nif", [hello, eval_bytecode]);
