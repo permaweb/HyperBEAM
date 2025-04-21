@@ -12,6 +12,7 @@ ErlDrvTermData atom_execution_result;
 static ErlDrvData wasm_driver_start(ErlDrvPort port, char *buff) {
     ErlDrvSysInfo info;
     driver_system_info(&info, sizeof(info));
+
     DRV_DEBUG("Starting WASM driver");
     DRV_DEBUG("Port: %p", port);
     DRV_DEBUG("Buff: %s", buff);
@@ -30,15 +31,19 @@ static ErlDrvData wasm_driver_start(ErlDrvPort port, char *buff) {
     DRV_DEBUG("info.dirty_scheduler_support: %d", info.dirty_scheduler_support);
     DRV_DEBUG("info.erts_version: %s", info.erts_version);
     DRV_DEBUG("info.otp_release: %s", info.otp_release);
+
     Proc* proc = driver_alloc(sizeof(Proc));
+    memset(proc, 0, sizeof(Proc));
+
+    proc->is_running = erl_drv_mutex_create("wasm_instance_mutex");
+
     proc->port = port;
     DRV_DEBUG("Port: %p", proc->port);
     proc->port_term = driver_mk_port(proc->port);
     DRV_DEBUG("Port term: %p", proc->port_term);
-    proc->is_running = erl_drv_mutex_create("wasm_instance_mutex");
-    proc->is_initialized = 0;
-    proc->current_import = NULL;
     proc->start_time = time(NULL);
+    DRV_DEBUG("Start time: %ld", proc->start_time);
+
     return (ErlDrvData)proc;
 }
 
