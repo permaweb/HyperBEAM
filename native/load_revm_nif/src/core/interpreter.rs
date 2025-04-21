@@ -1,0 +1,112 @@
+use crate::core::evm::CustomEvm;
+use rustler::NifResult;
+use revm::{
+    context::TxEnv,
+    database::{CacheDB, EmptyDB},
+    primitives::{address, hardfork::SpecId, Address, Bytes, U256},
+    Context, ExecuteEvm, MainContext,
+};
+use std::{collections::HashMap, fs};
+use revm::state::AccountInfo;
+use crate::tx_utils::{recover_signer, get_tx_kind, get_tx_object};
+use crate::core::state::{serialize_state, deserialize_state};
+use crate::utils::misc::json_error;
+use crate::utils::constants::{GENESIS_ADDRESS, TX_GAS_LIMIT};
+
+// main interpreter fn -- tx bytes eval
+pub fn eval(
+    raw_tx_hex: String,
+    previous_state: Option<String>,
+) -> NifResult<(String, String)> {
+    let tx = get_tx_object(&raw_tx_hex);
+
+    let input = tx.input.to_vec();
+    // let chain_id = tx.chain_id.unwrap();
+    let value = tx.value;
+    let sender = recover_signer(&raw_tx_hex);
+    println!("TX SENDER DEBUG: {:?}", sender);
+    
+    // Create a transaction environment
+    let mut tx_env = TxEnv::default();
+    tx_env.gas_limit = TX_GAS_LIMIT;  // 1 gigagas
+    tx_env.chain_id = Some(1); // defaulted to 1 for now
+    tx_env.data = Bytes::from(input);
+    tx_env.value = revm::primitives::U256::from(value.as_u128());
+    tx_env.gas_price = 7; // min gas to pass a tx, 7 wei
+    tx_env.caller = sender;
+    tx_env.nonce = tx.nonce.to_string().parse::<u64>().unwrap(); // debug: 0x197 - 8
+    tx_env.kind = get_tx_kind(tx);
+
+    println!("TX_ENV: {:?}", tx_env);
+    
+    // deserialize previous state or init new state
+    let db = if let Some(state_json) = previous_state.clone() {
+        match deserialize_state(&state_json) {
+            Ok(db) => db,
+            Err(e) => {
+                return Ok((json_error(&format!("Failed to deserialize state: {}", e)), "{}".to_string()));
+            }
+        }
+    } else {
+        // init new DB
+        // dirty genesis setup for now
+        CacheDB::new(EmptyDB::default());
+        let mut db = CacheDB::new(EmptyDB::default());
+        let genesis_address = address!("0x197f818c1313DC58b32D88078ecdfB40EA822614"); // genesis master address
+        let genesis_balance = U256::from(1_000_000) * U256::from(10).pow(U256::from(18)); // 1000000 native gas token
+        
+        let account_info = AccountInfo {
+            nonce: 0,
+            balance: genesis_balance,
+            code: None,
+            code_hash: revm::primitives::KECCAK_EMPTY,
+        };
+        
+        db.insert_account_info(genesis_address, account_info);
+        db
+    };
+    
+    // new EVM instance with the provided state
+    let ctx: Context<revm::context::BlockEnv, TxEnv, revm::context::CfgEnv, CacheDB<revm::database::EmptyDBTyped<std::convert::Infallible>>> = Context::mainnet()
+        .with_db(db)
+        .modify_cfg_chained(|cfg| {
+            cfg.spec = SpecId::CANCUN;
+        });
+    
+    let mut evm = CustomEvm::new(ctx, ());
+    
+    // transaction execution
+    match evm.0.transact(tx_env) {
+        Ok(result_and_state) => {
+            let mut response = serde_json::Map::new();
+            
+            response.insert("success".to_string(), serde_json::Value::Bool(true));
+            response.insert("sender".to_string(), serde_json::Value::String(format!("0x{:x}", sender)));
+            let gas_used = result_and_state.result.gas_used();
+            response.insert("gas_used".to_string(), serde_json::Value::Number(serde_json::Number::from(gas_used)));
+
+            if let Some(output) = result_and_state.result.output() {
+                let output_hex = format!("0x{}", hex::encode(output.to_vec()));
+                response.insert("output".to_string(), serde_json::Value::String(output_hex));
+            }
+            
+            if let Some(addr) = result_and_state.result.created_address() {
+                let addr_hex = format!("0x{:x}", addr);
+                response.insert("contract_address".to_string(), serde_json::Value::String(addr_hex));
+            }
+            
+            let result_json = match serde_json::to_string(&response) {
+                Ok(json) => json,
+                Err(_) => json_error("Error serializing result"),
+            };
+            
+            let state: HashMap<Address, revm::state::Account> = result_and_state.state;
+            let state_json = serialize_state(state.into()).unwrap();
+            // cout the evaluated state
+            fs::write("./state.json", state_json.clone()).unwrap();
+            
+            Ok((result_json, state_json))
+        },
+        Err(err) => Ok((json_error(&format!("Error executing transaction: {:?}", err)), previous_state.unwrap())),
+    }
+}
