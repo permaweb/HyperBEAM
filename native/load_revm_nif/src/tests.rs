@@ -81,7 +81,7 @@ mod tests {
         println!("new eval state result: {}", state);
     }
 
-    //#[test]
+    #[test]
     // uni factory contract deployment: https://explorer.load.network/tx/0xf034f0e2ac7283596cf66f5babda3be520dab67558e581421b92c0cb088863a4
     // contract address: 0xDF8f291928223BFE248a3e4E68ACf7E879396A8a
     fn test_uniswap_factory_deployment() {
