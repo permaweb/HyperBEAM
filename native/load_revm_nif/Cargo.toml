@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rustler = "0.29.1"
-revm = {git = "https://github.com/bluealloy/revm", branch = "main"}
+revm = {git = "https://github.com/bluealloy/revm", branch = "main", features=["optional_block_gas_limit"]}
 serde_json = "1.0.140"
 hex = "0.4.3"
 serde = {version = "1.0.219", features = ["derive"]}
