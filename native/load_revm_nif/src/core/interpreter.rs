@@ -7,7 +7,7 @@ use revm::state::AccountInfo;
 use revm::{
     context::TxEnv,
     database::{CacheDB, EmptyDB},
-    primitives::{address, hardfork::SpecId, Address, Bytes, U256},
+    primitives::{hardfork::SpecId, Address, Bytes, U256},
     Context, ExecuteEvm, MainContext,
 };
 use rustler::NifResult;
@@ -52,7 +52,7 @@ pub fn eval(raw_tx_hex: String, previous_state: Option<String>) -> NifResult<(St
         // dirty genesis setup for now
         CacheDB::new(EmptyDB::default());
         let mut db = CacheDB::new(EmptyDB::default());
-        let genesis_address = address!("0x197f818c1313DC58b32D88078ecdfB40EA822614"); // genesis master address
+        let genesis_address = Address::from_slice(GENESIS_ADDRESS.as_bytes()); // genesis master address
         let genesis_balance = U256::from(1_000_000) * U256::from(10).pow(U256::from(18)); // 1000000 native gas token
 
         let account_info = AccountInfo {
