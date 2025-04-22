@@ -1,7 +1,7 @@
 use crate::core::evm::CustomEvm;
 use crate::core::state::{deserialize_state, serialize_state};
 use crate::core::transaction::{get_tx_kind, get_tx_object, recover_signer};
-use crate::utils::constants::{GENESIS_ADDRESS, TX_GAS_LIMIT, CONTRACT_SIZE_LIMIT};
+use crate::utils::constants::{CONTRACT_SIZE_LIMIT, GENESIS_ADDRESS, TX_GAS_LIMIT};
 use crate::utils::misc::json_error;
 use revm::state::AccountInfo;
 use revm::{
@@ -119,11 +119,46 @@ pub fn eval(raw_tx_hex: String, previous_state: Option<String>) -> NifResult<(St
             };
 
             let state: HashMap<Address, revm::state::Account> = result_and_state.state;
-            let state_json = serialize_state(state.into()).unwrap();
-            // cout the evaluated state
-            fs::write("./state_9496.json", state_json.clone()).unwrap();
 
-            Ok((result_json, state_json))
+            let new_state_json = serialize_state(state.into()).unwrap();
+
+            // read existing state
+            if let Ok(existing_state) = fs::read_to_string("./state.json") {
+                let mut existing: serde_json::Value =
+                    serde_json::from_str(&existing_state).unwrap();
+                let new: serde_json::Value = serde_json::from_str(&new_state_json).unwrap();
+
+                // merge states
+                if let (Some(existing_accounts), Some(new_accounts)) =
+                    (existing.get_mut("accounts"), new.get("accounts"))
+                {
+                    for (k, v) in new_accounts.as_object().unwrap() {
+                        existing_accounts
+                            .as_object_mut()
+                            .unwrap()
+                            .insert(k.clone(), v.clone());
+                    }
+                }
+
+                if let (Some(existing_storage), Some(new_storage)) =
+                    (existing.get_mut("storage"), new.get("storage"))
+                {
+                    for (k, v) in new_storage.as_object().unwrap() {
+                        existing_storage
+                            .as_object_mut()
+                            .unwrap()
+                            .insert(k.clone(), v.clone());
+                    }
+                }
+
+                let merged_state = existing.to_string();
+                fs::write("./state.json", merged_state.clone()).unwrap();
+                return Ok((result_json, merged_state));
+            } else {
+                // if no existing state, just write the new state
+                fs::write("./state.json", new_state_json.clone()).unwrap();
+                return Ok((result_json, new_state_json));
+            }
         }
         Err(err) => Ok((
             json_error(&format!("Error executing transaction: {:?}", err)),
