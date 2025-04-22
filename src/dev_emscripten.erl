@@ -19,7 +19,7 @@
 %%% 
 %%% Where '_vjj' represents the type spec of the function.
 -module(dev_emscripten).
--export([info/1, init/3, router/4, invoke_ii/3, invoke_vjj/3]).
+-export([info/1, init/3, '__cxa_throw'/3, invoke_ii/3, invoke_vjj/3, invoke_viii/3, router/4]).
 
 
 -include("src/include/hb.hrl").
@@ -29,7 +29,7 @@
 
 info(_) ->
     #{
-        default_handler => fun router/4,
+        % default_handler => fun router/4,
         excludes => [keys, id, unsigned, hashpath]
     }.
 
@@ -49,13 +49,21 @@ init(M1, _M2, Opts) ->
     {ok, MsgWithLib}.
 
 
+'__cxa_throw'(_Msg1, _Msg2, _Opts) ->
+    ?event('__cxa_throw'),
+    {error, <<"__cxa_throw">>}.
+
 invoke_ii(Msg1, Msg2, Opts) ->
-	?event(invoke_emscripten_vjj),
+	?event(invoke_emscripten_ii),
 	router(<<"invoke_ii">>, Msg1, Msg2, Opts).
 
 invoke_vjj(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_vjj),
 	router(<<"invoke_vjj">>, Msg1, Msg2, Opts).
+
+invoke_viii(Msg1, Msg2, Opts) ->
+	?event(invoke_emscripten_viii),
+	router(<<"invoke_viii">>, Msg1, Msg2, Opts).
 
 router(<<"invoke_", _/binary>>, Msg1, Msg2, Opts) ->
     ?event(invoke_emscripten),
@@ -69,11 +77,13 @@ router(<<"invoke_", _/binary>>, Msg1, Msg2, Opts) ->
     try 
         ?event(trying_indirect_call),
         Res = hb_beamr:call(WASM, Index, Args, ImportResolver, State, Opts),
-        ?event(debug, try_indirect_call_succeeded),
-        Res
+        {ok, Result, StateMsg} = Res,
+        ?event(debug, {try_indirect_call_succeeded, Result}),
+        {ok, #{ <<"state">> => StateMsg, <<"results">> => Result }}
     catch
         _:Error ->
-            ?event(debug, calling_emscripten_stack_restore),
+            ?event(debug, {invoke_try_error, Error}),
+            % ?event(debug, calling_emscripten_stack_restore),
             % hb_beamr:call(WASM, <<"_emscripten_stack_restore">>, [SP]),
             % ?event(debug, calling_set_threw),
             % hb_beamr:call(WASM, <<"setThrew">>, [1, 0]),
@@ -101,11 +111,30 @@ generate_emscripten_stack(File, Func, Params) ->
 
 %% @doc Ensure that an AOS Emscripten-style WASM AOT module can be invoked
 %% with a function reference.
-emscripten_aot_test() ->
-    Init = generate_emscripten_stack("test/try.aot", <<"handle">>, [0, 0]),
+fib_aot_test() ->
+    Init = generate_emscripten_stack("test/fib.aot", <<"handle">>, [0, 0]),
     Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
     Msg = <<"msg">>,
     Env = <<"env">>,
+    {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
+    ?assertNotEqual(0, Ptr1),
+    hb_beamr_io:write(Instance, Ptr1, Msg),
+    {ok, Ptr2} = hb_beamr_io:malloc(Instance, byte_size(Env)),
+    ?assertNotEqual(0, Ptr2),
+    hb_beamr_io:write(Instance, Ptr2, Env),
+    Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
+    {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
+    [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
+    {ok, Output} = hb_beamr_io:read_string(Instance, Ptr),
+    ?assertEqual(<<"Fibonacci index 10 is 55\n">>, Output).
+
+%% @doc Ensure that an AOS Emscripten-style WASM AOT module can be invoked
+%% with a function reference.
+try_aot_test() ->
+    Init = generate_emscripten_stack("test/try.aot", <<"handle">>, [0, 0]),
+    Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
+    Msg = <<"msg">>,
+    Env = <<"1">>,
     {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
     ?assertNotEqual(0, Ptr1),
     hb_beamr_io:write(Instance, Ptr1, Msg),

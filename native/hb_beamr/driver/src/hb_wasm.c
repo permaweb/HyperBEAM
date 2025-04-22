@@ -20,6 +20,11 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
         return;
     }
 
+    if (attachment->proc->import_stack_depth >= MAX_IMPORT_STACK_DEPTH) {
+        DRV_DEBUG("Skipping import: Import stack depth exceeded");
+        return;
+    }
+
     Proc *proc = attachment->proc;
     const char *module_name = attachment->module_name;
     const char *func_name = attachment->field_name;
@@ -27,9 +32,9 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     DRV_DEBUG("Calling import %s.%s [%s]", module_name, func_name, signature);
 
     uint32_t param_count = attachment->param_count;
-    enum wasm_valkind_enum *param_kinds = attachment->param_kinds;
+    wasm_valkind_t *param_kinds = attachment->param_kinds;
     uint32_t result_count = attachment->result_count;
-    enum wasm_valkind_enum *result_kinds = attachment->result_kinds;
+    wasm_valkind_t *result_kinds = attachment->result_kinds;
     DRV_DEBUG("Param count: %d", param_count);
     DRV_DEBUG("Result count: %d", result_count);
     // int param_size = kinds_size(param_kinds, param_count);
@@ -69,12 +74,20 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     msg[msg_index++] = 5;
 
     // Initialize the result vector and set the required result types
-    proc->current_import = driver_alloc(sizeof(ImportResponse));
+    ImportResponse* this_import = driver_alloc(sizeof(ImportResponse));
+    proc->import_stack[proc->import_stack_depth++] = this_import;
+    DRV_DEBUG("import_stack: Import stack depth: %d", proc->import_stack_depth);
+    proc->current_import = this_import;
 
     // Create and initialize a is_running and condition variable for the response
-    proc->current_import->response_ready = erl_drv_mutex_create("response_mutex");
-    proc->current_import->cond = erl_drv_cond_create("response_cond");
-    proc->current_import->ready = 0;
+    char* response_mutex_name = driver_alloc(128);
+    sprintf(response_mutex_name, "response_mutex_%d", proc->import_stack_depth);
+    char* response_cond_name = driver_alloc(128);
+    sprintf(response_cond_name, "response_cond_%d", proc->import_stack_depth);
+    
+    this_import->response_ready = erl_drv_mutex_create(response_mutex_name);
+    this_import->cond = erl_drv_cond_create(response_cond_name);
+    this_import->ready = 0;
 
     DRV_DEBUG("Sending %d terms...", msg_index);
     DRV_DEBUG("Pre-send state: proc=%p, port=%lu, msg=%p, msg_index=%d", proc, proc->port_term, msg, msg_index);
@@ -86,34 +99,36 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
     DRV_DEBUG("Call to erl_drv_output_term completed. Res: %d", msg_res);
     DRV_DEBUG("Message sent. Res: %d", msg_res);
+
     // Wait for the response (we set this directly after the message was sent
     // so we have the lock, before Erlang sends us data back)
-    drv_wait(proc->current_import->response_ready, proc->current_import->cond, &proc->current_import->ready);
-
+    DRV_DEBUG("Waiting for response");
+    drv_wait(this_import->response_ready, this_import->cond, &this_import->ready);
     DRV_DEBUG("Response ready");
 
     // Handle error in the response
-    if (proc->current_import->error_message) {
+    if (this_import->error_message) {
         DRV_DEBUG("Import execution failed. Error message: %s", proc->current_import->error_message);
-        // TODO: Handle error
+        send_error(proc, "Import execution failed: %s", proc->current_import->error_message);
         return;
     }
 
     // Convert the response back to the function result, writing back to the args pointer
-    int res = erl_terms_to_import_results(result_count, result_kinds, args, proc->current_import->result_terms);
+    int res = erl_terms_to_import_results(result_count, result_kinds, args, this_import->result_terms);
     if(res == -1) {
         DRV_DEBUG("Failed to convert terms to wasm vals");
-        // TODO: Handle error
+        send_error(proc, "Failed to convert terms to wasm vals");
         return;
     }
 
     // Clean up
+    DRV_DEBUG("Destroying %s", erl_drv_cond_name(this_import->cond));
+    erl_drv_cond_destroy(this_import->cond);
+    DRV_DEBUG("Destroying %s", erl_drv_mutex_name(this_import->response_ready));
+    erl_drv_mutex_destroy(this_import->response_ready);
+    DRV_DEBUG("Cond and mutex destroyed");
     DRV_DEBUG("Cleaning up import response");
-    erl_drv_cond_destroy(proc->current_import->cond);
-    erl_drv_mutex_destroy(proc->current_import->response_ready);
-    driver_free(proc->current_import);
-
-    proc->current_import = NULL;
+    driver_free(this_import);
 }
 
 void wasm_initialize_runtime(void* raw) {
@@ -249,7 +264,7 @@ void wasm_initialize_runtime(void* raw) {
                 uint32_t param_count = wasm_func_type_get_param_count(type);
                 //DRV_DEBUG("Param count: %d", param_count);
 
-                enum wasm_valkind_enum *param_kinds = driver_alloc(sizeof(enum wasm_valkind_enum) * param_count);
+                wasm_valkind_t *param_kinds = driver_alloc(sizeof(wasm_valkind_t) * param_count);
                  if (!param_kinds && param_count > 0) {
                     DRV_DEBUG("Failed to allocate memory for param_kinds for %s.%s", module_name, name);
                     // TODO: Handle allocation failure
@@ -271,7 +286,7 @@ void wasm_initialize_runtime(void* raw) {
                 uint32_t result_count = wasm_func_type_get_result_count(type);
                 DRV_DEBUG("Result count: %d", result_count);
 
-                enum wasm_valkind_enum *result_kinds = driver_alloc(sizeof(enum wasm_valkind_enum) * result_count);
+                wasm_valkind_t *result_kinds = driver_alloc(sizeof(wasm_valkind_t) * result_count);
                 if (!result_kinds && result_count > 0) {
                     DRV_DEBUG("Failed to allocate memory for result_kinds for %s.%s", module_name, name);
                     // TODO: Handle allocation failure
@@ -554,7 +569,8 @@ void wasm_execute_exported_function(void* raw) {
     bool call_success = wasm_runtime_call_wasm_a(proc->exec_env, func, results.size, results.data, args.size, args.data);
 
     if (!call_success) {
-        send_error(proc, "!call_success");
+        const char *exception = wasm_runtime_get_exception(proc->instance);
+        send_error(proc, "Call to %s failed with exception: %s", function_name, exception);
         drv_unlock(proc->is_running);
         return;
     }
@@ -601,6 +617,8 @@ void wasm_execute_exported_function(void* raw) {
     DRV_DEBUG("Msg: %d", response_msg_res);
 
     wasm_val_vec_delete(&results);
+    
+    // This should already be set to NULL by the import handler
     proc->current_import = NULL;
 
 	DRV_DEBUG("Unlocking is_running mutex: %p", proc->is_running);
@@ -608,14 +626,15 @@ void wasm_execute_exported_function(void* raw) {
 }
 
 void wasm_execute_indirect_function(void *raw) {
-    // Proc* proc, const char *field_name, const wasm_val_vec_t* input_args, wasm_val_vec_t* output_results
-    
-    Proc* proc = (Proc*)raw;
-    long function_ix = proc->current_function_ix;
-
     DRV_DEBUG("=================================================");
     DRV_DEBUG("Starting indirect function invocation");
     DRV_DEBUG("=================================================");
+    // Proc* proc, const char *field_name, const wasm_val_vec_t* input_args, wasm_val_vec_t* output_results
+    
+    int result = 0;
+
+    Proc* proc = (Proc*)raw;
+    long function_ix = proc->current_function_ix;
 
     DRV_DEBUG("Function index: %ld", function_ix);
     DRV_DEBUG("Current args: %p", proc->current_args);
@@ -630,49 +649,35 @@ void wasm_execute_indirect_function(void *raw) {
     wasm_valkind_t *param_types = driver_alloc(sizeof(wasm_valkind_t) * param_count);
     wasm_func_get_param_types(function_ref, proc->instance, param_types);
     DRV_DEBUG("Param types: %p", param_types);
+    for (int i = 0; i < param_count; i++) {
+        DRV_DEBUG("  - Param type %d: %d", i, param_types[i]);
+    }
 
     uint32_t result_count = wasm_func_get_result_count(function_ref, proc->instance);
     DRV_DEBUG("Result count: %d", result_count);
     wasm_valkind_t *result_types = driver_alloc(sizeof(wasm_valkind_t) * result_count);    
     wasm_func_get_result_types(function_ref, proc->instance, result_types);
     DRV_DEBUG("Result types: %p", result_types);
-    
-    
-    // const wasm_val_vec_t* input_args = proc->current_args;
+    for (int i = 0; i < result_count; i++) {
+        DRV_DEBUG("  - Result type %d: %d", i, result_types[i]);
+    }
 
-    // const char* func_name = wasm_func_get(function_ref, proc->instance);
-    // DRV_DEBUG("Function name: %s", func_name);
+    uint32_t param_size = kinds_size(param_types, param_count);
+    uint32_t result_size = kinds_size(result_types, result_count);
+    DRV_DEBUG("Param size: %d", param_size);
+    DRV_DEBUG("Result size: %d", result_size);
+    // argc should be the max of param_size and result_size
+    uint32_t argc = param_size > result_size ? param_size : result_size;
+    uint32_t* argv = driver_alloc(sizeof(uint32_t) * argc);
+    DRV_DEBUG("Converting terms to indirect args");
+    if (erl_terms_to_indirect_args(argv, param_types, param_count, proc->current_args) == -1) {
+        DRV_DEBUG("Failed to convert terms to indirect args");
+        send_error(proc, "Failed to convert terms to indirect args");
+        drv_unlock(proc->is_running);
+        return;
+    }
 
-    // int result = 0;
-
-    // // Extract the function index from the input arguments
-    // int function_index = input_args->data[0].of.i32;  
-    // DRV_DEBUG("Function index retrieved from input_args: %d", function_index);
-
-    // // Retrieve the function type and log its parameters and results
-    // const wasm_functype_t* function_type = wasm_func_type(func);
-    // if (!function_type) {
-    //     DRV_DEBUG("Failed to retrieve function type for function at index %d", function_index);
-    // }
-
-    // // Log the function's parameter types
-    // const wasm_valtype_vec_t* param_types = wasm_functype_params(function_type);
-    // DRV_DEBUG("Function at index %d has %zu parameters", function_index, param_types->size);
-    // for (size_t j = 0; j < param_types->size; ++j) {
-    //     const wasm_valtype_t* param_type = param_types->data[j];
-    //     wasm_valkind_t param_kind = wasm_valtype_kind(param_type);
-    //     DRV_DEBUG("Param %zu: %s", j, get_wasm_type_name(param_kind));
-    // }
-
-    
-    // // Log the function's result types
-    // const wasm_valtype_vec_t* result_types = wasm_functype_results(function_type);
-    // DRV_DEBUG("Function at index %d has %zu results", function_index, result_types->size);
-    // for (size_t k = 0; k < result_types->size; ++k) {
-    //     const wasm_valtype_t* result_type = result_types->data[k];
-    //     wasm_valkind_t result_kind = wasm_valtype_kind(result_type);
-    //     DRV_DEBUG("Result %zu: %s", k, get_wasm_type_name(result_kind));
-    // }
+    bool res = wasm_runtime_call_indirect(proc->exec_env, function_ix, argc, argv);
 
     // // Prepare the arguments for the function call
     // wasm_val_vec_t prepared_args;
@@ -715,16 +720,31 @@ void wasm_execute_indirect_function(void *raw) {
     //     return;
     // }
 
-    // // Send the results back to Erlang
-    // DRV_DEBUG("Results size: %d", results.size);
-    // ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * (7 + (results.size * 2)));
-    // DRV_DEBUG("Allocated msg");
-    // int msg_index = 0;
-    // msg[msg_index++] = ERL_DRV_ATOM;
-    // msg[msg_index++] = atom_execution_result;
+        // Send the results back to Erlang
+    DRV_DEBUG("Results size: %d", result_count);
+    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * (7 + (result_count * 2)));
+    DRV_DEBUG("Allocated msg");
+    int msg_index = 0;
+    msg[msg_index++] = ERL_DRV_ATOM;
+    msg[msg_index++] = atom_execution_result;
+    for (size_t i = 0; i < result_count; i++) {
+        DRV_DEBUG("Processing result %d", i);
+        DRV_DEBUG("Result type: %d", result_types[i]);
+        int res_size = import_arg_to_erl_term(&msg[msg_index], result_types[i], (uint64_t *)&(argv[i]));
+        msg_index += res_size;
+    }
+    msg[msg_index++] = ERL_DRV_NIL;
+    msg[msg_index++] = ERL_DRV_LIST;
+    msg[msg_index++] = result_count + 1;
+    msg[msg_index++] = ERL_DRV_TUPLE;
+    msg[msg_index++] = 2;
+    DRV_DEBUG("Sending %d terms", msg_index);
+    int response_msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
+    driver_free(msg);
+    DRV_DEBUG("Msg: %d", response_msg_res);
 
     // // Free allocated memory
     // free(argv);
     // free(prepared_args.data);
-    // DRV_DEBUG("Function call completed successfully");
+    DRV_DEBUG("Indirect function call completed successfully");
 }

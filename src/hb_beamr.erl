@@ -183,6 +183,7 @@ stub(Msg1, _Msg2, _Opts) ->
 %% @doc Synchonously monitor the WASM executor for a call result and any
 %% imports that need to be handled.
 monitor_call(WASM, ImportFun, StateMsg, Opts) ->
+    ?event(monitoring_call),
     receive
         {execution_result, Result} ->
             ?event({call_result, Result}),

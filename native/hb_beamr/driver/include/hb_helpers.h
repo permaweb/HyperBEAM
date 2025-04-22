@@ -34,7 +34,7 @@ const char* wasm_import_export_kind_to_string(wasm_import_export_kind_t kind);
  * 
  *  returns: A character representing the value type (e.g., 'i' for i32, 'f' for f32).
  */
-char wasm_valkind_to_char(enum wasm_valkind_enum* valtype);
+char wasm_valkind_to_char(enum wasm_valkind_enum valtype);
 
 /*
  * Function: wasm_val_to_erl_term
@@ -74,9 +74,13 @@ int erl_term_to_wasm_val(wasm_val_t* val, ei_term* term);
  */
 int erl_terms_to_wasm_vals(wasm_val_vec_t* vals, ei_term* terms);
 
-int erl_term_to_import_result(enum wasm_valkind_enum* val_kind, uint64_t* val, ei_term* term);
+int erl_term_to_import_result(enum wasm_valkind_enum val_kind, uint64_t* val, ei_term* term);
 
-int erl_terms_to_import_results(uint32_t val_count, enum wasm_valkind_enum* val_kinds, uint64_t* vals, ei_term* terms);
+int erl_terms_to_import_results(uint32_t val_count, wasm_valkind_t *val_kinds, uint64_t* vals, ei_term* terms);
+
+int erl_term_to_indirect_arg(uint32_t* val, enum wasm_valkind_enum val_kind_enum, ei_term* term);
+
+int erl_terms_to_indirect_args(uint32_t* vals, wasm_valkind_t *val_kinds, uint32_t val_count, ei_term* terms);
 
 /*
  * Function: decode_list
@@ -103,8 +107,8 @@ ei_term* decode_list(char* buff, int* index);
  * 
  *  returns: 1 on success, 0 on failure (currently always returns 1).
  */
-int get_function_sig(uint32_t param_count, enum wasm_valkind_enum* param_kinds, 
-                       uint32_t result_count, enum wasm_valkind_enum* result_kinds, 
+int get_function_sig(uint32_t param_count, wasm_valkind_t *param_kinds, 
+                       uint32_t result_count, wasm_valkind_t *result_kinds, 
                        char* type_str);
 
 /*
@@ -143,6 +147,6 @@ long get_memory_size(Proc* proc);
 
 int kind_size(enum wasm_valkind_enum kind);
 
-int kinds_size(enum wasm_valkind_enum* kinds, int count);
+int kinds_size(wasm_valkind_t *kinds, int count);
 
 #endif // HB_HELPERS_H

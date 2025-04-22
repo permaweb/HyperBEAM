@@ -10,6 +10,8 @@
 #include <time.h>
 #include <pthread.h>
 
+#define MAX_IMPORT_STACK_DEPTH 10
+
 // Structure to represent the response for an import operation
 typedef struct {
     ErlDrvMutex* response_ready;    // Mutex to synchronize response readiness
@@ -28,15 +30,18 @@ typedef struct {
     // wasm_store_t* store;            // WASM store
     ErlDrvPort port;                // Erlang port associated with this process
     ErlDrvTermData port_term;       // Erlang term representation of the port
+    unsigned int port_key;
     ErlDrvMutex* is_running;        // Mutex to track if the process is running
+    wasm_table_inst_t indirect_func_table; // Indirect function table
+    wasm_exec_env_t exec_env;      // Execution environment for the WASM instance
     char* current_function;        // Current function being executed
     long current_function_ix;   // Index of the current function
     int indirect_func_table_ix;    // Index of the indirect function table
-    wasm_table_inst_t indirect_func_table; // Indirect function table
-    wasm_exec_env_t exec_env;      // Execution environment for the WASM instance
     ei_term* current_args;         // Arguments for the current function
     int current_args_length;       // Length of the current arguments
     ImportResponse* current_import; // Import response structure
+    ImportResponse* import_stack[MAX_IMPORT_STACK_DEPTH]; // Stack of import responses
+    int import_stack_depth;        // Depth of the current import stack
     ErlDrvTermData pid;            // PID of the Erlang process
     int is_initialized;            // Flag to check if the process is initialized
     time_t start_time;             // Start time of the process
@@ -99,9 +104,9 @@ typedef struct {
     const char *field_name;
     const char *signature;
     uint32_t param_count;
-    enum wasm_valkind_enum *param_kinds;
+    wasm_valkind_t *param_kinds;
     uint32_t result_count;
-    enum wasm_valkind_enum *result_kinds;
+    wasm_valkind_t *result_kinds;
 } NativeSymbolAttachment;
 
 #endif // HB_CORE_H

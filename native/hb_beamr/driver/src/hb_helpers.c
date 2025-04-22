@@ -1,6 +1,8 @@
 #include "../include/hb_helpers.h"
 #include "../include/hb_logging.h"
+#include "wasm_c_api.h"
 #include "wasm_export.h"
+#include <stdint.h>
 
 // Returns the string name corresponding to the wasm type
 const char* get_wasm_type_name(wasm_valkind_t kind) {
@@ -24,8 +26,8 @@ const char* wasm_import_export_kind_to_string(wasm_import_export_kind_t kind) {
 }
 
 // Helper function to convert wasm_valtype_t to char
-char wasm_valkind_to_char(enum wasm_valkind_enum* valkind) {
-    switch (*valkind) {
+char wasm_valkind_to_char(enum wasm_valkind_enum valkind_enum) {
+    switch (valkind_enum) {
         case WASM_I32: return 'i';
         case WASM_I64: return 'I';
         case WASM_F32: return 'f';
@@ -126,9 +128,48 @@ int erl_terms_to_wasm_vals(wasm_val_vec_t* vals, ei_term* terms) {
     return 0;
 }
 
-int erl_term_to_import_result(enum wasm_valkind_enum* val_kind, uint64_t* val, ei_term* term) {
+int erl_term_to_indirect_arg(uint32_t* val, enum wasm_valkind_enum val_kind, ei_term* term) {
+    DRV_DEBUG("Converting erl term to indirect arg. Term: %d. Size: %d", term->value.i_val, term->size);
+    switch (val_kind) {
+        case WASM_I32:
+            *val = (uint32_t) term->value.i_val;
+            return 1;
+        case WASM_I64:
+            *val = (uint32_t)((term->value.i_val) >> 32);
+            *(val + 1) = (uint32_t)(term->value.i_val & 0xFFFFFFFF);
+            return 2;
+        case WASM_F32:
+            *val = (uint32_t)(term->value.d_val);
+            return 1;
+        case WASM_F64:
+            *val = (uint32_t)(term->value.d_val);
+            *(val + 1) = (uint32_t)((uint64_t)(term->value.d_val) >> 32);
+            return 2;
+        default:
+            DRV_DEBUG("Unsupported parameter type: %d", val_kind);
+            return -1;
+    }
+}
+
+int erl_terms_to_indirect_args(uint32_t* vals, wasm_valkind_t *val_kinds, uint32_t val_count, ei_term* terms) {
+    DRV_DEBUG("Converting erl terms to indirect args");
+    DRV_DEBUG("Vals: %d", val_count);
+    int i = 0;
+    while (i < val_count) {
+        DRV_DEBUG("Converting term %d: %p", i, &vals[i]);
+        int res = erl_term_to_indirect_arg(&vals[i], val_kinds[i], &terms[i]);
+        if(res == -1) {
+            DRV_DEBUG("Failed to convert term to indirect arg");
+            return -1;
+        }
+        i += res;
+    }
+    return 0;
+}
+
+int erl_term_to_import_result(enum wasm_valkind_enum val_kind, uint64_t* val, ei_term* term) {
     DRV_DEBUG("Converting erl term to wasm val. Term: %d. Size: %d", term->value.i_val, term->size);
-    switch (*val_kind) {
+    switch (val_kind) {
         case WASM_I32:
             *val = (int) term->value.i_val;
             break;
@@ -142,18 +183,18 @@ int erl_term_to_import_result(enum wasm_valkind_enum* val_kind, uint64_t* val, e
             *val = term->value.d_val;
             break;
         default:
-            DRV_DEBUG("Unsupported parameter type: %d", *val_kind);
+            DRV_DEBUG("Unsupported parameter type: %d", val_kind);
             return -1;
     }
     return 0;
 }
 
-int erl_terms_to_import_results(uint32_t val_count, enum wasm_valkind_enum* val_kinds, uint64_t* vals, ei_term* terms) {
+int erl_terms_to_import_results(uint32_t val_count, wasm_valkind_t *val_kinds, uint64_t* vals, ei_term* terms) {
     DRV_DEBUG("Converting erl terms to wasm vals");
     DRV_DEBUG("Vals: %d", val_count);
     for(int i = 0; i < val_count; i++) {
         DRV_DEBUG("Converting term %d: %p", i, &vals[i]);
-        int res = erl_term_to_import_result(&val_kinds[i], &vals[i], &terms[i]);
+        int res = erl_term_to_import_result((enum wasm_valkind_enum)val_kinds[i], &vals[i], &terms[i]);
         if(res == -1) {
             DRV_DEBUG("Failed to convert term to wasm val");
             return -1;
@@ -164,10 +205,10 @@ int erl_terms_to_import_results(uint32_t val_count, enum wasm_valkind_enum* val_
 
 int kind_size(enum wasm_valkind_enum kind) {
     switch (kind) {
-        case WASM_I32: return 4;
-        case WASM_I64: return 8;
-        case WASM_F32: return 4;
-        case WASM_F64: return 8;
+        case WASM_I32: return 1;
+        case WASM_I64: return 2;
+        case WASM_F32: return 1;
+        case WASM_F64: return 2;
         default: {
             DRV_DEBUG("kind_size: unsupported kind: %d", kind);
             return 0;
@@ -175,7 +216,7 @@ int kind_size(enum wasm_valkind_enum kind) {
     }
 }
 
-int kinds_size(enum wasm_valkind_enum* kinds, int count) {
+int kinds_size(wasm_valkind_t *kinds, int count) {
     int size = 0;
     for(int i = 0; i < count; i++) {
         size += kind_size(kinds[i]);
@@ -222,17 +263,17 @@ ei_term* decode_list(char* buff, int* index) {
     return res;
 }
 
-int get_function_sig(uint32_t param_count, enum wasm_valkind_enum* param_kinds, 
-                       uint32_t result_count, enum wasm_valkind_enum* result_kinds, 
+int get_function_sig(uint32_t param_count, wasm_valkind_t *param_kinds, 
+                       uint32_t result_count, wasm_valkind_t *result_kinds, 
                        char* type_str) {
     int current_pos = 0;
     type_str[current_pos++] = '(';
     for(uint32_t i = 0; i < param_count; i++) {
-        type_str[current_pos++] = wasm_valkind_to_char(&param_kinds[i]);
+        type_str[current_pos++] = wasm_valkind_to_char((enum wasm_valkind_enum) param_kinds[i]);
     }
     type_str[current_pos++] = ')';
     for(uint32_t i = 0; i < result_count; i++) {
-        type_str[current_pos++] = wasm_valkind_to_char(&result_kinds[i]);
+        type_str[current_pos++] = wasm_valkind_to_char((enum wasm_valkind_enum) result_kinds[i]);
     }
     type_str[current_pos] = '\0'; // Null-terminate the string
     return 1; // Assuming success always for now

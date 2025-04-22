@@ -39,8 +39,16 @@ static ErlDrvData wasm_driver_start(ErlDrvPort port, char *buff) {
 
     proc->port = port;
     DRV_DEBUG("Port: %p", proc->port);
+
+    // Set a base port key, which will be incremented for each async call to ensure
+    // that the calls are on different threads so cannot deadlock each other.
+    // TODO: This is not a good solution due to wasted overhead of threads.
+    proc->port_key = driver_async_port_key(port);
+    DRV_DEBUG("Port key: %d", proc->port_key);
+
     proc->port_term = driver_mk_port(proc->port);
     DRV_DEBUG("Port term: %p", proc->port_term);
+
     proc->start_time = time(NULL);
     DRV_DEBUG("Start time: %ld", proc->start_time);
 
@@ -48,6 +56,7 @@ static ErlDrvData wasm_driver_start(ErlDrvPort port, char *buff) {
 }
 
 static void wasm_driver_stop(ErlDrvData raw) {
+    // DRV_DEBUG("IGNORING STOP");
     Proc* proc = (Proc*)raw;
     DRV_DEBUG("Stopping WASM driver");
 
@@ -125,7 +134,8 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         mod_bin->size = size;
         mod_bin->mode = mode;
         //DRV_DEBUG("Calling for async thread to init");
-        driver_async(proc->port, NULL, wasm_initialize_runtime, mod_bin, NULL);
+        proc->port_key++;
+        driver_async(proc->port, &proc->port_key, wasm_initialize_runtime, mod_bin, NULL);
     } else if (strcmp(command, "call") == 0) {
         if (!proc->is_initialized) {
             send_error(proc, "Cannot run WASM function as module not initialized.");
@@ -140,7 +150,8 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         DRV_DEBUG("Decoding args. Buff: %p. Index: %d", buff, index);
         proc->current_args = decode_list(buff, &index);
 
-        driver_async(proc->port, NULL, wasm_execute_exported_function, proc, NULL);
+        proc->port_key++;
+        driver_async(proc->port, &proc->port_key, wasm_execute_exported_function, proc, NULL);
     } 
     else if (strcmp(command, "indirect_call") == 0) {
         if (!proc->is_initialized) {
@@ -149,15 +160,23 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         }
         DRV_DEBUG("Decoding indirect call");
         ei_decode_long(buff, &index, &proc->current_function_ix);
+        DRV_DEBUG("Indirect function table index: %ld", proc->current_function_ix);
         proc->current_args = decode_list(buff, &index);
-	    DRV_DEBUG("Calling indirect call invoker");
-        driver_async(proc->port, NULL, wasm_execute_indirect_function, proc, NULL);
+	    DRV_DEBUG("Calling wasm_execute_indirect_function");
+
+        proc->port_key++;
+        driver_async(proc->port, &proc->port_key, wasm_execute_indirect_function, proc, NULL);
     } 
     else if (strcmp(command, "import_response") == 0) {
         // Handle import response
         // TODO: We should probably start a mutex on the current_import object here.
         // At the moment current_import->response_ready must not be locked so that signalling can happen.
         DRV_DEBUG("Import response received. Providing...");
+        DRV_DEBUG("Import stack depth: %d, current_import: %p", proc->import_stack_depth, proc->current_import);
+        // print out the current_import object
+        DRV_DEBUG("Current import object cond: %p", proc->current_import->cond);
+        DRV_DEBUG("Current import object response_ready: %p", proc->current_import->response_ready);
+        DRV_DEBUG("Current import object ready: %d", proc->current_import->ready);
         if (proc->current_import) {
             DRV_DEBUG("Decoding import response from Erlang...");
             proc->current_import->result_terms = decode_list(buff, &index);
@@ -168,6 +187,29 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
                 proc->current_import->response_ready,
                 proc->current_import->cond,
                 &proc->current_import->ready);
+
+            // Restore the previous import response
+            if (proc->import_stack_depth > 0) {
+                proc->import_stack_depth--; // Decrement depth FIRST
+                DRV_DEBUG("import_stack: Restoring previous import response at depth %d", proc->import_stack_depth);
+                DRV_DEBUG("import_stack: current_import Before (the one finishing): %p", proc->current_import);
+
+                if (proc->import_stack_depth == 0) {
+                    // Returned from the base import call, no previous context to restore.
+                    DRV_DEBUG("import_stack: Stack is now empty, setting current_import to NULL");
+                    proc->current_import = NULL;
+                } else {
+                    // Restore the import context from the element *below* the new depth.
+                    // (new_depth - 1) gives the index of the context we are returning to.
+                    proc->current_import = proc->import_stack[proc->import_stack_depth - 1];
+                    DRV_DEBUG("import_stack: Restored previous import context from index %d", proc->import_stack_depth - 1);
+                }
+                DRV_DEBUG("import_stack: current_import After (the one restored): %p", proc->current_import);
+            } else {
+                // This case should technically not be reachable if current_import was valid before the signal
+                 DRV_DEBUG("import_stack: Error - import_stack_depth was already 0?");
+                 proc->current_import = NULL; // Set to NULL for safety
+            }
         } else {
             DRV_DEBUG("[error] No pending import response waiting");
             send_error(proc, "No pending import response waiting");
