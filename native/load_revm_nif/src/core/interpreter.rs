@@ -1,6 +1,6 @@
 use crate::core::evm::CustomEvm;
 use crate::core::state::{deserialize_state, serialize_state};
-use crate::tx_utils::{get_tx_kind, get_tx_object, recover_signer};
+use crate::core::transaction::{get_tx_kind, get_tx_object, recover_signer};
 use crate::utils::constants::{GENESIS_ADDRESS, TX_GAS_LIMIT};
 use crate::utils::misc::json_error;
 use revm::state::AccountInfo;
