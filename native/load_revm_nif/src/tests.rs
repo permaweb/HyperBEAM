@@ -106,4 +106,16 @@ mod tests {
         println!("TX response:{:?}", result_json);
         println!("new eval state result: {}", state);
     }
+
+    #[test]
+    // wtLOAD token wrapping (`deposit()`) / resimulated from: https://explorer.load.network/tx/0x280357f4e780b2607cf89932ce1c55ebed9b4768cf8a9a39d56df2e01313d0e0
+    fn test_wtload_wrapping_deposit() {
+        let raw_tx_hex = "02f877822518058447868c008447868c00830813f1949116cf7dbc1c520dc264fe39c4c361537893e47f8609184e72a00084d0e30db0c080a065288495989ea7270150d0eaecb11b7e1e255eb2d281b3e8dc22826ecf2a1618a075cb25a285afde53830afe8cd7e2bf86725867a7fcf0a01ee3034c9fd298d784";
+        let previous_state = fs::read_to_string("./state.json").unwrap();
+        let (result, state) = eval(raw_tx_hex.to_string(), Some(previous_state)).unwrap();
+
+        let result_json: Value = serde_json::to_value(&result).unwrap();
+        println!("TX response:{:?}", result_json);
+        println!("new eval state result: {}", state);
+    }
 }
