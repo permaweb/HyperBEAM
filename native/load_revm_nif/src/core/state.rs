@@ -50,8 +50,8 @@ pub fn serialize_state(db: HashMap<Address, revm::state::Account>) -> Result<Str
 
         let mut account_storage = HashMap::new();
         for (slot, value) in account_info.storage.iter() {
-            let slot_hex = format!("0x{:?}", slot);
-            let value_hex = format!("0x{:?}", value);
+            let slot_hex = format!("0x{:x}", slot);
+            let value_hex = format!("0x{:x}", value.present_value);
             account_storage.insert(slot_hex, value_hex);
         }
 
