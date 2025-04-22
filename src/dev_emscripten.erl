@@ -19,7 +19,7 @@
 %%% 
 %%% Where '_vjj' represents the type spec of the function.
 -module(dev_emscripten).
--export([info/1, init/3, router/4, invoke_vjj/3]).
+-export([info/1, init/3, router/4, invoke_ii/3, invoke_vjj/3]).
 
 
 -include("src/include/hb.hrl").
@@ -36,34 +36,40 @@ info(_) ->
 %% @doc On-boot, initialize the virtual file system with:
 %% - Empty stdio files
 init(M1, _M2, Opts) ->
+    ?event(init_emscripten),
     MsgWithLib =
-        hb_converge:set(
+        hb_ao:set(
             M1,
             #{
-                <<"WASM/stdlib/env">> =>
-                    #{ device => <<"Emscripten/1.0">>}
+                <<"wasm/stdlib/env">> =>
+                    #{ device => <<"emscripten@1.0">>}
             },
             Opts
         ),
     {ok, MsgWithLib}.
 
+
+invoke_ii(Msg1, Msg2, Opts) ->
+	?event(invoke_emscripten_vjj),
+	router(<<"invoke_ii">>, Msg1, Msg2, Opts).
+
 invoke_vjj(Msg1, Msg2, Opts) ->
-	?event(debug, invoke_emscripten_vjj),
+	?event(invoke_emscripten_vjj),
 	router(<<"invoke_vjj">>, Msg1, Msg2, Opts).
 
 router(<<"invoke_", _/binary>>, Msg1, Msg2, Opts) ->
-    ?event(debug, invoke_emscripten),
+    ?event(invoke_emscripten),
     State = hb_ao:get(<<"State">>, Msg1, #{ hashpath => ignore }),
     WASM = dev_wasm:instance(State, Msg2, Opts),
     [Index|Args] = hb_ao:get(args, Msg2, #{ hashpath => ignore }),
     %?event(debug, invoke_emscripten_stack_get_current),
     % {ok, SP, _} = hb_beamr:call(WASM, <<"emscripten_stack_get_current">>, []),
     % ?event(debug, invoke_emscripten_stack_get_current_done),
-    ImportResolver = hb_private:get(<<"WASM/Import-Resolver">>, State, Opts),
+    ImportResolver = hb_private:get(<<"WASM/import-resolver">>, State, Opts),
     try 
-        ?event(debug, trying_indirect_call),
+        ?event(trying_indirect_call),
         Res = hb_beamr:call(WASM, Index, Args, ImportResolver, State, Opts),
-        ?event(debug, try_succeeded),
+        ?event(debug, try_indirect_call_succeeded),
         Res
     catch
         _:Error ->
@@ -76,47 +82,38 @@ router(<<"invoke_", _/binary>>, Msg1, Msg2, Opts) ->
     end.
 
 %%% Tests
-generate_stack(File) ->
-    Wallet = hb:wallet(),
+init() ->
+    application:ensure_all_started(hb).
+
+generate_emscripten_stack(File, Func, Params) ->
+    init(),
     Msg0 = dev_wasm:cache_wasm_image(File),
-    Image = hb_converge:get(<<"Image">>, Msg0, #{}),
     Msg1 = Msg0#{
-        device => <<"Stack/1.0">>,
-        <<"Device-Stack">> =>
-            [
-                <<"WASI/1.0">>,
-                <<"JSON-Iface/1.0">>,
-                <<"Emscripten/1.0">>,
-                <<"WASM-64/1.0">>,
-                <<"Multipass/1.0">>
-            ],
-        <<"Input-Prefix">> => <<"Process">>,
-        <<"Output-Prefix">> => <<"WASM">>,
-        <<"Passes">> => 2,
-        <<"Stack-Keys">> => [<<"Init">>, <<"Compute">>],
-        <<"Process">> =>
-            hb_message:sign(#{
-                <<"Type">> => <<"Process">>,
-                <<"Image">> => Image,
-                <<"Mode">> => <<"AOT">>,
-                <<"Scheduler">> => hb:address(),
-                <<"Authority">> => hb:address()
-            }, Wallet)
+        <<"device">> => <<"stack@1.0">>,
+        <<"device-stack">> => [<<"WASI@1.0">>, <<"WASM-64@1.0">>, <<"emscripten@1.0">>],
+        <<"output-prefixes">> => [<<"wasm">>, <<"wasm">>],
+        <<"stack-keys">> => [<<"init">>, <<"compute">>],
+        <<"function">> => Func,
+        <<"params">> => Params
     },
-    {ok, Msg2} = hb_converge:resolve(Msg1, <<"Init">>, #{}),
+    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, #{}),
     Msg2.
 
 %% @doc Ensure that an AOS Emscripten-style WASM AOT module can be invoked
 %% with a function reference.
 emscripten_aot_test() ->
-    Msg = generate_stack("test/process.aot"),
-    Proc = hb_converge:get(<<"Process">>, Msg, #{ hashpath => ignore }),
-    ProcID = hb_converge:get(id, Proc, #{}),
-    {ok, Msg3} =
-        hb_converge:resolve(
-            Msg,
-            dev_json_iface:generate_aos_msg(ProcID, <<"return 1+1">>),
-            #{}
-        ),
-    Data = hb_converge:get(<<"Results/Data">>, Msg3, #{}),
-    ?assertEqual(<<"2">>, Data).
+    Init = generate_emscripten_stack("test/try.aot", <<"handle">>, [0, 0]),
+    Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
+    Msg = <<"msg">>,
+    Env = <<"env">>,
+    {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
+    ?assertNotEqual(0, Ptr1),
+    hb_beamr_io:write(Instance, Ptr1, Msg),
+    {ok, Ptr2} = hb_beamr_io:malloc(Instance, byte_size(Env)),
+    ?assertNotEqual(0, Ptr2),
+    hb_beamr_io:write(Instance, Ptr2, Env),
+    Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
+    {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
+    [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
+    {ok, Output} = hb_beamr_io:read_string(Instance, Ptr),
+    ?assertEqual(<<"Initial">>, Output).
