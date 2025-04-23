@@ -1,0 +1,8 @@
+{
+    "name": "loaded_zama",
+    "chain_id": 8009,
+    "gas_limit": 1000000000,
+    "contract_size_limit": 10485760,
+    "genesis_address": "0x197f818c1313DC58b32D88078ecdfB40EA822614",
+    "genesis_address_balance": 1000000
+}
