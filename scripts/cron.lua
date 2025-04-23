@@ -23,25 +23,29 @@
 -- end
 
 function compute(process, message, opts)
+	-- early return when no body is provided
+	if not message.body.body then
+		return process
+	end
+	-- main logic to initialize the crons
 	local res = 42
 	process.crons = {
 		body = res
     }
-	ao.event("debug_cron", { "111compute:message", message.body })
-	-- ao.event("debug_cron", { "compute:opts", opts })
-	-- if message.body.body and message.body.body.body.path == "once" then
-	-- 	ao.event("debug_cron", { "log1", "1" })
-	-- 	-- process.crons = {
-	-- 	-- 	body = res + 1
-	-- 	-- }
-	-- else
-	-- 	ao.event("debug_cron", { "log2", "2" })
-	-- 	-- ao.event("debug_cron", { "2compute:message.body.body", message.body.body })
-	-- 	-- process.crons = {
-	-- 	-- 	body = res + 2
-	-- 	-- }
-	-- end
-    return process
+	ao.event("debug_cron", { "111compute:message", message.body.body.path })
+	if message.body.body.path == "once" then
+		ao.event("debug_cron", { "log1", "1" })
+		
+		process.crons = {
+			body = res + 10
+		}
+	else
+		ao.event("debug_cron", { "log2", "2" })
+		process.crons = {
+			body = res + 2
+		}
+	end
+	return process
 end
 
 -- test function for cache test in dev_cron.erl
