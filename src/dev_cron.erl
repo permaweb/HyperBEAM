@@ -1,13 +1,13 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([load/3, once/3, every/3, stop/3, info/1, info/3]).
+-export([load/3, once/3, every/3, stop/3, info/1, info/3, add/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
 info(_) -> 
-	#{ exports => [info, once, every, stop] }.
+	#{ exports => [info, once, every, stop, add, load] }.
 
 %% @doc Exported function for granting a description of the device.
 info(_Msg1, _Msg2, _Opts) ->
@@ -18,7 +18,9 @@ info(_Msg1, _Msg2, _Opts) ->
 			<<"info">> => <<"Get device info">>,
 			<<"once">> => <<"Schedule a one-time message">>,
 			<<"every">> => <<"Schedule a recurring message">>,
-			<<"stop">> => <<"Stop a scheduled task {task}">>
+			<<"stop">> => <<"Stop a scheduled task {task}">>,
+			<<"add">> => <<"Add a cron job">>,
+			<<"load">> => <<"Load cron jobs">>
 		}
 	},
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
@@ -48,14 +50,62 @@ load(_, _, Opts) ->
                 <<"method">> => <<"GET">>
             }
         ),
+	?event({load_cron_jobs_start, {msgs, Msgs}, {cron_opts, CronOpts}}),
     case hb_ao:resolve_many(Msgs, CronOpts) of
         {ok, Crons} ->
             % TODO: Restore the crons from the response
+			?event({load_cron_jobs_success, {crons, Crons}}),
             {ok, Crons};
         {error, Reason} ->
+			?event({load_cron_jobs_error, {error, Reason}}),
             {error, Reason}
     end.
 
+add(Base, Req, Opts) ->
+	?event({add, {base, Base}, {req, Req}}),
+	% hb_ao:resolve_many(
+	% 	hb_singleton:from(
+	% 		#{
+	% 			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
+	% 			<<"method">> => <<"POST">>,
+	% 			<<"body">> =>
+	% 				hb_message:commit(
+	% 					#{
+	% 						<<"path">> => <<"once">>,
+	% 						<<"task">> => <<"foobar">>
+	% 					},
+	% 					Opts
+	% 				)
+	% 		}
+	% 	),
+	% 	cron_opts(Opts)
+	% ),
+	% {ok, Res} = hb_ao:resolve_many(
+	% 	hb_singleton:from(
+	% 		#{
+	% 			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
+	% 			<<"method">> => <<"POST">>,
+	% 			<<"body">> => Req
+	% 		}
+	% 	),
+	% 	cron_opts(Opts)
+	% ),
+	% ?event({viksit_cron_add_result, {result, Res}}),
+	% hb_http:get(Node, <<"/cron~node-process@1.0/now">>, #{}),
+	% resolve the compute of now to get the result
+	% Now = hb_ao:resolve_many(
+	% 	hb_singleton:from(
+	% 		#{
+	% 			<<"path">> => <<"/cron~node-process@1.0/now">>,
+	% 			<<"method">> => <<"GET">>
+	% 		}
+	% 	),
+	% 	cron_opts(Opts)
+	% ),
+	% timer:sleep(1000),
+	% ?event({viksit_cron_now_result, {result, Now}}),
+	{ok, <<"foobar">>}.
+	
 %% @doc Exported function for scheduling a one-time message.
 once(_Msg1, Msg2, Opts) ->
 	case hb_ao:get(<<"cron-path">>, Msg2, Opts) of
@@ -236,6 +286,8 @@ parse_time(BinString) ->
 		_ -> throw({error, invalid_time_unit, UnitStr})
 	end.
 
+
+
 %%% Tests
 
 stop_once_test() ->
@@ -393,3 +445,193 @@ test_worker(State) ->
 			Pid ! {state, State},
 			test_worker(State)
 	end.
+%%
+%% caching tests
+%%
+%% 
+-define(TEST_NAME, <<"test-cron-cache">>).
+generate_test_opts() ->
+    {ok, Script} = file:read_file("scripts/cron.lua"),
+    generate_test_opts(#{
+        ?TEST_NAME => #{
+            <<"device">> => <<"process@1.0">>,
+            <<"execution-device">> => <<"lua@5.3a">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"script">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => Script
+            }
+        }
+    }).
+generate_test_opts(Defs) ->
+    #{
+        store =>
+            [
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"prefix">> =>
+                        <<
+                            "cache-TEST-",
+                            (integer_to_binary(os:system_time(millisecond)))/binary
+                        >>
+                }
+            ],
+        node_processes => Defs,
+        priv_wallet => ar_wallet:new()
+    }.
+
+add_test() ->
+	Opts = generate_test_opts(),
+	SampleMsg = [
+		#{ <<"device">> => <<"node-process@1.0">> },
+		?TEST_NAME,
+		#{
+			<<"path">> => <<"schedule">>,
+			<<"method">> => <<"POST">>,
+			<<"body">> =>
+				hb_message:commit(
+					#{
+						<<"path">> => <<"compute">>,
+						<<"body">> => #{
+							<<"path">> => <<"once">>
+						}
+					},
+					Opts
+				)
+		}
+	],
+	Res = hb_ao:resolve_many(SampleMsg, Opts),
+	?event({add2_test_result, {res, Res}}),
+	Res2 = hb_ao:get(
+		<< ?TEST_NAME/binary, "/now/crons" >>,
+		#{ <<"device">> => <<"node-process@1.0">> },
+		Opts
+	),
+	?event({add2_test_result2, {res2, Res2}}),
+	?event({'add2_test_done'}).
+
+
+
+% basic invocation test
+invoke_test() ->
+	{ok, Script} = file:read_file("scripts/cron.lua"),
+	Base = #{
+		<<"device">> => <<"lua@5.3a">>,
+		<<"script">> => #{
+			<<"content-type">> => <<"application/lua">>,
+			<<"body">> => Script
+		},
+		<<"test-value">> => 42
+	},
+	{ok, Result1} = hb_ao:resolve(Base, <<"hello">>, #{}),
+	?event({result1, Result1}),
+	?assertEqual(42, hb_ao:get(<<"test-value">>, Result1, #{})),
+	?assertEqual(<<"world">>, hb_ao:get(<<"hello">>, Result1, #{})),
+	{ok, Result2} =
+		hb_ao:resolve(
+			Base,
+			#{<<"path">> => <<"hello">>, <<"name">> => <<"Alice">>},
+			#{}
+		),
+	?event({result2, Result2}),
+	?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
+
+% cache handle test via the lua device
+cache_handle_test() ->
+	{ok, Script} = file:read_file("scripts/cron.lua"),
+	Base = #{
+		<<"device">> => <<"lua@5.3a">>,
+		<<"script">> => #{
+			<<"content-type">> => <<"application/lua">>,
+			<<"body">> => Script
+		},
+		<<"somekey">> => <<"somevalue">>
+	},
+	% resolve the handle function with a base body path of once
+	{ok, Result1} = hb_ao:resolve(
+		Base, 
+		#{
+			<<"path">> => <<"handle">>,
+			<<"body">> => #{<<"path">> => <<"every">>}
+		},
+		#{}
+	),
+	?event({result1, Result1}),
+	CronsRes = hb_ao:get(<<"crons">>, Result1, #{}),
+	?event({crons, CronsRes}),
+	% TODO(viksit): add asserts here tbd
+	% end of test
+	?event({'cache_handle_test_done'}).
+	
+%%%%%%%%%%%%%%%
+% add_test() ->
+% 	{ok, Script} = file:read_file("scripts/cron.lua"),
+% 	Node = hb_http_server:start_node(Opts = #{
+%         priv_wallet => ar_wallet:new(),
+%         node_processes => #{
+%             <<"cron">> => #{
+%                 <<"device">> => <<"process@1.0">>,
+%                 <<"execution-device">> => <<"lua@5.3a">>,
+%                 <<"scheduler-device">> => <<"scheduler@1.0">>,
+%                 <<"script">> => #{
+%                     <<"content-type">> => <<"application/lua">>,
+%                     <<"module">> => <<"cron">>,
+%                     <<"body">> => Script
+%                 }
+%             }
+%         }
+%     }),
+% 	% ?event({add_test_node, {node, Node}}),
+% 	% Res = hb_http:get(Node, <<"/meta@1.0/info">>, #{}),
+% 	% ?event({add_test_node_info, {res, Res}}),
+% 	ResPost = hb_http:post(
+% 		Node, 
+% 		#{
+% 			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
+% 			<<"method">> => <<"POST">>,
+% 			<<"body">> => hb_message:commit(#{
+% 				<<"path">> => <<"once">>,
+% 				% some meta data to send later
+% 				<<"task">> => <<"foobar">>
+% 			},
+% 			Opts)
+% 		},
+% 		Opts
+% 	),
+% 	?event({'cron:add:test:post_done', {res, ResPost}}),
+% 	ResGet = hb_http:get(Node, <<"/cron~node-process@1.0/now">>, #{}),
+% 	?event({'cron:add:test:get_cron', {req_id, ResGet}}),
+	
+% 	% Res = hb_http:get(Node, <<"/cron~node-process@1.0/now/crons">>, #{}),
+% 	% ?event({add_test_get_crons, {res, Res}}),
+
+% 	?event({'cron:add:test:::::::::::get_done'}).
+
+%%%%
+%%% 
+%%% 
+%%% 
+%%% 
+%%% 	% Node = hb_http_server:start_node(),
+	%%UrlPath = <<"/~cron@1.0/add?task=foobar">>,	
+	%%{ok, _ReqMsgId} = hb_http:get(Node, UrlPath, #{}),
+	% {ok, Res} = hb_ao:resolve_many(
+	% 	hb_singleton:from(
+	% 		#{
+	% 			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
+	% 			<<"method">> => <<"POST">>,
+	% 			<<"body">> => Req
+	% 		}
+	% 	),
+	% 	cron_opts(Opts)
+	% ),
+	% ?event({viksit_cron_add_result, {result, Res}}),
+	% hb_http:get(Node, <<"/cron~node-process@1.0/now">>, #{}),
+	% ?event({'cron:add:test:get_done', {req_id, _ReqMsgId}}).
+	% 
+% 
+% load_test() ->
+% 	Node = hb_http_server:start_node(),
+% 	UrlPath = <<"/~cron@1.0/load">>,
+% 	{ok, _ReqMsgId} = hb_http:get(Node, UrlPath, #{}),
+% 	?event({'cron:load:test:get_done', {req_id, _ReqMsgId}}).

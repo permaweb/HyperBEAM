@@ -49,6 +49,7 @@ end
 --- the `response` field set to a table with the `Output` field set to a string,
 --- and the `messages` field set to an empty table.
 function compute(process, message, opts)
+	ao.event("debug_cron", { "1compute:message.body", message.body })
     process.results = {
         output = {
             body = 42
