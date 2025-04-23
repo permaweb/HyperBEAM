@@ -1,7 +1,7 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([load/3, once/3, every/3, stop/3, info/1, info/3, add/3]).
+-export([load/3, once/3, every/3, stop/3, info/1, info/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -19,7 +19,6 @@ info(_Msg1, _Msg2, _Opts) ->
 			<<"once">> => <<"Schedule a one-time message">>,
 			<<"every">> => <<"Schedule a recurring message">>,
 			<<"stop">> => <<"Stop a scheduled task {task}">>,
-			<<"add">> => <<"Add a cron job">>,
 			<<"load">> => <<"Load cron jobs">>
 		}
 	},
@@ -34,7 +33,7 @@ cron_opts(Opts) ->
                 <<"cron">> => #{
                     <<"device">> => <<"process@1.0">>,
                     <<"execution-device">> => <<"lua@5.3a">>,
-                    <<"function">> => <<"handle">>,
+                    <<"function">> => <<"compute">>,
                     <<"script">> => Script
                 }
             }
@@ -61,51 +60,7 @@ load(_, _, Opts) ->
             {error, Reason}
     end.
 
-add(Base, Req, Opts) ->
-	?event({add, {base, Base}, {req, Req}}),
-	% hb_ao:resolve_many(
-	% 	hb_singleton:from(
-	% 		#{
-	% 			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
-	% 			<<"method">> => <<"POST">>,
-	% 			<<"body">> =>
-	% 				hb_message:commit(
-	% 					#{
-	% 						<<"path">> => <<"once">>,
-	% 						<<"task">> => <<"foobar">>
-	% 					},
-	% 					Opts
-	% 				)
-	% 		}
-	% 	),
-	% 	cron_opts(Opts)
-	% ),
-	% {ok, Res} = hb_ao:resolve_many(
-	% 	hb_singleton:from(
-	% 		#{
-	% 			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
-	% 			<<"method">> => <<"POST">>,
-	% 			<<"body">> => Req
-	% 		}
-	% 	),
-	% 	cron_opts(Opts)
-	% ),
-	% ?event({viksit_cron_add_result, {result, Res}}),
-	% hb_http:get(Node, <<"/cron~node-process@1.0/now">>, #{}),
-	% resolve the compute of now to get the result
-	% Now = hb_ao:resolve_many(
-	% 	hb_singleton:from(
-	% 		#{
-	% 			<<"path">> => <<"/cron~node-process@1.0/now">>,
-	% 			<<"method">> => <<"GET">>
-	% 		}
-	% 	),
-	% 	cron_opts(Opts)
-	% ),
-	% timer:sleep(1000),
-	% ?event({viksit_cron_now_result, {result, Now}}),
-	{ok, <<"foobar">>}.
-	
+
 %% @doc Exported function for scheduling a one-time message.
 once(_Msg1, Msg2, Opts) ->
 	case hb_ao:get(<<"cron-path">>, Msg2, Opts) of
@@ -122,7 +77,7 @@ once(_Msg1, Msg2, Opts) ->
 			Name = {<<"cron@1.0">>, ReqMsgID},
 			Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts) end),
 			hb_name:register(Name, Pid),
-            hb_ao:resolve_many(
+            Res = hb_ao:resolve_many(
                 hb_singleton:from(
                     #{
                         <<"path">> => <<"/cron~node-process@1.0/schedule">>,
@@ -132,6 +87,7 @@ once(_Msg1, Msg2, Opts) ->
                 ),
                 cron_opts(Opts)
             ),
+			?event({once_resolve_many_result, {result, Res}}),
 			{ok, ReqMsgID}
 	end.
 
@@ -448,7 +404,66 @@ test_worker(State) ->
 %%
 %% caching tests
 %%
-%% 
+% hb_ao:resolve_many(
+% 	hb_singleton:from(
+% 		#{
+% 			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
+% 			<<"method">> => <<"POST">>,
+% 			<<"body">> =>
+% 				hb_message:commit(
+% 					#{
+% 						<<"action">> => <<"Stop">>,
+% 						<<"task">> => TaskID
+% 					},
+% 					Opts
+% 				)
+% 		}
+% 	),
+% 	cron_opts(Opts)
+% ),
+% 
+add_resolve_test() ->
+	Opts = generate_test_opts(),
+	Res = hb_ao:resolve_many(
+		hb_singleton:from(
+			#{
+				<<"path">> => <<"test-cron-cache~node-process@1.0/schedule">>,
+				<<"method">> => <<"POST">>,
+				<<"body">> =>
+					hb_message:commit(
+						#{
+							<<"path">> => <<"compute">>,
+							<<"body">> => #{
+								<<"path">> => <<"once">>
+							}
+						},
+						Opts
+					)
+			}
+		),
+		Opts
+	),
+	?event({add_resolve_test_result, {result, Res}}),
+    % Msgs =
+    %     hb_singleton:from(
+    %         #{
+    %             <<"path">> => <<"/cron~node-process@1.0/now/crons">>,
+    %             <<"method">> => <<"GET">>
+    %         }
+    %     ),
+    % case hb_ao:resolve_many(Msgs, Opts) of
+    %     {ok, Crons} ->
+    %         % TODO: Restore the crons from the response
+	% 		?event({load_cron_jobs_success, {crons, Crons}}),
+    %         {ok, Crons};
+    %     {error, Reason} ->
+	% 		?event({load_cron_jobs_error, {error, Reason}}),
+    %         {error, Reason}
+    % end,
+	%% ?event({add_resolve_test_result2, {result2, Res2}}),
+	?event({'add_resolve_test_done'}).
+
+% test framework
 -define(TEST_NAME, <<"test-cron-cache">>).
 generate_test_opts() ->
     {ok, Script} = file:read_file("scripts/cron.lua"),
@@ -503,7 +518,7 @@ add_test() ->
 	Res = hb_ao:resolve_many(SampleMsg, Opts),
 	?event({add2_test_result, {res, Res}}),
 	Res2 = hb_ao:get(
-		<< ?TEST_NAME/binary, "/now/crons/body" >>,
+		<< ?TEST_NAME/binary, "/now/crons" >>,
 		#{ <<"device">> => <<"node-process@1.0">> },
 		Opts
 	),
