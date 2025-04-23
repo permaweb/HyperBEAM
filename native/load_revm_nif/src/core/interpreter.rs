@@ -15,7 +15,7 @@ use std::str::FromStr;
 use std::{collections::HashMap, fs};
 
 // main interpreter fn -- bytecode eval
-pub fn eval(raw_tx_hex: String, previous_state: Option<String>) -> NifResult<(String, String)> {
+pub fn eval(raw_tx_hex: String, previous_state: Option<String>, cout_state_path: String) -> NifResult<(String, String)> {
     let tx = get_tx_object(&raw_tx_hex);
 
     let input = tx.input.to_vec();
@@ -123,7 +123,7 @@ pub fn eval(raw_tx_hex: String, previous_state: Option<String>) -> NifResult<(St
             let new_state_json = serialize_state(state.into()).unwrap();
 
             // read existing state
-            if let Ok(existing_state) = fs::read_to_string("./state_8009.json") {
+            if let Ok(existing_state) = fs::read_to_string(&cout_state_path) {
                 let mut existing: serde_json::Value =
                     serde_json::from_str(&existing_state).unwrap();
                 let new: serde_json::Value = serde_json::from_str(&new_state_json).unwrap();
@@ -152,11 +152,11 @@ pub fn eval(raw_tx_hex: String, previous_state: Option<String>) -> NifResult<(St
                 }
 
                 let merged_state = existing.to_string();
-                fs::write("./state_8009.json", merged_state.clone()).unwrap();
+                fs::write(&cout_state_path, merged_state.clone()).unwrap();
                 return Ok((result_json, merged_state));
             } else {
                 // if no existing state, just write the new state
-                fs::write("./state_8009.json", new_state_json.clone()).unwrap();
+                fs::write(&cout_state_path, new_state_json.clone()).unwrap();
                 return Ok((result_json, new_state_json));
             }
         }
