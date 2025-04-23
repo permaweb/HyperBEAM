@@ -122,7 +122,8 @@ ExternalProject_Add(wamrc-compiler-proj
     BINARY_DIR ${wamrc_BINARY_DIR}          # Use specific compiler build dir
     CONFIGURE_COMMAND ${WAMRC_CONFIGURE_COMMAND} # Custom command includes LLVM build script
     BUILD_COMMAND $(MAKE) -C <BINARY_DIR>
-    INSTALL_COMMAND $(MAKE) -C <BINARY_DIR> install # Installs wamrc to ${WAMR_INSTALL_DIR}/bin
+    # Copy the library and the necessary header, skip installing the wamrc executable (single line command)
+    INSTALL_COMMAND $(MAKE) -C <BINARY_DIR> install && ${CMAKE_COMMAND} -E make_directory ${WAMR_INSTALL_DIR}/lib && ${CMAKE_COMMAND} -E copy_if_different <BINARY_DIR>/libaotclib.a ${WAMR_INSTALL_DIR}/lib/ && ${CMAKE_COMMAND} -E make_directory ${WAMR_INSTALL_DIR}/include && ${CMAKE_COMMAND} -E copy_if_different <SOURCE_DIR>/core/iwasm/include/aot_export.h ${WAMR_INSTALL_DIR}/include/ && ${CMAKE_COMMAND} -E copy_if_different <SOURCE_DIR>/core/iwasm/include/aot_comp_option.h ${WAMR_INSTALL_DIR}/include/
     DEPENDS wamr-runtime-proj # Depends only on WAMR source checkout
 )
 
