@@ -1,26 +1,3 @@
--- main handler for cron caching
--- function handle(base, req, opts)
--- 	ao.event("debug_cron", { "handle:base", base })
--- 	ao.event("debug_cron", { "handle:req", req })
--- 	ao.event("debug_cron", { "handle:opts", opts })
---     base.crons = base.crons or {}
---     if req.body.path == "once" then
--- 		ao.event("debug_cron", { "handle:path:once", req.body.path })
---         table.insert(base.crons, req.body)
---     elseif req.body.path == "every" then
--- 		ao.event("debug_cron", { "handle:path:every", req.body.path })
---         table.insert(base.crons, req.body)
---     elseif req.body.path == "stop" then
--- 		ao.event("debug_cron", { "handle:path:stop", req.body.path })
---         -- TODO: Stop the cron
---     end
--- 	base.crons = {
--- 		output = {
--- 			foo = 42
--- 		}
--- 	}
---     return base
--- end
 
 function compute(process, message, opts)
 	-- early return when no body is provided
@@ -28,22 +5,17 @@ function compute(process, message, opts)
 		return process
 	end
 	-- main logic to initialize the crons
-	local res = 42
-	process.crons = {
-		body = res
-    }
-	ao.event("debug_cron", { "111compute:message", message.body.body.path })
+	process.crons = process.crons or {}
 	if message.body.body.path == "once" then
-		ao.event("debug_cron", { "log1", "1" })
-		
-		process.crons = {
-			body = res + 10
-		}
-	else
-		ao.event("debug_cron", { "log2", "2" })
-		process.crons = {
-			body = res + 2
-		}
+		ao.event("debug_cron", { "add once process", "1" })
+		table.insert(process.crons, message.body)
+	elseif message.body.body.path == "every" then
+		ao.event("debug_cron", { "add every process", "2" })
+		table.insert(process.crons, message.body)
+	elseif message.body.body.path == "stop" then
+		ao.event("debug_cron", { "stop process", "3" })
+		-- TODO: stop the cron (needs table for loop)
+		-- table.remove(process.crons, message.body)
 	end
 	return process
 end
