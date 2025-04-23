@@ -503,7 +503,7 @@ add_test() ->
 	Res = hb_ao:resolve_many(SampleMsg, Opts),
 	?event({add2_test_result, {res, Res}}),
 	Res2 = hb_ao:get(
-		<< ?TEST_NAME/binary, "/now/crons" >>,
+		<< ?TEST_NAME/binary, "/now/crons/body" >>,
 		#{ <<"device">> => <<"node-process@1.0">> },
 		Opts
 	),
