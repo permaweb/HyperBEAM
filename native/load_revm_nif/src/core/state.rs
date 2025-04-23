@@ -1,3 +1,4 @@
+use crate::utils::constants::EIP1967_IMPLEMENTATION_SLOT;
 use crate::utils::misc::{parse_address, parse_u256};
 use revm::state::AccountInfo;
 use revm::{
@@ -6,8 +7,6 @@ use revm::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::utils::constants::EIP1967_IMPLEMENTATION_SLOT;
-
 
 #[derive(Serialize, Deserialize)]
 pub struct AccountState {
@@ -33,7 +32,7 @@ pub fn serialize_state(db: HashMap<Address, revm::state::Account>) -> Result<Str
 
         // Check if this is a contract
         let is_contract = account_info.info.code.is_some();
-        
+
         // create account state
         let account_state = AccountState {
             nonce: account_info.info.nonce,
@@ -62,7 +61,10 @@ pub fn serialize_state(db: HashMap<Address, revm::state::Account>) -> Result<Str
         // For contracts, always check the implementation slot even if other storage is empty
         if is_contract {
             // If this slot exists in storage, it's a proxy contract
-            if let Some(impl_value) = account_info.storage.get(&parse_u256(EIP1967_IMPLEMENTATION_SLOT).unwrap()) {
+            if let Some(impl_value) = account_info
+                .storage
+                .get(&parse_u256(EIP1967_IMPLEMENTATION_SLOT).unwrap())
+            {
                 let impl_hex = format!("0x{:x}", impl_value.present_value);
                 account_storage.insert(EIP1967_IMPLEMENTATION_SLOT.to_string(), impl_hex);
             }
