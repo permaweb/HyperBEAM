@@ -1,6 +1,6 @@
 pub mod core;
 #[cfg(test)]
-mod tests;
+pub mod tests;
 pub mod utils;
 
 use crate::core::interpreter::eval;
