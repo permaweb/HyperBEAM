@@ -79,16 +79,6 @@ once(_Msg1, Msg2, Opts) ->
 			hb_name:register(Name, Pid),
 			% Cache the task
 			{ok, PutResult} = cache_put(ReqMsgID, ModifiedMsg2, cron_opts(Opts)),
-            % Res = hb_ao:resolve_many(
-            %     hb_singleton:from(
-            %         #{
-            %             <<"path">> => <<"/cron~node-process@1.0/schedule">>,
-            %             <<"method">> => <<"POST">>,
-            %             <<"body">> => ModifiedMsg2
-            %         }
-            %     ),
-            %     cron_opts(Opts)
-            % ),	
 			?event({once_cache_put_result, {result, PutResult}}),
 			{ok, ReqMsgID}
 	end.
@@ -177,23 +167,6 @@ stop(_Msg1, Msg2, Opts) ->
 					hb_name:unregister(Name),
 					{ok, RemoveResult} = cache_remove(TaskID, cron_opts(Opts)),
 					?event({stop_cache_remove_result, {result, RemoveResult}}),
-                    % hb_ao:resolve_many(
-                    %     hb_singleton:from(
-                    %         #{
-                    %             <<"path">> => <<"/cron~node-process@1.0/schedule">>,
-                    %             <<"method">> => <<"POST">>,
-                    %             <<"body">> =>
-                    %                 hb_message:commit(
-                    %                     #{
-                    %                         <<"action">> => <<"Stop">>,
-                    %                         <<"task">> => TaskID
-                    %                     },
-                    %                     Opts
-                    %                 )
-                    %         }
-                    %     ),
-                    %     cron_opts(Opts)
-                    % ),
 					{ok, #{<<"status">> => 200, <<"body">> => #{
 						<<"message">> => <<"Task stopped successfully">>,
 						<<"task_id">> => TaskID
