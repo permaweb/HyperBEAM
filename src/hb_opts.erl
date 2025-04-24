@@ -18,6 +18,7 @@
 
 %% @doc The default configuration options of the hyperbeam node.
 default_message() ->
+    {ok, Script} = file:read_file("scripts/dynamic-router.lua"),
     #{
         %%%%%%%% Functional options %%%%%%%%
         hb_config_location => <<"config.flat">>,
@@ -196,6 +197,36 @@ default_message() ->
         % dynamically changing the configuration based on whether we are running
         % tests or not. To override this, set the `prometheus' option explicitly.
         % prometheus => false
+        ,
+        preprocessor => #{
+          <<"device">> => <<"router@1.0">>
+        },
+        route_provider => #{
+            <<"path">> =>
+                RouteProvider =
+                    <<"/router~node-process@1.0/compute/routes~message@1.0">>
+        },
+        node_processes => #{
+            <<"router">> => #{
+                <<"type">> => <<"Process">>,
+                <<"device">> => <<"process@1.0">>,
+                <<"execution-device">> => <<"lua@5.3a">>,
+                <<"scheduler-device">> => <<"scheduler@1.0">>,
+                <<"script">> => #{
+                    <<"content-type">> => <<"application/lua">>,
+                    <<"module">> => <<"dynamic-router">>,
+                    <<"body">> => Script
+                },
+                % Set script-specific factors for the test
+                <<"pricing-weight">> => 9,
+                <<"performance-weight">> => 1,
+                <<"score-preference">> => 4,
+                <<"is-admissible">> => #{ 
+                  <<"device">> => <<"snp@1.0">>
+                }
+            }
+        }
+
     }.
 
 %% @doc Get an option from the global options, optionally overriding with a
