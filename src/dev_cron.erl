@@ -244,7 +244,89 @@ parse_time(BinString) ->
 
 
 
-%%% Tests
+%% Cache functions and helpers
+%% @doc Helper function to send commands to the cron process
+send_cron_command(Command, Body, Opts) ->
+    SampleMsg = [
+        #{ <<"device">> => <<"node-process@1.0">> },
+        <<"cron">>,
+        #{
+            <<"path">> => <<"schedule">>,
+            <<"method">> => <<"POST">>,
+            <<"body">> =>
+                hb_message:commit(
+                    #{
+                        <<"path">> => <<"compute">>,
+                        <<"body">> => Body#{<<"path">> => Command}
+                    },
+                    Opts
+                )
+        }
+    ],
+    Result = hb_ao:resolve_many(SampleMsg, Opts),
+    ?event({cron_command_result, {command, Command}, {result, Result}}),
+    Result.
+
+%% @doc Put a value in the cache with the specified task ID
+%% Returns {ok, TaskId} on success
+cache_put(TaskId, Value, Opts) ->
+    send_cron_command(<<"once">>, #{
+        <<"task_id">> => TaskId,
+        <<"data">> => Value
+    }, Opts),
+    {ok, TaskId}.
+
+%% @doc Get a value from the cache by task ID
+%% Returns {ok, Value} if found, {error, not_found} otherwise
+cache_get(TaskId, Opts) ->
+    AllJobs = hb_ao:get(
+        << "cron/now/crons" >>,
+        #{ <<"device">> => <<"node-process@1.0">> },
+        Opts
+    ),
+    find_job_by_task_id(AllJobs, TaskId).
+
+%% @doc Remove a value from the cache by task ID
+%% Returns {ok, removed} if successful
+cache_remove(TaskId, Opts) ->
+    send_cron_command(<<"remove">>, #{
+        <<"task_id">> => TaskId
+    }, Opts),
+    {ok, removed}.
+
+%% @doc List all values in the cache
+%% Returns {ok, Values} with a list of all entries
+cache_list(Opts) ->
+    AllJobs = hb_ao:get(
+        << "cron/now/crons" >>,
+        #{ <<"device">> => <<"node-process@1.0">> },
+        Opts
+    ),
+    {ok, AllJobs}.
+
+%% @doc Clear all values from the cache
+%% Returns {ok, cleared} on success
+cache_clear(Opts) ->
+    send_cron_command(<<"clear">>, #{}, Opts),
+    {ok, cleared}.
+
+%% @doc Helper function to find a job by task ID in a list of jobs
+find_job_by_task_id([], _) ->
+    {error, not_found};
+
+find_job_by_task_id([Job|Rest], TaskId) ->
+	?event({find_job_by_task_id, {job, Job}, {task_id, TaskId}}),
+	?event({find_job_by_task_id_job_body, {job_body, hb_ao:get(<<"body/task_id">>, Job, #{})}}),
+    case hb_ao:get(<<"body/task_id">>, Job, #{}) of
+        TaskId -> 
+            JobData = hb_ao:get(<<"body/data">>, Job, #{}),
+            ?event({found_job_by_task_id_job_data, {job_data, JobData}}),
+            {ok, JobData};
+        _ -> find_job_by_task_id(Rest, TaskId)
+    end.
+
+
+%%% Cron device tests
 
 stop_once_test() ->
 	% Start a new node
@@ -401,74 +483,13 @@ test_worker(State) ->
 			Pid ! {state, State},
 			test_worker(State)
 	end.
-%%
-%% caching tests
-%%
-% hb_ao:resolve_many(
-% 	hb_singleton:from(
-% 		#{
-% 			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
-% 			<<"method">> => <<"POST">>,
-% 			<<"body">> =>
-% 				hb_message:commit(
-% 					#{
-% 						<<"action">> => <<"Stop">>,
-% 						<<"task">> => TaskID
-% 					},
-% 					Opts
-% 				)
-% 		}
-% 	),
-% 	cron_opts(Opts)
-% ),
-% 
-add_resolve_test() ->
-	Opts = generate_test_opts(),
-	Res = hb_ao:resolve_many(
-		hb_singleton:from(
-			#{
-				<<"path">> => <<"test-cron-cache~node-process@1.0/schedule">>,
-				<<"method">> => <<"POST">>,
-				<<"body">> =>
-					hb_message:commit(
-						#{
-							<<"path">> => <<"compute">>,
-							<<"body">> => #{
-								<<"path">> => <<"once">>
-							}
-						},
-						Opts
-					)
-			}
-		),
-		Opts
-	),
-	?event({add_resolve_test_result, {result, Res}}),
-    % Msgs =
-    %     hb_singleton:from(
-    %         #{
-    %             <<"path">> => <<"/cron~node-process@1.0/now/crons">>,
-    %             <<"method">> => <<"GET">>
-    %         }
-    %     ),
-    % case hb_ao:resolve_many(Msgs, Opts) of
-    %     {ok, Crons} ->
-    %         % TODO: Restore the crons from the response
-	% 		?event({load_cron_jobs_success, {crons, Crons}}),
-    %         {ok, Crons};
-    %     {error, Reason} ->
-	% 		?event({load_cron_jobs_error, {error, Reason}}),
-    %         {error, Reason}
-    % end,
-	%% ?event({add_resolve_test_result2, {result2, Res2}}),
-	?event({'add_resolve_test_done'}).
 
-% test framework
--define(TEST_NAME, <<"test-cron-cache">>).
+
+% Cache test framework for cron.lua via the node-process device
 generate_test_opts() ->
     {ok, Script} = file:read_file("scripts/cron.lua"),
     generate_test_opts(#{
-        ?TEST_NAME => #{
+        <<"cron">> => #{
             <<"device">> => <<"process@1.0">>,
             <<"execution-device">> => <<"lua@5.3a">>,
             <<"scheduler-device">> => <<"scheduler@1.0">>,
@@ -495,18 +516,51 @@ generate_test_opts(Defs) ->
         priv_wallet => ar_wallet:new()
     }.
 
+%% Unit tests for cache functions
+cache_put_test() ->
+	Opts = generate_test_opts(),
+	TaskId = <<"test-task-id">>,
+	TestData = #{<<"key">> => <<"value">>, <<"timestamp">> => os:system_time(millisecond)},
+	% Put the data in the cache
+	{ok, PutResult} = cache_put(TaskId, TestData, Opts),
+	?event({cache_put_test_result, {task_id, TaskId}, {result, PutResult}}),
+	?assertEqual(TaskId, PutResult),
+	timer:sleep(100),
+	% Verify the data was stored by retrieving the crons list
+	StoredData = hb_ao:get(
+		<<"cron/now/crons">>,
+		#{ <<"device">> => <<"node-process@1.0">> },
+		Opts
+	),
+	?event({cache_put_test_stored_data, {stored_data, StoredData}}),
+	% % Verify we can find our task in the stored data
+	{ok, RetrievedData} = find_job_by_task_id(StoredData, TaskId),
+	?event({cache_put_test_retrieved, {retrieved_data, RetrievedData}}),
+	% ?assertEqual(TestData, RetrievedData),
+	?event({'cache_put_test_done'}).
+
+
+
+
+
+
+
+
+
+%%%%%%%%%%%%%%% Experimental code and tests, to be cleaned up
+%% working test
 add_test() ->
 	Opts = generate_test_opts(),
 	SampleMsg = [
 		#{ <<"device">> => <<"node-process@1.0">> },
-		?TEST_NAME,
+		<<"cron">>,
 		#{
 			<<"path">> => <<"schedule">>,
 			<<"method">> => <<"POST">>,
 			<<"body">> =>
 				hb_message:commit(
 					#{
-						<<"path">> => <<"compute">>,
+						<<"path">> => <<"computeOld">>,
 						<<"body">> => #{
 							<<"path">> => <<"once">>
 						}
@@ -518,12 +572,53 @@ add_test() ->
 	Res = hb_ao:resolve_many(SampleMsg, Opts),
 	?event({add2_test_result, {res, Res}}),
 	Res2 = hb_ao:get(
-		<< ?TEST_NAME/binary, "/now/crons" >>,
+		<< "cron/now/crons" >>,
 		#{ <<"device">> => <<"node-process@1.0">> },
 		Opts
 	),
 	?event({add2_test_result2, {res2, Res2}}),
 	?event({'add2_test_done'}).
+
+%% should be an exact counterpart of add_test() but isn't currently working
+add_resolve_test() ->
+	Opts = generate_test_opts(),
+	Msg = hb_singleton:from(
+		#{
+			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
+			<<"method">> => <<"POST">>,
+			<<"body">> =>
+				%hb_message:commit(
+					#{
+						<<"path">> => <<"compute">>,
+						<<"body">> => #{
+							<<"path">> => <<"once">>
+						}
+					}
+				%	Opts
+				%)
+		}
+	),
+	?event({add_resolve_msg_singleton, {msg, Msg}}),
+	Res = hb_ao:resolve_many(Msg, Opts),
+	?event({add_resolve_test_result, {result, Res}}),
+    % Msgs =
+    %     hb_singleton:from(
+    %         #{
+    %             <<"path">> => <<"/cron~node-process@1.0/now/crons">>,
+    %             <<"method">> => <<"GET">>
+    %         }
+    %     ),
+    % case hb_ao:resolve_many(Msgs, Opts) of
+    %     {ok, Crons} ->
+    %         % TODO: Restore the crons from the response
+	% 		?event({load_cron_jobs_success, {crons, Crons}}),
+    %         {ok, Crons};
+    %     {error, Reason} ->
+	% 		?event({load_cron_jobs_error, {error, Reason}}),
+    %         {error, Reason}
+    % end,
+	%% ?event({add_resolve_test_result2, {result2, Res2}}),
+	?event({'add_resolve_test_done'}).
 
 
 
@@ -552,6 +647,7 @@ invoke_test() ->
 	?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
 
 % cache handle test via the lua device
+% 
 cache_handle_test() ->
 	{ok, Script} = file:read_file("scripts/cron.lua"),
 	Base = #{
