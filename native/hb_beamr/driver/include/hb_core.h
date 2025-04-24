@@ -3,8 +3,8 @@
 
 #include <erl_driver.h>
 #include <ei.h>
-#include <wasm_c_api.h>
-#include <wasm_export.h>
+#include "wasm_c_api.h"
+#include "wasm_export.h"
 #include <string.h>
 #include <stdarg.h>
 #include <time.h>

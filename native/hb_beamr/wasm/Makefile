@@ -2,6 +2,21 @@
 
 CMAKE_BUILD_DIR ?= _build
 CMAKE_INSTALL_PREFIX ?= $(CMAKE_BUILD_DIR)/install
+CMAKE_ARGS ?= -DCMAKE_INSTALL_PREFIX=$(CMAKE_INSTALL_PREFIX) -DWAMR_BUILD_EXECUTABLE=0
+
+# Optional: Override WAMR git repo settings
+ifdef WAMR_GIT_URL
+  CMAKE_ARGS += -DWAMR_GIT_URL=$(WAMR_GIT_URL)
+endif
+
+ifdef WAMR_GIT_TAG
+  CMAKE_ARGS += -DWAMR_GIT_TAG=$(WAMR_GIT_TAG)
+endif
+
+# LLVM configuration
+ifdef LLVM_DIR
+  CMAKE_ARGS += -DLLVM_DIR=$(LLVM_DIR)
+endif
 
 .PHONY: all configure build install clean clean-local
 
@@ -9,7 +24,7 @@ all: build install
 
 configure:
 	@echo "+++ Configuring hb_beamr_wasm +++"
-	cmake -S . -B $(CMAKE_BUILD_DIR) -DCMAKE_INSTALL_PREFIX=$(CMAKE_INSTALL_PREFIX)
+	cmake -S . -B $(CMAKE_BUILD_DIR) $(CMAKE_ARGS)
 
 # Build depends on configure implicitly via dependency or workflow
 build: configure
@@ -35,3 +50,5 @@ clean-local:
 	-@rm -f $(CMAKE_BUILD_DIR)/cmake_install.cmake
 	-@rm -f $(CMAKE_BUILD_DIR)/Makefile
 	-@rm -f $(CMAKE_BUILD_DIR)/lib/libhb_beamr_wasm.a
+	-@rm -f $(CMAKE_BUILD_DIR)/lib/libvmlib.a
+	-@rm -f $(CMAKE_BUILD_DIR)/lib/libaotclib.a
