@@ -27,7 +27,7 @@ compile(WasmBinary) when is_binary(WasmBinary) ->
     receive
         {compilation_result, AotWasm} ->
             ?event({compilation_result, {bytes, byte_size(AotWasm)}}),
-            AotWasm;
+            {ok, AotWasm};
         {error, Error} ->
             ?event({compilation_error, Error}),
             {error, Error}
@@ -38,6 +38,6 @@ compile_test() ->
     WasmPath = <<"test/test.wasm">>,
     WasmAotPath = <<"test/test.aot">>,
     {ok, WasmBinary} = file:read_file(WasmPath),
-    AotWasmGenerated = compile(WasmBinary),
+    {ok, AotWasmGenerated} = compile(WasmBinary),
     {ok, AotWasmFile} = file:read_file(WasmAotPath),
     ?assertEqual(AotWasmGenerated, AotWasmFile).
