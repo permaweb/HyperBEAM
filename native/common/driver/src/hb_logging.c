@@ -1,4 +1,9 @@
 #include "../include/hb_logging.h"
+#include <erl_driver.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <pthread.h>
 
 extern ErlDrvTermData atom_error;
 

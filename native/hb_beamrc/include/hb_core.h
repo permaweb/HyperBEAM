@@ -9,6 +9,8 @@
 #include <time.h>
 #include <pthread.h>
 
+#define PROC_DEFINED
+
 typedef struct {
     ErlDrvPort port;
     ErlDrvTermData port_term;

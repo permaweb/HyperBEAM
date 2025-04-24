@@ -22,6 +22,8 @@ typedef struct {
     int result_length;              // Length of the result_terms
 } ImportResponse;
 
+#define PROC_DEFINED
+
 // Structure to represent a WASM process instance
 typedef struct {
     // wasm_engine_t engine;          // WASM engine instance

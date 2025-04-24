@@ -1,7 +1,8 @@
 #ifndef HB_DRIVER_H
 #define HB_DRIVER_H
 
-#include "hb_core.h"
+#include "hb_stubs.h"
+#include <erl_driver.h>
 
 /*
  * Function: drv_lock
