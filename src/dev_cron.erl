@@ -244,11 +244,15 @@ send_cron_command(Command, Body, Opts) ->
 %% Returns {ok, TaskId} on success
 cache_put(TaskId, Value, Opts) ->
 	?event({cache_put_start, {task_id, TaskId}, {value, Value}}),
-    send_cron_command(<<"put">>, #{
-        <<"task_id">> => TaskId,
-        <<"data">> => Value
-    }, Opts),
-    {ok, TaskId}.
+    send_cron_command(
+		<<"put">>, 
+		#{
+        	<<"task_id">> => TaskId,
+        	<<"data">> => Value
+    	}, 
+		Opts
+	),
+{ok, TaskId}.
 
 %% @doc Get a value from the cache by task ID
 %% Returns {ok, Value} if found, {error, not_found} otherwise
@@ -263,10 +267,13 @@ cache_get(TaskId, Opts) ->
 %% @doc Remove a value from the cache by task ID
 %% Returns {ok, removed} if successful
 cache_remove(TaskId, Opts) ->
-    send_cron_command(<<"remove">>, #{
-        <<"task_id">> => TaskId
-    }, Opts),
-    {ok, removed}.
+    send_cron_command(
+		<<"remove">>, 
+		#{
+        	<<"task_id">> => TaskId
+    	}, 
+	Opts),
+{ok, removed}.
 
 %% @doc List all values in the cache
 %% Returns {ok, Values} with a list of all entries
