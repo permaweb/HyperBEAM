@@ -270,7 +270,7 @@ send_cron_command(Command, Body, Opts) ->
 %% @doc Put a value in the cache with the specified task ID
 %% Returns {ok, TaskId} on success
 cache_put(TaskId, Value, Opts) ->
-    send_cron_command(<<"once">>, #{
+    send_cron_command(<<"put">>, #{
         <<"task_id">> => TaskId,
         <<"data">> => Value
     }, Opts),
@@ -316,7 +316,6 @@ find_job_by_task_id([], _) ->
 
 find_job_by_task_id([Job|Rest], TaskId) ->
 	?event({find_job_by_task_id, {job, Job}, {task_id, TaskId}}),
-	?event({find_job_by_task_id_job_body, {job_body, hb_ao:get(<<"body/task_id">>, Job, #{})}}),
     case hb_ao:get(<<"body/task_id">>, Job, #{}) of
         TaskId -> 
             JobData = hb_ao:get(<<"body/data">>, Job, #{}),
@@ -535,13 +534,49 @@ cache_put_test() ->
 	?event({cache_put_test_stored_data, {stored_data, StoredData}}),
 	% % Verify we can find our task in the stored data
 	{ok, RetrievedData} = find_job_by_task_id(StoredData, TaskId),
-	?event({cache_put_test_retrieved, {retrieved_data, RetrievedData}}),
-	% ?assertEqual(TestData, RetrievedData),
+	CleanedData = maps:remove(<<"priv">>, RetrievedData),
+	?event({cache_put_test_retrieved, {retrieved_data, CleanedData}}),
+	?assertEqual(TestData, CleanedData),
 	?event({'cache_put_test_done'}).
 
-
-
-
+%% @doc Test the cache_remove function
+cache_remove_test() ->
+    Opts = generate_test_opts(),
+    TaskId = <<"test-remove-task-id">>,
+    TestData = #{<<"key">> => <<"value-to-remove">>, <<"timestamp">> => os:system_time(millisecond)},
+    % First put the data in the cache
+    {ok, PutResult} = cache_put(TaskId, TestData, Opts),
+    ?event({cache_remove_test_put, {task_id, TaskId}, {result, PutResult}}),
+    ?assertEqual(TaskId, PutResult),
+    timer:sleep(100),
+    % Verify the data was stored
+    StoredData = hb_ao:get(
+        <<"cron/now/crons">>,
+        #{ <<"device">> => <<"node-process@1.0">> },
+        Opts
+    ),
+    ?event({cache_remove_test_stored, {stored_data, StoredData}}),
+    % Verify we can find our task
+    {ok, RetrievedData} = find_job_by_task_id(StoredData, TaskId),
+    ?event({cache_remove_test_retrieved, {retrieved_data, RetrievedData}}),
+    CleanedData = maps:remove(<<"priv">>, RetrievedData),
+    ?assertEqual(TestData, CleanedData),
+    % Now remove the data
+    {ok, RemoveResult} = cache_remove(TaskId, Opts),
+    ?event({cache_remove_test_remove, {result, RemoveResult}}),
+    ?assertEqual(removed, RemoveResult),
+    timer:sleep(100),
+    % Verify the data was removed
+    UpdatedData = hb_ao:get(
+        <<"cron/now/crons">>,
+        #{ <<"device">> => <<"node-process@1.0">> },
+        Opts
+    ),
+    ?event({cache_remove_test_after, {updated_data, UpdatedData}}),
+    % Verify the task is no longer found
+    NotFoundResult = find_job_by_task_id(UpdatedData, TaskId),
+    ?assertEqual({error, not_found}, NotFoundResult),
+    ?event({'cache_remove_test_done'}).
 
 
 
