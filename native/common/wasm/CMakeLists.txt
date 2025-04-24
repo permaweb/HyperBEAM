@@ -411,7 +411,6 @@ include(CTest)
 
 # Test helpers
 configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/test/helpers.h.in
   ${CMAKE_CURRENT_SOURCE_DIR}/test/helpers.h
   @ONLY
 )
