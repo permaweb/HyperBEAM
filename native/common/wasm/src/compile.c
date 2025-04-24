@@ -162,8 +162,8 @@ int hb_wasm_aot_compile(uint8_t *wasm_module_data, size_t wasm_module_size, uint
     option.enable_gc = false;
     aot_call_stack_features_init_default(&option.call_stack_features);
 
-    // option.enable_nan_canonicalization = true;
-    // option.nan_canonicalization_sign_bit = 0;
+    option.enable_nan_canonicalization = true;
+    option.nan_canonicalization_sign_bit = 0;
 
     if (option.aux_stack_frame_type == AOT_STACK_FRAME_TYPE_STANDARD
         && can_enable_tiny_frame(&option)) {
