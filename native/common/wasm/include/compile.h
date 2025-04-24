@@ -19,7 +19,7 @@ extern "C" {
  *
  * @return 0 if successful, non-zero otherwise
  */
-int hb_wasm_aot_compile(uint8_t *wasm_module_data, size_t wasm_module_data_size, uint8_t **out_wasm_aot_data, size_t *out_wasm_aot_size);
+int hb_wasm_aot_compile(uint8_t *wasm_module_data, size_t wasm_module_size, uint8_t **out_wasm_aot_data, size_t *out_wasm_aot_size);
 
 #ifdef __cplusplus
 }
