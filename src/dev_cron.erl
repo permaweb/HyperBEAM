@@ -578,10 +578,91 @@ cache_remove_test() ->
     ?assertEqual({error, not_found}, NotFoundResult),
     ?event({'cache_remove_test_done'}).
 
+%% @doc Test the cache_list function
+cache_list_test() ->
+    Opts = generate_test_opts(),
+    % Create a few task IDs and test data
+    TaskId1 = <<"test-list-task-1">>,
+    TaskId2 = <<"test-list-task-2">>,
+    TestData1 = #{<<"key">> => <<"value-1">>, <<"timestamp">> => os:system_time(millisecond)},
+    TestData2 = #{<<"key">> => <<"value-2">>, <<"timestamp">> => os:system_time(millisecond)},
+    % Clear any existing data first (for test isolation)
+    {ok, _} = cache_clear(Opts),
+    timer:sleep(100),
+    % Put the test data in the cache
+    {ok, PutResult1} = cache_put(TaskId1, TestData1, Opts),
+    {ok, PutResult2} = cache_put(TaskId2, TestData2, Opts),
+    ?event({cache_list_test_put, {task_id1, TaskId1}, {task_id2, TaskId2}}),
+    ?assertEqual(TaskId1, PutResult1),
+    ?assertEqual(TaskId2, PutResult2),
+    timer:sleep(100),
+    % List all values in the cache
+    {ok, AllJobs} = cache_list(Opts),
+    ?event({cache_list_test_all_jobs, {all_jobs, AllJobs}}),
+    % Verify we can find both tasks in the list
+    {ok, RetrievedData1} = find_job_by_task_id(AllJobs, TaskId1),
+    {ok, RetrievedData2} = find_job_by_task_id(AllJobs, TaskId2),
+    % Clean the data for comparison
+    CleanedData1 = maps:remove(<<"priv">>, RetrievedData1),
+    CleanedData2 = maps:remove(<<"priv">>, RetrievedData2),
+    % Verify the data matches
+    ?assertEqual(TestData1, CleanedData1),
+    ?assertEqual(TestData2, CleanedData2),
+    % Verify the list length
+    ?assertEqual(2, length(AllJobs)),
+    ?event({'cache_list_test_done'}).
 
+%% @doc Test the cache_clear function
+cache_clear_test() ->
+    Opts = generate_test_opts(),
+    % Create test data
+    TaskId1 = <<"test-clear-task-1">>,
+    TaskId2 = <<"test-clear-task-2">>,
+    TestData1 = #{<<"key">> => <<"value-to-clear-1">>, <<"timestamp">> => os:system_time(millisecond)},
+    TestData2 = #{<<"key">> => <<"value-to-clear-2">>, <<"timestamp">> => os:system_time(millisecond)},
+    % Add data to the cache
+    {ok, PutResult1} = cache_put(TaskId1, TestData1, Opts),
+    {ok, PutResult2} = cache_put(TaskId2, TestData2, Opts),
+    ?event({cache_clear_test_put, {task_id1, TaskId1}, {task_id2, TaskId2}}),
+    ?assertEqual(TaskId1, PutResult1),
+    ?assertEqual(TaskId2, PutResult2),
+    timer:sleep(100),
+    % Verify the data was stored
+    {ok, AllJobsBefore} = cache_list(Opts),
+    ?event({cache_clear_test_before, {all_jobs, AllJobsBefore}}),
+    ?assert(length(AllJobsBefore) >= 2),
+    % Clear the cache
+    {ok, ClearResult} = cache_clear(Opts),
+    ?event({cache_clear_test_clear, {result, ClearResult}}),
+    ?assertEqual(cleared, ClearResult),
+    timer:sleep(100),
+    % Verify the cache is empty
+    {ok, AllJobsAfter} = cache_list(Opts),
+    ?event({cache_clear_test_after, {all_jobs, AllJobsAfter}}),
+    ?assertEqual(0, length(AllJobsAfter)),
+    ?event({'cache_clear_test_done'}).
 
-
-
+%% @doc Test the cache_get function
+cache_get_test() ->
+    Opts = generate_test_opts(),
+    TaskId = <<"test-get-task-id">>,
+    TestData = #{<<"key">> => <<"value-to-get">>, <<"timestamp">> => os:system_time(millisecond)},
+    % First put the data in the cache
+    {ok, PutResult} = cache_put(TaskId, TestData, Opts),
+    ?event({cache_get_test_put, {task_id, TaskId}, {result, PutResult}}),
+    ?assertEqual(TaskId, PutResult),
+    timer:sleep(100),
+    % Get the data from the cache
+    {ok, RetrievedData} = cache_get(TaskId, Opts),
+    ?event({cache_get_test_retrieved, {retrieved_data, RetrievedData}}),
+    % Clean the data for comparison
+    CleanedData = maps:remove(<<"priv">>, RetrievedData),
+    % Verify the data matches
+    ?assertEqual(TestData, CleanedData),
+    % Test getting a non-existent task
+    NonExistentResult = cache_get(<<"non-existent-task">>, Opts),
+    ?assertEqual({error, not_found}, NonExistentResult),
+    ?event({'cache_get_test_done'}).
 %%%%%%%%%%%%%%% Experimental code and tests, to be cleaned up
 %% working test
 add_test() ->
