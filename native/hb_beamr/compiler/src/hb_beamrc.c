@@ -1,6 +1,5 @@
 #include "../include/hb_core.h"
 #include "../include/hb_logging.h"
-#include "../include/hb_compile.h"
 #include "../include/hb_driver.h"
 #include "compile.h"
 #include <stddef.h>
