@@ -3,6 +3,16 @@
 
 cmake_minimum_required (VERSION 3.14)
 
+# Dependencies
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/wamr-src.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/wamr-llvm.cmake)
+
+# Fetch WAMR sources
+set(WAMR_GIT_REPOSITORY "https://github.com/permaweb/wasm-micro-runtime.git" CACHE STRING "Git repository URL for WAMR")
+set(WAMR_GIT_TAG "2.2.0-nan-canonicalization-fp-boundary-simd-immediate" CACHE STRING "Git tag or branch for WAMR")
+set(WAMR_SRC_DIR "${CMAKE_BINARY_DIR}/wamr-src" CACHE PATH "Directory for WAMR sources")
+fetch_wamr_source()
+
 include(CheckPIESupported)
 
 if (NOT DEFINED WAMR_BUILD_PLATFORM)
@@ -162,7 +172,9 @@ endif()
 
 # Enable LLVM
 if (NOT WAMR_BUILD_WITH_CUSTOM_LLVM)
-  set (LLVM_SRC_ROOT "${PROJECT_SOURCE_DIR}/../core/deps/llvm")
+  # Set up LLVM for WAMR
+  setup_llvm_for_wamr(${WAMR_SRC_DIR})
+  run_build_llvm(${WAMR_SRC_DIR}) 
   if (NOT EXISTS "${LLVM_SRC_ROOT}/build")
     message (FATAL_ERROR "Cannot find LLVM dir: ${LLVM_SRC_ROOT}/build")
   endif ()
@@ -208,8 +220,8 @@ if (NOT MSVC)
   string (REGEX REPLACE "  *" " " CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
 endif()
 
-set (SHARED_DIR ../core/shared)
-set (IWASM_DIR ../core/iwasm)
+set (SHARED_DIR ${WAMR_SRC_DIR}/core/shared)
+set (IWASM_DIR ${WAMR_SRC_DIR}/core/iwasm)
 
 include_directories (${SHARED_DIR}/include
                      ${IWASM_DIR}/include)
@@ -366,9 +378,10 @@ add_library (vmlib
 
 add_library (aotclib ${IWASM_COMPL_SOURCE})
 
-add_executable (wamrc main.c)
+add_library (hb_wasm SHARED src/compile.c)
+include_directories(include)
 check_pie_supported()
-set_target_properties (wamrc PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties (hb_wasm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if (LLVM_LINK_LLVM_DYLIB)
   set(WAMRC_LINK_LLVM_LIBS LLVM)
@@ -377,16 +390,46 @@ else()
 endif()
 
 if (NOT MSVC)
-  target_link_libraries (wamrc aotclib vmlib ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
+  target_link_libraries (hb_wasm aotclib vmlib ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
                          -lm -lpthread ${lib_lldb} ${UV_A_LIBS})
   if (MINGW)
-      target_link_libraries (wamrc ssp.a ws2_32)
+      target_link_libraries (hb_wasm ssp.a ws2_32)
   else()
-      target_link_libraries (wamrc -ldl)
+      target_link_libraries (hb_wasm -ldl)
   endif()
 else()
-  target_link_libraries (wamrc aotclib vmlib  ${lib_lldb} ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
+  target_link_libraries (hb_wasm aotclib vmlib  ${lib_lldb} ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
                          ${UV_A_LIBS})
 endif()
 
-install (TARGETS wamrc DESTINATION bin)
+install (TARGETS hb_wasm DESTINATION lib)
+install (FILES include/compile.h DESTINATION include)
+
+# Testing
+enable_testing()
+include(CTest)
+
+# Test helpers
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/helpers.h.in
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/helpers.h
+  @ONLY
+)
+
+# Build test executable
+add_executable(test_compile test/test_compile.c)
+target_include_directories(test_compile PRIVATE include test)
+target_link_libraries(test_compile hb_wasm)
+
+# Add test to CTest
+add_test(
+  NAME test_wasm_compile
+  COMMAND test_compile
+)
+
+# Custom target to run tests
+add_custom_target(run_tests
+  COMMAND ${CMAKE_CTEST_COMMAND} --verbose
+  COMMENT "Running tests..."
+  DEPENDS test_compile
+)
