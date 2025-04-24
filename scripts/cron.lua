@@ -1,5 +1,53 @@
+-- TODO: how do we cache this to file system?
+function compute(process, message, opts)
+    -- Early return when no body is provided
+    -- This handles the initial invocation during process setup
+    if not message.body or not message.body.body then
+        return process
+    end
+    
+    -- Initialize crons table if it doesn't exist
+    process.crons = process.crons or {}
+    
+    local command = message.body.body.path
+    ao.event("debug_cron", { "compute command", command })
+    
+    if command == "put" then
+        -- Standard addition to the cache with task_id
+        ao.event("debug_cron", { "adding task", message.body.body.task_id })
+        table.insert(process.crons, message.body)
+        
+    elseif command == "remove" then
+		-- TODO(viksit): this also needs to be called when a process is stopped. 
+		-- how do we do that?
+        -- Remove an entry by task_id
+        local task_id = message.body.body.task_id
+        ao.event("debug_cron", { "removing task", task_id, "process.crons", process.crons })
+        
+        -- Find and remove the task with matching task_id
+        for i, job in ipairs(process.crons) do
+            if job.body and job.body.task_id == task_id then
+                table.remove(process.crons, i)
+				ao.event("debug_cron", { "removed task", task_id, "process.crons", process.crons })
+                break
+            end
+        end
+        
+    elseif command == "clear" then
+        -- Clear all entries
+        ao.event("debug_cron", { "clearing all tasks" })
+        process.crons = {}
 
--- (currently ignored) main handler for cron caching
+    end
+    
+    return process
+end
+
+
+
+-- Experimental code, to be cleaned up
+
+--(currently ignored) main handler for cron caching
 function handle(base, req, opts)
 	ao.event("debug_cron", { "handle:base", base })
 	ao.event("debug_cron", { "handle:req", req })
@@ -22,68 +70,6 @@ function handle(base, req, opts)
 	}
 	return base
 end
-
--- TODO: how do we cache this to file system?
-function compute(process, message, opts)
-    -- Early return when no body is provided
-    -- This handles the initial invocation during process setup
-    if not message.body or not message.body.body then
-        return process
-    end
-    
-    -- Initialize crons table if it doesn't exist
-    process.crons = process.crons or {}
-    
-    local command = message.body.body.path
-    ao.event("cron_debug", { "compute command", command })
-    
-    if command == "once" then
-        -- Standard addition to the cache with task_id
-        ao.event("cron_debug", { "adding task", message.body.body.task_id })
-        table.insert(process.crons, message.body)
-        
-    elseif command == "every" then
-        -- Recurring task addition
-        ao.event("cron_debug", { "adding recurring task", message.body.body.task_id })
-        table.insert(process.crons, message.body)
-        
-    elseif command == "remove" then
-		-- TODO(viksit): this also needs to be called when a process is stopped. 
-		-- how do we do that?
-        -- Remove an entry by task_id
-        local task_id = message.body.body.task_id
-        ao.event("cron_debug", { "removing task", task_id })
-        
-        -- Find and remove the task with matching task_id
-        for i, job in ipairs(process.crons) do
-            if job.body and job.body.body and job.body.body.task_id == task_id then
-                table.remove(process.crons, i)
-                break
-            end
-        end
-        
-    elseif command == "clear" then
-        -- Clear all entries
-        ao.event("cron_debug", { "clearing all tasks" })
-        process.crons = {}
-        
-    elseif command == "stop" then
-        -- Stop a specific task
-        local task_id = message.body.body.task_id
-        ao.event("cron_debug", { "stopping task", task_id })
-        
-        -- Find and mark the task as stopped
-        for i, job in ipairs(process.crons) do
-            if job.body and job.body.body and job.body.body.task_id == task_id then
-                job.body.body.stopped = true
-                break
-            end
-        end
-    end
-    
-    return process
-end
-
 -- (currently ignored) original compute function
 function computeOld(process, message, opts)
 	-- early return when no body is provided
