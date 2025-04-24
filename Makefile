@@ -1,15 +1,15 @@
-.PHONY: all compile debug debug-clean clean wamrc aot_files setup-genesis-wasm
+.PHONY: all compile debug debug-clean clean setup-genesis-wasm wamrc aot_files
 
 all: compile aot_files
 
 compile:
 	rebar3 compile
 
-WAMRC_INSTALL_PATH = _build/hb_wasm/wamr-src/wamr-compiler/build/wamrc
-
 GENESIS_WASM_BRANCH = tillathehun0/cu-experimental
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
 GENESIS_WASM_SERVER_DIR = _build/genesis-wasm-server
+
+WAMRC_BUILD_PATH = _build/port_libs/hb_beamrc/wamr-src/wamr-compiler/build
 
 debug: debug-clean
 	CFLAGS="-DHB_DEBUG=1" rebar3 compile
@@ -20,16 +20,6 @@ debug-clean:
 clean:
 	rebar3 clean
 	rm -f $(AOT_FILES)
-
-WASM_FILES := $(wildcard test/*.wasm)
-AOT_FILES := $(patsubst test/%.wasm,test/%.aot,$(WASM_FILES))
-
-test/%.aot: test/%.wasm compile
-	@echo "Compiling $< to $@ (ignoring errors)"
-	-$(WAMRC_INSTALL_PATH) -o $@ $<
-
-aot_files: $(AOT_FILES)
-	@echo "+++ AOT files generated (errors ignored) +++"
 
 $(GENESIS_WASM_SERVER_DIR):
 	mkdir -p $(GENESIS_WASM_SERVER_DIR)
@@ -54,3 +44,19 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 	fi
 	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."
+
+wamrc: compile
+	mkdir -p $(WAMRC_BUILD_PATH) && \
+	    cd $(WAMRC_BUILD_PATH) && \
+        cmake .. && \
+        make
+
+test/%.aot: test/%.wasm wamrc
+	@echo "Compiling $< to $@ (ignoring errors)"
+	-$(WAMRC_BUILD_PATH)/wamrc -o $@ $<
+
+WASM_FILES := $(wildcard test/*.wasm)
+AOT_FILES := $(patsubst test/%.wasm,test/%.aot,$(WASM_FILES))
+
+aot_files: $(AOT_FILES)
+	@echo "+++ AOT files generated (errors ignored) +++"

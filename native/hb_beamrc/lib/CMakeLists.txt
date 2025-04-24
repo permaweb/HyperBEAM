@@ -4,8 +4,8 @@
 cmake_minimum_required (VERSION 3.14)
 
 # Dependencies
-include(${CMAKE_CURRENT_LIST_DIR}/cmake/wamr-src.cmake)
-include(${CMAKE_CURRENT_LIST_DIR}/cmake/wamr-llvm.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../../common/wamr/cmake/wamr-src.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../../common/wamr/cmake/wamr-llvm.cmake)
 
 # Fetch WAMR sources
 set(WAMR_GIT_REPOSITORY "https://github.com/permaweb/wasm-micro-runtime.git" CACHE STRING "Git repository URL for WAMR")
@@ -379,10 +379,10 @@ add_library (vmlib
 
 add_library (aotclib ${IWASM_COMPL_SOURCE})
 
-add_library (hb_wasm SHARED src/compile.c)
+add_library (hb_beamrc_lib SHARED src/compile.c)
 include_directories(include)
 check_pie_supported()
-set_target_properties (hb_wasm PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties (hb_beamrc_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if (LLVM_LINK_LLVM_DYLIB)
   set(WAMRC_LINK_LLVM_LIBS LLVM)
@@ -391,19 +391,19 @@ else()
 endif()
 
 if (NOT MSVC)
-  target_link_libraries (hb_wasm aotclib vmlib ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
+  target_link_libraries (hb_beamrc_lib aotclib vmlib ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
                          -lm -lpthread ${lib_lldb} ${UV_A_LIBS})
   if (MINGW)
-      target_link_libraries (hb_wasm ssp.a ws2_32)
+      target_link_libraries (hb_beamrc_lib ssp.a ws2_32)
   else()
-      target_link_libraries (hb_wasm -ldl)
+      target_link_libraries (hb_beamrc_lib -ldl)
   endif()
 else()
-  target_link_libraries (hb_wasm aotclib vmlib  ${lib_lldb} ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
+  target_link_libraries (hb_beamrc_lib aotclib vmlib  ${lib_lldb} ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
                          ${UV_A_LIBS})
 endif()
 
-install (TARGETS hb_wasm DESTINATION lib)
+install (TARGETS hb_beamrc_lib DESTINATION lib)
 install (FILES include/compile.h DESTINATION include)
 
 # Testing
@@ -413,7 +413,7 @@ include(CTest)
 # Build test executable
 add_executable(test_compile test/test_compile.c)
 target_include_directories(test_compile PRIVATE include test)
-target_link_libraries(test_compile hb_wasm)
+target_link_libraries(test_compile hb_beamrc_lib)
 
 # Add test to CTest
 add_test(

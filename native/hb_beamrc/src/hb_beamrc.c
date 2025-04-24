@@ -1,7 +1,7 @@
 #include "../include/hb_core.h"
+#include "../lib/include/compile.h"
 #include "hb_logging.h"
 #include "hb_driver.h"
-#include "compile.h"
 #include <stddef.h>
 
 // Declare the atoms used in Erlang driver communication
