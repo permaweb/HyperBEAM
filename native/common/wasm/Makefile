@@ -1,36 +1,24 @@
-.PHONY: all clean rebuild install test
+CMAKE_BUILD_DIR ?= _build
 
-# Build directory (can be overridden)
-BUILD_DIR ?= ./_build
+.PHONY: all configure build clean test
 
-# Additional CMake arguments
-CMAKE_ARGS ?=
+all: build
 
-# Default target
-all: $(BUILD_DIR)
-	@echo "Configuring CMake project..."
-	@cd $(BUILD_DIR) && cmake .. $(CMAKE_ARGS)
-	@echo "Building project..."
-	@cd $(BUILD_DIR) && $(MAKE)
+configure:
+	@echo "+++ Configuring hb_wasm +++"
+	cmake -S . -B $(CMAKE_BUILD_DIR) $(CMAKE_ARGS)
 
-# Create build directory if it doesn't exist
-$(BUILD_DIR):
-	@echo "Creating build directory..."
-	@mkdir -p $(BUILD_DIR)
+# Build depends on configure implicitly via dependency or workflow
+build: configure
+	@echo "+++ Building hb_wasm +++"
+	cmake --build $(CMAKE_BUILD_DIR)
 
-# Clean build artifacts
+# Full clean: Removes the entire build directory, including dependencies
 clean:
-	@echo "Cleaning build directory..."
-	@rm -rf $(BUILD_DIR)
-
-# Rebuild from scratch
-rebuild: clean all
-
-# Install
-install: all
-	@echo "Install complete."
+	@echo "+++ Cleaning hb_wasm (full) +++"
+	rm -rf $(CMAKE_BUILD_DIR)
 
 # Run tests
 test:
 	@echo "Running tests..."
-	@cd $(BUILD_DIR) && $(MAKE) run_tests 
+	@cmake --build $(CMAKE_BUILD_DIR) --target run_tests

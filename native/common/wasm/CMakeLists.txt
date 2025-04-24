@@ -409,12 +409,6 @@ install (FILES include/compile.h DESTINATION include)
 enable_testing()
 include(CTest)
 
-# Test helpers
-configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/test/helpers.h
-  @ONLY
-)
-
 # Build test executable
 add_executable(test_compile test/test_compile.c)
 target_include_directories(test_compile PRIVATE include test)

@@ -1,4 +1,3 @@
-
 %%% @doc BEAMRC: A WAMRC wrapper for BEAM.
 %%% 
 %%% Beamrc is a library that allows you to...
@@ -20,29 +19,25 @@ load_driver() ->
 
 %% @doc Start a WASM compiler context. Yields a port to the LID...
 compile(WasmBinary) when is_binary(WasmBinary) ->   
-    ?event({loading_module, {bytes, byte_size(WasmBinary)}}),
-    spawn(
-        fun() ->
-            ok = load_driver(),
-            Port = open_port({spawn, "hb_beamrc"}, []),
-            Port ! {self(), {command, term_to_binary({compile, WasmBinary})}},
-            ?event({waiting_for_compile_from, Port})
-        end
-    ),
+    ?event({compiling_module, {bytes, byte_size(WasmBinary)}}),
+    ok = load_driver(),
+    Port = open_port({spawn, "hb_beamrc"}, []),
+    Port ! {self(), {command, term_to_binary({compile, WasmBinary})}},
+    ?event({waiting_for_compile_from, Port}),
     receive
-        {compile_success, AotModule} ->
-            ?event(
-                {compile_success,
-                    {aot_module, AotModule}}),
-            {ok, AotModule};
-        {compile_error, Error} ->
-            ?event({compile_error, Error}),
+        {compilation_result, AotWasm} ->
+            ?event({compilation_result, {bytes, byte_size(AotWasm)}}),
+            AotWasm;
+        {error, Error} ->
+            ?event({compilation_error, Error}),
             {error, Error}
     end.
 
 % Tests
 compile_test() ->
     WasmPath = <<"test/test.wasm">>,
-    WasmBinary = file:read_file(WasmPath),
-    AotWasm = compile(WasmBinary),
-    ?assertEqual(AotWasm, <<"test">>).
+    WasmAotPath = <<"test/test.aot">>,
+    {ok, WasmBinary} = file:read_file(WasmPath),
+    AotWasmGenerated = compile(WasmBinary),
+    {ok, AotWasmFile} = file:read_file(WasmAotPath),
+    ?assertEqual(AotWasmGenerated, AotWasmFile).

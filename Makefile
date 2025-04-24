@@ -5,7 +5,7 @@ all: compile aot_files
 compile:
 	rebar3 compile
 
-WAMRC_INSTALL_PATH = _build/hb_beamr_wasm/_deps/wamr-install/bin/wamrc
+WAMRC_INSTALL_PATH = _build/hb_wasm/wamr-src/wamr-compiler/build/wamrc
 
 GENESIS_WASM_BRANCH = tillathehun0/cu-experimental
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
