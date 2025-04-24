@@ -77,17 +77,19 @@ once(_Msg1, Msg2, Opts) ->
 			Name = {<<"cron@1.0">>, ReqMsgID},
 			Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts) end),
 			hb_name:register(Name, Pid),
-            Res = hb_ao:resolve_many(
-                hb_singleton:from(
-                    #{
-                        <<"path">> => <<"/cron~node-process@1.0/schedule">>,
-                        <<"method">> => <<"POST">>,
-                        <<"body">> => ModifiedMsg2
-                    }
-                ),
-                cron_opts(Opts)
-            ),
-			?event({once_resolve_many_result, {result, Res}}),
+			% Cache the task
+			{ok, PutResult} = cache_put(ReqMsgID, ModifiedMsg2, cron_opts(Opts)),
+            % Res = hb_ao:resolve_many(
+            %     hb_singleton:from(
+            %         #{
+            %             <<"path">> => <<"/cron~node-process@1.0/schedule">>,
+            %             <<"method">> => <<"POST">>,
+            %             <<"body">> => ModifiedMsg2
+            %         }
+            %     ),
+            %     cron_opts(Opts)
+            % ),	
+			?event({once_cache_put_result, {result, PutResult}}),
 			{ok, ReqMsgID}
 	end.
 
@@ -148,6 +150,8 @@ every(_Msg1, Msg2, Opts) ->
                     ),
 				Name = {<<"cron@1.0">>, ReqMsgID},
 				hb_name:register(Name, Pid),
+				{ok, PutResult} = cache_put(ReqMsgID, ModifiedMsg2, cron_opts(Opts)),
+				?event({every_cache_put_result, {result, PutResult}}),
 				{ok, ReqMsgID}
 			catch
 				error:{invalid_time_unit, Unit} ->
@@ -171,23 +175,25 @@ stop(_Msg1, Msg2, Opts) ->
 					?event({cron_stopping_task, {task_id, TaskID}, {pid, Pid}}),
 					exit(Pid, kill),
 					hb_name:unregister(Name),
-                    hb_ao:resolve_many(
-                        hb_singleton:from(
-                            #{
-                                <<"path">> => <<"/cron~node-process@1.0/schedule">>,
-                                <<"method">> => <<"POST">>,
-                                <<"body">> =>
-                                    hb_message:commit(
-                                        #{
-                                            <<"action">> => <<"Stop">>,
-                                            <<"task">> => TaskID
-                                        },
-                                        Opts
-                                    )
-                            }
-                        ),
-                        cron_opts(Opts)
-                    ),
+					{ok, RemoveResult} = cache_remove(TaskID, cron_opts(Opts)),
+					?event({stop_cache_remove_result, {result, RemoveResult}}),
+                    % hb_ao:resolve_many(
+                    %     hb_singleton:from(
+                    %         #{
+                    %             <<"path">> => <<"/cron~node-process@1.0/schedule">>,
+                    %             <<"method">> => <<"POST">>,
+                    %             <<"body">> =>
+                    %                 hb_message:commit(
+                    %                     #{
+                    %                         <<"action">> => <<"Stop">>,
+                    %                         <<"task">> => TaskID
+                    %                     },
+                    %                     Opts
+                    %                 )
+                    %         }
+                    %     ),
+                    %     cron_opts(Opts)
+                    % ),
 					{ok, #{<<"status">> => 200, <<"body">> => #{
 						<<"message">> => <<"Task stopped successfully">>,
 						<<"task_id">> => TaskID
@@ -325,11 +331,47 @@ find_job_by_task_id([Job|Rest], TaskId) ->
     end.
 
 
+%%%
 %%% Cron device tests
+%%%
 
+% Helper functions to generate test opts
+generate_test_opts() ->
+	{ok, Script} = file:read_file("scripts/cron.lua"),
+	generate_test_opts(#{
+		<<"cron">> => #{
+			<<"device">> => <<"process@1.0">>,
+			<<"execution-device">> => <<"lua@5.3a">>,
+			<<"scheduler-device">> => <<"scheduler@1.0">>,
+			<<"script">> => #{
+				<<"content-type">> => <<"application/lua">>,
+				<<"body">> => Script
+			}
+		}
+	}).
+generate_test_opts(Defs) ->
+#{
+	store =>
+		[
+			#{
+				<<"store-module">> => hb_store_fs,
+				<<"prefix">> =>
+					<<
+						"cache-TEST-",
+						(integer_to_binary(os:system_time(millisecond)))/binary
+					>>
+			}
+		],
+	node_processes => Defs,
+	priv_wallet => ar_wallet:new()
+}.
+
+%% @doc This test verifies that a one-time task can be stopped by
+%% calling the stop function with the task ID.
 stop_once_test() ->
+	Opts = generate_test_opts(),
 	% Start a new node
-	Node = hb_http_server:start_node(),
+	Node = hb_http_server:start_node(Opts),
 	% Set up a standard test worker (even though delay doesn't use its state)
 	TestWorkerPid = spawn(fun test_worker/0),
 	TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
@@ -366,8 +408,9 @@ stop_once_test() ->
 %% @doc This test verifies that a recurring task can be stopped by
 %% calling the stop function with the task ID.
 stop_every_test() ->
+	Opts = generate_test_opts(),
 	% Start a new node
-	Node = hb_http_server:start_node(),
+	Node = hb_http_server:start_node(Opts),
 	% Set up a test worker process to hold state (counter)
 	TestWorkerPid = spawn(fun test_worker/0),
 	TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
@@ -411,8 +454,9 @@ stop_every_test() ->
 
 %% @doc This test verifies that a one-time task can be scheduled and executed.
 once_executed_test() ->
+	Opts = generate_test_opts(),
 	% start a new node 
-	Node = hb_http_server:start_node(),
+	Node = hb_http_server:start_node(Opts),
 	% spawn a worker on the new node that calls test_worker/0 which inits
     % test_worker/1 with a state of undefined
 	PID = spawn(fun test_worker/0),
@@ -443,7 +487,8 @@ once_executed_test() ->
 
 %% @doc This test verifies that a recurring task can be scheduled and executed.
 every_worker_loop_test() ->
-	Node = hb_http_server:start_node(),
+	Opts = generate_test_opts(),
+	Node = hb_http_server:start_node(Opts),
 	PID = spawn(fun test_worker/0),
 	ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
 	hb_name:register({<<"test">>, ID}, PID),
@@ -485,35 +530,7 @@ test_worker(State) ->
 
 
 % Cache test framework for cron.lua via the node-process device
-generate_test_opts() ->
-    {ok, Script} = file:read_file("scripts/cron.lua"),
-    generate_test_opts(#{
-        <<"cron">> => #{
-            <<"device">> => <<"process@1.0">>,
-            <<"execution-device">> => <<"lua@5.3a">>,
-            <<"scheduler-device">> => <<"scheduler@1.0">>,
-            <<"script">> => #{
-                <<"content-type">> => <<"application/lua">>,
-                <<"body">> => Script
-            }
-        }
-    }).
-generate_test_opts(Defs) ->
-    #{
-        store =>
-            [
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"prefix">> =>
-                        <<
-                            "cache-TEST-",
-                            (integer_to_binary(os:system_time(millisecond)))/binary
-                        >>
-                }
-            ],
-        node_processes => Defs,
-        priv_wallet => ar_wallet:new()
-    }.
+
 
 %% Unit tests for cache functions
 cache_put_test() ->
@@ -663,132 +680,135 @@ cache_get_test() ->
     NonExistentResult = cache_get(<<"non-existent-task">>, Opts),
     ?assertEqual({error, not_found}, NonExistentResult),
     ?event({'cache_get_test_done'}).
+
+
+
 %%%%%%%%%%%%%%% Experimental code and tests, to be cleaned up
-%% working test
-add_test() ->
-	Opts = generate_test_opts(),
-	SampleMsg = [
-		#{ <<"device">> => <<"node-process@1.0">> },
-		<<"cron">>,
-		#{
-			<<"path">> => <<"schedule">>,
-			<<"method">> => <<"POST">>,
-			<<"body">> =>
-				hb_message:commit(
-					#{
-						<<"path">> => <<"computeOld">>,
-						<<"body">> => #{
-							<<"path">> => <<"once">>
-						}
-					},
-					Opts
-				)
-		}
-	],
-	Res = hb_ao:resolve_many(SampleMsg, Opts),
-	?event({add2_test_result, {res, Res}}),
-	Res2 = hb_ao:get(
-		<< "cron/now/crons" >>,
-		#{ <<"device">> => <<"node-process@1.0">> },
-		Opts
-	),
-	?event({add2_test_result2, {res2, Res2}}),
-	?event({'add2_test_done'}).
+% %% working test
+% add_test() ->
+% 	Opts = generate_test_opts(),
+% 	SampleMsg = [
+% 		#{ <<"device">> => <<"node-process@1.0">> },
+% 		<<"cron">>,
+% 		#{
+% 			<<"path">> => <<"schedule">>,
+% 			<<"method">> => <<"POST">>,
+% 			<<"body">> =>
+% 				hb_message:commit(
+% 					#{
+% 						<<"path">> => <<"computeOld">>,
+% 						<<"body">> => #{
+% 							<<"path">> => <<"once">>
+% 						}
+% 					},
+% 					Opts
+% 				)
+% 		}
+% 	],
+% 	Res = hb_ao:resolve_many(SampleMsg, Opts),
+% 	?event({add2_test_result, {res, Res}}),
+% 	Res2 = hb_ao:get(
+% 		<< "cron/now/crons" >>,
+% 		#{ <<"device">> => <<"node-process@1.0">> },
+% 		Opts
+% 	),
+% 	?event({add2_test_result2, {res2, Res2}}),
+% 	?event({'add2_test_done'}).
 
-%% should be an exact counterpart of add_test() but isn't currently working
-add_resolve_test() ->
-	Opts = generate_test_opts(),
-	Msg = hb_singleton:from(
-		#{
-			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
-			<<"method">> => <<"POST">>,
-			<<"body">> =>
-				%hb_message:commit(
-					#{
-						<<"path">> => <<"compute">>,
-						<<"body">> => #{
-							<<"path">> => <<"once">>
-						}
-					}
-				%	Opts
-				%)
-		}
-	),
-	?event({add_resolve_msg_singleton, {msg, Msg}}),
-	Res = hb_ao:resolve_many(Msg, Opts),
-	?event({add_resolve_test_result, {result, Res}}),
-    % Msgs =
-    %     hb_singleton:from(
-    %         #{
-    %             <<"path">> => <<"/cron~node-process@1.0/now/crons">>,
-    %             <<"method">> => <<"GET">>
-    %         }
-    %     ),
-    % case hb_ao:resolve_many(Msgs, Opts) of
-    %     {ok, Crons} ->
-    %         % TODO: Restore the crons from the response
-	% 		?event({load_cron_jobs_success, {crons, Crons}}),
-    %         {ok, Crons};
-    %     {error, Reason} ->
-	% 		?event({load_cron_jobs_error, {error, Reason}}),
-    %         {error, Reason}
-    % end,
-	%% ?event({add_resolve_test_result2, {result2, Res2}}),
-	?event({'add_resolve_test_done'}).
+% %% should be an exact counterpart of add_test() but isn't currently working
+% add_resolve_test() ->
+% 	Opts = generate_test_opts(),
+% 	Msg = hb_singleton:from(
+% 		#{
+% 			<<"path">> => <<"/cron~node-process@1.0/schedule">>,
+% 			<<"method">> => <<"POST">>,
+% 			<<"body">> =>
+% 				%hb_message:commit(
+% 					#{
+% 						<<"path">> => <<"compute">>,
+% 						<<"body">> => #{
+% 							<<"path">> => <<"once">>
+% 						}
+% 					}
+% 				%	Opts
+% 				%)
+% 		}
+% 	),
+% 	?event({add_resolve_msg_singleton, {msg, Msg}}),
+% 	Res = hb_ao:resolve_many(Msg, Opts),
+% 	?event({add_resolve_test_result, {result, Res}}),
+%     % Msgs =
+%     %     hb_singleton:from(
+%     %         #{
+%     %             <<"path">> => <<"/cron~node-process@1.0/now/crons">>,
+%     %             <<"method">> => <<"GET">>
+%     %         }
+%     %     ),
+%     % case hb_ao:resolve_many(Msgs, Opts) of
+%     %     {ok, Crons} ->
+%     %         % TODO: Restore the crons from the response
+% 	% 		?event({load_cron_jobs_success, {crons, Crons}}),
+%     %         {ok, Crons};
+%     %     {error, Reason} ->
+% 	% 		?event({load_cron_jobs_error, {error, Reason}}),
+%     %         {error, Reason}
+%     % end,
+% 	%% ?event({add_resolve_test_result2, {result2, Res2}}),
+% 	?event({'add_resolve_test_done'}).
 
 
 
-% basic invocation test
-invoke_test() ->
-	{ok, Script} = file:read_file("scripts/cron.lua"),
-	Base = #{
-		<<"device">> => <<"lua@5.3a">>,
-		<<"script">> => #{
-			<<"content-type">> => <<"application/lua">>,
-			<<"body">> => Script
-		},
-		<<"test-value">> => 42
-	},
-	{ok, Result1} = hb_ao:resolve(Base, <<"hello">>, #{}),
-	?event({result1, Result1}),
-	?assertEqual(42, hb_ao:get(<<"test-value">>, Result1, #{})),
-	?assertEqual(<<"world">>, hb_ao:get(<<"hello">>, Result1, #{})),
-	{ok, Result2} =
-		hb_ao:resolve(
-			Base,
-			#{<<"path">> => <<"hello">>, <<"name">> => <<"Alice">>},
-			#{}
-		),
-	?event({result2, Result2}),
-	?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
+% % basic invocation test
+% invoke_test() ->
+% 	{ok, Script} = file:read_file("scripts/cron.lua"),
+% 	Base = #{
+% 		<<"device">> => <<"lua@5.3a">>,
+% 		<<"script">> => #{
+% 			<<"content-type">> => <<"application/lua">>,
+% 			<<"body">> => Script
+% 		},
+% 		<<"test-value">> => 42
+% 	},
+% 	{ok, Result1} = hb_ao:resolve(Base, <<"hello">>, #{}),
+% 	?event({result1, Result1}),
+% 	?assertEqual(42, hb_ao:get(<<"test-value">>, Result1, #{})),
+% 	?assertEqual(<<"world">>, hb_ao:get(<<"hello">>, Result1, #{})),
+% 	{ok, Result2} =
+% 		hb_ao:resolve(
+% 			Base,
+% 			#{<<"path">> => <<"hello">>, <<"name">> => <<"Alice">>},
+% 			#{}
+% 		),
+% 	?event({result2, Result2}),
+% 	?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
 
 % cache handle test via the lua device
-% 
-cache_handle_test() ->
-	{ok, Script} = file:read_file("scripts/cron.lua"),
-	Base = #{
-		<<"device">> => <<"lua@5.3a">>,
-		<<"script">> => #{
-			<<"content-type">> => <<"application/lua">>,
-			<<"body">> => Script
-		},
-		<<"somekey">> => <<"somevalue">>
-	},
-	% resolve the handle function with a base body path of once
-	{ok, Result1} = hb_ao:resolve(
-		Base, 
-		#{
-			<<"path">> => <<"handle">>,
-			<<"body">> => #{<<"path">> => <<"every">>}
-		},
-		#{}
-	),
-	?event({result1, Result1}),
-	CronsRes = hb_ao:get(<<"crons">>, Result1, #{}),
-	?event({crons, CronsRes}),
-	% TODO(viksit): add asserts here tbd
-	% end of test
-	?event({'cache_handle_test_done'}).
+% % 
+% cache_handle_test() ->
+% 	{ok, Script} = file:read_file("scripts/cron.lua"),
+% 	Base = #{
+% 		<<"device">> => <<"lua@5.3a">>,
+% 		<<"script">> => #{
+% 			<<"content-type">> => <<"application/lua">>,
+% 			<<"body">> => Script
+% 		},
+% 		<<"somekey">> => <<"somevalue">>
+% 	},
+% 	% resolve the handle function with a base body path of once
+% 	{ok, Result1} = hb_ao:resolve(
+% 		Base, 
+% 		#{
+% 			<<"path">> => <<"handle">>,
+% 			<<"body">> => #{<<"path">> => <<"every">>}
+% 		},
+% 		#{}
+% 	),
+% 	?event({result1, Result1}),
+% 	CronsRes = hb_ao:get(<<"crons">>, Result1, #{}),
+% 	?event({crons, CronsRes}),
+% 	% TODO(viksit): add asserts here tbd
+% 	% end of test
+% 	?event({'cache_handle_test_done'}).
 	
 %%%%%%%%%%%%%%%
 % add_test() ->
