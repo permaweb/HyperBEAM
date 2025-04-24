@@ -42,21 +42,13 @@ cron_opts(Opts) ->
 %% @doc Reload all registered cron tasks.
 load(_, _, Opts) ->
     CronOpts = cron_opts(Opts),
-    Msgs =
-        hb_singleton:from(
-            #{
-                <<"path">> => <<"/cron~node-process@1.0/now/crons">>,
-                <<"method">> => <<"GET">>
-            }
-        ),
-	?event({load_cron_jobs_start, {msgs, Msgs}, {cron_opts, CronOpts}}),
-    case hb_ao:resolve_many(Msgs, CronOpts) of
+    ?event({load_cron_jobs_start, {cron_opts, CronOpts}}),
+    case cache_list(CronOpts) of
         {ok, Crons} ->
-            % TODO: Restore the crons from the response
-			?event({load_cron_jobs_success, {crons, Crons}}),
+            ?event({load_cron_jobs_success, {crons, Crons}}),
             {ok, Crons};
         {error, Reason} ->
-			?event({load_cron_jobs_error, {error, Reason}}),
+            ?event({load_cron_jobs_error, {error, Reason}}),
             {error, Reason}
     end.
 
@@ -80,6 +72,8 @@ once(_Msg1, Msg2, Opts) ->
 			% Cache the task
 			{ok, PutResult} = cache_put(ReqMsgID, ModifiedMsg2, cron_opts(Opts)),
 			?event({once_cache_put_result, {result, PutResult}}),
+			{ok, Crons} = cache_list(cron_opts(Opts)),
+			?event({once_cron_cache_load_test_crons, {crons, Crons}}),
 			{ok, ReqMsgID}
 	end.
 
@@ -249,6 +243,7 @@ send_cron_command(Command, Body, Opts) ->
 %% @doc Put a value in the cache with the specified task ID
 %% Returns {ok, TaskId} on success
 cache_put(TaskId, Value, Opts) ->
+	?event({cache_put_start, {task_id, TaskId}, {value, Value}}),
     send_cron_command(<<"put">>, #{
         <<"task_id">> => TaskId,
         <<"data">> => Value
@@ -275,13 +270,25 @@ cache_remove(TaskId, Opts) ->
 
 %% @doc List all values in the cache
 %% Returns {ok, Values} with a list of all entries
+% cache_list(Opts) ->
+%     AllJobs = hb_ao:get(
+%         << "cron/now/crons" >>,
+%         #{ <<"device">> => <<"node-process@1.0">> },
+%         Opts
+%     ),
+%     {ok, AllJobs}.
+
 cache_list(Opts) ->
-    AllJobs = hb_ao:get(
+    Result = hb_ao:get(
         << "cron/now/crons" >>,
         #{ <<"device">> => <<"node-process@1.0">> },
         Opts
     ),
-    {ok, AllJobs}.
+	?event({cache_list_result, {result, Result}}),
+    case is_list(Result) of
+        true -> {ok, Result};
+        false -> {error, Result}
+    end.
 
 %% @doc Clear all values from the cache
 %% Returns {ok, cleared} on success
@@ -483,7 +490,51 @@ every_worker_loop_test() ->
 		?event({'cron:every:test:timeout', {pid, PID}, {lookup_result, FinalLookup}}),
 		throw({test_timeout_waiting_for_state, {id, ID}})
 	end.
-	
+
+%% @doc Test that verifies a one-time job is added to 
+%% the cron cache and can be loaded via the load endpoint
+once_cron_cache_load_test() ->
+    Opts = generate_test_opts(),
+    % Start a new node with test options
+    Node = hb_http_server:start_node(Opts),
+    % Create a test worker
+    PID = spawn(fun test_worker/0),
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    hb_name:register({<<"test">>, ID}, PID),
+    % Create a "once" task
+    UrlPath = <<"/~cron@1.0/once?test-id=", ID/binary,
+              "&cron-path=/~test-device@1.0/update_state">>,
+    {ok, ReqMsgId} = hb_http:get(Node, UrlPath, #{}),
+    ?event({once_load_test_created, {task_id, ReqMsgId}}),
+    % Wait for the task to be processed
+    timer:sleep(1000),
+	% Use the cache list function to retrieve cron jobs
+	{ok, Crons} = cache_list(Opts),
+	?event({once_cron_cache_load_test_crons, {crons, Crons}}),
+    % % Use the load function to retrieve cron jobs
+    % {ok, LoadedCrons} = hb_ao:resolve_many(
+    %     hb_singleton:from(#{
+    %         <<"path">> => <<"/~cron@1.0/load">>
+    %     }),
+    %     Opts
+    % ),
+    % ?event({once_load_test_loaded, {loaded_crons, LoadedCrons}}),
+    % % Verify the task is in the loaded list
+    % ?assertMatch({ok, _}, find_job_by_task_id(LoadedCrons, ReqMsgId)),
+    % % Also verify that the worker was called
+    % PID ! {get, self()},
+    % receive
+    %     {state, State} ->
+    %         ?event({once_load_test_state, {state, State}}),
+    %         ?assertMatch(#{ <<"test-id">> := ID }, State)
+    % after 1000 ->
+    %     FinalLookup = hb_name:lookup({<<"test">>, ID}),
+    %     ?event({timeout_waiting_for_worker, {pid, PID}, {lookup_result, FinalLookup}}),
+    %     throw(no_response_from_worker)
+    % end,
+    ?event({'once_load_test_done'}).
+
+
 %% @doc This is a helper function that is used to test the cron device.
 %% It is used to increment a counter and update the state of the worker.
 test_worker() -> test_worker(#{count => 0}).
