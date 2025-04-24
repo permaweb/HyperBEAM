@@ -13,7 +13,7 @@ static ErlDrvData compiler_driver_start(ErlDrvPort port, char *buff) {
     ErlDrvSysInfo info;
     driver_system_info(&info, sizeof(info));
 
-    DRV_DEBUG("Starting WASM driver");
+    DRV_DEBUG("Starting AOT Compiler driver");
     DRV_DEBUG("Port: %p", port);
     DRV_DEBUG("Buff: %s", buff);
     DRV_DEBUG("Caller PID: %d", driver_caller(port));
@@ -35,7 +35,7 @@ static ErlDrvData compiler_driver_start(ErlDrvPort port, char *buff) {
     Proc* proc = driver_alloc(sizeof(Proc));
     memset(proc, 0, sizeof(Proc));
 
-    proc->is_running = erl_drv_mutex_create("wasm_instance_mutex");
+    proc->is_running = erl_drv_mutex_create("aot_compiler_mutex");
 
     proc->port = port;
     DRV_DEBUG("Port: %p", proc->port);
@@ -58,7 +58,7 @@ static ErlDrvData compiler_driver_start(ErlDrvPort port, char *buff) {
 static void compiler_driver_stop(ErlDrvData raw) {
     // DRV_DEBUG("IGNORING STOP");
     Proc* proc = (Proc*)raw;
-    DRV_DEBUG("Stopping WASM driver");
+    DRV_DEBUG("Stopping AOT Compiler driver");
 
     // We need to first grab the lock, then unlock it and destroy it. Must be a better way...
     DRV_DEBUG("Grabbing is_running mutex to shutdown...");
@@ -67,14 +67,14 @@ static void compiler_driver_stop(ErlDrvData raw) {
     DRV_DEBUG("Destroying is_running mutex");
     erl_drv_mutex_destroy(proc->is_running);
     // Cleanup WASM resources
-    DRV_DEBUG("Cleaning up WASM resources");
+    DRV_DEBUG("Cleaning up AOT Compiler resources");
     DRV_DEBUG("Freeing proc");
     driver_free(proc);
     DRV_DEBUG("Freed proc");
 }
 
 static void compiler_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) {
-    DRV_DEBUG("WASM driver output received");
+    DRV_DEBUG("AOT Compiler driver output received");
     Proc* proc = (Proc*)raw;
     //DRV_DEBUG("Port: %p", proc->port);
     //DRV_DEBUG("Port term: %p", proc->port_term);
@@ -96,6 +96,7 @@ static void compiler_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT buffl
     DRV_DEBUG("Port %p received command: %s, arity: %d", proc->port, command, arity);
     
     if (strcmp(command, "compile") == 0) {
+        DRV_DEBUG("Received compile command");
         // Start async initialization
         proc->pid = driver_caller(proc->port);
         //DRV_DEBUG("Caller PID: %d", proc->pid);
@@ -139,7 +140,6 @@ void invoke_compile(void *raw) {
     
     if (res == 0) {
         DRV_DEBUG("Compilation successful");
-        DRV_DEBUG("Sending compilation result");
         send_compilation_result(proc, aot_module, aot_module_size);
     }
     else {
@@ -152,8 +152,8 @@ void invoke_compile(void *raw) {
 
 void send_compilation_result(Proc* proc, uint8_t* aot_module, uint32_t aot_module_size) {
     DRV_DEBUG("Sending compilation result");
-    DRV_DEBUG("AOT module size: %d bytes", aot_module_size);
     DRV_DEBUG("AOT module: %p", aot_module);
+    DRV_DEBUG("AOT module size: %d bytes", aot_module_size);
 
     // Send the compilation result to the caller
     ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 7);
