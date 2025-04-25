@@ -349,9 +349,13 @@ join_peer(PeerLocation, PeerID, _M1, M2, InitOpts) ->
 							},
                             hb_http_server:set_opts(NewOpts),
 							?event(successfully_joined_greenzone),
-                            
-                            % After successfully joining, try to mount encrypted volume
-                            try_mount_encrypted_volume(AESKey, NewOpts),
+							ShouldMount = hb_ao:get(<<"should_mount">>, M2, false, NewOpts),
+							case ShouldMount of
+								true ->
+									try_mount_encrypted_volume(AESKey, NewOpts);
+								false ->
+									?event(debug, <<"Not mounting encrypted volume.">>)
+							end,
 
                             {ok, #{ 
                                 <<"body">> => 

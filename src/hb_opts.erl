@@ -196,22 +196,23 @@ default_message() ->
         % dynamically changing the configuration based on whether we are running
         % tests or not. To override this, set the `prometheus' option explicitly.
         % prometheus => false
-		trusted => #{
-			vcpus => 35,
-			vcpu_type => 5, 
-			vmm_type => 1,
-			guest_features => 1,
-			firmware => <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
-			kernel => <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
-			initrd => <<"488e001d5ace38b498b6c1974db3b3b46c1f712ad2082e34c034aaa523f4d6d7">>,
-			append => <<"d4afe3c41d6378a77fa240582aeffd2b4d99cebfdfdeaf79d9b771e1720a580c">>
-		},
+		trusted => [
+			#{
+				vcpus => 32,
+				vcpu_type => 5, 
+				vmm_type => 1,
+				guest_features => 1,
+				firmware => <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
+				kernel => <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
+				initrd => <<"798bfd9d6e1cf3515e7a89dd4ebce773fa439c9271f0c094b408b860c0f628ce">>,
+				append => <<"b87609343a6c43ee8c7e1e0c4eabd579a26e450dfefef05b56a1d81fb9e29f37">>
+			}
+		],	
         preprocessor => #{
           <<"device">> => <<"router@1.0">>
         },
         route_provider => #{
             <<"path">> =>
-                RouteProvider =
                     <<"/router~node-process@1.0/compute/routes~message@1.0">>
         },
         node_processes => #{

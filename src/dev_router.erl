@@ -24,20 +24,87 @@
 %%%                map or a path regex.
 %%% </pre>
 -module(dev_router).
-%%% Device API:
 -export([routes/3, route/2, route/3, preprocess/3]).
-%%% Public utilities:
--export([match/3]).
+-export([match/3, is_relevant/3, register/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
--define(DEFAULT_EXEMPT_ROUTES, [
-  #{ <<"template">> => <<"/~meta@1.0/.*">> },
-  #{ <<"template">> => <<"/~greenzone@1.0/.*">> },
-  #{ <<"template">> => <<"/.*~node-process@1.0/.*">> },
-  #{ <<"template">> => <<"/~snp@1.0/.*">> },
-  #{ <<"template">> => <<"/~p4@1.0/.*">> }
+-define(DEFAULT_RELAVANT_ROUTES, [
+  #{ <<"template">> => <<"/.*~process@1.0/.*">> }
 ]).
+
+%% A exposed register function that allows telling the current node to register
+%% a new route with a remote router node. This function should also be itempotent
+%% so that it can be called only once.
+register(_M1, M2, Opts) ->
+	?event(debug_pete, {register, {msg, M2}}),
+	Registered = hb_opts:get(registered, false, Opts),
+	case Registered of
+	true ->
+		{ok, #{
+			<<"status">> => 208,
+			<<"message">> => <<"Node already registered.">>
+		}};
+	false ->
+		RouterNode = hb_ao:get(<<"peer-location">>, M2, not_found, Opts),
+		Prefix = hb_ao:get(<<"prefix">>, M2, not_found, Opts),
+		Price = hb_ao:get(<<"price">>, M2, not_found, Opts),
+		Template = hb_ao:get(<<"template">>, M2, not_found, Opts),
+
+		% Check if any required parameters are missing
+		Missing = [
+			{<<"peer-location">>, RouterNode},
+			{<<"prefix">>, Prefix},
+			{<<"price">>, Price},
+			{<<"template">>, Template}
+		],
+		
+		MissingParams = [Param || {Param, Value} <- Missing, Value =:= not_found],
+		
+		case MissingParams of
+			[] ->
+				% All required parameters are present, proceed with registration
+				Req = #{
+					<<"path">> => <<"/router~node-process@1.0/schedule">>,
+					<<"method">> => <<"POST">>,
+					<<"body">> =>
+						hb_message:commit(
+							#{
+								<<"path">> => <<"register">>,
+								<<"route">> =>
+									#{
+										<<"prefix">> => Prefix,
+										<<"template">> => Template,
+										<<"price">> => Price
+									},
+								<<"body">> => M2
+							},
+							Opts
+						)
+				},
+				case hb_http:post(RouterNode, Req, Opts) of
+					{ok, _} ->
+						hb_http_server:set_opts(Opts#{ registered => true }),
+						{ok, <<"Route registered.">>};
+					{error, _} ->
+						{error, <<"Failed to register route.">>}
+				end;
+			_ ->
+				% Some parameters are missing, return error message
+				ParamList = lists:foldl(
+					fun(Param, Acc) ->
+						case Acc of
+							<<>> -> Param;
+							_ -> <<Acc/binary, ", ", Param/binary>>
+						end
+					end,
+					<<>>,
+					MissingParams
+				),
+				ErrorMsg = <<"Missing required parameters: ", ParamList/binary>>,
+				{error, ErrorMsg}
+		end
+	end.
 
 %% @doc Device function that returns all known routes.
 routes(M1, M2, Opts) ->
@@ -179,7 +246,7 @@ extract_base(RawPath, Opts) when is_binary(RawPath) ->
     case ?IS_ID(BasePath) of
         true -> BasePath;
         false ->
-            case binary:split(BasePath, [<<"~">>, <<"?">>, <<"&">>], [global]) of
+            case binary:split(BasePath, [<<"\~">>, <<"?">>, <<"&">>], [global]) of
                 [BaseMsgID|_] when ?IS_ID(BaseMsgID) -> BaseMsgID;
                 _ -> hb_crypto:sha256(BasePath)
             end
@@ -370,57 +437,40 @@ binary_to_bignum(Bin) when ?IS_ID(Bin) ->
     << Num:256/unsigned-integer >> = hb_util:native_id(Bin),
     Num.
 
-%% @doc is_exempt looks at the is_exempt paths opt and if any incoming message path matches it will 
-%% make the request exempt from preprocessing.
-is_exempt(Msg1, Msg2, Opts) ->
-  ExemptRoutes = 
+%% @doc is_relevant looks at the relevant_routes paths opt and if any incoming message path matches it will 
+%% make the request relevant for preprocessing.
+is_relevant(Msg1, Msg2, Opts) ->
+  RelevantRoutes = 
       hb_opts:get(
-        exempt_routes,
-        ?DEFAULT_EXEMPT_ROUTES,
+        relevant_routes,
+        ?DEFAULT_RELAVANT_ROUTES,
         Opts
       ),
   Req = hb_ao:get(<<"request">>, Msg2, Opts),
-  {_, Matches} = match(#{ <<"routes">> => ExemptRoutes}, Req, Opts),
+  {_, Matches} = match(#{ <<"routes">> => RelevantRoutes}, Req, Opts),
   ?event(debug_preprocess, { matches, Matches }),
   case Matches of
     no_matching_route -> 
-        % case hb_ao:resolve(#{ 
-        %   <<"device">> => <<"router@1.0">>, 
-        %   <<"routes">> => hb_ao:get(exempt_routes, Msg1, Opts)}, 
-        %   Msg2#{ <<"path">> => <<"match">> },
-        %   Opts
-        % ) of
-        %     {error, no_matching_route} -> {ok, false};
-        %     _ -> {ok, false}
-        % end;
         {ok, false};
-    IsExempt -> 
-          ?event(debug_preprocess, { is_except, IsExempt }),
+    IsRelevant -> 
+          ?event(debug_preprocess, { is_relevant, IsRelevant }),
           {ok, true}
-end.
+  end.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
 preprocess(Msg1, Msg2, Opts) ->
     ?event(debug_preprocess, called_preprocess),
-    case is_exempt(Msg1, Msg2, Opts) of
+    case is_relevant(Msg1, Msg2, Opts) of
         {ok, true} ->
-            ?event(debug_preprocess, is_exempt_true),
-            {ok, hb_ao:get(<<"body">>, Msg2, Opts#{ hashpath => ignore })};
-            % Request should not be proxied, return the modified parsed list of messages to execute
-            % {ok, hb_ao:resolve(Msg1, Msg2, Opts)};
-        {ok, false} ->
-            ?event(debug_dynrouter, { msg1, Msg1 }),
-            ?event(debug_dynrouter, { opts, Opts }),
             {ok, TemplateRoutes} = routes(Msg1, Msg2, Opts),
-            ?event(debug_dynrouter, { template_routes, TemplateRoutes }),
             Req = hb_ao:get(<<"request">>, Msg2, Opts),
-            Path = find_target_path(Req, Opts),
-            ?event(debug_dynrouter, { found_path, Path }),
             {_, Match} = match(#{ <<"routes">> => TemplateRoutes}, Req, Opts),
-            ?event(debug_dynrouter, { found_match, Match }),
             case Match of
                 no_matching_route -> 
-                    {error, <<"No matching route found">>};
+					{ok, #{
+						<<"status">> => 404,
+						<<"message">> => <<"No matching template found in the given routes.">>
+					}};
                 _ -> 
                     {ok,
                         [
@@ -433,7 +483,10 @@ preprocess(Msg1, Msg2, Opts) ->
                             }
                         ]
                     }
-            end
+            end;
+        {ok, false} ->
+            ?event(debug_preprocess, is_not_relevant),
+            {ok, hb_ao:get(<<"body">>, Msg2, Opts#{ hashpath => ignore })}
     end.
 
 %%% Tests
@@ -641,16 +694,18 @@ dynamic_router_test() ->
     {ok, Script} = file:read_file("scripts/dynamic-router.lua"),
     Run = hb_util:bin(rand:uniform(1337)),
     Node = hb_http_server:start_node(Opts = #{
-		trusted => #{
-			vcpus => 1,
-			vcpu_type => 5, 
-			vmm_type => 1,
-			guest_features => 1,
-			firmware => <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
-			kernel => <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
-			initrd => <<"da6dffff50373e1d393bf92cb9b552198b1930068176a046dda4e23bb725b3bb">>,
-			append => <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>
-		},
+		trusted => [
+			#{
+				vcpus => 1,
+				vcpu_type => 5, 
+				vmm_type => 1,
+				guest_features => 1,
+				firmware => <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
+				kernel => <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
+				initrd => <<"da6dffff50373e1d393bf92cb9b552198b1930068176a046dda4e23bb725b3bb">>,
+				append => <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>
+			}
+		],
         store => [
             #{
                 <<"store-module">> => hb_store_fs,
@@ -663,8 +718,7 @@ dynamic_router_test() ->
         },
         route_provider => #{
             <<"path">> =>
-                RouteProvider =
-                    <<"/router~node-process@1.0/compute/routes~message@1.0">>
+				<<"/router~node-process@1.0/compute/routes~message@1.0">>
         },
         node_processes => #{
             <<"router">> => #{
@@ -730,7 +784,7 @@ dynamic_router_test() ->
     {Status, NodeRoutes} = hb_http:get(Node, <<"/router~node-process@1.0/now">>, #{}),
     ?event(debug_dynrouter, {got_node_routes, NodeRoutes}),
 	% Meta info is a part of the exempt routes. Make sure this returns our address
-    {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info/address">>, Opts),
+    {ok, _Res} = hb_http:get(Node, <<"/~meta@1.0/info/address">>, Opts),
 	% ?assertEqual(hb_util:human_id(ar_wallet:to_address(hb_opts:get(priv_wallet, not_found, Opts))), Res),
 	% {Status, _} = hb_http:get(Node, <<"/RhguwWmQJ-wWCXhRH_NtTDHRRgfCqNDZckXtJK52zKs~process@1.0/compute&slot=1">>, Opts),
     ?assertEqual(ok, Status).

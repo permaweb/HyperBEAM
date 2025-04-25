@@ -43,7 +43,7 @@ real_node_test() ->
             verify(
                 Report,
                 #{ <<"target">> => <<"self">> },
-                #{ trusted => ?TEST_TRUSTED_SOFTWARE }
+                #{ trusted => [?TEST_TRUSTED_SOFTWARE] }
             ),
         ?event({snp_validation_res, Result}),
         ?assertEqual({ok, true}, Result)
@@ -63,9 +63,16 @@ init(M1, _M2, Opts) ->
             SnpHashes = hb_ao:get(<<"body">>, M1, Opts),
             SNPDecoded = hb_json:decode(SnpHashes),
             Hashes = maps:get(<<"snp_hashes">>, SNPDecoded),
+            
+            % Get existing trusted configurations (always a list)
+            ExistingTrusted = hb_opts:get(trusted, [], Opts),
+            
+            % Add new hash configuration to the list
+            NewTrusted = ExistingTrusted ++ [Hashes],
+            
             ok = hb_http_server:set_opts(Opts#{
-                % Add our trusted hashes to the device's trusted software list
-                trusted => maps:merge(hb_opts:get(trusted, #{}, Opts), Hashes),
+                % Set trusted to the combined list
+                trusted => NewTrusted,
                 % Set our hashes to the given hashes
                 snp_hashes => Hashes
             }),
@@ -258,12 +265,27 @@ execute_is_trusted(M1, Msg, NodeOpts) ->
 trusted(_Msg1, Msg2, NodeOpts) ->
     Key = hb_ao:get(<<"key">>, Msg2, NodeOpts),
     Body = hb_ao:get(<<"body">>, Msg2, not_found, NodeOpts),
-    %% Ensure Trusted is always a map
-    TrustedSoftware = hb_opts:get(trusted, #{}, NodeOpts),
-    PropertyName = hb_ao:get(Key, TrustedSoftware, not_found, NodeOpts),
-    % ?event({trust_key, PropertyName, maps:is_key(Key, TrustedSoftware)}),
+    
+    %% Get trusted software list
+    TrustedSoftware = hb_opts:get(trusted, [], NodeOpts),
+    
+    %% Check if the value exists in any of the trusted maps in the list
+    IsTrusted = 
+        case TrustedSoftware of
+            [] -> 
+                false;
+            _ when is_list(TrustedSoftware) ->
+                lists:any(
+                    fun(TrustedMap) ->
+                        PropertyName = hb_ao:get(Key, TrustedMap, not_found, NodeOpts),
+                        PropertyName == Body
+                    end,
+                    TrustedSoftware
+                )
+        end,
+    
     %% Final trust validation
-    {ok, PropertyName == Body}.
+    {ok, IsTrusted}.
 
 %% @doc Ensure that the report data matches the expected report data.
 report_data_matches(Address, NodeMsgID, ReportData) ->
