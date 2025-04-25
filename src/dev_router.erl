@@ -61,6 +61,7 @@ register(_M1, M2, Opts) ->
 		
 		MissingParams = [Param || {Param, Value} <- Missing, Value =:= not_found],
 		
+		{ok, Attestion} = dev_snp:generate(#{}, #{}, Opts),
 		case MissingParams of
 			[] ->
 				% All required parameters are present, proceed with registration
@@ -77,7 +78,7 @@ register(_M1, M2, Opts) ->
 										<<"template">> => Template,
 										<<"price">> => Price
 									},
-								<<"body">> => M2
+								<<"body">> => Attestion
 							},
 							Opts
 						)
