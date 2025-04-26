@@ -91,7 +91,9 @@ default_message() ->
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
-            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm}
+            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
+			% temporal hack, for the future should load it from config
+            #{<<"name">> => <<"evm@1.0">>, <<"module">> => dev_evm}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
@@ -384,7 +386,7 @@ mimic_default_types(Map, Mode, Opts) ->
     hb_maps:from_list(lists:map(
         fun({Key, Value}) ->
             NewKey = try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end,
-            NewValue = 
+            NewValue =
                 case hb_maps:get(NewKey, Default, not_found, Opts) of
                     not_found -> Value;
                     DefaultValue when is_atom(DefaultValue) ->
