@@ -18,6 +18,7 @@
 
 %% @doc The default configuration options of the hyperbeam node.
 default_message() ->
+    {ok, Script} = file:read_file("./dynamic-router.lua"),
     #{
         %%%%%%%% Functional options %%%%%%%%
         hb_config_location => <<"config.flat">>,
@@ -130,7 +131,6 @@ default_message() ->
         debug_ids => false,
         debug_committers => false,
         debug_show_priv => false,
-		trusted => [],
         routes => [
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
@@ -189,13 +189,53 @@ default_message() ->
         % Should the node store all signed messages?
         store_all_signed => true,
         % Should the node use persistent processes?
-        process_workers => false
+        process_workers => false,
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,
         % dynamically changing the configuration based on whether we are running
         % tests or not. To override this, set the `prometheus' option explicitly.
         % prometheus => false
+		trusted => [
+			#{
+				vcpus => 1,
+				vcpu_type => 5, 
+				vmm_type => 1,
+				guest_features => 1,
+				firmware => <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
+				kernel => <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
+				initrd => <<"da6dffff50373e1d393bf92cb9b552198b1930068176a046dda4e23bb725b3bb">>,
+				append => <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>
+			}
+		],	
+        preprocessor => #{
+          <<"device">> => <<"router@1.0">>
+        },
+        route_provider => #{
+            <<"path">> =>
+                    <<"/router~node-process@1.0/compute/routes~message@1.0">>
+        },
+        node_processes => #{
+            <<"router">> => #{
+                <<"type">> => <<"Process">>,
+                <<"device">> => <<"process@1.0">>,
+                <<"execution-device">> => <<"lua@5.3a">>,
+                <<"scheduler-device">> => <<"scheduler@1.0">>,
+                <<"script">> => #{
+                    <<"content-type">> => <<"application/lua">>,
+                    <<"module">> => <<"dynamic-router">>,
+                    <<"body">> => Script
+                },
+                % Set script-specific factors for the test
+                <<"pricing-weight">> => 9,
+                <<"performance-weight">> => 1,
+                <<"score-preference">> => 4,
+                <<"is-admissible">> => #{ 
+                  <<"device">> => <<"snp@1.0">>
+                }
+            }
+        }
+
     }.
 
 %% @doc Get an option from the global options, optionally overriding with a

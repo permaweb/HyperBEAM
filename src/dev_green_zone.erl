@@ -28,15 +28,15 @@ Each of these options is derived from the present node's configuration.
 """.
 default_zone_required_opts(Opts) ->
 	#{
-		trusted_device_signers => hb_opts:get(trusted_device_signers, [], Opts),
-        load_remote_devices => hb_opts:get(load_remote_devices, false, Opts),
-        preload_devices => hb_opts:get(preload_devices, [], Opts),
+		% trusted_device_signers => hb_opts:get(trusted_device_signers, [], Opts),
+        % load_remote_devices => hb_opts:get(load_remote_devices, false, Opts),
+        % preload_devices => hb_opts:get(preload_devices, [], Opts),
         % store => hb_opts:get(store, [], Opts),
-        routes => hb_opts:get(routes, [], Opts),
-        preprocessor => hb_opts:get(preprocessor, undefined, Opts),
-        postprocessor => hb_opts:get(postprocessor, undefined, Opts),
-        scheduling_mode => disabled,
-        initialized => permanent
+        % routes => hb_opts:get(routes, [], Opts),
+        % preprocessor => hb_opts:get(preprocessor, undefined, Opts),
+        % postprocessor => hb_opts:get(postprocessor, undefined, Opts),
+        % scheduling_mode => disabled
+        % initialized => permanent
 	}.
 
 
@@ -405,8 +405,8 @@ maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) ->
             % The node operator does not want to adopt the peer's config. Return
             % the initial options unchanged.
             {ok, InitOpts};
-        AdoptConfig ->
-			?event(green_zone, {adopt_config, AdoptConfig, PeerLocation, PeerID, InitOpts}),
+        true ->
+			?event(green_zone, {adopt_config, true, PeerLocation, PeerID, InitOpts}),
             % Request the required config from the peer.
             RequiredConfigRes =
                 hb_http:get(
@@ -437,7 +437,7 @@ maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) ->
 							% Generate the node message that should be set prior to 
 							% joining a green zone.
 							NodeMessage =
-								calculate_node_message(RequiredConfig, Req, AdoptConfig),
+								calculate_node_message(RequiredConfig, Req, true),
 							% Adopt the node message.
 							dev_meta:adopt_node_message(NodeMessage, InitOpts)
 					end
@@ -504,7 +504,7 @@ validate_join(_M1, Req, Opts) ->
     NodeAddr = hb_ao:get(<<"address">>, Req, Opts),
     ?event(green_zone, {join, extract, {node_addr, NodeAddr}}),
     % Retrieve and decode the joining node's public key.
-    EncodedPubKey = hb_ao:get(<<"public-key">>, Req, Opts),
+    EncodedPubKey = hb_ao:get(<<"public-key">>, Req, not_found, Opts),
     RequesterPubKey = case EncodedPubKey of
         not_found -> not_found;
         Encoded -> binary_to_term(base64:decode(Encoded))
@@ -655,6 +655,8 @@ record suitable for encryption.
 -spec encrypt_payload(AESKey :: binary(), RequesterPubKey :: term()) -> binary().
 encrypt_payload(AESKey, RequesterPubKey) ->
     ?event(green_zone, {encrypt_payload, start}),
+	?event(green_zone, {encrypt_payload, requester_pub_key, RequesterPubKey}),
+	?event(green_zone, {encrypt_payload, aes_key, AESKey}),
     %% Expect RequesterPubKey in the form: { {rsa, E}, Pub }
     { {rsa, E}, Pub } = RequesterPubKey,
     RSAPubKey = #'RSAPublicKey'{
