@@ -400,13 +400,13 @@ required config of the green zone they are joining.
          {error, Reason} if the configuration adoption fails.
 """.
 maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) ->
-    case hb_ao:get(<<"adopt-config">>, Req, true, InitOpts) of
-        false ->
+    case hb_ao:get(<<"adopt-config">>, Req, <<"true">>, InitOpts) of
+        <<"false">> ->
             % The node operator does not want to adopt the peer's config. Return
             % the initial options unchanged.
             {ok, InitOpts};
-        AdoptConfig ->
-			?event(green_zone, {adopt_config, AdoptConfig, PeerLocation, PeerID, InitOpts}),
+		<<"true">> ->
+			?event(green_zone, {adopt_config, true, PeerLocation, PeerID, InitOpts}),
             % Request the required config from the peer.
             RequiredConfigRes =
                 hb_http:get(
@@ -437,7 +437,7 @@ maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) ->
 							% Generate the node message that should be set prior to 
 							% joining a green zone.
 							NodeMessage =
-								calculate_node_message(RequiredConfig, Req, AdoptConfig),
+								calculate_node_message(RequiredConfig, Req, true),
 							% Adopt the node message.
 							dev_meta:adopt_node_message(NodeMessage, InitOpts)
 					end
@@ -545,16 +545,21 @@ validate_join(_M1, Req, Opts) ->
 
 validate_peer_opts(Req, Opts) ->
 	?event(green_zone, {validate_peer_opts, start, Req}),
+	?event(green_zone, {validate_peer_opts, start_opts, Opts}),
+	
 	% Get the required config from the local node's configuration.
 	RequiredConfig =
 		hb_ao:normalize_keys(
 			hb_opts:get(green_zone_required_opts, #{}, Opts)),
 	?event(green_zone, {validate_peer_opts, required_config, RequiredConfig}),
+	?event(green_zone, {validate_peer_opts, required_config_keys, maps:keys(RequiredConfig)}),
 	
 	PeerOpts =
 		hb_ao:normalize_keys(
 			hb_ao:get(<<"node-message">>, Req, undefined, Opts)),
 	?event(green_zone, {validate_peer_opts, peer_opts, PeerOpts}),
+	?event(green_zone, {validate_peer_opts, peer_opts_defined, PeerOpts =/= undefined}),
+	?event(green_zone, {validate_peer_opts, peer_opts_keys, case is_map(PeerOpts) of true -> maps:keys(PeerOpts); false -> not_a_map end}),
 	
 	% Add the required config itself to the required options of the peer. This
 	% enforces that the new peer will also enforce the required config on peers
@@ -563,34 +568,50 @@ validate_peer_opts(Req, Opts) ->
 		green_zone_required_opts => RequiredConfig
 	},
 	?event(green_zone, {validate_peer_opts, full_required_opts, FullRequiredOpts}),
+	?event(green_zone, {validate_peer_opts, full_required_opts_keys, maps:keys(FullRequiredOpts)}),
 	
 	% Debug: Check if PeerOpts is a map
-	?event(green_zone, {validate_peer_opts, is_map_peer_opts, is_map(PeerOpts)}),
+	IsPeerOptsMap = is_map(PeerOpts),
+	?event(green_zone, {validate_peer_opts, is_map_peer_opts, IsPeerOptsMap}),
 	
 	% Debug: Get node_history safely
 	NodeHistory = hb_ao:get(<<"node_history">>, PeerOpts, [], Opts),
 	?event(green_zone, {validate_peer_opts, node_history, NodeHistory}),
+	?event(green_zone, {validate_peer_opts, node_history_type, erlang:is_list(NodeHistory)}),
 	
 	% Debug: Check length of node_history
 	HistoryCheck = case is_list(NodeHistory) of
-		true -> length(NodeHistory) =< 1;
-		false -> {error, not_a_list}
+		true -> 
+			HistLen = length(NodeHistory),
+			?event(green_zone, {validate_peer_opts, node_history_length, HistLen}),
+			?event(green_zone, {validate_peer_opts, node_history_valid, HistLen =< 1}),
+			HistLen =< 1;
+		false -> 
+			?event(green_zone, {validate_peer_opts, node_history_error, not_a_list}),
+			{error, not_a_list}
 	end,
 	?event(green_zone, {validate_peer_opts, history_check, HistoryCheck}),
 	
 	% Debug: Try the match check separately
 	MatchCheck = try
+		?event(green_zone, {validate_peer_opts, match_check_start}),
 		Result = hb_message:match(PeerOpts, FullRequiredOpts, only_present),
 		?event(green_zone, {validate_peer_opts, match_check, Result}),
+		?event(green_zone, {validate_peer_opts, match_check_complete}),
 		Result
 	catch
 		Error:Reason:Stacktrace ->
-			?event(green_zone, {validate_peer_opts, match_error, {Error, Reason, Stacktrace}}),
+			?event(green_zone, {validate_peer_opts, match_error, {Error, Reason}}),
+			?event(green_zone, {validate_peer_opts, match_error_stacktrace, Stacktrace}),
+			?event(green_zone, {validate_peer_opts, match_failed_peer_opts, PeerOpts}),
+			?event(green_zone, {validate_peer_opts, match_failed_required_opts, FullRequiredOpts}),
 			false
 	end,
 	
 	% Final result
 	FinalResult = MatchCheck andalso (HistoryCheck =:= true),
+	?event(green_zone, {validate_peer_opts, match_check_result, MatchCheck}),
+	?event(green_zone, {validate_peer_opts, history_check_result, HistoryCheck =:= true}),
 	?event(green_zone, {validate_peer_opts, final_result, FinalResult}),
 	FinalResult.
 	
