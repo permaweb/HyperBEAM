@@ -86,7 +86,9 @@ default_message() ->
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
-            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm}
+            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
+			% temporal hack, for the future should load it from config
+            #{<<"name">> => <<"evm@1.0">>, <<"module">> => dev_evm}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
@@ -331,9 +333,8 @@ mimic_default_types(Map, Mode) ->
             NewKey = hb_util:key_to_atom(Key, Mode),
             NewValue = 
                 case maps:get(NewKey, Default, not_found) of
-                    not_found -> Value;
-                    DefaultValue when is_atom(DefaultValue) ->
-                        hb_util:atom(Value);
+                    not_found ->
+                        Value;
                     DefaultValue when is_integer(DefaultValue) ->
                         hb_util:int(Value);
                     DefaultValue when is_float(DefaultValue) ->
