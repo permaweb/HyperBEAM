@@ -3,6 +3,7 @@ mod tests {
     use std::fs;
 
     use crate::core::interpreter::eval;
+    use crate::core::state::get_state;
     use serde_json::Value;
 
     #[test]
@@ -42,5 +43,12 @@ mod tests {
         let result_json: Value = serde_json::to_value(&result).unwrap();
         println!("TX response:{:?}", result_json);
         println!("new eval state result: {}", state);
+    }
+
+    #[test]
+    fn retrieve_state() {
+        let chain_id: &str = "9496";
+        let state = get_state(chain_id);
+        println!("{}", state);
     }
 }

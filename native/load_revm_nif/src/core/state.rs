@@ -6,7 +6,10 @@ use revm::{
     primitives::{Address, U256},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize)]
 pub struct AccountState {
@@ -137,10 +140,26 @@ pub fn deserialize_state(state_json: &str) -> Result<CacheDB<EmptyDB>, String> {
                     Err(e) => return Err(format!("Invalid storage value {}: {}", value_hex, e)),
                 };
 
-                db.insert_account_storage(address, slot, value);
+                let _ = db.insert_account_storage(address, slot, value);
             }
         }
     }
 
     Ok(db)
+}
+
+#[cfg(test)]
+fn get_appchain_base_path() -> String {
+    "./appchains".to_string()
+}
+
+#[cfg(not(test))]
+fn get_appchain_base_path() -> String {
+    "native/load_revm_nif/appchains".to_string()
+}
+
+pub fn get_state(chain_id: &str) -> String {
+    let path = format!("{}/{}.json", get_appchain_base_path(), chain_id);
+    let state = fs::read_to_string(path).unwrap();
+    state
 }
