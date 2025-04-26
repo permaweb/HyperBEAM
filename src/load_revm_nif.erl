@@ -1,5 +1,5 @@
 -module(load_revm_nif).
--export([hello/0, eval_bytecode/2]).
+-export([hello/0, eval_bytecode/3, get_appchain_state/1]).
 
 -on_load(init/0).
 -define(NOT_LOADED, not_loaded(?LINE)).
@@ -8,9 +8,13 @@
 hello() ->
     ?NOT_LOADED.
 
--spec eval_bytecode(binary(), binary()) -> binary().
-eval_bytecode(SignedRawTx, State) when is_binary(SignedRawTx), is_binary(State) ->
+-spec eval_bytecode(binary(), binary(), binary()) -> binary().
+eval_bytecode(SignedRawTx, State, CoutState) when is_binary(SignedRawTx), is_binary(State), is_binary(CoutState) ->
     ?NOT_LOADED.
+
+-spec get_appchain_state(binary()) -> binary().
+get_appchain_state(ChainId) when is_binary(ChainId) ->
+	?NOT_LOADED.
 
 init() ->
     % Get the current directory for debugging
