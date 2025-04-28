@@ -774,7 +774,7 @@ test_device_compute_test() ->
 
 wasm_compute_test() ->
     init(),
-    Msg1 = test_wasm_process(<<"test/test-64.aot">>),
+    Msg1 = test_wasm_process(<<"test/test-64.wasm">>),
     schedule_wasm_call(Msg1, <<"fac">>, [5.0]),
     schedule_wasm_call(Msg1, <<"fac">>, [6.0]),
     {ok, Msg3} = 
@@ -797,7 +797,7 @@ wasm_compute_test() ->
 wasm_compute_from_id_test() ->
     init(),
     Opts = #{ cache_control => <<"always">> },
-    Msg1 = test_wasm_process(<<"test/test-64.aot">>),
+    Msg1 = test_wasm_process(<<"test/test-64.wasm">>),
     schedule_wasm_call(Msg1, <<"fac">>, [5.0], Opts),
     Msg1ID = hb_message:id(Msg1, all),
     Msg2 = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
@@ -818,7 +818,7 @@ http_wasm_process_by_id_test() ->
         }
     }),
     Wallet = ar_wallet:new(),
-    Proc = test_wasm_process(<<"test/test-64.aot">>, Opts),
+    Proc = test_wasm_process(<<"test/test-64.wasm">>, Opts),
     hb_cache:write(Proc, Opts),
     ProcID = hb_util:human_id(hb_message:id(Proc, all)),
     InitRes =
@@ -1078,7 +1078,7 @@ persistent_process_test() ->
 simple_wasm_persistent_worker_benchmark_test() ->
     init(),
     BenchTime = 1,
-    Msg1 = test_wasm_process(<<"test/test-64.aot">>),
+    Msg1 = test_wasm_process(<<"test/test-64.wasm">>),
     schedule_wasm_call(Msg1, <<"fac">>, [5.0]),
     schedule_wasm_call(Msg1, <<"fac">>, [6.0]),
     {ok, Initialized} = 

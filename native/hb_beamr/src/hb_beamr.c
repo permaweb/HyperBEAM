@@ -1,7 +1,7 @@
 #include "../include/hb_helpers.h"
-#include "../include/hb_logging.h"
-#include "../include/hb_driver.h"
 #include "../include/hb_wasm.h"
+#include "hb_logging.h"
+#include "hb_driver.h"
 
 // Declare the atoms used in Erlang driver communication
 ErlDrvTermData atom_ok;

@@ -1,7 +1,7 @@
 #include "../include/hb_wasm.h"
-#include "../include/hb_logging.h"
 #include "../include/hb_helpers.h"
-#include "../include/hb_driver.h"
+#include "hb_logging.h"
+#include "hb_driver.h"
 #include "wasm_export.h"
 
 extern ErlDrvTermData atom_ok;
@@ -171,6 +171,7 @@ void wasm_initialize_runtime(void* raw) {
     uint8_t *binary_copy = driver_alloc(mod_bin->size);
     memcpy(binary_copy, mod_bin->binary, mod_bin->size);
     DRV_DEBUG("Loading proto-module");
+    DRV_DEBUG("wasm_runtime_load(%p, %zu, %p, %zu)", binary_copy, mod_bin->size, error_buf, 1024);
     wasm_module_t module_proto = wasm_runtime_load(binary_copy, mod_bin->size, error_buf, 1024);
     if (!module_proto) {
         DRV_DEBUG("Failed to load WASM proto-module: %s", error_buf);

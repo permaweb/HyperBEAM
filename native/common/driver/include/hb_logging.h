@@ -1,12 +1,7 @@
 #ifndef HB_LOGGING_H
 #define HB_LOGGING_H
 
-#include "hb_core.h"
-// Enable debug logging by default if not defined
-#define HB_DEBUG 0
-#ifndef HB_DEBUG
-#endif
-
+#include "hb_stubs.h"
 
 #define DRV_DEBUG(format, ...) beamr_print(HB_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define DRV_PRINT(format, ...) beamr_print(1, __FILE__, __LINE__, format, ##__VA_ARGS__)

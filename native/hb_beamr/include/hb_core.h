@@ -3,8 +3,8 @@
 
 #include <erl_driver.h>
 #include <ei.h>
-#include <wasm_c_api.h>
-#include <wasm_export.h>
+#include "wasm_c_api.h"
+#include "wasm_export.h"
 #include <string.h>
 #include <stdarg.h>
 #include <time.h>
@@ -21,6 +21,8 @@ typedef struct {
     ei_term* result_terms;          // List of result terms from the import
     int result_length;              // Length of the result_terms
 } ImportResponse;
+
+#define PROC_DEFINED
 
 // Structure to represent a WASM process instance
 typedef struct {
