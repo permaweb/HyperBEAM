@@ -220,11 +220,9 @@ if (NOT MSVC)
   # Remove the extra spaces for better make log
   string (REGEX REPLACE "  *" " " CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
 
-  # Set default visibility to hidden for non-MSVC compilers (GCC, Clang)
+  # Set default visibility to hidden
   # This ensures only explicitly marked symbols are exported.
-  if (NOT CMAKE_C_COMPILER_ID STREQUAL "MSVC")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvisibility=hidden")
-  endif()
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvisibility=hidden")
 endif()
 
 set (SHARED_DIR ${WAMR_SRC_DIR}/core/shared)
