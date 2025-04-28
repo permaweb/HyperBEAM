@@ -97,7 +97,8 @@ init(M1, M2, Opts) ->
                 end
         end,
     % Start the WASM executor.
-    {ok, Instance, _Imports, _Exports} = hb_beamr:start(ImageBin, Mode),
+    {ok, AotImageBin} = hb_beamrc:compile(ImageBin),
+    {ok, Instance, _Imports, _Exports} = hb_beamr:start(AotImageBin, Mode),
     % Set the WASM Instance, handler, and standard library invokation function.
     ?event({setting_wasm_instance, Instance, {prefix, Prefix}}),
     {ok,
@@ -381,7 +382,7 @@ init() ->
 % Pass
 input_prefix_test() ->
     init(),
-    #{ <<"image">> := ImageID } = cache_wasm_image("test/test.aot"),
+    #{ <<"image">> := ImageID } = cache_wasm_image("test/test.wasm"),
     Msg1 =
         #{
             <<"device">> => <<"WASM-64@1.0">>,
@@ -410,7 +411,7 @@ process_prefixes_test() ->
             <<"device">> => <<"WASM-64@1.0">>,
             <<"output-prefix">> => <<"wasm">>,
             <<"input-prefix">> => <<"process">>,
-            <<"process">> => cache_wasm_image("test/test.aot")
+            <<"process">> => cache_wasm_image("test/test.wasm")
         },
     {ok, Msg3} = hb_ao:resolve(Msg1, <<"init">>, #{}),
     ?event({after_init, Msg3}),
@@ -427,7 +428,7 @@ process_prefixes_test() ->
 
 init_test() ->
     init(),
-    Msg = cache_wasm_image("test/test.aot"),
+    Msg = cache_wasm_image("test/test.wasm"),
     {ok, Msg1} = hb_ao:resolve(Msg, <<"init">>, #{}),
     ?event({after_init, Msg1}),
     Priv = hb_private:from_message(Msg1),
@@ -443,20 +444,20 @@ init_test() ->
 basic_execution_test() ->
     ?assertEqual(
         {ok, [120.0]},
-        test_run_wasm("test/test.aot", <<"fac">>, [5.0], #{})
+        test_run_wasm("test/test.wasm", <<"fac">>, [5.0], #{})
     ).
 
 basic_execution_64_test() ->
     ?assertEqual(
         {ok, [120.0]},
-        test_run_wasm("test/test-64.aot", <<"fac">>, [5.0], #{})
+        test_run_wasm("test/test-64.wasm", <<"fac">>, [5.0], #{})
     ).
 
 imported_function_test() ->
     ?assertEqual(
         {ok, [32]},
         test_run_wasm(
-            "test/pow_calculator.aot",
+            "test/pow_calculator.wasm",
             <<"pow">>,
             [2, 5],
             #{
@@ -469,7 +470,7 @@ imported_function_test() ->
 benchmark_test() ->
     BenchTime = 0.5,
     init(),
-    Msg0 = cache_wasm_image("test/test-64.aot"),
+    Msg0 = cache_wasm_image("test/test-64.wasm"),
     {ok, Msg1} = hb_ao:resolve(Msg0, <<"init">>, #{}),
     Msg2 =
         maps:merge(
@@ -501,7 +502,7 @@ state_export_and_restore_test() ->
     init(),
     % Generate a WASM message. We use the pow_calculator because it has a 
     % reasonable amount of memory to work with.
-    Msg0 = cache_wasm_image("test/pow_calculator.aot"),
+    Msg0 = cache_wasm_image("test/pow_calculator.wasm"),
     {ok, Msg1} = hb_ao:resolve(Msg0, <<"init">>, #{}),
     Msg2 =
         maps:merge(
