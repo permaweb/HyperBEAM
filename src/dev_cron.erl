@@ -27,15 +27,20 @@ info(_Msg1, _Msg2, _Opts) ->
 %% @doc Modify a given node message to include the cron process.
 cron_opts(Opts) ->
     {ok, Script} = file:read_file("scripts/cron.lua"),
+    CronProcDef = #{
+        <<"device">> => <<"process@1.0">>,
+        <<"execution-device">> => <<"lua@5.3a">>,
+        <<"function">> => <<"compute">>,
+        <<"script">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Script
+        }
+    },
+    ?event({debug_cron_opts, {cron_process_def, CronProcDef}}),
     Opts#{
         node_processes =>
             (hb_opts:get(node_processes, #{}, Opts))#{
-                <<"cron">> => #{
-                    <<"device">> => <<"process@1.0">>,
-                    <<"execution-device">> => <<"lua@5.3a">>,
-                    <<"function">> => <<"compute">>,
-                    <<"script">> => Script
-                }
+                <<"cron">> => CronProcDef
             }
     }.
 
@@ -46,7 +51,7 @@ load(_, _, Opts) ->
     case cache_list(CronOpts) of
         {ok, Crons} ->
             ?event({load_cron_jobs_success, {crons, Crons}}),
-            {ok, Crons};
+            {ok, #{<<"crons">> => Crons}};
         {error, Reason} ->
             ?event({load_cron_jobs_error, {error, Reason}}),
             {error, Reason}
@@ -252,7 +257,7 @@ cache_put(TaskId, Value, Opts) ->
     	}, 
 		Opts
 	),
-{ok, TaskId}.
+	{ok, TaskId}.
 
 %% @doc Get a value from the cache by task ID
 %% Returns {ok, Value} if found, {error, not_found} otherwise
@@ -286,15 +291,29 @@ cache_remove(TaskId, Opts) ->
 %     {ok, AllJobs}.
 
 cache_list(Opts) ->
-    Result = hb_ao:get(
-        << "cron/now/crons" >>,
-        #{ <<"device">> => <<"node-process@1.0">> },
-        Opts
-    ),
-	?event({cache_list_result, {result, Result}}),
-    case is_list(Result) of
-        true -> {ok, Result};
-        false -> {error, Result}
+    % Result = hb_ao:get(
+    %     << "cron/now/crons" >>,
+    %     #{ <<"device">> => <<"node-process@1.0">> },
+    %     Opts
+    % ),
+	% ?event({cache_list_result, {result, Result}}),
+	% use samplemsg inspired GET command to get this 
+	% and use hb_ao:resolve_many to get the result
+	?event({cache_list_OG_start}),
+	SampleMsg = [
+		#{ <<"device">> => <<"node-process@1.0">> },
+		<<"cron">>,
+		#{ 
+			<<"path">> => <<"now/crons">>, 
+			<<"method">> => <<"GET">> 
+		}
+	],
+	{ok, Result} = hb_ao:resolve_many(SampleMsg, Opts),
+	CronData = hb_ao:get(<<"crons">>, Result, #{}),
+	?event({cache_list_cron_data, {cron_data, CronData}}),
+    case is_list(CronData) of
+        true -> {ok, CronData};
+        false -> {error, CronData}
     end.
 
 %% @doc Clear all values from the cache
@@ -519,28 +538,66 @@ once_cron_cache_load_test() ->
 	{ok, Crons} = cache_list(Opts),
 	?event({once_cron_cache_load_test_crons, {crons, Crons}}),
     % % Use the load function to retrieve cron jobs
-    % {ok, LoadedCrons} = hb_ao:resolve_many(
-    %     hb_singleton:from(#{
-    %         <<"path">> => <<"/~cron@1.0/load">>
-    %     }),
-    %     Opts
-    % ),
-    % ?event({once_load_test_loaded, {loaded_crons, LoadedCrons}}),
-    % % Verify the task is in the loaded list
-    % ?assertMatch({ok, _}, find_job_by_task_id(LoadedCrons, ReqMsgId)),
-    % % Also verify that the worker was called
-    % PID ! {get, self()},
-    % receive
-    %     {state, State} ->
-    %         ?event({once_load_test_state, {state, State}}),
-    %         ?assertMatch(#{ <<"test-id">> := ID }, State)
-    % after 1000 ->
-    %     FinalLookup = hb_name:lookup({<<"test">>, ID}),
-    %     ?event({timeout_waiting_for_worker, {pid, PID}, {lookup_result, FinalLookup}}),
-    %     throw(no_response_from_worker)
-    % end,
+	{ok, LoadedCrons} = hb_ao:resolve_many(
+        hb_singleton:from(#{
+            <<"path">> => <<"/~cron@1.0/load">>
+        }),
+        Opts
+    ),
+    ?event({once_load_test_loaded, {loaded_crons, LoadedCrons}}),
+    % Extract the list of cron jobs from the result map
+    CronsList = hb_ao:get(<<"crons">>, LoadedCrons, #{}),
+    ?event({once_load_test_extracted, {crons_list, CronsList}}),
+    % Verify the task is in the loaded list
+    ?assertMatch({ok, _}, find_job_by_task_id(CronsList, ReqMsgId)),
     ?event({'once_load_test_done'}).
 
+%% @doc Test that verifies a recurring job is added to
+%% the cron cache and can be loaded via cache_list.
+every_cron_cache_load_test() ->
+    Opts = generate_test_opts(),
+    % Start a new node with test options
+    Node = hb_http_server:start_node(Opts),
+    % Create a test worker
+    PID = spawn(fun test_worker/0),
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    hb_name:register({<<"test">>, ID}, PID),
+    % Create an "every" task
+    UrlPath = <<"/~cron@1.0/every?test-id=", ID/binary,
+              "&interval=500-milliseconds", % Specify interval
+              "&cron-path=/~test-device@1.0/increment_counter">>, % Specify target path
+    {ok, ReqMsgId} = hb_http:get(Node, UrlPath, #{}),
+    ?event({every_load_test_created, {task_id, ReqMsgId}}),
+    % Wait for the task to be processed and added to the cache
+    timer:sleep(100), % Short sleep just to ensure cache_put completes
+    % Use the cache list function to retrieve cron jobs
+    {ok, Crons} = cache_list(Opts),
+    ?event({every_cron_cache_load_test_crons, {crons, Crons}}),
+    % Verify the task is in the loaded list
+    ?assertMatch({ok, _}, find_job_by_task_id(Crons, ReqMsgId)),
+    ?event({'every_load_test_done'}).
+
+cron_device_load_test() ->
+	% this test checks whether the cron load function returns 
+	% the correct data
+	Opts = generate_test_opts(),
+	Node = hb_http_server:start_node(Opts),
+	TaskId = <<"load-test-task-id">>,
+	TestData = #{<<"key">> => <<"value">>, <<"timestamp">> => os:system_time(millisecond)},
+	{ok, _PutResult} = cache_put(TaskId, TestData, Opts),
+	TaskId2 = <<"load-test-task-id-2">>,
+	TestData2 = #{<<"key">> => <<"value-2">>, <<"timestamp">> => os:system_time(millisecond)},
+	{ok, _PutResult2} = cache_put(TaskId2, TestData2, Opts),
+	UrlPath = <<"/~cron@1.0/load">>,
+	{ok, LoadedCrons} = hb_http:get(Node, UrlPath, #{}),
+	CronsList = hb_ao:get(<<"crons">>, LoadedCrons, #{}),
+	{ok, RetrievedData} = find_job_by_task_id(CronsList, TaskId),
+	{ok, RetrievedData2} = find_job_by_task_id(CronsList, TaskId2),
+	CleanedData = maps:remove(<<"priv">>, RetrievedData),
+	CleanedData2 = maps:remove(<<"priv">>, RetrievedData2),
+	?assertEqual(TestData, CleanedData),
+	?assertEqual(TestData2, CleanedData2),
+	?event({'cache_load_test_done'}).
 
 %% @doc This is a helper function that is used to test the cron device.
 %% It is used to increment a counter and update the state of the worker.
@@ -563,7 +620,6 @@ test_worker(State) ->
 % Cache test framework for cron.lua via the node-process device
 
 
-%% Unit tests for cache functions
 cache_put_test() ->
 	Opts = generate_test_opts(),
 	TaskId = <<"test-task-id">>,
