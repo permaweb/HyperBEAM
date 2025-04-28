@@ -338,6 +338,6 @@ fail0:
     }
     free(llvm_options);
 
-    DEBUG("wamrc return");
+    DEBUG("hb_wasm_aot_compile return");
     return exit_status;
 }
