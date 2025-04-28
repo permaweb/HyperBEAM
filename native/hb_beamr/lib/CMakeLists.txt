@@ -10,15 +10,76 @@ set(WAMR_GIT_TAG "2.2.0-nan-canonicalization-fp-boundary-simd-immediate" CACHE S
 set(WAMR_SRC_DIR "${CMAKE_BINARY_DIR}/wamr-src" CACHE PATH "Directory for WAMR sources")
 fetch_wamr_source()
 
-# Configure WAMR build options
-set(WAMR_BUILD_PLATFORM "darwin")
-set(WAMR_BUILD_TARGET "AARCH64")
-set(WAMR_BUILD_INTERP 1)
+# Determine WAMR Platform based on CMake system name
+if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+  set(WAMR_BUILD_PLATFORM "darwin")
+elseif(CMAKE_SYSTEM_NAME MATCHES "Linux")
+  set(WAMR_BUILD_PLATFORM "linux")
+elseif(CMAKE_SYSTEM_NAME MATCHES "Windows")
+  set(WAMR_BUILD_PLATFORM "windows")
+else()
+  message(FATAL_ERROR "Unsupported WAMR Platform: ${CMAKE_SYSTEM_NAME}")
+endif()
+
+# Determine WAMR Target Architecture based on CMake system processor
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
+  set(WAMR_BUILD_TARGET "AARCH64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+  set(WAMR_BUILD_TARGET "X86_64")
+# Add more architectures as needed based on WAMR support and your targets
+# elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|ARM)$")
+#  set(WAMR_BUILD_TARGET "ARM")
+# elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86)$")
+#  set(WAMR_BUILD_TARGET "X86_32")
+else()
+  message(WARNING "Unsupported WAMR Target Architecture: ${CMAKE_SYSTEM_PROCESSOR}. Assuming X86_64. Please verify.")
+  set(WAMR_BUILD_TARGET "X86_64") # Default or fallback
+endif()
+
+message(STATUS "Configuring WAMR for Platform: ${WAMR_BUILD_PLATFORM}, Target: ${WAMR_BUILD_TARGET}")
+
+# -- Begin WAMR build options --
+
+# Run mode: We are only supporting AOT compilation currently.
 set(WAMR_BUILD_AOT 1)
+set(WAMR_BUILD_INTERP 0)
+set(WAMR_BUILD_FAST_INTERP 0)
 set(WAMR_BUILD_JIT 0)
-set(WAMR_BUILD_LIBC_BUILTIN 1)
-set(WAMR_BUILD_LIBC_WASI 1)
-set(WAMR_BUILD_SIMD 1)
+set(WAMR_BUILD_FAST_JIT 0)
+
+# AOT options
+set(WAMR_BUILD_AOT_STACK_FRAME 1) # TODO: Justification?
+
+# Debug options
+# TODO: set conditionally?
+set(WAMR_BUILD_DEBUG_AOT 1)
+set(WAMR_BUILD_DUMP_CALL_STACK 1)
+set(WAMR_BUILD_MEMORY_PROFILING 1)
+
+# Features
+set(WAMR_BUILD_MEMORY64 1) # Memory >4GB
+set(WAMR_BUILD_SIMD 1) # SIMD for performance
+set(WAMR_BUILD_TAIL_CALL 1) # TODO: Justification?
+
+# Disable hardware-enforced bounds checking
+# TODO: Justification? This is for determinism reasons?
+set(WAMR_DISABLE_HW_BOUND_CHECK 1)
+
+# Hard-enable built-in support for exceptions
+# TODO: Justification?
+set(WAMR_BUILD_EXCE_HANDLING 1)
+
+# Disable all libc libraries, as they can conflict with dev_wasi
+set(WAMR_BUILD_LIBC_BUILTIN 0)
+set(WAMR_BUILD_LIBC_WASI 0)
+set(WAMR_BUILD_LIBC_UVWASI 0)
+
+# Explicitly disable some features that are unused or hazardous
+set(WAMR_BUILD_SHARED_MEMORY 0)
+set(WAMR_BUILD_BULK_MEMORY 0)
+set(WAMR_BUILD_LIB_WASI_THREADS 0)
+
+# -- End WAMR build options --
 
 # Use WAMR runtime lib directly
 set(WAMR_ROOT_DIR ${WAMR_SRC_DIR})
