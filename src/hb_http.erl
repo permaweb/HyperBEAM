@@ -797,27 +797,27 @@ wasm_compute_request(ImageFile, Func, Params, ResultPath) ->
 
 run_wasm_unsigned_test() ->
     Node = hb_http_server:start_node(#{force_signed => false}),
-    Msg = wasm_compute_request(<<"test/test-64.aot">>, <<"fac">>, [3.0]),
+    Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0]),
     {ok, Res} = post(Node, Msg, #{}),
     ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, #{})).
 
 run_wasm_signed_test() ->
     URL = hb_http_server:start_node(#{force_signed => true}),
-    Msg = wasm_compute_request(<<"test/test-64.aot">>, <<"fac">>, [3.0], <<"">>),
+    Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>),
     {ok, Res} = post(URL, Msg, #{}),
     ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, #{})).
 
 get_deep_unsigned_wasm_state_test() ->
     URL = hb_http_server:start_node(#{force_signed => false}),
     Msg = wasm_compute_request(
-        <<"test/test-64.aot">>, <<"fac">>, [3.0], <<"">>),
+        <<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>),
     {ok, Res} = post(URL, Msg, #{}),
     ?assertEqual(6.0, hb_ao:get(<<"/output/1">>, Res, #{})).
 
 get_deep_signed_wasm_state_test() ->
     URL = hb_http_server:start_node(#{force_signed => true}),
     Msg = wasm_compute_request(
-        <<"test/test-64.aot">>, <<"fac">>, [3.0], <<"/output">>),
+        <<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"/output">>),
     {ok, Res} = post(URL, Msg, #{}),
     ?assertEqual(6.0, hb_ao:get(<<"1">>, Res, #{})).
 
@@ -831,7 +831,7 @@ cors_get_test() ->
 
 ans104_wasm_test() ->
     URL = hb_http_server:start_node(#{force_signed => true}),
-    {ok, Bin} = file:read_file(<<"test/test-64.aot">>),
+    {ok, Bin} = file:read_file(<<"test/test-64.wasm">>),
     Wallet = hb:wallet(),
     Msg = hb_message:commit(#{
         <<"path">> => <<"/init/compute/results">>,

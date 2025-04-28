@@ -112,7 +112,7 @@ generate_emscripten_stack(File, Func, Params) ->
 %% @doc Ensure that an AOS Emscripten-style WASM AOT module can be invoked
 %% with a function reference.
 fib_aot_test() ->
-    Init = generate_emscripten_stack("test/fib.aot", <<"handle">>, [0, 0]),
+    Init = generate_emscripten_stack("test/fib.wasm", <<"handle">>, [0, 0]),
     Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
     Msg = <<"msg">>,
     Env = <<"env">>,
@@ -131,7 +131,7 @@ fib_aot_test() ->
 %% @doc Ensure that an AOS Emscripten-style WASM AOT module can be invoked
 %% with a function reference.
 try_aot_test() ->
-    Init = generate_emscripten_stack("test/try.aot", <<"handle">>, [0, 0]),
+    Init = generate_emscripten_stack("test/try.wasm", <<"handle">>, [0, 0]),
     Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
     Msg = <<"msg">>,
     Env = <<"1">>,
