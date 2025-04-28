@@ -41,4 +41,16 @@ target_include_directories(hb_beamr_lib PUBLIC
 )
 
 # Link against vmlib and export it
-target_link_libraries(hb_beamr_lib PUBLIC vmlib)
+# target_link_libraries(hb_beamr_lib PUBLIC vmlib) # Original line
+
+# Link against vmlib, forcing export of its symbols into the shared library
+if(APPLE)
+  # On macOS, -all_load forces loading of all members of static archives
+  target_link_libraries(hb_beamr_lib PUBLIC "-Wl,-all_load" vmlib)
+elseif(UNIX AND NOT APPLE)
+  # On other Unix-like systems (e.g., Linux), use --whole-archive
+  target_link_libraries(hb_beamr_lib PUBLIC "-Wl,--whole-archive" vmlib "-Wl,--no-whole-archive")
+else()
+  # Fallback for other systems (e.g., Windows) or if flags cause issues
+  target_link_libraries(hb_beamr_lib PUBLIC vmlib)
+endif()

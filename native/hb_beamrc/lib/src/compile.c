@@ -125,6 +125,7 @@ can_enable_tiny_frame(const AOTCompOption *opt)
 static unsigned char dummy_wasm_file[8] = { 0x00, 0x61, 0x73, 0x6D,
                                             0x01, 0x00, 0x00, 0x00 };
 
+__attribute__((visibility("default")))
 int hb_wasm_aot_compile(uint8_t *wasm_module_data, size_t wasm_module_size, uint8_t **out_wasm_aot_data, size_t *out_wasm_aot_size)
 {
     char **llvm_options = NULL;
