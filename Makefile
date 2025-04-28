@@ -51,7 +51,7 @@ wamrc: compile
         cmake .. && \
         make
 
-test/%.aot: test/%.wasm wamrc
+test/%.aot: test/%.wasm
 	@echo "Compiling $< to $@ (ignoring errors)"
 	-$(WAMRC_BUILD_PATH)/wamrc -o $@ $<
 
