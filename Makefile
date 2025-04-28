@@ -1,6 +1,6 @@
 .PHONY: all compile debug debug-clean clean setup-genesis-wasm wamrc aot_files
 
-all: compile aot_files
+all: compile
 
 compile:
 	rebar3 compile
