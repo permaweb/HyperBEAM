@@ -1,3 +1,4 @@
+%%% @doc a device to interact with the EVM execution client (interpreted EVM) 
 -module(dev_evm).
 -export([info/1, info/3, get_state/3]).
 
@@ -9,7 +10,7 @@ info(_) ->
             <<"get_state">> => fun get_state/3
         }
     }.
-
+%% @doc return evm device info
 info(_Msg1, _Msg2, _Opts) ->
     InfoBody = #{
         <<"description">> => <<"EVM device for interacting with load_revm_nif">>,
@@ -20,11 +21,10 @@ info(_Msg1, _Msg2, _Opts) ->
         }
     },
     {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
-
+%% @doc get the JSON-serialized EVM state for a given chain_id
 get_state(Msg1, _Msg2, Opts) ->
-    % Get chain_id from path parameters
     ChainId = case hb_ao:get(<<"chain_id">>, Msg1, not_found, Opts) of
-        not_found -> <<"8009">>;  % default chain id
+        not_found -> <<"9496">>;  % default chain id (Load's appchain)
         Id -> Id
     end,
     try
