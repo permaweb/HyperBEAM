@@ -65,9 +65,8 @@ set(WAMR_BUILD_TAIL_CALL 1) # TODO: Justification?
 # TODO: Justification? This is for determinism reasons?
 set(WAMR_DISABLE_HW_BOUND_CHECK 1)
 
-# Hard-enable built-in support for exceptions
-# TODO: Justification?
-set(WAMR_BUILD_EXCE_HANDLING 1)
+# Exception handling is not supported in AOT mode
+set(WAMR_BUILD_EXCE_HANDLING 0)
 
 # Disable all libc libraries, as they can conflict with dev_wasi
 set(WAMR_BUILD_LIBC_BUILTIN 0)
