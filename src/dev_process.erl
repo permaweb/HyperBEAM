@@ -88,11 +88,11 @@ info(_Msg1) ->
 default_device(Msg1, Key, Opts) ->
     NormKey = hb_ao:normalize_key(Key),
     case {NormKey, hb_ao:get(<<"process/variant">>, {as, dev_message, Msg1}, Opts)} of
-        {<<"execution">>, <<"ao.TN.1">>} -> <<"genesis-wasm@1.0">>;
+        {<<"execution">>, <<"ao.TN.1">>} -> <<"wasm-64@1.0">>;
         _ -> default_device_index(NormKey)
     end.
 default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
-default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
+default_device_index(<<"execution">>) -> <<"wasm-64@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>.
 
 %% @doc Wraps functions in the Scheduler device.
