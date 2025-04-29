@@ -609,7 +609,7 @@ test_aos_process(Opts) ->
 test_aos_process(Opts, Stack) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    WASMProc = test_wasm_process(<<"test/aos-2-pure-xs.wasm">>, Opts),
+    WASMProc = test_wasm_process(<<"test/test-aos.wasm">>, Opts),
     hb_message:commit(
         maps:merge(
             hb_message:uncommitted(WASMProc),
