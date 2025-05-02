@@ -30,6 +30,7 @@ rebar3.crashdump
 
 native/hb_beamr/*.o
 native/hb_beamr/*.d
+native/riscv_em_nif/target
 
 priv/*
 .DS_STORE

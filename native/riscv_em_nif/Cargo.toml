@@ -1,0 +1,24 @@
+[package]
+name = "riscv_em_nif"
+version = "0.1.0"
+edition = "2024"
+authors = ["Load Network Team"]
+
+[lib]
+name = "load_revm_nif"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+revm = { version = "19.4.0", features = ["std"] }
+r55 = { git = "https://github.com/loadnetwork/r55.git", branch = "main" }
+
+rustler = "0.29.1"
+alloy-core = "0.8.20"
+alloy-primitives = "0.8.20"
+alloy-sol-types = "0.8.20"
+hex = "0.4"
+serde = {version = "1.0.219", features=["derive"]}
+serde_json = "1.0.140"
+ethers-core = "2.0.14"
+ethers = {version = "2.0.14", features=["rustls"]}
