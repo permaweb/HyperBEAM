@@ -261,7 +261,7 @@ lua_ao_cache_write_read_test() ->
     ?event(lua_cache_test, {resolve_write_result, WriteResolveResult}),
 
     % Assert Write Result (expecting {ok, ResultMap}) and Extract ID
-    ?assertMatch({ok, #{<<"status">> := ok, <<"value">> := _}}, WriteResolveResult), % Check structure first
+    ?assertMatch(#{<<"status">> := ok, <<"value">> := _}, WriteResolveResult), % Check structure first
     {ok, WriteResultMap} = WriteResolveResult, % Bind the map
     WrittenID = maps:get(<<"value">>, WriteResultMap),
     ?assert(is_binary(WrittenID)), % Check type on separate line
