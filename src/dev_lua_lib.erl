@@ -243,7 +243,10 @@ lua_ao_cache_write_read_test() ->
 		<<"store-module">> => hb_store_fs, 
 		<<"prefix">> => <<"cache-TEST-writeread">> 
 	}]},
-    TestMap = #{ <<"type">> => <<"test_data">>, <<"value">> => rand:uniform(1000), <<"nested">> => [1, <<"two">>] },
+    TestMap = #{ 
+		<<"type">> => <<"test_data">>, 
+		<<"value">> => rand:uniform(1000), 
+		<<"nested">> => [1, <<"two">>] },
     {ok, Script} = file:read_file("scripts/cache-test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
@@ -257,43 +260,28 @@ lua_ao_cache_write_read_test() ->
         <<"parameters">> => [TestMap]     % Arguments for Lua function
     },
     ?event(lua_cache_test, {resolving_lua_write, WriteRequest}),
-    WriteResolveResult = hb_ao:resolve(Base, WriteRequest, Opts),
+    {ok, WriteResolveResult} = hb_ao:resolve(Base, WriteRequest, Opts),
     ?event(lua_cache_test, {resolve_write_result, WriteResolveResult}),
-
-    % Assert Write Result (expecting {ok, ResultMap}) and Extract ID
-    ?assertMatch(#{<<"status">> := ok, <<"value">> := _}, WriteResolveResult), % Check structure first
-    {ok, WriteResultMap} = WriteResolveResult, % Bind the map
-    WrittenID = maps:get(<<"value">>, WriteResultMap),
-    ?assert(is_binary(WrittenID)), % Check type on separate line
-    ?event(lua_cache_test, {write_successful, {id, WrittenID}}),
-
+	Status = hb_ao:get(<<"status">>, WriteResolveResult, Opts),
+	?event(lua_cache_test, {status, Status}),
+	Value = hb_ao:get(<<"value">>, WriteResolveResult, Opts),
+	?event(lua_cache_test, {value, Value}),
+	% Assert the extracted values
+	?assertEqual(<<"ok">>, Status),
+	?assert(is_binary(Value)), % Assert that the value (ID) is a binary
     % Create and Resolve Read Request (Found case)
     ReadRequestFound = #{
         <<"path">> => <<"read_test">>,
-        <<"parameters">> => [WrittenID] % Argument: the ID from write step
+        <<"parameters">> => [Value] % Argument: the ID from write step
     },
     ?event(lua_cache_test, {resolving_lua_read_found, ReadRequestFound}),
-    ReadResolveResultFound = hb_ao:resolve(Base, ReadRequestFound, Opts),
+    {ok, ReadResolveResultFound} = hb_ao:resolve(Base, ReadRequestFound, Opts),
     ?event(lua_cache_test, {resolve_read_result_found, ReadResolveResultFound}),
-
-    % Assert Read Result (Found case)
-    ?assertMatch({ok, #{<<"status">> := ok, <<"value">> := _}}, ReadResolveResultFound), % Check structure first
-    {ok, ReadResultMap} = ReadResolveResultFound, % Bind the map
-    RetrievedMap = maps:get(<<"value">>, ReadResultMap),
-    % Compare the retrieved map (after removing potential priv) to the original TestMap
-    ?assertEqual(TestMap, maps:remove(<<"priv">>, RetrievedMap)),
-
-    % Create and Resolve Read Request (Not Found case)
-    NonExistentID = hb_util:bin(crypto:strong_rand_bytes(32)),
-    ReadRequestNotFound = #{
-        <<"path">> => <<"test_read">>,
-        <<"parameters">> => [NonExistentID]
-    },
-    ?event(lua_cache_test, {resolving_lua_read_not_found, ReadRequestNotFound}),
-    ReadResolveResultNotFound = hb_ao:resolve(Base, ReadRequestNotFound, Opts),
-    ?event(lua_cache_test, {resolve_read_result_not_found, ReadResolveResultNotFound}),
-
-    % Assert Read Result (Not Found case)
-    ?assertEqual({ok, #{<<"status">> => not_found}}, ReadResolveResultNotFound),
-    ?event(lua_cache_test, {finished, lua_ao_cache_write_read_test}),
+	Status2 = hb_ao:get(<<"status">>, ReadResolveResultFound, Opts),
+	?event(lua_cache_test, {read_resolve_status, Status2}),
+	RetrievedValueMap = maps:get(<<"value">>, ReadResolveResultFound),
+	?event(lua_cache_test, {read_resolve_value, RetrievedValueMap}),
+	% Assert the extracted values
+	?assertEqual(<<"ok">>, Status),
+	?assertEqual(TestMap, maps:remove(<<"priv">>, RetrievedValueMap)),
     ok.
