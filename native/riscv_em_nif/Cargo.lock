@@ -1164,7 +1164,7 @@ dependencies = [
 [[package]]
 name = "eth-riscv-interpreter"
 version = "0.1.0"
-source = "git+https://github.com/loadnetwork/r55.git?branch=main#d4cb6bb6cdc3c89b9ceab76d8af9486b7ee50191"
+source = "git+https://github.com/loadnetwork/r55.git?branch=main#f6248a3d5a54ba51c06fb3fd5c7310bf1a515623"
 dependencies = [
  "goblin",
  "rvemu",
@@ -1174,7 +1174,7 @@ dependencies = [
 [[package]]
 name = "eth-riscv-syscalls"
 version = "0.1.0"
-source = "git+https://github.com/loadnetwork/r55.git?branch=main#d4cb6bb6cdc3c89b9ceab76d8af9486b7ee50191"
+source = "git+https://github.com/loadnetwork/r55.git?branch=main#f6248a3d5a54ba51c06fb3fd5c7310bf1a515623"
 dependencies = [
  "thiserror-no-std",
 ]
@@ -2947,7 +2947,7 @@ checksum = "74765f6d916ee2faa39bc8e68e4f3ed8949b48cccdac59983d287a7cb71ce9c5"
 [[package]]
 name = "r55"
 version = "0.1.0"
-source = "git+https://github.com/loadnetwork/r55.git?branch=main#d4cb6bb6cdc3c89b9ceab76d8af9486b7ee50191"
+source = "git+https://github.com/loadnetwork/r55.git?branch=main#f6248a3d5a54ba51c06fb3fd5c7310bf1a515623"
 dependencies = [
  "alloy-core",
  "alloy-primitives",
@@ -4818,9 +4818,9 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "winnow"
-version = "0.7.8"
+version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e27d6ad3dac991091e4d35de9ba2d2d00647c5d0fc26c5496dee55984ae111b"
+checksum = "d9fb597c990f03753e08d3c29efbfcf2019a003b4bf4ba19225c158e1549f0f3"
 dependencies = [
  "memchr",
 ]
