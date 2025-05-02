@@ -7,20 +7,42 @@
 -hb_debug(print).
 
 %% @doc Perform a calculation using the C++ backend.
-calculate(M1, M2, Opts) ->
+calculate(_M1, M2, Opts) ->
     try
         % Extract operation and operands from the message
         ?event("Start calculate"),
-        Operation = hb_converge:get(<<"operation">>, M2, Opts),
-        Operand1 = hb_converge:get(<<"operand1">>, M2, Opts),
-        Operand2 = hb_converge:get(<<"operand2">>, M2, Opts),
+        Parameters = [
+            <<"operation">>,
+            <<"operand1">>,
+            <<"operand2">>
+        ],
+        [Operation, Operand1, Operand2] = lists:map(
+            fun(Parameter) ->
+                case hb_ao:get(Parameter, M2, Opts) of
+                    not_found -> throw({not_found, Parameter});
+                    Value -> Value
+                end
+            end,
+            Parameters
+        ),
 
         % Convert operation from binary to string
         OperationStr = binary_to_list(Operation),
         
-        % Convert operands to float
-        Op1 = erlang:float(Operand1),
-        Op2 = erlang:float(Operand2),
+        % Convert operands to floats
+        [Op1, Op2] = lists:map(
+            fun(Operand) ->
+                case string:to_float(Operand) of
+                    {error, no_float} ->
+                        case string:to_integer(Operand) of
+                            {error, _Reason} -> throw({badarg, Operand});
+                            {Int, _} -> float(Int)
+                        end;
+                    {Float, _} -> Float
+                end
+            end,
+            [Operand1, Operand2]
+        ),
 
         ?event({calculator_input, OperationStr, Op1, Op2}),
 
@@ -37,10 +59,10 @@ calculate(M1, M2, Opts) ->
             <<"operand2">> => Op2
         }}
     catch
-        error:{badarg, _} ->
+        throw:{badarg, Arg} ->
             ?event({calculator_error, badarg}),
-            {error, <<"Invalid arguments for calculation">>};
-        error:{not_found, Key} ->
+            {error, <<"Not a number: ", Arg/binary>>};
+        throw:{not_found, Key} ->
             ?event({calculator_error, {not_found, Key}}),
             {error, <<"Missing required parameter: ", Key/binary>>};
         Error:Reason:Stack ->
@@ -58,8 +80,8 @@ device_calculation_test() ->
 	AddM2 = #{
 		<<"path">> => <<"calculate">>,  % Specify the device function to call
 		<<"operation">> => <<"add">>,
-		<<"operand1">> => 10,
-		<<"operand2">> => 5
+		<<"operand1">> => <<"10">>,
+		<<"operand2">> => <<"5">>
 	},
 	?event({testing_addition_resolve, AddM2}),
 	{ok, AddResult} = hb_converge:resolve(M1, AddM2, #{}),
@@ -69,8 +91,8 @@ device_calculation_test() ->
 	MulM2 = #{
 		<<"path">> => <<"calculate">>,
 		<<"operation">> => <<"multiply">>,
-		<<"operand1">> => 10,
-		<<"operand2">> => 5
+		<<"operand1">> => <<"10">>,
+		<<"operand2">> => <<"5">>
 	},
 	?event({testing_multiplication_resolve, MulM2}),
 	{ok, MulResult} = hb_converge:resolve(M1, MulM2, #{}),
