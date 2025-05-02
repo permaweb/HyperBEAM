@@ -193,7 +193,7 @@ event([Group, Event], ExecState, Opts) ->
 
 %% @doc Wrapper for hb_cache:write/2 (structured message version).
 %% Expects Lua call: ao.cache_write(message_map, opts?)
-%% Returns a list containing ONE map: [#{status => ok | error, value => ID | Reason}]
+%% Returns [ok, UncommittedID] | [error, #{reason => Reason}]
 cache_write(Args, ExecState, ExecOpts) ->
     [MsgMapLua | RestArgs] = Args,
     MsgMapErlang = dev_lua:decode(MsgMapLua),
@@ -201,30 +201,29 @@ cache_write(Args, ExecState, ExecOpts) ->
     FinalOpts = maps:merge(ExecOpts, LuaOpts),
     ?event(debug_lua_lib_cache, {cache_write_call, {msg, MsgMapErlang}, {final_opts, FinalOpts}}),
     Result = hb_cache:write(MsgMapErlang, FinalOpts),
-    ReturnMap = case Result of
-        {ok, ID} -> #{ <<"status">> => ok, <<"value">> => ID };
-        {error, Reason} -> #{ <<"status">> => error, <<"reason">> => Reason }
-        % Handle other potential returns?
+    ReturnList = case Result of
+        {ok, ID} -> [ok, ID]; % Return [ok, ID]
+        {error, Reason} -> [error, #{ <<"reason">> => Reason }] % Return [error, ReasonMap]
     end,
-    ?event(debug_lua_lib_cache, {cache_write_return_map, {map, ReturnMap}}),
-    {[ReturnMap], ExecState}.
+    ?event(debug_lua_lib_cache, {cache_write_return_list, {list, ReturnList}}),
+    {ReturnList, ExecState}.
 
 %% @doc Wrapper for hb_cache:read/2.
 %% Expects Lua call: ao.cache_read(id_or_path_string, opts?)
-%% Returns a list containing ONE map: [#{status => ok | not_found | error, value => Map | Reason}]
+%% Returns [ok, Value] | [not_found] | [error, #{reason => Reason}]
 cache_read(Args, S, Opts) ->
     [IDOrPathBin | RestArgs] = Args,
     LuaOpts = maybe_decode_opts(RestArgs),
     FinalOpts = maps:merge(Opts, LuaOpts),
     ?event(dev_lua_lib, {cache_read_call, {id_or_path, IDOrPathBin}, {final_opts, FinalOpts}}),
     Result = hb_cache:read(IDOrPathBin, FinalOpts),
-    ReturnMap = case Result of
-        {ok, Value} -> #{ <<"status">> => ok, <<"value">> => Value };
-        not_found -> #{ <<"status">> => not_found };
-        {error, Reason} -> #{ <<"status">> => error, <<"reason">> => Reason }
+    ReturnList = case Result of
+        {ok, Value} -> [ok, Value]; % Return [ok, Value]
+        not_found -> [not_found]; % Return [not_found]
+        {error, Reason} -> [error, #{ <<"reason">> => Reason }] % Return [error, ReasonMap]
     end,
-    ?event(dev_lua_lib, {cache_read_return_map, {map, ReturnMap}}),
-    {[ReturnMap], S}.
+    ?event(dev_lua_lib, {cache_read_return_list, {list, ReturnList}}),
+    {ReturnList, S}.
 
 %% @doc Helper to decode optional Opts map from Lua args list.
 %% Expects Opts map to be the last argument if present.
@@ -240,40 +239,61 @@ maybe_decode_opts(ArgsList) ->
 %% Test calling ao.cache_read from Lua via dev_lua
 lua_ao_cache_write_read_test() ->
     ?event(lua_cache_test, {starting}),
-	Opts = #{ store => [#{ <<"store-module">> => hb_store_fs, <<"prefix">> => <<"cache-TEST-writeread">> }]},
-	% make the value a random number
-	TestMap = #{ <<"type">> => <<"test_data">>, <<"value">> => rand:uniform(1000) },
-	{ok, Script} = file:read_file("scripts/cache-test.lua"),
+    Opts = #{ store => [#{ 
+		<<"store-module">> => hb_store_fs, 
+		<<"prefix">> => <<"cache-TEST-writeread">> 
+	}]},
+    TestMap = #{ <<"type">> => <<"test_data">>, <<"value">> => rand:uniform(1000), <<"nested">> => [1, <<"two">>] },
+    {ok, Script} = file:read_file("scripts/cache-test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
         <<"script">> => #{
             <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Script,
-			<<"parameters">> => []
+            <<"body">> => Script
         }
     },
-	WriteRequest = #{
-        <<"path">> => <<"write_test">>, % Lua function to call
-        <<"parameters">> => [TestMap]    % Arguments for the Lua function
+    WriteRequest = #{
+        <<"path">> => <<"write_test">>,  % Lua function name
+        <<"parameters">> => [TestMap]     % Arguments for Lua function
     },
-    {ok, WriteResultMap} = hb_ao:resolve(Base, WriteRequest, Opts),
-	CleanedWriteResult = maps:remove(<<"priv">>, WriteResultMap),
-	Status = hb_ao:get(<<"status">>, CleanedWriteResult),
-	Value = hb_ao:get(<<"value">>, CleanedWriteResult), 
-    ?event(lua_cache_test, {resolve_write_result, {status, Status}, {value, Value}}),
-	?assertEqual(#{<<"status">> => <<"ok">>, <<"value">> => Value}, CleanedWriteResult),
-	
-	ReadRequestFound = #{
-        <<"path">> => <<"read_test">>,   % Lua function name
-        <<"parameters">> => [Value]    % Argument: the ID from write step
+    ?event(lua_cache_test, {resolving_lua_write, WriteRequest}),
+    WriteResolveResult = hb_ao:resolve(Base, WriteRequest, Opts),
+    ?event(lua_cache_test, {resolve_write_result, WriteResolveResult}),
+
+    % Assert Write Result (expecting {ok, ResultMap}) and Extract ID
+    ?assertMatch({ok, #{<<"status">> := ok, <<"value">> := _}}, WriteResolveResult), % Check structure first
+    {ok, WriteResultMap} = WriteResolveResult, % Bind the map
+    WrittenID = maps:get(<<"value">>, WriteResultMap),
+    ?assert(is_binary(WrittenID)), % Check type on separate line
+    ?event(lua_cache_test, {write_successful, {id, WrittenID}}),
+
+    % Create and Resolve Read Request (Found case)
+    ReadRequestFound = #{
+        <<"path">> => <<"read_test">>,
+        <<"parameters">> => [WrittenID] % Argument: the ID from write step
     },
     ?event(lua_cache_test, {resolving_lua_read_found, ReadRequestFound}),
-    {ok, ReadResolveResultFound} = hb_ao:resolve(Base, ReadRequestFound, Opts),
-	Status = hb_ao:get(<<"status">>, ReadResolveResultFound),
-	?event(lua_cache_test, {resolve_read_result_found, {status, Status}}),
-	Value = hb_ao:get(<<"value">>, ReadResolveResultFound),
-	?event(lua_cache_test, {resolve_read_result_found, {value, Value}}),
-	% Value = hb_ao:get(<<"value">>, ReadResolveResultFound), 
+    ReadResolveResultFound = hb_ao:resolve(Base, ReadRequestFound, Opts),
     ?event(lua_cache_test, {resolve_read_result_found, ReadResolveResultFound}),
-	%?assertEqual(#{<<"status">> => <<"ok">>, <<"value">> => Value}, ReadResolveResultFound),
-	?event(lua_cache_test, {ending, lua_ao_cache_write_read_test}).
+
+    % Assert Read Result (Found case)
+    ?assertMatch({ok, #{<<"status">> := ok, <<"value">> := _}}, ReadResolveResultFound), % Check structure first
+    {ok, ReadResultMap} = ReadResolveResultFound, % Bind the map
+    RetrievedMap = maps:get(<<"value">>, ReadResultMap),
+    % Compare the retrieved map (after removing potential priv) to the original TestMap
+    ?assertEqual(TestMap, maps:remove(<<"priv">>, RetrievedMap)),
+
+    % Create and Resolve Read Request (Not Found case)
+    NonExistentID = hb_util:bin(crypto:strong_rand_bytes(32)),
+    ReadRequestNotFound = #{
+        <<"path">> => <<"test_read">>,
+        <<"parameters">> => [NonExistentID]
+    },
+    ?event(lua_cache_test, {resolving_lua_read_not_found, ReadRequestNotFound}),
+    ReadResolveResultNotFound = hb_ao:resolve(Base, ReadRequestNotFound, Opts),
+    ?event(lua_cache_test, {resolve_read_result_not_found, ReadResolveResultNotFound}),
+
+    % Assert Read Result (Not Found case)
+    ?assertEqual({ok, #{<<"status">> => not_found}}, ReadResolveResultNotFound),
+    ?event(lua_cache_test, {finished, lua_ao_cache_write_read_test}),
+    ok.
