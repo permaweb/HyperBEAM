@@ -115,9 +115,7 @@ return(Result, ExecState) ->
     {ReturnParams, ResultingState} =
         lists:foldr(
             fun(LuaEncoded, {Params, StateIn}) ->
-				?event(lua_import, {return_encoding_term, {term, LuaEncoded}}), % Log term before encode
                 {NewParam, NewState} = luerl:encode(LuaEncoded, StateIn),
-				?event(lua_import, {return_encoded_term, {new_param, NewParam}}), % Log encoded param
                 {[NewParam | Params], NewState}
             end,
             {[], ExecState},
@@ -211,10 +209,10 @@ cache_write(Args, ExecState, ExecOpts) ->
 %% @doc Wrapper for hb_cache:read/2.
 %% Expects Lua call: ao.cache_read(id_or_path_string, opts?)
 %% Returns [ok, Value] | [not_found] | [error, #{reason => Reason}]
-cache_read(Args, S, Opts) ->
+cache_read(Args, ExecState, ExecOpts) ->
     [IDOrPathBin | RestArgs] = Args,
     LuaOpts = maybe_decode_opts(RestArgs),
-    FinalOpts = maps:merge(Opts, LuaOpts),
+    FinalOpts = maps:merge(ExecOpts, LuaOpts),
     ?event(dev_lua_lib, {cache_read_call, {id_or_path, IDOrPathBin}, {final_opts, FinalOpts}}),
     Result = hb_cache:read(IDOrPathBin, FinalOpts),
     ReturnList = case Result of
@@ -223,7 +221,7 @@ cache_read(Args, S, Opts) ->
         {error, Reason} -> [error, #{ <<"reason">> => Reason }] % Return [error, ReasonMap]
     end,
     ?event(dev_lua_lib, {cache_read_return_list, {list, ReturnList}}),
-    {ReturnList, S}.
+    {ReturnList, ExecState}.
 
 %% @doc Helper to decode optional Opts map from Lua args list.
 %% Expects Opts map to be the last argument if present.
