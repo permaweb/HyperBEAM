@@ -48,6 +48,7 @@ init(M1, _M2, _Opts) ->
 
 %% @doc On first pass prepare the call, on second pass get the results.
 compute(M1, M2, Opts) ->
+    ?event({json_pass, hb_ao:get(<<"pass">>, M1, Opts)}),
     case hb_ao:get(<<"pass">>, M1, Opts) of
         1 -> prep_call(M1, M2, Opts);
         2 -> results(M1, M2, Opts);
@@ -60,19 +61,21 @@ prep_call(M1, M2, Opts) ->
     ?event({prep_call, M1, M2, Opts}),
     Process = hb_ao:get(<<"process">>, M1, Opts#{ hashpath => ignore }),
     Message = hb_ao:get(<<"body">>, M2, Opts#{ hashpath => ignore }),
-    Image = hb_ao:get(<<"process/image">>, M1, Opts),
+    ModuleId = hb_ao:get(<<"module">>, M1, Opts),
     BlockHeight = hb_ao:get(<<"block-height">>, M2, Opts),
     Props = message_to_json_struct(denormalize_message(Message)),
     MsgProps =
         Props#{
-            <<"Module">> => Image,
+            <<"Module">> => ModuleId,
             <<"Block-Height">> => BlockHeight
         },
+    ?event({encode_msg, {msg_props, MsgProps}}),
     MsgJson = hb_json:encode(MsgProps),
     ProcessProps =
         #{
             <<"Process">> => message_to_json_struct(Process)
         },
+    ?event({encode_proc, {proc_props, ProcessProps}}),
     ProcessJson = hb_json:encode(ProcessProps),
     env_write(ProcessJson, MsgJson, M1, M2, Opts).
 

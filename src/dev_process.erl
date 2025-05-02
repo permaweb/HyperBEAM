@@ -88,10 +88,32 @@ info(_Msg1) ->
 default_device(Msg1, Key, Opts) ->
     NormKey = hb_ao:normalize_key(Key),
     case {NormKey, hb_ao:get(<<"process/variant">>, {as, dev_message, Msg1}, Opts)} of
-        {<<"execution">>, <<"ao.TN.1">>} -> <<"wasm-64@1.0">>;
+        {<<"execution">>, <<"ao.TN.1">>} ->
+        % In the case of the `ao.TN.1` variant, we need to use a stack device, 
+        % with `device-stack` also configured to the correct devices to ensure
+        % backwards-compatibility.
+        {
+            <<"stack@1.0">>,
+            #{ 
+                <<"device-stack">> => [
+                    % <<"WASI@1.0">>,
+                    <<"JSON-Iface@1.0">>,
+                    <<"WASM-64@1.0">>,
+                    <<"Multipass@1.0">>,
+                    <<"Emscripten@1.0">>
+                ],
+                <<"stack-keys">> =>[
+                    <<"init">>,
+                    <<"compute">>,
+                    <<"snapshot">>,
+                    <<"normalize">>
+                ]
+            }
+        };
         _ -> default_device_index(NormKey)
     end.
 default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
+% TODO: Should this also be a stack with WASI etc?
 default_device_index(<<"execution">>) -> <<"wasm-64@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>.
 
@@ -170,11 +192,13 @@ compute(Msg1, Msg2, Opts) ->
     % If we do not have a live state, restore or initialize one.
     ProcBase = ensure_process_key(Msg1, Opts),
     ProcID = process_id(ProcBase, #{}, Opts),
+    % ?event({compute_msg1, {explicit, Msg1}}),
+    Msg1Mod = ensure_module(Msg1, Msg2, Opts),
     case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Msg2}, Opts) of
         not_found ->
             % The slot is not set, so we need to serve the latest known state.
             % We do this by setting the `process_now_from_cache' option to `true'.
-            now(Msg1, Msg2, Opts#{ process_now_from_cache => true });
+            now(Msg1Mod, Msg2, Opts#{ process_now_from_cache => true });
         RawSlot ->
             Slot = hb_util:int(RawSlot),
             case dev_process_cache:read(ProcID, Slot, Opts) of
@@ -189,7 +213,7 @@ compute(Msg1, Msg2, Opts) ->
                     ),
                     {ok, Result};
                 not_found ->
-                    {ok, Loaded} = ensure_loaded(ProcBase, Msg2, Opts),
+                    {ok, Loaded} = ensure_loaded(Msg1Mod, Msg2, Opts),
                     ?event(compute,
                         {computing, {process_id, ProcID},
                         {to_slot, Slot}},
@@ -311,12 +335,12 @@ store_result(ProcID, Slot, Msg3, Msg2, Opts) ->
                 ?event(compute_debug,
                     {snapshotting, {proc_id, ProcID}, {slot, Slot}}, Opts),
                 {ok, Snapshot} = snapshot(Msg3, Msg2, Opts),
-				?event(snapshot,
-					{got_snapshot,
-						{storing_as_slot, Slot},
-						{snapshot, Snapshot}
-					}
-				),
+				% ?event(snapshot,
+				% 	{got_snapshot,
+				% 		{storing_as_slot, Slot},
+				% 		{snapshot, Snapshot}
+				% 	}
+				% ),
                 ?event(compute_debug,
                     {snapshot_generated, {proc_id, ProcID}, {slot, Slot}}, Opts),
 				Msg3#{ <<"snapshot">> => Snapshot };
@@ -466,36 +490,68 @@ ensure_loaded(Msg1, Msg2, Opts) ->
             end
     end.
 
+%% @doc If there is no image in the message, load it from the gateway
+%% based on the `module' key.
+%% TODO: Check the cache for the processed image, and skip in that case.
+ensure_module(Msg1, _Msg2, Opts) ->
+    ?event({ensure_module_called}),
+    case hb_ao:get(<<"process/image">>, Msg1, Opts) of
+        not_found ->
+            ?event({ensure_module_not_found}),
+            ModuleId = hb_ao:get(<<"module">>, Msg1, Opts),
+            ?event({module_id, ModuleId}),
+            {ok, ImageBin} = hb_gateway_client:data(ModuleId, Opts),
+            hb_ao:set(Msg1, #{ <<"process/image">> => ImageBin }, Opts);
+        _ ->
+            ?event({ensure_module_found}),
+            Msg1
+    end.
+
 %% @doc Run a message against Msg1, with the device being swapped out for
 %% the device found at `Key'. After execution, the device is swapped back
 %% to the original device if the device is the same as we left it.
+%% TODO: Restore the other extra keys as well?
 run_as(Key, Msg1, Msg2, Opts) ->
     BaseDevice = hb_ao:get(<<"device">>, {as, dev_message, Msg1}, Opts),
     ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
+    ?event({base_device, {device, BaseDevice}}),
+    {DefaultDevice, DefaultDeviceExtraKeys} = case default_device(Msg1, Key, Opts) of
+        {DevHasExtraKeys, ExtraKeys} ->
+            {DevHasExtraKeys, ExtraKeys};
+        DevOnly ->
+            {DevOnly, none}
+    end,
+    ?event({use_device, {default_device, DefaultDevice}, {extra_keys, DefaultDeviceExtraKeys}}),
+    PrepKeysInitial = #{
+        <<"device">> =>
+            DeviceSet = hb_ao:get(
+                << Key/binary, "-device">>,
+                {as, dev_message, Msg1},
+                DefaultDevice,
+                Opts
+            ),
+        <<"input-prefix">> =>
+            case hb_ao:get(<<"input-prefix">>, Msg1, Opts) of
+                not_found -> <<"process">>;
+                Prefix -> Prefix
+            end,
+        <<"output-prefixes">> =>
+            hb_ao:get(
+                <<Key/binary, "-output-prefixes">>,
+                {as, dev_message, Msg1},
+                undefined, % Undefined in set will be ignored.
+                Opts
+            )
+    },
+    PrepKeysWithExtra = case DefaultDeviceExtraKeys of
+        none -> PrepKeysInitial;
+        HasExtraKeys -> maps:merge(PrepKeysInitial, HasExtraKeys)
+    end,
+    ?event({prep_keys, {initial, PrepKeysInitial}, {with_extra, PrepKeysWithExtra}}),
     {ok, PreparedMsg} =
         dev_message:set(
             ensure_process_key(Msg1, Opts),
-            #{
-                <<"device">> =>
-                    DeviceSet = hb_ao:get(
-                        << Key/binary, "-device">>,
-                        {as, dev_message, Msg1},
-                        default_device(Msg1, Key, Opts),
-                        Opts
-                    ),
-                <<"input-prefix">> =>
-                    case hb_ao:get(<<"input-prefix">>, Msg1, Opts) of
-                        not_found -> <<"process">>;
-                        Prefix -> Prefix
-                    end,
-                <<"output-prefixes">> =>
-                    hb_ao:get(
-                        <<Key/binary, "-output-prefixes">>,
-                        {as, dev_message, Msg1},
-                        undefined, % Undefined in set will be ignored.
-                        Opts
-                    )
-            },
+            PrepKeysWithExtra,
             Opts
         ),
     {Status, BaseResult} =
@@ -504,6 +560,7 @@ run_as(Key, Msg1, Msg2, Opts) ->
             Msg2,
             Opts
         ),
+    ?event({resolve_res, {status, Status}, {base_result, BaseResult}}),
     case {Status, BaseResult} of
         {ok, #{ <<"device">> := DeviceSet }} ->
             {ok, hb_ao:set(BaseResult, #{ <<"device">> => BaseDevice })};
@@ -605,11 +662,12 @@ test_aos_process(Opts) ->
         <<"JSON-Iface@1.0">>,
         <<"WASM-64@1.0">>,
         <<"Multipass@1.0">>
+        % <<"Emscripten@1.0">>
     ]).
 test_aos_process(Opts, Stack) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    WASMProc = test_wasm_process(<<"test/test-aos.wasm">>, Opts),
+    WASMProc = test_wasm_process(<<"test/aos-new.wasm">>, Opts),
     hb_message:commit(
         maps:merge(
             hb_message:uncommitted(WASMProc),

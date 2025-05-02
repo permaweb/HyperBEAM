@@ -1,4 +1,4 @@
-.PHONY: all compile debug debug-clean clean setup-genesis-wasm wamrc aot_files
+.PHONY: all compile debug debug-clean clean setup-genesis-wasm port_libs wamrc aot_files
 
 all: compile
 
@@ -9,6 +9,12 @@ GENESIS_WASM_BRANCH = tillathehun0/cu-experimental
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
 GENESIS_WASM_SERVER_DIR = _build/genesis-wasm-server
 
+PROJ_DIR = $(shell pwd)
+ifeq ($(shell uname -s),Darwin)
+    SHARED_LIB_EXT = dylib
+else
+    SHARED_LIB_EXT = so
+endif
 WAMRC_BUILD_PATH = _build/port_libs/hb_beamrc/wamr-src/wamr-compiler/build
 
 debug: debug-clean
@@ -44,6 +50,14 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 	fi
 	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."
+
+_build/port_libs/hb_beamr/libhb_beamr_lib.$(SHARED_LIB_EXT):
+	make -C "native/hb_beamr/lib"  CMAKE_BUILD_DIR="$(PROJ_DIR)/_build/port_libs/hb_beamr"
+
+_build/port_libs/hb_beamrc/libhb_beamrc_lib.$(SHARED_LIB_EXT):
+	make -C "native/hb_beamrc/lib" CMAKE_BUILD_DIR="$(PROJ_DIR)/_build/port_libs/hb_beamrc"
+
+port_libs: _build/port_libs/hb_beamr/libhb_beamr_lib.$(SHARED_LIB_EXT) _build/port_libs/hb_beamrc/libhb_beamrc_lib.$(SHARED_LIB_EXT)
 
 wamrc: compile
 	mkdir -p $(WAMRC_BUILD_PATH) && \

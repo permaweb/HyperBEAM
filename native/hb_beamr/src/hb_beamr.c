@@ -207,8 +207,8 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
                 DRV_DEBUG("import_stack: current_import After (the one restored): %p", proc->current_import);
             } else {
                 // This case should technically not be reachable if current_import was valid before the signal
-                 DRV_DEBUG("import_stack: Error - import_stack_depth was already 0?");
-                 proc->current_import = NULL; // Set to NULL for safety
+                DRV_DEBUG("import_stack: Error - import_stack_depth was already 0?");
+                proc->current_import = NULL; // Set to NULL for safety
             }
         } else {
             DRV_DEBUG("[error] No pending import response waiting");

@@ -67,7 +67,7 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     // Encode function signature
     msg[msg_index++] = ERL_DRV_STRING;
     msg[msg_index++] = (ErlDrvTermData) signature;
-    msg[msg_index++] = strlen(signature) - 1;
+    msg[msg_index++] = strlen(signature);
 
     // Prepare the message to send to the Erlang side
     msg[msg_index++] = ERL_DRV_TUPLE;
@@ -75,9 +75,9 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
 
     // Initialize the result vector and set the required result types
     ImportResponse* this_import = driver_alloc(sizeof(ImportResponse));
+    proc->current_import = this_import;
     proc->import_stack[proc->import_stack_depth++] = this_import;
     DRV_DEBUG("import_stack: Import stack depth: %d", proc->import_stack_depth);
-    proc->current_import = this_import;
 
     // Create and initialize a is_running and condition variable for the response
     char* response_mutex_name = driver_alloc(128);
@@ -127,8 +127,11 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     DRV_DEBUG("Destroying %s", erl_drv_mutex_name(this_import->response_ready));
     erl_drv_mutex_destroy(this_import->response_ready);
     DRV_DEBUG("Cond and mutex destroyed");
-    DRV_DEBUG("Cleaning up import response");
+
+    DRV_DEBUG("Cleaning up this_import (%p)", this_import);
     driver_free(this_import);
+
+    DRV_DEBUG("generic_import_native_symbol_func completed");
 }
 
 void wasm_initialize_runtime(void* raw) {
@@ -618,9 +621,6 @@ void wasm_execute_exported_function(void* raw) {
     DRV_DEBUG("Msg: %d", response_msg_res);
 
     wasm_val_vec_delete(&results);
-    
-    // This should already be set to NULL by the import handler
-    proc->current_import = NULL;
 
 	DRV_DEBUG("Unlocking is_running mutex: %p", proc->is_running);
     drv_unlock(proc->is_running);
@@ -721,7 +721,7 @@ void wasm_execute_indirect_function(void *raw) {
     //     return;
     // }
 
-        // Send the results back to Erlang
+    // Send the results back to Erlang
     DRV_DEBUG("Results size: %d", result_count);
     ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * (7 + (result_count * 2)));
     DRV_DEBUG("Allocated msg");
