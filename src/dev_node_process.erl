@@ -194,8 +194,8 @@ lookup_execute_test() ->
 		Opts
 	),
 	?event({lookup_execute_test_result2, {res2, Res2}}),
-    % ?assertMatch(
-    %     42,
-    %     Res2
-    % ),
+    ?assertMatch(
+        42,
+        Res2
+    ),
 	?event({lookup_execute_test_done}).
