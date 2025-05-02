@@ -48,6 +48,7 @@ default_message() ->
         %% Preloaded devices for the node to use. These names override
         %% resolution of devices via ID to the default implementations.
         preloaded_devices => [
+            #{<<"name">> => <<"marshal:calculator@0.1">>, <<"module">> => dev_calculator},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
             #{<<"name">> => <<"compute@1.0">>, <<"module">> => dev_cu},
             #{<<"name">> => <<"cache@1.0">>, <<"module">> => dev_cache},
@@ -87,8 +88,7 @@ default_message() ->
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
-            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
-            #{<<"name">> => <<"calculator@1.0">>, <<"module">> => dev_calculator}
+            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],

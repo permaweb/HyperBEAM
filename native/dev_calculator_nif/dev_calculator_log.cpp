@@ -1,6 +1,5 @@
 #include "include/dev_calculator_log.h"
 
-
 void beamr_print(int print, const char* file, int line, const char* format, ...) {
     va_list args;
     va_start(args, format);

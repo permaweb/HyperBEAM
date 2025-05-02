@@ -6,12 +6,10 @@
 #ifndef HB_LOGGING_H
 #define HB_LOGGING_H
 
-
 // Enable debug logging by default if not defined
 #define HB_DEBUG 0
 #ifndef HB_DEBUG
 #endif
-
 
 #define DRV_DEBUG(format, ...) beamr_print(HB_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define DRV_PRINT(format, ...) beamr_print(1, __FILE__, __LINE__, format, ##__VA_ARGS__)
@@ -29,7 +27,5 @@
  *  ...: The variables to be printed in the format.
  */
 void beamr_print(int print, const char* file, int line, const char* format, ...);
-
-
 
 #endif // HB_LOGGING_H
