@@ -190,3 +190,19 @@ pub fn json_error(message: &str) -> String {
         )
     })
 }
+
+#[cfg(test)]
+fn get_appchain_base_path() -> String {
+    "./appchains".to_string()
+}
+
+#[cfg(not(test))]
+fn get_appchain_base_path() -> String {
+    "native/riscv_em_nif/appchains".to_string()
+}
+
+pub fn get_state(chain_id: &str) -> String {
+    let path = format!("{}/{}.json", get_appchain_base_path(), chain_id);
+    let state = std::fs::read_to_string(path).unwrap();
+    state
+}
