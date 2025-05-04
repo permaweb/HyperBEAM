@@ -19,7 +19,7 @@ void beamr_print(int print, const char* file, int line, const char* format, ...)
     va_end(args);
 }
 
-void send_error(Proc* proc, const char* message_fmt, ...) {
+void send_error(ErlDrvTermData port_term, const char* message_fmt, ...) {
     va_list args;
     va_start(args, message_fmt);
     char* message = driver_alloc(256);
@@ -35,7 +35,7 @@ void send_error(Proc* proc, const char* message_fmt, ...) {
     msg[msg_index++] = ERL_DRV_TUPLE;
     msg[msg_index++] = 2;
 
-    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
+    int msg_res = erl_drv_output_term(port_term, msg, msg_index);
     DRV_DEBUG("Sent error message. Res: %d", msg_res);
     va_end(args);
 }

@@ -9,6 +9,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-hb_debug(print).
+
 %% @doc Load the driver for the WASM compiler...
 load_driver() ->
     case erl_ddll:load(code:priv_dir(hb), ?MODULE) of
@@ -38,11 +40,22 @@ compile_test() ->
     WasmPath = <<"test/test.wasm">>,
     WasmAotPath = <<"test/test.aot">>,
     {ok, WasmBinary} = file:read_file(WasmPath),
+    print_binary_info("WasmBinary", WasmBinary),
     {ok, AotWasmGenerated} = compile(WasmBinary),
+    print_binary_info("AotWasmGenerated", AotWasmGenerated),
     {ok, AotWasmFile} = file:read_file(WasmAotPath),
+    print_binary_info("AotWasmFile", AotWasmFile),
     ?assertEqual(AotWasmGenerated, AotWasmFile).
 
 compile_invalid_test() ->
     WasmPath = <<"test/invalid.wasm">>,
     {ok, WasmBinary} = file:read_file(WasmPath),
     {error, _} = compile(WasmBinary).
+
+print_binary_info(Name, Bin) when is_binary(Bin) ->
+    ?event({
+        {name, Name},
+        {size, byte_size(Bin)},
+        {hash, erlang:md5(Bin)},
+        {leading_bytes, binary:part(Bin, 0, 10)}
+    }).

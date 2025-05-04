@@ -1,6 +1,7 @@
 #ifndef HB_LOGGING_H
 #define HB_LOGGING_H
 
+#include <erl_driver.h>
 #include "hb_stubs.h"
 
 #define DRV_DEBUG(format, ...) beamr_print(HB_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
@@ -30,6 +31,6 @@ void beamr_print(int print, const char* file, int line, const char* format, ...)
  *  message_fmt: The format string for the error message.
  *  ...: The variables to be printed in the error message.
  */
-void send_error(Proc* proc, const char* message_fmt, ...);
+void send_error(ErlDrvTermData port_term, const char* message_fmt, ...);
 
 #endif // HB_LOGGING_H

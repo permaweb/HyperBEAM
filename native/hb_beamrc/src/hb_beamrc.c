@@ -82,7 +82,7 @@ static void compiler_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT buffl
     int index = 0;
     int version;
     if(ei_decode_version(buff, &index, &version) != 0) {
-        send_error(proc, "Failed to decode message header (version).");
+        send_error(proc->port_term, "Failed to decode message header (version).");
         return;
     }
     //DRV_DEBUG("Received term has version: %d", version);
@@ -121,7 +121,7 @@ static void compiler_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT buffl
     }
     else {
         DRV_DEBUG("Unknown command: %s", command);
-        send_error(proc, "Unknown command");
+        send_error(proc->port_term, "Unknown command");
     }
 }
 
@@ -149,7 +149,7 @@ void invoke_compile(void *raw) {
     }
     else {
         DRV_DEBUG("Compilation failed");
-        send_error(proc, "Compilation failed");
+        send_error(proc->port_term, "Compilation failed");
     }
 
     drv_unlock(proc->is_running);

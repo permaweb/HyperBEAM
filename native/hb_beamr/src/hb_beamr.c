@@ -100,7 +100,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
     int index = 0;
     int version;
     if(ei_decode_version(buff, &index, &version) != 0) {
-        send_error(proc, "Failed to decode message header (version).");
+        send_error(proc->port_term, "Failed to decode message header (version).");
         return;
     }
     //DRV_DEBUG("Received term has version: %d", version);
@@ -138,7 +138,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         driver_async(proc->port, &proc->port_key, wasm_initialize_runtime, mod_bin, NULL);
     } else if (strcmp(command, "call") == 0) {
         if (!proc->is_initialized) {
-            send_error(proc, "Cannot run WASM function as module not initialized.");
+            send_error(proc->port_term, "Cannot run WASM function as module not initialized.");
             return;
         }
         // Extract the function name and the args from the Erlang term and generate the wasm_val_vec_t
@@ -155,7 +155,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
     } 
     else if (strcmp(command, "indirect_call") == 0) {
         if (!proc->is_initialized) {
-            send_error(proc, "Cannot run WASM indirect function as module not initialized.");
+            send_error(proc->port_term, "Cannot run WASM indirect function as module not initialized.");
             return;
         }
         DRV_DEBUG("Decoding indirect call");
@@ -212,7 +212,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
             }
         } else {
             DRV_DEBUG("[error] No pending import response waiting");
-            send_error(proc, "No pending import response waiting");
+            send_error(proc->port_term, "No pending import response waiting");
         }
     } else if (strcmp(command, "write") == 0) {
         DRV_DEBUG("Write received");
@@ -230,7 +230,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         size_t memory_size = get_memory_size(proc);
         if(ptr + size_bytes > memory_size) {
             DRV_DEBUG("Write request out of bounds.");
-            send_error(proc, "Write request out of bounds");
+            send_error(proc->port_term, "Write request out of bounds");
             return;
         }
         byte_t* memory_base = wasm_memory_get_base_address(get_memory(proc));
@@ -255,7 +255,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         DRV_DEBUG("Read received. Ptr: %ld. Size: %ld. Memory size: %ld", ptr, size_l, memory_size);
         if(ptr + size_l > memory_size) {
             DRV_DEBUG("Read request out of bounds.");
-            send_error(proc, "Read request out of bounds");
+            send_error(proc->port_term, "Read request out of bounds");
             return;
         }
         char* out_binary = NULL;
@@ -301,7 +301,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
     }
     else {
         DRV_DEBUG("Unknown command: %s", command);
-        send_error(proc, "Unknown command");
+        send_error(proc->port_term, "Unknown command");
     }
 }
 
