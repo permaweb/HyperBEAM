@@ -3,7 +3,7 @@
 CMAKE_BUILD_DIR ?= _build
 CMAKE_INSTALL_PREFIX ?= $(CMAKE_BUILD_DIR)/install
 
-.PHONY: all configure build install clean clean-local
+.PHONY: all configure build install clean clean-local test-build test
 
 all: build install
 
@@ -20,6 +20,18 @@ build: configure
 install: build
 	@echo "+++ Installing hb_beamr_wasm +++"
 	cmake --install $(CMAKE_BUILD_DIR)
+
+# Target to configure and build tests
+test-build:
+	@echo "+++ Configuring hb_beamr_wasm (with tests) +++"
+	cmake -S . -B $(CMAKE_BUILD_DIR) -DCMAKE_INSTALL_PREFIX=$(CMAKE_INSTALL_PREFIX) -DBUILD_TESTING=ON
+	@echo "+++ Building hb_beamr_wasm (with tests) +++"
+	cmake --build $(CMAKE_BUILD_DIR)
+
+# Target to run tests (depends on test-build)
+test: test-build
+	@echo "+++ Running hb_beamr_wasm tests +++"
+	cd $(CMAKE_BUILD_DIR) && ctest --output-on-failure
 
 # Full clean: Removes the entire build directory, including dependencies
 clean:

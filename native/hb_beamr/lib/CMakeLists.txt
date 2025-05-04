@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.14)
 project(hb_beamr_lib C)
 
+# Option to enable building tests
+option(BUILD_TESTING "Build the tests" OFF)
+
 # Dependencies
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/wamr/cmake/wamr-src.cmake)
 
@@ -9,6 +12,45 @@ set(WAMR_GIT_REPOSITORY "https://github.com/permaweb/wasm-micro-runtime.git" CAC
 set(WAMR_GIT_TAG "2.2.0-nan-canonicalization-fp-boundary-simd-immediate" CACHE STRING "Git tag or branch for WAMR")
 set(WAMR_SRC_DIR "${CMAKE_BINARY_DIR}/wamr-src" CACHE PATH "Directory for WAMR sources")
 fetch_wamr_source()
+
+# --- LLVM and WAMRC setup (only when testing) ---
+if(BUILD_TESTING)
+  # Include LLVM helper relative to this file
+  include(${CMAKE_CURRENT_LIST_DIR}/../../common/wamr/cmake/wamr-llvm.cmake)
+
+  # Ensure Python3 is found for LLVM build script
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+  # Setup and build LLVM using WAMR script
+  # This will place LLVM inside ${WAMR_SRC_DIR}/core/deps/llvm
+  setup_llvm_for_wamr(${WAMR_SRC_DIR})
+  run_build_llvm(${WAMR_SRC_DIR})
+
+  # Define path to wamrc source and build directories within our main build dir
+  set(WAMRC_SOURCE_DIR ${WAMR_SRC_DIR}/wamr-compiler)
+  set(WAMRC_BUILD_DIR ${CMAKE_BINARY_DIR}/wamrc_build) # Build wamrc within our project's build dir
+  set(WAMRC_EXECUTABLE ${WAMRC_BUILD_DIR}/wamrc)
+
+  # Add a custom target to build the wamrc executable
+  # This depends on LLVM being built first implicitly via run_build_llvm execution order
+  add_custom_command(
+    OUTPUT ${WAMRC_EXECUTABLE}
+    COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --blue "+++ Configuring wamrc +++"
+    COMMAND ${CMAKE_COMMAND} -S ${WAMRC_SOURCE_DIR} -B ${WAMRC_BUILD_DIR}
+            -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+            # Pass the LLVM location built by run_build_llvm
+            -DCMAKE_PREFIX_PATH=${LLVM_SRC_ROOT}/build
+    COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --blue "+++ Building wamrc +++"
+    COMMAND ${CMAKE_COMMAND} --build ${WAMRC_BUILD_DIR}
+    DEPENDS ${BUILD_LLVM_SCRIPT} # Depends on the script existing
+    COMMENT "Building wamrc executable..."
+    VERBATIM
+  )
+
+  add_custom_target(build_wamrc_exe DEPENDS ${WAMRC_EXECUTABLE})
+
+endif()
+# --- End LLVM and WAMRC setup ---
 
 # Determine WAMR Platform based on CMake system name
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
@@ -100,17 +142,12 @@ target_include_directories(hb_beamr_lib PUBLIC
     ${WAMR_ROOT_DIR}/core/iwasm/include  # WAMR headers
 )
 
-# Link against vmlib and export it
-# target_link_libraries(hb_beamr_lib PUBLIC vmlib) # Original line
-
 # Link against vmlib, forcing export of its symbols into the shared library
-if(APPLE)
-  # On macOS, -all_load forces loading of all members of static archives
-  target_link_libraries(hb_beamr_lib PUBLIC "-Wl,-all_load" vmlib)
-elseif(UNIX AND NOT APPLE)
-  # On other Unix-like systems (e.g., Linux), use --whole-archive
-  target_link_libraries(hb_beamr_lib PUBLIC "-Wl,--whole-archive" vmlib "-Wl,--no-whole-archive")
-else()
-  # Fallback for other systems (e.g., Windows) or if flags cause issues
-  target_link_libraries(hb_beamr_lib PUBLIC vmlib)
+target_link_libraries(hb_beamr_lib PUBLIC vmlib)
+
+# Conditionally add the test subdirectory and enable testing
+if(BUILD_TESTING)
+  enable_testing()
+  include(CTest)
+  add_subdirectory(test)
 endif()

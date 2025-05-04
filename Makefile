@@ -52,10 +52,10 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 		echo "Installed genesis-wasm@1.0 server."
 
 _build/port_libs/hb_beamr/libhb_beamr_lib.$(SHARED_LIB_EXT):
-	make -C "native/hb_beamr/lib"  CMAKE_BUILD_DIR="$(PROJ_DIR)/_build/port_libs/hb_beamr"
+	make -C "native/hb_beamr/lib"  CMAKE_BUILD_DIR="$(PROJ_DIR)/_build/port_libs/hb_beamr" build
 
 _build/port_libs/hb_beamrc/libhb_beamrc_lib.$(SHARED_LIB_EXT):
-	make -C "native/hb_beamrc/lib" CMAKE_BUILD_DIR="$(PROJ_DIR)/_build/port_libs/hb_beamrc"
+	make -C "native/hb_beamrc/lib" CMAKE_BUILD_DIR="$(PROJ_DIR)/_build/port_libs/hb_beamrc" build
 
 port_libs: _build/port_libs/hb_beamr/libhb_beamr_lib.$(SHARED_LIB_EXT) _build/port_libs/hb_beamrc/libhb_beamrc_lib.$(SHARED_LIB_EXT)
 
