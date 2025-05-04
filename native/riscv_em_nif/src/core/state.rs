@@ -231,17 +231,17 @@ pub fn shallow_merge(old_state: &str, new_state: &str) -> Result<(String, bool),
 
 
 #[cfg(test)]
-fn get_appchain_base_path() -> String {
-    "./appchains".to_string()
+pub fn get_base_path(dir: &str) -> String {
+    format!("./{}", dir)
 }
 
 #[cfg(not(test))]
-fn get_appchain_base_path() -> String {
-    "native/riscv_em_nif/appchains".to_string()
+pub fn get_base_path(dir: &str) -> String {
+    format!("native/riscv_em_nif/{}", dir)
 }
 
 pub fn get_state(chain_id: &str) -> String {
-    let path = format!("{}/{}.json", get_appchain_base_path(), chain_id);
+    let path = format!("{}/{}.json", get_base_path("appchains"), chain_id);
     let state = std::fs::read_to_string(path).unwrap_or_default();
     state
 }
