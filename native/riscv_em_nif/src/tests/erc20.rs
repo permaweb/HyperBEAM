@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::core::riscv_machine::evaluate_raw_tx;
-    use crate::core::state::{serialize_state, deserialize_state, get_state};
+    use crate::core::state::{serialize_state, deserialize_state, get_state, shallow_merge, get_base_path};
     use revm::primitives::Address;
     use r55::test_utils::{add_balance_to_db, ALICE};
     use serde_json::Value;
@@ -24,6 +24,22 @@ mod tests {
         .pointer(&format!("/accounts/{}/balance", "0x000000000000000000000000000000000000000a")).unwrap().as_str().unwrap();
         let alice_balance_de = deserialized_state.load_account(ALICE).unwrap().info.balance.to_string();
         assert_eq!(alice_balance_de, alice_balance_ser);
+    }
+
+    #[test]
+    fn test_eval_riscv_bytecode() {
+        let raw_tx_hex = std::fs::read_to_string("src/tests/erc20-bytecode-signed.txt").unwrap();
+        let state = get_state("1");
+        assert_ne!(state.len(), 0);
+    
+        let deserialized_state = deserialize_state(&state).unwrap();
+        let evaluation_res = evaluate_raw_tx(deserialized_state, &raw_tx_hex);
+        let serialized_evaluated_state = serialize_state(evaluation_res.0.accounts).unwrap();
+        let merged_states = shallow_merge(&state, &serialized_evaluated_state).unwrap();
+        
+        assert!(merged_states.1);
+        let path = format!("{}/{}.json", get_base_path("appchains"), 1);
+        let _state_update = std::fs::write(path, merged_states.0).unwrap();
     }
 
     #[test]
