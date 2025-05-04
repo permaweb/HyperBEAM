@@ -1,12 +1,12 @@
-use alloy_primitives::{map::foldhash::fast::RandomState, Address, Bytes, U256};
+use crate::utils::constants::EIP1967_IMPLEMENTATION_SLOT;
+use alloy_primitives::{Address, Bytes, U256, map::foldhash::fast::RandomState};
+use anyhow::Error;
 use r55::test_utils::AccountInfo;
+use r55::test_utils::Bytecode;
 use revm::db::DbAccount;
 use revm::db::{CacheDB, EmptyDB};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use r55::test_utils::Bytecode;
-use anyhow::Error;
-use crate::utils::constants::EIP1967_IMPLEMENTATION_SLOT;
 
 #[derive(Serialize, Deserialize)]
 pub struct AccountState {
@@ -193,42 +193,38 @@ pub fn json_error(message: &str) -> String {
 }
 
 pub fn shallow_merge(old_state: &str, new_state: &str) -> Result<(String, bool), Error> {
-                let mut old: serde_json::Value = serde_json::from_str(&old_state).unwrap();
-                let new: serde_json::Value = serde_json::from_str(&new_state).unwrap();
-                let mut is_updated = false;
+    let mut old: serde_json::Value = serde_json::from_str(&old_state).unwrap();
+    let new: serde_json::Value = serde_json::from_str(&new_state).unwrap();
+    let mut is_updated = false;
 
-                // merge states
-                if let (Some(existing_accounts), Some(new_accounts)) =
-                    (old.get_mut("accounts"), new.get("accounts"))
-                {
-                    for (k, v) in new_accounts.as_object().unwrap() {
-                        existing_accounts
-                            .as_object_mut()
-                            .unwrap()
-                            .insert(k.clone(), v.clone());
-                        is_updated = true;
-                    }
-                }
+    // merge states
+    if let (Some(existing_accounts), Some(new_accounts)) =
+        (old.get_mut("accounts"), new.get("accounts"))
+    {
+        for (k, v) in new_accounts.as_object().unwrap() {
+            existing_accounts
+                .as_object_mut()
+                .unwrap()
+                .insert(k.clone(), v.clone());
+            is_updated = true;
+        }
+    }
 
-                if let (Some(existing_storage), Some(new_storage)) =
-                    (old.get_mut("storage"), new.get("storage"))
-                {
-                    for (k, v) in new_storage.as_object().unwrap() {
-                        existing_storage
-                            .as_object_mut()
-                            .unwrap()
-                            .insert(k.clone(), v.clone());
-                        is_updated = true;
-                    }
-                }
+    if let (Some(existing_storage), Some(new_storage)) =
+        (old.get_mut("storage"), new.get("storage"))
+    {
+        for (k, v) in new_storage.as_object().unwrap() {
+            existing_storage
+                .as_object_mut()
+                .unwrap()
+                .insert(k.clone(), v.clone());
+            is_updated = true;
+        }
+    }
 
-                let merged_state = old.to_string();
-                return Ok((merged_state, is_updated));
-            
+    let merged_state = old.to_string();
+    return Ok((merged_state, is_updated));
 }
-    
-
-
 
 #[cfg(test)]
 pub fn get_base_path(dir: &str) -> String {
