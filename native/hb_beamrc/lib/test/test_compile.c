@@ -10,11 +10,17 @@ int main() {
     int result;
     
     printf("Starting WAMR AOT compilation test\n");
+
+    CompileOpts compile_opts = { 0 };
+    compile_opts.mem_alloc_option.allocator.malloc_func = malloc;
+    compile_opts.mem_alloc_option.allocator.realloc_func = realloc;
+    compile_opts.mem_alloc_option.allocator.free_func = free;
     
     /* Compile WebAssembly module to AOT module */
     uint8_t *out_wasm_aot_data = NULL;
     size_t out_wasm_aot_size = 0;
-    result = hb_wasm_aot_compile(dummy_wasm_file, sizeof(dummy_wasm_file), &out_wasm_aot_data, &out_wasm_aot_size);
+    
+    result = hb_wasm_aot_compile(&compile_opts, dummy_wasm_file, sizeof(dummy_wasm_file), &out_wasm_aot_data, &out_wasm_aot_size);
     
     if (result != 0) {
         fprintf(stderr, "Failed to compile WebAssembly module\n");

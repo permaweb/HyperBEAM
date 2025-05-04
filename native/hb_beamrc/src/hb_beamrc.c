@@ -131,11 +131,16 @@ void invoke_compile(void *raw) {
     DRV_DEBUG("Invoking compile");
     DRV_DEBUG("WASM binary size: %d bytes", mod_bin->size);
 
+    CompileOpts compile_opts = { 0 };
+    compile_opts.mem_alloc_option.allocator.malloc_func = driver_alloc;
+    compile_opts.mem_alloc_option.allocator.realloc_func = driver_realloc;
+    compile_opts.mem_alloc_option.allocator.free_func = driver_free;
+
     drv_lock(proc->is_running);
 
     size_t aot_module_size;
     uint8_t* aot_module;
-    int res = hb_wasm_aot_compile(mod_bin->binary, mod_bin->size, &aot_module, &aot_module_size);
+    int res = hb_wasm_aot_compile(&compile_opts, mod_bin->binary, mod_bin->size, &aot_module, &aot_module_size);
     DRV_DEBUG("AOT module size: %d bytes", aot_module_size);
     
     if (res == 0) {

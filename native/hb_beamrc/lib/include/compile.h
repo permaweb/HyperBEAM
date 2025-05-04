@@ -4,10 +4,15 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include "wasm_export.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct CompileOpts {
+    MemAllocOption mem_alloc_option;
+} CompileOpts;
 
 /**
  * Compile WebAssembly binary to AOT module.
@@ -19,7 +24,7 @@ extern "C" {
  *
  * @return 0 if successful, non-zero otherwise
  */
-int hb_wasm_aot_compile(uint8_t *wasm_module_data, size_t wasm_module_size, uint8_t **out_wasm_aot_data, size_t *out_wasm_aot_size);
+int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, size_t wasm_module_size, uint8_t **out_wasm_aot_data, size_t *out_wasm_aot_size);
 
 #ifdef __cplusplus
 }

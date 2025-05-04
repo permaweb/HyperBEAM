@@ -19,6 +19,6 @@ clean:
 	rm -rf $(CMAKE_BUILD_DIR)
 
 # Run tests
-test:
+test: build
 	@echo "Running tests..."
 	@cmake --build $(CMAKE_BUILD_DIR) --target run_tests

@@ -41,3 +41,8 @@ compile_test() ->
     {ok, AotWasmGenerated} = compile(WasmBinary),
     {ok, AotWasmFile} = file:read_file(WasmAotPath),
     ?assertEqual(AotWasmGenerated, AotWasmFile).
+
+compile_invalid_test() ->
+    WasmPath = <<"test/invalid.wasm">>,
+    {ok, WasmBinary} = file:read_file(WasmPath),
+    {error, _} = compile(WasmBinary).

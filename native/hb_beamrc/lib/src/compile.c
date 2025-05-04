@@ -13,105 +13,6 @@
 
 // #include <llvm-c/Support.h>
 
-#if BH_HAS_DLFCN
-#include <dlfcn.h>
-
-typedef uint32 (*get_native_lib_func)(char **p_module_name,
-                                      NativeSymbol **p_native_symbols);
-
-static uint32
-load_and_register_native_libs(const char **native_lib_list,
-                              uint32 native_lib_count,
-                              void **native_handle_list)
-{
-    uint32 i, native_handle_count = 0, n_native_symbols;
-    NativeSymbol *native_symbols;
-    char *module_name;
-    void *handle;
-
-    for (i = 0; i < native_lib_count; i++) {
-        /* open the native library */
-        if (!(handle = dlopen(native_lib_list[i], RTLD_NOW | RTLD_GLOBAL))
-            && !(handle = dlopen(native_lib_list[i], RTLD_LAZY))) {
-            LOG_WARNING("warning: failed to load native library %s",
-                        native_lib_list[i]);
-            continue;
-        }
-
-        /* lookup get_native_lib func */
-        get_native_lib_func get_native_lib = dlsym(handle, "get_native_lib");
-        if (!get_native_lib) {
-            LOG_WARNING("warning: failed to lookup `get_native_lib` function "
-                        "from native lib %s",
-                        native_lib_list[i]);
-            dlclose(handle);
-            continue;
-        }
-
-        n_native_symbols = get_native_lib(&module_name, &native_symbols);
-
-        /* register native symbols */
-        if (!(n_native_symbols > 0 && module_name && native_symbols
-              && wasm_runtime_register_natives(module_name, native_symbols,
-                                               n_native_symbols))) {
-            LOG_WARNING("warning: failed to register native lib %s",
-                        native_lib_list[i]);
-            dlclose(handle);
-            continue;
-        }
-
-        native_handle_list[native_handle_count++] = handle;
-    }
-
-    return native_handle_count;
-}
-
-static void
-unregister_and_unload_native_libs(uint32 native_lib_count,
-                                  void **native_handle_list)
-{
-    uint32 i, n_native_symbols;
-    NativeSymbol *native_symbols;
-    char *module_name;
-    void *handle;
-
-    for (i = 0; i < native_lib_count; i++) {
-        handle = native_handle_list[i];
-
-        /* lookup get_native_lib func */
-        get_native_lib_func get_native_lib = dlsym(handle, "get_native_lib");
-        if (!get_native_lib) {
-            LOG_WARNING("warning: failed to lookup `get_native_lib` function "
-                        "from native lib %p",
-                        handle);
-            continue;
-        }
-
-        n_native_symbols = get_native_lib(&module_name, &native_symbols);
-        if (n_native_symbols == 0 || module_name == NULL
-            || native_symbols == NULL) {
-            LOG_WARNING("warning: get_native_lib returned different values for "
-                        "native lib %p",
-                        handle);
-            continue;
-        }
-
-        /* unregister native symbols */
-        if (!wasm_runtime_unregister_natives(module_name, native_symbols)) {
-            LOG_WARNING("warning: failed to unregister native lib %p", handle);
-            continue;
-        }
-
-        dlclose(handle);
-    }
-}
-#endif
-
-// #define HANDLE_FAIL() \
-//     do {                      \
-//         goto fail0;           \
-//     } while (0)
-
 static bool
 can_enable_tiny_frame(const AOTCompOption *opt)
 {
@@ -119,15 +20,12 @@ can_enable_tiny_frame(const AOTCompOption *opt)
            && !opt->enable_perf_profiling;
 }
 
-/* When print help info for target/cpu/target-abi/cpu-features, load this dummy
- * wasm file content rather than from an input file, the dummy wasm file content
- * is: magic header + version number */
-static unsigned char dummy_wasm_file[8] = { 0x00, 0x61, 0x73, 0x6D,
-                                            0x01, 0x00, 0x00, 0x00 };
-
 __attribute__((visibility("default")))
-int hb_wasm_aot_compile(uint8_t *wasm_module_data, size_t wasm_module_size, uint8_t **out_wasm_aot_data, size_t *out_wasm_aot_size)
+int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, size_t wasm_module_size, uint8_t **out_wasm_aot_data, size_t *out_wasm_aot_size)
 {
+    *out_wasm_aot_data = NULL;
+    *out_wasm_aot_size = 0;
+
     char **llvm_options = NULL;
     size_t llvm_options_count = 0;
     wasm_module_t wasm_module = NULL;
@@ -139,15 +37,6 @@ int hb_wasm_aot_compile(uint8_t *wasm_module_data, size_t wasm_module_size, uint
     int log_verbose_level = 2;
     bool sgx_mode = false, size_level_set = false, use_dummy_wasm = false;
     int exit_status = EXIT_FAILURE;
-#if BH_HAS_DLFCN
-    const char *native_lib_list[8] = { NULL };
-    uint32 native_lib_count = 0;
-    void *native_handle_list[8] = { NULL };
-    uint32 native_handle_count = 0;
-#endif
-#if WASM_ENABLE_LINUX_PERF != 0
-    bool enable_linux_perf = false;
-#endif
 
     option.opt_level = 3;
     option.size_level = 3;
@@ -218,24 +107,15 @@ int hb_wasm_aot_compile(uint8_t *wasm_module_data, size_t wasm_module_size, uint
     memset(&init_args, 0, sizeof(RuntimeInitArgs));
 
     init_args.mem_alloc_type = Alloc_With_Allocator;
-    init_args.mem_alloc_option.allocator.malloc_func = malloc;
-    init_args.mem_alloc_option.allocator.realloc_func = realloc;
-    init_args.mem_alloc_option.allocator.free_func = free;
-#if WASM_ENABLE_LINUX_PERF != 0
-    init_args.enable_linux_perf = enable_linux_perf;
-#endif
+    init_args.mem_alloc_option.allocator.malloc_func = compile_opts->mem_alloc_option.allocator.malloc_func;
+    init_args.mem_alloc_option.allocator.realloc_func = compile_opts->mem_alloc_option.allocator.realloc_func;
+    init_args.mem_alloc_option.allocator.free_func = compile_opts->mem_alloc_option.allocator.free_func;
 
     /* initialize runtime environment */
     if (!wasm_runtime_full_init(&init_args)) {
         printf("Init runtime environment failed.\n");
         return -1;
     }
-
-#if BH_HAS_DLFCN
-    bh_print_time("Begin to load native libs");
-    native_handle_count = load_and_register_native_libs(
-        native_lib_list, native_lib_count, native_handle_list);
-#endif
 
     // if (llvm_options_count > 0)
     //     LLVMParseCommandLineOptions(llvm_options_count,
@@ -319,15 +199,10 @@ fail3:
 fail2:
     TRACE("fail2");
     /* free the file buffer */
-    // if (!use_dummy_wasm) {
-    //     wasm_runtime_free(wasm_module_data);
-    // }
+    // wasm_runtime_free(wasm_module_data);
 
 fail1:
     TRACE("fail1");
-#if BH_HAS_DLFCN
-    unregister_and_unload_native_libs(native_handle_count, native_handle_list);
-#endif
     /* Destroy runtime environment */
     wasm_runtime_destroy();
 
