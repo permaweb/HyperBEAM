@@ -160,9 +160,9 @@ void wasm_initialize_runtime(void* raw) {
     RuntimeInitArgs init_args;
     memset(&init_args, 0, sizeof(RuntimeInitArgs));
     init_args.mem_alloc_type = Alloc_With_Allocator;
-    init_args.mem_alloc_option.allocator.malloc_func = (void *)malloc;
-    init_args.mem_alloc_option.allocator.realloc_func = (void *)realloc;
-    init_args.mem_alloc_option.allocator.free_func = (void *)free;
+    init_args.mem_alloc_option.allocator.malloc_func = (void *)driver_alloc;
+    init_args.mem_alloc_option.allocator.realloc_func = (void *)driver_realloc;
+    init_args.mem_alloc_option.allocator.free_func = (void *)driver_free;
 
     if (!wasm_runtime_full_init(&init_args)) {
         DRV_DEBUG("Failed to initialize WAMR runtime");
