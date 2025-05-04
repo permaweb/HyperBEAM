@@ -242,6 +242,6 @@ fn get_appchain_base_path() -> String {
 
 pub fn get_state(chain_id: &str) -> String {
     let path = format!("{}/{}.json", get_appchain_base_path(), chain_id);
-    let state = std::fs::read_to_string(path).unwrap();
+    let state = std::fs::read_to_string(path).unwrap_or_default();
     state
 }
