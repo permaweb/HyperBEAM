@@ -255,6 +255,11 @@ ei_term* decode_list(char* buff, int* index) {
         }
         driver_free(str);
     }
+    else if (type == ERL_NIL_EXT) {
+        DRV_DEBUG("Decoding nil");
+        res[0].ei_type = ERL_NIL_EXT;
+        res[0].value.i_val = 0;
+    }
     else {
         DRV_DEBUG("Unknown type: %d", type);
         return NULL;

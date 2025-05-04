@@ -51,7 +51,7 @@ init(M1, _M2, Opts) ->
 
 '__cxa_throw'(_Msg1, _Msg2, _Opts) ->
     ?event('__cxa_throw'),
-    {error, <<"__cxa_throw">>}.
+    {import_exception, <<"__cxa_throw">>}.
 
 invoke_ii(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_ii),
@@ -65,16 +65,17 @@ invoke_viii(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_viii),
 	router(<<"invoke_viii">>, Msg1, Msg2, Opts).
 
-router(<<"invoke_", _/binary>>, Msg1, Msg2, Opts) ->
+router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
     ?event(invoke_emscripten),
-    State = hb_ao:get(<<"State">>, Msg1, #{ hashpath => ignore }),
+    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
     WASM = dev_wasm:instance(State, Msg2, Opts),
     [Index|Args] = hb_ao:get(args, Msg2, #{ hashpath => ignore }),
-    %?event(debug, invoke_emscripten_stack_get_current),
-    % {ok, SP, _} = hb_beamr:call(WASM, <<"emscripten_stack_get_current">>, []),
-    % ?event(debug, invoke_emscripten_stack_get_current_done),
-    ImportResolver = hb_private:get(<<"WASM/import-resolver">>, State, Opts),
-    try 
+    % ?event(debug, {invoke, {invoke_signature, Sig}, {indirect_function_index, Index}, {args, Args}}),
+    ?event(debug, invoke_emscripten_stack_get_current),
+    {ok, [SP]} = hb_beamr:call(WASM, <<"emscripten_stack_get_current">>, []),
+    ?event(debug, {invoke_stack_pointer, SP}),
+    ImportResolver = hb_private:get(<<"wasm/import-resolver">>, State, Opts),
+    try
         ?event(trying_indirect_call),
         Res = hb_beamr:call(WASM, Index, Args, ImportResolver, State, Opts),
         {ok, Result, StateMsg} = Res,
@@ -83,12 +84,21 @@ router(<<"invoke_", _/binary>>, Msg1, Msg2, Opts) ->
     catch
         _:Error ->
             ?event(debug, {invoke_try_error, Error}),
-            % ?event(debug, calling_emscripten_stack_restore),
-            % hb_beamr:call(WASM, <<"_emscripten_stack_restore">>, [SP]),
-            % ?event(debug, calling_set_threw),
-            % hb_beamr:call(WASM, <<"setThrew">>, [1, 0]),
-            % ?event(debug, calling_set_threw_done),
-            {error, Error}
+            ?event(debug, calling_emscripten_stack_restore),
+            hb_beamr:call(WASM, <<"_emscripten_stack_restore">>, [SP]),
+            ?event(debug, calling_set_threw),
+            SetThrewRes = hb_beamr:call(WASM, <<"setThrew">>, [1, 0], ImportResolver, State, Opts),
+            ?event(debug, {invoke_set_threw, {catch_result, SetThrewRes}}),
+            {ok, _, _} = SetThrewRes,
+            ?event(debug, set_threw_done),
+            % {ok, SetThrewResult, SetThrewMsg} = SetThrewRes,
+            % Set DummyResult to [0] if Sig starts with 'i', otherwise []
+            DummyResult = case binary:match(Sig, <<"i">>) of
+                {0, _} -> [0];
+                _ -> []
+            end,
+            ?event(debug, {dummy_result, DummyResult}),
+            {ok, #{ <<"state">> => State, <<"results">> => DummyResult }}
     end.
 
 %%% Tests
@@ -100,7 +110,7 @@ generate_emscripten_stack(File, Func, Params) ->
     Msg0 = dev_wasm:cache_wasm_image(File),
     Msg1 = Msg0#{
         <<"device">> => <<"stack@1.0">>,
-        <<"device-stack">> => [<<"WASI@1.0">>, <<"WASM-64@1.0">>, <<"emscripten@1.0">>],
+        <<"device-stack">> => [<<"wasm-64@1.0">>, <<"emscripten@1.0">>],
         <<"output-prefixes">> => [<<"wasm">>, <<"wasm">>],
         <<"stack-keys">> => [<<"init">>, <<"compute">>],
         <<"function">> => Func,
@@ -134,7 +144,8 @@ try_aot_test() ->
     Init = generate_emscripten_stack("test/try.wasm", <<"handle">>, [0, 0]),
     Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
     Msg = <<"msg">>,
-    Env = <<"1">>,
+    % Note: set to <<"1">> to enable the try/catch path
+    Env = <<"0">>,
     {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
     ?assertNotEqual(0, Ptr1),
     hb_beamr_io:write(Instance, Ptr1, Msg),

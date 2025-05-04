@@ -103,13 +103,15 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     // Wait for the response (we set this directly after the message was sent
     // so we have the lock, before Erlang sends us data back)
     DRV_DEBUG("Waiting for response");
+    drv_unlock(proc->is_running);
     drv_wait(this_import->response_ready, this_import->cond, &this_import->ready);
+    drv_lock(proc->is_running);
     DRV_DEBUG("Response ready");
 
     // Handle error in the response
     if (this_import->error_message) {
         DRV_DEBUG("Import execution failed. Error message: %s", proc->current_import->error_message);
-        send_error(proc, "Import execution failed: %s", proc->current_import->error_message);
+        send_error(proc->port_term, "Import execution failed: %s", proc->current_import->error_message);
         return;
     }
 
@@ -117,7 +119,7 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     int res = erl_terms_to_import_results(result_count, result_kinds, args, this_import->result_terms);
     if(res == -1) {
         DRV_DEBUG("Failed to convert terms to wasm vals");
-        send_error(proc, "Failed to convert terms to wasm vals");
+        send_error(proc->port_term, "Failed to convert terms to wasm vals");
         return;
     }
 
@@ -131,7 +133,7 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     DRV_DEBUG("Cleaning up this_import (%p)", this_import);
     driver_free(this_import);
 
-    DRV_DEBUG("generic_import_native_symbol_func completed");
+    DRV_DEBUG("generic_import_native_symbol_func completed (%s.%s)", module_name, func_name);
 }
 
 void wasm_initialize_runtime(void* raw) {
@@ -178,7 +180,7 @@ void wasm_initialize_runtime(void* raw) {
     wasm_module_t module_proto = wasm_runtime_load(binary_copy, mod_bin->size, error_buf, 1024);
     if (!module_proto) {
         DRV_DEBUG("Failed to load WASM proto-module: %s", error_buf);
-        send_error(proc, "Failed to load WASM proto-module: %s", error_buf);
+        send_error(proc->port_term, "Failed to load WASM proto-module: %s", error_buf);
         drv_unlock(proc->is_running);
         return;
     }
@@ -459,7 +461,7 @@ void wasm_initialize_runtime(void* raw) {
     DRV_DEBUG("Reinitializing runtime");
     if (!wasm_runtime_full_init(&init_args)) {
         DRV_DEBUG("Failed to reinitialize runtime");
-        send_error(proc, "Failed to reinitialize runtime");
+        send_error(proc->port_term, "Failed to reinitialize runtime");
         drv_unlock(proc->is_running);
         return;
     }
@@ -479,7 +481,7 @@ void wasm_initialize_runtime(void* raw) {
     wasm_module_t module_runtime = wasm_runtime_load(mod_bin->binary, mod_bin->size, error_buf, 1024);
     if (!module_runtime) {
         DRV_DEBUG("Failed to load WASM runtime-module: %s", error_buf);
-        send_error(proc, "Failed to load WASM runtime-module: %s", error_buf);
+        send_error(proc->port_term, "Failed to load WASM runtime-module: %s", error_buf);
         drv_unlock(proc->is_running);
         return;
     }
@@ -489,7 +491,7 @@ void wasm_initialize_runtime(void* raw) {
     wasm_module_inst_t module_inst = wasm_runtime_instantiate(module_runtime, 0x10000, 0x10000, error_buf, 1024);
     if (!module_inst) {
         DRV_DEBUG("Failed to instantiate WASM runtime-module: %s", error_buf);
-        send_error(proc, "Failed to instantiate WASM runtime-module: %s", error_buf);
+        send_error(proc->port_term, "Failed to instantiate WASM runtime-module: %s", error_buf);
         drv_unlock(proc->is_running);
         return;
     }
@@ -499,7 +501,7 @@ void wasm_initialize_runtime(void* raw) {
     wasm_table_inst_t indirect_func_table;
     if (!wasm_runtime_get_export_table_inst(module_inst, "__indirect_function_table", &indirect_func_table)) {
         DRV_DEBUG("Failed to find __indirect_function_table");
-        // send_error(proc, "Failed to get indirect function table");
+        // send_error(proc->port_term, "Failed to get indirect function table");
         // drv_unlock(proc->is_running);
         // return;
     } else {
@@ -532,7 +534,7 @@ void wasm_execute_exported_function(void* raw) {
     // Find the function in the exports
     wasm_function_inst_t* func = wasm_runtime_lookup_function(proc->instance, function_name);
     if (!func) {
-        send_error(proc, "Function not found: %s", function_name);
+        send_error(proc->port_term, "Function not found: %s", function_name);
         drv_unlock(proc->is_running);
         return;
     }
@@ -561,20 +563,22 @@ void wasm_execute_exported_function(void* raw) {
     }
     
     if (!(erl_terms_to_wasm_vals(&args, proc->current_args) == 0)) {
-        send_error(proc, "Failed to convert terms to wasm vals");
+        send_error(proc->port_term, "Failed to convert terms to wasm vals");
         drv_unlock(proc->is_running);
         return;
     }
 
-    proc->exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
+    DRV_DEBUG("Creating exec env");
+    wasm_exec_env_t exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
 
     // Call the function
     DRV_DEBUG("wasm_runtime_call_wasm_a: %s", function_name);
-    bool call_success = wasm_runtime_call_wasm_a(proc->exec_env, func, results.size, results.data, args.size, args.data);
+    bool call_success = wasm_runtime_call_wasm_a(exec_env, func, results.size, results.data, args.size, args.data);
+    DRV_DEBUG("wasm_runtime_call_wasm_a: %s, success: %d", function_name, call_success);
 
     if (!call_success) {
         const char *exception = wasm_runtime_get_exception(proc->instance);
-        send_error(proc, "Call to %s failed with exception: %s", function_name, exception);
+        send_error(proc->port_term, "Call to %s failed with exception: %s", function_name, exception);
         drv_unlock(proc->is_running);
         return;
     }
@@ -673,19 +677,23 @@ void wasm_execute_indirect_function(void *raw) {
     DRV_DEBUG("Converting terms to indirect args");
     if (erl_terms_to_indirect_args(argv, param_types, param_count, proc->current_args) == -1) {
         DRV_DEBUG("Failed to convert terms to indirect args");
-        send_error(proc, "Failed to convert terms to indirect args");
+        send_error(proc->port_term, "Failed to convert terms to indirect args");
         drv_unlock(proc->is_running);
         return;
     }
 
-    bool res = wasm_runtime_call_indirect(proc->exec_env, function_ix, argc, argv);
+    DRV_DEBUG("Creating exec env");
+    wasm_exec_env_t exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
+
+    DRV_DEBUG("wasm_runtime_call_indirect(%p, %ld, %d, %p)", exec_env, function_ix, argc, argv);
+    bool res = wasm_runtime_call_indirect(exec_env, function_ix, argc, argv);
 
     // // Prepare the arguments for the function call
     // wasm_val_vec_t prepared_args;
     //     // If there are no arguments or only one argument (function index), no preparation is needed
     // if (input_args->size <= 1) {
     //     DRV_DEBUG("Not enough arguments to create new wasm_val_vec_t");
-    //     send_error(proc, "Not enough arguments to create new wasm_val_vec_t");
+    //     send_error(proc->port_term, "Not enough arguments to create new wasm_val_vec_t");
     //     drv_unlock(proc->is_running);
     //     return;
     // }
@@ -716,7 +724,7 @@ void wasm_execute_indirect_function(void *raw) {
     //         DRV_DEBUG("%s", wasm_runtime_get_exception(proc->exec_env));
     //     }
     //     DRV_DEBUG("WASM function call failed");
-    //     send_error(proc, "WASM function call failed");
+    //     send_error(proc->port_term, "WASM function call failed");
     //     drv_unlock(proc->is_running);
     //     return;
     // }
