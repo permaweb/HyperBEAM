@@ -4,7 +4,7 @@ pub mod utils;
 #[cfg(test)]
 pub mod tests;
 
-use core::state::{deserialize_state, serialize_state};
+use core::state::{deserialize_state, serialize_state, get_state};
 
 use crate::core::riscv_machine::evaluate_raw_tx;
 use rustler::NifResult;
@@ -17,7 +17,7 @@ mod atoms {
 
 #[rustler::nif]
 fn hello() -> NifResult<String> {
-    Ok("hello from riscv em nif".to_string())
+    Ok("hello from riscv-em nif".to_string())
 }
 
 #[rustler::nif]
@@ -28,3 +28,10 @@ fn eval_riscv_bytecode(signed_raw_tx: String, state: String) -> NifResult<String
     Ok(serialized_evaluated_state)
 }
 
+#[rustler::nif]
+fn get_appchain_state(chain_id: &str) -> NifResult<String> {
+	let state = get_state(chain_id);
+    Ok(state)
+}
+
+rustler::init!("riscv_em_nif", [hello, eval_riscv_bytecode, get_appchain_state]);

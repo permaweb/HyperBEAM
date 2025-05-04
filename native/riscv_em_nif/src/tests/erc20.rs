@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::core::riscv_machine::evaluate_raw_tx;
-    use crate::core::state::{serialize_state, deserialize_state};
+    use crate::core::state::{serialize_state, deserialize_state, get_state};
     use revm::primitives::Address;
     use r55::test_utils::{add_balance_to_db, ALICE};
     use serde_json::Value;
@@ -47,5 +47,11 @@ mod tests {
         let res_mint = evaluate_raw_tx(state, &raw_tx_hex_mint.trim());
         println!("{:?}", res_mint.0);
         assert!(res_mint.1.status);
+    }
+
+    #[test]
+    fn get_appchain_state() {
+        let state = get_state("7777");
+        println!("{:?}", state);
     }
 }
