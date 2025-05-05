@@ -40,7 +40,7 @@ compile(WasmBinary) when is_binary(WasmBinary) ->
     end.
 
 % Tests
-compile_test() ->
+compile_binary_test() ->
     WasmPath = <<"test/test.wasm">>,
     WasmAotPath = <<"test/test.aot">>,
     {ok, WasmBinary} = file:read_file(WasmPath),
@@ -50,6 +50,16 @@ compile_test() ->
     print_binary_info("AotWasmGenerated", AotWasmGenerated),
     print_binary_info("AotWasmFile", AotWasmFile),
     ?assertEqual(AotWasmGenerated, AotWasmFile).
+
+compile_interface_test() ->
+    WasmPath = <<"test/pow_calculator.wasm">>,
+    {ok, WasmBinary} = file:read_file(WasmPath),
+    {ok, Imports, Exports, _} = compile(WasmBinary),
+    ?assertEqual(length(Imports), 4),
+    ?assertEqual(lists:nth(1, Imports), {func, "my_lib", "mul", "(ii)i"}),
+    ?assertEqual(length(Exports), 13),
+    ?assertEqual(lists:nth(1, Exports), {memory, "memory", []}),
+    ?assertEqual(lists:nth(2, Exports), {func, "pow", "(ii)i"}).
 
 compile_invalid_test() ->
     WasmPath = <<"test/invalid.wasm">>,
