@@ -1,5 +1,5 @@
 use crate::utils::constants::EIP1967_IMPLEMENTATION_SLOT;
-use alloy_primitives::{Address, Bytes, U256, map::foldhash::fast::RandomState};
+use alloy_primitives::{Address, U256, map::foldhash::fast::RandomState};
 use anyhow::Error;
 use r55::test_utils::AccountInfo;
 use r55::test_utils::Bytecode;
