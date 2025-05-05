@@ -3,11 +3,13 @@
 -module(dev_cron).
 -export([load/3, once/3, every/3, stop/3, info/1, info/3]).
 -export([normalize/3]).
+-export([normalize/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
 info(_) -> 
+	#{ exports => [info, once, every, stop, add, load, normalize] }.
 	#{ exports => [info, once, every, stop, add, load, normalize] }.
 
 %% @doc Exported function for granting a description of the device.
@@ -47,22 +49,123 @@ cron_opts(Opts) ->
             }
     }.
 
-%% @doc Normalize the cron jobs from cache.
-normalize(Msg1, Msg2, Opts) ->
+%% @doc Normalize the cron jobs from cache by attempting to restart them.
+normalize(Msg1, _Msg2, Opts) ->
 	?event({normalize_cron_jobs_start}),
-    CronOpts = cron_opts(Opts), % Ensure cron process def is included
+    CronOpts = cron_opts(Opts),
     case cache_list(CronOpts) of
 		{ok, Crons} -> 
 			?event({normalize_cron_jobs_loaded, {count, length(Crons)}}),
-			Results = lists:map(fun(Job) -> 
-				% only output the job for now.
-				?event({normalize_cron_job_start, {job, Job}}),
-				Job
-			end, Crons),
-			{ok, Results}
+            {Successes, Errors} = process_cached_jobs(Crons, Msg1, CronOpts),
+            NumSuccess = length(Successes),
+            ErrorDetails = Errors,
+            ?event({normalize_cron_jobs_finished, 
+				{success_or_existing, NumSuccess}, 
+				{errors, length(ErrorDetails)}, 
+				{error_details, ErrorDetails}}),
+			{ok, #{
+				<<"restarted_or_existing">> => NumSuccess, 
+				<<"errors">> => ErrorDetails
+			}};
+		{error, Reason} ->
+			 ?event({normalize_cron_jobs_load_error, {error, Reason}}),
+             {error, Reason}
 	end.
 
+%% Helper function to process the list of cached cron jobs
+process_cached_jobs(Crons, Msg1, CronOpts) ->
+    Results = lists:map(
+        fun(Job) -> 
+            process_single_job(Job, Msg1, CronOpts)
+        end, Crons
+    ),
+    lists:partition(fun({ok, _}) -> true; (_) -> false end, Results).
+
+%% Helper function to process a single cached job entry
+process_single_job(Job, Msg1, CronOpts) ->
+    case extract_job_details(Job) of
+        {ok, DetailsMap} ->
+            case reconstruct_original_msg(DetailsMap) of
+                {ok, OriginalMsg} ->
+                    attempt_job_restart(DetailsMap, OriginalMsg, Msg1, CronOpts);
+                {error, Reason} ->
+                    TaskId = maps:get(task_id, DetailsMap, unknown),
+                    {error, {TaskId, Reason}}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% Helper function to extract and validate details from a raw cache job entry
+extract_job_details(Job) ->
+    Body = maps:get(<<"body">>, Job, #{}),
+    TaskId = maps:get(<<"task_id">>, Body, undefined),
+    AugmentedData = maps:get(<<"data">>, Body, #{}),
+    Type = maps:get(<<"type">>, AugmentedData, undefined),
+    Interval = maps:get(<<"interval">>, AugmentedData, undefined),
+    WorkerMsg = maps:get(<<"worker_msg">>, AugmentedData, #{}),
+    if TaskId == undefined orelse Type == undefined orelse not is_map(WorkerMsg) orelse WorkerMsg == #{} ->
+        ?event({normalize_skipping_invalid_job, {reason, invalid_structure}, {raw_job, Job}}),
+        {error, {unknown_task_id, invalid_job_structure}};
+       true ->
+            {ok, #{ task_id => TaskId, type => Type, interval => Interval, worker_msg => WorkerMsg }}
+    end.
+
+%% Helper function to reconstruct the original message for once/every from cached details
+reconstruct_original_msg(DetailsMap) ->
+    #{ task_id := TaskId, type := Type, interval := Interval, worker_msg := WorkerMsg } = DetailsMap,
+    TargetPath = maps:get(<<"path">>, WorkerMsg, undefined),
+    if TargetPath == undefined ->
+        ?event({normalize_skipping_no_target_path, {task_id, TaskId}, {worker_msg, WorkerMsg}}),
+        {error, no_target_path};
+       true ->
+            OtherParams = maps:remove(<<"path">>, WorkerMsg),
+            OriginalMsg0 = maps:put(<<"cron-path">>, TargetPath, OtherParams),
+            OriginalMsg1 = case Type of
+                               <<"every">> when Interval =/= null andalso Interval =/= undefined -> 
+                                   maps:put(<<"interval">>, Interval, OriginalMsg0);
+                               _ -> OriginalMsg0
+                           end,
+            OriginalMsgPath = <<"/~cron@1.0/", Type/binary>>,
+            OriginalMsg = maps:put(<<"path">>, OriginalMsgPath, OriginalMsg1),
+            {ok, OriginalMsg}
+    end.
+
+%% Helper function to attempt the restart of a single job
+attempt_job_restart(DetailsMap, OriginalMsg, Msg1, CronOpts) ->
+    #{ task_id := TaskId, type := Type } = DetailsMap,
+    %?event({normalize_attempting_restart, {task_id, TaskId}, {type, Type}, {original_msg_preview, OriginalMsg#{ 
+    %     commitments => commitments
+    % }}}),
+    case Type of
+        <<"once">> -> 
+            case once(Msg1, OriginalMsg, CronOpts) of
+                {ok, ReturnedId} -> 
+                     % Success if original ID matches OR a new ID was returned (idempotency handled)
+                    ?event({normalize_once_success, {task_id, TaskId}, {returned_id, ReturnedId}}),
+                    {ok, TaskId};
+                Error -> 
+                    ?event({normalize_once_error, {task_id, TaskId}, {error, Error}}),
+                    {error, {TaskId, Error}}
+            end;
+        <<"every">> -> 
+            case every(Msg1, OriginalMsg, CronOpts) of
+                 {ok, ReturnedId} -> 
+                     % Success if original ID matches OR a new ID was returned (idempotency handled)
+                    ?event({normalize_every_success, {task_id, TaskId}, {returned_id, ReturnedId}}),
+                    {ok, TaskId};
+                Error -> 
+                    ?event({normalize_every_error, {task_id, TaskId}, {error, Error}}),
+                    {error, {TaskId, Error}}
+            end;
+        _ ->
+            ?event({normalize_unknown_type, {task_id, TaskId}, {type, Type}}),
+            {error, {TaskId, unknown_type}}
+    end.
+
 %% @doc Reload all registered cron tasks.
+%% TBD: currently only lists the cron jobs, but does not restart them.
+%% TBD: may need to be removed in favor of normalize/3
 load(_, _, Opts) ->
     CronOpts = cron_opts(Opts),
     ?event({load_cron_jobs_start, {cron_opts, CronOpts}}),
@@ -99,8 +202,14 @@ once(_Msg1, Msg2, Opts) ->
 					% Process not found, spawn and register
 					Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts) end),
 					hb_name:register(Name, Pid),
-					% Cache the task
-					{ok, PutResult} = cache_put(ReqMsgID, ModifiedMsg2, cron_opts(Opts)),
+					% Define the data structure for the cache
+					MinimalAugmentedData = #{ 
+						<<"type">> => <<"once">>,
+						<<"interval">> => null, % No interval for 'once'
+						<<"worker_msg">> => ModifiedMsg2 
+					},
+					% Cache the augmented task data
+					{ok, PutResult} = cache_put(ReqMsgID, MinimalAugmentedData, cron_opts(Opts)),
 					?event({once_cache_put_result, {result, PutResult}}),
 					% {ok, Crons} = cache_list(cron_opts(Opts)),
 					% ?event({once_cron_cache_load_test_crons, {crons, Crons}}),
@@ -172,7 +281,14 @@ every(_Msg1, Msg2, Opts) ->
 		                        end
 		                    ),
 						hb_name:register(Name, Pid),
-						{ok, PutResult} = cache_put(ReqMsgID, ModifiedMsg2, cron_opts(Opts)),
+						% Define the data structure for the cache
+						MinimalAugmentedData = #{ 
+							<<"type">> => <<"every">>,
+							<<"interval">> => IntervalString,
+							<<"worker_msg">> => ModifiedMsg2 
+						},
+						% Cache the augmented task data
+						{ok, PutResult} = cache_put(ReqMsgID, MinimalAugmentedData, cron_opts(Opts)),
 						?event({every_cache_put_result, {result, PutResult}}),
 						{ok, ReqMsgID}
 				end
@@ -281,14 +397,14 @@ send_cron_command(Command, Body, Opts) ->
 
 %% @doc Put a value in the cache with the specified task ID
 %% Returns {ok, TaskId} on success
-cache_put(TaskId, Value, Opts) ->
-	?event({cache_put_start, {task_id, TaskId}, {value, Value}}),
+cache_put(TaskId, AugmentedData, Opts) ->
+	?event({cache_put_start, {task_id, TaskId}, {augmented_data, AugmentedData}}),
     send_cron_command(
-		<<"put">>, 
-		#{
-        	<<"task_id">> => TaskId,
-        	<<"data">> => Value
-    	}, 
+		<<"put">>,
+		#{ 
+			<<"task_id">> => TaskId,
+        	<<"data">> => AugmentedData % Pass the augmented data map
+    	},
 		Opts
 	),
 	{ok, TaskId}.
@@ -828,14 +944,13 @@ normalize_test() ->
     {ok, _EveryTaskId} = hb_http:get(Node, EveryUrlPath, #{}),
     ?event({'normalize_test_every_created'}),
     timer:sleep(100), 
-    % Call normalize
     NormalizeUrlPath = <<"/~cron@1.0/normalize">>,
     ?event({'normalize_test_calling_normalize', {url, NormalizeUrlPath}}),
     {ok, NormalizeResult} = hb_http:get(Node, NormalizeUrlPath, #{}),
     ?event({'normalize_test_normalize_result', {result, NormalizeResult}}),
-    % Basic assertion: check if the call succeeded and returned a map
-    % ?assertMatch(#{<<"status">> := 200, <<"body">> := _}, NormalizeResult),
-    % We expect the body to be the list of jobs from cache_list mapped by normalize/3
-    % Body = maps:get(<<"body">>, NormalizeResult),
-   % ?assert(is_list(Body)), % Current normalize returns the list directly
+    ?assertMatch(#{ 
+        <<"status">> := 200,
+        <<"restarted_or_existing">> := _,
+        <<"errors">> := _
+    }, NormalizeResult),
     ?event({'normalize_test_done'}).
