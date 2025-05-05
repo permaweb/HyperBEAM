@@ -216,6 +216,7 @@ int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, si
     bool sgx_mode = false, size_level_set = false, use_dummy_wasm = false;
     int exit_status = EXIT_FAILURE;
 
+    /* Default options */
     option.opt_level = 3;
     option.size_level = 3;
     option.output_format = AOT_FORMAT_FILE;
@@ -230,7 +231,7 @@ int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, si
     option.enable_gc = false;
     aot_call_stack_features_init_default(&option.call_stack_features);
 
-    /* Process options */
+    /* Configured options */
     // for (argc--, argv++; argc > 0 && argv[0][0] == '-'; argc--, argv++) {
     // if (!strcmp(argv[0], "-o")) {
     //     argc--, argv++;
@@ -241,7 +242,7 @@ int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, si
     // else if (!strncmp(argv[0], "--target=", 9)) {
     //     if (argv[0][9] == '\0')
     //         PRINT_HELP_AND_EXIT();
-    //         option.target_arch = "aarch64";
+    // option.target_arch = "aarch64";
     //     if (!strcmp(option.target_arch, "help")) {
     //         use_dummy_wasm = true;
     //     }
@@ -326,17 +327,17 @@ int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, si
     //     option.enable_thread_mgr = true;
     // }
     // else if (!strcmp(argv[0], "--enable-tail-call")) {
-    //     option.enable_tail_call = true;
+    option.enable_tail_call = true;
     // }
     // else if (!strcmp(argv[0], "--enable-simd")) {
     //     /* obsolete option, kept for compatibility */
-    //     option.enable_simd = true;
+    option.enable_simd = true;
     // }
     // else if (!strcmp(argv[0], "--disable-simd")) {
     //     option.enable_simd = false;
     // }
     // else if (!strcmp(argv[0], "--disable-ref-types")) {
-    //     option.enable_ref_types = false;
+    // option.enable_ref_types = false;
     // }
     // else if (!strcmp(argv[0], "--disable-aux-stack-check")) {
     //     option.enable_aux_stack_check = false;
@@ -346,12 +347,12 @@ int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, si
     // }
     // else if (!strncmp(argv[0], "--call-stack-features=", 22)) {
     //     /* Reset all the features, only enable the user-defined ones */
-    //     memset(&option.call_stack_features, 0,
-    //             sizeof(AOTCallStackFeatures));
-
+    // memset(&option.call_stack_features, 0,
+    //         sizeof(AOTCallStackFeatures));
     //     if (argv[0][22] != '\0') {
     //         if (!parse_call_stack_features(argv[0] + 22,
     //                                         &option.call_stack_features)) {
+    // option.call_stack_features.bounds_checks = true;
     //             printf("Failed to parse call-stack-features\n");
     //             PRINT_HELP_AND_EXIT();
     //         }
@@ -362,8 +363,8 @@ int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, si
     //     option.enable_perf_profiling = true;
     // }
     // else if (!strcmp(argv[0], "--enable-memory-profiling")) {
-    //     option.enable_memory_profiling = true;
-    //     option.enable_stack_estimation = true;
+    option.enable_memory_profiling = true;
+    option.enable_stack_estimation = true;
     // }
     // else if (!strcmp(argv[0], "--xip")) {
     //     option.is_indirect_mode = true;
@@ -455,6 +456,7 @@ int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, si
     //     PRINT_HELP_AND_EXIT();
     // }
 
+    /* Additional options */
     option.enable_nan_canonicalization = true;
     option.nan_canonicalization_sign_bit = 0;
 

@@ -104,7 +104,7 @@ set(WAMR_BUILD_SIMD 1) # SIMD for performance
 set(WAMR_BUILD_TAIL_CALL 1) # TODO: Justification?
 
 # Disable hardware-enforced bounds checking
-# TODO: Justification? This is for determinism reasons?
+# TODO: Justification? This is due to running on the TEE?
 set(WAMR_DISABLE_HW_BOUND_CHECK 1)
 
 # Exception handling is not supported in AOT mode
@@ -117,7 +117,7 @@ set(WAMR_BUILD_LIBC_UVWASI 0)
 
 # Explicitly disable some features that are unused or hazardous
 set(WAMR_BUILD_SHARED_MEMORY 0)
-set(WAMR_BUILD_BULK_MEMORY 0)
+set(WAMR_BUILD_BULK_MEMORY 0) # TODO: Check if this is okay?
 set(WAMR_BUILD_LIB_WASI_THREADS 0)
 
 # -- End WAMR build options --
@@ -142,8 +142,20 @@ target_include_directories(hb_beamr_lib PUBLIC
     ${WAMR_ROOT_DIR}/core/iwasm/include  # WAMR headers
 )
 
+# Link against vmlib and export it
+# target_link_libraries(hb_beamr_lib PUBLIC vmlib) # Original line
+
 # Link against vmlib, forcing export of its symbols into the shared library
-target_link_libraries(hb_beamr_lib PUBLIC vmlib)
+if(APPLE)
+  # On macOS, -all_load forces loading of all members of static archives
+  target_link_libraries(hb_beamr_lib PUBLIC "-Wl,-all_load" vmlib)
+elseif(UNIX AND NOT APPLE)
+  # On other Unix-like systems (e.g., Linux), use --whole-archive
+  target_link_libraries(hb_beamr_lib PUBLIC "-Wl,--whole-archive" vmlib "-Wl,--no-whole-archive")
+else()
+  # Fallback for other systems (e.g., Windows) or if flags cause issues
+  target_link_libraries(hb_beamr_lib PUBLIC vmlib)
+endif()
 
 # Conditionally add the test subdirectory and enable testing
 if(BUILD_TESTING)

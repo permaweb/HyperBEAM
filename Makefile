@@ -79,9 +79,15 @@ wamrc: compile
         cmake .. && \
         make
 
+# TODO: Find a way to keep this in sync with `hb_beamrc_lib`?
+
 test/%.aot: test/%.wasm
 	@echo "Compiling $< to $@ (ignoring errors)"
-	-$(WAMRC_BUILD_PATH)/wamrc -o $@ $<
+	-$(WAMRC_BUILD_PATH)/wamrc \
+        --enable-nan-canonicalization \
+        --nan-canonicalization-sign-bit=0 \
+        --bounds-checks=1 \
+        -o $@ $<
 
 WASM_FILES := $(wildcard test/*.wasm)
 AOT_FILES := $(patsubst test/%.wasm,test/%.aot,$(WASM_FILES))
