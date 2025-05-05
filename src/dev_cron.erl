@@ -491,7 +491,10 @@ once_executed_test() ->
 			"&cron-path=/~test-device@1.0/update_state">>,
 	% this should call the worker via the test device
 	% the test device should look up the worker via the id given 
-	{ok, _ReqMsgId} = hb_http:get(Node, UrlPath, #{}),
+	{ok, ReqMsgId1} = hb_http:get(Node, UrlPath, #{}),
+	% Call again to test idempotency
+	{ok, ReqMsgId2} = hb_http:get(Node, UrlPath, #{}),
+	?assertEqual(ReqMsgId1, ReqMsgId2, "Second call should return the same Task ID"),
 	% wait for the request to be processed
 	timer:sleep(1000),
 	% send a message to the worker to get the state
@@ -518,8 +521,12 @@ every_worker_loop_test() ->
 		"&interval=500-milliseconds",
 		"&cron-path=/~test-device@1.0/increment_counter">>,
 	?event({'cron:every:test:sendUrl', {url_path, UrlPath}}),
-	{ok, ReqMsgId} = hb_http:get(Node, UrlPath, #{}),
-	?event({'cron:every:test:get_done', {req_id, ReqMsgId}}),
+	{ok, ReqMsgId1} = hb_http:get(Node, UrlPath, #{}),
+	?event({'cron:every:test:get_done', {req_id, ReqMsgId1}}),
+	% Call again to test idempotency
+	{ok, ReqMsgId2} = hb_http:get(Node, UrlPath, #{}),
+	?assertEqual(ReqMsgId1, ReqMsgId2, "Second call should return the same Task ID"),
+	?event({'cron:every:test:idempotency_check_done', {req_id, ReqMsgId2}}),
 	timer:sleep(1500),
 	PID ! {get, self()},
 	% receive the state from the worker
