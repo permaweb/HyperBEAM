@@ -130,8 +130,8 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     erl_drv_mutex_destroy(this_import->response_ready);
     DRV_DEBUG("Cond and mutex destroyed");
 
-    DRV_DEBUG("Cleaning up this_import (%p)", this_import);
-    driver_free(this_import);
+    // DRV_DEBUG("Cleaning up this_import (%p)", this_import);
+    // driver_free(this_import);
 
     DRV_DEBUG("generic_import_native_symbol_func completed (%s.%s)", module_name, func_name);
 }
@@ -568,8 +568,14 @@ void wasm_execute_exported_function(void* raw) {
         return;
     }
 
-    DRV_DEBUG("Creating exec env");
-    wasm_exec_env_t exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
+    if (proc->exec_env == NULL) {
+        DRV_DEBUG("Creating new exec env");
+        proc->exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
+    } else {
+        DRV_DEBUG("Using existing exec env");
+    }
+    wasm_exec_env_t exec_env = proc->exec_env;
+    // wasm_exec_env_t exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
 
     // Call the function
     DRV_DEBUG("wasm_runtime_call_wasm_a: %s", function_name);
@@ -682,8 +688,14 @@ void wasm_execute_indirect_function(void *raw) {
         return;
     }
 
-    DRV_DEBUG("Creating exec env");
-    wasm_exec_env_t exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
+    if (proc->exec_env == NULL) {
+        DRV_DEBUG("Creating new exec env");
+        proc->exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
+    } else {
+        DRV_DEBUG("Using existing exec env");
+    }
+    wasm_exec_env_t exec_env = proc->exec_env;
+    // wasm_exec_env_t exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
 
     DRV_DEBUG("wasm_runtime_call_indirect(%p, %ld, %d, %p)", exec_env, function_ix, argc, argv);
     bool res = wasm_runtime_call_indirect(exec_env, function_ix, argc, argv);

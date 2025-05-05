@@ -230,6 +230,231 @@ int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, si
     option.enable_gc = false;
     aot_call_stack_features_init_default(&option.call_stack_features);
 
+    /* Process options */
+    // for (argc--, argv++; argc > 0 && argv[0][0] == '-'; argc--, argv++) {
+    // if (!strcmp(argv[0], "-o")) {
+    //     argc--, argv++;
+    //     if (argc < 2)
+    //         PRINT_HELP_AND_EXIT();
+    //     out_file_name = argv[0];
+    // }
+    // else if (!strncmp(argv[0], "--target=", 9)) {
+    //     if (argv[0][9] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //         option.target_arch = "aarch64";
+    //     if (!strcmp(option.target_arch, "help")) {
+    //         use_dummy_wasm = true;
+    //     }
+    // }
+    // else if (!strncmp(argv[0], "--target-abi=", 13)) {
+    //     if (argv[0][13] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //     option.target_abi = argv[0] + 13;
+    //     if (!strcmp(option.target_abi, "help")) {
+    //         use_dummy_wasm = true;
+    //     }
+    // }
+    // else if (!strncmp(argv[0], "--cpu=", 6)) {
+    //     if (argv[0][6] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //     option.target_cpu = argv[0] + 6;
+    //     if (!strcmp(option.target_cpu, "help")) {
+    //         use_dummy_wasm = true;
+    //     }
+    // }
+    // else if (!strncmp(argv[0], "--cpu-features=", 15)) {
+    //     if (argv[0][15] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //     option.cpu_features = argv[0] + 15;
+    //     if (!strcmp(option.cpu_features, "+help")) {
+    //         use_dummy_wasm = true;
+    //     }
+    // }
+    // else if (!strncmp(argv[0], "--opt-level=", 12)) {
+    //     if (argv[0][12] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //     option.opt_level = (uint32)atoi(argv[0] + 12);
+    //     if (option.opt_level > 3)
+    //         option.opt_level = 3;
+    // }
+    // else if (!strncmp(argv[0], "--size-level=", 13)) {
+    //     if (argv[0][13] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //     option.size_level = (uint32)atoi(argv[0] + 13);
+    //     if (option.size_level > 3)
+    //         option.size_level = 3;
+    //     size_level_set = true;
+    // }
+    // else if (!strcmp(argv[0], "-sgx")) {
+    //     sgx_mode = true;
+    // }
+    // else if (!strncmp(argv[0], "--bounds-checks=", 16)) {
+    option.bounds_checks = 1;
+    // }
+    // else if (!strncmp(argv[0], "--stack-bounds-checks=", 22)) {
+    option.stack_bounds_checks = 1;
+    // }
+    // else if (!strncmp(argv[0], "--stack-usage=", 14)) {
+    //     option.stack_usage_file = argv[0] + 14;
+    // }
+    // else if (!strncmp(argv[0], "--format=", 9)) {
+    //     if (argv[0][9] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //     if (!strcmp(argv[0] + 9, "aot"))
+    //         option.output_format = AOT_FORMAT_FILE;
+    //     else if (!strcmp(argv[0] + 9, "object"))
+    //         option.output_format = AOT_OBJECT_FILE;
+    //     else if (!strcmp(argv[0] + 9, "llvmir-unopt"))
+    //         option.output_format = AOT_LLVMIR_UNOPT_FILE;
+    //     else if (!strcmp(argv[0] + 9, "llvmir-opt"))
+    //         option.output_format = AOT_LLVMIR_OPT_FILE;
+    //     else {
+    //         printf("Invalid format %s.\n", argv[0] + 9);
+    //         PRINT_HELP_AND_EXIT();
+    //     }
+    // }
+    // else if (!strncmp(argv[0], "-v=", 3)) {
+    //     log_verbose_level = atoi(argv[0] + 3);
+    //     if (log_verbose_level < 0 || log_verbose_level > 5)
+    //         PRINT_HELP_AND_EXIT();
+    // }
+    // else if (!strcmp(argv[0], "--disable-bulk-memory")) {
+    option.enable_bulk_memory = false;
+    // }
+    // else if (!strcmp(argv[0], "--enable-multi-thread")) {
+    //     option.enable_bulk_memory = true;
+    //     option.enable_thread_mgr = true;
+    // }
+    // else if (!strcmp(argv[0], "--enable-tail-call")) {
+    //     option.enable_tail_call = true;
+    // }
+    // else if (!strcmp(argv[0], "--enable-simd")) {
+    //     /* obsolete option, kept for compatibility */
+    //     option.enable_simd = true;
+    // }
+    // else if (!strcmp(argv[0], "--disable-simd")) {
+    //     option.enable_simd = false;
+    // }
+    // else if (!strcmp(argv[0], "--disable-ref-types")) {
+    //     option.enable_ref_types = false;
+    // }
+    // else if (!strcmp(argv[0], "--disable-aux-stack-check")) {
+    //     option.enable_aux_stack_check = false;
+    // }
+    // else if (!strcmp(argv[0], "--enable-dump-call-stack")) {
+    option.aux_stack_frame_type = AOT_STACK_FRAME_TYPE_STANDARD;
+    // }
+    // else if (!strncmp(argv[0], "--call-stack-features=", 22)) {
+    //     /* Reset all the features, only enable the user-defined ones */
+    //     memset(&option.call_stack_features, 0,
+    //             sizeof(AOTCallStackFeatures));
+
+    //     if (argv[0][22] != '\0') {
+    //         if (!parse_call_stack_features(argv[0] + 22,
+    //                                         &option.call_stack_features)) {
+    //             printf("Failed to parse call-stack-features\n");
+    //             PRINT_HELP_AND_EXIT();
+    //         }
+    //     }
+    // }
+    // else if (!strcmp(argv[0], "--enable-perf-profiling")) {
+    //     option.aux_stack_frame_type = AOT_STACK_FRAME_TYPE_STANDARD;
+    //     option.enable_perf_profiling = true;
+    // }
+    // else if (!strcmp(argv[0], "--enable-memory-profiling")) {
+    //     option.enable_memory_profiling = true;
+    //     option.enable_stack_estimation = true;
+    // }
+    // else if (!strcmp(argv[0], "--xip")) {
+    //     option.is_indirect_mode = true;
+    //     option.disable_llvm_intrinsics = true;
+    // }
+    // else if (!strcmp(argv[0], "--enable-indirect-mode")) {
+    //     option.is_indirect_mode = true;
+    // }
+    // else if (!strcmp(argv[0], "--enable-gc")) {
+    //     option.aux_stack_frame_type = AOT_STACK_FRAME_TYPE_STANDARD;
+    //     option.enable_gc = true;
+    // }
+    // else if (!strcmp(argv[0], "--disable-llvm-intrinsics")) {
+    //     option.disable_llvm_intrinsics = true;
+    // }
+    // else if (!strncmp(argv[0], "--enable-builtin-intrinsics=", 28)) {
+    //     if (argv[0][28] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //     option.builtin_intrinsics = argv[0] + 28;
+    // }
+    // else if (!strcmp(argv[0], "--disable-llvm-lto")) {
+    //     option.disable_llvm_lto = true;
+    // }
+    // else if (!strcmp(argv[0], "--enable-llvm-pgo")) {
+    //     option.enable_llvm_pgo = true;
+    // }
+    // else if (!strncmp(argv[0], "--enable-llvm-passes=", 21)) {
+    //     if (argv[0][21] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //     option.llvm_passes = argv[0] + 21;
+    // }
+    // else if (!strncmp(argv[0], "--use-prof-file=", 16)) {
+    //     if (argv[0][16] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //     option.use_prof_file = argv[0] + 16;
+    // }
+    // else if (!strcmp(argv[0], "--enable-segue")) {
+    //     /* all flags are enabled */
+    //     option.segue_flags = 0x1F1F;
+    // }
+    // else if (!strncmp(argv[0], "--enable-segue=", 15)) {
+    //     option.segue_flags = resolve_segue_flags(argv[0] + 15);
+    //     if (option.segue_flags == (uint32)-1)
+    //         PRINT_HELP_AND_EXIT();
+    // }
+    // else if (!strncmp(argv[0], "--emit-custom-sections=", 23)) {
+    //     int len = 0;
+    //     if (option.custom_sections) {
+    //         free(option.custom_sections);
+    //     }
+
+    //     option.custom_sections = split_string(argv[0] + 23, &len, ",");
+    //     if (!option.custom_sections) {
+    //         printf("Failed to process emit-custom-sections: alloc "
+    //                 "memory failed\n");
+    //         PRINT_HELP_AND_EXIT();
+    //     }
+
+    //     option.custom_sections_count = len;
+    // }
+    // else if (!strncmp(argv[0], "--mllvm=", 8)) {
+    //     void *np;
+    //     if (argv[0][8] == '\0')
+    //         PRINT_HELP_AND_EXIT();
+    //     if (llvm_options_count == 0)
+    //         llvm_options_count += 2;
+    //     else
+    //         llvm_options_count++;
+    //     np = realloc(llvm_options, llvm_options_count * sizeof(char *));
+    //     if (np == NULL) {
+    //         printf("Memory allocation failure\n");
+    //         goto fail0;
+    //     }
+    //     llvm_options = np;
+    //     if (llvm_options_count == 2)
+    //         llvm_options[llvm_options_count - 2] = "wamrc";
+    //     llvm_options[llvm_options_count - 1] = argv[0] + 8;
+    // }
+    // else if (!strcmp(argv[0], "--enable-shared-heap")) {
+    //     option.enable_shared_heap = true;
+    // }
+    // else if (!strcmp(argv[0], "--version")) {
+    //     uint32 major, minor, patch;
+    //     wasm_runtime_get_version(&major, &minor, &patch);
+    //     printf("wamrc %u.%u.%u\n", major, minor, patch);
+    //     return 0;
+    // }
+    // else
+    //     PRINT_HELP_AND_EXIT();
+    // }
+
     option.enable_nan_canonicalization = true;
     option.nan_canonicalization_sign_bit = 0;
 

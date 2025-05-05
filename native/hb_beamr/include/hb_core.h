@@ -35,7 +35,7 @@ typedef struct {
     unsigned int port_key;
     ErlDrvMutex* is_running;        // Mutex to track if the process is running
     wasm_table_inst_t indirect_func_table; // Indirect function table
-    // wasm_exec_env_t exec_env;      // Execution environment for the WASM instance
+    wasm_exec_env_t exec_env;      // Execution environment for the WASM instance
     char* current_function;        // Current function being executed
     long current_function_ix;   // Index of the current function
     int indirect_func_table_ix;    // Index of the indirect function table
