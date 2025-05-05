@@ -27,12 +27,16 @@ compile(WasmBinary) when is_binary(WasmBinary) ->
     Port ! {self(), {command, term_to_binary({compile, WasmBinary})}},
     ?event({waiting_for_compile_from, Port}),
     receive
-        {compilation_result, AotWasm} ->
-            ?event({compilation_result, {bytes, byte_size(AotWasm)}}),
-            {ok, AotWasm};
+        {compilation_result, Imports, Exports, AotWasm} ->
+            ?event({compilation_result, 
+                {imports, length(Imports)},
+                {exports, length(Exports)},
+                {bytes, byte_size(AotWasm)}}),
+            {ok, Imports, Exports, AotWasm};
         {error, Error} ->
             ?event({compilation_error, Error}),
-            {error, Error}
+            {error, Error};
+        Any -> ?event({any, Any})
     end.
 
 % Tests
@@ -40,10 +44,10 @@ compile_test() ->
     WasmPath = <<"test/test.wasm">>,
     WasmAotPath = <<"test/test.aot">>,
     {ok, WasmBinary} = file:read_file(WasmPath),
-    print_binary_info("WasmBinary", WasmBinary),
-    {ok, AotWasmGenerated} = compile(WasmBinary),
-    print_binary_info("AotWasmGenerated", AotWasmGenerated),
+    {ok, _, _, AotWasmGenerated} = compile(WasmBinary),
     {ok, AotWasmFile} = file:read_file(WasmAotPath),
+    print_binary_info("WasmBinary", WasmBinary),
+    print_binary_info("AotWasmGenerated", AotWasmGenerated),
     print_binary_info("AotWasmFile", AotWasmFile),
     ?assertEqual(AotWasmGenerated, AotWasmFile).
 

@@ -13,7 +13,7 @@
 #endif
 
 #ifndef TRACE
-#define TRACE(fmt, ...) do {} while (0)
+#define TRACE(fmt, ...) do { printf("[TRACE] " fmt "\n", ##__VA_ARGS__); } while (0)
 #endif
 
 #endif /* STUB_H */

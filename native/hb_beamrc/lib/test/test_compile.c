@@ -16,11 +16,14 @@ int main() {
     compile_opts.mem_alloc_option.allocator.realloc_func = realloc;
     compile_opts.mem_alloc_option.allocator.free_func = free;
     
-    /* Compile WebAssembly module to AOT module */
+    WasmInterfaceFunction* imports; 
+    size_t import_count;
+    WasmInterfaceFunction* exports;
+    size_t export_count;
     uint8_t *out_wasm_aot_data = NULL;
     size_t out_wasm_aot_size = 0;
-    
-    result = hb_wasm_aot_compile(&compile_opts, dummy_wasm_file, sizeof(dummy_wasm_file), &out_wasm_aot_data, &out_wasm_aot_size);
+
+    result = hb_wasm_aot_compile(&compile_opts, dummy_wasm_file, sizeof(dummy_wasm_file), &imports, &import_count, &exports, &export_count, &out_wasm_aot_data, &out_wasm_aot_size);
     
     if (result != 0) {
         fprintf(stderr, "Failed to compile WebAssembly module\n");

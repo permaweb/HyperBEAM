@@ -97,7 +97,7 @@ init(M1, M2, Opts) ->
                 end
         end,
     % Start the WASM executor.
-    {ok, AotImageBin} = hb_beamrc:compile(ImageBin),
+    {ok, _, _, AotImageBin} = hb_beamrc:compile(ImageBin),
     {ok, Instance, _Imports, _Exports} = hb_beamr:start(AotImageBin, Mode),
     % Set the WASM Instance, handler, and standard library invokation function.
     ?event({setting_wasm_instance, Instance, {prefix, Prefix}}),

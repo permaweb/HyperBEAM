@@ -138,14 +138,19 @@ void invoke_compile(void *raw) {
 
     drv_lock(proc->is_running);
 
+    WasmInterfaceFunction* imports;
+    size_t import_count;
+    WasmInterfaceFunction* exports;
+    size_t export_count;
+
     size_t aot_module_size;
     uint8_t* aot_module;
-    int res = hb_wasm_aot_compile(&compile_opts, mod_bin->binary, mod_bin->size, &aot_module, &aot_module_size);
+    int res = hb_wasm_aot_compile(&compile_opts, mod_bin->binary, mod_bin->size, &imports, &import_count, &exports, &export_count, &aot_module, &aot_module_size);
     DRV_DEBUG("AOT module size: %d bytes", aot_module_size);
     
     if (res == 0) {
         DRV_DEBUG("Compilation successful");
-        send_compilation_result(proc, aot_module, aot_module_size);
+        send_compilation_result(proc, imports, import_count, exports, export_count, aot_module, aot_module_size);
     }
     else {
         DRV_DEBUG("Compilation failed");
@@ -155,23 +160,88 @@ void invoke_compile(void *raw) {
     drv_unlock(proc->is_running);
 }
 
-void send_compilation_result(Proc* proc, uint8_t* aot_module, uint32_t aot_module_size) {
+const char* wasm_import_export_kind_to_string(wasm_import_export_kind_t kind) {
+    switch (kind) {
+        case WASM_IMPORT_EXPORT_KIND_FUNC: return "func";
+        case WASM_IMPORT_EXPORT_KIND_GLOBAL: return "global";
+        case WASM_IMPORT_EXPORT_KIND_TABLE: return "table";
+        case WASM_IMPORT_EXPORT_KIND_MEMORY: return "memory";
+        default: return "unknown";
+    }
+}
+
+void send_compilation_result(Proc* proc, WasmInterfaceFunction* imports, size_t import_count, WasmInterfaceFunction* exports, size_t export_count, uint8_t* aot_module, uint32_t aot_module_size) {
     DRV_DEBUG("Sending compilation result");
+    DRV_DEBUG("Imports: %d (%p)", import_count, imports);
+    DRV_DEBUG("Exports: %d (%p)", export_count, exports);
     DRV_DEBUG("AOT module: %p", aot_module);
     DRV_DEBUG("AOT module size: %d bytes", aot_module_size);
 
     // Send the compilation result to the caller
-    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 7);
-    int msg_index = 0;
-    msg[msg_index++] = ERL_DRV_ATOM;
-    msg[msg_index++] = atom_compilation_result;
-    msg[msg_index++] = ERL_DRV_BUF2BINARY;
-    msg[msg_index++] = (ErlDrvTermData)aot_module;
-    msg[msg_index++] = aot_module_size;
-    msg[msg_index++] = ERL_DRV_TUPLE;
-    msg[msg_index++] = 2;
+    int msg_size = sizeof(ErlDrvTermData) * (2 + 3 + 5 + (13 * import_count) + (11 * export_count) + 4);
+    ErlDrvTermData* msg = driver_alloc(msg_size);
+    int msg_i = 0;
+
+    msg[msg_i++] = ERL_DRV_ATOM;
+    msg[msg_i++] = atom_compilation_result;
     
-    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
+    DRV_DEBUG("Sending %d imports", import_count);
+    for (size_t i = 0; i < import_count; i++) {
+		WasmInterfaceFunction import = imports[i];
+        DRV_DEBUG("import %d pointers: %p %p %p", i, import.module_name, import.field_name, import.signature);
+        DRV_DEBUG("Sending import[%d]: %s.%s %s", i, import.module_name, import.field_name, import.signature == NULL ? "(null)" : import.signature);
+
+        msg[msg_i++] = ERL_DRV_ATOM;
+        msg[msg_i++] = driver_mk_atom((char*)wasm_import_export_kind_to_string(import.kind));
+        msg[msg_i++] = ERL_DRV_STRING;
+        msg[msg_i++] = (ErlDrvTermData)import.module_name;
+        msg[msg_i++] = strlen(import.module_name);
+        msg[msg_i++] = ERL_DRV_STRING;
+        msg[msg_i++] = (ErlDrvTermData)import.field_name;
+        msg[msg_i++] = strlen(import.field_name);
+        msg[msg_i++] = ERL_DRV_STRING;
+        msg[msg_i++] = (ErlDrvTermData)import.signature;
+        msg[msg_i++] = strlen(import.signature);
+        msg[msg_i++] = ERL_DRV_TUPLE;
+        msg[msg_i++] = 4;
+    }
+
+    msg[msg_i++] = ERL_DRV_NIL;
+    msg[msg_i++] = ERL_DRV_LIST;
+    msg[msg_i++] = import_count + 1;
+
+    DRV_DEBUG("Sending %d exports", export_count);
+    for (size_t i = 0; i < export_count; i++) {
+		WasmInterfaceFunction export = exports[i];
+        DRV_DEBUG("Sending export[%d]: %s %s", i, export.field_name, export.signature == NULL ? "(null)" : export.signature);
+        
+        // Signature should be an empty string if it's NULL
+        const char *send_signature = export.signature == NULL ? "" : export.signature;
+
+        msg[msg_i++] = ERL_DRV_ATOM;
+        msg[msg_i++] = driver_mk_atom((char *)wasm_import_export_kind_to_string(export.kind));
+        msg[msg_i++] = ERL_DRV_STRING;
+        msg[msg_i++] = (ErlDrvTermData)export.field_name;
+        msg[msg_i++] = strlen(export.field_name);
+        msg[msg_i++] = ERL_DRV_STRING;
+        msg[msg_i++] = (ErlDrvTermData)send_signature;
+        msg[msg_i++] = strlen(send_signature);
+        msg[msg_i++] = ERL_DRV_TUPLE;
+        msg[msg_i++] = 3;
+    }
+
+    msg[msg_i++] = ERL_DRV_NIL;
+    msg[msg_i++] = ERL_DRV_LIST;
+    msg[msg_i++] = export_count + 1;
+
+    msg[msg_i++] = ERL_DRV_BUF2BINARY;
+    msg[msg_i++] = (ErlDrvTermData)aot_module;
+    msg[msg_i++] = aot_module_size;
+    msg[msg_i++] = ERL_DRV_TUPLE;
+    msg[msg_i++] = 4;
+    
+    DRV_DEBUG("Sending message (%p) of size %d to port (%p)", msg, msg_i, proc->port_term);
+    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_i);
     DRV_DEBUG("Read response sent: %d", msg_res);
 }
 

@@ -3,11 +3,12 @@
 
 #include <erl_driver.h>
 #include <ei.h>
-#include "aot_export.h"
 #include <string.h>
 #include <stdarg.h>
 #include <time.h>
 #include <pthread.h>
+#include "aot_export.h"
+#include "../lib/include/compile.h"
 
 #define PROC_DEFINED
 
@@ -31,6 +32,6 @@ typedef struct {
 
 void invoke_compile(void *raw);
 
-void send_compilation_result(Proc* proc, uint8_t* aot_module, uint32_t aot_module_size);
+void send_compilation_result(Proc* proc, WasmInterfaceFunction* imports, size_t import_count, WasmInterfaceFunction* exports, size_t export_count, uint8_t* aot_module, uint32_t aot_module_size);
 
 #endif // HB_CORE_H

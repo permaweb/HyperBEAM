@@ -20,9 +20,187 @@ can_enable_tiny_frame(const AOTCompOption *opt)
            && !opt->enable_perf_profiling;
 }
 
-__attribute__((visibility("default")))
-int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, size_t wasm_module_size, uint8_t **out_wasm_aot_data, size_t *out_wasm_aot_size)
+char wasm_valkind_to_char(enum wasm_valkind_enum valkind_enum) {
+    switch (valkind_enum) {
+        case WASM_I32: return 'i';
+        case WASM_I64: return 'I';
+        case WASM_F32: return 'f';
+        case WASM_F64: return 'F';
+        case WASM_EXTERNREF: return 'e';
+        case WASM_V128: return 'v';
+        case WASM_FUNCREF: return 'f';
+        default: return 'u';
+    }
+}
+
+int wasm_func_type_to_signature(CompileOpts *compile_opts, wasm_func_type_t func_type, char **out_signature) {
+    int res = -1;
+    wasm_valkind_t *param_kinds = NULL;
+    wasm_valkind_t *result_kinds = NULL;
+    char *type_str = NULL;
+    size_t signature_len;
+
+    void *(*malloc_func)(size_t) = compile_opts->mem_alloc_option.allocator.malloc_func;
+    // void *(*realloc_func)(void *, size_t) = compile_opts->mem_alloc_option.allocator.realloc_func;
+    void (*free_func)(void *) = compile_opts->mem_alloc_option.allocator.free_func;
+
+    uint32_t param_count = wasm_func_type_get_param_count(func_type);
+    DEBUG("Param count: %d", param_count);
+
+    if (param_count > 0) {
+        param_kinds = malloc_func(sizeof(wasm_valkind_t) * param_count);
+        if (!param_kinds) {
+            DEBUG("Failed to allocate memory for param_kinds");
+            goto fail;
+        }
+        for (uint32_t p_idx = 0; p_idx < param_count; ++p_idx) {
+            param_kinds[p_idx] = wasm_func_type_get_param_valkind(func_type, p_idx);
+            DEBUG("Param %d kind: %d", p_idx, param_kinds[p_idx]);
+        }
+    }
+
+    uint32_t result_count = wasm_func_type_get_result_count(func_type);
+    DEBUG("Result count: %d", result_count);
+
+    if (result_count > 0) {
+        result_kinds = malloc_func(sizeof(wasm_valkind_t) * result_count);
+        if (!result_kinds) {
+            DEBUG("Failed to allocate memory for result_kinds");
+            goto fail;
+        }
+        for (uint32_t r_idx = 0; r_idx < result_count; ++r_idx) {
+            result_kinds[r_idx] = wasm_func_type_get_result_valkind(func_type, r_idx);
+            DEBUG("Result %d kind: %d", r_idx, result_kinds[r_idx]);
+        }
+    }
+
+    // Calculate required length: '(' + params + ')' + results + '\0'
+    signature_len = 1 + param_count + 1 + result_count + 1;
+    type_str = malloc_func(signature_len);
+    if (!type_str) {
+        DEBUG("Failed to allocate memory for type_str");
+        goto fail;
+    }
+
+    int current_pos = 0;
+    type_str[current_pos++] = '(';
+    for(uint32_t i = 0; i < param_count; i++) {
+        type_str[current_pos++] = wasm_valkind_to_char((enum wasm_valkind_enum) param_kinds[i]);
+    }
+    type_str[current_pos++] = ')';
+    for(uint32_t i = 0; i < result_count; i++) {
+        type_str[current_pos++] = wasm_valkind_to_char((enum wasm_valkind_enum) result_kinds[i]);
+    }
+    type_str[current_pos] = '\0'; // Null-terminate the string
+
+    *out_signature = type_str;
+    res = 0; // Success
+
+fail:
+    if (param_kinds) free_func(param_kinds);
+    if (result_kinds) free_func(result_kinds);
+    // If successful (res == 0), type_str is transferred to the caller via out_signature
+    // If failed (res == -1), free type_str if it was allocated
+    if (res != 0 && type_str) free_func(type_str);
+
+    return res;
+}
+
+int extract_interface_functions(CompileOpts *compile_opts, wasm_module_t wasm_module, WasmInterfaceFunction **out_imports, size_t *out_import_count, WasmInterfaceFunction **out_exports, size_t *out_export_count)
 {
+    int res = -1;
+
+    // Extract malloc/realloc/free functions from compile_opts
+    void *(*malloc_func)(size_t) = compile_opts->mem_alloc_option.allocator.malloc_func;
+    void *(*realloc_func)(void *, size_t) = compile_opts->mem_alloc_option.allocator.realloc_func;
+    void (*free_func)(void *) = compile_opts->mem_alloc_option.allocator.free_func;
+
+    int32_t import_count = wasm_runtime_get_import_count(wasm_module);
+    DEBUG("Import count: %d", import_count);
+    wasm_import_t *imports = malloc_func(sizeof(wasm_import_t) * import_count);
+
+    for (int i = 0; i < import_count; i++) {
+        wasm_runtime_get_import_type(wasm_module, i, &imports[i]);
+        DEBUG("imports[%d]: %s.%s [%d]", i, imports[i].module_name, imports[i].name, imports[i].kind);
+    }
+
+    int32_t export_count = wasm_runtime_get_export_count(wasm_module);
+    DEBUG("Export count: %d", export_count);
+    wasm_export_t *exports = malloc_func(sizeof(wasm_export_t) * export_count);
+
+    for (int i = 0; i < export_count; i++) {
+        wasm_runtime_get_export_type(wasm_module, i, &exports[i]);
+        DEBUG("exports[%d]: %s [%d]", i, exports[i].name, exports[i].kind);
+    }
+
+    WasmInterfaceFunction* imports_meta = malloc_func(sizeof(WasmInterfaceFunction) * import_count);
+    WasmInterfaceFunction* exports_meta = malloc_func(sizeof(WasmInterfaceFunction) * export_count);
+
+    for (int i = 0; i < import_count; i++) {
+        imports_meta[i].module_name = malloc_func(strlen(imports[i].module_name) + 1);
+        strcpy(imports_meta[i].module_name, imports[i].module_name);
+        imports_meta[i].field_name = malloc_func(strlen(imports[i].name) + 1);
+        strcpy(imports_meta[i].field_name, imports[i].name);
+        imports_meta[i].kind = imports[i].kind;
+        if (imports[i].kind == WASM_IMPORT_EXPORT_KIND_FUNC) {
+            char *signature = NULL;
+            if (wasm_func_type_to_signature(compile_opts, imports[i].u.func_type, &signature) != 0) {
+                DEBUG("Failed to get signature for import %s.%s", imports[i].module_name, imports[i].name);
+                goto fail0;
+            }
+            imports_meta[i].signature = signature;
+        } else {
+            imports_meta[i].signature = NULL;
+        }
+        DEBUG("Import %d: [%d] %s.%s %s", i, imports_meta[i].kind, imports_meta[i].module_name, imports_meta[i].field_name, imports_meta[i].signature);
+    }
+    
+    for (int i = 0; i < export_count; i++) {
+        // Exports do not have a module name
+        exports_meta[i].module_name = NULL;
+        exports_meta[i].field_name = malloc_func(strlen(exports[i].name) + 1);
+        strcpy(exports_meta[i].field_name, exports[i].name);
+        exports_meta[i].kind = exports[i].kind;
+        if (exports[i].kind == WASM_IMPORT_EXPORT_KIND_FUNC) {
+            char *signature = NULL;
+            if (wasm_func_type_to_signature(compile_opts, exports[i].u.func_type, &signature) != 0) {
+                DEBUG("Failed to get signature for export %s.%s", exports[i].name, exports[i].name);
+                goto fail0;
+            }
+            exports_meta[i].signature = signature;
+        } else {
+            exports_meta[i].signature = NULL;
+        }
+        DEBUG("Export %d: [%d] %s %s", i, exports_meta[i].kind, exports_meta[i].field_name, exports_meta[i].signature);
+    }
+
+    *out_imports = imports_meta;
+    *out_import_count = import_count;
+    *out_exports = exports_meta;
+    *out_export_count = export_count;
+
+    res = 0;
+
+fail1:
+    if (res != 0) {
+        free_func(imports_meta);
+        free_func(exports_meta);
+    }
+
+fail0:
+    free_func(imports);
+    free_func(exports);
+
+    return res;
+}
+
+__attribute__((visibility("default")))
+int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, size_t wasm_module_size, WasmInterfaceFunction **out_imports, size_t *out_import_count, WasmInterfaceFunction **out_exports, size_t *out_export_count, uint8_t **out_wasm_aot_data, size_t *out_wasm_aot_size)
+{
+    *out_imports = NULL;
+    *out_import_count = 0;
+    *out_exports = NULL;
+    *out_export_count = 0;
     *out_wasm_aot_data = NULL;
     *out_wasm_aot_size = 0;
 
@@ -135,6 +313,11 @@ int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, si
                                           sizeof(error_buf)))) {
         DEBUG("%s\n", error_buf);
         goto fail2;
+    }
+
+    if (extract_interface_functions(compile_opts, wasm_module, out_imports, out_import_count, out_exports, out_export_count) != 0) {
+        DEBUG("Failed to extract interface functions");
+        goto fail3;
     }
 
     if (!(comp_data = aot_create_comp_data(wasm_module, option.target_arch,
