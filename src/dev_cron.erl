@@ -72,14 +72,22 @@ once(_Msg1, Msg2, Opts) ->
                     maps:put(<<"path">>, CronPath, Msg2)
                 ),
 			Name = {<<"cron@1.0">>, ReqMsgID},
-			Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts) end),
-			hb_name:register(Name, Pid),
-			% Cache the task
-			{ok, PutResult} = cache_put(ReqMsgID, ModifiedMsg2, cron_opts(Opts)),
-			?event({once_cache_put_result, {result, PutResult}}),
-			{ok, Crons} = cache_list(cron_opts(Opts)),
-			?event({once_cron_cache_load_test_crons, {crons, Crons}}),
-			{ok, ReqMsgID}
+			case hb_name:lookup(Name) of
+				Pid when is_pid(Pid) ->
+					% Process already registered, return existing TaskID
+					?event({once_already_registered, {task_id, ReqMsgID}, {pid, Pid}}),
+					{ok, ReqMsgID};
+				undefined ->
+					% Process not found, spawn and register
+					Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts) end),
+					hb_name:register(Name, Pid),
+					% Cache the task
+					{ok, PutResult} = cache_put(ReqMsgID, ModifiedMsg2, cron_opts(Opts)),
+					?event({once_cache_put_result, {result, PutResult}}),
+					% {ok, Crons} = cache_list(cron_opts(Opts)),
+					% ?event({once_cron_cache_load_test_crons, {crons, Crons}}),
+					{ok, ReqMsgID}
+			end
 	end.
 
 %% @doc Internal function for scheduling a one-time message.
@@ -126,22 +134,30 @@ every(_Msg1, Msg2, Opts) ->
                         maps:remove(<<"interval">>, Msg2)
                     ),
 				TracePID = hb_tracer:start_trace(),
-				Pid =
-                    spawn(
-                        fun() ->
-                            every_worker_loop(
-                                CronPath,
-                                ModifiedMsg2,
-                                Opts#{ trace => TracePID },
-                                IntervalMillis
-                            )
-                        end
-                    ),
 				Name = {<<"cron@1.0">>, ReqMsgID},
-				hb_name:register(Name, Pid),
-				{ok, PutResult} = cache_put(ReqMsgID, ModifiedMsg2, cron_opts(Opts)),
-				?event({every_cache_put_result, {result, PutResult}}),
-				{ok, ReqMsgID}
+				case hb_name:lookup(Name) of
+					Pid when is_pid(Pid) ->
+						% Process already registered, return existing TaskID
+						?event({every_already_registered, {task_id, ReqMsgID}, {pid, Pid}}),
+						{ok, ReqMsgID};
+					undefined ->
+						% Process not found, spawn and register
+						Pid =
+		                    spawn(
+		                        fun() ->
+		                            every_worker_loop(
+		                                CronPath,
+		                                ModifiedMsg2,
+		                                Opts#{ trace => TracePID },
+		                                IntervalMillis
+		                            )
+		                        end
+		                    ),
+						hb_name:register(Name, Pid),
+						{ok, PutResult} = cache_put(ReqMsgID, ModifiedMsg2, cron_opts(Opts)),
+						?event({every_cache_put_result, {result, PutResult}}),
+						{ok, ReqMsgID}
+				end
 			catch
 				error:{invalid_time_unit, Unit} ->
                     {error, <<"Invalid time unit: ", Unit/binary>>};
