@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 use crate::core::riscv_machine::RevmDb;
-use crate::core::state::{deserialize_state, get_base_path, get_state, serialize_state};
+use crate::core::state::{get_base_path, get_state, serialize_state};
 
 pub enum GeneratedState {
     Default(RevmDb),
