@@ -2,12 +2,13 @@
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
 -export([load/3, once/3, every/3, stop/3, info/1, info/3]).
+-export([normalize/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
 info(_) -> 
-	#{ exports => [info, once, every, stop, add, load] }.
+	#{ exports => [info, once, every, stop, add, load, normalize] }.
 
 %% @doc Exported function for granting a description of the device.
 info(_Msg1, _Msg2, _Opts) ->
@@ -19,10 +20,12 @@ info(_Msg1, _Msg2, _Opts) ->
 			<<"once">> => <<"Schedule a one-time message">>,
 			<<"every">> => <<"Schedule a recurring message">>,
 			<<"stop">> => <<"Stop a scheduled task {task}">>,
-			<<"load">> => <<"Load cron jobs">>
+			<<"load">> => <<"Load cron jobs">>,
+			<<"normalize">> => <<"Boostrap cron jobs from cache">>
 		}
 	},
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
+
 
 %% @doc Modify a given node message to include the cron process.
 cron_opts(Opts) ->
@@ -43,6 +46,21 @@ cron_opts(Opts) ->
                 <<"cron">> => CronProcDef
             }
     }.
+
+%% @doc Normalize the cron jobs from cache.
+normalize(Msg1, Msg2, Opts) ->
+	?event({normalize_cron_jobs_start}),
+    CronOpts = cron_opts(Opts), % Ensure cron process def is included
+    case cache_list(CronOpts) of
+		{ok, Crons} -> 
+			?event({normalize_cron_jobs_loaded, {count, length(Crons)}}),
+			Results = lists:map(fun(Job) -> 
+				% only output the job for now.
+				?event({normalize_cron_job_start, {job, Job}}),
+				Job
+			end, Crons),
+			{ok, Results}
+	end.
 
 %% @doc Reload all registered cron tasks.
 load(_, _, Opts) ->
@@ -790,3 +808,34 @@ cache_get_test() ->
     NonExistentResult = cache_get(<<"non-existent-task">>, Opts),
     ?assertEqual({error, not_found}, NonExistentResult),
     ?event({'cache_get_test_done'}).
+
+normalize_test() ->
+    Opts = generate_test_opts(),
+    Node = hb_http_server:start_node(Opts),
+    % Setup test worker
+    PID = spawn(fun test_worker/0),
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    hb_name:register({<<"test">>, ID}, PID),
+    % Create a once job
+    OnceUrlPath = <<"/~cron@1.0/once?test-id=", ID/binary,
+                   "&cron-path=/~test-device@1.0/update_state">>,
+    {ok, _OnceTaskId} = hb_http:get(Node, OnceUrlPath, #{}),
+    ?event({'normalize_test_once_created'}),
+    % Create an every job
+    EveryUrlPath = <<"/~cron@1.0/every?test-id=", ID/binary,
+                    "&interval=1000-milliseconds", % Use a reasonable interval
+                    "&cron-path=/~test-device@1.0/increment_counter">>,
+    {ok, _EveryTaskId} = hb_http:get(Node, EveryUrlPath, #{}),
+    ?event({'normalize_test_every_created'}),
+    timer:sleep(100), 
+    % Call normalize
+    NormalizeUrlPath = <<"/~cron@1.0/normalize">>,
+    ?event({'normalize_test_calling_normalize', {url, NormalizeUrlPath}}),
+    {ok, NormalizeResult} = hb_http:get(Node, NormalizeUrlPath, #{}),
+    ?event({'normalize_test_normalize_result', {result, NormalizeResult}}),
+    % Basic assertion: check if the call succeeded and returned a map
+    % ?assertMatch(#{<<"status">> := 200, <<"body">> := _}, NormalizeResult),
+    % We expect the body to be the list of jobs from cache_list mapped by normalize/3
+    % Body = maps:get(<<"body">>, NormalizeResult),
+   % ?assert(is_list(Body)), % Current normalize returns the list directly
+    ?event({'normalize_test_done'}).
