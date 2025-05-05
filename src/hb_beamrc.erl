@@ -66,6 +66,11 @@ compile_invalid_test() ->
     {ok, WasmBinary} = file:read_file(WasmPath),
     {error, _} = compile(WasmBinary).
 
+compile_empty_test() ->
+    WasmPath = <<"test/empty.wasm">>,
+    {ok, WasmBinary} = file:read_file(WasmPath),
+    {error, _} = compile(WasmBinary).
+
 print_binary_info(Name, Bin) when is_binary(Bin) ->
     ?event({
         {name, Name},
