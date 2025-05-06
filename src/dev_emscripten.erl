@@ -19,7 +19,7 @@
 %%% 
 %%% Where '_vjj' represents the type spec of the function.
 -module(dev_emscripten).
--export([info/1, init/3, '__cxa_throw'/3, invoke_ii/3, invoke_vjj/3, invoke_viii/3, router/4]).
+-export([info/1, init/3, '_emscripten_memcpy_js'/3, '__cxa_throw'/3, invoke_ii/3, invoke_vjj/3, invoke_viii/3, router/4, emscripten_date_now/3]).
 
 
 -include("src/include/hb.hrl").
@@ -48,6 +48,15 @@ init(M1, _M2, Opts) ->
         ),
     {ok, MsgWithLib}.
 
+'_emscripten_memcpy_js'(Msg1, Msg2, Opts) ->
+    ?event('_emscripten_memcpy_js'),
+    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
+    WASM = dev_wasm:instance(State, Msg2, Opts),
+    [Dst, Src, Size] = hb_ao:get(args, Msg2, #{ hashpath => ignore }),
+    ?event(debug, {memcpy, {dst, Dst}, {src, Src}, {size, Size}}),
+    {ok, Data} = hb_beamr_io:read(WASM, Src, Size),
+    ok = hb_beamr_io:write(WASM, Dst, Data),
+    {ok, #{ <<"state">> => State, <<"results">> => [] }}.
 
 '__cxa_throw'(_Msg1, _Msg2, _Opts) ->
     ?event('__cxa_throw'),
@@ -70,7 +79,7 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
     State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
     WASM = dev_wasm:instance(State, Msg2, Opts),
     [Index|Args] = hb_ao:get(args, Msg2, #{ hashpath => ignore }),
-    % ?event(debug, {invoke, {invoke_signature, Sig}, {indirect_function_index, Index}, {args, Args}}),
+    ?event(debug, {invoke, {invoke_signature, Sig}, {indirect_function_index, Index}, {args, Args}}),
     ?event(debug, invoke_emscripten_stack_get_current),
     {ok, [SP]} = hb_beamr:call(WASM, <<"emscripten_stack_get_current">>, []),
     ?event(debug, {invoke_stack_pointer, SP}),
@@ -84,7 +93,7 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
     catch
         _:Error ->
             ?event(debug, {invoke_try_error, Error}),
-            ?event(debug, calling_emscripten_stack_restore),
+            ?event(debug, {calling_emscripten_stack_restore, {sp, SP}}),
             hb_beamr:call(WASM, <<"_emscripten_stack_restore">>, [SP]),
             ?event(debug, calling_set_threw),
             SetThrewRes = hb_beamr:call(WASM, <<"setThrew">>, [1, 0], ImportResolver, State, Opts),
@@ -92,14 +101,16 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
             {ok, _, _} = SetThrewRes,
             ?event(debug, set_threw_done),
             % {ok, SetThrewResult, SetThrewMsg} = SetThrewRes,
-            % Set DummyResult to [0] if Sig starts with 'i', otherwise []
-            DummyResult = case binary:match(Sig, <<"i">>) of
-                {0, _} -> [0];
-                _ -> []
-            end,
-            ?event(debug, {dummy_result, DummyResult}),
-            {ok, #{ <<"state">> => State, <<"results">> => DummyResult }}
+            {ok, #{ <<"state">> => State, <<"results">> => [] }}
     end.
+
+% Return 0 (as a double)
+emscripten_date_now(Msg1, _Msg2, _Opts) ->
+    ?event(emscripten_date_now),
+    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
+    Result = 0.0,
+    ?event(debug, {emscripten_date_now, {result, Result}}),
+    {ok, #{ <<"state">> => State, <<"results">> => [Result] }}.
 
 %%% Tests
 init() ->

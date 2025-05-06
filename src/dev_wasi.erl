@@ -6,7 +6,7 @@
 %%% modules.
 -module(dev_wasi).
 -export([init/3, compute/1, stdout/1]).
--export([path_open/3, fd_write/3, fd_read/3, clock_time_get/3]).
+-export([path_open/3, fd_write/3, fd_read/3, clock_time_get/3, environ_get/3, environ_sizes_get/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -222,6 +222,33 @@ clock_time_get(Msg1, _Msg2, Opts) ->
     ?event({clock_time_get, {returning, 1}}),
     State = hb_ao:get(<<"state">>, Msg1, Opts),
     {ok, #{ <<"state">> => State, <<"results">> => [1] }}.
+
+% Emulating no environment variables
+environ_get(Msg1, Msg2, Opts) ->
+    ?event({wasi_environ_get}),
+    State = hb_ao:get(<<"state">>, Msg1, Opts),
+    % Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
+    Signature = hb_ao:get(<<"func-sig">>, Msg2, Opts),
+    ?event({signature, Signature}),
+    [Environ,EnvironBuf] = hb_ao:get(<<"args">>, Msg2, Opts),
+    ?event({environ_get, {environ, Environ}, {environ_buf, EnvironBuf}}),
+    % We don't actually need to write as they are length 0
+    % ok = hb_beamr_io:write(Instance, Environ, <<0:64/little-unsigned-integer>>),
+    % ok = hb_beamr_io:write(Instance, EnvironBuf, <<0:64/little-unsigned-integer>>),
+    {ok, #{ <<"state">> => State, <<"results">> => [0] }}.
+
+% Emulating no environment variables
+environ_sizes_get(Msg1, Msg2, Opts) ->
+    ?event({wasi_environ_sizes_get}),
+    State = hb_ao:get(<<"state">>, Msg1, Opts),
+    Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
+    Signature = hb_ao:get(<<"func-sig">>, Msg2, Opts),
+    ?event({signature, Signature}),
+    [EnvironCount,EnvironBufSize] = hb_ao:get(<<"args">>, Msg2, Opts),
+    ?event({environ_sizes_get, {environ_count, EnvironCount}, {environ_buf_size, EnvironBufSize}}),
+    ok = hb_beamr_io:write(Instance, EnvironCount, <<0:64/little-unsigned-integer>>),
+    ok = hb_beamr_io:write(Instance, EnvironBufSize, <<0:64/little-unsigned-integer>>),
+    {ok, #{ <<"state">> => State, <<"results">> => [0] }}.
 
 %%% Tests
 
