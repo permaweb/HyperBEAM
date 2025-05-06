@@ -32,7 +32,7 @@ typedef struct {
     // wasm_store_t* store;            // WASM store
     ErlDrvPort port;                // Erlang port associated with this process
     ErlDrvTermData port_term;       // Erlang term representation of the port
-    unsigned int port_key;
+    unsigned int port_key;          // TODO: Justify or remove
     ErlDrvMutex* is_running;        // Mutex to track if the process is running
     wasm_table_inst_t indirect_func_table; // Indirect function table
     wasm_exec_env_t exec_env;      // Execution environment for the WASM instance
@@ -41,6 +41,7 @@ typedef struct {
     int indirect_func_table_ix;    // Index of the indirect function table
     ei_term* current_args;         // Arguments for the current function
     int current_args_length;       // Length of the current arguments
+    int export_depth;              // Depth of the current export stack
     ImportResponse* current_import; // Import response structure
     ImportResponse* import_stack[MAX_IMPORT_STACK_DEPTH]; // Stack of import responses
     int import_stack_depth;        // Depth of the current import stack

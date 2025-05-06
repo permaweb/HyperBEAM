@@ -526,10 +526,12 @@ void wasm_initialize_runtime(void* raw) {
 }
 
 void wasm_execute_exported_function(void* raw) {
+    DRV_DEBUG("wasm_execute_exported_function called, raw: %p", raw);
     Proc* proc = (Proc*)raw;
-    DRV_DEBUG("Calling exported function: %s", proc->current_function);
     drv_lock(proc->is_running);
     char* function_name = proc->current_function;
+    proc->export_depth++;
+    DRV_DEBUG("Calling export at depth: %d, function: %s", proc->export_depth, function_name);
 
     // Find the function in the exports
     wasm_function_inst_t* func = wasm_runtime_lookup_function(proc->instance, function_name);
@@ -568,7 +570,7 @@ void wasm_execute_exported_function(void* raw) {
         return;
     }
 
-    if (proc->exec_env == NULL) {
+    if (proc->export_depth == 1) {
         DRV_DEBUG("Creating new exec env");
         proc->exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
     } else {
@@ -585,6 +587,8 @@ void wasm_execute_exported_function(void* raw) {
     if (!call_success) {
         const char *exception = wasm_runtime_get_exception(proc->instance);
         send_error(proc->port_term, "Call to %s failed with exception: %s", function_name, exception);
+        proc->export_depth--;
+        DRV_DEBUG("Decreased export depth to: %d", proc->export_depth);
         drv_unlock(proc->is_running);
         return;
     }
@@ -631,6 +635,15 @@ void wasm_execute_exported_function(void* raw) {
     DRV_DEBUG("Msg: %d", response_msg_res);
 
     wasm_val_vec_delete(&results);
+
+    if (proc->export_depth == 1) {
+        DRV_DEBUG("Export depth is 1, destroying exec env");
+        wasm_runtime_destroy_exec_env(proc->exec_env);
+        proc->exec_env = NULL;
+    }
+
+    proc->export_depth--;
+    DRV_DEBUG("Decreased export depth to: %d", proc->export_depth);
 
 	DRV_DEBUG("Unlocking is_running mutex: %p", proc->is_running);
     drv_unlock(proc->is_running);
@@ -688,14 +701,13 @@ void wasm_execute_indirect_function(void *raw) {
         return;
     }
 
-    if (proc->exec_env == NULL) {
-        DRV_DEBUG("Creating new exec env");
-        proc->exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
-    } else {
-        DRV_DEBUG("Using existing exec env");
-    }
     wasm_exec_env_t exec_env = proc->exec_env;
-    // wasm_exec_env_t exec_env = wasm_runtime_create_exec_env(proc->instance, 0x10000);
+    if (exec_env == NULL) {
+        DRV_DEBUG("Aborting indirect function call, no exec env");
+        send_error(proc->port_term, "Aborting indirect function call, no exec env");
+        drv_unlock(proc->is_running);
+        return;
+    }
 
     DRV_DEBUG("wasm_runtime_call_indirect(%p, %ld, %d, %p)", exec_env, function_ix, argc, argv);
     bool res = wasm_runtime_call_indirect(exec_env, function_ix, argc, argv);
