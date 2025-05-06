@@ -10,7 +10,6 @@
 %% @doc Exported function for getting device info.
 info(_) -> 
 	#{ exports => [info, once, every, stop, add, load, normalize] }.
-	#{ exports => [info, once, every, stop, add, load, normalize] }.
 
 %% @doc Exported function for granting a description of the device.
 info(_Msg1, _Msg2, _Opts) ->
