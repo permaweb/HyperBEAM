@@ -28,8 +28,10 @@ relay_with_payments_test() ->
         hb_http_server:start_node(
             #{
                 operator => ar_wallet:to_address(HostWallet),
-                preprocessor => ProcessorMsg,
-                postprocessor => ProcessorMsg
+                on => #{
+                    <<"request">> => ProcessorMsg,
+                    <<"response">> => ProcessorMsg
+                }
             }
         ),
     % Create a message for the client to relay.
@@ -81,8 +83,10 @@ paid_wasm_test() ->
                 simple_pay_ledger => #{ ClientAddress => 100 },
                 simple_pay_price => 10,
                 operator => ar_wallet:to_address(HostWallet),
-                preprocessor => ProcessorMsg,
-                postprocessor => ProcessorMsg
+                on => #{
+                    <<"request">> => ProcessorMsg,
+                    <<"response">> => ProcessorMsg
+                }
             }
         ),
     % Read the WASM file from disk, post it to the host and execute it.
@@ -110,7 +114,7 @@ paid_wasm_test() ->
             ClientWallet
         ),
     {ok, Res2} = hb_http:get(HostNode, ClientMessage2, #{}),
-    ?assertMatch(40, Res2).
+    ?assertMatch(60, Res2).
 
 create_schedule_aos2_test_disabled() ->
     % The legacy process format, according to the ao.tn.1 spec:

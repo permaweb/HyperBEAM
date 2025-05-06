@@ -265,9 +265,9 @@ get(Key, Default, Opts) ->
     ?MODULE:get(Key, Default, Opts#{ prefer => local }).
 
 -ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, "error").
+-define(DEFAULT_PRINT_OPTS, "error,http_error").
 -else.
--define(DEFAULT_PRINT_OPTS, "error,http_short,compute_short,push_short").
+-define(DEFAULT_PRINT_OPTS, "error,http_error,http_short,compute_short,push_short").
 -endif.
 
 -define(ENV_KEYS,

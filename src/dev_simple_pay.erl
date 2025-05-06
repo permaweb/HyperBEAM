@@ -153,8 +153,10 @@ test_opts(Ledger) ->
             simple_pay_ledger => Ledger,
             simple_pay_price => 10,
             operator => Address,
-            preprocessor => ProcessorMsg,
-            postprocessor => ProcessorMsg
+            on => #{
+                <<"request">> => ProcessorMsg,
+                <<"response">> => ProcessorMsg
+            }
         }
     }.
 

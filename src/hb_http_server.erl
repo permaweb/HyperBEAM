@@ -86,7 +86,6 @@ start() ->
             FormattedConfig
         ]
     ),
-    
     start(
         Loaded#{
             priv_wallet => PrivWallet,
@@ -111,12 +110,26 @@ start(Opts) ->
     {ok, Listener, _Port} = new_server(BaseOpts),
     {ok, Listener}.
 
+%% @doc Trigger the creation of a new HTTP server node. Accepts a `NodeMsg'
+%% message, which is used to configure the server. This function executed the
+%% `start' hook on the node, giving it the opportunity to modify the `NodeMsg'
+%% before it is used to configure the server. The `start' hook expects gives and
+%% expects the node message to be in the `body' key.
 new_server(RawNodeMsg) ->
-    NodeMsg =
+    RawNodeMsgWithDefaults =
         maps:merge(
             hb_opts:default_message(),
             RawNodeMsg#{ only => local }
         ),
+    HookMsg = #{ <<"body">> => RawNodeMsgWithDefaults },
+    NodeMsg =
+        case dev_hook:on(<<"start">>, HookMsg, RawNodeMsgWithDefaults) of
+            {ok, #{ <<"body">> := NodeMsgAfterHook }} -> NodeMsgAfterHook;
+            Unexpected ->
+                ?event(http, {failed_to_start_server, {unexpected, Unexpected}}),
+                throw({failed_to_start_server, Unexpected})
+        end,
+    % Put server ID into node message so it's possible to update current server
     hb_http:start(),
     ServerID =
         hb_util:human_id(
@@ -453,3 +466,33 @@ start_node(Opts) ->
     ServerOpts = set_default_opts(Opts),
     {ok, _Listener, Port} = new_server(ServerOpts),
     <<"http://localhost:", (integer_to_binary(Port))/binary, "/">>.
+
+%%% Tests
+%%% The following only covering the HTTP server initialization process. For tests
+%%% of HTTP server requests/responses, see `hb_http.erl'.
+
+%% @doc Ensure that the `start' hook can be used to modify the node options. We
+%% do this by creating a message with a device that has a `start' key. This 
+%% key takes the message's body (the anticipated node options) and returns a
+%% modified version of that body, which will be used to configure the node. We
+%% then check that the node options were modified as we expected.
+set_node_opts_test() ->
+    Node =
+        start_node(#{
+            on => #{
+                <<"start">> => #{
+                    <<"device">> =>
+                        #{
+                            <<"start">> =>
+                                fun(_, #{ <<"body">> := NodeMsg }, _) ->
+                                    {ok, #{
+                                        <<"body">> =>
+                                            NodeMsg#{ <<"test-success">> => true }
+                                    }}
+                                end
+                        }
+                }
+            }
+        }),
+    {ok, LiveOpts} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
+    ?assert(hb_ao:get(<<"test-success">>, LiveOpts, false, #{})).

@@ -119,7 +119,8 @@ update_node_message(Request, NodeMsg) ->
                                 <<"body">> =>
                                     iolist_to_binary(
                                         io_lib:format(
-                                            "Node message updated. History: ~p updates.",
+                                            "Node message updated. History: ~p"
+                                                "updates.",
                                             [length(NewH)]
                                         )
                                     ),
@@ -148,12 +149,12 @@ adopt_node_message(Request, NodeMsg) ->
 %% @doc Handle an AO-Core request, which is a list of messages. We apply
 %% the node's pre-processor to the request first, and then resolve the request
 %% using the node's AO-Core implementation if its response was `ok'.
-%% After execution, we run the node's `postprocessor' message on the result of
+%% After execution, we run the node's `response' hook on the result of
 %% the request before returning the result it grants back to the user.
 handle_resolve(Req, Msgs, NodeMsg) ->
     TracePID = hb_opts:get(trace, no_tracer_set, NodeMsg),
     % Apply the pre-processor to the request.
-    case resolve_processor(<<"preprocess">>, preprocessor, Req, Msgs, NodeMsg) of
+    case resolve_hook(<<"request">>, Req, Msgs, NodeMsg) of
         {ok, PreProcessedMsg} ->
             ?event(
                 {result_after_preprocessing,
@@ -178,8 +179,11 @@ handle_resolve(Req, Msgs, NodeMsg) ->
                             <<"status">> => 404,
                             <<"unavilable">> => ID,
                             <<"body">> =>
-                                <<"Message necessary to resolve request not found: ",
-                                    ID/binary>>
+                                <<
+                                    "Message necessary to resolve request ",
+                                    "not found: ",
+                                    ID/binary
+                                >>
                         }}
                 end,
             {ok, StatusEmbeddedRes} =
@@ -191,9 +195,8 @@ handle_resolve(Req, Msgs, NodeMsg) ->
             % Apply the post-processor to the result.
             Output = maybe_sign(
                 embed_status(
-                    resolve_processor(
-                        <<"postprocess">>,
-                        postprocessor,
+                    resolve_hook(
+                        <<"response">>,
                         Req,
                         StatusEmbeddedRes,
                         AfterResolveOpts
@@ -206,32 +209,27 @@ handle_resolve(Req, Msgs, NodeMsg) ->
         Res -> embed_status(hb_ao:force_message(Res, NodeMsg))
     end.
 
-%% @doc Execute a message from the node message upon the user's request. The
-%% invocation of the processor provides a request of the following form:
+%% @doc Execute a hook from the node message upon the user's request. The
+%% invocation of the hook provides a request of the following form:
 %% <pre>
-%%      /path => preprocess | postprocess
+%%      /path => request | response
 %%      /request => the original request singleton
-%%      /body => list of messages the user wishes to process
+%%      /body => parsed sequence of messages to process | the execution result
 %% </pre>
-resolve_processor(PathKey, Processor, Req, Query, NodeMsg) ->
-    case hb_opts:get(Processor, undefined, NodeMsg) of
-        undefined -> {ok, Query};
-        ProcessorMsg ->
-            Key = hb_ao:get(<<"path">>, ProcessorMsg, PathKey, NodeMsg),
-            ?event(processor, {processor_resolving, Key, ProcessorMsg}),
-            Res =
-                hb_ao:resolve(
-                    ProcessorMsg,
-                    #{
-                        <<"path">> =>
-                            hb_ao:get(<<"path">>, ProcessorMsg, Key, NodeMsg),
-                        <<"body">> => Query,
-                        <<"request">> => Req
-                    },
-                    NodeMsg#{ hashpath => ignore }
-                ),
-            ?event(processor, {processor_result, {type, Key}, {res, Res}}),
-            Res
+resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
+    HookReq =
+        #{
+            <<"request">> => InitiatingRequest,
+            <<"body">> => Body
+        },
+    ?event(hook, {resolve_hook, HookName, HookReq}),
+    case dev_hook:on(HookName, HookReq, NodeMsg) of
+        {ok, #{ <<"body">> := ResponseBody }} ->
+            {ok, ResponseBody};
+        {error, _} = Error ->
+            Error;
+        Other ->
+            {error, Other}
     end.
 
 %% @doc Wrap the result of a device call in a status.
@@ -531,69 +529,96 @@ claim_node_test() ->
     ?assertEqual(<<"test2">>, hb_ao:get(<<"test_config_item">>, Res2, #{})),
     ?assertEqual(2, length(hb_ao:get(<<"node_history">>, Res2, [], #{}))).
 
-%% Test that we can use a preprocessor upon a request.
-% preprocessor_test() ->
-%     Parent = self(),
-%     Node = hb_http_server:start_node(
-%         #{
-%             preprocessor =>
-%                 #{
-%                     <<"device">> => #{
-%                         <<"preprocess">> =>
-%                             fun(_, #{ <<"body">> := Msgs }, _) ->
-%                                 Parent ! ok,
-%                                 {ok, Msgs}
-%                             end
-%                     }
-%                 }
-%         }),
-%     hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
-%     ?assert(receive ok -> true after 1000 -> false end).
+%% Test that we can use a hook upon a request.
+request_response_hooks_test() ->
+    Parent = self(),
+    Node = hb_http_server:start_node(
+        #{
+            on =>
+                #{
+                    <<"request">> =>
+                        #{
+                            <<"device">> => #{
+                                <<"request">> =>
+                                    fun(_, #{ <<"body">> := Msgs }, _) ->
+                                        Parent ! {hook, request},
+                                        {ok, #{ <<"body">> => Msgs} }
+                                    end
+                            }
+                        },
+                    <<"response">> =>
+                        #{
+                            <<"device">> => #{
+                                <<"response">> =>
+                                    fun(_, #{ <<"body">> := Msgs }, _) ->
+                                        Parent ! {hook, response},
+                                        {ok, #{ <<"body">> => Msgs} }
+                                    end
+                            }
+                        }
+                },
+            cache_control => [<<"no-store">>]
+        }),
+    hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
+    % Receive both of the responses from the hooks, if possible.
+    Res =
+        receive
+            {hook, request} ->
+                receive {hook, response} -> true after 100 -> false end
+            after 100 ->
+                false
+        end,
+    ?assert(Res).
 
-%% @doc Test that we can halt a request if the preprocessor returns an error.
+%% @doc Test that we can halt a request if the hook returns an error.
 halt_request_test() ->
     Node = hb_http_server:start_node(
         #{
-            preprocessor =>
+            on =>
                 #{
-                    <<"device">> => #{
-                        <<"preprocess">> =>
-                            fun(_, _, _) ->
-                                {error, <<"Bad">>}
-                            end
-                    }
+                    <<"request">> =>
+                        #{
+                            <<"device">> => #{
+                                <<"request">> =>
+                                    fun(_, _, _) ->
+                                        {error, <<"Bad">>}
+                                    end
+                            }
+                        }
                 }
         }),
     {error, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
     ?assertEqual(<<"Bad">>, Res).
 
-%% @doc Test that a preprocessor can modify a request.
+%% @doc Test that a hook can modify a request.
 modify_request_test() ->
     Node = hb_http_server:start_node(
         #{
-            preprocessor =>
+            on =>
                 #{
-                    <<"device">> => #{
-                        <<"preprocess">> =>
-                            fun(_, #{ <<"body">> := [M|Ms] }, _) ->
-                                {ok, [M#{ <<"added">> => <<"value">> }|Ms]}
-                            end
-                    }
+                    <<"request">> =>
+                        #{
+                            <<"device">> => #{
+                                <<"request">> =>
+                                    fun(_, #{ <<"body">> := [M|Ms] }, _) ->
+                                        {
+                                            ok,
+                                            #{
+                                                <<"body">> =>
+                                                    [
+                                                        M#{
+                                                            <<"added">> =>
+                                                                <<"value">>
+                                                        }
+                                                    |
+                                                        Ms
+                                                    ]
+                                            }
+                                        }
+                                    end
+                            }
+                        }
                 }
         }),
     {ok, Res} = hb_http:get(Node, <<"/added">>, #{}),
     ?assertEqual(<<"value">>, Res).
-
-%% Test that we can use a postprocessor upon a request. Calls the `test@1.0'
-%% device's postprocessor, which sets the `postprocessor-called' key to true in
-%% the HTTP server.
-% postprocessor_test() ->
-%     Node = hb_http_server:start_node(
-%         #{
-%             postprocessor => <<"test-device@1.0">>
-%         }),
-%     hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
-%     timer:sleep(100),
-%     {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info/postprocessor-called">>, #{}),
-%     ?event({res, Res}),
-%     ?assertEqual(true, Res).

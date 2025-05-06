@@ -168,8 +168,10 @@ do_start_simple_pay(Opts) ->
         },
     hb_http_server:start_node(
         Opts#{
-            preprocessor => Processor,
-            postprocessor => Processor
+            on => #{
+                <<"request">> => Processor,
+                <<"response">> => Processor
+            }
         }
     ),
     io:format(
