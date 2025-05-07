@@ -433,103 +433,62 @@ test_wasm_process(WASMImage, Opts) ->
 	).
 
 simple_lua_via_process_http_test_() ->
-    % 1. Setup: Start HTTP Server Node with its own wallet
-    NodeWallet = ar_wallet:new(),
-	Node = hb_http_server:start_node(Opts = #{
-        port => 10000 + rand:uniform(10000),
-        priv_wallet => NodeWallet,
-        cache_control => <<"always">>
-        % store => #{
-        %     <<"store-module">> => hb_store_fs,
-        %     <<"prefix">> => <<"cache-mainnet">>
-        % }
-        %}
-	}),
-	ClientWallet = hb:wallet(), 
-	Process = generate_lua_process("test/test.lua", Opts),
-	hb_cache:write(Process, Opts),
-	ProcID = hb_util:human_id(hb_message:id(Process, all)),
-	ok      = element(1,                    % ignore {ok, …} in a test
-              hb_http:post(Node,
-                           <<"/schedule">>, % NOTE: root path → create process
-                           Process,
-                           #{})),
-
-
-	% try meta get to test get
-	% ResMeta = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
-	% ?event({debug_http_todo, {results, ResMeta}}),
+		% 1. Setup: Start HTTP Server Node with its own wallet
+		NodeWallet = ar_wallet:new(),
+		Node = hb_http_server:start_node(Opts = #{
+			port => 10000 + rand:uniform(10000),
+			priv_wallet => NodeWallet,
+			cache_control => <<"always">>,
+			store => #{
+				<<"store-module">> => hb_store_fs,
+				<<"prefix">> => <<"cache-TEST">>
+			}
+		}),
+		% 2. Define Ultra-Simple Lua Script
+		{ok, Script} = file:read_file("test/test.lua"),
 	
-
-
-	% message stuff that works 
-	% Singleton1 = #{
-    %     <<"path">> => <<"schedule">>,
-    %     <<"method">> => <<"POST">>,
-    %     <<"body">> =>
-    %         hb_message:commit(
-    %             #{
-    %                 <<"target">> => ProcID,
-	% 				<<"path">> => <<"hello_world">>,
-    %                 <<"type">> => <<"Message">>,
-    %                 <<"data">> => <<"1 + 1">>,
-    %                 <<"random-seed">> => rand:uniform(1337),
-    %                 <<"action">> => <<"Eval">>,
-    %                 <<"from-process">> => <<"1234">>
-
-    %     }, ClientWallet)
-	% },
-	% ?event({debug_http_todo, {message, hb_singleton:to([Singleton1])}}),
-	% Message = hb_message:commit(Singleton1, ClientWallet),
-    % {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
-	% {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
-	% ?event({debug_http_todo, {results, Results}}),
-
+		% 3. Create the AO Process
+		ClientWallet = hb:wallet(), 
+		Process = hb_message:commit(#{
+			<<"device">> => <<"process@1.0">>,
+			<<"type">> => <<"Process">>,
+			<<"scheduler-device">> => <<"scheduler@1.0">>,
+			<<"execution-device">> => <<"lua@5.3a">>,
+			<<"script">> => #{
+				<<"content-type">> => <<"application/lua">>,
+				<<"body">> => Script
+			},
+			<<"authority">> => [ 
+				hb:address(), 
+				<<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
+			  ], 
+			  <<"scheduler-location">> =>
+				  hb_util:human_id(ar_wallet:to_address(ClientWallet)),
+			  <<"test-random-seed">> => rand:uniform(1337)
+		}, ClientWallet),
+		hb_cache:write(Process, Opts),
+		ProcID = hb_util:human_id(hb_message:id(Process, all)),
+		Message = hb_message:commit(#{
+			<<"path">> => <<"schedule">>,
+			<<"method">> => <<"POST">>,
+			<<"body">> =>
+				hb_message:commit(
+					#{
+						<<"target">> => ProcID,
+						<<"path">> => <<"hello_world">>,
+						<<"type">> => <<"Message">>,
+						<<"data">> => <<"1 + 1">>,
+						<<"random-seed">> => rand:uniform(1337),
+						<<"action">> => <<"Eval">>,
+						<<"from-process">> => <<"1234">>
 	
-
-	%%%%%%%%%%%%%%%%% http %%%%%%%%%%%%%
-	% Process = test_wasm_process(<<"test/test-64.wasm">>, Opts),
-	% Path = <<"/schedule">>,
-	% BodyPayload = #{
-	% 	<<"path">> => <<"hello_world">>,
-	% 	<<"action">> => <<"Eval">>,
-	% 	<<"data">> => <<"1 + 1">>,
-	% 	<<"from-process">> => <<"1234">>,
-	% 	<<"random-seed">> => 353,
-	% 	<<"target">> => ProcID,
-	% 	<<"type">> => <<"Message">>
-	% },
-	% InitRes =
-    %     hb_http:post(
-    %         Node,
-    %         Path,
-    %         BodyPayload,
-    %         #{}
-    %     ),
-    % ?event({debug_http_todo, {init_res, InitRes}}),
-
-	% try a get on the process
-	% ComputeGet = hb_http:get(Node, #{
-	% 	<<"path">> => << ProcID/binary, "/compute">>,
-	% 	<<"slot">> => 1
-	% }, #{}),
-	% ?event({debug_http_todo, {results, ComputeGet}}),
- 
-	% 
-	% {ok, ScheduleResponse} = hb_http:post(
-	% 	Node, 
-	% 	<<"/schedule">>, 
-	% 	Process, 
-	% 	#{json_response => true}),	
-	% BaseUrl = <<"/", ProcID/binary>>,
-
-	% % 5. Invoke hello_world via HTTP GET
-	% GetPath = <<BaseUrl/binary, "/hello_world">>,
-	% {ok, GetResponse} = hb_http:get(Node, GetPath, #{json_response => true}),
-	% ?assertEqual(<<"ok">>, maps:get(<<"status">>, GetResponse)),
-	% ?assertEqual(1, maps:get(<<"result">>, GetResponse)), % Lua number 1 becomes Erlang integer 1
-    ok.
-
+			}, ClientWallet)
+		  }, ClientWallet
+		),
+	{ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
+	{ok, Results} = hb_ao:resolve(Process, <<"now/result">>, #{}),
+	?event({debug_http_todo, {results, Results}}),
+	?assertEqual(1, Results).
 
 %%% Documentation
 %%%  NodeWallet – the private key that the HTTP node uses to sign replies.
@@ -568,20 +527,24 @@ simple_http_resolve_test_() ->
 	{ok, _Reply} = hb_http:post(Node, <<"/schedule">>, Process, #{}),
 	% ?event({debug_http_todo, {res, _Reply}}),
 
+	%% the process has been schduled above. 
+	%% now we can all the compute function directly to slot 0.
 	% {ok, Compute0} = hb_http:get(Node, #{
 	% 	<<"path">> => <<ProcID/binary, "/compute/results/output/body">>,
 	% 	<<"slot">> => 0
 	% }, #{json_response => true}),
 	% ?event({debug_http_todo, {compute0, Compute0}}),
-
+	% ?assertEqual(42, Compute0),
 	% {ok, Compute1} = hb_http:get(Node, #{
 	% 	<<"path">> => <<ProcID/binary, "/now/results/output/body">>
 	% }, #{json_response => true}),
 	% ?event({debug_http_todo, {compute1, Compute1}}),
-
-	% call a direct lua function
+	% ?assertEqual(42, Compute1),
+	
+	%% call a direct lua function (hello_world in test.lua)
+	%% this will be scheduled to slot 0 if the above is comented out.
 	ClientWallet = hb:wallet(), 
-	EvalMsg =
+	HelloWorldMsg =
         hb_message:commit(#{
              <<"target">> => ProcID,
              <<"type">>   => <<"Message">>,
@@ -589,21 +552,26 @@ simple_http_resolve_test_() ->
              <<"action">> => <<"Eval">>,
              <<"random-seed">> => rand:uniform(1337)
          }, ClientWallet),
-	HttpBody = #{ <<"body">> => EvalMsg },
+	HttpBody = #{ <<"body">> => HelloWorldMsg },
 	{ok, _SchedRes} =
 		 hb_http:post(Node,
 					  <<"/", ProcID/binary, "/schedule">>,
 					  HttpBody,
 					  #{}),
+	?event({debug_http_todo, {sched_res_hello_world, _SchedRes}}),
 	{ok, ComputeHelloWorldRes} =
 	hb_http:get(Node,
 			#{
-			<<"path">> => <<ProcID/binary, "/compute/results/output/body">>,
+			<<"path">> => <<ProcID/binary, "/compute">>,
 			<<"slot">> => 0
 			},
 			#{json_response => true}),
 	?event({debug_http_todo, {compute_hello_world_res, ComputeHelloWorldRes}}),
-
-
+	
+	% {ok, #{<<"result">> := Val}} =
+    % hb_http:get(Node,
+    %             <<"/", ProcID/binary, "/hello_world">>,
+    %             #{json_response => true}),
+	% ?event({debug_http_todo, {hello_world_direct_res, Val}}),
 	
 	?event(debug_http_todo, {end_of_test}).
