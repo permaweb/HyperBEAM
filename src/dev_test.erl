@@ -531,6 +531,25 @@ simple_lua_via_process_http_test_() ->
     ok.
 
 
+%%% Documentation
+%%%  NodeWallet – the private key that the HTTP node uses to sign replies.
+% Every Process that the node creates or owns should normally be
+% committed with this wallet so the scheduler-location matches the node.
+% • ClientWallet – the key you (the test client) use to sign messages that
+% are later delivered to the scheduler of some Process.
+% It can be the same key as NodeWallet, but it doesn’t have to be.
+% In a real deployment it would more often be a different user wallet.
+% • Wallet inside generate_lua_process/2 – the wallet used to sign the
+% Process definition itself. When you pass Opts that already contains
+% priv_wallet => NodeWallet the function ends up committing with the node’s
+% own key, which satisfies the scheduler’s trust test.
+
+%%% Process signed by  :  NodeWallet       (owner of the scheduler)
+%%% Messages scheduled :  ClientWallet     ( arbitrary client  )
+%%% HTTP server signs  :  NodeWallet
+
+
+
 simple_http_resolve_test_() ->
 	%% 1.  Start an HTTP node with its own wallet
 	NodeWallet = ar_wallet:new(),
@@ -544,7 +563,47 @@ simple_http_resolve_test_() ->
 	},
 	Node = hb_http_server:start_node(NodeOpts),
 	Process = generate_lua_process("test/test.lua", NodeOpts),
+	ProcID = hb_util:human_id(hb_message:id(Process, all)),	
 	hb_cache:write(Process, NodeOpts),
 	{ok, _Reply} = hb_http:post(Node, <<"/schedule">>, Process, #{}),
-	?event({debug_http_todo, {res, _Reply}}),
+	% ?event({debug_http_todo, {res, _Reply}}),
+
+	% {ok, Compute0} = hb_http:get(Node, #{
+	% 	<<"path">> => <<ProcID/binary, "/compute/results/output/body">>,
+	% 	<<"slot">> => 0
+	% }, #{json_response => true}),
+	% ?event({debug_http_todo, {compute0, Compute0}}),
+
+	% {ok, Compute1} = hb_http:get(Node, #{
+	% 	<<"path">> => <<ProcID/binary, "/now/results/output/body">>
+	% }, #{json_response => true}),
+	% ?event({debug_http_todo, {compute1, Compute1}}),
+
+	% call a direct lua function
+	ClientWallet = hb:wallet(), 
+	EvalMsg =
+        hb_message:commit(#{
+             <<"target">> => ProcID,
+             <<"type">>   => <<"Message">>,
+             <<"path">>   => <<"hello_world">>,  %% Lua function
+             <<"action">> => <<"Eval">>,
+             <<"random-seed">> => rand:uniform(1337)
+         }, ClientWallet),
+	HttpBody = #{ <<"body">> => EvalMsg },
+	{ok, _SchedRes} =
+		 hb_http:post(Node,
+					  <<"/", ProcID/binary, "/schedule">>,
+					  HttpBody,
+					  #{}),
+	{ok, ComputeHelloWorldRes} =
+	hb_http:get(Node,
+			#{
+			<<"path">> => <<ProcID/binary, "/compute/results/output/body">>,
+			<<"slot">> => 0
+			},
+			#{json_response => true}),
+	?event({debug_http_todo, {compute_hello_world_res, ComputeHelloWorldRes}}),
+
+
+	
 	?event(debug_http_todo, {end_of_test}).
