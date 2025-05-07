@@ -160,11 +160,6 @@ end
 --- @tparam table base
 --- @tparam table request
 function hello_world(base, req, opts)
-	ao.event('debug_http_todo', { "hello_world PROCESS", process})
-	ao.event('debug_http_todo', {"------------------"})
-	ao.event('debug_http_todo', { "hello_world MESSAGE", message})
-	ao.event('debug_http_todo', {"------------------"})
-	ao.event('debug_http_todo', { "hello_world OPTS", opts})
 	base.animals = base.animals or {}
 	base.animals.output = {
 		names = {
@@ -173,13 +168,18 @@ function hello_world(base, req, opts)
 		}
 	}
 	return base
-	-- return "ok", {
-	-- 	results = {
-	-- 		output = { 
-	-- 			body = {
-	-- 				data = "unicorns"
-	-- 			}
-	-- 		}
-	-- 	}
-	-- }
+end
+
+function animals_count(base, req, opts)
+    -- make sure we look at the list written by `hello_world`
+    local names = {}
+    if base.animals and base.animals.output and base.animals.output.names then
+        names = base.animals.output.names
+    end
+
+    -- expose the count in the canonical results table so it is addressable via `/results/count`
+    base.results = base.results or {}
+    base.results.count = #names
+
+    return base
 end

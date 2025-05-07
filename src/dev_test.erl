@@ -468,12 +468,12 @@ simple_lua_via_process_http_test_() ->
 % committed with this wallet so the scheduler-location matches the node.
 % • ClientWallet – the key you (the test client) use to sign messages that
 % are later delivered to the scheduler of some Process.
-% It can be the same key as NodeWallet, but it doesn’t have to be.
+% It can be the same key as NodeWallet, but it doesn't have to be.
 % In a real deployment it would more often be a different user wallet.
 % • Wallet inside generate_lua_process/2 – the wallet used to sign the
 % Process definition itself. When you pass Opts that already contains
-% priv_wallet => NodeWallet the function ends up committing with the node’s
-% own key, which satisfies the scheduler’s trust test.
+% priv_wallet => NodeWallet the function ends up committing with the node's
+% own key, which satisfies the scheduler's trust test.
 
 %%% Process signed by  :  NodeWallet       (owner of the scheduler)
 %%% Messages scheduled :  ClientWallet     ( arbitrary client  )
@@ -532,12 +532,61 @@ simple_http_resolve_test_() ->
 					  #{}),
 	?event({debug_http_todo, {sched_res_hello_world, _SchedRes}}),
 	timer:sleep(1000),
+
 	{ok, _State1} =
     hb_http:get(Node,
-                #{ <<"path">> => <<ProcID/binary, "/now/animals/">>,
+                #{ <<"path">> => <<ProcID/binary, "/compute/animals/">>,
                    <<"slot">> => 1 },
                 #{}),
 	?event({debug_http_todo, {state1, _State1}}),
 	
+	CountMsg =
+    hb_message:commit(#{
+        <<"target">>      => ProcID,
+        <<"type">>        => <<"Message">>,
+        <<"path">>        => <<"animals_count">>, % Lua fn
+        <<"action">>      => <<"Eval">>,
+        <<"random-seed">> => rand:uniform(1337)
+    }, ClientWallet),
+
+	{ok, _SchedResAnimalsCount} =
+		hb_http:post(Node,
+                   <<"/", ProcID/binary, "/schedule">>,
+                   #{<<"body">> => CountMsg},
+                   #{}),
+	?event({debug_http_todo, {sched_res_animals_count, _SchedResAnimalsCount}}),
+	timer:sleep(1000),
+	{ok, CountResp} =
+    hb_http:get(
+        Node,
+        #{
+            <<"path">> => <<ProcID/binary, "/compute/results/count">>,
+            <<"slot">> => 2
+        },
+        #{json_response => true}),
+	?event({debug_http_todo, {count_response, CountResp}}),
+	
+	%% get
+	{ok, AnimalsResp} = hb_http:get(Node, #{
+		<<"path">> => <<ProcID/binary, "/compute/animals/output/names">>,
+		<<"slot">> => 1
+	},
+	#{json_response => true}),
+	?event({debug_http_todo, {animals_resp, AnimalsResp}}),
+
+	%% --- Direct local computation of animals_count using cached slot 1 state ---
+	{ok, Slot1State} = hb_http:get(Node, #{
+	    <<"path">> => <<ProcID/binary, "/compute">>,
+	    <<"slot">> => 1
+	}, #{}),
+	% Execute the Lua function locally against that state (no scheduling)
+	{ok, LocalCountState} = hb_ao:resolve(
+	    Slot1State#{ <<"device">> => <<"lua@5.3a">> },
+	    <<"animals_count">>,
+	    #{}
+	),
+	DirectCount = hb_ao:get(<<"results/count">>, LocalCountState, #{}),
+	?event({debug_http_todo, {direct_count, DirectCount}}),
+	?assertEqual(2, DirectCount),
 
 	?event(debug_http_todo, {end_of_test}).
