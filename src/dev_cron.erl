@@ -78,7 +78,10 @@ process_cached_jobs(Crons, Msg1, CronOpts) ->
             process_single_job(Job, Msg1, CronOpts)
         end, Crons
     ),
-    lists:partition(fun({ok, _}) -> true; (_) -> false end, Results).
+    lists:partition(
+		fun({ok, _}) -> true; 
+		(_) -> false end, 
+		Results).
 
 %% Helper function to process a single cached job entry
 process_single_job(Job, Msg1, CronOpts) ->
