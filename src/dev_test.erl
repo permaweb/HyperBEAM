@@ -494,8 +494,8 @@ simple_lua_via_process_http_test_() ->
       }, ClientWallet
     ),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
-	{ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
-	?event({debug_http_todo, {results, Results}}),
+	% {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
+	% ?event({debug_http_todo, {results, Results}}),
 
 	
 
