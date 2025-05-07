@@ -337,27 +337,27 @@ very_simple_lua_execution_test() ->
 	ExpectedResult = <<"Hello from simple Lua!">>,
 	?assertEqual({ok, ExpectedResult}, hb_ao:resolve(BaseMsg, <<"get_greeting">>, #{})).
 
-generate_lua_process(File) ->
-		Wallet = hb:wallet(),
-		{ok, Script} = file:read_file(File),
-		hb_message:commit(#{
-			<<"device">> => <<"process@1.0">>,
-			<<"type">> => <<"Process">>,
-			<<"scheduler-device">> => <<"scheduler@1.0">>,
-			<<"execution-device">> => <<"lua@5.3a">>,
-			<<"script">> => #{
-				<<"content-type">> => <<"application/lua">>,
-				<<"body">> => Script
-			},
-			<<"authority">> => [ 
-			  hb:address(), 
-			  <<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
-			], 
-			<<"scheduler-location">> =>
-				hb_util:human_id(ar_wallet:to_address(Wallet)),
-			<<"test-random-seed">> => rand:uniform(1337)
-		}, Wallet).
-	
+generate_lua_process(File, Opts) ->
+	Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+	{ok, Script} = file:read_file(File),
+	hb_message:commit(#{
+		<<"device">> => <<"process@1.0">>,
+		<<"type">> => <<"Process">>,
+		<<"scheduler-device">> => <<"scheduler@1.0">>,
+		<<"execution-device">> => <<"lua@5.3a">>,
+		<<"script">> => #{
+			<<"content-type">> => <<"application/lua">>,
+			<<"body">> => Script
+		},
+		<<"authority">> => [ 
+			hb:address(), 
+			<<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
+		], 
+		<<"scheduler-location">> =>
+			hb_util:human_id(ar_wallet:to_address(Wallet)),
+		<<"test-random-seed">> => rand:uniform(1337)
+	}, Wallet).
+
 generate_test_message(Process) ->
     ProcID = hb_message:id(Process, all),
     Wallet = hb:wallet(),
@@ -391,7 +391,7 @@ generate_test_message(Process) ->
     ).
 
 simple_lua_via_process_test() ->
-	Process = generate_lua_process("test/hyper-aos.lua"),
+	Process = generate_lua_process("test/hyper-aos.lua", #{}),
 	{ok, _} = hb_cache:write(Process, #{}),
 	Message = generate_test_message(Process),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
@@ -445,55 +445,43 @@ simple_lua_via_process_http_test_() ->
         % }
         %}
 	}),
-	% 2. Define Ultra-Simple Lua Script
-	{ok, Script} = file:read_file("test/test.lua"),
-
-	% 3. Create the AO Process
 	ClientWallet = hb:wallet(), 
-	Process = hb_message:commit(#{
-		<<"device">> => <<"process@1.0">>,
-		<<"type">> => <<"Process">>,
-		<<"scheduler-device">> => <<"scheduler@1.0">>,
-		<<"execution-device">> => <<"lua@5.3a">>,
-		<<"script">> => #{
-			<<"content-type">> => <<"application/lua">>,
-			<<"body">> => Script
-		},
-		<<"authority">> => [ 
-			hb:address(), 
-			<<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
-		  ], 
-		  <<"scheduler-location">> =>
-			  hb_util:human_id(ar_wallet:to_address(ClientWallet)),
-		  <<"test-random-seed">> => rand:uniform(1337)
-	}, ClientWallet),
+	Process = generate_lua_process("test/test.lua", Opts),
 	hb_cache:write(Process, Opts),
 	ProcID = hb_util:human_id(hb_message:id(Process, all)),
+	ok      = element(1,                    % ignore {ok, …} in a test
+              hb_http:post(Node,
+                           <<"/schedule">>, % NOTE: root path → create process
+                           Process,
+                           #{})),
+
 
 	% try meta get to test get
 	% ResMeta = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
 	% ?event({debug_http_todo, {results, ResMeta}}),
 	
 
-	% message stuff that works 
-	Message = hb_message:commit(#{
-        <<"path">> => <<"schedule">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> =>
-            hb_message:commit(
-                #{
-                    <<"target">> => ProcID,
-					<<"path">> => <<"hello_world">>,
-                    <<"type">> => <<"Message">>,
-                    <<"data">> => <<"1 + 1">>,
-                    <<"random-seed">> => rand:uniform(1337),
-                    <<"action">> => <<"Eval">>,
-                    <<"from-process">> => <<"1234">>
 
-        }, ClientWallet)
-      }, ClientWallet
-    ),
-    {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
+	% message stuff that works 
+	% Singleton1 = #{
+    %     <<"path">> => <<"schedule">>,
+    %     <<"method">> => <<"POST">>,
+    %     <<"body">> =>
+    %         hb_message:commit(
+    %             #{
+    %                 <<"target">> => ProcID,
+	% 				<<"path">> => <<"hello_world">>,
+    %                 <<"type">> => <<"Message">>,
+    %                 <<"data">> => <<"1 + 1">>,
+    %                 <<"random-seed">> => rand:uniform(1337),
+    %                 <<"action">> => <<"Eval">>,
+    %                 <<"from-process">> => <<"1234">>
+
+    %     }, ClientWallet)
+	% },
+	% ?event({debug_http_todo, {message, hb_singleton:to([Singleton1])}}),
+	% Message = hb_message:commit(Singleton1, ClientWallet),
+    % {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
 	% {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
 	% ?event({debug_http_todo, {results, Results}}),
 
@@ -501,11 +489,21 @@ simple_lua_via_process_http_test_() ->
 
 	%%%%%%%%%%%%%%%%% http %%%%%%%%%%%%%
 	% Process = test_wasm_process(<<"test/test-64.wasm">>, Opts),
+	% Path = <<"/schedule">>,
+	% BodyPayload = #{
+	% 	<<"path">> => <<"hello_world">>,
+	% 	<<"action">> => <<"Eval">>,
+	% 	<<"data">> => <<"1 + 1">>,
+	% 	<<"from-process">> => <<"1234">>,
+	% 	<<"random-seed">> => 353,
+	% 	<<"target">> => ProcID,
+	% 	<<"type">> => <<"Message">>
+	% },
 	% InitRes =
     %     hb_http:post(
     %         Node,
-    %         << "/schedule" >>,
-    %         Process,
+    %         Path,
+    %         BodyPayload,
     %         #{}
     %     ),
     % ?event({debug_http_todo, {init_res, InitRes}}),
@@ -532,3 +530,21 @@ simple_lua_via_process_http_test_() ->
 	% ?assertEqual(1, maps:get(<<"result">>, GetResponse)), % Lua number 1 becomes Erlang integer 1
     ok.
 
+
+simple_http_resolve_test_() ->
+	%% 1.  Start an HTTP node with its own wallet
+	NodeWallet = ar_wallet:new(),
+	NodeOpts = #{
+		priv_wallet   => NodeWallet,
+		cache_control => <<"always">>,          % read/write only the local store
+		store         => #{
+			<<"store-module">> => hb_store_fs,
+			<<"prefix">>       => <<"cache-TEST">>
+		}
+	},
+	Node = hb_http_server:start_node(NodeOpts),
+	Process = generate_lua_process("test/test.lua", NodeOpts),
+	hb_cache:write(Process, NodeOpts),
+	{ok, _Reply} = hb_http:post(Node, <<"/schedule">>, Process, #{}),
+	?event({debug_http_todo, {res, _Reply}}),
+	?event(debug_http_todo, {end_of_test}).
