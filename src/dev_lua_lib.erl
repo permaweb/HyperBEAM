@@ -245,7 +245,7 @@ lua_ao_cache_write_read_test() ->
 		<<"type">> => <<"test_data">>, 
 		<<"value">> => rand:uniform(1000), 
 		<<"nested">> => [1, <<"two">>] },
-    {ok, Script} = file:read_file("scripts/cache-test.lua"),
+    {ok, Script} = file:read_file("scripts/lua-cache-test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
         <<"script">> => #{
