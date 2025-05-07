@@ -49,6 +49,11 @@ end
 --- the `response` field set to a table with the `Output` field set to a string,
 --- and the `messages` field set to an empty table.
 function compute(process, message, opts)
+	ao.event('debug_http_todo', { "compute PROCESS", process})
+	ao.event('debug_http_todo', {"------------------"})
+	ao.event('debug_http_todo', { "compute MESSAGE", message})
+	ao.event('debug_http_todo', {"------------------"})
+	ao.event('debug_http_todo', { "compute OPTS", opts})
     process.results = {
         output = {
             body = 42
@@ -149,4 +154,8 @@ function compute_routes(base, req, opts)
         }
     end
     return base
+end
+
+function hello_world()
+	return { status = "ok", result = 1 }
 end

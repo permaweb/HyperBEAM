@@ -643,6 +643,7 @@ invoke_aos_test() ->
     Message = generate_test_message(Process),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output/data">>, #{}),
+	?event({debug_http_todo, {results, Results}}),
     ?assertEqual(<<"1">>, Results).
 
 aos_authority_not_trusted_test() ->
@@ -808,3 +809,4 @@ execute_aos_call(Base, Req) ->
         },
         #{}
     ).
+

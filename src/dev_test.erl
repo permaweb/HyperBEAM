@@ -216,3 +216,319 @@ restore_test() ->
     Msg1 = #{ <<"device">> => <<"Test-Device@1.0">>, <<"already-seen">> => [1] },
     {ok, Msg3} = hb_ao:resolve(Msg1, <<"restore">>, #{}),
     ?assertEqual([1], hb_private:get(<<"test-key/started-state">>, Msg3, #{})).
+
+
+
+%% test code
+
+todo_app_http_test_() -> % Ensure name matches EUnit convention for timed tests
+    NodeWallet = ar_wallet:new(), % Create a wallet for the HTTP server node
+    Node = hb_http_server:start_node(#{ priv_wallet => NodeWallet }), % Provide wallet to the node
+    try
+        % 2. Define the Lua Script (same as previous example)
+        TodoScriptBinary = <<"""
+        if TodoList == nil then
+            TodoList = {}
+        end
+
+        function addTask(params)
+            local task_description = params.task
+            if task_description == nil then
+                return { status = "error", message = "Task parameter is missing" }
+            end
+            table.insert(TodoList, task_description)
+            return { status = "ok", message = "Task '" .. task_description .. "' added." }
+        end
+
+        function getTasks()
+            return { status = "ok", tasks = TodoList }
+        end
+
+        function initializeList()
+            TodoList = {}
+            return { status = "ok", message = "Todo list initialized."}
+        end
+        """>>,
+
+        % 3. Create the Lua process that will host our todo list
+        Wallet = hb:wallet(),
+        TodoProcess = hb_message:commit(#{
+            <<"device">> => <<"process@1.0">>,
+            <<"type">> => <<"Process">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"execution-device">> => <<"lua@5.3a">>,
+            <<"script">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => TodoScriptBinary
+            },
+            <<"authority">> => [hb:address()],
+            <<"scheduler-location">> => hb_util:human_id(ar_wallet:to_address(Wallet))
+        }, Wallet),
+        ProcID = hb_message:id(TodoProcess, all),
+        {ok, _} = hb_cache:write(TodoProcess, #{}), % Make the process discoverable
+
+        % NEW STEP: Register/Schedule the process with the HTTP Node's scheduler
+        {ok, ScheduleResponse} = hb_http:post(Node, <<"/schedule">>, TodoProcess, #{json_response => true}),
+        ?event({debug_http_todo, {schedule_process_response, ScheduleResponse}}),
+        case maps:get(<<"status">>, ScheduleResponse, undefined) of
+            200 -> ok; % OK
+            201 -> ok; % Created
+            202 -> ok; % Accepted
+            _Status -> 
+                ?debugFmt("Unexpected schedule process response: ~p", [ScheduleResponse]),
+                ?assert(false)
+        end,
+
+        % Base URL for our process
+        BaseUrl = <<"/", ProcID/binary>>,
+
+        % 4. Initialize the list via HTTP POST
+        InitPath = << BaseUrl/binary, "/initializeList" >>,
+        InitBody = #{ <<"parameters">> => #{} }, % Correctly structured for dev_lua
+        {ok, InitResponse} = hb_http:post(Node, InitPath, InitBody, #{json_response => true}),
+        ?event({debug_http_todo, {init_response, InitResponse}}),
+        ?assertEqual(<<"ok">>, maps:get(<<"status">>, InitResponse)), % Corrected path
+
+        % 5. Add the first task via HTTP POST
+        Task1 = <<"Buy groceries via HTTP">>,
+        AddPath = << BaseUrl/binary, "/addTask" >>,
+        AddBody1 = #{ <<"parameters">> => #{ <<"task">> => Task1 } },
+        {ok, AddResponse1} = hb_http:post(Node, AddPath, AddBody1, #{json_response => true}),
+        ?event({debug_http_todo, {add_response_1, AddResponse1}}),
+        ?assertEqual(<<"ok">>, maps:get(<<"status">>, AddResponse1)), % Corrected path
+
+        % 6. Add a second task via HTTP POST
+        Task2 = <<"Submit expenses via HTTP">>,
+        AddBody2 = #{ <<"parameters">> => #{ <<"task">> => Task2 } },
+        {ok, AddResponse2} = hb_http:post(Node, AddPath, AddBody2, #{json_response => true}),
+        ?event({debug_http_todo, {add_response_2, AddResponse2}}),
+        ?assertEqual(<<"ok">>, maps:get(<<"status">>, AddResponse2)), % Corrected path
+
+        % 7. Get all tasks via HTTP GET and verify
+        GetTasksPath = << BaseUrl/binary, "/getTasks" >>,
+        {ok, GetTasksResponse} = hb_http:get(Node, GetTasksPath, #{json_response => true}),
+        ?event({debug_http_todo, {get_tasks_response, GetTasksResponse}}),
+
+        ExpectedTasks = [Task1, Task2],
+        ActualTasks = maps:get(<<"tasks">>, GetTasksResponse), % Corrected path
+        
+        ?assertEqual(<<"ok">>, maps:get(<<"status">>, GetTasksResponse)), % Corrected path
+        ?assertEqual(ExpectedTasks, ActualTasks),
+        
+        ok
+    after
+        % 8. Clean up: Stop the HTTP server node
+        try gen_server:call(Node, stop) catch _:_ -> ok end
+    end. % This closes the fun() and the test definition.
+
+
+
+very_simple_lua_execution_test() ->
+	SimpleScript = <<"function get_greeting() return 'Hello from simple Lua!' end">>,
+	BaseMsg = #{
+		<<"device">> => <<"lua@5.3a">>,
+		<<"script">> => #{
+			<<"content-type">> => <<"application/lua">>,
+			<<"body">> => SimpleScript
+		}
+	},
+	% When a Lua function returns a simple string, and dev_lua processes it,
+	% the expected successful result from hb_ao:resolve is {ok, ReturnedString}.
+	ExpectedResult = <<"Hello from simple Lua!">>,
+	?assertEqual({ok, ExpectedResult}, hb_ao:resolve(BaseMsg, <<"get_greeting">>, #{})).
+
+generate_lua_process(File) ->
+		Wallet = hb:wallet(),
+		{ok, Script} = file:read_file(File),
+		hb_message:commit(#{
+			<<"device">> => <<"process@1.0">>,
+			<<"type">> => <<"Process">>,
+			<<"scheduler-device">> => <<"scheduler@1.0">>,
+			<<"execution-device">> => <<"lua@5.3a">>,
+			<<"script">> => #{
+				<<"content-type">> => <<"application/lua">>,
+				<<"body">> => Script
+			},
+			<<"authority">> => [ 
+			  hb:address(), 
+			  <<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
+			], 
+			<<"scheduler-location">> =>
+				hb_util:human_id(ar_wallet:to_address(Wallet)),
+			<<"test-random-seed">> => rand:uniform(1337)
+		}, Wallet).
+	
+generate_test_message(Process) ->
+    ProcID = hb_message:id(Process, all),
+    Wallet = hb:wallet(),
+    Code = """ 
+      Count = 0
+      function add() 
+        Count = Count + 1 
+      end
+      add()
+      return Count
+    """,
+    hb_message:commit(#{
+            <<"path">> => <<"schedule">>,
+            <<"method">> => <<"POST">>,
+            <<"body">> =>
+                hb_message:commit(
+                    #{
+                        <<"target">> => ProcID,
+                        <<"type">> => <<"Message">>,
+                        <<"body">> => #{
+                            <<"content-type">> => <<"application/lua">>,
+                            <<"body">> => list_to_binary(Code) 
+                        },
+                        <<"random-seed">> => rand:uniform(1337),
+                        <<"action">> => <<"Eval">>
+                    },
+                    Wallet
+                )
+        },
+        Wallet
+    ).
+
+simple_lua_via_process_test() ->
+	Process = generate_lua_process("test/hyper-aos.lua"),
+	{ok, _} = hb_cache:write(Process, #{}),
+	Message = generate_test_message(Process),
+    {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
+	{ok, Results} = hb_ao:resolve(Process, <<"now/results/output/data">>, #{}),
+	?event({debug_http_todo, {results, Results}}),
+    ?event({debug_http_todo, {end_of_test}}).
+
+
+
+
+test_base_process() ->
+	test_base_process(#{}).
+test_base_process(Opts) ->
+	Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+	Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+	hb_message:commit(#{
+		<<"device">> => <<"process@1.0">>,
+		<<"scheduler-device">> => <<"scheduler@1.0">>,
+		<<"scheduler-location">> => Address,
+		<<"type">> => <<"Process">>,
+		<<"test-random-seed">> => rand:uniform(1337)
+	}, Wallet).
+	
+test_wasm_process(WASMImage) ->
+	test_wasm_process(WASMImage, #{}).
+test_wasm_process(WASMImage, Opts) ->
+	Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+	#{ <<"image">> := WASMImageID } = dev_wasm:cache_wasm_image(WASMImage, Opts),
+	hb_message:commit(
+		maps:merge(
+			hb_message:uncommitted(test_base_process(Opts)),
+			#{
+				<<"execution-device">> => <<"stack@1.0">>,
+				<<"device-stack">> => [<<"WASM-64@1.0">>],
+				<<"image">> => WASMImageID
+			}
+		),
+		Wallet
+	).
+
+simple_lua_via_process_http_test_() ->
+    % 1. Setup: Start HTTP Server Node with its own wallet
+    NodeWallet = ar_wallet:new(),
+	Node = hb_http_server:start_node(Opts = #{
+        port => 10000 + rand:uniform(10000),
+        priv_wallet => NodeWallet,
+        cache_control => <<"always">>
+        % store => #{
+        %     <<"store-module">> => hb_store_fs,
+        %     <<"prefix">> => <<"cache-mainnet">>
+        % }
+        %}
+	}),
+	% 2. Define Ultra-Simple Lua Script
+	{ok, Script} = file:read_file("test/test.lua"),
+
+	% 3. Create the AO Process
+	ClientWallet = hb:wallet(), 
+	Process = hb_message:commit(#{
+		<<"device">> => <<"process@1.0">>,
+		<<"type">> => <<"Process">>,
+		<<"scheduler-device">> => <<"scheduler@1.0">>,
+		<<"execution-device">> => <<"lua@5.3a">>,
+		<<"script">> => #{
+			<<"content-type">> => <<"application/lua">>,
+			<<"body">> => Script
+		},
+		<<"authority">> => [ 
+			hb:address(), 
+			<<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
+		  ], 
+		  <<"scheduler-location">> =>
+			  hb_util:human_id(ar_wallet:to_address(ClientWallet)),
+		  <<"test-random-seed">> => rand:uniform(1337)
+	}, ClientWallet),
+	hb_cache:write(Process, Opts),
+	ProcID = hb_util:human_id(hb_message:id(Process, all)),
+
+	% try meta get to test get
+	% ResMeta = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
+	% ?event({debug_http_todo, {results, ResMeta}}),
+	
+
+	% message stuff that works 
+	Message = hb_message:commit(#{
+        <<"path">> => <<"schedule">>,
+        <<"method">> => <<"POST">>,
+        <<"body">> =>
+            hb_message:commit(
+                #{
+                    <<"target">> => ProcID,
+					<<"path">> => <<"hello_world">>,
+                    <<"type">> => <<"Message">>,
+                    <<"data">> => <<"1 + 1">>,
+                    <<"random-seed">> => rand:uniform(1337),
+                    <<"action">> => <<"Eval">>,
+                    <<"from-process">> => <<"1234">>
+
+        }, ClientWallet)
+      }, ClientWallet
+    ),
+    {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
+	{ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
+	?event({debug_http_todo, {results, Results}}),
+
+	
+
+	%%%%%%%%%%%%%%%%% http %%%%%%%%%%%%%
+	% Process = test_wasm_process(<<"test/test-64.wasm">>, Opts),
+	% InitRes =
+    %     hb_http:post(
+    %         Node,
+    %         << "/schedule" >>,
+    %         Process,
+    %         #{}
+    %     ),
+    % ?event({debug_http_todo, {init_res, InitRes}}),
+
+	% try a get on the process
+	% ComputeGet = hb_http:get(Node, #{
+	% 	<<"path">> => << ProcID/binary, "/compute">>,
+	% 	<<"slot">> => 1
+	% }, #{}),
+	% ?event({debug_http_todo, {results, ComputeGet}}),
+ 
+	% 
+	% {ok, ScheduleResponse} = hb_http:post(
+	% 	Node, 
+	% 	<<"/schedule">>, 
+	% 	Process, 
+	% 	#{json_response => true}),	
+	% BaseUrl = <<"/", ProcID/binary>>,
+
+	% % 5. Invoke hello_world via HTTP GET
+	% GetPath = <<BaseUrl/binary, "/hello_world">>,
+	% {ok, GetResponse} = hb_http:get(Node, GetPath, #{json_response => true}),
+	% ?assertEqual(<<"ok">>, maps:get(<<"status">>, GetResponse)),
+	% ?assertEqual(1, maps:get(<<"result">>, GetResponse)), % Lua number 1 becomes Erlang integer 1
+    ok.
+
