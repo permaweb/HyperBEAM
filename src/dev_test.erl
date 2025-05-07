@@ -534,9 +534,10 @@ simple_http_resolve_test_() ->
 	timer:sleep(1000),
 	{ok, _State1} =
     hb_http:get(Node,
-                #{ <<"path">> => <<ProcID/binary, "/compute/animals/">>,
+                #{ <<"path">> => <<ProcID/binary, "/now/animals/">>,
                    <<"slot">> => 1 },
                 #{}),
 	?event({debug_http_todo, {state1, _State1}}),
 	
+
 	?event(debug_http_todo, {end_of_test}).
