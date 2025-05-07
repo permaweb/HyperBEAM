@@ -156,6 +156,30 @@ function compute_routes(base, req, opts)
     return base
 end
 
-function hello_world()
-	return { status = "ok", result = 1 }
+--- @function hello_world
+--- @tparam table base
+--- @tparam table request
+function hello_world(base, req, opts)
+	ao.event('debug_http_todo', { "hello_world PROCESS", process})
+	ao.event('debug_http_todo', {"------------------"})
+	ao.event('debug_http_todo', { "hello_world MESSAGE", message})
+	ao.event('debug_http_todo', {"------------------"})
+	ao.event('debug_http_todo', { "hello_world OPTS", opts})
+	base.animals = base.animals or {}
+	base.animals.output = {
+		names = {
+			"rainbows",
+			"unicorns"
+		}
+	}
+	return base
+	-- return "ok", {
+	-- 	results = {
+	-- 		output = { 
+	-- 			body = {
+	-- 				data = "unicorns"
+	-- 			}
+	-- 		}
+	-- 	}
+	-- }
 end

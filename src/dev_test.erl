@@ -433,39 +433,11 @@ test_wasm_process(WASMImage, Opts) ->
 	).
 
 simple_lua_via_process_http_test_() ->
-		% 1. Setup: Start HTTP Server Node with its own wallet
-		NodeWallet = ar_wallet:new(),
-		Node = hb_http_server:start_node(Opts = #{
-			port => 10000 + rand:uniform(10000),
-			priv_wallet => NodeWallet,
-			cache_control => <<"always">>,
-			store => #{
-				<<"store-module">> => hb_store_fs,
-				<<"prefix">> => <<"cache-TEST">>
-			}
-		}),
-		% 2. Define Ultra-Simple Lua Script
-		{ok, Script} = file:read_file("test/test.lua"),
-	
-		% 3. Create the AO Process
 		ClientWallet = hb:wallet(), 
-		Process = hb_message:commit(#{
-			<<"device">> => <<"process@1.0">>,
-			<<"type">> => <<"Process">>,
-			<<"scheduler-device">> => <<"scheduler@1.0">>,
-			<<"execution-device">> => <<"lua@5.3a">>,
-			<<"script">> => #{
-				<<"content-type">> => <<"application/lua">>,
-				<<"body">> => Script
-			},
-			<<"authority">> => [ 
-				hb:address(), 
-				<<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
-			  ], 
-			  <<"scheduler-location">> =>
-				  hb_util:human_id(ar_wallet:to_address(ClientWallet)),
-			  <<"test-random-seed">> => rand:uniform(1337)
-		}, ClientWallet),
+		Opts = #{
+			priv_wallet => ClientWallet
+		},
+		Process = generate_lua_process("test/test.lua", Opts),
 		hb_cache:write(Process, Opts),
 		ProcID = hb_util:human_id(hb_message:id(Process, all)),
 		Message = hb_message:commit(#{
@@ -525,21 +497,21 @@ simple_http_resolve_test_() ->
 	ProcID = hb_util:human_id(hb_message:id(Process, all)),	
 	hb_cache:write(Process, NodeOpts),
 	{ok, _Reply} = hb_http:post(Node, <<"/schedule">>, Process, #{}),
-	% ?event({debug_http_todo, {res, _Reply}}),
+	?event({debug_http_todo, {res, _Reply}}),
 
 	%% the process has been schduled above. 
 	%% now we can all the compute function directly to slot 0.
-	% {ok, Compute0} = hb_http:get(Node, #{
-	% 	<<"path">> => <<ProcID/binary, "/compute/results/output/body">>,
-	% 	<<"slot">> => 0
-	% }, #{json_response => true}),
-	% ?event({debug_http_todo, {compute0, Compute0}}),
-	% ?assertEqual(42, Compute0),
-	% {ok, Compute1} = hb_http:get(Node, #{
-	% 	<<"path">> => <<ProcID/binary, "/now/results/output/body">>
-	% }, #{json_response => true}),
-	% ?event({debug_http_todo, {compute1, Compute1}}),
-	% ?assertEqual(42, Compute1),
+	{ok, Compute0} = hb_http:get(Node, #{
+		<<"path">> => <<ProcID/binary, "/compute/results/output/body">>,
+		<<"slot">> => 0
+	}, #{json_response => true}),
+	?event({debug_http_todo, {compute0, Compute0}}),
+	?assertEqual(42, Compute0),
+	{ok, Compute1} = hb_http:get(Node, #{
+		<<"path">> => <<ProcID/binary, "/now/results/output/body">>
+	}, #{json_response => true}),
+	?event({debug_http_todo, {compute1, Compute1}}),
+	?assertEqual(42, Compute1),
 	
 	%% call a direct lua function (hello_world in test.lua)
 	%% this will be scheduled to slot 0 if the above is comented out.
@@ -559,19 +531,12 @@ simple_http_resolve_test_() ->
 					  HttpBody,
 					  #{}),
 	?event({debug_http_todo, {sched_res_hello_world, _SchedRes}}),
-	{ok, ComputeHelloWorldRes} =
-	hb_http:get(Node,
-			#{
-			<<"path">> => <<ProcID/binary, "/compute">>,
-			<<"slot">> => 0
-			},
-			#{json_response => true}),
-	?event({debug_http_todo, {compute_hello_world_res, ComputeHelloWorldRes}}),
-	
-	% {ok, #{<<"result">> := Val}} =
-    % hb_http:get(Node,
-    %             <<"/", ProcID/binary, "/hello_world">>,
-    %             #{json_response => true}),
-	% ?event({debug_http_todo, {hello_world_direct_res, Val}}),
+	timer:sleep(1000),
+	{ok, _State1} =
+    hb_http:get(Node,
+                #{ <<"path">> => <<ProcID/binary, "/compute/animals/">>,
+                   <<"slot">> => 1 },
+                #{}),
+	?event({debug_http_todo, {state1, _State1}}),
 	
 	?event(debug_http_todo, {end_of_test}).
