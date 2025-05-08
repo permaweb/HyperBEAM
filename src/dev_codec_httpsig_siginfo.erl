@@ -56,6 +56,7 @@ commitment_to_sf_siginfo(Commitment, Opts) ->
     % then be placed into a dictionary with other commitments and transformed
     % into their binary representations.
     SFSig = {item, {binary, Signature}, []},
+    AdditionalParams = get_additional_params(Commitment),
     Params = 
         lists:filter(
             fun({_Key, undefined}) ->
@@ -70,7 +71,7 @@ commitment_to_sf_siginfo(Commitment, Opts) ->
                 {<<"created">>, Created},
                 {<<"expires">>, Expires},
                 {<<"nonce">>, {string, Nonce}}
-            ]
+            ] ++ AdditionalParams
         ),
     SFSigInput =
         {list,
@@ -81,7 +82,40 @@ commitment_to_sf_siginfo(Commitment, Opts) ->
             ],
             Params
         },
+        ?event(debug, {input, SFSigInput}),
     {ok, SigName, SFSig, SFSigInput}.
+
+get_additional_params(Commitment) ->
+    AdditionalParams = sets:to_list(
+                         sets:subtract(
+                           sets:from_list(maps:keys(Commitment)), 
+                           sets:from_list([<<"alg">>, <<"keyid">>, <<"tag">>, <<"created">>, <<"expires">>, <<"nonce">>])
+                          )
+                        ),
+    lists:map(fun(Param) ->
+        ParamValue = maps:get(Param, Commitment),
+        case ParamValue of
+            Val when is_binary(Val) ->
+                {Param, {string, Val}};
+            Val when is_list(Val) ->
+                {Param, {string, list_to_binary(lists:join(<<", ">>, Val))}};
+            Val when is_map(Val) ->
+                Map = nested_map_to_string(Val),
+                {Param, {string, list_to_binary(lists:join(<<", ">>, Map))} }
+        end
+    end, AdditionalParams).
+
+nested_map_to_string(Map) ->
+    lists:map(fun(I) ->
+        case maps:get(I, Map) of
+            Val when is_map(Val) ->
+                Name = maps:get(<<"name">>, Val),
+                Value = maps:get(<<"value">>, Val),
+                <<I/binary, ":", Name/binary, ":", Value/binary>>;
+            Val ->
+                Val
+        end
+    end, maps:keys(Map)).
 
 %% @doc Return a binary encoded `signature' and `signature-input' key pair for
 %% a commitment.
@@ -137,7 +171,11 @@ sf_siginfo_to_commitment(SFSig, SFSigInput, Opts) ->
         maps:from_list(
             lists:map(
                 fun ({Key, BareItem}) ->
-                    {Key, hb_structured_fields:from_bare_item(BareItem)}
+                    Item = case hb_structured_fields:from_bare_item(BareItem) of
+                        Res when is_binary(Res) -> decoding_nested_map_binary(Res);
+                        Res -> Res
+                    end,
+                    {Key, Item}
                 end,
                 ParamsKV
             )
@@ -193,6 +231,23 @@ sf_siginfo_to_commitment(SFSig, SFSigInput, Opts) ->
         end,
     % Return the commitment and calculated ID.
     {ok, ID, Commitment5}.
+
+decoding_nested_map_binary(Bin) ->
+    MapBinary = lists:foldl(fun (X, Acc) ->
+        ?event(debug, {x, X}),
+        case binary:split(X, <<":">>, [global]) of
+            [ID, Key, Value] ->
+                maps:put(ID, #{ <<"name">> => Key, <<"value">> => Value }, Acc);
+            _ ->
+                X
+        end
+    end, #{}, binary:split(Bin, <<", ">>, [global])),
+    case MapBinary of
+        Res when is_map(Res) ->
+            Res;
+        Res ->
+            Res
+    end.
 
 %% @doc Decode a list of keys, if they are present in the given message.
 decode_byte_keys([], Msg) -> Msg;

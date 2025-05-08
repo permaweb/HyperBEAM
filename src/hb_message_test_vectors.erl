@@ -29,7 +29,6 @@ test_codecs() ->
 %% wish to do so in the future.
 test_opts(_) ->
     #{
-        linkify_mode => offload,
         store =>
             [
                 #{
@@ -37,7 +36,8 @@ test_opts(_) ->
                     <<"prefix">> => <<"cache-TEST">>
                 }
             ],
-        priv_wallet => hb:wallet()
+        priv_wallet => hb:wallet(),
+        always_bundle => os:getenv("BUNDLE", false)
     }.
 
 %% @doc Organizes a test battery for the `hb_message' module and its codecs.
@@ -143,7 +143,11 @@ run(Suite) ->
     lists:map(
         fun(CodecName) ->
             {foreach,
-                fun() -> ok end,
+                fun() ->
+                    CodecOpts = test_opts(CodecName),
+                    StoreOpts = maps:get(store, CodecOpts),
+                    hb_store:reset(StoreOpts)
+                end,
                 fun(_) -> ok end,
                 [
                     {
