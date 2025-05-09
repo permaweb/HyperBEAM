@@ -40,6 +40,21 @@ jobs:
         with:
           python-version: '3.x' # Use a recent Python 3 version
 
+      - name: Install erlang dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y erlang
+
+      - name: Install erlang dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y erlang
+
+      - name: Install rebar3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rebar3
+
       # Install pip dependencies and cache them
       - name: 📦 Install Python dependencies
         run: |
