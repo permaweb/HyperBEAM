@@ -215,11 +215,9 @@ jobs:
         id: publish_artifacts
         run: |
           npx permaweb-deploy \
-            --ant-process=${ANT_PROCESS} \
-            --undername=${UNDERNAME} \
+            --ant-process=${{ secrets.ANT_PROCESS }} \
             --deploy-folder=${ARTIFACTS_OUTPUT_DIR}
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
           ARTIFACTS_OUTPUT_DIR: ${{ steps.build_artifacts.outputs.artifacts_output_dir }}
           ANT_PROCESS: ${{ secrets.ANT_PROCESS }}
-          UNDERNAME: docs
