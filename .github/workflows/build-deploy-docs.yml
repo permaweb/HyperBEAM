@@ -40,14 +40,18 @@ jobs:
         with:
           python-version: '3.x' # Use a recent Python 3 version
 
-      # Install Erlang OTP from RabbitMQ team's PPA
-      - name: Install Erlang
+      # Install Erlang OTP 27 using kerl
+      - name: Install Erlang OTP 27
         run: |
           sudo apt-get update
-          sudo apt-get install -y software-properties-common
-          sudo add-apt-repository -y ppa:rabbitmq/rabbitmq-erlang
-          sudo apt-get update
-          sudo apt-get install -y erlang
+          sudo apt-get install -y build-essential autoconf libncurses5-dev libssl-dev
+          git clone https://github.com/kerl/kerl.git
+          ./kerl/kerl build 27.0 otp-27.0
+          ./kerl/kerl install otp-27.0 ~/otp-27.0
+          echo '. ~/otp-27.0/activate' >> ~/.bashrc
+          . ~/otp-27.0/activate
+          echo "Erlang version:"
+          erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
 
       # Install system dependencies needed for HyperBEAM
       - name: Install system dependencies
@@ -64,18 +68,21 @@ jobs:
       - name: Debug syntax error region
         run: |
           echo "Showing the region with syntax error in hb_message.erl:"
-          sed -n '1440,1460p' src/hb_message.erl
-          
+          sed -n '1440,1460p' src/hb_message.erl || echo "File not found or cannot be read"
+
           echo "Checking for syntax error fix files:"
-          find . -name "*.erl.fix" -o -name "hb_message.erl.*" | grep -v ".beam"
-          
+          find . -name "*.erl.fix" -o -name "hb_message.erl.*" | grep -v ".beam" || echo "No fix files found"
+
           echo "Erlang version:"
-          erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
+          . ~/otp-27.0/activate && erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
 
       # Install rebar3
       - name: Install rebar3
         run: |
-          sudo apt-get install -y rebar3
+          mkdir -p ~/.config/rebar3
+          curl -O https://s3.amazonaws.com/rebar3/rebar3 && chmod +x rebar3
+          sudo mv rebar3 /usr/local/bin/rebar3
+          rebar3 --version
 
       # Install Rust toolchain (needed for WASM components)
       - name: Install Rust and Cargo
@@ -98,6 +105,7 @@ jobs:
 
       - name: 🛠 Build Docs
         run: |
+          . ~/otp-27.0/activate
           SKIP_COMPILE=1 SKIP_EDOC=1 ./docs/build-all.sh -v
 
   # Build and deploy the artifacts to Arweave via ArDrive
@@ -119,14 +127,18 @@ jobs:
         with:
           python-version: '3.x'
 
-      # Install Erlang OTP from RabbitMQ team's PPA
-      - name: Install Erlang
+      # Install Erlang OTP 27 using kerl
+      - name: Install Erlang OTP 27
         run: |
           sudo apt-get update
-          sudo apt-get install -y software-properties-common
-          sudo add-apt-repository -y ppa:rabbitmq/rabbitmq-erlang
-          sudo apt-get update
-          sudo apt-get install -y erlang
+          sudo apt-get install -y build-essential autoconf libncurses5-dev libssl-dev
+          git clone https://github.com/kerl/kerl.git
+          ./kerl/kerl build 27.0 otp-27.0
+          ./kerl/kerl install otp-27.0 ~/otp-27.0
+          echo '. ~/otp-27.0/activate' >> ~/.bashrc
+          . ~/otp-27.0/activate
+          echo "Erlang version:"
+          erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
 
       # Install system dependencies needed for HyperBEAM
       - name: Install system dependencies
@@ -143,18 +155,21 @@ jobs:
       - name: Debug syntax error region
         run: |
           echo "Showing the region with syntax error in hb_message.erl:"
-          sed -n '1440,1460p' src/hb_message.erl
-          
+          sed -n '1440,1460p' src/hb_message.erl || echo "File not found or cannot be read"
+
           echo "Checking for syntax error fix files:"
-          find . -name "*.erl.fix" -o -name "hb_message.erl.*" | grep -v ".beam"
-          
+          find . -name "*.erl.fix" -o -name "hb_message.erl.*" | grep -v ".beam" || echo "No fix files found"
+
           echo "Erlang version:"
-          erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
+          . ~/otp-27.0/activate && erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
 
       # Install rebar3
       - name: Install rebar3
         run: |
-          sudo apt-get install -y rebar3
+          mkdir -p ~/.config/rebar3
+          curl -O https://s3.amazonaws.com/rebar3/rebar3 && chmod +x rebar3
+          sudo mv rebar3 /usr/local/bin/rebar3
+          rebar3 --version
 
       # Install Rust toolchain (needed for WASM components)
       - name: Install Rust and Cargo
@@ -174,7 +189,6 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: 22 # Or your preferred version
-          # cache: yarn # Caching might not be needed just for npx
 
       - name: 👀 Env
         run: |
@@ -184,10 +198,12 @@ jobs:
           echo "SHA:        ${{ github.sha }}"
           VER=`node --version`; echo "Node ver:   $VER"
           VER=`npm --version`; echo "npm ver:    $VER"
+          . ~/otp-27.0/activate && erl -eval 'io:format("Erlang OTP version: ~s~n", [erlang:system_info(otp_release)]), halt().'
 
       - name: 🛠 Build Docs
         id: build_artifacts
         run: |
+          . ~/otp-27.0/activate
           SKIP_COMPILE=1 SKIP_EDOC=1 ./docs/build-all.sh -v
           touch mkdocs-site/.nojekyll
 
