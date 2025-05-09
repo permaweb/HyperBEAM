@@ -111,7 +111,7 @@ jobs:
 
   # Build and deploy the artifacts to Arweave via ArDrive
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dpshade/docs-content-styling'
     runs-on: ubuntu-22.04
     # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
     # However, do NOT cancel in-progress runs as we want to allow these deployments to complete.
