@@ -27,7 +27,7 @@ Example usage:
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#call-3">call/3</a></td><td>Execute a <code>call</code> request using a node's routes.</td></tr><tr><td valign="top"><a href="#call_get_test-0">call_get_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#cast-3">cast/3</a></td><td>Execute a request in the same way as <code>call/3</code>, but asynchronously.</td></tr><tr><td valign="top"><a href="#preprocess-3">preprocess/3</a></td><td>Preprocess a request to check if it should be relayed to a different node.</td></tr><tr><td valign="top"><a href="#preprocessor_reroute_to_nearest_test-0">preprocessor_reroute_to_nearest_test/0*</a></td><td>Test that the <code>preprocess/3</code> function re-routes a request to remote
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#call-3">call/3</a></td><td>Execute a <code>call</code> request using a node's routes.</td></tr><tr><td valign="top"><a href="#call_get_test-0">call_get_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#cast-3">cast/3</a></td><td>Execute a request in the same way as <code>call/3</code>, but asynchronously.</td></tr><tr><td valign="top"><a href="#request-3">request/3</a></td><td>Preprocess a request to check if it should be relayed to a different node.</td></tr><tr><td valign="top"><a href="#request_hook_reroute_to_nearest_test-0">request_hook_reroute_to_nearest_test/0*</a></td><td>Test that the <code>preprocess/3</code> function re-routes a request to remote
 peers, according to the node's routing table.</td></tr></table>
 
 
@@ -65,19 +65,19 @@ Defaults to `false`.
 Execute a request in the same way as `call/3`, but asynchronously. Always
 returns `<<"OK">>`.
 
-<a name="preprocess-3"></a>
+<a name="request-3"></a>
 
-### preprocess/3 ###
+### request/3 ###
 
-`preprocess(Msg1, Msg2, Opts) -> any()`
+`request(Msg1, Msg2, Opts) -> any()`
 
 Preprocess a request to check if it should be relayed to a different node.
 
-<a name="preprocessor_reroute_to_nearest_test-0"></a>
+<a name="request_hook_reroute_to_nearest_test-0"></a>
 
-### preprocessor_reroute_to_nearest_test/0 * ###
+### request_hook_reroute_to_nearest_test/0 * ###
 
-`preprocessor_reroute_to_nearest_test() -> any()`
+`request_hook_reroute_to_nearest_test() -> any()`
 
 Test that the `preprocess/3` function re-routes a request to remote
 peers, according to the node's routing table.

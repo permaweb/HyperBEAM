@@ -2,9 +2,9 @@
 
 ## Overview
 
-The `~meta@1.0` device serves as the primary configuration and information endpoint for a HyperBEAM node. It's the default entry point for processing requests and allows querying or modifying the node's settings.
+The [`~meta@1.0`](../resources/source-code/dev_meta.md) device provides access to metadata and configuration information about the local HyperBEAM node and the broader AO network.
 
-**Status:** Stable
+This device is essential for:
 
 ## Core Functions (Keys)
 
@@ -30,7 +30,7 @@ While the `info` key is the primary interaction point, the `NodeMsg` managed by 
 *   `operator`: The address designated as the node operator (defaults to the address derived from `priv_wallet`).
 *   `initialized`: Status indicating if the node setup is temporary or permanent.
 *   `preprocessor` / `postprocessor`: Optional messages defining pre/post-processing logic for requests.
-*   `routes`: Routing table used by `dev_router`.
+*   `routes`: Routing table used by [`dev_router`](../resources/source-code/dev_router.md).
 *   `store`: Configuration for data storage.
 *   `trace`: Debug tracing options.
 *   `p4_*`: Payment configuration.
@@ -40,7 +40,7 @@ While the `info` key is the primary interaction point, the `NodeMsg` managed by 
 
 ## Utility Functions (Internal/Module Level)
 
-The `dev_meta.erl` module also contains helper functions used internally or callable from other Erlang modules:
+The [`dev_meta.erl`](../resources/source-code/dev_meta.md) module also contains helper functions used internally or callable from other Erlang modules:
 
 *   `is_operator(<RequestMsg>, <NodeMsg>) -> boolean()`: Checks if the signer of `RequestMsg` matches the configured `operator` in `NodeMsg`.
 

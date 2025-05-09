@@ -1,21 +1,25 @@
 /* General Text Styles */
 h1 {
-	font-size: clamp(1.1rem, 1.5vw, 1.2rem) !important;
-	color: black !important;
+	font-size: clamp(1.6rem, 1.5vw, 1.7rem) !important;
+	color: rgba(60, 60, 67) !important;
+	font-weight: 600 !important;
 }
 
 h2 {
-	font-size: clamp(0.9rem, 1.5vw, 1rem) !important;
-	color: #0000008a;
+	font-size: clamp(1.2rem, 1.5vw, 1.3rem) !important;
+	color: rgba(60, 60, 67);
+	;
 	/* Semi-transparent black */
 }
 
 p {
-	font-size: clamp(0.6rem, 1.5vw, 0.65rem);
+	font-size: clamp(0.6rem, 1.5vw, 0.7rem);
+	line-height: 1.75;
 }
 
 li {
-	font-size: clamp(0.6rem, 1.5vw, 0.65rem);
+	font-size: clamp(0.6rem, 1.5vw, 0.75rem);
+	line-height: 1.75;
 }
 
 img {
@@ -27,21 +31,85 @@ input {
 }
 
 body {
-	--docs-max-width: 55rem;
+	--docs-max-width: 60rem;
 	--homepage-max-width: 90rem;
 	--sections-max-width: 80rem;
 	--parallax-perspective: 2rem;
+	--md-accent-fg-color: #555555 !important;
+	--md-default-fg-color--light: #bebebe !important;
 }
 
+.md-nav__item--section>.md-nav__link {
+	color: black !important;
+	margin-bottom: 8px;
+}
+
+/* 
+h1, h2, h3, h4, h5, h6 {
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 10px;
+}
+*/
+
+.md-content h2,
+h3,
+h4,
+h5,
+h6 {
+	font-weight: 400 !important;
+}
+
+.md-content h2 {
+	border-top: 1px solid #ccc;
+	padding-top: 1.5rem;
+}
+
+.md-content h3,
+h4,
+h5,
+h6 {
+	border-top: 1px solid #e5e5e58a;
+	padding-top: 1rem;
+}
 
 /* Body and Header Customization */
 .md-header {
 	box-shadow: none !important;
+	z-index: 100;
+	transition: transform 0.3s ease-in-out;
+	position: fixed;
+	width: 100%;
+	transform: translateY(0);
+}
+
+.header-hidden {
+	transform: translateY(-100%);
+	transition: transform 0.15s ease-in-out;
+}
+
+.md-main {
+	transition: padding-top 0.3s ease;
+}
+
+.header-hidden + .md-main {
+	padding-top: 0;
+}
+
+[dir=ltr] .md-sidebar--primary {
+	left: -15rem !important;
+}
+
+[data-md-toggle=drawer]:checked~.md-container .md-sidebar--primary {
+	transform: translateX(15rem) !important;
 }
 
 .md-grid {
 	/* transition: all 1s; this occurs on initial load, causing strange UI artifact */
 	max-width: var(--docs-max-width);
+}
+
+.md-main__inner {
+	gap: 2.25rem;
 }
 
 .custom-homepage-header {
@@ -50,8 +118,10 @@ body {
 	top: 0;
 	z-index: 20 !important;
 	background: linear-gradient(0deg, rgba(255, 255, 255, 0) 0%, #ffffff 100%);
-
+	border-bottom: 0px solid;
 }
+
+
 
 .custom-homepage-header .md-grid {
 	max-width: var(--homepage-max-width);
@@ -75,19 +145,69 @@ body {
 /* Navigation Styles */
 .md-nav__title,
 .md-nav__item {
-	font-size: clamp(0.45rem, 1.5vw, 0.5rem) !important;
+	font-size: clamp(0.6rem, 1.5vw, 0.65rem) !important;
 	box-shadow: none !important;
 }
 
+.md-nav__title {
+	color: #000000 !important;
+}
+
+.md-nav__link {
+	padding: 4px 16px;
+	border-radius: 6px;
+	margin: 0;
+	margin-top: 4px;
+}
+
+.md-tabs__item--active .md-tabs__link {
+	position: relative;
+	font-weight: 700;
+}
+
+.md-tabs__item--active .md-tabs__link::after {
+	content: "";
+	position: absolute;
+	bottom: -9px;
+	left: 5%;
+	width: 90%;
+	height: 2px;
+	background-color: black;
+	border-radius: 1px;
+	transition: all 0.3s ease;
+}
+
+
+.md-nav__link:hover {
+	background: rgb(243, 243, 243);
+}
+
 .md-nav__link--active {
-	color: #fc8516 !important;
+	color: #000000 !important;
 	/* Active link color */
-	font-weight: 600;
+	font-weight: 700;
+	background: rgb(237, 237, 237);
+}
+
+.md-sidebar {
+	width: 15rem;
+}
+
+[dir=ltr] .md-sidebar__inner {
+	padding-right: calc(100% - 15rem);
+}
+
+.md-nav--secondary {
+	border-left: 0.05rem solid lightgray !important;
 }
 
 /* Tab Navigation */
 .md-tabs__link {
-	font-size: clamp(0.4rem, 1.5vw, 0.5rem);
+	font-size: clamp(0.65rem, 1.5vw, 0.65rem) !important;
+}
+
+.md-tabs__list {
+	justify-content: space-between;
 }
 
 .md-tabs__item {
@@ -150,6 +270,7 @@ body {
 }
 
 /* Source Citation Styles */
+
 .md-header__source {
 	width: 10rem;
 	padding: 0.6rem;
@@ -272,7 +393,7 @@ body {
 	flex: 1.5 0 0;
 	gap: 0.5rem;
 	height: 40%;
-	min-height: 6rem;
+	min-height: 7rem;
 	backdrop-filter: blur(50px);
 
 }
@@ -284,7 +405,7 @@ body {
 	flex: 1 0 0;
 	border-radius: 4px;
 	border: 1px solid #2b2b2b;
-	background: rgba(0, 0, 0, 0.8);
+	background: rgba(0, 0, 0, 0.75);
 	justify-content: space-between;
 	align-items: start;
 	padding: 8px;
@@ -294,30 +415,41 @@ body {
 }
 
 .hero-button-card:hover {
-	background: rgba(0, 0, 0, 0.9);
+	background: rgba(0, 0, 0, 1);
+	border: 1px solid rgb(149, 149, 149);
 }
 
 .hero-main-heading h1 {
-	font-size: clamp(1.0rem, 1.5vw, 1rem) !important;
+	font-size: clamp(1.8rem, 1.5vw, 2.0rem) !important;
 	margin: 0 !important;
 	font-weight: 500 !important;
 	color: white !important;
 }
 
 .hero-button-card h2 {
-	font-size: clamp(0.7rem, 1.5vw, 0.8rem) !important;
+	font-size: clamp(0.9rem, 1.5vw, 1rem) !important;
 	margin: 0 !important;
 	font-weight: 500 !important;
 	color: white !important;
 }
 
+.hero-button-card p {
+	font-size: clamp(0.65rem, 1.5vw, 0.7rem) !important;
+	color: #c0c0c0 !important;
+	font-weight: 500;
+}
+
 .hero-main-heading h2,
 .hero-button-card p {
 	font-size: clamp(0.55rem, 1.5vw, 0.6rem) !important;
-	color: white !important;
+	line-height: normal;
 	margin: 0;
 	font-weight: 500;
 	text-align: left;
+}
+
+.hero-main-heading h2 {
+	color: white !important;
 }
 
 /* Hero Rocks */
@@ -423,7 +555,7 @@ body {
 }
 
 .section-inner-content h1 {
-	font-size: clamp(0.95rem, 1.5vw, 1rem) !important;
+	font-size: clamp(1.1rem, 1.5vw, 1.2rem) !important;
 	margin: 0 !important;
 	font-weight: 500 !important;
 }
@@ -469,6 +601,12 @@ body {
 
 .section-monetize {
 	justify-content: space-between;
+	position: relative;
+	overflow: hidden;
+}
+
+.section-monetize>*:not(:last-child) {
+	z-index: 3;
 }
 
 .double-column-content {
@@ -490,6 +628,7 @@ body {
 .column-container {
 	width: 100%;
 	height: 100%;
+	min-height: 70vh;
 }
 
 .grid-container {
@@ -499,10 +638,13 @@ body {
 	width: 100%;
 	background: white;
 	overflow: hidden;
+	border-radius: 4px;
 }
 
 .full-span {
 	grid-column: span 2;
+	min-height: 600px;
+	overflow: hidden;
 }
 
 .column-text {
@@ -529,17 +671,27 @@ body {
 	background: #F9F9F9;
 	border: 1px solid #E6E6E6;
 	border-radius: 4px;
-	min-height: 125px;
+	min-height: 130px;
 	padding: 8px;
 	overflow: hidden;
 }
 
-
+.card p {
+	font-size: clamp(0.65rem, 1.5vw, 0.7rem) !important;
+	color: #6E6E6E !important;
+	font-weight: 500;
+	line-height: normal;
+}
 
 .transparent-card {
 	min-height: 125px;
 	display: flex;
 	width: 100%;
+	background: rgba(255, 255, 255, 0.559);
+}
+
+.transparent-card p {
+	line-height: normal;
 }
 
 .card-row {
@@ -555,7 +707,7 @@ body {
 }
 
 .card span {
-	background: white;
+	/* background: white; */
 	width: fit-content;
 }
 
@@ -580,13 +732,18 @@ body {
 }
 
 .main-button {
-	background: #FFDE0B;
-	padding: 0px 40px;
-	height: 30px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: #E4EABB;
+	padding: 12.5px 60px;
 	border-radius: 4px;
+	font-size: clamp(0.6rem, 1.5vw, 0.7rem);
+	cursor: pointer;
 }
 
 .fig-container {
+	position: relative;
 	height: 100%;
 	display: flex;
 	width: 100%;
@@ -594,19 +751,46 @@ body {
 	overflow: hidden;
 }
 
-.fig img {
-	image-rendering: pixelated;
-	shape-rendering: geometricPrecision;
-	transform: translateZ(0);
-	/* force GPU for sharpness */
-}
-
-
 
 .fig {
 	position: absolute;
 	width: 100%;
-	max-width: 500px;
+	max-width: 400px;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+}
+
+.what-is-hyperbeam-fig {
+	position: absolute;
+	width: 100%;
+	top: 50%;
+	left: 50%;
+	max-width: 600px;
+	transform: translate(-50%, -50%);
+}
+
+.power-web2-web3-fig {
+	position: absolute;
+	width: 100%;
+	top: 0%;
+	right: 0%;
+	max-width: 700px;
+	transform: translate(-10%, -10%);
+
+}
+
+
+
+.monetize-fig {
+	position: absolute;
+	top: 0%;
+	left: 0%;
+
+	transform: translate(0%, 0%);
+	z-index: 1;
+	opacity: 20%;
+
 }
 
 /* Footer Customization */

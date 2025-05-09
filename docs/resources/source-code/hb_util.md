@@ -284,7 +284,8 @@ as well as a standard map of HyperBEAM runtime options.
 `human_id(Bin) -> any()`
 
 Convert a native binary ID to a human readable ID. If the ID is already
-a human readable ID, it is returned as is.
+a human readable ID, it is returned as is. If it is an ethereum address, it
+is returned as is.
 
 <a name="human_int-1"></a>
 

@@ -2,9 +2,7 @@
 
 ## Overview
 
-The `~wasm64@1.0` device enables the execution of WebAssembly (WASM) code within an AO process, specifically targeting the WASM Memory64 specification. It uses `hb_beamr`, an Erlang wrapper for the WebAssembly Micro Runtime (WAMR), as its backend.
-
-**Status:** Stable
+The [`~wasm64@1.0`](../resources/source-code/dev_wasm.md) device enables the execution of 64-bit WebAssembly (WASM) code within the HyperBEAM environment. It provides a sandboxed environment for running compiled code from various languages (like Rust, C++, Go) that target WASM.
 
 ## Core Concept: WASM Execution
 
@@ -14,7 +12,7 @@ The device manages the lifecycle of a WASM instance associated with the process 
 
 ## Key Functions (Keys)
 
-These keys are typically used within an execution stack (managed by `dev_stack`) for an AO process.
+These keys are typically used within an execution stack (managed by [`dev_stack`](../resources/source-code/dev_stack.md)) for an AO process.
 
 *   **`init`**
     *   **Action:** Initializes the WASM environment for the process. It locates the WASM image (binary), starts a WAMR instance, and stores the instance handle and helper functions (for reading/writing WASM memory) in the process's private state (`priv/...`).
@@ -51,12 +49,12 @@ These keys are typically used within an execution stack (managed by `dev_stack`)
 
 ## Usage within `dev_stack`
 
-The `~wasm64@1.0` device is almost always used as part of an execution stack configured in the Process Definition Message and managed by `dev_stack`. `dev_stack` ensures that `init` is called on the first pass, `compute` on subsequent passes, and potentially `snapshot` or `terminate` as needed.
+The `~wasm64@1.0` device is almost always used as part of an execution stack configured in the Process Definition Message and managed by [`dev_stack`](../resources/source-code/dev_stack.md). [`dev_stack`](../resources/source-code/dev_stack.md) ensures that `init` is called on the first pass, `compute` on subsequent passes, and potentially `snapshot` or `terminate` as needed.
 
 ```text
 # Example Process Definition Snippet
-Execution-Device: stack@1.0
-Execution-Stack: "scheduler@1.0", "wasm64@1.0"
+Execution-Device: [`stack@1.0`](../resources/source-code/dev_stack.md)
+Execution-Stack: "[`scheduler@1.0`](../resources/source-code/dev_scheduler.md)", "wasm64@1.0"
 WASM-Image: <WASMImageTxID>
 ```
 

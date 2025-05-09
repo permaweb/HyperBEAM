@@ -1,6 +1,6 @@
 # AO Devices
 
-In AO-Core and its implementation HyperBEAM, **Devices** are modular components responsible for processing and interpreting [Messages](./what-is-ao-core.md#messages). They define the specific logic for how computations are performed, data is handled, or interactions occur within the AO ecosystem.
+In AO-Core and its implementation HyperBEAM, **Devices** are modular components responsible for processing and interpreting [Messages](./what-is-ao-core.md#core-concepts). They define the specific logic for how computations are performed, data is handled, or interactions occur within the AO ecosystem.
 
 Think of Devices as specialized engines or services that can be plugged into the AO framework. This modularity is key to AO's flexibility and extensibility.
 
@@ -39,10 +39,22 @@ Devices are typically invoked via [HyperPATHs](./pathing-in-ao-core.md). The pat
 
 ```
 # Example: Execute the 'now' key on the process device for a specific process
-/PROCESS_ID~process@1.0/now
+/<procId>~process@1.0/now
 
 # Example: Relay a GET request via the relay device
 /~relay@1.0/call?method=GET&path=https://example.com
 ```
 
 The specific functions or 'keys' available for each Device are documented individually. See the [Devices section](../devices/index.md) for details on specific built-in devices. 
+
+## The Potential of Devices
+
+The modular nature of AO Devices opens up vast possibilities for future expansion and innovation. The current set of preloaded and community devices is just the beginning. As the AO ecosystem evolves, we can anticipate the development of new devices catering to increasingly specialized needs:
+
+*   **Specialized Hardware Integration:** Devices could be created to interface directly with specialized hardware accelerators like GPUs (for AI/ML tasks such as running large language models), TPUs, or FPGAs, allowing AO processes to leverage high-performance computing resources securely and verifiably.
+*   **Advanced Cryptography:** New devices could implement cutting-edge cryptographic techniques, such as zero-knowledge proofs (ZKPs) or fully homomorphic encryption (FHE), enabling enhanced privacy and complex computations on encrypted data.
+*   **Cross-Chain & Off-Chain Bridges:** Devices could act as secure bridges to other blockchain networks or traditional Web2 APIs, facilitating seamless interoperability and data exchange between AO and the wider digital world.
+*   **AI/ML Specific Devices:** Beyond raw GPU access, specialized devices could offer higher-level AI/ML functionalities, like optimized model inference engines or distributed training frameworks.
+*   **Domain-Specific Logic:** Communities or organizations could develop devices tailored to specific industries or use cases, such as decentralized finance (DeFi) primitives, scientific computing libraries, or decentralized identity management systems.
+
+The Device framework ensures that AO can adapt and grow, incorporating new technologies and computational paradigms without requiring fundamental changes to the core protocol. This extensibility is key to AO's long-term vision of becoming a truly global, decentralized computer.
