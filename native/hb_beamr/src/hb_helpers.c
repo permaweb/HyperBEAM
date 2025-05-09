@@ -129,21 +129,21 @@ int erl_terms_to_wasm_vals(wasm_val_vec_t* vals, ei_term* terms) {
 }
 
 int erl_term_to_indirect_arg(uint32_t* val, enum wasm_valkind_enum val_kind, ei_term* term) {
-    DRV_DEBUG("Converting erl term to indirect arg. Term: %d. Size: %d", term->value.i_val, term->size);
+    DRV_DEBUG("Converting erl term to indirect arg. Kind: %d. Term: %d. Size: %d", val_kind, term->value.i_val, term->size);
     switch (val_kind) {
         case WASM_I32:
-            *val = (uint32_t) term->value.i_val;
+            *val = (uint32_t)(term->value.i_val);
             return 1;
         case WASM_I64:
-            *val = (uint32_t)((term->value.i_val) >> 32);
-            *(val + 1) = (uint32_t)(term->value.i_val & 0xFFFFFFFF);
+            *(val) = (uint32_t)(term->value.i_val & 0xFFFFFFFF);
+            *(val + 1) = (uint32_t)((term->value.i_val) >> 32);
             return 2;
         case WASM_F32:
-            *val = (uint32_t)(term->value.d_val);
+            *val = (uint32_t)(term->value.i_val);
             return 1;
         case WASM_F64:
-            *val = (uint32_t)(term->value.d_val);
-            *(val + 1) = (uint32_t)((uint64_t)(term->value.d_val) >> 32);
+            *val = (uint32_t)(term->value.i_val & 0xFFFFFFFF);
+            *(val + 1) = (uint32_t)(term->value.i_val >> 32);
             return 2;
         default:
             DRV_DEBUG("Unsupported parameter type: %d", val_kind);
@@ -154,15 +154,15 @@ int erl_term_to_indirect_arg(uint32_t* val, enum wasm_valkind_enum val_kind, ei_
 int erl_terms_to_indirect_args(uint32_t* vals, wasm_valkind_t *val_kinds, uint32_t val_count, ei_term* terms) {
     DRV_DEBUG("Converting erl terms to indirect args");
     DRV_DEBUG("Vals: %d", val_count);
-    int i = 0;
-    while (i < val_count) {
+    int i = 0, pos = 0;
+    for (i = 0; i < val_count; i++) {
         DRV_DEBUG("Converting term %d: %p", i, &vals[i]);
-        int res = erl_term_to_indirect_arg(&vals[i], val_kinds[i], &terms[i]);
+        int res = erl_term_to_indirect_arg(&vals[pos], val_kinds[i], &terms[i]);
         if(res == -1) {
             DRV_DEBUG("Failed to convert term to indirect arg");
             return -1;
         }
-        i += res;
+        pos += res;
     }
     return 0;
 }
