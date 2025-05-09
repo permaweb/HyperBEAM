@@ -51,6 +51,19 @@ jobs:
         run: |
           sudo apt-get install -y rebar3
 
+      # Install Rust toolchain (needed for WASM components)
+      - name: Install Rust and Cargo
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          source "$HOME/.cargo/env"
+
+      # Setup Node.js
+      - name: ⎔ Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22 # Or your preferred version
+
       # Install pip dependencies and cache them
       - name: 📦 Install Python dependencies
         run: |
@@ -91,6 +104,13 @@ jobs:
         run: |
           sudo apt-get install -y rebar3
 
+      # Install Rust toolchain (needed for WASM components)
+      - name: Install Rust and Cargo
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          source "$HOME/.cargo/env"
+
       # Install pip dependencies and cache them
       - name: 📦 Install Python dependencies
         run: |
@@ -116,7 +136,7 @@ jobs:
       - name: 🛠 Build Docs
         id: build_artifacts
         run: |
-          ./docs/build-all.sh
+          ./docs/build-all.sh -v
           touch mkdocs-site/.nojekyll
 
           echo "artifacts_output_dir=mkdocs-site" >> $GITHUB_OUTPUT
