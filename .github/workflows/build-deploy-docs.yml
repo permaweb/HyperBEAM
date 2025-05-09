@@ -60,6 +60,18 @@ jobs:
             libssl-dev \
             ca-certificates
 
+      # Debug step - display the region with syntax error
+      - name: Debug syntax error region
+        run: |
+          echo "Showing the region with syntax error in hb_message.erl:"
+          sed -n '1440,1460p' src/hb_message.erl
+          
+          echo "Checking for syntax error fix files:"
+          find . -name "*.erl.fix" -o -name "hb_message.erl.*" | grep -v ".beam"
+          
+          echo "Erlang version:"
+          erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
+
       # Install rebar3
       - name: Install rebar3
         run: |
@@ -84,9 +96,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install mkdocs mkdocs-material mkdocs-git-revision-date-localized-plugin
 
+      # Create backup of source docs to use as fallback
+      - name: Create source docs backup
+        run: |
+          # Create backup directory
+          mkdir -p .backup/docs/resources/
+          
+          # If source-code directory exists, make a backup
+          if [ -d "docs/resources/source-code" ]; then
+            cp -r docs/resources/source-code .backup/docs/resources/
+          fi
+
       - name: 🛠 Build Docs
         run: |
-          SKIP_COMPILE=1 SKIP_EDOC=1 ./docs/build-all.sh -v
+          # Attempt the normal build process first
+          if ERL_COMPILER_OPTIONS=debug_info,verbose,report_warnings DEBUG=1 REBAR_LOG_LEVEL=debug ./docs/build-all.sh -v; then
+            echo "Documentation build successful."
+          else
+            echo "Documentation build failed. Using failsafe mechanism."
+            
+            # Restore from backup if it exists
+            if [ -d ".backup/docs/resources/source-code" ]; then
+              echo "Restoring source-code documentation from backup..."
+              mkdir -p docs/resources/
+              rm -rf docs/resources/source-code
+              cp -r .backup/docs/resources/source-code docs/resources/
+            fi
+            
+            # Skip compilation and continue with MkDocs build
+            echo "Skipping compilation and continuing with MkDocs build..."
+            SKIP_COMPILE=1 SKIP_EDOC=1 ./docs/build-all.sh -v
+          fi
+          
+          touch mkdocs-site/.nojekyll
+
+          echo "artifacts_output_dir=mkdocs-site" >> $GITHUB_OUTPUT
 
   # Build and deploy the artifacts to Arweave via ArDrive
   deploy:
@@ -127,6 +171,18 @@ jobs:
             libssl-dev \
             ca-certificates
 
+      # Debug step - display the region with syntax error
+      - name: Debug syntax error region
+        run: |
+          echo "Showing the region with syntax error in hb_message.erl:"
+          sed -n '1440,1460p' src/hb_message.erl
+          
+          echo "Checking for syntax error fix files:"
+          find . -name "*.erl.fix" -o -name "hb_message.erl.*" | grep -v ".beam"
+          
+          echo "Erlang version:"
+          erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
+
       # Install rebar3
       - name: Install rebar3
         run: |
@@ -161,10 +217,39 @@ jobs:
           VER=`node --version`; echo "Node ver:   $VER"
           VER=`npm --version`; echo "npm ver:    $VER"
 
+      # Create backup of source docs to use as fallback
+      - name: Create source docs backup
+        run: |
+          # Create backup directory
+          mkdir -p .backup/docs/resources/
+          
+          # If source-code directory exists, make a backup
+          if [ -d "docs/resources/source-code" ]; then
+            cp -r docs/resources/source-code .backup/docs/resources/
+          fi
+
       - name: 🛠 Build Docs
         id: build_artifacts
         run: |
-          SKIP_COMPILE=1 SKIP_EDOC=1 ./docs/build-all.sh -v
+          # Attempt the normal build process first
+          if ERL_COMPILER_OPTIONS=debug_info,verbose,report_warnings DEBUG=1 REBAR_LOG_LEVEL=debug ./docs/build-all.sh -v; then
+            echo "Documentation build successful."
+          else
+            echo "Documentation build failed. Using failsafe mechanism."
+            
+            # Restore from backup if it exists
+            if [ -d ".backup/docs/resources/source-code" ]; then
+              echo "Restoring source-code documentation from backup..."
+              mkdir -p docs/resources/
+              rm -rf docs/resources/source-code
+              cp -r .backup/docs/resources/source-code docs/resources/
+            fi
+            
+            # Skip compilation and continue with MkDocs build
+            echo "Skipping compilation and continuing with MkDocs build..."
+            SKIP_COMPILE=1 SKIP_EDOC=1 ./docs/build-all.sh -v
+          fi
+          
           touch mkdocs-site/.nojekyll
 
           echo "artifacts_output_dir=mkdocs-site" >> $GITHUB_OUTPUT
