@@ -40,11 +40,24 @@ jobs:
         with:
           python-version: '3.x' # Use a recent Python 3 version
 
-      # Install Erlang dependencies
-      - name: Install Erlang
+      # Install Erlang OTP 27 from Erlang Solutions
+      - name: Install Erlang OTP 27
         run: |
+          wget https://packages.erlang-solutions.com/erlang/debian/pool/erlang-solutions_2.0_all.deb
+          sudo dpkg -i erlang-solutions_2.0_all.deb
           sudo apt-get update
           sudo apt-get install -y erlang
+
+      # Install system dependencies needed for HyperBEAM
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            pkg-config \
+            ncurses-dev \
+            libssl-dev \
+            ca-certificates
 
       # Install rebar3
       - name: Install rebar3
@@ -72,7 +85,7 @@ jobs:
 
       - name: 🛠 Build Docs
         run: |
-          ./docs/build-all.sh -v
+          SKIP_COMPILE=1 SKIP_EDOC=1 ./docs/build-all.sh -v
 
   # Build and deploy the artifacts to Arweave via ArDrive
   deploy:
@@ -93,11 +106,24 @@ jobs:
         with:
           python-version: '3.x'
 
-      # Install Erlang dependencies
-      - name: Install Erlang
+      # Install Erlang OTP 27 from Erlang Solutions
+      - name: Install Erlang OTP 27
         run: |
+          wget https://packages.erlang-solutions.com/erlang/debian/pool/erlang-solutions_2.0_all.deb
+          sudo dpkg -i erlang-solutions_2.0_all.deb
           sudo apt-get update
           sudo apt-get install -y erlang
+
+      # Install system dependencies needed for HyperBEAM
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            pkg-config \
+            ncurses-dev \
+            libssl-dev \
+            ca-certificates
 
       # Install rebar3
       - name: Install rebar3
@@ -136,7 +162,7 @@ jobs:
       - name: 🛠 Build Docs
         id: build_artifacts
         run: |
-          ./docs/build-all.sh -v
+          SKIP_COMPILE=1 SKIP_EDOC=1 ./docs/build-all.sh -v
           touch mkdocs-site/.nojekyll
 
           echo "artifacts_output_dir=mkdocs-site" >> $GITHUB_OUTPUT
