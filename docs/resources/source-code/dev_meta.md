@@ -21,8 +21,9 @@ the AO-Core resolver has returned a result.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_dynamic_keys-1">add_dynamic_keys/1*</a></td><td>Add dynamic keys to the node message.</td></tr><tr><td valign="top"><a href="#adopt_node_message-2">adopt_node_message/2</a></td><td>Attempt to adopt changes to a node message.</td></tr><tr><td valign="top"><a href="#authorized_set_node_msg_succeeds_test-0">authorized_set_node_msg_succeeds_test/0*</a></td><td>Test that we can set the node message if the request is signed by the
-owner of the node.</td></tr><tr><td valign="top"><a href="#claim_node_test-0">claim_node_test/0*</a></td><td>Test that we can claim the node correctly and set the node message after.</td></tr><tr><td valign="top"><a href="#config_test-0">config_test/0*</a></td><td>Test that we can get the node message.</td></tr><tr><td valign="top"><a href="#embed_status-1">embed_status/1*</a></td><td>Wrap the result of a device call in a status.</td></tr><tr><td valign="top"><a href="#filter_node_msg-1">filter_node_msg/1*</a></td><td>Remove items from the node message that are not encodable into a
-message.</td></tr><tr><td valign="top"><a href="#halt_request_test-0">halt_request_test/0*</a></td><td>Test that we can halt a request if the preprocessor returns an error.</td></tr><tr><td valign="top"><a href="#handle-2">handle/2</a></td><td>Normalize and route messages downstream based on their path.</td></tr><tr><td valign="top"><a href="#handle_initialize-2">handle_initialize/2*</a></td><td></td></tr><tr><td valign="top"><a href="#handle_resolve-3">handle_resolve/3*</a></td><td>Handle an AO-Core request, which is a list of messages.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Ensure that the helper function <code>adopt_node_message/2</code> is not exported.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Get/set the node message.</td></tr><tr><td valign="top"><a href="#is-2">is/2</a></td><td>Check if the request in question is signed by a given <code>role</code> on the node.</td></tr><tr><td valign="top"><a href="#is-3">is/3</a></td><td></td></tr><tr><td valign="top"><a href="#maybe_sign-2">maybe_sign/2*</a></td><td>Sign the result of a device call if the node is configured to do so.</td></tr><tr><td valign="top"><a href="#message_to_status-1">message_to_status/1*</a></td><td>Get the HTTP status code from a transaction (if it exists).</td></tr><tr><td valign="top"><a href="#modify_request_test-0">modify_request_test/0*</a></td><td>Test that a preprocessor can modify a request.</td></tr><tr><td valign="top"><a href="#permanent_node_message_test-0">permanent_node_message_test/0*</a></td><td>Test that a permanent node message cannot be changed.</td></tr><tr><td valign="top"><a href="#priv_inaccessible_test-0">priv_inaccessible_test/0*</a></td><td>Test that we can't get the node message if the requested key is private.</td></tr><tr><td valign="top"><a href="#resolve_processor-5">resolve_processor/5*</a></td><td>Execute a message from the node message upon the user's request.</td></tr><tr><td valign="top"><a href="#status_code-1">status_code/1*</a></td><td>Calculate the appropriate HTTP status code for an AO-Core result.</td></tr><tr><td valign="top"><a href="#unauthorized_set_node_msg_fails_test-0">unauthorized_set_node_msg_fails_test/0*</a></td><td>Test that we can't set the node message if the request is not signed by
+owner of the node.</td></tr><tr><td valign="top"><a href="#build-3">build/3</a></td><td>Emits the version number and commit hash of the HyperBEAM node source,
+if available.</td></tr><tr><td valign="top"><a href="#buildinfo_test-0">buildinfo_test/0*</a></td><td>Test that version information is available and returned correctly.</td></tr><tr><td valign="top"><a href="#claim_node_test-0">claim_node_test/0*</a></td><td>Test that we can claim the node correctly and set the node message after.</td></tr><tr><td valign="top"><a href="#config_test-0">config_test/0*</a></td><td>Test that we can get the node message.</td></tr><tr><td valign="top"><a href="#embed_status-1">embed_status/1*</a></td><td>Wrap the result of a device call in a status.</td></tr><tr><td valign="top"><a href="#filter_node_msg-1">filter_node_msg/1*</a></td><td>Remove items from the node message that are not encodable into a
+message.</td></tr><tr><td valign="top"><a href="#halt_request_test-0">halt_request_test/0*</a></td><td>Test that we can halt a request if the hook returns an error.</td></tr><tr><td valign="top"><a href="#handle-2">handle/2</a></td><td>Normalize and route messages downstream based on their path.</td></tr><tr><td valign="top"><a href="#handle_initialize-2">handle_initialize/2*</a></td><td></td></tr><tr><td valign="top"><a href="#handle_resolve-3">handle_resolve/3*</a></td><td>Handle an AO-Core request, which is a list of messages.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Ensure that the helper function <code>adopt_node_message/2</code> is not exported.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Get/set the node message.</td></tr><tr><td valign="top"><a href="#is-2">is/2</a></td><td>Check if the request in question is signed by a given <code>role</code> on the node.</td></tr><tr><td valign="top"><a href="#is-3">is/3</a></td><td></td></tr><tr><td valign="top"><a href="#maybe_sign-2">maybe_sign/2*</a></td><td>Sign the result of a device call if the node is configured to do so.</td></tr><tr><td valign="top"><a href="#message_to_status-1">message_to_status/1*</a></td><td>Get the HTTP status code from a transaction (if it exists).</td></tr><tr><td valign="top"><a href="#modify_request_test-0">modify_request_test/0*</a></td><td>Test that a hook can modify a request.</td></tr><tr><td valign="top"><a href="#permanent_node_message_test-0">permanent_node_message_test/0*</a></td><td>Test that a permanent node message cannot be changed.</td></tr><tr><td valign="top"><a href="#priv_inaccessible_test-0">priv_inaccessible_test/0*</a></td><td>Test that we can't get the node message if the requested key is private.</td></tr><tr><td valign="top"><a href="#request_response_hooks_test-0">request_response_hooks_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_hook-4">resolve_hook/4*</a></td><td>Execute a hook from the node message upon the user's request.</td></tr><tr><td valign="top"><a href="#status_code-1">status_code/1*</a></td><td>Calculate the appropriate HTTP status code for an AO-Core result.</td></tr><tr><td valign="top"><a href="#unauthorized_set_node_msg_fails_test-0">unauthorized_set_node_msg_fails_test/0*</a></td><td>Test that we can't set the node message if the request is not signed by
 the owner of the node.</td></tr><tr><td valign="top"><a href="#uninitialized_node_test-0">uninitialized_node_test/0*</a></td><td>Test that an uninitialized node will not run computation.</td></tr><tr><td valign="top"><a href="#update_node_message-2">update_node_message/2*</a></td><td>Validate that the request is signed by the operator of the node, then
 allow them to update the node message.</td></tr></table>
 
@@ -55,6 +56,29 @@ Attempt to adopt changes to a node message.
 
 Test that we can set the node message if the request is signed by the
 owner of the node.
+
+<a name="build-3"></a>
+
+### build/3 ###
+
+`build(X1, X2, NodeMsg) -> any()`
+
+Emits the version number and commit hash of the HyperBEAM node source,
+if available.
+
+We include the short hash separately, as the length of this hash may change in
+the future, depending on the git version/config used to build the node.
+Subsequently, rather than embedding the `git-short-hash-length`, for the
+avoidance of doubt, we include the short hash separately, as well as its long
+hash.
+
+<a name="buildinfo_test-0"></a>
+
+### buildinfo_test/0 * ###
+
+`buildinfo_test() -> any()`
+
+Test that version information is available and returned correctly.
 
 <a name="claim_node_test-0"></a>
 
@@ -95,7 +119,7 @@ message.
 
 `halt_request_test() -> any()`
 
-Test that we can halt a request if the preprocessor returns an error.
+Test that we can halt a request if the hook returns an error.
 
 <a name="handle-2"></a>
 
@@ -122,7 +146,7 @@ other messages are routed to the `handle_resolve/2` function.
 Handle an AO-Core request, which is a list of messages. We apply
 the node's pre-processor to the request first, and then resolve the request
 using the node's AO-Core implementation if its response was `ok`.
-After execution, we run the node's `postprocessor` message on the result of
+After execution, we run the node's `response` hook on the result of
 the request before returning the result it grants back to the user.
 
 <a name="info-1"></a>
@@ -188,7 +212,7 @@ Get the HTTP status code from a transaction (if it exists).
 
 `modify_request_test() -> any()`
 
-Test that a preprocessor can modify a request.
+Test that a hook can modify a request.
 
 <a name="permanent_node_message_test-0"></a>
 
@@ -206,20 +230,26 @@ Test that a permanent node message cannot be changed.
 
 Test that we can't get the node message if the requested key is private.
 
-<a name="resolve_processor-5"></a>
+<a name="request_response_hooks_test-0"></a>
 
-### resolve_processor/5 * ###
+### request_response_hooks_test/0 * ###
 
-`resolve_processor(PathKey, Processor, Req, Query, NodeMsg) -> any()`
+`request_response_hooks_test() -> any()`
 
-Execute a message from the node message upon the user's request. The
-invocation of the processor provides a request of the following form:
+<a name="resolve_hook-4"></a>
+
+### resolve_hook/4 * ###
+
+`resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) -> any()`
+
+Execute a hook from the node message upon the user's request. The
+invocation of the hook provides a request of the following form:
 
 ```
 
-       /path => preprocess | postprocess
+       /path => request | response
        /request => the original request singleton
-       /body => list of messages the user wishes to process
+       /body => parsed sequence of messages to process | the execution result
 ```
 
 <a name="status_code-1"></a>

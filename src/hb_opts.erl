@@ -128,10 +128,10 @@ default_message() ->
         debug_print_trace => short, % `short' | `false'. Has performance impact.
         short_trace_len => 5,
         debug_metadata => true,
-        debug_ids => false,
+        debug_ids => true,
         debug_committers => false,
         debug_show_priv => false,
-        snp_trusted => #{},
+        snp_trusted => [],
         routes => [
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
@@ -265,9 +265,9 @@ get(Key, Default, Opts) ->
     ?MODULE:get(Key, Default, Opts#{ prefer => local }).
 
 -ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, "error").
+-define(DEFAULT_PRINT_OPTS, "error,http_error").
 -else.
--define(DEFAULT_PRINT_OPTS, "error,http_short,compute_short,push_short").
+-define(DEFAULT_PRINT_OPTS, "error,http_error,http_short,compute_short,push_short").
 -endif.
 
 -define(ENV_KEYS,
@@ -354,7 +354,7 @@ mimic_default_types(Map, Mode) ->
     Default = default_message(),
     maps:from_list(lists:map(
         fun({Key, Value}) ->
-            NewKey = hb_util:key_to_atom(Key, Mode),
+            NewKey = try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end,
             NewValue = 
                 case maps:get(NewKey, Default, not_found) of
                     not_found -> Value;

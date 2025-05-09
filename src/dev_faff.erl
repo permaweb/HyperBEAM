@@ -24,13 +24,9 @@
 estimate(_, Msg, NodeMsg) ->
     ?event(payment, {estimate, {msg, Msg}}),
     % Check if the address is in the allow-list.
-    case hb_ao:get(<<"type">>, Msg, <<"pre">>, NodeMsg) of
-        <<"pre">> ->
-            case is_admissible(Msg, NodeMsg) of
-                true -> {ok, 0};
-                false -> {ok, <<"infinity">>}
-            end;
-        <<"post">> -> {ok, 0}
+    case is_admissible(Msg, NodeMsg) of
+        true -> {ok, 0};
+        false -> {ok, <<"infinity">>}
     end.
 
 %% @doc Check whether all of the signers of the request are in the allow-list.

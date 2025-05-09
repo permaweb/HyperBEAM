@@ -1,4 +1,4 @@
-Generated: 2025-05-06T20:46:43Z
+Generated: 2025-05-09T19:56:45Z
 
 ## HyperBEAM Documentation Summary
 
@@ -67,6 +67,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module dev_faff.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_faff.erl)](./resources/source-code/dev_faff.html)
 * [[Module dev_genesis_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_genesis_wasm.erl)](./resources/source-code/dev_genesis_wasm.html)
 * [[Module dev_green_zone.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_green_zone.erl)](./resources/source-code/dev_green_zone.html)
+* [[Module dev_hook.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_hook.erl)](./resources/source-code/dev_hook.html)
 * [[Module dev_hyperbuddy.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_hyperbuddy.erl)](./resources/source-code/dev_hyperbuddy.html)
 * [[Module dev_json_iface.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_json_iface.erl)](./resources/source-code/dev_json_iface.html)
 * [[Module dev_local_name.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_local_name.erl)](./resources/source-code/dev_local_name.html)

@@ -27,8 +27,8 @@ local function ensure_defaults(state)
     state.routes = state.routes or {}
     state["is-admissible"] =
         state["is-admissible"] or {
-            path = "/default",
-            default = true
+			path = "/default",
+            default = "true"
         }
     state["sampling-rate"] = state["sampling-rate"] or 0.1
     state["pricing-weight"] = state["pricing-weight"] or 1
@@ -204,17 +204,11 @@ end
 function register(state, assignment, opts)
     state = ensure_defaults(state)
     local req = assignment.body
-    local status, is_admissible = "ok", "not_found"
-    if state["is-admissible"] then
-        req.path = "verify"
-        -- Remove commitments of the register/verify message
-        -- Add a target node of the id of the register message
-        req.target = "body"
-        -- This only works when there is a real message for state['is_admissible']
-        status, is_admissible = ao.resolve(state["is-admissible"], req)
-    end
-    ao.event("debug_dynrouter", { "is_admissible", { status, is_admissible } })
-    if status == "ok" and is_admissible ~= false then
+    req.path = state["is-admissible"].path or "is-admissible"
+    local status, is_admissible = ao.resolve(state["is-admissible"], req)
+
+    ao.event("is-admissible result:", { status, is_admissible })
+    if status == "ok" and is_admissible == "true" then
         state = add_node(state, req)
         return recalculate(state, assignment, opts)
     else
@@ -232,7 +226,12 @@ function duration(state, assignment, opts)
     local req = assignment.body
     local reference = req.reference
     if reference == nil then
-        ao.event("debug_dynrouter", {"ignoring", req["request-path"]})
+        ao.event("debug_dynrouter", 
+            {
+                "ignoring duration update for request without reference: ",
+                req["request-path"]
+            }
+        )
         return state
     end
     ao.event("debug_dynrouter", {"applying_duration", req.reference})
@@ -288,7 +287,6 @@ end
 --- Tests
 function register_test()
     local state = {}
-  
     -- Simulate a register call upon a default state.
     local req = {
         path = "register",

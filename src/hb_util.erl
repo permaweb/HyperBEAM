@@ -140,11 +140,7 @@ key_to_atom(Key, Mode) ->
     WithoutDashes = binary:replace(Key, <<"-">>, <<"_">>, [global]),
     case Mode of
         new_atoms -> binary_to_atom(WithoutDashes, utf8);
-        _ ->
-            try binary_to_existing_atom(WithoutDashes, utf8)
-            catch
-                error:badarg -> WithoutDashes
-            end
+        _ -> binary_to_existing_atom(WithoutDashes, utf8)
     end.
 
 %% @doc Convert a human readable ID to a native binary ID. If the ID is already

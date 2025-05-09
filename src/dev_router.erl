@@ -25,13 +25,9 @@
 %%% </pre>
 -module(dev_router).
 -export([routes/3, route/2, route/3, preprocess/3]).
--export([match/3, is_relevant/3, register/3]).
+-export([match/3, register/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
-
--define(DEFAULT_RELAVANT_ROUTES, [
-  #{ <<"template">> => <<"/.*~process@1.0/.*">> }
-]).
 
 %% A exposed register function that allows telling the current node to register
 %% a new route with a remote router node. This function should also be itempotent
@@ -64,7 +60,7 @@ register(_M1, _M2, Opts) ->
                         #{}, 
                         #{ 
                             priv_wallet => hb:wallet(), 
-                            snp_trusted => hb_opts:get(snp_trusted, #{}, Opts)
+                            snp_trusted => hb_opts:get(snp_trusted, [#{}], Opts)
                         }
                     ),
                     ?event(debug_register, {attestion, Attestion}),
@@ -311,7 +307,10 @@ apply_route(#{ <<"path">> := Path }, #{ <<"match">> := Match, <<"with">> := With
 %% module), or `route-path' for use by external devices and users.
 match(Base, Req, Opts) ->
     ?event(debug_preprocess, {routeReq, Req}),
-    ?event(debug_preprocess, {routes, hb_ao:get(<<"routes">>, { as, <<"message@1.0">>, Base}, [], Opts)}),
+    ?event(debug_preprocess,
+        {routes,
+            hb_ao:get(<<"routes">>, {as, <<"message@1.0">>, Base}, [], Opts)}
+        ),
     Match =
         match_routes(
             Req#{ <<"path">> => find_target_path(Req, Opts) },
@@ -355,7 +354,9 @@ template_matches(ToMatch, Template, _Opts) when is_map(Template) ->
     hb_message:match(Template, ToMatch, primary);
 template_matches(ToMatch, Regex, Opts) when is_binary(Regex) ->
     MsgPath = find_target_path(ToMatch, Opts),
-    hb_path:regex_matches(MsgPath, Regex).
+    Matches = hb_path:regex_matches(MsgPath, Regex),
+	?event(debug_template_matches, {matches, Matches, msg_path, MsgPath, regex, Regex}),
+	Matches.
 
 %% @doc Implements the load distribution strategies if given a cluster.
 choose(0, _, _, _, _) -> [];
@@ -446,56 +447,55 @@ binary_to_bignum(Bin) when ?IS_ID(Bin) ->
     << Num:256/unsigned-integer >> = hb_util:native_id(Bin),
     Num.
 
-%% @doc is_relevant looks at the relevant_routes paths opt and if any incoming message path matches it will 
-%% make the request relevant for preprocessing.
-is_relevant(_Msg1, Msg2, Opts) ->
-  RelevantRoutes = 
-      hb_opts:get(
-        relevant_routes,
-        ?DEFAULT_RELAVANT_ROUTES,
-        Opts
-      ),
-  Req = hb_ao:get(<<"request">>, Msg2, Opts),
-  {_, Matches} = match(#{ <<"routes">> => RelevantRoutes}, Req, Opts),
-  ?event(debug_preprocess, { matches, Matches }),
-  case Matches of
-    no_matching_route -> 
-        {ok, false};
-    IsRelevant -> 
-          ?event(debug_preprocess, { is_relevant, IsRelevant }),
-          {ok, true}
-  end.
-
 %% @doc Preprocess a request to check if it should be relayed to a different node.
-preprocess(Msg1, Msg2, Opts) ->
-    ?event(debug_preprocess, called_preprocess),
-    case is_relevant(Msg1, Msg2, Opts) of
-        {ok, true} ->
-            {ok, TemplateRoutes} = routes(Msg1, Msg2, Opts),
-            Req = hb_ao:get(<<"request">>, Msg2, Opts),
-            {_, Match} = match(#{ <<"routes">> => TemplateRoutes}, Req, Opts),
-            case Match of
-                no_matching_route -> 
+preprocess(_Msg1, Msg2, Opts) ->
+    Req = hb_ao:get(<<"request">>, Msg2, Opts),
+    ?event(debug_preprocess, {called_preprocess,Req}),
+    TemplateRoutes = load_routes(Opts),
+    ?event(debug_preprocess, {template_routes, TemplateRoutes}),
+    {_, Match} = match(#{ <<"routes">> => TemplateRoutes }, Req, Opts),
+    ?event(debug_preprocess, {match, Match}),
+    case Match of
+        no_matching_route -> 
+            ?event(debug_preprocess, preprocessor_did_not_match),
+            case hb_opts:get(router_preprocess_default, <<"local">>, Opts) of
+                <<"local">> ->
+                    ?event(debug_preprocess, executing_locally),
                     {ok, #{
-                        <<"status">> => 404,
-                        <<"message">> => <<"No matching template found in the given routes.">>
+                        <<"body">> =>
+                            hb_ao:get(<<"body">>, Msg2, Opts#{ hashpath => ignore })
                     }};
-                _ -> 
-                    {ok,
+                <<"error">> ->
+                    ?event(debug_preprocess, preprocessor_returning_error),
+                    {ok, #{
+                        <<"body">> =>
+                            [#{
+                                <<"status">> => 404,
+                                <<"message">> =>
+                                    <<"No matching template found in the given routes.">>
+                            }]
+                    }}
+            end;
+        _ -> 
+            ?event(debug_preprocess, {matched_route, Match}),
+            {ok,
+                #{
+                    <<"body">> =>
                         [
                             #{ <<"device">> => <<"relay@1.0">> },
                             #{
                                 <<"path">> => <<"call">>,
                                 <<"target">> => <<"body">>,
                                 <<"body">> =>
-                                    hb_ao:get(<<"request">>, Msg2, Opts#{ hashpath => ignore })
+                                    hb_ao:get(
+                                        <<"request">>,
+                                        Msg2,
+                                        Opts#{ hashpath => ignore }
+                                    )
                             }
                         ]
-                    }
-            end;
-        {ok, false} ->
-            ?event(debug_preprocess, is_not_relevant),
-            {ok, hb_ao:get(<<"body">>, Msg2, Opts#{ hashpath => ignore })}
+                }
+            }
     end.
 
 %%% Tests
@@ -588,7 +588,7 @@ local_process_route_provider_test() ->
 %% likelihood of routing to a given node, depending upon price and performance.
 local_dynamic_router_test() ->
     BenchRoutes = 50,
-    {ok, Script} = file:read_file("scripts/dynamic-router.lua"),
+    {ok, Script} = file:read_file(<<"scripts/dynamic-router.lua">>),
     Run = hb_util:bin(rand:uniform(1337)),
     Node = hb_http_server:start_node(Opts = #{
         store => [
@@ -700,35 +700,47 @@ local_dynamic_router_test() ->
 %% likelihood of routing to a given node, depending upon price and performance.
 %% also include preprocessing support for routing
 dynamic_router_test() ->
-    {ok, Script} = file:read_file("scripts/dynamic-router.lua"),
+    {ok, Script} = file:read_file(<<"scripts/dynamic-router.lua">>),
     Run = hb_util:bin(rand:uniform(1337)),
-    Node = hb_http_server:start_node(Opts = #{
-        snp_trusted => #{
-            <<"1">> =>
-                #{
-                    <<"vcpus">> => 1,
-                    <<"vcpu_type">> => 5, 
-                    <<"vmm_type">> => 1,
-                    <<"guest_features">> => 1,
-                    <<"firmware">> => <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
-                    <<"kernel">> => <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
-                    <<"initrd">> => <<"da6dffff50373e1d393bf92cb9b552198b1930068176a046dda4e23bb725b3bb">>,
-                    <<"append">> => <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>
-                }
-        },
+	ExecWallet = hb:wallet(<<"test/admissible-report-wallet.json">>),
+	ProxyWallet = ar_wallet:new(),
+    ExecNode =
+        hb_http_server:start_node(
+        	ExecOpts = #{ priv_wallet => ExecWallet }
+        ),
+    Node = hb_http_server:start_node(ProxyOpts = #{
+        snp_trusted => [
+			#{
+				<<"vcpus">> => 32,
+				<<"vcpu_type">> => 5, 
+				<<"vmm_type">> => 1,
+				<<"guest_features">> => 1,
+				<<"firmware">> =>
+                    <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
+				<<"kernel">> =>
+                    <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
+				<<"initrd">> =>
+                    <<"544045560322dbcd2c454bdc50f35edf0147829ec440e6cb487b4a1503f923c1">>,
+				<<"append">> =>
+                    <<"95a34faced5e487991f9cc2253a41cbd26b708bf00328f98dddbbf6b3ea2892e">>
+			}
+		],
         store => [
             #{
                 <<"store-module">> => hb_store_fs,
                 <<"prefix">> => <<"cache-TEST/dynrouter-", Run/binary>>
             }
         ],
-        priv_wallet => ar_wallet:new(),
-        preprocessor => #{
-          <<"device">> => <<"router@1.0">>
-        },
+        priv_wallet => ProxyWallet,
+        on => 
+            #{
+                <<"request">> => #{
+                    <<"device">> => <<"router@1.0">>,
+                    <<"path">> => <<"preprocess">>
+                }
+            },
         route_provider => #{
-            <<"path">> =>
-                    <<"/router~node-process@1.0/compute/routes~message@1.0">>
+            <<"path">> => <<"/router~node-process@1.0/compute/routes~message@1.0">>
         },
         node_processes => #{
             <<"router">> => #{
@@ -746,167 +758,65 @@ dynamic_router_test() ->
                 <<"performance-weight">> => 1,
                 <<"score-preference">> => 4,
                 <<"is-admissible">> => #{ 
-                  <<"device">> => <<"snp@1.0">>
+                  <<"device">> => <<"snp@1.0">>,
+                  <<"path">> => <<"verify">>
                 }
             }
         }
-    }),
-    % mergeRight this takes our defined Opts and merges them into the
+    }),    % mergeRight this takes our defined Opts and merges them into the
     % node opts configs.
-    Store = hb_opts:get(store, no_store, Opts),
+    Store = hb_opts:get(store, no_store, ProxyOpts),
     ?event(debug_dynrouter, {store, Store}),
     % Register workers with the dynamic router with varied prices.
     {ok, [Req]} = file:consult(<<"test/admissible-report.eterm">>),
     lists:foreach(fun(X) ->
-        case hb_http:post(
-            Node,
-            #{
-                <<"path">> => <<"/router~node-process@1.0/schedule">>,
-                <<"method">> => <<"POST">>,
-                <<"body">> =>
-                    hb_message:commit(
-                        #{
-                            <<"path">> => <<"register">>,
-                            <<"route">> =>
-                                #{
-                                    <<"prefix">> =>
-                                        <<
-                                            "http://149.28.249.192:10000"
-                                        >>,
-                                    <<"template">> => <<"/.*~process@1.0/.*">>,
-                                    <<"price">> => X * 250
-                                },
-                            <<"body">> => Req
-                        },
-                        Opts
-                    )
-            },
-            Opts
-        ) of
-            {ok, Res} ->
-                ?event(debug_dynrouter, { res, Res});
-            {failure, Res} ->
-                ?event(debug_router_register, { failure, Res})
-        end
-    end, lists:seq(1, 1)),
-    % Force computation of the current state. This should be done with a 
-    % background worker (ex: a `~cron@1.0/every' task).
-    {Status, NodeRoutes} = hb_http:get(Node, <<"/router~node-process@1.0/now">>, #{}),
-    ?event(debug_dynrouter, {got_node_routes, NodeRoutes}),
-    % Meta info is a part of the exempt routes. Make sure this returns our address
-    {ok, _} = hb_http:get(Node, <<"/~meta@1.0/info/address">>, Opts),
-    % ?assertEqual(hb_util:human_id(ar_wallet:to_address(hb_opts:get(priv_wallet, not_found, Opts))), Res),
-    % {Status, _} = hb_http:get(Node, <<"/RhguwWmQJ-wWCXhRH_NtTDHRRgfCqNDZckXtJK52zKs~process@1.0/compute&slot=1">>, Opts),
-    ?assertEqual(ok, Status).
-
-%% @doc Example of a Lua script being used as the `route_provider' for a
-%% HyperBEAM node. This test specifically sends an invalid attestation report
-%% (with mismatched firmware hash) which should be rejected by the SNP
-%% validation system. It tests the error handling for invalid attestations.
-dynamic_router_invalid_report_test() ->
-    {ok, Script} = file:read_file("scripts/dynamic-router.lua"),
-    Run = hb_util:bin(rand:uniform(1337)),
-    Node = hb_http_server:start_node(Opts = #{
-        snp_trusted => #{
-            <<"1">> =>
+        {ok, Res} = 
+            hb_http:post(
+                Node,
                 #{
-                    <<"vcpus">> => 1,
-                    <<"vcpu_type">> => 5, 
-                    <<"vmm_type">> => 1,
-                    <<"guest_features">> => 1,
-                    <<"firmware">> => <<"b8c5d4082d5738db6b0fb0294174992734645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
-                    <<"kernel">> => <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
-                    <<"initrd">> => <<"da6dffff50373e1d393bf92cb9b552198b1930068176a046dda4e23bb725b3bb">>,
-                    <<"append">> => <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>
-                }
-        },
-        store => [
-            #{
-                <<"store-module">> => hb_store_fs,
-                <<"prefix">> => <<"cache-TEST/dynrouter-", Run/binary>>
-            }
-        ],
-        priv_wallet => ar_wallet:new(),
-        preprocessor => #{
-          <<"device">> => <<"router@1.0">>
-        },
-        route_provider => #{
-            <<"path">> =>
-                    <<"/router~node-process@1.0/compute/routes~message@1.0">>
-        },
-        node_processes => #{
-            <<"router">> => #{
-                <<"type">> => <<"Process">>,
-                <<"device">> => <<"process@1.0">>,
-                <<"execution-device">> => <<"lua@5.3a">>,
-                <<"scheduler-device">> => <<"scheduler@1.0">>,
-                <<"script">> => #{
-                    <<"content-type">> => <<"application/lua">>,
-                    <<"module">> => <<"dynamic-router">>,
-                    <<"body">> => Script
+                    <<"path">> => <<"/router~node-process@1.0/schedule">>,
+                    <<"method">> => <<"POST">>,
+                    <<"body">> =>
+                        hb_message:commit(
+                            #{
+                                <<"path">> => <<"register">>,
+                                <<"route">> =>
+                                    #{
+                                        <<"prefix">> => ExecNode,
+                                        <<"template">> => <<"/c">>,
+                                        <<"price">> => X * 250
+                                    },
+                                <<"body">> => hb_message:commit(Req, ExecOpts)
+                            },
+                            ExecOpts
+                        )
                 },
-                % Set script-specific factors for the test
-                <<"pricing-weight">> => 9,
-                <<"performance-weight">> => 1,
-                <<"score-preference">> => 4,
-                <<"is-admissible">> => #{ 
-                  <<"device">> => <<"snp@1.0">>
-                }
-            }
-        }
-    }),
-    % mergeRight this takes our defined Opts and merges them into the
-    % node opts configs.
-    Store = hb_opts:get(store, no_store, Opts),
-    ?event(debug_dynrouter, {store, Store}),
-    % Register workers with the dynamic router with varied prices.
-    {ok, [Req]} = file:consult(<<"test/admissible-report.eterm">>),
-    lists:foreach(fun(X) ->
-        case hb_http:post(
-            Node,
-            #{
-                <<"path">> => <<"/router~node-process@1.0/schedule">>,
-                <<"method">> => <<"POST">>,
-                <<"body">> =>
-                    hb_message:commit(
-                        #{
-                            <<"path">> => <<"register">>,
-                            <<"route">> =>
-                                #{
-                                    <<"prefix">> =>
-                                        <<
-                                            "http://149.28.249.192:10000"
-                                        >>,
-                                    <<"template">> => <<"/.*~process@1.0/.*">>,
-                                    <<"price">> => X * 250
-                                },
-                            <<"body">> => Req
-                        },
-                        Opts
-                    )
-            },
-            Opts
-        ) of
-            {ok, Res} ->
-                ?event(debug_dynrouter, { res, Res});
-            {failure, Res} ->
-                ?event(debug_router_register, { failure, Res})
-        end
+                ExecOpts
+            ),
+        Res
     end, lists:seq(1, 1)),
     % Force computation of the current state. This should be done with a 
     % background worker (ex: a `~cron@1.0/every' task).
     {Status, NodeRoutes} = hb_http:get(Node, <<"/router~node-process@1.0/now">>, #{}),
     ?event(debug_dynrouter, {got_node_routes, NodeRoutes}),
-    Routes = hb_ao:get(<<"routes">>, NodeRoutes, Opts),
-    % This should be 0, as the invalid report should have been rejected.
-    ?event(debug_dynrouter, {routes_length, length(Routes)}),
-    ?assertEqual(0, length(Routes)),
-    % Meta info is a part of the exempt routes. Make sure this returns our address
-    {ok, _} = hb_http:get(Node, <<"/~meta@1.0/info/address">>, Opts),
-    % ?assertEqual(hb_util:human_id(ar_wallet:to_address(hb_opts:get(priv_wallet, not_found, Opts))), Res),
-    % {Status, _} = hb_http:get(Node, <<"/RhguwWmQJ-wWCXhRH_NtTDHRRgfCqNDZckXtJK52zKs~process@1.0/compute&slot=1">>, Opts),
-    ?assertEqual(ok, Status).
-
+    ?assertEqual(ok, Status),
+    ProxyWalletAddr = hb_util:human_id(ar_wallet:to_address(ProxyWallet)),
+    ExecNodeAddr = hb_util:human_id(ar_wallet:to_address(ExecWallet)),
+    % Ensure that the `~meta@1.0/info/address' response is produced by the
+    % proxy wallet.
+    ?event(debug_dynrouter,
+        {addresses,
+            {proxy_wallet_addr, ProxyWalletAddr},
+            {exec_node_addr, ExecNodeAddr}
+        }
+    ),
+    ?assertEqual(
+        {ok, ProxyWalletAddr},
+        hb_http:get(Node, <<"/~meta@1.0/info/address">>, ProxyOpts)
+    ),
+    % Ensure that computation is done by the exec node.
+    {ok, ResMsg} = hb_http:get(Node, <<"/c?c+list=1">>, ExecOpts),
+    ?assertEqual([ExecNodeAddr], hb_message:signers(ResMsg)).
 
 %% @doc Demonstrates routing tables being dynamically created and adjusted
 %% according to the real-time performance of nodes. This test utilizes the
@@ -918,11 +828,11 @@ dynamic_routing_by_performance() ->
     % Setup test parameters
     TestNodes = 4,
     BenchRoutes = 16,
-    TestPath = <<"/.*/.*">>,
+    TestPath = <<"/worker">>,
     % Start the main node for the test, loading the `dynamic-router' script and
     % the http_monitor to generate performance messages.
-    {ok, Script} = file:read_file("scripts/dynamic-router.lua"),
-    Run = hb_util:bin(rand:uniform(1337)),
+    {ok, Script} = file:read_file(<<"scripts/dynamic-router.lua">>),
+    Run = hb_util:bin(rand:uniform(1337_000)),
     Node = hb_http_server:start_node(Opts = #{
         relay_http_client => gun,
         store => [
@@ -963,7 +873,7 @@ dynamic_routing_by_performance() ->
         }
     }),
     % Start and add a series of nodes with decreasing performance, via lag 
-    % introduced with a preprocessor set to `~test@1.0/delay'.
+    % introduced with a hook set to `~test@1.0/delay'.
     _XNodes =
         lists:map(
             fun(X) ->
@@ -972,15 +882,20 @@ dynamic_routing_by_performance() ->
                 XNode =
                     hb_http_server:start_node(
                         #{
-                            preprocessor => #{
-                                <<"device">> => <<"test-device@1.0">>,
-                                <<"path">> => <<"delay">>,
-                                <<"duration">> => (X - 1) * 50, % Delay by some ms
-                                <<"return">> => [
-                                    #{ <<"node">> => X },
-                                    <<"node">>
-                                ]
-                            }
+                            on =>
+                                #{
+                                    <<"request">> => #{
+                                        <<"device">> => <<"test-device@1.0">>,
+                                        <<"path">> => <<"delay">>,
+                                        <<"duration">> => (X - 1) * 100,
+                                        <<"return">> => #{
+                                            <<"body">> => [
+                                                #{ <<"worker">> => X },
+                                                <<"worker">>
+                                            ]
+                                        }
+                                    }
+                                }
                         }
                     ),
                 % Register the node with the router.
@@ -1009,7 +924,6 @@ dynamic_routing_by_performance() ->
             end,
             lists:seq(1, TestNodes)
         ),
-    timer:sleep(2000),
     % Force calculation of the process state.
     {ok, ResBefore} =
         hb_http:get(
@@ -1026,7 +940,7 @@ dynamic_routing_by_performance() ->
             % will then apply the routes and the request to the test node set.
             Res = hb_http:get(
                 Node,
-                << "/~relay@1.0/call?relay-path=/~scheduler@1.0/info" >>,
+                << "/~relay@1.0/call?relay-path=/worker" >>,
                 Opts
             ),
             ?event(debug_dynrouter, {recvd, Res})
@@ -1047,20 +961,25 @@ dynamic_routing_by_performance() ->
     ),
     % Get the new weights
     {ok, After} = hb_http:get(Node, PerfPath, Opts),
-    SortedWeights =
-        lists:map(
-            fun(N) ->
-                hb_ao:get(
-                    <<(integer_to_binary(N))/binary, "/weight">>,
-                    After,
-                    Opts
-                )
-            end,
-            lists:seq(1, TestNodes)
+    WeightsByWorker =
+        maps:from_list(
+            lists:map(
+                fun(N) ->
+                    {
+                        N,
+                        hb_ao:get(
+                            <<(integer_to_binary(N))/binary, "/weight">>,
+                            After,
+                            Opts
+                        )
+                    }
+                end,
+                lists:seq(1, TestNodes)
+            )
         ),
-    ?event(debug_dynrouter, {sorted_weights, SortedWeights}),
-    ?assert(hd(SortedWeights) > 0.3),
-    ?assert(lists:last(SortedWeights) < 0.4),
+    ?event(debug_dynrouter, {worker_weights, {explicit, WeightsByWorker}}),
+    ?assert(maps:get(1, WeightsByWorker) > 0.4),
+    ?assert(maps:get(TestNodes, WeightsByWorker) < 0.3),
     ok.
 
 weighted_random_strategy_test() ->

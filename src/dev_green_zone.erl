@@ -18,7 +18,7 @@ sane basic requirements for a green zone:
   initiating machine).
 - The node uses the default store configuration.
 - The node will not change its routes from the defaults.
-- The peer's preprocessor and postprocessor are the same as the local node's.
+- The peer's hooks are the same as the local node's.
 - The node will not schedule messages. Without coordination, peers in the 
   green zone will schedule messages without regard for avoiding
   double-assignment of slots.
@@ -33,8 +33,7 @@ default_zone_required_opts(Opts) ->
         preload_devices => hb_opts:get(preload_devices, [], Opts),
         % store => hb_opts:get(store, [], Opts),
         routes => hb_opts:get(routes, [], Opts),
-        preprocessor => hb_opts:get(preprocessor, undefined, Opts),
-        postprocessor => hb_opts:get(postprocessor, undefined, Opts),
+        on => hb_opts:get(on, undefined, Opts),
         scheduling_mode => disabled,
         initialized => permanent
     }.

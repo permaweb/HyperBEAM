@@ -59,8 +59,8 @@ Like [`~wasm64@1.0`](../resources/source-code/dev_wasm.md), the `~lua@5.3a` devi
 
 ```text
 # Example Process Definition Snippet
-Execution-Device: [`stack@1.0`](../resources/source-code/dev_stack.md)
-Execution-Stack: "[`scheduler@1.0`](../resources/source-code/dev_scheduler.md)", "lua@5.3a"
+Execution-Device: stack@1.0
+Execution-Stack: scheduler@1.0, lua@5.3a
 Script: <LuaScriptTxID>
 Sandbox: true
 ```

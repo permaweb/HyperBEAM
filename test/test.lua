@@ -85,8 +85,8 @@ end
 --- @tparam table base
 --- @tparam table request
 --- @return table an answer to every HTTP request with the words "i like turtles"
-function preprocess(base, req, opts)
-    return "ok", { { body = "i like turtles" } }
+function request(base, req, opts)
+    return "ok", { body = { { body = "i like turtles" } } }
 end
 
 --- @function sandboxed_fail

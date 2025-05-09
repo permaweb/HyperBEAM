@@ -19,17 +19,17 @@ The primary tool for interacting with AO and developing processes is `aos`, a co
 
 === "npm"
     ```bash
-    npm i -g https://get_ao.g8way.io
+    npm i -g https://get_ao.arweave.net
     ```
 
 === "bun"
     ```bash
-    bun install -g https://get_ao.g8way.io
+    bun install -g https://get_ao.arweave.net
     ```
 
 === "pnpm"
     ```bash
-    pnpm add -g https://get_ao.g8way.io
+    pnpm add -g https://get_ao.arweave.net
     ```
 
 **Starting `aos`:**

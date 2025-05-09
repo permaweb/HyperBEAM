@@ -116,11 +116,13 @@
 %%      4: Persistent-resolver lookup.
 %%      5: Device lookup.
 %%      6: Execution.
-%%      7: Cryptographic linking.
-%%      8: Result caching.
-%%      9: Notify waiters.
-%%     10: Fork worker.
-%%     11: Recurse or terminate.
+%%      7: Execution of the `step' hook.
+%%      8: Subresolution.
+%%      9: Cryptographic linking.
+%%     10: Result caching.
+%%     11: Notify waiters.
+%%     12: Fork worker.
+%%     13: Recurse or terminate.
 resolve(SingletonMsg, Opts) ->
     resolve_many(hb_singleton:from(SingletonMsg), Opts).
 
@@ -177,7 +179,7 @@ resolve_many(MsgList, Opts) ->
     ?event(ao_core, {resolve_many_complete, {res, Res}, {req, MsgList}}, Opts),
     Res.
 do_resolve_many([Msg3], _Opts) ->
-    ?event(ao_core, {stage, 11, resolve_complete, Msg3}),
+    ?event(ao_core, {stage, 13, resolve_complete, Msg3}),
     {ok, Msg3};
 do_resolve_many([Msg1, Msg2 | MsgList], Opts) ->
     ?event(ao_core, {stage, 0, resolve_many, {msg1, Msg1}, {msg2, Msg2}, {opts, Opts}}),
@@ -186,7 +188,7 @@ do_resolve_many([Msg1, Msg2 | MsgList], Opts) ->
             ?event(ao_core,
                 {
                     stage,
-                    11,
+                    13,
                     resolved_step,
                     {msg3, Msg3},
                     {opts, Opts}
@@ -196,7 +198,7 @@ do_resolve_many([Msg1, Msg2 | MsgList], Opts) ->
             do_resolve_many([Msg3 | MsgList], Opts);
         Res ->
             % The result is not a resolvable message. Return it.
-            ?event(ao_core, {stage, 11, resolve_many_terminating_early, Res}),
+            ?event(ao_core, {stage, 13, resolve_many_terminating_early, Res}),
             Res
     end.
 
@@ -550,16 +552,48 @@ resolve_stage(6, Func, Msg1, Msg2, ExecName, Opts) ->
                 )
         end,
     resolve_stage(7, Msg1, Msg2, Res, ExecName, Opts);
-resolve_stage(7, Msg1, Msg2, {ok, {resolve, Sublist}}, ExecName, Opts) ->
-    ?event(ao_core, {stage, 7, ExecName, subresolve_result}, Opts),
+resolve_stage(7, Msg1, Msg2, {St, Res}, ExecName, Opts = #{ on := On = #{ <<"step">> := _ }}) ->
+    ?event(ao_core, {stage, 7, ExecName, executing_step_hook, {on, On}}, Opts),
+    % If the `step' hook is defined, we execute it. Note: This function clause
+    % matches directly on the `on' key of the `Opts' map. This is in order to
+    % remove the expensive lookup check that would otherwise be performed on every
+    % execution.
+    HookReq = #{
+        <<"base">> => Msg1,
+        <<"request">> => Msg2,
+        <<"status">> => St,
+        <<"body">> => Res
+    },
+    case dev_hook:on(<<"step">>, HookReq, Opts) of
+        {ok, #{ <<"status">> := NewStatus, <<"body">> := NewRes }} ->
+            resolve_stage(8, Msg1, Msg2, {NewStatus, NewRes}, ExecName, Opts);
+        Error ->
+            ?event(
+                ao_core,
+                {step_hook_error,
+                    {error, Error},
+                    {hook_req, HookReq}
+                },
+                Opts
+            ),
+            Error
+    end;
+resolve_stage(7, Msg1, Msg2, Res, ExecName, Opts) ->
+    ?event(ao_core, {stage, 7, ExecName, no_step_hook}, Opts),
+    resolve_stage(8, Msg1, Msg2, Res, ExecName, Opts);
+resolve_stage(8, Msg1, Msg2, {ok, {resolve, Sublist}}, ExecName, Opts) ->
+    ?event(ao_core, {stage, 8, ExecName, subresolve_result}, Opts),
     % If the result is a `{resolve, Sublist}' tuple, we need to execute it
     % as a sub-resolution.
-    resolve_stage(7, Msg1, Msg2, resolve_many(Sublist, Opts), ExecName, Opts);
-resolve_stage(7, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) when is_map(Msg3) ->
-    ?event(ao_core, {stage, 7, ExecName, generate_hashpath}, Opts),
+    resolve_stage(9, Msg1, Msg2, resolve_many(Sublist, Opts), ExecName, Opts);
+resolve_stage(8, Msg1, Msg2, Res, ExecName, Opts) ->
+    ?event(ao_core, {stage, 8, ExecName, no_subresolution_necessary}, Opts),
+    resolve_stage(9, Msg1, Msg2, Res, ExecName, Opts);
+resolve_stage(9, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) when is_map(Msg3) ->
+    ?event(ao_core, {stage, 9, ExecName, generate_hashpath}, Opts),
     % Cryptographic linking. Now that we have generated the result, we
     % need to cryptographically link the output to its input via a hashpath.
-    resolve_stage(8, Msg1, Msg2,
+    resolve_stage(10, Msg1, Msg2,
         case hb_opts:get(hashpath, update, Opts#{ only => local }) of
             update ->
                 Priv = hb_private:from_message(Msg3),
@@ -583,37 +617,37 @@ resolve_stage(7, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) when is_map(Msg3) ->
         ExecName,
         Opts
     );
-resolve_stage(7, Msg1, Msg2, {Status, Msg3}, ExecName, Opts) when is_map(Msg3) ->
-    ?event(ao_core, {stage, 7, ExecName, abnormal_status_reset_hashpath}, Opts),
+resolve_stage(9, Msg1, Msg2, {Status, Msg3}, ExecName, Opts) when is_map(Msg3) ->
+    ?event(ao_core, {stage, 9, ExecName, abnormal_status_reset_hashpath}, Opts),
     ?event(hashpath, {resetting_hashpath_msg3, {msg1, Msg1}, {msg2, Msg2}, {opts, Opts}}),
     % Skip cryptographic linking and reset the hashpath if the result is abnormal.
     Priv = hb_private:from_message(Msg3),
     resolve_stage(
-        8, Msg1, Msg2,
+        10, Msg1, Msg2,
         {Status, Msg3#{ <<"priv">> => maps:without([<<"hashpath">>], Priv) }},
         ExecName, Opts);
-resolve_stage(7, Msg1, Msg2, Res, ExecName, Opts) ->
-    ?event(ao_core, {stage, 7, ExecName, non_map_result_skipping_hash_path}, Opts),
+resolve_stage(9, Msg1, Msg2, Res, ExecName, Opts) ->
+    ?event(ao_core, {stage, 9, ExecName, non_map_result_skipping_hash_path}, Opts),
     % Skip cryptographic linking and continue if we don't have a map that can have
     % a hashpath at all.
-    resolve_stage(8, Msg1, Msg2, Res, ExecName, Opts);
-resolve_stage(8, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) ->
-    ?event(ao_core, {stage, 8, ExecName, result_caching}, Opts),
+    resolve_stage(10, Msg1, Msg2, Res, ExecName, Opts);
+resolve_stage(10, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) ->
+    ?event(ao_core, {stage, 10, ExecName, result_caching}, Opts),
     % Result caching: Optionally, cache the result of the computation locally.
     hb_cache_control:maybe_store(Msg1, Msg2, Msg3, Opts),
-    resolve_stage(9, Msg1, Msg2, {ok, Msg3}, ExecName, Opts);
-resolve_stage(8, Msg1, Msg2, Res, ExecName, Opts) ->
-    ?event(ao_core, {stage, 8, ExecName, abnormal_status_skip_caching}, Opts),
+    resolve_stage(11, Msg1, Msg2, {ok, Msg3}, ExecName, Opts);
+resolve_stage(10, Msg1, Msg2, Res, ExecName, Opts) ->
+    ?event(ao_core, {stage, 10, ExecName, abnormal_status_skip_caching}, Opts),
     % Skip result caching if the result is abnormal.
-    resolve_stage(9, Msg1, Msg2, Res, ExecName, Opts);
-resolve_stage(9, Msg1, Msg2, Res, ExecName, Opts) ->
-    ?event(ao_core, {stage, 9, ExecName}, Opts),
+    resolve_stage(11, Msg1, Msg2, Res, ExecName, Opts);
+resolve_stage(11, Msg1, Msg2, Res, ExecName, Opts) ->
+    ?event(ao_core, {stage, 11, ExecName}, Opts),
     % Notify processes that requested the resolution while we were executing and
     % unregister ourselves from the group.
     hb_persistent:unregister_notify(ExecName, Msg2, Res, Opts),
-    resolve_stage(10, Msg1, Msg2, Res, ExecName, Opts);
-resolve_stage(10, _Msg1, _Msg2, {ok, Msg3} = Res, ExecName, Opts) ->
-    ?event(ao_core, {stage, 10, ExecName, maybe_spawn_worker}, Opts),
+    resolve_stage(12, Msg1, Msg2, Res, ExecName, Opts);
+resolve_stage(12, _Msg1, _Msg2, {ok, Msg3} = Res, ExecName, Opts) ->
+    ?event(ao_core, {stage, 12, ExecName, maybe_spawn_worker}, Opts),
     % Check if we should spawn a worker for the current execution
     case {is_map(Msg3), hb_opts:get(spawn_worker, false, Opts#{ prefer => local })} of
         {A, B} when (A == false) or (B == false) ->
@@ -624,8 +658,8 @@ resolve_stage(10, _Msg1, _Msg2, {ok, Msg3} = Res, ExecName, Opts) ->
             hb_persistent:forward_work(WorkerPID, Opts),
             Res
     end;
-resolve_stage(10, _Msg1, _Msg2, OtherRes, ExecName, Opts) ->
-    ?event(ao_core, {stage, 10, ExecName, abnormal_status_skip_spawning}, Opts),
+resolve_stage(12, _Msg1, _Msg2, OtherRes, ExecName, Opts) ->
+    ?event(ao_core, {stage, 12, ExecName, abnormal_status_skip_spawning}, Opts),
     OtherRes.
 
 %% @doc Execute a sub-resolution.
@@ -917,22 +951,33 @@ set(Msg1, Key, Value, Opts) ->
     deep_set(Msg1, Path, Value, Opts).
 
 %% @doc Recursively search a map, resolving keys, and set the value of the key
-%% at the given path.
+%% at the given path. This function has special cases for handling `set' calls
+%% where the path is an empty list (`/'). In this case, if the value is an 
+%% immediate, non-complex term, we can set it directly. Otherwise, we use the
+%% device's `set' function to set the value.
+deep_set(Msg, [], Value, Opts) when is_map(Msg) or is_list(Msg) ->
+    device_set(Msg, <<"/">>, Value, Opts);
+deep_set(_Msg, [], Value, _Opts) ->
+    Value;
 deep_set(Msg, [Key], Value, Opts) ->
-    device_set(Msg, Key, Value, Opts);
+    DevRes = device_set(Msg, Key, Value, Opts),
+    ?event(debug, {deep_device_set_result, {msg, Msg}, {key, Key}, {res, DevRes}}),
+    DevRes;
 deep_set(Msg, [Key|Rest], Value, Opts) ->
     case resolve(Msg, Key, Opts) of 
         {ok, SubMsg} ->
-            ?event(
+            ?event(debug,
                 {traversing_deeper_to_set,
                     {current_key, Key},
                     {current_value, SubMsg},
                     {rest, Rest}
                 }
             ),
-            device_set(Msg, Key, deep_set(SubMsg, Rest, Value, Opts), Opts);
+            Res = device_set(Msg, Key, deep_set(SubMsg, Rest, Value, Opts), <<"explicit">>, Opts),
+            ?event(debug, {deep_set_result, {msg, Msg}, {key, Key}, {res, Res}}),
+            Res;
         _ ->
-            ?event(
+            ?event(debug,
                 {creating_new_map,
                     {current_key, Key},
                     {rest, Rest}
@@ -943,30 +988,43 @@ deep_set(Msg, [Key|Rest], Value, Opts) ->
 
 %% @doc Call the device's `set' function.
 device_set(Msg, Key, Value, Opts) ->
-    Req =
+    device_set(Msg, Key, Value, <<"deep">>, Opts).
+device_set(Msg, Key, Value, Mode, Opts) ->
+    ReqWithoutMode =
         case Key of
             <<"path">> ->
                 #{ <<"path">> => <<"set_path">>, <<"value">> => Value };
+            <<"/">> when is_map(Value) ->
+                % The value is a map and it is to be `set' at the root of the
+                % message. Subsequently, we call the device's `set' function
+                % with all of the keys found in the message, leading it to be
+                % merged into the message.
+                Value#{ <<"path">> => <<"set">> };
             _ ->
                 #{ <<"path">> => <<"set">>, Key => Value }
         end,
+    Req =
+        case Mode of
+            <<"deep">> -> ReqWithoutMode;
+            <<"explicit">> -> ReqWithoutMode#{ <<"set-mode">> => Mode }
+        end,
 	?event(
-        ao_internal,
+        debug,
         {
             calling_device_set,
             {msg, Msg},
             {applying_set, Req}
-        },
-        Opts
+        }
     ),
-	Res = hb_util:ok(
-        resolve(
-            Msg,
-            Req,
+	Res =
+        hb_util:ok(
+            resolve(
+                Msg,
+                Req,
+                internal_opts(Opts)
+            ),
             internal_opts(Opts)
         ),
-        internal_opts(Opts)
-    ),
 	?event(
         ao_internal,
         {device_set_result, Res},
@@ -1145,7 +1203,7 @@ find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
 find_exported_function(_Msg, _Mod, _Key, Arity, _Opts) when Arity < 0 ->
     not_found;
 find_exported_function(Msg, Mod, Key, Arity, Opts) when not is_atom(Key) ->
-	try binary_to_existing_atom(normalize_key(Key), latin1) of
+	try hb_util:key_to_atom(Key, false) of
 		KeyAtom -> find_exported_function(Msg, Mod, KeyAtom, Arity, Opts)
 	catch _:_ -> not_found
 	end;

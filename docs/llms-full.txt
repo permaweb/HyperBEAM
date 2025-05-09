@@ -1,4 +1,4 @@
-Generated: 2025-05-06T20:46:43Z
+Generated: 2025-05-09T19:56:45Z
 
 --- START OF FILE: docs/build/exposing-process-state.md ---
 # Exposing Process State with the Patch Device
@@ -221,17 +221,17 @@ The primary tool for interacting with AO and developing processes is `aos`, a co
 
 === "npm"
     ```bash
-    npm i -g https://get_ao.g8way.io
+    npm i -g https://get_ao.arweave.net
     ```
 
 === "bun"
     ```bash
-    bun install -g https://get_ao.g8way.io
+    bun install -g https://get_ao.arweave.net
     ```
 
 === "pnpm"
     ```bash
-    pnpm add -g https://get_ao.g8way.io
+    pnpm add -g https://get_ao.arweave.net
     ```
 
 **Starting `aos`:**
@@ -558,8 +558,8 @@ Like [`~wasm64@1.0`](../resources/source-code/dev_wasm.md), the `~lua@5.3a` devi
 
 ```text
 # Example Process Definition Snippet
-Execution-Device: [`stack@1.0`](../resources/source-code/dev_stack.md)
-Execution-Stack: "[`scheduler@1.0`](../resources/source-code/dev_scheduler.md)", "lua@5.3a"
+Execution-Device: stack@1.0
+Execution-Stack: scheduler@1.0, lua@5.3a
 Script: <LuaScriptTxID>
 Sandbox: true
 ```
@@ -2946,7 +2946,7 @@ records to and from TABMs.
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td>Sign a message using the <code>priv_wallet</code> key in the options.</td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td>Return a list of committed keys from an ANS-104 message.</td></tr><tr><td valign="top"><a href="#committed_from_trusted_keys-3">committed_from_trusted_keys/3*</a></td><td></td></tr><tr><td valign="top"><a href="#content_type-1">content_type/1</a></td><td>Return the content type for the codec.</td></tr><tr><td valign="top"><a href="#deduplicating_from_list-1">deduplicating_from_list/1*</a></td><td>Deduplicate a list of key-value pairs by key, generating a list of
-values for each normalized key if there are duplicates.</td></tr><tr><td valign="top"><a href="#deserialize-1">deserialize/1</a></td><td>Deserialize a binary ans104 message to a TABM.</td></tr><tr><td valign="top"><a href="#do_from-1">do_from/1*</a></td><td></td></tr><tr><td valign="top"><a href="#duplicated_tag_name_test-0">duplicated_tag_name_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#encoded_tags_to_map-1">encoded_tags_to_map/1*</a></td><td>Convert an ANS-104 encoded tag list into a HyperBEAM-compatible map.</td></tr><tr><td valign="top"><a href="#from-1">from/1</a></td><td>Convert a #tx record into a message map recursively.</td></tr><tr><td valign="top"><a href="#from_maintains_tag_name_case_test-0">from_maintains_tag_name_case_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message.</td></tr><tr><td valign="top"><a href="#normal_tags-1">normal_tags/1*</a></td><td>Check whether a list of key-value pairs contains only normalized keys.</td></tr><tr><td valign="top"><a href="#normal_tags_test-0">normal_tags_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#only_committed_maintains_target_test-0">only_committed_maintains_target_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#restore_tag_name_case_from_cache_test-0">restore_tag_name_case_from_cache_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#serialize-1">serialize/1</a></td><td>Serialize a message or TX to a binary.</td></tr><tr><td valign="top"><a href="#signed_duplicated_tag_name_test-0">signed_duplicated_tag_name_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_to_conversion_test-0">simple_to_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#tag_map_to_encoded_tags-1">tag_map_to_encoded_tags/1*</a></td><td>Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
+values for each normalized key if there are duplicates.</td></tr><tr><td valign="top"><a href="#deserialize-1">deserialize/1</a></td><td>Deserialize a binary ans104 message to a TABM.</td></tr><tr><td valign="top"><a href="#do_from-1">do_from/1*</a></td><td></td></tr><tr><td valign="top"><a href="#duplicated_tag_name_test-0">duplicated_tag_name_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#encoded_tags_to_map-1">encoded_tags_to_map/1*</a></td><td>Convert an ANS-104 encoded tag list into a HyperBEAM-compatible map.</td></tr><tr><td valign="top"><a href="#from-1">from/1</a></td><td>Convert a #tx record into a message map recursively.</td></tr><tr><td valign="top"><a href="#from_maintains_tag_name_case_test-0">from_maintains_tag_name_case_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message.</td></tr><tr><td valign="top"><a href="#normal_tags-1">normal_tags/1*</a></td><td>Check whether a list of key-value pairs contains only normalized keys.</td></tr><tr><td valign="top"><a href="#normal_tags_test-0">normal_tags_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#only_committed_maintains_target_test-0">only_committed_maintains_target_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#quantity_field_is_ignored_in_from_test-0">quantity_field_is_ignored_in_from_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#quantity_key_encoded_as_tag_test-0">quantity_key_encoded_as_tag_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#restore_tag_name_case_from_cache_test-0">restore_tag_name_case_from_cache_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#serialize-1">serialize/1</a></td><td>Serialize a message or TX to a binary.</td></tr><tr><td valign="top"><a href="#signed_duplicated_tag_name_test-0">signed_duplicated_tag_name_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_to_conversion_test-0">simple_to_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#tag_map_to_encoded_tags-1">tag_map_to_encoded_tags/1*</a></td><td>Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
 recreating the original order of the tags.</td></tr><tr><td valign="top"><a href="#to-1">to/1</a></td><td>Internal helper to translate a message to its #tx record representation,
 which can then be used by ar_bundles to serialize the message.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify an ANS-104 commitment.</td></tr></table>
 
@@ -3063,6 +3063,18 @@ Check whether a list of key-value pairs contains only normalized keys.
 ### only_committed_maintains_target_test/0 * ###
 
 `only_committed_maintains_target_test() -> any()`
+
+<a name="quantity_field_is_ignored_in_from_test-0"></a>
+
+### quantity_field_is_ignored_in_from_test/0 * ###
+
+`quantity_field_is_ignored_in_from_test() -> any()`
+
+<a name="quantity_key_encoded_as_tag_test-0"></a>
+
+### quantity_key_encoded_as_tag_test/0 * ###
+
+`quantity_key_encoded_as_tag_test() -> any()`
 
 <a name="restore_tag_name_case_from_cache_test-0"></a>
 
@@ -4921,6 +4933,176 @@ validate_join(M1::term(), Req::map(), Opts::map()) -&gt; {ok, map()} | {error, b
 
 --- END OF FILE: docs/resources/source-code/dev_green_zone.md ---
 
+--- START OF FILE: docs/resources/source-code/dev_hook.md ---
+# [Module dev_hook.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_hook.erl)
+
+
+
+
+A generalized interface for `hooking` into HyperBEAM nodes.
+
+<a name="description"></a>
+
+## Description ##
+
+This module allows users to define `hooks` that are executed at various
+points in the lifecycle of nodes and message evaluations.
+
+Hooks are maintained in the `node message` options, under the key `on`
+key. Each `hook` may have zero or many `handlers` which their request is
+executed against. A new `handler` of a hook can be registered by simply
+adding a new key to that message. If multiple hooks need to be executed for
+a single event, the key's value can be set to a list of hooks.
+
+`hook`s themselves do not need to be added explicitly. Any device can add
+a hook by simply executing `dev_hook:on(HookName, Req, Opts)`. This
+function is does not affect the hashpath of a message and is not exported on
+the device`s API, such that it is not possible to call it directly with
+AO-Core resolution.
+
+All handlers are expressed in the form of a message, upon which the hook's
+request is evaluated:
+
+AO(HookMsg, Req, Opts) => {Status, Result}
+
+The `Status` and `Result` of the evaluation can be used at the `hook` caller's
+discretion. If multiple handlers are to be executed for a single `hook`, the
+result of each is used as the input to the next, on the assumption that the
+status of the previous is `ok`. If a non-`ok` status is encountered, the
+evaluation is halted and the result is returned to the caller. This means
+that in most cases, hooks take the form of chainable pipelines of functions,
+passing the most pertinent data in the `body` key of both the request and
+result. Hook definitions can also set the `hook/result` key to `ignore`, if
+the result of the execution should be discarded and the prior value (the
+input to the hook) should be used instead. The `hook/commit-request` key can
+also be set to `true` if the request should be committed by the node before
+execution of the hook.
+
+The default HyperBEAM node implements several useful hooks. They include:
+
+start: Executed when the node starts.
+Req/body: The node's initial configuration.
+Result/body: The node's possibly updated configuration.
+request: Executed when a request is received via the HTTP API.
+Req/body: The sequence of messages that the node will evaluate.
+Req/request: The raw, unparsed singleton request.
+Result/body: The sequence of messages that the node will evaluate.
+step: Executed after each message in a sequence has been evaluated.
+Req/body: The result of the evaluation.
+Result/body: The result of the evaluation.
+response: Executed when a response is sent via the HTTP API.
+Req/body: The result of the evaluation.
+Req/request: The raw, unparsed singleton request that was used to
+generate the response.
+Result/body: The message to be sent in response to the request.
+
+Additionally, this module implements a traditional device API, allowing the
+node operator to register hooks to the node and find those that are
+currently active.<a name="index"></a>
+
+## Function Index ##
+
+
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#execute_handler-4">execute_handler/4*</a></td><td>Execute a single handler
+Handlers are expressed as messages that can be resolved via AO.</td></tr><tr><td valign="top"><a href="#execute_handlers-4">execute_handlers/4*</a></td><td>Execute a list of handlers in sequence.</td></tr><tr><td valign="top"><a href="#find-2">find/2</a></td><td>Get all handlers for a specific hook from the node message options.</td></tr><tr><td valign="top"><a href="#find-3">find/3</a></td><td></td></tr><tr><td valign="top"><a href="#halt_on_error_test-0">halt_on_error_test/0*</a></td><td>Test that pipeline execution halts on error.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Device API information.</td></tr><tr><td valign="top"><a href="#multiple_handlers_test-0">multiple_handlers_test/0*</a></td><td>Test that multiple handlers form a pipeline.</td></tr><tr><td valign="top"><a href="#no_handlers_test-0">no_handlers_test/0*</a></td><td>Test that hooks with no handlers return the original request.</td></tr><tr><td valign="top"><a href="#on-3">on/3</a></td><td>Execute a named hook with the provided request and options
+This function finds all handlers for the hook and evaluates them in sequence.</td></tr><tr><td valign="top"><a href="#single_handler_test-0">single_handler_test/0*</a></td><td>Test that a single handler is executed correctly.</td></tr></table>
+
+
+<a name="functions"></a>
+
+## Function Details ##
+
+<a name="execute_handler-4"></a>
+
+### execute_handler/4 * ###
+
+`execute_handler(HookName, Handler, Req, Opts) -> any()`
+
+Execute a single handler
+Handlers are expressed as messages that can be resolved via AO.
+
+<a name="execute_handlers-4"></a>
+
+### execute_handlers/4 * ###
+
+`execute_handlers(HookName, Rest, Req, Opts) -> any()`
+
+Execute a list of handlers in sequence.
+The result of each handler is used as input to the next handler.
+If a handler returns a non-ok status, execution is halted.
+
+<a name="find-2"></a>
+
+### find/2 ###
+
+`find(HookName, Opts) -> any()`
+
+Get all handlers for a specific hook from the node message options.
+Handlers are stored in the `on` key of this message. The `find/2` variant of
+this function only takes a hook name and node message, and is not called
+directly via the device API. Instead it is used by `on/3` and other internal
+functionality to find handlers when necessary. The `find/3` variant can,
+however, be called directly via the device API.
+
+<a name="find-3"></a>
+
+### find/3 ###
+
+`find(Base, Req, Opts) -> any()`
+
+<a name="halt_on_error_test-0"></a>
+
+### halt_on_error_test/0 * ###
+
+`halt_on_error_test() -> any()`
+
+Test that pipeline execution halts on error
+
+<a name="info-1"></a>
+
+### info/1 ###
+
+`info(X1) -> any()`
+
+Device API information
+
+<a name="multiple_handlers_test-0"></a>
+
+### multiple_handlers_test/0 * ###
+
+`multiple_handlers_test() -> any()`
+
+Test that multiple handlers form a pipeline
+
+<a name="no_handlers_test-0"></a>
+
+### no_handlers_test/0 * ###
+
+`no_handlers_test() -> any()`
+
+Test that hooks with no handlers return the original request
+
+<a name="on-3"></a>
+
+### on/3 ###
+
+`on(HookName, Req, Opts) -> any()`
+
+Execute a named hook with the provided request and options
+This function finds all handlers for the hook and evaluates them in sequence.
+The result of each handler is used as input to the next handler.
+
+<a name="single_handler_test-0"></a>
+
+### single_handler_test/0 * ###
+
+`single_handler_test() -> any()`
+
+Test that a single handler is executed correctly
+
+
+--- END OF FILE: docs/resources/source-code/dev_hook.md ---
+
 --- START OF FILE: docs/resources/source-code/dev_hyperbuddy.md ---
 # [Module dev_hyperbuddy.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_hyperbuddy.erl)
 
@@ -5636,7 +5818,7 @@ A device that calls a Lua script upon a request and returns the result.
 list of Erlang terms.</td></tr><tr><td valign="top"><a href="#decode_stacktrace-2">decode_stacktrace/2*</a></td><td>Parse a Lua stack trace into a list of messages.</td></tr><tr><td valign="top"><a href="#decode_stacktrace-3">decode_stacktrace/3*</a></td><td></td></tr><tr><td valign="top"><a href="#direct_benchmark_test-0">direct_benchmark_test/0*</a></td><td>Benchmark the performance of Lua executions.</td></tr><tr><td valign="top"><a href="#encode-1">encode/1</a></td><td>Encode a HyperBEAM <code>structured@1.0</code> message into a Lua term.</td></tr><tr><td valign="top"><a href="#ensure_initialized-3">ensure_initialized/3*</a></td><td>Initialize the Lua VM if it is not already initialized.</td></tr><tr><td valign="top"><a href="#error_response_test-0">error_response_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#execute_aos_call-1">execute_aos_call/1*</a></td><td></td></tr><tr><td valign="top"><a href="#execute_aos_call-2">execute_aos_call/2*</a></td><td></td></tr><tr><td valign="top"><a href="#find_scripts-2">find_scripts/2*</a></td><td>Find the script in the base message, either by ID or by string.</td></tr><tr><td valign="top"><a href="#functions-3">functions/3</a></td><td>Return a list of all functions in the Lua environment.</td></tr><tr><td valign="top"><a href="#generate_lua_process-1">generate_lua_process/1*</a></td><td>Generate a Lua process message.</td></tr><tr><td valign="top"><a href="#generate_stack-1">generate_stack/1*</a></td><td>Generate a stack message for the Lua process.</td></tr><tr><td valign="top"><a href="#generate_test_message-1">generate_test_message/1*</a></td><td>Generate a test message for a Lua process.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>All keys that are not directly available in the base message are
 resolved by calling the Lua function in the script of the same name.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the device state, loading the script into memory if it is
 a reference.</td></tr><tr><td valign="top"><a href="#initialize-3">initialize/3*</a></td><td>Initialize a new Lua state with a given base message and script.</td></tr><tr><td valign="top"><a href="#invoke_aos_test-0">invoke_aos_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#invoke_non_compute_key_test-0">invoke_non_compute_key_test/0*</a></td><td>Call a non-compute key on a Lua device message and ensure that the
-function of the same name in the script is called.</td></tr><tr><td valign="top"><a href="#load_scripts-2">load_scripts/2*</a></td><td>Load a list of scripts for installation into the Lua VM.</td></tr><tr><td valign="top"><a href="#load_scripts-3">load_scripts/3*</a></td><td></td></tr><tr><td valign="top"><a href="#load_scripts_by_id_test-0">load_scripts_by_id_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#lua_http_preprocessor_test-0">lua_http_preprocessor_test/0*</a></td><td>Use a Lua script as a preprocessor on the HTTP server via <code>~meta@1.0</code>.</td></tr><tr><td valign="top"><a href="#multiple_scripts_test-0">multiple_scripts_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize-3">normalize/3</a></td><td>Restore the Lua state from a snapshot, if it exists.</td></tr><tr><td valign="top"><a href="#process_response-2">process_response/2*</a></td><td>Process a response to a Luerl invocation.</td></tr><tr><td valign="top"><a href="#pure_lua_process_benchmark_test_-0">pure_lua_process_benchmark_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#pure_lua_process_test-0">pure_lua_process_test/0*</a></td><td>Call a process whose <code>execution-device</code> is set to <code>lua@5.3a</code>.</td></tr><tr><td valign="top"><a href="#sandbox-3">sandbox/3*</a></td><td>Sandbox (render inoperable) a set of Lua functions.</td></tr><tr><td valign="top"><a href="#sandboxed_failure_test-0">sandboxed_failure_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_invocation_test-0">simple_invocation_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td>Snapshot the Lua state from a live computation.</td></tr></table>
+function of the same name in the script is called.</td></tr><tr><td valign="top"><a href="#load_scripts-2">load_scripts/2*</a></td><td>Load a list of scripts for installation into the Lua VM.</td></tr><tr><td valign="top"><a href="#load_scripts-3">load_scripts/3*</a></td><td></td></tr><tr><td valign="top"><a href="#load_scripts_by_id_test-0">load_scripts_by_id_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#lua_http_hook_test-0">lua_http_hook_test/0*</a></td><td>Use a Lua script as a hook on the HTTP server via <code>~meta@1.0</code>.</td></tr><tr><td valign="top"><a href="#multiple_scripts_test-0">multiple_scripts_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize-3">normalize/3</a></td><td>Restore the Lua state from a snapshot, if it exists.</td></tr><tr><td valign="top"><a href="#process_response-2">process_response/2*</a></td><td>Process a response to a Luerl invocation.</td></tr><tr><td valign="top"><a href="#pure_lua_process_benchmark_test_-0">pure_lua_process_benchmark_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#pure_lua_process_test-0">pure_lua_process_test/0*</a></td><td>Call a process whose <code>execution-device</code> is set to <code>lua@5.3a</code>.</td></tr><tr><td valign="top"><a href="#sandbox-3">sandbox/3*</a></td><td>Sandbox (render inoperable) a set of Lua functions.</td></tr><tr><td valign="top"><a href="#sandboxed_failure_test-0">sandboxed_failure_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_invocation_test-0">simple_invocation_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td>Snapshot the Lua state from a live computation.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -5859,13 +6041,13 @@ Load a list of scripts for installation into the Lua VM.
 
 `load_scripts_by_id_test() -> any()`
 
-<a name="lua_http_preprocessor_test-0"></a>
+<a name="lua_http_hook_test-0"></a>
 
-### lua_http_preprocessor_test/0 * ###
+### lua_http_hook_test/0 * ###
 
-`lua_http_preprocessor_test() -> any()`
+`lua_http_hook_test() -> any()`
 
-Use a Lua script as a preprocessor on the HTTP server via `~meta@1.0`.
+Use a Lua script as a hook on the HTTP server via `~meta@1.0`.
 
 <a name="multiple_scripts_test-0"></a>
 
@@ -6018,7 +6200,7 @@ implement a case-insensitive key lookup rather than delegating to
 <code>maps:get/2</code>.</td></tr><tr><td valign="top"><a href="#case_insensitive_get_test-0">case_insensitive_get_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td>Commit to a message, using the <code>commitment-device</code> key to specify the
 device that should be used to commit to the message.</td></tr><tr><td valign="top"><a href="#commitment_ids_from_committers-2">commitment_ids_from_committers/2*</a></td><td>Returns a list of commitment IDs in a commitments map that are relevant
 for a list of given committer addresses.</td></tr><tr><td valign="top"><a href="#commitment_ids_from_request-3">commitment_ids_from_request/3*</a></td><td>Implements a standardized form of specifying commitment IDs for a
-message request.</td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td>Return the list of committed keys from a message.</td></tr><tr><td valign="top"><a href="#committers-1">committers/1</a></td><td>Return the committers of a message that are present in the given request.</td></tr><tr><td valign="top"><a href="#committers-2">committers/2</a></td><td></td></tr><tr><td valign="top"><a href="#committers-3">committers/3</a></td><td></td></tr><tr><td valign="top"><a href="#exec_for_commitment-5">exec_for_commitment/5*</a></td><td>Execute a function for a single commitment in the context of its
+message request.</td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td>Return the list of committed keys from a message.</td></tr><tr><td valign="top"><a href="#committers-1">committers/1</a></td><td>Return the committers of a message that are present in the given request.</td></tr><tr><td valign="top"><a href="#committers-2">committers/2</a></td><td></td></tr><tr><td valign="top"><a href="#committers-3">committers/3</a></td><td></td></tr><tr><td valign="top"><a href="#deep_unset_test-0">deep_unset_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#exec_for_commitment-5">exec_for_commitment/5*</a></td><td>Execute a function for a single commitment in the context of its
 parent message.</td></tr><tr><td valign="top"><a href="#get-2">get/2</a></td><td>Return the value associated with the key as it exists in the message's
 underlying Erlang map.</td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr><tr><td valign="top"><a href="#get_keys_mod_test-0">get_keys_mod_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message, using the <code>committers</code> list if it exists.</td></tr><tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr><tr><td valign="top"><a href="#id-3">id/3</a></td><td></td></tr><tr><td valign="top"><a href="#id_device-1">id_device/1*</a></td><td>Locate the ID device of a message.</td></tr><tr><td valign="top"><a href="#info-0">info/0</a></td><td>Return the info for the identity device.</td></tr><tr><td valign="top"><a href="#is_private_mod_test-0">is_private_mod_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#key_from_device_test-0">key_from_device_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#keys-1">keys/1</a></td><td>Get the public keys of a message.</td></tr><tr><td valign="top"><a href="#keys_from_device_test-0">keys_from_device_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#private_keys_are_filtered_test-0">private_keys_are_filtered_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#remove-2">remove/2</a></td><td>Remove a key or keys from a message.</td></tr><tr><td valign="top"><a href="#remove_test-0">remove_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#run_test-0">run_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set-3">set/3</a></td><td>Deep merge keys in a message.</td></tr><tr><td valign="top"><a href="#set_conflicting_keys_test-0">set_conflicting_keys_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set_ignore_undefined_test-0">set_ignore_undefined_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set_path-3">set_path/3</a></td><td>Special case of <code>set/3</code> for setting the <code>path</code> key.</td></tr><tr><td valign="top"><a href="#unset_with_set_test-0">unset_with_set_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify a message.</td></tr><tr><td valign="top"><a href="#verify_test-0">verify_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#with_relevant_commitments-3">with_relevant_commitments/3*</a></td><td>Return a message with only the relevant commitments for a given request.</td></tr></table>
 
@@ -6114,6 +6296,12 @@ Return the committers of a message that are present in the given request.
 ### committers/3 ###
 
 `committers(X1, X2, NodeOpts) -> any()`
+
+<a name="deep_unset_test-0"></a>
+
+### deep_unset_test/0 * ###
+
+`deep_unset_test() -> any()`
 
 <a name="exec_for_commitment-5"></a>
 
@@ -6340,8 +6528,9 @@ the AO-Core resolver has returned a result.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_dynamic_keys-1">add_dynamic_keys/1*</a></td><td>Add dynamic keys to the node message.</td></tr><tr><td valign="top"><a href="#adopt_node_message-2">adopt_node_message/2</a></td><td>Attempt to adopt changes to a node message.</td></tr><tr><td valign="top"><a href="#authorized_set_node_msg_succeeds_test-0">authorized_set_node_msg_succeeds_test/0*</a></td><td>Test that we can set the node message if the request is signed by the
-owner of the node.</td></tr><tr><td valign="top"><a href="#claim_node_test-0">claim_node_test/0*</a></td><td>Test that we can claim the node correctly and set the node message after.</td></tr><tr><td valign="top"><a href="#config_test-0">config_test/0*</a></td><td>Test that we can get the node message.</td></tr><tr><td valign="top"><a href="#embed_status-1">embed_status/1*</a></td><td>Wrap the result of a device call in a status.</td></tr><tr><td valign="top"><a href="#filter_node_msg-1">filter_node_msg/1*</a></td><td>Remove items from the node message that are not encodable into a
-message.</td></tr><tr><td valign="top"><a href="#halt_request_test-0">halt_request_test/0*</a></td><td>Test that we can halt a request if the preprocessor returns an error.</td></tr><tr><td valign="top"><a href="#handle-2">handle/2</a></td><td>Normalize and route messages downstream based on their path.</td></tr><tr><td valign="top"><a href="#handle_initialize-2">handle_initialize/2*</a></td><td></td></tr><tr><td valign="top"><a href="#handle_resolve-3">handle_resolve/3*</a></td><td>Handle an AO-Core request, which is a list of messages.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Ensure that the helper function <code>adopt_node_message/2</code> is not exported.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Get/set the node message.</td></tr><tr><td valign="top"><a href="#is-2">is/2</a></td><td>Check if the request in question is signed by a given <code>role</code> on the node.</td></tr><tr><td valign="top"><a href="#is-3">is/3</a></td><td></td></tr><tr><td valign="top"><a href="#maybe_sign-2">maybe_sign/2*</a></td><td>Sign the result of a device call if the node is configured to do so.</td></tr><tr><td valign="top"><a href="#message_to_status-1">message_to_status/1*</a></td><td>Get the HTTP status code from a transaction (if it exists).</td></tr><tr><td valign="top"><a href="#modify_request_test-0">modify_request_test/0*</a></td><td>Test that a preprocessor can modify a request.</td></tr><tr><td valign="top"><a href="#permanent_node_message_test-0">permanent_node_message_test/0*</a></td><td>Test that a permanent node message cannot be changed.</td></tr><tr><td valign="top"><a href="#priv_inaccessible_test-0">priv_inaccessible_test/0*</a></td><td>Test that we can't get the node message if the requested key is private.</td></tr><tr><td valign="top"><a href="#resolve_processor-5">resolve_processor/5*</a></td><td>Execute a message from the node message upon the user's request.</td></tr><tr><td valign="top"><a href="#status_code-1">status_code/1*</a></td><td>Calculate the appropriate HTTP status code for an AO-Core result.</td></tr><tr><td valign="top"><a href="#unauthorized_set_node_msg_fails_test-0">unauthorized_set_node_msg_fails_test/0*</a></td><td>Test that we can't set the node message if the request is not signed by
+owner of the node.</td></tr><tr><td valign="top"><a href="#build-3">build/3</a></td><td>Emits the version number and commit hash of the HyperBEAM node source,
+if available.</td></tr><tr><td valign="top"><a href="#buildinfo_test-0">buildinfo_test/0*</a></td><td>Test that version information is available and returned correctly.</td></tr><tr><td valign="top"><a href="#claim_node_test-0">claim_node_test/0*</a></td><td>Test that we can claim the node correctly and set the node message after.</td></tr><tr><td valign="top"><a href="#config_test-0">config_test/0*</a></td><td>Test that we can get the node message.</td></tr><tr><td valign="top"><a href="#embed_status-1">embed_status/1*</a></td><td>Wrap the result of a device call in a status.</td></tr><tr><td valign="top"><a href="#filter_node_msg-1">filter_node_msg/1*</a></td><td>Remove items from the node message that are not encodable into a
+message.</td></tr><tr><td valign="top"><a href="#halt_request_test-0">halt_request_test/0*</a></td><td>Test that we can halt a request if the hook returns an error.</td></tr><tr><td valign="top"><a href="#handle-2">handle/2</a></td><td>Normalize and route messages downstream based on their path.</td></tr><tr><td valign="top"><a href="#handle_initialize-2">handle_initialize/2*</a></td><td></td></tr><tr><td valign="top"><a href="#handle_resolve-3">handle_resolve/3*</a></td><td>Handle an AO-Core request, which is a list of messages.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Ensure that the helper function <code>adopt_node_message/2</code> is not exported.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Get/set the node message.</td></tr><tr><td valign="top"><a href="#is-2">is/2</a></td><td>Check if the request in question is signed by a given <code>role</code> on the node.</td></tr><tr><td valign="top"><a href="#is-3">is/3</a></td><td></td></tr><tr><td valign="top"><a href="#maybe_sign-2">maybe_sign/2*</a></td><td>Sign the result of a device call if the node is configured to do so.</td></tr><tr><td valign="top"><a href="#message_to_status-1">message_to_status/1*</a></td><td>Get the HTTP status code from a transaction (if it exists).</td></tr><tr><td valign="top"><a href="#modify_request_test-0">modify_request_test/0*</a></td><td>Test that a hook can modify a request.</td></tr><tr><td valign="top"><a href="#permanent_node_message_test-0">permanent_node_message_test/0*</a></td><td>Test that a permanent node message cannot be changed.</td></tr><tr><td valign="top"><a href="#priv_inaccessible_test-0">priv_inaccessible_test/0*</a></td><td>Test that we can't get the node message if the requested key is private.</td></tr><tr><td valign="top"><a href="#request_response_hooks_test-0">request_response_hooks_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_hook-4">resolve_hook/4*</a></td><td>Execute a hook from the node message upon the user's request.</td></tr><tr><td valign="top"><a href="#status_code-1">status_code/1*</a></td><td>Calculate the appropriate HTTP status code for an AO-Core result.</td></tr><tr><td valign="top"><a href="#unauthorized_set_node_msg_fails_test-0">unauthorized_set_node_msg_fails_test/0*</a></td><td>Test that we can't set the node message if the request is not signed by
 the owner of the node.</td></tr><tr><td valign="top"><a href="#uninitialized_node_test-0">uninitialized_node_test/0*</a></td><td>Test that an uninitialized node will not run computation.</td></tr><tr><td valign="top"><a href="#update_node_message-2">update_node_message/2*</a></td><td>Validate that the request is signed by the operator of the node, then
 allow them to update the node message.</td></tr></table>
 
@@ -6374,6 +6563,29 @@ Attempt to adopt changes to a node message.
 
 Test that we can set the node message if the request is signed by the
 owner of the node.
+
+<a name="build-3"></a>
+
+### build/3 ###
+
+`build(X1, X2, NodeMsg) -> any()`
+
+Emits the version number and commit hash of the HyperBEAM node source,
+if available.
+
+We include the short hash separately, as the length of this hash may change in
+the future, depending on the git version/config used to build the node.
+Subsequently, rather than embedding the `git-short-hash-length`, for the
+avoidance of doubt, we include the short hash separately, as well as its long
+hash.
+
+<a name="buildinfo_test-0"></a>
+
+### buildinfo_test/0 * ###
+
+`buildinfo_test() -> any()`
+
+Test that version information is available and returned correctly.
 
 <a name="claim_node_test-0"></a>
 
@@ -6414,7 +6626,7 @@ message.
 
 `halt_request_test() -> any()`
 
-Test that we can halt a request if the preprocessor returns an error.
+Test that we can halt a request if the hook returns an error.
 
 <a name="handle-2"></a>
 
@@ -6441,7 +6653,7 @@ other messages are routed to the `handle_resolve/2` function.
 Handle an AO-Core request, which is a list of messages. We apply
 the node's pre-processor to the request first, and then resolve the request
 using the node's AO-Core implementation if its response was `ok`.
-After execution, we run the node's `postprocessor` message on the result of
+After execution, we run the node's `response` hook on the result of
 the request before returning the result it grants back to the user.
 
 <a name="info-1"></a>
@@ -6507,7 +6719,7 @@ Get the HTTP status code from a transaction (if it exists).
 
 `modify_request_test() -> any()`
 
-Test that a preprocessor can modify a request.
+Test that a hook can modify a request.
 
 <a name="permanent_node_message_test-0"></a>
 
@@ -6525,20 +6737,26 @@ Test that a permanent node message cannot be changed.
 
 Test that we can't get the node message if the requested key is private.
 
-<a name="resolve_processor-5"></a>
+<a name="request_response_hooks_test-0"></a>
 
-### resolve_processor/5 * ###
+### request_response_hooks_test/0 * ###
 
-`resolve_processor(PathKey, Processor, Req, Query, NodeMsg) -> any()`
+`request_response_hooks_test() -> any()`
 
-Execute a message from the node message upon the user's request. The
-invocation of the processor provides a request of the following form:
+<a name="resolve_hook-4"></a>
+
+### resolve_hook/4 * ###
+
+`resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) -> any()`
+
+Execute a hook from the node message upon the user's request. The
+invocation of the hook provides a request of the following form:
 
 ```
 
-       /path => preprocess | postprocess
+       /path => request | response
        /request => the original request singleton
-       /body => list of messages the user wishes to process
+       /body => parsed sequence of messages to process | the execution result
 ```
 
 <a name="status_code-1"></a>
@@ -6910,8 +7128,8 @@ the node should fulfil services for users.
 
 The device requires the following node message settings in order to function:
 
-- `p4_pricing_device`: The device that will estimate the cost of a request.
-- `p4_ledger_device`: The device that will act as a payment ledger.
+- `p4_pricing-device`: The device that will estimate the cost of a request.
+- `p4_ledger-device`: The device that will act as a payment ledger.
 
 The pricing device should implement the following keys:
 
@@ -6927,10 +7145,10 @@ key may return `infinity` if the node will not serve a user under any
 circumstances. Else, the value returned by the `price` key will be passed to
 the ledger device as the `amount` key.
 
-The ledger device should implement the following keys:
+A ledger device should implement the following keys:
 
 ```
-<code>POST /credit?message=PaymentMessage&request=RequestMessage</code><code>POST /debit?amount=PriceMessage&type=pre|post&request=RequestMessage</code>
+<code>POST /credit?message=PaymentMessage&request=RequestMessage</code><code>POST /debit?amount=PriceMessage&request=RequestMessage</code><code>GET /balance?request=RequestMessage</code>
 ```
 
 The `type` key is optional and defaults to `pre`. If `type` is set to `post`,
@@ -6941,8 +7159,8 @@ check whether the debit would succeed before execution.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#balance-3">balance/3</a></td><td>Get the balance of a user in the ledger.</td></tr><tr><td valign="top"><a href="#faff_test-0">faff_test/0*</a></td><td>Simple test of p4's capabilities with the <code>faff@1.0</code> device.</td></tr><tr><td valign="top"><a href="#is_chargable_req-2">is_chargable_req/2*</a></td><td>The node operator may elect to make certain routes non-chargable, using
-the <code>routes</code> syntax also used to declare routes in <code>router@1.0</code>.</td></tr><tr><td valign="top"><a href="#non_chargable_route_test-0">non_chargable_route_test/0*</a></td><td>Test that a non-chargable route is not charged for.</td></tr><tr><td valign="top"><a href="#postprocess-3">postprocess/3</a></td><td>Postprocess the request after it has been fulfilled.</td></tr><tr><td valign="top"><a href="#preprocess-3">preprocess/3</a></td><td>Estimate the cost of a transaction and decide whether to proceed with
-a request.</td></tr><tr><td valign="top"><a href="#test_opts-1">test_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-2">test_opts/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-3">test_opts/3*</a></td><td></td></tr></table>
+the <code>routes</code> syntax also used to declare routes in <code>router@1.0</code>.</td></tr><tr><td valign="top"><a href="#lua_pricing_test-0">lua_pricing_test/0*</a></td><td>Ensure that Lua scripts can be used as pricing and ledger devices.</td></tr><tr><td valign="top"><a href="#non_chargable_route_test-0">non_chargable_route_test/0*</a></td><td>Test that a non-chargable route is not charged for.</td></tr><tr><td valign="top"><a href="#request-3">request/3</a></td><td>Estimate the cost of a transaction and decide whether to proceed with
+a request.</td></tr><tr><td valign="top"><a href="#response-3">response/3</a></td><td>Postprocess the request after it has been fulfilled.</td></tr><tr><td valign="top"><a href="#test_opts-1">test_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-2">test_opts/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-3">test_opts/3*</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -6974,6 +7192,19 @@ Simple test of p4's capabilities with the `faff@1.0` device.
 The node operator may elect to make certain routes non-chargable, using
 the `routes` syntax also used to declare routes in `router@1.0`.
 
+<a name="lua_pricing_test-0"></a>
+
+### lua_pricing_test/0 * ###
+
+`lua_pricing_test() -> any()`
+
+Ensure that Lua scripts can be used as pricing and ledger devices. Our
+scripts come in two parts:
+- A `process` script which is executed as a persistent `local-process` on the
+node, and which maintains the state of the ledger.
+- A `client` script, which is executed as a `p4@1.0` device, marshalling
+requests to the `process` script.
+
 <a name="non_chargable_route_test-0"></a>
 
 ### non_chargable_route_test/0 * ###
@@ -6982,23 +7213,23 @@ the `routes` syntax also used to declare routes in `router@1.0`.
 
 Test that a non-chargable route is not charged for.
 
-<a name="postprocess-3"></a>
+<a name="request-3"></a>
 
-### postprocess/3 ###
+### request/3 ###
 
-`postprocess(State, RawResponse, NodeMsg) -> any()`
-
-Postprocess the request after it has been fulfilled.
-
-<a name="preprocess-3"></a>
-
-### preprocess/3 ###
-
-`preprocess(State, Raw, NodeMsg) -> any()`
+`request(State, Raw, NodeMsg) -> any()`
 
 Estimate the cost of a transaction and decide whether to proceed with
-a request. The default behavior if `pricing_device` or `p4_balances` are
+a request. The default behavior if `pricing-device` or `p4_balances` are
 not set is to proceed, so it is important that a user initialize them.
+
+<a name="response-3"></a>
+
+### response/3 ###
+
+`response(State, RawResponse, NodeMsg) -> any()`
+
+Postprocess the request after it has been fulfilled.
 
 <a name="test_opts-1"></a>
 
@@ -7027,26 +7258,63 @@ not set is to proceed, so it is important that a user initialize them.
 
 
 
-A device that finds `PATCH` requests in the `results/outbox`
-of its message, and applies them to it.
+A device that can be used to reorganize a message: Moving data from
+one path inside it to another.
 
 <a name="description"></a>
 
 ## Description ##
-This can be useful for processes
-whose computation would like to manipulate data outside of the `results` key
-of its message.<a name="index"></a>
+
+This device's function runs in two modes:
+
+1. When using `all` to move all data at the path given in `from` to the
+path given in `to`.
+2. When using `patches` to move all submessages in the source to the target,
+_if_ they have a `method` key of `PATCH` or a `device` key of `patch@1.0`.
+
+Source and destination paths may be prepended by `base:` or `req:` keys to
+indicate that they are relative to either of the message`s that the
+computation is being performed on.
+
+The search order for finding the source and destination keys is as follows,
+where `X` is either `from` or `to`:
+
+1. The `patch-X` key of the execution message.
+2. The `X` key of the execution message.
+3. The `patch-X` key of the request message.
+4. The `X` key of the request message.
+
+Additionally, this device implements the standard computation device keys,
+allowing it to be used as an element of an execution stack pipeline, etc.<a name="index"></a>
 
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#compute-3">compute/3</a></td><td>Find <code>PATCH</code> requests in the <code>results/outbox</code> of the message, and apply
-them to the state.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Default process device hooks.</td></tr><tr><td valign="top"><a href="#normalize-3">normalize/3</a></td><td></td></tr><tr><td valign="top"><a href="#patch_to_submessage_test-0">patch_to_submessage_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td></td></tr><tr><td valign="top"><a href="#uninitialized_patch_test-0">uninitialized_patch_test/0*</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#all-3">all/3</a></td><td>Get the value found at the <code>patch-from</code> key of the message, or the
+<code>from</code> key if the former is not present.</td></tr><tr><td valign="top"><a href="#all_mode_test-0">all_mode_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#compute-3">compute/3</a></td><td></td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Necessary hooks for compliance with the <code>execution-device</code> standard.</td></tr><tr><td valign="top"><a href="#move-4">move/4*</a></td><td>Unified executor for the <code>all</code> and <code>patches</code> modes.</td></tr><tr><td valign="top"><a href="#normalize-3">normalize/3</a></td><td></td></tr><tr><td valign="top"><a href="#patch_to_submessage_test-0">patch_to_submessage_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#patches-3">patches/3</a></td><td>Find relevant <code>PATCH</code> messages in the given source key of the execution
+and request messages, and apply them to the given destination key of the
+request.</td></tr><tr><td valign="top"><a href="#req_prefix_test-0">req_prefix_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td></td></tr><tr><td valign="top"><a href="#uninitialized_patch_test-0">uninitialized_patch_test/0*</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
 
 ## Function Details ##
+
+<a name="all-3"></a>
+
+### all/3 ###
+
+`all(Msg1, Msg2, Opts) -> any()`
+
+Get the value found at the `patch-from` key of the message, or the
+`from` key if the former is not present. Remove it from the message and set
+the new source to the value found.
+
+<a name="all_mode_test-0"></a>
+
+### all_mode_test/0 * ###
+
+`all_mode_test() -> any()`
 
 <a name="compute-3"></a>
 
@@ -7054,16 +7322,21 @@ them to the state.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></t
 
 `compute(Msg1, Msg2, Opts) -> any()`
 
-Find `PATCH` requests in the `results/outbox` of the message, and apply
-them to the state.
-
 <a name="init-3"></a>
 
 ### init/3 ###
 
 `init(Msg1, Msg2, Opts) -> any()`
 
-Default process device hooks.
+Necessary hooks for compliance with the `execution-device` standard.
+
+<a name="move-4"></a>
+
+### move/4 * ###
+
+`move(Mode, Msg1, Msg2, Opts) -> any()`
+
+Unified executor for the `all` and `patches` modes.
 
 <a name="normalize-3"></a>
 
@@ -7076,6 +7349,22 @@ Default process device hooks.
 ### patch_to_submessage_test/0 * ###
 
 `patch_to_submessage_test() -> any()`
+
+<a name="patches-3"></a>
+
+### patches/3 ###
+
+`patches(Msg1, Msg2, Opts) -> any()`
+
+Find relevant `PATCH` messages in the given source key of the execution
+and request messages, and apply them to the given destination key of the
+request.
+
+<a name="req_prefix_test-0"></a>
+
+### req_prefix_test/0 * ###
+
+`req_prefix_test() -> any()`
 
 <a name="snapshot-3"></a>
 
@@ -7930,7 +8219,7 @@ continues until the there are no remaining messages to push.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#additional_keys-3">additional_keys/3*</a></td><td>Set the necessary keys in order for the recipient to know where the
-message came from.</td></tr><tr><td valign="top"><a href="#do_push-3">do_push/3*</a></td><td>Push a message or slot number.</td></tr><tr><td valign="top"><a href="#extract-2">extract/2*</a></td><td>Return either the <code>target</code> or the <code>hint</code>.</td></tr><tr><td valign="top"><a href="#find_type-2">find_type/2*</a></td><td></td></tr><tr><td valign="top"><a href="#full_push_test_-0">full_push_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#is_async-3">is_async/3*</a></td><td>Determine if the push is asynchronous.</td></tr><tr><td valign="top"><a href="#multi_process_push_test_disabled-0">multi_process_push_test_disabled/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize_message-2">normalize_message/2*</a></td><td>Augment the message with from-* keys, if it doesn't already have them.</td></tr><tr><td valign="top"><a href="#parse_redirect-1">parse_redirect/1*</a></td><td></td></tr><tr><td valign="top"><a href="#ping_pong_script-1">ping_pong_script/1*</a></td><td></td></tr><tr><td valign="top"><a href="#push-3">push/3</a></td><td>Push either a message or an assigned slot number.</td></tr><tr><td valign="top"><a href="#push_prompts_encoding_change_test-0">push_prompts_encoding_change_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#push_result_message-5">push_result_message/5*</a></td><td></td></tr><tr><td valign="top"><a href="#push_with_mode-3">push_with_mode/3*</a></td><td></td></tr><tr><td valign="top"><a href="#push_with_redirect_hint_test_disabled-0">push_with_redirect_hint_test_disabled/0*</a></td><td></td></tr><tr><td valign="top"><a href="#remote_schedule_result-3">remote_schedule_result/3*</a></td><td></td></tr><tr><td valign="top"><a href="#reply_script-0">reply_script/0*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_initial_message-3">schedule_initial_message/3*</a></td><td>Push a message or a process, prior to pushing the resulting slot number.</td></tr><tr><td valign="top"><a href="#schedule_result-3">schedule_result/3*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_result-4">schedule_result/4*</a></td><td></td></tr><tr><td valign="top"><a href="#split_target-1">split_target/1*</a></td><td></td></tr><tr><td valign="top"><a href="#target_process-2">target_process/2*</a></td><td>Find the target process ID for a message to push.</td></tr></table>
+message came from.</td></tr><tr><td valign="top"><a href="#do_push-3">do_push/3*</a></td><td>Push a message or slot number, including its downstream results.</td></tr><tr><td valign="top"><a href="#extract-2">extract/2*</a></td><td>Return either the <code>target</code> or the <code>hint</code>.</td></tr><tr><td valign="top"><a href="#find_type-2">find_type/2*</a></td><td></td></tr><tr><td valign="top"><a href="#full_push_test_-0">full_push_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#is_async-3">is_async/3*</a></td><td>Determine if the push is asynchronous.</td></tr><tr><td valign="top"><a href="#multi_process_push_test_-0">multi_process_push_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize_message-2">normalize_message/2*</a></td><td>Augment the message with from-* keys, if it doesn't already have them.</td></tr><tr><td valign="top"><a href="#parse_redirect-1">parse_redirect/1*</a></td><td></td></tr><tr><td valign="top"><a href="#ping_pong_script-1">ping_pong_script/1*</a></td><td></td></tr><tr><td valign="top"><a href="#push-3">push/3</a></td><td>Push either a message or an assigned slot number.</td></tr><tr><td valign="top"><a href="#push_prompts_encoding_change_test-0">push_prompts_encoding_change_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#push_result_message-4">push_result_message/4*</a></td><td>Push a downstream message result.</td></tr><tr><td valign="top"><a href="#push_with_mode-3">push_with_mode/3*</a></td><td></td></tr><tr><td valign="top"><a href="#push_with_redirect_hint_test_disabled-0">push_with_redirect_hint_test_disabled/0*</a></td><td></td></tr><tr><td valign="top"><a href="#remote_schedule_result-3">remote_schedule_result/3*</a></td><td></td></tr><tr><td valign="top"><a href="#reply_script-0">reply_script/0*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_initial_message-3">schedule_initial_message/3*</a></td><td>Push a message or a process, prior to pushing the resulting slot number.</td></tr><tr><td valign="top"><a href="#schedule_result-4">schedule_result/4*</a></td><td>Add the necessary keys to the message to be scheduled, then schedule it.</td></tr><tr><td valign="top"><a href="#schedule_result-5">schedule_result/5*</a></td><td></td></tr><tr><td valign="top"><a href="#split_target-1">split_target/1*</a></td><td>Split the target into the process ID and the optional query string.</td></tr><tr><td valign="top"><a href="#target_process-2">target_process/2*</a></td><td>Find the target process ID for a message to push.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -7941,7 +8230,7 @@ message came from.</td></tr><tr><td valign="top"><a href="#do_push-3">do_push/3*
 
 ### additional_keys/3 * ###
 
-`additional_keys(FromMsg, ToSched, Opts) -> any()`
+`additional_keys(Origin, ToSched, Opts) -> any()`
 
 Set the necessary keys in order for the recipient to know where the
 message came from.
@@ -7950,9 +8239,9 @@ message came from.
 
 ### do_push/3 * ###
 
-`do_push(Base, Assignment, Opts) -> any()`
+`do_push(Process, Assignment, Opts) -> any()`
 
-Push a message or slot number.
+Push a message or slot number, including its downstream results.
 
 <a name="extract-2"></a>
 
@@ -7978,15 +8267,15 @@ Return either the `target` or the `hint`.
 
 ### is_async/3 * ###
 
-`is_async(Base, Req, Opts) -> any()`
+`is_async(Process, Req, Opts) -> any()`
 
 Determine if the push is asynchronous.
 
-<a name="multi_process_push_test_disabled-0"></a>
+<a name="multi_process_push_test_-0"></a>
 
-### multi_process_push_test_disabled/0 * ###
+### multi_process_push_test_/0 * ###
 
-`multi_process_push_test_disabled() -> any()`
+`multi_process_push_test_() -> any()`
 
 <a name="normalize_message-2"></a>
 
@@ -8014,7 +8303,20 @@ Augment the message with from-* keys, if it doesn't already have them.
 
 `push(Base, Req, Opts) -> any()`
 
-Push either a message or an assigned slot number.
+Push either a message or an assigned slot number. If a `Process` is
+provided in the `body` of the request, it will be scheduled (initializing
+it if it does not exist). Otherwise, the message specified by the given
+`slot` key will be pushed.
+
+Optional parameters:
+
+`/result-depth`: The depth to which the full contents of the result
+will be included in the response. Default: 1, returning
+the full result of the first message, but only the 'tree'
+of downstream messages.
+
+`/push-mode`: Whether or not the push should be done asynchronously.
+Default: `sync`, pushing synchronously.
 
 <a name="push_prompts_encoding_change_test-0"></a>
 
@@ -8022,17 +8324,22 @@ Push either a message or an assigned slot number.
 
 `push_prompts_encoding_change_test() -> any()`
 
-<a name="push_result_message-5"></a>
+<a name="push_result_message-4"></a>
 
-### push_result_message/5 * ###
+### push_result_message/4 * ###
 
-`push_result_message(Base, FromSlot, Key, MsgToPush, Opts) -> any()`
+`push_result_message(TargetProcess, MsgToPush, Origin, Opts) -> any()`
+
+Push a downstream message result. The `Origin` map contains information
+about the origin of the message: The process that originated the message,
+the slot number from which it was sent, and the outbox key of the message,
+and the depth to which downstream results should be included in the message.
 
 <a name="push_with_mode-3"></a>
 
 ### push_with_mode/3 * ###
 
-`push_with_mode(Base, Req, Opts) -> any()`
+`push_with_mode(Process, Req, Opts) -> any()`
 
 <a name="push_with_redirect_hint_test_disabled-0"></a>
 
@@ -8060,23 +8367,29 @@ Push either a message or an assigned slot number.
 
 Push a message or a process, prior to pushing the resulting slot number.
 
-<a name="schedule_result-3"></a>
-
-### schedule_result/3 * ###
-
-`schedule_result(Base, MsgToPush, Opts) -> any()`
-
 <a name="schedule_result-4"></a>
 
 ### schedule_result/4 * ###
 
-`schedule_result(Base, MsgToPush, Codec, Opts) -> any()`
+`schedule_result(TargetProcess, MsgToPush, Origin, Opts) -> any()`
+
+Add the necessary keys to the message to be scheduled, then schedule it.
+If the remote scheduler does not support the given codec, it will be
+downgraded and re-signed.
+
+<a name="schedule_result-5"></a>
+
+### schedule_result/5 * ###
+
+`schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) -> any()`
 
 <a name="split_target-1"></a>
 
 ### split_target/1 * ###
 
 `split_target(RawTarget) -> any()`
+
+Split the target into the process ID and the optional query string.
 
 <a name="target_process-2"></a>
 
@@ -8119,7 +8432,7 @@ Example usage:
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#call-3">call/3</a></td><td>Execute a <code>call</code> request using a node's routes.</td></tr><tr><td valign="top"><a href="#call_get_test-0">call_get_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#cast-3">cast/3</a></td><td>Execute a request in the same way as <code>call/3</code>, but asynchronously.</td></tr><tr><td valign="top"><a href="#preprocess-3">preprocess/3</a></td><td>Preprocess a request to check if it should be relayed to a different node.</td></tr><tr><td valign="top"><a href="#preprocessor_reroute_to_nearest_test-0">preprocessor_reroute_to_nearest_test/0*</a></td><td>Test that the <code>preprocess/3</code> function re-routes a request to remote
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#call-3">call/3</a></td><td>Execute a <code>call</code> request using a node's routes.</td></tr><tr><td valign="top"><a href="#call_get_test-0">call_get_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#cast-3">cast/3</a></td><td>Execute a request in the same way as <code>call/3</code>, but asynchronously.</td></tr><tr><td valign="top"><a href="#request-3">request/3</a></td><td>Preprocess a request to check if it should be relayed to a different node.</td></tr><tr><td valign="top"><a href="#request_hook_reroute_to_nearest_test-0">request_hook_reroute_to_nearest_test/0*</a></td><td>Test that the <code>preprocess/3</code> function re-routes a request to remote
 peers, according to the node's routing table.</td></tr></table>
 
 
@@ -8157,19 +8470,19 @@ Defaults to `false`.
 Execute a request in the same way as `call/3`, but asynchronously. Always
 returns `<<"OK">>`.
 
-<a name="preprocess-3"></a>
+<a name="request-3"></a>
 
-### preprocess/3 ###
+### request/3 ###
 
-`preprocess(Msg1, Msg2, Opts) -> any()`
+`request(Msg1, Msg2, Opts) -> any()`
 
 Preprocess a request to check if it should be relayed to a different node.
 
-<a name="preprocessor_reroute_to_nearest_test-0"></a>
+<a name="request_hook_reroute_to_nearest_test-0"></a>
 
-### preprocessor_reroute_to_nearest_test/0 * ###
+### request_hook_reroute_to_nearest_test/0 * ###
 
-`preprocessor_reroute_to_nearest_test() -> any()`
+`request_hook_reroute_to_nearest_test() -> any()`
 
 Test that the `preprocess/3` function re-routes a request to remote
 peers, according to the node's routing table.
@@ -8222,13 +8535,11 @@ The structure of the routes should be as follows:
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_route_test-0">add_route_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#apply_route-2">apply_route/2*</a></td><td>Apply a node map's rules for transforming the path of the message.</td></tr><tr><td valign="top"><a href="#apply_routes-3">apply_routes/3*</a></td><td>Generate a <code>uri</code> key for each node in a route.</td></tr><tr><td valign="top"><a href="#binary_to_bignum-1">binary_to_bignum/1*</a></td><td>Cast a human-readable or native-encoded ID to a big integer.</td></tr><tr><td valign="top"><a href="#by_base_determinism_test-0">by_base_determinism_test/0*</a></td><td>Ensure that <code>By-Base</code> always chooses the same node for the same
-hashpath.</td></tr><tr><td valign="top"><a href="#choose-5">choose/5*</a></td><td>Implements the load distribution strategies if given a cluster.</td></tr><tr><td valign="top"><a href="#choose_1_test-1">choose_1_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#choose_n_test-1">choose_n_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#device_call_from_singleton_test-0">device_call_from_singleton_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_route_provider_test-0">dynamic_route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_router_invalid_report_test-0">dynamic_router_invalid_report_test/0*</a></td><td>Example of a Lua script being used as the <code>route_provider</code> for a
-HyperBEAM node.</td></tr><tr><td valign="top"><a href="#dynamic_router_test-0">dynamic_router_test/0*</a></td><td>Example of a Lua script being used as the <code>route_provider</code> for a
+hashpath.</td></tr><tr><td valign="top"><a href="#choose-5">choose/5*</a></td><td>Implements the load distribution strategies if given a cluster.</td></tr><tr><td valign="top"><a href="#choose_1_test-1">choose_1_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#choose_n_test-1">choose_n_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#device_call_from_singleton_test-0">device_call_from_singleton_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_route_provider_test-0">dynamic_route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_router_test-0">dynamic_router_test/0*</a></td><td>Example of a Lua script being used as the <code>route_provider</code> for a
 HyperBEAM node.</td></tr><tr><td valign="top"><a href="#dynamic_routing_by_performance-0">dynamic_routing_by_performance/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_routing_by_performance_test_-0">dynamic_routing_by_performance_test_/0*</a></td><td>Demonstrates routing tables being dynamically created and adjusted
 according to the real-time performance of nodes.</td></tr><tr><td valign="top"><a href="#explicit_route_test-0">explicit_route_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#extract_base-2">extract_base/2*</a></td><td>Extract the base message ID from a request message.</td></tr><tr><td valign="top"><a href="#field_distance-2">field_distance/2*</a></td><td>Calculate the minimum distance between two numbers
 (either progressing backwards or forwards), assuming a
-256-bit field.</td></tr><tr><td valign="top"><a href="#find_target_path-2">find_target_path/2*</a></td><td>Find the target path to route for a request message.</td></tr><tr><td valign="top"><a href="#generate_hashpaths-1">generate_hashpaths/1*</a></td><td></td></tr><tr><td valign="top"><a href="#generate_nodes-1">generate_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#get_routes_test-0">get_routes_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#is_relevant-3">is_relevant/3</a></td><td>is_relevant looks at the relevant_routes paths opt and if any incoming message path matches it will
-make the request relevant for preprocessing.</td></tr><tr><td valign="top"><a href="#load_routes-1">load_routes/1*</a></td><td>Load the current routes for the node.</td></tr><tr><td valign="top"><a href="#local_dynamic_router_test-0">local_dynamic_router_test/0*</a></td><td>Example of a Lua script being used as the <code>route_provider</code> for a
+256-bit field.</td></tr><tr><td valign="top"><a href="#find_target_path-2">find_target_path/2*</a></td><td>Find the target path to route for a request message.</td></tr><tr><td valign="top"><a href="#generate_hashpaths-1">generate_hashpaths/1*</a></td><td></td></tr><tr><td valign="top"><a href="#generate_nodes-1">generate_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#get_routes_test-0">get_routes_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#load_routes-1">load_routes/1*</a></td><td>Load the current routes for the node.</td></tr><tr><td valign="top"><a href="#local_dynamic_router_test-0">local_dynamic_router_test/0*</a></td><td>Example of a Lua script being used as the <code>route_provider</code> for a
 HyperBEAM node.</td></tr><tr><td valign="top"><a href="#local_process_route_provider_test-0">local_process_route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#lowest_distance-1">lowest_distance/1*</a></td><td>Find the node with the lowest distance to the given hashpath.</td></tr><tr><td valign="top"><a href="#lowest_distance-2">lowest_distance/2*</a></td><td></td></tr><tr><td valign="top"><a href="#match-3">match/3</a></td><td>Find the first matching template in a list of known routes.</td></tr><tr><td valign="top"><a href="#match_routes-3">match_routes/3*</a></td><td></td></tr><tr><td valign="top"><a href="#match_routes-4">match_routes/4*</a></td><td></td></tr><tr><td valign="top"><a href="#preprocess-3">preprocess/3</a></td><td>Preprocess a request to check if it should be relayed to a different node.</td></tr><tr><td valign="top"><a href="#register-3">register/3</a></td><td></td></tr><tr><td valign="top"><a href="#relay_nearest_test-0">relay_nearest_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route-2">route/2</a></td><td>Find the appropriate route for the given message.</td></tr><tr><td valign="top"><a href="#route-3">route/3</a></td><td></td></tr><tr><td valign="top"><a href="#route_provider_test-0">route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route_regex_matches_test-0">route_regex_matches_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route_template_message_matches_test-0">route_template_message_matches_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#routes-3">routes/3</a></td><td>Device function that returns all known routes.</td></tr><tr><td valign="top"><a href="#simulate-4">simulate/4*</a></td><td></td></tr><tr><td valign="top"><a href="#simulation_distribution-2">simulation_distribution/2*</a></td><td></td></tr><tr><td valign="top"><a href="#simulation_occurences-2">simulation_occurences/2*</a></td><td></td></tr><tr><td valign="top"><a href="#strategy_suite_test_-0">strategy_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#template_matches-3">template_matches/3*</a></td><td>Check if a message matches a message template or path regex.</td></tr><tr><td valign="top"><a href="#unique_nodes-1">unique_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#unique_test-1">unique_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#weighted_random_strategy_test-0">weighted_random_strategy_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#within_norms-3">within_norms/3*</a></td><td></td></tr></table>
 
 
@@ -8312,17 +8623,6 @@ Implements the load distribution strategies if given a cluster.
 
 `dynamic_route_provider_test() -> any()`
 
-<a name="dynamic_router_invalid_report_test-0"></a>
-
-### dynamic_router_invalid_report_test/0 * ###
-
-`dynamic_router_invalid_report_test() -> any()`
-
-Example of a Lua script being used as the `route_provider` for a
-HyperBEAM node. This test specifically sends an invalid attestation report
-(with mismatched firmware hash) which should be rejected by the SNP
-validation system. It tests the error handling for invalid attestations.
-
 <a name="dynamic_router_test-0"></a>
 
 ### dynamic_router_test/0 * ###
@@ -8401,15 +8701,6 @@ Find the target path to route for a request message.
 ### get_routes_test/0 * ###
 
 `get_routes_test() -> any()`
-
-<a name="is_relevant-3"></a>
-
-### is_relevant/3 ###
-
-`is_relevant(Msg1, Msg2, Opts) -> any()`
-
-is_relevant looks at the relevant_routes paths opt and if any incoming message path matches it will
-make the request relevant for preprocessing.
 
 <a name="load_routes-1"></a>
 
@@ -8678,7 +8969,7 @@ Write an assignment message into the cache.
 
 ### write_location/2 ###
 
-`write_location(LocationMsg, Opts) -> any()`
+`write_location(LocMsg, Opts) -> any()`
 
 Write the latest known scheduler location for an address.
 
@@ -9045,12 +9336,13 @@ Process: `#{ id, Scheduler: #{ Authority } }`
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#benchmark_suite-2">benchmark_suite/2*</a></td><td></td></tr><tr><td valign="top"><a href="#benchmark_suite_test_-0">benchmark_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#cache_remote_schedule-2">cache_remote_schedule/2*</a></td><td>Cache a schedule received from a remote scheduler.</td></tr><tr><td valign="top"><a href="#check_lookahead_and_local_cache-4">check_lookahead_and_local_cache/4*</a></td><td>Check if we have a result from a lookahead worker or from our local
 cache.</td></tr><tr><td valign="top"><a href="#checkpoint-1">checkpoint/1</a></td><td>Returns the current state of the scheduler.</td></tr><tr><td valign="top"><a href="#do_get_remote_schedule-6">do_get_remote_schedule/6*</a></td><td>Get a schedule from a remote scheduler, unless we already have already
 read all of the assignments from the local cache.</td></tr><tr><td valign="top"><a href="#do_post_schedule-4">do_post_schedule/4*</a></td><td>Post schedule the message.</td></tr><tr><td valign="top"><a href="#filter_json_assignments-3">filter_json_assignments/3*</a></td><td>Filter JSON assignment results from a remote legacy scheduler.</td></tr><tr><td valign="top"><a href="#find_message_to_schedule-3">find_message_to_schedule/3*</a></td><td>Search the given base and request message pair to find the message to
-schedule.</td></tr><tr><td valign="top"><a href="#find_remote_scheduler-3">find_remote_scheduler/3*</a></td><td>Use the SchedulerLocation to the remote path and return a redirect.</td></tr><tr><td valign="top"><a href="#find_server-3">find_server/3*</a></td><td>Locate the correct scheduling server for a given process.</td></tr><tr><td valign="top"><a href="#find_server-4">find_server/4*</a></td><td></td></tr><tr><td valign="top"><a href="#find_target_id-3">find_target_id/3*</a></td><td>Find the schedule ID from a given request.</td></tr><tr><td valign="top"><a href="#generate_local_schedule-5">generate_local_schedule/5*</a></td><td>Generate a <code>GET /schedule</code> response for a process.</td></tr><tr><td valign="top"><a href="#generate_redirect-3">generate_redirect/3*</a></td><td>Generate a redirect message to a scheduler.</td></tr><tr><td valign="top"><a href="#get_hint-2">get_hint/2*</a></td><td>If a hint is present in the string, return it.</td></tr><tr><td valign="top"><a href="#get_local_assignments-4">get_local_assignments/4*</a></td><td>Get the assignments for a process, and whether the request was truncated.</td></tr><tr><td valign="top"><a href="#get_local_schedule_test-0">get_local_schedule_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#get_remote_schedule-5">get_remote_schedule/5*</a></td><td>Get a schedule from a remote scheduler, but first read all of the
+schedule.</td></tr><tr><td valign="top"><a href="#find_remote_scheduler-3">find_remote_scheduler/3*</a></td><td>Use the SchedulerLocation to the remote path and return a redirect.</td></tr><tr><td valign="top"><a href="#find_server-3">find_server/3*</a></td><td>Locate the correct scheduling server for a given process.</td></tr><tr><td valign="top"><a href="#find_server-4">find_server/4*</a></td><td></td></tr><tr><td valign="top"><a href="#find_target_id-3">find_target_id/3*</a></td><td>Find the schedule ID from a given request.</td></tr><tr><td valign="top"><a href="#generate_local_schedule-5">generate_local_schedule/5*</a></td><td>Generate a <code>GET /schedule</code> response for a process.</td></tr><tr><td valign="top"><a href="#generate_redirect-3">generate_redirect/3*</a></td><td>Generate a redirect message to a scheduler.</td></tr><tr><td valign="top"><a href="#get_hint-2">get_hint/2*</a></td><td>If a hint is present in the string, return it.</td></tr><tr><td valign="top"><a href="#get_local_assignments-4">get_local_assignments/4*</a></td><td>Get the assignments for a process, and whether the request was truncated.</td></tr><tr><td valign="top"><a href="#get_local_schedule_test-0">get_local_schedule_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#get_location-3">get_location/3*</a></td><td>Search for the location of the scheduler in the scheduler-location
+cache.</td></tr><tr><td valign="top"><a href="#get_remote_schedule-5">get_remote_schedule/5*</a></td><td>Get a schedule from a remote scheduler, but first read all of the
 assignments from the local cache that we already know about.</td></tr><tr><td valign="top"><a href="#get_schedule-3">get_schedule/3*</a></td><td>Generate and return a schedule for a process, optionally between
 two slots -- labelled as <code>from</code> and <code>to</code>.</td></tr><tr><td valign="top"><a href="#http_get_json_schedule_test_-0">http_get_json_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_schedule_as_aos2_test_-0">http_get_legacy_schedule_as_aos2_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_schedule_slot_range_test_-0">http_get_legacy_schedule_slot_range_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_schedule_test_-0">http_get_legacy_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_slot_test_-0">http_get_legacy_slot_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule-4">http_get_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule-5">http_get_schedule/5*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule_redirect_test-0">http_get_schedule_redirect_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule_test_-0">http_get_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_slot-2">http_get_slot/2*</a></td><td></td></tr><tr><td valign="top"><a href="#http_init-0">http_init/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_init-1">http_init/1*</a></td><td></td></tr><tr><td valign="top"><a href="#http_post_legacy_schedule_test_-0">http_post_legacy_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_post_schedule_sign-4">http_post_schedule_sign/4*</a></td><td></td></tr><tr><td valign="top"><a href="#http_post_schedule_test-0">http_post_schedule_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#info-0">info/0</a></td><td>This device uses a default_handler to route requests to the correct
-function.</td></tr><tr><td valign="top"><a href="#many_clients-1">many_clients/1*</a></td><td></td></tr><tr><td valign="top"><a href="#message_cached_assignments-2">message_cached_assignments/2*</a></td><td>Non-device exported helper to get the cached assignments held in a
+function.</td></tr><tr><td valign="top"><a href="#location-3">location/3</a></td><td>Router for <code>record</code> requests.</td></tr><tr><td valign="top"><a href="#many_clients-1">many_clients/1*</a></td><td></td></tr><tr><td valign="top"><a href="#message_cached_assignments-2">message_cached_assignments/2*</a></td><td>Non-device exported helper to get the cached assignments held in a
 process.</td></tr><tr><td valign="top"><a href="#next-3">next/3</a></td><td>Load the schedule for a process into the cache, then return the next
-assignment.</td></tr><tr><td valign="top"><a href="#node_from_redirect-2">node_from_redirect/2*</a></td><td>Get the node URL from a redirect.</td></tr><tr><td valign="top"><a href="#post_legacy_schedule-4">post_legacy_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#post_remote_schedule-4">post_remote_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#post_schedule-3">post_schedule/3*</a></td><td>Schedules a new message on the SU.</td></tr><tr><td valign="top"><a href="#read_local_assignments-4">read_local_assignments/4*</a></td><td>Get the assignments for a process.</td></tr><tr><td valign="top"><a href="#redirect_from_graphql_test-0">redirect_from_graphql_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#redirect_to_hint_test-0">redirect_to_hint_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#register-3">register/3</a></td><td>Generate a new scheduler location record and register it.</td></tr><tr><td valign="top"><a href="#register_new_process_test-0">register_new_process_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#register_scheduler_test-0">register_scheduler_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#remote_slot-3">remote_slot/3*</a></td><td>Get the current slot from a remote scheduler.</td></tr><tr><td valign="top"><a href="#remote_slot-4">remote_slot/4*</a></td><td>Get the current slot from a remote scheduler, based on the variant of
+assignment.</td></tr><tr><td valign="top"><a href="#node_from_redirect-2">node_from_redirect/2*</a></td><td>Get the node URL from a redirect.</td></tr><tr><td valign="top"><a href="#post_legacy_schedule-4">post_legacy_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#post_location-3">post_location/3*</a></td><td>Generate a new scheduler location record and register it.</td></tr><tr><td valign="top"><a href="#post_remote_schedule-4">post_remote_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#post_schedule-3">post_schedule/3*</a></td><td>Schedules a new message on the SU.</td></tr><tr><td valign="top"><a href="#read_local_assignments-4">read_local_assignments/4*</a></td><td>Get the assignments for a process.</td></tr><tr><td valign="top"><a href="#redirect_from_graphql_test-0">redirect_from_graphql_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#redirect_to_hint_test-0">redirect_to_hint_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#register_location_on_boot_test-0">register_location_on_boot_test/0*</a></td><td>Test that a scheduler location is registered on boot.</td></tr><tr><td valign="top"><a href="#register_new_process_test-0">register_new_process_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#register_scheduler_test-0">register_scheduler_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#remote_slot-3">remote_slot/3*</a></td><td>Get the current slot from a remote scheduler.</td></tr><tr><td valign="top"><a href="#remote_slot-4">remote_slot/4*</a></td><td>Get the current slot from a remote scheduler, based on the variant of
 the process's scheduler.</td></tr><tr><td valign="top"><a href="#router-4">router/4</a></td><td>The default handler for the scheduler device.</td></tr><tr><td valign="top"><a href="#schedule-3">schedule/3</a></td><td>A router for choosing between getting the existing schedule, or
 scheduling a new message.</td></tr><tr><td valign="top"><a href="#schedule_message_and_get_slot_test-0">schedule_message_and_get_slot_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#single_resolution-1">single_resolution/1*</a></td><td></td></tr><tr><td valign="top"><a href="#slot-3">slot/3</a></td><td>Returns information about the current slot for a process.</td></tr><tr><td valign="top"><a href="#spawn_lookahead_worker-3">spawn_lookahead_worker/3*</a></td><td>Spawn a new Erlang process to fetch the next assignments from the local
 cache, if we have them available.</td></tr><tr><td valign="top"><a href="#start-0">start/0</a></td><td>Helper to ensure that the environment is started.</td></tr><tr><td valign="top"><a href="#status-3">status/3</a></td><td>Returns information about the entire scheduler.</td></tr><tr><td valign="top"><a href="#status_test-0">status_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#test_process-0">test_process/0</a></td><td>Generate a _transformed_ process message, not as they are generated
@@ -9215,6 +9507,17 @@ Get the assignments for a process, and whether the request was truncated.
 
 `get_local_schedule_test() -> any()`
 
+<a name="get_location-3"></a>
+
+### get_location/3 * ###
+
+`get_location(Msg1, Req, Opts) -> any()`
+
+Search for the location of the scheduler in the scheduler-location
+cache. If an address is provided, we search for the location of that
+specific scheduler. Otherwise, we return the location record for the current
+node's scheduler, if it has been established.
+
 <a name="get_remote_schedule-5"></a>
 
 ### get_remote_schedule/5 * ###
@@ -9333,6 +9636,14 @@ we redirect to the remote scheduler or proxy based on the node opts.
 This device uses a default_handler to route requests to the correct
 function.
 
+<a name="location-3"></a>
+
+### location/3 ###
+
+`location(Msg1, Msg2, Opts) -> any()`
+
+Router for `record` requests. Expects either a `POST` or `GET` request.
+
 <a name="many_clients-1"></a>
 
 ### many_clients/1 * ###
@@ -9373,6 +9684,15 @@ Get the node URL from a redirect.
 
 `post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) -> any()`
 
+<a name="post_location-3"></a>
+
+### post_location/3 * ###
+
+`post_location(Msg1, RawReq, Opts) -> any()`
+
+Generate a new scheduler location record and register it. We both send
+the new scheduler-location to the given registry, and return it to the caller.
+
 <a name="post_remote_schedule-4"></a>
 
 ### post_remote_schedule/4 * ###
@@ -9409,14 +9729,13 @@ Get the assignments for a process.
 
 `redirect_to_hint_test() -> any()`
 
-<a name="register-3"></a>
+<a name="register_location_on_boot_test-0"></a>
 
-### register/3 ###
+### register_location_on_boot_test/0 * ###
 
-`register(Msg1, Req, Opts) -> any()`
+`register_location_on_boot_test() -> any()`
 
-Generate a new scheduler location record and register it. We both send
-the new scheduler-location to the given registry, and return it to the caller.
+Test that a scheduler location is registered on boot.
 
 <a name="register_new_process_test-0"></a>
 
@@ -9564,7 +9883,7 @@ definition.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#balance-3">balance/3</a></td><td>Get the balance of a user in the ledger.</td></tr><tr><td valign="top"><a href="#debit-3">debit/3</a></td><td>Preprocess a request by checking the ledger and charging the user.</td></tr><tr><td valign="top"><a href="#estimate-3">estimate/3</a></td><td>Estimate the cost of a request by counting the number of messages in
-the request, then multiplying by the per-message price.</td></tr><tr><td valign="top"><a href="#get_balance-2">get_balance/2*</a></td><td>Get the balance of a user in the ledger.</td></tr><tr><td valign="top"><a href="#get_balance_and_top_up_test-0">get_balance_and_top_up_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#is_operator-2">is_operator/2*</a></td><td>Check if the request is from the operator.</td></tr><tr><td valign="top"><a href="#set_balance-3">set_balance/3*</a></td><td>Adjust a user's balance, normalizing their wallet ID first.</td></tr><tr><td valign="top"><a href="#test_opts-0">test_opts/0*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-1">test_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#topup-3">topup/3</a></td><td>Top up the user's balance in the ledger.</td></tr></table>
+the request, then multiplying by the per-message price.</td></tr><tr><td valign="top"><a href="#get_balance-2">get_balance/2*</a></td><td>Get the balance of a user in the ledger.</td></tr><tr><td valign="top"><a href="#get_balance_and_top_up_test-0">get_balance_and_top_up_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#is_operator-2">is_operator/2*</a></td><td>Check if the request is from the operator.</td></tr><tr><td valign="top"><a href="#set_balance-3">set_balance/3*</a></td><td>Adjust a user's balance, normalizing their wallet ID first.</td></tr><tr><td valign="top"><a href="#test_opts-1">test_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#topup-3">topup/3</a></td><td>Top up the user's balance in the ledger.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -9628,12 +9947,6 @@ Check if the request is from the operator.
 `set_balance(Signer, Amount, NodeMsg) -> any()`
 
 Adjust a user's balance, normalizing their wallet ID first.
-
-<a name="test_opts-0"></a>
-
-### test_opts/0 * ###
-
-`test_opts() -> any()`
 
 <a name="test_opts-1"></a>
 
@@ -9756,7 +10069,8 @@ as well as generating them, if called in an appropriate environment.
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#execute_is_trusted-3">execute_is_trusted/3*</a></td><td>Ensure that all of the software hashes are trusted.</td></tr><tr><td valign="top"><a href="#generate-3">generate/3</a></td><td>Generate an commitment report and emit it as a message, including all of
 the necessary data to generate the nonce (ephemeral node address + node
 message ID), as well as the expected measurement (firmware, kernel, and VMSAs
-hashes).</td></tr><tr><td valign="top"><a href="#generate_nonce-2">generate_nonce/2*</a></td><td>Generate the nonce to use in the commitment report.</td></tr><tr><td valign="top"><a href="#is_debug-1">is_debug/1*</a></td><td>Ensure that the node's debug policy is disabled.</td></tr><tr><td valign="top"><a href="#real_node_test-0">real_node_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#report_data_matches-3">report_data_matches/3*</a></td><td>Ensure that the report data matches the expected report data.</td></tr><tr><td valign="top"><a href="#trusted-3">trusted/3</a></td><td>Default implementation of a resolver for trusted software.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify an commitment report message; validating the identity of a
+hashes).</td></tr><tr><td valign="top"><a href="#generate_nonce-2">generate_nonce/2*</a></td><td>Generate the nonce to use in the commitment report.</td></tr><tr><td valign="top"><a href="#is_debug-1">is_debug/1*</a></td><td>Ensure that the node's debug policy is disabled.</td></tr><tr><td valign="top"><a href="#real_node_test-0">real_node_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#report_data_matches-3">report_data_matches/3*</a></td><td>Ensure that the report data matches the expected report data.</td></tr><tr><td valign="top"><a href="#trusted-3">trusted/3</a></td><td>Validates if a given message parameter matches a trusted value from the SNP trusted list
+Returns {ok, true} if the message is trusted, {ok, false} otherwise.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify an commitment report message; validating the identity of a
 remote node, its ephemeral private address, and the integrity of the report.</td></tr></table>
 
 
@@ -9821,9 +10135,8 @@ Ensure that the report data matches the expected report data.
 
 `trusted(Msg1, Msg2, NodeOpts) -> any()`
 
-Default implementation of a resolver for trusted software. Searches the
-`trusted` key in the base message for a list of trusted values, and checks
-if the value in the request message is a member of that list.
+Validates if a given message parameter matches a trusted value from the SNP trusted list
+Returns {ok, true} if the message is trusted, {ok, false} otherwise
 
 <a name="verify-3"></a>
 
@@ -10223,10 +10536,10 @@ keyInDevice executed on DeviceName against Msg1.
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#compute-3">compute/3</a></td><td>Example implementation of a <code>compute</code> handler.</td></tr><tr><td valign="top"><a href="#compute_test-0">compute_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#delay-3">delay/3</a></td><td>Does nothing, just sleeps <code>Req/duration or 750</code> ms and returns the
-appropriate form in order to be used as preprocessor.</td></tr><tr><td valign="top"><a href="#device_with_function_key_module_test-0">device_with_function_key_module_test/0*</a></td><td>Tests the resolution of a default function.</td></tr><tr><td valign="top"><a href="#increment_counter-3">increment_counter/3</a></td><td>Find a test worker's PID and send it an increment message.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Exports a default_handler function that can be used to test the
+appropriate form in order to be used as a hook.</td></tr><tr><td valign="top"><a href="#device_with_function_key_module_test-0">device_with_function_key_module_test/0*</a></td><td>Tests the resolution of a default function.</td></tr><tr><td valign="top"><a href="#increment_counter-3">increment_counter/3</a></td><td>Find a test worker's PID and send it an increment message.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Exports a default_handler function that can be used to test the
 handler resolution mechanism.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Exports a default_handler function that can be used to test the
 handler resolution mechanism.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Example <code>init/3</code> handler.</td></tr><tr><td valign="top"><a href="#mul-2">mul/2</a></td><td>Example implementation of an <code>imported</code> function for a WASM
-executor.</td></tr><tr><td valign="top"><a href="#postprocess-3">postprocess/3</a></td><td>Set the <code>postprocessor-called</code> key to true in the HTTP server.</td></tr><tr><td valign="top"><a href="#restore-3">restore/3</a></td><td>Example <code>restore/3</code> handler.</td></tr><tr><td valign="top"><a href="#restore_test-0">restore_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td>Do nothing when asked to snapshot.</td></tr><tr><td valign="top"><a href="#test_func-1">test_func/1</a></td><td></td></tr><tr><td valign="top"><a href="#update_state-3">update_state/3</a></td><td>Find a test worker's PID and send it an update message.</td></tr></table>
+executor.</td></tr><tr><td valign="top"><a href="#restore-3">restore/3</a></td><td>Example <code>restore/3</code> handler.</td></tr><tr><td valign="top"><a href="#restore_test-0">restore_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td>Do nothing when asked to snapshot.</td></tr><tr><td valign="top"><a href="#test_func-1">test_func/1</a></td><td></td></tr><tr><td valign="top"><a href="#update_state-3">update_state/3</a></td><td>Find a test worker's PID and send it an update message.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -10256,7 +10569,7 @@ slot number in the results key.
 `delay(Msg1, Req, Opts) -> any()`
 
 Does nothing, just sleeps `Req/duration or 750` ms and returns the
-appropriate form in order to be used as preprocessor.
+appropriate form in order to be used as a hook.
 
 <a name="device_with_function_key_module_test-0"></a>
 
@@ -10308,14 +10621,6 @@ Example `init/3` handler. Sets the `Already-Seen` key to an empty list.
 
 Example implementation of an `imported` function for a WASM
 executor.
-
-<a name="postprocess-3"></a>
-
-### postprocess/3 ###
-
-`postprocess(Msg, X2, Opts) -> any()`
-
-Set the `postprocessor-called` key to true in the HTTP server.
 
 <a name="restore-3"></a>
 
@@ -10762,7 +11067,7 @@ execution under different circumstances.
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#as_path_test-1">as_path_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#basic_get_test-1">basic_get_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#basic_set_test-1">basic_set_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#continue_as_test-1">continue_as_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#deep_recursive_get_test-1">deep_recursive_get_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#deep_set_new_messages_test-0">deep_set_new_messages_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#deep_set_test-1">deep_set_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#deep_set_with_device_test-1">deep_set_with_device_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#denormalized_device_key_test-1">denormalized_device_key_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#device_excludes_test-1">device_excludes_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#device_exports_test-1">device_exports_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#device_with_default_handler_function_test-1">device_with_default_handler_function_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#device_with_handler_function_test-1">device_with_handler_function_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#exec_dummy_device-2">exec_dummy_device/2*</a></td><td>Ensure that we can read a device from the cache then execute it.</td></tr><tr><td valign="top"><a href="#gen_default_device-0">gen_default_device/0*</a></td><td>Create a simple test device that implements the default handler.</td></tr><tr><td valign="top"><a href="#gen_handler_device-0">gen_handler_device/0*</a></td><td>Create a simple test device that implements the handler key.</td></tr><tr><td valign="top"><a href="#generate_device_with_keys_using_args-0">generate_device_with_keys_using_args/0*</a></td><td>Generates a test device with three keys, each of which uses
-progressively more of the arguments that can be passed to a device key.</td></tr><tr><td valign="top"><a href="#get_as_with_device_test-1">get_as_with_device_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#get_with_device_test-1">get_with_device_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#key_from_id_device_with_args_test-1">key_from_id_device_with_args_test/1*</a></td><td>Test that arguments are passed to a device key as expected.</td></tr><tr><td valign="top"><a href="#key_to_binary_test-1">key_to_binary_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#list_transform_test-1">list_transform_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#load_as_test-1">load_as_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#load_device_test-0">load_device_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#recursive_get_test-1">recursive_get_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_binary_key_test-1">resolve_binary_key_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_from_multiple_keys_test-1">resolve_from_multiple_keys_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_id_test-1">resolve_id_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_key_twice_test-1">resolve_key_twice_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_path_element_test-1">resolve_path_element_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_simple_test-1">resolve_simple_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#run_all_test_-0">run_all_test_/0*</a></td><td>Run each test in the file with each set of options.</td></tr><tr><td valign="top"><a href="#run_test-0">run_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set_with_device_test-1">set_with_device_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#start_as_test-1">start_as_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#start_as_with_parameters_test-1">start_as_with_parameters_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-0">test_opts/0*</a></td><td></td></tr><tr><td valign="top"><a href="#test_suite-0">test_suite/0*</a></td><td></td></tr><tr><td valign="top"><a href="#untrusted_load_device_test-0">untrusted_load_device_test/0*</a></td><td></td></tr></table>
+progressively more of the arguments that can be passed to a device key.</td></tr><tr><td valign="top"><a href="#get_as_with_device_test-1">get_as_with_device_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#get_with_device_test-1">get_with_device_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#key_from_id_device_with_args_test-1">key_from_id_device_with_args_test/1*</a></td><td>Test that arguments are passed to a device key as expected.</td></tr><tr><td valign="top"><a href="#key_to_binary_test-1">key_to_binary_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#list_transform_test-1">list_transform_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#load_as_test-1">load_as_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#load_device_test-0">load_device_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#recursive_get_test-1">recursive_get_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_binary_key_test-1">resolve_binary_key_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_from_multiple_keys_test-1">resolve_from_multiple_keys_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_id_test-1">resolve_id_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_key_twice_test-1">resolve_key_twice_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_path_element_test-1">resolve_path_element_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_simple_test-1">resolve_simple_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#run_all_test_-0">run_all_test_/0*</a></td><td>Run each test in the file with each set of options.</td></tr><tr><td valign="top"><a href="#run_test-0">run_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set_with_device_test-1">set_with_device_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#start_as_test-1">start_as_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#start_as_with_parameters_test-1">start_as_with_parameters_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#step_hook_test-1">step_hook_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-0">test_opts/0*</a></td><td></td></tr><tr><td valign="top"><a href="#test_suite-0">test_suite/0*</a></td><td></td></tr><tr><td valign="top"><a href="#untrusted_load_device_test-0">untrusted_load_device_test/0*</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -11003,6 +11308,12 @@ the store for each test.
 
 `start_as_with_parameters_test(Opts) -> any()`
 
+<a name="step_hook_test-1"></a>
+
+### step_hook_test/1 * ###
+
+`step_hook_test(InitOpts) -> any()`
+
 <a name="test_opts-0"></a>
 
 ### test_opts/0 * ###
@@ -11122,7 +11433,7 @@ HyperBEAM device implementations are defined as follows:
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#deep_set-4">deep_set/4</a></td><td>Recursively search a map, resolving keys, and set the value of the key
 at the given path.</td></tr><tr><td valign="top"><a href="#default_module-0">default_module/0*</a></td><td>The default device is the identity device, which simply returns the
-value associated with any key as it exists in its Erlang map.</td></tr><tr><td valign="top"><a href="#device_set-4">device_set/4*</a></td><td>Call the device's <code>set</code> function.</td></tr><tr><td valign="top"><a href="#do_resolve_many-2">do_resolve_many/2*</a></td><td></td></tr><tr><td valign="top"><a href="#ensure_loaded-2">ensure_loaded/2*</a></td><td>Ensure that the message is loaded from the cache if it is an ID.</td></tr><tr><td valign="top"><a href="#error_execution-5">error_execution/5*</a></td><td>Handle an error in a device call.</td></tr><tr><td valign="top"><a href="#error_infinite-3">error_infinite/3*</a></td><td>Catch all return if we are in an infinite loop.</td></tr><tr><td valign="top"><a href="#error_invalid_intermediate_status-5">error_invalid_intermediate_status/5*</a></td><td></td></tr><tr><td valign="top"><a href="#error_invalid_message-3">error_invalid_message/3*</a></td><td>Catch all return if the message is invalid.</td></tr><tr><td valign="top"><a href="#find_exported_function-5">find_exported_function/5</a></td><td>Find the function with the highest arity that has the given name, if it
+value associated with any key as it exists in its Erlang map.</td></tr><tr><td valign="top"><a href="#device_set-4">device_set/4*</a></td><td>Call the device's <code>set</code> function.</td></tr><tr><td valign="top"><a href="#device_set-5">device_set/5*</a></td><td></td></tr><tr><td valign="top"><a href="#do_resolve_many-2">do_resolve_many/2*</a></td><td></td></tr><tr><td valign="top"><a href="#ensure_loaded-2">ensure_loaded/2*</a></td><td>Ensure that the message is loaded from the cache if it is an ID.</td></tr><tr><td valign="top"><a href="#error_execution-5">error_execution/5*</a></td><td>Handle an error in a device call.</td></tr><tr><td valign="top"><a href="#error_infinite-3">error_infinite/3*</a></td><td>Catch all return if we are in an infinite loop.</td></tr><tr><td valign="top"><a href="#error_invalid_intermediate_status-5">error_invalid_intermediate_status/5*</a></td><td></td></tr><tr><td valign="top"><a href="#error_invalid_message-3">error_invalid_message/3*</a></td><td>Catch all return if the message is invalid.</td></tr><tr><td valign="top"><a href="#find_exported_function-5">find_exported_function/5</a></td><td>Find the function with the highest arity that has the given name, if it
 exists.</td></tr><tr><td valign="top"><a href="#force_message-2">force_message/2</a></td><td></td></tr><tr><td valign="top"><a href="#get-2">get/2</a></td><td>Shortcut for resolving a key in a message without its status if it is
 <code>ok</code>.</td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr><tr><td valign="top"><a href="#get-4">get/4</a></td><td></td></tr><tr><td valign="top"><a href="#get_first-2">get_first/2</a></td><td>take a sequence of base messages and paths, then return the value of the
 first message that can be resolved using a path.</td></tr><tr><td valign="top"><a href="#get_first-3">get_first/3</a></td><td></td></tr><tr><td valign="top"><a href="#info-2">info/2</a></td><td>Get the info map for a device, optionally giving it a message if the
@@ -11145,7 +11456,10 @@ actually takes.</td></tr><tr><td valign="top"><a href="#verify_device_compatibil
 `deep_set(Msg, Rest, Value, Opts) -> any()`
 
 Recursively search a map, resolving keys, and set the value of the key
-at the given path.
+at the given path. This function has special cases for handling `set` calls
+where the path is an empty list (`/`). In this case, if the value is an
+immediate, non-complex term, we can set it directly. Otherwise, we use the
+device's `set` function to set the value.
 
 <a name="default_module-0"></a>
 
@@ -11165,6 +11479,12 @@ according to the `Message2` passed to it.
 `device_set(Msg, Key, Value, Opts) -> any()`
 
 Call the device's `set` function.
+
+<a name="device_set-5"></a>
+
+### device_set/5 * ###
+
+`device_set(Msg, Key, Value, Mode, Opts) -> any()`
 
 <a name="do_resolve_many-2"></a>
 
@@ -11457,11 +11777,13 @@ The resolver is composed of a series of discrete phases:
 4: Persistent-resolver lookup.
 5: Device lookup.
 6: Execution.
-7: Cryptographic linking.
-8: Result caching.
-9: Notify waiters.
-10: Fork worker.
-11: Recurse or terminate.
+7: Execution of the `step` hook.
+8: Subresolution.
+9: Cryptographic linking.
+10: Result caching.
+11: Notify waiters.
+12: Fork worker.
+13: Recurse or terminate.
 
 <a name="resolve-3"></a>
 
@@ -13831,7 +14153,7 @@ the execution parameters of all downstream requests to be controlled.<a name="in
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#allowed_methods-2">allowed_methods/2</a></td><td>Return the list of allowed methods for the HTTP server.</td></tr><tr><td valign="top"><a href="#cors_reply-2">cors_reply/2*</a></td><td>Reply to CORS preflight requests.</td></tr><tr><td valign="top"><a href="#get_opts-1">get_opts/1</a></td><td></td></tr><tr><td valign="top"><a href="#handle_request-3">handle_request/3*</a></td><td>Handle all non-CORS preflight requests as AO-Core requests.</td></tr><tr><td valign="top"><a href="#http3_conn_sup_loop-0">http3_conn_sup_loop/0*</a></td><td></td></tr><tr><td valign="top"><a href="#init-2">init/2</a></td><td>Entrypoint for all HTTP requests.</td></tr><tr><td valign="top"><a href="#new_server-1">new_server/1*</a></td><td></td></tr><tr><td valign="top"><a href="#read_body-1">read_body/1*</a></td><td>Helper to grab the full body of a HTTP request, even if it's chunked.</td></tr><tr><td valign="top"><a href="#read_body-2">read_body/2*</a></td><td></td></tr><tr><td valign="top"><a href="#set_default_opts-1">set_default_opts/1</a></td><td></td></tr><tr><td valign="top"><a href="#set_opts-1">set_opts/1</a></td><td>Merges the provided <code>Opts</code> with uncommitted values from <code>Request</code>,
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#allowed_methods-2">allowed_methods/2</a></td><td>Return the list of allowed methods for the HTTP server.</td></tr><tr><td valign="top"><a href="#cors_reply-2">cors_reply/2*</a></td><td>Reply to CORS preflight requests.</td></tr><tr><td valign="top"><a href="#get_opts-1">get_opts/1</a></td><td></td></tr><tr><td valign="top"><a href="#handle_request-3">handle_request/3*</a></td><td>Handle all non-CORS preflight requests as AO-Core requests.</td></tr><tr><td valign="top"><a href="#http3_conn_sup_loop-0">http3_conn_sup_loop/0*</a></td><td></td></tr><tr><td valign="top"><a href="#init-2">init/2</a></td><td>Entrypoint for all HTTP requests.</td></tr><tr><td valign="top"><a href="#new_server-1">new_server/1*</a></td><td>Trigger the creation of a new HTTP server node.</td></tr><tr><td valign="top"><a href="#read_body-1">read_body/1*</a></td><td>Helper to grab the full body of a HTTP request, even if it's chunked.</td></tr><tr><td valign="top"><a href="#read_body-2">read_body/2*</a></td><td></td></tr><tr><td valign="top"><a href="#set_default_opts-1">set_default_opts/1</a></td><td></td></tr><tr><td valign="top"><a href="#set_node_opts_test-0">set_node_opts_test/0*</a></td><td>Ensure that the <code>start</code> hook can be used to modify the node options.</td></tr><tr><td valign="top"><a href="#set_opts-1">set_opts/1</a></td><td>Merges the provided <code>Opts</code> with uncommitted values from <code>Request</code>,
 preserves the http_server value, and updates node_history by prepending
 the <code>Request</code>.</td></tr><tr><td valign="top"><a href="#set_opts-2">set_opts/2</a></td><td></td></tr><tr><td valign="top"><a href="#start-0">start/0</a></td><td>Starts the HTTP server.</td></tr><tr><td valign="top"><a href="#start-1">start/1</a></td><td></td></tr><tr><td valign="top"><a href="#start_http2-3">start_http2/3*</a></td><td></td></tr><tr><td valign="top"><a href="#start_http3-3">start_http3/3*</a></td><td></td></tr><tr><td valign="top"><a href="#start_node-0">start_node/0</a></td><td>Test that we can start the server, send a message, and get a response.</td></tr><tr><td valign="top"><a href="#start_node-1">start_node/1</a></td><td></td></tr></table>
 
@@ -13894,6 +14216,12 @@ the server ID, which can be used to lookup the node message.
 
 `new_server(RawNodeMsg) -> any()`
 
+Trigger the creation of a new HTTP server node. Accepts a `NodeMsg`
+message, which is used to configure the server. This function executed the
+`start` hook on the node, giving it the opportunity to modify the `NodeMsg`
+before it is used to configure the server. The `start` hook expects gives and
+expects the node message to be in the `body` key.
+
 <a name="read_body-1"></a>
 
 ### read_body/1 * ###
@@ -13913,6 +14241,18 @@ Helper to grab the full body of a HTTP request, even if it's chunked.
 ### set_default_opts/1 ###
 
 `set_default_opts(Opts) -> any()`
+
+<a name="set_node_opts_test-0"></a>
+
+### set_node_opts_test/0 * ###
+
+`set_node_opts_test() -> any()`
+
+Ensure that the `start` hook can be used to modify the node options. We
+do this by creating a message with a device that has a `start` key. This
+key takes the message's body (the anticipated node options) and returns a
+modified version of that body, which will be used to configure the node. We
+then check that the node options were modified as we expected.
 
 <a name="set_opts-1"></a>
 
@@ -19753,6 +20093,7 @@ Use the navigation menu to dive into specific parts of the codebase. Each module
 <tr><td><a href="dev_faff.md" class="module">dev_faff</a></td></tr>
 <tr><td><a href="dev_genesis_wasm.md" class="module">dev_genesis_wasm</a></td></tr>
 <tr><td><a href="dev_green_zone.md" class="module">dev_green_zone</a></td></tr>
+<tr><td><a href="dev_hook.md" class="module">dev_hook</a></td></tr>
 <tr><td><a href="dev_hyperbuddy.md" class="module">dev_hyperbuddy</a></td></tr>
 <tr><td><a href="dev_json_iface.md" class="module">dev_json_iface</a></td></tr>
 <tr><td><a href="dev_local_name.md" class="module">dev_local_name</a></td></tr>
@@ -20261,7 +20602,7 @@ To successfully build and run a HyperBEAM node, your system needs several softwa
         ncurses-dev \
         libssl-dev \
         sudo \
-        curl \
+        curl
         ca-certificates
     ```
 
@@ -20297,14 +20638,14 @@ Installation methods:
     ```bash
     sudo apt install erlang
     ```
-
+<!-- 
 === "asdf (Recommended)"
     Tools like `asdf-vm` with the `asdf-erlang` plugin are highly recommended for managing multiple Erlang versions across platforms.
     ```bash
     asdf plugin add erlang https://github.com/asdf-vm/asdf-erlang.git
     asdf install erlang <version> # e.g., 27.0
     asdf global erlang <version>
-    ```
+    ``` -->
 
 === "Source Build"
     Download from [erlang.org](https://www.erlang.org/downloads) and follow the build instructions for your platform.
@@ -20323,13 +20664,13 @@ Installation methods:
 === "Linux / macOS (Direct Download)"
     Get the `rebar3` binary from the [official website](https://rebar3.org/). Place the downloaded `rebar3` file in your system's `PATH` (e.g., `/usr/local/bin`) and make it executable (`chmod +x rebar3`).
 
-=== "asdf (Recommended)"
+<!-- === "asdf (Recommended)"
     If using `asdf`, you can install it via the `rebar` plugin:
     ```bash
     asdf plugin add rebar https://github.com/asdf-vm/asdf-rebar.git
     asdf install rebar <version> # e.g., 3.23.0
     asdf global rebar <version>
-    ```
+    ``` -->
 
 ### Node.js
 

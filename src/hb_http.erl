@@ -137,7 +137,19 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             Msg = http_response_to_httpsig(Status, NormHeaderMap, Body, Opts),
             ?event(http_outbound, {result_is_single_key, {key, Key}, {msg, Msg}}, Opts),
             case maps:get(Key, Msg, undefined) of
-                undefined -> {failure, result_key_not_found};
+                undefined ->
+                    {failure,
+                        <<
+                            "Result key '",
+                            Key/binary,
+                            "' not found in response from '",
+                            Peer/binary,
+                            "' for path '",
+                            Path/binary,
+                            "': ",
+                            Body/binary
+                        >>
+                    };
                 Value -> {BaseStatus, Value}
             end;
         undefined ->
@@ -880,7 +892,7 @@ send_large_signed_request_test() ->
     {ok, [Req]} = file:consult(<<"test/large-message.eterm">>),
     % Get the short trace length from the node message in the large, stored
     % request. 
-    ?event(debug_http, {request_message, Req}),
+    ?event({request_message, Req}),
     ?assertMatch(
         {ok, 5},
         post(

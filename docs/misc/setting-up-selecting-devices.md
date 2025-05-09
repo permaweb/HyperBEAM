@@ -137,8 +137,8 @@ PoDA:
 
 Core payment framework that works with pricing and ledger devices. It requires the following node message settings:
 
-- `p4_pricing_device`: Estimates request cost
-- `p4_ledger_device`: Acts as payment ledger
+- `p4_pricing-device`: Estimates request cost
+- `p4_ledger-device`: Acts as payment ledger
 
 ### ~simple-pay@1.0
 
@@ -239,8 +239,8 @@ For a node intended for personal use only:
 rebar3 shell --eval "hb:start_mainnet(#{
   port => 9001,
   key_location => 'path/to/my/wallet.key',
-  p4_pricing_device => '~faff@1.0',
-  p4_ledger_device => '~faff@1.0',
+  p4_pricing-device => '~faff@1.0',
+  p4_ledger-device => '~faff@1.0',
   faff_allow_list => ['my-wallet-address']
 })."
 
@@ -255,8 +255,8 @@ For a node offering computation services to the network:
 rebar3 shell --eval "hb:start_mainnet(#{
   port => 9001,
   key_location => 'path/to/my/wallet.key',
-  p4_pricing_device => '~simple-pay@1.0',
-  p4_ledger_device => '~simple-pay@1.0',
+  p4_pricing-device => '~simple-pay@1.0',
+  p4_ledger-device => '~simple-pay@1.0',
   simple_pay_price => 0.01,
   preloaded_devices => ['~wasm64@1.0', '~process@1.0', 'dev_stack', 'dev_scheduler']
 })."
@@ -272,8 +272,8 @@ For a node running in a Trusted Execution Environment:
 rebar3 shell --eval "hb:start_mainnet(#{
   port => 9001,
   key_location => 'path/to/my/wallet.key',
-  p4_pricing_device => '~simple-pay@1.0',
-  p4_ledger_device => '~simple-pay@1.0',
+  p4_pricing-device => '~simple-pay@1.0',
+  p4_ledger-device => '~simple-pay@1.0',
   simple_pay_price => 0.05,
   preloaded_devices => ['~wasm64@1.0', '~process@1.0', 'dev_stack', 'dev_scheduler', '~snp@1.0']
 })."

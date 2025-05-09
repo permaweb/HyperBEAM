@@ -75,7 +75,24 @@ h6 {
 /* Body and Header Customization */
 .md-header {
 	box-shadow: none !important;
-	z-index: 25;
+	z-index: 100;
+	transition: transform 0.3s ease-in-out;
+	position: fixed;
+	width: 100%;
+	transform: translateY(0);
+}
+
+.header-hidden {
+	transform: translateY(-100%);
+	transition: transform 0.15s ease-in-out;
+}
+
+.md-main {
+	transition: padding-top 0.3s ease;
+}
+
+.header-hidden+.md-main {
+	padding-top: 0;
 }
 
 [dir=ltr] .md-sidebar--primary {
@@ -151,7 +168,7 @@ h6 {
 .md-tabs__item--active .md-tabs__link::after {
 	content: "";
 	position: absolute;
-	bottom: -9px;
+	bottom: -8px;
 	left: 5%;
 	width: 90%;
 	height: 2px;

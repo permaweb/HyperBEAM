@@ -54,7 +54,8 @@ format_error_trace(Trace) ->
                        case TraceItem of
                            {http, {parsed_singleton, _ReqSingleton, _}} ->
                                maps:put(request_parsing, true, Acc);
-                           {ao_core, {stage, Stage, _Task}} -> maps:put(resolve_stage, Stage, Acc);
+                           {ao_core, {stage, Stage, _Task}} ->
+                                maps:put(resolve_stage, Stage, Acc);
                            {ao_result,
                             {load_device_failed, _, _, _, _, {exec_exception, Exception}, _, _}} ->
                                maps:put(error, Exception, Acc);
@@ -93,10 +94,12 @@ format_error_trace(Trace) ->
                 ParsingTrace;
             Stage ->
                 StageEmoji = stage_to_emoji(Stage),
-                <<ParsingTrace/binary,
-                  "\n",
-                  StageEmoji/binary,
-                  " Resolved steps of your execution">>
+                try << ParsingTrace/binary, "\n", StageEmoji/binary,
+                        " Resolved steps of your execution" >>
+                catch
+                    error:badarg ->
+                        iolist_to_binary(io_lib:format("~p", [ParsingTrace]))
+                end
         end,
     % Add error information
     case maps:get(error, TraceMap, undefined) of

@@ -282,6 +282,7 @@ process_response({ok, [Status, MsgResult], NewState}, Priv) ->
     % and add the previous `priv' element back into the resulting message.
     case decode(MsgResult) of
         Msg when is_map(Msg) ->
+            ?event(lua, {response, {status, Status}, {msg, Msg}}),
             {hb_util:atom(Status), Msg#{
                 <<"priv">> => Priv#{
                     <<"state">> => NewState
@@ -584,19 +585,21 @@ invoke_non_compute_key_test() ->
     ?event({result2, Result2}),
     ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
 
-%% @doc Use a Lua script as a preprocessor on the HTTP server via `~meta@1.0'.
-lua_http_preprocessor_test() ->
+%% @doc Use a Lua script as a hook on the HTTP server via `~meta@1.0'.
+lua_http_hook_test() ->
     {ok, Script} = file:read_file("test/test.lua"),
     Node = hb_http_server:start_node(
         #{
-            preprocessor =>
-                #{
-                    <<"device">> => <<"lua@5.3a">>,
-                    <<"script">> => #{
-                        <<"content-type">> => <<"application/lua">>,
-                        <<"body">> => Script
+            on => #{
+                <<"request">> =>
+                    #{
+                        <<"device">> => <<"lua@5.3a">>,
+                        <<"script">> => #{
+                            <<"content-type">> => <<"application/lua">>,
+                            <<"body">> => Script
+                        }
                     }
-                }
+            }
         }),
     {ok, Res} = hb_http:get(Node, <<"/hello?hello=world">>, #{}),
     ?assertMatch(#{ <<"body">> := <<"i like turtles">> }, Res).

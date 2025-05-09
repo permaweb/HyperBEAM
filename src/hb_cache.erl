@@ -33,7 +33,7 @@ list_numbered(Path, Opts) ->
     [ to_integer(Name) || Name <- list(SlotDir, Opts) ].
 
 %% @doc List all items under a given path.
-list(Path, Opts) when is_map(Opts)->
+list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) ->
     case hb_opts:get(store, no_viable_store, Opts) of
         no_viable_store -> [];
         Store ->

@@ -7,10 +7,11 @@
 %%% resolver. Additionally, a post-processor can be set, which is executed after
 %%% the AO-Core resolver has returned a result.
 -module(dev_meta).
--export([info/1, info/3, handle/2, adopt_node_message/2, is/2, is/3]).
-%%% Public API
+-export([info/1, info/3, build/3, handle/2, adopt_node_message/2, is/2, is/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+%%% Include the auto-generated build info header file.
+-include_lib("../_build/hb_buildinfo.hrl").
 
 %% @doc Ensure that the helper function `adopt_node_message/2' is not exported.
 %% The naming of this method carefully avoids a clash with the exported `info/3'
@@ -21,7 +22,26 @@
 %% info call will match the three-argument version of the function. If in the 
 %% future the `request' is added as an argument to AO-Core's internal `info'
 %% function, we will need to find a different approach.
-info(_) -> #{ exports => [info] }.
+info(_) -> #{ exports => [info, build] }.
+
+%% @doc Emits the version number and commit hash of the HyperBEAM node source,
+%% if available.
+%% 
+%% We include the short hash separately, as the length of this hash may change in
+%% the future, depending on the git version/config used to build the node.
+%% Subsequently, rather than embedding the `git-short-hash-length', for the
+%% avoidance of doubt, we include the short hash separately, as well as its long
+%% hash.
+build(_, _, _NodeMsg) ->
+    {ok,
+        #{
+            <<"node">> => <<"HyperBEAM">>,
+            <<"version">> => ?HYPERBEAM_VERSION,
+            <<"source">> => ?HB_BUILD_SOURCE,
+            <<"source-short">> => ?HB_BUILD_SOURCE_SHORT,
+            <<"build-time">> => ?HB_BUILD_TIME
+        }
+    }.
 
 %% @doc Normalize and route messages downstream based on their path. Messages
 %% with a `Meta' key are routed to the `handle_meta/2' function, while all
@@ -43,9 +63,9 @@ handle(NodeMsg, RawRequest) ->
         _ -> handle_resolve(RawRequest, NormRequest, NodeMsg)
     end.
 
-handle_initialize([Base = #{ <<"device">> := Device}, Req = #{ <<"path">> := Path }|_], NodeMsg) ->
-    ?event({got, {device, Device}, {path, Path}}),
-    case {Device, Path} of
+handle_initialize([Base = #{ <<"device">> := Dev}, Req = #{ <<"path">> := Path }|_], NodeMsg) ->
+    ?event({got, {device, Dev}, {path, Path}}),
+    case {Dev, Path} of
         {<<"meta@1.0">>, <<"info">>} -> info(Base, Req, NodeMsg);
         _ -> {error, <<"Node must be initialized before use.">>}
     end;
@@ -119,7 +139,8 @@ update_node_message(Request, NodeMsg) ->
                                 <<"body">> =>
                                     iolist_to_binary(
                                         io_lib:format(
-                                            "Node message updated. History: ~p updates.",
+                                            "Node message updated. History: ~p"
+                                                "updates.",
                                             [length(NewH)]
                                         )
                                     ),
@@ -148,12 +169,12 @@ adopt_node_message(Request, NodeMsg) ->
 %% @doc Handle an AO-Core request, which is a list of messages. We apply
 %% the node's pre-processor to the request first, and then resolve the request
 %% using the node's AO-Core implementation if its response was `ok'.
-%% After execution, we run the node's `postprocessor' message on the result of
+%% After execution, we run the node's `response' hook on the result of
 %% the request before returning the result it grants back to the user.
 handle_resolve(Req, Msgs, NodeMsg) ->
     TracePID = hb_opts:get(trace, no_tracer_set, NodeMsg),
     % Apply the pre-processor to the request.
-    case resolve_processor(<<"preprocess">>, preprocessor, Req, Msgs, NodeMsg) of
+    case resolve_hook(<<"request">>, Req, Msgs, NodeMsg) of
         {ok, PreProcessedMsg} ->
             ?event(
                 {result_after_preprocessing,
@@ -161,10 +182,11 @@ handle_resolve(Req, Msgs, NodeMsg) ->
             ),
             AfterPreprocOpts = hb_http_server:get_opts(NodeMsg),
             % Resolve the request message.
-            HTTPOpts = maps:merge(
-                AfterPreprocOpts,
-                hb_opts:get(http_extra_opts, #{}, NodeMsg)
-            ),
+            HTTPOpts =
+                maps:merge(
+                    AfterPreprocOpts,
+                    hb_opts:get(http_extra_opts, #{}, NodeMsg)
+                ),
             Res =
                 try
                     hb_ao:resolve_many(
@@ -176,10 +198,13 @@ handle_resolve(Req, Msgs, NodeMsg) ->
                         ID = hb_util:human_id(MsgID),
                         {error, #{
                             <<"status">> => 404,
-                            <<"unavilable">> => ID,
+                            <<"unavailable">> => ID,
                             <<"body">> =>
-                                <<"Message necessary to resolve request not found: ",
-                                    ID/binary>>
+                                <<
+                                    "Message necessary to resolve request ",
+                                    "not found: ",
+                                    ID/binary
+                                >>
                         }}
                 end,
             {ok, StatusEmbeddedRes} =
@@ -191,9 +216,8 @@ handle_resolve(Req, Msgs, NodeMsg) ->
             % Apply the post-processor to the result.
             Output = maybe_sign(
                 embed_status(
-                    resolve_processor(
-                        <<"postprocess">>,
-                        postprocessor,
+                    resolve_hook(
+                        <<"response">>,
                         Req,
                         StatusEmbeddedRes,
                         AfterResolveOpts
@@ -206,32 +230,27 @@ handle_resolve(Req, Msgs, NodeMsg) ->
         Res -> embed_status(hb_ao:force_message(Res, NodeMsg))
     end.
 
-%% @doc Execute a message from the node message upon the user's request. The
-%% invocation of the processor provides a request of the following form:
+%% @doc Execute a hook from the node message upon the user's request. The
+%% invocation of the hook provides a request of the following form:
 %% <pre>
-%%      /path => preprocess | postprocess
+%%      /path => request | response
 %%      /request => the original request singleton
-%%      /body => list of messages the user wishes to process
+%%      /body => parsed sequence of messages to process | the execution result
 %% </pre>
-resolve_processor(PathKey, Processor, Req, Query, NodeMsg) ->
-    case hb_opts:get(Processor, undefined, NodeMsg) of
-        undefined -> {ok, Query};
-        ProcessorMsg ->
-            Key = hb_ao:get(<<"path">>, ProcessorMsg, PathKey, NodeMsg),
-            ?event(processor, {processor_resolving, Key, ProcessorMsg}),
-            Res =
-                hb_ao:resolve(
-                    ProcessorMsg,
-                    #{
-                        <<"path">> =>
-                            hb_ao:get(<<"path">>, ProcessorMsg, Key, NodeMsg),
-                        <<"body">> => Query,
-                        <<"request">> => Req
-                    },
-                    NodeMsg#{ hashpath => ignore }
-                ),
-            ?event(processor, {processor_result, {type, Key}, {res, Res}}),
-            Res
+resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
+    HookReq =
+        #{
+            <<"request">> => InitiatingRequest,
+            <<"body">> => Body
+        },
+    ?event(hook, {resolve_hook, HookName, HookReq}),
+    case dev_hook:on(HookName, HookReq, NodeMsg) of
+        {ok, #{ <<"body">> := ResponseBody }} ->
+            {ok, ResponseBody};
+        {error, _} = Error ->
+            Error;
+        Other ->
+            {error, Other}
     end.
 
 %% @doc Wrap the result of a device call in a status.
@@ -261,6 +280,7 @@ status_code(ok) -> 200;
 status_code(error) -> 400;
 status_code(created) -> 201;
 status_code(not_found) -> 404;
+status_code(failure) -> 500;
 status_code(unavailable) -> 503.
 
 %% @doc Get the HTTP status code from a transaction (if it exists).
@@ -531,69 +551,122 @@ claim_node_test() ->
     ?assertEqual(<<"test2">>, hb_ao:get(<<"test_config_item">>, Res2, #{})),
     ?assertEqual(2, length(hb_ao:get(<<"node_history">>, Res2, [], #{}))).
 
-%% Test that we can use a preprocessor upon a request.
-% preprocessor_test() ->
-%     Parent = self(),
-%     Node = hb_http_server:start_node(
-%         #{
-%             preprocessor =>
-%                 #{
-%                     <<"device">> => #{
-%                         <<"preprocess">> =>
-%                             fun(_, #{ <<"body">> := Msgs }, _) ->
-%                                 Parent ! ok,
-%                                 {ok, Msgs}
-%                             end
-%                     }
-%                 }
-%         }),
-%     hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
-%     ?assert(receive ok -> true after 1000 -> false end).
+%% Test that we can use a hook upon a request.
+request_response_hooks_test() ->
+    Parent = self(),
+    Node = hb_http_server:start_node(
+        #{
+            on =>
+                #{
+                    <<"request">> =>
+                        #{
+                            <<"device">> => #{
+                                <<"request">> =>
+                                    fun(_, #{ <<"body">> := Msgs }, _) ->
+                                        Parent ! {hook, request},
+                                        {ok, #{ <<"body">> => Msgs} }
+                                    end
+                            }
+                        },
+                    <<"response">> =>
+                        #{
+                            <<"device">> => #{
+                                <<"response">> =>
+                                    fun(_, #{ <<"body">> := Msgs }, _) ->
+                                        Parent ! {hook, response},
+                                        {ok, #{ <<"body">> => Msgs} }
+                                    end
+                            }
+                        }
+                },
+            http_extra_opts => #{
+                <<"cache-control">> => [<<"no-store">>, <<"no-cache">>]
+            }
+        }),
+    hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
+    % Receive both of the responses from the hooks, if possible.
+    Res =
+        receive
+            {hook, request} ->
+                receive {hook, response} -> true after 100 -> false end
+            after 100 ->
+                false
+        end,
+    ?assert(Res).
 
-%% @doc Test that we can halt a request if the preprocessor returns an error.
+%% @doc Test that we can halt a request if the hook returns an error.
 halt_request_test() ->
     Node = hb_http_server:start_node(
         #{
-            preprocessor =>
+            on =>
                 #{
-                    <<"device">> => #{
-                        <<"preprocess">> =>
-                            fun(_, _, _) ->
-                                {error, <<"Bad">>}
-                            end
-                    }
+                    <<"request">> =>
+                        #{
+                            <<"device">> => #{
+                                <<"request">> =>
+                                    fun(_, _, _) ->
+                                        {error, <<"Bad">>}
+                                    end
+                            }
+                        }
                 }
         }),
     {error, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
     ?assertEqual(<<"Bad">>, Res).
 
-%% @doc Test that a preprocessor can modify a request.
+%% @doc Test that a hook can modify a request.
 modify_request_test() ->
     Node = hb_http_server:start_node(
         #{
-            preprocessor =>
+            on =>
                 #{
-                    <<"device">> => #{
-                        <<"preprocess">> =>
-                            fun(_, #{ <<"body">> := [M|Ms] }, _) ->
-                                {ok, [M#{ <<"added">> => <<"value">> }|Ms]}
-                            end
-                    }
+                    <<"request">> =>
+                        #{
+                            <<"device">> => #{
+                                <<"request">> =>
+                                    fun(_, #{ <<"body">> := [M|Ms] }, _) ->
+                                        {
+                                            ok,
+                                            #{
+                                                <<"body">> =>
+                                                    [
+                                                        M#{
+                                                            <<"added">> =>
+                                                                <<"value">>
+                                                        }
+                                                    |
+                                                        Ms
+                                                    ]
+                                            }
+                                        }
+                                    end
+                            }
+                        }
                 }
         }),
     {ok, Res} = hb_http:get(Node, <<"/added">>, #{}),
     ?assertEqual(<<"value">>, Res).
 
-%% Test that we can use a postprocessor upon a request. Calls the `test@1.0'
-%% device's postprocessor, which sets the `postprocessor-called' key to true in
-%% the HTTP server.
-% postprocessor_test() ->
-%     Node = hb_http_server:start_node(
-%         #{
-%             postprocessor => <<"test-device@1.0">>
-%         }),
-%     hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
-%     timer:sleep(100),
-%     {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info/postprocessor-called">>, #{}),
-%     ?event({res, Res}),
-%     ?assertEqual(true, Res).
+%% @doc Test that version information is available and returned correctly.
+buildinfo_test() ->
+    Node = hb_http_server:start_node(#{}),
+    ?assertEqual(
+        {ok, <<"HyperBEAM">>},
+        hb_http:get(Node, <<"/~meta@1.0/build/node">>, #{})
+    ),
+    ?assertEqual(
+        {ok, ?HYPERBEAM_VERSION},
+        hb_http:get(Node, <<"/~meta@1.0/build/version">>, #{})
+    ),
+    ?assertEqual(
+        {ok, ?HB_BUILD_SOURCE},
+        hb_http:get(Node, <<"/~meta@1.0/build/source">>, #{})
+    ),
+    ?assertEqual(
+        {ok, ?HB_BUILD_SOURCE_SHORT},
+        hb_http:get(Node, <<"/~meta@1.0/build/source-short">>, #{})
+    ),
+    ?assertEqual(
+        {ok, ?HB_BUILD_TIME},
+        hb_http:get(Node, <<"/~meta@1.0/build/build-time">>, #{})
+    ).

@@ -15,15 +15,17 @@
 %% not pay for their own requests.
 estimate(_, EstimateReq, NodeMsg) ->
     Req = hb_ao:get(<<"request">>, EstimateReq, NodeMsg#{ hashpath => ignore }),
-    ReqType = hb_ao:get(<<"type">>, EstimateReq, undefined, NodeMsg),
-    case {is_operator(Req, NodeMsg), ReqType} of
-        {true, _} -> {ok, 0};
-        {_, <<"post">>} ->
-            % We do not charge after the request has been processed, as balances
-            % in the ledger are updated in the pre-processing step.
+    case is_operator(Req, NodeMsg) of
+        true ->
+            ?event(payment,
+                {estimate_preprocessing, caller_is_operator}
+            ),
             {ok, 0};
-        {_, <<"pre">>} ->
-            Messages = hb_ao:get(<<"body">>, EstimateReq, NodeMsg#{ hashpath => ignore }),
+        false ->
+            Messages =
+                hb_singleton:from(
+                    hb_ao:get(<<"request">>, EstimateReq, NodeMsg)
+                ),
             {ok, length(Messages) * hb_opts:get(simple_pay_price, 1, NodeMsg)}
     end.
 
@@ -31,28 +33,49 @@ estimate(_, EstimateReq, NodeMsg) ->
 %% can charge the user at this stage because we know statically what the price
 %% will be
 debit(_, RawReq, NodeMsg) ->
-    case hb_ao:get(<<"type">>, RawReq, undefined, NodeMsg) of
-        <<"post">> -> {ok, true};
-        <<"pre">> ->
-            ?event(payment, {debit_preprocessing, RawReq}),
-            Req = hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }),
-            case hb_message:signers(Req) of
-                [] -> {ok, false};
-                [Signer] ->
-                    UserBalance = get_balance(Signer, NodeMsg),
-                    Price = hb_ao:get(<<"amount">>, RawReq, 0, NodeMsg),
+    ?event(payment, {debit, RawReq}),
+    Req = hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }),
+    case hb_message:signers(Req) of
+        [] ->
+            ?event(payment, {debit, {error, <<"No signers">>}}),
+            {ok, false};
+        [Signer] ->
+            UserBalance = get_balance(Signer, NodeMsg),
+            Price = hb_ao:get(<<"quantity">>, RawReq, 0, NodeMsg),
+            ?event(payment,
+                {debit,
+                    {user, Signer},
+                    {balance, UserBalance},
+                    {price, Price}
+                }),
+            {ok, _} =
+                set_balance(
+                    Signer,
+                    NewBalance = UserBalance - Price,
+                    NodeMsg
+                ),
+            case NewBalance >= 0 of
+                true ->
+                    {ok, true};
+                false ->
                     ?event(payment,
                         {debit,
                             {user, Signer},
                             {balance, UserBalance},
                             {price, Price}
-                        }),
-                    case UserBalance >= Price of
-                        true ->
-                            set_balance(Signer, UserBalance - Price, NodeMsg),
-                            {ok, true};
-                        false -> {ok, false}
-                    end
+                        }
+                    ),
+                    {error, #{
+                        <<"status">> => 429,
+                        <<"body">> => <<"Insufficient funds. "
+                            "User balance before debit: ",
+                                (hb_util:bin(UserBalance))/binary,
+                            ". Price of request: ",
+                                (hb_util:bin(Price))/binary,
+                            ". New balance: ",
+                                (hb_util:bin(NewBalance))/binary,
+                            ".">>
+                    }}
             end
     end.
 
@@ -60,7 +83,11 @@ debit(_, RawReq, NodeMsg) ->
 balance(_, RawReq, NodeMsg) ->
     Target =
         case hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }) of
-            not_found -> hd(hb_message:signers(RawReq));
+            not_found ->
+                case hb_message:signers(RawReq) of
+                    [] -> hb_ao:get(<<"target">>, RawReq, undefined, NodeMsg);
+                    [Signer] -> Signer
+                end;
             Req -> hd(hb_message:signers(Req))
         end,
     {ok, get_balance(Target, NodeMsg)}.
@@ -136,15 +163,14 @@ is_operator(Req, NodeMsg) ->
 
 %%% Tests
 
-test_opts() -> test_opts(#{}).
 test_opts(Ledger) ->
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     ProcessorMsg =
         #{
             <<"device">> => <<"p4@1.0">>,
-            <<"ledger_device">> => <<"simple-pay@1.0">>,
-            <<"pricing_device">> => <<"simple-pay@1.0">>
+            <<"ledger-device">> => <<"simple-pay@1.0">>,
+            <<"pricing-device">> => <<"simple-pay@1.0">>
         },
     {
         Address,
@@ -153,26 +179,34 @@ test_opts(Ledger) ->
             simple_pay_ledger => Ledger,
             simple_pay_price => 10,
             operator => Address,
-            preprocessor => ProcessorMsg,
-            postprocessor => ProcessorMsg
+            on => #{
+                <<"request">> => ProcessorMsg,
+                <<"response">> => ProcessorMsg
+            }
         }
     }.
 
 get_balance_and_top_up_test() ->
     ClientWallet = ar_wallet:new(),
     ClientAddress = hb_util:human_id(ar_wallet:to_address(ClientWallet)),
-    {_HostAddress, HostWallet, Opts} = test_opts(#{ClientAddress => 100}),
+    {HostAddress, HostWallet, Opts} = test_opts(#{ ClientAddress => 100 }),
     Node = hb_http_server:start_node(Opts),
+    ?event({host_address, HostAddress}),
+    ?event({client_address, ClientAddress}),
     {ok, Res} =
         hb_http:get(
             Node,
-            hb_message:commit(
+            Req = hb_message:commit(
                 #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
                 ClientWallet
             ),
             #{}
         ),
-    ?assertEqual(80, Res),
+    ?event({req_signers, hb_message:signers(Req)}),
+    % Balance is given during the request, before the charge is made, so we 
+    % should expect to see the original balance.
+    ?assertEqual(100, Res),
+    % The balance should now be 80, as the check will have charged us 20.
     {ok, NewBalance} =
         hb_http:post(
             Node,
@@ -186,6 +220,9 @@ get_balance_and_top_up_test() ->
             ),
             #{}
         ),
+    % The balance should now be 180, as the topup will have been added and will
+    % not have generated a charge in itself. The top-up did not generate a charge
+    % because it is the operator that performed it, and not a user.
     ?assertEqual(180, NewBalance),
     {ok, Res2} =
         hb_http:get(
@@ -196,4 +233,4 @@ get_balance_and_top_up_test() ->
             ),
             #{}
         ),
-    ?assertEqual(160, Res2).
+    ?assertEqual(180, Res2).

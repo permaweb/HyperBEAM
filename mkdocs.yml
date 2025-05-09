@@ -240,8 +240,8 @@ extra_javascript:
   - js/parallax.js
   - js/navigation.js
   - js/toc-highlight.js
-  - js/custom-nav.js
   - js/disable-preload-transition.js
+  - js/header-scroll.js
 
 extra:
   social:

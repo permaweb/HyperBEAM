@@ -106,7 +106,7 @@ pub fn compute_launch_digest<'a>(env: Env<'a>, input_map: Term<'a>) -> NifResult
         // vcpu_type: CpuType::try_from(args.vcpu_type).unwrap(),
         // vmm_type: Some(VMMType::try_from(args.vmm_type).unwrap()),
         // guest_features: GuestFeatures(args.guest_features),
-		vcpus: 1,
+		vcpus: 32,
         vcpu_type: CpuType::EpycV4,
         vmm_type: Some(VMMType::QEMU),
         guest_features: GuestFeatures(0x1),

@@ -79,7 +79,7 @@ do_compute(ProcID, Msg2, Opts) ->
                 <<"relay-path">> =>
                     <<
                         "/result/",
-                        (integer_to_binary(Slot))/binary,
+                        (hb_util:bin(Slot))/binary,
                         "?process-id=",
                         ProcID/binary
                     >>,
