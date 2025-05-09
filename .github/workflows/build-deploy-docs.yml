@@ -29,7 +29,7 @@ jobs:
   # Run the build as part of PRs to confirm the site properly builds
   check_build:
     if: ${{ startsWith(github.ref, 'refs/pull/') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: ⬇️ Checkout repo
         uses: actions/checkout@v3
@@ -91,7 +91,7 @@ jobs:
   # Build and deploy the artifacts to Arweave via ArDrive
   deploy:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
     # However, do NOT cancel in-progress runs as we want to allow these deployments to complete.
     concurrency:
