@@ -79,10 +79,11 @@ jobs:
       # Install rebar3
       - name: Install rebar3
         run: |
+          . ~/otp-27.0/activate
           mkdir -p ~/.config/rebar3
           curl -O https://s3.amazonaws.com/rebar3/rebar3 && chmod +x rebar3
           sudo mv rebar3 /usr/local/bin/rebar3
-          rebar3 --version
+          . ~/otp-27.0/activate && rebar3 --version
 
       # Install Rust toolchain (needed for WASM components)
       - name: Install Rust and Cargo
@@ -166,10 +167,11 @@ jobs:
       # Install rebar3
       - name: Install rebar3
         run: |
+          . ~/otp-27.0/activate
           mkdir -p ~/.config/rebar3
           curl -O https://s3.amazonaws.com/rebar3/rebar3 && chmod +x rebar3
           sudo mv rebar3 /usr/local/bin/rebar3
-          rebar3 --version
+          . ~/otp-27.0/activate && rebar3 --version
 
       # Install Rust toolchain (needed for WASM components)
       - name: Install Rust and Cargo
