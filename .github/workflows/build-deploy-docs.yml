@@ -107,7 +107,7 @@ jobs:
             --undername=${UNDERNAME} \
             --deploy-folder=${ARTIFACTS_OUTPUT_DIR}
         env:
-          DEPLOY_KEY: ${{ secrets.CI_WALLET }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
           ARTIFACTS_OUTPUT_DIR: ${{ steps.build_artifacts.outputs.artifacts_output_dir }}
-          ANT_PROCESS: HY021r2MQL9Zi0qSNFAQ9QRshIc2mNPYf65pZBP04cE
+          ANT_PROCESS: ${{ secrets.ANT_PROCESS }}
           UNDERNAME: docs
