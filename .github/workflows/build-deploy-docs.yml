@@ -72,7 +72,7 @@ jobs:
 
       - name: 🛠 Build Docs
         run: |
-          ./docs/build-all.sh
+          ./docs/build-all.sh -v
 
   # Build and deploy the artifacts to Arweave via ArDrive
   deploy:
