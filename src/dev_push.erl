@@ -21,7 +21,6 @@
 %%
 %% `/push-mode': Whether or not the push should be done asynchronously.
 %%        Default: `sync', pushing synchronously.
-
 push(Base, Req, Opts) ->
     Process = dev_process:as_process(Base, Opts),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
