@@ -2,7 +2,6 @@
 
 
 
-* [Data Types](#types)
 
 This module implements HTTP Message Signatures as described in RFC-9421
 (https://datatracker.ietf.org/doc/html/rfc9421), as an AO-Core device.

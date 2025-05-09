@@ -2,9 +2,7 @@
 
 ## Overview
 
-The `~relay@1.0` device is responsible for forwarding messages (HTTP requests) from one HyperBEAM node to another node or to any external HTTP(S) endpoint.
-
-**Status:** Stable
+The [`~relay@1.0`](../resources/source-code/dev_relay.md) device enables HyperBEAM nodes to send messages to external HTTP endpoints or other AO nodes.
 
 ## Core Concept: Message Forwarding
 
@@ -31,7 +29,7 @@ This device acts as an HTTP client within the AO ecosystem. It allows a node or 
     *   **Inputs:** Same as `call`.
     *   **Response:** `{ok, <<"OK">>}`.
 *   **`preprocess`**
-    *   **Action:** This function is designed to be used as a node's global `preprocessor` (configured via `~meta@1.0`). When configured, it intercepts *all* incoming requests to the node and automatically rewrites them to be relayed via the `call` key. This effectively turns the node into a pure forwarding proxy, using its routing table (`dev_router`) to determine the destination.
+    *   **Action:** This function is designed to be used as a node's global `preprocessor` (configured via [`~meta@1.0`](../resources/source-code/dev_meta.md)). When configured, it intercepts *all* incoming requests to the node and automatically rewrites them to be relayed via the `call` key. This effectively turns the node into a pure forwarding proxy, using its routing table ([`dev_router`](../resources/source-code/dev_router.md)) to determine the destination.
     *   **Response:** A message structure that invokes `/~relay@1.0/call` with the original request as the target body.
 
 ## Use Cases
@@ -43,6 +41,6 @@ This device acts as an HTTP client within the AO ecosystem. It allows a node or 
 
 ## Interaction with Routing
 
-When `call` or `cast` is invoked, the actual HTTP request dispatch is handled by `hb_http:request/2`. This function often utilizes the node's routing configuration (`dev_router`) to determine the specific peer/URL to send the request to, especially if the target path is an AO process ID or another internal identifier rather than a full external URL.
+When `call` or `cast` is invoked, the actual HTTP request dispatch is handled by `hb_http:request/2`. This function often utilizes the node's routing configuration ([`dev_router`](../resources/source-code/dev_router.md)) to determine the specific peer/URL to send the request to, especially if the target path is an AO process ID or another internal identifier rather than a full external URL.
 
 [relay module](../resources/source-code/dev_relay.md)

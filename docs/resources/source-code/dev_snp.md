@@ -14,8 +14,8 @@ as well as generating them, if called in an appropriate environment.
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#execute_is_trusted-3">execute_is_trusted/3*</a></td><td>Ensure that all of the software hashes are trusted.</td></tr><tr><td valign="top"><a href="#generate-3">generate/3</a></td><td>Generate an commitment report and emit it as a message, including all of
 the necessary data to generate the nonce (ephemeral node address + node
 message ID), as well as the expected measurement (firmware, kernel, and VMSAs
-hashes).</td></tr><tr><td valign="top"><a href="#generate_nonce-2">generate_nonce/2*</a></td><td>Generate the nonce to use in the commitment report.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Should take in options to set for the device such as kernel, initrd, firmware,
-and append hashes and make them available to the device.</td></tr><tr><td valign="top"><a href="#is_debug-1">is_debug/1*</a></td><td>Ensure that the node's debug policy is disabled.</td></tr><tr><td valign="top"><a href="#real_node_test-0">real_node_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#report_data_matches-3">report_data_matches/3*</a></td><td>Ensure that the report data matches the expected report data.</td></tr><tr><td valign="top"><a href="#trusted-3">trusted/3</a></td><td>Default implementation of a resolver for trusted software.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify an commitment report message; validating the identity of a
+hashes).</td></tr><tr><td valign="top"><a href="#generate_nonce-2">generate_nonce/2*</a></td><td>Generate the nonce to use in the commitment report.</td></tr><tr><td valign="top"><a href="#is_debug-1">is_debug/1*</a></td><td>Ensure that the node's debug policy is disabled.</td></tr><tr><td valign="top"><a href="#real_node_test-0">real_node_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#report_data_matches-3">report_data_matches/3*</a></td><td>Ensure that the report data matches the expected report data.</td></tr><tr><td valign="top"><a href="#trusted-3">trusted/3</a></td><td>Validates if a given message parameter matches a trusted value from the SNP trusted list
+Returns {ok, true} if the message is trusted, {ok, false} otherwise.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify an commitment report message; validating the identity of a
 remote node, its ephemeral private address, and the integrity of the report.</td></tr></table>
 
 
@@ -52,17 +52,6 @@ hashes).
 
 Generate the nonce to use in the commitment report.
 
-<a name="init-3"></a>
-
-### init/3 ###
-
-`init(M1, M2, Opts) -> any()`
-
-Should take in options to set for the device such as kernel, initrd, firmware,
-and append hashes and make them available to the device. Only runnable once,
-and only if the operator is not set to an address (and thus, the node has not
-had any priviledged access).
-
 <a name="is_debug-1"></a>
 
 ### is_debug/1 * ###
@@ -91,9 +80,8 @@ Ensure that the report data matches the expected report data.
 
 `trusted(Msg1, Msg2, NodeOpts) -> any()`
 
-Default implementation of a resolver for trusted software. Searches the
-`trusted` key in the base message for a list of trusted values, and checks
-if the value in the request message is a member of that list.
+Validates if a given message parameter matches a trusted value from the SNP trusted list
+Returns {ok, true} if the message is trusted, {ok, false} otherwise
 
 <a name="verify-3"></a>
 

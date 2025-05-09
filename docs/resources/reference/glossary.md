@@ -106,7 +106,7 @@ For a more comprehensive glossary of terms used in the permaweb, try the [Permaw
   <div class="light-mode-iframe-container">
     <iframe 
      id="glossary-frame-light" 
-     src="https://glossary.arweave.net/?hide-header=true&bg-color=%23FFFFFF&text-color=%231A1A1A&link-color=%23fc8516&heading-color=%233C3C3C&accent-color=%23fc8516&tag-bg=%23fc8516&tag-text=%23ffffff&button-bg=%23fc8516&button-text=%23ffffff"
+     src="https://glossary.arweave.net/?hide-header=true&bg-color=%23FFFFFF&text-color=%231A1A1A&heading-color=%233C3C3C&tag-text=%23ffffff&button-text=%23ffffff"
      width="100%" 
      height="400" 
      frameborder="0" 
@@ -120,7 +120,7 @@ For a more comprehensive glossary of terms used in the permaweb, try the [Permaw
      height="400"  
 	 frameborder="0" 
 	 scrolling="no"
-     src="https://glossary.arweave.net/?hide-header=true&bg-color=%231F2129&text-color=%23e0e0e0&link-color=%23fc8516&heading-color=%23ffffff&accent-color=%23fc8516&border-color=%23444444&hover-bg=%23222222&button-bg=%23fc8516&button-text=%23ffffff&section-bg=%23333333&section-color=%23ffffff&category-bg=%23333333&category-text=%23ffffff&tag-bg=%23fc8516&tag-text=%23ffffff&secondary-text=%23a0a0a0&result-bg=%231e1e1e&result-hover=%23333333"
+     src="https://glossary.arweave.net/?hide-header=true&bg-color=%231F2129&text-color=%23e0e0e0&heading-color=%23ffffff&border-color=%23444444&hover-bg=%23222222&button-text=%23ffffff&section-bg=%23333333&section-color=%23ffffff&category-bg=%23333333&category-text=%23ffffff&tag-text=%23ffffff&secondary-text=%23a0a0a0&result-bg=%231e1e1e&result-hover=%23333333"
      >
     </iframe>
   </div>

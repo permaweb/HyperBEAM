@@ -6,7 +6,7 @@ Each device listed here represents a specific capability available to AO process
 
 ## Available Devices
 
-Below is a list of documented built-in devices. Each page details the device's purpose, status, available functions (keys), and usage examples where applicable.
+Below is a list of documented built-in devices. Each page details the device's purpose, available functions (keys), and usage examples where applicable.
 
 *   **[`~message@1.0`](./message-at-1-0.md):** Base message handling and manipulation.
 *   **[`~meta@1.0`](./meta-at-1-0.md):** Node configuration and metadata.
@@ -24,7 +24,3 @@ Below is a list of documented built-in devices. Each page details the device's p
 Devices are typically referenced using a name and version, like `~<name>@<version>` (e.g., `~process@1.0`). The tilde (`~`) often indicates a primary, user-facing device, while internal or utility devices might use a `dev_` prefix in the source code (e.g., `dev_router`).
 
 Versioning indicates the specific interface and behavior of the device. Changes to a device that break backward compatibility usually result in a version increment.
-
-## Status Indicators
-
-Each device page will include a status indicator (e.g., `Stable`, `Beta`, `Experimental`) to help you gauge its production readiness and likelihood of future changes.

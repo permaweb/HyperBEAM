@@ -377,8 +377,8 @@ mimic_default_types(Map, Mode) ->
 %% @param Opts The options map containing node_history
 %% @param MinLength The minimum acceptable length of node_history
 %% @param MaxLength The maximum acceptable length of node_history
-%% @returns {ok, Length} if MinLength =< Length =< MaxLength,
-%% or {error, Reason} if the length is outside the range.
+%% @returns `{ok, Length}' if `MinLength =< Length =< MaxLength',
+%% or `{error, Reason}' if the length is outside the range.
 validate_node_history(Opts) ->
     validate_node_history(Opts, 1, 1).
 validate_node_history(Opts, MinLength, MaxLength) ->

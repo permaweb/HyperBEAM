@@ -99,7 +99,7 @@ To start a shell with profiles:
 rebar3 as rocksdb shell
 
 # Multiple profiles
-rebar3 as rocksdb,genesis_wasm shell
+rebar3 as rocksdb, genesis_wasm shell
 ```
 
 To create a release with profiles:

@@ -95,7 +95,7 @@ HyperBEAM device implementations are defined as follows:
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#deep_set-4">deep_set/4</a></td><td>Recursively search a map, resolving keys, and set the value of the key
 at the given path.</td></tr><tr><td valign="top"><a href="#default_module-0">default_module/0*</a></td><td>The default device is the identity device, which simply returns the
-value associated with any key as it exists in its Erlang map.</td></tr><tr><td valign="top"><a href="#device_set-4">device_set/4*</a></td><td>Call the device's <code>set</code> function.</td></tr><tr><td valign="top"><a href="#do_resolve_many-2">do_resolve_many/2*</a></td><td></td></tr><tr><td valign="top"><a href="#ensure_loaded-2">ensure_loaded/2*</a></td><td>Ensure that the message is loaded from the cache if it is an ID.</td></tr><tr><td valign="top"><a href="#error_execution-5">error_execution/5*</a></td><td>Handle an error in a device call.</td></tr><tr><td valign="top"><a href="#error_infinite-3">error_infinite/3*</a></td><td>Catch all return if we are in an infinite loop.</td></tr><tr><td valign="top"><a href="#error_invalid_intermediate_status-5">error_invalid_intermediate_status/5*</a></td><td></td></tr><tr><td valign="top"><a href="#error_invalid_message-3">error_invalid_message/3*</a></td><td>Catch all return if the message is invalid.</td></tr><tr><td valign="top"><a href="#find_exported_function-5">find_exported_function/5</a></td><td>Find the function with the highest arity that has the given name, if it
+value associated with any key as it exists in its Erlang map.</td></tr><tr><td valign="top"><a href="#device_set-4">device_set/4*</a></td><td>Call the device's <code>set</code> function.</td></tr><tr><td valign="top"><a href="#device_set-5">device_set/5*</a></td><td></td></tr><tr><td valign="top"><a href="#do_resolve_many-2">do_resolve_many/2*</a></td><td></td></tr><tr><td valign="top"><a href="#ensure_loaded-2">ensure_loaded/2*</a></td><td>Ensure that the message is loaded from the cache if it is an ID.</td></tr><tr><td valign="top"><a href="#error_execution-5">error_execution/5*</a></td><td>Handle an error in a device call.</td></tr><tr><td valign="top"><a href="#error_infinite-3">error_infinite/3*</a></td><td>Catch all return if we are in an infinite loop.</td></tr><tr><td valign="top"><a href="#error_invalid_intermediate_status-5">error_invalid_intermediate_status/5*</a></td><td></td></tr><tr><td valign="top"><a href="#error_invalid_message-3">error_invalid_message/3*</a></td><td>Catch all return if the message is invalid.</td></tr><tr><td valign="top"><a href="#find_exported_function-5">find_exported_function/5</a></td><td>Find the function with the highest arity that has the given name, if it
 exists.</td></tr><tr><td valign="top"><a href="#force_message-2">force_message/2</a></td><td></td></tr><tr><td valign="top"><a href="#get-2">get/2</a></td><td>Shortcut for resolving a key in a message without its status if it is
 <code>ok</code>.</td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr><tr><td valign="top"><a href="#get-4">get/4</a></td><td></td></tr><tr><td valign="top"><a href="#get_first-2">get_first/2</a></td><td>take a sequence of base messages and paths, then return the value of the
 first message that can be resolved using a path.</td></tr><tr><td valign="top"><a href="#get_first-3">get_first/3</a></td><td></td></tr><tr><td valign="top"><a href="#info-2">info/2</a></td><td>Get the info map for a device, optionally giving it a message if the
@@ -118,7 +118,10 @@ actually takes.</td></tr><tr><td valign="top"><a href="#verify_device_compatibil
 `deep_set(Msg, Rest, Value, Opts) -> any()`
 
 Recursively search a map, resolving keys, and set the value of the key
-at the given path.
+at the given path. This function has special cases for handling `set` calls
+where the path is an empty list (`/`). In this case, if the value is an
+immediate, non-complex term, we can set it directly. Otherwise, we use the
+device's `set` function to set the value.
 
 <a name="default_module-0"></a>
 
@@ -138,6 +141,12 @@ according to the `Message2` passed to it.
 `device_set(Msg, Key, Value, Opts) -> any()`
 
 Call the device's `set` function.
+
+<a name="device_set-5"></a>
+
+### device_set/5 * ###
+
+`device_set(Msg, Key, Value, Mode, Opts) -> any()`
 
 <a name="do_resolve_many-2"></a>
 
@@ -430,11 +439,13 @@ The resolver is composed of a series of discrete phases:
 4: Persistent-resolver lookup.
 5: Device lookup.
 6: Execution.
-7: Cryptographic linking.
-8: Result caching.
-9: Notify waiters.
-10: Fork worker.
-11: Recurse or terminate.
+7: Execution of the `step` hook.
+8: Subresolution.
+9: Cryptographic linking.
+10: Result caching.
+11: Notify waiters.
+12: Fork worker.
+13: Recurse or terminate.
 
 <a name="resolve-3"></a>
 

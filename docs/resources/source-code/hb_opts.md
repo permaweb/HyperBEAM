@@ -31,7 +31,7 @@ with a refusal to execute.<a name="index"></a>
 changes during the lifetime of a node.</td></tr><tr><td valign="top"><a href="#config_lookup-2">config_lookup/2*</a></td><td>An abstraction for looking up configuration variables.</td></tr><tr><td valign="top"><a href="#default_message-0">default_message/0</a></td><td>The default configuration options of the hyperbeam node.</td></tr><tr><td valign="top"><a href="#get-1">get/1</a></td><td>Get an option from the global options, optionally overriding with a
 local <code>Opts</code> map if <code>prefer</code> or <code>only</code> is set to <code>local</code>.</td></tr><tr><td valign="top"><a href="#get-2">get/2</a></td><td></td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr><tr><td valign="top"><a href="#global_get-2">global_get/2*</a></td><td>Get an environment variable or configuration key.</td></tr><tr><td valign="top"><a href="#load-1">load/1</a></td><td>Parse a <code>flat@1.0</code> encoded file into a map, matching the types of the
 keys to those in the default message.</td></tr><tr><td valign="top"><a href="#load_bin-1">load_bin/1</a></td><td></td></tr><tr><td valign="top"><a href="#mimic_default_types-2">mimic_default_types/2</a></td><td>Mimic the types of the default message for a given map.</td></tr><tr><td valign="top"><a href="#normalize_default-1">normalize_default/1*</a></td><td>Get an option from environment variables, optionally consulting the
-<code>hb_features</code> of the node if a conditional default tuple is provided.</td></tr></table>
+<code>hb_features</code> of the node if a conditional default tuple is provided.</td></tr><tr><td valign="top"><a href="#validate_node_history-1">validate_node_history/1</a></td><td>Validate that the node_history length is within an acceptable range.</td></tr><tr><td valign="top"><a href="#validate_node_history-3">validate_node_history/3</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -130,4 +130,18 @@ Mimic the types of the default message for a given map.
 
 Get an option from environment variables, optionally consulting the
 `hb_features` of the node if a conditional default tuple is provided.
+
+<a name="validate_node_history-1"></a>
+
+### validate_node_history/1 ###
+
+`validate_node_history(Opts) -> any()`
+
+Validate that the node_history length is within an acceptable range.
+
+<a name="validate_node_history-3"></a>
+
+### validate_node_history/3 ###
+
+`validate_node_history(Opts, MinLength, MaxLength) -> any()`
 

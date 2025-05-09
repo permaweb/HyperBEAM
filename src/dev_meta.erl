@@ -11,7 +11,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 %%% Include the auto-generated build info header file.
--include_lib("_build/hb_buildinfo.hrl").
+-include_lib("../_build/hb_buildinfo.hrl").
 
 %% @doc Ensure that the helper function `adopt_node_message/2' is not exported.
 %% The naming of this method carefully avoids a clash with the exported `info/3'

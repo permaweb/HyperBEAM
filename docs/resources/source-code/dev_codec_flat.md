@@ -12,12 +12,18 @@ their value.
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td></td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td></td></tr><tr><td valign="top"><a href="#deep_nesting_test-0">deep_nesting_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#deserialize-1">deserialize/1</a></td><td></td></tr><tr><td valign="top"><a href="#empty_map_test-0">empty_map_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#from-1">from/1</a></td><td>Convert a flat map to a TABM.</td></tr><tr><td valign="top"><a href="#inject_at_path-3">inject_at_path/3*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_paths_test-0">multiple_paths_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#nested_conversion_test-0">nested_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#path_list_test-0">path_list_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#serialize-1">serialize/1</a></td><td></td></tr><tr><td valign="top"><a href="#simple_conversion_test-0">simple_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#to-1">to/1</a></td><td>Convert a TABM to a flat map.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#binary_passthrough_test-0">binary_passthrough_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td></td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td></td></tr><tr><td valign="top"><a href="#deep_nesting_test-0">deep_nesting_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#deserialize-1">deserialize/1</a></td><td></td></tr><tr><td valign="top"><a href="#empty_map_test-0">empty_map_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#from-1">from/1</a></td><td>Convert a flat map to a TABM.</td></tr><tr><td valign="top"><a href="#inject_at_path-3">inject_at_path/3*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_paths_test-0">multiple_paths_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#nested_conversion_test-0">nested_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#path_list_test-0">path_list_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#serialize-1">serialize/1</a></td><td></td></tr><tr><td valign="top"><a href="#simple_conversion_test-0">simple_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#to-1">to/1</a></td><td>Convert a TABM to a flat map.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
 
 ## Function Details ##
+
+<a name="binary_passthrough_test-0"></a>
+
+### binary_passthrough_test/0 * ###
+
+`binary_passthrough_test() -> any()`
 
 <a name="commit-3"></a>
 

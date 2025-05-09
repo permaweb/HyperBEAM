@@ -59,7 +59,7 @@ Write an assignment message into the cache.
 
 ### write_location/2 ###
 
-`write_location(LocationMsg, Opts) -> any()`
+`write_location(LocMsg, Opts) -> any()`
 
 Write the latest known scheduler location for an address.
 
