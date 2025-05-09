@@ -215,6 +215,7 @@ jobs:
         id: publish_artifacts
         run: |
           npx permaweb-deploy \
+            --arns-name=dps-testing-facility \
             --ant-process=${{ secrets.ANT_PROCESS }} \
             --deploy-folder=${ARTIFACTS_OUTPUT_DIR}
         env:
