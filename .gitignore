@@ -43,3 +43,9 @@ mkdocs-site-id.txt
 mkdocs-site-manifest.csv
 
 !test/admissible-report-wallet.json
+mainnet-cache/
+store-inputs/
+debug-cache/
+
+wallet.json
+node_modules
