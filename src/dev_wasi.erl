@@ -286,6 +286,52 @@ basic_aos_exec_test() ->
         = hb_json:decode(Output),
     ?assertEqual(<<"2">>, Data).
 
+em_exception_test() ->
+    Init = generate_wasi_stack("test/try.wasm", <<"handle">>, []),
+    Msg = gen_test_aos_msg("return 1 + 1"),
+    Env = <<"1">>,
+    Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
+    {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
+    ?assertNotEqual(0, Ptr1),
+    hb_beamr_io:write(Instance, Ptr1, Msg),
+    {ok, Ptr2} = hb_beamr_io:malloc(Instance, byte_size(Env)),
+    ?assertNotEqual(0, Ptr2),
+    hb_beamr_io:write(Instance, Ptr2, Env),
+    % Read the strings to validate they are correctly passed
+    {ok, MsgBin} = hb_beamr_io:read(Instance, Ptr1, byte_size(Msg)),
+    {ok, EnvBin} = hb_beamr_io:read(Instance, Ptr2, byte_size(Env)),
+    ?assertEqual(Env, EnvBin),
+    ?assertEqual(Msg, MsgBin),
+    Ready = Init#{ <<"wasm-params">> => [Ptr1, Ptr2] },
+    {ok, StateRes} = hb_converge:resolve(Ready, <<"compute">>, #{}),
+    [Ptr] = hb_converge:get(<<"results/wasm/output">>, StateRes),
+    {ok, Output} = hb_beamr_io:read_string(Instance, Ptr),
+    ?event({got_output, Output}),
+    ?assertEqual(<<"Catch">>, Output).
+
+em_exception_stack_test() ->
+    Init = generate_wasi_stack("test/try_stack.wasm", <<"handle">>, []),
+    Msg = gen_test_aos_msg("return 1 + 1"),
+    Env = gen_test_env(),
+    Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
+    {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
+    ?assertNotEqual(0, Ptr1),
+    hb_beamr_io:write(Instance, Ptr1, Msg),
+    {ok, Ptr2} = hb_beamr_io:malloc(Instance, byte_size(Env)),
+    ?assertNotEqual(0, Ptr2),
+    hb_beamr_io:write(Instance, Ptr2, Env),
+    % Read the strings to validate they are correctly passed
+    {ok, MsgBin} = hb_beamr_io:read(Instance, Ptr1, byte_size(Msg)),
+    {ok, EnvBin} = hb_beamr_io:read(Instance, Ptr2, byte_size(Env)),
+    ?assertEqual(Env, EnvBin),
+    ?assertEqual(Msg, MsgBin),
+    Ready = Init#{ <<"wasm-params">> => [Ptr1, Ptr2] },
+    {ok, StateRes} = hb_converge:resolve(Ready, <<"compute">>, #{}),
+    [Ptr] = hb_converge:get(<<"results/wasm/output">>, StateRes),
+    {ok, Output} = hb_beamr_io:read_string(Instance, Ptr),
+    ?event({got_output, Output}),
+    ?assertEqual(<<"Done">>, Output).
+
 %%% Test Helpers
 gen_test_env() ->
     <<"{\"Process\":{\"Id\":\"AOS\",\"Owner\":\"FOOBAR\",\"Tags\":[{\"name\":\"Name\",\"value\":\"Thomas\"}, {\"name\":\"Authority\",\"value\":\"FOOBAR\"}]}}\0">>.
