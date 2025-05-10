@@ -87,10 +87,13 @@ find_scripts(Base, Opts) ->
     end.
 
 %% @doc Load a list of scripts for installation into the Lua VM.
-load_scripts(Scripts, Opts) -> load_scripts(Scripts, Opts, []).
+load_scripts(Scripts, Opts) -> 
+    ?event({debug_lua_load_scripts_start, {scripts, Scripts}}),
+    load_scripts(Scripts, Opts, []).
 load_scripts([], _Opts, Acc) ->
     {ok, lists:reverse(Acc)};
-load_scripts([ScriptID | Rest], Opts, Acc) when ?IS_ID(ScriptID) ->
+load_scripts([ScriptID | Rest], Opts, Acc) when is_binary(ScriptID) ->
+    ?event({debug_lua_load_scripts_binary, {script_id, ScriptID}}),
     case hb_cache:read(ScriptID, Opts) of
         {ok, Script} when is_binary(Script) ->
             % The ID referred to a binary script item, so we add it to the list
@@ -107,18 +110,9 @@ load_scripts([ScriptID | Rest], Opts, Acc) when ?IS_ID(ScriptID) ->
             }}
     end;
 load_scripts([Script | Rest], Opts, Acc) when is_map(Script) ->
-    % We have found a message with a Lua script inside. Search for the binary
-    % of the program in the body and the data.
-    ScriptBin =
-        hb_ao:get_first(
-            [
-                {Script, <<"body">>},
-                {Script, <<"data">>}
-            ],
-            Script,
-            Opts
-        ),
-    case ScriptBin of
+    ?event({debug_lua_load_scripts_map, {script_map, Script}}),
+    % We have found a message with a direct Lua script. Load it.
+    case hb_ao:get(<<"body">>, Script, Opts) of
         not_found ->
             {error, #{
                 <<"status">> => 404,
@@ -149,6 +143,7 @@ load_scripts([Script | Rest], Opts, Acc) when is_map(Script) ->
 
 %% @doc Initialize a new Lua state with a given base message and script.
 initialize(Base, Scripts, Opts) ->
+    ?event({debug_lua_initialize_start, {scripts, Scripts}}),
     State0 = luerl:init(),
     % Load each script into the Lua state.
     State1 =
