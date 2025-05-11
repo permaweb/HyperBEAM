@@ -26,6 +26,7 @@ rebar3.crashdump
 *.bin
 .vscode/c_cpp_properties.json
 
+target
 native/hb_beamr/*.o
 native/hb_beamr/*.d
 

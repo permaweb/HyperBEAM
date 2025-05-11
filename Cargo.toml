@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = [
+    "native/dev_snp_nif",
+    "native/hb_wtime",
+]

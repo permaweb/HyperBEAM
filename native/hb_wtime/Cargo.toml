@@ -1,0 +1,18 @@
+[package]
+name = "hb_wtime"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "hb_wtime"
+path = "src/lib.rs"
+crate-type = ["dylib"]
+
+[dependencies]
+anyhow = "1.0.98"
+rustler = "0.36.0"
+tokio = { version = "1.45.0", features = ["full"] }
+tracing = "0.1.41"
+tracing-test = "0.2.5"
+ulid = "1.2.1"
+wasmtime = "32.0.0"
