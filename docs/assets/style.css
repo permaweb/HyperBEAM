@@ -586,6 +586,10 @@ h6 {
 	background: #D4D4D4;
 }
 
+.headerlink {
+	transform: rotateY(180deg);
+}
+
 .section-inner-content {
 	display: flex;
 	flex-direction: column;
