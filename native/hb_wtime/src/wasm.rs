@@ -1,3 +1,5 @@
+use std::{future::Future, pin::Pin};
+
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, trace};
@@ -230,17 +232,23 @@ pub struct CallStackLevel {
     host_request: Option<HostFuncRequest>,
 }
 
-#[derive(Debug)]
-pub struct PendingImportStackItem {
+pub struct PendingImportStackItem<'a> {
     func_desc: HostFuncDesc,
     results_count: usize,
+    wasm_future: Pin<Box<dyn Future<Output = Result<Vec<WasmVal>, anyhow::Error>> + Send + 'a>>,
     host_resp_tx: HostFuncRespTx,
 }
 
+impl<'a> std::fmt::Debug for PendingImportStackItem<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PendingImportStackItem {{ func_desc: {:?}, results_count: {}, host_resp_tx: {:?} }}", self.func_desc, self.results_count, self.host_resp_tx)
+    }
+}
+
 #[derive(Debug)]
-pub struct WasmCallState {
+pub struct WasmCallState<'a> {
     instance_extra: WasmInstanceExtra,
-    pending_import_stack: Vec<PendingImportStackItem>,
+    pending_import_stack: Vec<PendingImportStackItem<'a>>,
 }
 
 #[derive(Debug, Clone)]
@@ -249,10 +257,9 @@ pub enum CallStepResult {
     Complete(WasmResultsVec),
 }
 
-pub fn call_init(instance_extra: WasmInstanceExtra) -> Result<WasmCallState> {
+pub fn call_init<'a>(instance_extra: WasmInstanceExtra) -> Result<WasmCallState<'a>> {
     trace!("call_init");
 
-    // let call_id = ulid::Ulid::new();
     let call_state = WasmCallState {
         instance_extra,
         pending_import_stack: vec![],
@@ -261,9 +268,9 @@ pub fn call_init(instance_extra: WasmInstanceExtra) -> Result<WasmCallState> {
     Ok(call_state)
 }
 
-pub async fn call_push_native(
-    instance_state: &mut WasmInstanceState,
-    call_state: &mut WasmCallState,
+pub async fn call_push_native<'a>(
+    instance_state: &'a mut WasmInstanceState,
+    call_state: &mut WasmCallState<'a>,
     native_request: NativeFuncRequest,
 ) -> Result<CallStepResult> {
     let module = &instance_state.module;
@@ -278,22 +285,26 @@ pub async fn call_push_native(
         NativeFuncDesc::Indirect(_index) => unimplemented!(),
     };
 
-    let mut results = vec![WasmVal::I32(0); results_count];
-    let mut wasm_future = Box::pin(func_inst.call_async(
-        &mut instance_state.store,
-        native_request.params.as_slice(),
-        results.as_mut_slice(),
-    ));
+    let mut wasm_future = Box::pin(async move {
+        let mut results = vec![WasmVal::I32(0); results_count];
+        func_inst.call_async(
+            &mut instance_state.store,
+            native_request.params.as_slice(),
+            results.as_mut_slice(),
+        ).await.unwrap();
+        Ok::<Vec<WasmVal>, anyhow::Error>(results)
+    });
 
+    // Re-add Box::pin for host_func_request_future as recv() is not Unpin
     let mut host_func_request_future = Box::pin(call_state.instance_extra.host_req_channel.recv());
 
     let step_result = tokio::select! {
         call_result = &mut wasm_future => {
             match call_result {
-                Ok(_complete) => {
+                Ok(results) => {
                     debug!("Wasm future complete, results populated in provided slice");
                     drop(wasm_future);
-                    CallStepResult::Complete(results.clone())
+                    CallStepResult::Complete(results)
                 }
                 Err(e) => {
                     panic!("Wasm future failed: {:?}", e);
@@ -302,15 +313,16 @@ pub async fn call_push_native(
         },
         Some((host_req, host_resp_tx)) = &mut host_func_request_future => {
             info!("Host request: {:?}", host_req);
-            let import_meta = ImportMeta {
-                func_desc: host_req.func_desc.clone(),
-                params: host_req.params.clone(),
-            };
             call_state.pending_import_stack.push(PendingImportStackItem {
-                func_desc: host_req.func_desc,
+                func_desc: host_req.func_desc.clone(),
                 results_count,
+                wasm_future,
                 host_resp_tx,
             });
+            let import_meta = ImportMeta {
+                func_desc: host_req.func_desc,
+                params: host_req.params.clone(),
+            };
             CallStepResult::ImportCall(import_meta)
         },
         else => unreachable!(),
@@ -319,9 +331,8 @@ pub async fn call_push_native(
     Ok(step_result)
 }
 
-pub fn call_pop_host(
-    instance_state: &mut WasmInstanceState,
-    call_state: &mut WasmCallState,
+pub async fn call_pop_host<'a>(
+    call_state: &mut WasmCallState<'a>,
     host_response: HostFuncResponse,
 ) -> Result<CallStepResult> {
     trace!("call_pop_host");
@@ -333,11 +344,42 @@ pub fn call_pop_host(
 
     let results_count = pending_import_stack_item.results_count;
     // let func_desc = pending_import_stack_item.func_desc;
+    let mut wasm_future = pending_import_stack_item.wasm_future;
 
     // Then, send the response
-    let result_sent = pending_import_stack_item.host_resp_tx.send(host_response);
+    pending_import_stack_item.host_resp_tx.send(host_response).unwrap();
     
-    let step_result = CallStepResult::Complete(vec![WasmVal::I32(0); results_count]);
+    let mut host_func_request_future = Box::pin(call_state.instance_extra.host_req_channel.recv());
+
+    let step_result = tokio::select! {
+        call_result = &mut wasm_future => {
+            match call_result {
+                Ok(results) => {
+                    debug!("Wasm future complete, results populated in provided slice");
+                    drop(wasm_future);
+                    CallStepResult::Complete(results)
+                }
+                Err(e) => {
+                    panic!("Wasm future failed: {:?}", e);
+                }
+            }
+        },
+        Some((host_req, host_resp_tx)) = &mut host_func_request_future => {
+            info!("Host request: {:?}", host_req);
+            call_state.pending_import_stack.push(PendingImportStackItem {
+                func_desc: host_req.func_desc.clone(),
+                results_count,
+                wasm_future,
+                host_resp_tx,
+            });
+            let import_meta = ImportMeta {
+                func_desc: host_req.func_desc,
+                params: host_req.params.clone(),
+            };
+            CallStepResult::ImportCall(import_meta)
+        },
+        else => unreachable!(),
+    };
 
     Ok(step_result)
 }
@@ -470,7 +512,8 @@ mod tests {
             results: vec![WasmVal::I32(0)],
         };
 
-        let pop_res = call_pop_host(&mut instance_state, &mut call_state, host_response).unwrap();
+        let pop_res = call_pop_host(&mut call_state, host_response).await.unwrap();
+        
         
         // assert_eq!(pop_res, CallStepResult::Complete(vec![WasmVal::I32(0); 1]));
         error!("Pop res: {:?}", pop_res);
