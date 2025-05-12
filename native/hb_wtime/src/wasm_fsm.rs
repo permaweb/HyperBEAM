@@ -6,9 +6,12 @@ pub use crate::wasm::{
 use anyhow::Result;
 use strum_macros::Display;
 
+/// Distinguishes the context of a `PendingStep` state in the FSM.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum StepType {
+    /// Indicates the Wasm execution is starting from the beginning of an exported function.
     Begin,
+    /// Indicates the Wasm execution is resuming after a host function call has returned.
     Resume,
 }
 
@@ -627,11 +630,11 @@ mod tests {
         assert_eq!(fsm.call_stack.len(), 1);
 
         // 5. Provide response for host_A (for the outer_call)
-        let host_response_A = HostFuncResponse {
+        let host_response_a = HostFuncResponse {
             func_desc: import_req_a.func_desc, // Use the original func_desc for host_A
             results: vec![Val::I32(10)],       // host_A returned 10
         };
-        fsm.pop(host_response_A)
+        fsm.pop(host_response_a)
             .expect("provide_host_response for host_A failed");
         assert_eq!(
             *fsm.current_state(),
