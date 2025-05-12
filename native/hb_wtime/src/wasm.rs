@@ -1,9 +1,10 @@
 use std::{future::Future, pin::Pin};
+use crate::types::{WasmVal, WasmValType};
 
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, trace};
-use wasmtime::{Caller, Config, Engine, Instance, Linker, Module, Store, Val as WasmVal, ValType};
+use wasmtime::{Caller, Config, Engine, Instance, Linker, Module, Store};
 
 #[derive(Debug, Clone)]
 pub enum WasmModuleData {
@@ -181,8 +182,8 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
 }
 
 pub struct WasmFunctionSignature {
-    pub params: Vec<ValType>,
-    pub results: Vec<ValType>,
+    pub params: Vec<WasmValType>,
+    pub results: Vec<WasmValType>,
 }
 
 type WasmParamsVec = Vec<WasmVal>;

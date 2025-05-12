@@ -1,8 +1,7 @@
 use rustler::{Encoder, Env, Error, Term};
 use tracing::{error, trace};
-use wasmtime::{Val as WasmVal, ValType as WasmValType};
 
-use crate::{types::NifWasmVal, wasm::HostFuncRequest};
+use crate::{types::{NifWasmVal, WasmVal, WasmValType}, wasm::HostFuncRequest};
 
 /// Converts an Erlang float (f64) argument into a WasmVal::F64.
 /// Currently assumes the first argument is the one to convert.

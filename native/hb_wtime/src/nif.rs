@@ -1,4 +1,4 @@
-use crate::types::NifWasmVal;
+use crate::types::{NifWasmVal, WasmVal, WasmValType};
 use crate::wasm::*;
 use crate::convert;
 use rustler::{Atom, Binary, Env, NifResult, ResourceArc, Term, Encoder};
