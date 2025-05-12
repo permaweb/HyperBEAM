@@ -8,8 +8,8 @@
         , tagged_enum_echo/1
         , untagged_enum_echo/1
         , xor_example/2
-        , wtime_instance_init/1
-        , wtime_call_init/3
+        , wtime_create_instance/1
+        , wtime_call_start/3
         ]).
 
 -include("cargo.hrl").
@@ -44,10 +44,10 @@ untagged_enum_echo(_Untagged) ->
 xor_example(_BinX, _BinY) ->
     ?NOT_LOADED.
 
-wtime_instance_init(_Bin) ->
+wtime_create_instance(_Bin) ->
     ?NOT_LOADED.
 
-wtime_call_init(_Context, _Func, _Args) ->
+wtime_call_start(_Context, _Func, _Args) ->
     ?NOT_LOADED.
 
 %%%===================================================================
@@ -97,21 +97,21 @@ xor_example_test() ->
     Y = <<"\x55\x55\x55\x55\x55\x55\x55\x55">>,
     ?assertEqual(<<"\x1F\x1F\x1F\x1F\x1F\x1F\x1F\x1F">>, xor_example(X, Y)).
 
-
-wtime_instance_init_test() ->
+wtime_create_instance_test() ->
     Bin = <<0,97,115,109,1,0,0,0>>,  % Minimal valid WASM binary
-    {ok, _Context} = wtime_instance_init(Bin),
+    {ok, _Context} = wtime_create_instance(Bin),
     ok.
 
-wtime_instance_init_error_test() ->
+wtime_create_instance_error_test() ->
     Bin = <<0,0,0,0,0,0,0,0>>,  % Invalid WASM binary
-    {error, _} = wtime_instance_init(Bin),
+    {error, _} = wtime_create_instance(Bin),
     ok.
 
-wtime_call_init_test() ->
+wtime_call_start_test() ->
     {ok, Bin} = file:read_file("test/test.wasm"),
-    {ok, Inst} = wtime_instance_init(Bin),
-    {ok, _Call} = wtime_call_init(Inst, "run", []),
+    io:format("Bin: ~p~n", [Bin]),
+    {ok, Inst} = wtime_create_instance(Bin),
+    {ok, complete, [120.0]} = wtime_call_start(Inst, <<"fac">>, [5.0]),
     ok.
 
 -endif.

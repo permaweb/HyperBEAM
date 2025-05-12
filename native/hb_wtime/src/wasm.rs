@@ -216,39 +216,35 @@ pub enum NativeFuncDesc {
 
 #[derive(Debug, Clone)]
 pub struct NativeFuncRequest {
-    func_desc: NativeFuncDesc,
-    params: WasmParamsVec,
+    pub func_desc: NativeFuncDesc,
+    pub params: WasmParamsVec,
 }
 
 #[derive(Debug, Clone)]
 pub struct NativeFuncResponse {
-    func_desc: NativeFuncDesc,
-    results: WasmResultsVec,
+    pub func_desc: NativeFuncDesc,
+    pub results: WasmResultsVec,
 }
 
 #[derive(Debug, Clone)]
 pub struct HostFuncRequest {
-    func_desc: HostFuncDesc,
-    params: WasmParamsVec,
+    pub func_desc: HostFuncDesc,
+    pub params: WasmParamsVec,
 }
 
 #[derive(Debug, Clone)]
 pub struct HostFuncResponse {
-    func_desc: HostFuncDesc,
-    results: WasmResultsVec,
-}
-
-#[derive(Debug, Clone)]
-pub struct CallStackLevel {
-    native_request: NativeFuncRequest,
-    host_request: Option<HostFuncRequest>,
+    pub func_desc: HostFuncDesc,
+    pub results: WasmResultsVec,
 }
 
 pub struct PendingImportStackItem<'a> {
-    func_desc: HostFuncDesc,
-    results_count: usize,
-    wasm_future: Pin<Box<dyn Future<Output = Result<Vec<WasmVal>, anyhow::Error>> + Send + 'a>>,
-    host_resp_tx: HostFuncRespTx,
+    pub func_desc: HostFuncDesc,
+    pub results_count: usize,
+    /// The active Wasm future. The lifetime 'a is tied to the Wasmtime Store
+    /// from WasmInstanceState that this future operates on.
+    pub wasm_future: Pin<Box<dyn Future<Output = Result<Vec<WasmVal>, anyhow::Error>> + Send + 'a>>,
+    pub host_resp_tx: HostFuncRespTx,
 }
 
 impl<'a> std::fmt::Debug for PendingImportStackItem<'a> {
@@ -258,9 +254,13 @@ impl<'a> std::fmt::Debug for PendingImportStackItem<'a> {
 }
 
 #[derive(Debug)]
+/// Represents the state of an ongoing Wasm call.
+/// The lifetime 'a is derived from the WasmInstanceState (specifically its Store)
+/// with which this call state is associated. This means WasmCallState<'a>
+/// must be used in a context where that WasmInstanceState is also live.
 pub struct WasmCallState<'a> {
-    instance_extra: WasmInstanceExtra,
-    pending_import_stack: Vec<PendingImportStackItem<'a>>,
+    pub instance_extra: WasmInstanceExtra,
+    pub pending_import_stack: Vec<PendingImportStackItem<'a>>,
 }
 
 #[derive(Debug, Clone)]
