@@ -1,6 +1,7 @@
+use crate::types::NifWasmParams;
 use crate::wasm::*;
 use crate::convert;
-use rustler::{Atom, Binary, Env, NifResult, Resource, ResourceArc, Term, Encoder};
+use rustler::{Atom, Binary, Env, NifResult, ResourceArc, Term, Encoder};
 use tracing::{debug, error, trace, warn};
 use std::sync::Mutex;
 use tokio::sync::{mpsc, oneshot};
@@ -47,8 +48,8 @@ fn wtime_create_instance(env: Env, module_binary: Binary) -> NifResult<(Atom, Re
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, args: Vec<f64>) -> NifResult<Term> {
-    trace!("wtime_call_start - func: {}, args: {:?}", func, args);
+fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, params: Vec<NifWasmParams>) -> NifResult<Term> {
+    trace!("wtime_call_start - func: {}, params: {:?}", func, params);
 
     let mut context = resource.context.lock().unwrap();
     let rt_handle = context.rt.handle().clone();
@@ -56,7 +57,12 @@ fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, args:
     let (_, dummy_rx) = mpsc::channel::<(HostFuncRequest, oneshot::Sender<HostFuncResponse>)>(1);
     let mut instance_extra = std::mem::replace(&mut context.init_extra, WasmInstanceExtra { host_req_channel: dummy_rx });
 
-    let params = match convert::args_to_wasm_vals(&args) {
+
+    let func_type = context.init_state.module.get_export(func.as_str()).unwrap();
+    let param_def = func_type.unwrap_func().params();
+    let param_types = param_def.collect::<Vec<_>>();
+
+    let params = match convert::nif_params_to_wasm_vals(params.as_slice(), &param_types) {
         Ok(p) => p,
         Err(e) => {
             error!("Argument conversion failed: {:?}", e);

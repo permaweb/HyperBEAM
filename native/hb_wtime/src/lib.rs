@@ -5,6 +5,7 @@ use tracing::trace;
 /// This file defines the available NIF functions and organizes them into modules.
 
 pub mod example;
+pub mod types;
 pub mod wasm;
 pub mod convert;
 pub mod nif;

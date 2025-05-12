@@ -113,18 +113,16 @@ wtime_create_instance_error_test() ->
 
 wtime_call_start_test() ->
     {ok, Bin} = file:read_file("test/test.wasm"),
-    io:format("Bin: ~p~n", [Bin]),
     {ok, Inst} = wtime_create_instance(Bin),
     {ok, complete, [120.0]} = wtime_call_start(Inst, <<"fac">>, [5.0]),
     ok.
 
 wtime_call_resume_test() ->
-    {ok, Bin} = file:read_file("test/pow-calculator.wasm"),
+    {ok, Bin} = file:read_file("test/pow_calculator.wasm"),
     {ok, Inst} = wtime_create_instance(Bin),
-    {ok, A, B} = wtime_call_start(Inst, <<"pow">>, [2.0, 5.0]),
-    % import, [<<"mul">>, [2.0, 2.0]]
-    io:format("A: ~p~n", [A]),
-    io:format("B: ~p~n", [B]),
+    {ok, import, [Mod, Field, [1, 2]]} = wtime_call_start(Inst, <<"pow">>, [2, 5]),
+    ?assertEqual(<<"my_lib">>, Mod),
+    ?assertEqual(<<"mul">>, Field),
     % {ok, complete, [120.0]} = wtime_call_resume(Inst),
     ok.
 

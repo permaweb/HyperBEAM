@@ -1,17 +1,35 @@
 use rustler::{Encoder, Env, Error, Term};
-use wasmtime::Val;
+use tracing::{error, trace};
+use wasmtime::{Val, ValType};
 
-use crate::wasm::HostFuncRequest;
+use crate::{types::NifWasmParams, wasm::HostFuncRequest};
 
 /// Converts an Erlang float (f64) argument into a WasmVal::F64.
 /// Currently assumes the first argument is the one to convert.
-pub fn args_to_wasm_vals(args: &[f64]) -> Result<Vec<Val>, Error> {
-    if args.is_empty() {
-        Ok(vec![])
-    } else {
-        // TODO: Add proper signature checking and conversion for multiple args.
-        Ok(vec![Val::F64(args[0].to_bits())])
+pub fn nif_params_to_wasm_vals(
+    params: &[NifWasmParams],
+    param_types: &[ValType],
+) -> Result<Vec<Val>, Error> {
+    trace!("nif_params_to_wasm_vals - params: {:?}, param_types: {:?}", params, param_types);
+
+    let mut wasm_vals = Vec::new();
+    for (arg, arg_type) in params.iter().zip(param_types.iter()) {
+        trace!("nif_params_to_wasm_vals - arg: {:?}, arg_type: {:?}", arg, arg_type);
+
+        match (arg, arg_type) {
+            (NifWasmParams::I32(arg), ValType::I32) => wasm_vals.push(Val::I32(*arg as i32)),
+            (NifWasmParams::I64(arg), ValType::I64) => wasm_vals.push(Val::I64(*arg as i64)),
+            (NifWasmParams::F32(arg), ValType::F32) => wasm_vals.push(Val::F32(arg.to_bits())),
+            (NifWasmParams::F32(arg), ValType::F64) => wasm_vals.push(Val::F64((*arg as f64).to_bits())),
+            (NifWasmParams::F64(arg), ValType::F32) => wasm_vals.push(Val::F32((*arg as f32).to_bits())),
+            (NifWasmParams::F64(arg), ValType::F64) => wasm_vals.push(Val::F64(arg.to_bits())),
+            _ => {
+                error!("nif_params_to_wasm_vals - Unsupported WasmValType");
+                return Err(Error::Term(Box::new("Unsupported WasmValType")))
+            },
+        }
     }
+    Ok(wasm_vals)
 }
 
 /// Converts a WasmVal result into an encodable rustler::Term.
