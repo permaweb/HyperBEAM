@@ -229,3 +229,39 @@ fn call_continue<'a>(
         Err(e) => Ok(fsm_error_to_term(env, e)),
     }
 }
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn mem_read<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<NifRes>,
+    offset: usize,
+    length: usize,
+) -> NifResult<Term<'a>> {
+    trace!("mem_read - offset: {}, length: {}", offset, length);
+    let mut fsm = resource.fsm.lock().unwrap();
+
+    let mut erl_bin = rustler::NewBinary::new(env, length);
+
+    match fsm.read_memory(offset, erl_bin.as_mut_slice()) {
+        Ok(()) => {
+            Ok((Atom::from_str(env, "ok").unwrap(), Term::from(erl_bin)).encode(env))
+        }
+        Err(e) => Ok(fsm_error_to_term(env, e)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn mem_write<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<NifRes>,
+    offset: usize,
+    data: Binary<'a>,
+) -> NifResult<Term<'a>> {
+    trace!("mem_write - offset: {}, data_len: {}", offset, data.len());
+    let mut fsm = resource.fsm.lock().unwrap();
+
+    match fsm.write_memory(offset, data.as_slice()) {
+        Ok(()) => Ok(Atom::from_str(env, "ok").unwrap().encode(env)),
+        Err(e) => Ok(fsm_error_to_term(env, e)),
+    }
+}

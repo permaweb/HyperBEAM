@@ -3,7 +3,9 @@
 -export([
     create/1,
     call_begin/3,
-    call_continue/4
+    call_continue/4,
+    mem_read/3,
+    mem_write/3
 ]).
 
 -include("cargo.hrl").
@@ -21,6 +23,12 @@ call_begin(_Context, _Func, _Args) ->
     ?NOT_LOADED.
 
 call_continue(_Context, _Module, _Field, _Results) ->
+    ?NOT_LOADED.
+
+mem_read(_Context, _Offset, _Length) ->
+    ?NOT_LOADED.
+
+mem_write(_Context, _Offset, _Data) ->
     ?NOT_LOADED.
 
 %%%===================================================================
@@ -52,13 +60,13 @@ create_error_test() ->
     {error, _} = create(Bin),
     ok.
 
-call_begin_test() ->
+call_start_test() ->
     {ok, Bin} = file:read_file("test/test.wasm"),
     {ok, Inst} = create(Bin),
     {ok, complete, [120.0]} = call_begin(Inst, <<"fac">>, [5.0]),
     ok.
 
-call_continue_test() ->
+call_resume_test() ->
     {ok, Bin} = file:read_file("test/pow_calculator.wasm"),
     {ok, Inst} = create(Bin),
     Mod = <<"my_lib">>,
@@ -69,7 +77,7 @@ call_continue_test() ->
     {ok, complete, [4]} = call_continue(Inst, Mod, Field, [Res2A * Res2B]),
     ok.
 
-wtime_nested_call_test() ->
+nested_call_test() ->
     WAT =
         <<
             "(module\n"
@@ -95,6 +103,18 @@ wtime_nested_call_test() ->
     HostAResponse = 42,
     {ok, complete, [OuterResult]} = call_continue(Inst, EnvModuleA, FuncNameA, [HostAResponse]),
     ?assertEqual(HostAResponse, OuterResult),
+    ok.
+
+mem_read_write_test() ->
+    WAT = <<"(module (memory (export \"memory\") 1))">>,
+    {ok, Inst} = create(WAT),
+    Offset = 10,
+    WriteData = <<"hello_erlang\x99">>,
+    ?assertEqual(ok, mem_write(Inst, Offset, WriteData)),
+    
+    ReadLength = size(WriteData),
+    {ok, ReadData} = mem_read(Inst, Offset, ReadLength),
+    ?assertEqual(WriteData, ReadData),
     ok.
 
 -endif.

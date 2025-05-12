@@ -394,6 +394,38 @@ impl WasmFsm {
             ))),
         }
     }
+
+    /// Reads data from the Wasm instance's memory at the given offset into the provided buffer.
+    ///
+    /// Allowed when the FSM is `Idle` or `AwaitingHost`.
+    pub fn read_memory(&mut self, offset: usize, buffer: &mut [u8]) -> Result<(), FsmError> {
+        if !matches!(self.state_tag, StateTag::Idle) && 
+           !matches!(self.state_tag, StateTag::AwaitingHost) {
+            return Err(FsmError::InvalidState {
+                operation: "read_memory (must be Idle or AwaitingHost)",
+                current_state: self.state_tag.clone(),
+            });
+        }
+        // Pass the mutable borrow of self.instance to the wasm module function
+        wasm::wasm_read_memory(&mut self.instance, offset, buffer)
+            .map_err(FsmError::CallFailed) // Wrap underlying error
+    }
+
+    /// Writes data to the Wasm instance's memory at the given offset.
+    ///
+    /// Allowed when the FSM is `Idle` or `AwaitingHost`.
+    pub fn write_memory(&mut self, offset: usize, data: &[u8]) -> Result<(), FsmError> {
+        if !matches!(self.state_tag, StateTag::Idle) && 
+           !matches!(self.state_tag, StateTag::AwaitingHost) {
+            return Err(FsmError::InvalidState {
+                operation: "write_memory (must be Idle or AwaitingHost)",
+                current_state: self.state_tag.clone(),
+            });
+        }
+        // Pass the mutable borrow of self.instance to the wasm module function
+        wasm::wasm_write_memory(&mut self.instance, offset, data)
+            .map_err(FsmError::CallFailed) // Wrap underlying error
+    }
 }
 
 #[cfg(test)]
@@ -791,5 +823,99 @@ mod tests {
             _ => panic!("Expected Complete for run_add_five"),
         }
         assert_eq!(*fsm.current_state(), StateTag::Idle);
+    }
+
+    #[test]
+    fn test_fsm_memory_write_read_idle() {
+        let wat = r#"(module (memory (export "memory") 1))"#;
+        let (_runtime, mut fsm) = setup_fsm(wat);
+        assert_eq!(*fsm.current_state(), StateTag::Idle);
+
+        let write_data: Vec<u8> = vec![1, 2, 3, 4, 5];
+        let offset = 10;
+
+        fsm.write_memory(offset, &write_data).expect("write_memory failed");
+
+        let mut read_buffer = vec![0u8; write_data.len()];
+        fsm.read_memory(offset, &mut read_buffer).expect("read_memory failed");
+
+        assert_eq!(write_data, read_buffer);
+    }
+
+    #[test]
+    fn test_fsm_memory_write_read_awaiting_host() {
+        let wat = r#"
+            (module
+              (import "env" "host_func" (func $hf))
+              (memory (export "memory") 1)
+              (func (export "run") call $hf)
+            )
+        "#;
+        let (_runtime, mut fsm) = setup_fsm(wat);
+
+        // Start call to get to AwaitingHost
+        let request = NativeFuncRequest {
+            func_desc: wasm::NativeFuncDesc::Export("run".to_string()),
+            params: vec![],
+        };
+        fsm.push(request).expect("start_call failed");
+        // Capture the actual import request when transitioning to AwaitingHost
+        let actual_import_req = match fsm.step().expect("step failed to get to AwaitingHost") {
+            CallOutcome::ImportCallNeeded(req) => req,
+            _ => panic!("Expected ImportCallNeeded"),
+        };
+        assert_eq!(*fsm.current_state(), StateTag::AwaitingHost);
+
+        // Perform memory operations while AwaitingHost
+        let write_data: Vec<u8> = vec![10, 20, 30];
+        let offset = 50;
+        fsm.write_memory(offset, &write_data).expect("write_memory in AwaitingHost failed");
+
+        let mut read_buffer = vec![0u8; write_data.len()];
+        fsm.read_memory(offset, &mut read_buffer).expect("read_memory in AwaitingHost failed");
+        assert_eq!(write_data, read_buffer);
+
+        // Resume and complete the call using the captured import request details
+        let host_response = HostFuncResponse {
+            func_desc: actual_import_req.func_desc, // Use the captured func_desc
+            results: vec![], // Assuming host_func takes no params and returns nothing for simplicity
+        };
+        fsm.pop(host_response).expect("provide_host_response failed");
+        assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Resume));
+
+        match fsm.step().expect("final step failed") {
+            CallOutcome::Complete(_) => (),
+            _ => panic!("Expected Complete after resuming"),
+        }
+        assert_eq!(*fsm.current_state(), StateTag::Idle);
+    }
+
+    #[test]
+    fn test_fsm_memory_op_invalid_state_pending_step() {
+        let wat = r#"(module (memory (export "memory") 1) (func (export "run")))"#;
+        let (_runtime, mut fsm) = setup_fsm(wat);
+        let request = NativeFuncRequest {
+            func_desc: wasm::NativeFuncDesc::Export("run".to_string()),
+            params: vec![],
+        };
+        fsm.push(request).expect("start_call failed");
+        assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
+
+        let data: Vec<u8> = vec![1];
+        assert!(matches!(
+            fsm.write_memory(0, &data),
+            Err(FsmError::InvalidState { 
+                operation: "write_memory (must be Idle or AwaitingHost)",
+                current_state: StateTag::PendingStep(StepType::Begin)
+            })
+        ));
+        let mut buffer = vec![0u8;1];
+        assert!(matches!(
+            fsm.read_memory(0, &mut buffer),
+            Err(FsmError::InvalidState { 
+                operation: "read_memory (must be Idle or AwaitingHost)",
+                current_state: StateTag::PendingStep(StepType::Begin)
+            })
+        ));
     }
 }
