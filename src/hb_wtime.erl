@@ -1,17 +1,10 @@
 -module(hb_wtime).
 
--export([ add/2
-        , my_map/0
-        , my_maps/0
-        , my_tuple/0
-        , unit_enum_echo/1
-        , tagged_enum_echo/1
-        , untagged_enum_echo/1
-        , xor_example/2
-        , wtime_create_instance/1
-        , wtime_call_start/3
-        , wtime_call_resume/4
-        ]).
+-export([
+    wtime_create_instance/1,
+    wtime_call_start/3,
+    wtime_call_resume/4
+]).
 
 -include("cargo.hrl").
 -on_load(init/0).
@@ -20,30 +13,6 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-
-add(_A, _B) ->
-    ?NOT_LOADED.
-
-my_map() ->
-    ?NOT_LOADED.
-
-my_maps() ->
-    ?NOT_LOADED.
-
-my_tuple() ->
-    ?NOT_LOADED.
-
-unit_enum_echo(_Atom) ->
-    ?NOT_LOADED.
-
-tagged_enum_echo(_Tagged) ->
-    ?NOT_LOADED.
-
-untagged_enum_echo(_Untagged) ->
-    ?NOT_LOADED.
-
-xor_example(_BinX, _BinY) ->
-    ?NOT_LOADED.
 
 wtime_create_instance(_Bin) ->
     ?NOT_LOADED.
@@ -71,43 +40,15 @@ not_loaded(Line) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-add_test() ->
-    ?assertEqual(4, add(2, 2)).
-
-my_map_test() ->
-    ?assertEqual(#{lhs => 33, rhs => 21}, my_map()).
-
-my_maps_test() ->
-    ?assertEqual([#{lhs => 33, rhs => 21}, #{lhs => 33, rhs => 21}], my_maps()).
-
-my_tuple_test() ->
-    ?assertEqual({33, 21}, my_tuple()).
-
-unit_enum_echo_test() ->
-    ?assertEqual(foo_bar, unit_enum_echo(foo_bar)),
-    ?assertEqual(baz, unit_enum_echo(baz)).
-
-tagged_enum_echo_test() ->
-    ?assertEqual(foo, tagged_enum_echo(foo)),
-    ?assertEqual({bar, <<"string">>}, tagged_enum_echo({bar, <<"string">>})),
-    ?assertEqual({baz,#{a => 1, b => 2}}, tagged_enum_echo({baz,#{a => 1, b => 2}})).
-
-untagged_enum_echo_test() ->
-    ?assertEqual(123, untagged_enum_echo(123)),
-    ?assertEqual(<<"string">>, untagged_enum_echo(<<"string">>)).
-
-xor_example_test() ->
-    X = <<"\x4A\x4A\x4A\x4A\x4A\x4A\x4A\x4A">>,
-    Y = <<"\x55\x55\x55\x55\x55\x55\x55\x55">>,
-    ?assertEqual(<<"\x1F\x1F\x1F\x1F\x1F\x1F\x1F\x1F">>, xor_example(X, Y)).
-
 wtime_create_instance_test() ->
-    Bin = <<0,97,115,109,1,0,0,0>>,  % Minimal valid WASM binary
+    % Minimal valid WASM binary
+    Bin = <<0, 97, 115, 109, 1, 0, 0, 0>>,
     {ok, _Context} = wtime_create_instance(Bin),
     ok.
 
 wtime_create_instance_error_test() ->
-    Bin = <<0,0,0,0,0,0,0,0>>,  % Invalid WASM binary
+    % Invalid WASM binary
+    Bin = <<0, 0, 0, 0, 0, 0, 0, 0>>,
     {error, _} = wtime_create_instance(Bin),
     ok.
 
@@ -129,17 +70,18 @@ wtime_call_resume_test() ->
     ok.
 
 wtime_nested_call_test() ->
-    WAT = <<"
-        (module
-          (import \"env\" \"host_A\" (func $host_A (result i32)))
-          (func (export \"outer_func\") (result i32)
-            call $host_A
-          )
-          (func (export \"inner_func\") (result i32)
-            i32.const 99
-          )
-        )
-    ">>,
+    WAT =
+        <<
+            "(module\n"
+            "  (import \"env\" \"host_A\" (func $host_A (result i32)))\n"
+            "  (func (export \"outer_func\") (result i32)\n"
+            "    call $host_A\n"
+            "  )\n"
+            "  (func (export \"inner_func\") (result i32)\n"
+            "    i32.const 99\n"
+            "  )\n"
+            ")"
+        >>,
     {ok, Inst} = wtime_create_instance(WAT),
     % 1. Start outer_func, it should call host_A
     {ok, import, [EnvModuleA, FuncNameA, _ParamsA]} = wtime_call_start(Inst, <<"outer_func">>, []),
