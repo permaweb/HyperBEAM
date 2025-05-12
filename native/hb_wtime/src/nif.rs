@@ -13,32 +13,8 @@ pub struct NifRes {
     runtime: tokio::runtime::Runtime,
 }
 
-fn nif_val_to_wasm_val(nif_val: NifWasmVal) -> WasmVal {
-    match nif_val {
-        NifWasmVal::I32(v) => WasmVal::I32(v),
-        NifWasmVal::I64(v) => WasmVal::I64(v),
-        NifWasmVal::F32(v) => WasmVal::F32(v.to_bits()),
-        NifWasmVal::F64(v) => WasmVal::F64(v.to_bits()),
-    }
-}
-
 fn fsm_error_to_term<'a>(env: Env<'a>, err: FsmError) -> Term<'a> {
-    let reason_string = match err {
-        FsmError::InitializationFailed(e) => format!("Initialization Failed: {}", e),
-        FsmError::CallFailed(e) => format!("Call Failed: {}", e),
-        FsmError::InvalidState { operation, current_state } => {
-                        format!(
-                            "Invalid State for operation '{}': {:?}",
-                            operation,
-                            current_state
-                        )
-            }
-        FsmError::InternalError(s) => format!("Internal FSM Error: {}", s),
-        FsmError::ExportNotFound(s) => format!("Export not found: {}", s),
-        FsmError::NotAFunction(s) => format!("Export '{}' is not a function", s),
-        FsmError::IndirectNotFound(s) => format!("Indirect not found: {}", s),
-        FsmError::ImportNotFound(s) => format!("Import not found: {}", s),
-    };
+    let reason_string = err.to_string();
     (Atom::from_str(env, "error").unwrap(), reason_string).encode(env)
 }
 

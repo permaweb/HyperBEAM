@@ -4,6 +4,7 @@ pub use crate::wasm::{
     WasmInstanceState, WasmModuleData,
 };
 use anyhow::Result;
+use strum_macros::Display;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum StepType {
@@ -32,18 +33,33 @@ pub enum CallOutcome {
 }
 
 /// Errors specific to the FSM operation.
-#[derive(Debug)]
+#[derive(Debug, Display)]
 pub enum FsmError {
+    #[strum(to_string = "Wasm initialization failed: {0}")]
     InitializationFailed(anyhow::Error),
+
+    #[strum(to_string = "Wasm call failed: {0}")]
     CallFailed(anyhow::Error),
+
+    #[strum(to_string = "Invalid state transition: cannot perform operation '{operation}' in state {current_state:?}")]
     InvalidState {
         operation: &'static str,
         current_state: StateTag,
     },
+
+    #[strum(to_string = "Internal FSM Error: {0}")]
     InternalError(String),
+
+    #[strum(to_string = "Export not found: {0}")]
     ExportNotFound(String),
+
+    #[strum(to_string = "Indirect not found: {0}")]
     IndirectNotFound(String),
+
+    #[strum(to_string = "Import not found: {0}")]
     ImportNotFound(String),
+
+    #[strum(to_string = "Export '{0}' is not a function")]
     NotAFunction(String),
 }
 
