@@ -97,8 +97,7 @@ init(M1, M2, Opts) ->
                 end
         end,
     % Start the WASM executor.
-    {ok, _, _, AotImageBin} = hb_beamrc:compile(ImageBin),
-    {ok, Instance, _Imports, _Exports} = hb_beamr:start(AotImageBin, Mode),
+    {ok, Instance} = hb_wtime:create(ImageBin),
     % Set the WASM Instance, handler, and standard library invokation function.
     ?event({setting_wasm_instance, Instance, {prefix, Prefix}}),
     {ok,
@@ -106,13 +105,13 @@ init(M1, M2, Opts) ->
             #{
                 <<Prefix/binary, "/write">> =>
                     fun(Binary) ->
-                        {ok, Ptr} = hb_beamr_io:write_string(Instance, Binary),
+                        {ok, Ptr} = hb_wtime:mem_write(Instance, Binary),
                         {ok, Ptr}
                     end,
                 <<Prefix/binary, "/read">> =>
                     fun Reader([Ptr]) -> Reader(Ptr);
                         Reader(Ptr) ->
-                            {ok, Binary} = hb_beamr_io:read_string(Instance, Ptr),
+                            {ok, Binary} = hb_wtime:mem_read(Instance, Ptr),
                             {ok, Binary}
                     end,
                 <<Prefix/binary, "/instance">> => Instance,
@@ -129,8 +128,8 @@ default_import_resolver(Msg1, Msg2, Opts) ->
         instance := WASM,
         module := Module,
         func := Func,
-        args := Args,
-        func_sig := Signature
+        args := Args
+        % func_sig := Signature
     } = Msg2,
     Prefix = dev_stack:prefix(Msg1, Msg2, Opts),
     {ok, Msg3} =
@@ -142,16 +141,51 @@ default_import_resolver(Msg1, Msg2, Opts) ->
             ),
             #{
                 <<"path">> => <<"import">>,
-                <<"module">> => list_to_binary(Module),
-                <<"func">> => list_to_binary(Func),
-                <<"args">> => Args,
-                <<"func-sig">> => list_to_binary(Signature)
+                <<"module">> => Module,
+                <<"func">> => Func,
+                <<"args">> => Args
+                % <<"func-sig">> => list_to_binary(Signature)
             },
             Opts
         ),
     NextState = hb_ao:get(state, Msg3, Opts),
     Response = hb_ao:get(results, Msg3, Opts),
     {ok, Response, NextState}.
+
+call(Instance, Function, Params, ImportResolver, State1, Opts) ->
+    case hb_wtime:call_begin(Instance, Function, Params) of
+        {ok, complete, ResultList} ->
+            {ok, ResultList, State1};
+        {ok, import, [ImportModule, ImportField, ImportParams]} ->
+            % Start the import resolution loop
+            call_loop(Instance, ImportModule, ImportField, ImportParams, ImportResolver, State1, Opts);
+        {error, Reason} ->
+            {error, {call_begin_failed, Reason}}
+    end.
+
+%% Internal helper function to handle the host import loop.
+call_loop(Instance, ImportModule, ImportField, ImportParams, ImportResolver, CurrentState, Opts) ->
+    case ImportResolver(CurrentState, #{
+        instance => Instance,
+        module => ImportModule,
+        func => ImportField,
+        args => ImportParams
+        % func_sig => ImportSignature
+    }, Opts) of
+        {ok, HostResultList, NextState} ->
+            % Resume Wasm execution with the host result
+            case hb_wtime:call_continue(Instance, ImportModule, ImportField, HostResultList) of
+                {ok, complete, FinalResultList} ->
+                    {ok, FinalResultList, NextState}; % Final completion
+                {ok, import, [NextImportModule, NextImportField, NextImportParams]} ->
+                    % Another import was needed, continue the loop
+                    call_loop(Instance, NextImportModule, NextImportField, NextImportParams, ImportResolver, NextState, Opts);
+                {error, Reason} ->
+                    {error, {call_continue_failed, Reason}}
+            end;
+        {error, Reason} ->
+            {error, {import_resolver_failed, Reason}}
+    end.
 
 %% @doc Call the WASM executor with a message that has been prepared by a prior
 %% pass.
@@ -210,8 +244,8 @@ compute(RawM1, M2, Opts) ->
                             {priv, hb_private:from_message(M1)}
                         }
                     ),
-                    {ResType, Res, MsgAfterExecution} =
-                        hb_beamr:call(
+                    {ok, Res, MsgAfterExecution} =
+                        call(
                             instance(M1, M2, Opts),
                             WASMFunction,
                             case WASMParams of
@@ -225,7 +259,7 @@ compute(RawM1, M2, Opts) ->
                     {ok,
                         hb_ao:set(MsgAfterExecution,
                             #{
-                                <<"results/", Prefix/binary, "/type">> => ResType,
+                                % <<"results/", Prefix/binary, "/type">> => ResType,
                                 <<"results/", Prefix/binary, "/output">> => Res
                             }
                         )
@@ -261,7 +295,7 @@ normalize(RawM1, M2, Opts) ->
                     not_found -> throw({error, no_wasm_instance_or_snapshot});
                     State ->
                         {ok, M1} = init(RawM1, State, Opts),
-                        Res = hb_beamr:deserialize(instance(M1, M2, Opts), State),
+                        Res = hb_wtime:mem_write(instance(M1, M2, Opts), 0, State),
                         ?event(snapshot, {wasm_deserialized, {result, Res}}),
                         M1
                 end;
@@ -275,10 +309,11 @@ normalize(RawM1, M2, Opts) ->
 snapshot(M1, M2, Opts) ->
     ?event(snapshot, generating_snapshot),
     Instance = instance(M1, M2, Opts),
-    {ok, Serialized} = hb_beamr:serialize(Instance),
+    {ok, Size} = hb_wtime:mem_size(Instance),
+    {ok, Mem} = hb_wtime:mem_read(Instance, 0, Size),
     {ok,
         #{
-            <<"body">> => Serialized
+            <<"body">> => Mem
         }
     }.
 
@@ -393,7 +428,7 @@ input_prefix_test() ->
     ?event({after_init, Msg2}),
     Priv = hb_private:from_message(Msg2),
     ?assertMatch(
-        {ok, Instance} when is_pid(Instance),
+        {ok, Instance} when is_reference(Instance),
         hb_ao:resolve(Priv, <<"instance">>, #{})
     ),
     ?assertMatch(
@@ -417,7 +452,7 @@ process_prefixes_test() ->
     ?event({after_init, Msg3}),
     Priv = hb_private:from_message(Msg3),
     ?assertMatch(
-        {ok, Instance} when is_pid(Instance),
+        {ok, Instance} when is_reference(Instance),
         hb_ao:resolve(Priv, <<"wasm/instance">>, #{})
     ),
     ?assertMatch(
@@ -433,7 +468,7 @@ init_test() ->
     ?event({after_init, Msg1}),
     Priv = hb_private:from_message(Msg1),
     ?assertMatch(
-        {ok, Instance} when is_pid(Instance),
+        {ok, Instance} when is_reference(Instance),
         hb_ao:resolve(Priv, <<"instance">>, #{})
     ),
     ?assertMatch(
