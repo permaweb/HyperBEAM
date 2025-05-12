@@ -128,4 +128,31 @@ wtime_call_resume_test() ->
     {ok, complete, [4]} = wtime_call_resume(Inst, Mod, Field, [Res2A * Res2B]),
     ok.
 
+wtime_nested_call_test() ->
+    WAT = <<"
+        (module
+          (import \"env\" \"host_A\" (func $host_A (result i32)))
+          (func (export \"outer_func\") (result i32)
+            call $host_A
+          )
+          (func (export \"inner_func\") (result i32)
+            i32.const 99
+          )
+        )
+    ">>,
+    {ok, Inst} = wtime_create_instance(WAT),
+    % 1. Start outer_func, it should call host_A
+    {ok, import, [EnvModuleA, FuncNameA, _ParamsA]} = wtime_call_start(Inst, <<"outer_func">>, []),
+    ?assertEqual(<<"env">>, EnvModuleA),
+    ?assertEqual(<<"host_A">>, FuncNameA),
+    % 2. While outer_func is awaiting host_A, call inner_func (nesting)
+    %    wtime_call_start should allow this because the FSM is in AwaitingHost for the outer call.
+    {ok, complete, [InnerResult]} = wtime_call_start(Inst, <<"inner_func">>, []),
+    ?assertEqual(99, InnerResult),
+    % 3. Provide response for host_A to resume outer_func
+    HostAResponse = 42,
+    {ok, complete, [OuterResult]} = wtime_call_resume(Inst, EnvModuleA, FuncNameA, [HostAResponse]),
+    ?assertEqual(HostAResponse, OuterResult),
+    ok.
+
 -endif.

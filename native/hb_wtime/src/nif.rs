@@ -70,11 +70,12 @@ fn wtime_call_start<'a>(
     );
     let mut fsm = resource.fsm.lock().unwrap();
 
-    if !matches!(fsm.current_state(), StateTag::Idle) {
+    if !matches!(fsm.current_state(), StateTag::Idle) && 
+       !matches!(fsm.current_state(), StateTag::AwaitingHost) {
         return Ok(fsm_error_to_term(
             env,
             FsmError::InvalidState {
-                operation: "call_start (must be Idle)",
+                operation: "call_start (must be Idle or AwaitingHost for nesting)",
                 current_state: fsm.current_state().clone(),
             },
         ));
