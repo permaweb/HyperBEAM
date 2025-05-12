@@ -39,7 +39,7 @@ pub struct InstanceInitResult {
 }
 
 // Initialize the wasmtime runtime
-pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInitResult> {
+pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<InstanceInitResult> {
     trace!("instance_init");
 
     let mut cfg = Config::new();
@@ -255,7 +255,7 @@ pub enum CallStepResult {
     Complete(WasmResultsVec),
 }
 
-pub fn call_init<'a>() -> Result<WasmCallState<'a>> {
+pub fn wasm_call_init<'a>() -> Result<WasmCallState<'a>> {
     trace!("call_init");
 
     let call_state = WasmCallState {
@@ -268,7 +268,7 @@ pub fn call_init<'a>() -> Result<WasmCallState<'a>> {
 }
 
 // Make call_step public
-pub async fn call_step<'a>(
+pub async fn wasm_call_step<'a>(
     call_state: &mut WasmCallState<'a>,
     host_req_channel: &mut HostFuncChannel, // Add host_req_channel argument
 ) -> Result<CallStepResult> {
@@ -330,7 +330,7 @@ pub async fn call_step<'a>(
     }
 }
 
-pub async fn call_push_native<'a>(
+pub async fn wasm_call_push_native<'a>(
     instance_state: &'a mut WasmInstanceState,
     call_state: &mut WasmCallState<'a>, // Takes mutable call_state
     native_request: NativeFuncRequest,
@@ -398,7 +398,7 @@ pub async fn call_push_native<'a>(
     Ok(())
 }
 
-pub async fn call_pop_host<'a>(
+pub async fn wasm_call_pop_host<'a>(
     call_state: &mut WasmCallState<'a>, // Takes mutable call_state
     host_response: HostFuncResponse,
 ) -> Result<()> {
@@ -458,7 +458,7 @@ mod tests {
                 call $sleep))
         "#;
         let module_data = WasmModuleData::Wat(wat);
-        let res = instance_init(module_data).await.unwrap();
+        let res = wasm_instance_create(module_data).await.unwrap();
         assert_eq!(res.state.engine.is_async(), true);
     }
 
@@ -466,7 +466,7 @@ mod tests {
     #[traced_test]
     async fn test_init_binary() {
         let module_binary = include_bytes!("../fixture/test-64.wasm");
-        let res = instance_init(WasmModuleData::Binary(module_binary))
+        let res = wasm_instance_create(WasmModuleData::Binary(module_binary))
             .await
             .unwrap();
         assert_eq!(res.state.engine.is_async(), true);
@@ -489,21 +489,21 @@ mod tests {
             )
         "#;
         let module_data = WasmModuleData::Wat(wat);
-        let init_result = instance_init(module_data).await.unwrap();
+        let init_result = wasm_instance_create(module_data).await.unwrap();
         let mut init = init_result.state; // WasmInstanceState
         let mut current_instance_extra = init_result.extra; // Re-add initialization of current_instance_extra
 
         for i in 0..10 {
-            let mut call_state = call_init().unwrap();
+            let mut call_state = wasm_call_init().unwrap();
 
             let native_request = NativeFuncRequest {
                 func_desc: NativeFuncDesc::Export("run".to_string()),
                 params: vec![],
             };
 
-            call_push_native(&mut init, &mut call_state, native_request).await.unwrap();
+            wasm_call_push_native(&mut init, &mut call_state, native_request).await.unwrap();
             // Correctly use current_instance_extra.host_req_channel
-            let step_result = call_step(&mut call_state, &mut current_instance_extra.host_req_channel).await.unwrap();
+            let step_result = wasm_call_step(&mut call_state, &mut current_instance_extra.host_req_channel).await.unwrap();
             
             match step_result {
                 CallStepResult::Complete(results) => {
@@ -531,11 +531,11 @@ mod tests {
                 call $sleep))
         "#;
         let module_data = WasmModuleData::Wat(wat);
-        let res = instance_init(module_data).await.unwrap();
+        let res = wasm_instance_create(module_data).await.unwrap();
         let mut init = res.state;
         
         let mut instance_extra = res.extra; // Make instance_extra mutable
-        let mut call_state = call_init().unwrap();
+        let mut call_state = wasm_call_init().unwrap();
 
         let native_request = NativeFuncRequest {
             func_desc: NativeFuncDesc::Export("run".to_string()),
@@ -543,12 +543,12 @@ mod tests {
         };
 
         // call_push_native now mutates call_state and returns Result<()>
-        call_push_native(&mut init, &mut call_state, native_request)
+        wasm_call_push_native(&mut init, &mut call_state, native_request)
             .await
             .unwrap();
 
         // Call call_step, which takes the future from call_state
-        let res = call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
+        let res = wasm_call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
 
         let import_meta = match res {
             CallStepResult::ImportCall(ic) => ic,
@@ -572,11 +572,11 @@ mod tests {
                 call $sleep))
         "#;
         let module_data = WasmModuleData::Wat(wat);
-        let init_res = instance_init(module_data).await.unwrap();
+        let init_res = wasm_instance_create(module_data).await.unwrap();
 
         let mut instance_state = init_res.state;
         let mut instance_extra = init_res.extra; // Make instance_extra mutable
-        let mut call_state = call_init().unwrap();
+        let mut call_state = wasm_call_init().unwrap();
 
         let native_request = NativeFuncRequest {
             func_desc: NativeFuncDesc::Export("run".to_string()),
@@ -584,12 +584,12 @@ mod tests {
         };
 
         // Push native call, mutates state
-        call_push_native(&mut instance_state, &mut call_state, native_request)
+        wasm_call_push_native(&mut instance_state, &mut call_state, native_request)
             .await
             .unwrap();
 
         // Call call_step to get the first result (ImportCall)
-        let push_step_res = call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
+        let push_step_res = wasm_call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
 
         // Expect the first step to be an import call
         let import_meta = match push_step_res {
@@ -607,10 +607,10 @@ mod tests {
         info!("Sending host response: {:?}", host_response);
 
         // Pop host response, mutates state to prepare for next step
-        call_pop_host(&mut call_state, host_response).await.unwrap();
+        wasm_call_pop_host(&mut call_state, host_response).await.unwrap();
 
         // Call call_step again with the resumed future now in state
-        let pop_res = call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
+        let pop_res = wasm_call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
 
         // Expect completion
         match pop_res {

@@ -21,8 +21,8 @@ fn fsm_error_to_term<'a>(env: Env<'a>, err: FsmError) -> Term<'a> {
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn wtime_create_instance<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
-    trace!("wtime_create_instance (fsm)");
+fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
+    trace!("create (fsm)");
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -57,14 +57,14 @@ fn wtime_create_instance<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<T
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn wtime_call_start<'a>(
+fn call_begin<'a>(
     env: Env<'a>,
     resource: ResourceArc<NifRes>,
     func_name: String,
     params: Vec<NifWasmVal>,
 ) -> NifResult<Term<'a>> {
     trace!(
-        "wtime_call_start (new) - func: {}, params: {:?}",
+        "call_begin (new) - func: {}, params: {:?}",
         func_name,
         params
     );
@@ -100,7 +100,7 @@ fn wtime_call_start<'a>(
         params: wasm_params,
     };
 
-    if let Err(e) = fsm.start_call(native_request) {
+    if let Err(e) = fsm.push(native_request) {
         return Ok(fsm_error_to_term(env, e));
     }
 
@@ -136,14 +136,14 @@ fn wtime_call_start<'a>(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn wtime_call_resume<'a>(
+fn call_continue<'a>(
     env: Env<'a>,
     resource: ResourceArc<NifRes>,
     module_name: String,
     field_name: String,
     results: Vec<NifWasmVal>,
 ) -> NifResult<Term<'a>> {
-    trace!("wtime_call_resume - results: {:?}", results);
+    trace!("call_continue - results: {:?}", results);
     let mut fsm = resource.fsm.lock().unwrap();
 
     if !matches!(fsm.current_state(), StateTag::AwaitingHost) {
@@ -195,7 +195,7 @@ fn wtime_call_resume<'a>(
         }
     };
 
-    if let Err(e) = fsm.provide_host_response(host_response) {
+    if let Err(e) = fsm.pop(host_response) {
         return Ok(fsm_error_to_term(env, e));
     }
 

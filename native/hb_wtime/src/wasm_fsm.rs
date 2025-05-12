@@ -122,7 +122,7 @@ impl WasmFsm {
     ) -> Result<Self, FsmError> {
         let rt_handle = runtime.handle().clone();
         let init_res = rt_handle
-            .block_on(wasm::instance_init(module_data))
+            .block_on(wasm::wasm_instance_create(module_data))
             .map_err(|e| FsmError::InitializationFailed(e))?;
 
         Ok(WasmFsm {
@@ -139,7 +139,7 @@ impl WasmFsm {
     /// Can only be called when the FSM is in the `Idle` state or `AwaitingHost` state.
     /// Transitions the FSM to the `PendingStep` state.
     /// The caller should subsequently call `step()` to drive the execution.
-    pub fn start_call(&mut self, native_request: NativeFuncRequest) -> Result<(), FsmError> {
+    pub fn push(&mut self, native_request: NativeFuncRequest) -> Result<(), FsmError> {
         if !matches!(self.state_tag, StateTag::Idle)
             && !matches!(self.state_tag, StateTag::AwaitingHost)
         {
@@ -151,13 +151,13 @@ impl WasmFsm {
 
         // WasmInstanceExtra (containing the channel) is not taken by call_init anymore.
         // It's held by WasmFsm and passed to call_step when needed.
-        let mut call_state = wasm::call_init().map_err(|e| {
+        let mut call_state = wasm::wasm_call_init().map_err(|e| {
             // call_init failing is highly unlikely given its current simplicity,
             // but if it did, host_channel_receiver is untouched here.
             FsmError::CallFailed(e)
         })?;
 
-        let push_result = self.rt_handle.block_on(wasm::call_push_native(
+        let push_result = self.rt_handle.block_on(wasm::wasm_call_push_native(
             &mut self.instance,
             &mut call_state,
             native_request,
@@ -209,7 +209,7 @@ impl WasmFsm {
         let call_state_ref = self.get_top_call_state_mut()?;
 
         // 3. Pass a mutable reference to actual_receiver.
-        let step_result_fut = wasm::call_step(call_state_ref, &mut actual_receiver);
+        let step_result_fut = wasm::wasm_call_step(call_state_ref, &mut actual_receiver);
         let step_result = rt_handle.block_on(step_result_fut);
 
         // 4. Put the actual_receiver back.
@@ -291,7 +291,7 @@ impl WasmFsm {
     /// Can only be called when the FSM is in the `AwaitingHost` state.
     /// Transitions the FSM back to the `Running` state.
     /// The caller should subsequently call `step()` to drive the execution further.
-    pub fn provide_host_response(
+    pub fn pop(
         &mut self,
         host_response: HostFuncResponse,
     ) -> Result<(), FsmError> {
@@ -310,7 +310,7 @@ impl WasmFsm {
         // The receiver is primarily for `call_step`.
         // No need to take/put back `self.host_channel_receiver` here if `call_pop_host` doesn't use it.
 
-        let pop_result = rt_handle.block_on(wasm::call_pop_host(call_state_ref, host_response));
+        let pop_result = rt_handle.block_on(wasm::wasm_call_pop_host(call_state_ref, host_response));
 
         match pop_result {
             Ok(()) => {
@@ -429,7 +429,7 @@ mod tests {
         };
 
         assert_eq!(*fsm.current_state(), StateTag::Idle);
-        fsm.start_call(request).expect("start_call failed");
+        fsm.push(request).expect("start_call failed");
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
         match fsm.step().expect("step failed") {
@@ -462,7 +462,7 @@ mod tests {
         };
 
         // Start -> PendingStep
-        fsm.start_call(request).expect("start_call failed");
+        fsm.push(request).expect("start_call failed");
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
         // Step -> AwaitingHost
@@ -482,7 +482,7 @@ mod tests {
             func_desc: import_request.func_desc,
             results: vec![Val::I32(30)], // 10 + 20
         };
-        fsm.provide_host_response(host_response)
+        fsm.pop(host_response)
             .expect("provide_host_response failed");
         assert_eq!(
             *fsm.current_state(),
@@ -526,7 +526,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            fsm.provide_host_response(response.clone()),
+            fsm.pop(response.clone()),
             Err(FsmError::InvalidState {
                 operation: "provide_host_response",
                 current_state: StateTag::Idle
@@ -534,19 +534,19 @@ mod tests {
         ));
 
         // Start call -> PendingStep
-        fsm.start_call(request.clone()).expect("start_call failed");
+        fsm.push(request.clone()).expect("start_call failed");
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
         // Cannot start call or provide response when PendingStep
         assert!(matches!(
-            fsm.start_call(request.clone()),
+            fsm.push(request.clone()),
             Err(FsmError::InvalidState {
                 operation: "start_call (must be Idle or AwaitingHost for nesting)",
                 current_state: StateTag::PendingStep(StepType::Begin)
             })
         ));
         assert!(matches!(
-            fsm.provide_host_response(response.clone()),
+            fsm.pop(response.clone()),
             Err(FsmError::InvalidState {
                 operation: "provide_host_response",
                 current_state: StateTag::PendingStep(StepType::Begin)
@@ -589,7 +589,7 @@ mod tests {
             func_desc: wasm::NativeFuncDesc::Export("outer_call".to_string()),
             params: vec![],
         };
-        fsm.start_call(outer_request)
+        fsm.push(outer_request)
             .expect("start_call for outer_call failed");
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
@@ -607,7 +607,7 @@ mod tests {
             params: vec![],
         };
         // This start_call is the nesting.
-        fsm.start_call(inner_request)
+        fsm.push(inner_request)
             .expect("nested start_call for inner_call failed");
         // FSM state should now reflect the new, topmost call.
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
@@ -631,7 +631,7 @@ mod tests {
             func_desc: import_req_a.func_desc, // Use the original func_desc for host_A
             results: vec![Val::I32(10)],       // host_A returned 10
         };
-        fsm.provide_host_response(host_response_A)
+        fsm.pop(host_response_A)
             .expect("provide_host_response for host_A failed");
         assert_eq!(
             *fsm.current_state(),
@@ -679,7 +679,7 @@ mod tests {
         };
 
         assert_eq!(*fsm.current_state(), StateTag::Idle);
-        fsm.start_call(add_request)
+        fsm.push(add_request)
             .expect("start_call for add failed");
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
@@ -699,7 +699,7 @@ mod tests {
         };
 
         assert_eq!(*fsm.current_state(), StateTag::Idle); // Should be Idle again
-        fsm.start_call(sub_request)
+        fsm.push(sub_request)
             .expect("start_call for sub failed");
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
@@ -738,7 +738,7 @@ mod tests {
         };
 
         assert_eq!(*fsm.current_state(), StateTag::Idle);
-        fsm.start_call(double_request)
+        fsm.push(double_request)
             .expect("start_call for run_double failed");
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
@@ -753,7 +753,7 @@ mod tests {
             func_desc: import_req.func_desc,
             results: vec![Val::I32(20)], // 10 * 2
         };
-        fsm.provide_host_response(host_resp)
+        fsm.pop(host_resp)
             .expect("provide_host_response for run_double failed");
         assert_eq!(
             *fsm.current_state(),
@@ -776,7 +776,7 @@ mod tests {
         };
 
         assert_eq!(*fsm.current_state(), StateTag::Idle); // Should be Idle again
-        fsm.start_call(add_five_request)
+        fsm.push(add_five_request)
             .expect("start_call for run_add_five failed");
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
