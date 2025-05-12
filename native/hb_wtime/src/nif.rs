@@ -82,12 +82,16 @@ fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, param
              Err(e) => return (Err(e), None),
         };
 
-        let result = call_push_native(&mut context.init_state, &mut call_state, native_request).await;
+        if let Err(e) = call_push_native(&mut context.init_state, &mut call_state, native_request).await {
+            return (Err(e), Some(call_state.instance_extra));
+        }
 
-        (result, Some(call_state.instance_extra))
+        let step_result = call_step(&mut call_state).await;
+
+        (step_result, Some(call_state.instance_extra))
     });
 
-    let (call_res, returned_instance_extra_opt) = call_res_tuple;
+    let (step_result, returned_instance_extra_opt) = call_res_tuple;
 
     if let Some(returned_instance_extra) = returned_instance_extra_opt {
          context.init_extra = returned_instance_extra;
@@ -97,9 +101,9 @@ fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, param
          context.init_extra = WasmInstanceExtra { host_req_channel: new_dummy_rx };
     }
 
-    match call_res {
-        Ok(step_result) => {
-            match step_result {
+    match step_result {
+        Ok(step_result_val) => {
+            match step_result_val {
                 CallStepResult::ImportCall(import_meta) => {
                     error!("ImportCall occurred, but state persistence for resume is not implemented. Meta: {:?}", import_meta);
 
