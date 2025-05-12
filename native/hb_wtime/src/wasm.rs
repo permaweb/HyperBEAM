@@ -441,7 +441,14 @@ pub async fn wasm_call_pop_host<'a>(
     Ok(())
 }
 
-pub fn wasm_read_memory(instance_state: &mut WasmInstanceState, offset: usize, data: &mut [u8]) -> Result<()> {
+pub fn wasm_memory_size(instance_state: &mut WasmInstanceState) -> Result<usize> {
+    let instance = &instance_state.instance; // Instance can usually be an immutable borrow
+    let memory = instance.get_memory(&mut instance_state.store, "memory")
+        .ok_or_else(|| anyhow::anyhow!("Failed to find Wasm memory export named 'memory'"))?;
+    Ok(memory.size(&mut instance_state.store) as usize)
+}
+
+pub fn wasm_memory_read(instance_state: &mut WasmInstanceState, offset: usize, data: &mut [u8]) -> Result<()> {
     trace!("wasm_read_memory: {:?}, {:?}", offset, data.len());
     
     let instance = &instance_state.instance; // Instance can usually be an immutable borrow
@@ -457,7 +464,7 @@ pub fn wasm_read_memory(instance_state: &mut WasmInstanceState, offset: usize, d
     Ok(())
 }
 
-pub fn wasm_write_memory(instance_state: &mut WasmInstanceState, offset: usize, data: &[u8]) -> Result<()> {
+pub fn wasm_memory_write(instance_state: &mut WasmInstanceState, offset: usize, data: &[u8]) -> Result<()> {
     trace!("wasm_write_memory: {:?}, {:?}", offset, data.len());
     
     let instance = &instance_state.instance; // Instance can usually be an immutable borrow
@@ -679,14 +686,14 @@ mod tests {
         let offset = 100;
 
         // Write data
-        wasm_write_memory(&mut instance_state, offset, &write_data).unwrap_or_else(|e| {
+        wasm_memory_write(&mut instance_state, offset, &write_data).unwrap_or_else(|e| {
             panic!("wasm_write_memory failed: {}", e);
         });
         info!("Successfully wrote data to Wasm memory at offset {}", offset);
 
         // Read data back
         let mut read_buffer = vec![0u8; write_data.len()];
-        wasm_read_memory(&mut instance_state, offset, &mut read_buffer).unwrap_or_else(|e| {
+        wasm_memory_read(&mut instance_state, offset, &mut read_buffer).unwrap_or_else(|e| {
             panic!("wasm_read_memory failed: {}", e);
         });
         info!("Successfully read data from Wasm memory at offset {}", offset);
@@ -712,23 +719,23 @@ mod tests {
         let offset_b = 10;
 
         // Write data A
-        wasm_write_memory(&mut instance_state, offset_a, &data_a).expect("write A failed");
+        wasm_memory_write(&mut instance_state, offset_a, &data_a).expect("write A failed");
         // Write data B
-        wasm_write_memory(&mut instance_state, offset_b, &data_b).expect("write B failed");
+        wasm_memory_write(&mut instance_state, offset_b, &data_b).expect("write B failed");
 
         // Read data A back
         let mut read_buffer_a = vec![0u8; data_a.len()];
-        wasm_read_memory(&mut instance_state, offset_a, &mut read_buffer_a).expect("read A failed");
+        wasm_memory_read(&mut instance_state, offset_a, &mut read_buffer_a).expect("read A failed");
         assert_eq!(data_a, read_buffer_a, "Data A mismatch");
 
         // Read data B back
         let mut read_buffer_b = vec![0u8; data_b.len()];
-        wasm_read_memory(&mut instance_state, offset_b, &mut read_buffer_b).expect("read B failed");
+        wasm_memory_read(&mut instance_state, offset_b, &mut read_buffer_b).expect("read B failed");
         assert_eq!(data_b, read_buffer_b, "Data B mismatch");
 
         // Verify A wasn't overwritten by B if offsets are distinct and non-overlapping
         let mut re_read_buffer_a = vec![0u8; data_a.len()];
-        wasm_read_memory(&mut instance_state, offset_a, &mut re_read_buffer_a).expect("re-read A failed");
+        wasm_memory_read(&mut instance_state, offset_a, &mut re_read_buffer_a).expect("re-read A failed");
         assert_eq!(data_a, re_read_buffer_a, "Data A mismatch after B write/read");
     }
 
@@ -749,13 +756,30 @@ mod tests {
         let expected_data = b"hello";
         let mut read_buffer = vec![0u8; expected_data.len()];
         
-        wasm_read_memory(&mut instance_state, 0, &mut read_buffer).expect("read initialized data failed");
+        wasm_memory_read(&mut instance_state, 0, &mut read_buffer).expect("read initialized data failed");
         assert_eq!(expected_data, read_buffer.as_slice());
 
         // Try reading a bit further to ensure padding / other areas are zero or as expected
         let mut larger_buffer = vec![0u8; expected_data.len() + 5];
-        wasm_read_memory(&mut instance_state, 0, &mut larger_buffer).expect("read initialized data failed");
+        wasm_memory_read(&mut instance_state, 0, &mut larger_buffer).expect("read initialized data failed");
         assert_eq!(&larger_buffer[0..expected_data.len()], expected_data);
         assert_eq!(&larger_buffer[expected_data.len()..], &[0,0,0,0,0]); // Assuming rest is zero-initialized
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_wasm_memory_size() {
+        let wat = r#"
+            (module
+              (memory (export "memory") 2) ;; Export a memory of 2 pages
+            )
+        "#;
+        let module_data = WasmModuleData::Wat(wat);
+        let init_result = wasm_instance_create(module_data).await.unwrap();
+        let mut instance_state = init_result.state;
+
+        let size_in_pages = wasm_memory_size(&mut instance_state).expect("wasm_memory_size failed");
+
+        assert_eq!(size_in_pages, 2, "Memory size should be 2 pages");
     }
 }

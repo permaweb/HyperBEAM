@@ -395,6 +395,22 @@ impl WasmFsm {
         }
     }
 
+    /// Gets the current size of the Wasm instance's memory in pages (64KiB units).
+    ///
+    /// Allowed when the FSM is `Idle` or `AwaitingHost`.
+    pub fn get_memory_size(&mut self) -> Result<usize, FsmError> {
+        if !matches!(self.state_tag, StateTag::Idle) && 
+           !matches!(self.state_tag, StateTag::AwaitingHost) {
+            return Err(FsmError::InvalidState {
+                operation: "get_memory_size (must be Idle or AwaitingHost)",
+                current_state: self.state_tag.clone(),
+            });
+        }
+        // Call the wasm module function, passing the mutable instance state
+        wasm::wasm_memory_size(&mut self.instance)
+            .map_err(FsmError::CallFailed) // Wrap underlying error
+    }
+
     /// Reads data from the Wasm instance's memory at the given offset into the provided buffer.
     ///
     /// Allowed when the FSM is `Idle` or `AwaitingHost`.
@@ -407,7 +423,7 @@ impl WasmFsm {
             });
         }
         // Pass the mutable borrow of self.instance to the wasm module function
-        wasm::wasm_read_memory(&mut self.instance, offset, buffer)
+        wasm::wasm_memory_read(&mut self.instance, offset, buffer)
             .map_err(FsmError::CallFailed) // Wrap underlying error
     }
 
@@ -423,7 +439,7 @@ impl WasmFsm {
             });
         }
         // Pass the mutable borrow of self.instance to the wasm module function
-        wasm::wasm_write_memory(&mut self.instance, offset, data)
+        wasm::wasm_memory_write(&mut self.instance, offset, data)
             .map_err(FsmError::CallFailed) // Wrap underlying error
     }
 }
@@ -823,6 +839,21 @@ mod tests {
             _ => panic!("Expected Complete for run_add_five"),
         }
         assert_eq!(*fsm.current_state(), StateTag::Idle);
+    }
+
+    #[test]
+    fn test_fsm_get_memory_size() {
+        let wat = r#"(module (memory (export "memory") 3))"#; // Define 3 pages
+        let (_runtime, mut fsm) = setup_fsm(wat);
+        assert_eq!(*fsm.current_state(), StateTag::Idle);
+
+        match fsm.get_memory_size() {
+            Ok(size_in_pages) => {
+                assert_eq!(size_in_pages, 3, "Expected memory size to be 3 pages");
+            }
+            Err(e) => panic!("get_memory_size failed: {:?}", e),
+        }
+        assert_eq!(*fsm.current_state(), StateTag::Idle); // Ensure state is unchanged
     }
 
     #[test]

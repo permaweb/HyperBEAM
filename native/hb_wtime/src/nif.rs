@@ -231,6 +231,28 @@ fn call_continue<'a>(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+fn mem_size<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<NifRes>,
+) -> NifResult<Term<'a>> {
+    trace!("mem_size");
+    let mut fsm = resource.fsm.lock().unwrap();
+
+    // We need access to the instance state within the FSM
+    // Assuming WasmFsm has a method to get the instance state mutably 
+    // or a dedicated method that calls wasm_memory_size internally.
+    // Let's assume a method `get_memory_size()` exists on Fsm for now.
+    match fsm.get_memory_size() { // Assuming this method exists
+        Ok(size_in_pages) => {
+            // Wasm memory size is in pages (64KiB)
+            // let size_in_bytes = size_in_pages * 65536; // No longer needed, FSM returns pages
+            Ok((Atom::from_str(env, "ok").unwrap(), size_in_pages).encode(env))
+        }
+        Err(e) => Ok(fsm_error_to_term(env, e)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
 fn mem_read<'a>(
     env: Env<'a>,
     resource: ResourceArc<NifRes>,

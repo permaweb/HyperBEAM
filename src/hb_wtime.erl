@@ -4,6 +4,7 @@
     create/1,
     call_begin/3,
     call_continue/4,
+    mem_size/1,
     mem_read/3,
     mem_write/3
 ]).
@@ -23,6 +24,9 @@ call_begin(_Context, _Func, _Args) ->
     ?NOT_LOADED.
 
 call_continue(_Context, _Module, _Field, _Results) ->
+    ?NOT_LOADED.
+
+mem_size(_Context) ->
     ?NOT_LOADED.
 
 mem_read(_Context, _Offset, _Length) ->
@@ -105,11 +109,15 @@ nested_call_test() ->
     ?assertEqual(HostAResponse, OuterResult),
     ok.
 
-mem_read_write_test() ->
+mem_size_read_write_test() ->
     WAT = <<"(module (memory (export \"memory\") 1))">>,
     {ok, Inst} = create(WAT),
+
+    {ok, Size} = mem_size(Inst),
+    ?assertEqual(1, Size),
+
     Offset = 10,
-    WriteData = <<"hello_erlang\x99">>,
+    WriteData = <<"hello_wasmtime\x99">>,
     ?assertEqual(ok, mem_write(Inst, Offset, WriteData)),
     
     ReadLength = size(WriteData),
