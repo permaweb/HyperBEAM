@@ -8,6 +8,7 @@ pub mod example;
 pub mod nif;
 pub mod types;
 pub mod wasm;
+pub mod wasm_fsm;
 
 rustler::init!(
     "hb_wtime", // Module name as used in Erlang.

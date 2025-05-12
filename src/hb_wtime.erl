@@ -10,7 +10,7 @@
         , xor_example/2
         , wtime_create_instance/1
         , wtime_call_start/3
-        , wtime_call_resume/1
+        , wtime_call_resume/4
         ]).
 
 -include("cargo.hrl").
@@ -51,7 +51,7 @@ wtime_create_instance(_Bin) ->
 wtime_call_start(_Context, _Func, _Args) ->
     ?NOT_LOADED.
 
-wtime_call_resume(_Context) ->
+wtime_call_resume(_Context, _Module, _Field, _Results) ->
     ?NOT_LOADED.
 
 %%%===================================================================
@@ -120,10 +120,12 @@ wtime_call_start_test() ->
 wtime_call_resume_test() ->
     {ok, Bin} = file:read_file("test/pow_calculator.wasm"),
     {ok, Inst} = wtime_create_instance(Bin),
-    {ok, import, [Mod, Field, [1, 2]]} = wtime_call_start(Inst, <<"pow">>, [2, 5]),
-    ?assertEqual(<<"my_lib">>, Mod),
-    ?assertEqual(<<"mul">>, Field),
-    % {ok, complete, [120.0]} = wtime_call_resume(Inst),
+    Mod = <<"my_lib">>,
+    Field = <<"mul">>,
+    {ok, import, [Mod, Field, Res1]} = wtime_call_start(Inst, <<"pow">>, [2, 2]),
+    ?assertEqual([1, 2], Res1),
+    {ok, import, [Mod, Field, [Res2A, Res2B]]} = wtime_call_resume(Inst, Mod, Field, [1 * 2]),
+    {ok, complete, [4]} = wtime_call_resume(Inst, Mod, Field, [Res2A * Res2B]),
     ok.
 
 -endif.

@@ -1,4 +1,4 @@
-use crate::types::{WasmVal, WasmValType};
+use crate::types::WasmVal;
 use std::{future::Future, pin::Pin};
 
 use anyhow::Result;
@@ -182,11 +182,6 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
     Ok(res)
 }
 
-pub struct WasmFunctionSignature {
-    pub params: Vec<WasmValType>,
-    pub results: Vec<WasmValType>,
-}
-
 type WasmParamsVec = Vec<WasmVal>;
 
 type WasmResultsVec = Vec<WasmVal>;
@@ -207,12 +202,6 @@ pub enum NativeFuncDesc {
 pub struct NativeFuncRequest {
     pub func_desc: NativeFuncDesc,
     pub params: WasmParamsVec,
-}
-
-#[derive(Debug, Clone)]
-pub struct NativeFuncResponse {
-    pub func_desc: NativeFuncDesc,
-    pub results: WasmResultsVec,
 }
 
 #[derive(Debug, Clone)]
@@ -485,6 +474,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.state.engine.is_async(), true);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_call_repeatedly() {
+        // Wasm that increments a global counter and returns the new value.
+        let wat = r#"
+            (module
+              (global $counter (mut i32) (i32.const 0))
+              (func (export "run") (result i32)
+                global.get $counter
+                i32.const 1
+                i32.add
+                global.set $counter ;; Set $counter to the new value
+                global.get $counter ;; Return the new value of $counter
+              )
+            )
+        "#;
+        let module_data = WasmModuleData::Wat(wat);
+        let init_result = instance_init(module_data).await.unwrap();
+        let mut init = init_result.state; // WasmInstanceState
+        let mut current_instance_extra = init_result.extra; // Initial WasmInstanceExtra
+
+        for i in 0..10 {
+            // Re-initialize WasmCallState for each independent call.
+            // This consumes current_instance_extra and creates a call_state with a fresh lifetime.
+            let mut call_state = call_init(current_instance_extra).unwrap();
+
+            let native_request = NativeFuncRequest {
+                func_desc: NativeFuncDesc::Export("run".to_string()),
+                params: vec![],
+            };
+
+            // The mutable borrow of `init` by call_push_native is now scoped to this iteration.
+            call_push_native(&mut init, &mut call_state, native_request).await.unwrap();
+            let step_result = call_step(&mut call_state).await.unwrap();
+            
+            match step_result {
+                CallStepResult::Complete(results) => {
+                    assert_eq!(results.len(), 1);
+                    // With the corrected Wasm, the (i)th call (0-indexed) returns i+1.
+                    assert_eq!(results[0].i32(), Some((i + 1) as i32));
+                    
+                    // Retrieve the instance_extra from the completed call_state for the next iteration.
+                    current_instance_extra = call_state.instance_extra;
+                }
+                CallStepResult::ImportCall(ic) => {
+                    panic!("Expected Complete, got ImportCall: {:?}", ic);
+                }
+            };
+            // call_state (and its lifetime tied to this iteration's borrow of `init`) goes out of scope here.
+        }
     }
 
     #[tokio::test]

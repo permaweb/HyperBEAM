@@ -1,154 +1,220 @@
-use crate::convert;
-use crate::types::NifWasmVal;
-use crate::wasm::*;
-use rustler::{Atom, Binary, Encoder, Env, NifResult, ResourceArc, Term};
+use crate::convert::{self, nif_vals_to_wasm_vals};
+use crate::types::{NifWasmVal, WasmVal};
+use crate::wasm_fsm::{CallOutcome, FsmError, HostFuncRequest, HostFuncResponse, NativeFuncRequest, StepType, StateTag, WasmFsm, WasmModuleData};
+use crate::wasm::{HostFuncDesc, NativeFuncDesc};
+use rustler::{Atom, Binary, Decoder, Encoder, Env, NifResult, NewBinary, ResourceArc, Term};
 use std::sync::Mutex;
-use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, trace, warn};
-
-#[derive(Debug)]
-pub struct NifContext {
-    rt: tokio::runtime::Runtime,
-    init_state: WasmInstanceState,
-    init_extra: WasmInstanceExtra,
-}
+use anyhow;
 
 pub struct NifRes {
-    context: Mutex<NifContext>,
+    fsm: Mutex<WasmFsm>,
+    #[allow(dead_code)]
+    runtime: tokio::runtime::Runtime,
+}
+
+fn nif_val_to_wasm_val(nif_val: NifWasmVal) -> WasmVal {
+    match nif_val {
+        NifWasmVal::I32(v) => WasmVal::I32(v),
+        NifWasmVal::I64(v) => WasmVal::I64(v),
+        NifWasmVal::F32(v) => WasmVal::F32(v.to_bits()),
+        NifWasmVal::F64(v) => WasmVal::F64(v.to_bits()),
+    }
+}
+
+fn fsm_error_to_term<'a>(env: Env<'a>, err: FsmError) -> Term<'a> {
+    let reason_string = match err {
+        FsmError::InitializationFailed(e) => format!("Initialization Failed: {}", e),
+        FsmError::CallFailed(e) => format!("Call Failed: {}", e),
+        FsmError::InvalidState { operation, current_state } => {
+                        format!(
+                            "Invalid State for operation '{}': {:?}",
+                            operation,
+                            current_state
+                        )
+            }
+        FsmError::InternalError(s) => format!("Internal FSM Error: {}", s),
+        FsmError::ExportNotFound(s) => format!("Export not found: {}", s),
+        FsmError::NotAFunction(s) => format!("Export '{}' is not a function", s),
+        FsmError::IndirectNotFound(s) => format!("Indirect not found: {}", s),
+        FsmError::ImportNotFound(s) => format!("Import not found: {}", s),
+    };
+    (Atom::from_str(env, "error").unwrap(), reason_string).encode(env)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn wtime_create_instance(
-    env: Env,
+fn wtime_create_instance<'a>(
+    env: Env<'a>,
     module_binary: Binary,
-) -> NifResult<(Atom, ResourceArc<NifRes>)> {
-    trace!("wtime_instance_init");
+) -> NifResult<Term<'a>> {
+    trace!("wtime_create_instance (fsm)");
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| {
-        rustler::Error::Term(Box::new(format!("Failed to create Tokio runtime: {}", e)))
-    })?;
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            let fsm_err = FsmError::InitializationFailed(anyhow::anyhow!(
+                "Failed to create Tokio runtime: {}",
+                e
+            ));
+            return Ok(fsm_error_to_term(env, fsm_err));
+        }
+    };
 
     let binary_data = module_binary.as_slice();
     let module_data = WasmModuleData::Binary(unsafe { std::mem::transmute(binary_data) });
 
-    let init_res = rt.block_on(instance_init(module_data));
-
-    match init_res {
-        Ok(init_val) => {
-            let context = NifContext {
-                rt,
-                init_state: init_val.state,
-                init_extra: init_val.extra,
-            };
-            debug!("Wasm instance context created successfully.");
-
+    match WasmFsm::new(module_data, &runtime) {
+        Ok(fsm_instance) => {
+            debug!("WasmFsm created successfully.");
             let resource = ResourceArc::new(NifRes {
-                context: Mutex::new(context),
+                fsm: Mutex::new(fsm_instance),
+                runtime,
             });
-            Ok((Atom::from_str(env, "ok").unwrap(), resource))
+            Ok((Atom::from_str(env, "ok").unwrap(), resource).encode(env))
         }
         Err(e) => {
-            error!("Error during instance_init: {:?}", e);
-            Err(rustler::Error::Term(Box::new(e.to_string())))
+            error!("Error during WasmFsm::new: {:?}", e);
+            Ok(fsm_error_to_term(env, e))
         }
     }
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn wtime_call_start(
-    env: Env,
+fn wtime_call_start<'a>(
+    env: Env<'a>,
     resource: ResourceArc<NifRes>,
-    func: String,
+    func_name: String,
     params: Vec<NifWasmVal>,
-) -> NifResult<Term> {
-    trace!("wtime_call_start - func: {}, params: {:?}", func, params);
+) -> NifResult<Term<'a>> {
+    trace!("wtime_call_start (new) - func: {}, params: {:?}", func_name, params);
+    let mut fsm = resource.fsm.lock().unwrap();
 
-    let mut context = resource.context.lock().unwrap();
-    let rt_handle = context.rt.handle().clone();
+    if !matches!(fsm.current_state(), StateTag::Idle) {
+        return Ok(fsm_error_to_term(env, FsmError::InvalidState {
+            operation: "call_start (must be Idle)",
+            current_state: fsm.current_state().clone(),
+        }));
+    }
 
-    let (_, dummy_rx) = mpsc::channel::<(HostFuncRequest, oneshot::Sender<HostFuncResponse>)>(1);
-    let instance_extra = std::mem::replace(
-        &mut context.init_extra,
-        WasmInstanceExtra {
-            host_req_channel: dummy_rx,
-        },
-    );
+    let param_types: Vec<wasmtime::ValType> = match fsm.get_native_func_param_types(&func_name) {
+        Ok(types) => types,
+        Err(e) => return Ok(fsm_error_to_term(env, e)),
+    };
 
-    let func_type = context.init_state.module.get_export(func.as_str()).unwrap();
-    let param_def = func_type.unwrap_func().params();
-    let param_types = param_def.collect::<Vec<_>>();
-
-    let params = match convert::nif_vals_to_wasm_vals(params.as_slice(), &param_types) {
+    let wasm_params = match convert::nif_vals_to_wasm_vals(params.as_slice(), &param_types) {
         Ok(p) => p,
         Err(e) => {
             error!("Argument conversion failed: {:?}", e);
-            context.init_extra = instance_extra;
-            return Err(e);
+            let reason = format!("Argument conversion failed: {:?}", e);
+            return Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env));
         }
     };
-    debug!("Converted args to Wasm params: {:?}", params);
 
     let native_request = NativeFuncRequest {
-        func_desc: NativeFuncDesc::Export(func),
-        params: params,
+        func_desc: NativeFuncDesc::Export(func_name),
+        params: wasm_params,
     };
 
-    let call_res_tuple: (
-        Result<CallStepResult, anyhow::Error>,
-        Option<WasmInstanceExtra>,
-    ) = rt_handle.block_on(async {
-        let mut call_state = match call_init(instance_extra) {
-            Ok(state) => state,
-            Err(e) => return (Err(e), None),
-        };
-
-        if let Err(e) =
-            call_push_native(&mut context.init_state, &mut call_state, native_request).await
-        {
-            return (Err(e), Some(call_state.instance_extra));
-        }
-
-        let step_result = call_step(&mut call_state).await;
-
-        (step_result, Some(call_state.instance_extra))
-    });
-
-    let (step_result, returned_instance_extra_opt) = call_res_tuple;
-
-    if let Some(returned_instance_extra) = returned_instance_extra_opt {
-        context.init_extra = returned_instance_extra;
-    } else {
-        warn!("call_init failed; instance_extra state might be unexpected.");
-        let (_, new_dummy_rx) =
-            mpsc::channel::<(HostFuncRequest, oneshot::Sender<HostFuncResponse>)>(1);
-        context.init_extra = WasmInstanceExtra {
-            host_req_channel: new_dummy_rx,
-        };
+    if let Err(e) = fsm.start_call(native_request) {
+        return Ok(fsm_error_to_term(env, e));
     }
 
-    match step_result {
-        Ok(step_result_val) => match step_result_val {
-            CallStepResult::ImportCall(import_meta) => {
-                error!("ImportCall occurred, but state persistence for resume is not implemented. Meta: {:?}", import_meta);
-
-                let ok_atom = Atom::from_str(env, "ok").unwrap();
-                let import_atom = Atom::from_str(env, "import").unwrap();
-                let meta_term = convert::wasm_host_func_req_to_term_list(env, import_meta)?;
-                Ok((ok_atom, import_atom, meta_term).encode(env))
+    match fsm.step() {
+        Ok(CallOutcome::Complete(results)) => {
+            debug!("Call started and completed. Results: {:?}", results);
+            let ok_atom = Atom::from_str(env, "ok").unwrap();
+            let complete_atom = Atom::from_str(env, "complete").unwrap();
+            match convert::wasm_vals_to_term_list(env, &results) {
+                Ok(results_term) => Ok((ok_atom, complete_atom, results_term).encode(env)),
+                Err(e) => {
+                    error!("Result conversion failed: {:?}", e);
+                    let reason = format!("Result conversion failed: {:?}", e);
+                    Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env))
+                }
             }
-            CallStepResult::Complete(results) => {
-                debug!("Call completed immediately. Results: {:?}", results);
-                let ok_atom = Atom::from_str(env, "ok").unwrap();
-                let complete_atom = Atom::from_str(env, "complete").unwrap();
-
-                let results_term = convert::wasm_vals_to_term_list(env, &results)?;
-                Ok((ok_atom, complete_atom, results_term).encode(env))
-            }
-        },
-        Err(e) => {
-            error!("Error during call execution: {:?}", e);
-            let error_atom = Atom::from_str(env, "error").unwrap();
-            Ok((error_atom, e.to_string()).encode(env))
         }
+        Ok(CallOutcome::ImportCallNeeded(req)) => {
+            debug!("Call started, yielded import call: {:?}", req);
+            let ok_atom = Atom::from_str(env, "ok").unwrap();
+            let import_atom = Atom::from_str(env, "import").unwrap();
+            match convert::wasm_host_func_req_to_term_list(env, req) {
+                Ok(meta_term) => Ok((ok_atom, import_atom, meta_term).encode(env)),
+                Err(e) => {
+                    error!("Import request conversion failed: {:?}", e);
+                    let reason = format!("Import request conversion failed: {:?}", e);
+                    Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env))
+                }
+            }
+        }
+        Err(e) => Ok(fsm_error_to_term(env, e)),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn wtime_call_resume<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<NifRes>,
+    module_name: String,
+    field_name: String,
+    results: Vec<NifWasmVal>,
+) -> NifResult<Term<'a>> {
+    trace!("wtime_call_resume - results: {:?}", results);
+    let mut fsm = resource.fsm.lock().unwrap();
+
+    if !matches!(fsm.current_state(), StateTag::AwaitingHost) {
+        return Ok(fsm_error_to_term(env, FsmError::InvalidState {
+            operation: "call_resume (must be AwaitingHost)",
+            current_state: fsm.current_state().clone(),
+        }));
+    }
+
+    let host_response = match || -> Result<HostFuncResponse, rustler::Error> {
+        let result_types = fsm.get_last_host_func_result_types().unwrap();
+        let wasm_results: Vec<WasmVal> = nif_vals_to_wasm_vals(results.as_slice(), &result_types)?;
+        Ok(HostFuncResponse {
+            func_desc: HostFuncDesc { module_name, field_name },
+            results: wasm_results,
+        })
+    }() {
+        Ok(resp) => resp,
+        Err(e) => {
+            error!("Host response decoding failed: {:?}", e);
+            let reason = format!("Host response decoding failed: {:?}", e);
+            return Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env));
+        }
+    };
+
+    if let Err(e) = fsm.provide_host_response(host_response) {
+        return Ok(fsm_error_to_term(env, e));
+    }
+
+    match fsm.step() {
+        Ok(CallOutcome::Complete(results)) => {
+            debug!("Call resumed and completed. Results: {:?}", results);
+            let ok_atom = Atom::from_str(env, "ok").unwrap();
+            let complete_atom = Atom::from_str(env, "complete").unwrap();
+            match convert::wasm_vals_to_term_list(env, &results) {
+                Ok(results_term) => Ok((ok_atom, complete_atom, results_term).encode(env)),
+                Err(e) => {
+                    error!("Result conversion failed: {:?}", e);
+                    let reason = format!("Result conversion failed: {:?}", e);
+                    Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env))
+                }
+            }
+        }
+        Ok(CallOutcome::ImportCallNeeded(req)) => {
+            debug!("Call resumed, yielded another import call: {:?}", req);
+            let ok_atom = Atom::from_str(env, "ok").unwrap();
+            let import_atom = Atom::from_str(env, "import").unwrap();
+            match convert::wasm_host_func_req_to_term_list(env, req) {
+                Ok(meta_term) => Ok((ok_atom, import_atom, meta_term).encode(env)),
+                Err(e) => {
+                    error!("Import request conversion failed: {:?}", e);
+                    let reason = format!("Import request conversion failed: {:?}", e);
+                    Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env))
+                }
+            }
+        }
+        Err(e) => Ok(fsm_error_to_term(env, e)),
     }
 }
