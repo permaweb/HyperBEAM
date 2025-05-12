@@ -555,4 +555,130 @@ mod tests {
             StateTag::PendingStep(StepType::Resume)
         );
     }
+
+    #[test]
+    fn test_fsm_call_sequence_multiple_functions() {
+        let wat = r#"
+            (module
+              (func (export "add") (param i32 i32) (result i32)
+                local.get 0
+                local.get 1
+                i32.add)
+              (func (export "sub") (param i32 i32) (result i32)
+                local.get 0
+                local.get 1
+                i32.sub)
+            )
+        "#;
+        let (_runtime, mut fsm) = setup_fsm(wat);
+
+        // Call 1: "add"
+        let add_request = NativeFuncRequest {
+            func_desc: wasm::NativeFuncDesc::Export("add".to_string()),
+            params: vec![Val::I32(10), Val::I32(5)],
+        };
+
+        assert_eq!(*fsm.current_state(), StateTag::Idle);
+        fsm.start_call(add_request).expect("start_call for add failed");
+        assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
+
+        match fsm.step().expect("step for add failed") {
+            CallOutcome::Complete(results) => {
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].i32(), Some(15)); // 10 + 5
+            }
+            _ => panic!("Expected Complete for add"),
+        }
+        assert_eq!(*fsm.current_state(), StateTag::Idle);
+
+        // Call 2: "sub"
+        let sub_request = NativeFuncRequest {
+            func_desc: wasm::NativeFuncDesc::Export("sub".to_string()),
+            params: vec![Val::I32(10), Val::I32(5)],
+        };
+
+        assert_eq!(*fsm.current_state(), StateTag::Idle); // Should be Idle again
+        fsm.start_call(sub_request).expect("start_call for sub failed");
+        assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
+
+        match fsm.step().expect("step for sub failed") {
+            CallOutcome::Complete(results) => {
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].i32(), Some(5)); // 10 - 5
+            }
+            _ => panic!("Expected Complete for sub"),
+        }
+        assert_eq!(*fsm.current_state(), StateTag::Idle);
+    }
+
+    #[test]
+    fn test_fsm_call_sequence_with_imports() {
+        let wat = r#"
+            (module
+              (import "env" "host_double" (func $double (param i32) (result i32)))
+              (func (export "run_double") (param i32) (result i32)
+                local.get 0
+                call $double
+              )
+              (func (export "run_add_five") (param i32) (result i32)
+                local.get 0
+                i32.const 5
+                i32.add
+              )
+            )
+        "#;
+        let (_runtime, mut fsm) = setup_fsm(wat);
+
+        // Call 1: "run_double" (invokes host function)
+        let double_request = NativeFuncRequest {
+            func_desc: wasm::NativeFuncDesc::Export("run_double".to_string()),
+            params: vec![Val::I32(10)],
+        };
+
+        assert_eq!(*fsm.current_state(), StateTag::Idle);
+        fsm.start_call(double_request).expect("start_call for run_double failed");
+        assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
+
+        let import_req = match fsm.step().expect("step 1 for run_double failed") {
+            CallOutcome::ImportCallNeeded(req) => req,
+            _ => panic!("Expected ImportCallNeeded for run_double"),
+        };
+        assert_eq!(*fsm.current_state(), StateTag::AwaitingHost);
+        assert_eq!(import_req.func_desc.field_name, "host_double");
+
+        let host_resp = HostFuncResponse {
+            func_desc: import_req.func_desc,
+            results: vec![Val::I32(20)], // 10 * 2
+        };
+        fsm.provide_host_response(host_resp).expect("provide_host_response for run_double failed");
+        assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Resume));
+
+        match fsm.step().expect("step 2 for run_double failed") {
+            CallOutcome::Complete(results) => {
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].i32(), Some(20));
+            }
+            _ => panic!("Expected Complete for run_double after host call"),
+        }
+        assert_eq!(*fsm.current_state(), StateTag::Idle);
+
+        // Call 2: "run_add_five" (simple call, no imports)
+        let add_five_request = NativeFuncRequest {
+            func_desc: wasm::NativeFuncDesc::Export("run_add_five".to_string()),
+            params: vec![Val::I32(7)],
+        };
+
+        assert_eq!(*fsm.current_state(), StateTag::Idle); // Should be Idle again
+        fsm.start_call(add_five_request).expect("start_call for run_add_five failed");
+        assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
+
+        match fsm.step().expect("step for run_add_five failed") {
+            CallOutcome::Complete(results) => {
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0].i32(), Some(12)); // 7 + 5
+            }
+            _ => panic!("Expected Complete for run_add_five"),
+        }
+        assert_eq!(*fsm.current_state(), StateTag::Idle);
+    }
 }
