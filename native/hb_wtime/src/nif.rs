@@ -1,7 +1,7 @@
 use crate::wasm::*;
+use crate::convert;
 use rustler::{Atom, Binary, Env, NifResult, Resource, ResourceArc, Term, Encoder};
 use tracing::{debug, error, trace, warn};
-use wasmtime::Val;
 use std::sync::Mutex;
 use tokio::sync::{mpsc, oneshot};
 
@@ -48,22 +48,24 @@ fn wtime_create_instance(env: Env, module_binary: Binary) -> NifResult<(Atom, Re
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, args: Vec<f64>) -> NifResult<Term> {
-    trace!("wtime_call_start");
+    trace!("wtime_call_start - func: {}, args: {:?}", func, args);
 
     let mut context = resource.context.lock().unwrap();
-
-    // Get a cloneable handle to the runtime *before* block_on
-    // This avoids borrowing `context` within the block_on call itself.
     let rt_handle = context.rt.handle().clone();
 
-    let (dummy_tx, dummy_rx) = mpsc::channel::<(HostFuncRequest, oneshot::Sender<HostFuncResponse>)>(1);
+    let (_, dummy_rx) = mpsc::channel::<(HostFuncRequest, oneshot::Sender<HostFuncResponse>)>(1);
     let mut instance_extra = std::mem::replace(&mut context.init_extra, WasmInstanceExtra { host_req_channel: dummy_rx });
 
-    // Convert f64 argument to WasmVal::F64 using its bit representation
-    let params = vec![Val::F64(args[0].to_bits())];
-    if !args.is_empty() {
-        warn!("Argument conversion from String to WasmVal not implemented yet.");
-    }
+    let params = match convert::args_to_wasm_vals(&args) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Argument conversion failed: {:?}", e);
+            context.init_extra = instance_extra;
+            return Err(e);
+        }
+    };
+    debug!("Converted args to Wasm params: {:?}", params);
+
     let native_request = NativeFuncRequest {
         func_desc: NativeFuncDesc::Export(func),
         params: params,
@@ -72,7 +74,7 @@ fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, args:
     let call_res_tuple: (Result<CallStepResult, anyhow::Error>, Option<WasmInstanceExtra>) = rt_handle.block_on(async {
         let mut call_state = match call_init(instance_extra) {
              Ok(state) => state,
-             Err(e) => return (Err(e.into()), None),
+             Err(e) => return (Err(e), None),
         };
 
         let result = call_push_native(&mut context.init_state, &mut call_state, native_request).await;
@@ -85,7 +87,7 @@ fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, args:
     if let Some(returned_instance_extra) = returned_instance_extra_opt {
          context.init_extra = returned_instance_extra;
     } else {
-         warn!("call_init failed; restoring dummy instance_extra.");
+         warn!("call_init failed; instance_extra state might be unexpected.");
          let (_, new_dummy_rx) = mpsc::channel::<(HostFuncRequest, oneshot::Sender<HostFuncResponse>)>(1);
          context.init_extra = WasmInstanceExtra { host_req_channel: new_dummy_rx };
     }
@@ -94,7 +96,7 @@ fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, args:
         Ok(step_result) => {
             match step_result {
                 CallStepResult::ImportCall(import_meta) => {
-                    error!("ImportCall occurred, but state persistence for resume is not implemented.");
+                    error!("ImportCall occurred, but state persistence for resume is not implemented. Meta: {:?}", import_meta);
 
                     let ok_atom = Atom::from_str(env, "ok").unwrap();
                     let import_atom = Atom::from_str(env, "import").unwrap();
@@ -103,23 +105,10 @@ fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, args:
                 }
                 CallStepResult::Complete(results) => {
                     debug!("Call completed immediately. Results: {:?}", results);
-
                     let ok_atom = Atom::from_str(env, "ok").unwrap();
                     let complete_atom = Atom::from_str(env, "complete").unwrap();
-                    // Convert WasmVal results to a Vec<Term>
-                    let encoded_results: Result<Vec<Term>, rustler::Error> = results.into_iter().map(|result| {
-                        match result {
-                            Val::I32(i) => Ok(i.encode(env)),
-                            Val::I64(i) => Ok(i.encode(env)),
-                            Val::F32(f) => Ok(f32::from_bits(f).encode(env)),
-                            Val::F64(f) => Ok(f64::from_bits(f).encode(env)),
-                            // TODO: Handle other Val types like V128, FuncRef, ExternRef if needed
-                            _ => Err(rustler::Error::Term(Box::new("Unsupported WasmVal result type"))),
-                        }
-                    }).collect();
 
-                    // Encode the Vec<Term> directly, or propagate the error
-                    let results_term = encoded_results?.encode(env);
+                    let results_term = convert::wasm_vals_to_term_list(env, &results)?;
                     Ok((ok_atom, complete_atom, results_term).encode(env))
                 }
             }

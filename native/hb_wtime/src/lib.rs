@@ -6,6 +6,7 @@ use tracing::trace;
 
 pub mod example;
 pub mod wasm;
+pub mod convert;
 pub mod nif;
 
 rustler::init!(
