@@ -100,7 +100,7 @@ fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, args:
 
                     let ok_atom = Atom::from_str(env, "ok").unwrap();
                     let import_atom = Atom::from_str(env, "import").unwrap();
-                    let meta_term = rustler::types::map::map_new(env);
+                    let meta_term = convert::wasm_host_func_req_to_term_list(env, import_meta)?;
                     Ok((ok_atom, import_atom, meta_term).encode(env))
                 }
                 CallStepResult::Complete(results) => {
@@ -120,3 +120,5 @@ fn wtime_call_start(env: Env, resource: ResourceArc<NifRes>, func: String, args:
         }
     }
 }
+
+

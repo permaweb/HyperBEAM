@@ -1,6 +1,8 @@
 use rustler::{Encoder, Env, Error, Term};
 use wasmtime::Val;
 
+use crate::wasm::HostFuncRequest;
+
 /// Converts an Erlang float (f64) argument into a WasmVal::F64.
 /// Currently assumes the first argument is the one to convert.
 pub fn args_to_wasm_vals(args: &[f64]) -> Result<Vec<Val>, Error> {
@@ -32,4 +34,18 @@ pub fn wasm_vals_to_term_list<'a>(env: Env<'a>, results: &[Val]) -> Result<Term<
         .collect();
     // Encode the resulting Vec<Term> into a single Term (list).
     Ok(terms?.encode(env))
+}
+
+pub fn wasm_host_func_req_to_term_list<'a>(
+    env: Env<'a>,
+    host_func_req: HostFuncRequest,
+) -> Result<Term<'a>, Error> {
+    // Create a vector of terms directly.
+    let terms: Vec<Term> = vec![
+        host_func_req.func_desc.module_name.encode(env),
+        host_func_req.func_desc.field_name.encode(env),
+        wasm_vals_to_term_list(env, &host_func_req.params)?,
+    ];
+    // Encode the vector into an Erlang list term.
+    Ok(terms.encode(env))
 }

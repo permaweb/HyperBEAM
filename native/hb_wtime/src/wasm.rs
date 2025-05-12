@@ -203,12 +203,6 @@ pub struct HostFuncDesc {
 }
 
 #[derive(Debug, Clone)]
-pub struct ImportMeta {
-    pub func_desc: HostFuncDesc,
-    pub params: WasmParamsVec,
-}
-
-#[derive(Debug, Clone)]
 pub enum NativeFuncDesc {
     Export(String),
     Indirect(i64),
@@ -265,7 +259,7 @@ pub struct WasmCallState<'a> {
 
 #[derive(Debug, Clone)]
 pub enum CallStepResult {
-    ImportCall(ImportMeta),
+    ImportCall(HostFuncRequest),
     Complete(WasmResultsVec),
 }
 
@@ -331,7 +325,7 @@ pub async fn call_push_native<'a>(
                 wasm_future,
                 host_resp_tx,
             });
-            let import_meta = ImportMeta {
+            let import_meta = HostFuncRequest {
                 func_desc: host_req.func_desc,
                 params: host_req.params.clone(),
             };
@@ -384,7 +378,7 @@ pub async fn call_pop_host<'a>(
                 wasm_future,
                 host_resp_tx,
             });
-            let import_meta = ImportMeta {
+            let import_meta = HostFuncRequest {
                 func_desc: host_req.func_desc,
                 params: host_req.params.clone(),
             };

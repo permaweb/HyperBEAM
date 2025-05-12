@@ -10,6 +10,7 @@
         , xor_example/2
         , wtime_create_instance/1
         , wtime_call_start/3
+        , wtime_call_resume/1
         ]).
 
 -include("cargo.hrl").
@@ -48,6 +49,9 @@ wtime_create_instance(_Bin) ->
     ?NOT_LOADED.
 
 wtime_call_start(_Context, _Func, _Args) ->
+    ?NOT_LOADED.
+
+wtime_call_resume(_Context) ->
     ?NOT_LOADED.
 
 %%%===================================================================
@@ -112,6 +116,16 @@ wtime_call_start_test() ->
     io:format("Bin: ~p~n", [Bin]),
     {ok, Inst} = wtime_create_instance(Bin),
     {ok, complete, [120.0]} = wtime_call_start(Inst, <<"fac">>, [5.0]),
+    ok.
+
+wtime_call_resume_test() ->
+    {ok, Bin} = file:read_file("test/pow-calculator.wasm"),
+    {ok, Inst} = wtime_create_instance(Bin),
+    {ok, A, B} = wtime_call_start(Inst, <<"pow">>, [2.0, 5.0]),
+    % import, [<<"mul">>, [2.0, 2.0]]
+    io:format("A: ~p~n", [A]),
+    io:format("B: ~p~n", [B]),
+    % {ok, complete, [120.0]} = wtime_call_resume(Inst),
     ok.
 
 -endif.
