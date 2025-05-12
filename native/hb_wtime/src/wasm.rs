@@ -1,5 +1,5 @@
-use std::{future::Future, pin::Pin};
 use crate::types::{WasmVal, WasmValType};
+use std::{future::Future, pin::Pin};
 
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
@@ -43,7 +43,7 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
     trace!("instance_init");
 
     let mut cfg = Config::new();
-    
+
     // Necessary for the async import architecture
     cfg.async_support(true);
 
@@ -75,7 +75,11 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
     module.imports().for_each(|import| {
         let module_name_ref = import.module();
         let field_name_ref = import.name();
-        trace!("Creating import function for: {}.{}", module_name_ref, field_name_ref);
+        trace!(
+            "Creating import function for: {}.{}",
+            module_name_ref,
+            field_name_ref
+        );
 
         let ty = match import.ty().func() {
             Some(ty) => ty.clone(),
@@ -171,10 +175,7 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
         host_req_channel: host_req_rx,
     };
 
-    let res = InstanceInitResult {
-        state,
-        extra,
-    };
+    let res = InstanceInitResult { state, extra };
 
     trace!("Instance init result: {:?}", res);
 
@@ -237,7 +238,11 @@ pub struct PendingImportStackItem<'a> {
 
 impl<'a> std::fmt::Debug for PendingImportStackItem<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PendingImportStackItem {{ func_desc: {:?}, results_count: {}, host_resp_tx: {:?} }}", self.func_desc, self.results_count, self.host_resp_tx)
+        write!(
+            f,
+            "PendingImportStackItem {{ func_desc: {:?}, results_count: {}, host_resp_tx: {:?} }}",
+            self.func_desc, self.results_count, self.host_resp_tx
+        )
     }
 }
 
@@ -245,19 +250,20 @@ impl<'a> std::fmt::Debug for PendingImportStackItem<'a> {
 pub struct WasmCallState<'a> {
     pub instance_extra: WasmInstanceExtra,
     pub pending_import_stack: Vec<PendingImportStackItem<'a>>,
-    pub current_future: Option<Pin<Box<dyn Future<Output = Result<Vec<WasmVal>, anyhow::Error>> + Send + 'a>>>,
+    pub current_future:
+        Option<Pin<Box<dyn Future<Output = Result<Vec<WasmVal>, anyhow::Error>> + Send + 'a>>>,
     pub current_results_count: Option<usize>,
 }
 
 // Manually implement Debug to exclude the non-Debug Future field.
 impl<'a> std::fmt::Debug for WasmCallState<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter< '_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WasmCallState")
-         .field("instance_extra", &self.instance_extra)
-         .field("pending_import_stack", &self.pending_import_stack)
-         // Exclude current_future as it doesn't implement Debug
-         .field("current_results_count", &self.current_results_count)
-         .finish_non_exhaustive() // Use finish_non_exhaustive if you might add fields later
+            .field("instance_extra", &self.instance_extra)
+            .field("pending_import_stack", &self.pending_import_stack)
+            // Exclude current_future as it doesn't implement Debug
+            .field("current_results_count", &self.current_results_count)
+            .finish_non_exhaustive() // Use finish_non_exhaustive if you might add fields later
     }
 }
 
@@ -281,13 +287,15 @@ pub fn call_init<'a>(instance_extra: WasmInstanceExtra) -> Result<WasmCallState<
 }
 
 // Make call_step public
-pub async fn call_step<'a>(
-    call_state: &mut WasmCallState<'a>,
-) -> Result<CallStepResult> {
+pub async fn call_step<'a>(call_state: &mut WasmCallState<'a>) -> Result<CallStepResult> {
     // Take the future and count from the state. Error if not present.
-    let mut wasm_future = call_state.current_future.take()
+    let mut wasm_future = call_state
+        .current_future
+        .take()
         .ok_or_else(|| anyhow::anyhow!("call_step called but no current_future in state"))?;
-    let results_count = call_state.current_results_count.take()
+    let results_count = call_state
+        .current_results_count
+        .take()
         .ok_or_else(|| anyhow::anyhow!("call_step called but no current_results_count in state"))?;
 
     let mut host_func_request_future = Box::pin(call_state.instance_extra.host_req_channel.recv());
@@ -341,13 +349,15 @@ pub async fn call_push_native<'a>(
     instance_state: &'a mut WasmInstanceState,
     call_state: &mut WasmCallState<'a>, // Takes mutable call_state
     native_request: NativeFuncRequest,
-) -> Result<()> { // Returns Result<()> instead of the future/count tuple
+) -> Result<()> {
+    // Returns Result<()> instead of the future/count tuple
     trace!("call_push_native: {:?}", native_request.func_desc);
     let module = &instance_state.module;
 
     let (func_inst, results_count) = match native_request.func_desc {
         NativeFuncDesc::Export(ref name) => {
-            let export_extern = module.get_export(name.as_str())
+            let export_extern = module
+                .get_export(name.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Export '{}' not found", name))?;
 
             let func_ty = match export_extern {
@@ -356,27 +366,44 @@ pub async fn call_push_native<'a>(
             };
             let results_count_val = func_ty.results().count();
 
-            let func = instance_state.instance.get_func(&mut instance_state.store, name.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Function instance not found for export: {}", name))?;
+            let func = instance_state
+                .instance
+                .get_func(&mut instance_state.store, name.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Function instance not found for export: {}", name)
+                })?;
             (func, results_count_val)
-        },
-        NativeFuncDesc::Indirect(_index) => unimplemented!("Indirect function calls not yet implemented"),
+        }
+        NativeFuncDesc::Indirect(_index) => {
+            unimplemented!("Indirect function calls not yet implemented")
+        }
     };
 
-    let params_owned = native_request.params.clone(); 
+    let params_owned = native_request.params.clone();
     let func_desc_clone = native_request.func_desc.clone(); // Clone for use in error message
 
-    let wasm_future: Pin<Box<dyn Future<Output = Result<Vec<WasmVal>, anyhow::Error>> + Send + 'a>> = Box::pin(async move {
+    let wasm_future: Pin<
+        Box<dyn Future<Output = Result<Vec<WasmVal>, anyhow::Error>> + Send + 'a>,
+    > = Box::pin(async move {
         let mut temp_results_buffer = vec![WasmVal::I32(0); results_count];
-        
+
         // Important: Need mutable access to instance_state.store here.
         // The lifetime 'a ensures instance_state outlives the future.
-        func_inst.call_async(
-            &mut instance_state.store, 
-            &params_owned, 
-            temp_results_buffer.as_mut_slice(),
-        ).await.map_err(|e| anyhow::anyhow!("Wasm function call_async failed for {:?}: {:?}", func_desc_clone, e))?;
-        
+        func_inst
+            .call_async(
+                &mut instance_state.store,
+                &params_owned,
+                temp_results_buffer.as_mut_slice(),
+            )
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Wasm function call_async failed for {:?}: {:?}",
+                    func_desc_clone,
+                    e
+                )
+            })?;
+
         Ok(temp_results_buffer)
     });
 
@@ -389,17 +416,38 @@ pub async fn call_push_native<'a>(
 pub async fn call_pop_host<'a>(
     call_state: &mut WasmCallState<'a>, // Takes mutable call_state
     host_response: HostFuncResponse,
-) -> Result<()> { // Returns Result<()> instead of the future/count tuple
-    trace!("call_pop_host for {:?}, response: {:?}", host_response.func_desc, host_response.results);
+) -> Result<()> {
+    // Returns Result<()> instead of the future/count tuple
+    trace!(
+        "call_pop_host for {:?}, response: {:?}",
+        host_response.func_desc,
+        host_response.results
+    );
 
-    let pending_item = call_state.pending_import_stack.pop()
+    let pending_item = call_state
+        .pending_import_stack
+        .pop()
         .ok_or_else(|| anyhow::anyhow!("call_pop_host called with empty pending import stack"))?;
 
-    debug!("Popped pending import item for {:?}. Results count for original call: {}", pending_item.func_desc, pending_item.results_count);
+    debug!(
+        "Popped pending import item for {:?}. Results count for original call: {}",
+        pending_item.func_desc, pending_item.results_count
+    );
 
-    if pending_item.host_resp_tx.send(host_response.clone()).is_err() {
-        error!("Failed to send host response; Wasm receiver was dropped for {:?}.", pending_item.func_desc);
-        return Err(anyhow::anyhow!("Wasm future for {:?} dropped its response receiver. Host response was: {:?}", pending_item.func_desc, host_response));
+    if pending_item
+        .host_resp_tx
+        .send(host_response.clone())
+        .is_err()
+    {
+        error!(
+            "Failed to send host response; Wasm receiver was dropped for {:?}.",
+            pending_item.func_desc
+        );
+        return Err(anyhow::anyhow!(
+            "Wasm future for {:?} dropped its response receiver. Host response was: {:?}",
+            pending_item.func_desc,
+            host_response
+        ));
     }
 
     // Store the resumed future and original results count in the call_state
@@ -452,7 +500,7 @@ mod tests {
         let module_data = WasmModuleData::Wat(wat);
         let res = instance_init(module_data).await.unwrap();
         let mut init = res.state;
-        
+
         let instance_extra = res.extra;
         let mut call_state = call_init(instance_extra).unwrap();
 
@@ -462,16 +510,20 @@ mod tests {
         };
 
         // call_push_native now mutates call_state and returns Result<()>
-        call_push_native(&mut init, &mut call_state, native_request).await.unwrap();
+        call_push_native(&mut init, &mut call_state, native_request)
+            .await
+            .unwrap();
 
         // Call call_step, which takes the future from call_state
         let res = call_step(&mut call_state).await.unwrap();
 
         let import_meta = match res {
             CallStepResult::ImportCall(ic) => ic,
-            CallStepResult::Complete(results) => panic!("Expected ImportCall, got Complete({:?})", results),
+            CallStepResult::Complete(results) => {
+                panic!("Expected ImportCall, got Complete({:?})", results)
+            }
         };
-        
+
         assert_eq!(import_meta.func_desc.module_name, "host");
         assert_eq!(import_meta.func_desc.field_name, "sleep_and_resume");
     }
@@ -488,7 +540,7 @@ mod tests {
         "#;
         let module_data = WasmModuleData::Wat(wat);
         let init_res = instance_init(module_data).await.unwrap();
-        
+
         let mut instance_state = init_res.state;
         let instance_extra = init_res.extra;
         let mut call_state = call_init(instance_extra).unwrap();
@@ -499,11 +551,9 @@ mod tests {
         };
 
         // Push native call, mutates state
-        call_push_native(
-            &mut instance_state,
-            &mut call_state,
-            native_request
-        ).await.unwrap();
+        call_push_native(&mut instance_state, &mut call_state, native_request)
+            .await
+            .unwrap();
 
         // Call call_step to get the first result (ImportCall)
         let push_step_res = call_step(&mut call_state).await.unwrap();
@@ -511,7 +561,9 @@ mod tests {
         // Expect the first step to be an import call
         let import_meta = match push_step_res {
             CallStepResult::ImportCall(ic) => ic,
-            CallStepResult::Complete(results) => panic!("Expected ImportCall, got Complete({:?})", results),
+            CallStepResult::Complete(results) => {
+                panic!("Expected ImportCall, got Complete({:?})", results)
+            }
         };
 
         // Prepare and send host response
@@ -531,9 +583,15 @@ mod tests {
         match pop_res {
             CallStepResult::Complete(results) => {
                 info!("Final Wasm execution completed with results: {:?}", results);
-                assert_eq!(format!("{:?}", results), format!("{:?}", vec![wasmtime::Val::I32(12345)]));
+                assert_eq!(
+                    format!("{:?}", results),
+                    format!("{:?}", vec![wasmtime::Val::I32(12345)])
+                );
             }
-            CallStepResult::ImportCall(ic) => panic!("Expected Complete, got ImportCall({:?}) after host response", ic),
+            CallStepResult::ImportCall(ic) => panic!(
+                "Expected Complete, got ImportCall({:?}) after host response",
+                ic
+            ),
         }
 
         assert_eq!(call_state.pending_import_stack.len(), 0);

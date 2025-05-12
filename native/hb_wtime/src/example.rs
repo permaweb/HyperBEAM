@@ -1,4 +1,7 @@
-use rustler::{Binary, Env, Error, NifMap, NifResult, NifTaggedEnum, NifTuple, NifUnitEnum, NifUntaggedEnum, OwnedBinary};
+use rustler::{
+    Binary, Env, Error, NifMap, NifResult, NifTaggedEnum, NifTuple, NifUnitEnum, NifUntaggedEnum,
+    OwnedBinary,
+};
 
 #[rustler::nif]
 fn xor_example<'a>(env: Env<'a>, x: Binary<'a>, y: Binary<'a>) -> NifResult<Binary<'a>> {
@@ -34,7 +37,7 @@ enum UnitEnum {
 enum TaggedEnum {
     Foo,
     Bar(String),
-    Baz{ a: i32, b: i32 },
+    Baz { a: i32, b: i32 },
 }
 
 #[derive(NifUntaggedEnum)]
@@ -59,7 +62,7 @@ fn my_map_nif() -> MyMap {
 
 #[rustler::nif]
 fn my_maps() -> Vec<MyMap> {
-    vec![ my_map(), my_map()]
+    vec![my_map(), my_map()]
 }
 
 fn my_map() -> MyMap {
