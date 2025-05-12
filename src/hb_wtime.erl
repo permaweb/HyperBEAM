@@ -7,6 +7,7 @@
         , unit_enum_echo/1
         , tagged_enum_echo/1
         , untagged_enum_echo/1
+        , xor_example/2
         ]).
 
 -include("cargo.hrl").
@@ -36,6 +37,9 @@ tagged_enum_echo(_Tagged) ->
     ?NOT_LOADED.
 
 untagged_enum_echo(_Untagged) ->
+    ?NOT_LOADED.
+
+xor_example(_BinX, _BinY) ->
     ?NOT_LOADED.
 
 %%%===================================================================
@@ -79,5 +83,10 @@ tagged_enum_echo_test() ->
 untagged_enum_echo_test() ->
     ?assertEqual(123, untagged_enum_echo(123)),
     ?assertEqual(<<"string">>, untagged_enum_echo(<<"string">>)).
+
+xor_example_test() ->
+    X = <<"\x4A\x4A\x4A\x4A\x4A\x4A\x4A\x4A">>,
+    Y = <<"\x55\x55\x55\x55\x55\x55\x55\x55">>,
+    ?assertEqual(<<"\x1F\x1F\x1F\x1F\x1F\x1F\x1F\x1F">>, xor_example(X, Y)).
 
 -endif.

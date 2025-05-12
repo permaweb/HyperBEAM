@@ -1,9 +1,22 @@
-use rustler::{NifMap, NifTuple, NifUnitEnum, NifTaggedEnum, NifUntaggedEnum};
+use rustler::{Binary, Env, Error, NifMap, NifResult, NifTaggedEnum, NifTuple, NifUnitEnum, NifUntaggedEnum, OwnedBinary};
 
 /// Entry point for the Rustler NIF module.
 /// This file defines the available NIF functions and organizes them into modules.
 
 pub mod wasm;
+
+#[rustler::nif]
+fn xor_example<'a>(env: Env<'a>, x: Binary<'a>, y: Binary<'a>) -> NifResult<Binary<'a>> {
+    let mut x_owned: OwnedBinary = x.to_owned().ok_or(Error::Term(Box::new("no mem")))?;
+    let y_owned: OwnedBinary = y.to_owned().ok_or(Error::Term(Box::new("no mem")))?;
+    for (x_byte, y_byte) in x_owned.as_mut_slice().iter_mut().zip(y_owned.as_slice()) {
+        *x_byte ^= *y_byte;
+    }
+
+    // Ownership of `owned`'s data is transferred to `env` on the
+    // following line, so no additional heap allocations are incurred.
+    Ok(Binary::from_owned(x_owned, env))
+}
 
 #[derive(NifMap)]
 struct MyMap {
