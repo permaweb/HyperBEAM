@@ -1,11 +1,13 @@
 use crate::convert::{self, nif_vals_to_wasm_vals};
 use crate::types::{NifWasmVal, WasmVal};
-use crate::wasm_fsm::{CallOutcome, FsmError, HostFuncRequest, HostFuncResponse, NativeFuncRequest, StepType, StateTag, WasmFsm, WasmModuleData};
 use crate::wasm::{HostFuncDesc, NativeFuncDesc};
-use rustler::{Atom, Binary, Decoder, Encoder, Env, NifResult, NewBinary, ResourceArc, Term};
-use std::sync::Mutex;
-use tracing::{debug, error, trace, warn};
+use crate::wasm_fsm::{
+    CallOutcome, FsmError, HostFuncResponse, NativeFuncRequest, StateTag, WasmFsm, WasmModuleData,
+};
 use anyhow;
+use rustler::{Atom, Binary, Encoder, Env, NifResult, ResourceArc, Term};
+use std::sync::Mutex;
+use tracing::{debug, error, trace};
 
 pub struct NifRes {
     fsm: Mutex<WasmFsm>,
@@ -19,10 +21,7 @@ fn fsm_error_to_term<'a>(env: Env<'a>, err: FsmError) -> Term<'a> {
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn wtime_create_instance<'a>(
-    env: Env<'a>,
-    module_binary: Binary,
-) -> NifResult<Term<'a>> {
+fn wtime_create_instance<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
     trace!("wtime_create_instance (fsm)");
 
     let runtime = match tokio::runtime::Runtime::new() {
@@ -37,6 +36,8 @@ fn wtime_create_instance<'a>(
     };
 
     let binary_data = module_binary.as_slice();
+    // SAFETY: Transmuting lifetime to 'static. Assumes `module_binary` (owned by BEAM)
+    // lives at least as long as the WasmFsm resource, as WasmModuleData::Binary expects &'static [u8].
     let module_data = WasmModuleData::Binary(unsafe { std::mem::transmute(binary_data) });
 
     match WasmFsm::new(module_data, &runtime) {
@@ -62,14 +63,21 @@ fn wtime_call_start<'a>(
     func_name: String,
     params: Vec<NifWasmVal>,
 ) -> NifResult<Term<'a>> {
-    trace!("wtime_call_start (new) - func: {}, params: {:?}", func_name, params);
+    trace!(
+        "wtime_call_start (new) - func: {}, params: {:?}",
+        func_name,
+        params
+    );
     let mut fsm = resource.fsm.lock().unwrap();
 
     if !matches!(fsm.current_state(), StateTag::Idle) {
-        return Ok(fsm_error_to_term(env, FsmError::InvalidState {
-            operation: "call_start (must be Idle)",
-            current_state: fsm.current_state().clone(),
-        }));
+        return Ok(fsm_error_to_term(
+            env,
+            FsmError::InvalidState {
+                operation: "call_start (must be Idle)",
+                current_state: fsm.current_state().clone(),
+            },
+        ));
     }
 
     let param_types: Vec<wasmtime::ValType> = match fsm.get_native_func_param_types(&func_name) {
@@ -138,25 +146,51 @@ fn wtime_call_resume<'a>(
     let mut fsm = resource.fsm.lock().unwrap();
 
     if !matches!(fsm.current_state(), StateTag::AwaitingHost) {
-        return Ok(fsm_error_to_term(env, FsmError::InvalidState {
-            operation: "call_resume (must be AwaitingHost)",
-            current_state: fsm.current_state().clone(),
-        }));
+        return Ok(fsm_error_to_term(
+            env,
+            FsmError::InvalidState {
+                operation: "call_resume (must be AwaitingHost)",
+                current_state: fsm.current_state().clone(),
+            },
+        ));
     }
 
-    let host_response = match || -> Result<HostFuncResponse, rustler::Error> {
-        let result_types = fsm.get_last_host_func_result_types().unwrap();
-        let wasm_results: Vec<WasmVal> = nif_vals_to_wasm_vals(results.as_slice(), &result_types)?;
+    // Inner function to handle fallible conversion, returns Result<HostFuncResponse, String>
+    // where String is a formatted error message.
+    let decoding_result: Result<HostFuncResponse, String> = (|| {
+        let result_types = match fsm.get_last_host_func_result_types() {
+            Ok(types) => types,
+            Err(fsm_err) => {
+                return Err(format!(
+                    "Error getting host func result types: {}",
+                    fsm_err.to_string()
+                ));
+            }
+        };
+        let wasm_results: Vec<WasmVal> =
+            match nif_vals_to_wasm_vals(results.as_slice(), &result_types) {
+                Ok(vals) => vals,
+                Err(rustler_err) => {
+                    return Err(format!(
+                        "Error converting NIF vals to Wasm vals: {:?}",
+                        rustler_err
+                    ));
+                }
+            };
         Ok(HostFuncResponse {
-            func_desc: HostFuncDesc { module_name, field_name },
+            func_desc: HostFuncDesc {
+                module_name,
+                field_name,
+            },
             results: wasm_results,
         })
-    }() {
+    })();
+
+    let host_response = match decoding_result {
         Ok(resp) => resp,
-        Err(e) => {
-            error!("Host response decoding failed: {:?}", e);
-            let reason = format!("Host response decoding failed: {:?}", e);
-            return Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env));
+        Err(reason_string) => {
+            error!("Host response processing failed: {}", reason_string);
+            return Ok((Atom::from_str(env, "error").unwrap(), reason_string).encode(env));
         }
     };
 

@@ -25,7 +25,7 @@ pub struct WasmInstanceState {
 
 type HostFuncRespTx = oneshot::Sender<HostFuncResponse>;
 
-type HostFuncChannel = mpsc::Receiver<(HostFuncRequest, HostFuncRespTx)>;
+pub type HostFuncChannel = mpsc::Receiver<(HostFuncRequest, HostFuncRespTx)>;
 
 #[derive(Debug)]
 pub struct WasmInstanceExtra {
@@ -55,7 +55,7 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
     // Additional safe features
     // TODO: Configurable?
     cfg.wasm_simd(true);
-    cfg.wasm_relaxed_simd(true); // see `relaxed_simd_deterministic`
+    cfg.wasm_relaxed_simd(true); // determinism handled by `relaxed_simd_deterministic`
 
     let engine = Engine::new(&cfg)?;
 
@@ -72,7 +72,7 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
     let (host_req_tx, host_req_rx) =
         mpsc::channel::<(HostFuncRequest, oneshot::Sender<HostFuncResponse>)>(1);
 
-    module.imports().for_each(|import| {
+    for import in module.imports() {
         let module_name_ref = import.module();
         let field_name_ref = import.name();
         trace!(
@@ -83,7 +83,7 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
 
         let ty = match import.ty().func() {
             Some(ty) => ty.clone(),
-            None => panic!("Import function {} has no type", field_name_ref),
+            None => return Err(anyhow::anyhow!("Import item '{}.{}' is not a function type", module_name_ref, field_name_ref)),
         };
 
         let module_name_owned = import.module().to_string();
@@ -91,7 +91,7 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
 
         let current_host_req_tx = host_req_tx.clone();
 
-        let link_res = linker.func_new_async(
+        linker.func_new_async(
             module_name_ref,
             field_name_ref,
             ty,
@@ -107,7 +107,7 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
                 let params_vec = params.to_vec();
                 trace!("Params: {:?}", params_vec);
 
-                let captured_req_tx = current_host_req_tx.clone();
+                let moved_host_req_tx = current_host_req_tx.clone();
 
                 Box::new(async move {
                     trace!(
@@ -128,7 +128,7 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
 
                     trace!("Sending request: {:?}", request);
 
-                    if captured_req_tx.send((request, resp_tx)).await.is_err() {
+                    if moved_host_req_tx.send((request, resp_tx)).await.is_err() {
                         // Host is no longer listening or channel closed
                         return Err(anyhow::anyhow!("Failed to send request to host"));
                     }
@@ -155,13 +155,9 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
                     }
                 })
             },
-        );
-
-        match link_res {
-            Ok(_) => (),
-            Err(e) => panic!("Failed to link function: {}", e),
-        };
-    });
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to link import function '{}.{}': {}", module_name_ref, field_name_ref, e))?;
+    }
 
     let instance = linker.instantiate_async(&mut store, &module).await?;
     let state = WasmInstanceState {
@@ -237,7 +233,6 @@ impl<'a> std::fmt::Debug for PendingImportStackItem<'a> {
 
 // Removed #[derive(Debug)] as Debug is manually implemented
 pub struct WasmCallState<'a> {
-    pub instance_extra: WasmInstanceExtra,
     pub pending_import_stack: Vec<PendingImportStackItem<'a>>,
     pub current_future:
         Option<Pin<Box<dyn Future<Output = Result<Vec<WasmVal>, anyhow::Error>> + Send + 'a>>>,
@@ -248,11 +243,9 @@ pub struct WasmCallState<'a> {
 impl<'a> std::fmt::Debug for WasmCallState<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WasmCallState")
-            .field("instance_extra", &self.instance_extra)
             .field("pending_import_stack", &self.pending_import_stack)
-            // Exclude current_future as it doesn't implement Debug
             .field("current_results_count", &self.current_results_count)
-            .finish_non_exhaustive() // Use finish_non_exhaustive if you might add fields later
+            .finish_non_exhaustive()
     }
 }
 
@@ -262,11 +255,10 @@ pub enum CallStepResult {
     Complete(WasmResultsVec),
 }
 
-pub fn call_init<'a>(instance_extra: WasmInstanceExtra) -> Result<WasmCallState<'a>> {
+pub fn call_init<'a>() -> Result<WasmCallState<'a>> {
     trace!("call_init");
 
     let call_state = WasmCallState {
-        instance_extra,
         pending_import_stack: vec![],
         current_future: None,
         current_results_count: None,
@@ -276,7 +268,10 @@ pub fn call_init<'a>(instance_extra: WasmInstanceExtra) -> Result<WasmCallState<
 }
 
 // Make call_step public
-pub async fn call_step<'a>(call_state: &mut WasmCallState<'a>) -> Result<CallStepResult> {
+pub async fn call_step<'a>(
+    call_state: &mut WasmCallState<'a>,
+    host_req_channel: &mut HostFuncChannel, // Add host_req_channel argument
+) -> Result<CallStepResult> {
     // Take the future and count from the state. Error if not present.
     let mut wasm_future = call_state
         .current_future
@@ -287,7 +282,8 @@ pub async fn call_step<'a>(call_state: &mut WasmCallState<'a>) -> Result<CallSte
         .take()
         .ok_or_else(|| anyhow::anyhow!("call_step called but no current_results_count in state"))?;
 
-    let mut host_func_request_future = Box::pin(call_state.instance_extra.host_req_channel.recv());
+    // Use the passed-in host_req_channel
+    let mut host_func_request_future = Box::pin(host_req_channel.recv());
 
     tokio::select! {
         biased;
@@ -313,7 +309,7 @@ pub async fn call_step<'a>(call_state: &mut WasmCallState<'a>) -> Result<CallSte
                     // Push the currently executing future onto the stack.
                     call_state.pending_import_stack.push(PendingImportStackItem {
                         func_desc: host_req.func_desc.clone(),
-                        results_count, // This is the count for the *original* call, needed when resuming.
+                        results_count, // Expected results count for the original Wasm call that led to this (or a parent) host call.
                         wasm_future, // Move the future here.
                         host_resp_tx,
                     });
@@ -495,36 +491,32 @@ mod tests {
         let module_data = WasmModuleData::Wat(wat);
         let init_result = instance_init(module_data).await.unwrap();
         let mut init = init_result.state; // WasmInstanceState
-        let mut current_instance_extra = init_result.extra; // Initial WasmInstanceExtra
+        let mut current_instance_extra = init_result.extra; // Re-add initialization of current_instance_extra
 
         for i in 0..10 {
-            // Re-initialize WasmCallState for each independent call.
-            // This consumes current_instance_extra and creates a call_state with a fresh lifetime.
-            let mut call_state = call_init(current_instance_extra).unwrap();
+            let mut call_state = call_init().unwrap();
 
             let native_request = NativeFuncRequest {
                 func_desc: NativeFuncDesc::Export("run".to_string()),
                 params: vec![],
             };
 
-            // The mutable borrow of `init` by call_push_native is now scoped to this iteration.
             call_push_native(&mut init, &mut call_state, native_request).await.unwrap();
-            let step_result = call_step(&mut call_state).await.unwrap();
+            // Correctly use current_instance_extra.host_req_channel
+            let step_result = call_step(&mut call_state, &mut current_instance_extra.host_req_channel).await.unwrap();
             
             match step_result {
                 CallStepResult::Complete(results) => {
                     assert_eq!(results.len(), 1);
-                    // With the corrected Wasm, the (i)th call (0-indexed) returns i+1.
                     assert_eq!(results[0].i32(), Some((i + 1) as i32));
-                    
-                    // Retrieve the instance_extra from the completed call_state for the next iteration.
-                    current_instance_extra = call_state.instance_extra;
+                    // current_instance_extra is taken and put back implicitly by the loop structure for this test
+                    // if it were a more complex scenario, we might need to extract it from call_state
+                    // but since WasmCallState no longer holds it, this is managed externally.
                 }
                 CallStepResult::ImportCall(ic) => {
                     panic!("Expected Complete, got ImportCall: {:?}", ic);
                 }
             };
-            // call_state (and its lifetime tied to this iteration's borrow of `init`) goes out of scope here.
         }
     }
 
@@ -541,9 +533,9 @@ mod tests {
         let module_data = WasmModuleData::Wat(wat);
         let res = instance_init(module_data).await.unwrap();
         let mut init = res.state;
-
-        let instance_extra = res.extra;
-        let mut call_state = call_init(instance_extra).unwrap();
+        
+        let mut instance_extra = res.extra; // Make instance_extra mutable
+        let mut call_state = call_init().unwrap();
 
         let native_request = NativeFuncRequest {
             func_desc: NativeFuncDesc::Export("run".to_string()),
@@ -556,7 +548,7 @@ mod tests {
             .unwrap();
 
         // Call call_step, which takes the future from call_state
-        let res = call_step(&mut call_state).await.unwrap();
+        let res = call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
 
         let import_meta = match res {
             CallStepResult::ImportCall(ic) => ic,
@@ -583,8 +575,8 @@ mod tests {
         let init_res = instance_init(module_data).await.unwrap();
 
         let mut instance_state = init_res.state;
-        let instance_extra = init_res.extra;
-        let mut call_state = call_init(instance_extra).unwrap();
+        let mut instance_extra = init_res.extra; // Make instance_extra mutable
+        let mut call_state = call_init().unwrap();
 
         let native_request = NativeFuncRequest {
             func_desc: NativeFuncDesc::Export("run".to_string()),
@@ -597,7 +589,7 @@ mod tests {
             .unwrap();
 
         // Call call_step to get the first result (ImportCall)
-        let push_step_res = call_step(&mut call_state).await.unwrap();
+        let push_step_res = call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
 
         // Expect the first step to be an import call
         let import_meta = match push_step_res {
@@ -618,7 +610,7 @@ mod tests {
         call_pop_host(&mut call_state, host_response).await.unwrap();
 
         // Call call_step again with the resumed future now in state
-        let pop_res = call_step(&mut call_state).await.unwrap();
+        let pop_res = call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
 
         // Expect completion
         match pop_res {
