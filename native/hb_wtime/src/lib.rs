@@ -15,6 +15,6 @@ rustler::init!(
 
 fn load(env: Env, _load_info: Term) -> bool {
     trace!("load");
-    rustler::resource!(nif::NifContext, env);
+    rustler::resource!(nif::NifRes, env);
     true
 }

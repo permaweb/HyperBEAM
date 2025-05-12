@@ -9,6 +9,7 @@
         , untagged_enum_echo/1
         , xor_example/2
         , wtime_instance_init/1
+        , wtime_call_init/3
         ]).
 
 -include("cargo.hrl").
@@ -44,6 +45,9 @@ xor_example(_BinX, _BinY) ->
     ?NOT_LOADED.
 
 wtime_instance_init(_Bin) ->
+    ?NOT_LOADED.
+
+wtime_call_init(_Context, _Func, _Args) ->
     ?NOT_LOADED.
 
 %%%===================================================================
@@ -102,6 +106,12 @@ wtime_instance_init_test() ->
 wtime_instance_init_error_test() ->
     Bin = <<0,0,0,0,0,0,0,0>>,  % Invalid WASM binary
     {error, _} = wtime_instance_init(Bin),
+    ok.
+
+wtime_call_init_test() ->
+    {ok, Bin} = file:read_file("test/test.wasm"),
+    {ok, Inst} = wtime_instance_init(Bin),
+    {ok, _Call} = wtime_call_init(Inst, "run", []),
     ok.
 
 -endif.
