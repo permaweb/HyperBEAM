@@ -42,8 +42,20 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
     trace!("instance_init");
 
     let mut cfg = Config::new();
+
+    // Necessary for the async import architecture
     cfg.async_support(true);
+
+    // Configurations for deterministic behavior
     cfg.cranelift_nan_canonicalization(true);
+    cfg.wasm_threads(false);
+    cfg.relaxed_simd_deterministic(true);
+
+    // Additional safe features
+    // TODO: Configurable?
+    cfg.wasm_simd(true);
+    cfg.wasm_relaxed_simd(true); // see `relaxed_simd_deterministic`
+
     let engine = Engine::new(&cfg)?;
 
     let module = match module_binary {
@@ -62,15 +74,19 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
     module.imports().for_each(|import| {
         let module_name_ref = import.module();
         let field_name_ref = import.name();
-        trace!("Creating import function for: {}.{}", module_name_ref, field_name_ref);
-
-        let module_name_owned = import.module().to_string();
-        let field_name_owned = import.name().to_string();
+        trace!(
+            "Creating import function for: {}.{}",
+            module_name_ref,
+            field_name_ref
+        );
 
         let ty = match import.ty().func() {
             Some(ty) => ty.clone(),
-            None => return,
+            None => panic!("Import function {} has no type", field_name_ref),
         };
+
+        let module_name_owned = import.module().to_string();
+        let field_name_owned = import.name().to_string();
 
         let current_host_req_tx = host_req_tx.clone();
 
@@ -158,10 +174,7 @@ pub async fn instance_init(module_binary: WasmModuleData) -> Result<InstanceInit
         host_req_channel: host_req_rx,
     };
 
-    let res = InstanceInitResult {
-        state,
-        extra,
-    };
+    let res = InstanceInitResult { state, extra };
 
     trace!("Instance init result: {:?}", res);
 
@@ -241,7 +254,11 @@ pub struct PendingImportStackItem<'a> {
 
 impl<'a> std::fmt::Debug for PendingImportStackItem<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PendingImportStackItem {{ func_desc: {:?}, results_count: {}, host_resp_tx: {:?} }}", self.func_desc, self.results_count, self.host_resp_tx)
+        write!(
+            f,
+            "PendingImportStackItem {{ func_desc: {:?}, results_count: {}, host_resp_tx: {:?} }}",
+            self.func_desc, self.results_count, self.host_resp_tx
+        )
     }
 }
 
@@ -279,19 +296,25 @@ pub async fn call_push_native<'a>(
         NativeFuncDesc::Export(ref name) => {
             let func_type = module.get_export(name.as_str()).unwrap();
             let results_count_val = func_type.unwrap_func().results().count();
-            let func = instance_state.instance.get_func(&mut instance_state.store, name.as_str()).unwrap();
+            let func = instance_state
+                .instance
+                .get_func(&mut instance_state.store, name.as_str())
+                .unwrap();
             (func, results_count_val)
-        },
+        }
         NativeFuncDesc::Indirect(_index) => unimplemented!(),
     };
 
     let mut wasm_future = Box::pin(async move {
         let mut results = vec![WasmVal::I32(0); results_count];
-        func_inst.call_async(
-            &mut instance_state.store,
-            native_request.params.as_slice(),
-            results.as_mut_slice(),
-        ).await.unwrap();
+        func_inst
+            .call_async(
+                &mut instance_state.store,
+                native_request.params.as_slice(),
+                results.as_mut_slice(),
+            )
+            .await
+            .unwrap();
         Ok::<Vec<WasmVal>, anyhow::Error>(results)
     });
 
@@ -340,15 +363,21 @@ pub async fn call_pop_host<'a>(
     // First, pop the pending import stack and send the response
     let pending_import_stack_item = call_state.pending_import_stack.pop().unwrap();
 
-    debug!("Popped pending import stack item: {:?}", pending_import_stack_item);
+    debug!(
+        "Popped pending import stack item: {:?}",
+        pending_import_stack_item
+    );
 
     let results_count = pending_import_stack_item.results_count;
     // let func_desc = pending_import_stack_item.func_desc;
     let mut wasm_future = pending_import_stack_item.wasm_future;
 
     // Then, send the response
-    pending_import_stack_item.host_resp_tx.send(host_response).unwrap();
-    
+    pending_import_stack_item
+        .host_resp_tx
+        .send(host_response)
+        .unwrap();
+
     let mut host_func_request_future = Box::pin(call_state.instance_extra.host_req_channel.recv());
 
     let step_result = tokio::select! {
@@ -476,7 +505,7 @@ mod tests {
         "#;
         let module_data = WasmModuleData::Wat(wat);
         let init_res = instance_init(module_data).await.unwrap();
-        
+
         let mut instance_state = init_res.state;
         let instance_extra = init_res.extra;
         let mut call_state = call_init(instance_extra).unwrap();
@@ -486,11 +515,9 @@ mod tests {
             params: vec![],
         };
 
-        let res = call_push_native(
-            &mut instance_state,
-            &mut call_state,
-            native_request
-        ).await.unwrap();
+        let res = call_push_native(&mut instance_state, &mut call_state, native_request)
+            .await
+            .unwrap();
 
         match res {
             CallStepResult::ImportCall(import_meta) => {
@@ -500,8 +527,11 @@ mod tests {
             }
             CallStepResult::Complete(_) => assert!(false, "Expected ImportCall, got Complete"),
         }
-        
-        trace!("Pending import stack: {:?}", call_state.pending_import_stack);
+
+        trace!(
+            "Pending import stack: {:?}",
+            call_state.pending_import_stack
+        );
         assert_eq!(call_state.pending_import_stack.len(), 1);
 
         let host_response = HostFuncResponse {
@@ -513,8 +543,7 @@ mod tests {
         };
 
         let pop_res = call_pop_host(&mut call_state, host_response).await.unwrap();
-        
-        
+
         // assert_eq!(pop_res, CallStepResult::Complete(vec![WasmVal::I32(0); 1]));
         error!("Pop res: {:?}", pop_res);
     }
