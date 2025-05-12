@@ -8,6 +8,7 @@
         , tagged_enum_echo/1
         , untagged_enum_echo/1
         , xor_example/2
+        , wtime_instance_init/1
         ]).
 
 -include("cargo.hrl").
@@ -40,6 +41,9 @@ untagged_enum_echo(_Untagged) ->
     ?NOT_LOADED.
 
 xor_example(_BinX, _BinY) ->
+    ?NOT_LOADED.
+
+wtime_instance_init(_Bin) ->
     ?NOT_LOADED.
 
 %%%===================================================================
@@ -88,5 +92,16 @@ xor_example_test() ->
     X = <<"\x4A\x4A\x4A\x4A\x4A\x4A\x4A\x4A">>,
     Y = <<"\x55\x55\x55\x55\x55\x55\x55\x55">>,
     ?assertEqual(<<"\x1F\x1F\x1F\x1F\x1F\x1F\x1F\x1F">>, xor_example(X, Y)).
+
+
+wtime_instance_init_test() ->
+    Bin = <<0,97,115,109,1,0,0,0>>,  % Minimal valid WASM binary
+    {ok, _Context} = wtime_instance_init(Bin),
+    ok.
+
+wtime_instance_init_error_test() ->
+    Bin = <<0,0,0,0,0,0,0,0>>,  % Invalid WASM binary
+    {error, _} = wtime_instance_init(Bin),
+    ok.
 
 -endif.
