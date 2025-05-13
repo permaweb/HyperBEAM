@@ -161,23 +161,31 @@ call(Instance, Function, Params, ImportResolver, State1, Opts) ->
     ?event({call_begin, Instance, Function, Params}),
     case hb_wtime:call_begin(Instance, Function, Params) of
         {ok, complete, ResultList} ->
+            ?event({call_complete, Instance, Function, Params, ResultList}),
             {ok, ResultList, State1};
         {ok, import, [ImportModule, ImportField, ImportParams]} ->
             % Start the import resolution loop
             call_loop(Instance, ImportModule, ImportField, ImportParams, ImportResolver, State1, Opts);
         {error, Reason} ->
+            ?event({call_begin_failed, Instance, Function, Params, Reason}),
             {error, {call_begin_failed, Reason}}
     end.
 
 %% Internal helper function to handle the host import loop.
 call_loop(Instance, ImportModule, ImportField, ImportParams, ImportResolver, CurrentState, Opts) ->
-    case ImportResolver(CurrentState, #{
+    ImportRes = ImportResolver(CurrentState, #{
         instance => Instance,
         module => ImportModule,
         func => ImportField,
         args => ImportParams
         % func_sig => ImportSignature
-    }, Opts) of
+    }, Opts),
+    ?event({
+        import_resolver_result,
+        {in,  ImportModule, ImportField, ImportParams},
+        {out, ImportRes}
+    }),
+    case ImportRes of
         {ok, HostResultList, NextState} ->
             % Resume Wasm execution with the host result
             case hb_wtime:call_continue(Instance, ImportModule, ImportField, HostResultList) of
