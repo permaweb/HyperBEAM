@@ -54,8 +54,8 @@ init(M1, _M2, Opts) ->
     WASM = dev_wasm:instance(State, Msg2, Opts),
     [Dst, Src, Size] = hb_ao:get(args, Msg2, #{ hashpath => ignore }),
     ?event(debug, {memcpy, {dst, Dst}, {src, Src}, {size, Size}}),
-    {ok, Data} = hb_beamr_io:read(WASM, Src, Size),
-    ok = hb_beamr_io:write(WASM, Dst, Data),
+    {ok, Data} = hb_wtime:mem_read(WASM, Src, Size),
+    ok = hb_wtime:mem_write(WASM, Dst, Data),
     {ok, #{ <<"state">> => State, <<"results">> => [] }}.
 
 '__cxa_throw'(_Msg1, _Msg2, _Opts) ->
@@ -81,12 +81,12 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
     [Index|Args] = hb_ao:get(args, Msg2, #{ hashpath => ignore }),
     ?event(debug, {invoke, {invoke_signature, Sig}, {indirect_function_index, Index}, {args, Args}}),
     ?event(debug, invoke_emscripten_stack_get_current),
-    {ok, [SP]} = hb_beamr:call(WASM, <<"emscripten_stack_get_current">>, []),
+    {ok, [SP]} = dev_wasm:call(WASM, <<"emscripten_stack_get_current">>, []),
     ?event(debug, {invoke_stack_pointer, SP}),
     ImportResolver = hb_private:get(<<"wasm/import-resolver">>, State, Opts),
     try
         ?event(trying_indirect_call),
-        Res = hb_beamr:call(WASM, Index, Args, ImportResolver, State, Opts),
+        Res = dev_wasm:call(WASM, Index, Args, ImportResolver, State, Opts),
         {ok, Result, StateMsg} = Res,
         ?event(debug, {try_indirect_call_succeeded, Result}),
         {ok, #{ <<"state">> => StateMsg, <<"results">> => Result }}
@@ -94,14 +94,14 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
         _:Error ->
             ?event(debug, {invoke_try_error, Error}),
             ?event(debug, {calling_emscripten_stack_restore, {sp, SP}}),
-            hb_beamr:call(WASM, <<"_emscripten_stack_restore">>, [SP]),
+            dev_wasm:call(WASM, <<"_emscripten_stack_restore">>, [SP], ImportResolver, State, Opts),
             ?event(debug, calling_set_threw),
-            SetThrewRes = hb_beamr:call(WASM, <<"setThrew">>, [1, 0], ImportResolver, State, Opts),
+            SetThrewRes = dev_wasm:call(WASM, <<"setThrew">>, [1, 0], ImportResolver, State, Opts),
             ?event(debug, {invoke_set_threw, {catch_result, SetThrewRes}}),
-            {ok, _, _} = SetThrewRes,
+            % {ok, _, _} = SetThrewRes,
             ?event(debug, set_threw_done),
-            % {ok, SetThrewResult, SetThrewMsg} = SetThrewRes,
-            {ok, #{ <<"state">> => State, <<"results">> => [] }}
+            {ok, SetThrewResult, SetThrewMsg} = SetThrewRes,
+            {ok, #{ <<"state">> => SetThrewMsg, <<"results">> => SetThrewResult }}
     end.
 
 % Return 0 (as a double)
@@ -121,7 +121,7 @@ generate_emscripten_stack(File, Func, Params) ->
     Msg0 = dev_wasm:cache_wasm_image(File),
     Msg1 = Msg0#{
         <<"device">> => <<"stack@1.0">>,
-        <<"device-stack">> => [<<"wasm-64@1.0">>, <<"emscripten@1.0">>],
+        <<"device-stack">> => [<<"wasm-64@1.0">>, <<"wasi@1.0">>, <<"emscripten@1.0">>],
         <<"output-prefixes">> => [<<"wasm">>, <<"wasm">>],
         <<"stack-keys">> => [<<"init">>, <<"compute">>],
         <<"function">> => Func,
@@ -132,39 +132,71 @@ generate_emscripten_stack(File, Func, Params) ->
 
 %% @doc Ensure that an AOS Emscripten-style WASM AOT module can be invoked
 %% with a function reference.
-fib_aot_test() ->
+fib_test() ->
     Init = generate_emscripten_stack("test/fib.wasm", <<"handle">>, [0, 0]),
     Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
     Msg = <<"msg">>,
     Env = <<"env">>,
-    {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
+    {ok, Ptr1} = hb_wtime_io:malloc(Instance, byte_size(Msg)),
     ?assertNotEqual(0, Ptr1),
-    hb_beamr_io:write(Instance, Ptr1, Msg),
-    {ok, Ptr2} = hb_beamr_io:malloc(Instance, byte_size(Env)),
+    hb_wtime:mem_write(Instance, Ptr1, Msg),
+    {ok, Ptr2} = hb_wtime_io:malloc(Instance, byte_size(Env)),
     ?assertNotEqual(0, Ptr2),
-    hb_beamr_io:write(Instance, Ptr2, Env),
+    hb_wtime:mem_write(Instance, Ptr2, Env),
     Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
     {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
     [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
-    {ok, Output} = hb_beamr_io:read_string(Instance, Ptr),
+    {ok, Output} = hb_wtime_io:read_string(Instance, Ptr),
     ?assertEqual(<<"Fibonacci index 10 is 55\n">>, Output).
 
 %% @doc Ensure that an AOS Emscripten-style WASM AOT module can be invoked
 %% with a function reference.
-try_aot_test() ->
+try_test() ->
     Init = generate_emscripten_stack("test/try.wasm", <<"handle">>, [0, 0]),
     Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
     Msg = <<"msg">>,
     % Note: set to <<"1">> to enable the try/catch path
-    Env = <<"0">>,
-    {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
+    Env = <<"1">>,
+    {ok, Ptr1} = hb_wtime_io:malloc(Instance, byte_size(Msg)),
     ?assertNotEqual(0, Ptr1),
-    hb_beamr_io:write(Instance, Ptr1, Msg),
-    {ok, Ptr2} = hb_beamr_io:malloc(Instance, byte_size(Env)),
+    hb_wtime:mem_write(Instance, Ptr1, Msg),
+    {ok, Ptr2} = hb_wtime_io:malloc(Instance, byte_size(Env)),
     ?assertNotEqual(0, Ptr2),
-    hb_beamr_io:write(Instance, Ptr2, Env),
+    hb_wtime:mem_write(Instance, Ptr2, Env),
     Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
     {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
     [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
-    {ok, Output} = hb_beamr_io:read_string(Instance, Ptr),
+    {ok, Output} = hb_wtime_io:read_string(Instance, Ptr),
     ?assertEqual(<<"Initial">>, Output).
+
+basic_aos_exec_test() ->
+    Init = generate_emscripten_stack("test/aos-new.wasm", <<"handle">>, []),
+    Msg = gen_test_aos_msg("return 1 + 1"),
+    Env = gen_test_env(),
+    Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
+    {ok, Ptr1} = hb_wtime_io:malloc(Instance, byte_size(Msg)),
+    ?assertNotEqual(0, Ptr1),
+    hb_wtime:mem_write(Instance, Ptr1, Msg),
+    {ok, Ptr2} = hb_wtime_io:malloc(Instance, byte_size(Env)),
+    ?assertNotEqual(0, Ptr2),
+    hb_wtime:mem_write(Instance, Ptr2, Env),
+    % Read the strings to validate they are correctly passed
+    {ok, MsgBin} = hb_wtime:mem_read(Instance, Ptr1, byte_size(Msg)),
+    {ok, EnvBin} = hb_wtime:mem_read(Instance, Ptr2, byte_size(Env)),
+    ?assertEqual(Env, EnvBin),
+    ?assertEqual(Msg, MsgBin),
+    Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
+    {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
+    [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
+    {ok, Output} = hb_wtime:mem_read_string(Instance, Ptr),
+    ?event({got_output, Output}),
+    #{ <<"response">> := #{ <<"Output">> := #{ <<"data">> := Data }} }
+        = hb_json:decode(Output),
+    ?assertEqual(<<"2">>, Data).
+
+%%% Test Helpers
+gen_test_env() ->
+    <<"{\"Process\":{\"Id\":\"AOS\",\"Owner\":\"FOOBAR\",\"Tags\":[{\"name\":\"Name\",\"value\":\"Thomas\"}, {\"name\":\"Authority\",\"value\":\"FOOBAR\"}]}}\0">>.
+
+gen_test_aos_msg(Command) ->
+    <<"{\"From\":\"FOOBAR\",\"Block-Height\":\"1\",\"Target\":\"AOS\",\"Owner\":\"FOOBAR\",\"Id\":\"1\",\"Module\":\"W\",\"Tags\":[{\"name\":\"Action\",\"value\":\"Eval\"}],\"Data\":\"", (list_to_binary(Command))/binary, "\"}\0">>.

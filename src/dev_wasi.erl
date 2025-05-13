@@ -82,7 +82,7 @@ path_open(Msg1, Msg2, Opts) ->
     Instance = hb_private:get(<<"instance">>, Msg1, Opts),
     [FDPtr, LookupFlag, PathPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({path_open, FDPtr, LookupFlag, PathPtr}),
-    Path = hb_beamr_io:read_string(Instance, PathPtr),
+    Path = hb_wtime:mem_read_string(Instance, PathPtr),
     ?event({path_open, Path}),
     FD = #{
         <<"index">> := Index
@@ -121,7 +121,7 @@ fd_write(Msg1, Msg2, Opts) ->
     fd_write(State, Instance, [FD, Ptr, Vecs, RetPtr], 0, Opts).
 
 fd_write(S, Instance, [_, _Ptr, 0, RetPtr], BytesWritten, _Opts) ->
-    hb_beamr_io:write(
+    hb_wtime:mem_write(
         Instance,
         RetPtr,
         <<BytesWritten:64/little-unsigned-integer>>
@@ -133,7 +133,7 @@ fd_write(S, Instance, [FDnum, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
     Filename = hb_ao:get(<<"filename">>, FD, Opts),
     StartOffset = hb_ao:get(<<"offset">>, FD, Opts),
     {VecPtr, Len} = parse_iovec(Instance, Ptr),
-    {ok, Data} = hb_beamr_io:read(Instance, VecPtr, Len),
+    {ok, Data} = hb_wtime:mem_read(Instance, VecPtr, Len),
     Before =
         binary:part(
             OrigData = hb_ao:get(<<"data">>, FD, Opts),
@@ -175,7 +175,7 @@ fd_read(Msg1, Msg2, Opts) ->
 
 fd_read(S, Instance, [FD, _VecsPtr, 0, RetPtr], BytesRead, _Opts) ->
     ?event({{completed_read, FD, BytesRead}}),
-    hb_beamr_io:write(Instance, RetPtr,
+    hb_wtime:mem_write(Instance, RetPtr,
         <<BytesRead:64/little-unsigned-integer>>),
     {ok, #{ <<"state">> => S, <<"results">> => [0] }};
 fd_read(S, Instance, [FDNum, VecsPtr, NumVecs, RetPtr], BytesRead, Opts) ->
@@ -194,7 +194,7 @@ fd_read(S, Instance, [FDNum, VecsPtr, NumVecs, RetPtr], BytesRead, Opts) ->
     ReadSize = min(Len, byte_size(Data) - Offset),
     Bin = binary:part(Data, Offset, ReadSize),
     % Write the bytes to the WASM Instance
-    ok = hb_beamr_io:write(Instance, VecPtr, Bin),
+    ok = hb_wtime:mem_write(Instance, VecPtr, Bin),
     fd_read(
         hb_ao:set(
             S,
@@ -210,7 +210,7 @@ fd_read(S, Instance, [FDNum, VecsPtr, NumVecs, RetPtr], BytesRead, Opts) ->
 
 %% @doc Parse an iovec in WASI-preview-1 format.
 parse_iovec(Instance, Ptr) ->
-    {ok, VecStruct} = hb_beamr_io:read(Instance, Ptr, 16),
+    {ok, VecStruct} = hb_wtime:mem_read(Instance, Ptr, 16),
     <<
         BinPtr:64/little-unsigned-integer,
         Len:64/little-unsigned-integer
@@ -233,8 +233,8 @@ environ_get(Msg1, Msg2, Opts) ->
     [Environ,EnvironBuf] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({environ_get, {environ, Environ}, {environ_buf, EnvironBuf}}),
     % We don't actually need to write as they are length 0
-    % ok = hb_beamr_io:write(Instance, Environ, <<0:64/little-unsigned-integer>>),
-    % ok = hb_beamr_io:write(Instance, EnvironBuf, <<0:64/little-unsigned-integer>>),
+    % ok = hb_wtime:mem_write(Instance, Environ, <<0:64/little-unsigned-integer>>),
+    % ok = hb_wtime:mem_write(Instance, EnvironBuf, <<0:64/little-unsigned-integer>>),
     {ok, #{ <<"state">> => State, <<"results">> => [0] }}.
 
 % Emulating no environment variables
@@ -246,8 +246,8 @@ environ_sizes_get(Msg1, Msg2, Opts) ->
     ?event({signature, Signature}),
     [EnvironCount,EnvironBufSize] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({environ_sizes_get, {environ_count, EnvironCount}, {environ_buf_size, EnvironBufSize}}),
-    ok = hb_beamr_io:write(Instance, EnvironCount, <<0:64/little-unsigned-integer>>),
-    ok = hb_beamr_io:write(Instance, EnvironBufSize, <<0:64/little-unsigned-integer>>),
+    ok = hb_wtime:mem_write(Instance, EnvironCount, <<0:64/little-unsigned-integer>>),
+    ok = hb_wtime:mem_write(Instance, EnvironBufSize, <<0:64/little-unsigned-integer>>),
     {ok, #{ <<"state">> => State, <<"results">> => [0] }}.
 
 %%% Tests
@@ -287,35 +287,3 @@ wasi_stack_is_serializable_test() ->
     HTTPSigMsg = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
     Msg2 = hb_message:convert(HTTPSigMsg, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
     ?assert(hb_message:match(Msg, Msg2)).
-
-basic_aos_exec_test() ->
-    Init = generate_wasi_stack("test/aos-new.wasm", <<"handle">>, []),
-    Msg = gen_test_aos_msg("return 1 + 1"),
-    Env = gen_test_env(),
-    Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
-    {ok, Ptr1} = hb_beamr_io:malloc(Instance, byte_size(Msg)),
-    ?assertNotEqual(0, Ptr1),
-    hb_beamr_io:write(Instance, Ptr1, Msg),
-    {ok, Ptr2} = hb_beamr_io:malloc(Instance, byte_size(Env)),
-    ?assertNotEqual(0, Ptr2),
-    hb_beamr_io:write(Instance, Ptr2, Env),
-    % Read the strings to validate they are correctly passed
-    {ok, MsgBin} = hb_beamr_io:read(Instance, Ptr1, byte_size(Msg)),
-    {ok, EnvBin} = hb_beamr_io:read(Instance, Ptr2, byte_size(Env)),
-    ?assertEqual(Env, EnvBin),
-    ?assertEqual(Msg, MsgBin),
-    Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
-    {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
-    [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
-    {ok, Output} = hb_beamr_io:read_string(Instance, Ptr),
-    ?event({got_output, Output}),
-    #{ <<"response">> := #{ <<"Output">> := #{ <<"data">> := Data }} }
-        = hb_json:decode(Output),
-    ?assertEqual(<<"2">>, Data).
-
-%%% Test Helpers
-gen_test_env() ->
-    <<"{\"Process\":{\"Id\":\"AOS\",\"Owner\":\"FOOBAR\",\"Tags\":[{\"name\":\"Name\",\"value\":\"Thomas\"}, {\"name\":\"Authority\",\"value\":\"FOOBAR\"}]}}\0">>.
-
-gen_test_aos_msg(Command) ->
-    <<"{\"From\":\"FOOBAR\",\"Block-Height\":\"1\",\"Target\":\"AOS\",\"Owner\":\"FOOBAR\",\"Id\":\"1\",\"Module\":\"W\",\"Tags\":[{\"name\":\"Action\",\"value\":\"Eval\"}],\"Data\":\"", (list_to_binary(Command))/binary, "\"}\0">>.

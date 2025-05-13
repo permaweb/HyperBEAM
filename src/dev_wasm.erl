@@ -34,13 +34,15 @@
 %%%             Raw binary WASM state
 %%% </pre>
 -module(dev_wasm).
--export([info/2, init/3, compute/3, import/3, terminate/3, snapshot/3, normalize/3]).
+-export([info/2, init/3, call/3, call/6, compute/3, import/3, terminate/3, snapshot/3, normalize/3]).
 %%% API for other devices:
 -export([instance/3]).
 %%% Test API:
 -export([cache_wasm_image/1, cache_wasm_image/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+-hb_print(debug).
 
 %% @doc Export all functions aside the `instance/3' function.
 info(_Msg1, _Opts) ->
@@ -152,7 +154,11 @@ default_import_resolver(Msg1, Msg2, Opts) ->
     Response = hb_ao:get(results, Msg3, Opts),
     {ok, Response, NextState}.
 
+call(Instance, Function, Params) ->
+    {ok, Res, _} = call(Instance, Function, Params, fun default_import_resolver/3, #{}, #{}),
+    {ok, Res}.
 call(Instance, Function, Params, ImportResolver, State1, Opts) ->
+    ?event({call_begin, Instance, Function, Params}),
     case hb_wtime:call_begin(Instance, Function, Params) of
         {ok, complete, ResultList} ->
             {ok, ResultList, State1};
