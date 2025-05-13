@@ -1,4 +1,4 @@
-use crate::types::WasmVal;
+use crate::types::{NativeFuncDesc, WasmVal};
 pub use crate::wasm::{
     self, HostFuncChannel, HostFuncRequest, HostFuncResponse, NativeFuncRequest, WasmCallState,
     WasmInstanceState, WasmModuleData,
@@ -341,18 +341,37 @@ impl WasmFsm {
 
     // New method to get export parameter types
     pub fn get_native_func_param_types(
-        &self,
-        func_name: &str,
+        &mut self,
+        func_desc: &NativeFuncDesc,
     ) -> Result<Vec<wasmtime::ValType>, FsmError> {
-        let export_extern = self
-            .instance
-            .module
-            .get_export(func_name)
-            .ok_or_else(|| FsmError::ExportNotFound(func_name.to_string()))?;
+        match func_desc {
+            NativeFuncDesc::Export(func_name) => {
+                let export_type = self
+                    .instance
+                    .module
+                    .get_export(func_name.as_str())
+                    .ok_or_else(|| FsmError::ExportNotFound(func_name.to_string()))?;
+                let func_type_ref = export_type.func()
+                    .ok_or_else(|| FsmError::NotAFunction(func_name.to_string()))?;
+                Ok(func_type_ref.params().collect())
+            }
+            NativeFuncDesc::Indirect(index) => {
+                    // Check the indirect function table (Needs &mut store)
+                let table = self.instance.instance.get_table(&mut self.instance.store, "__indirect_function_table")
+                    .ok_or_else(|| FsmError::InternalError("Indirect function table not found".to_string()))?;
+                // Get the Val from the table (Needs &mut store)
+                let table_val = table.get(&mut self.instance.store, *index) // This is Option<Val>
+                    .ok_or_else(|| FsmError::InternalError(format!("Indirect function at index {} not found", index)))?;
 
-        match export_extern.func() {
-            Some(func) => Ok(func.params().collect()),
-            None => Err(FsmError::NotAFunction(func_name.to_string())),
+                // Extract the Option<&Func> using as_func()
+                let func_opt = table_val.as_func().unwrap(); // This is Option<&Func>
+                // Unwrap the Option<&Func>
+                let func = func_opt
+                    .ok_or_else(|| FsmError::NotAFunction(format!("Table element at index {} is not a function ref", index)))?;
+
+                // func.ty() needs store access (&mut or &?)
+                Ok(func.ty(&mut self.instance.store).params().collect()) // Use &mut store here too
+            }
         }
     }
 
@@ -447,7 +466,7 @@ impl WasmFsm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wasm::WasmModuleData;
+    use crate::{types::NativeFuncDesc, wasm::WasmModuleData};
     use wasmtime::Val;
 
     // Helper to create a runtime and FSM instance for tests
@@ -475,7 +494,7 @@ mod tests {
         let (_runtime, mut fsm) = setup_fsm(wat);
 
         let request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("run".to_string()),
+            func_desc: NativeFuncDesc::Export("run".to_string()),
             params: vec![],
         };
 
@@ -508,7 +527,7 @@ mod tests {
         let (_runtime, mut fsm) = setup_fsm(wat);
 
         let request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("run".to_string()),
+            func_desc: NativeFuncDesc::Export("run".to_string()),
             params: vec![Val::I32(10), Val::I32(20)],
         };
 
@@ -557,7 +576,7 @@ mod tests {
         let (_runtime, mut fsm) = setup_fsm(wat);
 
         let request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("run".to_string()),
+            func_desc: NativeFuncDesc::Export("run".to_string()),
             params: vec![],
         };
         let response = HostFuncResponse {
@@ -637,7 +656,7 @@ mod tests {
 
         // 1. Start outer_call
         let outer_request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("outer_call".to_string()),
+            func_desc: NativeFuncDesc::Export("outer_call".to_string()),
             params: vec![],
         };
         fsm.push(outer_request)
@@ -654,7 +673,7 @@ mod tests {
 
         // 3. FSM is AwaitingHost for host_A. Now, make a nested call to inner_call.
         let inner_request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("inner_call".to_string()),
+            func_desc: NativeFuncDesc::Export("inner_call".to_string()),
             params: vec![],
         };
         // This start_call is the nesting.
@@ -725,7 +744,7 @@ mod tests {
 
         // Call 1: "add"
         let add_request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("add".to_string()),
+            func_desc: NativeFuncDesc::Export("add".to_string()),
             params: vec![Val::I32(10), Val::I32(5)],
         };
 
@@ -745,7 +764,7 @@ mod tests {
 
         // Call 2: "sub"
         let sub_request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("sub".to_string()),
+            func_desc: NativeFuncDesc::Export("sub".to_string()),
             params: vec![Val::I32(10), Val::I32(5)],
         };
 
@@ -784,7 +803,7 @@ mod tests {
 
         // Call 1: "run_double" (invokes host function)
         let double_request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("run_double".to_string()),
+            func_desc: NativeFuncDesc::Export("run_double".to_string()),
             params: vec![Val::I32(10)],
         };
 
@@ -822,7 +841,7 @@ mod tests {
 
         // Call 2: "run_add_five" (simple call, no imports)
         let add_five_request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("run_add_five".to_string()),
+            func_desc: NativeFuncDesc::Export("run_add_five".to_string()),
             params: vec![Val::I32(7)],
         };
 
@@ -886,7 +905,7 @@ mod tests {
 
         // Start call to get to AwaitingHost
         let request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("run".to_string()),
+            func_desc: NativeFuncDesc::Export("run".to_string()),
             params: vec![],
         };
         fsm.push(request).expect("start_call failed");
@@ -926,7 +945,7 @@ mod tests {
         let wat = r#"(module (memory (export "memory") 1) (func (export "run")))"#;
         let (_runtime, mut fsm) = setup_fsm(wat);
         let request = NativeFuncRequest {
-            func_desc: wasm::NativeFuncDesc::Export("run".to_string()),
+            func_desc: NativeFuncDesc::Export("run".to_string()),
             params: vec![],
         };
         fsm.push(request).expect("start_call failed");

@@ -1,4 +1,4 @@
-use crate::types::WasmVal;
+use crate::types::{NativeFuncDesc, WasmVal};
 use std::{future::Future, pin::Pin};
 
 use anyhow::Result;
@@ -189,12 +189,6 @@ pub struct HostFuncDesc {
 }
 
 #[derive(Debug, Clone)]
-pub enum NativeFuncDesc {
-    Export(String),
-    Indirect(i64),
-}
-
-#[derive(Debug, Clone)]
 pub struct NativeFuncRequest {
     pub func_desc: NativeFuncDesc,
     pub params: WasmParamsVec,
@@ -359,8 +353,19 @@ pub async fn wasm_call_push_native<'a>(
                 })?;
             (func, results_count_val)
         }
-        NativeFuncDesc::Indirect(_index) => {
-            unimplemented!("Indirect function calls not yet implemented")
+        NativeFuncDesc::Indirect(index) => {
+            // Check the indirect function table
+            let table = instance_state.instance.get_table(&mut instance_state.store, "__indirect_function_table")
+                .ok_or_else(|| anyhow::anyhow!("Indirect function table not found"))?;
+            // Get the function from the table
+            let func_ref = table.get(&mut instance_state.store, index)
+                .ok_or_else(|| anyhow::anyhow!("Indirect function not found in table"))?;
+
+            let func = *func_ref.unwrap_func().unwrap();
+            
+            let results_count_val = func.ty(&instance_state.store).results().len();
+
+            (func, results_count_val)
         }
     };
 

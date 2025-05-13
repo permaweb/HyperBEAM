@@ -1,6 +1,6 @@
 use crate::convert::{self, nif_vals_to_wasm_vals};
-use crate::types::{NifWasmVal, WasmVal};
-use crate::wasm::{HostFuncDesc, NativeFuncDesc};
+use crate::types::{NativeFuncDesc, NifWasmVal, WasmVal};
+use crate::wasm::HostFuncDesc;
 use crate::wasm_fsm::{
     CallOutcome, FsmError, HostFuncResponse, NativeFuncRequest, StateTag, WasmFsm, WasmModuleData,
 };
@@ -60,12 +60,12 @@ fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
 fn call_begin<'a>(
     env: Env<'a>,
     resource: ResourceArc<NifRes>,
-    func_name: String,
+    func_desc: NativeFuncDesc,
     params: Vec<NifWasmVal>,
 ) -> NifResult<Term<'a>> {
     trace!(
-        "call_begin (new) - func: {}, params: {:?}",
-        func_name,
+        "call_begin (new) - func_desc: {:?}, params: {:?}",
+        func_desc,
         params
     );
     let mut fsm = resource.fsm.lock().unwrap();
@@ -81,7 +81,7 @@ fn call_begin<'a>(
         ));
     }
 
-    let param_types: Vec<wasmtime::ValType> = match fsm.get_native_func_param_types(&func_name) {
+    let param_types: Vec<wasmtime::ValType> = match fsm.get_native_func_param_types(&func_desc) {
         Ok(types) => types,
         Err(e) => return Ok(fsm_error_to_term(env, e)),
     };
@@ -96,7 +96,7 @@ fn call_begin<'a>(
     };
 
     let native_request = NativeFuncRequest {
-        func_desc: NativeFuncDesc::Export(func_name),
+        func_desc,
         params: wasm_params,
     };
 
@@ -143,7 +143,7 @@ fn call_continue<'a>(
     field_name: String,
     results: Vec<NifWasmVal>,
 ) -> NifResult<Term<'a>> {
-    trace!("call_continue - results: {:?}", results);
+    trace!("call_continue - module_name: {}, field_name: {}, results: {:?}", module_name, field_name, results);
     let mut fsm = resource.fsm.lock().unwrap();
 
     if !matches!(fsm.current_state(), StateTag::AwaitingHost) {

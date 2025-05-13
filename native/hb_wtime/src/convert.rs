@@ -1,7 +1,11 @@
 use rustler::{Encoder, Env, Error, Term};
-use tracing::{error, trace};
+use tracing::{debug, trace, warn};
+use wasmtime::V128;
 
-use crate::{types::{NifWasmVal, WasmVal, WasmValType}, wasm::HostFuncRequest};
+use crate::{
+    types::{NifWasmVal, WasmVal, WasmValType},
+    wasm::HostFuncRequest,
+};
 
 /// Converts an Erlang float (f64) argument into a WasmVal::F64.
 /// Currently assumes the first argument is the one to convert.
@@ -9,27 +13,50 @@ pub fn nif_vals_to_wasm_vals(
     vals: &[NifWasmVal],
     val_types: &[WasmValType],
 ) -> Result<Vec<WasmVal>, Error> {
-    trace!("nif_params_to_wasm_vals - params: {:?}, param_types: {:?}", vals, val_types);
+    trace!(
+        "nif_params_to_wasm_vals - params: {:?}, param_types: {:?}",
+        vals,
+        val_types
+    );
 
     let mut wasm_vals = Vec::new();
     for (val, val_type) in vals.iter().zip(val_types.iter()) {
-        trace!("nif_vals_to_wasm_vals - val: {:?}, val_type: {:?}", val, val_type);
+        trace!(
+            "nif_vals_to_wasm_vals - val: {:?}, val_type: {:?}",
+            val,
+            val_type
+        );
 
-        match (val, val_type) {
-            (NifWasmVal::I32(arg), WasmValType::I32) => wasm_vals.push(WasmVal::I32(*arg as i32)),
-            (NifWasmVal::I32(arg), WasmValType::I64) => wasm_vals.push(WasmVal::I64(*arg as i64)),
-            (NifWasmVal::I64(arg), WasmValType::I64) => wasm_vals.push(WasmVal::I64(*arg as i64)),
-            (NifWasmVal::I64(arg), WasmValType::I32) => wasm_vals.push(WasmVal::I32(*arg as i32)),
-            (NifWasmVal::F32(arg), WasmValType::F32) => wasm_vals.push(WasmVal::F32(arg.to_bits())),
-            (NifWasmVal::F32(arg), WasmValType::F64) => wasm_vals.push(WasmVal::F64((*arg as f64).to_bits())),
-            (NifWasmVal::F64(arg), WasmValType::F32) => wasm_vals.push(WasmVal::F32((*arg as f32).to_bits())),
-            (NifWasmVal::F64(arg), WasmValType::F64) => wasm_vals.push(WasmVal::F64(arg.to_bits())),
+        let wasm_val = match (val, val_type) {
+            (NifWasmVal::I32(arg), WasmValType::I32) => WasmVal::I32(*arg as i32),
+            (NifWasmVal::I32(arg), WasmValType::I64) => WasmVal::I64(*arg as i64),
+            (NifWasmVal::I64(arg), WasmValType::I32) => WasmVal::I32(*arg as i32),
+            (NifWasmVal::I64(arg), WasmValType::I64) => WasmVal::I64(*arg as i64),
+            (NifWasmVal::F32(arg), WasmValType::F32) => WasmVal::F32(arg.to_bits()),
+            (NifWasmVal::F32(arg), WasmValType::F64) => WasmVal::F64((*arg as f64).to_bits()),
+            (NifWasmVal::F64(arg), WasmValType::F32) => WasmVal::F32((*arg as f32).to_bits()),
+            (NifWasmVal::F64(arg), WasmValType::F64) => WasmVal::F64(arg.to_bits()),
             _ => {
-                let msg = format!("nif_params_to_wasm_vals - Unsupported combination of NifVal/WasmType: ({:?}, {:?})", val, val_type);
-                error!("{}", msg);
-                return Err(Error::Term(Box::new(msg)))
-            },
-        }
+                let msg = format!(
+                    "Unsupported combination of NifVal/WasmType: ({:?}, {:?})",
+                    val, val_type
+                );
+                debug!("nif_params_to_wasm_vals - {}", msg);
+
+                warn!("Using default value for unconvertable type: {:?}", val_type);
+                match val_type {
+                    WasmValType::I32 => WasmVal::I32(0),
+                    WasmValType::I64 => WasmVal::I64(0),
+                    WasmValType::F32 => WasmVal::F32(0),
+                    WasmValType::F64 => WasmVal::F64(0),
+                    WasmValType::V128 => WasmVal::V128(V128::from(0)),
+                    _ => unimplemented!("Unsupported WasmValType: {:?}", val_type),
+                }
+            }
+        };
+
+        trace!("nif_vals_to_wasm_vals - wasm_val: {:?}", wasm_val);
+        wasm_vals.push(wasm_val);
     }
     Ok(wasm_vals)
 }
