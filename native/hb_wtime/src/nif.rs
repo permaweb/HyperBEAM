@@ -64,7 +64,7 @@ fn call_begin<'a>(
     params: Vec<NifWasmVal>,
 ) -> NifResult<Term<'a>> {
     trace!(
-        "call_begin (new) - func_desc: {:?}, params: {:?}",
+        "call_begin - func_desc: {:?}, params: {:?}",
         func_desc,
         params
     );

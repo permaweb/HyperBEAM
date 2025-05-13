@@ -14,7 +14,7 @@ pub fn nif_vals_to_wasm_vals(
     val_types: &[WasmValType],
 ) -> Result<Vec<WasmVal>, Error> {
     trace!(
-        "nif_params_to_wasm_vals - params: {:?}, param_types: {:?}",
+        "nif_vals_to_wasm_vals - vals: {:?}, val_types: {:?}",
         vals,
         val_types
     );
