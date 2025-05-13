@@ -1,5 +1,5 @@
 use rustler::{Env, Term};
-use tracing::trace;
+use tracing::{info, trace};
 
 pub mod convert;
 /// Entry point for the Rustler NIF module.
@@ -17,7 +17,11 @@ rustler::init!(
 
 fn load(env: Env, _load_info: Term) -> bool {
     logging::init_tracing();
-    trace!("load");
+    info!("loading hb_wtime NIF");
+
+    trace!("loading resources");
     rustler::resource!(nif::NifRes, env);
+    
+    trace!("load complete");
     true
 }

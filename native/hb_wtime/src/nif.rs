@@ -22,10 +22,12 @@ fn fsm_error_to_term<'a>(env: Env<'a>, err: FsmError) -> Term<'a> {
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
+    trace!("create");
+
     let span = trace_span!("create");
     let _enter = span.enter();
 
-    trace!("enter");
+    debug!("enter");
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -43,7 +45,7 @@ fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
     // lives at least as long as the WasmFsm resource, as WasmModuleData::Binary expects &'static [u8].
     let module_data = WasmModuleData::Binary(unsafe { std::mem::transmute(binary_data) });
 
-    match WasmFsm::new(module_data, &runtime) {
+    let res = match WasmFsm::new(module_data, &runtime) {
         Ok(fsm_instance) => {
             debug!("WasmFsm created successfully.");
             let resource = ResourceArc::new(NifRes {
@@ -56,7 +58,11 @@ fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
             error!("Error during WasmFsm::new: {:?}", e);
             Ok(fsm_error_to_term(env, e))
         }
-    }
+    };
+
+    trace!("exit");
+
+    res
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -66,10 +72,12 @@ fn call_begin<'a>(
     func_desc: NativeFuncDesc,
     params: Vec<NifWasmVal>,
 ) -> NifResult<Term<'a>> {
-    let span = trace_span!("call_begin", func_desc = ?func_desc, params = ?params);
+    trace!("call_begin");
+
+    let span = trace_span!("call_begin", func = func_desc.to_string(), params = ?params);
     let _enter = span.enter();
 
-    trace!("enter");
+    debug!("enter");
 
     let mut fsm = resource.fsm.lock().unwrap();
 
@@ -107,9 +115,9 @@ fn call_begin<'a>(
         return Ok(fsm_error_to_term(env, e));
     }
 
-    match fsm.step() {
+    let res = match fsm.step() {
         Ok(CallOutcome::Complete(results)) => {
-            debug!("Call started and completed. Results: {:?}", results);
+            trace!("Call started and completed. Results: {:?}", results);
             let ok_atom = Atom::from_str(env, "ok").unwrap();
             let complete_atom = Atom::from_str(env, "complete").unwrap();
             match convert::wasm_vals_to_term_list(env, &results) {
@@ -122,7 +130,7 @@ fn call_begin<'a>(
             }
         }
         Ok(CallOutcome::ImportCallNeeded(req)) => {
-            debug!("Call started, yielded import call: {:?}", req);
+            trace!("Call started, yielded import call: {:?}", req);
             let ok_atom = Atom::from_str(env, "ok").unwrap();
             let import_atom = Atom::from_str(env, "import").unwrap();
             match convert::wasm_host_func_req_to_term_list(env, req) {
@@ -135,7 +143,11 @@ fn call_begin<'a>(
             }
         }
         Err(e) => Ok(fsm_error_to_term(env, e)),
-    }
+    };
+
+    trace!("exit");
+
+    res
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -146,10 +158,12 @@ fn call_continue<'a>(
     field_name: String,
     results: Vec<NifWasmVal>,
 ) -> NifResult<Term<'a>> {
-    let span = trace_span!("call_continue", module_name = module_name, field_name = field_name, results = ?results);
+    trace!("call_continue");
+
+    let span = trace_span!("call_continue", func = format!("{}.{}", module_name, field_name), results = ?results);
     let _enter = span.enter();
 
-    trace!("enter");
+    debug!("enter");
 
     let mut fsm = resource.fsm.lock().unwrap();
 
@@ -206,9 +220,9 @@ fn call_continue<'a>(
         return Ok(fsm_error_to_term(env, e));
     }
 
-    match fsm.step() {
+    let res = match fsm.step() {
         Ok(CallOutcome::Complete(results)) => {
-            debug!("Call resumed and completed. Results: {:?}", results);
+            trace!("Call resumed and completed. Results: {:?}", results);
             let ok_atom = Atom::from_str(env, "ok").unwrap();
             let complete_atom = Atom::from_str(env, "complete").unwrap();
             match convert::wasm_vals_to_term_list(env, &results) {
@@ -221,7 +235,7 @@ fn call_continue<'a>(
             }
         }
         Ok(CallOutcome::ImportCallNeeded(req)) => {
-            debug!("Call resumed, yielded another import call: {:?}", req);
+            trace!("Call resumed, yielded another import call: {:?}", req);
             let ok_atom = Atom::from_str(env, "ok").unwrap();
             let import_atom = Atom::from_str(env, "import").unwrap();
             match convert::wasm_host_func_req_to_term_list(env, req) {
@@ -234,7 +248,11 @@ fn call_continue<'a>(
             }
         }
         Err(e) => Ok(fsm_error_to_term(env, e)),
-    }
+    };
+
+    trace!("exit");
+
+    res
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -242,10 +260,12 @@ fn mem_size<'a>(
     env: Env<'a>,
     resource: ResourceArc<NifRes>,
 ) -> NifResult<Term<'a>> {
+    trace!("mem_size");
+
     let span = trace_span!("mem_size");
     let _enter = span.enter();
 
-    trace!("enter");
+    debug!("enter");
 
     let mut fsm = resource.fsm.lock().unwrap();
 
@@ -253,14 +273,18 @@ fn mem_size<'a>(
     // Assuming WasmFsm has a method to get the instance state mutably 
     // or a dedicated method that calls wasm_memory_size internally.
     // Let's assume a method `get_memory_size()` exists on Fsm for now.
-    match fsm.get_memory_size() { // Assuming this method exists
+    let res = match fsm.get_memory_size() { // Assuming this method exists
         Ok(size_in_pages) => {
             // Wasm memory size is in pages (64KiB)
             // let size_in_bytes = size_in_pages * 65536; // No longer needed, FSM returns pages
             Ok((Atom::from_str(env, "ok").unwrap(), size_in_pages).encode(env))
         }
         Err(e) => Ok(fsm_error_to_term(env, e)),
-    }
+    };
+
+    trace!("exit");
+
+    res
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -270,21 +294,27 @@ fn mem_read<'a>(
     offset: usize,
     length: usize,
 ) -> NifResult<Term<'a>> {
+    trace!("mem_read");
+
     let span = trace_span!("mem_read", offset = offset, length = length);
     let _enter = span.enter();
 
-    trace!("enter");
+    debug!("enter");
 
     let mut fsm = resource.fsm.lock().unwrap();
 
     let mut erl_bin = rustler::NewBinary::new(env, length);
 
-    match fsm.read_memory(offset, erl_bin.as_mut_slice()) {
+    let res = match fsm.read_memory(offset, erl_bin.as_mut_slice()) {
         Ok(()) => {
             Ok((Atom::from_str(env, "ok").unwrap(), Term::from(erl_bin)).encode(env))
         }
         Err(e) => Ok(fsm_error_to_term(env, e)),
-    }
+    };
+
+    trace!("exit");
+
+    res
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -294,15 +324,21 @@ fn mem_write<'a>(
     offset: usize,
     data: Binary<'a>,
 ) -> NifResult<Term<'a>> {
+    trace!("mem_write");
+
     let span = trace_span!("mem_write", offset = offset, data_len = data.len());
     let _enter = span.enter();
 
-    trace!("enter");
+    debug!("enter");
 
     let mut fsm = resource.fsm.lock().unwrap();
 
-    match fsm.write_memory(offset, data.as_slice()) {
+    let res = match fsm.write_memory(offset, data.as_slice()) {
         Ok(()) => Ok(Atom::from_str(env, "ok").unwrap().encode(env)),
         Err(e) => Ok(fsm_error_to_term(env, e)),
-    }
+    };
+
+    trace!("exit");
+
+    res
 }

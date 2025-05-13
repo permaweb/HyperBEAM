@@ -299,7 +299,7 @@ pub async fn wasm_call_step<'a>(
         maybe_host_req = &mut host_func_request_future => {
             match maybe_host_req {
                 Some((host_req, host_resp_tx)) => {
-                    info!("Host request received by call_step: {:?}, results_count for original call: {}", host_req.func_desc, results_count);
+                    debug!("Host request received by call_step: {:?}, results_count for original call: {}", host_req.func_desc, results_count);
                     // Push the currently executing future onto the stack.
                     call_state.pending_import_stack.push(PendingImportStackItem {
                         func_desc: host_req.func_desc.clone(),

@@ -16,3 +16,16 @@ pub enum NativeFuncDesc {
     Export(String),
     Indirect(u64),
 }
+
+impl NativeFuncDesc {
+    pub fn to_string(&self) -> String {
+        match self {
+            NativeFuncDesc::Export(name) => 
+                match name.parse::<u64>() {
+                    Ok(_) => format!("\"{}\"", name),
+                    Err(_) => name.clone(),
+                }
+            NativeFuncDesc::Indirect(index) => format!("{}", index),
+        }
+    }
+}

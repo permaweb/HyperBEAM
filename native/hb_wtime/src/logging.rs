@@ -2,7 +2,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 pub fn init_tracing() {
     let fmt_layer = fmt::layer()
-        .without_time()
+        .with_timer(fmt::time::SystemTime)
         .with_target(false)
         .with_file(true)
         .with_line_number(true);
