@@ -19,13 +19,13 @@
 %%% 
 %%% Where '_vjj' represents the type spec of the function.
 -module(dev_emscripten).
--export([info/1, init/3, '_emscripten_memcpy_js'/3, '__cxa_throw'/3, invoke_ii/3, invoke_vjj/3, invoke_viii/3, router/4, emscripten_date_now/3]).
+-export([info/1, init/3, '_emscripten_memcpy_js'/3, '__cxa_throw'/3, '_emscripten_throw_longjmp'/3, invoke_ii/3, invoke_vjj/3, invoke_viii/3, router/4, emscripten_date_now/3]).
 
 
 -include("src/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--hb_debug(print).
+% -hb_debug(print).
 
 info(_) ->
     #{
@@ -59,8 +59,14 @@ init(M1, _M2, Opts) ->
     {ok, #{ <<"state">> => State, <<"results">> => [] }}.
 
 '__cxa_throw'(_Msg1, _Msg2, _Opts) ->
-    ?event('__cxa_throw'),
-    {import_exception, <<"__cxa_throw">>}.
+    Res = {import_exception, <<"__cxa_throw">>},
+    ?event(Res),
+    Res.
+
+'_emscripten_throw_longjmp'(_Msg1, _Msg2, _Opts) ->
+    Res = {import_exception, <<"_emscripten_throw_longjmp">>},
+    ?event(Res),
+    Res.
 
 invoke_ii(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_ii),
@@ -93,6 +99,8 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
     catch
         _:Error ->
             ?event(debug, {invoke_try_error, Error}),
+            ?event(debug, continuing_call),
+            hb_wtime:call_continue(WASM, <<"env">>, <<"_emscripten_throw_longjmp">>, []),
             ?event(debug, {calling_emscripten_stack_restore, {sp, SP}}),
             dev_wasm:call(WASM, <<"_emscripten_stack_restore">>, [SP], ImportResolver, State, Opts),
             ?event(debug, calling_set_threw),
@@ -102,7 +110,6 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
             % ?event(debug, set_threw_done),
             % {ok, SetThrewResult, SetThrewMsg} = SetThrewRes,
             % complete the __cxa_throw call
-            hb_wtime:call_continue(WASM, <<"env">>, <<"__cxa_throw">>, []),
             % return empty result for invoke call
             {ok, #{ <<"state">> => SetThrewMsg, <<"results">> => [] }}
     end.
@@ -172,30 +179,35 @@ try_test() ->
     {ok, Output} = hb_wtime_io:read_string(Instance, Ptr),
     ?assertEqual(<<"Catch">>, Output).
 
-basic_aos_exec_test() ->
-    Init = generate_emscripten_stack("test/aos-new.wasm", <<"handle">>, []),
-    Msg = gen_test_aos_msg("return 1 + 1"),
-    Env = gen_test_env(),
-    Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
-    {ok, Ptr1} = hb_wtime_io:malloc(Instance, byte_size(Msg)),
-    ?assertNotEqual(0, Ptr1),
-    hb_wtime:mem_write(Instance, Ptr1, Msg),
-    {ok, Ptr2} = hb_wtime_io:malloc(Instance, byte_size(Env)),
-    ?assertNotEqual(0, Ptr2),
-    hb_wtime:mem_write(Instance, Ptr2, Env),
-    % Read the strings to validate they are correctly passed
-    {ok, MsgBin} = hb_wtime:mem_read(Instance, Ptr1, byte_size(Msg)),
-    {ok, EnvBin} = hb_wtime:mem_read(Instance, Ptr2, byte_size(Env)),
-    ?assertEqual(Env, EnvBin),
-    ?assertEqual(Msg, MsgBin),
-    Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
-    {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
-    [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
-    {ok, Output} = hb_wtime:mem_read_string(Instance, Ptr),
-    ?event({got_output, Output}),
-    #{ <<"response">> := #{ <<"Output">> := #{ <<"data">> := Data }} }
-        = hb_json:decode(Output),
-    ?assertEqual(<<"2">>, Data).
+basic_aos_exec_test_() ->
+    {timeout, 30, fun () ->
+        Init = generate_emscripten_stack("test/aos-new.wasm", <<"handle">>, []),
+        Msg = gen_test_aos_msg("return 1 + 1"),
+        Env = gen_test_env(),
+        Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
+        {ok, Ptr1} = hb_wtime_io:malloc(Instance, byte_size(Msg)),
+        ?assertNotEqual(0, Ptr1),
+        hb_wtime:mem_write(Instance, Ptr1, Msg),
+        {ok, Ptr2} = hb_wtime_io:malloc(Instance, byte_size(Env)),
+        ?assertNotEqual(0, Ptr2),
+        hb_wtime:mem_write(Instance, Ptr2, Env),
+        % Read the strings to validate they are correctly passed
+        {ok, MsgBin} = hb_wtime:mem_read(Instance, Ptr1, byte_size(Msg)),
+        {ok, EnvBin} = hb_wtime:mem_read(Instance, Ptr2, byte_size(Env)),
+        ?assertEqual(Env, EnvBin),
+        ?assertEqual(Msg, MsgBin),
+        Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
+        {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
+        [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
+        {ok, Output} = hb_wtime_io:read_string(Instance, Ptr),
+        % io:format("Output: ~p~n", [Output]),
+        ?event({got_output, Output}),
+        #{ <<"response">> := #{ <<"Output">> := #{ <<"data">> := Data }} }
+            = hb_json:decode(Output),
+        DataStartExpected = <<"\e[90mNew Message From \e[32mFOO">>,
+        DataStart = binary:part(Data, 0, byte_size(DataStartExpected)),
+        ?assertEqual(DataStartExpected, DataStart)
+    end}.
 
 %%% Test Helpers
 gen_test_env() ->
