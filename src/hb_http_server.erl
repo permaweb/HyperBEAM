@@ -463,7 +463,6 @@ set_default_opts(Opts) ->
 start_node() ->
     start_node(#{}).
 start_node(Opts) ->
-	?event(http, {viksit_listener_starting, Opts}),
     application:ensure_all_started([
         kernel,
         stdlib,

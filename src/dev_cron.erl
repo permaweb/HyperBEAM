@@ -958,7 +958,7 @@ normalize_test() ->
     ?event({'normalize_test_done'}).
 
 
-start_hook_normalize_test_() ->
+start_hook_normalize_test() ->
 	Opts = generate_test_opts(),
 	Node = hb_http_server:start_node(Opts),
 	?event({start_hook_normalize_test}),

@@ -1,4 +1,3 @@
--- TODO: how do we cache this to file system?
 function compute(process, message, opts)
     -- Early return when no body is provided
     -- This handles the initial invocation during process setup
@@ -18,8 +17,6 @@ function compute(process, message, opts)
         table.insert(process.crons, message.body)
         
     elseif command == "remove" then
-		-- TODO(viksit): this also needs to be called when a cron job ends.
-		-- how do we do that?
         -- Remove an entry by task_id
         local task_id = message.body.body.task_id
         ao.event("debug_cron", { "removing task", task_id, "process.crons", process.crons })

@@ -40,9 +40,3 @@ function read_test(id_or_path)
 	  return { status = status, reason = value_or_reason }
 	end
 end
-  
--- Placeholder for remove test later
--- function remove_test(key)
--- 	ao.event("lua_cache_test", {"cache_test:test_remove called (placeholder)", {key=key}})
--- 	return "remove_placeholder_ok"
--- end
