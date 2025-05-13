@@ -848,8 +848,8 @@ mod tests {
         assert_eq!(*fsm.current_state(), StateTag::Idle);
 
         match fsm.get_memory_size() {
-            Ok(size_in_pages) => {
-                assert_eq!(size_in_pages, 3, "Expected memory size to be 3 pages");
+            Ok(size) => {
+                assert_eq!(size, 3 * 65536, "Expected memory size to be 3 pages");
             }
             Err(e) => panic!("get_memory_size failed: {:?}", e),
         }

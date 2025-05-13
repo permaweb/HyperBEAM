@@ -17,14 +17,17 @@ pub fn nif_vals_to_wasm_vals(
 
         match (val, val_type) {
             (NifWasmVal::I32(arg), WasmValType::I32) => wasm_vals.push(WasmVal::I32(*arg as i32)),
+            (NifWasmVal::I32(arg), WasmValType::I64) => wasm_vals.push(WasmVal::I64(*arg as i64)),
             (NifWasmVal::I64(arg), WasmValType::I64) => wasm_vals.push(WasmVal::I64(*arg as i64)),
+            (NifWasmVal::I64(arg), WasmValType::I32) => wasm_vals.push(WasmVal::I32(*arg as i32)),
             (NifWasmVal::F32(arg), WasmValType::F32) => wasm_vals.push(WasmVal::F32(arg.to_bits())),
             (NifWasmVal::F32(arg), WasmValType::F64) => wasm_vals.push(WasmVal::F64((*arg as f64).to_bits())),
             (NifWasmVal::F64(arg), WasmValType::F32) => wasm_vals.push(WasmVal::F32((*arg as f32).to_bits())),
             (NifWasmVal::F64(arg), WasmValType::F64) => wasm_vals.push(WasmVal::F64(arg.to_bits())),
             _ => {
-                error!("nif_params_to_wasm_vals - Unsupported WasmValType");
-                return Err(Error::Term(Box::new("Unsupported WasmValType")))
+                let msg = format!("nif_params_to_wasm_vals - Unsupported combination of NifVal/WasmType: ({:?}, {:?})", val, val_type);
+                error!("{}", msg);
+                return Err(Error::Term(Box::new(msg)))
             },
         }
     }

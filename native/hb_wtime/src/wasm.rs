@@ -445,7 +445,9 @@ pub fn wasm_memory_size(instance_state: &mut WasmInstanceState) -> Result<usize>
     let instance = &instance_state.instance; // Instance can usually be an immutable borrow
     let memory = instance.get_memory(&mut instance_state.store, "memory")
         .ok_or_else(|| anyhow::anyhow!("Failed to find Wasm memory export named 'memory'"))?;
-    Ok(memory.size(&mut instance_state.store) as usize)
+    let page_count = memory.size(&mut instance_state.store) as usize;
+    let page_size = memory.page_size(&mut instance_state.store) as usize;
+    Ok(page_count * page_size)
 }
 
 pub fn wasm_memory_read(instance_state: &mut WasmInstanceState, offset: usize, data: &mut [u8]) -> Result<()> {
@@ -778,8 +780,8 @@ mod tests {
         let init_result = wasm_instance_create(module_data).await.unwrap();
         let mut instance_state = init_result.state;
 
-        let size_in_pages = wasm_memory_size(&mut instance_state).expect("wasm_memory_size failed");
+        let size = wasm_memory_size(&mut instance_state).expect("wasm_memory_size failed");
 
-        assert_eq!(size_in_pages, 2, "Memory size should be 2 pages");
+        assert_eq!(size, 2 * 65536, "Memory size should be 2 pages");
     }
 }
