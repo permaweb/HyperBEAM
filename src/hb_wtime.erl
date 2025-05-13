@@ -114,7 +114,7 @@ mem_size_read_write_test() ->
     {ok, Inst} = create(WAT),
 
     {ok, Size} = mem_size(Inst),
-    ?assertEqual(1, Size),
+    ?assertEqual(65536, Size), % 64KiB (1 page)
 
     Offset = 10,
     WriteData = <<"hello_wasmtime\x99">>,
