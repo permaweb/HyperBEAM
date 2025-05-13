@@ -956,3 +956,38 @@ normalize_test() ->
         <<"errors">> := _
     }, NormalizeResult),
     ?event({'normalize_test_done'}).
+
+
+start_hook_normalize_test_() ->
+	Opts = generate_test_opts(),
+	Node = hb_http_server:start_node(Opts),
+	?event({start_hook_normalize_test}),
+	% schedule a once job
+	PID = spawn(fun test_worker/0),
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    hb_name:register({<<"test">>, ID}, PID),
+	OnceUrlPath = <<"/~cron@1.0/once?test-id=", ID/binary,
+                   "&cron-path=/~test-device@1.0/update_state">>,
+    {ok, _OnceTaskId} = hb_http:get(Node, OnceUrlPath, #{}),
+	?event({start_hook_normalize_test, once_created}),
+	% stop the node.
+	Res = hb_http_server:stop_node(Opts),
+	?event({start_hook_normalize_test, node_stopped, Res}),
+	HookNodeOpts = maps:merge(Opts, #{
+		on => #{
+			<<"start">> => #{
+				<<"device">> => <<"cron@1.0">>,
+				<<"path">> => <<"normalize">>,
+				<<"hook">> => #{ <<"result">> => <<"ignore">> }
+			}
+		}
+	}),
+	% ?event({start_hook_normalize_test, hook_node_opts, HookNodeOpts}),
+	HookNode = hb_http_server:start_node(HookNodeOpts),
+	% ?event({start_hook_normalize_test, hook_node_started, HookNode}),
+	timer:sleep(100),
+	% check the cron cache list
+	{ok, Crons} = cache_list(Opts),
+	% verify we can find the once job in the crons list after node start
+	?assertMatch({ok, _}, find_job_by_task_id(Crons, _OnceTaskId)),
+	?event({start_hook_normalize_test, test_end}).
