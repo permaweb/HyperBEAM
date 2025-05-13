@@ -7,7 +7,7 @@ use crate::wasm_fsm::{
 use anyhow;
 use rustler::{Atom, Binary, Encoder, Env, NifResult, ResourceArc, Term};
 use std::sync::Mutex;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, trace_span};
 
 pub struct NifRes {
     fsm: Mutex<WasmFsm>,
@@ -22,7 +22,10 @@ fn fsm_error_to_term<'a>(env: Env<'a>, err: FsmError) -> Term<'a> {
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
-    trace!("create (fsm)");
+    let span = trace_span!("create");
+    let _enter = span.enter();
+
+    trace!("enter");
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -63,11 +66,11 @@ fn call_begin<'a>(
     func_desc: NativeFuncDesc,
     params: Vec<NifWasmVal>,
 ) -> NifResult<Term<'a>> {
-    trace!(
-        "call_begin - func_desc: {:?}, params: {:?}",
-        func_desc,
-        params
-    );
+    let span = trace_span!("call_begin", func_desc = ?func_desc, params = ?params);
+    let _enter = span.enter();
+
+    trace!("enter");
+
     let mut fsm = resource.fsm.lock().unwrap();
 
     if !matches!(fsm.current_state(), StateTag::Idle) && 
@@ -143,7 +146,11 @@ fn call_continue<'a>(
     field_name: String,
     results: Vec<NifWasmVal>,
 ) -> NifResult<Term<'a>> {
-    trace!("call_continue - module_name: {}, field_name: {}, results: {:?}", module_name, field_name, results);
+    let span = trace_span!("call_continue", module_name = module_name, field_name = field_name, results = ?results);
+    let _enter = span.enter();
+
+    trace!("enter");
+
     let mut fsm = resource.fsm.lock().unwrap();
 
     if !matches!(fsm.current_state(), StateTag::AwaitingHost) {
@@ -235,7 +242,11 @@ fn mem_size<'a>(
     env: Env<'a>,
     resource: ResourceArc<NifRes>,
 ) -> NifResult<Term<'a>> {
-    trace!("mem_size");
+    let span = trace_span!("mem_size");
+    let _enter = span.enter();
+
+    trace!("enter");
+
     let mut fsm = resource.fsm.lock().unwrap();
 
     // We need access to the instance state within the FSM
@@ -259,7 +270,11 @@ fn mem_read<'a>(
     offset: usize,
     length: usize,
 ) -> NifResult<Term<'a>> {
-    trace!("mem_read - offset: {}, length: {}", offset, length);
+    let span = trace_span!("mem_read", offset = offset, length = length);
+    let _enter = span.enter();
+
+    trace!("enter");
+
     let mut fsm = resource.fsm.lock().unwrap();
 
     let mut erl_bin = rustler::NewBinary::new(env, length);
@@ -279,7 +294,11 @@ fn mem_write<'a>(
     offset: usize,
     data: Binary<'a>,
 ) -> NifResult<Term<'a>> {
-    trace!("mem_write - offset: {}, data_len: {}", offset, data.len());
+    let span = trace_span!("mem_write", offset = offset, data_len = data.len());
+    let _enter = span.enter();
+
+    trace!("enter");
+
     let mut fsm = resource.fsm.lock().unwrap();
 
     match fsm.write_memory(offset, data.as_slice()) {

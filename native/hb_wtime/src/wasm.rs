@@ -75,7 +75,7 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
     for import in module.imports() {
         let module_name_ref = import.module();
         let field_name_ref = import.name();
-        trace!(
+        debug!(
             "Creating import function for: {}.{}",
             module_name_ref,
             field_name_ref
