@@ -107,13 +107,13 @@ init(M1, M2, Opts) ->
             #{
                 <<Prefix/binary, "/write">> =>
                     fun(Binary) ->
-                        {ok, Ptr} = hb_wtime:mem_write(Instance, Binary),
+                        {ok, Ptr} = hb_wtime_io:write_string(Instance, Binary),
                         {ok, Ptr}
                     end,
                 <<Prefix/binary, "/read">> =>
                     fun Reader([Ptr]) -> Reader(Ptr);
                         Reader(Ptr) ->
-                            {ok, Binary} = hb_wtime:mem_read(Instance, Ptr),
+                            {ok, Binary} = hb_wtime_io:read_string(Instance, Ptr),
                             {ok, Binary}
                     end,
                 <<Prefix/binary, "/instance">> => Instance,
