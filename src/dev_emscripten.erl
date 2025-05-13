@@ -98,10 +98,13 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
             ?event(debug, calling_set_threw),
             SetThrewRes = dev_wasm:call(WASM, <<"setThrew">>, [1, 0], ImportResolver, State, Opts),
             ?event(debug, {invoke_set_threw, {catch_result, SetThrewRes}}),
-            % {ok, _, _} = SetThrewRes,
-            ?event(debug, set_threw_done),
-            {ok, SetThrewResult, SetThrewMsg} = SetThrewRes,
-            {ok, #{ <<"state">> => SetThrewMsg, <<"results">> => SetThrewResult }}
+            {ok, _SetThrewResult, SetThrewMsg} = SetThrewRes,
+            % ?event(debug, set_threw_done),
+            % {ok, SetThrewResult, SetThrewMsg} = SetThrewRes,
+            % complete the __cxa_throw call
+            hb_wtime:call_continue(WASM, <<"env">>, <<"__cxa_throw">>, []),
+            % return empty result for invoke call
+            {ok, #{ <<"state">> => SetThrewMsg, <<"results">> => [] }}
     end.
 
 % Return 0 (as a double)
@@ -167,7 +170,7 @@ try_test() ->
     {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
     [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
     {ok, Output} = hb_wtime_io:read_string(Instance, Ptr),
-    ?assertEqual(<<"Initial">>, Output).
+    ?assertEqual(<<"Catch">>, Output).
 
 basic_aos_exec_test() ->
     Init = generate_emscripten_stack("test/aos-new.wasm", <<"handle">>, []),
