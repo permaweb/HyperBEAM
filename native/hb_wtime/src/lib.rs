@@ -1,3 +1,5 @@
+#![feature(type_alias_impl_trait)]
+
 use rustler::{Env, Term};
 use tracing::{info, trace};
 
@@ -9,6 +11,7 @@ pub mod nif;
 pub mod types;
 pub mod wasm;
 pub mod wasm_fsm;
+pub mod ext;
 
 rustler::init!(
     "hb_wtime", // Module name as used in Erlang.

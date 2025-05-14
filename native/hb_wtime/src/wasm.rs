@@ -1,9 +1,12 @@
-use crate::types::{NativeFuncDesc, WasmVal};
-use std::{future::Future, pin::Pin};
+use crate::{
+    ext::{get_imports, HostModule, ImportDef},
+    types::{NativeFuncDesc, WasmVal},
+};
+use std::{collections::HashMap, future::Future, pin::Pin};
 
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, trace};
 use wasmtime::{Caller, Config, Engine, Instance, Linker, Module, Store};
 
 #[derive(Debug, Clone)]
@@ -72,91 +75,126 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
     let (host_req_tx, host_req_rx) =
         mpsc::channel::<(HostFuncRequest, oneshot::Sender<HostFuncResponse>)>(1);
 
-    for import in module.imports() {
-        let module_name_ref = import.module();
-        let field_name_ref = import.name();
+    let enabled_modules = vec![HostModule::Emscripten];
+    let native_imports = get_imports(engine.clone(), false, enabled_modules);
+    let mut native_imports_map: HashMap<(String, String), ImportDef> = native_imports
+        .into_iter()
+        .map(|def| ((def.module_name.clone(), def.field_name.clone()), def))
+        .collect();
+
+    for import_desc in module.imports() {
+        let module_name_ref = import_desc.module();
+        let field_name_ref = import_desc.name();
         debug!(
             "Creating import function for: {}.{}",
-            module_name_ref,
-            field_name_ref
+            module_name_ref, field_name_ref
         );
 
-        let ty = match import.ty().func() {
+        let ty = match import_desc.ty().func() {
             Some(ty) => ty.clone(),
-            None => return Err(anyhow::anyhow!("Import item '{}.{}' is not a function type", module_name_ref, field_name_ref)),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "Import item '{}.{}' is not a function type",
+                    module_name_ref,
+                    field_name_ref
+                ))
+            }
         };
 
-        let module_name_owned = import.module().to_string();
-        let field_name_owned = import.name().to_string();
+        let key = (module_name_ref.to_string(), field_name_ref.to_string());
+        if let Some(matching_import) = native_imports_map.remove(&key) {
+            linker
+                .func_new(module_name_ref, field_name_ref, ty, matching_import.func)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to link import function '{}.{}': {}",
+                        module_name_ref,
+                        field_name_ref,
+                        e
+                    )
+                })?;
+        } else {
+            let module_name_owned = import_desc.module().to_string();
+            let field_name_owned = import_desc.name().to_string();
+            let current_host_req_tx = host_req_tx.clone();
 
-        let current_host_req_tx = host_req_tx.clone();
+            linker
+                .func_new_async(
+                    module_name_ref,
+                    field_name_ref,
+                    ty,
+                    move |mut _caller: Caller<'_, ()>,
+                          params: &[WasmVal],
+                          results: &mut [WasmVal]| {
+                        let captured_module_name = module_name_owned.clone();
+                        let captured_field_name = field_name_owned.clone();
+                        trace!(
+                            "Import function: {}.{}",
+                            module_name_owned,
+                            field_name_owned
+                        );
 
-        linker.func_new_async(
-            module_name_ref,
-            field_name_ref,
-            ty,
-            move |mut _caller: Caller<'_, ()>, params: &[WasmVal], results: &mut [WasmVal]| {
-                let captured_module_name = module_name_owned.clone();
-                let captured_field_name = field_name_owned.clone();
-                trace!(
-                    "Import function: {}.{}",
-                    module_name_owned,
-                    field_name_owned
-                );
+                        let params_vec = params.to_vec();
+                        trace!("Params: {:?}", params_vec);
 
-                let params_vec = params.to_vec();
-                trace!("Params: {:?}", params_vec);
+                        let moved_host_req_tx = current_host_req_tx.clone();
 
-                let moved_host_req_tx = current_host_req_tx.clone();
+                        Box::new(async move {
+                            trace!(
+                                "Import function: {}.{}",
+                                captured_module_name,
+                                captured_field_name
+                            );
 
-                Box::new(async move {
-                    trace!(
-                        "Import function: {}.{}",
-                        captured_module_name,
-                        captured_field_name
-                    );
+                            let (resp_tx, resp_rx) = oneshot::channel::<HostFuncResponse>();
 
-                    let (resp_tx, resp_rx) = oneshot::channel::<HostFuncResponse>();
+                            let request = HostFuncRequest {
+                                func_desc: HostFuncDesc {
+                                    module_name: captured_module_name,
+                                    field_name: captured_field_name,
+                                },
+                                params: params_vec,
+                            };
 
-                    let request = HostFuncRequest {
-                        func_desc: HostFuncDesc {
-                            module_name: captured_module_name,
-                            field_name: captured_field_name,
-                        },
-                        params: params_vec,
-                    };
+                            trace!("Sending request: {:?}", request);
 
-                    trace!("Sending request: {:?}", request);
-
-                    if moved_host_req_tx.send((request, resp_tx)).await.is_err() {
-                        // Host is no longer listening or channel closed
-                        return Err(anyhow::anyhow!("Failed to send request to host"));
-                    }
-
-                    trace!("Waiting for response");
-
-                    let host_response = resp_rx.await;
-
-                    trace!("Received response: {:?}", host_response);
-
-                    match host_response {
-                        Ok(host_response) => {
-                            if results.len() == host_response.results.len() {
-                                results.copy_from_slice(&host_response.results);
-                                Ok(())
-                            } else {
-                                Err(anyhow::anyhow!("Host response arity mismatch"))
+                            if moved_host_req_tx.send((request, resp_tx)).await.is_err() {
+                                // Host is no longer listening or channel closed
+                                return Err(anyhow::anyhow!("Failed to send request to host"));
                             }
-                        }
-                        Err(_) => {
-                            // Host dropped the response sender or other error
-                            Err(anyhow::anyhow!("Failed to receive response from host"))
-                        }
-                    }
-                })
-            },
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to link import function '{}.{}': {}", module_name_ref, field_name_ref, e))?;
+
+                            trace!("Waiting for response");
+
+                            let host_response = resp_rx.await;
+
+                            trace!("Received response: {:?}", host_response);
+
+                            match host_response {
+                                Ok(host_response) => {
+                                    if results.len() == host_response.results.len() {
+                                        results.copy_from_slice(&host_response.results);
+                                        Ok(())
+                                    } else {
+                                        Err(anyhow::anyhow!("Host response arity mismatch"))
+                                    }
+                                }
+                                Err(_) => {
+                                    // Host dropped the response sender or other error
+                                    Err(anyhow::anyhow!("Failed to receive response from host"))
+                                }
+                            }
+                        })
+                    },
+                )
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to link import function '{}.{}': {}",
+                        module_name_ref,
+                        field_name_ref,
+                        e
+                    )
+                })?;
+        }
     }
 
     let instance = linker.instantiate_async(&mut store, &module).await?;
@@ -355,14 +393,17 @@ pub async fn wasm_call_push_native<'a>(
         }
         NativeFuncDesc::Indirect(index) => {
             // Check the indirect function table
-            let table = instance_state.instance.get_table(&mut instance_state.store, "__indirect_function_table")
+            let table = instance_state
+                .instance
+                .get_table(&mut instance_state.store, "__indirect_function_table")
                 .ok_or_else(|| anyhow::anyhow!("Indirect function table not found"))?;
             // Get the function from the table
-            let func_ref = table.get(&mut instance_state.store, index)
+            let func_ref = table
+                .get(&mut instance_state.store, index)
                 .ok_or_else(|| anyhow::anyhow!("Indirect function not found in table"))?;
 
             let func = *func_ref.unwrap_func().unwrap();
-            
+
             let results_count_val = func.ty(&instance_state.store).results().len();
 
             (func, results_count_val)
@@ -448,42 +489,55 @@ pub async fn wasm_call_pop_host<'a>(
 
 pub fn wasm_memory_size(instance_state: &mut WasmInstanceState) -> Result<usize> {
     let instance = &instance_state.instance; // Instance can usually be an immutable borrow
-    let memory = instance.get_memory(&mut instance_state.store, "memory")
+    let memory = instance
+        .get_memory(&mut instance_state.store, "memory")
         .ok_or_else(|| anyhow::anyhow!("Failed to find Wasm memory export named 'memory'"))?;
     let page_count = memory.size(&mut instance_state.store) as usize;
     let page_size = memory.page_size(&mut instance_state.store) as usize;
     Ok(page_count * page_size)
 }
 
-pub fn wasm_memory_read(instance_state: &mut WasmInstanceState, offset: usize, data: &mut [u8]) -> Result<()> {
+pub fn wasm_memory_read(
+    instance_state: &mut WasmInstanceState,
+    offset: usize,
+    data: &mut [u8],
+) -> Result<()> {
     trace!("wasm_read_memory: {:?}, {:?}", offset, data.len());
-    
+
     let instance = &instance_state.instance; // Instance can usually be an immutable borrow
-    
+
     // Get memory, passing a mutable borrow of the store
-    let memory = instance.get_memory(&mut instance_state.store, "memory")
+    let memory = instance
+        .get_memory(&mut instance_state.store, "memory")
         .ok_or_else(|| anyhow::anyhow!("Failed to find Wasm memory export named 'memory'"))?;
-    
+
     // Read from memory, passing a mutable borrow of the store again
-    memory.read(&mut instance_state.store, offset, data)
+    memory
+        .read(&mut instance_state.store, offset, data)
         .map_err(|e| anyhow::anyhow!("Failed to read from Wasm memory: {}", e))?;
-    
+
     Ok(())
 }
 
-pub fn wasm_memory_write(instance_state: &mut WasmInstanceState, offset: usize, data: &[u8]) -> Result<()> {
+pub fn wasm_memory_write(
+    instance_state: &mut WasmInstanceState,
+    offset: usize,
+    data: &[u8],
+) -> Result<()> {
     trace!("wasm_write_memory: {:?}, {:?}", offset, data.len());
-    
+
     let instance = &instance_state.instance; // Instance can usually be an immutable borrow
-    
+
     // Get memory, passing a mutable borrow of the store
-    let memory = instance.get_memory(&mut instance_state.store, "memory")
+    let memory = instance
+        .get_memory(&mut instance_state.store, "memory")
         .ok_or_else(|| anyhow::anyhow!("Failed to find Wasm memory export named 'memory'"))?;
-    
+
     // Write to memory, passing a mutable borrow of the store again
-    memory.write(&mut instance_state.store, offset, data)
+    memory
+        .write(&mut instance_state.store, offset, data)
         .map_err(|e| anyhow::anyhow!("Failed to write to Wasm memory: {}", e))?;
-    
+
     Ok(())
 }
 
@@ -547,10 +601,17 @@ mod tests {
                 params: vec![],
             };
 
-            wasm_call_push_native(&mut init, &mut call_state, native_request).await.unwrap();
+            wasm_call_push_native(&mut init, &mut call_state, native_request)
+                .await
+                .unwrap();
             // Correctly use current_instance_extra.host_req_channel
-            let step_result = wasm_call_step(&mut call_state, &mut current_instance_extra.host_req_channel).await.unwrap();
-            
+            let step_result = wasm_call_step(
+                &mut call_state,
+                &mut current_instance_extra.host_req_channel,
+            )
+            .await
+            .unwrap();
+
             match step_result {
                 CallStepResult::Complete(results) => {
                     assert_eq!(results.len(), 1);
@@ -579,7 +640,7 @@ mod tests {
         let module_data = WasmModuleData::Wat(wat);
         let res = wasm_instance_create(module_data).await.unwrap();
         let mut init = res.state;
-        
+
         let mut instance_extra = res.extra; // Make instance_extra mutable
         let mut call_state = wasm_call_init().unwrap();
 
@@ -594,7 +655,9 @@ mod tests {
             .unwrap();
 
         // Call call_step, which takes the future from call_state
-        let res = wasm_call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
+        let res = wasm_call_step(&mut call_state, &mut instance_extra.host_req_channel)
+            .await
+            .unwrap();
 
         let import_meta = match res {
             CallStepResult::ImportCall(ic) => ic,
@@ -635,7 +698,9 @@ mod tests {
             .unwrap();
 
         // Call call_step to get the first result (ImportCall)
-        let push_step_res = wasm_call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
+        let push_step_res = wasm_call_step(&mut call_state, &mut instance_extra.host_req_channel)
+            .await
+            .unwrap();
 
         // Expect the first step to be an import call
         let import_meta = match push_step_res {
@@ -653,10 +718,14 @@ mod tests {
         info!("Sending host response: {:?}", host_response);
 
         // Pop host response, mutates state to prepare for next step
-        wasm_call_pop_host(&mut call_state, host_response).await.unwrap();
+        wasm_call_pop_host(&mut call_state, host_response)
+            .await
+            .unwrap();
 
         // Call call_step again with the resumed future now in state
-        let pop_res = wasm_call_step(&mut call_state, &mut instance_extra.host_req_channel).await.unwrap();
+        let pop_res = wasm_call_step(&mut call_state, &mut instance_extra.host_req_channel)
+            .await
+            .unwrap();
 
         // Expect completion
         match pop_res {
@@ -696,16 +765,25 @@ mod tests {
         wasm_memory_write(&mut instance_state, offset, &write_data).unwrap_or_else(|e| {
             panic!("wasm_write_memory failed: {}", e);
         });
-        info!("Successfully wrote data to Wasm memory at offset {}", offset);
+        info!(
+            "Successfully wrote data to Wasm memory at offset {}",
+            offset
+        );
 
         // Read data back
         let mut read_buffer = vec![0u8; write_data.len()];
         wasm_memory_read(&mut instance_state, offset, &mut read_buffer).unwrap_or_else(|e| {
             panic!("wasm_read_memory failed: {}", e);
         });
-        info!("Successfully read data from Wasm memory at offset {}", offset);
+        info!(
+            "Successfully read data from Wasm memory at offset {}",
+            offset
+        );
 
-        assert_eq!(write_data, read_buffer, "Data read back should match data written");
+        assert_eq!(
+            write_data, read_buffer,
+            "Data read back should match data written"
+        );
     }
 
     #[tokio::test]
@@ -742,8 +820,12 @@ mod tests {
 
         // Verify A wasn't overwritten by B if offsets are distinct and non-overlapping
         let mut re_read_buffer_a = vec![0u8; data_a.len()];
-        wasm_memory_read(&mut instance_state, offset_a, &mut re_read_buffer_a).expect("re-read A failed");
-        assert_eq!(data_a, re_read_buffer_a, "Data A mismatch after B write/read");
+        wasm_memory_read(&mut instance_state, offset_a, &mut re_read_buffer_a)
+            .expect("re-read A failed");
+        assert_eq!(
+            data_a, re_read_buffer_a,
+            "Data A mismatch after B write/read"
+        );
     }
 
     // Optional: Test for reading memory initialized by the module itself via data segments.
@@ -762,15 +844,17 @@ mod tests {
 
         let expected_data = b"hello";
         let mut read_buffer = vec![0u8; expected_data.len()];
-        
-        wasm_memory_read(&mut instance_state, 0, &mut read_buffer).expect("read initialized data failed");
+
+        wasm_memory_read(&mut instance_state, 0, &mut read_buffer)
+            .expect("read initialized data failed");
         assert_eq!(expected_data, read_buffer.as_slice());
 
         // Try reading a bit further to ensure padding / other areas are zero or as expected
         let mut larger_buffer = vec![0u8; expected_data.len() + 5];
-        wasm_memory_read(&mut instance_state, 0, &mut larger_buffer).expect("read initialized data failed");
+        wasm_memory_read(&mut instance_state, 0, &mut larger_buffer)
+            .expect("read initialized data failed");
         assert_eq!(&larger_buffer[0..expected_data.len()], expected_data);
-        assert_eq!(&larger_buffer[expected_data.len()..], &[0,0,0,0,0]); // Assuming rest is zero-initialized
+        assert_eq!(&larger_buffer[expected_data.len()..], &[0, 0, 0, 0, 0]); // Assuming rest is zero-initialized
     }
 
     #[tokio::test]
