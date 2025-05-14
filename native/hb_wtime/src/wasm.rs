@@ -57,6 +57,7 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
 
     // Additional safe features
     // TODO: Configurable?
+    cfg.wasm_memory64(true);
     cfg.wasm_simd(true);
     cfg.wasm_relaxed_simd(true); // determinism handled by `relaxed_simd_deterministic`
 
