@@ -835,7 +835,8 @@ function compute(base, assignment)
         -- Handle unknown `action' values.
         base.results = {
             status = "error",
-            error = "Unknown action: " .. assignment.body.action
+            error = "Unknown action: " .. assignment.body.action,
+            request = assignment
         }
         ao.event({ "Unknown action", { action = assignment.body.action } })
         return "ok", base

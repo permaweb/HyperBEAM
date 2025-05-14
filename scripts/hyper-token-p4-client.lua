@@ -9,15 +9,22 @@ function balance(base, request)
             .. "/now/balance/"
             .. request["target"]
     })
-    ao.event({ "client received balance response", 
-        { status = status, res = res, target = request["target"] } }
-    )
     -- If the balance request fails (most likely because the user has no balance),
     -- return a balance of 0.
     if status ~= "ok" then
+        ao.event({"Returning 0 balance", {
+            status = status,
+            res = res,
+            target = request["target"]
+        }})
         return "ok", 0
     end
 
+    ao.event({"Returning balance", {
+        status = status,
+        res = res,
+        target = request["target"]
+    }})
     -- We have successfully retrieved the balance, so return it.
     return "ok", res
 end

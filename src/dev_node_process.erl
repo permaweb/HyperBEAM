@@ -28,7 +28,12 @@ lookup(Name, _Base, Req, Opts) ->
         ),
     case LookupRes of
         {ok, ProcessID} ->
-            hb_cache:read(ProcessID, Opts);
+            case hb_ao:get(<<"return">>, Req, <<"message">>, Opts) of
+                <<"message">> ->
+                    hb_cache:read(ProcessID, Opts);
+                <<"id">> ->
+                    {ok, ProcessID}
+            end;
         {error, not_found} ->
             case hb_ao:get(<<"spawn">>, Req, true, Opts) of
                 true ->

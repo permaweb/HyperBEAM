@@ -197,6 +197,10 @@ response(State, RawResponse, NodeMsg) ->
                 end,
             ?event(payment, {p4_post_pricing_response, PricingRes}),
             case PricingRes of
+                {ok, 0} ->
+                    % The pricing device has estimated the cost of the request
+                    % to be zero, so we proceed.
+                    {ok, #{ <<"body">> => Response }};
                 {ok, Price} ->
                     % We have successfully determined the cost of the request,
                     % so we proceed to charge the user's account. We sign the
@@ -232,7 +236,14 @@ response(State, RawResponse, NodeMsg) ->
                             % Return the original response.
                             {ok, #{ <<"body">> => Response }};
                         {error, Error} ->
-                            ?event(payment, {p4_post_ledger_response, {error, Error}}),
+                            ?event(
+                                payment,
+                                {p4_post_ledger_response,
+                                    {error,
+                                        {string, maps:get(<<"body">>, Error, Error)}
+                                    }
+                                }
+                            ),
                             % The charge failed, so we return the error from the
                             % ledger device.
                             {error, Error}
@@ -381,15 +392,20 @@ non_chargable_route_test() ->
     ?event({res3, Res3}),
     ?assertMatch({error, _}, Res3).
 
-%% @doc Ensure that Lua scripts can be used as pricing and ledger devices. Our
-%% scripts come in two components:
-%% 1. A `process' script which is executed as a persistent `local-process' on the
-%%   node, and which maintains the state of the ledger. This process runs 
-%%   `hyper-token.lua' as its base, then adds the logic of `hyper-token-p4.lua'
+%% @doc Ensure that Lua scripts can be used as pricing and ledger devices. This
+%% configuration comes in three components:
+%% 1. A `hyper-token` root process, acting as the main token ledger.
+%% 2. A `process' script which is executed as a persistent `local-process' on the
+%%   node, and which maintains the state of our node's sub-ledger. This process
+%%   runs `hyper-token.lua' as its base, then adds the logic of `hyper-token-p4'
 %%   to it. This secondary script implements the `charge' function that `p4@1.0'
-%%   will call to charge a user's account.
-%% 2. A `client' script, which is executed as a `p4@1.0' ledger device, which
-%%   uses `~push@1.0' to send requests to the ledger `process'.
+%%   will call to charge a user's account on our sub-ledger. The node's key is
+%%   added as an `admin' to the sub-ledger, allowing the `~p4@1.0/charge' call
+%%   to identify itself as the node itself. In a TEE-secured environment, this
+%%   key will not be exposed to the user. Subsequently, the `admin' functionality
+%%   will be as secure as the TEE itself.
+%% 3. A `client' script, which is executed as a `p4@1.0' ledger device, which
+%%   uses `~push@1.0' to send requests to the local ledger `process'.
 hyper_token_ledger_test_() ->
     {timeout, 60, fun hyper_token_ledger/0}.
 hyper_token_ledger() ->
@@ -405,7 +421,40 @@ hyper_token_ledger() ->
     {ok, TokenScript} = file:read_file("scripts/hyper-token.lua"),
     {ok, ProcessScript} = file:read_file("scripts/hyper-token-p4.lua"),
     {ok, ClientScript} = file:read_file("scripts/hyper-token-p4-client.lua"),
-    % Create the processor device, contains component (1): The script that 
+    Store = [
+        #{
+            <<"prefix">> => <<"cache-mainnet">>,
+            <<"store-module">> => hb_store_fs
+        }
+    ],
+	% Create the main (component 1) ledger, which will act as the token for
+    % the sub-ledger. We initialize it with 100 tokens for Alice.
+    HyperToken =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"process@1.0">>,
+                <<"type">> => <<"Process">>,
+                <<"scheduler-device">> => <<"scheduler@1.0">>,
+                <<"scheduler">> => hb_util:human_id(HostWallet),
+                <<"execution-device">> => <<"lua@5.3a">>,
+                <<"authority">> => hb_util:human_id(HostWallet),
+                <<"script">> => #{
+                    <<"content-type">> => <<"text/x-lua">>,
+                    <<"module">> => <<"scripts/hyper-token.lua">>,
+                    <<"body">> => TokenScript
+                },
+                <<"balance">> => #{
+                    AliceAddress => 100
+                }
+            },
+            HostWallet
+        ),
+    TokenID = hb_message:id(HyperToken, all),
+    % We store it such that it will be available to the node later. In practice,
+    % this step is not required as the node will be using an external process
+    % for its token.
+    {ok, TokenPath} = hb_cache:write(HyperToken, #{ store => Store }),
+    % Create the processor device, which contains component (3): The script that 
     % pushes requests to the ledger `process'.
     Processor =
         #{
@@ -420,20 +469,26 @@ hyper_token_ledger() ->
             <<"ledger-path">> => <<"/ledger~node-process@1.0">>
         },
     % Start the node with the processor and the `local-process' ledger 
-    % (component 2) running the `hyper-token.lua' and `hyper-token-p4.lua'
+    % (component 2), running the `hyper-token.lua' and `hyper-token-p4.lua'
     % scripts. `hyper-token.lua' implements the core token ledger, while
     % `hyper-token-p4.lua' implements the `charge' function that `p4@1.0' will
-    % call to charge a user's account upon charges. We initialize the ledger
-    % with 100 tokens for Alice.
+    % call to charge a user's account upon charges.
+    % We set the `token' key to the ID of the `hyper-token' process, which
+    % informs the local process that it will be running in `sub-ledger' mode and
+    % accepting deposits from the main token ledger.
     Node =
         hb_http_server:start_node(
             #{
+                store => Store,
                 priv_wallet => HostWallet,
                 p4_non_chargable_routes =>
                     [
                         #{
+                            <<"template">> => <<"/*~node-process@1.0/*">>
+                        },
+                        #{
                             <<"template">> =>
-                                <<"/*~node-process@1.0/*">>
+                                <<"/~node-process@1.0/ledger&return=id">>
                         }
                     ],
                 on => #{
@@ -459,7 +514,8 @@ hyper_token_ledger() ->
                             }
                         ],
                         <<"balance">> => #{ AliceAddress => 100 },
-                        <<"admin">> => HostAddress
+                        <<"admin">> => HostAddress,
+                        <<"token">> => TokenID
                     }
                 }
             }
@@ -474,24 +530,46 @@ hyper_token_ledger() ->
     Res = hb_http:get(Node, SignedReq, #{}),
     ?event({expected_failure, Res}),
     ?assertMatch({error, _}, Res),
-    % We then move 50 tokens from Alice to Bob.
+    % We then move 50 tokens from Alice to Bob from the main token ledger to the
+    % sub-ledger.
+    % First, we get the ID of the sub-ledger from the local process.
+    {ok, SubLedgerID} =
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~node-process@1.0/ledger&return=id">>
+                },
+                HostWallet
+            ),
+            #{}
+        ),
+    ?event(debug_charge, {subledger_id, SubLedgerID}),
+    % We then move 50 tokens from Alice to Bob from the main token ledger to the
+    % sub-ledger. The `route' key specifies that the request should be sent to
+    % the sub-ledger. Internally, upon receiving the transfer, the main ledger
+    % will debit Alice's balance, but instead of crediting Bob directly, it will
+    % credit the sub-ledger's account. The sub-ledger will then receive this
+    % `Credit-Notice', validate that it is from the root ledger, and credit Bob's
+    % account.
     {ok, TopupRes} =
         hb_http:post(
             Node,
             hb_message:commit(
                 #{
-                    <<"path">> => <<"/ledger~node-process@1.0/schedule">>,
+                    <<"path">> => << TokenPath/binary, "/push">>,
                     <<"body">> =>
                         hb_message:commit(
                             #{
                                 <<"path">> => <<"transfer">>,
                                 <<"quantity">> => 50,
-                                <<"recipient">> => BobAddress
+                                <<"recipient">> => BobAddress,
+                                <<"route">> => SubLedgerID
                             },
                             AliceWallet
                         )
                 },
-                HostWallet
+                OperatorWallet
             ),
             #{}
         ),
@@ -500,7 +578,7 @@ hyper_token_ledger() ->
     ResAfterTopup = hb_http:get(Node, SignedReq, #{}),
     ?event({res_after_topup, ResAfterTopup}),
     ?assertMatch({ok, <<"Hello, world!">>}, ResAfterTopup),
-    % We now check the balance of Bob. It should have been charged 2 tokens from
+    % Check the balance of Bob. It should have been charged 2 tokens from
     % the 50 Alice sent him.
     {ok, Balances} =
         hb_http:get(
@@ -510,6 +588,6 @@ hyper_token_ledger() ->
         ),
     ?event(debug_charge, {balances, Balances}),
     ?assertMatch(48, hb_ao:get(BobAddress, Balances, #{})),
-    % Finally, we check the balance of the operator. It should be 2 tokens,
-    % the amount that was charged from Alice.
+    % Check the balance of the operator. It should be 2 tokens, the amount that
+    % was charged from Alice.
     ?assertMatch(2, hb_ao:get(OperatorAddress, Balances, #{})).
