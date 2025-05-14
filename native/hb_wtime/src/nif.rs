@@ -52,6 +52,7 @@ fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
                 fsm: Mutex::new(fsm_instance),
                 runtime,
             });
+            debug!("fsm.current_state(): {:?}", resource.fsm.lock().unwrap().current_state());
             Ok((Atom::from_str(env, "ok").unwrap(), resource).encode(env))
         }
         Err(e) => {
@@ -60,8 +61,8 @@ fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
         }
     };
 
+    debug!("res: {:?}", res);
     trace!("exit");
-
     res
 }
 
@@ -74,13 +75,15 @@ fn call_begin<'a>(
 ) -> NifResult<Term<'a>> {
     trace!("call_begin");
 
-    let span = trace_span!("call_begin", func = func_desc.to_string(), params = ?params);
+    let span = trace_span!("call_begin", wsm_fn = func_desc.to_string());
     let _enter = span.enter();
 
     debug!("enter");
+    debug!("params: {:?}", params);
 
     let mut fsm = resource.fsm.lock().unwrap();
 
+    debug!("fsm.current_state(): {:?}", fsm.current_state());
     if !matches!(fsm.current_state(), StateTag::Idle) && 
        !matches!(fsm.current_state(), StateTag::AwaitingHost) {
         return Ok(fsm_error_to_term(
@@ -145,6 +148,9 @@ fn call_begin<'a>(
         Err(e) => Ok(fsm_error_to_term(env, e)),
     };
 
+    debug!("fsm.current_state(): {:?}", fsm.current_state());
+
+    debug!("res: {:?}", res);
     trace!("exit");
 
     res
@@ -160,12 +166,15 @@ fn call_continue<'a>(
 ) -> NifResult<Term<'a>> {
     trace!("call_continue");
 
-    let span = trace_span!("call_continue", func = format!("{}.{}", module_name, field_name), results = ?results);
+    let span = trace_span!("call_continue", hst_fn = format!("{}.{}", module_name, field_name));
     let _enter = span.enter();
 
     debug!("enter");
+    debug!("results: {:?}", results);
 
     let mut fsm = resource.fsm.lock().unwrap();
+
+    debug!("fsm.current_state(): {:?}", fsm.current_state());
 
     if !matches!(fsm.current_state(), StateTag::AwaitingHost) {
         return Ok(fsm_error_to_term(
@@ -250,6 +259,9 @@ fn call_continue<'a>(
         Err(e) => Ok(fsm_error_to_term(env, e)),
     };
 
+    debug!("fsm.current_state(): {:?}", fsm.current_state());
+
+    debug!("res: {:?}", res);
     trace!("exit");
 
     res
@@ -282,6 +294,7 @@ fn mem_size<'a>(
         Err(e) => Ok(fsm_error_to_term(env, e)),
     };
 
+    debug!("res: {:?}", res);
     trace!("exit");
 
     res
@@ -312,6 +325,7 @@ fn mem_read<'a>(
         Err(e) => Ok(fsm_error_to_term(env, e)),
     };
 
+    debug!("res: {:?}", res);
     trace!("exit");
 
     res
@@ -338,6 +352,7 @@ fn mem_write<'a>(
         Err(e) => Ok(fsm_error_to_term(env, e)),
     };
 
+    debug!("res: {:?}", res);
     trace!("exit");
 
     res
