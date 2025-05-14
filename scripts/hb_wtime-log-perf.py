@@ -170,13 +170,14 @@ def main():
     print_table("Totals per span type", type_rows, ("span", "calls", "total_seconds", "avg_seconds"))
     print("─" * 45)
     # Calculate total_excluding_create ensuring type_rows is not empty
-    print(f"grand total: {grand_total.total_seconds():.6f} s ({(grand_total / overall_duration) if overall_duration.total_seconds() > 0 else 0:.2%})")
+    print(f"grand total: {grand_total.total_seconds():.6f} s ({(grand_total / overall_duration) if overall_duration.total_seconds() > 0 else 0:.2%} of {overall_duration.total_seconds():.6f} s)")
     total_excluding_create = dt.timedelta()
     if type_rows:
         # Convert the string representation of seconds to a float, then to a timedelta
         seconds_to_subtract = float(type_rows[0]["total_seconds"])
         total_excluding_create = grand_total - dt.timedelta(seconds=seconds_to_subtract)
-        print(f"excl. create: {total_excluding_create.total_seconds():.6f} s ({(total_excluding_create / overall_duration) if overall_duration.total_seconds() > 0 else 0:.2%})")
+        overall_duration_excluding_create = overall_duration - dt.timedelta(seconds=seconds_to_subtract)
+        print(f"excl. create: {total_excluding_create.total_seconds():.6f} s ({(total_excluding_create / overall_duration_excluding_create) if overall_duration.total_seconds() > 0 else 0:.2%} of {overall_duration_excluding_create.total_seconds():.6f} s)")
 
     # print(f"overall duration: {overall_duration.total_seconds():.6f} s")
 
