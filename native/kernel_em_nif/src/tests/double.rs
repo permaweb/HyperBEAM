@@ -11,7 +11,7 @@ mod tests {
         let input_data = vec![1, 3, 5, 7];
         // println!("SOURCE CODE: {:?}", kernel_src);
         let kem = pollster::block_on(KernelExecutor::new());
-        let result = kem.execute_kernel_default(&kernel_src, &input_data, Some(4));
+        let result = kem.execute_kernel_default(&kernel_src, &input_data, Some(1));
         println!("{:?}", result);
     }
 }
