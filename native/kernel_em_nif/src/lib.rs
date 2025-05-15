@@ -1,4 +1,6 @@
 pub mod core;
+#[cfg(test)]
+pub mod tests;
 use crate::core::arweave::retrieve_kernel_src;
 use crate::core::execution_machine::KernelExecutor;
 use rustler::NifResult;
