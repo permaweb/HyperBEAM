@@ -9,11 +9,18 @@ pub struct AdapterInfoRes {
     pub device: u32,
     pub driver: String,
     pub backend: String,
-    pub driver_info: String
+    pub driver_info: String,
 }
 
 impl AdapterInfoRes {
     pub fn from(adapter: AdapterInfo) -> Self {
-        Self { name: adapter.name, vendor: adapter.vendor, device: adapter.device, driver: adapter.driver, driver_info: adapter.driver_info, backend: adapter.backend.to_string() }
+        Self {
+            name: adapter.name,
+            vendor: adapter.vendor,
+            device: adapter.device,
+            driver: adapter.driver,
+            driver_info: adapter.driver_info,
+            backend: adapter.backend.to_string(),
+        }
     }
 }

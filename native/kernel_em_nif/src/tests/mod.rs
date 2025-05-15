@@ -1,2 +1,2 @@
-pub mod double;
 pub mod adapter;
+pub mod double;
