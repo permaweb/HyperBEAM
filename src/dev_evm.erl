@@ -1,6 +1,6 @@
 %%% @doc a device to interact with the EVM execution client (interpreted EVM) 
 -module(dev_evm).
--export([info/1, info/3, get_state/3]).
+-export([info/1, info/3, get_state/3, test_hb_http/0, test_ao/0]).
 
 info(_) ->
     #{
@@ -39,4 +39,78 @@ get_state(Msg1, _Msg2, Opts) ->
                     <<"details">> => Error
                 }
             }}
+    end.
+
+% in erlang shell call: dev_evm:test_hb_http().
+test_hb_http() ->
+    io:format("~n__test_evm_device__~n"),
+    try
+        % start a node with proper configuration
+        Node = hb_http_server:start_node(#{
+            priv_wallet => ar_wallet:new()
+        }),
+        
+        % Create a message that uses the EVM device
+        Base = #{
+            <<"device">> => <<"evm@1.0">>,
+            <<"path">> => <<"get_state">>,
+            <<"chain_id">> => <<"9496">>
+        },
+        
+        % Use hb_http:get to test the device through the node
+        Result = hb_http:get(Node, <<"/~evm@1.0/get_state">>, #{}),
+        io:format("~nEVM test result: ~p~n", [Result])
+    catch
+        Error:Reason:Stack ->
+            io:format("Error running EVM test: ~p:~p~n~p~n", [Error, Reason, Stack])
+    end.
+
+% in erlang shell call: dev_evm:test_ao().
+test_ao() ->
+    io:format("~n__test_evm_device__~n"),
+    try
+        % Get current wallet
+        Wallet = hb:wallet(),
+        % Get wallet address in human readable form  
+        Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+
+        % Create the process message
+        {ok, Script} = file:read_file("test/evm-device.lua"),
+        Process = hb_message:commit(#{
+            <<"device">> => <<"process@1.0">>,
+            <<"type">> => <<"Process">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"execution-device">> => <<"lua@5.3a">>,
+            <<"script">> => Script,
+            <<"scheduler-location">> => Address,
+            <<"authority">> => [Address],  % Add authority
+            <<"test-random-seed">> => rand:uniform(1337)
+        }, Wallet),
+
+        % Cache the process
+        {ok, _} = hb_cache:write(Process, #{}),
+
+        % Get process ID
+        ProcID = hb_message:id(Process, all),
+
+        % Create schedule message  
+        Message = hb_message:commit(#{
+            <<"path">> => <<"schedule">>,
+            <<"method">> => <<"POST">>,
+            <<"body">> => hb_message:commit(#{
+                <<"target">> => ProcID,
+                <<"type">> => <<"Message">>,
+                <<"action">> => <<"Eval">>
+            }, Wallet)
+        }, Wallet),
+
+        % Schedule the message
+        {ok, _} = hb_ao:resolve(Process, Message, #{}),
+
+        % Get the results
+        {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
+        io:format("~nEVM test result: ~p~n", [Results])
+    catch
+        Error:Reason:Stack ->
+            io:format("Error running EVM test: ~p:~p~n~p~n", [Error, Reason, Stack])
     end.
