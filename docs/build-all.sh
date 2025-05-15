@@ -70,7 +70,7 @@ ${NEON_GREEN}             ++++*        ${BLACK}${BOLD}| |__  _   _ _ __   ___ _ 
 ${NEON_GREEN}           :+++*${BRIGHT_YELLOW}##       ${BLACK}${BOLD} | '_ \\| | | | '_ \\ / _ \\ '__| ${NC}
 ${NEON_GREEN}          ++**${BRIGHT_YELLOW}####       ${BLACK}${BOLD} | | | | |_| | |_) |  __/ |    ${NC}
 ${NEON_GREEN}        +++${BRIGHT_YELLOW}####${NEON_GREEN}***       ${BLACK}${BOLD} |_| |_|\\__, | .__/ \\___|_|    ${NC}
-${NEON_GREEN}       +*${BRIGHT_YELLOW}##${NEON_GREEN}****${MAGENTA}+--      ${BLACK}${BOLD}        |___/|_|              ${NC}
+${NEON_GREEN}        +*${BRIGHT_YELLOW}##${NEON_GREEN}****${MAGENTA}+--      ${BLACK}${BOLD}        |___/|_|              ${NC}
 ${MAGENTA}    -**${BRIGHT_YELLOW}##${NEON_GREEN}**${MAGENTA}+------       ${BLACK}${BOLD}                	BEAM.${NC}
 ${MAGENTA}   -##${NEON_GREEN}*+${BRIGHT_RED}---:::::::
 ${GRAY}  =${GRAY}%%${NEON_GREEN}*+${BRIGHT_RED}=-:::::::::${GRAY}        DECENTRALIZED OPERATING SYSTEM${NC}
@@ -129,6 +129,7 @@ find "$DOCS_DIR" -maxdepth 1 -type f -name "*.md" -not -name "index.md" -not -na
     /^\* \[Description\]\(#description\)$/ { next; }
     /^\* \[Function Index\]\(#index\)$/ { next; }
     /^\* \[Function Details\]\(#functions\)$/ { next; }
+	/^\* \[Data Types\]\(#types\)$/ { next; }
     { print; }
   ' "$file" > "$TEMP_MODULE_FILE"
 
@@ -288,9 +289,9 @@ log_step "Generating LLM context files"
 LLM_SUMMARY_FILE="$ROOT_DIR/docs/llms.txt"
 LLM_FULL_FILE="$ROOT_DIR/docs/llms-full.txt"
 DOC_DIRS=(
-    "$ROOT_DIR/docs/begin"
+    "$ROOT_DIR/docs/introduction"
     "$ROOT_DIR/docs/run"
-    "$ROOT_DIR/docs/guides"
+    "$ROOT_DIR/docs/build"
     "$ROOT_DIR/docs/devices"
     "$ROOT_DIR/docs/resources"
 )

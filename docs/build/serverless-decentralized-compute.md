@@ -13,7 +13,7 @@ Instead of deploying code to centralized servers, you deploy code *to* the Arwea
     2.  Fetch the associated WASM/Lua code from Arweave.
     3.  Execute the code using the relevant device ([`dev_wasm`](../resources/source-code/dev_wasm.md) or [`dev_lua`](../resources/source-code/dev_lua.md)), passing the message data and current state.
     4.  Update the process state based on the execution results.
-
+<!-- 
 ## Example 1: Running WASM Containers
 
 WebAssembly (WASM) allows you to run precompiled code written in languages like Rust, C++, Go, or AssemblyScript within your AO process.
@@ -60,7 +60,7 @@ Lua provides a lightweight scripting environment directly within AO.
     ```lua
     [aos]> Send({ Target = MyLuaProcess, Action = "Calculate", Value = "7" })
     ```
-    The node executes the `Calculate` handler within the Lua script associated with `MyLuaProcess`.
+    The node executes the `Calculate` handler within the Lua script associated with `MyLuaProcess`. -->
 
 ## TEE Attestations (via [`~snp@1.0`](../resources/source-code/dev_snp.md))
 

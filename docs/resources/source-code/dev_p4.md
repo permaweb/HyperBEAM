@@ -33,10 +33,10 @@ key may return `infinity` if the node will not serve a user under any
 circumstances. Else, the value returned by the `price` key will be passed to
 the ledger device as the `amount` key.
 
-The ledger device should implement the following keys:
+A ledger device should implement the following keys:
 
 ```
-<code>POST /credit?message=PaymentMessage&request=RequestMessage</code><code>POST /debit?amount=PriceMessage&type=pre|post&request=RequestMessage</code>
+<code>POST /credit?message=PaymentMessage&request=RequestMessage</code><code>POST /debit?amount=PriceMessage&request=RequestMessage</code><code>GET /balance?request=RequestMessage</code>
 ```
 
 The `type` key is optional and defaults to `pre`. If `type` is set to `post`,
@@ -47,8 +47,8 @@ check whether the debit would succeed before execution.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#balance-3">balance/3</a></td><td>Get the balance of a user in the ledger.</td></tr><tr><td valign="top"><a href="#faff_test-0">faff_test/0*</a></td><td>Simple test of p4's capabilities with the <code>faff@1.0</code> device.</td></tr><tr><td valign="top"><a href="#is_chargable_req-2">is_chargable_req/2*</a></td><td>The node operator may elect to make certain routes non-chargable, using
-the <code>routes</code> syntax also used to declare routes in <code>router@1.0</code>.</td></tr><tr><td valign="top"><a href="#non_chargable_route_test-0">non_chargable_route_test/0*</a></td><td>Test that a non-chargable route is not charged for.</td></tr><tr><td valign="top"><a href="#postprocess-3">postprocess/3</a></td><td>Postprocess the request after it has been fulfilled.</td></tr><tr><td valign="top"><a href="#preprocess-3">preprocess/3</a></td><td>Estimate the cost of a transaction and decide whether to proceed with
-a request.</td></tr><tr><td valign="top"><a href="#test_opts-1">test_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-2">test_opts/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-3">test_opts/3*</a></td><td></td></tr></table>
+the <code>routes</code> syntax also used to declare routes in <code>router@1.0</code>.</td></tr><tr><td valign="top"><a href="#lua_pricing_test-0">lua_pricing_test/0*</a></td><td>Ensure that Lua modules can be used as pricing and ledger devices.</td></tr><tr><td valign="top"><a href="#non_chargable_route_test-0">non_chargable_route_test/0*</a></td><td>Test that a non-chargable route is not charged for.</td></tr><tr><td valign="top"><a href="#request-3">request/3</a></td><td>Estimate the cost of a transaction and decide whether to proceed with
+a request.</td></tr><tr><td valign="top"><a href="#response-3">response/3</a></td><td>Postprocess the request after it has been fulfilled.</td></tr><tr><td valign="top"><a href="#test_opts-1">test_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-2">test_opts/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-3">test_opts/3*</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -80,6 +80,19 @@ Simple test of p4's capabilities with the `faff@1.0` device.
 The node operator may elect to make certain routes non-chargable, using
 the `routes` syntax also used to declare routes in `router@1.0`.
 
+<a name="lua_pricing_test-0"></a>
+
+### lua_pricing_test/0 * ###
+
+`lua_pricing_test() -> any()`
+
+Ensure that Lua modules can be used as pricing and ledger devices. Our
+modules come in two parts:
+- A `process` module which is executed as a persistent `local-process` on the
+node, and which maintains the state of the ledger.
+- A `client` module, which is executed as a `p4@1.0` device, marshalling
+requests to the `process` module.
+
 <a name="non_chargable_route_test-0"></a>
 
 ### non_chargable_route_test/0 * ###
@@ -88,23 +101,23 @@ the `routes` syntax also used to declare routes in `router@1.0`.
 
 Test that a non-chargable route is not charged for.
 
-<a name="postprocess-3"></a>
+<a name="request-3"></a>
 
-### postprocess/3 ###
+### request/3 ###
 
-`postprocess(State, RawResponse, NodeMsg) -> any()`
-
-Postprocess the request after it has been fulfilled.
-
-<a name="preprocess-3"></a>
-
-### preprocess/3 ###
-
-`preprocess(State, Raw, NodeMsg) -> any()`
+`request(State, Raw, NodeMsg) -> any()`
 
 Estimate the cost of a transaction and decide whether to proceed with
 a request. The default behavior if `pricing-device` or `p4_balances` are
 not set is to proceed, so it is important that a user initialize them.
+
+<a name="response-3"></a>
+
+### response/3 ###
+
+`response(State, RawResponse, NodeMsg) -> any()`
+
+Postprocess the request after it has been fulfilled.
 
 <a name="test_opts-1"></a>
 

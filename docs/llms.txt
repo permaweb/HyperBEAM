@@ -1,4 +1,4 @@
-Generated: 2025-05-02T14:36:17Z
+Generated: 2025-05-15T13:32:25Z
 
 ## HyperBEAM Documentation Summary
 
@@ -7,8 +7,12 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 
 ## Documentation Pages by Section
 
-### uegin
+### introduction
 
+* [AO Devices](./introduction/ao-devices.html)
+* [Pathing in AO-Core](./introduction/pathing-in-ao-core.html)
+* [What is AO-Core?](./introduction/what-is-ao-core.html)
+* [What is HyperBEAM?](./introduction/what-is-hyperbeam.html)
 
 ### run
 
@@ -17,16 +21,20 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [Running a HyperBEAM Node](./run/running-a-hyperbeam-node.html)
 * [Trusted Execution Environment (TEE)](./run/tee-nodes.html)
 
-### guides
+### uuild
 
+* [Exposing Process State with the Patch Device](./build/exposing-process-state.html)
+* [Extending HyperBEAM](./build/extending-hyperbeam.html)
+* [Getting Started Building on AO-Core](./build/get-started-building-on-ao-core.html)
+* [Serverless Decentralized Compute on AO](./build/serverless-decentralized-compute.html)
 
 ### devices
 
-* [Devices](./devices/index.html)
 * [Device: ~json@1.0](./devices/json-at-1-0.html)
 * [Device: ~lua@5.3a](./devices/lua-at-5-3a.html)
 * [Device: ~message@1.0](./devices/message-at-1-0.html)
 * [Device: ~meta@1.0](./devices/meta-at-1-0.html)
+* [Devices](./devices/overview.html)
 * [Device: ~process@1.0](./devices/process-at-1-0.html)
 * [Device: ~relay@1.0](./devices/relay-at-1-0.html)
 * [Device: ~scheduler@1.0](./devices/scheduler-at-1-0.html)
@@ -59,6 +67,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module dev_faff.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_faff.erl)](./resources/source-code/dev_faff.html)
 * [[Module dev_genesis_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_genesis_wasm.erl)](./resources/source-code/dev_genesis_wasm.html)
 * [[Module dev_green_zone.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_green_zone.erl)](./resources/source-code/dev_green_zone.html)
+* [[Module dev_hook.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_hook.erl)](./resources/source-code/dev_hook.html)
 * [[Module dev_hyperbuddy.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_hyperbuddy.erl)](./resources/source-code/dev_hyperbuddy.html)
 * [[Module dev_json_iface.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_json_iface.erl)](./resources/source-code/dev_json_iface.html)
 * [[Module dev_local_name.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_local_name.erl)](./resources/source-code/dev_local_name.html)
@@ -92,6 +101,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module dev_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_snp_nif.erl)](./resources/source-code/dev_snp_nif.html)
 * [[Module dev_stack.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_stack.erl)](./resources/source-code/dev_stack.html)
 * [[Module dev_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_test.erl)](./resources/source-code/dev_test.html)
+* [[Module dev_volume.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_volume.erl)](./resources/source-code/dev_volume.html)
 * [[Module dev_wasi.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_wasi.erl)](./resources/source-code/dev_wasi.html)
 * [[Module dev_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_wasm.erl)](./resources/source-code/dev_wasm.html)
 * [[Module hb.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb.erl)](./resources/source-code/hb.html)
@@ -117,6 +127,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module hb_http_client_sup.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_http_client_sup.erl)](./resources/source-code/hb_http_client_sup.html)
 * [[Module hb_http_server.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_http_server.erl)](./resources/source-code/hb_http_server.html)
 * [[Module hb_json.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_json.erl)](./resources/source-code/hb_json.html)
+* [[Module hb_keccak.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_keccak.erl)](./resources/source-code/hb_keccak.html)
 * [[Module hb_logger.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_logger.erl)](./resources/source-code/hb_logger.html)
 * [[Module hb_message.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_message.erl)](./resources/source-code/hb_message.html)
 * [[Module hb_metrics_collector.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_metrics_collector.erl)](./resources/source-code/hb_metrics_collector.html)

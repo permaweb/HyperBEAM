@@ -379,8 +379,8 @@ mimic_default_types(Map, Mode) ->
 %% @param Opts The options map containing node_history
 %% @param MinLength The minimum acceptable length of node_history
 %% @param MaxLength The maximum acceptable length of node_history
-%% @returns {ok, Length} if MinLength =< Length =< MaxLength,
-%% or {error, Reason} if the length is outside the range.
+%% @returns `{ok, Length}' if `MinLength =< Length =< MaxLength',
+%% or `{error, Reason}' if the length is outside the range.
 validate_node_history(Opts) ->
     validate_node_history(Opts, 1, 1).
 validate_node_history(Opts, MinLength, MaxLength) ->
@@ -418,9 +418,9 @@ validate_node_history(Opts, MinLength, MaxLength) ->
 %% - {error, ErrorMsg} with a message listing all missing options when any are not_found
 %% @param KeyValuePairs A list of {Name, Value} pairs to check.
 %% @param Opts The original options map to return if validation succeeds.
-%% @returns {ok, Opts} if all required options are present.
-%% @returns {error, <<"Missing required parameters: ", MissingOptsStr/binary>>}
-%% where MissingOptsStr is a comma-separated list of missing option names.
+%% @returns `{ok, Opts}' if all required options are present, or
+%% `{error, <<"Missing required parameters: ", MissingOptsStr/binary>>}'
+%% where `MissingOptsStr' is a comma-separated list of missing option names.
 -spec check_required_opts(list({binary(), term()}), map()) -> 
     {ok, map()} | {error, binary()}.
 check_required_opts(KeyValuePairs, Opts) ->

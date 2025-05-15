@@ -13,14 +13,12 @@
 %% `slot' key will be pushed.
 %% 
 %% Optional parameters:
-%% ```
-%%     /result-depth: The depth to which the full contents of the result
+%% `/result-depth': The depth to which the full contents of the result
 %%                    will be included in the response. Default: 1, returning 
 %%                    the full result of the first message, but only the 'tree'
 %%                    of downstream messages.
-%%     /push-mode:    Whether or not the push should be done asynchronously.
+%%  `/push-mode':    Whether or not the push should be done asynchronously.
 %%                    Default: `sync', pushing synchronously.
-%% ```
 push(Base, Req, Opts) ->
     Process = dev_process:as_process(Base, Opts),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),

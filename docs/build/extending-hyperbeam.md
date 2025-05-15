@@ -55,19 +55,18 @@ Pre/post-processors allow you to intercept incoming requests *before* they reach
 
 Processors often involve checking specific conditions (like request path or headers) and then either:
 
-a)  Passing the request through unchanged.
-b)  Modifying the request/response message structure.
-c)  Returning an error or redirect.
-
-dThe guide on [Building Pre/Post-Processors](TODO:link-to-pre-post-processor-guide-once-available) provides a detailed example pattern, particularly focusing on exempting certain routes.
+a.  Passing the request through unchanged.
+b.  Modifying the request/response message structure.
+c.  Returning an error or redirect.
+<!-- d. The guide on [Building Pre/Post-Processors](TODO:link-to-pre-post-processor-guide-once-available) provides a detailed example pattern, particularly focusing on exempting certain routes. -->
 
 **Example Idea:** A preprocessor that automatically adds a timestamp tag to all incoming messages for a specific process.
-
+<!-- 
 ## Approach 3: Modifying Existing Devices (Use with Caution)
 
-You could directly modify the source code of existing `dev_*.erl` modules. However, this is generally discouraged as it makes future updates harder and can break compatibility.
+You could directly modify the source code of existing `dev_*.erl` modules. However, this is generally discouraged as it makes future updates harder and can break compatibility. -->
 
-## Approach 4: Custom Routing Strategies
+## Approach 3: Custom Routing Strategies
 
 While `dev_router` provides basic strategies (round-robin, etc.), you could potentially implement a custom load balancing or routing strategy module that `dev_router` could be configured to use. This would involve understanding the interfaces expected by `dev_router`.
 
@@ -75,7 +74,7 @@ While `dev_router` provides basic strategies (round-robin, etc.), you could pote
 
 ## Getting Started
 
-1.  **Familiarize Yourself:** Deeply understand Erlang/OTP and the HyperBEAM codebase (`src/` directory), especially `hb_ao.erl`, `hb_message.erl`, and existing `dev_*.erl` modules relevant to your idea.
+1.  **Familiarize Yourself:** Deeply understand Erlang/OTP and the HyperBEAM codebase (`src/` directory), especially [`hb_ao.erl`](../resources/source-code/hb_ao.md), [`hb_message.erl`](../resources/source-code/hb_message.md), and existing `dev_*.erl` modules relevant to your idea.
 2.  **Study Examples:** Look at simple devices like `dev_patch.erl` or more complex ones like `dev_process.erl` to understand patterns.
 3.  **Start Small:** Implement a minimal version of your idea first.
 4.  **Test Rigorously:** Use `rebar3 eunit` extensively.

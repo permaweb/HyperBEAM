@@ -24,7 +24,7 @@ To successfully build and run a HyperBEAM node, your system needs several softwa
         ncurses-dev \
         libssl-dev \
         sudo \
-        curl \
+        curl
         ca-certificates
     ```
 
@@ -60,14 +60,14 @@ Installation methods:
     ```bash
     sudo apt install erlang
     ```
-
+<!-- 
 === "asdf (Recommended)"
     Tools like `asdf-vm` with the `asdf-erlang` plugin are highly recommended for managing multiple Erlang versions across platforms.
     ```bash
     asdf plugin add erlang https://github.com/asdf-vm/asdf-erlang.git
     asdf install erlang <version> # e.g., 27.0
     asdf global erlang <version>
-    ```
+    ``` -->
 
 === "Source Build"
     Download from [erlang.org](https://www.erlang.org/downloads) and follow the build instructions for your platform.
@@ -86,13 +86,13 @@ Installation methods:
 === "Linux / macOS (Direct Download)"
     Get the `rebar3` binary from the [official website](https://rebar3.org/). Place the downloaded `rebar3` file in your system's `PATH` (e.g., `/usr/local/bin`) and make it executable (`chmod +x rebar3`).
 
-=== "asdf (Recommended)"
+<!-- === "asdf (Recommended)"
     If using `asdf`, you can install it via the `rebar` plugin:
     ```bash
     asdf plugin add rebar https://github.com/asdf-vm/asdf-rebar.git
     asdf install rebar <version> # e.g., 3.23.0
     asdf global rebar <version>
-    ```
+    ``` -->
 
 ### Node.js
 

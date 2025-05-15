@@ -25,7 +25,7 @@ nav:
       - Serverless decentralized compute: 'build/serverless-decentralized-compute.md'
       - Extending HyperBEAM: 'build/extending-hyperbeam.md'
   - Devices:
-      - Overview: 'devices/index.md'
+      - Overview: 'devices/overview.md'
       - '~meta@1.0': 'devices/meta-at-1-0.md'
       - '~process@1.0': 'devices/process-at-1-0.md'
       - '~message@1.0': 'devices/message-at-1-0.md'
@@ -35,8 +35,11 @@ nav:
       - '~scheduler@1.0': 'devices/scheduler-at-1-0.md'
       - '~relay@1.0': 'devices/relay-at-1-0.md'
   - Resources:
-    - Source Code:
-      - Overview: 'resources/source-code/index.md'
+    # - Overview: 'resources/source-code/index.md'
+    - FAQ: 'resources/reference/faq.md'
+    - LLMs.txt: 'resources/llms.md'
+    - Glossary: 'resources/reference/glossary.md'
+    - Source Code Modules:
       - Modules:
         - ar_bundles: 'resources/source-code/ar_bundles.md'
         - ar_deep_hash: 'resources/source-code/ar_deep_hash.md'
@@ -140,11 +143,8 @@ nav:
         - hb_volume: 'resources/source-code/hb_volume.md'
         - hb: 'resources/source-code/hb.md'
         - rsa_pss: 'resources/source-code/rsa_pss.md'
-    - Reference:
-      # - Troubleshooting: 'resources/reference/troubleshooting.md'
-      - Glossary: 'resources/reference/glossary.md'
-      - FAQ: 'resources/reference/faq.md'
-      - LLMs.txt: 'resources/llms.md'
+    # - Troubleshooting: 'resources/reference/troubleshooting.md'
+
   # - Community:
   #   - Contribute Overview: 'community/guidelines.md'
     # - Development Setup: 'community/setup.md'
@@ -203,13 +203,13 @@ theme:
     - content.code.copy
     - content.code.select
     - content.code.annotate
-    # - navigation.footer
+    - navigation.footer
   palette:
     # Palette toggle for light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
       primary: white
-      accent: orange
+      accent: blue
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
@@ -217,7 +217,7 @@ theme:
     - media: "(prefers-color-scheme: dark)"
       scheme: default
       primary: white
-      accent: orange
+      accent: blue
       toggle:
         icon: material/brightness-7
         name: Switch to light mode
@@ -240,8 +240,8 @@ extra_javascript:
   - js/parallax.js
   - js/navigation.js
   - js/toc-highlight.js
-  - js/custom-nav.js
   - js/disable-preload-transition.js
+  - js/header-scroll.js
 
 extra:
   social:

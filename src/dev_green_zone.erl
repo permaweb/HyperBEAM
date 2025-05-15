@@ -116,8 +116,8 @@ default_zone_required_opts(Opts) ->
 %% @param _M1 Ignored parameter
 %% @param _M2 May contain a `required-config' map for custom requirements
 %% @param Opts A map of configuration options
-%% @returns {ok, Binary} on success with confirmation message
-%% @returns {error, Binary} on failure with error message
+%% @returns `{ok, Binary}' on success with confirmation message, or
+%% `{error, Binary}' on failure with error message.
 -spec init(M1 :: term(), M2 :: term(), Opts :: map()) -> {ok, binary()} | {error, binary()}.
 init(_M1, _M2, Opts) ->
     ?event(green_zone, {init, start}),
@@ -184,8 +184,8 @@ init(_M1, _M2, Opts) ->
 %% @param M1 The join request message with target peer information
 %% @param M2 Additional request details, may include adoption preferences
 %% @param Opts A map of configuration options for join operations
-%% @returns {ok, Map} on success with join response details
-%% @returns {error, Binary} on failure with error message
+%% @returns `{ok, Map}' on success with join response details, or
+%% `{error, Binary}' on failure with error message.
 -spec join(M1 :: term(), M2 :: term(), Opts :: map()) ->
         {ok, map()} | {error, binary()}.
 join(M1, M2, Opts) ->
@@ -220,8 +220,8 @@ join(M1, M2, Opts) ->
 %% @param _M1 Ignored parameter
 %% @param _M2 Ignored parameter
 %% @param Opts A map of configuration options
-%% @returns {ok, Map} containing the encrypted key and IV on success
-%% @returns {error, Binary} if the node is not part of a green zone
+%% @returns `{ok, Map}' containing the encrypted key and IV on success, or
+%% `{error, Binary}' if the node is not part of a green zone
 -spec key(M1 :: term(), M2 :: term(), Opts :: map()) -> 
     {ok, map()} | {error, binary()}.
 key(_M1, _M2, Opts) ->
@@ -276,8 +276,8 @@ key(_M1, _M2, Opts) ->
 %% @param _M1 Ignored parameter
 %% @param _M2 Ignored parameter
 %% @param Opts A map of configuration options
-%% @returns {ok, Map} on success with confirmation details
-%% @returns {error, Binary} if the node is not part of a green zone or
+%% @returns `{ok, Map}' on success with confirmation details, or
+%% `{error, Binary}' if the node is not part of a green zone or
 %% identity adoption fails.
 -spec become(M1 :: term(), M2 :: term(), Opts :: map()) ->
         {ok, map()} | {error, binary()}.
@@ -374,8 +374,8 @@ finalize_become(KeyResp, NodeLocation, NodeID, GreenZoneAES, Opts) ->
 %% @param _M1 Ignored parameter
 %% @param M2 May contain ShouldMount flag to enable encrypted volume mounting
 %% @param InitOpts A map of initial configuration options
-%% @returns {ok, Map} on success with confirmation message
-%% @returns {error, Map|Binary} on failure with error details
+%% @returns `{ok, Map}' on success with confirmation message, or
+%% `{error, Map|Binary}' on failure with error details
 -spec join_peer(
     PeerLocation :: binary(),
     PeerID :: binary(),
@@ -483,8 +483,8 @@ join_peer(PeerLocation, PeerID, _M1, M2, InitOpts) ->
 %% @param PeerID The ID of the peer node to join
 %% @param Req The request message with adoption preferences
 %% @param InitOpts A map of initial configuration options
-%% @returns {ok, Map} with updated configuration on success
-%% @returns {error, Binary} if configuration retrieval fails
+%% @returns `{ok, Map}' with updated configuration on success, or
+%% `{error, Binary}' if configuration retrieval fails
 -spec maybe_set_zone_opts(
     PeerLocation :: binary(),
     PeerID :: binary(),
@@ -601,8 +601,8 @@ calculate_node_message(RequiredOpts, Req, BinList) when is_binary(BinList) ->
 %% @param M1 Ignored parameter
 %% @param Req The join request containing commitment report and public key
 %% @param Opts A map of configuration options
-%% @returns {ok, Map} on success with encrypted AES key
-%% @returns {error, Binary} on failure with error message
+%% @returns `{ok, Map}' on success with encrypted AES key, or
+%% `{error, Binary}' on failure with error message
 -spec validate_join(M1 :: term(), Req :: map(), Opts :: map()) ->
         {ok, map()} | {error, binary()}.
 validate_join(_M1, Req, Opts) ->

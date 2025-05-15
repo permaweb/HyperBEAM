@@ -28,6 +28,7 @@
 <tr><td><a href="dev_faff.md" class="module">dev_faff</a></td></tr>
 <tr><td><a href="dev_genesis_wasm.md" class="module">dev_genesis_wasm</a></td></tr>
 <tr><td><a href="dev_green_zone.md" class="module">dev_green_zone</a></td></tr>
+<tr><td><a href="dev_hook.md" class="module">dev_hook</a></td></tr>
 <tr><td><a href="dev_hyperbuddy.md" class="module">dev_hyperbuddy</a></td></tr>
 <tr><td><a href="dev_json_iface.md" class="module">dev_json_iface</a></td></tr>
 <tr><td><a href="dev_local_name.md" class="module">dev_local_name</a></td></tr>
@@ -61,6 +62,7 @@
 <tr><td><a href="dev_snp_nif.md" class="module">dev_snp_nif</a></td></tr>
 <tr><td><a href="dev_stack.md" class="module">dev_stack</a></td></tr>
 <tr><td><a href="dev_test.md" class="module">dev_test</a></td></tr>
+<tr><td><a href="dev_volume.md" class="module">dev_volume</a></td></tr>
 <tr><td><a href="dev_wasi.md" class="module">dev_wasi</a></td></tr>
 <tr><td><a href="dev_wasm.md" class="module">dev_wasm</a></td></tr>
 <tr><td><a href="hb.md" class="module">hb</a></td></tr>
@@ -86,6 +88,7 @@
 <tr><td><a href="hb_http_client_sup.md" class="module">hb_http_client_sup</a></td></tr>
 <tr><td><a href="hb_http_server.md" class="module">hb_http_server</a></td></tr>
 <tr><td><a href="hb_json.md" class="module">hb_json</a></td></tr>
+<tr><td><a href="hb_keccak.md" class="module">hb_keccak</a></td></tr>
 <tr><td><a href="hb_logger.md" class="module">hb_logger</a></td></tr>
 <tr><td><a href="hb_message.md" class="module">hb_message</a></td></tr>
 <tr><td><a href="hb_metrics_collector.md" class="module">hb_metrics_collector</a></td></tr>

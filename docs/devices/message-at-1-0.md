@@ -4,14 +4,12 @@
 
 The [`~message@1.0`](../resources/source-code/dev_message.md) device is a fundamental built-in device in HyperBEAM. It serves as the identity device for standard AO-Core messages, which are represented as Erlang maps internally. Its primary function is to allow manipulation and inspection of these message maps directly via HyperPATH requests, without needing a persistent process state.
 
-**Status:** Stable
-
 This device is particularly useful for:
 
 *   Creating and modifying transient messages on the fly using query parameters.
 *   Retrieving specific values from a message map.
 *   Inspecting the keys of a message.
-*   Handling message commitments and verification (though often delegated to specialized commitment devices like `httpsig@1.0`).
+*   Handling message commitments and verification (though often delegated to specialized commitment devices like [`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
 
 ## Core Functionality
 
@@ -45,8 +43,8 @@ The `message@1.0` device reserves several keys for specific operations:
 *   **`set_path`**: A special case for setting the `path` key itself, which cannot be done via the standard `set` operation.
 *   **`remove`**: Removes one or more specified keys from the message. Requires an `item` or `items` parameter.
 *   **`keys`**: Returns a list of all public (non-private) keys present in the message map.
-*   **`id`**: Calculates and returns the ID (hash) of the message. Considers active commitments based on specified `committers`. May delegate ID calculation to a device specified by the message's `id-device` key or the default (`httpsig@1.0`).
-*   **`commit`**: Creates a commitment (e.g., a signature) for the message. Requires parameters like `commitment-device` and potentially committer information. Delegates the actual commitment generation to the specified device (default `httpsig@1.0`).
+*   **`id`**: Calculates and returns the ID (hash) of the message. Considers active commitments based on specified `committers`. May delegate ID calculation to a device specified by the message\'s `id-device` key or the default ([`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
+*   **`commit`**: Creates a commitment (e.g., a signature) for the message. Requires parameters like `commitment-device` and potentially committer information. Delegates the actual commitment generation to the specified device (default [`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
 *   **`committers`**: Returns a list of committers associated with the commitments in the message. Can be filtered by request parameters.
 *   **`commitments`**: Used internally and in requests to filter or specify which commitments to operate on (e.g., for `id` or `verify`).
 *   **`verify`**: Verifies the commitments attached to the message. Can be filtered by `committers` or specific `commitment` IDs in the request. Delegates verification to the device specified in each commitment (`commitment-device`).

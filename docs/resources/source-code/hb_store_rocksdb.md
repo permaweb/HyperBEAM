@@ -2,7 +2,6 @@
 
 
 
-* [Data Types](#types)
 
 A process wrapper over rocksdb storage.
 

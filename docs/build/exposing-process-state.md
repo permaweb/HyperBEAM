@@ -49,7 +49,7 @@ InitialSync = InitialSync or 'INCOMPLETE'
 -- Sync state on spawn/load if not already done
 if InitialSync == 'INCOMPLETE' then
   -- Send the relevant state variables to the patch device
-  Send({ Target = ao.id, device = 'patch@1.0', cache = { balances = Balances, totalsupply = TotalSupply } })
+  Send({ device = 'patch@1.0', cache = { balances = Balances, totalsupply = TotalSupply } })
   -- Update the flag to prevent re-syncing on subsequent executions
   InitialSync = 'COMPLETE'
   print("Initial state sync complete. Balances and TotalSupply patched.")
@@ -75,7 +75,7 @@ Handlers.add(
   function (msg)
     local dataToPublish = "Some important state: " .. math.random()
     -- Expose 'currentstatus' key under the 'cache' path
-    Send({ Target = ao.id, device = 'patch@1.0', cache = { currentstatus = dataToPublish } })
+    Send({ device = 'patch@1.0', cache = { currentstatus = dataToPublish } })
     print("Published data to /cache/currentstatus")
   end
 )
