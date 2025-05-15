@@ -42,7 +42,7 @@ impl KernelExecutor {
             
         Self { device, queue }
     }
-
+    /// execute wgsl kernel fns with default options
     pub fn execute_kernel_default(
         &self, 
         kernel_code: &str, 
