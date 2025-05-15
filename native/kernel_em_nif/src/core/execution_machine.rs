@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 use bytemuck::{Pod, Zeroable};
+use crate::core::constants::MAX_MEMORY_ALLOCATION;
 
 pub struct KernelExecutor {
     pub device: wgpu::Device,
@@ -40,6 +41,27 @@ impl KernelExecutor {
             .expect("Failed to create device");
             
         Self { device, queue }
+    }
+
+    pub fn execute_kernel_default(
+        &self, 
+        kernel_code: &str, 
+        input_data: &[u8],
+        output_size_hint: Option<u64>
+    ) -> Vec<u8> {
+        // default to homogeneous input/output size
+        let output_size = output_size_hint.unwrap_or(input_data.len() as u64);
+        let output_size = output_size.min(MAX_MEMORY_ALLOCATION);
+        // default to 256
+        let workgroup_size = (256, 1, 1);
+        
+        // calculates number of workgroups needed to cover all output data
+        // assumes 4 bytes (int) per memory address
+        let elements = (output_size as f32 / 4.0).ceil() as u32;
+        let num_workgroups = (elements + workgroup_size.0 - 1) / workgroup_size.0;
+        let dispatch_size = (num_workgroups, 1, 1);
+
+        self.execute_kernel(kernel_code, "main", input_data, output_size, workgroup_size, dispatch_size)
     }
     
     /// Execute a wsgl kernel code with input and output buffers
