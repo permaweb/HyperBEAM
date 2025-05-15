@@ -114,7 +114,7 @@ impl KernelExecutor {
         let dispatch_x = (width + workgroup_size - 1) / workgroup_size;
         let dispatch_y = (height + workgroup_size - 1) / workgroup_size;
 
-        let workgroup_size = (16, 16, 1); 
+        let workgroup_size = (16, 16, 1);
         let dispatch_size = (dispatch_x, dispatch_y, 1);
 
         self.execute_kernel_with_uniform(

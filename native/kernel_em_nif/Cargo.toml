@@ -5,7 +5,7 @@ edition = "2024"
 
 [lib]
 name = "kernel_em_nif"
-path = "src/lib.rs" 
+path = "src/lib.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
