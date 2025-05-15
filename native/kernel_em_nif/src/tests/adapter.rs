@@ -5,8 +5,8 @@ mod tests {
 
     #[test]
 
-fn test_adapter_info() {
-    let adapter = pollster::block_on(KernelExecutor::get_adapter_info());
-    println!("{}", adapter);
-}
+    fn test_adapter_info() {
+        let adapter = pollster::block_on(KernelExecutor::get_adapter_info());
+        println!("{}", adapter);
+    }
 }
