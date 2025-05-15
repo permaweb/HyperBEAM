@@ -52,11 +52,11 @@ eval_tx(Msg1, _Msg2, Opts) ->
         RawBody = hb_ao:get(<<"body">>, Msg1, not_found, Opts),
         Body = hb_json:decode(RawBody),
 		CoutState = list_to_binary("native/load_revm_nif/appchains/9496.json"),
-        
+
         % Get parameters from decoded body
         SignedRawTx = maps:get(<<"signed_raw_tx">>, Body),
         ChainId = maps:get(<<"chain_id">>, Body, <<"9496">>),  % FOR NOW default to Load's appchain
-        
+
         % % Get current state
         % State = load_revm_nif:get_appchain_state(ChainId),
 		% io:format(State),try
@@ -65,7 +65,7 @@ eval_tx(Msg1, _Msg2, Opts) ->
     	io:format("~n9496 appchain state: ~p~n", [State]),
 
 
-        
+
         % Evaluate the transaction
         Result = load_revm_nif:eval_bytecode(SignedRawTx, State, CoutState),
         {ok, #{<<"status">> => 200, <<"body">> => Result}}
@@ -89,14 +89,14 @@ test_hb_http() ->
         Node = hb_http_server:start_node(#{
             priv_wallet => ar_wallet:new()
         }),
-        
+
         % Create a message that uses the EVM device
         Base = #{
             <<"device">> => <<"evm@1.0">>,
             <<"path">> => <<"get_state">>,
             <<"chain_id">> => <<"9496">>
         },
-        
+
         % Use hb_http:get to test the device through the node
         Result = hb_http:get(Node, <<"/~evm@1.0/get_state">>, #{}),
         io:format("~nEVM test result: ~p~n", [Result])
@@ -111,7 +111,7 @@ test_ao() ->
     try
         % Get current wallet
         Wallet = hb:wallet(),
-        % Get wallet address in human readable form  
+        % Get wallet address in human readable form
         Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
 
         % Create the process message
@@ -133,7 +133,7 @@ test_ao() ->
         % Get process ID
         ProcID = hb_message:id(Process, all),
 
-        % Create schedule message  
+        % Create schedule message
         Message = hb_message:commit(#{
             <<"path">> => <<"schedule">>,
             <<"method">> => <<"POST">>,
