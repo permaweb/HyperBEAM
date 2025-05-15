@@ -69,7 +69,8 @@ impl KernelExecutor {
         output_size_hint: Option<u64>,
     ) -> Vec<u8> {
         // default to homogeneous input/output size
-        let output_size = output_size_hint.unwrap_or(input_data.len() as u64);
+        let output_size = output_size_hint.unwrap_or(10);
+        let output_size = input_data.len() as u64 * output_size;
         let output_size = output_size.min(MAX_MEMORY_ALLOCATION);
         // default to 256
         let workgroup_size = (256, 1, 1);
