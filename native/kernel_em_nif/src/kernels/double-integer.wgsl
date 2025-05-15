@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
 // Simple direct doubling kernel
+// deployment id (Arweave): btSvNclyu2me_zGh4X9ULVRZqwze9l2DpkcVHcLw9Eg
 
 // input as u32 array
 @group(0) @binding(0)
