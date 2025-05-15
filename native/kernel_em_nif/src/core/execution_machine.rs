@@ -1,7 +1,10 @@
 use std::borrow::Cow;
-use wgpu::util::DeviceExt;
+use serde_json::Value;
+use wgpu::{util::DeviceExt, Adapter};
 use bytemuck::{Pod, Zeroable};
 use crate::core::constants::MAX_MEMORY_ALLOCATION;
+
+use super::adapter::AdapterInfoRes;
 
 pub struct KernelExecutor {
     pub device: wgpu::Device,
@@ -41,6 +44,23 @@ impl KernelExecutor {
             .expect("Failed to create device");
             
         Self { device, queue }
+    }
+    pub async fn get_adapter_info() -> String {
+        // initialize wgpu instance
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        
+        // find a suitable GPU
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .expect("Failed to find an appropriate adapter").get_info();
+            
+        let adapter_info = AdapterInfoRes::from(adapter);
+        serde_json::to_string(&adapter_info).unwrap()
     }
     /// execute wgsl kernel fns with default options
     pub fn execute_kernel_default(

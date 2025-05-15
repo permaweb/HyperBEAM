@@ -24,4 +24,10 @@ fn execute_kernel(kernel_id: String, input_data: Vec<u8>, output_size_hint: Opti
     Ok(result)
 }
 
-rustler::init!("kem_nif", [hello, execute_kernel]);
+#[rustler::nif(schedule = "DirtyCpu")]
+fn adapter_info() -> NifResult<String> {
+    let adapter = pollster::block_on(KernelExecutor::get_adapter_info());
+    Ok(adapter)
+}
+
+rustler::init!("kem_nif", [hello, execute_kernel, adapter_info]);
