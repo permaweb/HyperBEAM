@@ -1,1 +1,1 @@
-pub const MAX_MEMORY_ALLOCATION: u64 = 1024 * 1024 * 1024; // 1GB memory
+pub const MAX_MEMORY_ALLOCATION: u64 = 268_435_456; // 268 MB
