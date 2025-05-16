@@ -11,17 +11,14 @@
 %% provided in the `body' of the request, it will be scheduled (initializing
 %% it if it does not exist). Otherwise, the message specified by the given
 %% `slot' key will be pushed.
-%%
+%% 
 %% Optional parameters:
-%%
 %% `/result-depth': The depth to which the full contents of the result
-%%        will be included in the response. Default: 1, returning
-%%        the full result of the first message, but only the 'tree'
-%%        of downstream messages.
-%%
-%% `/push-mode': Whether or not the push should be done asynchronously.
-%%        Default: `sync', pushing synchronously.
-
+%%                    will be included in the response. Default: 1, returning 
+%%                    the full result of the first message, but only the 'tree'
+%%                    of downstream messages.
+%%  `/push-mode':    Whether or not the push should be done asynchronously.
+%%                    Default: `sync', pushing synchronously.
 push(Base, Req, Opts) ->
     Process = dev_process:as_process(Base, Opts),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
@@ -133,7 +130,7 @@ do_push(Process, Assignment, Opts) ->
                                 <<"message">> => Msg
                             }
                     end,
-                    Outbox
+                    hb_ao:normalize_keys(Outbox)
                 ),
             {ok, maps:merge(Downstream, AdditionalRes#{
                 <<"slot">> => Slot,

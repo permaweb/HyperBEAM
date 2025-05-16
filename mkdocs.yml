@@ -35,12 +35,12 @@ nav:
       - '~scheduler@1.0': 'devices/scheduler-at-1-0.md'
       - '~relay@1.0': 'devices/relay-at-1-0.md'
   - Resources:
-    - Source Code:
-      # - Overview: 'resources/source-code/index.md'
-      - FAQ: 'resources/reference/faq.md'
-      - LLMs.txt: 'resources/llms.md'
-      - Glossary: 'resources/reference/glossary.md'
-      - Source Code Modules:
+    # - Overview: 'resources/source-code/index.md'
+    - FAQ: 'resources/reference/faq.md'
+    - LLMs.txt: 'resources/llms.md'
+    - Glossary: 'resources/reference/glossary.md'
+    - Source Code Modules:
+      - Modules:
         - ar_bundles: 'resources/source-code/ar_bundles.md'
         - ar_deep_hash: 'resources/source-code/ar_deep_hash.md'
         - ar_rate_limiter: 'resources/source-code/ar_rate_limiter.md'
@@ -143,7 +143,7 @@ nav:
         - hb_volume: 'resources/source-code/hb_volume.md'
         - hb: 'resources/source-code/hb.md'
         - rsa_pss: 'resources/source-code/rsa_pss.md'
-      # - Troubleshooting: 'resources/reference/troubleshooting.md'
+    # - Troubleshooting: 'resources/reference/troubleshooting.md'
 
   # - Community:
   #   - Contribute Overview: 'community/guidelines.md'

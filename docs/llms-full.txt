@@ -1,4 +1,4 @@
-Generated: 2025-05-09T21:49:48Z
+Generated: 2025-05-13T16:51:16Z
 
 --- START OF FILE: docs/build/exposing-process-state.md ---
 # Exposing Process State with the Patch Device
@@ -5807,7 +5807,7 @@ Check if a string terminates with a given suffix.
 
 
 
-A device that calls a Lua script upon a request and returns the result.
+A device that calls a Lua module upon a request and returns the result.
 
 <a name="index"></a>
 
@@ -5815,10 +5815,10 @@ A device that calls a Lua script upon a request and returns the result.
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#ao_core_resolution_from_lua_test-0">ao_core_resolution_from_lua_test/0*</a></td><td>Run an AO-Core resolution from the Lua environment.</td></tr><tr><td valign="top"><a href="#ao_core_sandbox_test-0">ao_core_sandbox_test/0*</a></td><td>Run an AO-Core resolution from the Lua environment.</td></tr><tr><td valign="top"><a href="#aos_authority_not_trusted_test-0">aos_authority_not_trusted_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#aos_process_benchmark_test_-0">aos_process_benchmark_test_/0*</a></td><td>Benchmark the performance of Lua executions.</td></tr><tr><td valign="top"><a href="#compute-4">compute/4*</a></td><td>Call the Lua script with the given arguments.</td></tr><tr><td valign="top"><a href="#decode-1">decode/1</a></td><td>Decode a Lua result into a HyperBEAM <code>structured@1.0</code> message.</td></tr><tr><td valign="top"><a href="#decode_params-2">decode_params/2*</a></td><td>Decode a list of Lua references, as found in a stack trace, into a
-list of Erlang terms.</td></tr><tr><td valign="top"><a href="#decode_stacktrace-2">decode_stacktrace/2*</a></td><td>Parse a Lua stack trace into a list of messages.</td></tr><tr><td valign="top"><a href="#decode_stacktrace-3">decode_stacktrace/3*</a></td><td></td></tr><tr><td valign="top"><a href="#direct_benchmark_test-0">direct_benchmark_test/0*</a></td><td>Benchmark the performance of Lua executions.</td></tr><tr><td valign="top"><a href="#encode-1">encode/1</a></td><td>Encode a HyperBEAM <code>structured@1.0</code> message into a Lua term.</td></tr><tr><td valign="top"><a href="#ensure_initialized-3">ensure_initialized/3*</a></td><td>Initialize the Lua VM if it is not already initialized.</td></tr><tr><td valign="top"><a href="#error_response_test-0">error_response_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#execute_aos_call-1">execute_aos_call/1*</a></td><td></td></tr><tr><td valign="top"><a href="#execute_aos_call-2">execute_aos_call/2*</a></td><td></td></tr><tr><td valign="top"><a href="#find_scripts-2">find_scripts/2*</a></td><td>Find the script in the base message, either by ID or by string.</td></tr><tr><td valign="top"><a href="#functions-3">functions/3</a></td><td>Return a list of all functions in the Lua environment.</td></tr><tr><td valign="top"><a href="#generate_lua_process-1">generate_lua_process/1*</a></td><td>Generate a Lua process message.</td></tr><tr><td valign="top"><a href="#generate_stack-1">generate_stack/1*</a></td><td>Generate a stack message for the Lua process.</td></tr><tr><td valign="top"><a href="#generate_test_message-1">generate_test_message/1*</a></td><td>Generate a test message for a Lua process.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>All keys that are not directly available in the base message are
-resolved by calling the Lua function in the script of the same name.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the device state, loading the script into memory if it is
-a reference.</td></tr><tr><td valign="top"><a href="#initialize-3">initialize/3*</a></td><td>Initialize a new Lua state with a given base message and script.</td></tr><tr><td valign="top"><a href="#invoke_aos_test-0">invoke_aos_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#invoke_non_compute_key_test-0">invoke_non_compute_key_test/0*</a></td><td>Call a non-compute key on a Lua device message and ensure that the
-function of the same name in the script is called.</td></tr><tr><td valign="top"><a href="#load_scripts-2">load_scripts/2*</a></td><td>Load a list of scripts for installation into the Lua VM.</td></tr><tr><td valign="top"><a href="#load_scripts-3">load_scripts/3*</a></td><td></td></tr><tr><td valign="top"><a href="#load_scripts_by_id_test-0">load_scripts_by_id_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#lua_http_hook_test-0">lua_http_hook_test/0*</a></td><td>Use a Lua script as a hook on the HTTP server via <code>~meta@1.0</code>.</td></tr><tr><td valign="top"><a href="#multiple_scripts_test-0">multiple_scripts_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize-3">normalize/3</a></td><td>Restore the Lua state from a snapshot, if it exists.</td></tr><tr><td valign="top"><a href="#process_response-2">process_response/2*</a></td><td>Process a response to a Luerl invocation.</td></tr><tr><td valign="top"><a href="#pure_lua_process_benchmark_test_-0">pure_lua_process_benchmark_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#pure_lua_process_test-0">pure_lua_process_test/0*</a></td><td>Call a process whose <code>execution-device</code> is set to <code>lua@5.3a</code>.</td></tr><tr><td valign="top"><a href="#sandbox-3">sandbox/3*</a></td><td>Sandbox (render inoperable) a set of Lua functions.</td></tr><tr><td valign="top"><a href="#sandboxed_failure_test-0">sandboxed_failure_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_invocation_test-0">simple_invocation_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td>Snapshot the Lua state from a live computation.</td></tr></table>
+list of Erlang terms.</td></tr><tr><td valign="top"><a href="#decode_stacktrace-2">decode_stacktrace/2*</a></td><td>Parse a Lua stack trace into a list of messages.</td></tr><tr><td valign="top"><a href="#decode_stacktrace-3">decode_stacktrace/3*</a></td><td></td></tr><tr><td valign="top"><a href="#direct_benchmark_test-0">direct_benchmark_test/0*</a></td><td>Benchmark the performance of Lua executions.</td></tr><tr><td valign="top"><a href="#encode-1">encode/1</a></td><td>Encode a HyperBEAM <code>structured@1.0</code> message into a Lua term.</td></tr><tr><td valign="top"><a href="#ensure_initialized-3">ensure_initialized/3*</a></td><td>Initialize the Lua VM if it is not already initialized.</td></tr><tr><td valign="top"><a href="#error_response_test-0">error_response_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#find_modules-2">find_modules/2*</a></td><td>Find the script in the base message, either by ID or by string.</td></tr><tr><td valign="top"><a href="#functions-3">functions/3</a></td><td>Return a list of all functions in the Lua environment.</td></tr><tr><td valign="top"><a href="#generate_lua_process-1">generate_lua_process/1*</a></td><td>Generate a Lua process message.</td></tr><tr><td valign="top"><a href="#generate_stack-1">generate_stack/1*</a></td><td>Generate a stack message for the Lua process.</td></tr><tr><td valign="top"><a href="#generate_test_message-1">generate_test_message/1*</a></td><td>Generate a test message for a Lua process.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>All keys that are not directly available in the base message are
+resolved by calling the Lua function in the module of the same name.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the device state, loading the script into memory if it is
+a reference.</td></tr><tr><td valign="top"><a href="#initialize-3">initialize/3*</a></td><td>Initialize a new Lua state with a given base message and module.</td></tr><tr><td valign="top"><a href="#invoke_aos_test-0">invoke_aos_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#invoke_non_compute_key_test-0">invoke_non_compute_key_test/0*</a></td><td>Call a non-compute key on a Lua device message and ensure that the
+function of the same name in the script is called.</td></tr><tr><td valign="top"><a href="#load_modules-2">load_modules/2*</a></td><td>Load a list of modules for installation into the Lua VM.</td></tr><tr><td valign="top"><a href="#load_modules-3">load_modules/3*</a></td><td></td></tr><tr><td valign="top"><a href="#load_modules_by_id_test-0">load_modules_by_id_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#lua_http_hook_test-0">lua_http_hook_test/0*</a></td><td>Use a Lua module as a hook on the HTTP server via <code>~meta@1.0</code>.</td></tr><tr><td valign="top"><a href="#multiple_modules_test-0">multiple_modules_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize-3">normalize/3</a></td><td>Restore the Lua state from a snapshot, if it exists.</td></tr><tr><td valign="top"><a href="#process_response-2">process_response/2*</a></td><td>Process a response to a Luerl invocation.</td></tr><tr><td valign="top"><a href="#pure_lua_process_benchmark_test_-0">pure_lua_process_benchmark_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#pure_lua_process_test-0">pure_lua_process_test/0*</a></td><td>Call a process whose <code>execution-device</code> is set to <code>lua@5.3a</code>.</td></tr><tr><td valign="top"><a href="#sandbox-3">sandbox/3*</a></td><td>Sandbox (render inoperable) a set of Lua functions.</td></tr><tr><td valign="top"><a href="#sandboxed_failure_test-0">sandboxed_failure_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_invocation_test-0">simple_invocation_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td>Snapshot the Lua state from a live computation.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -5917,7 +5917,7 @@ Encode a HyperBEAM `structured@1.0` message into a Lua term.
 `ensure_initialized(Base, Req, Opts) -> any()`
 
 Initialize the Lua VM if it is not already initialized. Optionally takes
-the script as a  Binary string. If not provided, the script will be loaded
+the script as a  Binary string. If not provided, the module will be loaded
 from the base message.
 
 <a name="error_response_test-0"></a>
@@ -5926,23 +5926,11 @@ from the base message.
 
 `error_response_test() -> any()`
 
-<a name="execute_aos_call-1"></a>
+<a name="find_modules-2"></a>
 
-### execute_aos_call/1 * ###
+### find_modules/2 * ###
 
-`execute_aos_call(Base) -> any()`
-
-<a name="execute_aos_call-2"></a>
-
-### execute_aos_call/2 * ###
-
-`execute_aos_call(Base, Req) -> any()`
-
-<a name="find_scripts-2"></a>
-
-### find_scripts/2 * ###
-
-`find_scripts(Base, Opts) -> any()`
+`find_modules(Base, Opts) -> any()`
 
 Find the script in the base message, either by ID or by string.
 
@@ -5985,7 +5973,7 @@ Generate a test message for a Lua process.
 `info(Base) -> any()`
 
 All keys that are not directly available in the base message are
-resolved by calling the Lua function in the script of the same name.
+resolved by calling the Lua function in the module of the same name.
 Additionally, we exclude the `keys`, `set`, `encode` and `decode` functions
 which are `message@1.0` core functions, and Lua public utility functions.
 
@@ -6002,9 +5990,9 @@ a reference.
 
 ### initialize/3 * ###
 
-`initialize(Base, Scripts, Opts) -> any()`
+`initialize(Base, Modules, Opts) -> any()`
 
-Initialize a new Lua state with a given base message and script.
+Initialize a new Lua state with a given base message and module.
 
 <a name="invoke_aos_test-0"></a>
 
@@ -6021,25 +6009,25 @@ Initialize a new Lua state with a given base message and script.
 Call a non-compute key on a Lua device message and ensure that the
 function of the same name in the script is called.
 
-<a name="load_scripts-2"></a>
+<a name="load_modules-2"></a>
 
-### load_scripts/2 * ###
+### load_modules/2 * ###
 
-`load_scripts(Scripts, Opts) -> any()`
+`load_modules(Modules, Opts) -> any()`
 
-Load a list of scripts for installation into the Lua VM.
+Load a list of modules for installation into the Lua VM.
 
-<a name="load_scripts-3"></a>
+<a name="load_modules-3"></a>
 
-### load_scripts/3 * ###
+### load_modules/3 * ###
 
-`load_scripts(Rest, Opts, Acc) -> any()`
+`load_modules(Rest, Opts, Acc) -> any()`
 
-<a name="load_scripts_by_id_test-0"></a>
+<a name="load_modules_by_id_test-0"></a>
 
-### load_scripts_by_id_test/0 * ###
+### load_modules_by_id_test/0 * ###
 
-`load_scripts_by_id_test() -> any()`
+`load_modules_by_id_test() -> any()`
 
 <a name="lua_http_hook_test-0"></a>
 
@@ -6047,13 +6035,13 @@ Load a list of scripts for installation into the Lua VM.
 
 `lua_http_hook_test() -> any()`
 
-Use a Lua script as a hook on the HTTP server via `~meta@1.0`.
+Use a Lua module as a hook on the HTTP server via `~meta@1.0`.
 
-<a name="multiple_scripts_test-0"></a>
+<a name="multiple_modules_test-0"></a>
 
-### multiple_scripts_test/0 * ###
+### multiple_modules_test/0 * ###
 
-`multiple_scripts_test() -> any()`
+`multiple_modules_test() -> any()`
 
 <a name="normalize-3"></a>
 
@@ -7159,7 +7147,7 @@ check whether the debit would succeed before execution.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#balance-3">balance/3</a></td><td>Get the balance of a user in the ledger.</td></tr><tr><td valign="top"><a href="#faff_test-0">faff_test/0*</a></td><td>Simple test of p4's capabilities with the <code>faff@1.0</code> device.</td></tr><tr><td valign="top"><a href="#is_chargable_req-2">is_chargable_req/2*</a></td><td>The node operator may elect to make certain routes non-chargable, using
-the <code>routes</code> syntax also used to declare routes in <code>router@1.0</code>.</td></tr><tr><td valign="top"><a href="#lua_pricing_test-0">lua_pricing_test/0*</a></td><td>Ensure that Lua scripts can be used as pricing and ledger devices.</td></tr><tr><td valign="top"><a href="#non_chargable_route_test-0">non_chargable_route_test/0*</a></td><td>Test that a non-chargable route is not charged for.</td></tr><tr><td valign="top"><a href="#request-3">request/3</a></td><td>Estimate the cost of a transaction and decide whether to proceed with
+the <code>routes</code> syntax also used to declare routes in <code>router@1.0</code>.</td></tr><tr><td valign="top"><a href="#lua_pricing_test-0">lua_pricing_test/0*</a></td><td>Ensure that Lua modules can be used as pricing and ledger devices.</td></tr><tr><td valign="top"><a href="#non_chargable_route_test-0">non_chargable_route_test/0*</a></td><td>Test that a non-chargable route is not charged for.</td></tr><tr><td valign="top"><a href="#request-3">request/3</a></td><td>Estimate the cost of a transaction and decide whether to proceed with
 a request.</td></tr><tr><td valign="top"><a href="#response-3">response/3</a></td><td>Postprocess the request after it has been fulfilled.</td></tr><tr><td valign="top"><a href="#test_opts-1">test_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-2">test_opts/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-3">test_opts/3*</a></td><td></td></tr></table>
 
 
@@ -7198,12 +7186,12 @@ the `routes` syntax also used to declare routes in `router@1.0`.
 
 `lua_pricing_test() -> any()`
 
-Ensure that Lua scripts can be used as pricing and ledger devices. Our
-scripts come in two parts:
-- A `process` script which is executed as a persistent `local-process` on the
+Ensure that Lua modules can be used as pricing and ledger devices. Our
+modules come in two parts:
+- A `process` module which is executed as a persistent `local-process` on the
 node, and which maintains the state of the ledger.
-- A `client` script, which is executed as a `p4@1.0` device, marshalling
-requests to the `process` script.
+- A `client` module, which is executed as a `p4@1.0` device, marshalling
+requests to the `process` module.
 
 <a name="non_chargable_route_test-0"></a>
 
@@ -8309,13 +8297,11 @@ it if it does not exist). Otherwise, the message specified by the given
 `slot` key will be pushed.
 
 Optional parameters:
-
 `/result-depth`: The depth to which the full contents of the result
 will be included in the response. Default: 1, returning
 the full result of the first message, but only the 'tree'
 of downstream messages.
-
-`/push-mode`: Whether or not the push should be done asynchronously.
+`/push-mode`:    Whether or not the push should be done asynchronously.
 Default: `sync`, pushing synchronously.
 
 <a name="push_prompts_encoding_change_test-0"></a>
@@ -8535,11 +8521,11 @@ The structure of the routes should be as follows:
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_route_test-0">add_route_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#apply_route-2">apply_route/2*</a></td><td>Apply a node map's rules for transforming the path of the message.</td></tr><tr><td valign="top"><a href="#apply_routes-3">apply_routes/3*</a></td><td>Generate a <code>uri</code> key for each node in a route.</td></tr><tr><td valign="top"><a href="#binary_to_bignum-1">binary_to_bignum/1*</a></td><td>Cast a human-readable or native-encoded ID to a big integer.</td></tr><tr><td valign="top"><a href="#by_base_determinism_test-0">by_base_determinism_test/0*</a></td><td>Ensure that <code>By-Base</code> always chooses the same node for the same
-hashpath.</td></tr><tr><td valign="top"><a href="#choose-5">choose/5*</a></td><td>Implements the load distribution strategies if given a cluster.</td></tr><tr><td valign="top"><a href="#choose_1_test-1">choose_1_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#choose_n_test-1">choose_n_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#device_call_from_singleton_test-0">device_call_from_singleton_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_route_provider_test-0">dynamic_route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_router_test-0">dynamic_router_test/0*</a></td><td>Example of a Lua script being used as the <code>route_provider</code> for a
+hashpath.</td></tr><tr><td valign="top"><a href="#choose-5">choose/5*</a></td><td>Implements the load distribution strategies if given a cluster.</td></tr><tr><td valign="top"><a href="#choose_1_test-1">choose_1_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#choose_n_test-1">choose_n_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#device_call_from_singleton_test-0">device_call_from_singleton_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_route_provider_test-0">dynamic_route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_router_test-0">dynamic_router_test/0*</a></td><td>Example of a Lua module being used as the <code>route_provider</code> for a
 HyperBEAM node.</td></tr><tr><td valign="top"><a href="#dynamic_routing_by_performance-0">dynamic_routing_by_performance/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_routing_by_performance_test_-0">dynamic_routing_by_performance_test_/0*</a></td><td>Demonstrates routing tables being dynamically created and adjusted
 according to the real-time performance of nodes.</td></tr><tr><td valign="top"><a href="#explicit_route_test-0">explicit_route_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#extract_base-2">extract_base/2*</a></td><td>Extract the base message ID from a request message.</td></tr><tr><td valign="top"><a href="#field_distance-2">field_distance/2*</a></td><td>Calculate the minimum distance between two numbers
 (either progressing backwards or forwards), assuming a
-256-bit field.</td></tr><tr><td valign="top"><a href="#find_target_path-2">find_target_path/2*</a></td><td>Find the target path to route for a request message.</td></tr><tr><td valign="top"><a href="#generate_hashpaths-1">generate_hashpaths/1*</a></td><td></td></tr><tr><td valign="top"><a href="#generate_nodes-1">generate_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#get_routes_test-0">get_routes_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#load_routes-1">load_routes/1*</a></td><td>Load the current routes for the node.</td></tr><tr><td valign="top"><a href="#local_dynamic_router_test-0">local_dynamic_router_test/0*</a></td><td>Example of a Lua script being used as the <code>route_provider</code> for a
+256-bit field.</td></tr><tr><td valign="top"><a href="#find_target_path-2">find_target_path/2*</a></td><td>Find the target path to route for a request message.</td></tr><tr><td valign="top"><a href="#generate_hashpaths-1">generate_hashpaths/1*</a></td><td></td></tr><tr><td valign="top"><a href="#generate_nodes-1">generate_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#get_routes_test-0">get_routes_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#load_routes-1">load_routes/1*</a></td><td>Load the current routes for the node.</td></tr><tr><td valign="top"><a href="#local_dynamic_router_test-0">local_dynamic_router_test/0*</a></td><td>Example of a Lua module being used as the <code>route_provider</code> for a
 HyperBEAM node.</td></tr><tr><td valign="top"><a href="#local_process_route_provider_test-0">local_process_route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#lowest_distance-1">lowest_distance/1*</a></td><td>Find the node with the lowest distance to the given hashpath.</td></tr><tr><td valign="top"><a href="#lowest_distance-2">lowest_distance/2*</a></td><td></td></tr><tr><td valign="top"><a href="#match-3">match/3</a></td><td>Find the first matching template in a list of known routes.</td></tr><tr><td valign="top"><a href="#match_routes-3">match_routes/3*</a></td><td></td></tr><tr><td valign="top"><a href="#match_routes-4">match_routes/4*</a></td><td></td></tr><tr><td valign="top"><a href="#preprocess-3">preprocess/3</a></td><td>Preprocess a request to check if it should be relayed to a different node.</td></tr><tr><td valign="top"><a href="#register-3">register/3</a></td><td></td></tr><tr><td valign="top"><a href="#relay_nearest_test-0">relay_nearest_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route-2">route/2</a></td><td>Find the appropriate route for the given message.</td></tr><tr><td valign="top"><a href="#route-3">route/3</a></td><td></td></tr><tr><td valign="top"><a href="#route_provider_test-0">route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route_regex_matches_test-0">route_regex_matches_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route_template_message_matches_test-0">route_template_message_matches_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#routes-3">routes/3</a></td><td>Device function that returns all known routes.</td></tr><tr><td valign="top"><a href="#simulate-4">simulate/4*</a></td><td></td></tr><tr><td valign="top"><a href="#simulation_distribution-2">simulation_distribution/2*</a></td><td></td></tr><tr><td valign="top"><a href="#simulation_occurences-2">simulation_occurences/2*</a></td><td></td></tr><tr><td valign="top"><a href="#strategy_suite_test_-0">strategy_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#template_matches-3">template_matches/3*</a></td><td>Check if a message matches a message template or path regex.</td></tr><tr><td valign="top"><a href="#unique_nodes-1">unique_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#unique_test-1">unique_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#weighted_random_strategy_test-0">weighted_random_strategy_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#within_norms-3">within_norms/3*</a></td><td></td></tr></table>
 
 
@@ -8629,8 +8615,8 @@ Implements the load distribution strategies if given a cluster.
 
 `dynamic_router_test() -> any()`
 
-Example of a Lua script being used as the `route_provider` for a
-HyperBEAM node. The script utilized in this example dynamically adjusts the
+Example of a Lua module being used as the `route_provider` for a
+HyperBEAM node. The module utilized in this example dynamically adjusts the
 likelihood of routing to a given node, depending upon price and performance.
 also include preprocessing support for routing
 
@@ -8718,8 +8704,8 @@ the node message's `routes` key, or dynamic routes generated by resolving the
 
 `local_dynamic_router_test() -> any()`
 
-Example of a Lua script being used as the `route_provider` for a
-HyperBEAM node. The script utilized in this example dynamically adjusts the
+Example of a Lua module being used as the `route_provider` for a
+HyperBEAM node. The module utilized in this example dynamically adjusts the
 likelihood of routing to a given node, depending upon price and performance.
 
 <a name="local_process_route_provider_test-0"></a>

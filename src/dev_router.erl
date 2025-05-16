@@ -525,7 +525,7 @@ dynamic_route_provider_test() ->
         route_provider => #{
             <<"device">> => <<"lua@5.3a">>,
             <<"path">> => <<"route_provider">>,
-            <<"script">> => #{
+            <<"module">> => #{
                 <<"content-type">> => <<"application/lua">>,
                 <<"body">> => Script
             },
@@ -550,7 +550,7 @@ local_process_route_provider_test() ->
                 <<"device">> => <<"process@1.0">>,
                 <<"execution-device">> => <<"lua@5.3a">>,
                 <<"scheduler-device">> => <<"scheduler@1.0">>,
-                <<"script">> => #{
+                <<"module">> => #{
                     <<"content-type">> => <<"application/lua">>,
                     <<"body">> => Script
                 },
@@ -583,12 +583,12 @@ local_process_route_provider_test() ->
     ?event({responses, Responses}),
     ?assertEqual(2, sets:size(sets:from_list(Responses))).
 
-%% @doc Example of a Lua script being used as the `route_provider' for a
-%% HyperBEAM node. The script utilized in this example dynamically adjusts the
+%% @doc Example of a Lua module being used as the `route_provider' for a
+%% HyperBEAM node. The module utilized in this example dynamically adjusts the
 %% likelihood of routing to a given node, depending upon price and performance.
 local_dynamic_router_test() ->
     BenchRoutes = 50,
-    {ok, Script} = file:read_file(<<"scripts/dynamic-router.lua">>),
+    {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
     Run = hb_util:bin(rand:uniform(1337)),
     Node = hb_http_server:start_node(Opts = #{
         store => [
@@ -608,12 +608,12 @@ local_dynamic_router_test() ->
                 <<"device">> => <<"process@1.0">>,
                 <<"execution-device">> => <<"lua@5.3a">>,
                 <<"scheduler-device">> => <<"scheduler@1.0">>,
-                <<"script">> => #{
+                <<"module">> => #{
                     <<"content-type">> => <<"application/lua">>,
                     <<"module">> => <<"dynamic-router">>,
-                    <<"body">> => Script
+                    <<"body">> => Module
                 },
-                % Set script-specific factors for the test
+                % Set module-specific factors for the test
                 <<"pricing-weight">> => 9,
                 <<"performance-weight">> => 1,
                 <<"score-preference">> => 4
@@ -695,12 +695,12 @@ local_dynamic_router_test() ->
     ?event(debug_distribution, {distribution_of_responses, Dist}),
     ?assert(length(UniqueResponses) > 1).
 
-%% @doc Example of a Lua script being used as the `route_provider' for a
-%% HyperBEAM node. The script utilized in this example dynamically adjusts the
+%% @doc Example of a Lua module being used as the `route_provider' for a
+%% HyperBEAM node. The module utilized in this example dynamically adjusts the
 %% likelihood of routing to a given node, depending upon price and performance.
 %% also include preprocessing support for routing
 dynamic_router_test() ->
-    {ok, Script} = file:read_file(<<"scripts/dynamic-router.lua">>),
+    {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
     Run = hb_util:bin(rand:uniform(1337)),
 	ExecWallet = hb:wallet(<<"test/admissible-report-wallet.json">>),
 	ProxyWallet = ar_wallet:new(),
@@ -748,12 +748,12 @@ dynamic_router_test() ->
                 <<"device">> => <<"process@1.0">>,
                 <<"execution-device">> => <<"lua@5.3a">>,
                 <<"scheduler-device">> => <<"scheduler@1.0">>,
-                <<"script">> => #{
+                <<"module">> => #{
                     <<"content-type">> => <<"application/lua">>,
                     <<"module">> => <<"dynamic-router">>,
-                    <<"body">> => Script
+                    <<"body">> => Module
                 },
-                % Set script-specific factors for the test
+                % Set module-specific factors for the test
                 <<"pricing-weight">> => 9,
                 <<"performance-weight">> => 1,
                 <<"score-preference">> => 4,
@@ -851,12 +851,12 @@ dynamic_routing_by_performance() ->
                 <<"device">> => <<"process@1.0">>,
                 <<"execution-device">> => <<"lua@5.3a">>,
                 <<"scheduler-device">> => <<"scheduler@1.0">>,
-                <<"script">> => #{
+                <<"module">> => #{
                     <<"content-type">> => <<"application/lua">>,
-                    <<"module">> => <<"dynamic-router">>,
+                    <<"name">> => <<"dynamic-router">>,
                     <<"body">> => Script
                 },
-                % Set script-specific factors for the test
+                % Set module-specific factors for the test
                 <<"pricing-weight">> => 1,
                 <<"performance-weight">> => 99,
                 <<"score-preference">> => 4,
