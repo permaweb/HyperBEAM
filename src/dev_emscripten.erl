@@ -19,7 +19,7 @@
 %%% 
 %%% Where '_vjj' represents the type spec of the function.
 -module(dev_emscripten).
--export([info/1, init/3, '_emscripten_memcpy_js'/3, '__cxa_throw'/3, '__cxa_rethrow'/3, '_emscripten_throw_longjmp'/3, invoke_v/3, invoke_ii/3, invoke_jj/3, invoke_vjj/3, invoke_vjjj/3, invoke_viii/3, router/4, emscripten_date_now/3]).
+-export([info/1, init/3, '_emscripten_memcpy_js'/3, '__cxa_throw'/3, '__cxa_rethrow'/3, '_emscripten_throw_longjmp'/3, invoke_v/3, invoke_ii/3, invoke_jj/3, invoke_vjj/3, invoke_vjjj/3, invoke_vii/3, invoke_viii/3, invoke_iiii/3, router/4, emscripten_date_now/3]).
 
 
 -include("src/include/hb.hrl").
@@ -93,9 +93,17 @@ invoke_vjj(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_vjj),
 	router(<<"invoke_vjj">>, Msg1, Msg2, Opts).
 
+invoke_vii(Msg1, Msg2, Opts) ->
+	?event(invoke_emscripten_vii),
+	router(<<"invoke_vii">>, Msg1, Msg2, Opts).
+
 invoke_viii(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_viii),
 	router(<<"invoke_viii">>, Msg1, Msg2, Opts).
+
+invoke_iiii(Msg1, Msg2, Opts) ->
+	?event(invoke_emscripten_iiii),
+	router(<<"invoke_iiii">>, Msg1, Msg2, Opts).
 
 router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
     ?event(invoke_emscripten),
@@ -248,6 +256,23 @@ try_throw_invalid_pointer_test() ->
             {badmatch, {error, {call_begin_failed, ErrorStrBin2}}} = Error2,
             ?event(debug, {invoke_try_error, ErrorStrBin2})
     end.
+
+jmp_test() -> 
+    Init = generate_emscripten_stack("test/jmp.wasm", <<"handle">>, [0, 0]),
+    Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
+    Msg = <<"msg">>,
+    Env = <<"1">>,
+    {ok, Ptr1} = hb_wtime_io:malloc(Instance, byte_size(Msg)),
+    ?assertNotEqual(0, Ptr1),
+    hb_wtime:mem_write(Instance, Ptr1, Msg),
+    {ok, Ptr2} = hb_wtime_io:malloc(Instance, byte_size(Env)),
+    ?assertNotEqual(0, Ptr2),
+    hb_wtime:mem_write(Instance, Ptr2, Env),
+    Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
+    {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
+    [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
+    {ok, Output} = hb_wtime_io:read_string(Instance, Ptr),
+    ?assertEqual(<<"last_level: 3, ret: 42, local_state: 7">>, Output).
 
 %% @doc Ensure that an AOS Emscripten-style WASM AOT module can be invoked
 %% with a function reference.
