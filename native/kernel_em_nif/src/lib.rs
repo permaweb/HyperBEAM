@@ -19,12 +19,12 @@ fn hello() -> NifResult<String> {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn execute_kernel(
     kernel_id: String,
-    input_data: Vec<u8>,
+    input_data: rustler::Binary,
     output_size_hint: u64,
 ) -> NifResult<Vec<u8>> {
     let kernel_src = retrieve_kernel_src(&kernel_id).unwrap();
     let kem = pollster::block_on(KernelExecutor::new());
-    let result = kem.execute_kernel_default(&kernel_src, &input_data, Some(output_size_hint));
+    let result = kem.execute_kernel_default(&kernel_src, input_data.as_slice(), Some(output_size_hint));
     Ok(result)
 }
 
