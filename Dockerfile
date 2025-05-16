@@ -1,6 +1,6 @@
-FROM ubuntu:22.04 AS builder
+ARG PROFILES=${PROFILES:-genesis_wasm}
 
-ARG PROFILES=genesis_wasm
+FROM ubuntu:22.04 AS builder
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -37,14 +37,11 @@ WORKDIR /app
 
 COPY . .
 
-# TODO: support build args for profiles to allow for different builds
-
 # compile the project with provided profiles
 RUN rebar3 clean && rebar3 get-deps && rebar3 as ${PROFILES} compile
 
-
 # create the release binary
-RUN rebar3 as prod release
+RUN rebar3 as ${PROFILES} release
 
 CMD ["/bin/bash"]
 
@@ -58,7 +55,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY --from=builder /app/_build/prod/rel/hb /app
+# replace commas with pluses in the PROFILES variable
+RUN BUILT_PROFILES="$(echo "$PROFILES" | tr ',' '+')";
+
+COPY --from=builder /app/_build/${BUILT_PROFILES}/rel/hb /app
 
 RUN chmod +x /app/bin/hb
 
