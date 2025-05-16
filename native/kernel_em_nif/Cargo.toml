@@ -1,0 +1,22 @@
+[package]
+name = "kernel_em_nif"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "kernel_em_nif"
+path = "src/lib.rs" 
+crate-type = ["cdylib"]
+
+[dependencies]
+wgpu = "25.0.0"
+env_logger = "0.11.8"
+futures = "0.3.31"
+futures-intrusive = "0.5.0"
+pollster = "0.4.0"
+bytemuck = { version = "1.23.0", features = ["derive"] }
+rustler = "0.29.1"
+ureq = "3.0.11"
+anyhow = "1.0.98"
+serde_json = "1.0.140"
+serde = {version = "1.0.219", features=["derive"]}
