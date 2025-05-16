@@ -38,18 +38,18 @@ execute_kernel(Msg1, _Msg2, Opts) ->
         % decode the JSON body
         RawBody = hb_ao:get(<<"body">>, Msg1, not_found, Opts),
         io:format("~nRawBody: ~p~n", [RawBody]),
-        
+
         Body = hb_json:decode(RawBody),
         io:format("~nDecoded Body: ~p~n", [Body]),
-        
+
         % Now get parameters from decoded body
         KernelId = maps:get(<<"kernel_id">>, Body),
         RawInputData = maps:get(<<"input_data">>, Body),
         OutputSizeHint = maps:get(<<"output_size_hint">>, Body, 1),
-        
+
         % Convert input array to binary
         InputData = list_to_binary(RawInputData),
-        
+
         Result = kem_nif:execute_kernel(KernelId, InputData, OutputSizeHint),
         {ok, #{<<"status">> => 200, <<"body">> => Result}}
     catch
@@ -71,19 +71,19 @@ execute_kernel_with_params(Msg1, _Msg2, Opts) ->
         % decode the JSON body
         RawBody = hb_ao:get(<<"body">>, Msg1, not_found, Opts),
         io:format("~nRawBody: ~p~n", [RawBody]),
-        
+
         Body = hb_json:decode(RawBody),
         % io:format("~nDecoded Body: ~p~n", [Body]),
-        
+
         % Now get parameters from decoded body
         KernelId = maps:get(<<"kernel_id">>, Body),
         RawInputData = maps:get(<<"input_data">>, Body),
         RawParams = maps:get(<<"params">>, Body),
-        
+
         % Convert input array to binary
 		InputData = list_to_binary(RawInputData),  % Keep image bytes as bytes
 		Params = << <<X:32/little>> || X <- RawParams >>,
-        
+
         Result = kem_nif:execute_kernel_with_params(KernelId, InputData, Params),
         {ok, #{<<"status">> => 200, <<"body">> => Result}}
     catch
@@ -129,7 +129,7 @@ test_ao() ->
     try
         % Get current wallet
         Wallet = hb:wallet(),
-        % Get wallet address in human readable form  
+        % Get wallet address in human readable form
         Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
 
         % Create the process message
@@ -151,7 +151,7 @@ test_ao() ->
         % Get process ID
         ProcID = hb_message:id(Process, all),
 
-        % Create schedule message  
+        % Create schedule message
         Message = hb_message:commit(#{
             <<"path">> => <<"schedule">>,
             <<"method">> => <<"POST">>,

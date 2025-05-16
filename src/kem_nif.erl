@@ -9,7 +9,7 @@ hello() ->
     ?NOT_LOADED.
 
 -spec execute_kernel(binary(), binary(), pos_integer()) -> binary().
-execute_kernel(KernelId, InputData, OutputSizeHint) 
+execute_kernel(KernelId, InputData, OutputSizeHint)
     when is_binary(KernelId),
          is_binary(InputData),
          is_integer(OutputSizeHint),
@@ -17,7 +17,7 @@ execute_kernel(KernelId, InputData, OutputSizeHint)
     ?NOT_LOADED.
 
 -spec execute_kernel_with_params(binary(), binary(), binary()) -> binary().
-execute_kernel_with_params(KernelId, InputData, Params) 
+execute_kernel_with_params(KernelId, InputData, Params)
     when is_binary(KernelId),
          is_binary(InputData),
          is_binary(Params) ->
@@ -32,24 +32,24 @@ init() ->
     % Get the current directory for debugging
     {ok, Cwd} = file:get_cwd(),
     io:format("Current directory: ~p~n", [Cwd]),
-        
+
     PrivDir = case code:priv_dir(hb) of
         {error, _} -> "priv";
         Dir -> Dir
     end,
-    
+
     % Build the NIF path using the priv directory
     NifPath = filename:join([PrivDir, "crates", "kernel_em_nif", "kernel_em_nif"]),
     io:format("NIF path: ~p~n", [NifPath]),
-    
+
     % Check if the NIF file exists
     NifSoPath = NifPath ++ ".so",
     io:format("NIF .so exists: ~p~n", [filelib:is_file(NifSoPath)]),
-    
+
     % Try to load the NIF
     Result = erlang:load_nif(NifPath, 0),
     io:format("Load result: ~p~n", [Result]),
-    
+
     Result.
 
 not_loaded(Line) ->
