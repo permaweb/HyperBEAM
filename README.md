@@ -49,6 +49,7 @@ To begin using HyperBeam, you will need to install:
 - Docker (optional, for containerized deployment)
 
 You will also need:
+
 - A wallet and it's keyfile *(generate a new wallet and keyfile with https://www.wander.app)*
 
 Then you can clone the HyperBEAM source and build it:
@@ -60,31 +61,28 @@ rebar3 compile
 rebar3 shell # launches the erlang shell with the HyperBEAM module preloaded
 ```
 
-If you would prefer to execute HyperBEAM in a containerized environment, you
-can use the provided Dockerfile to build a container image.
-
-Add your wallet to the `wallets` directory and modify the `config.flat` file to use the correct port.
+If you would prefer to execute HyperBEAM as a binary in a containerized environment,
+you can use the provided Dockerfile to build a container image.
 
 ```bash
-docker build --platform=linux/amd64 --target=builder -t hyperbeam .
-```
-
-To target a lean image to run just the node, you can use the following command:
-
-```bash
-docker build --platform=linux/amd64 --target=runner -t hyperbeam .
+docker build --platform=linux/amd64 -t hb .
 ```
 
 Once you have the image built, you can run the container with the following command:
 
 ```bash
-docker run --memory="8g" --memory-swap="8g" \
--it \
--v $(pwd)/wallets/<wallet-file>:/app/hyperbeam-key.json \
--v $(pwd)/config.flat:/app/config.flat \
--p 10000:10000 \
-hyperbeam
+docker run -p 10000:10000 hb foreground
 ```
+
+You can use volumes to mount your wallet and config file into the container via
+
+```bash
+docker run -p 10000:10000 \
+-v $(pwd)/wallets/<wallet-file>:/app/bin/hyperbeam-key.json \
+-v $(pwd)/config.flat:/app/bin/config.flat \
+hb foreground
+```
+
 
 If you intend to offer TEE-based computation of AO-Core devices, please see the
 [`HyperBEAM OS`](https://github.com/permaweb/hb-os) repo for details on configuration and deployment.
