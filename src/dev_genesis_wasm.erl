@@ -150,7 +150,16 @@ ensure_started(Opts) ->
                                                 )
                                             },
 											{"DISABLE_PROCESS_FILE_CHECKPOINT_CREATION", "false"},
-											{"PROCESS_MEMORY_FILE_CHECKPOINTS_DIR", CheckpointDir}
+											{"PROCESS_MEMORY_FILE_CHECKPOINTS_DIR", CheckpointDir},
+                                            {"PROCESS_WASM_MEMORY_MAX_LIMIT", 
+                                                hb_util:list(
+                                                    hb_opts:get(
+                                                        genesis_wasm_max_wasm_memory_limit,
+                                                        1073741824,
+                                                        Opts
+                                                    )
+                                                )
+                                            }
                                         ]
                                     }
                                 ]

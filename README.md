@@ -49,6 +49,7 @@ To begin using HyperBeam, you will need to install:
 - Docker (optional, for containerized deployment)
 
 You will also need:
+
 - A wallet and it's keyfile *(generate a new wallet and keyfile with https://www.wander.app)*
 
 Then you can clone the HyperBEAM source and build it:
@@ -57,14 +58,31 @@ Then you can clone the HyperBEAM source and build it:
 git clone https://github.com/permaweb/HyperBEAM.git
 cd HyperBEAM
 rebar3 compile
+rebar3 shell # launches the erlang shell with the HyperBEAM module preloaded
 ```
 
-If you would prefer to execute HyperBEAM in a containerized environment, you
-can use the provided Dockerfile to build a container image.
+If you would prefer to execute HyperBEAM as a binary in a containerized environment,
+you can use the provided Dockerfile to build a container image.
 
 ```bash
-docker build -t hyperbeam .
+docker build --platform=linux/amd64 -t hb .
 ```
+
+Once you have the image built, you can run the container with the following command:
+
+```bash
+docker run -p 10000:10000 hb foreground
+```
+
+You can use volumes to mount your wallet and config file into the container via
+
+```bash
+docker run -p 10000:10000 \
+-v $(pwd)/wallets/<wallet-file>:/app/bin/hyperbeam-key.json \
+-v $(pwd)/config.flat:/app/bin/config.flat \
+hb foreground
+```
+
 
 If you intend to offer TEE-based computation of AO-Core devices, please see the
 [`HyperBEAM OS`](https://github.com/permaweb/hb-os) repo for details on configuration and deployment.
@@ -155,6 +173,20 @@ rebar3 release
 This creates a release in `_build/default/rel/hb` that can be deployed independently.
 
 ### Runtime Configuration Changes
+```bash
+rebar3 shell --eval "hb:start_mainnet(#{ port => 9001, priv_key_location => 'path/to/my/wallet.key' })."
+```
+
+Node operators can also configure the environment using a `flat@1.0` encoded settings file. An 
+example configuration is found in the `config.flat` file of this repository. The format simply specifies 
+configuration options using HTTP header styling. For example, to set the port for the node and to specify
+whether it should use caching heuristics or always consult its local data store, the `config.flat` would
+be as follows:
+
+```
+port: 1337
+cache-lookup-hueristics: true
+```
 
 Additionally, if you would like to modify a running node's configuration, you can
  do so by sending a HTTP Signed Message using any RFC-9421 compatible client
