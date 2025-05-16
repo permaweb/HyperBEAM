@@ -62,6 +62,7 @@
 <tr><td><a href="dev_snp_nif.md" class="module">dev_snp_nif</a></td></tr>
 <tr><td><a href="dev_stack.md" class="module">dev_stack</a></td></tr>
 <tr><td><a href="dev_test.md" class="module">dev_test</a></td></tr>
+<tr><td><a href="dev_volume.md" class="module">dev_volume</a></td></tr>
 <tr><td><a href="dev_wasi.md" class="module">dev_wasi</a></td></tr>
 <tr><td><a href="dev_wasm.md" class="module">dev_wasm</a></td></tr>
 <tr><td><a href="hb.md" class="module">hb</a></td></tr>

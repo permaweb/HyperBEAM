@@ -1,4 +1,5 @@
-Generated: 2025-05-13T16:51:16Z
+Generated: 2025-05-15T13:32:25Z
+
 
 --- START OF FILE: docs/build/exposing-process-state.md ---
 # Exposing Process State with the Patch Device
@@ -4795,12 +4796,21 @@ endpoint.
 
 
 
-<a name="index"></a>
+The green zone device, which provides secure communication and identity
+management between trusted nodes.
+
+<a name="description"></a>
+
+## Description ##
+It handles node initialization, joining existing green zones, key exchange,
+and node identity cloning. All operations are protected by hardware
+commitment and encryption.<a name="index"></a>
 
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_trusted_node-4">add_trusted_node/4*</a></td><td></td></tr><tr><td valign="top"><a href="#become-3">become/3</a></td><td></td></tr><tr><td valign="top"><a href="#calculate_node_message-3">calculate_node_message/3*</a></td><td></td></tr><tr><td valign="top"><a href="#decrypt_zone_key-2">decrypt_zone_key/2*</a></td><td></td></tr><tr><td valign="top"><a href="#default_zone_required_opts-1">default_zone_required_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#encrypt_payload-2">encrypt_payload/2*</a></td><td></td></tr><tr><td valign="top"><a href="#finalize_become-5">finalize_become/5*</a></td><td></td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td></td></tr><tr><td valign="top"><a href="#join-3">join/3</a></td><td></td></tr><tr><td valign="top"><a href="#join_peer-5">join_peer/5*</a></td><td></td></tr><tr><td valign="top"><a href="#key-3">key/3</a></td><td></td></tr><tr><td valign="top"><a href="#maybe_set_zone_opts-4">maybe_set_zone_opts/4*</a></td><td></td></tr><tr><td valign="top"><a href="#rsa_wallet_integration_test-0">rsa_wallet_integration_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#try_mount_encrypted_volume-2">try_mount_encrypted_volume/2*</a></td><td></td></tr><tr><td valign="top"><a href="#validate_join-3">validate_join/3*</a></td><td></td></tr><tr><td valign="top"><a href="#validate_peer_opts-2">validate_peer_opts/2*</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_trusted_node-4">add_trusted_node/4*</a></td><td>Adds a node to the trusted nodes list with its commitment report.</td></tr><tr><td valign="top"><a href="#become-3">become/3</a></td><td>Clones the identity of a target node in the green zone.</td></tr><tr><td valign="top"><a href="#calculate_node_message-3">calculate_node_message/3*</a></td><td>Generate the node message that should be set prior to joining
+a green zone.</td></tr><tr><td valign="top"><a href="#decrypt_zone_key-2">decrypt_zone_key/2*</a></td><td>Decrypts an AES key using the node's RSA private key.</td></tr><tr><td valign="top"><a href="#default_zone_required_opts-1">default_zone_required_opts/1*</a></td><td>Provides the default required options for a green zone.</td></tr><tr><td valign="top"><a href="#encrypt_payload-2">encrypt_payload/2*</a></td><td>Encrypts an AES key with a node's RSA public key.</td></tr><tr><td valign="top"><a href="#finalize_become-5">finalize_become/5*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Controls which functions are exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Provides information about the green zone device and its API.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the green zone for a node.</td></tr><tr><td valign="top"><a href="#join-3">join/3</a></td><td>Initiates the join process for a node to enter an existing green zone.</td></tr><tr><td valign="top"><a href="#join_peer-5">join_peer/5*</a></td><td>Processes a join request to a specific peer node.</td></tr><tr><td valign="top"><a href="#key-3">key/3</a></td><td>Encrypts and provides the node's private key for secure sharing.</td></tr><tr><td valign="top"><a href="#maybe_set_zone_opts-4">maybe_set_zone_opts/4*</a></td><td>Adopts configuration from a peer when joining a green zone.</td></tr><tr><td valign="top"><a href="#rsa_wallet_integration_test-0">rsa_wallet_integration_test/0*</a></td><td>Test RSA operations with the existing wallet structure.</td></tr><tr><td valign="top"><a href="#try_mount_encrypted_volume-2">try_mount_encrypted_volume/2*</a></td><td>Attempts to mount an encrypted volume using the green zone AES key.</td></tr><tr><td valign="top"><a href="#validate_join-3">validate_join/3*</a></td><td>Validates an incoming join request from another node.</td></tr><tr><td valign="top"><a href="#validate_peer_opts-2">validate_peer_opts/2*</a></td><td>Validates that a peer's configuration matches required options.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -4816,6 +4826,17 @@ add_trusted_node(NodeAddr::binary(), Report::map(), RequesterPubKey::term(), Opt
 </code></pre>
 <br />
 
+`NodeAddr`: The joining node's address<br />`Report`: The commitment report provided by the joining node<br />`RequesterPubKey`: The joining node's public key<br />`Opts`: A map of configuration options<br />
+
+returns: ok
+
+Adds a node to the trusted nodes list with its commitment report.
+
+This function updates the trusted nodes configuration:
+1. Retrieves the current trusted nodes map
+2. Adds the new node with its report and public key
+3. Updates the node configuration with the new trusted nodes list
+
 <a name="become-3"></a>
 
 ### become/3 ###
@@ -4825,11 +4846,40 @@ become(M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, binary()
 </code></pre>
 <br />
 
+`Opts`: A map of configuration options<br />
+
+returns: `{ok, Map}` on success with confirmation details, or
+`{error, Binary}` if the node is not part of a green zone or
+identity adoption fails.
+
+Clones the identity of a target node in the green zone.
+
+This function performs the following operations:
+1. Retrieves target node location and ID from the configuration
+2. Verifies that the local node has a valid shared AES key
+3. Requests the target node's encrypted key via its key endpoint
+4. Verifies the response is from the expected peer
+5. Decrypts the target node's private key using the shared AES key
+6. Updates the local node's wallet with the target node's identity
+
+Required configuration in Opts map:
+- green_zone_peer_location: Target node's address
+- green_zone_peer_id: Target node's unique identifier
+- priv_green_zone_aes: The shared AES key for the green zone
+
 <a name="calculate_node_message-3"></a>
 
 ### calculate_node_message/3 * ###
 
 `calculate_node_message(RequiredOpts, Req, List) -> any()`
+
+Generate the node message that should be set prior to joining
+a green zone.
+
+This function takes a required opts message, a request message, and an
+`adopt-config` value. The `adopt-config` value can be a boolean, a list of
+fields that should be included in the node message from the request, or a
+binary string of fields to include, separated by commas.
 
 <a name="decrypt_zone_key-2"></a>
 
@@ -4840,11 +4890,41 @@ decrypt_zone_key(EncZoneKey::binary(), Opts::map()) -&gt; {ok, binary()} | {erro
 </code></pre>
 <br />
 
+`EncZoneKey`: The encrypted zone AES key (Base64 encoded or binary)<br />`Opts`: A map of configuration options<br />
+
+returns: {ok, DecryptedKey} on success with the decrypted AES key
+
+Decrypts an AES key using the node's RSA private key.
+
+This function handles decryption of the zone key:
+1. Decodes the encrypted key if it's in Base64 format
+2. Extracts the RSA private key components from the wallet
+3. Creates an RSA private key record
+4. Performs private key decryption on the encrypted key
+
 <a name="default_zone_required_opts-1"></a>
 
 ### default_zone_required_opts/1 * ###
 
-`default_zone_required_opts(Opts) -> any()`
+<pre><code>
+default_zone_required_opts(Opts::map()) -&gt; map()
+</code></pre>
+<br />
+
+`Opts`: A map of configuration options from which to derive defaults<br />
+
+returns: A map of required configuration options for the green zone
+
+Provides the default required options for a green zone.
+
+This function defines the baseline security requirements for nodes in a green zone:
+1. Restricts loading of remote devices and only allows trusted signers
+2. Limits to preloaded devices from the initiating machine
+3. Enforces specific store configuration
+4. Prevents route changes from the defaults
+5. Requires matching hooks across all peers
+6. Disables message scheduling to prevent conflicts
+7. Enforces a permanent state to prevent further configuration changes
 
 <a name="encrypt_payload-2"></a>
 
@@ -4855,20 +4935,74 @@ encrypt_payload(AESKey::binary(), RequesterPubKey::term()) -&gt; binary()
 </code></pre>
 <br />
 
+`AESKey`: The shared AES key (256-bit binary)<br />`RequesterPubKey`: The node's public RSA key<br />
+
+returns: The encrypted AES key
+
+Encrypts an AES key with a node's RSA public key.
+
+This function securely encrypts the shared key for transmission:
+1. Extracts the RSA public key components
+2. Creates an RSA public key record
+3. Performs public key encryption on the AES key
+
 <a name="finalize_become-5"></a>
 
 ### finalize_become/5 * ###
 
 `finalize_become(KeyResp, NodeLocation, NodeID, GreenZoneAES, Opts) -> any()`
 
+<a name="info-1"></a>
+
+### info/1 ###
+
+`info(X1) -> any()`
+
+Controls which functions are exposed via the device API.
+
+This function defines the security boundary for the green zone device by
+explicitly listing which functions are available through the API.
+
+<a name="info-3"></a>
+
+### info/3 ###
+
+`info(Msg1, Msg2, Opts) -> any()`
+
+Provides information about the green zone device and its API.
+
+This function returns detailed documentation about the device, including:
+1. A high-level description of the device's purpose
+2. Version information
+3. Available API endpoints with their parameters and descriptions
+
 <a name="init-3"></a>
 
 ### init/3 ###
 
 <pre><code>
-init(M1::term(), M2::term(), Opts::map()) -&gt; {ok, binary()}
+init(M1::term(), M2::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
 </code></pre>
 <br />
+
+`Opts`: A map of configuration options<br />
+
+returns: `{ok, Binary}` on success with confirmation message, or
+`{error, Binary}` on failure with error message.
+
+Initialize the green zone for a node.
+
+This function performs the following operations:
+1. Validates the node's history to ensure this is a valid initialization
+2. Retrieves or creates a required configuration for the green zone
+3. Ensures a wallet (keypair) exists or creates a new one
+4. Generates a new 256-bit AES key for secure communication
+5. Updates the node's configuration with these cryptographic identities
+
+Config options in Opts map:
+- green_zone_required_config: (Optional) Custom configuration requirements
+- priv_wallet: (Optional) Existing wallet to use instead of creating a new one
+- priv_green_zone_aes: (Optional) Existing AES key, if already part of a zone
 
 <a name="join-3"></a>
 
@@ -4879,14 +5013,54 @@ join(M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, binary()}
 </code></pre>
 <br />
 
+`M1`: The join request message with target peer information<br />`M2`: Additional request details, may include adoption preferences<br />`Opts`: A map of configuration options for join operations<br />
+
+returns: `{ok, Map}` on success with join response details, or
+`{error, Binary}` on failure with error message.
+
+Initiates the join process for a node to enter an existing green zone.
+
+This function performs the following operations depending on the state:
+1. Validates the node's history to ensure proper initialization
+2. Checks for target peer information (location and ID)
+3. If target peer is specified:
+a. Generates a commitment report for the peer
+b. Prepares and sends a POST request to the target peer
+c. Verifies the response and decrypts the returned zone key
+d. Updates local configuration with the shared AES key
+4. If no peer is specified, processes the join request locally
+
+Config options in Opts map:
+- green_zone_peer_location: Target peer's address
+- green_zone_peer_id: Target peer's unique identifier
+- green_zone_adopt_config:
+(Optional) Whether to adopt peer's configuration (default: true)
+
 <a name="join_peer-5"></a>
 
 ### join_peer/5 * ###
 
 <pre><code>
-join_peer(PeerLocation::binary(), PeerID::binary(), M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, map()}
+join_peer(PeerLocation::binary(), PeerID::binary(), M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, map() | binary()}
 </code></pre>
 <br />
+
+`PeerLocation`: The target peer's address<br />`PeerID`: The target peer's unique identifier<br />`M2`: May contain ShouldMount flag to enable encrypted volume mounting<br />
+
+returns: `{ok, Map}` on success with confirmation message, or
+`{error, Map|Binary}` on failure with error details
+
+Processes a join request to a specific peer node.
+
+This function handles the client-side join flow when connecting to a peer:
+1. Verifies the node is not already in a green zone
+2. Optionally adopts configuration from the target peer
+3. Generates a hardware-backed commitment report
+4. Sends a POST request to the peer's join endpoint
+5. Verifies the response signature
+6. Decrypts the returned AES key
+7. Updates local configuration with the shared key
+8. Optionally mounts an encrypted volume using the shared key
 
 <a name="key-3"></a>
 
@@ -4897,11 +5071,49 @@ key(M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, binary()}
 </code></pre>
 <br />
 
+`Opts`: A map of configuration options<br />
+
+returns: `{ok, Map}` containing the encrypted key and IV on success, or
+`{error, Binary}` if the node is not part of a green zone
+
+Encrypts and provides the node's private key for secure sharing.
+
+This function performs the following operations:
+1. Retrieves the shared AES key and the node's wallet
+2. Verifies that the node is part of a green zone (has a shared AES key)
+3. Generates a random initialization vector (IV) for encryption
+4. Encrypts the node's private key using AES-256-GCM with the shared key
+5. Returns the encrypted key and IV for secure transmission
+
+Required configuration in Opts map:
+- priv_green_zone_aes: The shared AES key for the green zone
+- priv_wallet: The node's wallet containing the private key to encrypt
+
 <a name="maybe_set_zone_opts-4"></a>
 
 ### maybe_set_zone_opts/4 * ###
 
-`maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) -> any()`
+<pre><code>
+maybe_set_zone_opts(PeerLocation::binary(), PeerID::binary(), Req::map(), InitOpts::map()) -&gt; {ok, map()} | {error, binary()}
+</code></pre>
+<br />
+
+`PeerLocation`: The location of the peer node to join<br />`PeerID`: The ID of the peer node to join<br />`Req`: The request message with adoption preferences<br />`InitOpts`: A map of initial configuration options<br />
+
+returns: `{ok, Map}` with updated configuration on success, or
+`{error, Binary}` if configuration retrieval fails
+
+Adopts configuration from a peer when joining a green zone.
+
+This function handles the conditional adoption of peer configuration:
+1. Checks if adoption is enabled (default: true)
+2. Requests required configuration from the peer
+3. Verifies the authenticity of the configuration
+4. Creates a node message with appropriate settings
+5. Updates the local node configuration
+
+Config options:
+- green_zone_adopt_config: Controls configuration adoption (boolean, list, or binary)
 
 <a name="rsa_wallet_integration_test-0"></a>
 
@@ -4909,11 +5121,27 @@ key(M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, binary()}
 
 `rsa_wallet_integration_test() -> any()`
 
+Test RSA operations with the existing wallet structure.
+
+This test function verifies that encryption and decryption using the RSA keys
+from the wallet work correctly. It creates a new wallet, encrypts a test
+message with the RSA public key, and then decrypts it with the RSA private
+key, asserting that the decrypted message matches the original.
+
 <a name="try_mount_encrypted_volume-2"></a>
 
 ### try_mount_encrypted_volume/2 * ###
 
 `try_mount_encrypted_volume(AESKey, Opts) -> any()`
+
+Attempts to mount an encrypted volume using the green zone AES key.
+
+This function handles the complete process of secure storage setup by
+delegating to the dev_volume module, which provides a unified interface
+for volume management.
+
+The encryption key used for the volume is the same AES key used for green zone
+communication, ensuring that only nodes in the green zone can access the data.
 
 <a name="validate_join-3"></a>
 
@@ -4924,11 +5152,43 @@ validate_join(M1::term(), Req::map(), Opts::map()) -&gt; {ok, map()} | {error, b
 </code></pre>
 <br />
 
+`M1`: Ignored parameter<br />`Req`: The join request containing commitment report and public key<br />`Opts`: A map of configuration options<br />
+
+returns: `{ok, Map}` on success with encrypted AES key, or
+`{error, Binary}` on failure with error message
+
+Validates an incoming join request from another node.
+
+This function handles the server-side join flow when receiving a connection
+request:
+1. Validates the peer's configuration meets required standards
+2. Extracts the commitment report and public key from the request
+3. Verifies the hardware-backed commitment report
+4. Adds the joining node to the trusted nodes list
+5. Encrypts the shared AES key with the peer's public key
+6. Returns the encrypted key to the requesting node
+
 <a name="validate_peer_opts-2"></a>
 
 ### validate_peer_opts/2 * ###
 
-`validate_peer_opts(Req, Opts) -> any()`
+<pre><code>
+validate_peer_opts(Req::map(), Opts::map()) -&gt; boolean()
+</code></pre>
+<br />
+
+`Req`: The request message containing the peer's configuration<br />`Opts`: A map of the local node's configuration options<br />
+
+returns: true if the peer's configuration is valid, false otherwise
+
+Validates that a peer's configuration matches required options.
+
+This function ensures the peer node meets configuration requirements:
+1. Retrieves the local node's required configuration
+2. Gets the peer's options from its message
+3. Adds required configuration to peer's required options list
+4. Verifies the peer's node history is valid
+5. Checks that the peer's options match the required configuration
 
 
 --- END OF FILE: docs/resources/source-code/dev_green_zone.md ---
@@ -8525,7 +8785,8 @@ hashpath.</td></tr><tr><td valign="top"><a href="#choose-5">choose/5*</a></td><t
 HyperBEAM node.</td></tr><tr><td valign="top"><a href="#dynamic_routing_by_performance-0">dynamic_routing_by_performance/0*</a></td><td></td></tr><tr><td valign="top"><a href="#dynamic_routing_by_performance_test_-0">dynamic_routing_by_performance_test_/0*</a></td><td>Demonstrates routing tables being dynamically created and adjusted
 according to the real-time performance of nodes.</td></tr><tr><td valign="top"><a href="#explicit_route_test-0">explicit_route_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#extract_base-2">extract_base/2*</a></td><td>Extract the base message ID from a request message.</td></tr><tr><td valign="top"><a href="#field_distance-2">field_distance/2*</a></td><td>Calculate the minimum distance between two numbers
 (either progressing backwards or forwards), assuming a
-256-bit field.</td></tr><tr><td valign="top"><a href="#find_target_path-2">find_target_path/2*</a></td><td>Find the target path to route for a request message.</td></tr><tr><td valign="top"><a href="#generate_hashpaths-1">generate_hashpaths/1*</a></td><td></td></tr><tr><td valign="top"><a href="#generate_nodes-1">generate_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#get_routes_test-0">get_routes_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#load_routes-1">load_routes/1*</a></td><td>Load the current routes for the node.</td></tr><tr><td valign="top"><a href="#local_dynamic_router_test-0">local_dynamic_router_test/0*</a></td><td>Example of a Lua module being used as the <code>route_provider</code> for a
+256-bit field.</td></tr><tr><td valign="top"><a href="#find_target_path-2">find_target_path/2*</a></td><td>Find the target path to route for a request message.</td></tr><tr><td valign="top"><a href="#generate_hashpaths-1">generate_hashpaths/1*</a></td><td></td></tr><tr><td valign="top"><a href="#generate_nodes-1">generate_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#get_routes_test-0">get_routes_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Exported function for getting device info, controls which functions are
+exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>HTTP info response providing information about this device.</td></tr><tr><td valign="top"><a href="#load_routes-1">load_routes/1*</a></td><td>Load the current routes for the node.</td></tr><tr><td valign="top"><a href="#local_dynamic_router_test-0">local_dynamic_router_test/0*</a></td><td>Example of a Lua module being used as the <code>route_provider</code> for a
 HyperBEAM node.</td></tr><tr><td valign="top"><a href="#local_process_route_provider_test-0">local_process_route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#lowest_distance-1">lowest_distance/1*</a></td><td>Find the node with the lowest distance to the given hashpath.</td></tr><tr><td valign="top"><a href="#lowest_distance-2">lowest_distance/2*</a></td><td></td></tr><tr><td valign="top"><a href="#match-3">match/3</a></td><td>Find the first matching template in a list of known routes.</td></tr><tr><td valign="top"><a href="#match_routes-3">match_routes/3*</a></td><td></td></tr><tr><td valign="top"><a href="#match_routes-4">match_routes/4*</a></td><td></td></tr><tr><td valign="top"><a href="#preprocess-3">preprocess/3</a></td><td>Preprocess a request to check if it should be relayed to a different node.</td></tr><tr><td valign="top"><a href="#register-3">register/3</a></td><td></td></tr><tr><td valign="top"><a href="#relay_nearest_test-0">relay_nearest_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route-2">route/2</a></td><td>Find the appropriate route for the given message.</td></tr><tr><td valign="top"><a href="#route-3">route/3</a></td><td></td></tr><tr><td valign="top"><a href="#route_provider_test-0">route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route_regex_matches_test-0">route_regex_matches_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route_template_message_matches_test-0">route_template_message_matches_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#routes-3">routes/3</a></td><td>Device function that returns all known routes.</td></tr><tr><td valign="top"><a href="#simulate-4">simulate/4*</a></td><td></td></tr><tr><td valign="top"><a href="#simulation_distribution-2">simulation_distribution/2*</a></td><td></td></tr><tr><td valign="top"><a href="#simulation_occurences-2">simulation_occurences/2*</a></td><td></td></tr><tr><td valign="top"><a href="#strategy_suite_test_-0">strategy_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#template_matches-3">template_matches/3*</a></td><td>Check if a message matches a message template or path regex.</td></tr><tr><td valign="top"><a href="#unique_nodes-1">unique_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#unique_test-1">unique_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#weighted_random_strategy_test-0">weighted_random_strategy_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#within_norms-3">within_norms/3*</a></td><td></td></tr></table>
 
 
@@ -8687,6 +8948,23 @@ Find the target path to route for a request message.
 ### get_routes_test/0 * ###
 
 `get_routes_test() -> any()`
+
+<a name="info-1"></a>
+
+### info/1 ###
+
+`info(X1) -> any()`
+
+Exported function for getting device info, controls which functions are
+exposed via the device API.
+
+<a name="info-3"></a>
+
+### info/3 ###
+
+`info(Msg1, Msg2, Opts) -> any()`
+
+HTTP info response providing information about this device
 
 <a name="load_routes-1"></a>
 
@@ -10647,6 +10925,281 @@ Find a test worker's PID and send it an update message.
 
 
 --- END OF FILE: docs/resources/source-code/dev_test.md ---
+
+--- START OF FILE: docs/resources/source-code/dev_volume.md ---
+# [Module dev_volume.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_volume.erl)
+
+
+
+
+Secure Volume Management for HyperBEAM Nodes.
+
+<a name="description"></a>
+
+## Description ##
+
+This module handles encrypted storage operations for HyperBEAM, providing
+a robust and secure approach to data persistence. It manages the complete
+lifecycle of encrypted volumes from detection to creation, formatting, and
+mounting.
+
+Key responsibilities:
+- Volume detection and initialization
+- Encrypted partition creation and formatting
+- Secure mounting using cryptographic keys
+- Store path reconfiguration to use mounted volumes
+- Automatic handling of various system states
+(new device, existing partition, etc.)
+
+The primary entry point is the `mount/3` function, which orchestrates the
+entire process based on the provided configuration parameters. This module
+works alongside `hb_volume` which provides the low-level operations for
+device manipulation.
+
+Security considerations:
+- Ensures data at rest is protected through LUKS encryption
+- Provides proper volume sanitization and secure mounting
+- IMPORTANT: This module only applies configuration set in node options and
+does NOT accept disk operations via HTTP requests. It cannot format arbitrary
+disks as all operations are safeguarded by host operating system permissions
+enforced upon the HyperBEAM environment.<a name="index"></a>
+
+## Function Index ##
+
+
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#check_base_device-8">check_base_device/8*</a></td><td>Check if the base device exists and if it does, check if the partition exists.</td></tr><tr><td valign="top"><a href="#check_partition-8">check_partition/8*</a></td><td>Check if the partition exists.</td></tr><tr><td valign="top"><a href="#create_and_mount_partition-8">create_and_mount_partition/8*</a></td><td>Create, format and mount a new partition.</td></tr><tr><td valign="top"><a href="#decrypt_volume_key-2">decrypt_volume_key/2*</a></td><td>Decrypts an encrypted volume key using the node's private key.</td></tr><tr><td valign="top"><a href="#format_and_mount-6">format_and_mount/6*</a></td><td>Format and mount a newly created partition.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Exported function for getting device info, controls which functions are
+exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>HTTP info response providing information about this device.</td></tr><tr><td valign="top"><a href="#mount-3">mount/3</a></td><td>Handles the complete process of secure encrypted volume mounting.</td></tr><tr><td valign="top"><a href="#mount_existing_partition-6">mount_existing_partition/6*</a></td><td>Mount an existing partition.</td></tr><tr><td valign="top"><a href="#mount_formatted_partition-6">mount_formatted_partition/6*</a></td><td>Mount a newly formatted partition.</td></tr><tr><td valign="top"><a href="#public_key-3">public_key/3</a></td><td>Returns the node's public key for secure key exchange.</td></tr><tr><td valign="top"><a href="#update_node_config-2">update_node_config/2*</a></td><td>Update the node's configuration with the new store.</td></tr><tr><td valign="top"><a href="#update_store_path-2">update_store_path/2*</a></td><td>Update the store path to use the mounted volume.</td></tr></table>
+
+
+<a name="functions"></a>
+
+## Function Details ##
+
+<a name="check_base_device-8"></a>
+
+### check_base_device/8 * ###
+
+<pre><code>
+check_base_device(Device::term(), Partition::term(), PartitionType::term(), VolumeName::term(), MountPoint::term(), StorePath::term(), Key::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`Device`: The base device to check.<br />`Partition`: The partition to check.<br />`PartitionType`: The type of partition to check.<br />`VolumeName`: The name of the volume to check.<br />`MountPoint`: The mount point to check.<br />`StorePath`: The store path to check.<br />`Key`: The key to check.<br />`Opts`: The options to check.<br />
+
+returns: `{ok, Binary}` on success with operation result message, or
+`{error, Binary}` on failure with error message.
+
+Check if the base device exists and if it does, check if the partition exists.
+
+<a name="check_partition-8"></a>
+
+### check_partition/8 * ###
+
+<pre><code>
+check_partition(Device::term(), Partition::term(), PartitionType::term(), VolumeName::term(), MountPoint::term(), StorePath::term(), Key::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`Device`: The base device to check.<br />`Partition`: The partition to check.<br />`PartitionType`: The type of partition to check.<br />`VolumeName`: The name of the volume to check.<br />`MountPoint`: The mount point to check.<br />`StorePath`: The store path to check.<br />`Key`: The key to check.<br />`Opts`: The options to check.<br />
+
+returns: `{ok, Binary}` on success with operation result message, or
+`{error, Binary}` on failure with error message.
+
+Check if the partition exists. If it does, attempt to mount it.
+If it doesn't exist, create it, format it with encryption and mount it.
+
+<a name="create_and_mount_partition-8"></a>
+
+### create_and_mount_partition/8 * ###
+
+<pre><code>
+create_and_mount_partition(Device::term(), Partition::term(), PartitionType::term(), Key::term(), MountPoint::term(), VolumeName::term(), StorePath::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`Device`: The device to create the partition on.<br />`Partition`: The partition to create.<br />`PartitionType`: The type of partition to create.<br />`Key`: The key to create the partition with.<br />`MountPoint`: The mount point to mount the partition to.<br />`VolumeName`: The name of the volume to mount.<br />`StorePath`: The store path to mount.<br />`Opts`: The options to mount.<br />
+
+returns: `{ok, Binary}` on success with operation result message, or
+`{error, Binary}` on failure with error message.
+
+Create, format and mount a new partition.
+
+<a name="decrypt_volume_key-2"></a>
+
+### decrypt_volume_key/2 * ###
+
+<pre><code>
+decrypt_volume_key(EncryptedKeyBase64::binary(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`Opts`: A map of configuration options.<br />
+
+returns: `{ok, DecryptedKey}` on successful decryption, or
+`{error, Binary}` if decryption fails.
+
+Decrypts an encrypted volume key using the node's private key.
+
+This function takes an encrypted key (typically sent by a client who encrypted
+it with the node's public key) and decrypts it using the node's private RSA key.
+
+<a name="format_and_mount-6"></a>
+
+### format_and_mount/6 * ###
+
+<pre><code>
+format_and_mount(Partition::term(), Key::term(), MountPoint::term(), VolumeName::term(), StorePath::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`Partition`: The partition to format and mount.<br />`Key`: The key to format and mount the partition with.<br />`MountPoint`: The mount point to mount the partition to.<br />`VolumeName`: The name of the volume to mount.<br />`StorePath`: The store path to mount.<br />`Opts`: The options to mount.<br />
+
+returns: `{ok, Binary}` on success with operation result message, or
+`{error, Binary}` on failure with error message.
+
+Format and mount a newly created partition.
+
+<a name="info-1"></a>
+
+### info/1 ###
+
+`info(X1) -> any()`
+
+Exported function for getting device info, controls which functions are
+exposed via the device API.
+
+<a name="info-3"></a>
+
+### info/3 ###
+
+`info(Msg1, Msg2, Opts) -> any()`
+
+HTTP info response providing information about this device
+
+<a name="mount-3"></a>
+
+### mount/3 ###
+
+<pre><code>
+mount(M1::term(), M2::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`M1`: Base message for context.<br />`M2`: Request message with operation details.<br />`Opts`: A map of configuration options for volume operations.<br />
+
+returns: `{ok, Binary}` on success with operation result message, or
+`{error, Binary}` on failure with error message.
+
+Handles the complete process of secure encrypted volume mounting.
+
+This function performs the following operations depending on the state:
+1. Validates the encryption key is present
+2. Checks if the base device exists
+3. Checks if the partition exists on the device
+4. If the partition exists, attempts to mount it
+5. If the partition doesn't exist, creates it, formats it with encryption
+and mounts it
+6. Updates the node's store configuration to use the mounted volume
+
+Config options in Opts map:
+- volume_key: (Required) The encryption key
+- volume_device: Base device path
+- volume_partition: Partition path
+- volume_partition_type: Filesystem type
+- volume_name: Name for encrypted volume
+- volume_mount_point: Where to mount
+- volume_store_path: Store path on volume
+
+<a name="mount_existing_partition-6"></a>
+
+### mount_existing_partition/6 * ###
+
+<pre><code>
+mount_existing_partition(Partition::term(), Key::term(), MountPoint::term(), VolumeName::term(), StorePath::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`Partition`: The partition to mount.<br />`Key`: The key to mount.<br />`MountPoint`: The mount point to mount.<br />`VolumeName`: The name of the volume to mount.<br />`StorePath`: The store path to mount.<br />`Opts`: The options to mount.<br />
+
+returns: `{ok, Binary}` on success with operation result message, or
+`{error, Binary}` on failure with error message.
+
+Mount an existing partition.
+
+<a name="mount_formatted_partition-6"></a>
+
+### mount_formatted_partition/6 * ###
+
+<pre><code>
+mount_formatted_partition(Partition::term(), Key::term(), MountPoint::term(), VolumeName::term(), StorePath::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`Partition`: The partition to mount.<br />`Key`: The key to mount the partition with.<br />`MountPoint`: The mount point to mount the partition to.<br />`VolumeName`: The name of the volume to mount.<br />`StorePath`: The store path to mount.<br />`Opts`: The options to mount.<br />
+
+returns: `{ok, Binary}` on success with operation result message, or
+`{error, Binary}` on failure with error message.
+
+Mount a newly formatted partition.
+
+<a name="public_key-3"></a>
+
+### public_key/3 ###
+
+<pre><code>
+public_key(M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, binary()}
+</code></pre>
+<br />
+
+`Opts`: A map of configuration options.<br />
+
+returns: `{ok, Map}` containing the node's public key on success, or
+`{error, Binary}` if the node's wallet is not available.
+
+Returns the node's public key for secure key exchange.
+
+This function retrieves the node's wallet and extracts the public key
+for encryption purposes. It allows users to securely exchange encryption keys
+by first encrypting their volume key with the node's public key.
+
+The process ensures that sensitive keys are never transmitted in plaintext.
+The encrypted key can then be securely sent to the node, which will decrypt it
+using its private key before using it for volume encryption.
+
+<a name="update_node_config-2"></a>
+
+### update_node_config/2 * ###
+
+<pre><code>
+update_node_config(NewStore::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`NewStore`: The new store to update the node's configuration with.<br />`Opts`: The options to update the node's configuration with.<br />
+
+returns: `{ok, Binary}` on success with operation result message, or
+`{error, Binary}` on failure with error message.
+
+Update the node's configuration with the new store.
+
+<a name="update_store_path-2"></a>
+
+### update_store_path/2 * ###
+
+<pre><code>
+update_store_path(StorePath::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`StorePath`: The store path to update.<br />`Opts`: The options to update.<br />
+
+returns: `{ok, Binary}` on success with operation result message, or
+`{error, Binary}` on failure with error message.
+
+Update the store path to use the mounted volume.
+
+
+--- END OF FILE: docs/resources/source-code/dev_volume.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_wasi.md ---
 # [Module dev_wasi.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_wasi.erl)
@@ -15852,7 +16405,7 @@ with a refusal to execute.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cached_os_env-2">cached_os_env/2*</a></td><td>Cache the result of os:getenv/1 in the process dictionary, as it never
-changes during the lifetime of a node.</td></tr><tr><td valign="top"><a href="#config_lookup-2">config_lookup/2*</a></td><td>An abstraction for looking up configuration variables.</td></tr><tr><td valign="top"><a href="#default_message-0">default_message/0</a></td><td>The default configuration options of the hyperbeam node.</td></tr><tr><td valign="top"><a href="#get-1">get/1</a></td><td>Get an option from the global options, optionally overriding with a
+changes during the lifetime of a node.</td></tr><tr><td valign="top"><a href="#check_required_opts-2">check_required_opts/2</a></td><td>Utility function to check for required options in a list.</td></tr><tr><td valign="top"><a href="#config_lookup-2">config_lookup/2*</a></td><td>An abstraction for looking up configuration variables.</td></tr><tr><td valign="top"><a href="#default_message-0">default_message/0</a></td><td>The default configuration options of the hyperbeam node.</td></tr><tr><td valign="top"><a href="#get-1">get/1</a></td><td>Get an option from the global options, optionally overriding with a
 local <code>Opts</code> map if <code>prefer</code> or <code>only</code> is set to <code>local</code>.</td></tr><tr><td valign="top"><a href="#get-2">get/2</a></td><td></td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr><tr><td valign="top"><a href="#global_get-2">global_get/2*</a></td><td>Get an environment variable or configuration key.</td></tr><tr><td valign="top"><a href="#load-1">load/1</a></td><td>Parse a <code>flat@1.0</code> encoded file into a map, matching the types of the
 keys to those in the default message.</td></tr><tr><td valign="top"><a href="#load_bin-1">load_bin/1</a></td><td></td></tr><tr><td valign="top"><a href="#mimic_default_types-2">mimic_default_types/2</a></td><td>Mimic the types of the default message for a given map.</td></tr><tr><td valign="top"><a href="#normalize_default-1">normalize_default/1*</a></td><td>Get an option from environment variables, optionally consulting the
 <code>hb_features</code> of the node if a conditional default tuple is provided.</td></tr><tr><td valign="top"><a href="#validate_node_history-1">validate_node_history/1</a></td><td>Validate that the node_history length is within an acceptable range.</td></tr><tr><td valign="top"><a href="#validate_node_history-3">validate_node_history/3</a></td><td></td></tr></table>
@@ -15870,6 +16423,26 @@ keys to those in the default message.</td></tr><tr><td valign="top"><a href="#lo
 
 Cache the result of os:getenv/1 in the process dictionary, as it never
 changes during the lifetime of a node.
+
+<a name="check_required_opts-2"></a>
+
+### check_required_opts/2 ###
+
+<pre><code>
+check_required_opts(KeyValuePairs::[{binary(), term()}], Opts::map()) -&gt; {ok, map()} | {error, binary()}
+</code></pre>
+<br />
+
+`KeyValuePairs`: A list of {Name, Value} pairs to check.<br />`Opts`: The original options map to return if validation succeeds.<br />
+
+returns: `{ok, Opts}` if all required options are present, or
+`{error, <<"Missing required parameters: ", MissingOptsStr/binary>>}`
+where `MissingOptsStr` is a comma-separated list of missing option names.
+
+Utility function to check for required options in a list.
+Takes a list of {Name, Value} pairs and returns:
+- {ok, Opts} when all required options are present (Value =/= not_found)
+- {error, ErrorMsg} with a message listing all missing options when any are not_found
 
 <a name="config_lookup-2"></a>
 
@@ -20113,6 +20686,7 @@ Use the navigation menu to dive into specific parts of the codebase. Each module
 <tr><td><a href="dev_snp_nif.md" class="module">dev_snp_nif</a></td></tr>
 <tr><td><a href="dev_stack.md" class="module">dev_stack</a></td></tr>
 <tr><td><a href="dev_test.md" class="module">dev_test</a></td></tr>
+<tr><td><a href="dev_volume.md" class="module">dev_volume</a></td></tr>
 <tr><td><a href="dev_wasi.md" class="module">dev_wasi</a></td></tr>
 <tr><td><a href="dev_wasm.md" class="module">dev_wasm</a></td></tr>
 <tr><td><a href="hb.md" class="module">hb</a></td></tr>

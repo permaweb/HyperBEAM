@@ -24,10 +24,53 @@
 %%%                map or a path regex.
 %%% </pre>
 -module(dev_router).
--export([routes/3, route/2, route/3, preprocess/3]).
+-export([info/1, info/3, routes/3, route/2, route/3, preprocess/3]).
 -export([match/3, register/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
+
+%% @doc Exported function for getting device info, controls which functions are
+%% exposed via the device API.
+info(_) -> 
+    #{ exports => [info, routes, route, match, register, preprocess] }.
+
+%% @doc HTTP info response providing information about this device
+info(_Msg1, _Msg2, _Opts) ->
+    InfoBody = #{
+        <<"description">> => <<"Router device for handling outbound message routing">>,
+        <<"version">> => <<"1.0">>,
+        <<"api">> => #{
+            <<"info">> => #{
+                <<"description">> => <<"Get device info">>
+            },
+            <<"routes">> => #{
+                <<"description">> => <<"Get or add routes">>,
+                <<"method">> => <<"GET or POST">>
+            },
+            <<"route">> => #{
+                <<"description">> => <<"Find a route for a message">>,
+                <<"required_params">> => #{
+                    <<"route-path">> => <<"Path to route">>
+                }
+            },
+            <<"match">> => #{
+                <<"description">> => <<"Match a message against available routes">>
+            },
+            <<"register">> => #{
+                <<"description">> => <<"Register a route with a remote router node">>,
+                <<"required_node_opts">> => #{
+                    <<"router_peer_location">> => <<"Location of the router peer">>,
+                    <<"router_prefix">> => <<"Prefix for the route">>,
+                    <<"router_price">> => <<"Price for the route">>,
+                    <<"router_template">> => <<"Template to match the route">>
+                }
+            },
+            <<"preprocess">> => #{
+                <<"description">> => <<"Preprocess a request to check if it should be relayed">>
+            }
+        }
+    },
+    {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% A exposed register function that allows telling the current node to register
 %% a new route with a remote router node. This function should also be itempotent
@@ -46,15 +89,6 @@ register(_M1, _M2, Opts) ->
                     Prefix = hb_opts:get(<<"router_prefix">>, not_found, Opts),
                     Price = hb_opts:get(<<"router_price">>, not_found, Opts),
                     Template = hb_opts:get(<<"router_template">>, not_found, Opts),
-                    % Check if any required parameters are missing
-                    Missing = [
-                        {<<"router_peer_location">>, RouterNode},
-                        {<<"router_prefix">>, Prefix},
-                        {<<"router_price">>, Price},
-                        {<<"router_template">>, Template}
-                    ],
-                    MissingParams = 
-                        [Param || {Param, Value} <- Missing, Value =:= not_found],
                     {ok, Attestion} = dev_snp:generate(
                         #{}, 
                         #{}, 
@@ -64,8 +98,14 @@ register(_M1, _M2, Opts) ->
                         }
                     ),
                     ?event(debug_register, {attestion, Attestion}),
-                    case MissingParams of
-                        [] ->
+                    % Check if any required parameters are missing
+                    case hb_opts:check_required_opts([
+                        {<<"router_peer_location">>, RouterNode},
+                        {<<"router_prefix">>, Prefix},
+                        {<<"router_price">>, Price},
+                        {<<"router_template">>, Template}
+                    ], Opts) of
+                        {ok, _} ->
                             case hb_http:post(RouterNode, #{
                                 <<"path">> => <<"/router~node-process@1.0/schedule">>,
                                 <<"method">> => <<"POST">>,
@@ -92,19 +132,7 @@ register(_M1, _M2, Opts) ->
                                 {error, _} ->
                                     {error, <<"Failed to register route.">>}
                             end;
-                        _ ->
-                            % Some parameters are missing, return error message
-                            ParamList = lists:foldl(
-                                fun(Param, Acc) ->
-                                    case Acc of
-                                        <<>> -> Param;
-                                        _ -> <<Acc/binary, ", ", Param/binary>>
-                                    end
-                                end,
-                                <<>>,
-                                MissingParams
-                            ),
-                            ErrorMsg = <<"Missing required parameters: ", ParamList/binary>>,
+                        {error, ErrorMsg} ->
                             {error, ErrorMsg}
                     end;
                 {error, Reason} ->
@@ -355,8 +383,8 @@ template_matches(ToMatch, Template, _Opts) when is_map(Template) ->
 template_matches(ToMatch, Regex, Opts) when is_binary(Regex) ->
     MsgPath = find_target_path(ToMatch, Opts),
     Matches = hb_path:regex_matches(MsgPath, Regex),
-	?event(debug_template_matches, {matches, Matches, msg_path, MsgPath, regex, Regex}),
-	Matches.
+    ?event(debug_template_matches, {matches, Matches, msg_path, MsgPath, regex, Regex}),
+    Matches.
 
 %% @doc Implements the load distribution strategies if given a cluster.
 choose(0, _, _, _, _) -> [];
@@ -702,29 +730,29 @@ local_dynamic_router_test() ->
 dynamic_router_test() ->
     {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
     Run = hb_util:bin(rand:uniform(1337)),
-	ExecWallet = hb:wallet(<<"test/admissible-report-wallet.json">>),
-	ProxyWallet = ar_wallet:new(),
+    ExecWallet = hb:wallet(<<"test/admissible-report-wallet.json">>),
+    ProxyWallet = ar_wallet:new(),
     ExecNode =
         hb_http_server:start_node(
-        	ExecOpts = #{ priv_wallet => ExecWallet }
+            ExecOpts = #{ priv_wallet => ExecWallet }
         ),
     Node = hb_http_server:start_node(ProxyOpts = #{
         snp_trusted => [
-			#{
-				<<"vcpus">> => 32,
-				<<"vcpu_type">> => 5, 
-				<<"vmm_type">> => 1,
-				<<"guest_features">> => 1,
-				<<"firmware">> =>
+            #{
+                <<"vcpus">> => 32,
+                <<"vcpu_type">> => 5, 
+                <<"vmm_type">> => 1,
+                <<"guest_features">> => 1,
+                <<"firmware">> =>
                     <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
-				<<"kernel">> =>
+                <<"kernel">> =>
                     <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
-				<<"initrd">> =>
+                <<"initrd">> =>
                     <<"544045560322dbcd2c454bdc50f35edf0147829ec440e6cb487b4a1503f923c1">>,
-				<<"append">> =>
+                <<"append">> =>
                     <<"95a34faced5e487991f9cc2253a41cbd26b708bf00328f98dddbbf6b3ea2892e">>
-			}
-		],
+            }
+        ],
         store => [
             #{
                 <<"store-module">> => hb_store_fs,

@@ -271,7 +271,7 @@ respective documentation.
 HyperBEAM is developed as an open source implementation of the AO-Core protocol 
 by [Forward Research](https://fwd.arweave.net). Pull Requests are always welcome!
 
-To get started building on HyperBEAM, check out the [hacking on HyperBEAM](./docs/contribute/setup.md)
+To get started building on HyperBEAM, check out the [hacking on HyperBEAM](./docs/misc/hacking-on-hyperbeam.md)
 guide.
 
 ## Documentation
@@ -387,4 +387,4 @@ To contribute documentation to HyperBEAM, follow these steps:
    - Be prepared to make adjustments based on feedback
    - Once approved, your documentation will be merged into the main repository
 
-For more detailed contribution guidelines, see the [Community Guidelines](./docs/community/guidelines.md) and [Development Setup](./docs/community/setup.md) documentation.
+For more detailed contribution guidelines, see the [Community Guidelines](./docs/misc/community/guidelines.md) and [Development Setup](./docs/misc/community/setup.md) documentation.

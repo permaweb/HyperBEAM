@@ -1,4 +1,4 @@
-Generated: 2025-05-13T16:51:16Z
+Generated: 2025-05-15T13:32:25Z
 
 ## HyperBEAM Documentation Summary
 
@@ -101,6 +101,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module dev_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_snp_nif.erl)](./resources/source-code/dev_snp_nif.html)
 * [[Module dev_stack.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_stack.erl)](./resources/source-code/dev_stack.html)
 * [[Module dev_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_test.erl)](./resources/source-code/dev_test.html)
+* [[Module dev_volume.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_volume.erl)](./resources/source-code/dev_volume.html)
 * [[Module dev_wasi.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_wasi.erl)](./resources/source-code/dev_wasi.html)
 * [[Module dev_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_wasm.erl)](./resources/source-code/dev_wasm.html)
 * [[Module hb.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb.erl)](./resources/source-code/hb.html)
