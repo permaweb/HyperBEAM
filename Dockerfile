@@ -55,12 +55,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# replace commas with pluses in the PROFILES variable
-SHELL ["/bin/bash", "-c"]
-ENV BUILT_PROFILES="${PROFILES//,/+}"
-
 COPY --from=builder /app/_build/${BUILT_PROFILES}/rel/hb /app
 
-RUN chmod +x /app/bin/hb
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
-ENTRYPOINT ["/app/bin/hb"]
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["entrypoint.sh"]
