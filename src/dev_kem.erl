@@ -5,7 +5,7 @@
 %%% this device offer parallel computation on hardware level, boosting ao's parallel compute to a lower level
 
 -module(dev_kem).
--export([info/1, info/3, execute_kernel/3, get_adapter_info/3]).
+-export([info/1, info/3, execute_kernel/3, get_adapter_info/3, test_ao/0]).
 
 info(_) ->
     #{
@@ -86,3 +86,53 @@ get_adapter_info(_Msg1, _Msg2, _Opts) ->
 %     "input_data": [1,3,5,7],
 %     "output_size_hint": 1
 %   }'
+
+% in erlang shell call: dev_kem:test_ao().
+test_ao() ->
+    io:format("~n__test_kem_device__~n"),
+    try
+        % Get current wallet
+        Wallet = hb:wallet(),
+        % Get wallet address in human readable form  
+        Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+
+        % Create the process message
+        {ok, Script} = file:read_file("test/kem-device.lua"),
+        Process = hb_message:commit(#{
+            <<"device">> => <<"process@1.0">>,
+            <<"type">> => <<"Process">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"execution-device">> => <<"lua@5.3a">>,
+            <<"script">> => Script,
+            <<"scheduler-location">> => Address,
+            <<"authority">> => [Address],  % Add authority
+            <<"test-random-seed">> => rand:uniform(1337)
+        }, Wallet),
+
+        % Cache the process
+        {ok, _} = hb_cache:write(Process, #{}),
+
+        % Get process ID
+        ProcID = hb_message:id(Process, all),
+
+        % Create schedule message  
+        Message = hb_message:commit(#{
+            <<"path">> => <<"schedule">>,
+            <<"method">> => <<"POST">>,
+            <<"body">> => hb_message:commit(#{
+                <<"target">> => ProcID,
+                <<"type">> => <<"Message">>,
+                <<"action">> => <<"Eval">>
+            }, Wallet)
+        }, Wallet),
+
+        % Schedule the message
+        {ok, _} = hb_ao:resolve(Process, Message, #{}),
+
+        % Get the results
+        {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
+        io:format("~nKEM test result: ~p~n", [Results])
+    catch
+        Error:Reason:Stack ->
+            io:format("Error running KEM test: ~p:~p~n~p~n", [Error, Reason, Stack])
+    end.
