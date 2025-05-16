@@ -92,7 +92,8 @@ default_message() ->
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
 			% temporal hack, for the future should load it from config
             #{<<"name">> => <<"evm@1.0">>, <<"module">> => dev_evm},
-			#{<<"name">> => <<"riscv-em@1.0">>, <<"module">> => dev_riscv_em}
+			#{<<"name">> => <<"riscv-em@1.0">>, <<"module">> => dev_riscv_em},
+			#{<<"name">> => <<"kem@1.0">>, <<"module">> => dev_kem}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
