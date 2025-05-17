@@ -4,6 +4,8 @@ The `kernel-em` NIF (kernel execution machine - `kem@1.0` device) is a HyperBEAM
 
 With `wgpu` being a cross-platform GPU graphics API, hyperbeam node operators can add the KEM device to offer a compute platform for KEM functions. And with the ability to be called from within an ao process through `ao.resolve` (`kem@1.0` device), KEM functions offer great flexibility to run as GPU compute sidecars alongside ao processes.
 
+***[!] This device is experimental, in PoC stage [!]***
+
 
 ## KEM Technical Architecture
 
