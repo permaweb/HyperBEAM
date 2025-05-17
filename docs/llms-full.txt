@@ -1,5 +1,4 @@
-Generated: 2025-05-15T13:32:25Z
-
+Generated: 2025-05-17T00:09:40Z
 
 --- START OF FILE: docs/build/exposing-process-state.md ---
 # Exposing Process State with the Patch Device
