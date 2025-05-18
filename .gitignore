@@ -39,3 +39,4 @@ cache-*
 
 cu/
 mkdocs-site/
+deployment.sh
