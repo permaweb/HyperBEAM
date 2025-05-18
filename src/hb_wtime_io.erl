@@ -89,11 +89,9 @@ size_test() ->
     {ok, File} = file:read_file("test/test-print.wasm"),
     {ok, Instance} = hb_wtime:create(File),
     ?assertEqual({ok, PageSize * File1Pages}, hb_wtime:mem_size(Instance)),
-    % hb_beamr:stop(Instance),
     {ok, File2} = file:read_file("test/aos-new.wasm"),
     {ok, Instance2} = hb_wtime:create(File2),
     ?assertEqual({ok, PageSize * File2Pages}, hb_wtime:mem_size(Instance2)).
-    % hb_beamr:stop(Instance2).
 
 %% @doc Test writing memory in and out of bounds.
 write_test() ->
@@ -123,7 +121,11 @@ malloc_test() ->
     {ok, File} = file:read_file("test/test-calling.wasm"),
     {ok, Instance} = hb_wtime:create(File),
     % Check that we can allocate memory inside the bounds of the WASM module.
-    ?assertMatch({ok, _}, malloc(Instance, 100)),
+    Result = malloc(Instance, 100),
+    ?assertMatch({ok, _}, Result),
+    % TODO: Find a module with `free` function
+    % {ok, Ptr} = Result,
+    % ?assertEqual(ok, free(Instance, Ptr)),
     % Check that we can safely handle out-of-bounds allocations.
     % The WASM module has a maximum of 259 pages (16MB) of memory, so we
     % should not be able to allocate more than that.

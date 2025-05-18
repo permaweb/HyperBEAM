@@ -1,13 +1,14 @@
 use crate::convert::{self, nif_vals_to_wasm_vals};
 use crate::types::{NativeFuncDesc, NifWasmVal, WasmVal};
-use crate::wasm::HostFuncDesc;
+use crate::wasm::{HostFuncDesc, HostFuncResult};
 use crate::wasm_fsm::{
     CallOutcome, FsmError, HostFuncResponse, NativeFuncRequest, StateTag, WasmFsm, WasmModuleData,
 };
 use anyhow;
-use rustler::{Atom, Binary, Encoder, Env, NifResult, ResourceArc, Term};
+use rustler::types::atom::{error, ok};
+use rustler::{Binary, Encoder, Env, NifResult, OwnedBinary, ResourceArc, Term};
 use std::sync::Mutex;
-use tracing::{debug, error, trace, trace_span};
+use tracing::{debug, error, trace, debug_span};
 
 pub struct NifRes {
     fsm: Mutex<WasmFsm>,
@@ -15,16 +16,29 @@ pub struct NifRes {
     runtime: tokio::runtime::Runtime,
 }
 
+mod result_atoms {
+    use rustler::atoms;
+
+    atoms! {
+        complete,
+        import,
+        not_found,
+    }
+}
+
 fn fsm_error_to_term<'a>(env: Env<'a>, err: FsmError) -> Term<'a> {
-    let reason_string = err.to_string();
-    (Atom::from_str(env, "error").unwrap(), reason_string).encode(env)
+    let reason_string_raw = err.to_string();
+    // Rust strings (i.e. generated from wasmtime errors) can contain null bytes,
+    // which could cause issues if passed along.
+    let reason_string_escaped = reason_string_raw.replace("\0", "\\0");
+    (error(), reason_string_escaped).encode(env)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
     trace!("create");
 
-    let span = trace_span!("create");
+    let span = debug_span!("create");
     let _enter = span.enter();
 
     debug!("enter");
@@ -40,10 +54,10 @@ fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
         }
     };
 
-    let binary_data = module_binary.as_slice();
-    // SAFETY: Transmuting lifetime to 'static. Assumes `module_binary` (owned by BEAM)
-    // lives at least as long as the WasmFsm resource, as WasmModuleData::Binary expects &'static [u8].
-    let module_data = WasmModuleData::Binary(unsafe { std::mem::transmute(binary_data) });
+    let binary_data_slice = module_binary.as_slice();
+    let owned_module_bytes_vec = binary_data_slice.to_vec();
+    let leaked_module_bytes: &'static [u8] = Box::leak(owned_module_bytes_vec.into_boxed_slice());
+    let module_data = WasmModuleData::Binary(leaked_module_bytes);
 
     let res = match WasmFsm::new(module_data, &runtime) {
         Ok(fsm_instance) => {
@@ -53,7 +67,7 @@ fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
                 runtime,
             });
             debug!("fsm.current_state(): {:?}", resource.fsm.lock().unwrap().current_state());
-            Ok((Atom::from_str(env, "ok").unwrap(), resource).encode(env))
+            Ok((ok(), resource).encode(env))
         }
         Err(e) => {
             error!("Error during WasmFsm::new: {:?}", e);
@@ -67,6 +81,26 @@ fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+fn meta<'a>(env: Env<'a>, resource: ResourceArc<NifRes>) -> NifResult<Term<'a>> {
+    trace!("meta");
+
+    let span = debug_span!("meta");
+    let _enter = span.enter();
+
+    let fsm = resource.fsm.lock().unwrap();
+
+    let res = match convert::wasm_module_to_meta_term_list(env, &fsm.instance.module) {
+        Ok(res) => Ok((ok(), res).encode(env)),
+        Err(e) => Ok((error(), format!("Failed to convert metadata: {:?}", e)).encode(env)),
+    };
+
+    debug!("res: {:?}", res);
+    trace!("exit");
+
+    res
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
 fn call_begin<'a>(
     env: Env<'a>,
     resource: ResourceArc<NifRes>,
@@ -75,7 +109,7 @@ fn call_begin<'a>(
 ) -> NifResult<Term<'a>> {
     trace!("call_begin");
 
-    let span = trace_span!("call_begin", wsm_fn = func_desc.to_string());
+    let span = debug_span!("call_begin", wsm_fn = func_desc.to_string());
     let _enter = span.enter();
 
     debug!("enter");
@@ -105,7 +139,7 @@ fn call_begin<'a>(
         Err(e) => {
             error!("Argument conversion failed: {:?}", e);
             let reason = format!("Argument conversion failed: {:?}", e);
-            return Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env));
+            return Ok((error(), reason).encode(env));
         }
     };
 
@@ -121,27 +155,25 @@ fn call_begin<'a>(
     let res = match fsm.step() {
         Ok(CallOutcome::Complete(results)) => {
             trace!("Call started and completed. Results: {:?}", results);
-            let ok_atom = Atom::from_str(env, "ok").unwrap();
-            let complete_atom = Atom::from_str(env, "complete").unwrap();
+            let ok_atom = ok();
             match convert::wasm_vals_to_term_list(env, &results) {
-                Ok(results_term) => Ok((ok_atom, complete_atom, results_term).encode(env)),
+                Ok(results_term) => Ok((ok_atom, result_atoms::complete(), results_term).encode(env)),
                 Err(e) => {
                     error!("Result conversion failed: {:?}", e);
                     let reason = format!("Result conversion failed: {:?}", e);
-                    Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env))
+                    Ok((error(), reason).encode(env))
                 }
             }
         }
         Ok(CallOutcome::ImportCallNeeded(req)) => {
             trace!("Call started, yielded import call: {:?}", req);
-            let ok_atom = Atom::from_str(env, "ok").unwrap();
-            let import_atom = Atom::from_str(env, "import").unwrap();
+            let ok_atom = ok();
             match convert::wasm_host_func_req_to_term_list(env, req) {
-                Ok(meta_term) => Ok((ok_atom, import_atom, meta_term).encode(env)),
+                Ok(meta_term) => Ok((ok_atom, result_atoms::import(), meta_term).encode(env)),
                 Err(e) => {
                     error!("Import request conversion failed: {:?}", e);
                     let reason = format!("Import request conversion failed: {:?}", e);
-                    Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env))
+                    Ok((error(), reason).encode(env))
                 }
             }
         }
@@ -166,7 +198,7 @@ fn call_continue<'a>(
 ) -> NifResult<Term<'a>> {
     trace!("call_continue");
 
-    let span = trace_span!("call_continue", hst_fn = format!("{}.{}", module_name, field_name));
+    let span = debug_span!("call_continue", hst_fn = format!("{}.{}", module_name, field_name));
     let _enter = span.enter();
 
     debug!("enter");
@@ -213,7 +245,7 @@ fn call_continue<'a>(
                 module_name,
                 field_name,
             },
-            results: wasm_results,
+            results: HostFuncResult::Success(wasm_results),
         })
     })();
 
@@ -221,7 +253,7 @@ fn call_continue<'a>(
         Ok(resp) => resp,
         Err(reason_string) => {
             error!("Host response processing failed: {}", reason_string);
-            return Ok((Atom::from_str(env, "error").unwrap(), reason_string).encode(env));
+            return Ok((error(), reason_string).encode(env));
         }
     };
 
@@ -232,27 +264,25 @@ fn call_continue<'a>(
     let res = match fsm.step() {
         Ok(CallOutcome::Complete(results)) => {
             trace!("Call resumed and completed. Results: {:?}", results);
-            let ok_atom = Atom::from_str(env, "ok").unwrap();
-            let complete_atom = Atom::from_str(env, "complete").unwrap();
+            let ok_atom = ok();
             match convert::wasm_vals_to_term_list(env, &results) {
-                Ok(results_term) => Ok((ok_atom, complete_atom, results_term).encode(env)),
+                Ok(results_term) => Ok((ok_atom, result_atoms::complete(), results_term).encode(env)),
                 Err(e) => {
                     error!("Result conversion failed: {:?}", e);
                     let reason = format!("Result conversion failed: {:?}", e);
-                    Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env))
+                    Ok((error(), reason).encode(env))
                 }
             }
         }
         Ok(CallOutcome::ImportCallNeeded(req)) => {
             trace!("Call resumed, yielded another import call: {:?}", req);
-            let ok_atom = Atom::from_str(env, "ok").unwrap();
-            let import_atom = Atom::from_str(env, "import").unwrap();
+            let ok_atom = ok();
             match convert::wasm_host_func_req_to_term_list(env, req) {
-                Ok(meta_term) => Ok((ok_atom, import_atom, meta_term).encode(env)),
+                Ok(meta_term) => Ok((ok_atom, result_atoms::import(), meta_term).encode(env)),
                 Err(e) => {
                     error!("Import request conversion failed: {:?}", e);
                     let reason = format!("Import request conversion failed: {:?}", e);
-                    Ok((Atom::from_str(env, "error").unwrap(), reason).encode(env))
+                    Ok((error(), reason).encode(env))
                 }
             }
         }
@@ -274,22 +304,19 @@ fn mem_size<'a>(
 ) -> NifResult<Term<'a>> {
     trace!("mem_size");
 
-    let span = trace_span!("mem_size");
+    let span = debug_span!("mem_size");
     let _enter = span.enter();
 
     debug!("enter");
 
     let mut fsm = resource.fsm.lock().unwrap();
 
-    // We need access to the instance state within the FSM
-    // Assuming WasmFsm has a method to get the instance state mutably 
-    // or a dedicated method that calls wasm_memory_size internally.
-    // Let's assume a method `get_memory_size()` exists on Fsm for now.
-    let res = match fsm.get_memory_size() { // Assuming this method exists
-        Ok(size_in_pages) => {
-            // Wasm memory size is in pages (64KiB)
-            // let size_in_bytes = size_in_pages * 65536; // No longer needed, FSM returns pages
-            Ok((Atom::from_str(env, "ok").unwrap(), size_in_pages).encode(env))
+    let res = match fsm.get_memory_size() {
+        Ok(size_option) => {
+            match size_option {
+                Some(size_in_bytes) => Ok((ok(), size_in_bytes).encode(env)),
+                None => Ok((ok(), result_atoms::not_found()).encode(env)),
+            }
         }
         Err(e) => Ok(fsm_error_to_term(env, e)),
     };
@@ -309,18 +336,23 @@ fn mem_read<'a>(
 ) -> NifResult<Term<'a>> {
     trace!("mem_read");
 
-    let span = trace_span!("mem_read", offset = offset, length = length);
+    let span = debug_span!("mem_read", offset = offset, length = length);
     let _enter = span.enter();
 
     debug!("enter");
 
     let mut fsm = resource.fsm.lock().unwrap();
 
-    let mut erl_bin = rustler::NewBinary::new(env, length);
+    let mut erl_bin = match OwnedBinary::new(length) {
+        Some(bin) => bin,
+        None => {
+            return Ok((error(), format!("Failed to allocate memory (length: {})", length)).encode(env));
+        }
+    };
 
     let res = match fsm.read_memory(offset, erl_bin.as_mut_slice()) {
         Ok(()) => {
-            Ok((Atom::from_str(env, "ok").unwrap(), Term::from(erl_bin)).encode(env))
+            Ok((ok(), Binary::from_owned(erl_bin, env)).encode(env))
         }
         Err(e) => Ok(fsm_error_to_term(env, e)),
     };
@@ -340,7 +372,7 @@ fn mem_write<'a>(
 ) -> NifResult<Term<'a>> {
     trace!("mem_write");
 
-    let span = trace_span!("mem_write", offset = offset, data_len = data.len());
+    let span = debug_span!("mem_write", offset = offset, data_len = data.len());
     let _enter = span.enter();
 
     debug!("enter");
@@ -348,7 +380,7 @@ fn mem_write<'a>(
     let mut fsm = resource.fsm.lock().unwrap();
 
     let res = match fsm.write_memory(offset, data.as_slice()) {
-        Ok(()) => Ok(Atom::from_str(env, "ok").unwrap().encode(env)),
+        Ok(()) => Ok(ok().encode(env)),
         Err(e) => Ok(fsm_error_to_term(env, e)),
     };
 

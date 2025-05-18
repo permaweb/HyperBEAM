@@ -1,7 +1,7 @@
-use rustler::NifUntaggedEnum;
-
 pub use wasmtime::Val as WasmVal;
 pub use wasmtime::ValType as WasmValType;
+
+use rustler::NifUntaggedEnum;
 
 #[derive(Debug, Clone, NifUntaggedEnum)]
 pub enum NifWasmVal {

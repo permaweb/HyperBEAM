@@ -1,10 +1,11 @@
 use crate::types::{NativeFuncDesc, WasmVal};
 pub use crate::wasm::{
-    self, HostFuncChannel, HostFuncRequest, HostFuncResponse, NativeFuncRequest, WasmCallState,
+    self, HostFuncChannel, HostFuncRequest, HostFuncResult, HostFuncResponse, NativeFuncRequest, WasmCallState,
     WasmInstanceState, WasmModuleData,
 };
 use anyhow::Result;
 use strum_macros::Display;
+use tracing::debug;
 
 /// Distinguishes the context of a `PendingStep` state in the FSM.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -58,14 +59,17 @@ pub enum FsmError {
     #[strum(to_string = "Export not found: {0}")]
     ExportNotFound(String),
 
+    #[strum(to_string = "Export not a function: {0}")]
+    ExportNotAFunction(String),
+
     #[strum(to_string = "Indirect not found: {0}")]
     IndirectNotFound(String),
 
     #[strum(to_string = "Import not found: {0}")]
     ImportNotFound(String),
-
-    #[strum(to_string = "Export '{0}' is not a function")]
-    NotAFunction(String),
+    
+    #[strum(to_string = "Import not a function: {0}")]
+    ImportNotAFunction(String),
 }
 
 // Helper to convert wasm::Error into FsmError::CallFailed
@@ -80,16 +84,18 @@ impl From<wasm::CallStepResult> for CallOutcome {
 
 /// The Wasm FSM wrapper.
 pub struct WasmFsm {
+    pub instance: WasmInstanceState,
+
+    state_tag: StateTag,
+
     // Call stack for managing (potentially nested) calls.
     call_stack: Vec<WasmCallState<'static>>,
-    instance: WasmInstanceState,
 
     // The single MPSC receiver for all host function calls from this instance.
     // Option to allow taking it for mutable operations if strictly needed,
     // though typically passed as &mut to wasm::call_step.
     host_channel_receiver: Option<HostFuncChannel>,
 
-    state_tag: StateTag,
     rt_handle: tokio::runtime::Handle,
 }
 
@@ -266,24 +272,45 @@ impl WasmFsm {
                 Ok(CallOutcome::ImportCallNeeded(request))
             }
             Err(e) => {
-                self.call_stack.pop(); // Remove the failed call state
+                debug!("WasmFsm::step: Encountered error in step_result: {:?}", e);
+                debug!("WasmFsm::step: Call stack length BEFORE pop: {}", self.call_stack.len());
+                if let Some(top_before_pop) = self.call_stack.last() {
+                    debug!("WasmFsm::step: Top of stack BEFORE pop (current_results_count): {:?}", top_before_pop.current_results_count);
+                }
+
+                let popped_state = self.call_stack.pop(); // Remove the failed call state
+
+                if popped_state.is_some() {
+                    debug!("WasmFsm::step: Successfully popped a WasmCallState from stack.");
+                } else {
+                    debug!("WasmFsm::step: Attempted to pop from an empty call_stack (this should not happen if an error occurred within a call).");
+                }
+                debug!("WasmFsm::step: Call stack length AFTER pop: {}", self.call_stack.len());
+
                 if self.call_stack.is_empty() {
                     self.state_tag = StateTag::Idle;
+                    debug!("WasmFsm::step: Call stack empty, setting state_tag to Idle.");
                 } else {
                     // Similar to above, determine state from new top call.
                     if let Some(new_top_call_state) = self.call_stack.last() {
+                         debug!("WasmFsm::step: New top of stack (current_results_count): {:?}", new_top_call_state.current_results_count);
                         if !new_top_call_state.pending_import_stack.is_empty() {
                             self.state_tag = StateTag::AwaitingHost;
+                            debug!("WasmFsm::step: New top has pending imports, setting state_tag to AwaitingHost.");
                         } else if new_top_call_state.current_future.is_some() {
                             self.state_tag = StateTag::PendingStep(StepType::Resume);
+                             debug!("WasmFsm::step: New top has current_future, setting state_tag to PendingStep(Resume).");
                         } else {
-                            self.state_tag = StateTag::PendingStep(StepType::Resume);
-                            // Fallback
+                            self.state_tag = StateTag::PendingStep(StepType::Resume); // Fallback
+                            debug!("WasmFsm::step: New top has no pending_imports and no current_future (fallback), setting state_tag to PendingStep(Resume).");
                         }
                     } else {
+                        // This case should ideally not be reached if call_stack was not empty before this `else`
                         self.state_tag = StateTag::Idle;
+                        debug!("WasmFsm::step: Call stack became empty unexpectedly after check, setting state_tag to Idle.");
                     }
                 }
+                debug!("WasmFsm::step: Final state_tag after error: {:?}", self.state_tag);
                 Err(FsmError::CallFailed(e))
             }
         }
@@ -352,7 +379,7 @@ impl WasmFsm {
                     .get_export(func_name.as_str())
                     .ok_or_else(|| FsmError::ExportNotFound(func_name.to_string()))?;
                 let func_type_ref = export_type.func()
-                    .ok_or_else(|| FsmError::NotAFunction(func_name.to_string()))?;
+                    .ok_or_else(|| FsmError::ExportNotAFunction(func_name.to_string()))?;
                 Ok(func_type_ref.params().collect())
             }
             NativeFuncDesc::Indirect(index) => {
@@ -367,7 +394,7 @@ impl WasmFsm {
                 let func_opt = table_val.as_func().unwrap(); // This is Option<&Func>
                 // Unwrap the Option<&Func>
                 let func = func_opt
-                    .ok_or_else(|| FsmError::NotAFunction(format!("Table element at index {} is not a function ref", index)))?;
+                    .ok_or_else(|| FsmError::ExportNotAFunction(format!("Table element at index {} is not a function ref", index)))?;
 
                 // func.ty() needs store access (&mut or &?)
                 Ok(func.ty(&mut self.instance.store).params().collect()) // Use &mut store here too
@@ -407,17 +434,17 @@ impl WasmFsm {
 
         match import_type.ty() {
             wasmtime::ExternType::Func(func) => Ok(func.results().collect()),
-            _ => Err(FsmError::NotAFunction(format!(
+            _ => Err(FsmError::ImportNotAFunction(format!(
                 "{}:{}",
                 func_desc.module_name, func_desc.field_name
             ))),
         }
     }
 
-    /// Gets the current size of the Wasm instance's memory in pages (64KiB units).
+    /// Gets the current size of the Wasm instance's memory in bytes.
     ///
     /// Allowed when the FSM is `Idle` or `AwaitingHost`.
-    pub fn get_memory_size(&mut self) -> Result<usize, FsmError> {
+    pub fn get_memory_size(&mut self) -> Result<Option<usize>, FsmError> {
         if !matches!(self.state_tag, StateTag::Idle) && 
            !matches!(self.state_tag, StateTag::AwaitingHost) {
             return Err(FsmError::InvalidState {
@@ -550,7 +577,7 @@ mod tests {
         // Provide Response -> PendingStep
         let host_response = HostFuncResponse {
             func_desc: import_request.func_desc,
-            results: vec![Val::I32(30)], // 10 + 20
+            results: HostFuncResult::Success(vec![Val::I32(30)]), // 10 + 20
         };
         fsm.pop(host_response)
             .expect("provide_host_response failed");
@@ -584,7 +611,7 @@ mod tests {
                 module_name: "".into(),
                 field_name: "".into(),
             },
-            results: vec![],
+            results: HostFuncResult::Success(vec![]),
         };
 
         // Cannot step or provide response when Idle
@@ -699,7 +726,7 @@ mod tests {
         // 5. Provide response for host_A (for the outer_call)
         let host_response_a = HostFuncResponse {
             func_desc: import_req_a.func_desc, // Use the original func_desc for host_A
-            results: vec![Val::I32(10)],       // host_A returned 10
+            results: HostFuncResult::Success(vec![Val::I32(10)]),       // host_A returned 10
         };
         fsm.pop(host_response_a)
             .expect("provide_host_response for host_A failed");
@@ -821,7 +848,7 @@ mod tests {
 
         let host_resp = HostFuncResponse {
             func_desc: import_req.func_desc,
-            results: vec![Val::I32(20)], // 10 * 2
+            results: HostFuncResult::Success(vec![Val::I32(20)]), // 10 * 2
         };
         fsm.pop(host_resp)
             .expect("provide_host_response for run_double failed");
@@ -868,7 +895,7 @@ mod tests {
 
         match fsm.get_memory_size() {
             Ok(size) => {
-                assert_eq!(size, 3 * 65536, "Expected memory size to be 3 pages");
+                assert_eq!(size, Some(3 * 65536), "Expected memory size to be 3 pages");
             }
             Err(e) => panic!("get_memory_size failed: {:?}", e),
         }
@@ -928,7 +955,7 @@ mod tests {
         // Resume and complete the call using the captured import request details
         let host_response = HostFuncResponse {
             func_desc: actual_import_req.func_desc, // Use the captured func_desc
-            results: vec![], // Assuming host_func takes no params and returns nothing for simplicity
+            results: HostFuncResult::Success(vec![]), // Assuming host_func takes no params and returns nothing for simplicity
         };
         fsm.pop(host_response).expect("provide_host_response failed");
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Resume));

@@ -1,4 +1,5 @@
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::{filter::Directive, fmt, prelude::*, EnvFilter};
 
 pub fn init_tracing() {
     let fmt_layer = fmt::layer()
@@ -7,8 +8,12 @@ pub fn init_tracing() {
         .with_file(true)
         .with_line_number(true);
 
+    let filter_layer = EnvFilter::builder()
+        .with_default_directive(Directive::from(LevelFilter::ERROR))
+        .from_env_lossy();
+
     tracing_subscriber::registry()
         .with(fmt_layer)
-        .with(EnvFilter::from_default_env()) // honours RUST_LOG
+        .with(filter_layer)
         .init();                             // *must* run only once
 }

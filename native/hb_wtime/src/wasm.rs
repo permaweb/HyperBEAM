@@ -1,12 +1,12 @@
 use crate::{
     ext::{get_imports, HostModule, ImportDef},
-    types::{NativeFuncDesc, WasmVal},
+    types::{NativeFuncDesc, WasmVal, WasmValType},
 };
 use std::{collections::HashMap, future::Future, pin::Pin};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 use wasmtime::{Caller, Config, Engine, Instance, Linker, Module, Store};
 
 #[derive(Debug, Clone)]
@@ -64,7 +64,7 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
     let engine = Engine::new(&cfg)?;
 
     let module = match module_binary {
-        WasmModuleData::Binary(binary) => Module::new(&engine, binary)?,
+        WasmModuleData::Binary(binary_data) => Module::new(&engine, &binary_data)?,
         WasmModuleData::Wat(wat) => Module::new(&engine, wat)?,
     };
 
@@ -94,7 +94,7 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
         let ty = match import_desc.ty().func() {
             Some(ty) => ty.clone(),
             None => {
-                return Err(anyhow::anyhow!(
+                return Err(anyhow!(
                     "Import item '{}.{}' is not a function type",
                     module_name_ref,
                     field_name_ref
@@ -107,7 +107,7 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
             linker
                 .func_new(module_name_ref, field_name_ref, ty, matching_import.func)
                 .map_err(|e| {
-                    anyhow::anyhow!(
+                    anyhow!(
                         "Failed to link import function '{}.{}': {}",
                         module_name_ref,
                         field_name_ref,
@@ -161,7 +161,7 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
 
                             if moved_host_req_tx.send((request, resp_tx)).await.is_err() {
                                 // Host is no longer listening or channel closed
-                                return Err(anyhow::anyhow!("Failed to send request to host"));
+                                panic!("Failed to send request to host");
                             }
 
                             trace!("Waiting for response");
@@ -172,23 +172,29 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
 
                             match host_response {
                                 Ok(host_response) => {
-                                    if results.len() == host_response.results.len() {
-                                        results.copy_from_slice(&host_response.results);
-                                        Ok(())
-                                    } else {
-                                        Err(anyhow::anyhow!("Host response arity mismatch"))
+                                    match host_response.results {
+                                        HostFuncResult::Success(host_results) => {
+                                            if host_results.len() != results.len() {
+                                                panic!("Host function call arity mismatch");
+                                            }
+                                            results.copy_from_slice(&host_results);
+                                            Ok(())
+                                        }
+                                        HostFuncResult::Failure(e) => {
+                                            Err(anyhow!("Host function call failed: {}", e))
+                                        }
                                     }
                                 }
                                 Err(_) => {
                                     // Host dropped the response sender or other error
-                                    Err(anyhow::anyhow!("Failed to receive response from host"))
+                                    panic!("Failed to receive response from host")
                                 }
                             }
                         })
                     },
                 )
                 .map_err(|e| {
-                    anyhow::anyhow!(
+                    anyhow!(
                         "Failed to link import function '{}.{}': {}",
                         module_name_ref,
                         field_name_ref,
@@ -240,9 +246,15 @@ pub struct HostFuncRequest {
 }
 
 #[derive(Debug, Clone)]
+pub enum HostFuncResult {
+    Success(WasmResultsVec),
+    Failure(String),
+}
+
+#[derive(Debug, Clone)]
 pub struct HostFuncResponse {
     pub func_desc: HostFuncDesc,
-    pub results: WasmResultsVec,
+    pub results: HostFuncResult,
 }
 
 pub struct PendingImportStackItem<'a> {
@@ -309,11 +321,11 @@ pub async fn wasm_call_step<'a>(
     let mut wasm_future = call_state
         .current_future
         .take()
-        .ok_or_else(|| anyhow::anyhow!("call_step called but no current_future in state"))?;
+        .ok_or_else(|| anyhow!("call_step called but no current_future in state"))?;
     let results_count = call_state
         .current_results_count
         .take()
-        .ok_or_else(|| anyhow::anyhow!("call_step called but no current_results_count in state"))?;
+        .ok_or_else(|| anyhow!("call_step called but no current_results_count in state"))?;
 
     // Use the passed-in host_req_channel
     let mut host_func_request_future = Box::pin(host_req_channel.recv());
@@ -331,7 +343,7 @@ pub async fn wasm_call_step<'a>(
                 Err(e) => {
                     error!("Wasm future failed: {:?}", e);
                     // Future failed, no need to put it back in state.
-                    Err(anyhow::anyhow!("Wasm future failed: {:?}", e))
+                    Err(anyhow!("Wasm future failed: {:?}", e))
                 }
             }
         },
@@ -356,7 +368,7 @@ pub async fn wasm_call_step<'a>(
                 None => {
                     error!("Host request channel closed while call_step was awaiting a host request. This is unexpected if a Wasm future is pending.");
                     // Even though the future failed, we already took it out of the state.
-                    Err(anyhow::anyhow!("Host request channel closed, Wasm future cannot proceed if it requires host calls."))
+                    Err(anyhow!("Host request channel closed, Wasm future cannot proceed if it requires host calls."))
                 }
             }
         },
@@ -376,11 +388,11 @@ pub async fn wasm_call_push_native<'a>(
         NativeFuncDesc::Export(ref name) => {
             let export_extern = module
                 .get_export(name.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Export '{}' not found", name))?;
+                .ok_or_else(|| anyhow!("Export '{}' not found", name))?;
 
             let func_ty = match export_extern {
                 wasmtime::ExternType::Func(ft) => ft,
-                _ => return Err(anyhow::anyhow!("Export '{}' is not a function", name)),
+                _ => return Err(anyhow!("Export '{}' is not a function", name)),
             };
             let results_count_val = func_ty.results().count();
 
@@ -388,7 +400,7 @@ pub async fn wasm_call_push_native<'a>(
                 .instance
                 .get_func(&mut instance_state.store, name.as_str())
                 .ok_or_else(|| {
-                    anyhow::anyhow!("Function instance not found for export: {}", name)
+                    anyhow!("Function instance not found for export: {}", name)
                 })?;
             (func, results_count_val)
         }
@@ -397,11 +409,11 @@ pub async fn wasm_call_push_native<'a>(
             let table = instance_state
                 .instance
                 .get_table(&mut instance_state.store, "__indirect_function_table")
-                .ok_or_else(|| anyhow::anyhow!("Indirect function table not found"))?;
+                .ok_or_else(|| anyhow!("Indirect function table not found"))?;
             // Get the function from the table
             let func_ref = table
                 .get(&mut instance_state.store, index)
-                .ok_or_else(|| anyhow::anyhow!("Indirect function not found in table"))?;
+                .ok_or_else(|| anyhow!("Indirect function not found in table"))?;
 
             let func = *func_ref.unwrap_func().unwrap();
 
@@ -429,7 +441,7 @@ pub async fn wasm_call_push_native<'a>(
             )
             .await
             .map_err(|e| {
-                anyhow::anyhow!(
+                anyhow!(
                     "Wasm function call_async failed for {:?}: {:?}",
                     func_desc_clone,
                     e
@@ -459,7 +471,7 @@ pub async fn wasm_call_pop_host<'a>(
     let pending_item = call_state
         .pending_import_stack
         .pop()
-        .ok_or_else(|| anyhow::anyhow!("call_pop_host called with empty pending import stack"))?;
+        .ok_or_else(|| anyhow!("call_pop_host called with empty pending import stack"))?;
 
     debug!(
         "Popped pending import item for {:?}. Results count for original call: {}",
@@ -475,7 +487,7 @@ pub async fn wasm_call_pop_host<'a>(
             "Failed to send host response; Wasm receiver was dropped for {:?}.",
             pending_item.func_desc
         );
-        return Err(anyhow::anyhow!(
+        return Err(anyhow!(
             "Wasm future for {:?} dropped its response receiver. Host response was: {:?}",
             pending_item.func_desc,
             host_response
@@ -488,14 +500,20 @@ pub async fn wasm_call_pop_host<'a>(
     Ok(())
 }
 
-pub fn wasm_memory_size(instance_state: &mut WasmInstanceState) -> Result<usize> {
-    let instance = &instance_state.instance; // Instance can usually be an immutable borrow
-    let memory = instance
-        .get_memory(&mut instance_state.store, "memory")
-        .ok_or_else(|| anyhow::anyhow!("Failed to find Wasm memory export named 'memory'"))?;
-    let page_count = memory.size(&mut instance_state.store) as usize;
-    let page_size = memory.page_size(&mut instance_state.store) as usize;
-    Ok(page_count * page_size)
+// None indicates that the "memory" export is not present.
+pub fn wasm_memory_size(instance_state: &mut WasmInstanceState) -> Result<Option<usize>> {
+    let instance = &instance_state.instance;
+    match instance.get_memory(&mut instance_state.store, "memory") {
+        Some(memory) => {
+            let page_count = memory.size(&mut instance_state.store) as usize;
+            let page_size = memory.page_size(&mut instance_state.store) as usize;
+            Ok(Some(page_count * page_size))
+        }
+        None => {
+            debug!("Failed to find Wasm memory export named 'memory', returning `None` for memory size.");
+            Ok(None)
+        },
+    }
 }
 
 pub fn wasm_memory_read(
@@ -510,12 +528,12 @@ pub fn wasm_memory_read(
     // Get memory, passing a mutable borrow of the store
     let memory = instance
         .get_memory(&mut instance_state.store, "memory")
-        .ok_or_else(|| anyhow::anyhow!("Failed to find Wasm memory export named 'memory'"))?;
+        .ok_or_else(|| anyhow!("Failed to find Wasm memory export named 'memory'"))?;
 
     // Read from memory, passing a mutable borrow of the store again
     memory
         .read(&mut instance_state.store, offset, data)
-        .map_err(|e| anyhow::anyhow!("Failed to read from Wasm memory: {}", e))?;
+        .map_err(|e| anyhow!("Failed to read from Wasm memory: {}", e))?;
 
     Ok(())
 }
@@ -532,12 +550,12 @@ pub fn wasm_memory_write(
     // Get memory, passing a mutable borrow of the store
     let memory = instance
         .get_memory(&mut instance_state.store, "memory")
-        .ok_or_else(|| anyhow::anyhow!("Failed to find Wasm memory export named 'memory'"))?;
+        .ok_or_else(|| anyhow!("Failed to find Wasm memory export named 'memory'"))?;
 
     // Write to memory, passing a mutable borrow of the store again
     memory
         .write(&mut instance_state.store, offset, data)
-        .map_err(|e| anyhow::anyhow!("Failed to write to Wasm memory: {}", e))?;
+        .map_err(|e| anyhow!("Failed to write to Wasm memory: {}", e))?;
 
     Ok(())
 }
@@ -714,7 +732,7 @@ mod tests {
         // Prepare and send host response
         let host_response = HostFuncResponse {
             func_desc: import_meta.func_desc.clone(),
-            results: vec![wasmtime::Val::I32(12345)],
+            results: HostFuncResult::Success(vec![wasmtime::Val::I32(12345)]),
         };
         info!("Sending host response: {:?}", host_response);
 
@@ -872,6 +890,19 @@ mod tests {
 
         let size = wasm_memory_size(&mut instance_state).expect("wasm_memory_size failed");
 
-        assert_eq!(size, 2 * 65536, "Memory size should be 2 pages");
+        assert_eq!(size, Some(2 * 65536), "Memory size should be 2 pages");
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_wasm_memory_size_no_memory() {
+        let wat = r#"(module)"#;
+        let module_data = WasmModuleData::Wat(wat);
+        let init_result = wasm_instance_create(module_data).await.unwrap();
+        let mut instance_state = init_result.state;
+
+        let size = wasm_memory_size(&mut instance_state).expect("wasm_memory_size failed");
+        
+        assert_eq!(size, None, "Memory size should be None");
     }
 }
