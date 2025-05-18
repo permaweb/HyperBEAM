@@ -82,7 +82,7 @@ path_open(Msg1, Msg2, Opts) ->
     Instance = hb_private:get(<<"instance">>, Msg1, Opts),
     [FDPtr, LookupFlag, PathPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({path_open, FDPtr, LookupFlag, PathPtr}),
-    Path = hb_wtime:mem_read_string(Instance, PathPtr),
+    Path = hb_wtime_io:read_string(Instance, PathPtr),
     ?event({path_open, Path}),
     FD = #{
         <<"index">> := Index
