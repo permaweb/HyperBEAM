@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=hyperbeam
-Group=hyperbeam
+User=root
+Group=root
 WorkingDirectory=/opt/load_hb
 Environment=HOME=/opt/load_hb
 ExecStart=/usr/bin/erl -pa _build/default/lib/*/ebin -eval "application:ensure_all_started(hb)."
