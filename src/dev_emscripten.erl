@@ -124,7 +124,7 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
     try
         ?event({trying_indirect_call, {index, Index}, {args, Args}}),
         Res = dev_wasm:call(WASM, Index, Args, ImportResolver, State, Opts),
-        {ok, Result, StateMsg} = Res,
+        {ok, Result, _ResType, StateMsg} = Res,
         ?event(debug, {try_indirect_call_succeeded, Result}),
         {ok, #{ <<"state">> => StateMsg, <<"results">> => Result }}
     catch
@@ -137,7 +137,7 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
             ?event(debug, calling_set_threw),
             SetThrewRes = dev_wasm:call(WASM, <<"setThrew">>, [1, 0], ImportResolver, State, Opts),
             ?event(debug, {invoke_set_threw, {catch_result, SetThrewRes}}),
-            {ok, _SetThrewResult, SetThrewMsg} = SetThrewRes,
+            {ok, _SetThrewResult, _SetThrewResType, SetThrewMsg} = SetThrewRes,
             % ?event(debug, set_threw_done),
             % {ok, SetThrewResult, SetThrewMsg} = SetThrewRes,
             % complete the __cxa_throw call
