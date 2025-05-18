@@ -1,5 +1,5 @@
 [Unit]
-Description=HyperBEAM Service
+Description=load_hb node
 After=network.target
 
 [Service]
@@ -8,7 +8,9 @@ User=root
 Group=root
 WorkingDirectory=/opt/load_hb
 Environment=HOME=/opt/load_hb
-ExecStart=/usr/bin/erl -pa _build/default/lib/*/ebin -eval "application:ensure_all_started(hb)."
+Environment=LANG=en_US.UTF-8
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/local/bin/erl -pa _build/default/lib/*/ebin -eval "application:ensure_all_started(hb)."
 Restart=always
 RestartSec=5
 
