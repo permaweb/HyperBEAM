@@ -63,6 +63,8 @@
 %% with the `cache_frequency' option.
 -define(DEFAULT_CACHE_FREQ, 1).
 
+-hb_debug(print).
+
 %% @doc When the info key is called, we should return the process exports.
 info(_Msg1) ->
     #{
@@ -88,33 +90,37 @@ info(_Msg1) ->
 default_device(Msg1, Key, Opts) ->
     NormKey = hb_ao:normalize_key(Key),
     case {NormKey, hb_ao:get(<<"process/variant">>, {as, dev_message, Msg1}, Opts)} of
-        {<<"execution">>, <<"ao.TN.1">>} ->
+        % {<<"execution">>, <<"ao.TN.1">>} ->
+        {<<"execution">>, _} ->
         % In the case of the `ao.TN.1` variant, we need to use a stack device, 
         % with `device-stack` also configured to the correct devices to ensure
         % backwards-compatibility.
+        ?event({using_ao_tn_1_variant_stack}),
         {
             <<"stack@1.0">>,
             #{ 
                 <<"device-stack">> => [
-                    % <<"WASI@1.0">>,
+                    <<"WASI@1.0">>,
+                    <<"Emscripten@1.0">>,
                     <<"JSON-Iface@1.0">>,
                     <<"WASM-64@1.0">>,
-                    <<"Multipass@1.0">>,
-                    <<"Emscripten@1.0">>
+                    <<"patch@1.0">>,
+                    <<"Multipass@1.0">>
                 ],
                 <<"stack-keys">> =>[
                     <<"init">>,
                     <<"compute">>,
                     <<"snapshot">>,
                     <<"normalize">>
-                ]
+                ],
+                <<"passes">> => 2
             }
         };
         _ -> default_device_index(NormKey)
     end.
 default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
 % TODO: Should this also be a stack with WASI etc?
-default_device_index(<<"execution">>) -> <<"wasm-64@1.0">>;
+default_device_index(<<"execution">>) -> <<"test-device@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>.
 
 %% @doc Wraps functions in the Scheduler device.
@@ -193,7 +199,8 @@ compute(Msg1, Msg2, Opts) ->
     ProcBase = ensure_process_key(Msg1, Opts),
     ProcID = process_id(ProcBase, #{}, Opts),
     % ?event({compute_msg1, {explicit, Msg1}}),
-    Msg1Mod = ensure_module(Msg1, Msg2, Opts),
+    % Msg1Mod = Msg1,
+    Msg1Mod = ensure_module_cached(Msg1, Msg2, Opts),
     case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Msg2}, Opts) of
         not_found ->
             % The slot is not set, so we need to serve the latest known state.
@@ -306,6 +313,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     % Unset the previous results.
     UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
     Res = run_as(<<"execution">>, UnsetResults, InputMsg, Opts),
+    ?event({execution_result, {res, Res}}),
     case Res of
         {ok, Msg3} ->
             ?event(compute_short, {executed, {slot, NextSlot}, {proc_id, ProcID}}, Opts),
@@ -493,17 +501,30 @@ ensure_loaded(Msg1, Msg2, Opts) ->
 %% @doc If there is no image in the message, load it from the gateway
 %% based on the `module' key.
 %% TODO: Check the cache for the processed image, and skip in that case.
-ensure_module(Msg1, _Msg2, Opts) ->
-    ?event({ensure_module_called}),
-    case hb_ao:get(<<"process/image">>, Msg1, Opts) of
+ensure_module_cached(Msg1, _Msg2, Opts) ->
+    case hb_ao:get(<<"module">>, Msg1, Opts) of
+        ModuleId when is_binary(ModuleId) ->
+            ?event({ensure_module_id_found, {module_id, ModuleId}}),
+            ModuleDataPath = <<ModuleId/binary, "/data">>,
+            case hb_cache:read(ModuleDataPath, Opts) of
+                {ok, CacheLinkId} ->
+                    ?event({ensure_module_cache_hit, {module_id, ModuleId}, {cache_link_id, CacheLinkId}}),
+                    hb_ao:set(Msg1, #{ <<"process/image">> => CacheLinkId }, Opts);
+                not_found ->
+                    ?event({ensure_module_cache_miss, {module_id, ModuleId}}),
+                    % Fetch the module from the gateway
+                    {ok, ImageBin} = hb_gateway_client:data(ModuleId, Opts),
+                    {ok, CacheLinkIdWritten} = hb_cache:write(ImageBin, Opts),
+                    % Link the module id to the cache link so we can find it next time
+                    hb_cache:link(CacheLinkIdWritten, ModuleDataPath, Opts),
+                    % TODO: Do I really have to read this again?
+                    {ok, CacheLinkId} = hb_cache:read(ModuleDataPath, Opts),
+                    ?event({ensure_module_cache_linked, {module_id, ModuleId}, {cache_link_id, CacheLinkId}}),
+                    % Set the cache link id on the message
+                    hb_ao:set(Msg1, #{ <<"process/image">> => CacheLinkId }, Opts)
+            end;
         not_found ->
-            ?event({ensure_module_not_found}),
-            ModuleId = hb_ao:get(<<"module">>, Msg1, Opts),
-            ?event({module_id, ModuleId}),
-            {ok, ImageBin} = hb_gateway_client:data(ModuleId, Opts),
-            hb_ao:set(Msg1, #{ <<"process/image">> => ImageBin }, Opts);
-        _ ->
-            ?event({ensure_module_found}),
+            ?event({ensure_module_id_not_found}),
             Msg1
     end.
 
@@ -522,7 +543,7 @@ run_as(Key, Msg1, Msg2, Opts) ->
             {DevOnly, none}
     end,
     ?event({use_device, {default_device, DefaultDevice}, {extra_keys, DefaultDeviceExtraKeys}}),
-    PrepKeysInitial = #{
+    PrepKeysBase = #{
         <<"device">> =>
             DeviceSet = hb_ao:get(
                 << Key/binary, "-device">>,
@@ -544,10 +565,10 @@ run_as(Key, Msg1, Msg2, Opts) ->
             )
     },
     PrepKeysWithExtra = case DefaultDeviceExtraKeys of
-        none -> PrepKeysInitial;
-        HasExtraKeys -> maps:merge(PrepKeysInitial, HasExtraKeys)
+        none -> PrepKeysBase;
+        HasExtraKeys -> maps:merge(PrepKeysBase, HasExtraKeys)
     end,
-    ?event({prep_keys, {initial, PrepKeysInitial}, {with_extra, PrepKeysWithExtra}}),
+    ?event({prep_keys, {base, PrepKeysBase}, {with_extra, PrepKeysWithExtra}}),
     {ok, PreparedMsg} =
         dev_message:set(
             ensure_process_key(Msg1, Opts),
@@ -640,6 +661,7 @@ test_wasm_process(WASMImage) ->
 test_wasm_process(WASMImage, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     #{ <<"image">> := WASMImageID } = dev_wasm:cache_wasm_image(WASMImage, Opts),
+    ?event({wasm_image_id, {id, WASMImageID}}),
     hb_message:commit(
         maps:merge(
             hb_message:uncommitted(test_base_process(Opts)),
@@ -659,15 +681,15 @@ test_aos_process() ->
 test_aos_process(Opts) ->
     test_aos_process(Opts, [
         <<"WASI@1.0">>,
+        <<"Emscripten@1.0">>,
         <<"JSON-Iface@1.0">>,
         <<"WASM-64@1.0">>,
         <<"Multipass@1.0">>
-        % <<"Emscripten@1.0">>
     ]).
 test_aos_process(Opts, Stack) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    WASMProc = test_wasm_process(<<"test/aos-new.wasm">>, Opts),
+    WASMProc = test_wasm_process(<<"test/aos-ll.wasm">>, Opts),
     hb_message:commit(
         maps:merge(
             hb_message:uncommitted(WASMProc),
@@ -920,12 +942,13 @@ aos_compute_test_() ->
         {ok, Msg3} = hb_ao:resolve(Msg1, Msg2, #{}),
         {ok, Res} = hb_ao:resolve(Msg3, <<"results">>, #{}),
         ?event({computed_message, {msg3, Res}}),
-        {ok, Data} = hb_ao:resolve(Res, <<"data">>, #{}),
-        ?event({computed_data, Data}),
-        ?assertEqual(<<"2">>, Data),
+        {ok, Data1} = hb_ao:resolve(Res, <<"data">>, #{}),
+        #{ <<"output">> := Output1 } = Data1,
+        ?assertEqual(2, Output1),
         Msg4 = #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
         {ok, Msg5} = hb_ao:resolve(Msg1, Msg4, #{}),
-        ?assertEqual(<<"4">>, hb_ao:get(<<"results/data">>, Msg5, #{})),
+        #{ <<"output">> := Output2 } = hb_ao:get(<<"results/data">>, Msg5, #{}),
+        ?assertEqual(4, Output2),
         {ok, Msg5}
     end}.
 
@@ -996,7 +1019,6 @@ aos_state_access_via_http_test_() ->
                 {explicit,
                     <<
                         Node/binary,
-                        "/",
                         ProcID/binary,
                         "/compute&slot=1/results/outbox/1/data"
                     >>
@@ -1013,6 +1035,7 @@ aos_state_patch_test_() ->
         init(),
         Msg1Raw = test_aos_process(#{}, [
             <<"WASI@1.0">>,
+            <<"Emscripten@1.0">>,
             <<"JSON-Iface@1.0">>,
             <<"WASM-64@1.0">>,
             <<"patch@1.0">>,
