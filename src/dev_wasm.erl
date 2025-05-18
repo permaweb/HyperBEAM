@@ -42,7 +42,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--hb_print(debug).
+-hb_debug(print).
 
 %% @doc Export all functions aside the `instance/3' function.
 info(_Msg1, _Opts) ->
@@ -263,13 +263,16 @@ compute(RawM1, M2, Opts) ->
                             instance(M1, M2, Opts),
                             WASMFunction,
                             case WASMParams of
-                                not_found -> [];
+                                not_found ->
+                                    ?event({inferring_empty_params}),
+                                    [];
                                 Params -> Params
                             end,
                             hb_private:get(<<Prefix/binary, "/import-resolver">>, M1, Opts),
                             M1,
                             Opts
                         ),
+                    ?event({set_results, {key, <<"results/", Prefix/binary, "/output">>}, {res, Res}}),
                     {ok,
                         hb_ao:set(MsgAfterExecution,
                             #{
@@ -324,7 +327,15 @@ snapshot(M1, M2, Opts) ->
     ?event(snapshot, generating_snapshot),
     Instance = instance(M1, M2, Opts),
     {ok, Size} = hb_wtime:mem_size(Instance),
-    {ok, Mem} = hb_wtime:mem_read(Instance, 0, Size),
+    UseSize = min(Size, 1),
+    {ok, Mem} = case UseSize of
+        0 -> 
+            ?event({reading_memory_0b, {size, UseSize}}),
+            {ok, <<>>};
+        _ ->
+            ?event({reading_memory_1b, {size, UseSize}}),
+            hb_wtime:mem_read(Instance, 0, UseSize)
+    end,
     {ok,
         #{
             <<"body">> => Mem
@@ -360,6 +371,7 @@ instance(M1, M2, Opts) ->
 %% 4. If it succeeds, return the new state from the message.
 %% 5. If it fails with `not_found', call the stub handler.
 import(Msg1, Msg2, Opts) ->
+    ?event({import_begin, {msg1, Msg1}, {msg2, Msg2}}),
     % 1. Adjust the path to the stdlib.
     ModName = hb_ao:get(<<"module">>, Msg2, Opts),
     FuncName = hb_ao:get(<<"func">>, Msg2, Opts),
@@ -391,10 +403,11 @@ import(Msg1, Msg2, Opts) ->
     % 3. Resolve the adjusted path against the added state.
     case hb_ao:resolve(AdjustedMsg1, AdjustedMsg2, Opts) of
         {ok, Res} ->
+            ?event({wasm_import_resolve_success, {module, ModName}, {func, FuncName}, {res, Res}}),
             % 4. Success. Return.
             {ok, Res};
         {error, not_found} ->
-            ?event(stdlib_not_found),
+            ?event({wasm_import_resolve_not_found, {module, ModName}, {func, FuncName}}),
             % 5. Failure. Call the stub handler.
             undefined_import_stub(Msg1, Msg2, Opts)
     end.
@@ -402,7 +415,6 @@ import(Msg1, Msg2, Opts) ->
 %% @doc Log the call to the standard library as an event, and write the
 %% call details into the message.
 undefined_import_stub(Msg1, Msg2, Opts) ->
-    ?event({unimplemented_dev_wasm_call, {msg1, Msg1}, {msg2, Msg2}}),
     Prefix = dev_stack:prefix(Msg1, Msg2, Opts),
     UndefinedCallsPath =
         <<"state/results/", Prefix/binary, "/undefined-calls">>,

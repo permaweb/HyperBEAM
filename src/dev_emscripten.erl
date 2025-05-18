@@ -278,8 +278,8 @@ jmp_test() ->
 %% with a function reference.
 basic_aos_exec_test_() ->
     {timeout, 30, fun () ->
-        Init = generate_emscripten_stack("test/aos-new.wasm", <<"handle">>, []),
-        Msg = gen_test_aos_msg("return 1 + 1"),
+        Init = generate_emscripten_stack("test/aos-ll.wasm", <<"handle">>, []),
+        Msg = gen_test_aos_msg("return 5 * 3"),
         Env = gen_test_env(),
         Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
         {ok, Ptr1} = hb_wtime_io:malloc(Instance, byte_size(Msg)),
@@ -296,14 +296,12 @@ basic_aos_exec_test_() ->
         Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
         {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
         [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
-        {ok, Output} = hb_wtime_io:read_string(Instance, Ptr),
+        {ok, Res} = hb_wtime_io:read_string(Instance, Ptr),
         % io:format("Output: ~p~n", [Output]),
-        ?event({got_output, Output}),
-        #{ <<"response">> := #{ <<"Output">> := #{ <<"data">> := Data }} }
-            = hb_json:decode(Output),
-        DataStartExpected = <<"\e[90mNew Message From \e[32mFB.">>,
-        DataStart = binary:part(Data, 0, byte_size(DataStartExpected)),
-        ?assertEqual(DataStartExpected, DataStart)
+        ?event({got_result, Res}),
+        #{ <<"response">> := #{ <<"Output">> := #{ <<"data">> := #{ <<"output">> := Output } } } }
+            = hb_json:decode(Res),
+        ?assertEqual(15, Output)
     end}.
 
 %%% Test Helpers
