@@ -42,6 +42,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+-hb_debug(print).
+
 %% @doc Initialize the device.
 init(M1, _M2, _Opts) ->
     {ok, hb_ao:set(M1, #{<<"function">> => <<"handle">>})}.
@@ -283,6 +285,7 @@ results(M1, M2, Opts) ->
             };
         <<"ok">> ->
             {ok, Str} = env_read(M1, M2, Opts),
+            ?event({results_str, {str, Str}}),
             try hb_json:decode(Str) of
                 #{<<"ok">> := true, <<"response">> := Resp} ->
                     {ok, ProcessedResults} = json_to_message(Resp, Opts),
