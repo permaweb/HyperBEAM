@@ -16,7 +16,7 @@
 -define(NOT_LOADED, not_loaded(?LINE)).
 
 -include("src/include/hb.hrl").
--hb_debug(print).
+% -hb_debug(print).
 
 %%%===================================================================
 %%% API

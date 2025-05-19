@@ -42,7 +42,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
--hb_debug(print).
+% -hb_debug(print).
 
 %% @doc Initialize the device.
 init(M1, _M2, _Opts) ->

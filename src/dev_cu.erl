@@ -2,7 +2,7 @@
 -export([push/2, execute/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
--hb_debug(print).
+% -hb_debug(print).
 
 push(Msg, S = #{ assignment := Assignment, logger := _Logger }) ->
     ?event(

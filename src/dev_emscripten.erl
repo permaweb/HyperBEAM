@@ -31,7 +31,7 @@
 -include("src/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--hb_debug(print).
+% -hb_debug(print).
 
 info(_) ->
     #{

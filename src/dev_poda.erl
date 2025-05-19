@@ -3,7 +3,7 @@
 -export([is_user_signed/1]).
 -export([push/2]).
 -include("include/hb.hrl").
--hb_debug(print).
+% -hb_debug(print).
 
 %%% A simple exemplar decentralized proof of authority consensus algorithm
 %%% for AO processes. This device is split into two flows, spanning three

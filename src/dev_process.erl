@@ -63,7 +63,7 @@
 %% with the `cache_frequency' option.
 -define(DEFAULT_CACHE_FREQ, 1).
 
--hb_debug(print).
+% -hb_debug(print).
 
 %% @doc When the info key is called, we should return the process exports.
 info(_Msg1) ->

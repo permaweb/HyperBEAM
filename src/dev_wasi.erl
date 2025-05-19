@@ -10,7 +10,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--hb_debug(print).
+% -hb_debug(print).
 
 -define(INIT_VFS,
     #{

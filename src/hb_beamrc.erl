@@ -9,7 +9,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--hb_debug(print).
+% -hb_debug(print).
 
 %% @doc Load the driver for the WASM compiler...
 load_driver() ->
