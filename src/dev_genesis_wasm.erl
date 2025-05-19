@@ -244,5 +244,194 @@ log_server_events(Bin) when is_binary(Bin) ->
     log_server_events(binary:split(Bin, <<"\n">>, [global]));
 log_server_events([Remaining]) -> Remaining;
 log_server_events([Line | Rest]) ->
-    ?event(genesis_wasm_server, {server_logged, Line}),
+    ?event(genesis_wasm_server, {server_logged, {string, Line}}),
     log_server_events(Rest).
+
+%% Tests
+-ifdef(ENABLE_GENESIS_WASM).
+
+genisis_wasm_opts() ->
+    #{
+        genesis_wasm_db_dir => "cache-mainnet-test/genesis-wasm",
+        genesis_wasm_checkpoints_dir => "cache-mainnet-test/genesis-wasm/checkpoints",
+        genesis_wasm_log_level => "error",
+        genesis_wasm_port => 6363
+    }.
+
+genesis_wasm_init() ->
+    genesis_wasm_init(genisis_wasm_opts()).
+genesis_wasm_init(Opts) ->
+    Wallet = ar_wallet:new(),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Msg1 = hb_message:commit(#{
+        <<"device">> => <<"process@1.0">>,
+        <<"scheduler-device">> => <<"scheduler@1.0">>,
+        <<"scheduler-location">> => Address,
+        <<"type">> => <<"Process">>,
+        <<"test-random-seed">> => rand:uniform(1337)
+    }, Wallet),
+    Status = ensure_started(Opts),
+    ?assertEqual(true, Status),
+    Msg1.
+
+
+test_base_process() ->
+    test_base_process(#{}).
+test_base_process(Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    hb_message:commit(#{
+        <<"device">> => <<"process@1.0">>,
+        <<"scheduler-device">> => <<"scheduler@1.0">>,
+        <<"scheduler-location">> => Address,
+        <<"type">> => <<"Process">>,
+        <<"test-random-seed">> => rand:uniform(1337)
+    }, Wallet).
+
+test_wasm_process(WASMImage) ->
+    test_wasm_process(WASMImage, #{}).
+test_wasm_process(WASMImage, Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    #{ <<"image">> := WASMImageID } = dev_wasm:cache_wasm_image(WASMImage, Opts),
+    hb_message:commit(
+        maps:merge(
+            hb_message:uncommitted(test_base_process(Opts)),
+            #{
+                <<"execution-device">> => <<"stack@1.0">>,
+                <<"device-stack">> => [<<"WASM-64@1.0">>],
+                <<"image">> => WASMImageID
+            }
+        ),
+        Wallet
+    ).
+
+test_aos_process() ->
+    test_aos_process(#{
+        genesis_wasm_db_dir => "cache-mainnet-test/genesis-wasm",
+        genesis_wasm_checkpoints_dir => "cache-mainnet-test/genesis-wasm/checkpoints",
+        genesis_wasm_log_level => "error",
+        genesis_wasm_port => 6363,
+        port => 8734
+    }).
+test_aos_process(Opts) ->
+    test_aos_process(Opts, [
+        <<"WASI@1.0">>,
+        <<"JSON-Iface@1.0">>,
+        <<"WASM-64@1.0">>,
+        <<"Multipass@1.0">>,
+        <<"genesis-wasm@1.0">>
+    ]).
+test_aos_process(Opts, Stack) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    WASMProc = test_wasm_process(<<"test/aos-2-pure-xs.wasm">>, Opts),
+    hb_message:commit(
+        maps:merge(
+            hb_message:uncommitted(WASMProc),
+            #{
+                <<"device-stack">> => Stack,
+                <<"execution-device">> => <<"stack@1.0">>,
+                <<"scheduler-device">> => <<"scheduler@1.0">>,
+                <<"output-prefix">> => <<"wasm">>,
+                <<"patch-from">> => <<"/results/outbox">>,
+                <<"passes">> => 2,
+                <<"stack-keys">> =>
+                    [
+                        <<"init">>,
+                        <<"compute">>,
+                        <<"snapshot">>,
+                        <<"normalize">>,
+                        <<"compute">>
+                    ],
+                <<"scheduler">> => Address,
+                <<"authority">> => Address,
+                <<"module">> => <<"URgYpPQzvxxfYQtjrIQ116bl3YBfcImo3JEnNo8Hlrk">>,
+                <<"data-protocol">> => <<"ao">>,
+                <<"type">> => <<"Process">>
+            }),
+        Wallet
+    ).
+
+
+schedule_test_message(Msg1, Text) ->
+    schedule_test_message(Msg1, Text, #{}).
+schedule_test_message(Msg1, Text, MsgBase) ->
+    Wallet = hb:wallet(),
+    UncommittedBase = hb_message:uncommitted(MsgBase),
+    Msg2 =
+        hb_message:commit(#{
+                <<"path">> => <<"schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> =>
+                    hb_message:commit(
+                        UncommittedBase#{
+                            <<"type">> => <<"Message">>,
+                            <<"test-label">> => Text
+                        },
+                        Wallet
+                    )
+            },
+            Wallet
+        ),
+    {ok, Msg3} = hb_ao:resolve(Msg1, Msg2, #{}),
+    Msg3.
+
+schedule_aos_call(Msg1, Code) ->
+    schedule_aos_call(Msg1, Code, #{}).
+schedule_aos_call(Msg1, Code, Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    ProcID = hb_message:id(Msg1, all),
+    Msg2 =
+        hb_message:commit(
+            #{
+                <<"action">> => <<"Eval">>,
+                <<"data">> => Code,
+                <<"target">> => ProcID
+            },
+            Wallet
+        ),
+    schedule_test_message(Msg1, <<"TEST MSG">>, Msg2).
+   
+
+spawn_and_execute_slot_test_() ->
+    { timeout, 900, fun spawn_and_execute_slot/0 }.
+spawn_and_execute_slot() ->
+    application:ensure_all_started(hb),
+    Msg1 = test_aos_process(),
+    hb_cache:write(Msg1, #{}),
+    hb_ao:resolve(Msg1, Msg1#{<<"path">> => <<"schedule">>, <<"method">> => <<"POST">>}, #{}),
+
+    schedule_aos_call(Msg1, <<"return 1+1">>),
+    schedule_aos_call(Msg1, <<"return 2+2">>),
+    
+    {ok, SchedulerRes} =
+        hb_ao:resolve(Msg1, #{
+            <<"method">> => <<"GET">>,
+            <<"path">> => <<"schedule">>
+        }, #{}),
+
+    % Verify computation messages
+    ?assertMatch(
+        <<"return 1+1">>,
+        hb_ao:get(<<"assignments/1/body/data">>, SchedulerRes)
+    ),
+    ?assertMatch(
+        <<"return 2+2">>,
+        hb_ao:get(<<"assignments/2/body/data">>, SchedulerRes)
+    ),
+
+    % Verify process message is scheduled first
+    ?assertMatch(
+        <<"Process">>,
+        hb_ao:get(<<"assignments/0/body/type">>, SchedulerRes)
+    ),
+
+    {ok, Result} = hb_ao:resolve(Msg1, #{
+        <<"path">> => <<"now">>
+    }, #{}),
+
+    
+    % Msg2 = #{ <<"device">> => <<"genesis-wasm@1.0">>, <<"path">> => <<"compute">>, <<"slot">> => 0 },
+    % {ok, Msg3} = hb_ao:resolve(Msg1, Msg2, #{}),
+    ?assertEqual(<<"4">>, hb_ao:get(<<"results/data">>, Result)).
+-endif.
