@@ -1,3 +1,4 @@
+use tracing::trace;
 use wasmtime::{Caller, Engine, FuncType};
 use super::types::ImportDef;
 use crate::types::{WasmVal, WasmValType};
@@ -14,6 +15,8 @@ pub fn get_memcpy_js(engine: Engine, is_64: bool) -> ImportDef {
         field_name: "_emscripten_memcpy_js".to_string(),
         ty: FuncType::new(&engine, arg_types, result_types),
         func: Box::new(move |mut caller: Caller<'_, ()>, params: &[WasmVal], results: &mut [WasmVal]| {
+            trace!("calling native env._emscripten_memcpy_js");
+
             let (dst, src, len) = match (params[0], params[1], params[2]) {
                 (WasmVal::I64(dst), WasmVal::I64(src), WasmVal::I64(len)) => {
                     (dst as usize, src as usize, len as usize)

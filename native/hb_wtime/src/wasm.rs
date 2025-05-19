@@ -2,11 +2,11 @@ use crate::{
     ext::{get_imports, HostModule, ImportDef},
     types::{NativeFuncDesc, WasmVal, WasmValType},
 };
-use std::{collections::HashMap, future::Future, pin::Pin};
+use std::{collections::HashMap, fmt, future::Future, pin::Pin};
 
 use anyhow::{anyhow, Result};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use wasmtime::{Caller, Config, Engine, Instance, Linker, Module, Store};
 
 #[derive(Debug, Clone)]
@@ -77,6 +77,10 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
         mpsc::channel::<(HostFuncRequest, oneshot::Sender<HostFuncResponse>)>(1);
 
     let enabled_modules = vec![HostModule::Emscripten];
+    if enabled_modules.len() > 0 {
+        warn!("Enabled modules: {:?}", enabled_modules);
+    }
+
     let native_imports = get_imports(engine.clone(), false, enabled_modules);
     let mut native_imports_map: HashMap<(String, String), ImportDef> = native_imports
         .into_iter()
@@ -104,6 +108,7 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
 
         let key = (module_name_ref.to_string(), field_name_ref.to_string());
         if let Some(matching_import) = native_imports_map.remove(&key) {
+            warn!("Linking import '{}.{}' with native function", module_name_ref, field_name_ref);
             linker
                 .func_new(module_name_ref, field_name_ref, ty, matching_import.func)
                 .map_err(|e| {
@@ -175,12 +180,15 @@ pub async fn wasm_instance_create(module_binary: WasmModuleData) -> Result<Insta
                                     match host_response.results {
                                         HostFuncResult::Success(host_results) => {
                                             if host_results.len() != results.len() {
-                                                panic!("Host function call arity mismatch");
+                                                panic!("Host function call arity mismatch: expected {} results, got {}", results.len(), host_results.len());
                                             }
+                                            // TODO: Check result types as well?
                                             results.copy_from_slice(&host_results);
+                                            debug!("Host function ({}.{}) call returning with Ok(): {:?}", host_response.func_desc.module_name, host_response.func_desc.field_name, host_results);
                                             Ok(())
                                         }
                                         HostFuncResult::Failure(e) => {
+                                            debug!("Host function ({}.{}) call returning with Err(): {}", host_response.func_desc.module_name, host_response.func_desc.field_name, e);
                                             Err(anyhow!("Host function call failed: {}", e))
                                         }
                                     }
@@ -233,6 +241,12 @@ pub struct HostFuncDesc {
     pub field_name: String,
 }
 
+impl fmt::Display for HostFuncDesc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.module_name, self.field_name)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NativeFuncRequest {
     pub func_desc: NativeFuncDesc,
@@ -266,8 +280,8 @@ pub struct PendingImportStackItem<'a> {
     pub host_resp_tx: HostFuncRespTx,
 }
 
-impl<'a> std::fmt::Debug for PendingImportStackItem<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<'a> fmt::Debug for PendingImportStackItem<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "PendingImportStackItem {{ func_desc: {:?}, results_count: {}, host_resp_tx: {:?} }}",
@@ -278,17 +292,17 @@ impl<'a> std::fmt::Debug for PendingImportStackItem<'a> {
 
 // Removed #[derive(Debug)] as Debug is manually implemented
 pub struct WasmCallState<'a> {
-    pub pending_import_stack: Vec<PendingImportStackItem<'a>>,
+    pub pending_import: Option<PendingImportStackItem<'a>>,
     pub current_future:
         Option<Pin<Box<dyn Future<Output = Result<Vec<WasmVal>, anyhow::Error>> + Send + 'a>>>,
     pub current_results_count: Option<usize>,
 }
 
 // Manually implement Debug to exclude the non-Debug Future field.
-impl<'a> std::fmt::Debug for WasmCallState<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<'a> fmt::Debug for WasmCallState<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WasmCallState")
-            .field("pending_import_stack", &self.pending_import_stack)
+            .field("pending_import_option", &self.pending_import)
             .field("current_results_count", &self.current_results_count)
             .finish_non_exhaustive()
     }
@@ -298,13 +312,14 @@ impl<'a> std::fmt::Debug for WasmCallState<'a> {
 pub enum CallStepResult {
     ImportCall(HostFuncRequest),
     Complete(WasmResultsVec),
+    Error(String),
 }
 
 pub fn wasm_call_init<'a>() -> Result<WasmCallState<'a>> {
     trace!("call_init");
 
     let call_state = WasmCallState {
-        pending_import_stack: vec![],
+        pending_import: None,
         current_future: None,
         current_results_count: None,
     };
@@ -336,14 +351,14 @@ pub async fn wasm_call_step<'a>(
         call_result = &mut wasm_future => {
             match call_result {
                 Ok(results) => {
-                    debug!("Wasm future completed successfully.");
+                    debug!("Wasm future returned Ok().");
                     // Future completed, no need to put it back in state.
                     Ok(CallStepResult::Complete(results))
                 }
                 Err(e) => {
-                    error!("Wasm future failed: {:?}", e);
+                    info!("Wasm future returned Err(): {:?}", e);
                     // Future failed, no need to put it back in state.
-                    Err(anyhow!("Wasm future failed: {:?}", e))
+                    Ok(CallStepResult::Error(e.to_string()))
                 }
             }
         },
@@ -352,7 +367,7 @@ pub async fn wasm_call_step<'a>(
                 Some((host_req, host_resp_tx)) => {
                     debug!("Host request received by call_step: {:?}, results_count for original call: {}", host_req.func_desc, results_count);
                     // Push the currently executing future onto the stack.
-                    call_state.pending_import_stack.push(PendingImportStackItem {
+                    call_state.pending_import = Some(PendingImportStackItem {
                         func_desc: host_req.func_desc.clone(),
                         results_count, // Expected results count for the original Wasm call that led to this (or a parent) host call.
                         wasm_future, // Move the future here.
@@ -469,8 +484,8 @@ pub async fn wasm_call_pop_host<'a>(
     );
 
     let pending_item = call_state
-        .pending_import_stack
-        .pop()
+        .pending_import
+        .take()
         .ok_or_else(|| anyhow!("call_pop_host called with empty pending import stack"))?;
 
     debug!(
@@ -642,6 +657,9 @@ mod tests {
                 CallStepResult::ImportCall(ic) => {
                     panic!("Expected Complete, got ImportCall: {:?}", ic);
                 }
+                CallStepResult::Error(reason) => {
+                    panic!("Expected Complete, got Cancelled: {}", reason);
+                }
             };
         }
     }
@@ -682,6 +700,9 @@ mod tests {
             CallStepResult::ImportCall(ic) => ic,
             CallStepResult::Complete(results) => {
                 panic!("Expected ImportCall, got Complete({:?})", results)
+            }
+            CallStepResult::Error(reason) => {
+                panic!("Expected ImportCall, got Cancelled: {}", reason);
             }
         };
 
@@ -727,6 +748,9 @@ mod tests {
             CallStepResult::Complete(results) => {
                 panic!("Expected ImportCall, got Complete({:?})", results)
             }
+            CallStepResult::Error(reason) => {
+                panic!("Expected ImportCall, got Cancelled: {}", reason);
+            }
         };
 
         // Prepare and send host response
@@ -759,9 +783,13 @@ mod tests {
                 "Expected Complete, got ImportCall({:?}) after host response",
                 ic
             ),
+            CallStepResult::Error(reason) => panic!(
+                "Expected Complete, got Cancelled: {}",
+                reason
+            )
         }
 
-        assert_eq!(call_state.pending_import_stack.len(), 0);
+        assert_eq!(call_state.pending_import.is_none(), true);
         info!("Test test_call_init_push_pop completed successfully.");
     }
 

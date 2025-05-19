@@ -7,6 +7,8 @@ use anyhow::Result;
 use strum_macros::Display;
 use tracing::debug;
 
+use self::wasm::CallStepResult;
+
 /// Distinguishes the context of a `PendingStep` state in the FSM.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum StepType {
@@ -25,15 +27,6 @@ pub enum StateTag {
     PendingStep(StepType),
     /// The Wasm function called a host function (import) and is paused, waiting for the host response.
     AwaitingHost,
-}
-
-/// Represents the outcome of stepping the Wasm execution.
-#[derive(Debug, Clone)]
-pub enum CallOutcome {
-    /// The Wasm function call completed successfully. Contains the results.
-    Complete(Vec<WasmVal>),
-    /// The Wasm function called an imported host function. Contains the request details.
-    ImportCallNeeded(HostFuncRequest),
 }
 
 /// Errors specific to the FSM operation.
@@ -72,24 +65,14 @@ pub enum FsmError {
     ImportNotAFunction(String),
 }
 
-// Helper to convert wasm::Error into FsmError::CallFailed
-impl From<wasm::CallStepResult> for CallOutcome {
-    fn from(result: wasm::CallStepResult) -> Self {
-        match result {
-            wasm::CallStepResult::Complete(results) => CallOutcome::Complete(results),
-            wasm::CallStepResult::ImportCall(req) => CallOutcome::ImportCallNeeded(req),
-        }
-    }
-}
-
 /// The Wasm FSM wrapper.
 pub struct WasmFsm {
     pub instance: WasmInstanceState,
 
-    state_tag: StateTag,
+    pub state_tag: StateTag,
 
     // Call stack for managing (potentially nested) calls.
-    call_stack: Vec<WasmCallState<'static>>,
+    pub call_stack: Vec<WasmCallState<'static>>,
 
     // The single MPSC receiver for all host function calls from this instance.
     // Option to allow taking it for mutable operations if strictly needed,
@@ -191,9 +174,9 @@ impl WasmFsm {
     /// Drives the Wasm execution forward by one step.
     ///
     /// Can only be called when the FSM is in the `PendingStep` state.
-    /// Returns the outcome of the step: `Complete` or `ImportCallNeeded`.
+    /// Returns the outcome of the step: `Complete` or `ImportCall`.
     /// Transitions the FSM to `Idle` on completion, or `AwaitingHost` if an import is called.
-    pub fn step(&mut self) -> Result<CallOutcome, FsmError> {
+    pub fn step(&mut self) -> Result<CallStepResult, FsmError> {
         if !matches!(self.state_tag, StateTag::PendingStep(_)) {
             return Err(FsmError::InvalidState {
                 operation: "step",
@@ -226,7 +209,7 @@ impl WasmFsm {
 
         // 5. Process result.
         match step_result {
-            Ok(wasm::CallStepResult::Complete(results)) => {
+            Ok(CallStepResult::Complete(results)) => {
                 self.call_stack.pop(); // Remove completed call
                 if self.call_stack.is_empty() {
                     self.state_tag = StateTag::Idle;
@@ -234,10 +217,10 @@ impl WasmFsm {
                     // The completed call was popped. The FSM state should now reflect
                     // the state of the new top-most call on the stack.
                     // This new top call was previously suspended.
-                    // If its pending_import_stack is not empty, it means it was AwaitingHost.
+                    // If its pending_import_option is not None, it means it was AwaitingHost.
                     // Otherwise, it was suspended due to a nested native call and should become PendingStep.
                     if let Some(new_top_call_state) = self.call_stack.last() {
-                        if !new_top_call_state.pending_import_stack.is_empty() {
+                        if new_top_call_state.pending_import.is_some() {
                             self.state_tag = StateTag::AwaitingHost;
                         } else {
                             // This implies the underlying call was waiting for a nested native call (which just completed).
@@ -265,11 +248,52 @@ impl WasmFsm {
                         self.state_tag = StateTag::Idle;
                     }
                 }
-                Ok(CallOutcome::Complete(results))
+                Ok(CallStepResult::Complete(results))
             }
-            Ok(wasm::CallStepResult::ImportCall(request)) => {
+            Ok(CallStepResult::Error(reason)) => {
+                self.call_stack.pop(); // Remove completed call
+                if self.call_stack.is_empty() {
+                    self.state_tag = StateTag::Idle;
+                } else {
+                    // The completed call was popped. The FSM state should now reflect
+                    // the state of the new top-most call on the stack.
+                    // This new top call was previously suspended.
+                    // If its pending_import_option is not None, it means it was AwaitingHost.
+                    // Otherwise, it was suspended due to a nested native call and should become PendingStep.
+                    if let Some(new_top_call_state) = self.call_stack.last() {
+                        if !new_top_call_state.pending_import.is_none() {
+                            self.state_tag = StateTag::AwaitingHost;
+                        } else {
+                            // This implies the underlying call was waiting for a nested native call (which just completed).
+                            // It should now be ready to be stepped again.
+                            // Which StepType? It depends on how new_top_call_state was left.
+                            // If it has a current_future, it was likely pushed (Begin) or resumed (Resume).
+                            // This is where knowing *why* it was on stack is important.
+                            // For now, if it has a future, assume it's resumable.
+                            if new_top_call_state.current_future.is_some() {
+                                self.state_tag = StateTag::PendingStep(StepType::Resume);
+                            // Or Begin? This needs care.
+                            // Let's assume Resume is safer for now.
+                            } else {
+                                // This case should ideally not happen if a call is on stack and not AwaitingHost.
+                                // It implies it was PendingStep but its future was taken and not put back.
+                                // Or, it was pushed without a future properly set up.
+                                // Fallback to a general PendingStep, but this signals a potential logic gap.
+                                // For robustness, we might need WasmCallState to also store its conceptual state.
+                                self.state_tag = StateTag::PendingStep(StepType::Resume);
+                                // Consider logging a warning here if current_future is None and not AwaitingHost
+                            }
+                        }
+                    } else {
+                        // Should be caught by is_empty() above, but as a fallback:
+                        self.state_tag = StateTag::Idle;
+                    }
+                }
+                Ok(CallStepResult::Error(reason))
+            }
+            Ok(CallStepResult::ImportCall(request)) => {
                 self.state_tag = StateTag::AwaitingHost;
-                Ok(CallOutcome::ImportCallNeeded(request))
+                Ok(CallStepResult::ImportCall(request))
             }
             Err(e) => {
                 debug!("WasmFsm::step: Encountered error in step_result: {:?}", e);
@@ -294,7 +318,7 @@ impl WasmFsm {
                     // Similar to above, determine state from new top call.
                     if let Some(new_top_call_state) = self.call_stack.last() {
                          debug!("WasmFsm::step: New top of stack (current_results_count): {:?}", new_top_call_state.current_results_count);
-                        if !new_top_call_state.pending_import_stack.is_empty() {
+                        if !new_top_call_state.pending_import.is_none() {
                             self.state_tag = StateTag::AwaitingHost;
                             debug!("WasmFsm::step: New top has pending imports, setting state_tag to AwaitingHost.");
                         } else if new_top_call_state.current_future.is_some() {
@@ -412,9 +436,9 @@ impl WasmFsm {
         })?;
 
         let pending_item_ref = top_call_state
-            .pending_import_stack
-            .last()
-            .ok_or_else(|| FsmError::InternalError("pending_import_stack is empty".to_string()))?;
+            .pending_import
+            .as_ref()
+            .ok_or_else(|| FsmError::InternalError("pending_import_option is empty".to_string()))?;
 
         let func_desc = pending_item_ref.func_desc.clone();
 
@@ -530,11 +554,12 @@ mod tests {
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
         match fsm.step().expect("step failed") {
-            CallOutcome::Complete(results) => {
+            CallStepResult::Complete(results) => {
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].i32(), Some(42));
             }
-            CallOutcome::ImportCallNeeded(_) => panic!("Expected Complete, got ImportCallNeeded"),
+            CallStepResult::Error(reason) => panic!("Expected Complete, got Cancelled: {}", reason),
+            CallStepResult::ImportCall(_) => panic!("Expected Complete, got ImportCall"),
         }
         assert_eq!(*fsm.current_state(), StateTag::Idle);
     }
@@ -564,8 +589,9 @@ mod tests {
 
         // Step -> AwaitingHost
         let import_request = match fsm.step().expect("step 1 failed") {
-            CallOutcome::ImportCallNeeded(req) => req,
-            CallOutcome::Complete(_) => panic!("Expected ImportCallNeeded, got Complete"),
+            CallStepResult::ImportCall(req) => req,
+            CallStepResult::Complete(_) => panic!("Expected ImportCall, got Complete"),
+            CallStepResult::Error(reason) => panic!("Expected ImportCall, got Cancelled: {}", reason),
         };
         assert_eq!(*fsm.current_state(), StateTag::AwaitingHost);
         assert_eq!(import_request.func_desc.module_name, "host");
@@ -588,11 +614,12 @@ mod tests {
 
         // Step -> Idle (Complete)
         match fsm.step().expect("step 2 failed") {
-            CallOutcome::Complete(results) => {
+            CallStepResult::Complete(results) => {
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].i32(), Some(30));
             }
-            CallOutcome::ImportCallNeeded(_) => panic!("Expected Complete, got ImportCallNeeded"),
+            CallStepResult::Error(reason) => panic!("Expected Complete, got Cancelled: {}", reason),
+            CallStepResult::ImportCall(_) => panic!("Expected Complete, got ImportCall"),
         }
         assert_eq!(*fsm.current_state(), StateTag::Idle);
     }
@@ -652,7 +679,7 @@ mod tests {
 
         // Step to complete -> Idle
         match fsm.step() {
-            Ok(CallOutcome::Complete(_)) => (),
+            Ok(CallStepResult::Complete(_)) => (),
             Err(e) => panic!("Step failed: {:?}", e),
             _ => panic!("Unexpected step outcome"),
         };
@@ -692,8 +719,8 @@ mod tests {
 
         // 2. Step outer_call, it should request host_A
         let import_req_a = match fsm.step().expect("step for outer_call (host_A) failed") {
-            CallOutcome::ImportCallNeeded(req) => req,
-            _ => panic!("Expected ImportCallNeeded for host_A"),
+            CallStepResult::ImportCall(req) => req,
+            _ => panic!("Expected ImportCall for host_A"),
         };
         assert_eq!(*fsm.current_state(), StateTag::AwaitingHost);
         assert_eq!(import_req_a.func_desc.field_name, "host_A");
@@ -712,7 +739,7 @@ mod tests {
 
         // 4. Step and complete inner_call
         match fsm.step().expect("step for inner_call failed") {
-            CallOutcome::Complete(results) => {
+            CallStepResult::Complete(results) => {
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].i32(), Some(50));
             }
@@ -740,7 +767,7 @@ mod tests {
         // For this test, we just expect it to complete or request another import if the WAT was more complex.
         // Given the simple WAT for outer_call, it effectively completes after the host_A call site.
         match fsm.step().expect("final step for outer_call failed") {
-            CallOutcome::Complete(results) => {
+            CallStepResult::Complete(results) => {
                 // outer_call doesn't actually return a value in this simplified WAT
                 // It would if it used the result of host_A and then returned something.
                 // Let's assume if it completes, it means the flow worked.
@@ -781,7 +808,7 @@ mod tests {
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
         match fsm.step().expect("step for add failed") {
-            CallOutcome::Complete(results) => {
+            CallStepResult::Complete(results) => {
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].i32(), Some(15)); // 10 + 5
             }
@@ -801,7 +828,7 @@ mod tests {
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
         match fsm.step().expect("step for sub failed") {
-            CallOutcome::Complete(results) => {
+            CallStepResult::Complete(results) => {
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].i32(), Some(5)); // 10 - 5
             }
@@ -840,8 +867,8 @@ mod tests {
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
         let import_req = match fsm.step().expect("step 1 for run_double failed") {
-            CallOutcome::ImportCallNeeded(req) => req,
-            _ => panic!("Expected ImportCallNeeded for run_double"),
+            CallStepResult::ImportCall(req) => req,
+            _ => panic!("Expected ImportCall for run_double"),
         };
         assert_eq!(*fsm.current_state(), StateTag::AwaitingHost);
         assert_eq!(import_req.func_desc.field_name, "host_double");
@@ -858,7 +885,7 @@ mod tests {
         );
 
         match fsm.step().expect("step 2 for run_double failed") {
-            CallOutcome::Complete(results) => {
+            CallStepResult::Complete(results) => {
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].i32(), Some(20));
             }
@@ -878,7 +905,7 @@ mod tests {
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Begin));
 
         match fsm.step().expect("step for run_add_five failed") {
-            CallOutcome::Complete(results) => {
+            CallStepResult::Complete(results) => {
                 assert_eq!(results.len(), 1);
                 assert_eq!(results[0].i32(), Some(12)); // 7 + 5
             }
@@ -938,8 +965,8 @@ mod tests {
         fsm.push(request).expect("start_call failed");
         // Capture the actual import request when transitioning to AwaitingHost
         let actual_import_req = match fsm.step().expect("step failed to get to AwaitingHost") {
-            CallOutcome::ImportCallNeeded(req) => req,
-            _ => panic!("Expected ImportCallNeeded"),
+            CallStepResult::ImportCall(req) => req,
+            _ => panic!("Expected ImportCall"),
         };
         assert_eq!(*fsm.current_state(), StateTag::AwaitingHost);
 
@@ -961,7 +988,7 @@ mod tests {
         assert_eq!(*fsm.current_state(), StateTag::PendingStep(StepType::Resume));
 
         match fsm.step().expect("final step failed") {
-            CallOutcome::Complete(_) => (),
+            CallStepResult::Complete(_) => (),
             _ => panic!("Expected Complete after resuming"),
         }
         assert_eq!(*fsm.current_state(), StateTag::Idle);

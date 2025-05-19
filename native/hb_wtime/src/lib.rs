@@ -23,8 +23,9 @@ fn load(env: Env, _load_info: Term) -> bool {
     debug!("loading hb_wtime NIF");
 
     trace!("loading hb_wtime NIF resources");
-    rustler::resource!(nif::NifRes, env);
+    rustler::resource!(nif::NifRes, env).then(|| {
+        info!("loaded hb_wtime NIF");
+    });
 
-    info!("loaded hb_wtime NIF");
     true
 }

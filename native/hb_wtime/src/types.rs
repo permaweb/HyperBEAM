@@ -1,3 +1,5 @@
+use std::fmt;
+
 pub use wasmtime::Val as WasmVal;
 pub use wasmtime::ValType as WasmValType;
 
@@ -17,15 +19,15 @@ pub enum NativeFuncDesc {
     Indirect(u64),
 }
 
-impl NativeFuncDesc {
-    pub fn to_string(&self) -> String {
+impl fmt::Display for NativeFuncDesc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             NativeFuncDesc::Export(name) => 
                 match name.parse::<u64>() {
-                    Ok(_) => format!("\"{}\"", name),
-                    Err(_) => name.clone(),
+                    Ok(_) => write!(f, "\"{}\"", name),
+                    Err(_) => write!(f, "{}", name),
                 }
-            NativeFuncDesc::Indirect(index) => format!("{}", index),
+            NativeFuncDesc::Indirect(index) => write!(f, "{}", index),
         }
     }
 }

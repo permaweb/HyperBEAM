@@ -5,6 +5,7 @@
     meta/1,
     call_begin/3,
     call_continue/4,
+    call_cancel/3,
     mem_size/1,
     mem_read/3,
     mem_write/3
@@ -31,6 +32,9 @@ call_begin(_Context, _Func, _Args) ->
     ?NOT_LOADED.
 
 call_continue(_Context, _Module, _Field, _Results) ->
+    ?NOT_LOADED.
+
+call_cancel(_Context, _Module, _Field) ->
     ?NOT_LOADED.
 
 mem_size(_Context) ->

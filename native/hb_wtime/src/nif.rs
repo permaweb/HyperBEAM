@@ -1,14 +1,14 @@
 use crate::convert::{self, nif_vals_to_wasm_vals};
 use crate::types::{NativeFuncDesc, NifWasmVal, WasmVal};
-use crate::wasm::{HostFuncDesc, HostFuncResult};
+use crate::wasm::{CallStepResult, HostFuncDesc, HostFuncResult};
 use crate::wasm_fsm::{
-    CallOutcome, FsmError, HostFuncResponse, NativeFuncRequest, StateTag, WasmFsm, WasmModuleData,
+    FsmError, HostFuncResponse, NativeFuncRequest, StateTag, StepType, WasmFsm, WasmModuleData
 };
 use anyhow;
 use rustler::types::atom::{error, ok};
 use rustler::{Binary, Encoder, Env, NifResult, OwnedBinary, ResourceArc, Term};
 use std::sync::Mutex;
-use tracing::{debug, error, trace, debug_span};
+use tracing::{debug, debug_span, error, trace, warn};
 
 pub struct NifRes {
     fsm: Mutex<WasmFsm>,
@@ -31,7 +31,28 @@ fn fsm_error_to_term<'a>(env: Env<'a>, err: FsmError) -> Term<'a> {
     // Rust strings (i.e. generated from wasmtime errors) can contain null bytes,
     // which could cause issues if passed along.
     let reason_string_escaped = reason_string_raw.replace("\0", "\\0");
-    (error(), reason_string_escaped).encode(env)
+    // Make sure it is converted to a `Binary` and owned by Erlang
+    let mut reason_binary_owned = OwnedBinary::new(reason_string_escaped.len()).unwrap();
+    reason_binary_owned.as_mut_slice().copy_from_slice(reason_string_escaped.as_bytes());
+    let reason_binary = Binary::from_owned(reason_binary_owned, env);
+    (error(), reason_binary).encode(env)
+}
+
+fn fsm_state_meta_to_str(fsm: &WasmFsm) -> String {
+    let tag_str = match fsm.current_state() {
+        StateTag::Idle => "Idle".to_string(),
+        StateTag::AwaitingHost => "Await".to_string(),
+        StateTag::PendingStep(st) => match st {
+            StepType::Begin => "PendBeg".to_string(),
+            StepType::Resume => "PendRes".to_string(),
+        },
+    };
+    let call_stack_len = fsm.call_stack.len();
+    let call_has_import_flag = match fsm.call_stack.first().map_or(false, |call| call.pending_import.is_some()) {
+        true => "i",
+        _ => "",
+    };
+    format!("{tag_str}({call_stack_len}{call_has_import_flag})")
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -66,7 +87,7 @@ fn create<'a>(env: Env<'a>, module_binary: Binary) -> NifResult<Term<'a>> {
                 fsm: Mutex::new(fsm_instance),
                 runtime,
             });
-            debug!("fsm.current_state(): {:?}", resource.fsm.lock().unwrap().current_state());
+            debug!("fsm: {}", fsm_state_meta_to_str(&resource.fsm.lock().unwrap()));
             Ok((ok(), resource).encode(env))
         }
         Err(e) => {
@@ -117,7 +138,7 @@ fn call_begin<'a>(
 
     let mut fsm = resource.fsm.lock().unwrap();
 
-    debug!("fsm.current_state(): {:?}", fsm.current_state());
+    debug!("fsm: {}", fsm_state_meta_to_str(&fsm));
     if !matches!(fsm.current_state(), StateTag::Idle) && 
        !matches!(fsm.current_state(), StateTag::AwaitingHost) {
         return Ok(fsm_error_to_term(
@@ -144,7 +165,7 @@ fn call_begin<'a>(
     };
 
     let native_request = NativeFuncRequest {
-        func_desc,
+        func_desc: func_desc.clone(),
         params: wasm_params,
     };
 
@@ -153,7 +174,7 @@ fn call_begin<'a>(
     }
 
     let res = match fsm.step() {
-        Ok(CallOutcome::Complete(results)) => {
+        Ok(CallStepResult::Complete(results)) => {
             trace!("Call started and completed. Results: {:?}", results);
             let ok_atom = ok();
             match convert::wasm_vals_to_term_list(env, &results) {
@@ -165,7 +186,7 @@ fn call_begin<'a>(
                 }
             }
         }
-        Ok(CallOutcome::ImportCallNeeded(req)) => {
+        Ok(CallStepResult::ImportCall(req)) => {
             trace!("Call started, yielded import call: {:?}", req);
             let ok_atom = ok();
             match convert::wasm_host_func_req_to_term_list(env, req) {
@@ -177,10 +198,15 @@ fn call_begin<'a>(
                 }
             }
         }
+        Ok(CallStepResult::Error(reason)) => {
+            let msg = format!("Call to {} resulted in error: {}", func_desc, reason);
+            warn!(msg);
+            Ok((error(), msg).encode(env))
+        }
         Err(e) => Ok(fsm_error_to_term(env, e)),
     };
 
-    debug!("fsm.current_state(): {:?}", fsm.current_state());
+    debug!("fsm: {}", fsm_state_meta_to_str(&fsm));
 
     debug!("res: {:?}", res);
     trace!("exit");
@@ -206,7 +232,7 @@ fn call_continue<'a>(
 
     let mut fsm = resource.fsm.lock().unwrap();
 
-    debug!("fsm.current_state(): {:?}", fsm.current_state());
+    debug!("fsm: {}", fsm_state_meta_to_str(&fsm));
 
     if !matches!(fsm.current_state(), StateTag::AwaitingHost) {
         return Ok(fsm_error_to_term(
@@ -217,6 +243,11 @@ fn call_continue<'a>(
             },
         ));
     }
+
+    let func_desc = HostFuncDesc {
+        module_name,
+        field_name,
+    };
 
     // Inner function to handle fallible conversion, returns Result<HostFuncResponse, String>
     // where String is a formatted error message.
@@ -241,10 +272,7 @@ fn call_continue<'a>(
                 }
             };
         Ok(HostFuncResponse {
-            func_desc: HostFuncDesc {
-                module_name,
-                field_name,
-            },
+            func_desc: func_desc.clone(),
             results: HostFuncResult::Success(wasm_results),
         })
     })();
@@ -262,7 +290,7 @@ fn call_continue<'a>(
     }
 
     let res = match fsm.step() {
-        Ok(CallOutcome::Complete(results)) => {
+        Ok(CallStepResult::Complete(results)) => {
             trace!("Call resumed and completed. Results: {:?}", results);
             let ok_atom = ok();
             match convert::wasm_vals_to_term_list(env, &results) {
@@ -274,7 +302,7 @@ fn call_continue<'a>(
                 }
             }
         }
-        Ok(CallOutcome::ImportCallNeeded(req)) => {
+        Ok(CallStepResult::ImportCall(req)) => {
             trace!("Call resumed, yielded another import call: {:?}", req);
             let ok_atom = ok();
             match convert::wasm_host_func_req_to_term_list(env, req) {
@@ -286,10 +314,79 @@ fn call_continue<'a>(
                 }
             }
         }
+        Ok(CallStepResult::Error(reason)) => {
+            let msg = format!("Response from {} resulted in error: {}", func_desc, reason);
+            warn!(msg);
+            Ok((error(), msg).encode(env))
+        }
         Err(e) => Ok(fsm_error_to_term(env, e)),
     };
 
-    debug!("fsm.current_state(): {:?}", fsm.current_state());
+    debug!("fsm: {}", fsm_state_meta_to_str(&fsm));
+
+    debug!("res: {:?}", res);
+    trace!("exit");
+
+    res
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn call_cancel<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<NifRes>,
+    module_name: String,
+    field_name: String,
+) -> NifResult<Term<'a>> {
+    trace!("call_cancel");
+
+    let span = debug_span!("call_cancel");
+    let _enter = span.enter();
+
+    debug!("enter");
+
+    let mut fsm = resource.fsm.lock().unwrap();
+
+    debug!("fsm: {}", fsm_state_meta_to_str(&fsm));
+
+    if !matches!(fsm.current_state(), StateTag::AwaitingHost) {
+        return Ok(fsm_error_to_term(
+            env,
+            FsmError::InvalidState {
+                operation: "call_cancel (must be AwaitingHost)",
+                current_state: fsm.current_state().clone(),
+            },
+        ));
+    }
+
+    let host_response =
+        HostFuncResponse {
+            func_desc: HostFuncDesc {
+                module_name,
+                field_name,
+            },
+            results: HostFuncResult::Failure("Cancelled by `call_cancel` NIF function".to_string()),
+        };
+
+    if let Err(e) = fsm.pop(host_response) {
+        return Ok(fsm_error_to_term(env, e));
+    }
+
+    let res = match fsm.step() {
+        Ok(CallStepResult::Error(reason)) => {
+            Ok((ok(), reason).encode(env))
+        }
+        Ok(CallStepResult::Complete(results)) => {
+            let err = format!("Unexpected call complete: {:?}", results);
+            Ok((error(), err).encode(env))
+        }
+        Ok(CallStepResult::ImportCall(req)) => {
+            let err = format!("Unexpected call import needed: {:?}", req);
+            Ok((error(), err).encode(env))
+        }
+        Err(e) => Ok(fsm_error_to_term(env, e)),
+    };
+
+    debug!("fsm: {}", fsm_state_meta_to_str(&fsm));
 
     debug!("res: {:?}", res);
     trace!("exit");
