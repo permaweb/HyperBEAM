@@ -62,6 +62,7 @@ init(M1, M2, Opts) ->
     ImageBin =
         case hb_ao:get(<<InPrefix/binary, "/image">>, M1, Opts) of
             not_found ->
+                ?event({wasm_image_not_found}),
                 case hb_ao:get(<<"body">>, M1, Opts) of
                     not_found ->
                         throw(
@@ -130,8 +131,8 @@ default_import_resolver(Msg1, Msg2, Opts) ->
         instance := WASM,
         module := Module,
         func := Func,
-        args := Args
-        % func_sig := Signature
+        args := Args,
+        func_sig := Signature
     } = Msg2,
     Prefix = dev_stack:prefix(Msg1, Msg2, Opts),
     {ok, Msg3} =
@@ -145,8 +146,8 @@ default_import_resolver(Msg1, Msg2, Opts) ->
                 <<"path">> => <<"import">>,
                 <<"module">> => Module,
                 <<"func">> => Func,
-                <<"args">> => Args
-                % <<"func-sig">> => list_to_binary(Signature)
+                <<"args">> => Args,
+                <<"func-sig">> => Signature
             },
             Opts
         ),
@@ -154,31 +155,79 @@ default_import_resolver(Msg1, Msg2, Opts) ->
     Response = hb_ao:get(results, Msg3, Opts),
     {ok, Response, NextState}.
 
+find_import_in_list([], _FunctionToCompare) ->
+    false;
+find_import_in_list([{func, ImportModule, ImportField, ParamTypes, ResultTypes} | RestImports], {TestImportModule, TestImportField})
+  when is_binary(ImportModule) and is_binary(ImportField) ->
+    if
+        ImportModule == TestImportModule andalso ImportField == TestImportField ->
+            {true, {matched_import_results, ParamTypes, ResultTypes}};
+        true ->
+            find_import_in_list(RestImports, {TestImportModule, TestImportField})
+    end;
+find_import_in_list([_ | RestImports], {TestImportModule, TestImportField}) -> 
+    find_import_in_list(RestImports, {TestImportModule, TestImportField}).
+
+get_import_func_type(InstMeta, {ImportModule, ImportField}) ->
+    ?event(get_import_func_type),
+    {{imports, Imports}, _} = InstMeta,
+    % ?event({get_import_res_type_inputs, #{imports => Imports, import_module => ImportModule, import_field => ImportField}}),
+    FoundImport = find_import_in_list(Imports, {ImportModule, ImportField}),
+    ?event({get_import_res_type_found_import, FoundImport}),
+    ResType = case FoundImport of
+        {true, {matched_import_results, ParamTypes, ResultTypes}} ->
+            {ok, {params, ParamTypes}, {results, ResultTypes}};
+        false -> {error, no_import_found}
+    end,
+    ?event({get_import_res_type_final_res_type, ResType}),
+    ResType.
+
+type_list_to_string_parts([]) ->
+    [];
+type_list_to_string_parts([Atom]) when is_atom(Atom) ->
+    [atom_to_binary(Atom, utf8)];
+type_list_to_string_parts([Atom | Rest]) when is_atom(Atom) ->
+    [atom_to_binary(Atom, utf8), <<", ">> | type_list_to_string_parts(Rest)].
+
+func_type_atoms_to_sig(ParamTypes, ResultTypes) ->
+    ?event({func_type_atoms_to_sig, {params, ParamTypes}, {results, ResultTypes}}),
+    ParamsString = iolist_to_binary(type_list_to_string_parts(ParamTypes)),
+    ResultsString = iolist_to_binary(type_list_to_string_parts(ResultTypes)),
+    Sig = <<"(", ParamsString/binary, ") -> (", ResultsString/binary, ")">>,
+    ?event({func_type_atoms_to_sig_final, Sig}),
+    Sig.
+
 call(Instance, Function, Params) ->
-    {ok, Res, _} = call(Instance, Function, Params, fun default_import_resolver/3, #{}, #{}),
+    {ok, Res, _, _} = call(Instance, Function, Params, fun default_import_resolver/3, #{}, #{}),
     {ok, Res}.
 call(Instance, Function, Params, ImportResolver, State1, Opts) ->
     ?event({call_begin, Instance, Function, Params}),
+    {ok, InstMeta} = hb_wtime:meta(Instance),
     case hb_wtime:call_begin(Instance, Function, Params) of
         {ok, complete, ResultList} ->
             ?event({call_complete, Instance, Function, Params, ResultList}),
-            {ok, ResultList, State1};
+            {ok, ResultList, ok, State1};
         {ok, import, [ImportModule, ImportField, ImportParams]} ->
             % Start the import resolution loop
-            call_loop(Instance, ImportModule, ImportField, ImportParams, ImportResolver, State1, Opts);
+            call_loop(Instance, InstMeta, ImportModule, ImportField, ImportParams, ImportResolver, State1, Opts);
         {error, Reason} ->
             ?event({call_begin_failed, Instance, Function, Params, Reason}),
             {error, {call_begin_failed, Reason}}
     end.
 
 %% Internal helper function to handle the host import loop.
-call_loop(Instance, ImportModule, ImportField, ImportParams, ImportResolver, CurrentState, Opts) ->
+call_loop(Instance, InstMeta, ImportModule, ImportField, ImportParams, ImportResolver, CurrentState, Opts) ->
+    ?event({call_loop_begin, {{module, ImportModule}, {field, ImportField}, {params, ImportParams}, {import_resolver, ImportResolver}}}),
+    {ok, {params, ParamTypes}, {results, ResultTypes}} = get_import_func_type(InstMeta, {ImportModule, ImportField}),
+    ?event({call_loop_params, {param_types, ParamTypes}, {result_types, ResultTypes}}),
+    Signature = func_type_atoms_to_sig(ParamTypes, ResultTypes),
+    ?event({call_loop_signature, Signature}),
     ImportRes = ImportResolver(CurrentState, #{
         instance => Instance,
         module => ImportModule,
         func => ImportField,
-        args => ImportParams
-        % func_sig => ImportSignature
+        args => ImportParams,
+        func_sig => Signature
     }, Opts),
     ?event({
         import_resolver_result,
@@ -190,10 +239,10 @@ call_loop(Instance, ImportModule, ImportField, ImportParams, ImportResolver, Cur
             % Resume Wasm execution with the host result
             case hb_wtime:call_continue(Instance, ImportModule, ImportField, HostResultList) of
                 {ok, complete, FinalResultList} ->
-                    {ok, FinalResultList, NextState}; % Final completion
+                    {ok, FinalResultList, ok, NextState}; % Final completion
                 {ok, import, [NextImportModule, NextImportField, NextImportParams]} ->
                     % Another import was needed, continue the loop
-                    call_loop(Instance, NextImportModule, NextImportField, NextImportParams, ImportResolver, NextState, Opts);
+                    call_loop(Instance, InstMeta, NextImportModule, NextImportField, NextImportParams, ImportResolver, NextState, Opts);
                 {error, Reason} ->
                     {error, {call_continue_failed, Reason}}
             end;
@@ -258,7 +307,7 @@ compute(RawM1, M2, Opts) ->
                             {priv, hb_private:from_message(M1)}
                         }
                     ),
-                    {ok, Res, MsgAfterExecution} =
+                    {ok, Res, ResType, MsgAfterExecution} =
                         call(
                             instance(M1, M2, Opts),
                             WASMFunction,
@@ -276,7 +325,7 @@ compute(RawM1, M2, Opts) ->
                     {ok,
                         hb_ao:set(MsgAfterExecution,
                             #{
-                                % <<"results/", Prefix/binary, "/type">> => ResType,
+                                <<"results/", Prefix/binary, "/type">> => ResType,
                                 <<"results/", Prefix/binary, "/output">> => Res
                             }
                         )
@@ -326,15 +375,15 @@ normalize(RawM1, M2, Opts) ->
 snapshot(M1, M2, Opts) ->
     ?event(snapshot, generating_snapshot),
     Instance = instance(M1, M2, Opts),
-    {ok, Size} = hb_wtime:mem_size(Instance),
-    UseSize = min(Size, 1),
-    {ok, Mem} = case UseSize of
-        0 -> 
-            ?event({reading_memory_0b, {size, UseSize}}),
+    {ok, MaybeSize} = hb_wtime:mem_size(Instance),
+    {ok, Mem} = case MaybeSize of
+        X when X == not_found orelse X == 0 ->
+            ?event({mem_snap_skip, {size, X}}),
             {ok, <<>>};
-        _ ->
-            ?event({reading_memory_1b, {size, UseSize}}),
-            hb_wtime:mem_read(Instance, 0, UseSize)
+        ActualSize when is_integer(ActualSize) ->
+            ?event({mem_snap_read, {size, ActualSize}}),
+            % Read 1 byte. TODO: Read ActualSize bytes (optimise this)
+            hb_wtime:mem_read(Instance, 0, 1)
     end,
     {ok,
         #{
@@ -346,8 +395,8 @@ snapshot(M1, M2, Opts) ->
 terminate(M1, M2, Opts) ->
     ?event(terminate_called_on_dev_wasm),
     Prefix = dev_stack:prefix(M1, M2, Opts),
-    Instance = instance(M1, M2, Opts),
-    hb_beamr:stop(Instance),
+    % Instance = instance(M1, M2, Opts),
+    % hb_beamr:stop(Instance),
     {ok, hb_private:set(M1,
         #{
             <<Prefix/binary, "/Instance">> => unset
@@ -375,7 +424,9 @@ import(Msg1, Msg2, Opts) ->
     % 1. Adjust the path to the stdlib.
     ModName = hb_ao:get(<<"module">>, Msg2, Opts),
     FuncName = hb_ao:get(<<"func">>, Msg2, Opts),
-    Prefix = dev_stack:prefix(Msg1, Msg2, Opts),
+    ?event({import_mod_func, {mod, ModName}, {func, FuncName}}),
+    Prefix = <<"wasm">>, %dev_stack:prefix(Msg1, Msg2, Opts),
+    ?event({import_prefix, {prefix, Prefix}}),
     AdjustedPath =
         <<
             Prefix/binary,
@@ -399,7 +450,7 @@ import(Msg1, Msg2, Opts) ->
             #{ StatePath => Msg1 },
             Opts#{ hashpath => ignore }
         ),
-    ?event({state_added_msg1, AdjustedMsg1, AdjustedMsg2}),
+    % ?event({state_added_msg1, AdjustedMsg1, AdjustedMsg2}),
     % 3. Resolve the adjusted path against the added state.
     case hb_ao:resolve(AdjustedMsg1, AdjustedMsg2, Opts) of
         {ok, Res} ->
@@ -408,6 +459,7 @@ import(Msg1, Msg2, Opts) ->
             {ok, Res};
         {error, not_found} ->
             ?event({wasm_import_resolve_not_found, {module, ModName}, {func, FuncName}}),
+            % throw({error, wasm_import_resolve_not_found}),
             % 5. Failure. Call the stub handler.
             undefined_import_stub(Msg1, Msg2, Opts)
     end.
@@ -432,7 +484,7 @@ undefined_import_stub(Msg1, Msg2, Opts) ->
                 ]
         }
     ),
-    {ok, #{ state => Msg3, results => [0] }}.
+    {ok, #{ state => Msg3, results => [] }}.
 
 %%% Tests
 

@@ -116,7 +116,9 @@ default_device(Msg1, Key, Opts) ->
                 <<"passes">> => 2
             }
         };
-        _ -> default_device_index(NormKey)
+        _ -> 
+            ?event({default_device_index, {key, NormKey}}),
+            default_device_index(NormKey)
     end.
 default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
 % TODO: Should this also be a stack with WASI etc?
@@ -535,14 +537,14 @@ ensure_module_cached(Msg1, _Msg2, Opts) ->
 run_as(Key, Msg1, Msg2, Opts) ->
     BaseDevice = hb_ao:get(<<"device">>, {as, dev_message, Msg1}, Opts),
     ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
-    ?event({base_device, {device, BaseDevice}}),
+    ?event({base_device, {key, {explicit, Key}}, {device, BaseDevice}}),
     {DefaultDevice, DefaultDeviceExtraKeys} = case default_device(Msg1, Key, Opts) of
         {DevHasExtraKeys, ExtraKeys} ->
             {DevHasExtraKeys, ExtraKeys};
         DevOnly ->
             {DevOnly, none}
     end,
-    ?event({use_device, {default_device, DefaultDevice}, {extra_keys, DefaultDeviceExtraKeys}}),
+    ?event({use_device, {key, {explicit, Key}}, {default_device, DefaultDevice}, {extra_keys, DefaultDeviceExtraKeys}}),
     PrepKeysBase = #{
         <<"device">> =>
             DeviceSet = hb_ao:get(
@@ -568,7 +570,7 @@ run_as(Key, Msg1, Msg2, Opts) ->
         none -> PrepKeysBase;
         HasExtraKeys -> maps:merge(PrepKeysBase, HasExtraKeys)
     end,
-    ?event({prep_keys, {base, PrepKeysBase}, {with_extra, PrepKeysWithExtra}}),
+    ?event({prep_keys, {key, {explicit, Key}}, {base, PrepKeysBase}, {with_extra, PrepKeysWithExtra}}),
     {ok, PreparedMsg} =
         dev_message:set(
             ensure_process_key(Msg1, Opts),

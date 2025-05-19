@@ -13,7 +13,7 @@ jmp_buf env;
 void deep_function(int level)
 {
     last_level = level;
-    if (level == 3) {                       /* Pick an arbitrary depth…  */
+    if (level == 5) {                       /* Pick an arbitrary depth…  */
         LOG("!  deep_function() hit the trigger … jumping out!");
         longjmp(env, 42);                   /* Jump back, return value = 42 */
     }

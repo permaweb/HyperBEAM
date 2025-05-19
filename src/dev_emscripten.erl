@@ -19,8 +19,14 @@
 %%% 
 %%% Where '_vjj' represents the type spec of the function.
 -module(dev_emscripten).
--export([info/1, init/3, '_emscripten_memcpy_js'/3, '__cxa_throw'/3, '__cxa_rethrow'/3, '_emscripten_throw_longjmp'/3, invoke_v/3, invoke_ii/3, invoke_jj/3, invoke_vjj/3, invoke_vjjj/3, invoke_vii/3, invoke_viii/3, invoke_iiii/3, router/4, emscripten_date_now/3]).
-
+-export([info/1, init/3
+    ,'__cxa_throw'/3, '__cxa_rethrow'/3, '_emscripten_throw_longjmp'/3
+    ,invoke_v/3, invoke_ii/3, invoke_jj/3, invoke_jjj/3, invoke_vjj/3, invoke_vjjj/3, invoke_vii/3, invoke_viii/3, invoke_iii/3, invoke_iiii/3, router/4
+    ,'__cxa_find_matching_catch_3'/3, '__cxa_begin_catch'/3
+    ,'_emscripten_memcpy_js'/3
+    ,emscripten_date_now/3
+    ,'__asyncjs__weavedrive_open'/3, '__asyncjs__weavedrive_read'/3, '__asyncjs__weavedrive_close'/3
+]).
 
 -include("src/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -48,30 +54,20 @@ init(M1, _M2, Opts) ->
         ),
     {ok, MsgWithLib}.
 
-'_emscripten_memcpy_js'(Msg1, Msg2, Opts) ->
-    ?event('_emscripten_memcpy_js'),
-    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
-    WASM = dev_wasm:instance(State, Msg2, Opts),
-    [Dst, Src, Size] = hb_ao:get(args, Msg2, #{ hashpath => ignore }),
-    ?event(debug, {memcpy, {dst, Dst}, {src, Src}, {size, Size}}),
-    {ok, Data} = hb_wtime:mem_read(WASM, Src, Size),
-    ok = hb_wtime:mem_write(WASM, Dst, Data),
-    {ok, #{ <<"state">> => State, <<"results">> => [] }}.
-
 '__cxa_throw'(_Msg1, _Msg2, _Opts) ->
     Res = {import_exception, <<"__cxa_throw">>},
     ?event(Res),
-    Res.
+    {error, Res}.
 
 '__cxa_rethrow'(_Msg1, _Msg2, _Opts) ->
     Res = {import_exception, <<"__cxa_throw">>},
     ?event(Res),
-    Res.
+    {error, Res}.
 
 '_emscripten_throw_longjmp'(_Msg1, _Msg2, _Opts) ->
     Res = {import_exception, <<"_emscripten_throw_longjmp">>},
     ?event(Res),
-    Res.
+    {error, Res}.
 
 invoke_v(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_v),
@@ -84,6 +80,10 @@ invoke_ii(Msg1, Msg2, Opts) ->
 invoke_jj(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_jj),
 	router(<<"invoke_jj">>, Msg1, Msg2, Opts).
+
+invoke_jjj(Msg1, Msg2, Opts) ->
+	?event(invoke_emscripten_jjj),
+	router(<<"invoke_jjj">>, Msg1, Msg2, Opts).
 
 invoke_vjjj(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_vjjj),
@@ -100,6 +100,10 @@ invoke_vii(Msg1, Msg2, Opts) ->
 invoke_viii(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_viii),
 	router(<<"invoke_viii">>, Msg1, Msg2, Opts).
+
+invoke_iii(Msg1, Msg2, Opts) ->
+	?event(invoke_emscripten_iii),
+	router(<<"invoke_iii">>, Msg1, Msg2, Opts).
 
 invoke_iiii(Msg1, Msg2, Opts) ->
 	?event(invoke_emscripten_iiii),
@@ -119,8 +123,9 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
     ?event(debug, invoke_emscripten_stack_get_current),
     {ok, [SP]} = dev_wasm:call(WASM, <<"emscripten_stack_get_current">>, []),
     ?event(debug, {invoke_stack_pointer, SP}),
-    ?event({calling_import_resolver, {state, State, opts, Opts}}),
-    ImportResolver = hb_private:get(<<"wasm/import-resolver">>, State, Opts),
+    ?event({calling_import_resolver, {state, State}, {opts, Opts}}),
+    ImportResolver = hb_private:get(<<"import-resolver">>, State, Opts),
+    ?event({import_resolver, ImportResolver}),
     try
         ?event({trying_indirect_call, {index, Index}, {args, Args}}),
         Res = dev_wasm:call(WASM, Index, Args, ImportResolver, State, Opts),
@@ -128,10 +133,10 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
         ?event(debug, {try_indirect_call_succeeded, Result}),
         {ok, #{ <<"state">> => StateMsg, <<"results">> => Result }}
     catch
-        _:Error ->
-            ?event(debug, {invoke_try_error, Error}),
-            ?event(debug, continuing_call),
-            hb_wtime:call_continue(WASM, <<"env">>, <<"_emscripten_throw_longjmp">>, []),
+        _:Error:Stack ->
+            ?event(debug, {invoke_try_error, Error, Stack}),
+            ?event(debug, cancelling_call),
+            hb_wtime:call_cancel(WASM, <<"env">>, <<"_emscripten_throw_longjmp">>),
             ?event(debug, {calling_emscripten_stack_restore, {sp, SP}}),
             dev_wasm:call(WASM, <<"_emscripten_stack_restore">>, [SP], ImportResolver, State, Opts),
             ?event(debug, calling_set_threw),
@@ -140,10 +145,29 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
             {ok, _SetThrewResult, _SetThrewResType, SetThrewMsg} = SetThrewRes,
             % ?event(debug, set_threw_done),
             % {ok, SetThrewResult, SetThrewMsg} = SetThrewRes,
-            % complete the __cxa_throw call
             % return empty result for invoke call
             {ok, #{ <<"state">> => SetThrewMsg, <<"results">> => [] }}
     end.
+
+'__cxa_find_matching_catch_3'(Msg1, _Msg2, Opts) ->
+    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
+    ?event(debug, {cxa_find_matching_catch_3, {state, State}, {opts, Opts}}),
+    {ok, #{ <<"state">> => State, <<"results">> => [1] }}.
+
+'__cxa_begin_catch'(Msg1, _Msg2, Opts) ->
+    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
+    ?event(debug, {cxa_begin_catch, {state, State}, {opts, Opts}}),
+    {ok, #{ <<"state">> => State, <<"results">> => [1] }}.
+
+'_emscripten_memcpy_js'(Msg1, Msg2, Opts) ->
+    ?event('_emscripten_memcpy_js'),
+    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
+    WASM = dev_wasm:instance(State, Msg2, Opts),
+    [Dst, Src, Size] = hb_ao:get(args, Msg2, #{ hashpath => ignore }),
+    ?event(debug, {memcpy, {dst, Dst}, {src, Src}, {size, Size}}),
+    {ok, Data} = hb_wtime:mem_read(WASM, Src, Size),
+    ok = hb_wtime:mem_write(WASM, Dst, Data),
+    {ok, #{ <<"state">> => State, <<"results">> => [] }}.
 
 % Return 0 (as a double)
 emscripten_date_now(Msg1, _Msg2, _Opts) ->
@@ -152,6 +176,21 @@ emscripten_date_now(Msg1, _Msg2, _Opts) ->
     Result = 0.0,
     ?event(debug, {emscripten_date_now, {result, Result}}),
     {ok, #{ <<"state">> => State, <<"results">> => [Result] }}.
+
+'__asyncjs__weavedrive_open'(Msg1, _Msg2, Opts) ->
+    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
+    ?event(debug, {weavedrive_open, {state, State}, {opts, Opts}}),
+    {ok, #{ <<"state">> => State, <<"results">> => [0] }}.
+
+'__asyncjs__weavedrive_read'(Msg1, _Msg2, Opts) ->
+    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
+    ?event(debug, {weavedrive_read, {state, State}, {opts, Opts}}),
+    {ok, #{ <<"state">> => State, <<"results">> => [0] }}.
+
+'__asyncjs__weavedrive_close'(Msg1, _Msg2, Opts) ->
+    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
+    ?event(debug, {weavedrive_close, {state, State}, {opts, Opts}}),
+    {ok, #{ <<"state">> => State, <<"results">> => [0] }}.
 
 %%% Tests
 init() ->
@@ -272,7 +311,7 @@ jmp_test() ->
     {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
     [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
     {ok, Output} = hb_wtime_io:read_string(Instance, Ptr),
-    ?assertEqual(<<"last_level: 3, ret: 42, local_state: 7">>, Output).
+    ?assertEqual(<<"last_level: 5, ret: 42, local_state: 7">>, Output).
 
 %% @doc Ensure that an AOS Emscripten-style WASM AOT module can be invoked
 %% with a function reference.

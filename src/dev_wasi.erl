@@ -10,6 +10,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-hb_debug(print).
+
 -define(INIT_VFS,
     #{
         <<"dev">> => #{
@@ -79,7 +81,7 @@ stdout(M) ->
 %path_open(M, Instance, [FDPtr, LookupFlag, PathPtr|_]) ->
 path_open(Msg1, Msg2, Opts) ->
     FDs = hb_ao:get(<<"file-descriptors">>, Msg1, Opts),
-    Instance = hb_private:get(<<"instance">>, Msg1, Opts),
+    Instance = dev_wasm:instance(Msg1, Msg2, Opts),
     [FDPtr, LookupFlag, PathPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({path_open, FDPtr, LookupFlag, PathPtr}),
     Path = hb_wtime_io:read_string(Instance, PathPtr),
@@ -113,7 +115,7 @@ path_open(Msg1, Msg2, Opts) ->
 %% interface.
 fd_write(Msg1, Msg2, Opts) ->
     State = hb_ao:get(<<"state">>, Msg1, Opts),
-    Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
+    Instance = dev_wasm:instance(State, Msg2, Opts),
     [FD, Ptr, Vecs, RetPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({fd_write, {fd, FD}, {ptr, Ptr}, {vecs, Vecs}, {retptr, RetPtr}}),
     Signature = hb_ao:get(<<"func-sig">>, Msg2, Opts),
@@ -121,6 +123,7 @@ fd_write(Msg1, Msg2, Opts) ->
     fd_write(State, Instance, [FD, Ptr, Vecs, RetPtr], 0, Opts).
 
 fd_write(S, Instance, [_, _Ptr, 0, RetPtr], BytesWritten, _Opts) ->
+    ?event({fd_write, {bytes_written, BytesWritten}}),
     hb_wtime:mem_write(
         Instance,
         RetPtr,
@@ -128,6 +131,7 @@ fd_write(S, Instance, [_, _Ptr, 0, RetPtr], BytesWritten, _Opts) ->
     ),
     {ok, #{ <<"state">> => S, <<"results">> => [0] }};
 fd_write(S, Instance, [FDnum, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
+    ?event({fd_write, {fdnum, FDnum}, {ptr, Ptr}, {vecs, Vecs}, {retptr, RetPtr}}),
     FDNumStr = integer_to_binary(FDnum),
     FD = hb_ao:get(<<"file-descriptors/", FDNumStr/binary>>, S, Opts),
     Filename = hb_ao:get(<<"filename">>, FD, Opts),
@@ -167,7 +171,7 @@ fd_write(S, Instance, [FDnum, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
 %% @doc Read from a file using the WASI-p1 standard interface.
 fd_read(Msg1, Msg2, Opts) ->
     State = hb_ao:get(<<"state">>, Msg1, Opts),
-    Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
+    Instance = dev_wasm:instance(State, Msg2, Opts),
     [FD, VecsPtr, NumVecs, RetPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
     Signature = hb_ao:get(<<"func-sig">>, Msg2, Opts),
     ?event({signature, Signature}),
@@ -227,7 +231,7 @@ clock_time_get(Msg1, _Msg2, Opts) ->
 environ_get(Msg1, Msg2, Opts) ->
     ?event({wasi_environ_get}),
     State = hb_ao:get(<<"state">>, Msg1, Opts),
-    % Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
+    % Instance = dev_wasm:instance(State, Msg2, Opts),
     Signature = hb_ao:get(<<"func-sig">>, Msg2, Opts),
     ?event({signature, Signature}),
     [Environ,EnvironBuf] = hb_ao:get(<<"args">>, Msg2, Opts),
@@ -241,7 +245,7 @@ environ_get(Msg1, Msg2, Opts) ->
 environ_sizes_get(Msg1, Msg2, Opts) ->
     ?event({wasi_environ_sizes_get}),
     State = hb_ao:get(<<"state">>, Msg1, Opts),
-    Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
+    Instance = dev_wasm:instance(State, Msg2, Opts),
     Signature = hb_ao:get(<<"func-sig">>, Msg2, Opts),
     ?event({signature, Signature}),
     [EnvironCount,EnvironBufSize] = hb_ao:get(<<"args">>, Msg2, Opts),
