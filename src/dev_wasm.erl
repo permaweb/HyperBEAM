@@ -383,7 +383,7 @@ snapshot(M1, M2, Opts) ->
         ActualSize when is_integer(ActualSize) ->
             ?event({mem_snap_read, {size, ActualSize}}),
             % Read 1 byte. TODO: Read ActualSize bytes (optimise this)
-            hb_wtime:mem_read(Instance, 0, 1)
+            hb_wtime:mem_read(Instance, 0, ActualSize)
     end,
     {ok,
         #{
