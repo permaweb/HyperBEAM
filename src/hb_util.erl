@@ -1,6 +1,7 @@
 %% @doc A collection of utility functions for building with HyperBEAM.
 -module(hb_util).
 -export([int/1, float/1, atom/1, bin/1, list/1]).
+-export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, short_id/1, human_int/1, to_hex/1]).
 -export([key_to_atom/2, binary_to_addresses/1]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
@@ -70,6 +71,16 @@ list(Value) when is_binary(Value) ->
     binary_to_list(Value);
 list(Value) when is_list(Value) -> Value;
 list(Value) when is_atom(Value) -> atom_to_list(Value).
+
+%% @doc: rounds IntValue up to the nearest multiple of Nearest.
+%% Rounds up even if IntValue is already a multiple of Nearest.
+ceil_int(IntValue, Nearest) ->
+	IntValue - (IntValue rem Nearest) + Nearest.
+
+%% @doc: rounds IntValue down to the nearest multiple of Nearest.
+%% Doesn't change IntValue if it's already a multiple of Nearest.
+floor_int(IntValue, Nearest) ->
+	IntValue - (IntValue rem Nearest).
 
 %% @doc Unwrap a tuple of the form `{ok, Value}', or throw/return, depending on
 %% the value of the `error_strategy' option.
