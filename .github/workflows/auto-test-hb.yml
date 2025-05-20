@@ -1,13 +1,12 @@
 name: Run HyperBEAM Tests
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - main
     types:
       - opened
-
-  workflow_dispatch:
 
 jobs:
   build-deps-image:
@@ -17,14 +16,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Build Ubuntu 22.04 image with dependencies
+      - name: Build Ubuntu 22.04 image with dependencies
         run: |
           docker build -t hyperbeam-deps - <<'EOF'
           FROM ubuntu:22.04
 
-          # 1) Install OS packages
+          # 1) Install OS packages (including git)
           RUN apt-get update \
            && apt-get install -y --no-install-recommends \
+              git \
               build-essential \
               cmake \
               pkg-config \
@@ -34,7 +34,7 @@ jobs:
               ca-certificates \
            && rm -rf /var/lib/apt/lists/*
 
-          # 2) Build & install Erlang OTP 27
+          # 2) Build & install Erlang OTP 27
           RUN git clone https://github.com/erlang/otp.git /tmp/otp \
            && cd /tmp/otp \
            && git checkout maint-27 \
@@ -53,4 +53,4 @@ jobs:
 
       - name: Verify image built correctly
         run: |
-          docker run --rm hyperbeam-deps bash -lc "erlang --version && rebar3 --version"
+          docker run --rm hyperbeam-deps bash -lc "erl -version && rebar3 --version"
