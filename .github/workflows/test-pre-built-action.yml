@@ -11,7 +11,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    name: Erlang/OTP ${{ matrix.otp }} / rebar3 ${{ matrix.rebar3 }}
+    name: Install Deps and Run Tests
     strategy:
       matrix:
         otp: ['27.3.3']
