@@ -187,11 +187,15 @@ lookup_execute_test() ->
         {ok, #{ <<"slot">> := 1 }},
         Res1
     ),
+	?event({lookup_execute_test_result, {res1, Res1}}),
+	Res2 = hb_ao:get(
+		<< ?TEST_NAME/binary, "/now/results/output/body" >>,
+		#{ <<"device">> => <<"node-process@1.0">> },
+		Opts
+	),
+	?event({lookup_execute_test_result2, {res2, Res2}}),
     ?assertMatch(
         42,
-        hb_ao:get(
-            << ?TEST_NAME/binary, "/now/results/output/body" >>,
-            #{ <<"device">> => <<"node-process@1.0">> },
-            Opts
-        )
-    ).
+        Res2
+    ),
+	?event({lookup_execute_test_done}).
