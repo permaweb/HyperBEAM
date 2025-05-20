@@ -34,9 +34,21 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # Determine whether we're in a PR or a push to main
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            TEXT=":x: HyperBEAM Tests Failed PR #${PR_NUMBER}: ${PR_TITLE}"
+          else
+            TEXT=":x: HyperBEAM Tests Failed on main"
+          fi
+
+          # Post to Slack
           curl -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
             -d "channel=$SLACK_CHANNEL_ID" \
-            -d "text=:x: HyperBEAM Tests Failed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View test output>"
+            -d "text=${TEXT} <${RUN_URL}|View test output>"
+
 
