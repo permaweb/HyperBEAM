@@ -38,5 +38,5 @@ jobs:
           curl -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
             -d "channel=$SLACK_CHANNEL_ID" \
-            -d "text=:x: *HyperBEAM Tests Failed*\n*PR #${{ github.event.pull_request.number }}*: ${{ github.event.pull_request.title }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View test output>"
+            -d "text=:x: HyperBEAM Tests Failed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View test output>"
 
