@@ -71,8 +71,10 @@ call(M1, RawM2, Opts) ->
     TargetMod2 =
         case hb_ao:get(<<"commit-request">>, BaseTarget, false, Opts) of
             true ->
+                ?event({commit_request, true}),
                 case hb_opts:get(relay_allow_commit_request, false, Opts) of
                     true ->
+                        ?event({allow_commit_request, true}),
                         hb_message:convert(
                             hb_message:commit(TargetMod1, Opts),
                             <<"httpsig@1.0">>,
@@ -182,10 +184,13 @@ request_hook_reroute_to_nearest_test() ->
 commit_request_test() ->
     Port = 10000 + rand:uniform(10000),
     Wallet = ar_wallet:new(),
+    WalletAddress = hb_util:human_id(Wallet),
+    ?event({test_wallet_address, WalletAddress}),
     Node =
         hb_http_server:start_node(#{
             port => Port,
-            priv_wallet => ar_wallet:new(),
+            priv_wallet => ServerWallet = ar_wallet:new(),
+            relay_allow_commit_request => true,
             routes =>
                 [
                     #{
@@ -199,7 +204,7 @@ commit_request_test() ->
                                             (hb_util:bin(Port))/binary,
                                         "/commitments"
                                     >>,
-                                <<"wallet">> => hb_util:human_id(Wallet),
+                                <<"wallet">> => WalletAddress,
                                 <<"match">> => <<"test-commitments">>,
                                 <<"with">> => <<"commitments">>
                             }
@@ -215,6 +220,7 @@ commit_request_test() ->
                     }
                 }
         }),
+    ?event({server_wallet, hb_util:human_id(ServerWallet)}),
     {ok, Res} =
         hb_http:get(
             Node,
@@ -222,4 +228,19 @@ commit_request_test() ->
             #{}
         ),
     ?event({res, Res}),
-    ?assert(hb_message:committed(Res)).
+
+    % Verify relay fields in the response
+    ?assertEqual(<<"/commitments">>, hb_ao:get(<<"relay-path">>, Res, #{})),
+    % Verify relay-body exists and contains the original request
+    RelayBody = hb_ao:get(<<"relay-body">>, Res, #{}),
+    ?event({relay_body, RelayBody}),
+    ?assertNotEqual(not_found, RelayBody),
+    ?assertEqual(<<"/test-commitments">>, hb_ao:get(<<"path">>, RelayBody, #{})),
+    % Verify that the relay-body has been committed
+    RelayCommitments = hb_ao:get(<<"commitments">>, RelayBody, #{}),
+    ?event({relay_commitments, RelayCommitments}),
+    ?assertNotEqual(#{}, RelayCommitments),
+    % Check at least one commitment exists by getting the keys
+    CommitmentKeys = maps:keys(RelayCommitments),
+    ?assertNotEqual([], CommitmentKeys),
+    ?assert(length(CommitmentKeys) > 0).

@@ -324,7 +324,7 @@ apply_route(#{ <<"path">> := Path }, #{ <<"suffix">> := Suffix }) ->
     {ok, <<Path/binary, Suffix/binary>>};
 apply_route(#{ <<"path">> := Path }, #{ <<"match">> := Match, <<"with">> := With }) ->
     % Apply the regex to the path and replace the first occurrence.
-    case re:replace(Path, Match, With, [global]) of
+    case re:replace(Path, Match, With, [global, {return, binary}]) of
         NewPath when is_binary(NewPath) ->
             {ok, NewPath};
         _ -> {error, invalid_replace_args}
@@ -522,24 +522,55 @@ preprocess(Msg1, Msg2, Opts) ->
                     true -> #{ <<"commit-request">> => true };
                     false -> #{}
                 end,
-            {ok,
-                #{
-                    <<"body">> =>
-                        [
-                            MaybeCommit#{ <<"device">> => <<"relay@1.0">> },
-                            #{
-                                <<"path">> => <<"call">>,
-                                <<"target">> => <<"body">>,
-                                <<"body">> =>
-                                    hb_ao:get(
-                                        <<"request">>,
-                                        Msg2,
-                                        Opts#{ hashpath => ignore }
-                                    )
-                            }
-                        ]
-                }
-            }
+            ?event(debug_preprocess, {maybe_commit, MaybeCommit}),
+            ReqBody =
+                hb_ao:get(
+                    <<"request">>,
+                    Msg2,
+                    Opts#{ hashpath => ignore }
+                ),
+            ?event(debug_preprocess, {req_body, ReqBody}),
+            % Use the route function to get the target with transformations applied
+            RouteResult = route(ReqBody, Opts#{ routes => TemplateRoutes }),
+            ?event(debug_preprocess, {route_result, RouteResult}),
+            % Extract the target path based on what route returns
+            TargetPath = case RouteResult of
+                {ok, URI} when is_binary(URI) ->
+                    % Direct URI
+                    URI;
+                {ok, #{ <<"uri">> := URI }} ->
+                    % Map with URI
+                    URI;
+                {ok, Map} ->
+                    % Use first node's path as fallback
+                    Nodes = hb_ao:get(<<"nodes">>, Map, [], Opts),
+                    case Nodes of
+                        [] -> <<"/">>;
+                        [FirstNode | _] when is_map(FirstNode) ->
+                            hb_ao:get(<<"path">>, FirstNode, <<"/">>, Opts);
+                        _ -> <<"/">>
+                    end;
+                {error, Error} ->
+                    % Properly propagate routing errors like hb_http does
+                    ?event(debug_preprocess, {route_error, Error}),
+                    throw({no_viable_route, {reason, Error}, {message, ReqBody}})
+            end,
+            ?event(debug_preprocess, {target_path, TargetPath}),
+            % Create relay request using the correct fields for dev_relay
+            {ok, #{
+                <<"body">> => [
+                    maps:merge(
+                        MaybeCommit#{ <<"device">> => <<"relay@1.0">> },
+                        #{
+                            <<"device">> => <<"relay@1.0">>,
+                            <<"path">> => <<"call">>,
+                            <<"relay-path">> => TargetPath,
+                            <<"relay-method">> => <<"GET">>,
+                            <<"relay-body">> => ReqBody
+                        }
+                    )
+                ]
+            }}
     end.
 
 %%% Tests
