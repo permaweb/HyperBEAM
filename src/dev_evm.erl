@@ -1,24 +1,28 @@
 %%% @doc a device to interact with the EVM execution client (interpreted EVM) 
 -module(dev_evm).
--export([info/1, info/3, get_state/3, test_hb_http/0, test_ao/0]).
+-export([info/1, info/3, get_state/3, test_hb_http/0, eval_tx/3, test_ao/0]).
 
 info(_) ->
     #{
         <<"default">> => dev_message,
-        handlers => #{
-            <<"info">> => fun info/3,
-            <<"get_state">> => fun get_state/3
-        }
+		handlers => #{
+			<<"info">> => fun info/3,
+			<<"get_state">> => fun get_state/3,
+			<<"eval_tx">> => fun eval_tx/3
+		}
+
     }.
 %% @doc return evm device info
 info(_Msg1, _Msg2, _Opts) ->
     InfoBody = #{
         <<"description">> => <<"EVM device for interacting with load_revm_nif">>,
         <<"version">> => <<"1.0">>,
-        <<"paths">> => #{
-            <<"info">> => <<"Get device info">>,
-            <<"get_state">> => <<"Get appchain state">>
-        }
+		<<"paths">> => #{
+			<<"info">> => <<"Get device info">>,
+			<<"get_state">> => <<"Get appchain state">>,
+			<<"eval_tx">> => <<"Evaluate a transaction">>
+		}
+
     },
     {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 %% @doc get the JSON-serialized EVM state for a given chain_id
@@ -40,6 +44,42 @@ get_state(Msg1, _Msg2, Opts) ->
                 }
             }}
     end.
+
+%% @doc evaluate a transaction on an appchain
+eval_tx(Msg1, _Msg2, Opts) ->
+    try
+        % decode the JSON body
+        RawBody = hb_ao:get(<<"body">>, Msg1, not_found, Opts),
+        Body = hb_json:decode(RawBody),
+		CoutState = list_to_binary("native/load_revm_nif/appchains/9496.json"),
+        
+        % Get parameters from decoded body
+        SignedRawTx = maps:get(<<"signed_raw_tx">>, Body),
+        ChainId = maps:get(<<"chain_id">>, Body, <<"9496">>),  % FOR NOW default to Load's appchain
+        
+        % % Get current state
+        % State = load_revm_nif:get_appchain_state(ChainId),
+		% io:format(State),try
+    	State = load_revm_nif:get_appchain_state(ChainId),
+		% io:format("~nCHAIN ID: : ~p~n", [ChainId]),
+    	io:format("~n9496 appchain state: ~p~n", [State]),
+
+
+        
+        % Evaluate the transaction
+        Result = load_revm_nif:eval_bytecode(SignedRawTx, State, CoutState),
+        {ok, #{<<"status">> => 200, <<"body">> => Result}}
+    catch
+        error:Error ->
+            {error, #{
+                <<"status">> => 500,
+                <<"body">> => #{
+                    <<"error">> => <<"Failed to evaluate transaction">>,
+                    <<"details">> => Error
+                }
+            }}
+    end.
+
 
 % in erlang shell call: dev_evm:test_hb_http().
 test_hb_http() ->
