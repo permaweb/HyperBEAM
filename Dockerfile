@@ -1,4 +1,8 @@
+ARG PROFILES=genesis_wasm
+
 FROM ubuntu:22.04 AS builder
+
+ARG PROFILES
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -23,33 +27,26 @@ RUN git clone https://github.com/erlang/rebar3.git && \
     ./bootstrap && \
     sudo mv rebar3 /usr/local/bin/
 
+# install node 22 (used by genesis_wasm profile)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
+    node --version
+
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-WORKDIR /app
+WORKDIR /opt
 
 COPY . .
 
-# compile the project
-RUN rebar3 clean && rebar3 get-deps && rebar3 compile
+# compile the project with provided profiles
+RUN rebar3 clean && rebar3 get-deps && rebar3 as ${PROFILES} release
 
-# create the release
-RUN rebar3 as prod release
+RUN set -eux; \
+    BUILD_DIR="/opt/_build/$(echo "$PROFILES" | tr ',' '+')/rel/hb"; \
+    echo "#!/bin/sh\nexec \"$BUILD_DIR/bin/hb\" \"\$@\"" > /usr/local/bin/hb && \
+    chmod +x /usr/local/bin/hb && \
+    chmod +x "$BUILD_DIR/bin/hb"
 
-CMD ["/bin/bash"]
+ENTRYPOINT ["hb"]
 
-FROM ubuntu:22.04 AS runner
-
-RUN apt-get update && apt-get install -y \
-    libssl-dev \
-    ncurses-dev \
-    ca-certificates && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-COPY --from=builder /app/_build/prod/rel/hb /app
-
-RUN chmod +x /app/bin/hb
-
-CMD ["/app/bin/hb", "foreground", "--eval", "hb:start_mainnet(#{})"]

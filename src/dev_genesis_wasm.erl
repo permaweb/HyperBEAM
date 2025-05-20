@@ -98,19 +98,29 @@ ensure_started(Opts) ->
                                 )
                             ),
                         DatabaseUrl = filename:absname(DBDir ++ "/genesis-wasm-db"),
+                        BuildDir = filename:absname(
+                            hb_util:list(
+                                hb_opts:get(
+                                    genesis_wasm_build_dir,
+                                    "_build/genesis-wasm-server",
+                                    Opts
+                                )
+                            )
+                        ),
                         filelib:ensure_path(DBDir),
 						filelib:ensure_path(CheckpointDir),
+                        filelib:ensure_path(BuildDir),
                         Port =
                             open_port(
                                 {spawn_executable,
-                                    "_build/genesis-wasm-server/launch-monitored.sh"
+                                    filename:join([BuildDir, "launch-monitored.sh"])
                                 },
                                 [
                                     binary, use_stdio, stderr_to_stdout,
                                     {args, [
                                         "npm",
                                         "--prefix",
-                                        "_build/genesis-wasm-server",
+                                        BuildDir,
                                         "run",
                                         "dev"
                                     ]},
@@ -152,11 +162,13 @@ ensure_started(Opts) ->
 											{"DISABLE_PROCESS_FILE_CHECKPOINT_CREATION", "false"},
 											{"PROCESS_MEMORY_FILE_CHECKPOINTS_DIR", CheckpointDir},
                                             {"PROCESS_WASM_MEMORY_MAX_LIMIT", 
-                                                hb_util:list(
-                                                    hb_opts:get(
-                                                        genesis_wasm_max_wasm_memory_limit,
-                                                        1073741824,
-                                                        Opts
+                                                integer_to_list(
+                                                    binary_to_integer(
+                                                        hb_opts:get(
+                                                            genesis_wasm_max_memory_limit,
+                                                            "1073741824",
+                                                            Opts
+                                                        )
                                                     )
                                                 )
                                             }
