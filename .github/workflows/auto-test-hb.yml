@@ -1,0 +1,54 @@
+name: Run HyperBEAM Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+
+jobs:
+  build-deps-image:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build Ubuntu 22.04.5 image with dependencies
+        run: |
+          docker build -t hyperbeam-deps - <<'EOF'
+          FROM ubuntu:22.04.5
+
+          # 1) Install OS packages
+          RUN apt-get update \
+           && apt-get install -y --no-install-recommends \
+              build-essential \
+              cmake \
+              pkg-config \
+              ncurses-dev \
+              libssl-dev \
+              curl \
+              ca-certificates \
+           && rm -rf /var/lib/apt/lists/*
+
+          # 2) Build & install Erlang OTP 27
+          RUN git clone https://github.com/erlang/otp.git /tmp/otp \
+           && cd /tmp/otp \
+           && git checkout maint-27 \
+           && ./configure \
+           && make -j"$(nproc)" \
+           && make install \
+           && rm -rf /tmp/otp
+
+          # 3) Install rebar3
+          RUN git clone https://github.com/erlang/rebar3.git /tmp/rebar3 \
+           && cd /tmp/rebar3 \
+           && ./bootstrap \
+           && mv rebar3 /usr/local/bin/ \
+           && rm -rf /tmp/rebar3
+          EOF
+
+      - name: Verify image built correctly
+        run: |
+          docker run --rm hyperbeam-deps bash -lc "erlang --version && rebar3 --version"
