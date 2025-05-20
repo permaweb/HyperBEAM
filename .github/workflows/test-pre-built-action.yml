@@ -11,15 +11,32 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    name: Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
+    name: Erlang/OTP ${{ matrix.otp }} / rebar3 ${{ matrix.rebar3 }}
     strategy:
       matrix:
         otp: ['27.3.3']
         rebar3: ['3.24.0']
     steps:
-      - uses: actions/checkout@v4
-      - uses: erlef/setup-beam@v1
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Erlang & rebar3
+        uses: erlef/setup-beam@v1
         with:
-          otp-version: ${{matrix.otp}}
-          rebar3-version: ${{matrix.rebar3}}
-      - run: rebar3 eunit
+          otp-version: ${{ matrix.otp }}
+          rebar3-version: ${{ matrix.rebar3 }}
+
+      - name: Run EUnit
+        run: rebar3 eunit
+
+      - name: Notify Slack on Failure
+        if: failure()
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+        run: |
+          curl -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -d "channel=$SLACK_CHANNEL_ID" \
+            -d "text=:x: *HyperBEAM Tests Failed*\n*PR #${{ github.event.pull_request.number }}*: ${{ github.event.pull_request.title }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View test output>"
+
