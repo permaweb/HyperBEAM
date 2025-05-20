@@ -65,11 +65,12 @@ jobs:
            && mv rebar3 /usr/local/bin/ \
            && rm -rf /tmp/rebar3
 
-          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable
 
-          RUN mkdir -p /hyperbeam
 
-          RUN git clone --depth 1 --branch "$PR_BRANCH" "$REPO_URL" /hyperbeam/HyperBEAM
+          RUN mkdir -p /hyperbeam \
+           && git clone --depth 1 --branch "$PR_BRANCH" "$REPO_URL" /hyperbeam/HyperBEAM
 
           EOF
 
@@ -77,3 +78,12 @@ jobs:
       - name: Run Tests
         run: |
           docker run --rm hyperbeam-deps bash -lc "cd /hyperbeam/HyperBEAM && rebar3 eunit"
+
+      - name: Notify Slack on Failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data "{
+            \"text\": \":x: *HyperBEAM Tests Failed*\n*PR #${{ github.event.pull_request.number }}*: ${{ github.event.pull_request.title }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View test output>\"
+          }" \"$SLACK_WEBHOOK_URL\"
