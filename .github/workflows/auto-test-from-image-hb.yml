@@ -1,4 +1,4 @@
-name: Run HyperBEAM Tests
+name: Run HyperBEAM Tests, from docker image
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Build Ubuntu 22.04 image with dependencies, and HyperBEAM
+      - name: Build Erlang 27 image with deps and HyperBEAM
         run: |
           # set defaults if not in a PR
           if [ "${GITHUB_EVENT_NAME}" != "pull_request" ]; then
@@ -31,12 +31,12 @@ jobs:
             --build-arg REPO_URL="$REPO_URL" \
             --build-arg PR_BRANCH="$PR_BRANCH" \
             -t hyperbeam-deps - <<'EOF'
-          FROM ubuntu:22.04
+          FROM erlang:27@sha256:b0edce60779cecafd65c1584d2475850f9840460e872d149e1159743a4098d47
 
           ARG REPO_URL
           ARG PR_BRANCH
 
-          # 1) Install OS packages (including git)
+          # Install OS packages (git, build tools, etc.)
           RUN apt-get update \
            && apt-get install -y --no-install-recommends \
               git \
@@ -49,30 +49,16 @@ jobs:
               ca-certificates \
            && rm -rf /var/lib/apt/lists/*
 
-          # 2) Build & install Erlang OTP 27
-          RUN git clone https://github.com/erlang/otp.git /tmp/otp \
-           && cd /tmp/otp \
-           && git checkout maint-27 \
-           && ./configure \
-           && make -j"$(nproc)" \
-           && make install \
-           && rm -rf /tmp/otp
-
-          # 3) Install rebar3
-          RUN git clone https://github.com/erlang/rebar3.git /tmp/rebar3 \
-           && cd /tmp/rebar3 \
-           && ./bootstrap \
-           && mv rebar3 /usr/local/bin/ \
-           && rm -rf /tmp/rebar3
-
-          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          # (Optional) install Rust toolchain
+          RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --default-toolchain stable \
+           && echo 'export PATH=/root/.cargo/bin:$PATH' >> /etc/profile
 
           RUN mkdir -p /hyperbeam
-
+          
           RUN git clone --depth 1 --branch "$PR_BRANCH" "$REPO_URL" /hyperbeam/HyperBEAM
 
           EOF
-
 
       - name: Run Tests
         run: |
