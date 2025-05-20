@@ -16,7 +16,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Build Ubuntu 22.04 image with dependencies
+      - name: Build Ubuntu 22.04 image with dependencies, and HyperBEAM
         run: |
           docker build -t hyperbeam-deps - <<'EOF'
           FROM ubuntu:22.04
@@ -34,7 +34,7 @@ jobs:
               ca-certificates \
            && rm -rf /var/lib/apt/lists/*
 
-          # 2) Build & install Erlang OTP 27
+          # 2) Build & install Erlang OTP 27
           RUN git clone https://github.com/erlang/otp.git /tmp/otp \
            && cd /tmp/otp \
            && git checkout maint-27 \
@@ -54,11 +54,9 @@ jobs:
           RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 
           RUN mkdir -p /hyperbeam && \
-            git clone https://github.com/permaweb/HyperBEAM.git /hyperbeam/HyperBEAM && \
-            cd /hyperbeam/HyperBEAM && \
-            rebar3 eunit
+            git clone https://github.com/permaweb/HyperBEAM.git /hyperbeam/HyperBEAM
 
 
-      - name: Verify image built correctly
+      - name: Run Tests
         run: |
-          docker run --rm hyperbeam-deps bash -lc "erl -version && rebar3 --version"
+          docker run --rm hyperbeam-deps bash -lc "cd /hyperbeam/HyperBEAM && rebar3 eunit"
