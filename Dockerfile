@@ -1,4 +1,8 @@
-FROM --platform=linux/amd64 ubuntu:22.04
+ARG PROFILES=genesis_wasm
+
+FROM ubuntu:22.04 AS builder
+
+ARG PROFILES
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -7,7 +11,9 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     ncurses-dev \
     libssl-dev \
-    sudo
+    sudo \
+    curl \
+    ca-certificates
 
 RUN git clone https://github.com/erlang/otp.git && \
     cd otp && \
@@ -21,15 +27,26 @@ RUN git clone https://github.com/erlang/rebar3.git && \
     ./bootstrap && \
     sudo mv rebar3 /usr/local/bin/
 
-RUN git clone https://github.com/rust-lang/rust.git && \
-    cd rust && \
-    ./configure && \
-    make && \
-    sudo make install
+# install node 22 (used by genesis_wasm profile)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
+    node --version
 
-COPY . /app
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
-RUN cd /app && \
-    rebar3 compile
+WORKDIR /opt
 
-CMD ["/bin/bash"]
+COPY . .
+
+# compile the project with provided profiles
+RUN rebar3 clean && rebar3 get-deps && rebar3 as ${PROFILES} release
+
+RUN set -eux; \
+    BUILD_DIR="/opt/_build/$(echo "$PROFILES" | tr ',' '+')/rel/hb"; \
+    echo "#!/bin/sh\nexec \"$BUILD_DIR/bin/hb\" \"\$@\"" > /usr/local/bin/hb && \
+    chmod +x /usr/local/bin/hb && \
+    chmod +x "$BUILD_DIR/bin/hb"
+
+ENTRYPOINT ["hb"]
+

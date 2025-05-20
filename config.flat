@@ -1,1 +1,5 @@
 port: 10000
+operator: trustless
+initialized: permanent
+genesis-wasm-build-dir: /opt/_build/genesis-wasm-server
+genesis-wasm-max-memory-limit: 17179869184
