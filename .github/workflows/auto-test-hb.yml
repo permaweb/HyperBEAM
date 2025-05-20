@@ -17,10 +17,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Build Ubuntu 22.04.5 image with dependencies
+      - name: Build Ubuntu 22.04 image with dependencies
         run: |
           docker build -t hyperbeam-deps - <<'EOF'
-          FROM ubuntu:22.04.5
+          FROM ubuntu:22.04
 
           # 1) Install OS packages
           RUN apt-get update \
