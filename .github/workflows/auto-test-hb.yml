@@ -49,12 +49,13 @@ jobs:
            && ./bootstrap \
            && mv rebar3 /usr/local/bin/ \
            && rm -rf /tmp/rebar3
-          EOF
 
           RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 
           RUN mkdir -p /hyperbeam && \
             git clone https://github.com/permaweb/HyperBEAM.git /hyperbeam/HyperBEAM
+
+          EOF
 
 
       - name: Run Tests
