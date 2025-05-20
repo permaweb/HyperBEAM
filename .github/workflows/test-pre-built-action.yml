@@ -40,9 +40,9 @@ jobs:
         run: |
           # Determine whether we're in a PR or a push to main
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
-            TEXT=":x: HyperBEAM Tests Failed PR #${PR_NUMBER}: ${PR_TITLE}"
+            TEXT=":x: HyperBEAM tests failed PR #${PR_NUMBER}: ${PR_TITLE}"
           else
-            TEXT=":x: HyperBEAM Tests Failed on main"
+            TEXT=":x: HyperBEAM tests failed on main"
           fi
 
           # Post to Slack
