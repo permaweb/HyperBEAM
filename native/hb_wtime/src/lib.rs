@@ -1,4 +1,4 @@
-#![feature(type_alias_impl_trait)]
+// #![feature(type_alias_impl_trait)]
 
 use rustler::{Env, Term};
 use tracing::{debug, info, trace};
