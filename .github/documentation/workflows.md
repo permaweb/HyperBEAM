@@ -6,3 +6,4 @@ These workflows are GitHub Actions workflows that are used for a variety of CI/C
 ## Table of Contents
 
 - [CD](cd.md)
+- [Tests](tests.md)
