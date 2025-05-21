@@ -327,24 +327,37 @@ commitment_ids_from_request(Base, Req, Opts) ->
         ),
     ReqCommitments =
         case RawReqCommitments of
-            X2 when is_list(X2) -> X2;
-            Descriptor2 -> hb_ao:normalize_key(Descriptor2)
+            X2 when is_list(X2) ->
+                % Normalize each key in the list
+                lists:map(fun(Key) -> hb_ao:normalize_key(Key) end, X2);
+            X2 when is_map(X2) ->
+                % Normalize each key from the map
+                lists:map(fun(Key) -> hb_ao:normalize_key(Key) end, maps:keys(X2));
+            Descriptor2 ->
+                % Normalize the single key
+                [hb_ao:normalize_key(Descriptor2)]
         end,
     ?event({commitment_ids_from_request, {req_commitments, ReqCommitments}, {req_committers, ReqCommitters}}),
     % Get the commitments to verify.
     FromCommitmentIDs =
         case ReqCommitments of
-            <<"none">> -> [];
-            <<"all">> -> maps:keys(Commitments);
-            CommitmentIDs ->
-                CommitmentIDs =
-                    if is_list(CommitmentIDs) -> CommitmentIDs;
-                    true -> [CommitmentIDs]
+            [<<"none">>] ->
+                []; % Return empty list if specifically requested "none" by ID
+            [<<"all">>] ->
+                maps:keys(Commitments); % Return all keys if specifically requested "all" by ID
+            CommitmentIDs when is_list(CommitmentIDs) ->
+                % It's a list of specific IDs. Filter out any that don't actually exist.
+                lists:filtermap(
+                    fun(ID) ->
+                        case maps:is_key(ID, Commitments) of
+                            true -> {true, ID}; % Keep the ID if it's a valid key
+                            false -> false      % Discard if not found in Commitments
+                        end
                     end,
-                lists:map(
-                    fun(CommitmentID) -> maps:get(CommitmentID, Commitments) end,
                     CommitmentIDs
-                )
+                );
+            _ -> % Default/Error case
+                []
         end,
     FromCommitterAddrs =
         case ReqCommitters of
