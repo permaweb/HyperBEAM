@@ -58,9 +58,9 @@ init(M1, M2, Opts) ->
     InPrefix = dev_stack:input_prefix(M1, M2, Opts),
     % Where we should read/write our own state to.
     Prefix = dev_stack:prefix(M1, M2, Opts),
-    ?event({in_prefix, InPrefix}),
+    % ?event({in_prefix, InPrefix}),
     ImageBin =
-        case hb_ao:get(<<InPrefix/binary, "/image">>, M1, Opts) of
+        case hb_ao:get(<<"image">>, M1, Opts) of
             not_found ->
                 ?event({wasm_image_not_found}),
                 case hb_ao:get(<<"body">>, M1, Opts) of
@@ -70,8 +70,7 @@ init(M1, M2, Opts) ->
                                 wasm_init_error,
                                 <<
                                     "No viable image found in ",
-                                    InPrefix/binary,
-                                    "/image."
+                                    "image."
                                 >>,
                                 {msg1, M1}
                             }
@@ -90,7 +89,7 @@ init(M1, M2, Opts) ->
                 Image
         end,
     Mode =
-        case hb_ao:get(<<InPrefix/binary, "/Mode">>, M1, Opts) of
+        case hb_ao:get(<<"Mode">>, M1, Opts) of
             not_found -> wasm;
             <<"WASM">> -> wasm;
             <<"AOT">> ->

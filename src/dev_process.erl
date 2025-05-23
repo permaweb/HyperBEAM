@@ -511,7 +511,7 @@ ensure_module_cached(Msg1, _Msg2, Opts) ->
             case hb_cache:read(ModuleDataPath, Opts) of
                 {ok, CacheLinkId} ->
                     ?event({ensure_module_cache_hit, {module_id, ModuleId}, {cache_link_id, CacheLinkId}}),
-                    hb_ao:set(Msg1, #{ <<"process/image">> => CacheLinkId }, Opts);
+                    hb_ao:set(Msg1, #{ <<"image">> => CacheLinkId }, Opts);
                 not_found ->
                     ?event({ensure_module_cache_miss, {module_id, ModuleId}}),
                     % Fetch the module from the gateway
@@ -523,7 +523,7 @@ ensure_module_cached(Msg1, _Msg2, Opts) ->
                     {ok, CacheLinkId} = hb_cache:read(ModuleDataPath, Opts),
                     ?event({ensure_module_cache_linked, {module_id, ModuleId}, {cache_link_id, CacheLinkId}}),
                     % Set the cache link id on the message
-                    hb_ao:set(Msg1, #{ <<"process/image">> => CacheLinkId }, Opts)
+                    hb_ao:set(Msg1, #{ <<"image">> => CacheLinkId }, Opts)
             end;
         not_found ->
             ?event({ensure_module_id_not_found}),

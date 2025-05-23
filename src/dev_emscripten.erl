@@ -31,7 +31,7 @@
 -include("src/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-% -hb_debug(print).
+-hb_debug(print).
 
 info(_) ->
     #{
@@ -55,17 +55,17 @@ init(M1, _M2, Opts) ->
     {ok, MsgWithLib}.
 
 '__cxa_throw'(_Msg1, _Msg2, _Opts) ->
-    Res = {import_exception, <<"__cxa_throw">>},
+    Res = {import_exception, {<<"env">>, <<"__cxa_throw">>}},
     ?event(Res),
     {error, Res}.
 
 '__cxa_rethrow'(_Msg1, _Msg2, _Opts) ->
-    Res = {import_exception, <<"__cxa_throw">>},
+    Res = {import_exception, {<<"env">>, <<"__cxa_throw">>}},
     ?event(Res),
     {error, Res}.
 
 '_emscripten_throw_longjmp'(_Msg1, _Msg2, _Opts) ->
-    Res = {import_exception, <<"_emscripten_throw_longjmp">>},
+    Res = {import_exception, {<<"env">>, <<"_emscripten_throw_longjmp">>}},
     ?event(Res),
     {error, Res}.
 
@@ -124,7 +124,7 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
     {ok, [SP]} = dev_wasm:call(WASM, <<"emscripten_stack_get_current">>, []),
     ?event(debug, {invoke_stack_pointer, SP}),
     ?event({calling_import_resolver, {state, State}, {opts, Opts}}),
-    ImportResolver = hb_private:get(<<"import-resolver">>, State, Opts),
+    ImportResolver = hb_private:get(<<"wasm/import-resolver">>, State, Opts),
     ?event({import_resolver, ImportResolver}),
     try
         ?event({trying_indirect_call, {index, Index}, {args, Args}}),
@@ -317,7 +317,7 @@ jmp_test() ->
 %% with a function reference.
 basic_aos_exec_test_() ->
     {timeout, 30, fun () ->
-        Init = generate_emscripten_stack("test/aos-ll.wasm", <<"handle">>, []),
+        Init = generate_emscripten_stack("test/aos-dock.wasm", <<"handle">>, []),
         Msg = gen_test_aos_msg("return 5 * 3"),
         Env = gen_test_env(),
         Instance = hb_private:get(<<"wasm/instance">>, Init, #{}),
@@ -338,9 +338,9 @@ basic_aos_exec_test_() ->
         {ok, Res} = hb_wtime_io:read_string(Instance, Ptr),
         % io:format("Output: ~p~n", [Output]),
         ?event({got_result, Res}),
-        #{ <<"response">> := #{ <<"Output">> := #{ <<"data">> := #{ <<"output">> := Output } } } }
+        #{ <<"response">> := #{ <<"Output">> := #{ <<"data">> := Output } } }
             = hb_json:decode(Res),
-        ?assertEqual(15, Output)
+        ?assertEqual(<<"15">>, Output)
     end}.
 
 %%% Test Helpers

@@ -108,7 +108,11 @@ fn meta<'a>(env: Env<'a>, resource: ResourceArc<NifRes>) -> NifResult<Term<'a>> 
     let span = debug_span!("meta");
     let _enter = span.enter();
 
+    debug!("enter");
+
     let fsm = resource.fsm.lock().unwrap();
+
+    debug!("fsm: {}", fsm_state_meta_to_str(&fsm));
 
     let res = match convert::wasm_module_to_meta_term_list(env, &fsm.instance.module) {
         Ok(res) => Ok((ok(), res).encode(env)),
@@ -139,6 +143,7 @@ fn call_begin<'a>(
     let mut fsm = resource.fsm.lock().unwrap();
 
     debug!("fsm: {}", fsm_state_meta_to_str(&fsm));
+    
     if !matches!(fsm.current_state(), StateTag::Idle) && 
        !matches!(fsm.current_state(), StateTag::AwaitingHost) {
         return Ok(fsm_error_to_term(
@@ -440,6 +445,8 @@ fn mem_read<'a>(
 
     let mut fsm = resource.fsm.lock().unwrap();
 
+    debug!("fsm: {}", fsm_state_meta_to_str(&fsm));
+
     let mut erl_bin = match OwnedBinary::new(length) {
         Some(bin) => bin,
         None => {
@@ -475,6 +482,8 @@ fn mem_write<'a>(
     debug!("enter");
 
     let mut fsm = resource.fsm.lock().unwrap();
+
+    debug!("fsm: {}", fsm_state_meta_to_str(&fsm));
 
     let res = match fsm.write_memory(offset, data.as_slice()) {
         Ok(()) => Ok(ok().encode(env)),
