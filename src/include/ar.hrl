@@ -27,7 +27,9 @@
 -define(EDDSA_TYPE_BYTE, <<3>>).
 
 %% The default key type used by transactions that do not specify a signature type.
--define(DEFAULT_KEY_TYPE, {?RSA_SIGN_ALG, 65537}).
+-define(RSA_KEY_TYPE, {?RSA_SIGN_ALG, 65537}).
+-define(ECDSA_KEY_TYPE, {?ECDSA_SIGN_ALG, secp256k1}).
+-define(DEFAULT_KEY_TYPE, ?RSA_KEY_TYPE).
 
 %% Winstons per AR.
 -define(WINSTON_PER_AR, 1000000000000).
@@ -93,7 +95,7 @@
 
     %% The type of signature this transaction was signed with. A system field,
     %% not used by the protocol yet.
-    signature_type = ?DEFAULT_KEY_TYPE
+    signature_type = ?RSA_KEY_TYPE
 }).
 
 
