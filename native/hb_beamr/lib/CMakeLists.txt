@@ -102,6 +102,7 @@ set(WAMR_BUILD_MEMORY_PROFILING 1)
 set(WAMR_BUILD_MEMORY64 1) # Memory >4GB
 set(WAMR_BUILD_SIMD 1) # SIMD for performance
 set(WAMR_BUILD_TAIL_CALL 1) # TODO: Justification?
+set(WAMR_BUILD_BULK_MEMORY 1) # TODO: Check if this is okay?
 
 # Disable hardware-enforced bounds checking
 # TODO: Justification? This is due to running on the TEE?
@@ -117,7 +118,6 @@ set(WAMR_BUILD_LIBC_UVWASI 0)
 
 # Explicitly disable some features that are unused or hazardous
 set(WAMR_BUILD_SHARED_MEMORY 0)
-set(WAMR_BUILD_BULK_MEMORY 0) # TODO: Check if this is okay?
 set(WAMR_BUILD_LIB_WASI_THREADS 0)
 
 # -- End WAMR build options --

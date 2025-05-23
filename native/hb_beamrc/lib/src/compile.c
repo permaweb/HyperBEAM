@@ -320,7 +320,7 @@ int hb_wasm_aot_compile(CompileOpts *compile_opts, uint8_t *wasm_module_data, si
     //         PRINT_HELP_AND_EXIT();
     // }
     // else if (!strcmp(argv[0], "--disable-bulk-memory")) {
-    option.enable_bulk_memory = false;
+    //     option.enable_bulk_memory = false;
     // }
     // else if (!strcmp(argv[0], "--enable-multi-thread")) {
     //     option.enable_bulk_memory = true;
