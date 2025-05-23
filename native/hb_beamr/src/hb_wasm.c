@@ -742,16 +742,16 @@ void wasm_execute_indirect_function(void *raw) {
     //     argv[i] = prepared_args.data[i].of.i64;
     // }
 
-    // // Attempt to call the function and check for any exceptions
-    // if (!wasm_runtime_call_indirect(proc->exec_env, function_index, argc, argv)) {
-    //     if (wasm_runtime_get_exception(proc->exec_env)) {
-    //         DRV_DEBUG("%s", wasm_runtime_get_exception(proc->exec_env));
-    //     }
-    //     DRV_DEBUG("WASM function call failed");
-    //     send_error(proc->port_term, "WASM function call failed");
-    //     drv_unlock(proc->is_running);
-    //     return;
-    // }
+    // Attempt to call the function and check for any exceptions
+    if (!res) {
+        if (wasm_runtime_get_exception(proc->instance)) {
+            DRV_DEBUG("%s", wasm_runtime_get_exception(proc->instance));
+        }
+        DRV_DEBUG("WASM function call failed");
+        send_error(proc->port_term, "WASM function call failed");
+        drv_unlock(proc->is_running);
+        return;
+    }
 
     // Send the results back to Erlang
     DRV_DEBUG("Results size: %d", result_count);
