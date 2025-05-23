@@ -99,7 +99,8 @@ init(M1, M2, Opts) ->
                 end
         end,
     % Start the WASM executor.
-    {ok, Instance} = hb_wtime:create(ImageBin),
+    {ok, _Imports, _Exports, AotBin} = hb_beamrc:compile(ImageBin),
+    {ok, Instance, _Imports2, _Exports2} = hb_beamr:start(AotBin, aot),
     % Set the WASM Instance, handler, and standard library invokation function.
     ?event({setting_wasm_instance, Instance, {prefix, Prefix}}),
     {ok,
@@ -107,13 +108,13 @@ init(M1, M2, Opts) ->
             #{
                 <<Prefix/binary, "/write">> =>
                     fun(Binary) ->
-                        {ok, Ptr} = hb_wtime_io:write_string(Instance, Binary),
+                        {ok, Ptr} = hb_beamr_io:write_string(Instance, Binary),
                         {ok, Ptr}
                     end,
                 <<Prefix/binary, "/read">> =>
                     fun Reader([Ptr]) -> Reader(Ptr);
                         Reader(Ptr) ->
-                            {ok, Binary} = hb_wtime_io:read_string(Instance, Ptr),
+                            {ok, Binary} = hb_beamr_io:read_string(Instance, Ptr),
                             {ok, Binary}
                     end,
                 <<Prefix/binary, "/instance">> => Instance,
@@ -143,8 +144,8 @@ default_import_resolver(Msg1, Msg2, Opts) ->
             ),
             #{
                 <<"path">> => <<"import">>,
-                <<"module">> => Module,
-                <<"func">> => Func,
+                <<"module">> => list_to_binary(Module),
+                <<"func">> => list_to_binary(Func),
                 <<"args">> => Args,
                 <<"func-sig">> => Signature
             },
@@ -307,7 +308,7 @@ compute(RawM1, M2, Opts) ->
                         }
                     ),
                     {ok, Res, ResType, MsgAfterExecution} =
-                        call(
+                        hb_beamr:call(
                             instance(M1, M2, Opts),
                             WASMFunction,
                             case WASMParams of
@@ -360,7 +361,7 @@ normalize(RawM1, M2, Opts) ->
                     not_found -> throw({error, no_wasm_instance_or_snapshot});
                     State ->
                         {ok, M1} = init(RawM1, State, Opts),
-                        Res = hb_wtime:mem_write(instance(M1, M2, Opts), 0, State),
+                        Res = hb_beamr_io:write(instance(M1, M2, Opts), 0, State),
                         ?event(snapshot, {wasm_deserialized, {result, Res}}),
                         M1
                 end;
@@ -374,7 +375,7 @@ normalize(RawM1, M2, Opts) ->
 snapshot(M1, M2, Opts) ->
     ?event(snapshot, generating_snapshot),
     Instance = instance(M1, M2, Opts),
-    {ok, MaybeSize} = hb_wtime:mem_size(Instance),
+    {ok, MaybeSize} = hb_beamr_io:size(Instance),
     {ok, Mem} = case MaybeSize of
         X when X == not_found orelse X == 0 ->
             ?event({mem_snap_skip, {size, X}}),
@@ -382,7 +383,7 @@ snapshot(M1, M2, Opts) ->
         ActualSize when is_integer(ActualSize) ->
             ?event({mem_snap_read, {size, ActualSize}}),
             % Read 1 byte. TODO: Read ActualSize bytes (optimise this)
-            hb_wtime:mem_read(Instance, 0, ActualSize)
+            hb_beamr_io:read(Instance, 0, ActualSize)
     end,
     {ok,
         #{

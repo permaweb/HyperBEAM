@@ -84,7 +84,7 @@ path_open(Msg1, Msg2, Opts) ->
     Instance = dev_wasm:instance(Msg1, Msg2, Opts),
     [FDPtr, LookupFlag, PathPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({path_open, FDPtr, LookupFlag, PathPtr}),
-    Path = hb_wtime_io:read_string(Instance, PathPtr),
+    Path = hb_beamr_io:read_string(Instance, PathPtr),
     ?event({path_open, Path}),
     FD = #{
         <<"index">> := Index
@@ -124,7 +124,7 @@ fd_write(Msg1, Msg2, Opts) ->
 
 fd_write(S, Instance, [_, _Ptr, 0, RetPtr], BytesWritten, _Opts) ->
     ?event({fd_write, {bytes_written, BytesWritten}}),
-    hb_wtime:mem_write(
+    hb_beamr_io:write(
         Instance,
         RetPtr,
         <<BytesWritten:64/little-unsigned-integer>>
@@ -137,7 +137,7 @@ fd_write(S, Instance, [FDnum, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
     Filename = hb_ao:get(<<"filename">>, FD, Opts),
     StartOffset = hb_ao:get(<<"offset">>, FD, Opts),
     {VecPtr, Len} = parse_iovec(Instance, Ptr),
-    {ok, Data} = hb_wtime:mem_read(Instance, VecPtr, Len),
+    {ok, Data} = hb_beamr_io:read(Instance, VecPtr, Len),
     Before =
         binary:part(
             OrigData = hb_ao:get(<<"data">>, FD, Opts),
@@ -179,7 +179,7 @@ fd_read(Msg1, Msg2, Opts) ->
 
 fd_read(S, Instance, [FD, _VecsPtr, 0, RetPtr], BytesRead, _Opts) ->
     ?event({{completed_read, FD, BytesRead}}),
-    hb_wtime:mem_write(Instance, RetPtr,
+    hb_beamr_io:write(Instance, RetPtr,
         <<BytesRead:64/little-unsigned-integer>>),
     {ok, #{ <<"state">> => S, <<"results">> => [0] }};
 fd_read(S, Instance, [FDNum, VecsPtr, NumVecs, RetPtr], BytesRead, Opts) ->
@@ -198,7 +198,7 @@ fd_read(S, Instance, [FDNum, VecsPtr, NumVecs, RetPtr], BytesRead, Opts) ->
     ReadSize = min(Len, byte_size(Data) - Offset),
     Bin = binary:part(Data, Offset, ReadSize),
     % Write the bytes to the WASM Instance
-    ok = hb_wtime:mem_write(Instance, VecPtr, Bin),
+    ok = hb_beamr_io:write(Instance, VecPtr, Bin),
     fd_read(
         hb_ao:set(
             S,
@@ -214,7 +214,7 @@ fd_read(S, Instance, [FDNum, VecsPtr, NumVecs, RetPtr], BytesRead, Opts) ->
 
 %% @doc Parse an iovec in WASI-preview-1 format.
 parse_iovec(Instance, Ptr) ->
-    {ok, VecStruct} = hb_wtime:mem_read(Instance, Ptr, 16),
+    {ok, VecStruct} = hb_beamr_io:read(Instance, Ptr, 16),
     <<
         BinPtr:64/little-unsigned-integer,
         Len:64/little-unsigned-integer
@@ -237,8 +237,8 @@ environ_get(Msg1, Msg2, Opts) ->
     [Environ,EnvironBuf] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({environ_get, {environ, Environ}, {environ_buf, EnvironBuf}}),
     % We don't actually need to write as they are length 0
-    % ok = hb_wtime:mem_write(Instance, Environ, <<0:64/little-unsigned-integer>>),
-    % ok = hb_wtime:mem_write(Instance, EnvironBuf, <<0:64/little-unsigned-integer>>),
+    % ok = hb_beamr_io:write(Instance, Environ, <<0:64/little-unsigned-integer>>),
+    % ok = hb_beamr_io:write(Instance, EnvironBuf, <<0:64/little-unsigned-integer>>),
     {ok, #{ <<"state">> => State, <<"results">> => [0] }}.
 
 % Emulating no environment variables
@@ -250,8 +250,8 @@ environ_sizes_get(Msg1, Msg2, Opts) ->
     ?event({signature, Signature}),
     [EnvironCount,EnvironBufSize] = hb_ao:get(<<"args">>, Msg2, Opts),
     ?event({environ_sizes_get, {environ_count, EnvironCount}, {environ_buf_size, EnvironBufSize}}),
-    ok = hb_wtime:mem_write(Instance, EnvironCount, <<0:64/little-unsigned-integer>>),
-    ok = hb_wtime:mem_write(Instance, EnvironBufSize, <<0:64/little-unsigned-integer>>),
+    ok = hb_beamr_io:write(Instance, EnvironCount, <<0:64/little-unsigned-integer>>),
+    ok = hb_beamr_io:write(Instance, EnvironBufSize, <<0:64/little-unsigned-integer>>),
     {ok, #{ <<"state">> => State, <<"results">> => [0] }}.
 
 %%% Tests
