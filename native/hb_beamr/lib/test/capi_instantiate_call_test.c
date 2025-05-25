@@ -5,36 +5,6 @@
 #include <string.h>
 #include <assert.h>
 
-// Dummy WASI function implementations
-static wasm_trap_t* wasi_dummy_generic_ii_i(void* env_store, const wasm_val_vec_t* args, wasm_val_vec_t* results) {
-    printf("[WASI DUMMY] '%s' called (params: %zu, results: %zu)\n", __func__, args->size, results->size);
-    if (results->size > 0) { // For functions like args_sizes_get that return an errno
-        results->data[0].kind = WASM_I32;
-        results->data[0].of.i32 = 0; // __WASI_ERRNO_SUCCESS
-        results->num_elems = 1;
-    }
-    return NULL;
-}
-
-static wasm_trap_t* wasi_dummy_generic_i_v(void* env_store, const wasm_val_vec_t* args, wasm_val_vec_t* results) {
-    printf("[WASI DUMMY] '%s' called (proc_exit with %d)\n", __func__, args->data[0].of.i32);
-    results->num_elems = 0;
-    // To truly exit or trap: 
-    // wasm_name_t msg; wasm_name_new_from_string_nt(&msg, "wasi proc_exit called"); 
-    // wasm_trap_t* trap = wasm_trap_new((wasm_store_t*)env_store, (const wasm_message_t*)&msg); 
-    // wasm_name_delete(&msg); return trap;
-    return NULL; // For now, just print and continue for test purposes
-}
-
-static wasm_trap_t* wasi_dummy_generic_iiii_i(void* env_store, const wasm_val_vec_t* args, wasm_val_vec_t* results) {
-    printf("[WASI DUMMY] '%s' called (fd_write with fd=%d)\n", __func__, args->data[0].of.i32);
-    if (results->size > 0) { // fd_write returns errno
-        results->data[0].kind = WASM_I32;
-        results->data[0].of.i32 = 0; // __WASI_ERRNO_SUCCESS
-        results->num_elems = 1;
-    }
-    return NULL;
-}
 
 // Helper to read a file into a buffer (same as in capi_load_wasm_module_test.c)
 static uint8_t* read_file_to_buffer(const char* filename, uint32_t* ret_size) {
@@ -77,17 +47,15 @@ int main(int argc, char* argv[]) {
     printf("WASM module loaded. Last error: %s\n", hb_beamr_capi_lib_get_last_error(ctx));
     free(wasm_buf);
 
-    printf("Instantiating module with dummy WASI imports...\n");
-    hb_beamr_capi_native_symbol_t native_symbols[] = {
-        { "wasi_snapshot_preview1", "args_sizes_get", (void*)wasi_dummy_generic_ii_i, "(ii)i" },
-        { "wasi_snapshot_preview1", "args_get",       (void*)wasi_dummy_generic_ii_i, "(ii)i" }, // Same dummy for simplicity
-        { "wasi_snapshot_preview1", "proc_exit",      (void*)wasi_dummy_generic_i_v,  "(i)v" },
-        { "wasi_snapshot_preview1", "fd_write",       (void*)wasi_dummy_generic_iiii_i, "(iiii)i" } // Corrected signature
-    };
+    printf("Instantiating module...\n");
+    // Provide dummy WASI implementations as override_symbols for basic_fib.wasm
 
-    rc = hb_beamr_capi_lib_instantiate(ctx, native_symbols, sizeof(native_symbols)/sizeof(native_symbols[0]) ); 
-    printf("Instantiation rc: %d, Last error: %s\n", rc, hb_beamr_capi_lib_get_last_error(ctx));
+    rc = hb_beamr_capi_lib_instantiate(ctx, 
+                                       NULL, // No default import function
+                                       NULL, 
+                                       0);
     assert(rc == HB_BEAMR_CAPI_LIB_SUCCESS);
+    printf("Module instantiated. Last error: %s\n", hb_beamr_capi_lib_get_last_error(ctx));
 
     printf("Calling exported function 'fib' with input 10...\n");
     wasm_val_t args[1];

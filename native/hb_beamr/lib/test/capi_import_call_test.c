@@ -42,38 +42,47 @@ wasm_trap_t* host_log_impl(void* env_store, const wasm_val_vec_t* args, wasm_val
 }
 
 // Host function: env.host_add_one (i) -> i
-// This matches the `extern int host_add_one(int val);` imported by the wasm module.
-wasm_trap_t* host_add_one_impl(void* env_store, const wasm_val_vec_t* args, wasm_val_vec_t* results) {
-    printf("[host_add_one_impl] Entered. env_store: %p\n", env_store);
-    wasm_store_t* store = (wasm_store_t*)env_store;
+wasm_trap_t* host_add_one_impl(void* env_param, const wasm_val_vec_t* args, wasm_val_vec_t* results) {
+    wasm_store_t* store = (wasm_store_t*)env_param;
+    printf("[host_add_one_impl] Entered. env_param (store): %p\n", (void*)store);
+    fflush(stdout); fflush(stderr);
+
+    if (!store) {
+        fprintf(stderr, "[host_add_one_impl] CRITICAL: store is NULL.\n");
+        return NULL; 
+    }
+
     if (args->num_elems != 1 || args->data[0].kind != WASM_I32 || results->size < 1) {
-        fprintf(stderr, "[host_add_one_impl] Signature mismatch! Cannot create trap if store is NULL.\n");
-        if (store) { // Only create trap if store is available
-            wasm_name_t trap_msg;
-            wasm_name_new_from_string_nt(&trap_msg, "trap: host_add_one_impl signature mismatch");
-            wasm_trap_t* trap = wasm_trap_new(store, (const wasm_message_t*)&trap_msg);
-            wasm_name_delete(&trap_msg); 
-            return trap;
-        } else {
-            // Cannot create a standard trap without a store. 
-            // This indicates a problem if a trap was expected by the runtime.
-            return NULL; 
-        }
+        fprintf(stderr, "[host_add_one_impl] Signature mismatch!\n");
+        fflush(stdout); fflush(stderr);
+        wasm_name_t trap_msg;
+        wasm_name_new_from_string_nt(&trap_msg, "trap: host_add_one_impl signature mismatch");
+        wasm_trap_t* trap = wasm_trap_new(store, (const wasm_message_t*)&trap_msg);
+        wasm_name_delete(&trap_msg); 
+        return trap;
     }
     int input_val = args->data[0].of.i32;
     global_host_value += input_val; 
-    printf("[host_add_one_impl] Input: %d, global_host_value now: %d\n", input_val, global_host_value);
+    
+    printf("[host_add_one_impl] Input: %d, global_host_value now: %d\n", 
+           input_val, global_host_value);
+    fflush(stdout); fflush(stderr);
     results->data[0].kind = WASM_I32;
     results->data[0].of.i32 = global_host_value; 
     results->num_elems = 1;
     printf("[host_add_one_impl] Returning %d. Trap: NULL\n", results->data[0].of.i32);
+    fflush(stdout); fflush(stderr);
     return NULL; 
 }
 
 // Helper to read a file into a buffer
 static uint8_t* read_file_to_buffer(const char* filename, uint32_t* ret_size) {
     FILE* file = fopen(filename, "rb");
-    if (!file) { fprintf(stderr, "fopen failed for %s\n", filename); return NULL; }
+    if (!file) { 
+        fprintf(stderr, "fopen failed for %s\n", filename); 
+        fflush(stderr);
+        return NULL; 
+    }
     fseek(file, 0, SEEK_END); long size = ftell(file); fseek(file, 0, SEEK_SET);
     if (size < 0) { fclose(file); return NULL; }
     uint8_t* buffer = (uint8_t*)malloc(size);
@@ -83,71 +92,73 @@ static uint8_t* read_file_to_buffer(const char* filename, uint32_t* ret_size) {
 }
 
 int main(int argc, char* argv[]) {
-    printf("Starting C-API Import Call Test (Corrected)...\n");
+    printf("DEBUG: Main Start\n"); fflush(stdout); fflush(stderr);
+
     hb_beamr_capi_lib_rc_t rc;
 
-    wasm_config_t* config = wasm_config_new(); assert(config != NULL);
+    wasm_config_t* config = wasm_config_new(); 
+    printf("DEBUG: Config created\n"); fflush(stdout); fflush(stderr);
+    assert(config != NULL);
     rc = hb_beamr_capi_lib_init_runtime_global(config);
+    printf("DEBUG: Runtime init called, rc=%d\n", rc); fflush(stdout); fflush(stderr);
     if (rc != HB_BEAMR_CAPI_LIB_SUCCESS) {
-        printf("Runtime init failed: %d\n", rc); 
-        if (config) wasm_config_delete(config);
+        printf("Runtime init failed: %d\n", rc); fflush(stdout); fflush(stderr);
+        if (config) wasm_config_delete(config); // Config is consumed on success by init_runtime_global
         return 1;
     }
-    // Config consumed by init_runtime_global on success
 
     hb_beamr_capi_lib_context_t* ctx = hb_beamr_capi_lib_create_context();
+    printf("DEBUG: Context created %p\n", (void*)ctx); fflush(stdout); fflush(stderr);
     assert(ctx != NULL);
 
     uint32_t wasm_size;
     uint8_t* wasm_buf = read_file_to_buffer("./import_test_module.aot", &wasm_size);
+    printf("DEBUG: Wasm file read, buf %p, size %u\n", (void*)wasm_buf, wasm_size); fflush(stdout); fflush(stderr);
     assert(wasm_buf != NULL && wasm_size > 0);
 
     rc = hb_beamr_capi_lib_load_wasm_module(ctx, wasm_buf, wasm_size);
+    printf("DEBUG: Module loaded, rc=%d, last_error: %s\n", rc, hb_beamr_capi_lib_get_last_error(ctx)); fflush(stdout); fflush(stderr);
     assert(rc == HB_BEAMR_CAPI_LIB_SUCCESS);
-    printf("WASM module loaded. Last error: %s\n", hb_beamr_capi_lib_get_last_error(ctx));
     free(wasm_buf);
 
-    hb_beamr_capi_native_symbol_t native_symbols[] = {
+    hb_beamr_capi_native_symbol_t override_symbols[] = {
         { "env", "host_add_one", (void*)host_add_one_impl, "(i)i" } 
     };
 
-    printf("Instantiating module with host functions...\n");
-    rc = hb_beamr_capi_lib_instantiate(ctx, native_symbols, sizeof(native_symbols)/sizeof(native_symbols[0]));
-    printf("Instantiation rc: %d, Last error: %s\n", rc, hb_beamr_capi_lib_get_last_error(ctx));
+    printf("DEBUG: Instantiating module...\n"); fflush(stdout); fflush(stderr);
+    rc = hb_beamr_capi_lib_instantiate(ctx, 
+                                       NULL, // No default import function for this test
+                                       override_symbols, 
+                                       sizeof(override_symbols)/sizeof(override_symbols[0]));
+    printf("DEBUG: Instantiation done, rc=%d, last_error: %s\n", rc, hb_beamr_capi_lib_get_last_error(ctx)); fflush(stdout); fflush(stderr);
     if (rc != HB_BEAMR_CAPI_LIB_SUCCESS) {
         hb_beamr_capi_lib_destroy_context(ctx);
         hb_beamr_capi_lib_destroy_runtime_global();
         return 1;
     }
 
-    global_host_value = 100; // Reset global for predictable test
-    printf("Calling exported Wasm function 'wasm_add_two_via_host' with input 10...\n");
+    global_host_value = 100; 
+    printf("DEBUG: Calling export 'wasm_add_two_via_host'...\n"); fflush(stdout); fflush(stderr);
     wasm_val_t args_call[1]; args_call[0].kind = WASM_I32; args_call[0].of.i32 = 10;
     wasm_val_t results_call[1];
-    printf("  Before call_export for wasm_add_two_via_host\n");
     rc = hb_beamr_capi_lib_call_export(ctx, "wasm_add_two_via_host", 1, args_call, 1, results_call);
-    printf("  After call_export for wasm_add_two_via_host. rc: %d, Last error: %s\n", rc, hb_beamr_capi_lib_get_last_error(ctx));
-    
+    printf("DEBUG: Call export done, rc=%d, last_error: %s\n", rc, hb_beamr_capi_lib_get_last_error(ctx)); fflush(stdout); fflush(stderr);
     if (rc != HB_BEAMR_CAPI_LIB_SUCCESS) {
         hb_beamr_capi_lib_destroy_context(ctx);
         hb_beamr_capi_lib_destroy_runtime_global();
         return 1; 
     }
     
-    printf("wasm_add_two_via_host(10) result: %d\n", results_call[0].of.i32);
+    printf("DEBUG: Result: %d\n", results_call[0].of.i32); fflush(stdout); fflush(stderr);
     assert(results_call[0].kind == WASM_I32);
-    // wasm_add_two_via_host calls host_add_one(val) then host_add_one(val+1)
-    // If val=10: host_add_one(10) -> global=110, returns 110.
-    // Then: host_add_one(110) -> global=220, returns 220.
-    // So result should be 220 and global_host_value should be 220.
     assert(results_call[0].of.i32 == 220); 
     assert(global_host_value == 220);
 
-    printf("Destroying context...\n"); // Restoring full cleanup
+    printf("DEBUG: Destroying context...\n"); fflush(stdout); fflush(stderr);
     hb_beamr_capi_lib_destroy_context(ctx);
-    printf("Destroying runtime...\n");
-    hb_beamr_capi_lib_destroy_runtime_global(); // Re-enable runtime destroy
+    printf("DEBUG: Destroying runtime...\n"); fflush(stdout); fflush(stderr);
+    hb_beamr_capi_lib_destroy_runtime_global(); 
 
-    printf("\nC-API Import Call Test PASSED (but expect SEGV on runtime destroy with WAMR C-API for imports).\n");
+    printf("DEBUG: Test PASSED criteria met.\n"); fflush(stdout); fflush(stderr);
     return 0;
 } 

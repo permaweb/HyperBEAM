@@ -53,14 +53,15 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_load_wasm_module(
     uint32_t wasm_binary_size
 );
 
-// Instantiation (links provided native_symbols for this instance)
+// Instantiate the loaded WASM module, linking native symbols (host functions).
 hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
-    hb_beamr_capi_lib_context_t* ctx,
-    const hb_beamr_capi_native_symbol_t* native_symbols,
-    uint32_t num_native_symbols
+    hb_beamr_capi_lib_context_t* ctx, 
+    void* default_import_function, // User-provided C function pointer for unoverridden imports
+    const hb_beamr_capi_native_symbol_t* override_symbols, // Array of specific host functions to override
+    uint32_t num_override_symbols // Number of symbols in the override_symbols array
 );
 
-// Call exported function
+// Call an exported function by name.
 hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_call_export(
     hb_beamr_capi_lib_context_t* ctx,
     const char* func_name,

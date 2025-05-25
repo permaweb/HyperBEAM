@@ -12,6 +12,12 @@
 static wasm_engine_t* g_wasm_engine = NULL; // This will be a real engine
 static bool g_runtime_initialized = false;
 
+// Environment for the trampoline host function
+typedef struct HostFuncEnvStruct {
+    void* user_function_ptr;         
+    hb_beamr_capi_lib_context_t* instance_ctx; // Pointer to the main library context for the trampoline
+} HostFuncEnv;
+
 // Forward declaration of the context struct's content needed by HostFuncEnv
 struct hb_beamr_capi_lib_context {
     wasm_store_t* store;
@@ -21,14 +27,10 @@ struct hb_beamr_capi_lib_context {
     wasm_func_t** created_host_funcs; // For cleanup of wasm_func_t objects themselves
     size_t num_created_host_funcs;
     size_t capacity_created_host_funcs;
+    HostFuncEnv** created_host_envs; // To manually manage HostFuncEnv lifetime
+    size_t num_created_host_envs;
+    size_t capacity_created_host_envs;
 };
-
-// Environment for the trampoline host function
-// One of these will be created for each imported host function.
-typedef struct {
-    void* user_function_ptr;         // Pointer to the actual user-supplied C function
-    wasm_store_t* store_for_user_callback; // Store to pass as env to user's func, for wasm_trap_new
-} HostFuncEnv;
 
 // Typedef for the user's actual host function signature (matches wasm_func_callback_with_env_t)
 typedef wasm_trap_t* (*user_host_func_callback_t)(
@@ -36,35 +38,33 @@ typedef wasm_trap_t* (*user_host_func_callback_t)(
     const wasm_val_vec_t* args, 
     wasm_val_vec_t* results);
 
-// Finalizer for the HostFuncEnv
-static void finalizer_for_host_func_env(void* env) {
-    printf("[DEBUG FINALIZER] Freeing HostFuncEnv: %p\n", env);
-    free(env);
-}
-
 // Generic trampoline callback function
 static wasm_trap_t* generic_trampoline_callback(
     void* env, 
     const wasm_val_vec_t* args, 
     wasm_val_vec_t* results
 ) {
-    printf("[DEBUG TRAMP] Enter generic_trampoline_callback. Env: %p\n", env);
     HostFuncEnv* tramp_env = (HostFuncEnv*)env;
-    if (!tramp_env || !tramp_env->user_function_ptr) {
-        fprintf(stderr, "CRITICAL: generic_trampoline_callback with invalid env/func_ptr! Env: %p\n", env);
-        // This is a critical error; attempting to return a trap is difficult without a store.
-        // It's better to ensure tramp_env and its contents are always valid.
-        // Forcing a trap might be possible via WAMR specific APIs if really needed.
-        return NULL; // This might cause WAMR to behave unpredictably.
+
+    if (!tramp_env || !tramp_env->instance_ctx || !tramp_env->instance_ctx->store) {
+        fprintf(stderr, "CRITICAL PANIC: generic_trampoline_callback called with NULL or invalid HostFuncEnv/instance_ctx/store!\n");
+        return NULL; 
     }
+
+    if (!tramp_env->user_function_ptr) {
+        char trap_msg_buf[128];
+        snprintf(trap_msg_buf, sizeof(trap_msg_buf), "trap: Call to unlinked or unimplemented host function");
+        wasm_name_t trap_name;
+        wasm_name_new_from_string_nt(&trap_name, trap_msg_buf);
+        wasm_trap_t* trap = wasm_trap_new(tramp_env->instance_ctx->store, (const wasm_message_t*)&trap_name);
+        wasm_name_delete(&trap_name);
+        results->num_elems = 0; 
+        return trap;
+    }
+
     user_host_func_callback_t actual_callback = (user_host_func_callback_t)tramp_env->user_function_ptr;
-    printf("[DEBUG TRAMP] Calling user function %p with user_env (store) %p\n", 
-           (void*)actual_callback, (void*)tramp_env->store_for_user_callback);
-    
-    wasm_trap_t* user_trap = actual_callback(tramp_env->store_for_user_callback, args, results);
-    
-    printf("[DEBUG TRAMP] User function returned. Trap: %p. Results num_elems: %zu\n", (void*)user_trap, results->num_elems);
-    return user_trap;
+    // Pass the store from instance_ctx as the environment to the user's actual C function
+    return actual_callback(tramp_env->instance_ctx->store, args, results);
 }
 
 // Helper function to set the last error message in a context
@@ -138,6 +138,10 @@ hb_beamr_capi_lib_context_t* hb_beamr_capi_lib_create_context(void) {
 
     ctx->module = NULL;
     ctx->instance = NULL;
+    // Initialize new fields for HostFuncEnv tracking
+    ctx->created_host_envs = NULL;
+    ctx->num_created_host_envs = 0;
+    ctx->capacity_created_host_envs = 0;
     strcpy(ctx->last_error_msg, "No error");
     return ctx;
 }
@@ -155,23 +159,33 @@ void hb_beamr_capi_lib_destroy_context(hb_beamr_capi_lib_context_t* ctx) {
             wasm_module_delete(ctx->module);
             ctx->module = NULL;
         }
-        if (ctx->created_host_funcs) {
-            printf("[DEBUG DESTROY_CTX]   Deleting %zu created host functions\n", ctx->num_created_host_funcs);
-            for (size_t i = 0; i < ctx->num_created_host_funcs; ++i) {
-                if (ctx->created_host_funcs[i]) {
-                    // printf("[DEBUG DESTROY_CTX]     Deleting host_func %p\n", (void*)ctx->created_host_funcs[i]);
-                    // wasm_func_delete(ctx->created_host_funcs[i]);
+        
+        // Free HostFuncEnvs manually
+        if (ctx->created_host_envs) {
+            printf("[DEBUG DESTROY_CTX]   Freeing %zu created host envs\n", ctx->num_created_host_envs);
+            for (size_t i = 0; i < ctx->num_created_host_envs; ++i) {
+                if (ctx->created_host_envs[i]) {
+                    printf("[DEBUG DESTROY_CTX]     Freeing host_env %p\n", (void*)ctx->created_host_envs[i]);
+                    free(ctx->created_host_envs[i]);
                 }
             }
+            free(ctx->created_host_envs);
+            ctx->created_host_envs = NULL;
+            ctx->num_created_host_envs = 0;
+            ctx->capacity_created_host_envs = 0;
+        }
+
+        // Free tracking array for wasm_func_t (funcs assumed managed by WAMR if instance succeeded)
+        if (ctx->created_host_funcs) {
+            printf("[DEBUG DESTROY_CTX]   Freeing tracking array for host functions (no delete on funcs)\n");
             free(ctx->created_host_funcs);
             ctx->created_host_funcs = NULL;
-            ctx->num_created_host_funcs = 0; // Reset these as well
+            ctx->num_created_host_funcs = 0; 
             ctx->capacity_created_host_funcs = 0;
         }
         if (ctx->store) {
-            // DIAGNOSTIC: Temporarily skip deleting the store
             printf("[DEBUG DESTROY_CTX]   Deleting store %p\n", (void*)ctx->store);
-            wasm_store_delete(ctx->store); // Re-enable store deletion
+            wasm_store_delete(ctx->store); 
             ctx->store = NULL; 
         } else {
             printf("[DEBUG DESTROY_CTX]   Store was already NULL.\n");
@@ -277,10 +291,11 @@ void print_functype_details(const wasm_functype_t* ftype) {
 
 hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
     hb_beamr_capi_lib_context_t* ctx, 
-    const hb_beamr_capi_native_symbol_t* native_symbols,
-    uint32_t num_native_symbols
+    void* default_import_function,
+    const hb_beamr_capi_native_symbol_t* override_symbols,
+    uint32_t num_override_symbols
 ) {
-    printf("[DEBUG INST] Enter hb_beamr_capi_lib_instantiate (Refactor V2)\n");
+    printf("[DEBUG INST] Enter hb_beamr_capi_lib_instantiate (Refactor V6 - HostFuncEnv with instance_ctx)\n");
     if (!ctx || !ctx->store || !ctx->module) { 
         if(ctx) set_error_msg(ctx, "Ctx/store/module invalid for instantiate."); 
         else printf("[DEBUG INST] Error: ctx is NULL for instantiate\n");
@@ -290,18 +305,12 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
 
     wasm_importtype_vec_t import_types_vec;
     wasm_module_imports(ctx->module, &import_types_vec);
-    printf("[DEBUG INST] Module has %zu imports.\n", import_types_vec.size);
-
-    // Temporary C array to hold the externs we create
-    // Note: If import_types_vec.size can be very large, dynamic allocation for extern_stubs is safer.
-    // For now, assume a reasonable upper limit or handle VLA if compiler supports, or use malloc.
     size_t num_imports = import_types_vec.size;
-    wasm_extern_t* extern_stubs_array[num_imports > 0 ? num_imports : 1]; // Avoid zero-size array for empty imports
-    if (num_imports == 0) { // Ensure extern_stubs_array is valid even if 0 imports
-        extern_stubs_array[0] = NULL; // Not strictly necessary if num_imports is 0 for wasm_extern_vec_new
-    }
+    printf("[DEBUG INST] Module has %zu imports.\n", num_imports);
 
-    // Prepare to store created wasm_func_t objects for later cleanup
+    wasm_extern_t* extern_stubs_array_on_stack[num_imports > 0 ? num_imports : 1]; 
+    wasm_extern_t** extern_stubs_array_ptr = extern_stubs_array_on_stack;
+
     if (ctx->created_host_funcs) { free(ctx->created_host_funcs); ctx->created_host_funcs = NULL; }
     ctx->capacity_created_host_funcs = num_imports > 0 ? num_imports : 1; 
     ctx->created_host_funcs = (wasm_func_t**)calloc(ctx->capacity_created_host_funcs, sizeof(wasm_func_t*));
@@ -309,6 +318,17 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
     if (num_imports > 0 && !ctx->created_host_funcs) {
         wasm_importtype_vec_delete(&import_types_vec);
         set_error_msg(ctx, "Alloc for host func tracking failed.");
+        return HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED;
+    }
+
+    if (ctx->created_host_envs) { free(ctx->created_host_envs); ctx->created_host_envs = NULL; }
+    ctx->capacity_created_host_envs = num_imports > 0 ? num_imports : 1;
+    ctx->created_host_envs = (HostFuncEnv**)calloc(ctx->capacity_created_host_envs, sizeof(HostFuncEnv*));
+    ctx->num_created_host_envs = 0;
+    if (num_imports > 0 && !ctx->created_host_envs) {
+        wasm_importtype_vec_delete(&import_types_vec);
+        if(ctx->created_host_funcs) { free(ctx->created_host_funcs); ctx->created_host_funcs = NULL; }
+        set_error_msg(ctx, "Alloc for host env tracking failed.");
         return HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED;
     }
 
@@ -321,101 +341,94 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
         const wasm_externtype_t* extern_type = wasm_importtype_type(import_type);
         wasm_externkind_t kind = wasm_externtype_kind(extern_type);
 
-        // printf("[DEBUG INST] Processing Import %zu: Module=\"%.*s\", Name=\"%.*s\", Kind=%d\n", 
-        //         i, (int)module_name_vec->size, module_name_vec->data, 
-        //         (int)func_name_vec->size, func_name_vec->data, kind);
+        extern_stubs_array_ptr[i] = NULL; 
 
         if (kind != WASM_EXTERN_FUNC) {
-            // printf("[DEBUG INST]   Import %zu is not a function (Kind=%d). Setting NULL extern.\n", i, kind);
-            extern_stubs_array[i] = NULL; 
+            printf("[DEBUG INST]   Import '%.*s::%.*s' is not a function (kind=%d), skipping host func creation.\n",
+                   (int)module_name_vec->size, module_name_vec->data,
+                   (int)func_name_vec->size, func_name_vec->data, kind);
             continue; 
         }
-
-        bool found_native_for_import = false;
-        for (uint32_t j = 0; j < num_native_symbols; ++j) {
-            const hb_beamr_capi_native_symbol_t* native_sym = &native_symbols[j];
-            if (names_match(module_name_vec, native_sym->import_module_name) &&
-                names_match(func_name_vec, native_sym->import_function_name)) {
-                // printf("[DEBUG INST]     Found match for import '%s::%s'! Creating host function using trampoline.\n", 
-                //     native_sym->import_module_name, native_sym->import_function_name );
-                
-                const wasm_functype_t* expected_functype = wasm_externtype_as_functype_const(extern_type);
-                if (!expected_functype) { 
-                    set_error_msg_v(ctx, "Could not get functype for import '%s::%s'.", native_sym->import_module_name, native_sym->import_function_name);
-                    final_rc = HB_BEAMR_CAPI_LIB_ERROR_NATIVE_LINKING_FAILED; goto cleanup_and_fail;
-                }
-                
-                wasm_func_t* host_func = NULL;
-                // **** DIAGNOSTIC: Special handling for "env.host_add_one" to mirror callback.c example ****
-                if (names_match(module_name_vec, "env") && names_match(func_name_vec, "host_add_one")) {
-                    printf("[DEBUG INST]     MATCHED env.host_add_one: Using direct callback and NULL env.\n");
-                    host_func = wasm_func_new_with_env(
-                        ctx->store, 
-                        expected_functype, 
-                        (wasm_func_callback_with_env_t)native_sym->user_function, // Direct user function
-                        ctx, // Set env as ctx
-                        NULL  // No finalizer for NULL env
-                    );
-                } else { // Original trampoline path for other functions
-                    HostFuncEnv* tramp_env_alloc = (HostFuncEnv*)malloc(sizeof(HostFuncEnv));
-                    if (!tramp_env_alloc) {
-                        set_error_msg(ctx, "Failed to allocate trampoline env.");
-                        final_rc = HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED; goto cleanup_and_fail;
-                    }
-                    tramp_env_alloc->user_function_ptr = native_sym->user_function;
-                    tramp_env_alloc->store_for_user_callback = ctx->store;
-                    host_func = wasm_func_new_with_env(
-                        ctx->store, expected_functype, 
-                        generic_trampoline_callback, 
-                        tramp_env_alloc, finalizer_for_host_func_env );
-                    if (!host_func && tramp_env_alloc) {
-                         free(tramp_env_alloc); // Clean up if func_new_with_env failed
-                    }
-                }
-                // **** END DIAGNOSTIC ****
-                                
-                if (!host_func) {
-                    set_error_msg_v(ctx, "wasm_func_new_with_env failed for '%s::%s'.", native_sym->import_module_name, native_sym->import_function_name);
-                    final_rc = HB_BEAMR_CAPI_LIB_ERROR_NATIVE_LINKING_FAILED; goto cleanup_and_fail;
-                }
-                extern_stubs_array[i] = wasm_func_as_extern(host_func);
-                if (ctx->num_created_host_funcs < ctx->capacity_created_host_funcs) {
-                    ctx->created_host_funcs[ctx->num_created_host_funcs++] = host_func;
-                } else { 
-                    wasm_func_delete(host_func); 
-                    set_error_msg(ctx, "Internal error: exceeded capacity for host_funcs.");
-                    final_rc = HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED; goto cleanup_and_fail; 
-                }
-                found_native_for_import = true;
+        
+        void* user_function_for_import = NULL;
+        bool found_override = false;
+        for (uint32_t j = 0; j < num_override_symbols; ++j) {
+            const hb_beamr_capi_native_symbol_t* override_sym = &override_symbols[j];
+            if (names_match(module_name_vec, override_sym->import_module_name) &&
+                names_match(func_name_vec, override_sym->import_function_name)) {
+                user_function_for_import = override_sym->user_function;
+                found_override = true;
+                printf("[DEBUG INST]   Import '%.*s::%.*s' matched override symbol %p.\n",
+                    (int)module_name_vec->size, module_name_vec->data,
+                    (int)func_name_vec->size, func_name_vec->data, user_function_for_import);
                 break; 
             }
         }
-        if (!found_native_for_import) {
-            if (strncmp((const char*)module_name_vec->data, "wasi_snapshot_preview1", module_name_vec->size) == 0) {
-                // printf("[DEBUG INST]   Import %zu ('%.*s::%.*s') is WASI. Setting NULL extern.\n", i, 
-                //         (int)module_name_vec->size, module_name_vec->data,
-                //         (int)func_name_vec->size, func_name_vec->data);
-                extern_stubs_array[i] = NULL; 
-            } else {
-                char import_mod_name[64]; char import_func_name[128];
-                snprintf(import_mod_name, sizeof(import_mod_name), "%.*s", (int)module_name_vec->size, module_name_vec->data);
-                snprintf(import_func_name, sizeof(import_func_name), "%.*s", (int)func_name_vec->size, func_name_vec->data);
-                set_error_msg_v(ctx, "Native symbol not found for non-WASI import: %s::%s", import_mod_name, import_func_name);
-                final_rc = HB_BEAMR_CAPI_LIB_ERROR_NATIVE_LINKING_FAILED; goto cleanup_and_fail;
-            }
+        if (!found_override && default_import_function != NULL) {
+            user_function_for_import = default_import_function;
+            printf("[DEBUG INST]   Import '%.*s::%.*s' using default import function %p.\n",
+                (int)module_name_vec->size, module_name_vec->data,
+                (int)func_name_vec->size, func_name_vec->data, user_function_for_import);
+        }
+        if (user_function_for_import == NULL && !found_override) {
+             printf("[DEBUG INST]   Import '%.*s::%.*s' has no override and no default; will trap if called.\n",
+                (int)module_name_vec->size, module_name_vec->data,
+                (int)func_name_vec->size, func_name_vec->data);
+        }
+
+        const wasm_functype_t* expected_functype = wasm_externtype_as_functype_const(extern_type);
+        if (!expected_functype) { 
+            char import_mod_name_buf[64]; char import_func_name_buf[128];
+            snprintf(import_mod_name_buf, sizeof(import_mod_name_buf), "%.*s", (int)module_name_vec->size, module_name_vec->data);
+            snprintf(import_func_name_buf, sizeof(import_func_name_buf), "%.*s", (int)func_name_vec->size, func_name_vec->data);
+            set_error_msg_v(ctx, "Could not get functype for import '%s::%s'.", import_mod_name_buf, import_func_name_buf);
+            final_rc = HB_BEAMR_CAPI_LIB_ERROR_NATIVE_LINKING_FAILED; goto cleanup_and_fail;
+        }
+        
+        HostFuncEnv* tramp_env_alloc = (HostFuncEnv*)malloc(sizeof(HostFuncEnv));
+        if (!tramp_env_alloc) {
+            set_error_msg(ctx, "Failed to allocate trampoline env.");
+            final_rc = HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED; goto cleanup_and_fail;
+        }
+        tramp_env_alloc->user_function_ptr = user_function_for_import;
+        tramp_env_alloc->instance_ctx = ctx; // Set the instance_ctx field
+        
+        wasm_func_t* host_func = wasm_func_new_with_env(
+            ctx->store, expected_functype, 
+            generic_trampoline_callback, 
+            tramp_env_alloc, 
+            NULL );
+        
+        if (!host_func) { 
+             if (tramp_env_alloc) free(tramp_env_alloc);
+             char import_mod_name_buf[64]; char import_func_name_buf[128];
+             snprintf(import_mod_name_buf, sizeof(import_mod_name_buf), "%.*s", (int)module_name_vec->size, module_name_vec->data);
+             snprintf(import_func_name_buf, sizeof(import_func_name_buf), "%.*s", (int)func_name_vec->size, func_name_vec->data);
+             set_error_msg_v(ctx, "wasm_func_new_with_env failed for '%s::%s'.", import_mod_name_buf, import_func_name_buf);
+             final_rc = HB_BEAMR_CAPI_LIB_ERROR_NATIVE_LINKING_FAILED; goto cleanup_and_fail;
+        }
+
+        extern_stubs_array_ptr[i] = wasm_func_as_extern(host_func);
+        if (ctx->num_created_host_funcs < ctx->capacity_created_host_funcs && 
+            ctx->num_created_host_envs < ctx->capacity_created_host_envs) {
+            ctx->created_host_funcs[ctx->num_created_host_funcs++] = host_func;
+            ctx->created_host_envs[ctx->num_created_host_envs++] = tramp_env_alloc;
+        } else { 
+            if (tramp_env_alloc) free(tramp_env_alloc);
+            if (host_func) wasm_func_delete(host_func); 
+            set_error_msg(ctx, "Internal error: exceeded capacity for host_funcs/envs arrays.");
+            final_rc = HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED; goto cleanup_and_fail; 
         }
     }
 
     wasm_extern_vec_t imports_for_instance;
-    // wasm_extern_vec_new takes `own wasm_extern_t* const[]` - it does NOT take ownership of the wasm_extern_t items themselves.
-    // The items (which are wasm_func_t cast to wasm_extern_t) are owned by ctx->created_host_funcs.
-    wasm_extern_vec_new(&imports_for_instance, num_imports, extern_stubs_array);
+    wasm_extern_vec_new(&imports_for_instance, num_imports, extern_stubs_array_ptr);
 
     printf("[DEBUG INST] Preparing to call wasm_instance_new.\n");
     wasm_trap_t* trap = NULL;
     ctx->instance = wasm_instance_new(ctx->store, ctx->module, &imports_for_instance, &trap);
     
-    wasm_extern_vec_delete(&imports_for_instance); // Deletes the vector shell, not the elements it pointed to.
+    wasm_extern_vec_delete(&imports_for_instance); 
 
     if (trap) {
         wasm_message_t trap_message;
@@ -441,8 +454,15 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
 
 cleanup_and_fail:
     printf("[DEBUG INST] Linking/Instantiation failed path cleanup. final_rc=%d\n", final_rc);
-    // created_host_funcs (and their HostFuncEnvs via finalizers) are cleaned by destroy_context
-    // but if instantiate fails partway, destroy_context might not be called by user, so clean here.
+    if (ctx->created_host_envs) {
+         for(size_t k=0; k < ctx->num_created_host_envs; ++k) {
+            if(ctx->created_host_envs[k]) free(ctx->created_host_envs[k]);
+         }
+         free(ctx->created_host_envs); 
+         ctx->created_host_envs = NULL; 
+         ctx->num_created_host_envs = 0;
+         ctx->capacity_created_host_envs = 0;
+    }
     if (ctx->created_host_funcs) {
          for(size_t k=0; k < ctx->num_created_host_funcs; ++k) {
             if(ctx->created_host_funcs[k]) wasm_func_delete(ctx->created_host_funcs[k]);
@@ -450,6 +470,7 @@ cleanup_and_fail:
          free(ctx->created_host_funcs); 
          ctx->created_host_funcs = NULL; 
          ctx->num_created_host_funcs = 0;
+         ctx->capacity_created_host_funcs = 0;
     }
     wasm_importtype_vec_delete(&import_types_vec); 
     return final_rc;
@@ -519,4 +540,5 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_resolve_import(
     set_error_msg(ctx, "resolve_import not impl.");
     return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE; 
 }
+
 
