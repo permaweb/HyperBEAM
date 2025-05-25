@@ -1,6 +1,10 @@
 #ifndef HB_BEAMR_CAPI_LIB_H
 #define HB_BEAMR_CAPI_LIB_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stdbool.h>
 #include "wasm_c_api.h" // For wasm_config_t, wasm_val_t, etc.
@@ -80,5 +84,9 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_resolve_import(
     uint32_t num_results,
     wasm_val_t results[]
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // HB_BEAMR_CAPI_LIB_H 

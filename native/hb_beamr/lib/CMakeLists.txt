@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.14)
-project(hb_beamr_lib C)
+project(hb_beamr_lib CXX C)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Option to enable building tests
 option(BUILD_TESTING "Build the tests" OFF)
@@ -153,13 +156,13 @@ target_link_libraries(hb_beamr_lib PUBLIC vmlib)
 # =============================================================================
 
 add_library(hb_beamr_capi_lib STATIC
-    src/hb_beamr_capi_lib.c
+    src/hb_beamr_capi_lib.cpp
 )
 
 # Include directories for the CAPI library
 target_include_directories(hb_beamr_capi_lib PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/include    # Public headers for hb_beamr_capi_lib (and hb_beamr_lib)
-    ${WAMR_ROOT_DIR}/core/iwasm/include  # WAMR headers (includes wasm_c_api.h and wasm_export.h)
+    SYSTEM ${WAMR_ROOT_DIR}/core/iwasm/include  # WAMR headers (includes wasm_c_api.h and wasm_export.h)
 )
 
 # Link CAPI lib against vmlib (for WAMR specific calls if any, and transitively for runtime components)

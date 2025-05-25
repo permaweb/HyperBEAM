@@ -1,15 +1,22 @@
 #include "hb_beamr_capi_lib.h"
+
 #include "wasm_c_api.h"    // Ensure this is the primary include for Wasm types
-#include <stdlib.h> 
-#include <string.h> 
-#include <stdarg.h> 
-#include <stdio.h>  
+
+#include <cstdlib> 
+#include <cstring> 
+#include <cstdarg> 
+#include <cstdio>  
 #include <stdbool.h> 
+#include <vector>
+#include <string>
+#include <memory> // For std::unique_ptr if needed for more complex RAII
+#include <iostream> // For std::cout, std::cerr
+#include <string_view> // For std::string_view
 
 #define MAX_LAST_ERROR_MSG_SIZE 256
 
 // Global state for the C API based library
-static wasm_engine_t* g_wasm_engine = NULL; // This will be a real engine
+static wasm_engine_t* g_wasm_engine = nullptr; // This will be a real engine
 static bool g_runtime_initialized = false;
 
 // Environment for the trampoline host function
@@ -23,13 +30,15 @@ struct hb_beamr_capi_lib_context {
     wasm_store_t* store;
     wasm_module_t* module;      
     wasm_instance_t* instance;  
-    char last_error_msg[MAX_LAST_ERROR_MSG_SIZE];
-    wasm_func_t** created_host_funcs; // For cleanup of wasm_func_t objects themselves
-    size_t num_created_host_funcs;
-    size_t capacity_created_host_funcs;
-    HostFuncEnv** created_host_envs; // To manually manage HostFuncEnv lifetime
-    size_t num_created_host_envs;
-    size_t capacity_created_host_envs;
+    std::string last_error_msg; // Changed from C-style char array
+    std::vector<wasm_func_t*> host_funcs; // Changed from C-style array
+    std::vector<HostFuncEnv*> host_envs;  // Changed from C-style array
+    // wasm_func_t** created_host_funcs; // For cleanup of wasm_func_t objects themselves
+    // size_t num_created_host_funcs;
+    // size_t capacity_created_host_funcs;
+    // HostFuncEnv** created_host_envs; // To manually manage HostFuncEnv lifetime
+    // size_t num_created_host_envs;
+    // size_t capacity_created_host_envs;
 };
 
 // Typedef for the user's actual host function signature (matches wasm_func_callback_with_env_t)
@@ -44,25 +53,26 @@ static wasm_trap_t* generic_trampoline_callback(
     const wasm_val_vec_t* args, 
     wasm_val_vec_t* results
 ) {
-    HostFuncEnv* tramp_env = (HostFuncEnv*)env;
+    HostFuncEnv* tramp_env = static_cast<HostFuncEnv*>(env);
 
-    if (!tramp_env || !tramp_env->instance_ctx || !tramp_env->instance_ctx->store) { // store check is still good for trap creation below
-        fprintf(stderr, "CRITICAL: generic_trampoline_callback called with invalid HostFuncEnv or context/store.\n");
-        return NULL; 
+    if (!tramp_env || !tramp_env->instance_ctx || !tramp_env->instance_ctx->store) { 
+        std::cerr << "CRITICAL: generic_trampoline_callback called with invalid HostFuncEnv or context/store.\n";
+        return nullptr; 
     }
 
     if (!tramp_env->user_function_ptr) {
-        char trap_msg_buf[128];
-        snprintf(trap_msg_buf, sizeof(trap_msg_buf), "trap: Call to unlinked or unimplemented host function");
+        // Use std::format or stringstream if more complex formatting is needed in the future
+        std::string trap_msg_buf_str = "trap: Call to unlinked or unimplemented host function";
         wasm_name_t trap_name;
-        wasm_name_new_from_string_nt(&trap_name, trap_msg_buf);
+        // wasm_name_new_from_string_nt is fine as it takes const char*
+        wasm_name_new_from_string_nt(&trap_name, trap_msg_buf_str.c_str()); 
         wasm_trap_t* trap = wasm_trap_new(tramp_env->instance_ctx->store, (const wasm_message_t*)&trap_name);
         wasm_name_delete(&trap_name);
         results->num_elems = 0; 
         return trap;
     }
 
-    user_host_func_callback_t actual_callback = (user_host_func_callback_t)tramp_env->user_function_ptr;
+    user_host_func_callback_t actual_callback = reinterpret_cast<user_host_func_callback_t>(tramp_env->user_function_ptr);
     // Pass the entire instance_ctx as the environment to the user's actual C function
     return actual_callback(tramp_env->instance_ctx, args, results);
 }
@@ -70,8 +80,13 @@ static wasm_trap_t* generic_trampoline_callback(
 // Helper function to set the last error message in a context
 static void set_error_msg(hb_beamr_capi_lib_context_t* ctx, const char* msg) {
     if (ctx) {
-        strncpy(ctx->last_error_msg, msg, MAX_LAST_ERROR_MSG_SIZE - 1);
-        ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\0'; // Ensure null termination
+        try {
+            ctx->last_error_msg = msg;
+        } catch (const std::bad_alloc&) {
+            // Not much we can do if string allocation fails here, 
+            // perhaps log to stderr if this is critical path
+            std::cerr << "CRITICAL: Failed to allocate memory for error message.\n";
+        }
     }
 }
 
@@ -79,16 +94,38 @@ static void set_error_msg_v(hb_beamr_capi_lib_context_t* ctx, const char* format
     if (ctx) {
         va_list args;
         va_start(args, format);
-        vsnprintf(ctx->last_error_msg, MAX_LAST_ERROR_MSG_SIZE, format, args);
+        
+        // Determine required size
+        va_list args_copy;
+        va_copy(args_copy, args);
+        int size = std::vsnprintf(nullptr, 0, format, args_copy);
+        va_end(args_copy);
+
+        if (size < 0) { // Error in vsnprintf
+            va_end(args);
+            try {
+                ctx->last_error_msg = "Error formatting error message.";
+            } catch (const std::bad_alloc&) { /* Ignore */ }
+            return;
+        }
+
+        try {
+            std::string temp_msg(size + 1, '\0'); // +1 for null terminator
+            std::vsnprintf(&temp_msg[0], temp_msg.length(), format, args);
+            temp_msg.resize(size); // Remove trailing null characters if any beyond 'size'
+            ctx->last_error_msg = temp_msg;
+        } catch (const std::bad_alloc&) {
+            // Allocation for temp_msg or ctx->last_error_msg failed
+            std::cerr << "CRITICAL: Failed to allocate memory for formatted error message.\n";
+        }
         va_end(args);
-        ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\0'; // Ensure null termination
     }
 }
 
 // Accessor for a store pointer from the context
 wasm_store_t* hb_beamr_capi_lib_context_get_store(hb_beamr_capi_lib_context_t* ctx) {
     if (!ctx) {
-        return NULL;
+        return nullptr;
     }
     return ctx->store;
 }
@@ -121,7 +158,7 @@ void hb_beamr_capi_lib_destroy_runtime_global(void) {
     if (g_runtime_initialized) {
         if (g_wasm_engine) {
             wasm_engine_delete(g_wasm_engine); // This should handle the config it consumed.
-            g_wasm_engine = NULL;
+            g_wasm_engine = nullptr;
         }
         g_runtime_initialized = false;
     }
@@ -129,28 +166,30 @@ void hb_beamr_capi_lib_destroy_runtime_global(void) {
 
 hb_beamr_capi_lib_context_t* hb_beamr_capi_lib_create_context(void) {
     if (!g_runtime_initialized || !g_wasm_engine) {
-        return NULL;
+        return nullptr;
     }
 
-    hb_beamr_capi_lib_context_t* ctx = (hb_beamr_capi_lib_context_t*)malloc(sizeof(hb_beamr_capi_lib_context_t));
+    hb_beamr_capi_lib_context_t* ctx = new (std::nothrow) hb_beamr_capi_lib_context_t();
     if (!ctx) {
-        return NULL; 
+        return nullptr; 
     }
-    memset(ctx, 0, sizeof(hb_beamr_capi_lib_context_t));
 
     ctx->store = wasm_store_new(g_wasm_engine);
     if (!ctx->store) {
-        free(ctx);
-        return NULL; 
+        delete ctx;
+        return nullptr; 
     }
 
-    ctx->module = NULL;
-    ctx->instance = NULL;
-    // Initialize new fields for HostFuncEnv tracking
-    ctx->created_host_envs = NULL;
-    ctx->num_created_host_envs = 0;
-    ctx->capacity_created_host_envs = 0;
-    strcpy(ctx->last_error_msg, "No error");
+    ctx->module = nullptr;
+    ctx->instance = nullptr;
+    try {
+        ctx->last_error_msg = "No error";
+    } catch (const std::bad_alloc&) {
+        // If this fails, last_error_msg will be empty. 
+        // The get_last_error function should handle this.
+        delete ctx; // Can't really proceed if basic error string fails
+        return nullptr;
+    }
     return ctx;
 }
 
@@ -158,42 +197,39 @@ void hb_beamr_capi_lib_destroy_context(hb_beamr_capi_lib_context_t* ctx) {
     if (ctx) {
         if (ctx->instance) {
             wasm_instance_delete(ctx->instance);
-            ctx->instance = NULL;
+            ctx->instance = nullptr;
         }
         if (ctx->module) {
             wasm_module_delete(ctx->module);
-            ctx->module = NULL;
+            ctx->module = nullptr;
         }
-        if (ctx->created_host_envs) {
-            for (size_t i = 0; i < ctx->num_created_host_envs; ++i) {
-                if (ctx->created_host_envs[i]) {
-                    free(ctx->created_host_envs[i]);
-                }
-            }
-            free(ctx->created_host_envs);
-            ctx->created_host_envs = NULL;
-            ctx->num_created_host_envs = 0;
-            ctx->capacity_created_host_envs = 0;
+        
+        // Delete HostFuncEnv objects managed by host_envs vector
+        for (HostFuncEnv* env : ctx->host_envs) {
+            delete env;
         }
-        if (ctx->created_host_funcs) {
-            free(ctx->created_host_funcs);
-            ctx->created_host_funcs = NULL;
-            ctx->num_created_host_funcs = 0; 
-            ctx->capacity_created_host_funcs = 0;
-        }
+        ctx->host_envs.clear(); // Clear the vector of pointers
+
+        // wasm_func_t objects pointed to by host_funcs are typically owned by the store
+        // or WAMR. We don't delete them directly here, just clear our tracking vector.
+        // WAMR will clean them up when the store is deleted.
+        ctx->host_funcs.clear();
+
         if (ctx->store) {
             wasm_store_delete(ctx->store); 
-            ctx->store = NULL; 
+            ctx->store = nullptr; 
         }
-        free(ctx);
+        delete ctx;
     }
 }
 
 const char* hb_beamr_capi_lib_get_last_error(hb_beamr_capi_lib_context_t* ctx) {
-    if (ctx && ctx->last_error_msg[0] != '\0') {
-        return ctx->last_error_msg;
+    if (ctx && !ctx->last_error_msg.empty()) {
+        return ctx->last_error_msg.c_str();
     }
-    return "Context is NULL or error message not set.";
+    // Return a static string literal if ctx is null or message is empty
+    static const char* default_msg = "Context is NULL or error message not set.";
+    return default_msg;
 }
 
 // Module loading (from .wasm binary using standard C API)
@@ -267,21 +303,43 @@ const char* valkind_to_string(wasm_valkind_t kind) {
 // Helper function to print wasm_functype_t details for debugging
 void print_functype_details(const wasm_functype_t* ftype) {
     if (!ftype) {
-        printf("[DEBUG FT] functype is NULL\n");
+        std::cout << "[DEBUG FT] functype is NULL\n";
         return;
     }
     const wasm_valtype_vec_t* params = wasm_functype_params(ftype);
     const wasm_valtype_vec_t* results = wasm_functype_results(ftype);
-    printf("[DEBUG FT] Params (%zu): ", params->size);
+    std::cout << "[DEBUG FT] Params (" << params->size << "): ";
     for (size_t i = 0; i < params->size; ++i) {
-        printf("%s ", valkind_to_string(wasm_valtype_kind(params->data[i])));
+        std::cout << valkind_to_string(wasm_valtype_kind(params->data[i])) << " ";
     }
-    printf(", Results (%zu): ", results->size);
+    std::cout << ", Results (" << results->size << "): ";
     for (size_t i = 0; i < results->size; ++i) {
-        printf("%s ", valkind_to_string(wasm_valtype_kind(results->data[i])));
+        std::cout << valkind_to_string(wasm_valtype_kind(results->data[i])) << " ";
     }
-    printf("\n");
+    std::cout << "\n";
 }
+
+// RAII Wrappers for WAMR types
+struct WasmImporttypeVecRAII {
+    wasm_importtype_vec_t vec;
+    WasmImporttypeVecRAII() { wasm_importtype_vec_new_empty(&vec); }
+    ~WasmImporttypeVecRAII() { wasm_importtype_vec_delete(&vec); }
+    // Disable copy and assign
+    WasmImporttypeVecRAII(const WasmImporttypeVecRAII&) = delete;
+    WasmImporttypeVecRAII& operator=(const WasmImporttypeVecRAII&) = delete;
+};
+
+struct WasmExternVecRAII {
+    wasm_extern_vec_t vec;
+    WasmExternVecRAII() { wasm_extern_vec_new_empty(&vec); } 
+    // Constructor to take ownership of an existing initialized vec if needed (e.g. from wasm_instance_exports)
+    // For wasm_extern_vec_new, it initializes and we'd populate. For wasm_instance_exports, it populates for us.
+    // This basic version assumes we initialize then populate, or it's populated by WAMR for us to then delete.
+    ~WasmExternVecRAII() { wasm_extern_vec_delete(&vec); }
+    // Disable copy and assign
+    WasmExternVecRAII(const WasmExternVecRAII&) = delete;
+    WasmExternVecRAII& operator=(const WasmExternVecRAII&) = delete;
+};
 
 hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
     hb_beamr_capi_lib_context_t* ctx, 
@@ -295,50 +353,43 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
     }
     if (ctx->instance) { set_error_msg(ctx, "Already instantiated."); return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE; }
 
-    wasm_importtype_vec_t import_types_vec;
-    wasm_module_imports(ctx->module, &import_types_vec);
-    size_t num_imports = import_types_vec.size;
+    WasmImporttypeVecRAII import_types_vec_raii; // RAII wrapper
+    wasm_module_imports(ctx->module, &import_types_vec_raii.vec);
+    size_t num_imports = import_types_vec_raii.vec.size;
 
-    wasm_extern_t* extern_stubs_array_on_stack[num_imports > 0 ? num_imports : 1]; 
-    wasm_extern_t** extern_stubs_array_ptr = extern_stubs_array_on_stack;
+    std::vector<wasm_extern_t*> extern_stubs_array(num_imports);
 
-    if (ctx->created_host_funcs) { free(ctx->created_host_funcs); ctx->created_host_funcs = NULL; }
-    ctx->capacity_created_host_funcs = num_imports > 0 ? num_imports : 1; 
-    ctx->created_host_funcs = (wasm_func_t**)calloc(ctx->capacity_created_host_funcs, sizeof(wasm_func_t*));
-    ctx->num_created_host_funcs = 0;
-    if (num_imports > 0 && !ctx->created_host_funcs) {
-        wasm_importtype_vec_delete(&import_types_vec);
-        set_error_msg(ctx, "Alloc for host func tracking failed.");
-        return HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED;
+    // Clear and prepare for new host functions and environments
+    for (HostFuncEnv* env : ctx->host_envs) {
+        delete env; 
     }
+    ctx->host_envs.clear();
+    ctx->host_funcs.clear();
 
-    if (ctx->created_host_envs) { free(ctx->created_host_envs); ctx->created_host_envs = NULL; }
-    ctx->capacity_created_host_envs = num_imports > 0 ? num_imports : 1;
-    ctx->created_host_envs = (HostFuncEnv**)calloc(ctx->capacity_created_host_envs, sizeof(HostFuncEnv*));
-    ctx->num_created_host_envs = 0;
-    if (num_imports > 0 && !ctx->created_host_envs) {
-        wasm_importtype_vec_delete(&import_types_vec);
-        if(ctx->created_host_funcs) { free(ctx->created_host_funcs); ctx->created_host_funcs = NULL; }
-        set_error_msg(ctx, "Alloc for host env tracking failed.");
-        return HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED;
+    if (num_imports > 0) {
+        try {
+            ctx->host_envs.reserve(num_imports);
+            ctx->host_funcs.reserve(num_imports);
+        } catch (const std::bad_alloc& e) {
+            set_error_msg(ctx, "Alloc for host env/func tracking failed (vector reserve).");
+            return HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED; // Exits function
+        }
     }
-
-    hb_beamr_capi_lib_rc_t final_rc = HB_BEAMR_CAPI_LIB_SUCCESS;
 
     for (size_t i = 0; i < num_imports; ++i) {
-        const wasm_importtype_t* import_type = import_types_vec.data[i];
+        const wasm_importtype_t* import_type = import_types_vec_raii.vec.data[i];
         const wasm_name_t* module_name_vec = wasm_importtype_module(import_type);
         const wasm_name_t* func_name_vec = wasm_importtype_name(import_type);
         const wasm_externtype_t* extern_type = wasm_importtype_type(import_type);
         wasm_externkind_t kind = wasm_externtype_kind(extern_type);
 
-        extern_stubs_array_ptr[i] = NULL; 
+        extern_stubs_array[i] = nullptr; 
 
         if (kind != WASM_EXTERN_FUNC) {
             continue; 
         }
         
-        void* user_function_for_import = NULL;
+        void* user_function_for_import = nullptr;
         bool found_override = false;
         for (uint32_t j = 0; j < num_override_symbols; ++j) {
             const hb_beamr_capi_native_symbol_t* override_sym = &override_symbols[j];
@@ -349,25 +400,30 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
                 break; 
             }
         }
-        if (!found_override && default_import_function != NULL) {
+        if (!found_override && default_import_function != nullptr) {
             user_function_for_import = default_import_function;
         }
-        if (user_function_for_import == NULL && !found_override) {
+        if (user_function_for_import == nullptr && !found_override) {
         }
 
         const wasm_functype_t* expected_functype = wasm_externtype_as_functype_const(extern_type);
         if (!expected_functype) { 
-            char import_mod_name_buf[64]; char import_func_name_buf[128];
-            snprintf(import_mod_name_buf, sizeof(import_mod_name_buf), "%.*s", (int)module_name_vec->size, module_name_vec->data);
-            snprintf(import_func_name_buf, sizeof(import_func_name_buf), "%.*s", (int)func_name_vec->size, func_name_vec->data);
-            set_error_msg_v(ctx, "Could not get functype for import '%s::%s'.", import_mod_name_buf, import_func_name_buf);
-            final_rc = HB_BEAMR_CAPI_LIB_ERROR_NATIVE_LINKING_FAILED; goto cleanup_and_fail;
+            std::string_view mod_name_sv(module_name_vec->data, module_name_vec->size);
+            std::string_view func_name_sv(func_name_vec->data, func_name_vec->size);
+            // Using set_error_msg_v which internally uses vsnprintf, so direct std::format not used here
+            // but constructing the strings for the message can be cleaner.
+            char error_buf[256]; // Temporary buffer for the combined message
+            snprintf(error_buf, sizeof(error_buf), "Could not get functype for import '%.*s::%.*s'.",
+                     static_cast<int>(mod_name_sv.length()), mod_name_sv.data(),
+                     static_cast<int>(func_name_sv.length()), func_name_sv.data());
+            set_error_msg(ctx, error_buf); // Use set_error_msg with the formatted C-string
+            return HB_BEAMR_CAPI_LIB_ERROR_NATIVE_LINKING_FAILED;
         }
         
-        HostFuncEnv* tramp_env_alloc = (HostFuncEnv*)malloc(sizeof(HostFuncEnv));
+        HostFuncEnv* tramp_env_alloc = new (std::nothrow) HostFuncEnv();
         if (!tramp_env_alloc) {
             set_error_msg(ctx, "Failed to allocate trampoline env.");
-            final_rc = HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED; goto cleanup_and_fail;
+            return HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED;
         }
         tramp_env_alloc->user_function_ptr = user_function_for_import;
         tramp_env_alloc->instance_ctx = ctx; // Set the instance_ctx field
@@ -376,79 +432,68 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
             ctx->store, expected_functype, 
             generic_trampoline_callback, 
             tramp_env_alloc, 
-            NULL );
+            nullptr ); // host_func_env_finalizer, set to null as we manually delete HostFuncEnv
         
         if (!host_func) { 
-             if (tramp_env_alloc) free(tramp_env_alloc);
-             char import_mod_name_buf[64]; char import_func_name_buf[128];
-             snprintf(import_mod_name_buf, sizeof(import_mod_name_buf), "%.*s", (int)module_name_vec->size, module_name_vec->data);
-             snprintf(import_func_name_buf, sizeof(import_func_name_buf), "%.*s", (int)func_name_vec->size, func_name_vec->data);
-             set_error_msg_v(ctx, "wasm_func_new_with_env failed for '%s::%s'.", import_mod_name_buf, import_func_name_buf);
-             final_rc = HB_BEAMR_CAPI_LIB_ERROR_NATIVE_LINKING_FAILED; goto cleanup_and_fail;
+             delete tramp_env_alloc; 
+             std::string_view mod_name_sv(module_name_vec->data, module_name_vec->size);
+             std::string_view func_name_sv(func_name_vec->data, func_name_vec->size);
+             char error_buf[256];
+             snprintf(error_buf, sizeof(error_buf), "wasm_func_new_with_env failed for '%.*s::%.*s'.",
+                      static_cast<int>(mod_name_sv.length()), mod_name_sv.data(),
+                      static_cast<int>(func_name_sv.length()), func_name_sv.data());
+             set_error_msg(ctx, error_buf);
+             return HB_BEAMR_CAPI_LIB_ERROR_NATIVE_LINKING_FAILED;
         }
 
-        extern_stubs_array_ptr[i] = wasm_func_as_extern(host_func);
-        if (ctx->num_created_host_funcs < ctx->capacity_created_host_funcs && 
-            ctx->num_created_host_envs < ctx->capacity_created_host_envs) {
-            ctx->created_host_funcs[ctx->num_created_host_funcs++] = host_func;
-            ctx->created_host_envs[ctx->num_created_host_envs++] = tramp_env_alloc;
-        } else { 
-            if (tramp_env_alloc) free(tramp_env_alloc);
-            if (host_func) wasm_func_delete(host_func); 
-            set_error_msg(ctx, "Internal error: exceeded capacity for host_funcs/envs arrays.");
-            final_rc = HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED; goto cleanup_and_fail; 
+        extern_stubs_array[i] = wasm_func_as_extern(host_func);
+        try {
+            ctx->host_funcs.push_back(host_func);
+            ctx->host_envs.push_back(tramp_env_alloc);
+        } catch (const std::bad_alloc& e) {
+            delete tramp_env_alloc;
+            wasm_func_delete(host_func); 
+            set_error_msg(ctx, "Internal error: failed to push to host_funcs/envs vectors.");
+            return HB_BEAMR_CAPI_LIB_ERROR_ALLOCATION_FAILED;
         }
     }
 
-    wasm_extern_vec_t imports_for_instance;
-    wasm_extern_vec_new(&imports_for_instance, num_imports, extern_stubs_array_ptr);
+    WasmExternVecRAII imports_for_instance_raii; // RAII wrapper
+    wasm_extern_vec_new(&imports_for_instance_raii.vec, num_imports, num_imports > 0 ? extern_stubs_array.data() : nullptr);
 
-    wasm_trap_t* trap = NULL;
-    ctx->instance = wasm_instance_new(ctx->store, ctx->module, &imports_for_instance, &trap);
-    
-    wasm_extern_vec_delete(&imports_for_instance); 
+    wasm_trap_t* trap = nullptr; 
+    ctx->instance = wasm_instance_new(ctx->store, ctx->module, &imports_for_instance_raii.vec, &trap);
+    // imports_for_instance_raii destructor will call wasm_extern_vec_delete
 
     if (trap) {
         wasm_message_t trap_message;
         wasm_trap_message(trap, &trap_message);
-        char trap_msg_str[256];
-        snprintf(trap_msg_str, sizeof(trap_msg_str), "%.*s", (int)trap_message.size, trap_message.data);
-        set_error_msg_v(ctx, "Instantiation trapped: %s", trap_msg_str);
+        // Use std::string for temporary buffer before set_error_msg_v
+        std::string trap_msg_str_cpp(trap_message.size, '\0');
+        memcpy(&trap_msg_str_cpp[0], trap_message.data, trap_message.size);
+        set_error_msg_v(ctx, "Instantiation trapped: %s", trap_msg_str_cpp.c_str());
         wasm_name_delete(&trap_message); wasm_trap_delete(trap);
-        if (ctx->instance) { wasm_instance_delete(ctx->instance); ctx->instance = NULL;}
-        final_rc = HB_BEAMR_CAPI_LIB_ERROR_WAMR_INSTANTIATE_FAILED; goto cleanup_and_fail;
+        if (ctx->instance) { wasm_instance_delete(ctx->instance); ctx->instance = nullptr;}
+        return HB_BEAMR_CAPI_LIB_ERROR_WAMR_INSTANTIATE_FAILED;
     }
     if (!ctx->instance) {
         set_error_msg(ctx, "Instantiation failed: Unknown error, no trap.");
-        final_rc = HB_BEAMR_CAPI_LIB_ERROR_WAMR_INSTANTIATE_FAILED; goto cleanup_and_fail;
+        return HB_BEAMR_CAPI_LIB_ERROR_WAMR_INSTANTIATE_FAILED;
     }
 
-    wasm_importtype_vec_delete(&import_types_vec);
+    // import_types_vec_raii destructor will call wasm_importtype_vec_delete
     set_error_msg(ctx, "Module instantiated successfully.");
     return HB_BEAMR_CAPI_LIB_SUCCESS;
-
-cleanup_and_fail:
-    if (ctx->created_host_envs) {
-         for(size_t k=0; k < ctx->num_created_host_envs; ++k) {
-            if(ctx->created_host_envs[k]) free(ctx->created_host_envs[k]);
-         }
-         free(ctx->created_host_envs); 
-         ctx->created_host_envs = NULL; 
-         ctx->num_created_host_envs = 0;
-         ctx->capacity_created_host_envs = 0;
-    }
-    if (ctx->created_host_funcs) {
-         for(size_t k=0; k < ctx->num_created_host_funcs; ++k) {
-            if(ctx->created_host_funcs[k]) wasm_func_delete(ctx->created_host_funcs[k]);
-         }
-         free(ctx->created_host_funcs); 
-         ctx->created_host_funcs = NULL; 
-         ctx->num_created_host_funcs = 0;
-         ctx->capacity_created_host_funcs = 0;
-    }
-    wasm_importtype_vec_delete(&import_types_vec); 
-    return final_rc;
 }
+
+// Let's make a specific RAII wrapper for wasm_exporttype_vec_t
+struct WasmExporttypeVecRAII {
+    wasm_exporttype_vec_t vec;
+    WasmExporttypeVecRAII() { wasm_exporttype_vec_new_empty(&vec); }
+    ~WasmExporttypeVecRAII() { wasm_exporttype_vec_delete(&vec); }
+    WasmExporttypeVecRAII(const WasmExporttypeVecRAII&) = delete;
+    WasmExporttypeVecRAII& operator=(const WasmExporttypeVecRAII&) = delete;
+};
 
 hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_call_export(
     hb_beamr_capi_lib_context_t* ctx,
@@ -461,39 +506,43 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_call_export(
     if (!ctx || !ctx->instance) { if (ctx) set_error_msg(ctx, "Instance invalid for call."); return HB_BEAMR_CAPI_LIB_ERROR_INSTANCE_NOT_CREATED;}
     if (!func_name) { set_error_msg(ctx, "Func name NULL for call."); return HB_BEAMR_CAPI_LIB_ERROR_WAMR_FUNCTION_LOOKUP_FAILED;}
 
-    wasm_extern_vec_t exports_vec;
-    wasm_instance_exports(ctx->instance, &exports_vec);
-    wasm_func_t* func = NULL; bool found_func = false;
-    wasm_exporttype_vec_t module_export_types;
-    wasm_module_exports(ctx->module, &module_export_types);
+    WasmExternVecRAII exports_vec_raii; // RAII for exports
+    wasm_instance_exports(ctx->instance, &exports_vec_raii.vec);
+    wasm_func_t* func = nullptr; bool found_func = false;
+    
+    WasmExporttypeVecRAII module_export_types_raii_actual;
+    wasm_module_exports(ctx->module, &module_export_types_raii_actual.vec);
 
-    for (size_t i = 0; i < module_export_types.size; ++i) {
-        const wasm_exporttype_t* export_type = module_export_types.data[i];
+    for (size_t i = 0; i < module_export_types_raii_actual.vec.size; ++i) {
+        const wasm_exporttype_t* export_type = module_export_types_raii_actual.vec.data[i];
         const wasm_name_t* name_vec = wasm_exporttype_name(export_type);
         if (names_match(name_vec, func_name)) {
-            if (wasm_externtype_kind(wasm_exporttype_type(export_type)) == WASM_EXTERN_FUNC && i < exports_vec.size) {
-                func = wasm_extern_as_func(exports_vec.data[i]);
+            if (wasm_externtype_kind(wasm_exporttype_type(export_type)) == WASM_EXTERN_FUNC && i < exports_vec_raii.vec.size) {
+                func = wasm_extern_as_func(exports_vec_raii.vec.data[i]);
                 if (func) found_func = true;
             }
             break; 
         }
     }
-    wasm_exporttype_vec_delete(&module_export_types); 
+    // module_export_types_raii_actual destructor handles delete
+
     if (!found_func) {
         set_error_msg_v(ctx, "Export func '%s' not found.", func_name);
-        wasm_extern_vec_delete(&exports_vec); 
+        // exports_vec_raii destructor handles delete
         return HB_BEAMR_CAPI_LIB_ERROR_WAMR_FUNCTION_LOOKUP_FAILED;
     }
     
     wasm_val_vec_t args_as_vec = { .num_elems = num_args, .size = num_args, .data = c_api_args };
     wasm_val_vec_t results_as_vec = { .num_elems = 0, .size = num_results, .data = c_api_results };
     wasm_trap_t* trap = wasm_func_call(func, &args_as_vec, &results_as_vec);
-    wasm_extern_vec_delete(&exports_vec); 
+    // exports_vec_raii destructor handles delete
 
     if (trap) {
         wasm_message_t trap_message;
         wasm_trap_message(trap, &trap_message);
-        set_error_msg_v(ctx, "Call to '%s' trapped: %.*s", func_name, (int)trap_message.size, trap_message.data);
+        std::string trap_msg_str_cpp(trap_message.size, '\0');
+        memcpy(&trap_msg_str_cpp[0], trap_message.data, trap_message.size);
+        set_error_msg_v(ctx, "Call to '%s' trapped: %s", func_name, trap_msg_str_cpp.c_str());
         wasm_name_delete(&trap_message); wasm_trap_delete(trap);
         return HB_BEAMR_CAPI_LIB_ERROR_WAMR_CALL_FAILED;
     }
@@ -504,6 +553,8 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_call_export(
     return HB_BEAMR_CAPI_LIB_SUCCESS;
 }
 
+extern "C" {
+
 hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_resolve_import(
     hb_beamr_capi_lib_context_t* ctx, uint32_t num_results, wasm_val_t results[]
 ) {
@@ -511,5 +562,7 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_resolve_import(
     set_error_msg(ctx, "resolve_import not impl.");
     return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE; 
 }
+
+} // extern "C"
 
 
