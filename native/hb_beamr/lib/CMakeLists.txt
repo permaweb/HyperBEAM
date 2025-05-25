@@ -84,7 +84,7 @@ message(STATUS "Configuring WAMR for Platform: ${WAMR_BUILD_PLATFORM}, Target: $
 
 # Run mode: We are only supporting AOT compilation currently.
 set(WAMR_BUILD_AOT 1)
-set(WAMR_BUILD_INTERP 0)
+set(WAMR_BUILD_INTERP 1)
 set(WAMR_BUILD_FAST_INTERP 0)
 set(WAMR_BUILD_JIT 0)
 set(WAMR_BUILD_FAST_JIT 0)
@@ -135,27 +135,36 @@ target_link_libraries(vmlib ${WAMR_RUNTIME_LIB_DEPS})
 # --- hb_beamr_lib Target ---
 # =============================================================================
 
-add_library(hb_beamr_lib SHARED stub.c)
+add_library(hb_beamr_lib STATIC
+    src/hb_beamr_lib.c
+)
 
 # Include directories for the library
 target_include_directories(hb_beamr_lib PUBLIC
+    ${CMAKE_CURRENT_LIST_DIR}/include    # Public headers for hb_beamr_lib
     ${WAMR_ROOT_DIR}/core/iwasm/include  # WAMR headers
 )
 
 # Link against vmlib and export it
-# target_link_libraries(hb_beamr_lib PUBLIC vmlib) # Original line
+target_link_libraries(hb_beamr_lib PUBLIC vmlib)
 
-# Link against vmlib, forcing export of its symbols into the shared library
-if(APPLE)
-  # On macOS, -all_load forces loading of all members of static archives
-  target_link_libraries(hb_beamr_lib PUBLIC "-Wl,-all_load" vmlib)
-elseif(UNIX AND NOT APPLE)
-  # On other Unix-like systems (e.g., Linux), use --whole-archive
-  target_link_libraries(hb_beamr_lib PUBLIC "-Wl,--whole-archive" vmlib "-Wl,--no-whole-archive")
-else()
-  # Fallback for other systems (e.g., Windows) or if flags cause issues
-  target_link_libraries(hb_beamr_lib PUBLIC vmlib)
-endif()
+# =============================================================================
+# --- hb_beamr_capi_lib Target --- 
+# =============================================================================
+
+add_library(hb_beamr_capi_lib STATIC
+    src/hb_beamr_capi_lib.c
+)
+
+# Include directories for the CAPI library
+target_include_directories(hb_beamr_capi_lib PUBLIC
+    ${CMAKE_CURRENT_LIST_DIR}/include    # Public headers for hb_beamr_capi_lib (and hb_beamr_lib)
+    ${WAMR_ROOT_DIR}/core/iwasm/include  # WAMR headers (includes wasm_c_api.h and wasm_export.h)
+)
+
+# Link CAPI lib against vmlib (for WAMR specific calls if any, and transitively for runtime components)
+# and export it so tests or other consumers can link to it.
+target_link_libraries(hb_beamr_capi_lib PUBLIC vmlib)
 
 # Conditionally add the test subdirectory and enable testing
 if(BUILD_TESTING)

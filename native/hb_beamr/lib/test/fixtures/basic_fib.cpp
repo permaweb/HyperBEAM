@@ -1,13 +1,40 @@
+// Standard C/C++ include, not strictly necessary for this simple Wasm module
+// but good practice if more complex C++ features were used.
+// #include <vector>
+
 #include <cstdio>
+#include <emscripten.h> // For EMSCRIPTEN_KEEPALIVE
 
 using namespace std;
 
-unsigned long fib(unsigned long i) {
-  if (i <= 1) {
-    return i;
-  }
-  return fib(i - 1) + fib(i - 2);
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// EMSCRIPTEN_KEEPALIVE is not strictly needed if functions are listed in EXPORTED_FUNCTIONS
+// but can be useful for C functions intended to be callable from JS/Wasm.
+// #include <emscripten.h>
+// EMSCRIPTEN_KEEPALIVE
+EMSCRIPTEN_KEEPALIVE
+int fib(int n) {
+    if (n <= 0) {
+        return 0;
+    }
+    if (n == 1) {
+        return 1;
+    }
+    int a = 0, b = 1, c;
+    for (int i = 2; i <= n; ++i) {
+        c = a + b;
+        a = b;
+        b = c;
+    }
+    return b;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 char result_str[256] = "\0";
 

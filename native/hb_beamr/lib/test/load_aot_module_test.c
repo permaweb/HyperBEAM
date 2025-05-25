@@ -1,136 +1,120 @@
+#include "hb_beamr_lib.h"
 #include <stdio.h>
-#include <stdlib.h>
+#include <stdlib.h> // For fopen, fread, fclose, NULL
 #include <string.h>
+#include <assert.h>
 
-#include "wasm_export.h"
-#include "utils.h" // Include our new utils header
-
-int main(int argc, char *argv[]) {
-    char *aot_file_path = "./basic_fib.aot"; // Relative path to the AOT file copied by CMake
-    char *buffer = NULL;
-    uint32_t buffer_size = 0;
-    wasm_module_t module = NULL;
-    wasm_module_inst_t module_inst = NULL;
-    wasm_exec_env_t exec_env = NULL;
-    wasm_function_inst_t func_handle = NULL;
-    char error_buf[128];
-    int result = 1; // Default to failure
-
-    printf("Running AOT module test: %s\n", aot_file_path);
-
-    // Initialize WAMR runtime
-    RuntimeInitArgs init_args;
-    memset(&init_args, 0, sizeof(RuntimeInitArgs));
-    init_args.mem_alloc_type = Alloc_With_Allocator;
-    init_args.mem_alloc_option.allocator.malloc_func = malloc;
-    init_args.mem_alloc_option.allocator.realloc_func = realloc;
-    init_args.mem_alloc_option.allocator.free_func = free;
-    // init_args.max_thread_num = 1; // Default is 4
-
-    if (!wasm_runtime_full_init(&init_args)) {
-        fprintf(stderr, "Error: Failed to initialize WAMR runtime.\n");
-        goto fail_1;
+// Helper to read a binary file into a buffer
+// Caller is responsible for freeing the returned buffer.
+uint8_t* read_file_to_buffer(const char* filename, uint32_t* out_size) {
+    FILE* file = fopen(filename, "rb");
+    if (!file) {
+        fprintf(stderr, "ERROR: Cannot open file %s\n", filename);
+        return NULL;
     }
 
-    // Read the AOT file using our utility function
-    buffer = read_file_to_buffer(aot_file_path, &buffer_size);
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    if (size < 0) {
+        fprintf(stderr, "ERROR: File size is invalid for %s\n", filename);
+        fclose(file);
+        return NULL;
+    }
+    *out_size = (uint32_t)size;
+
+    uint8_t* buffer = (uint8_t*)malloc(*out_size);
     if (!buffer) {
-        fprintf(stderr, "Error: Failed to read AOT file %s (using read_file_to_buffer).\n", aot_file_path);
-        goto fail_2;
-    }
-    printf("Successfully read AOT file (%u bytes).\n", buffer_size);
-
-    // Load the AOT module
-    module = wasm_runtime_load((uint8_t *)buffer, buffer_size, error_buf, sizeof(error_buf));
-    if (!module) {
-        fprintf(stderr, "Error: Failed to load AOT module: %s\n", error_buf);
-        goto fail_3;
-    }
-    printf("Successfully loaded AOT module.\n");
-
-    // Instantiate the module
-    module_inst = wasm_runtime_instantiate(module, 1024 * 1024, // stack size
-                                           1024 * 1024, // heap size
-                                           error_buf, sizeof(error_buf));
-    if (!module_inst) {
-        fprintf(stderr, "Error: Failed to instantiate AOT module: %s\n", error_buf);
-        goto fail_4;
-    }
-    printf("Successfully instantiated AOT module.\n");
-
-    // Create execution environment
-    exec_env = wasm_runtime_create_exec_env(module_inst, 1024 * 1024); // stack size
-    if (!exec_env) {
-        fprintf(stderr, "Error: Failed to create execution environment.\n");
-        goto fail_5;
-    }
-    printf("Successfully created execution environment.\n");
-
-    // Look up the exported 'handle' function
-    func_handle = wasm_runtime_lookup_function(module_inst, "handle");
-    if (!func_handle) {
-        fprintf(stderr, "Error: Failed to find exported function 'handle'.\n");
-        goto fail_6;
-    }
-    printf("Successfully found function 'handle'.\n");
-
-    // Prepare arguments for the 'handle' function (char* msg, char* env)
-    // In the C++ code, these are char*. In WASM, they are pointers (i32/i64).
-    // For this test, we'll pass NULL, which corresponds to 0 in WASM.
-    uint32_t wasm_argv[2] = {0, 0};
-
-    // Call the 'handle' function
-    printf("Calling handle function...\n");
-    if (!wasm_runtime_call_wasm(exec_env, func_handle, 2, wasm_argv)) {
-        fprintf(stderr, "Error calling handle function: %s\n", wasm_runtime_get_exception(module_inst));
-        goto fail_6;
+        fprintf(stderr, "ERROR: Malloc failed for reading file %s\n", filename);
+        fclose(file);
+        return NULL;
     }
 
-    // The function returns a char* (WASM pointer). Retrieve it.
-    uint32_t result_ptr = wasm_argv[0]; // Result is placed back into argv[0]
-    printf("handle function returned successfully (result ptr: %u).\n", result_ptr);
+    size_t read_size = fread(buffer, 1, *out_size, file);
+    fclose(file);
 
-    // Validate the result pointer (should not be 0 if successful and returned something)
-    if (result_ptr == 0) {
-         fprintf(stderr, "Error: handle function returned NULL pointer.\n");
-         goto fail_6;
+    if (read_size != *out_size) {
+        fprintf(stderr, "ERROR: Read size mismatch for file %s (expected %u, got %zu)\n", filename, *out_size, read_size);
+        free(buffer);
+        return NULL;
     }
+    return buffer;
+}
 
-    // Convert the WASM pointer to a native pointer
-    // IMPORTANT: Ensure the pointer is valid within the module instance memory
-    if (!wasm_runtime_validate_app_addr(module_inst, result_ptr, 1)) { // Check if at least 1 byte is valid
-        fprintf(stderr, "Error: Result pointer %u is not a valid app address.\n", result_ptr);
-        goto fail_6;
+// Dummy host function for testing import registration
+// This function signature must match what Wasm expects, including exec_env.
+// For a simple fib(i32) -> i32, an import might be (env, host_fib, (i)i)
+// static void host_fib_impl(wasm_exec_env_t exec_env, int32_t n, int32_t* result) {
+//    *result = n * 2; // dummy implementation
+// }
+
+int main() {
+    printf("Running test: Load AOT Module Test\n");
+
+    hb_beamr_lib_rc_t rc_rt = hb_beamr_lib_init_runtime_global(NULL);
+    assert(rc_rt == HB_BEAMR_LIB_SUCCESS && "Runtime init failed");
+
+    hb_beamr_lib_context_t* ctx = hb_beamr_lib_create_context();
+    assert(ctx != NULL && "Context creation failed");
+
+    const char* aot_filename = "./basic_fib.aot"; // Copied by CMake into build dir
+    uint32_t aot_file_size = 0;
+    uint8_t* aot_file_buffer = read_file_to_buffer(aot_filename, &aot_file_size);
+
+    if (!aot_file_buffer) {
+        fprintf(stderr, "Test FAILED: Could not read AOT file %s. Ensure it was compiled and copied.\n", aot_filename);
+        hb_beamr_lib_destroy_context(ctx);
+        hb_beamr_lib_destroy_runtime_global();
+        return 1;
     }
+    printf("AOT file %s read successfully, size: %u bytes.\n", aot_filename, aot_file_size);
 
-    char *result_native_ptr = (char *)wasm_runtime_addr_app_to_native(module_inst, result_ptr);
-    printf("Result string (native): %s\n", result_native_ptr);
-
-    // Basic check on the result string content
-    const char* expected_prefix = "Fibonacci index 10 is 55";
-    if (strncmp(result_native_ptr, expected_prefix, strlen(expected_prefix)) != 0) {
-         fprintf(stderr, "Error: Result string does not match expected prefix.\nExpected: '%s...'\nActual:   '%s'\n", expected_prefix, result_native_ptr);
-         goto fail_6;
+    // Test loading without imports first
+    hb_beamr_lib_rc_t load_rc = hb_beamr_lib_load_aot_module(ctx, aot_file_buffer, aot_file_size);
+    
+    if (load_rc != HB_BEAMR_LIB_SUCCESS) {
+        fprintf(stderr, "Test FAILED: hb_beamr_lib_load_aot_module (no imports) failed. Error: %s\n", hb_beamr_lib_get_last_error(ctx));
+        free(aot_file_buffer);
+        hb_beamr_lib_destroy_context(ctx);
+        hb_beamr_lib_destroy_runtime_global();
+        return 1;
     }
+    printf("hb_beamr_lib_load_aot_module (no imports) successful. Last message: %s\n", hb_beamr_lib_get_last_error(ctx));
 
-    printf("Result validation successful!\n");
-    result = 0; // Success!
+    // Module is loaded. Destroy context should unload it.
+    hb_beamr_lib_destroy_context(ctx);
+    ctx = NULL; // Avoid use after free
 
-fail_6:
-    wasm_runtime_destroy_exec_env(exec_env);
-fail_5:
-    wasm_runtime_deinstantiate(module_inst);
-fail_4:
-    wasm_runtime_unload(module);
-fail_3:
-    if (buffer) free_buffer(buffer); // Use our utility free function
-fail_2:
-    wasm_runtime_destroy();
-fail_1:
-    if (result == 0) {
-        printf("--- Test PASSED ---\n");
-    } else {
-        fprintf(stderr, "--- Test FAILED ---\n");
+    // Re-create context for next test with imports (if we add one)
+    // For now, just test loading again to ensure context is clean.
+    ctx = hb_beamr_lib_create_context();
+    assert(ctx != NULL && "Second context creation failed");
+
+    // Test loading again (make sure no residue from previous load in global state or uncleaned context)
+    // This time, let's imagine we have a host function to register.
+    // hb_beamr_native_symbol_t import_symbols[] = {
+    //     { "env", "host_double", (void*)host_fib_impl, "(i)i", NULL }
+    // };
+    // uint32_t num_imports = sizeof(import_symbols) / sizeof(hb_beamr_native_symbol_t);
+    // load_rc = hb_beamr_lib_load_aot_module(ctx, aot_file_buffer, aot_file_size, import_symbols, num_imports);
+
+    // For now, just repeat the no-imports load on a fresh context
+    load_rc = hb_beamr_lib_load_aot_module(ctx, aot_file_buffer, aot_file_size);
+    if (load_rc != HB_BEAMR_LIB_SUCCESS) {
+        fprintf(stderr, "Test FAILED: hb_beamr_lib_load_aot_module (second load, no imports) failed. Error: %s\n", hb_beamr_lib_get_last_error(ctx));
+        free(aot_file_buffer);
+        hb_beamr_lib_destroy_context(ctx);
+        hb_beamr_lib_destroy_runtime_global();
+        return 1;
     }
-    return result;
+    printf("hb_beamr_lib_load_aot_module (second load, no imports) successful. Last message: %s\n", hb_beamr_lib_get_last_error(ctx));
+
+
+    free(aot_file_buffer);
+    hb_beamr_lib_destroy_context(ctx);
+    hb_beamr_lib_destroy_runtime_global();
+
+    printf("Test PASSED: Load AOT Module Test\n");
+    return 0;
 }

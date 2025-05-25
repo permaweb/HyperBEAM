@@ -136,8 +136,21 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     DRV_DEBUG("generic_import_native_symbol_func completed (%s.%s)", module_name, func_name);
 }
 
+void ensure_thread_init() {
+    if (!wasm_runtime_thread_env_inited()) {
+        DRV_DEBUG("Thread environment: initializing...");
+        wasm_runtime_init_thread_env();
+        DRV_DEBUG("Thread environment: initialized!");
+    } else {
+        DRV_DEBUG("Thread environment: already initialized");
+    }
+}
+
 void wasm_initialize_runtime(void* raw) {
     DRV_DEBUG("Initializing WASM module");
+    
+    ensure_thread_init();
+
     LoadWasmReq* mod_bin = (LoadWasmReq*)raw;
     Proc* proc = mod_bin->proc;
     drv_lock(proc->is_running);
@@ -527,6 +540,9 @@ void wasm_initialize_runtime(void* raw) {
 
 void wasm_execute_exported_function(void* raw) {
     DRV_DEBUG("wasm_execute_exported_function called, raw: %p", raw);
+
+    ensure_thread_init();
+
     Proc* proc = (Proc*)raw;
     drv_lock(proc->is_running);
     char* function_name = proc->current_function;
@@ -654,7 +670,9 @@ void wasm_execute_indirect_function(void *raw) {
     DRV_DEBUG("Starting indirect function invocation");
     DRV_DEBUG("=================================================");
     // Proc* proc, const char *field_name, const wasm_val_vec_t* input_args, wasm_val_vec_t* output_results
-    
+
+    ensure_thread_init();
+
     int result = 0;
 
     Proc* proc = (Proc*)raw;
