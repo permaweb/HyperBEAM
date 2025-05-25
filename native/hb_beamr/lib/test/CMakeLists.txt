@@ -201,5 +201,51 @@ add_custom_command(TARGET capi_import_call_test POST_BUILD
     )
 add_test(NAME CAPIImportCallTest COMMAND capi_import_call_test)
 
+# --- Compile Fixture: import_nested.wasm (for C-API nested import/export test) ---
+set(NESTED_IMPORT_FIXTURE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/import_nested.c)
+set(NESTED_IMPORT_WASM_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/import_nested.wasm)
+
+if(NOT EXISTS ${NESTED_IMPORT_FIXTURE_SRC})
+    message(FATAL_ERROR "Fixture source file import_nested.c not found at ${NESTED_IMPORT_FIXTURE_SRC}.")
+endif()
+
+add_custom_command(
+  OUTPUT ${NESTED_IMPORT_WASM_OUTPUT}
+  COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --blue "+++ Compiling fixture ${NESTED_IMPORT_FIXTURE_SRC} to WASM (using emcc) +++"
+  COMMAND ${EMCC_EXECUTABLE} -O2 -s STANDALONE_WASM -s EXPORTED_FUNCTIONS=['_get_data_ptr','_xor_memory','_call_host_and_read'] -Wl,--no-entry -s ERROR_ON_UNDEFINED_SYMBOLS=0 ${NESTED_IMPORT_FIXTURE_SRC} -o ${NESTED_IMPORT_WASM_OUTPUT}
+  DEPENDS ${NESTED_IMPORT_FIXTURE_SRC}
+  COMMENT "Compiling C import_nested fixture to WASM using emcc..."
+  VERBATIM
+)
+add_custom_target(nested_import_wasm_file_target DEPENDS ${NESTED_IMPORT_WASM_OUTPUT})
+
+# --- Compile Fixture: import_nested.aot (for C-API nested import/export test) ---
+set(NESTED_IMPORT_AOT_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/import_nested.aot)
+if(DEFINED WAMRC_EXECUTABLE AND TARGET build_wamrc_exe)
+    add_custom_command(
+      OUTPUT ${NESTED_IMPORT_AOT_OUTPUT}
+      COMMAND ${WAMRC_EXECUTABLE} -o ${NESTED_IMPORT_AOT_OUTPUT} ${NESTED_IMPORT_WASM_OUTPUT}
+      DEPENDS nested_import_wasm_file_target build_wamrc_exe
+      COMMENT "Compiling import_nested.wasm to AOT (for C-API nested test)..."
+      VERBATIM
+    )
+    add_custom_target(nested_import_aot_file_target DEPENDS ${NESTED_IMPORT_AOT_OUTPUT})
+else()
+    message(STATUS "WAMRC not available. C-API AOT fixture import_nested.aot will not be built.")
+    add_custom_target(nested_import_aot_file_target) # Dummy target
+endif()
+
+# C-API Import Call Export Test (AOT based, nested logic)
+add_executable(capi_import_call_export_test capi_import_call_export_test.c utils.c)
+target_link_libraries(capi_import_call_export_test PRIVATE hb_beamr_capi_lib)
+add_dependencies(capi_import_call_export_test nested_import_aot_file_target) 
+add_custom_command(TARGET capi_import_call_export_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${NESTED_IMPORT_AOT_OUTPUT} 
+    $<TARGET_FILE_DIR:capi_import_call_export_test>/import_nested.aot
+    COMMENT "Copying import_nested.aot to capi_import_call_export_test directory"
+)
+add_test(NAME CAPIImportCallExportTest COMMAND capi_import_call_export_test)
+
+
 # TODO: Add C-API tests for AOT loaded modules (instantiate, call export, import call)
-# These would depend on fib_capi_aot_file_target and import_capi_aot_file_target
