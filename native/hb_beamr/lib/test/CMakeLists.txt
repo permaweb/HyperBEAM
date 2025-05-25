@@ -150,7 +150,7 @@ target_link_libraries(capi_context_management_test PRIVATE hb_beamr_capi_lib)
 add_test(NAME CAPIContextManagementTest COMMAND capi_context_management_test)
 
 # C-API Load WASM Module Test
-add_executable(capi_load_wasm_module_test capi_load_wasm_module_test.c)
+add_executable(capi_load_wasm_module_test capi_load_wasm_module_test.c utils.c)
 target_link_libraries(capi_load_wasm_module_test PRIVATE hb_beamr_capi_lib)
 add_dependencies(capi_load_wasm_module_test fib_wasm_file_target) 
 add_custom_command(TARGET capi_load_wasm_module_test POST_BUILD
@@ -163,7 +163,7 @@ add_test(NAME CAPILoadWasmModuleTest COMMAND capi_load_wasm_module_test)
 
 # C-API Load AOT Module Test 
 if(DEFINED WAMRC_EXECUTABLE AND TARGET build_wamrc_exe)
-    add_executable(capi_load_aot_module_test capi_load_aot_module_test.c)
+    add_executable(capi_load_aot_module_test capi_load_aot_module_test.c utils.c)
     target_link_libraries(capi_load_aot_module_test PRIVATE hb_beamr_capi_lib)
     add_dependencies(capi_load_aot_module_test fib_capi_aot_file_target) 
     add_custom_command(TARGET capi_load_aot_module_test POST_BUILD
@@ -178,7 +178,7 @@ else()
 endif()
 
 # C-API Instantiate and Call Export Test (WASM based)
-add_executable(capi_instantiate_call_test capi_instantiate_call_test.c)
+add_executable(capi_instantiate_call_test capi_instantiate_call_test.c utils.c)
 target_link_libraries(capi_instantiate_call_test PRIVATE hb_beamr_capi_lib)
 add_dependencies(capi_instantiate_call_test fib_wasm_file_target) 
 add_custom_command(TARGET capi_instantiate_call_test POST_BUILD
@@ -190,7 +190,7 @@ add_custom_command(TARGET capi_instantiate_call_test POST_BUILD
 add_test(NAME CAPIInstantiateCallExportTest COMMAND capi_instantiate_call_test)
 
 # C-API Import Call Test (WASM based)
-add_executable(capi_import_call_test capi_import_call_test.c)
+add_executable(capi_import_call_test capi_import_call_test.c utils.c)
 target_link_libraries(capi_import_call_test PRIVATE hb_beamr_capi_lib)
 add_dependencies(capi_import_call_test import_test_wasm_file_target) 
 add_custom_command(TARGET capi_import_call_test POST_BUILD

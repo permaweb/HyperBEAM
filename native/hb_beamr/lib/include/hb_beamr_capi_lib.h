@@ -46,6 +46,9 @@ void hb_beamr_capi_lib_destroy_context(hb_beamr_capi_lib_context_t* ctx);
 // Error handling
 const char* hb_beamr_capi_lib_get_last_error(hb_beamr_capi_lib_context_t* ctx);
 
+// Accessor for a store pointer from the context, useful for host functions
+wasm_store_t* hb_beamr_capi_lib_context_get_store(hb_beamr_capi_lib_context_t* ctx);
+
 // Module loading (from .wasm binary using standard C API)
 hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_load_wasm_module(
     hb_beamr_capi_lib_context_t* ctx,

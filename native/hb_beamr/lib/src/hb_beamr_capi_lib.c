@@ -46,8 +46,8 @@ static wasm_trap_t* generic_trampoline_callback(
 ) {
     HostFuncEnv* tramp_env = (HostFuncEnv*)env;
 
-    if (!tramp_env || !tramp_env->instance_ctx || !tramp_env->instance_ctx->store) {
-        fprintf(stderr, "CRITICAL PANIC: generic_trampoline_callback called with NULL or invalid HostFuncEnv/instance_ctx/store!\n");
+    if (!tramp_env || !tramp_env->instance_ctx || !tramp_env->instance_ctx->store) { // store check is still good for trap creation below
+        fprintf(stderr, "CRITICAL: generic_trampoline_callback called with invalid HostFuncEnv or context/store.\n");
         return NULL; 
     }
 
@@ -63,8 +63,8 @@ static wasm_trap_t* generic_trampoline_callback(
     }
 
     user_host_func_callback_t actual_callback = (user_host_func_callback_t)tramp_env->user_function_ptr;
-    // Pass the store from instance_ctx as the environment to the user's actual C function
-    return actual_callback(tramp_env->instance_ctx->store, args, results);
+    // Pass the entire instance_ctx as the environment to the user's actual C function
+    return actual_callback(tramp_env->instance_ctx, args, results);
 }
 
 // Helper function to set the last error message in a context
@@ -83,6 +83,14 @@ static void set_error_msg_v(hb_beamr_capi_lib_context_t* ctx, const char* format
         va_end(args);
         ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\0'; // Ensure null termination
     }
+}
+
+// Accessor for a store pointer from the context
+wasm_store_t* hb_beamr_capi_lib_context_get_store(hb_beamr_capi_lib_context_t* ctx) {
+    if (!ctx) {
+        return NULL;
+    }
+    return ctx->store;
 }
 
 // Initialize the runtime globally using wasm_c_api style config
@@ -148,24 +156,17 @@ hb_beamr_capi_lib_context_t* hb_beamr_capi_lib_create_context(void) {
 
 void hb_beamr_capi_lib_destroy_context(hb_beamr_capi_lib_context_t* ctx) {
     if (ctx) {
-        printf("[DEBUG DESTROY_CTX] Destroying context %p\n", (void*)ctx);
         if (ctx->instance) {
-            printf("[DEBUG DESTROY_CTX]   Deleting instance %p\n", (void*)ctx->instance);
             wasm_instance_delete(ctx->instance);
             ctx->instance = NULL;
         }
         if (ctx->module) {
-            printf("[DEBUG DESTROY_CTX]   Deleting module %p\n", (void*)ctx->module);
             wasm_module_delete(ctx->module);
             ctx->module = NULL;
         }
-        
-        // Free HostFuncEnvs manually
         if (ctx->created_host_envs) {
-            printf("[DEBUG DESTROY_CTX]   Freeing %zu created host envs\n", ctx->num_created_host_envs);
             for (size_t i = 0; i < ctx->num_created_host_envs; ++i) {
                 if (ctx->created_host_envs[i]) {
-                    printf("[DEBUG DESTROY_CTX]     Freeing host_env %p\n", (void*)ctx->created_host_envs[i]);
                     free(ctx->created_host_envs[i]);
                 }
             }
@@ -174,23 +175,16 @@ void hb_beamr_capi_lib_destroy_context(hb_beamr_capi_lib_context_t* ctx) {
             ctx->num_created_host_envs = 0;
             ctx->capacity_created_host_envs = 0;
         }
-
-        // Free tracking array for wasm_func_t (funcs assumed managed by WAMR if instance succeeded)
         if (ctx->created_host_funcs) {
-            printf("[DEBUG DESTROY_CTX]   Freeing tracking array for host functions (no delete on funcs)\n");
             free(ctx->created_host_funcs);
             ctx->created_host_funcs = NULL;
             ctx->num_created_host_funcs = 0; 
             ctx->capacity_created_host_funcs = 0;
         }
         if (ctx->store) {
-            printf("[DEBUG DESTROY_CTX]   Deleting store %p\n", (void*)ctx->store);
             wasm_store_delete(ctx->store); 
             ctx->store = NULL; 
-        } else {
-            printf("[DEBUG DESTROY_CTX]   Store was already NULL.\n");
         }
-        printf("[DEBUG DESTROY_CTX]   Freeing context struct %p\n", (void*)ctx);
         free(ctx);
     }
 }
@@ -295,10 +289,8 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
     const hb_beamr_capi_native_symbol_t* override_symbols,
     uint32_t num_override_symbols
 ) {
-    printf("[DEBUG INST] Enter hb_beamr_capi_lib_instantiate (Refactor V6 - HostFuncEnv with instance_ctx)\n");
     if (!ctx || !ctx->store || !ctx->module) { 
         if(ctx) set_error_msg(ctx, "Ctx/store/module invalid for instantiate."); 
-        else printf("[DEBUG INST] Error: ctx is NULL for instantiate\n");
         return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE; 
     }
     if (ctx->instance) { set_error_msg(ctx, "Already instantiated."); return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE; }
@@ -306,7 +298,6 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
     wasm_importtype_vec_t import_types_vec;
     wasm_module_imports(ctx->module, &import_types_vec);
     size_t num_imports = import_types_vec.size;
-    printf("[DEBUG INST] Module has %zu imports.\n", num_imports);
 
     wasm_extern_t* extern_stubs_array_on_stack[num_imports > 0 ? num_imports : 1]; 
     wasm_extern_t** extern_stubs_array_ptr = extern_stubs_array_on_stack;
@@ -344,9 +335,6 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
         extern_stubs_array_ptr[i] = NULL; 
 
         if (kind != WASM_EXTERN_FUNC) {
-            printf("[DEBUG INST]   Import '%.*s::%.*s' is not a function (kind=%d), skipping host func creation.\n",
-                   (int)module_name_vec->size, module_name_vec->data,
-                   (int)func_name_vec->size, func_name_vec->data, kind);
             continue; 
         }
         
@@ -358,22 +346,13 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
                 names_match(func_name_vec, override_sym->import_function_name)) {
                 user_function_for_import = override_sym->user_function;
                 found_override = true;
-                printf("[DEBUG INST]   Import '%.*s::%.*s' matched override symbol %p.\n",
-                    (int)module_name_vec->size, module_name_vec->data,
-                    (int)func_name_vec->size, func_name_vec->data, user_function_for_import);
                 break; 
             }
         }
         if (!found_override && default_import_function != NULL) {
             user_function_for_import = default_import_function;
-            printf("[DEBUG INST]   Import '%.*s::%.*s' using default import function %p.\n",
-                (int)module_name_vec->size, module_name_vec->data,
-                (int)func_name_vec->size, func_name_vec->data, user_function_for_import);
         }
         if (user_function_for_import == NULL && !found_override) {
-             printf("[DEBUG INST]   Import '%.*s::%.*s' has no override and no default; will trap if called.\n",
-                (int)module_name_vec->size, module_name_vec->data,
-                (int)func_name_vec->size, func_name_vec->data);
         }
 
         const wasm_functype_t* expected_functype = wasm_externtype_as_functype_const(extern_type);
@@ -424,7 +403,6 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
     wasm_extern_vec_t imports_for_instance;
     wasm_extern_vec_new(&imports_for_instance, num_imports, extern_stubs_array_ptr);
 
-    printf("[DEBUG INST] Preparing to call wasm_instance_new.\n");
     wasm_trap_t* trap = NULL;
     ctx->instance = wasm_instance_new(ctx->store, ctx->module, &imports_for_instance, &trap);
     
@@ -438,22 +416,18 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
         set_error_msg_v(ctx, "Instantiation trapped: %s", trap_msg_str);
         wasm_name_delete(&trap_message); wasm_trap_delete(trap);
         if (ctx->instance) { wasm_instance_delete(ctx->instance); ctx->instance = NULL;}
-        printf("[DEBUG INST] Instantiation trapped. Error: %s\n", ctx->last_error_msg);
         final_rc = HB_BEAMR_CAPI_LIB_ERROR_WAMR_INSTANTIATE_FAILED; goto cleanup_and_fail;
     }
     if (!ctx->instance) {
         set_error_msg(ctx, "Instantiation failed: Unknown error, no trap.");
-        printf("[DEBUG INST] Instantiation failed (no instance, no trap).\n");
         final_rc = HB_BEAMR_CAPI_LIB_ERROR_WAMR_INSTANTIATE_FAILED; goto cleanup_and_fail;
     }
 
     wasm_importtype_vec_delete(&import_types_vec);
     set_error_msg(ctx, "Module instantiated successfully.");
-    printf("[DEBUG INST] Instantiation successful.\n");
     return HB_BEAMR_CAPI_LIB_SUCCESS;
 
 cleanup_and_fail:
-    printf("[DEBUG INST] Linking/Instantiation failed path cleanup. final_rc=%d\n", final_rc);
     if (ctx->created_host_envs) {
          for(size_t k=0; k < ctx->num_created_host_envs; ++k) {
             if(ctx->created_host_envs[k]) free(ctx->created_host_envs[k]);
@@ -492,13 +466,10 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_call_export(
     wasm_func_t* func = NULL; bool found_func = false;
     wasm_exporttype_vec_t module_export_types;
     wasm_module_exports(ctx->module, &module_export_types);
-    // printf("[DEBUG] call_export: Looking for function '%s'. Module has %zu exports.\n", func_name, module_export_types.size);
 
     for (size_t i = 0; i < module_export_types.size; ++i) {
         const wasm_exporttype_t* export_type = module_export_types.data[i];
         const wasm_name_t* name_vec = wasm_exporttype_name(export_type);
-        // printf("[DEBUG]   Checking export %zu: Name=\"%.*s\" (len=%zu), Kind=%d\n", 
-        //         i, (int)name_vec->size, name_vec->data, name_vec->size, wasm_externtype_kind(wasm_exporttype_type(export_type)));
         if (names_match(name_vec, func_name)) {
             if (wasm_externtype_kind(wasm_exporttype_type(export_type)) == WASM_EXTERN_FUNC && i < exports_vec.size) {
                 func = wasm_extern_as_func(exports_vec.data[i]);

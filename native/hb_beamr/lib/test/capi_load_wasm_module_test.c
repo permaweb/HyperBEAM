@@ -3,38 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-
-// Helper to read a file into a buffer
-static uint8_t* read_file_to_buffer(const char* filename, uint32_t* ret_size) {
-    FILE* file = fopen(filename, "rb");
-    if (!file) {
-        fprintf(stderr, "Failed to open file: %s\n", filename);
-        return NULL;
-    }
-    fseek(file, 0, SEEK_END);
-    long size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    if (size < 0) {
-        fprintf(stderr, "Failed to get file size: %s\n", filename);
-        fclose(file);
-        return NULL;
-    }
-    uint8_t* buffer = (uint8_t*)malloc(size);
-    if (!buffer) {
-        fprintf(stderr, "Failed to allocate buffer for file: %s\n", filename);
-        fclose(file);
-        return NULL;
-    }
-    size_t read_size = fread(buffer, 1, size, file);
-    fclose(file);
-    if (read_size != (size_t)size) {
-        fprintf(stderr, "Failed to read entire file: %s\n", filename);
-        free(buffer);
-        return NULL;
-    }
-    *ret_size = (uint32_t)size;
-    return buffer;
-}
+#include "utils.h"
 
 int main(int argc, char* argv[]) {
     printf("Starting C-API Load WASM Module Test...\n");
@@ -73,7 +42,7 @@ int main(int argc, char* argv[]) {
     hb_beamr_capi_lib_destroy_runtime_global();
     printf("Runtime destroyed.\n");
 
-    free(wasm_buffer);
+    free_buffer(wasm_buffer);
     printf("\nC-API Load WASM Module Test PASSED.\n");
     return 0;
 } 

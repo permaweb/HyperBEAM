@@ -1,10 +1,11 @@
 #include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h> // For uint8_t
 
-char* read_file_to_buffer(const char *filename, uint32_t *p_size) {
+uint8_t* read_file_to_buffer(const char *filename, uint32_t *p_size) {
     FILE *file = NULL;
-    char *buffer = NULL;
+    uint8_t *buffer = NULL;
     long file_size = 0;
     size_t bytes_read = 0;
 
@@ -18,7 +19,6 @@ char* read_file_to_buffer(const char *filename, uint32_t *p_size) {
         return NULL;
     }
 
-    // Get file size
     fseek(file, 0, SEEK_END);
     file_size = ftell(file);
     rewind(file);
@@ -29,15 +29,13 @@ char* read_file_to_buffer(const char *filename, uint32_t *p_size) {
          return NULL;
     }
 
-    // Allocate buffer (+1 for potential null terminator, though not strictly necessary for binary)
-    buffer = (char *)malloc(file_size + 1);
+    buffer = (uint8_t *)malloc(file_size); // No +1 needed for binary data
     if (!buffer) {
         fprintf(stderr, "Error allocating memory for file buffer\n");
         fclose(file);
         return NULL;
     }
 
-    // Read file content
     bytes_read = fread(buffer, 1, file_size, file);
     if (bytes_read != (size_t)file_size) {
         fprintf(stderr, "Error reading file (read %zu, expected %ld)\n", bytes_read, file_size);
@@ -46,7 +44,6 @@ char* read_file_to_buffer(const char *filename, uint32_t *p_size) {
         return NULL;
     }
 
-    buffer[file_size] = '\0'; // Null-terminate just in case
     *p_size = (uint32_t)file_size;
 
     fclose(file);

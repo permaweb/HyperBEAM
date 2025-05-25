@@ -1,26 +1,12 @@
 #include "hb_beamr_capi_lib.h"
-#include "wasm_c_api.h" // For wasm_val_t, wasm_valkind_enum
+#include "wasm_c_api.h" 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include "utils.h" // Use the shared utility
 
-
-// Helper to read a file into a buffer (same as in capi_load_wasm_module_test.c)
-static uint8_t* read_file_to_buffer(const char* filename, uint32_t* ret_size) {
-    FILE* file = fopen(filename, "rb");
-    if (!file) { fprintf(stderr, "fopen failed for %s\n", filename); return NULL; }
-    fseek(file, 0, SEEK_END);
-    long size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    if (size < 0) { fclose(file); return NULL; }
-    uint8_t* buffer = (uint8_t*)malloc(size);
-    if (!buffer) { fclose(file); return NULL; }
-    if (fread(buffer, 1, size, file) != (size_t)size) { free(buffer); fclose(file); return NULL; }
-    fclose(file);
-    *ret_size = (uint32_t)size;
-    return buffer;
-}
+// Dummy WASI function implementations are NOT needed here as the main library handles unlinked imports.
 
 int main(int argc, char* argv[]) {
     printf("Starting C-API Instantiate and Call Export Test...\n");
@@ -45,16 +31,11 @@ int main(int argc, char* argv[]) {
     rc = hb_beamr_capi_lib_load_wasm_module(ctx, wasm_buf, wasm_size);
     assert(rc == HB_BEAMR_CAPI_LIB_SUCCESS);
     printf("WASM module loaded. Last error: %s\n", hb_beamr_capi_lib_get_last_error(ctx));
-    free(wasm_buf);
+    free_buffer(wasm_buf); 
 
     printf("Instantiating module...\n");
-    // Provide dummy WASI implementations as override_symbols for basic_fib.wasm
-
-    rc = hb_beamr_capi_lib_instantiate(ctx, 
-                                       NULL, // No default import function
-                                       NULL, 
-                                       0);
-    assert(rc == HB_BEAMR_CAPI_LIB_SUCCESS);
+    rc = hb_beamr_capi_lib_instantiate(ctx, NULL, NULL, 0);
+    assert(rc == HB_BEAMR_CAPI_LIB_SUCCESS); 
     printf("Module instantiated. Last error: %s\n", hb_beamr_capi_lib_get_last_error(ctx));
 
     printf("Calling exported function 'fib' with input 10...\n");
