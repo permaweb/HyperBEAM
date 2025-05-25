@@ -55,7 +55,7 @@ int main(int argc, char* argv[]) {
 
     uint32_t wasm_size;
     // Changed to .wasm to match CMakeLists.txt copy operation, was .aot
-    uint8_t* wasm_buf = read_file_to_buffer("./import_test_module.wasm", &wasm_size);
+    uint8_t* wasm_buf = read_file_to_buffer("./import_test_module_capi.aot", &wasm_size);
     assert(wasm_buf != NULL && wasm_size > 0);
 
     rc = hb_beamr_capi_lib_load_wasm_module(ctx, wasm_buf, wasm_size);

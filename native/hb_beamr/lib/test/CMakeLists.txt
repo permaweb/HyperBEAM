@@ -192,12 +192,12 @@ add_test(NAME CAPIInstantiateCallExportTest COMMAND capi_instantiate_call_test)
 # C-API Import Call Test (WASM based)
 add_executable(capi_import_call_test capi_import_call_test.c utils.c)
 target_link_libraries(capi_import_call_test PRIVATE hb_beamr_capi_lib)
-add_dependencies(capi_import_call_test import_test_wasm_file_target) 
+add_dependencies(capi_import_call_test import_capi_aot_file_target) 
 add_custom_command(TARGET capi_import_call_test POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${IMPORT_TEST_WASM_OUTPUT} 
-        $<TARGET_FILE_DIR:capi_import_call_test>/import_test_module.wasm
-    COMMENT "Copying import_test_module.wasm to capi_import_call_test directory"
+        ${IMPORT_CAPI_AOT_OUTPUT} 
+        $<TARGET_FILE_DIR:capi_import_call_test>/import_test_module_capi.aot
+    COMMENT "Copying import_test_module_capi.aot to capi_import_call_test directory"
     )
 add_test(NAME CAPIImportCallTest COMMAND capi_import_call_test)
 
