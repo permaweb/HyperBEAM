@@ -1,3 +1,47 @@
+%%% @doc A simple abstraction layer for AO key value store operations.
+%%% 
+%%% This interface allows us to swap out the underlying store implementation(s)
+%%% as desired, without changing the API that `hb_cache` employs. Additionally,
+%%% it enables node operators to customize their configuration to maximize
+%%% performance, data availability, and other factors.
+%%% 
+%%% Stores can be represented in a node's configuration as either a single 
+%%% message, or a (`structured@1.0') list of store messages. If a list of stores
+%%% is provided, the node will cycle through each until a viable store is found
+%%% to execute the given function.
+%%% 
+%%% A valid store must implement a _subset_ of the following functions:
+%%% ```
+%%%     start/1:      Initialize the store.
+%%%     stop/1:       Stop any processes (etc.) that manage the store.
+%%%     reset/1:      Restore the store to its original, empty state.
+%%%     scope/0:      A tag describing the 'scope' of a stores search: `in_memory',
+%%%                   `local', `remote', `arweave', etc. Used in order to allow
+%%%                   node operators to prioritize their stores for search.
+%%%     make_group/2: Create a new group of keys in the store with the given ID.
+%%%     make_link/3:  Create a link (implying one key should redirect to another)
+%%%                   from `existing` to `new` (in that order).
+%%%     type/2:       Return whether the value found at the given key is a
+%%%                   `composite' (group) type, or a `simple' direct binary.
+%%%     read/2:       Read the data at the given location, returning a binary
+%%%                   if it is a `simple' value, or a message if it is a complex
+%%%                   term.
+%%%     write/3:      Write the given `key` with the associated `value` (in that
+%%%                   order) to the store.
+%%%     list/2:       For `composite' type keys, return a list of its child keys.
+%%%     path/2:       Optionally transform a list of path parts into the store's
+%%%                   canonical form.
+%%% '''
+%%% Each function takes a `store' message first, containing an arbitrary set
+%%% of its necessary configuration keys, as well as the `store-module' key which
+%%% refers to the Erlang module that implements the store.
+%%% 
+%%% All functions must return `ok` or `{ok, Result}`, as appropriate. Other 
+%%% results will lead to the store manager (this module) iterating to the next
+%%% store message given by the user. If none of the given store messages are 
+%%% able to execute a requested service, the store manager will return 
+%%% `{error, no_viable_store}`.
+
 -module(hb_store).
 -export([behavior_info/1]).
 -export([start/1, stop/1, reset/1]).
@@ -9,13 +53,9 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%%% A simple abstraction layer for AO key value store operations.
-%%% This interface allows us to swap out the underlying store
-%%% implementation(s) as desired.
-%%% 
-%%% It takes a list of modules and their options, and calls the appropriate
-%%% function on the first module that succeeds. If all modules fail, it returns
-%%% {error, no_viable_store}.
+%% @doc The number of write and read operations to perform in the benchmark.
+-define(STORE_BENCH_WRITE_OPS, 100_000).
+-define(STORE_BENCH_READ_OPS, 100_000).
 
 behavior_info(callbacks) ->
     [
@@ -51,12 +91,12 @@ filter(Modules, Filter) ->
 %% @doc Limit the store scope to only a specific (set of) option(s).
 %% Takes either an Opts message or store, and either a single scope or a list
 %% of scopes.
-scope(Scope, Opts) when is_map(Opts) ->
+scope(Opts, Scope) when is_map(Opts) ->
     case hb_opts:get(store, no_viable_store, Opts) of
         no_viable_store -> Opts;
-        Store -> Opts#{ store => scope(Scope, Store) }
+        Store -> Opts#{ store => scope(Store, Scope) }
     end;
-scope(Scope, Store) ->
+scope(Store, Scope) ->
     filter(
         Store,
         fun(StoreScope, _) ->
@@ -81,7 +121,7 @@ get_store_scope(Store) ->
 sort(Stores, PreferenceOrder) when is_list(PreferenceOrder) ->
     sort(
         Stores,
-        maps:from_list(
+        hb_maps:from_list(
             [
                 {Scope, -Index}
             ||
@@ -96,8 +136,8 @@ sort(Stores, PreferenceOrder) when is_list(PreferenceOrder) ->
 sort(Stores, ScoreMap) ->
     lists:sort(
         fun(Store1, Store2) ->
-            maps:get(get_store_scope(Store1), ScoreMap, 0) >
-                maps:get(get_store_scope(Store2), ScoreMap, 0)
+            hb_maps:get(get_store_scope(Store1), ScoreMap, 0) >
+                hb_maps:get(get_store_scope(Store2), ScoreMap, 0)
         end,
         Stores
     ).
@@ -158,7 +198,6 @@ call_function(X, _Function, _Args) when not is_list(X) ->
 call_function([], _Function, _Args) ->
     no_viable_store;
 call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
-    ?event({calling, Mod, Function, Args}),
     try apply(Mod, Function, [Store | Args]) of
         not_found ->
             call_function(Rest, Function, Args);
@@ -212,17 +251,29 @@ test_stores() ->
 generate_test_suite(Suite) ->
     generate_test_suite(Suite, test_stores()).
 generate_test_suite(Suite, Stores) ->
+    hb:init(),
     lists:map(
-        fun(Store = #{ <<"store-module">> := Mod }) ->
+        fun(Store = #{<<"store-module">> := Mod}) ->
             {foreach,
-				fun() -> hb_store:start(Store), hb_store:reset(Store) end,
-				fun(_) -> hb_store:reset(Store) end,
+                fun() ->
+                    hb_store:start(Store)
+                end,
+                fun(_) ->
+                    hb_store:reset(Store),
+                    hb_store:stop(Store)
+                end,
                 [
-                    {atom_to_list(Mod) ++ ": " ++ Desc,
-                        fun() -> 
-                            TestResult = Test(Store),
-                            TestResult
-                        end}
+                    {
+                        atom_to_list(Mod) ++ ": " ++ Desc,
+                        {
+                            timeout,
+                            60,
+                            fun() ->
+                                TestResult = Test(Store),
+                                TestResult
+                            end
+                        }
+                    }
                 ||
                     {Desc, Test} <- Suite
                 ]
@@ -262,3 +313,77 @@ store_suite_test_() ->
         {"resursive path resolution", fun resursive_path_resolution_test/1},
         {"hierarchical path resolution", fun hierarchical_path_resolution_test/1}
     ]).
+
+benchmark_suite_test_() ->
+    hb_store:generate_test_suite([
+        {"benchmark store", fun benchmark_store/1}
+    ]).
+
+%% @doc Benchmark a store. By default, we write 10,000 keys and read 10,000
+%% keys. This can be altered by setting the `STORE_BENCH_WRITE_OPS' and
+%% `STORE_BENCH_READ_OPS' macros.
+benchmark_store(Store) ->
+    benchmark_store(Store, ?STORE_BENCH_WRITE_OPS, ?STORE_BENCH_READ_OPS).
+benchmark_store(Store, WriteOps, ReadOps) ->
+    start(Store),
+    timer:sleep(100),
+    ?event(
+        {benchmarking,
+            {store, Store},
+            {write_ops, WriteOps},
+            {read_ops, ReadOps}
+        }
+    ),
+    % Generate random data to write and the keys to read ahead of time.
+    RandomData = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Keys =
+        lists:map(
+            fun(_) ->
+                << "key-", (integer_to_binary(rand:uniform(ReadOps)))/binary >>
+            end,
+            lists:seq(1, ReadOps)
+        ),
+    {WriteTime, ok} =
+        timer:tc(
+            fun() ->
+                lists:foreach(
+                    fun(Key) -> ok = write(Store, Key, RandomData) end,
+                    Keys
+                )
+            end
+        ),
+    % Calculate write rate.
+    WriteRate = erlang:round(WriteOps / (WriteTime / 1000000)),
+    hb_util:eunit_print(
+        "Wrote ~s records in ~p ms (~s records/s)",
+        [
+            hb_util:human_int(WriteOps),
+            WriteTime/1000,
+            hb_util:human_int(WriteRate)
+        ]
+    ),
+    % Generate keys to read ahead of time.
+    ReadKeys =
+        lists:map(
+            fun(_) ->
+                << "key", (rand:uniform(ReadOps)):256/integer >>
+            end,
+            lists:seq(1, ReadOps)
+        ),
+    % Time random reads.
+    {ReadTime, ok} =
+        timer:tc(
+            fun() ->
+                lists:foreach(fun(Key) -> read(Store, Key) end, ReadKeys)
+            end
+        ),
+    % Calculate read rate.
+    ReadRate = erlang:round(ReadOps / (ReadTime / 1000000)),
+    hb_util:eunit_print(
+        "Read ~s records in ~p ms (~s records/s)",
+        [
+            hb_util:human_int(ReadOps),
+            ReadTime/1000,
+            hb_util:human_int(ReadRate)
+        ]
+    ).
