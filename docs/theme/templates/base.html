@@ -92,8 +92,10 @@
 	  {% set primary = palette.primary | d("indigo", true) %}
 	  {% set accent  = palette.accent  | d("indigo", true) %}
 	  <body dir="{{ direction }}" data-md-color-scheme="{{ scheme | replace(' ', '-') }}" data-md-color-primary="{{ primary | replace(' ', '-') }}" data-md-color-accent="{{ accent | replace(' ', '-') }}">
+        <div id="preloader">Loading<span></span></div>
 	{% else %}
 	  <body dir="{{ direction }}">
+        <div id="preloader">Loading<span></span></div>
 	{% endif %}
 	  {% set features = config.theme.features or [] %}
 	  <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -153,80 +155,85 @@
     {% if page.is_homepage %}
        <!-- Custom homepage content here -->
 	  <section class="hero-container">
-		<!-- Foreground Rocks -->
-		<picture
-			class="rocks foreground-rocks flicker-img"
-			style="--depth: 0.05"
-		>
-			<img
-				src="https://arweave.net/FA9EoFZCYS3hDn5DVFV0c1oaWTP9aj5Qn9AJQzxtKe8"
-				alt="front-rocks"
-			/>
-		</picture>
+                    <!-- Foreground Rocks -->
+                    <picture
+                        class="rocks foreground-rocks flicker-img fade-in picture"
+                        style="--depth: 0.05"
+                    >
+                        <img
+                            src="https://arweave.net/FA9EoFZCYS3hDn5DVFV0c1oaWTP9aj5Qn9AJQzxtKe8"
+                            alt="front-rocks"
+                        />
+                    </picture>
 
-		<picture
-			class="rocks foreground-rocks"
-			style="--depth: 0.15"
-		>
-			<img
-				src="https://arweave.net/SWlQOVP9iI6p0OUqvANT1Gbis0KNcT51tgQqYKPx76Q"
-				alt="front-boulder"
-			/>
-		</picture>
+                    <picture
+                        class="rocks foreground-rocks fade-in picture"
+                        style="--depth: 0.15"
+                    >
+                        <img
+                            src="https://arweave.net/SWlQOVP9iI6p0OUqvANT1Gbis0KNcT51tgQqYKPx76Q"
+                            alt="front-boulder"
+                        />
+                    </picture>
 
-		<!-- Mid Rocks -->
-		<picture
-			class="rocks mid-rocks flicker-img"
-			style="--depth: 0.35"
-		>
-			<img
-				src="https://arweave.net/fd-MzJ9LMicOcC1vVyytKEa5v2gjDr2L_yaICDiKJUA"
-				alt="mid-rocks"
-			/>
-		</picture>
+                    <!-- Mid Rocks -->
+                    <picture
+                        class="rocks mid-rocks fade-in picture"
+                        style="--depth: 0.35"
+                    >
+                        <img
+                            src="https://arweave.net/fd-MzJ9LMicOcC1vVyytKEa5v2gjDr2L_yaICDiKJUA"
+                            alt="mid-rocks"
+                        />
+                    </picture>
 
-		<picture class="rocks mid-rocks" style="--depth: 0.6">
-			<img
-				src="https://arweave.net/P2Xx-NrDzGJfDrQmUT1rWxlSruZqhF9BK3KAqJ_ZnFw"
-				alt="back-rocks"
-			/>
-		</picture>
+                    <picture
+                        class="rocks mid-rocks fade-in picture"
+                        style="--depth: 0.6"
+                    >
+                        <img
+                            src="https://arweave.net/P2Xx-NrDzGJfDrQmUT1rWxlSruZqhF9BK3KAqJ_ZnFw"
+                            alt="back-rocks"
+                        />
+                    </picture>
 
-		<!-- Background Rocks -->
-		<picture
-			class="rocks background-rocks"
-			style="--depth: 0.7"
-		>
-			<img
-				src="https://arweave.net/rNPFyUrzokSxt_0sYIsJ-hZc3-KOHA-kLx1t70sNpos"
-				alt="background-rocks"
-			/>
-		</picture>
+                    <!-- Background Rocks -->
+                    <picture
+                        class="rocks background-rocks fade-in picture"
+                        style="--depth: 0.7"
+                    >
+                        <img
+                            src="https://arweave.net/rNPFyUrzokSxt_0sYIsJ-hZc3-KOHA-kLx1t70sNpos"
+                            alt="background-rocks"
+                        />
+                    </picture>
 
-		<!-- Background Chroma -->
-		<picture
-			class="rocks background-chroma flicker-img"
-			style="--depth: 0.99"
-		>
-			<img
-				src="https://arweave.net/5uRyQM79BegCqgdKA_Imb-P8QuMsj7IhDGkb_NbtSAY"
-				alt="background-chroma-space"
-			/>
-		</picture>
+                    <!-- Background Chroma -->
+                    <picture
+                        class="rocks background-chroma flicker-img fade-in picture"
+                        style="--depth: 0.99"
+                    >
+                        <img
+                            src="https://arweave.net/5uRyQM79BegCqgdKA_Imb-P8QuMsj7IhDGkb_NbtSAY"
+                            alt="background-chroma-space"
+                        />
+                    </picture>
 
-		<div class="dark-bottom" style="--depth: 0.99"></div>
-		<div class="hero-content-wrapper">
+                    <div class="dark-bottom" style="--depth: 0.99"></div>
+                    <div class="hero-content-wrapper">
                         <div class="hero-floating-wrapper">
                             <div class="hero-inner-content-bottom">
                                 <div class="hero-text-container">
-                                    <div class="hero-main-heading">
+                                    <div
+                                        class="hero-main-heading fade-in hero-text"
+                                    >
                                         <h1>Hyperbeam</h1>
                                         <h2>
                                             A Decentralized Operating System.
                                             Powered By AO.
                                         </h2>
                                     </div>
-                                    <div class="hero-detail">
+                                    <div class="hero-detail fade-in hero-text">
                                         <button class="scroll-button">
                                             <img
                                                 src="/assets/images/scroll-for-more.svg"
@@ -236,16 +243,28 @@
                                         </button>
                                     </div>
                                 </div>
-                                <div class="hero-button-cards-container">
+                                <div
+                                    class="hero-button-cards-container fade-in hero-text"
+                                >
                                     <a
                                         href="/introduction/what-is-ao-core.html"
                                     >
                                         <button class="hero-button-card">
-                                            <div class="hero-button-header">   <svg width="24" height="24" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M1 5C1 7.20914 2.79086 9 5 9C7.20914 9 9 7.20914 9 5C9 2.79086 7.20914 1 5 1C2.79086 1 1 2.79086 1 5Z" stroke="white" stroke-dasharray="2 2"/>
-<path d="M2.59961 4.99961C2.59961 6.32509 3.67413 7.39961 4.99961 7.39961C6.32509 7.39961 7.39961 6.32509 7.39961 4.99961C7.39961 3.67413 6.32509 2.59961 4.99961 2.59961C3.67413 2.59961 2.59961 3.67413 2.59961 4.99961Z" stroke="white" stroke-dasharray="2 1"/>
-</svg>
-<h2>Introduction</h2></div>
+                                            <div class="hero-button-header">
+                                                <svg
+                                                    xmlns="http://www.w3.org/2000/svg"
+                                                    width="16"
+                                                    height="16"
+                                                    viewBox="0 0 10 10"
+                                                    fill="none"
+                                                >
+                                                    <path
+                                                        d="M8.74228e-07 -8.74228e-07L10 0L10 10L0 10L8.74228e-07 -8.74228e-07ZM9 1L3 0.999999L9 7L9 1ZM6 4L5.24537e-07 4L6 10L6 4Z"
+                                                        fill="white"
+                                                    />
+                                                </svg>
+                                                <h2>Introduction</h2>
+                                            </div>
                                             <p>
                                                 Start to learn about AO-Core,
                                                 HyperBEAM and the Permaweb
@@ -256,16 +275,36 @@
                                         href="/run/running-a-hyperbeam-node.html"
                                     >
                                         <button class="hero-button-card">
-                                              <div class="hero-button-header">   <svg width="20" height="20" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
-<g clip-path="url(#clip0_414_901)">
-<path d="M1 1H9V9H1V1Z" stroke="white" stroke-linecap="square" stroke-dasharray="3 2"/>
-</g>
-<defs>
-<clipPath id="clip0_414_901">
-<rect width="10" height="10" fill="white"/>
-</clipPath>
-</defs>
-</svg><h2>Run your Node</h2></div>
+                                            <div class="hero-button-header">
+                                                <svg
+                                                    xmlns="http://www.w3.org/2000/svg"
+                                                    width="16"
+                                                    height="16"
+                                                    viewBox="0 0 10 10"
+                                                    fill="none"
+                                                >
+                                                    <g
+                                                        clip-path="url(#clip0_454_53)"
+                                                    >
+                                                        <path
+                                                            d="M8.74228e-07 -8.74228e-07L10 0L10 10L0 10L8.74228e-07 -8.74228e-07ZM5 1L1 0.999999L1 5L5 1ZM9 5L5 9L9 9L9 5ZM3 9C4.10457 9 5 8.10457 5 7C5 5.89543 4.10457 5 3 5C1.89543 5 1 5.89543 1 7C1 8.10457 1.89543 9 3 9Z"
+                                                            fill="white"
+                                                        />
+                                                    </g>
+                                                    <defs>
+                                                        <clipPath
+                                                            id="clip0_454_53"
+                                                        >
+                                                            <rect
+                                                                width="10"
+                                                                height="10"
+                                                                fill="white"
+                                                            />
+                                                        </clipPath>
+                                                    </defs>
+                                                </svg>
+                                                <h2>Run your Node</h2>
+                                            </div>
                                             <p>
                                                 Power onchain compute, enable
                                                 token activity, and earn fees.
@@ -276,18 +315,21 @@
                                         href="/build/get-started-building-on-ao-core.html"
                                     >
                                         <button class="hero-button-card">
-                                             <div class="hero-button-header">   <svg width="20" height="20" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
-<g clip-path="url(#clip0_414_908)">
-<path d="M5 1H1V5H5M5 1V5M5 1H9V5M5 5H9M5 5V9H9V5" stroke="white" stroke-linecap="square" stroke-dasharray="4 2"/>
-<path d="M1 5H5V9H1V5Z" stroke="white" stroke-linecap="square" stroke-dasharray="3 2"/>
-</g>
-<defs>
-<clipPath id="clip0_414_908">
-<rect width="10" height="10" fill="white"/>
-</clipPath>
-</defs>
-</svg>
- <h2>Build On Hyperbeam</h2></div>
+                                            <div class="hero-button-header">
+                                                <svg
+                                                    xmlns="http://www.w3.org/2000/svg"
+                                                    width="16"
+                                                    height="16"
+                                                    viewBox="0 0 10 10"
+                                                    fill="none"
+                                                >
+                                                    <path
+                                                        d="M8.74228e-07 -8.74228e-07L10 0L10 10L0 10L8.74228e-07 -8.74228e-07ZM9 1L5 1L9 9L9 1ZM2.5 4C3.32843 4 4 3.32843 4 2.5C4 1.67157 3.32843 0.999999 2.5 0.999999C1.67157 0.999999 1 1.67157 1 2.5C1 3.32843 1.67157 4 2.5 4ZM4 6L1 6L1 9L4 9L4 6Z"
+                                                        fill="white"
+                                                    />
+                                                </svg>
+                                                <h2>Build On Hyperbeam</h2>
+                                            </div>
                                             <p>
                                                 Real use-case walkthroughs for
                                                 leveraging HyperBEAM in your
@@ -335,13 +377,22 @@
                                         </h2>
                                         <div class="feature-cards">
                                             <div class="card">
-                                                <div class="feature-card-header">
-                                                    <svg width="12" height="12" viewBox="0 0 6 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                    <rect x="1" y="1" width="1" height="4" fill="black"/>
-                                                    <rect x="4" y="4" width="1" height="1" fill="black"/>
-                                                    <rect x="4" y="1" width="1" height="1" fill="black"/>
+                                                <div
+                                                    class="feature-card-header"
+                                                >
+                                                    <svg
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                        width="14"
+                                                        height="14"
+                                                        viewBox="0 0 8 8"
+                                                        fill="none"
+                                                    >
+                                                        <path
+                                                            d="M6.99382e-07 -6.99382e-07L8 0L8 8L0 8L6.99382e-07 -6.99382e-07ZM4 1L3 1L3 5L4 1ZM2 0.999999L1 5L2 5L2 0.999999ZM7 3L6 3L6 7L7 3ZM5 3L4 7L5 7L5 3Z"
+                                                            fill="#444444"
+                                                        />
                                                     </svg>
-                                                <span>Parallel</span>
+                                                    <span>Parallel</span>
                                                 </div>
                                                 <p>
                                                     Programs run as independent
@@ -349,12 +400,23 @@
                                                 </p>
                                             </div>
                                             <div class="card">
-                                                 <div class="feature-card-header">
-                                                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 6 6" fill="none">
-  <path d="M2.6084 4.96191C2.73419 4.9868 2.86515 5 3 5V6C2.79946 6 2.60359 5.97991 2.41406 5.94238L2.6084 4.96191ZM3.58496 5.94238C3.39573 5.97979 3.20021 6 3 6V5C3.13485 5 3.26581 4.9868 3.3916 4.96191L3.58496 5.94238ZM1.33594 4.11035C1.48224 4.32889 1.67111 4.51776 1.88965 4.66406L1.33301 5.49414C1.00575 5.27498 0.723901 4.99338 0.504883 4.66602L1.33594 4.11035ZM5.49414 4.66602C5.27502 4.99341 4.99341 5.27502 4.66602 5.49414L4.11035 4.66406C4.32889 4.51776 4.51776 4.32889 4.66406 4.11035L5.49414 4.66602ZM0 3C0 2.79952 0.0191347 2.60353 0.0566406 2.41406L1.03809 2.6084C1.0132 2.73419 1 2.86515 1 3C1 3.13485 1.0132 3.26581 1.03809 3.3916L0.0566406 3.58496C0.0192556 3.39578 0 3.20015 0 3ZM6 3C6 3.20021 5.97979 3.39573 5.94238 3.58496L4.96191 3.3916C4.9868 3.26581 5 3.13485 5 3C5 2.86515 4.9868 2.73419 4.96191 2.6084L5.94238 2.41406C5.97991 2.60359 6 2.79946 6 3ZM1.88965 1.33594C1.67111 1.48224 1.48224 1.67111 1.33594 1.88965L0.504883 1.33301C0.723937 1.00578 1.00578 0.723937 1.33301 0.504883L1.88965 1.33594ZM4.66602 0.504883C4.99338 0.723901 5.27498 1.00575 5.49414 1.33301L4.66406 1.88965C4.51776 1.67111 4.32889 1.48224 4.11035 1.33594L4.66602 0.504883ZM3 0C3.20015 0 3.39578 0.0192556 3.58496 0.0566406L3.3916 1.03809C3.26581 1.0132 3.13485 1 3 1C2.86515 1 2.73419 1.0132 2.6084 1.03809L2.41406 0.0566406C2.60353 0.0191347 2.79952 0 3 0Z" fill="black"/>
-</svg>
+                                                <div
+                                                    class="feature-card-header"
+                                                >
+                                                    <svg
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                        width="14"
+                                                        height="14"
+                                                        viewBox="0 0 9 8"
+                                                        fill="none"
+                                                    >
+                                                        <path
+                                                            d="M0.333985 -6.99382e-07L8.33399 0L8.33398 8L0.333984 8L0.333985 -6.99382e-07ZM5.66699 3.55566C6.1578 3.55566 6.55647 3.15776 6.55664 2.66699C6.55664 2.17607 6.15791 1.77734 5.66699 1.77734C5.17622 1.77752 4.77832 2.17618 4.77832 2.66699C4.7785 3.15765 5.17633 3.55549 5.66699 3.55566ZM2.55664 2.66699C2.80176 2.66676 3.00074 2.46777 3.00098 2.22266C3.00098 1.97734 2.8019 1.77758 2.55664 1.77734C2.31118 1.77734 2.11133 1.9772 2.11133 2.22266C2.11156 2.46792 2.31133 2.66699 2.55664 2.66699ZM3.00098 6.22266C3.49175 6.22248 3.88965 5.82382 3.88965 5.33301C3.88947 4.84235 3.49164 4.44451 3.00098 4.44434C2.51017 4.44434 2.1115 4.84224 2.11133 5.33301C2.11133 5.82393 2.51006 6.22266 3.00098 6.22266ZM6.11133 6.22266C6.35679 6.22266 6.55664 6.0228 6.55664 5.77734C6.55641 5.53208 6.35664 5.33301 6.11133 5.33301C5.86621 5.33324 5.66723 5.53223 5.66699 5.77734C5.66699 6.02266 5.86607 6.22242 6.11133 6.22266Z"
+                                                            fill="#444444"
+                                                        />
+                                                    </svg>
 
-                                                <span>Async</span>
+                                                    <span>Async</span>
                                                 </div>
                                                 <p>
                                                     Communicate via asynchronous
@@ -362,16 +424,23 @@
                                                 </p>
                                             </div>
                                             <div class="card">
-                                                <div class="feature-card-header">
-                                                    <svg width="12" height="12" viewBox="0 0 6 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect x="0.25" y="5.75" width="0.5" height="0.5" transform="rotate(-90 0.25 5.75)" stroke="black" stroke-width="0.5"/>
-<rect x="0.25" y="0.75" width="0.5" height="0.5" transform="rotate(-90 0.25 0.75)" stroke="black" stroke-width="0.5"/>
-<rect x="5.25" y="5.75" width="0.5" height="0.5" transform="rotate(-90 5.25 5.75)" stroke="black" stroke-width="0.5"/>
-<rect x="2.5" y="3.5" width="1" height="1" transform="rotate(-90 2.5 3.5)" stroke="black"/>
-<rect x="5.25" y="0.75" width="0.5" height="0.5" transform="rotate(-90 5.25 0.75)" stroke="black" stroke-width="0.5"/>
-</svg>
+                                                <div
+                                                    class="feature-card-header"
+                                                >
+                                                    <svg
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                        width="14"
+                                                        height="14"
+                                                        viewBox="0 0 9 8"
+                                                        fill="none"
+                                                    >
+                                                        <path
+                                                            d="M0.666016 -6.99382e-07L8.66602 0L8.66602 8L0.666016 8L0.666016 -6.99382e-07ZM7.66602 1L6.66602 1L6.66602 2L7.66602 2L7.66602 1ZM2.66602 0.999999L1.66602 0.999999L1.66602 2L2.66602 2L2.66602 0.999999ZM5.66602 3L3.66602 3L3.66602 5L5.66602 5L5.66602 3ZM7.66602 7L7.66602 6L6.66602 6L6.66602 7L7.66602 7ZM2.66602 6L1.66602 6L1.66602 7L2.66602 7L2.66602 6Z"
+                                                            fill="#444444"
+                                                        />
+                                                    </svg>
 
-                                                <span>Distributed</span>
+                                                    <span>Distributed</span>
                                                 </div>
                                                 <p>
                                                     Operate across a distributed
@@ -385,19 +454,20 @@
                                             href="/introduction/what-is-ao-core.html"
                                         >
                                             <button class="main-button">
-                                                <svg width="12" height="12" viewBox="0 0 6 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M6 4L4 4L4 6L6 4Z" fill="white"/>
-<path d="M4 2L2 2L2 4L4 2Z" fill="white"/>
-<path d="M2 4L2.06632e-07 4L1.19209e-07 6L2 4Z" fill="white"/>
-<path d="M2 2L2.06632e-07 2L1.19209e-07 4L2 2Z" fill="white"/>
-<path d="M4 4L2 4L2 6L4 4Z" fill="white"/>
-<path d="M6 2L4 2L4 4L6 2Z" fill="white"/>
-<path d="M4 0L2 -8.74228e-08L2 2L4 0Z" fill="white"/>
-<path d="M2 0L2.06632e-07 -8.74228e-08L1.19209e-07 2L2 0Z" fill="white"/>
-<path d="M6 0L4 -8.74228e-08L4 2L6 0Z" fill="white"/>
-</svg>
+                                                <svg
+                                                    xmlns="http://www.w3.org/2000/svg"
+                                                    width="12"
+                                                    height="12"
+                                                    viewBox="0 0 6 6"
+                                                    fill="none"
+                                                >
+                                                    <path
+                                                        d="M5.24537e-07 -5.2454e-07L6 0L6 6L0 6L5.24537e-07 -5.2454e-07ZM5.00098 1L3 1L5.00098 2.99902L5.00098 1Z"
+                                                        fill="white"
+                                                    />
+                                                </svg>
 
-                                                Find Out More
+                                                Core Concepts of the Network
                                             </button>
                                         </a>
                                     </div>
@@ -417,7 +487,7 @@
                         <div class="double-single-grid-content">
                             <div class="grid-container">
                                 <div class="card-row">
-                                    <div class="column-text">
+                                    <div class="column-half-text">
                                         <div class="grid-card-header">
                                             <span class="annotation-number"
                                                 >01</span
@@ -426,15 +496,18 @@
                                                 Create New Devices for AO
                                                 processes.
                                             </h1>
+                                            <h2>
+                                                Bringing further capabilities to
+                                                its network of 7m+ smart
+                                                contracts.
+                                            </h2>
                                         </div>
-                                        <h2>
-                                            Bringing further capabilities to its
-                                            network of 7m+ smart contracts.
-                                        </h2>
                                     </div>
-                                    <div class="fig-container">
+                                    <div
+                                        class="fig-container absolute-half-img"
+                                    >
                                         <img
-                                            src="/assets/images/fig-code-create.png"
+                                            src="https://arweave.net/PCb3LY2rDDzia4NnWdurSHqgSgADqyeYBQAGsMRJnXE"
                                             alt="fig-code-create"
                                             class="fig"
                                         />
@@ -443,7 +516,7 @@
                             </div>
                             <div class="grid-container">
                                 <div class="card-row">
-                                    <div class="column-text">
+                                    <div class="column-half-text">
                                         <div class="grid-card-header">
                                             <span class="annotation-number"
                                                 >02</span
@@ -453,17 +526,19 @@
                                                 infrastructure apps at any
                                                 scale.
                                             </h1>
+                                            <h2>
+                                                Core fundamentals supported by
+                                                Arweave as the permanent data
+                                                ledger and AO as the
+                                                decentralized supercomputer.
+                                            </h2>
                                         </div>
-                                        <h2>
-                                            Core fundamentals supported by
-                                            Arweave as the permanent data ledger
-                                            and AO as the decentralized
-                                            supercomputer.
-                                        </h2>
                                     </div>
-                                    <div class="fig-container">
+                                    <div
+                                        class="fig-container absolute-half-img"
+                                    >
                                         <img
-                                            src="/assets/images/fig-rock-solid.png"
+                                            src="https://arweave.net/uUgIcEaicBokM5HQfQit5JbMZSsJaWPK2WyHbWdYHP0"
                                             alt="rock-solid-fig"
                                             class="fig"
                                         />
@@ -491,29 +566,573 @@
                                             href="/build/get-started-building-on-ao-core.html"
                                         >
                                             <button class="main-button">
-                                                <svg width="12" height="12" viewBox="0 0 6 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M6 4L4 4L4 6L6 4Z" fill="white"/>
-<path d="M4 2L2 2L2 4L4 2Z" fill="white"/>
-<path d="M2 4L2.06632e-07 4L1.19209e-07 6L2 4Z" fill="white"/>
-<path d="M2 2L2.06632e-07 2L1.19209e-07 4L2 2Z" fill="white"/>
-<path d="M4 4L2 4L2 6L4 4Z" fill="white"/>
-<path d="M6 2L4 2L4 4L6 2Z" fill="white"/>
-<path d="M4 0L2 -8.74228e-08L2 2L4 0Z" fill="white"/>
-<path d="M2 0L2.06632e-07 -8.74228e-08L1.19209e-07 2L2 0Z" fill="white"/>
-<path d="M6 0L4 -8.74228e-08L4 2L6 0Z" fill="white"/>
-</svg>
-                                                Start Building
+                                                <svg
+                                                    xmlns="http://www.w3.org/2000/svg"
+                                                    width="12"
+                                                    height="12"
+                                                    viewBox="0 0 6 6"
+                                                    fill="none"
+                                                >
+                                                    <path
+                                                        d="M5.24537e-07 -5.2454e-07L6 0L6 6L0 6L5.24537e-07 -5.2454e-07ZM5.00098 1L3 1L5.00098 2.99902L5.00098 1Z"
+                                                        fill="white"
+                                                    />
+                                                </svg>
+                                                Build Your App
                                             </button>
                                         </a>
                                     </div>
                                 </div>
-                                <div class="fig-container">
-                                <img
-						src="/assets/images/fig-decentralized-apps.png"
-						alt="power-web2-web3-fig"
-						class="power-web2-web3-fig"
-					></img>
-                    </div>
+                                <div class="fig-container absolute-full-img">
+                                    <svg
+                                        width="1598"
+                                        height="936"
+                                        viewBox="0 0 1598 936"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                    >
+                                        <g clip-path="url(#clip0_521_493)">
+                                            <mask
+                                                id="mask0_521_493"
+                                                style="mask-type: luminance"
+                                                maskUnits="userSpaceOnUse"
+                                                x="0"
+                                                y="0"
+                                                width="1598"
+                                                height="936"
+                                            >
+                                                <path
+                                                    d="M1598 0H0V936H1598V0Z"
+                                                    fill="white"
+                                                />
+                                            </mask>
+                                            <g mask="url(#mask0_521_493)">
+                                                <path
+                                                    d="M789 54H788V93H789V54Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M651 62H650V100H651V62Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M524 84H523V122H524V84Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M408 118H407V157H408V118Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M307 164H306V202H307V164Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M223 220H222V258H223V220Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M158 284H157V322H158V284Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M115 355H114V393H115V355Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M97 431H96V469H97V431Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M105 508H104V546H105V508Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M139 581H138V619H139V581Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M195 648H194V686H195V648Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M272 706H271V745H272V706Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M367 756H366V794H367V756Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M477 796H476V834H477V796Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M600 823H599V861H600V823Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M733 837H732V875H733V837Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M872 837H871V875H872V837Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1004 822H1003V860H1004V822Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1126 793H1125V831H1126V793Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1236 753H1235V791H1236V753Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1329 703H1328V741H1329V703Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1405 643H1404V681H1405V643Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1460 576H1459V614H1460V576Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1492 503H1491V541H1492V503Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1498 426H1497V464H1498V426Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1474 350H1473V388H1474V350Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1424 280H1423V318H1424V280Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1351 217H1350V255H1351V217Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1259 162H1258V201H1259V162Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1152 117H1151V155H1152V117Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1036 83H1035V121H1036V83Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M913 62H912V100H913V62Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M789 54H788V93H789V54Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M789 136H788V174H789V136Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M651 146H650V184H651V146Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M526 173H525V211H526V173Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M418 216H417V255H418V216Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M332 272H331V311H332V272Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M272 339H271V377H272V339Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M240 414H239V452H240V414Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M242 493H241V531H242V493Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M277 567H276V605H277V567Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M341 632H340V670H341V632Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M429 687H428V725H429V687Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M539 728H538V766H539V728Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M665 755H664V793H665V755Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M803 764H802V802H803V764Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M940 753H939V792H940V753Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1065 726H1064V764H1065V726Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1173 683H1172V721H1173V683Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1260 627H1259V666H1260V627Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1322 562H1321V600H1322V562Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1355 487H1354V526H1355V487Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1353 409H1352V447H1353V409Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1313 335H1312V373H1313V335Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1242 270H1241V308H1242V270Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1146 215H1145V253H1146V215Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1034 173H1033V211H1034V173Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M912 146H911V184H912V146Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M789 136H788V174H789V136Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M789 218H788V256H789V218Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M656 230H655V269H656V230Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M542 264H541V303H542V264Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M453 316H452V354H453V316Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M396 382H395V420H396V382Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M377 457H376V496H377V457Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M400 531H399V569H400V531Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M462 595H461V633H462V595Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M554 645H553V683H554V645Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M670 678H669V716H670V678Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M803 689H802V727H803V689Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M935 676H934V714H935V676Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1049 642H1048V680H1049V642Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1139 591H1138V629H1139V591Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1198 526H1197V564H1198V526Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1218 452H1217V490H1218V452Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1191 378H1190V416H1191V378Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1120 314H1119V352H1120V314Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1020 263H1019V301H1020V263Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M905 230H904V268H905V230Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M789 218H788V256H789V218Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M789 296H788V334H789V296Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M657 315H656V353H657V315Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M562 365H561V403H562V365Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M519 437H518V475H519V437Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M538 513H537V551H538V513Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M616 572H615V611H616V572Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M734 606H733V644H734V606Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M871 604H870V643H871V604Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M987 569H986V607H987V569Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1061 508H1060V546H1061V508Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1075 432H1074V470H1075V432Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M1011 362H1010V401H1011V362Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M902 314H901V352H902V314Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M789 296H788V334H789V296Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M791 374H790V390H791V374Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M743 378H742V395H743V378Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M703 391H702V407H703V391Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M671 409H670V426H671V409Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M651 433H650V449H651V433Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M645 460H644V476H645V460Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M653 486H652V503H653V486Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M676 509H675V525H676V509Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M709 527H708V543H709V527Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M750 538H749V555H750V538Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M798 542H797V559H798V542Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M845 538H844V554H845V538Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M886 525H885V542H886V525Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M918 507H917V523H918V507Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M938 484H937V500H938V484Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M945 457H944V473H945V457Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M935 431H934V447H935V431Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M908 408H907V424H908V408Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M871 390H870V406H871V390Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M830 378H829V395H830V378Z"
+                                                    fill="#898989"
+                                                />
+                                                <path
+                                                    d="M791 374H790V390H791V374Z"
+                                                    fill="#898989"
+                                                />
+                                            </g>
+                                            <path
+                                                d="M779.857 429.157C789.219 425.417 797.56 429.667 797.56 429.667L795.012 454.049C794.966 454.03 785.152 450.038 778.569 453.674C772.992 456.754 762.275 454.323 762.238 454.315L764.332 428.344C764.395 428.39 770.544 432.878 779.857 429.157ZM780.288 433.917C780.218 433.917 780.148 433.921 780.073 433.921V439.396C778.206 439.435 776.335 439.47 774.468 439.447V433.972C773.774 433.963 773.075 433.945 772.381 433.917V446.953C773.075 446.986 773.774 447.004 774.468 447.013V441.271C776.335 441.298 778.206 441.259 780.073 441.22V446.958C780.148 446.958 780.218 446.958 780.288 446.953C780.912 446.944 781.536 446.929 782.164 446.915V433.879C781.536 433.888 780.912 433.903 780.288 433.917ZM783.562 440.036V446.349C783.883 446.349 784.2 446.345 784.521 446.345C784.561 446.137 784.598 445.934 784.639 445.731C784.734 445.868 784.851 445.996 784.995 446.106C785.14 446.212 785.307 446.296 785.497 446.353C785.691 446.419 785.904 446.455 786.144 446.455C786.569 446.459 786.945 446.372 787.266 446.178C787.596 445.988 787.853 445.723 788.038 445.379C788.223 445.035 788.314 444.642 788.314 444.205C788.314 443.751 788.219 443.349 788.029 443.001C787.844 442.643 787.586 442.357 787.256 442.154C786.935 441.938 786.56 441.832 786.135 441.823C785.769 441.819 785.466 441.893 785.222 442.039C784.978 442.176 784.783 442.357 784.639 442.573V440.027C784.277 440.027 783.92 440.032 783.562 440.036ZM785.918 442.745C786.171 442.745 786.397 442.806 786.592 442.926C786.791 443.049 786.944 443.217 787.048 443.429C787.161 443.64 787.22 443.883 787.22 444.161C787.22 444.439 787.161 444.686 787.048 444.893C786.944 445.096 786.791 445.255 786.592 445.374C786.397 445.489 786.171 445.542 785.918 445.542C785.665 445.537 785.434 445.48 785.239 445.361C785.045 445.238 784.896 445.074 784.783 444.871C784.675 444.659 784.62 444.412 784.62 444.135C784.62 443.857 784.675 443.614 784.783 443.407C784.896 443.195 785.045 443.032 785.239 442.913C785.434 442.798 785.665 442.74 785.918 442.745Z"
+                                                fill="#323232"
+                                            />
+                                            <path
+                                                d="M797.964 428.105C798.293 428.14 798.318 428.142 798.32 428.143C798.32 428.143 798.32 428.143 798.32 428.144C798.32 428.145 798.319 428.146 798.319 428.148C798.319 428.152 798.318 428.157 798.318 428.164C798.316 428.179 798.314 428.201 798.311 428.23C798.305 428.287 798.296 428.373 798.284 428.485C798.261 428.709 798.227 429.04 798.182 429.466C798.094 430.317 797.966 431.547 797.809 433.065C797.494 436.101 797.061 440.285 796.589 444.88C795.645 454.068 794.543 464.895 793.912 471.452L793.199 471.384C793.83 464.824 794.932 453.995 795.876 444.806C796.348 440.212 796.781 436.027 797.096 432.992C797.253 431.474 797.381 430.243 797.47 429.392C797.514 428.966 797.548 428.635 797.572 428.411C797.583 428.299 797.593 428.213 797.599 428.155C797.602 428.127 797.604 428.105 797.605 428.09C797.606 428.083 797.607 428.077 797.607 428.074C797.607 428.072 797.607 428.071 797.607 428.07C797.608 428.069 797.607 428.069 797.608 428.069C797.609 428.069 797.629 428.071 797.964 428.105Z"
+                                                fill="#323232"
+                                            />
+                                            <ellipse
+                                                cx="798.157"
+                                                cy="426.551"
+                                                rx="0.971614"
+                                                ry="0.971413"
+                                                fill="#323232"
+                                            />
+                                            <path
+                                                d="M793.776 455.817L792.521 455.817L785.716 462.979L779.79 471.776L784.803 471.776L791.789 468.732L793.776 460.138L793.776 455.817Z"
+                                                fill="#323232"
+                                            />
+                                            <path
+                                                d="M792.521 455.817L793.776 455.817L793.776 460.138L791.789 468.732L784.803 471.776M792.521 455.817L784.803 471.776M792.521 455.817L785.716 462.979L779.79 471.776L784.803 471.776"
+                                                stroke="white"
+                                                stroke-width="0.15"
+                                                stroke-linejoin="round"
+                                            />
+                                            <path
+                                                d="M797.878 455.47L800.704 460.841L803.43 471.777L801.281 471.777L797.429 470.956L797.071 470.419L795.328 460.304L796.596 455.47L797.878 455.47Z"
+                                                fill="#323232"
+                                            />
+                                            <path
+                                                d="M796.596 455.47L797.878 455.47L800.704 460.841L803.43 471.777L801.281 471.777M796.596 455.47L795.328 460.304L797.071 470.419L797.429 470.956L801.281 471.777M796.596 455.47L801.281 471.777"
+                                                stroke="white"
+                                                stroke-width="0.15"
+                                                stroke-linejoin="round"
+                                            />
+                                            <path
+                                                d="M795.789 466.847L796.879 471.849L790.768 471.849L787.67 471.849L790.715 464.519L793.759 461.404L795.371 461.404L795.789 466.847Z"
+                                                fill="#323232"
+                                            />
+                                            <path
+                                                d="M793.759 461.404L795.371 461.404L795.789 466.847L796.879 471.849L790.768 471.849M793.759 461.404L790.715 464.519L787.67 471.849L790.768 471.849M793.759 461.404L790.768 471.849"
+                                                stroke="white"
+                                                stroke-width="0.15"
+                                                stroke-linejoin="round"
+                                            />
+                                        </g>
+                                        <defs>
+                                            <clipPath id="clip0_521_493">
+                                                <rect
+                                                    width="1598"
+                                                    height="936"
+                                                    fill="white"
+                                                />
+                                            </clipPath>
+                                        </defs>
+                                    </svg>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -522,55 +1141,417 @@
                     class="section-container section-container-background-primary"
                 >
                     <div class="section-inner-content section-monetize">
-                        <div class="top-annotation">
-                            <div class="divider"></div>
-                            <div class="section-header">
-                                <p>How Do I Get Involved?</p>
-                                <div>
-                                    <h1>Monetize Your Harware. (this section under construction, layout and images.)</h1>
+                        <div class="divider"></div>
+                        <div class="monetize-content">
+                            <p>How Do I Get Involved?</p>
+                            <div class="monetize-row">
+                                <div class="monetize-fig">
+                                    <svg
+                                        width="624"
+                                        height="857"
+                                        viewBox="0 0 624 857"
+                                        fill="none"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                    >
+                                        <path
+                                            d="M1 461.527C1 449.971 10.3677 440.604 21.9233 440.604H602.068C613.624 440.604 622.992 449.971 622.992 461.527C622.992 461.527 622.992 539.989 622.992 618.451C622.992 696.914 622.992 775.376 622.992 775.376C622.992 786.931 613.624 796.299 602.068 796.299H21.9233C10.3677 796.299 1 786.931 1 775.376C1 775.376 1 696.914 1 618.451"
+                                            stroke="#515151"
+                                        />
+                                        <path
+                                            d="M602.071 199.035H21.9258V440.604H602.071V199.035Z"
+                                            fill="url(#paint0_linear_544_704)"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M21.9232 199.035C10.3676 199.035 1 208.403 1 219.958V461.526C1 449.971 10.3676 440.603 21.9232 440.603V199.035Z"
+                                            fill="url(#paint1_linear_544_704)"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M622.99 219.958C622.99 208.403 613.622 199.035 602.066 199.035V440.603C613.622 440.603 622.99 449.971 622.99 461.526V219.958Z"
+                                            fill="url(#paint2_linear_544_704)"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M1 376.885C1 298.423 1 219.961 1 219.961L1 461.53C1 461.53 1 539.992 1 618.454L1 376.885Z"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M622.992 219.961C622.992 219.961 622.992 298.423 622.992 376.885V618.454C622.992 539.992 622.992 461.53 622.992 461.53V219.961Z"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M367.722 346.445H256.268M256.268 421.947H367.722"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M256.26 346.445C246.332 346.445 238.283 355.812 238.283 367.366L238.283 608.904C238.283 597.349 246.332 587.983 256.26 587.983V421.947"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M389.297 608.904C389.297 597.349 379.638 587.983 367.725 587.983V421.947C381.085 419.307 385.246 414.805 389.297 403.97V608.904Z"
+                                            fill="url(#paint3_linear_544_704)"
+                                        />
+                                        <path
+                                            d="M367.725 346.445C379.638 346.445 389.297 355.812 389.297 367.366V403.97M389.297 403.97V608.904C389.297 597.349 379.638 587.983 367.725 587.983V421.947C381.085 419.307 385.246 414.805 389.297 403.97Z"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M256.26 421.947C246.332 421.947 238.283 411.929 238.283 400.375V641.913C238.283 653.467 246.332 662.833 256.26 662.833V421.947Z"
+                                            fill="url(#paint4_linear_544_704)"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M389.297 400.375C389.297 411.929 379.638 421.947 367.725 421.947V662.833C379.638 662.833 389.297 653.467 389.297 641.913V400.375Z"
+                                            fill="url(#paint5_linear_544_704)"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M367.2 422.957H257.262V664.167H367.584L367.2 422.957Z"
+                                            fill="url(#paint6_linear_544_704)"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M1 533.812L1 775.381C1 775.381 1 696.919 1 618.457"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M622.992 375.203C622.992 453.665 622.992 532.128 622.992 532.128V773.696C622.992 773.696 622.992 695.234 622.992 616.772V375.203Z"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M1 533.812C1 545.368 10.3676 554.736 21.9232 554.736V796.304C10.3676 796.304 1 786.936 1 775.38V533.812Z"
+                                            fill="url(#paint7_linear_544_704)"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M602.066 554.736C613.622 554.736 622.99 545.368 622.99 533.812V775.38C622.99 786.936 613.622 796.304 602.066 796.304V554.736Z"
+                                            fill="url(#paint8_linear_544_704)"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <path
+                                            d="M20.9082 554.812H601.053V796.381H20.9082V554.812Z"
+                                            fill="url(#paint9_linear_544_704)"
+                                            stroke="#515151"
+                                            stroke-linejoin="round"
+                                        />
+                                        <g opacity="0.75">
+                                            <path
+                                                d="M57.6553 733.203C68.5873 728.836 78.3334 733.762 78.4092 733.801L75.4229 762.381C75.4229 762.381 63.8822 757.669 56.1465 761.94C49.61 765.55 37.0515 762.705 37 762.693L39.4541 732.25C39.4866 732.274 46.7054 737.578 57.6553 733.203ZM58.1582 738.78C58.0759 738.78 57.9937 738.786 57.9062 738.786V745.205C55.7172 745.25 53.5242 745.29 51.335 745.263V738.847C50.5213 738.836 49.7023 738.813 48.8887 738.78V754.062C49.7023 754.1 50.5213 754.122 51.335 754.133V747.403C53.5242 747.435 55.7172 747.388 57.9062 747.343V754.066C57.9936 754.066 58.0759 754.067 58.1582 754.062C58.8895 754.051 59.621 754.033 60.3574 754.017V738.736C59.621 738.747 58.8895 738.764 58.1582 738.78ZM61.9883 745.953V753.354C62.3645 753.354 62.7361 753.348 63.1123 753.348C63.16 753.105 63.2023 752.867 63.25 752.629C63.3613 752.789 63.4984 752.94 63.668 753.069C63.8375 753.193 64.0343 753.291 64.2568 753.358C64.4846 753.436 64.7339 753.478 65.0146 753.478C65.5126 753.483 65.952 753.379 66.3281 753.151C66.7149 752.929 67.0171 752.619 67.2344 752.216C67.4516 751.812 67.5576 751.352 67.5576 750.84C67.5576 750.308 67.447 749.837 67.2246 749.429C67.0074 749.01 66.7051 748.673 66.3184 748.436C65.9421 748.182 65.502 748.058 65.0039 748.048C64.5749 748.043 64.2197 748.13 63.9336 748.301C63.6475 748.461 63.4196 748.673 63.25 748.927V745.943C62.8261 745.943 62.4069 745.948 61.9883 745.953ZM64.749 749.129C65.0458 749.129 65.3112 749.201 65.5391 749.341C65.7721 749.486 65.9524 749.682 66.0742 749.93C66.2067 750.178 66.2753 750.462 66.2754 750.788C66.2754 751.114 66.2066 751.403 66.0742 751.646C65.9523 751.884 65.7722 752.071 65.5391 752.211C65.3112 752.345 65.0457 752.407 64.749 752.407C64.4524 752.402 64.1819 752.335 63.9541 752.195C63.7263 752.051 63.5514 751.859 63.4189 751.621C63.2918 751.373 63.2286 751.083 63.2285 750.758C63.2285 750.432 63.2918 750.147 63.4189 749.904C63.5514 749.656 63.7264 749.465 63.9541 749.325C64.1819 749.191 64.4524 749.124 64.749 749.129Z"
+                                                fill="white"
+                                            />
+                                            <path
+                                                d="M78.8767 731.964C79.2624 732.004 79.2916 732.007 79.2938 732.008C79.2938 732.008 79.2938 732.008 79.2938 732.009C79.2937 732.01 79.2934 732.012 79.2932 732.014C79.2927 732.018 79.2921 732.025 79.2912 732.033C79.2894 732.05 79.2868 732.076 79.2833 732.109C79.2763 732.177 79.266 732.277 79.2523 732.408C79.225 732.671 79.1847 733.059 79.1328 733.558C79.029 734.556 78.8792 735.999 78.6948 737.778C78.3259 741.336 77.8184 746.241 77.2649 751.626C76.158 762.396 74.8663 775.087 74.1273 782.773L73.2918 782.692C74.0311 775.004 75.3227 762.31 76.4297 751.54C76.9832 746.155 77.4906 741.25 77.8595 737.691C78.044 735.912 78.1938 734.469 78.2976 733.471C78.3494 732.973 78.3897 732.585 78.4171 732.322C78.4308 732.19 78.4415 732.09 78.4485 732.022C78.452 731.989 78.4546 731.963 78.4564 731.946C78.4573 731.938 78.458 731.931 78.4584 731.927C78.4586 731.925 78.4589 731.923 78.459 731.922C78.459 731.922 78.459 731.921 78.459 731.921C78.4605 731.921 78.4848 731.923 78.8767 731.964Z"
+                                                fill="white"
+                                            />
+                                            <ellipse
+                                                cx="79.1036"
+                                                cy="730.139"
+                                                rx="1.13877"
+                                                ry="1.13864"
+                                                fill="white"
+                                            />
+                                        </g>
+                                        <path
+                                            d="M311.993 323.936C332.328 323.936 348.812 340.42 348.812 360.755C348.812 381.09 332.328 397.574 311.993 397.574C291.658 397.574 275.174 381.09 275.174 360.755C275.174 340.42 291.658 323.936 311.993 323.936ZM311.993 162.218C332.328 162.218 348.812 178.702 348.812 199.037C348.812 219.372 332.328 235.856 311.993 235.856C291.658 235.856 275.174 219.372 275.174 199.037C275.174 178.702 291.658 162.218 311.993 162.218ZM311.993 0.5C332.328 0.5 348.812 16.9846 348.812 37.3193C348.812 57.6542 332.328 74.1387 311.993 74.1387C291.658 74.1386 275.174 57.6541 275.174 37.3193C275.174 16.9846 291.658 0.50009 311.993 0.5Z"
+                                            fill="url(#paint10_linear_544_704)"
+                                            stroke="#515151"
+                                        />
+                                        <defs>
+                                            <linearGradient
+                                                id="paint0_linear_544_704"
+                                                x1="602.071"
+                                                y1="319.819"
+                                                x2="21.9258"
+                                                y2="319.819"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#CBCBCB" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="#9E9E9E"
+                                                />
+                                            </linearGradient>
+                                            <linearGradient
+                                                id="paint1_linear_544_704"
+                                                x1="21.9232"
+                                                y1="330.281"
+                                                x2="1"
+                                                y2="330.281"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#CBCBCB" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="#9E9E9E"
+                                                />
+                                            </linearGradient>
+                                            <linearGradient
+                                                id="paint2_linear_544_704"
+                                                x1="622.99"
+                                                y1="330.281"
+                                                x2="602.066"
+                                                y2="330.281"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#CBCBCB" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="#9E9E9E"
+                                                />
+                                            </linearGradient>
+                                            <linearGradient
+                                                id="paint3_linear_544_704"
+                                                x1="389.297"
+                                                y1="477.674"
+                                                x2="367.725"
+                                                y2="477.674"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#F0F0F0" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="#C4C4C4"
+                                                />
+                                            </linearGradient>
+                                            <linearGradient
+                                                id="paint4_linear_544_704"
+                                                x1="256.26"
+                                                y1="531.604"
+                                                x2="238.283"
+                                                y2="531.604"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#F0F0F0" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="#C4C4C4"
+                                                />
+                                            </linearGradient>
+                                            <linearGradient
+                                                id="paint5_linear_544_704"
+                                                x1="389.297"
+                                                y1="531.604"
+                                                x2="367.725"
+                                                y2="531.604"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#F0F0F0" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="#C4C4C4"
+                                                />
+                                            </linearGradient>
+                                            <linearGradient
+                                                id="paint6_linear_544_704"
+                                                x1="367.584"
+                                                y1="543.383"
+                                                x2="257.262"
+                                                y2="543.383"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#F0F0F0" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="#C4C4C4"
+                                                />
+                                            </linearGradient>
+                                            <linearGradient
+                                                id="paint7_linear_544_704"
+                                                x1="21.9232"
+                                                y1="665.058"
+                                                x2="1"
+                                                y2="665.058"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#F0F0F0" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="#C4C4C4"
+                                                />
+                                            </linearGradient>
+                                            <linearGradient
+                                                id="paint8_linear_544_704"
+                                                x1="622.99"
+                                                y1="665.058"
+                                                x2="602.066"
+                                                y2="665.058"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#F0F0F0" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="#C4C4C4"
+                                                />
+                                            </linearGradient>
+                                            <linearGradient
+                                                id="paint9_linear_544_704"
+                                                x1="601.053"
+                                                y1="675.597"
+                                                x2="20.9082"
+                                                y2="675.597"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#F0F0F0" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="#C4C4C4"
+                                                />
+                                            </linearGradient>
+                                            <linearGradient
+                                                id="paint10_linear_544_704"
+                                                x1="311.993"
+                                                y1="0"
+                                                x2="311.993"
+                                                y2="398.075"
+                                                gradientUnits="userSpaceOnUse"
+                                            >
+                                                <stop stop-color="#DDDDDD" />
+                                                <stop
+                                                    offset="1"
+                                                    stop-color="white"
+                                                />
+                                            </linearGradient>
+                                        </defs>
+                                    </svg>
+                                </div>
+                                <div class="monetize-column">
+                                    <h1>Monetize Your Harware.</h1>
                                     <h2>
                                         Join AO-Core's peer-to-peer network and
                                         build towards a decentralized future.
                                     </h2>
+                                    <div class="bullet">
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="20"
+                                            height="24"
+                                            viewBox="0 0 8 12"
+                                            fill="none"
+                                        >
+                                            <path
+                                                d="M3.92383 1.28402C5.99723 0.455781 7.84566 1.38837 7.86328 1.3973L7.2959 6.82308C7.26423 6.81023 5.09451 5.93407 3.63672 6.7391C2.39325 7.42564 0.00195312 6.88265 0.00195312 6.88265L0.467773 1.10238C0.467773 1.10238 1.84039 2.11638 3.92383 1.28402Z"
+                                                fill="black"
+                                            />
+                                            <path
+                                                d="M7.90401 1.00057C7.99713 1.00898 8.00474 1.00972 8.00474 1.00972L8.00415 1.01453C8.00415 1.01453 8.00318 1.02262 8.0024 1.02902C8.00084 1.04181 7.99857 1.06083 7.99553 1.08576C7.98945 1.13565 7.98051 1.20923 7.96899 1.30387C7.94597 1.49316 7.84412 2.15437 7.8032 2.49187C7.72134 3.16692 7.60876 4.0974 7.48605 5.119C7.24062 7.16229 6.95449 9.56996 6.79164 11.0281L6.03516 10.9946C6.19807 9.53581 6.48419 7.12767 6.72961 5.08445C6.85233 4.06281 6.9649 3.13232 7.04676 2.45725C7.08769 2.11971 7.18953 1.45847 7.21256 1.26916C7.22407 1.17452 7.23302 1.10095 7.2391 1.05105C7.24214 1.0261 7.24451 1.00703 7.24607 0.994239C7.24684 0.987875 7.24782 0.979822 7.24782 0.979822L7.24826 0.976101C7.24826 0.976101 7.80938 0.992033 7.90401 1.00057Z"
+                                                fill="black"
+                                            />
+                                        </svg>
+                                        <p>
+                                            Offer compute to AO processes and
+                                            their users, earning fees in return.
+                                        </p>
+                                    </div>
+                                    <div class="bullet">
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="20"
+                                            height="24"
+                                            viewBox="0 0 8 12"
+                                            fill="none"
+                                        >
+                                            <path
+                                                d="M3.92383 1.28402C5.99723 0.455781 7.84566 1.38837 7.86328 1.3973L7.2959 6.82308C7.26423 6.81023 5.09451 5.93407 3.63672 6.7391C2.39325 7.42564 0.00195312 6.88265 0.00195312 6.88265L0.467773 1.10238C0.467773 1.10238 1.84039 2.11638 3.92383 1.28402Z"
+                                                fill="black"
+                                            />
+                                            <path
+                                                d="M7.90401 1.00057C7.99713 1.00898 8.00474 1.00972 8.00474 1.00972L8.00415 1.01453C8.00415 1.01453 8.00318 1.02262 8.0024 1.02902C8.00084 1.04181 7.99857 1.06083 7.99553 1.08576C7.98945 1.13565 7.98051 1.20923 7.96899 1.30387C7.94597 1.49316 7.84412 2.15437 7.8032 2.49187C7.72134 3.16692 7.60876 4.0974 7.48605 5.119C7.24062 7.16229 6.95449 9.56996 6.79164 11.0281L6.03516 10.9946C6.19807 9.53581 6.48419 7.12767 6.72961 5.08445C6.85233 4.06281 6.9649 3.13232 7.04676 2.45725C7.08769 2.11971 7.18953 1.45847 7.21256 1.26916C7.22407 1.17452 7.23302 1.10095 7.2391 1.05105C7.24214 1.0261 7.24451 1.00703 7.24607 0.994239C7.24684 0.987875 7.24782 0.979822 7.24782 0.979822L7.24826 0.976101C7.24826 0.976101 7.80938 0.992033 7.90401 1.00057Z"
+                                                fill="black"
+                                            />
+                                        </svg>
+                                        <p>
+                                            Provide access to all of the data on
+                                            Arweave's permaweb by offering
+                                            gateway services with AR.IO.
+                                        </p>
+                                    </div>
+                                    <div class="bullet">
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="20"
+                                            height="24"
+                                            viewBox="0 0 8 12"
+                                            fill="none"
+                                        >
+                                            <path
+                                                d="M3.92383 1.28402C5.99723 0.455781 7.84566 1.38837 7.86328 1.3973L7.2959 6.82308C7.26423 6.81023 5.09451 5.93407 3.63672 6.7391C2.39325 7.42564 0.00195312 6.88265 0.00195312 6.88265L0.467773 1.10238C0.467773 1.10238 1.84039 2.11638 3.92383 1.28402Z"
+                                                fill="black"
+                                            />
+                                            <path
+                                                d="M7.90401 1.00057C7.99713 1.00898 8.00474 1.00972 8.00474 1.00972L8.00415 1.01453C8.00415 1.01453 8.00318 1.02262 8.0024 1.02902C8.00084 1.04181 7.99857 1.06083 7.99553 1.08576C7.98945 1.13565 7.98051 1.20923 7.96899 1.30387C7.94597 1.49316 7.84412 2.15437 7.8032 2.49187C7.72134 3.16692 7.60876 4.0974 7.48605 5.119C7.24062 7.16229 6.95449 9.56996 6.79164 11.0281L6.03516 10.9946C6.19807 9.53581 6.48419 7.12767 6.72961 5.08445C6.85233 4.06281 6.9649 3.13232 7.04676 2.45725C7.08769 2.11971 7.18953 1.45847 7.21256 1.26916C7.22407 1.17452 7.23302 1.10095 7.2391 1.05105C7.24214 1.0261 7.24451 1.00703 7.24607 0.994239C7.24684 0.987875 7.24782 0.979822 7.24782 0.979822L7.24826 0.976101C7.24826 0.976101 7.80938 0.992033 7.90401 1.00057Z"
+                                                fill="black"
+                                            />
+                                        </svg>
+                                        <p>
+                                            Execute trust-minimized serverless
+                                            WASM functions for builders via
+                                            native TEE integrations.
+                                        </p>
+                                    </div>
+
+                                    <div class="bullet">
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="20"
+                                            height="24"
+                                            viewBox="0 0 8 12"
+                                            fill="none"
+                                        >
+                                            <path
+                                                d="M3.92383 1.28402C5.99723 0.455781 7.84566 1.38837 7.86328 1.3973L7.2959 6.82308C7.26423 6.81023 5.09451 5.93407 3.63672 6.7391C2.39325 7.42564 0.00195312 6.88265 0.00195312 6.88265L0.467773 1.10238C0.467773 1.10238 1.84039 2.11638 3.92383 1.28402Z"
+                                                fill="black"
+                                            />
+                                            <path
+                                                d="M7.90401 1.00057C7.99713 1.00898 8.00474 1.00972 8.00474 1.00972L8.00415 1.01453C8.00415 1.01453 8.00318 1.02262 8.0024 1.02902C8.00084 1.04181 7.99857 1.06083 7.99553 1.08576C7.98945 1.13565 7.98051 1.20923 7.96899 1.30387C7.94597 1.49316 7.84412 2.15437 7.8032 2.49187C7.72134 3.16692 7.60876 4.0974 7.48605 5.119C7.24062 7.16229 6.95449 9.56996 6.79164 11.0281L6.03516 10.9946C6.19807 9.53581 6.48419 7.12767 6.72961 5.08445C6.85233 4.06281 6.9649 3.13232 7.04676 2.45725C7.08769 2.11971 7.18953 1.45847 7.21256 1.26916C7.22407 1.17452 7.23302 1.10095 7.2391 1.05105C7.24214 1.0261 7.24451 1.00703 7.24607 0.994239C7.24684 0.987875 7.24782 0.979822 7.24782 0.979822L7.24826 0.976101C7.24826 0.976101 7.80938 0.992033 7.90401 1.00057Z"
+                                                fill="black"
+                                            />
+                                        </svg>
+                                        <p>
+                                            Coming Soon: Offer your GPUs for
+                                            compute on APUS.Network.
+                                        </p>
+                                    </div>
+
+                                    <a
+                                        href="/run/running-a-hyperbeam-node.html"
+                                    >
+                                        <button
+                                            class="main-button monetize-button"
+                                        >
+                                            <svg
+                                                xmlns="http://www.w3.org/2000/svg"
+                                                width="12"
+                                                height="12"
+                                                viewBox="0 0 6 6"
+                                                fill="none"
+                                            >
+                                                <path
+                                                    d="M5.24537e-07 -5.2454e-07L6 0L6 6L0 6L5.24537e-07 -5.2454e-07ZM5.00098 1L3 1L5.00098 2.99902L5.00098 1Z"
+                                                    fill="white"
+                                                />
+                                            </svg>
+                                            Run Your Node
+                                        </button>
+                                    </a>
                                 </div>
                             </div>
                         </div>
-
-                        <div class="card-row">
-                            <div class="transparent-card">
-                                <p>
-                                    Bringing further capabilities to its network
-                                    of 7m+ smart contracts.
-                                </p>
-                            </div>
-                            <div class="transparent-card">
-                                <p>
-                                    Core fundamentals supported by Arweave as
-                                    the permanent data ledger and AO as the
-                                    decentralized supercomputer.
-                                </p>
-                            </div>
-                            <div class="transparent-card">
-                                <p>
-                                    Permissionless in combination with reduced
-                                    costs.
-                                </p>
-                            </div>
-                            <div class="transparent-card">
-                                <p>
-                                    Permissionless in combination with reduced
-                                    costs.
-                                </p>
-                            </div>
-                        </div>
-                        <!-- <video
-				src="/assets/images/monetize-fig.mp4"
-				alt="monetize-fig"
-				class="monetize-fig"
-				autoplay
-				loop
-				muted
-			></video> -->
                     </div>
                 </section>
     {% else %}

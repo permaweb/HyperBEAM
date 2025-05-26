@@ -37,3 +37,31 @@ document.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("resize", updateHeaderFade);
   requestAnimationFrame(updateHeaderFade); // run on load
 });
+
+// Fade in slowly all landing page elements
+
+window.addEventListener("load", () => {
+  const isHomepage =
+    window.location.pathname === "/" ||
+    window.location.pathname === "/index.html";
+
+  if (isHomepage) {
+    // Only run preloader fade out on the homepage
+    const preloader = document.getElementById("preloader");
+    if (preloader) {
+      preloader.style.transition = "opacity 0.5s ease-out";
+      preloader.style.opacity = "0";
+      setTimeout(() => (preloader.style.display = "none"), 500);
+    }
+
+    // Fade in elements on the homepage
+    document.querySelectorAll(".fade-in").forEach((el, index) => {
+      const delay = el.classList.contains("nav")
+        ? 2000
+        : el.classList.contains("hero-text")
+        ? 1500
+        : 500 + index * 100;
+      setTimeout(() => el.classList.add("visible"), delay);
+    });
+  }
+});

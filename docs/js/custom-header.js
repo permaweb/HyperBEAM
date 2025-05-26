@@ -4,6 +4,7 @@
   function updateHeaderAndMainClass() {
     const header = document.querySelector(".md-header");
     const main = document.querySelector("main");
+    const body = document.querySelector("body");
     const tabs = document.querySelector(".md-tabs");
 
     const segments = window.location.pathname.split("/").filter(Boolean);
@@ -16,6 +17,7 @@
       header.classList.add("custom-homepage-header");
       main.classList.add("custom-homepage-main");
       main.classList.remove("md-main");
+      body.style.background = "#000";
       if (tabs) tabs.style.display = "none";
     } else {
       header.classList.remove("custom-homepage-header");
@@ -50,7 +52,10 @@ document.addEventListener("DOMContentLoaded", function () {
     if (isHomepage) {
       mainElement.classList.add("custom-homepage-main");
       mainElement.classList.remove("md-main");
+      if (tabs) tabs.style.display = "none";
     } else {
+      if (tabs) tabs.style.display = "";
+
       mainElement.classList.add("md-main");
       mainElement.classList.remove("custom-homepage-main");
     }
