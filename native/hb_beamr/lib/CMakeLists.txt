@@ -1,8 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(hb_beamr_lib CXX C)
-
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+project(hb_beamr_lib C)
 
 # Option to enable building tests
 option(BUILD_TESTING "Build the tests" OFF)
@@ -156,7 +153,7 @@ target_link_libraries(hb_beamr_lib PUBLIC vmlib)
 # =============================================================================
 
 add_library(hb_beamr_capi_lib STATIC
-    src/hb_beamr_capi_lib.cpp
+    src/hb_beamr_capi_lib.c
 )
 
 # Include directories for the CAPI library
