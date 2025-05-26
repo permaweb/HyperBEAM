@@ -92,10 +92,9 @@
 	  {% set primary = palette.primary | d("indigo", true) %}
 	  {% set accent  = palette.accent  | d("indigo", true) %}
 	  <body dir="{{ direction }}" data-md-color-scheme="{{ scheme | replace(' ', '-') }}" data-md-color-primary="{{ primary | replace(' ', '-') }}" data-md-color-accent="{{ accent | replace(' ', '-') }}">
-        <div id="preloader">Loading<span></span></div>
 	{% else %}
 	  <body dir="{{ direction }}">
-        <div id="preloader">Loading<span></span></div>
+
 	{% endif %}
 	  {% set features = config.theme.features or [] %}
 	  <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
