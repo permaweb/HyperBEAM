@@ -232,17 +232,13 @@ call_all([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
 test_stores() ->
     [
         #{
-            <<"store-module">> => hb_store_fs,
-            <<"prefix">> => <<"cache-TEST/fs">>
+            <<"store-module">> => hb_store_lmdb,
+            <<"prefix">> => <<"cache-TEST/lmdb">>,
+            <<"max-size">> => 6000 * 1024 * 1024
         },
         #{
-            <<"store-module">> => hb_store_lru,
-            <<"persistent-store">> => [
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"prefix">> => <<"cache-TEST/lru">>
-                }
-            ]
+            <<"store-module">> => hb_store_fs,
+            <<"prefix">> => <<"cache-TEST/fs">>
         }
     ] ++ rocks_stores().
 
@@ -348,10 +344,10 @@ benchmark_store(Store, WriteOps, ReadOps) ->
     RandomData = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Keys =
         lists:map(
-            fun(_) ->
-                << "key-", (integer_to_binary(rand:uniform(ReadOps)))/binary >>
+            fun(N) ->
+                << "key-", (integer_to_binary(N))/binary >>
             end,
-            lists:seq(1, ReadOps)
+            lists:seq(1, WriteOps)
         ),
     {WriteTime, ok} =
         timer:tc(
@@ -376,7 +372,7 @@ benchmark_store(Store, WriteOps, ReadOps) ->
     ReadKeys =
         lists:map(
             fun(_) ->
-                << "key", (rand:uniform(ReadOps)):256/integer >>
+                << "key-", (integer_to_binary(rand:uniform(ReadOps)))/binary >>
             end,
             lists:seq(1, ReadOps)
         ),
