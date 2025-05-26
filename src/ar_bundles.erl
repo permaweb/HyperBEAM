@@ -399,50 +399,54 @@ enforce_valid_tx(List) when is_list(List) ->
 enforce_valid_tx(Map) when is_map(Map) ->
     lists:all(fun(Item) -> enforce_valid_tx(Item) end, maps:values(Map));
 enforce_valid_tx(TX) ->
-    ok_or_throw(TX,
-        check_type(TX, message),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_type(TX, message),
         {invalid_tx, TX}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.id, [0, 32]),
+	hb_util:ok_or_throw(TX,
+		hb_util:check_value(TX#tx.format, [ans104]),
+		{invalid_field, format, TX#tx.format}
+	),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.id, [0, 32]),
         {invalid_field, id, TX#tx.id}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.unsigned_id, [0, 32]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.unsigned_id, [0, 32]),
         {invalid_field, unsigned_id, TX#tx.unsigned_id}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.last_tx, [0, 32]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.last_tx, [0, 32]),
         {invalid_field, last_tx, TX#tx.last_tx}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.owner, [0, byte_size(?DEFAULT_OWNER)]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.owner, [0, byte_size(?DEFAULT_OWNER)]),
         {invalid_field, owner, TX#tx.owner}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.target, [0, 32]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.target, [0, 32]),
         {invalid_field, target, TX#tx.target}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.signature, [0, 65, byte_size(?DEFAULT_SIG)]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.signature, [0, 65, byte_size(?DEFAULT_SIG)]),
         {invalid_field, signature, TX#tx.signature}
     ),
     lists:foreach(
         fun({Name, Value}) ->
-            ok_or_throw(TX,
-                check_type(Name, binary),
+            hb_util:ok_or_throw(TX,
+                hb_util:check_type(Name, binary),
                 {invalid_field, tag_name, Name}
             ),
-            ok_or_throw(TX,
-                check_size(Name, {range, 0, ?MAX_TAG_NAME_SIZE}),
+            hb_util:ok_or_throw(TX,
+                hb_util:check_size(Name, {range, 0, ?MAX_TAG_NAME_SIZE}),
                 {invalid_field, tag_name, Name}
             ),
-            ok_or_throw(TX,
-                check_type(Value, binary),
+            hb_util:ok_or_throw(TX,
+                hb_util:check_type(Value, binary),
                 {invalid_field, tag_value, Value}
             ),
-            ok_or_throw(TX,
-                check_size(Value, {range, 0, ?MAX_TAG_VALUE_SIZE}),
+            hb_util:ok_or_throw(TX,
+                hb_util:check_size(Value, {range, 0, ?MAX_TAG_VALUE_SIZE}),
                 {invalid_field, tag_value, Value}
             );
             (InvalidTagForm) ->
@@ -450,39 +454,14 @@ enforce_valid_tx(TX) ->
         end,
         TX#tx.tags
     ),
-    ok_or_throw(
+    hb_util:ok_or_throw(
         TX,
-        check_type(TX#tx.data, binary)
-            orelse check_type(TX#tx.data, map)
-            orelse check_type(TX#tx.data, list),
+        hb_util:check_type(TX#tx.data, binary)
+            orelse hb_util:check_type(TX#tx.data, map)
+            orelse hb_util:check_type(TX#tx.data, list),
         {invalid_field, data, TX#tx.data}
     ),
     true.
-
-%% @doc Force that a binary is either empty or the given number of bytes.
-check_size(Bin, {range, Start, End}) ->
-    check_type(Bin, binary)
-        andalso byte_size(Bin) >= Start
-        andalso byte_size(Bin) =< End;
-check_size(Bin, Sizes) ->
-    check_type(Bin, binary)
-        andalso lists:member(byte_size(Bin), Sizes).
-
-%% @doc Ensure that a value is of the given type.
-check_type(Value, binary) when is_binary(Value) -> true;
-check_type(Value, _) when is_binary(Value) -> false;
-check_type(Value, list) when is_list(Value) -> true;
-check_type(Value, _) when is_list(Value) -> false;
-check_type(Value, map) when is_map(Value) -> true;
-check_type(Value, _) when is_map(Value) -> false;
-check_type(Value, message) ->
-    is_record(Value, tx) or is_map(Value) or is_list(Value);
-check_type(_Value, _) -> false.
-
-%% @doc Throw an error if the given value is not ok.
-ok_or_throw(_, true, _) -> true;
-ok_or_throw(_TX, false, Error) ->
-    throw(Error).
 
 %% @doc Take an item and ensure that both the unsigned and signed IDs are
 %% appropriately set. This function is structured to fall through all cases

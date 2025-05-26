@@ -120,13 +120,14 @@ verify(Msg, Req, Opts) ->
 
 %% @doc Convert a #tx record into a message map recursively.
 from(Binary, _Req, _Opts) when is_binary(Binary) -> {ok, Binary};
-from(TX, Req, Opts) when is_record(TX, tx) ->
+from(#tx{ format = ans104 } = TX, Req, Opts) ->
     case lists:keyfind(<<"ao-type">>, 1, TX#tx.tags) of
         false ->
             do_from(TX, Req, Opts);
         {<<"ao-type">>, <<"binary">>} ->
             {ok, TX#tx.data}
     end.
+
 do_from(RawTX, Req, Opts) ->
     % Ensure the TX is fully deserialized.
     TX = ar_bundles:deserialize(ar_bundles:normalize(RawTX)),

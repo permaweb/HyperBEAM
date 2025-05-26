@@ -22,6 +22,7 @@
 -export([ok/1, ok/2, until/1, until/2, until/3]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
 -export([unique/1]).
+-export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -include("include/hb.hrl").
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
@@ -903,3 +904,35 @@ binary_to_addresses(List) when is_binary(List) ->
                 error({cannot_parse_list, List})
         end
     end.
+
+%% @doc Force that a binary is either empty or the given number of bytes.
+check_size(Bin, {range, Start, End}) ->
+    check_type(Bin, binary)
+        andalso byte_size(Bin) >= Start
+        andalso byte_size(Bin) =< End;
+check_size(Bin, Sizes) ->
+    check_type(Bin, binary)
+        andalso lists:member(byte_size(Bin), Sizes).
+
+check_value(Value, ExpectedValues) ->
+    lists:member(Value, ExpectedValues).
+
+%% @doc Ensure that a value is of the given type.
+check_type(Value, binary) when is_binary(Value) -> true;
+check_type(Value, _) when is_binary(Value) -> false;
+check_type(Value, integer) when is_integer(Value) -> true;
+check_type(Value, _) when is_integer(Value) -> false;
+check_type(Value, list) when is_list(Value) -> true;
+check_type(Value, _) when is_list(Value) -> false;
+check_type(Value, map) when is_map(Value) -> true;
+check_type(Value, _) when is_map(Value) -> false;
+check_type(Value, tx) when is_record(Value, tx) -> true;
+check_type(Value, _) when is_record(Value, tx) -> false;
+check_type(Value, message) ->
+    is_record(Value, tx) or is_map(Value) or is_list(Value);
+check_type(_Value, _) -> false.
+
+%% @doc Throw an error if the given value is not ok.
+ok_or_throw(_, true, _) -> true;
+ok_or_throw(_TX, false, Error) ->
+    throw(Error).
