@@ -4,17 +4,23 @@
 #include <stdint.h> // For uint8_t
 
 uint8_t* read_file_to_buffer(const char *filename, uint32_t *p_size) {
+    printf("[DEBUG read_file_to_buffer ENTRY] Filename: %s\n", filename ? filename : "NULL");
+    fflush(stdout);
+
     FILE *file = NULL;
     uint8_t *buffer = NULL;
     long file_size = 0;
     size_t bytes_read = 0;
 
     if (!filename || !p_size) {
+        fprintf(stderr, "[DEBUG read_file_to_buffer] Filename or p_size is NULL. Filename: %s\n", filename ? filename : "NULL");
         return NULL;
     }
+    fprintf(stderr, "[DEBUG read_file_to_buffer] Attempting to open: '%s'\n", filename);
 
     file = fopen(filename, "rb");
     if (!file) {
+        fprintf(stderr, "fopen failed for file: '%s'\n", filename);
         perror("Error opening file");
         return NULL;
     }

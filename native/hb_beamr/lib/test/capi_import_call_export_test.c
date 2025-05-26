@@ -76,7 +76,7 @@ int main() {
         return 1;
     }
 
-    const char* wasm_file_path = "./import_nested.aot"; // Relative to where test runs
+    const char* wasm_file_path = "./import_nested.wasm"; // Relative to where test runs
     uint32_t wasm_size = 0;
     uint8_t* wasm_binary = read_file_to_buffer(wasm_file_path, &wasm_size);
     if (!wasm_binary) {

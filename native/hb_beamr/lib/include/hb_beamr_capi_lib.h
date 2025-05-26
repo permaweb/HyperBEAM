@@ -26,6 +26,8 @@ typedef enum {
     HB_BEAMR_CAPI_LIB_ERROR_WAMR_CALL_FAILED = 9,
     HB_BEAMR_CAPI_LIB_ERROR_NATIVE_LINKING_FAILED = 10,
     HB_BEAMR_CAPI_LIB_ERROR_SIGNATURE_PARSE_FAILED = 11,
+    HB_BEAMR_CAPI_LIB_ERROR_INVALID_ARGS = 12,             // Added for invalid arguments to functions
+    HB_BEAMR_CAPI_LIB_ERROR_MEMORY_ACCESS_OUT_OF_BOUNDS = 13 // Added for memory access errors
 } hb_beamr_capi_lib_rc_t;
 
 // Native symbol structure for providing host functions during instantiation.
@@ -75,14 +77,53 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_call_export(
     uint32_t num_args,
     wasm_val_t args[],     // wasm_val_t is from wasm_c_api.h
     uint32_t num_results,
-    wasm_val_t results[]   // wasm_val_t is from wasm_c_api.h
+    wasm_val_t c_api_results[]
 );
 
-// Placeholder for resolving imports if async behavior is introduced (standard C API has no direct equivalent)
-hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_resolve_import(
+// --- Wasm Memory Access Helpers ---
+
+// Gets the size of the Wasm memory in pages.
+wasm_memory_pages_t hb_beamr_capi_lib_get_memory_size_pages(wasm_memory_t* memory);
+
+// Gets the size of the Wasm memory in bytes.
+size_t hb_beamr_capi_lib_get_memory_size_bytes(wasm_memory_t* memory);
+
+// Retrieves information about an exported memory, including its data pointer and size.
+hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_get_export_memory_info(
     hb_beamr_capi_lib_context_t* ctx,
-    uint32_t num_results,
-    wasm_val_t results[]
+    const char* memory_name,
+    uint8_t** out_data_ptr,             // Output: Pointer to the start of the memory data
+    size_t* out_data_size_bytes,    // Output: Size of the memory in bytes
+    wasm_memory_t** out_memory_ptr      // Output: Pointer to the wasm_memory_t object
+);
+
+// Variant using WAMR internal APIs to attempt to get memory information
+// This is WAMR-specific and less portable.
+// Output `out_internal_memory_handle` will be a WAMR `wasm_memory_inst_t` cast to `void*`.
+hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_get_export_memory_info_wamr_internal(
+    hb_beamr_capi_lib_context_t* ctx,
+    const char* memory_name,             // Can be NULL or empty to explicitly request default memory
+    uint8_t** out_data_ptr,              // Pointer to the start of the memory data
+    size_t* out_data_size_bytes,         // Total size of the memory in bytes
+    void** out_internal_memory_handle   // WAMR internal memory handle (wasm_memory_inst_t cast to void*)
+);
+
+// Reads a block of memory from Wasm.
+hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_read_memory(
+    hb_beamr_capi_lib_context_t* ctx,   // For error reporting
+    wasm_memory_t* memory,              // The Wasm memory to read from
+    size_t offset,                      // Byte offset in Wasm memory to start reading
+    uint8_t* buffer,                    // Buffer to store the read data
+    size_t length                       // Number of bytes to read
+);
+
+// Writes a block of memory to Wasm.
+hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_write_memory(
+    hb_beamr_capi_lib_context_t* ctx,   // For error reporting
+    wasm_memory_t* memory,              // The Wasm memory to write to
+    size_t offset,                      // Byte offset in Wasm memory to start writing
+    const uint8_t* buffer,              // Data to write
+    size_t length                       // Number of bytes to write
 );
 
 #ifdef __cplusplus

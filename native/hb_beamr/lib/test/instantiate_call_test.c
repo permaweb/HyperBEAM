@@ -34,6 +34,9 @@ int main() {
     assert(ctx != NULL && "Context creation failed");
 
     const char* aot_filename = "./basic_fib.aot";
+    printf("AOT filename: %s\n", aot_filename);
+    fflush(stdout);
+
     uint32_t aot_file_size = 0;
     uint8_t* aot_file_buffer = read_file_to_buffer(aot_filename, &aot_file_size);
     assert(aot_file_buffer != NULL && "AOT file read failed");

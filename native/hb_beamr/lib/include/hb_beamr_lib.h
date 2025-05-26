@@ -1,7 +1,26 @@
 #ifndef HB_BEAMR_LIB_H
 #define HB_BEAMR_LIB_H
 
-#include "wasm_export.h" // For WAMR types like RuntimeInitArgs
+#ifndef HB_BEAMR_LIB_API
+  #if defined(_WIN32) || defined(__CYGWIN__)
+    #ifdef HB_BEAMR_LIB_COMPILING_DLL // Define this when building the DLL
+      #define HB_BEAMR_LIB_API __declspec(dllexport)
+    #else
+      #define HB_BEAMR_LIB_API __declspec(dllimport)
+    #endif
+  #elif __GNUC__ >= 4 // Or __clang__
+    #define HB_BEAMR_LIB_API __attribute__((visibility("default")))
+  #else
+    #define HB_BEAMR_LIB_API // Default to empty for other compilers/static linking
+  #endif
+#endif
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h> // For size_t
+#include "wasm_export.h" // For WAMR types like RuntimeInitArgs, wasm_module_inst_t, wasm_memory_inst_t
+// Note: wasm_val_t is also needed for call_export, it might come from wasm_export.h or a C-API header.
+// If not, #include "wasm_c_api.h" or similar might be needed for wasm_val_t if it's used by functions here.
 
 // Opaque context handle declaration
 // The actual struct definition will be in hb_beamr_lib.c
@@ -16,11 +35,15 @@ typedef enum {
     HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED,
     HB_BEAMR_LIB_ERROR_WAMR_INSTANTIATE_FAILED,
     HB_BEAMR_LIB_ERROR_WAMR_FUNCTION_LOOKUP_FAILED,
-    HB_BEAMR_LIB_ERROR_WAMR_CALL_FAILED,
+    HB_BEAMR_LIB_ERROR_WAMR_CALL_FAILED = 7,
     HB_BEAMR_LIB_ERROR_WAMR_VALIDATION_FAILED,
     HB_BEAMR_LIB_ERROR_INVALID_STATE,
     HB_BEAMR_LIB_ERROR_MODULE_NOT_LOADED,
     HB_BEAMR_LIB_ERROR_INSTANCE_NOT_CREATED,
+    HB_BEAMR_LIB_ERROR_NATIVE_LINKING_FAILED = 8,
+    HB_BEAMR_LIB_ERROR_SIGNATURE_PARSE_FAILED = 9,
+    HB_BEAMR_LIB_ERROR_INVALID_ARGS = 10,            
+    HB_BEAMR_LIB_ERROR_MEMORY_ACCESS_OUT_OF_BOUNDS = 11,
     // ... other specific errors to be added
 } hb_beamr_lib_rc_t;
 
@@ -91,5 +114,59 @@ hb_beamr_lib_rc_t hb_beamr_lib_resolve_import(hb_beamr_lib_context_t* ctx,
 // Memory Access (Wrappers around WAMR APIs) - Placeholders for now
 // bool hb_beamr_lib_validate_app_addr(hb_beamr_lib_context_t* ctx, uint64_t app_offset, uint64_t size);
 // void* hb_beamr_lib_addr_app_to_native(hb_beamr_lib_context_t* ctx, uint64_t app_offset);
+
+// Loads a WASM module from a binary buffer (can be .wasm or .aot)
+// Note: wasm_runtime_load intelligently handles both.
+// Consider if this should replace or complement hb_beamr_lib_load_aot_module.
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_load_wasm_module(
+    hb_beamr_lib_context_t* ctx,
+    uint8_t* wasm_binary_buf, // Input WASM or AOT binary
+    uint32_t wasm_binary_size
+);
+
+// Retrieves information about an exported or default memory from the instance.
+// If memory_name is NULL or empty, it attempts to get the default memory.
+// out_memory_inst_ptr will point to the WAMR internal wasm_memory_inst_t.
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_get_memory_info(
+    hb_beamr_lib_context_t* ctx,
+    const char* memory_name,             // Name of the exported memory, or NULL/empty for default
+    uint8_t** out_data_ptr,              // Output: Pointer to the start of the memory data
+    size_t* out_data_size_bytes,         // Output: Size of the memory in bytes
+    wasm_memory_inst_t* out_memory_inst_ptr // Output: Pointer to WAMR's internal memory instance handle
+);
+
+// Reads directly from the default Wasm memory of the instance.
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_direct_read_memory(
+    hb_beamr_lib_context_t* ctx,
+    size_t offset,                      // Byte offset in Wasm memory to start reading
+    uint8_t* buffer,                    // Buffer to store the read data
+    size_t length                       // Number of bytes to read
+);
+
+// Writes directly to the default Wasm memory of the instance.
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_direct_write_memory(
+    hb_beamr_lib_context_t* ctx,
+    size_t offset,                      // Byte offset in Wasm memory to start writing
+    const uint8_t* buffer,              // Data to write
+    size_t length                       // Number of bytes to write
+);
+
+// Calls an indirectly referenced function from a table.
+// table_name is typically "__indirect_function_table" or the specific export name of the table.
+// func_index is the index within that table.
+// Args and results use wasm_val_t for consistency with call_export.
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
+    hb_beamr_lib_context_t* ctx,
+    const char* table_name, // Name of the exported table (e.g., "__indirect_function_table")
+    uint32_t func_index,    // Index of the function in the table
+    uint32_t num_args,      // Number of arguments in the args array
+    wasm_val_t args[],      // Arguments for the function call
+    uint32_t num_results,   // Expected number of results
+    wasm_val_t results[]    // Buffer to store results
+);
+
+#ifdef __cplusplus
+// ... existing code ...
+#endif
 
 #endif // HB_BEAMR_LIB_H 

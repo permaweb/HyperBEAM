@@ -1,6 +1,7 @@
 #include "hb_beamr_capi_lib.h"
 
 #include "wasm_c_api.h" // Ensure this is the primary include for Wasm types
+#include "wasm_export.h"  // For WAMR internal APIs like wasm_runtime_get_default_memory
 
 #include <stdlib.h> // Replaced <cstdlib>
 #include <string.h> // Replaced <cstring>
@@ -10,6 +11,7 @@
 
 #define MAX_LAST_ERROR_MSG_SIZE 256
 #define INITIAL_HOST_FUNCS_CAPACITY 10 // Initial capacity for host_funcs and host_envs
+#define WASM_PAGE_SIZE 65536 // Wasm page size is 64KiB
 
 // Global state for the C API based library
 static wasm_engine_t* g_wasm_engine = NULL; // Replaced nullptr
@@ -50,7 +52,7 @@ static wasm_trap_t* generic_trampoline_callback(
     HostFuncEnv* tramp_env = (HostFuncEnv*)(env); // Replaced static_cast
 
     if (!tramp_env || !tramp_env->instance_ctx || !tramp_env->instance_ctx->store) {
-        fprintf(stderr, "CRITICAL: generic_trampoline_callback called with invalid HostFuncEnv or context/store.\\n"); // Replaced std::cerr
+        fprintf(stderr, "CRITICAL: generic_trampoline_callback called with invalid HostFuncEnv or context/store.\n"); // Replaced std::cerr
         return NULL; // Replaced nullptr
     }
 
@@ -78,10 +80,10 @@ static void set_error_msg(hb_beamr_capi_lib_context_t* ctx, const char* msg) {
     if (ctx) {
         if (msg) {
             strncpy(ctx->last_error_msg, msg, MAX_LAST_ERROR_MSG_SIZE - 1);
-            ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\\0'; // Ensure null termination
+            ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\0'; // Ensure null termination
         } else {
             strncpy(ctx->last_error_msg, "Unknown error (null message passed).", MAX_LAST_ERROR_MSG_SIZE - 1);
-            ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\\0';
+            ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\0';
         }
     }
 }
@@ -96,11 +98,11 @@ static void set_error_msg_v(hb_beamr_capi_lib_context_t* ctx, const char* format
             // Handle error or truncation, for now, we just ensure null termination
             // at the end of the buffer if vsnprintf failed or truncated.
             // A more robust solution might log this occurrence.
-            ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\\0';
+            ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\0';
             if (written < 0) {
                  // vsnprintf failed, set a generic error.
                  strncpy(ctx->last_error_msg, "Error formatting error message.", MAX_LAST_ERROR_MSG_SIZE -1);
-                 ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\\0';
+                 ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\0';
             }
         }
     }
@@ -157,7 +159,7 @@ hb_beamr_capi_lib_context_t* hb_beamr_capi_lib_create_context(void) {
     ctx->module = NULL; // Replaced nullptr
     ctx->instance = NULL; // Replaced nullptr
     strncpy(ctx->last_error_msg, "No error", MAX_LAST_ERROR_MSG_SIZE - 1);
-    ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\\0';
+    ctx->last_error_msg[MAX_LAST_ERROR_MSG_SIZE - 1] = '\0';
 
     // Initialize dynamic arrays
     ctx->host_funcs = (wasm_func_t**)malloc(sizeof(wasm_func_t*) * INITIAL_HOST_FUNCS_CAPACITY);
@@ -225,7 +227,7 @@ void hb_beamr_capi_lib_destroy_context(hb_beamr_capi_lib_context_t* ctx) {
 }
 
 const char* hb_beamr_capi_lib_get_last_error(hb_beamr_capi_lib_context_t* ctx) {
-    if (ctx && ctx->last_error_msg[0] != '\\0') { // Check if not empty
+    if (ctx && ctx->last_error_msg[0] != '\0') { // Check if not empty
         return ctx->last_error_msg;
     }
     // Return a static string literal if ctx is null or message is empty/default
@@ -278,26 +280,6 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_load_wasm_module(
     return HB_BEAMR_CAPI_LIB_SUCCESS;
 }
 
-// Helper for comparing wasm_name_t with a C string
-static bool names_match(const wasm_name_t* wasm_name, const char* c_string) {
-    if (!wasm_name || !c_string) return false;
-    size_t c_len = strlen(c_string);
-
-    // Check if wasm_name matches c_string exactly up to c_len,
-    // and if wasm_name->size indicates it's either the same length string
-    // or a null-terminated string of that c_len.
-    if (wasm_name->size == c_len) {
-        return memcmp(wasm_name->data, c_string, c_len) == 0;
-    }
-    // Some WAMR/Wasm C API `wasm_name_t` might not be null-terminated if they come from
-    // non-string sections or are synthesized. The `size` field is authoritative.
-    // Comparing `wasm_name->size == c_len + 1` and `wasm_name->data[c_len] == '\\0'`
-    // was an attempt to handle null-terminated wasm_name_t, but it's safer to rely on size.
-    // If the wasm_name is supposed to represent the c_string, its size must be c_len.
-    return false;
-}
-
-
 // Helper function to print wasm_valtype_kind_t as string for debugging
 // This function uses printf, which is okay for debugging but should be
 // conditional if this library aims for no stdout/stderr writes.
@@ -317,7 +299,7 @@ const char* valkind_to_string(wasm_valkind_t kind) {
 // Helper function to print wasm_functype_t details for debugging
 void print_functype_details(const wasm_functype_t* ftype) {
     if (!ftype) {
-        printf("[DEBUG FT] functype is NULL\\n"); // Replaced std::cout
+        printf("[DEBUG FT] functype is NULL\n"); // Replaced std::cout
         return;
     }
     const wasm_valtype_vec_t* params = wasm_functype_params(ftype);
@@ -330,7 +312,7 @@ void print_functype_details(const wasm_functype_t* ftype) {
     for (size_t i = 0; i < results->size; ++i) {
         printf("%s ", valkind_to_string(wasm_valtype_kind(results->data[i]))); // Replaced std::cout
     }
-    printf("\\n"); // Replaced std::cout
+    printf("\n"); // Replaced std::cout
 }
 
 // Helper function to manage dynamic array for host_funcs
@@ -382,6 +364,8 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
     size_t num_imports = import_types_vec.size;
 
     wasm_extern_t** extern_stubs_array = NULL;
+    fprintf(stderr, "[hb_beamr_capi_lib DEBUG] Instantiation: Module has %zu imports.\n", num_imports);
+
     if (num_imports > 0) {
         extern_stubs_array = (wasm_extern_t**)calloc(num_imports, sizeof(wasm_extern_t*)); // Replaced std::vector and new
         if (!extern_stubs_array) {
@@ -410,6 +394,20 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
         const wasm_externtype_t* extern_type = wasm_importtype_type(import_type);
         wasm_externkind_t kind = wasm_externtype_kind(extern_type);
 
+        // Log import details
+        char current_import_module_name[256];
+        char current_import_func_name[256];
+        size_t module_name_len = module_name_vec->size;
+        size_t func_name_len = func_name_vec->size;
+        if (module_name_len >= sizeof(current_import_module_name)) module_name_len = sizeof(current_import_module_name) - 1;
+        if (func_name_len >= sizeof(current_import_func_name)) func_name_len = sizeof(current_import_func_name) - 1;
+        memcpy(current_import_module_name, module_name_vec->data, module_name_len);
+        current_import_module_name[module_name_len] = '\0';
+        memcpy(current_import_func_name, func_name_vec->data, func_name_len);
+        current_import_func_name[func_name_len] = '\0';
+        fprintf(stderr, "[hb_beamr_capi_lib DEBUG] Import[%zu]: Module='%s', Name='%s', Kind=%d\n", 
+                i, current_import_module_name, current_import_func_name, kind);
+
         // extern_stubs_array initialized with calloc, so elements are NULL
 
         if (kind != WASM_EXTERN_FUNC) {
@@ -427,12 +425,12 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
 
             if (module_name_vec->size < sizeof(temp_module_name)) {
                 memcpy(temp_module_name, module_name_vec->data, module_name_vec->size);
-                temp_module_name[module_name_vec->size] = '\\0';
+                temp_module_name[module_name_vec->size] = '\0';
             } else { continue; /* name too long, skip */ }
 
             if (func_name_vec->size < sizeof(temp_func_name)) {
                 memcpy(temp_func_name, func_name_vec->data, func_name_vec->size);
-                temp_func_name[func_name_vec->size] = '\\0';
+                temp_func_name[func_name_vec->size] = '\0';
             } else { continue; /* name too long, skip */ }
 
             if (strcmp(temp_module_name, override_sym->import_module_name) == 0 &&
@@ -532,6 +530,36 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
     ctx->instance = wasm_instance_new(ctx->store, ctx->module, &imports_for_instance, &trap);
     wasm_extern_vec_delete(&imports_for_instance); // Manual RAII cleanup
 
+    // Log exports after instantiation
+    if (ctx->instance) {
+        wasm_extern_vec_t exports_vec_debug;
+        wasm_extern_vec_new_empty(&exports_vec_debug);
+        wasm_instance_exports(ctx->instance, &exports_vec_debug);
+        fprintf(stderr, "[hb_beamr_capi_lib DEBUG] Instantiation: Instance has %zu exports.\n", exports_vec_debug.size);
+
+        wasm_exporttype_vec_t module_export_types_debug;
+        wasm_exporttype_vec_new_empty(&module_export_types_debug);
+        wasm_module_exports(ctx->module, &module_export_types_debug);
+
+        for (size_t k = 0; k < module_export_types_debug.size; ++k) {
+            const wasm_exporttype_t* export_type_debug = module_export_types_debug.data[k];
+            const wasm_name_t* name_vec_debug = wasm_exporttype_name(export_type_debug);
+            const wasm_externtype_t* extern_type_debug = wasm_exporttype_type(export_type_debug);
+            wasm_externkind_t kind_debug = wasm_externtype_kind(extern_type_debug);
+            
+            char current_export_name_debug[256];
+            size_t export_name_len_debug = name_vec_debug->size;
+            if (export_name_len_debug >= sizeof(current_export_name_debug)) export_name_len_debug = sizeof(current_export_name_debug) - 1;
+            memcpy(current_export_name_debug, name_vec_debug->data, export_name_len_debug);
+            current_export_name_debug[export_name_len_debug] = '\0';
+
+            fprintf(stderr, "[hb_beamr_capi_lib DEBUG] Export[%zu]: Name='%s', Kind=%d\n", 
+                    k, current_export_name_debug, kind_debug);
+        }
+        wasm_exporttype_vec_delete(&module_export_types_debug);
+        wasm_extern_vec_delete(&exports_vec_debug);
+    }
+
     if (trap) {
         wasm_message_t trap_message;
         wasm_trap_message(trap, &trap_message);
@@ -539,7 +567,7 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_instantiate(
         char trap_msg_c_str[MAX_LAST_ERROR_MSG_SIZE]; // Or a larger temp buffer
         size_t copy_len = trap_message.size < (MAX_LAST_ERROR_MSG_SIZE - 1) ? trap_message.size : (MAX_LAST_ERROR_MSG_SIZE - 1);
         memcpy(trap_msg_c_str, trap_message.data, copy_len);
-        trap_msg_c_str[copy_len] = '\\0';
+        trap_msg_c_str[copy_len] = '\0';
 
         set_error_msg_v(ctx, "Instantiation trapped: %s", trap_msg_c_str);
         wasm_name_delete(&trap_message); // Assuming wasm_name_delete is correct for wasm_message_t
@@ -588,16 +616,16 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_call_export(
         
         // Convert wasm_name_t to null-terminated C string for strcmp
         char current_export_name[256]; // Assuming max name length
-        if (name_vec->size < sizeof(current_export_name)) {
-            memcpy(current_export_name, name_vec->data, name_vec->size);
-            current_export_name[name_vec->size] = '\\0';
-        } else {
-            // Name too long, cannot match func_name unless func_name is also this long
-            // and strcmp handles non-null terminated strings with a length, which it doesn't.
-            // Or, use a more robust comparison that respects name_vec->size.
-            // For now, skip if too long for buffer.
-            continue;
+        size_t name_len = name_vec->size;
+        if (name_len >= sizeof(current_export_name)) {
+            name_len = sizeof(current_export_name) - 1;
         }
+        memcpy(current_export_name, name_vec->data, name_len);
+        current_export_name[name_len] = '\0';
+
+        // wasm_externkind_t kind = wasm_externtype_kind(wasm_exporttype_type(export_type)); // kind is unused now
+        // fprintf(stderr, "[hb_beamr_capi_lib DEBUG] Found export: name='%s', kind=%d (target='%s')\n", 
+        //         current_export_name, kind, func_name);
 
         if (strcmp(current_export_name, func_name) == 0) {
             if (wasm_externtype_kind(wasm_exporttype_type(export_type)) == WASM_EXTERN_FUNC && i < exports_vec.size) {
@@ -626,7 +654,7 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_call_export(
         char trap_msg_c_str[MAX_LAST_ERROR_MSG_SIZE];
         size_t copy_len = trap_message.size < (MAX_LAST_ERROR_MSG_SIZE - 1) ? trap_message.size : (MAX_LAST_ERROR_MSG_SIZE - 1);
         memcpy(trap_msg_c_str, trap_message.data, copy_len);
-        trap_msg_c_str[copy_len] = '\\0';
+        trap_msg_c_str[copy_len] = '\0';
 
         set_error_msg_v(ctx, "Call to '%s' trapped: %s", func_name, trap_msg_c_str);
         wasm_name_delete(&trap_message); // Assuming correct for wasm_message_t
@@ -649,18 +677,293 @@ hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_call_export(
     return HB_BEAMR_CAPI_LIB_SUCCESS;
 }
 
-// extern "C" { // This is a .c file, so extern "C" is not needed here.
+// --- Wasm Memory Access Helpers ---
 
-hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_resolve_import(
-    hb_beamr_capi_lib_context_t* ctx, uint32_t num_results, wasm_val_t results[]
-) {
-    if (!ctx) return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE;
-    // This function seems to be a placeholder or for a specific WAMR feature not used elsewhere.
-    // Ensure `results` is handled if it's meant to be populated.
-    // If num_results > 0, `results` array should be populated or cleared.
-    // For now, just setting error as per original.
-    set_error_msg(ctx, "resolve_import not impl.");
-    return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE; // Changed from INVALID_STATE to make it clearer
+wasm_memory_pages_t hb_beamr_capi_lib_get_memory_size_pages(wasm_memory_t* memory) {
+    if (!memory) {
+        return 0;
+    }
+    return wasm_memory_size(memory); // Returns page count
 }
+
+size_t hb_beamr_capi_lib_get_memory_size_bytes(wasm_memory_t* memory) {
+    if (!memory) {
+        return 0;
+    }
+    // Wasm page size is 64KiB
+    return wasm_memory_size(memory) * WASM_PAGE_SIZE;
+}
+
+// Original C-API compliant version
+hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_get_export_memory_info(
+    hb_beamr_capi_lib_context_t* ctx,
+    const char* memory_name,
+    uint8_t** out_data_ptr,
+    size_t* out_data_size_bytes,
+    wasm_memory_t** out_memory_ptr
+) {
+    if (!ctx || !ctx->instance) {
+        if (ctx) set_error_msg(ctx, "Instance not created, cannot get memory info.");
+        return HB_BEAMR_CAPI_LIB_ERROR_INSTANCE_NOT_CREATED;
+    }
+    if (!memory_name || !out_data_ptr || !out_data_size_bytes || !out_memory_ptr) {
+        if (ctx) set_error_msg(ctx, "Invalid arguments for get_export_memory_info.");
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_ARGS; 
+    }
+
+    *out_data_ptr = NULL;
+    *out_data_size_bytes = 0;
+    *out_memory_ptr = NULL;
+
+    wasm_extern_vec_t exports;
+    wasm_extern_vec_new_empty(&exports);
+    wasm_instance_exports(ctx->instance, &exports);
+
+    wasm_memory_t* found_memory = NULL;
+
+    wasm_exporttype_vec_t export_types;
+    wasm_exporttype_vec_new_empty(&export_types);
+    wasm_module_exports(ctx->module, &export_types);
+
+    for (size_t i = 0; i < export_types.size; ++i) {
+        const wasm_exporttype_t* export_type = export_types.data[i];
+        const wasm_name_t* name_vec = wasm_exporttype_name(export_type);
+        const wasm_externtype_t* ext_type = wasm_exporttype_type(export_type);
+
+        char current_export_name[256];
+        size_t name_len = name_vec->size;
+        if (name_len >= sizeof(current_export_name)) {
+            name_len = sizeof(current_export_name) - 1;
+        }
+        memcpy(current_export_name, name_vec->data, name_len);
+        current_export_name[name_len] = '\0';
+        
+        wasm_externkind_t kind = wasm_externtype_kind(ext_type);
+        fprintf(stderr, "[hb_beamr_capi_lib DEBUG] Scanning export: name='%s', kind=%d (target memory '%s')\n", 
+                current_export_name, kind, memory_name);
+
+        if (strcmp(current_export_name, memory_name) == 0) {
+            if (kind == WASM_EXTERN_MEMORY && i < exports.size) {
+                wasm_extern_t* ext = exports.data[i];
+                found_memory = wasm_extern_as_memory(ext);
+                if (found_memory) {
+                    fprintf(stderr, "[hb_beamr_capi_lib DEBUG] Matched memory export: '%s' with wasm_memory_t* = %p\n", memory_name, (void*)found_memory);
+                    break;
+                } else {
+                    fprintf(stderr, "[hb_beamr_capi_lib DEBUG] Matched memory export by name '%s', but wasm_extern_as_memory returned NULL\n", memory_name);
+                }
+            }
+        }
+    }
+
+    wasm_exporttype_vec_delete(&export_types);
+    wasm_extern_vec_delete(&exports);
+
+    if (!found_memory) {
+        set_error_msg_v(ctx, "Exported memory '%s' not found.", memory_name);
+        return HB_BEAMR_CAPI_LIB_ERROR_WAMR_FUNCTION_LOOKUP_FAILED; 
+    }
+
+    *out_memory_ptr = found_memory;
+    uint8_t* mem_data_ptr = (uint8_t*)wasm_memory_data(found_memory);
+    wasm_memory_pages_t mem_pages = wasm_memory_size(found_memory);
+    size_t mem_data_size_direct = wasm_memory_data_size(found_memory); // New call
+
+    fprintf(stderr, "[hb_beamr_capi_lib DEBUG] For found_memory = %p:\n", (void*)found_memory);
+    fprintf(stderr, "[hb_beamr_capi_lib DEBUG]   wasm_memory_data() -> %p\n", (void*)mem_data_ptr);
+    fprintf(stderr, "[hb_beamr_capi_lib DEBUG]   wasm_memory_size() (pages) -> %u\n", (unsigned int)mem_pages);
+    fprintf(stderr, "[hb_beamr_capi_lib DEBUG]   wasm_memory_data_size() (bytes direct) -> %zu\n", mem_data_size_direct);
+
+    *out_data_ptr = mem_data_ptr;
+    *out_data_size_bytes = mem_pages * WASM_PAGE_SIZE; // Calculated based on pages
+    // Optionally, one could choose to trust mem_data_size_direct if it seems more reliable
+    // For now, we stick to the page-based calculation for *out_data_size_bytes as per original logic.
+
+    // Check based on calculated size from pages first
+    if (found_memory && *out_data_ptr == NULL && *out_data_size_bytes == 0) {
+        set_error_msg_v(ctx, "Memory '%s' exported, but C-API reports NULL data pointer and zero size. WAMR C-API inconsistency?", memory_name);
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE; 
+    }
+    
+    if (*out_data_ptr == NULL && *out_data_size_bytes > 0) { 
+        set_error_msg_v(ctx, "Memory '%s' data pointer is NULL but size is non-zero.", memory_name);
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE;
+    }
+
+    set_error_msg(ctx, "No error"); 
+    return HB_BEAMR_CAPI_LIB_SUCCESS;
+}
+
+// NEW FUNCTION USING WAMR INTERNAL APIS
+hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_get_export_memory_info_wamr_internal(
+    hb_beamr_capi_lib_context_t* ctx,
+    const char* memory_name, // Can be NULL to explicitly request default memory
+    uint8_t** out_data_ptr,
+    size_t* out_data_size_bytes,
+    void** out_internal_memory_handle // Using void** to avoid direct wasm_memory_inst_t dependency in signature
+) {
+    if (!ctx || !ctx->instance) {
+        if (ctx) set_error_msg(ctx, "Instance not created, cannot get memory info (WAMR internal).");
+        return HB_BEAMR_CAPI_LIB_ERROR_INSTANCE_NOT_CREATED;
+    }
+    if (!out_data_ptr || !out_data_size_bytes || !out_internal_memory_handle) {
+        if (ctx) set_error_msg(ctx, "Invalid arguments for get_export_memory_info_wamr_internal.");
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_ARGS;
+    }
+
+    *out_data_ptr = NULL;
+    *out_data_size_bytes = 0;
+    *out_internal_memory_handle = NULL;
+
+    // --- WAMR Internal API Path ---
+
+    // Define a structure that mimics WAMR's internal C-API instance wrapper (e.g., struct WASMInstance in WAMR's wasm_c_api.c)
+    // This typically holds both the WASMModuleInstanceCommon* and the main WASMExecEnv*.
+    // The field names (module_inst, exec_env_main) are crucial and based on common WAMR patterns.
+    typedef struct WAMR_CAPI_Instance_Wrapper {
+        wasm_module_inst_t module_inst; // WAMR's WASMModuleInstanceCommon*
+        wasm_exec_env_t exec_env_main;  // WAMR's main WASMExecEnv* for this C-API instance
+        // Other fields might exist... this is a minimal guess.
+    } WAMR_CAPI_Instance_Wrapper;
+
+    wasm_module_inst_t wamr_module_inst = NULL;
+    wasm_exec_env_t primary_exec_env = NULL;
+
+    if (ctx->instance) {
+        // Cast the C-API ctx->instance (wasm_instance_t*) to our assumed wrapper struct pointer.
+        WAMR_CAPI_Instance_Wrapper* wamr_capi_wrapper = (WAMR_CAPI_Instance_Wrapper*)ctx->instance;
+        
+        // Attempt to get the main execution environment from the wrapper.
+        // Then, get the module instance from that execution environment using a WAMR API.
+        primary_exec_env = wamr_capi_wrapper->exec_env_main;
+        if (primary_exec_env) {
+            wamr_module_inst = wasm_runtime_get_module_inst(primary_exec_env);
+        } else {
+             // Fallback: if exec_env_main is not where we expect, try getting module_inst directly from wrapper
+             // This covers cases where the wrapper might prioritize module_inst or exec_env might not be populated yet.
+             wamr_module_inst = wamr_capi_wrapper->module_inst;
+        }
+    } else {
+        if (ctx) set_error_msg(ctx, "WAMR Internal: ctx->instance is NULL, cannot proceed.");
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE;
+    }
+
+    if (!wamr_module_inst) {
+        set_error_msg_v(ctx, 
+            "WAMR Internal: Failed to derive WAMR module_inst from C-API instance. C-API instance ptr: %p. Wrapper exec_env: %p. Wrapper module_inst: %p. This indicates the assumed wrapper structure/access is incorrect for this WAMR version.", 
+            (void*)ctx->instance, (void*)primary_exec_env, 
+            (ctx->instance ? (void*)((WAMR_CAPI_Instance_Wrapper*)ctx->instance)->module_inst : NULL) );
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE;
+    }
+
+    wasm_memory_inst_t wamr_mem_inst = NULL;
+
+    if (memory_name != NULL && strlen(memory_name) > 0) {
+        wamr_mem_inst = wasm_runtime_lookup_memory(wamr_module_inst, memory_name);
+    }
+    
+    if (!wamr_mem_inst) { // If named lookup failed or no name was given
+        wamr_mem_inst = wasm_runtime_get_default_memory(wamr_module_inst);
+    }
+
+    if (!wamr_mem_inst) {
+        set_error_msg_v(ctx, "WAMR Internal: Failed to get memory instance (name: %s). Derived WAMR module_inst: %p",
+                        memory_name ? memory_name : "(default lookup)", (void*)wamr_module_inst);
+        return HB_BEAMR_CAPI_LIB_ERROR_WAMR_FUNCTION_LOOKUP_FAILED;
+    }
+
+    *out_internal_memory_handle = (void*)wamr_mem_inst;
+    uint8_t* data_ptr_internal = (uint8_t*)wasm_memory_get_base_address(wamr_mem_inst);
+    uint64_t page_count_internal = wasm_memory_get_cur_page_count(wamr_mem_inst);
+
+    *out_data_ptr = data_ptr_internal;
+    *out_data_size_bytes = page_count_internal * WASM_PAGE_SIZE; 
+
+    if (data_ptr_internal == NULL && page_count_internal > 0) {
+        set_error_msg_v(ctx, "WAMR Internal: Memory '%s' reports %llu pages but NULL data pointer.", 
+                        memory_name ? memory_name : "default", page_count_internal);
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE;
+    }
+
+    set_error_msg(ctx, "No error (using WAMR internal path)");
+    return HB_BEAMR_CAPI_LIB_SUCCESS;
+}
+
+hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_read_memory(
+    hb_beamr_capi_lib_context_t* ctx,
+    wasm_memory_t* memory,
+    size_t offset,
+    uint8_t* buffer,
+    size_t length
+) {
+    if (!ctx) { 
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_ARGS;
+    }
+    if (!memory || !buffer) {
+        set_error_msg(ctx, "Invalid arguments for read_memory (memory or buffer is NULL).");
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_ARGS;
+    }
+    if (length == 0) {
+        set_error_msg(ctx, "No error");
+        return HB_BEAMR_CAPI_LIB_SUCCESS; // Nothing to read
+    }
+
+    size_t memory_size_bytes = hb_beamr_capi_lib_get_memory_size_bytes(memory);
+    if (offset + length > memory_size_bytes) {
+        set_error_msg_v(ctx, "Read memory out of bounds (offset %zu + length %zu > size %zu).", offset, length, memory_size_bytes);
+        return HB_BEAMR_CAPI_LIB_ERROR_MEMORY_ACCESS_OUT_OF_BOUNDS;
+    }
+
+    uint8_t* memory_data = (uint8_t*)wasm_memory_data(memory);
+    if (!memory_data) {
+        // If wasm_memory_data returns NULL but size > 0, this is problematic.
+        // This path is hit if the C-API wasm_memory_data fails for a C-API wasm_memory_t handle.
+        set_error_msg_v(ctx, "Failed to get memory data pointer for read (offset %zu, length %zu, C-API memory handle %p). Check if memory is valid and mapped.", offset, length, (void*)memory);
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE;
+    }
+
+    memcpy(buffer, memory_data + offset, length);
+    set_error_msg(ctx, "No error");
+    return HB_BEAMR_CAPI_LIB_SUCCESS;
+}
+
+hb_beamr_capi_lib_rc_t hb_beamr_capi_lib_write_memory(
+    hb_beamr_capi_lib_context_t* ctx,
+    wasm_memory_t* memory,
+    size_t offset,
+    const uint8_t* buffer,
+    size_t length
+) {
+    if (!ctx) { 
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_ARGS;
+    }
+    if (!memory || !buffer) {
+        set_error_msg(ctx, "Invalid arguments for write_memory (memory or buffer is NULL).");
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_ARGS;
+    }
+    if (length == 0) {
+        set_error_msg(ctx, "No error");
+        return HB_BEAMR_CAPI_LIB_SUCCESS; // Nothing to write
+    }
+
+    size_t memory_size_bytes = hb_beamr_capi_lib_get_memory_size_bytes(memory);
+    if (offset + length > memory_size_bytes) {
+        set_error_msg_v(ctx, "Write memory out of bounds (offset %zu + length %zu > size %zu).", offset, length, memory_size_bytes);
+        return HB_BEAMR_CAPI_LIB_ERROR_MEMORY_ACCESS_OUT_OF_BOUNDS;
+    }
+
+    uint8_t* memory_data = (uint8_t*)wasm_memory_data(memory);
+     if (!memory_data) {
+        // Similar to read, if wasm_memory_data returns NULL but size > 0
+        set_error_msg_v(ctx, "Failed to get memory data pointer for write (offset %zu, length %zu, C-API memory handle %p). Check if memory is valid and mapped.", offset, length, (void*)memory);
+        return HB_BEAMR_CAPI_LIB_ERROR_INVALID_STATE;
+    }
+
+    memcpy(memory_data + offset, buffer, length);
+    set_error_msg(ctx, "No error");
+    return HB_BEAMR_CAPI_LIB_SUCCESS;
+}
+
+// extern "C" { // This is a .c file, so extern "C" is not needed here.
 
 // } // extern "C"

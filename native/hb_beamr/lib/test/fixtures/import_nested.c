@@ -1,6 +1,4 @@
-#ifndef EMSCRIPTEN_KEEPALIVE
-#define EMSCRIPTEN_KEEPALIVE __attribute__((used)) __attribute__((visibility("default")))
-#endif
+#include <emscripten.h>
 
 // Global variable in Wasm memory
 volatile unsigned int global_data_buffer[16]; // 16 * 4 = 64 bytes
@@ -35,4 +33,9 @@ unsigned int call_host_and_read(unsigned int index, unsigned int init_val) {
     }
     // Return a distinct value on error or if index is out of bounds.
     return 0xFFFFFFFF;
+}
+
+// Dummy main function to allow compilation without -Wl,--no-entry
+int main() {
+    return 0;
 }

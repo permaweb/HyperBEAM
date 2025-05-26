@@ -33,17 +33,24 @@ test: test-build
 	@echo "+++ Running hb_beamr_wasm tests +++"
 	cd $(CMAKE_BUILD_DIR) && ctest --output-on-failure
 
+# Target to run tests (depends on test-build)
+test-verbose: test-build
+	@echo "+++ Running hb_beamr_wasm tests +++"
+	cd $(CMAKE_BUILD_DIR) && ctest -V
+
 # Full clean: Removes the entire build directory, including dependencies
-clean:
+clean-all:
 	@echo "+++ Cleaning hb_beamr_wasm (full) +++"
 	rm -rf $(CMAKE_BUILD_DIR)
 
 # Local clean: Removes only CMake generated files and local library artifacts,
 # preserving downloaded/built dependencies (_deps).
-clean-local:
-	@echo "+++ Cleaning hb_beamr_wasm (local only) +++"
+clean:
+	@echo "+++ Cleaning hb_beamr_wasm (skip deps) +++"
+	@echo "Run 'make clean-all' to delete the entire build directory, however it will take a long time to rebuild."
 	-@rm -f $(CMAKE_BUILD_DIR)/CMakeCache.txt
 	-@rm -rf $(CMAKE_BUILD_DIR)/CMakeFiles
 	-@rm -f $(CMAKE_BUILD_DIR)/cmake_install.cmake
 	-@rm -f $(CMAKE_BUILD_DIR)/Makefile
-	-@rm -f $(CMAKE_BUILD_DIR)/lib/libhb_beamr_wasm.a
+	-@rm -f $(CMAKE_BUILD_DIR)/lib/libhb_beamr_lib.a
+	-@rm -rf $(CMAKE_BUILD_DIR)/test
