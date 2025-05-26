@@ -1,6 +1,8 @@
 % @doc An lmdb (Lighting Memory Db) implementation of the hb_store
 -module(hb_store_lmdb).
--export([start/1, stop/0, stop/1]).
+-export([start/1, stop/0, stop/1, scope/0, scope/1]).
+-export([read/2, write/3]).
+
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -11,15 +13,23 @@ start(#{ <<"prefix">> := DataDir, <<"max-size">> := MaxSize}) ->
     case whereis(?MODULE) of
         undefined ->
             {ok, Env} = lmdb:env_create(),
+            % Set max size for lmdb env
             lmdb:env_set_mapsize(Env, MaxSize),
-            % TODO: ensure_dir(DataDir)
+            % Make sure data directory exists
+            filelib:ensure_dir(DataDir),
+            % Set database director for lmdb env
             lmdb:env_open(Env, binary_to_list(DataDir)),
+            % Create singleton
             Pid = spawn(fun() -> loop(Env) end),
             register(?MODULE, Pid),
             {ok, Pid};
         Pid -> 
             {ok, Pid}
     end.
+
+% @doc The lmdb store is always local for now.
+scope() -> local.
+scope(_) -> scope().
 
 %% @doc Get env from singleton process.
 get_env() ->
@@ -40,6 +50,8 @@ stop(_) ->
             Pid ! stop,
             ok
     end.
+
+reset(
 
 %% @doc listen for messages on singleton process.
 loop(Env) ->
@@ -67,7 +79,7 @@ write(_, Key, Value) ->
 read(_, Key) ->
     case get_env() of
         {ok, Env} ->
-            lmdb:with_txn(Env, fun(Txn) ->
+            lmdb:with_ro_txn(Env, fun(Txn) ->
                 {ok, Dbi} = lmdb:open_db(Txn, default),
                 {ok, Value } =lmdb:get(Txn, Dbi, Key),
                 lmdb:close_db(Env, Dbi),
