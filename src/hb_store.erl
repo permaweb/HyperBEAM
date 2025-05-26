@@ -234,7 +234,7 @@ test_stores() ->
         #{
             <<"store-module">> => hb_store_lmdb,
             <<"prefix">> => <<"cache-TEST/lmdb">>,
-            <<"max-size">> => 6000 * 1024 * 1024
+            <<"max-size">> => 600 * 1024 * 1024
         },
         #{
             <<"store-module">> => hb_store_fs,

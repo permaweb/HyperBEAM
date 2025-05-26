@@ -9,12 +9,15 @@
 -define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024).
 -define(CONNECT_TIMEOUT, 3000).
 -define(DEFAULT_IDLE_FLUSH_TIME, 5).
--define(DEFAULT_MAX_FLUSH_TIME, 5).
+-define(DEFAULT_MAX_FLUSH_TIME, 50).
 
 %% @doc Start singleton process holding lmdb env.
 start(StoreOpts = #{ <<"prefix">> := DataDir, <<"max-size">> := MaxSize}) ->
     case whereis(?MODULE) of
         undefined ->
+            filelib:ensure_dir(
+                binary_to_list(hb_util:bin(DataDir)) ++ "/mbd.data"
+            ),
             {ok, Env} = lmdb:env_create(DataDir, #{ max_mapsize => MaxSize }),
             % Create the server process
             Server = start_server(StoreOpts#{ <<"env">> => Env }),
@@ -108,8 +111,7 @@ server(State) ->
             From ! {flushed, Ref},
             server(NewState);
         stop ->
-            NewState = server_flush(State),
-            lmdb:env_close(maps:get(<<"env">>, NewState)),
+            server_flush(State),
             ok
     after
         maps:get(<<"idle-flush-time">>, State, ?DEFAULT_IDLE_FLUSH_TIME) ->
@@ -131,9 +133,24 @@ server_write(RawState, Key, Value) ->
 
 %% @doc Flush the current transaction to the database.
 server_flush(RawState) ->
-    State = ensure_transaction(RawState),
-    lmdb_nif:txn_commit(maps:get(<<"transaction">>, State)),
-    State#{ <<"transaction">> => undefined, <<"instance">> => undefined }.
+    case maps:get(<<"transaction">>, RawState, undefined) of
+        undefined ->
+            RawState;
+        _ ->
+            Res = lmdb_nif:txn_commit(maps:get(<<"transaction">>, RawState)),
+            notify_flush(RawState),
+            RawState#{ <<"transaction">> => undefined, <<"instance">> => undefined }
+    end.
+
+%% @doc Signal to all flush requesters that the flush is complete.
+notify_flush(State) ->
+    receive
+        {flush, From, Ref} ->
+            From ! {flushed, Ref},
+            notify_flush(State)
+    after 0 ->
+        ok
+    end.
 
 %% @doc A monitor process that periodically flushes the transaction to the
 %% database.
