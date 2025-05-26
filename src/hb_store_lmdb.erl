@@ -12,37 +12,25 @@
 -define(DEFAULT_MAX_FLUSH_TIME, 50).
 
 %% @doc Start singleton process holding lmdb env.
-start(StoreOpts = #{ <<"prefix">> := DataDir, <<"max-size">> := MaxSize}) ->
-    case whereis(?MODULE) of
-        undefined ->
-            filelib:ensure_dir(
-                binary_to_list(hb_util:bin(DataDir)) ++ "/mbd.data"
-            ),
-            {ok, Env} = lmdb:env_create(DataDir, #{ max_mapsize => MaxSize }),
-            % Create the server process
-            Server = start_server(StoreOpts#{ <<"env">> => Env }),
-            hb_name:register({?MODULE, DataDir}, Server),
-            {ok, Server};
-        Pid -> 
-            {ok, Pid}
-    end.
+start(StoreOpts) ->
+    {ok, find_or_spawn_instance(StoreOpts)}.
 
 %% @doc Write value to lmdb by key by sending a message to the server process.
 write(StoreOpts, Key, Value) ->
-    PID = ensure_instance(StoreOpts),
+    PID = find_or_spawn_instance(StoreOpts),
     PID ! {write, Key, Value},
     ok.
 
 %% @doc Read value from lmdb by key.
 read(StoreOpts, Key) ->
-    case lmdb:get(get_env(StoreOpts), Key) of
+    case lmdb:get(find_env(StoreOpts), Key) of
         {ok, Value} ->
             {ok, Value};
         not_found ->
             ?event(read_miss, {miss, Key}),
-            ensure_instance(StoreOpts) ! {flush, self(), Ref = make_ref()},
+            find_or_spawn_instance(StoreOpts) ! {flush, self(), Ref = make_ref()},
             receive
-                {flushed, Ref} -> lmdb:get(get_env(StoreOpts), Key)
+                {flushed, Ref} -> lmdb:get(find_env(StoreOpts), Key)
             after ?CONNECT_TIMEOUT -> {error, timeout}
             end
     end.
@@ -52,10 +40,11 @@ scope() -> local.
 scope(_) -> scope().
 
 %% @doc Get env from singleton process.
-get_env(StoreOpts = #{ <<"prefix">> := DataDir }) ->
+find_env(StoreOpts = #{ <<"prefix">> := DataDir }) ->
     case get({?MODULE, DataDir}) of
         undefined ->
-            PID = ensure_instance(StoreOpts),
+            ?event(debug_process_cache, {not_in_env_cache, {?MODULE, DataDir}}),
+            PID = find_or_spawn_instance(StoreOpts),
             PID ! {get_env, self(), Ref = make_ref()},
             receive
                 {env, Env, Ref} ->
@@ -67,18 +56,25 @@ get_env(StoreOpts = #{ <<"prefix">> := DataDir }) ->
     end.
 
 %% @doc Ensure that the requested instance exists. If it doesn't, start it.
-ensure_instance(StoreOpts = #{ <<"prefix">> := DataDir }) ->
-    case hb_name:lookup({?MODULE, DataDir}) of
+find_or_spawn_instance(StoreOpts = #{ <<"prefix">> := DataDir }) ->
+    case get({?MODULE, {server, DataDir}}) of
         undefined ->
-            {ok, Pid} = start(StoreOpts),
-            Pid;
-        Pid -> Pid
+            ?event(debug_process_cache, {not_in_process_cache, {?MODULE, DataDir}}),
+            case hb_name:lookup({?MODULE, DataDir}) of
+                undefined ->
+                    % Create the server process
+                    Pid = start_server(StoreOpts),
+                    Pid;
+                Pid -> Pid
+            end;
+        Pid ->
+            Pid
     end.
 
 %% @doc Stop lmdb singleton process.
 stop(StoreOpts) ->
-    PID = ensure_instance(StoreOpts),
-    Env = get_env(StoreOpts),
+    PID = find_or_spawn_instance(StoreOpts),
+    Env = find_env(StoreOpts),
     PID ! stop,
     lmdb:env_close(Env),
     ok.
@@ -90,13 +86,27 @@ reset(StoreOpts = #{ <<"prefix">> := DataDir }) ->
     ok.
 
 %% @doc Start the server process.
-start_server(StoreOpts) ->
-    spawn(
-        fun() ->
-            spawn_link(fun() -> commit_manager(StoreOpts, self()) end),
-            server(StoreOpts)
-        end
-    ).
+start_server(StoreOpts = #{ <<"prefix">> := DataDir }) ->
+    filelib:ensure_dir(
+        binary_to_list(hb_util:bin(DataDir)) ++ "/mbd.data"
+    ),
+    {ok, Env} =
+        lmdb:env_create(
+            DataDir,
+            #{
+                max_mapsize => maps:get(<<"max-size">>, StoreOpts, ?DEFAULT_SIZE)
+            }
+        ),
+    ServerOpts = StoreOpts#{ <<"env">> => Env },
+    Server = 
+        spawn(
+            fun() ->
+                spawn_link(fun() -> commit_manager(ServerOpts, self()) end),
+                server(ServerOpts)
+            end
+        ),
+    put({?MODULE, {server, DataDir}}, Server),
+    Server.
 
 %% @doc Listen for messages on singleton process, periodically sync the database.
 server(State) ->
