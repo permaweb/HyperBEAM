@@ -1,7 +1,7 @@
 % @doc An lmdb (Lighting Memory Db) implementation of the hb_store
 -module(hb_store_lmdb).
 -export([start/1, stop/1, scope/0, scope/1, reset/1]).
--export([read/2, write/3]).
+-export([read/2, write/3, list/2]).
 
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -35,9 +35,32 @@ read(StoreOpts, Key) ->
             end
     end.
 
-% @doc The lmdb store is always local for now.
+%% @doc The lmdb store is always local for now.
 scope() -> local.
 scope(_) -> scope().
+
+%% @doc List contents of a directory or key prefix in the store.
+list(StoreOpts, Path) when is_map(StoreOpts), is_binary(Path) ->
+    Env = find_env(StoreOpts),
+    PathSize = byte_size(Path),
+    try
+       
+       Result = lmdb:fold(Env, default,
+           fun(Key, _Value, Acc) ->
+               case byte_size(Key) >= PathSize andalso binary:part(Key, 0, PathSize) =:= Path of
+                  true -> [Key | Acc];
+                  false -> Acc
+               end
+           end,
+           []
+        ),
+       Result
+    catch
+       _:Error -> {error, Error}
+    end;
+list(_, _) ->
+    {error, {badarg, "StoreOpts must be a map and Path must be an binary"}}.
+ 
 
 %% @doc Get env from singleton process.
 find_env(StoreOpts = #{ <<"prefix">> := DataDir }) ->
@@ -202,4 +225,22 @@ basic_test() ->
     ?assertEqual(ok, Res),
     {ok, Value} = read(StoreOpts, <<"Hello">>),
     ?assertEqual(Value, <<"World2">>),
+    ok = stop(StoreOpts).
+
+list_test() ->
+    StoreOpts = #{
+        <<"prefix">> => <<"/tmp/store-2">>,
+        <<"max-size">> => ?DEFAULT_SIZE
+    },
+    write(StoreOpts, <<"colors/red">>, <<"1">>),
+    write(StoreOpts, <<"colors/blue">>, <<"2">>),
+    write(StoreOpts, <<"colors/green">>, <<"3">>),
+    write(StoreOpts, <<"foo/bar">>, <<"baz">>),
+    write(StoreOpts, <<"beep/boop">>, <<"bam">>),
+    % {ok, Value} = read(StoreOpts, <<"foo/bar">>),
+    % ?event({foo, Value}),
+    timer:sleep(10), 
+    {ok, Keys} = list(StoreOpts, <<"colors">>),
+    % ?event({keys, Keys}),
+    ?assertEqual([<<"colors/red">>, <<"colors/green">>, <<"colors/blue">>], Keys),
     ok = stop(StoreOpts).

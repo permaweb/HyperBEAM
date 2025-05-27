@@ -18,7 +18,7 @@
   0},
  {<<"lmdb">>,
   {git,"https://github.com/twilson63/erlang-lmdb",
-       {ref,"5177fa99a45b20963352f7efef2484be445bc3e2"}},
+       {ref,"a60111088f203b87a172f2d06eccba4482b6e169"}},
   0},
  {<<"luerl">>,{pkg,<<"luerl">>,<<"1.3.0">>},0},
  {<<"prometheus">>,{pkg,<<"prometheus">>,<<"4.11.0">>},0},
