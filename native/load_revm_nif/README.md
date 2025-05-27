@@ -1,8 +1,9 @@
 ## About
 
-The `load_revm_nif` is the base of the `@evm1.0` device: an EVM bytecode emulator built on top of Revm (version [v22.0.1](https://github.com/bluealloy/revm/releases/tag/v69))
+The `load_revm_nif` is the base of the `@evm1.0` device: an EVM bytecode emulator built on top of Revm (version [v22.0.1](https://github.com/bluealloy/revm/releases/tag/v69)).
 
-The device not only allow bytecode (signed raw transaction) evaluation against a given state db, but also appchains creation, its statefulness, EVM context customization (gas limit, chain id, contract size limit, etc), and the elimination of the block gas limit, and substituing it with tx gas limit. 
+The device not only allows evaluation of bytecode (signed raw transactions) against a given state db, but also supports appchain creation, statefulness, EVM context customization (gas limit, chain id, contract size limit, etc.), and the elimination of the block gas limit by substituting it with a transaction-level gas limit.
+
 
 ***[!] This device is experimental, in PoC stage [!]***
 
