@@ -27,7 +27,7 @@ static void generic_stub(wasm_exec_env_t exec_env, uint64_t *args){
 }
 
 static void run_import_test_module(){
-    uint32_t sz=0; uint8_t *buf=read_file_to_buffer("import_test_module.wasm",&sz); assert(buf);
+    uint32_t sz=0; uint8_t *buf=read_file_to_buffer("import_test_module.aot",&sz); assert(buf);
     
     uint8_t *buf_cpy = malloc(sz);
     assert(buf_cpy);

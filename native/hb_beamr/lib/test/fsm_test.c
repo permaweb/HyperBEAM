@@ -8,7 +8,7 @@ static int fib_expected(int n) { int a=0,b=1; for(int i=0;i<n;i++){int t=a+b;a=b
 int main(void) {
     // Load fixture
     uint32_t wasm_size=0;
-    uint8_t *wasm_buf = read_file_to_buffer("basic_fib.wasm", &wasm_size);
+    uint8_t *wasm_buf = read_file_to_buffer("basic_fib.aot", &wasm_size);
     assert(wasm_buf && wasm_size > 0);
 
     // Init runtime

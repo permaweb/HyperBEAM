@@ -12,8 +12,8 @@
 #define NUM_WORKERS_PHASE 10
 #define ITERATIONS_PER_WORKER 50
 
-static const char *fib_wasm_filename = "basic_fib.wasm";
-static const char *import_wasm_filename = "import_test_module.wasm";
+static const char *fib_wasm_filename = "basic_fib.aot";
+static const char *import_wasm_filename = "import_test_module.aot";
 
 static uint8_t *g_fib_bytes = NULL;  static uint32_t g_fib_size = 0;
 static uint8_t *g_import_bytes = NULL; static uint32_t g_import_size = 0;

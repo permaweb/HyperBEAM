@@ -151,9 +151,9 @@ static int fib_expected(int n) {
 }
 
 int main() {
-  g_fib_bytes = read_file_to_buffer("basic_fib.wasm", &g_fib_sz);
-  g_import_bytes = read_file_to_buffer("import_test_module.wasm", &g_import_sz);
-  g_nested_bytes = read_file_to_buffer("import_nested.wasm", &g_nested_sz);
+  g_fib_bytes = read_file_to_buffer("basic_fib.aot", &g_fib_sz);
+  g_import_bytes = read_file_to_buffer("import_test_module.aot", &g_import_sz);
+  g_nested_bytes = read_file_to_buffer("import_nested.aot", &g_nested_sz);
   assert(g_fib_bytes && g_import_bytes && g_nested_bytes);
   assert(hb_beamr_lib_init_runtime_global(NULL) == HB_BEAMR_LIB_SUCCESS);
 

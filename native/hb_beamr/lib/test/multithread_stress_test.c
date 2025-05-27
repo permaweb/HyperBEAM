@@ -39,8 +39,8 @@ static void record_event(event_kind_t kind, int worker_id, int iteration) {
     }
 }
 
-static const char *fib_wasm_filename = "basic_fib.wasm";
-static const char *import_wasm_filename = "import_test_module.wasm";
+static const char *fib_wasm_filename = "basic_fib.aot";
+static const char *import_wasm_filename = "import_test_module.aot";
 
 static uint8_t *g_fib_bytes = NULL;
 static uint32_t g_fib_size = 0;

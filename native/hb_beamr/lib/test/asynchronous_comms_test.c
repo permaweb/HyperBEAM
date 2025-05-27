@@ -199,9 +199,9 @@ static void *slave_thread(void *arg) {
 int fib_expected(int n) { int a=0,b=1; for(int i=0;i<n;i++){int t=a+b;a=b;b=t;} return a; }
 
 int main() {
-    g_fib_bytes = read_file_to_buffer("basic_fib.wasm", &g_fib_size);
-    g_import_bytes = read_file_to_buffer("import_test_module.wasm", &g_import_size);
-    g_nested_import_bytes = read_file_to_buffer("import_nested.wasm", &g_nested_import_size);
+    g_fib_bytes = read_file_to_buffer("basic_fib.aot", &g_fib_size);
+    g_import_bytes = read_file_to_buffer("import_test_module.aot", &g_import_size);
+    g_nested_import_bytes = read_file_to_buffer("import_nested.aot", &g_nested_import_size);
     assert(g_fib_bytes && g_import_bytes && g_nested_import_bytes);
     LOG_STDERR_FLUSH("MASTER: All Wasm fixture bytes loaded.");
     assert(hb_beamr_lib_init_runtime_global(NULL) == HB_BEAMR_LIB_SUCCESS);
@@ -215,7 +215,7 @@ int main() {
     hb_beamr_lib_context_t *ctx_fib    = hb_beamr_lib_create_context();
     hb_beamr_lib_context_t *ctx_import = hb_beamr_lib_create_context();
     hb_beamr_lib_context_t *ctx_nested = hb_beamr_lib_create_context();
-    push_cmd((command_t){CMD_LOAD_MODULE, ctx_fib, 0, "basic_fib.wasm"});
+    push_cmd((command_t){CMD_LOAD_MODULE, ctx_fib, 0, "basic_fib.aot"});
     event_t e = pop_evt();
     LOG_STDERR_FLUSH("MASTER: Load fib module event kind: %d, val: %d", e.kind, e.value);
     assert(e.kind == EVT_OK);
@@ -241,7 +241,7 @@ int main() {
     LOG_STDERR_FLUSH("MASTER: Register host_add_one natives event kind: %d, val: %d", e.kind, e.value);
 
     // Then load the module that needs them
-    push_cmd((command_t){CMD_LOAD_MODULE, ctx_import, 1, "import_test_module.wasm"});
+    push_cmd((command_t){CMD_LOAD_MODULE, ctx_import, 1, "import_test_module.aot"});
     e = pop_evt(); assert(e.kind==EVT_OK);
     LOG_STDERR_FLUSH("MASTER: Load import_test_module event kind: %d, val: %d", e.kind, e.value);
 
@@ -263,7 +263,7 @@ int main() {
     e = pop_evt(); assert(e.kind == EVT_OK);
     LOG_STDERR_FLUSH("MASTER: Register give_host_control natives event kind: %d, val: %d", e.kind, e.value);
 
-    push_cmd((command_t){CMD_LOAD_MODULE, ctx_nested, 2, "import_nested.wasm"});
+    push_cmd((command_t){CMD_LOAD_MODULE, ctx_nested, 2, "import_nested.aot"});
     e = pop_evt(); assert(e.kind == EVT_OK);
     LOG_STDERR_FLUSH("MASTER: Load import_nested event kind: %d, val: %d", e.kind, e.value);
 

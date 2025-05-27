@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *nested_wasm_file = "import_nested.wasm";
+static const char *nested_wasm_file = "import_nested.aot";
 static const uint32_t XOR_CONST = 0xABCDEFFF;
 
 // give_host_control native – mirrors earlier test but uses FSM-owned context.
