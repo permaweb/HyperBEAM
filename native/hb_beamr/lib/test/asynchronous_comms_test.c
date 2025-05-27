@@ -124,11 +124,11 @@ static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t *args) {
     // This import is void, Wasm will read the (now modified) memory itself.
 }
 
+// Keep separate context per module id, allowing the slave to be otherwise
+// "stateless" about which context is currently active.
 static void *slave_thread(void *arg) {
     (void)arg;
     wasm_runtime_init_thread_env();
-
-    hb_beamr_lib_context_t *ctx = NULL;
 
     while (1) {
         command_t cmd = pop_cmd();
@@ -136,80 +136,58 @@ static void *slave_thread(void *arg) {
 
         switch (cmd.kind) {
             case CMD_LOAD_MODULE: {
-                LOG_STDERR_FLUSH("SLAVE: CMD_LOAD_MODULE for module_id %d", cmd.arg);
-                if (ctx) { 
-                    hb_beamr_lib_destroy_context(ctx);
-                    ctx = NULL;
-                }
-                ctx = hb_beamr_lib_create_context();
+                hb_beamr_lib_context_t *ctx_local = cmd.ctx;
+                LOG_STDERR_FLUSH("SLAVE: CMD_LOAD_MODULE (module_id %d) ctx=%p", cmd.arg, (void*)ctx_local);
+                if (!ctx_local) { push_evt((event_t){EVT_ERROR, HB_BEAMR_LIB_ERROR_INVALID_ARGS}); break; }
                 uint8_t* bytes = NULL;
                 uint32_t size = 0;
-                if (cmd.arg == 0) { bytes = g_fib_bytes; size = g_fib_size; LOG_STDERR_FLUSH("SLAVE: Loading fib_bytes"); }
-                else if (cmd.arg == 1) { bytes = g_import_bytes; size = g_import_size; LOG_STDERR_FLUSH("SLAVE: Loading import_bytes (import_test_module)");}
-                else if (cmd.arg == 2) { bytes = g_nested_import_bytes; size = g_nested_import_size; LOG_STDERR_FLUSH("SLAVE: Loading nested_import_bytes"); }
-
-                hb_beamr_lib_rc_t rc = hb_beamr_lib_load_wasm_module(ctx, bytes, size);
-                LOG_STDERR_FLUSH("SLAVE: hb_beamr_lib_load_wasm_module rc=%d", rc);
+                if (cmd.arg == 0) { bytes = g_fib_bytes; size = g_fib_size; }
+                else if (cmd.arg == 1) { bytes = g_import_bytes; size = g_import_size; }
+                else if (cmd.arg == 2) { bytes = g_nested_import_bytes; size = g_nested_import_size; }
+                hb_beamr_lib_rc_t rc = hb_beamr_lib_load_wasm_module(ctx_local, bytes, size);
                 push_evt((event_t){ rc == HB_BEAMR_LIB_SUCCESS ? EVT_OK : EVT_ERROR, rc });
                 break; }
             case CMD_INSTANTIATE: {
-                LOG_STDERR_FLUSH("SLAVE: CMD_INSTANTIATE");
-                hb_beamr_lib_rc_t rc = hb_beamr_lib_instantiate(ctx, 128*1024, 0);
-                LOG_STDERR_FLUSH("SLAVE: hb_beamr_lib_instantiate rc=%d. Error: %s", rc, hb_beamr_lib_get_last_error(ctx));
+                hb_beamr_lib_context_t *ctx_local = cmd.ctx; if (!ctx_local){ push_evt((event_t){EVT_ERROR, HB_BEAMR_LIB_ERROR_INVALID_STATE}); break; }
+                LOG_STDERR_FLUSH("SLAVE: CMD_INSTANTIATE ctx=%p", (void*)ctx_local);
+                hb_beamr_lib_rc_t rc = hb_beamr_lib_instantiate(ctx_local, 128*1024, 0);
                 push_evt((event_t){ rc == HB_BEAMR_LIB_SUCCESS ? EVT_OK : EVT_ERROR, rc });
                 break; }
             case CMD_REGISTER_NATIVES: {
-                LOG_STDERR_FLUSH("SLAVE: CMD_REGISTER_NATIVES for module_id %d (attachment ctx: %p)", cmd.arg, (void*)ctx);
                 hb_beamr_lib_rc_t rc = HB_BEAMR_LIB_ERROR_INVALID_ARGS;
-                if (cmd.arg == 1) { // For import_test_module
+                if (cmd.arg == 1) {
                     hb_beamr_native_symbol_t sym = {"env","host_add_one",(void*)native_host_add_one,"(i)i",NULL};
                     rc = hb_beamr_lib_register_global_natives("env", &sym, 1);
-                } else if (cmd.arg == 2) { // For import_nested module
-                    // Attachment for global natives can be NULL if custom_data is used, or pass ctx if it helps debugging.
-                    // For this pattern, custom_data is preferred.
-                    hb_beamr_native_symbol_t sym_nested = {"env","give_host_control",(void*)native_give_host_control,"(i)", NULL /*ctx*/ };
-                     rc = hb_beamr_lib_register_global_natives("env", &sym_nested, 1);
+                } else if (cmd.arg == 2) {
+                    hb_beamr_native_symbol_t sym_nested = {"env","give_host_control",(void*)native_give_host_control,"(i)", NULL};
+                    rc = hb_beamr_lib_register_global_natives("env", &sym_nested, 1);
                 }
-                LOG_STDERR_FLUSH("SLAVE: hb_beamr_lib_register_global_natives rc=%d", rc);
                 push_evt((event_t){ rc == HB_BEAMR_LIB_SUCCESS ? EVT_OK : EVT_ERROR, rc});
                 break; }
             case CMD_CALL_EXPORT: {
-                LOG_STDERR_FLUSH("SLAVE: CMD_CALL_EXPORT for func '%s' with arg %d", cmd.func_name, cmd.arg);
+                hb_beamr_lib_context_t *ctx_local = cmd.ctx; if (!ctx_local){ push_evt((event_t){EVT_ERROR, HB_BEAMR_LIB_ERROR_INVALID_STATE}); break; }
                 int val_arg = cmd.arg;
                 wasm_val_t args[1] = { {.kind=WASM_I32,.of.i32=val_arg} };
                 wasm_val_t results[1];
-                hb_beamr_lib_rc_t rc = hb_beamr_lib_call_export(ctx, cmd.func_name, 1, args, 1, results);
-                LOG_STDERR_FLUSH("SLAVE: hb_beamr_lib_call_export for '%s' rc=%d. Result val (if any): %d. Error: %s", 
-                                 cmd.func_name, rc, (rc==HB_BEAMR_LIB_SUCCESS ? results[0].of.i32 : -1), hb_beamr_lib_get_last_error(ctx));
+                hb_beamr_lib_rc_t rc = hb_beamr_lib_call_export(ctx_local, cmd.func_name, 1, args, 1, results);
                 if(rc==HB_BEAMR_LIB_SUCCESS)
                     push_evt((event_t){EVT_RESULT,results[0].of.i32});
                 else push_evt((event_t){EVT_ERROR,rc});
                 break; }
             case CMD_CALL_NESTED_IMPORT_EXPORT: {
-                LOG_STDERR_FLUSH("SLAVE: CMD_CALL_NESTED_IMPORT_EXPORT for func '%s' with init_val %d", cmd.func_name, cmd.arg);
-                int init_val = cmd.arg; // This is the `init_val` for `call_host_and_read`
-                // The `index` for `call_host_and_read` is fixed to 0 for simplicity in this test cmd
-                wasm_val_t call_args[2];
-                call_args[0].kind = WASM_I32;
-                call_args[0].of.i32 = 0; // index = 0
-                call_args[1].kind = WASM_I32;
-                call_args[1].of.i32 = init_val;
-
+                hb_beamr_lib_context_t *ctx_local = cmd.ctx; if (!ctx_local){ push_evt((event_t){EVT_ERROR, HB_BEAMR_LIB_ERROR_INVALID_STATE}); break; }
+                int init_val = cmd.arg;
+                wasm_val_t call_args[2]; call_args[0].kind = WASM_I32; call_args[0].of.i32 = 0; call_args[1].kind = WASM_I32; call_args[1].of.i32 = init_val;
                 wasm_val_t call_results[1];
-                hb_beamr_lib_rc_t rc_call = hb_beamr_lib_call_export(ctx, cmd.func_name, 2, call_args, 1, call_results);
-                LOG_STDERR_FLUSH("SLAVE: hb_beamr_lib_call_export for '%s' (nested) rc=%d. Result val (if any): %d. Error: %s", 
-                                 cmd.func_name, rc_call, (rc_call==HB_BEAMR_LIB_SUCCESS ? call_results[0].of.i32 : -1), hb_beamr_lib_get_last_error(ctx));
+                hb_beamr_lib_rc_t rc_call = hb_beamr_lib_call_export(ctx_local, cmd.func_name, 2, call_args, 1, call_results);
                 if (rc_call == HB_BEAMR_LIB_SUCCESS)
                     push_evt((event_t){EVT_RESULT, call_results[0].of.i32});
-                else
-                    push_evt((event_t){EVT_ERROR, rc_call});
+                else push_evt((event_t){EVT_ERROR, rc_call});
                 break; }
             default: break;
         }
     }
 
-    LOG_STDERR_FLUSH("SLAVE: CMD_QUIT received. Destroying context %p and exiting thread.", (void*)ctx);
-    if (ctx) hb_beamr_lib_destroy_context(ctx);
     wasm_runtime_destroy_thread_env();
     return NULL;
 }
@@ -230,20 +208,23 @@ int main() {
     LOG_STDERR_FLUSH("MASTER: Slave thread created.");
 
     // Phase: load fib module
-    push_cmd((command_t){CMD_LOAD_MODULE,0,"basic_fib.wasm"}); // module_id 0 for fib
+    hb_beamr_lib_context_t *ctx_fib    = hb_beamr_lib_create_context();
+    hb_beamr_lib_context_t *ctx_import = hb_beamr_lib_create_context();
+    hb_beamr_lib_context_t *ctx_nested = hb_beamr_lib_create_context();
+    push_cmd((command_t){CMD_LOAD_MODULE, ctx_fib, 0, "basic_fib.wasm"});
     event_t e = pop_evt();
     LOG_STDERR_FLUSH("MASTER: Load fib module event kind: %d, val: %d", e.kind, e.value);
     assert(e.kind == EVT_OK);
 
     // Instantiate fib module
-    push_cmd((command_t){CMD_INSTANTIATE,0,NULL});
+    push_cmd((command_t){CMD_INSTANTIATE, ctx_fib, 0, NULL});
     e = pop_evt();
     LOG_STDERR_FLUSH("MASTER: Instantiate fib module event kind: %d, val: %d", e.kind, e.value);
     assert(e.kind == EVT_OK);
 
     // Call fib with various numbers
     for (int n=3; n<10; n++) {
-        push_cmd((command_t){CMD_CALL_EXPORT, n, "fib"});
+        push_cmd((command_t){CMD_CALL_EXPORT, ctx_fib, n, "fib"});
         e = pop_evt();
         LOG_STDERR_FLUSH("MASTER: Call fib(%d) event kind: %d, val: %d. Expected: %d", n, e.kind, e.value, fib_expected(n));
         assert(e.kind == EVT_RESULT && e.value == fib_expected(n));
@@ -251,38 +232,38 @@ int main() {
 
     // Now exercise import module path
     // Register natives FIRST
-    push_cmd((command_t){CMD_REGISTER_NATIVES, 1, NULL}); // arg=1 for "env" module natives
+    push_cmd((command_t){CMD_REGISTER_NATIVES, NULL, 1, NULL});
     e = pop_evt(); assert(e.kind==EVT_OK);
     LOG_STDERR_FLUSH("MASTER: Register host_add_one natives event kind: %d, val: %d", e.kind, e.value);
 
     // Then load the module that needs them
-    push_cmd((command_t){CMD_LOAD_MODULE, 1, "import_test_module.wasm"}); // module_id 1 for import
+    push_cmd((command_t){CMD_LOAD_MODULE, ctx_import, 1, "import_test_module.wasm"});
     e = pop_evt(); assert(e.kind==EVT_OK);
     LOG_STDERR_FLUSH("MASTER: Load import_test_module event kind: %d, val: %d", e.kind, e.value);
 
     // Instantiate the import module
-    push_cmd((command_t){CMD_INSTANTIATE, 0, NULL}); // arg is N/A for instantiate
+    push_cmd((command_t){CMD_INSTANTIATE, ctx_import, 0, NULL});
     e = pop_evt(); assert(e.kind==EVT_OK);
     LOG_STDERR_FLUSH("MASTER: Instantiate import_test_module event kind: %d, val: %d", e.kind, e.value);
 
     // Call the exported function that uses imports
     for(int v=1; v<=5; v++){
-        push_cmd((command_t){CMD_CALL_EXPORT, v, "wasm_add_two_via_host"});
+        push_cmd((command_t){CMD_CALL_EXPORT, ctx_import, v, "wasm_add_two_via_host"});
         e = pop_evt();
         LOG_STDERR_FLUSH("MASTER: Call wasm_add_two_via_host(%d) event kind: %d, val: %d. Expected: %d", v, e.kind, e.value, v+2);
         assert(e.kind==EVT_RESULT && e.value==v+2);
     }
 
     // Phase: Test blocking import with import_nested.wasm
-    push_cmd((command_t){CMD_REGISTER_NATIVES, 2, NULL}); // Natives for import_nested (module_id 2)
+    push_cmd((command_t){CMD_REGISTER_NATIVES, NULL, 2, NULL});
     e = pop_evt(); assert(e.kind == EVT_OK);
     LOG_STDERR_FLUSH("MASTER: Register give_host_control natives event kind: %d, val: %d", e.kind, e.value);
 
-    push_cmd((command_t){CMD_LOAD_MODULE, 2, "import_nested.wasm"}); // module_id 2 for import_nested
+    push_cmd((command_t){CMD_LOAD_MODULE, ctx_nested, 2, "import_nested.wasm"});
     e = pop_evt(); assert(e.kind == EVT_OK);
     LOG_STDERR_FLUSH("MASTER: Load import_nested event kind: %d, val: %d", e.kind, e.value);
 
-    push_cmd((command_t){CMD_INSTANTIATE, 0, NULL});
+    push_cmd((command_t){CMD_INSTANTIATE, ctx_nested, 0, NULL});
     e = pop_evt(); assert(e.kind == EVT_OK);
     LOG_STDERR_FLUSH("MASTER: Instantiate import_nested event kind: %d, val: %d", e.kind, e.value);
 
@@ -294,7 +275,7 @@ int main() {
     // Slave unblocks. Wasm's call_host_and_read returns memory[0] which is 83.
     int test_init_val = 100;
     int test_index = 0; 
-    push_cmd((command_t){CMD_CALL_NESTED_IMPORT_EXPORT, test_init_val, "call_host_and_read"});
+    push_cmd((command_t){CMD_CALL_NESTED_IMPORT_EXPORT, ctx_nested, test_init_val, "call_host_and_read"});
     LOG_STDERR_FLUSH("MASTER: Sent CMD_CALL_NESTED_IMPORT_EXPORT with init_val %d", test_init_val);
 
     // Slave calls give_host_control(test_index), master gets this event
@@ -326,9 +307,15 @@ int main() {
                      e.kind, e.value, host_modified_val);
     assert(e.kind == EVT_RESULT && e.value == host_modified_val);
 
-    push_cmd((command_t){CMD_QUIT,0,NULL});
+    push_cmd((command_t){CMD_QUIT, NULL, 0, NULL});
     pthread_join(slave,NULL);
     LOG_STDERR_FLUSH("MASTER: Slave thread joined.");
+
+    // Clean up contexts in master BEFORE destroying the runtime to avoid
+    // "memory hasn't been initialize" warnings from WAMR.
+    hb_beamr_lib_destroy_context(ctx_fib);
+    hb_beamr_lib_destroy_context(ctx_import);
+    hb_beamr_lib_destroy_context(ctx_nested);
 
     hb_beamr_lib_destroy_runtime_global();
     free_buffer(g_fib_bytes);
@@ -336,5 +323,6 @@ int main() {
     free_buffer(g_nested_import_bytes);
     LOG_STDERR_FLUSH("MASTER: Test PASSED.");
     printf("asynchronous_comms_test PASSED\n");
+
     return 0;
 } 

@@ -2,6 +2,7 @@
 #define ASYNC_QUEUE_H
 
 #include <pthread.h>
+#include "hb_beamr_lib.h"
 
 // Command (Master -> Slave)
 
@@ -16,8 +17,9 @@ typedef enum {
 
 typedef struct {
     command_kind_t kind;
+    hb_beamr_lib_context_t *ctx; // context pointer owned by master
     int arg; // module_id or function_arg
-    const char* func_name; // for CMD_CALL_EXPORT
+    const char* func_name; // for CMD_CALL_EXPORT / nested import
 } command_t;
 
 // Event (Slave -> Master)
@@ -27,7 +29,6 @@ typedef enum {
     EVT_RESULT,             // value = function call result
     EVT_ERROR,              // value = hb_beamr_lib_rc_t
     EVT_IMPORT_CALL,        // value = value passed from wasm to import
-    EVT_IMPORT_RESULT       // value = value master provides for import
 } event_kind_t;
 
 typedef struct {
