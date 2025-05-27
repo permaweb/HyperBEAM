@@ -39,7 +39,7 @@ read(StoreOpts, Key) ->
 scope() -> local.
 scope(_) -> scope().
 
-%% @doc List contents of a directory or key prefix in the store.
+%% @doc List keys? of a collection or key prefix in the store.
 list(StoreOpts, Path) when is_map(StoreOpts), is_binary(Path) ->
     Env = find_env(StoreOpts),
     PathSize = byte_size(Path),
@@ -216,6 +216,9 @@ ensure_transaction(State) ->
     end.
 
 %% Tests
+%%
+
+%% @doc Basic store test
 basic_test() ->
     StoreOpts = #{
         <<"prefix">> => <<"/tmp/store-1">>,
@@ -227,6 +230,7 @@ basic_test() ->
     ?assertEqual(Value, <<"World2">>),
     ok = stop(StoreOpts).
 
+%% @doc List test store_lmdb:list to find keys by path
 list_test() ->
     StoreOpts = #{
         <<"prefix">> => <<"/tmp/store-2">>,
