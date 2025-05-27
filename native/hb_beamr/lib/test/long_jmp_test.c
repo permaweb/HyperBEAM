@@ -92,9 +92,15 @@ static hb_beamr_lib_rc_t perform_indirect_call_via_lib_api(
     return rc;
 }
 
+// Added helper to map from exec_env -> module_inst -> hb_beamr_lib_context
+static inline hb_beamr_lib_context_t *get_ctx_from_exec_env(wasm_exec_env_t exec_env) {
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    return inst ? (hb_beamr_lib_context_t *)wasm_runtime_get_custom_data(inst) : NULL;
+}
+
 // invoke_vii(index, a, b) -> void
 static void native_invoke_vii(wasm_exec_env_t exec_env, uint64_t *raw_args) {
-    hb_beamr_lib_context_t *ctx = (hb_beamr_lib_context_t*)wasm_runtime_get_function_attachment(exec_env);
+    hb_beamr_lib_context_t *ctx = get_ctx_from_exec_env(exec_env);
     LOG_STDERR_FLUSH("[CTX %p] native_invoke_vii", ctx);
 
     uint32_t table_index = (uint32_t)raw_args[0];
@@ -111,7 +117,7 @@ static void native_invoke_vii(wasm_exec_env_t exec_env, uint64_t *raw_args) {
 
 // invoke_iiii(index, a, b, c) -> i32
 static void native_invoke_iiii(wasm_exec_env_t exec_env, uint64_t *raw_args) {
-    hb_beamr_lib_context_t *ctx = (hb_beamr_lib_context_t*)wasm_runtime_get_function_attachment(exec_env);
+    hb_beamr_lib_context_t *ctx = get_ctx_from_exec_env(exec_env);
     LOG_STDERR_FLUSH("native_invoke_iiii: %p", ctx);
 
     uint32_t table_index = (uint32_t)raw_args[0];
@@ -133,7 +139,7 @@ static void native_invoke_iiii(wasm_exec_env_t exec_env, uint64_t *raw_args) {
 
 // _emscripten_throw_longjmp(env_ptr, value) -> void (traps)
 static void native_emscripten_throw_longjmp(wasm_exec_env_t exec_env, uint64_t *raw_args) {
-    hb_beamr_lib_context_t *ctx = (hb_beamr_lib_context_t*)wasm_runtime_get_function_attachment(exec_env);
+    hb_beamr_lib_context_t *ctx = get_ctx_from_exec_env(exec_env);
     LOG_STDERR_FLUSH("[CTX %p] native_emscripten_throw_longjmp", ctx);
     // wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
     // wasm_runtime_set_exception(module_inst, "_emscripten_throw_longjmp");
@@ -153,9 +159,9 @@ int main(void) {
     assert(rc == HB_BEAMR_LIB_SUCCESS && "Runtime init failed");
 
     hb_beamr_native_symbol_t sjlj_symbols[] = {
-        { "env", "invoke_vii", (void*)native_invoke_vii, "(iii)", ctx },
-        { "env", "invoke_iiii", (void*)native_invoke_iiii, "(iiii)i", ctx },
-        { "env", "_emscripten_throw_longjmp", (void*)native_emscripten_throw_longjmp, "()", ctx }
+        { "env", "invoke_vii", (void*)native_invoke_vii, "(iii)", NULL },
+        { "env", "invoke_iiii", (void*)native_invoke_iiii, "(iiii)i", NULL },
+        { "env", "_emscripten_throw_longjmp", (void*)native_emscripten_throw_longjmp, "()", NULL }
     };
     const uint32_t num_sjlj_symbols = sizeof(sjlj_symbols) / sizeof(hb_beamr_native_symbol_t);
 

@@ -9,6 +9,9 @@
 // For wasm_runtime_get_function_attachment, wasm_runtime_get_module_inst, wasm_runtime_set_exception
 #include "wasm_export.h"
 
+// Forward declaration for helper that is defined later in the file.
+static inline hb_beamr_lib_context_t *get_ctx_from_exec_env(wasm_exec_env_t exec_env);
+
 #define assert_rc_try_catch(rc, expected_rc, ctx, msg) \
     if (rc != expected_rc) { \
         fprintf(stderr, "Assertion failed: %s. Expected %d, got %d. Error: %s\n", \
@@ -39,7 +42,7 @@ bool DID_CXA_THROW = false;
 
 // Signature: (iii)
 void native_cxa_throw(wasm_exec_env_t exec_env, uint64_t *args) {
-    hb_beamr_lib_context_t *ctx = (hb_beamr_lib_context_t*)wasm_runtime_get_function_attachment(exec_env);
+    hb_beamr_lib_context_t *ctx = get_ctx_from_exec_env(exec_env);
 
     uint32_t ptr_arg = (uint32_t)args[0];
     uint32_t type = (uint32_t)args[1];
@@ -165,9 +168,17 @@ static bool perform_indirect_call_via_lib_api(
     return true;
 }
 
+// Helper to obtain hb_beamr_lib_context_t* associated with the module that
+// triggered the native call.  The context was stored earlier via
+// wasm_runtime_set_custom_data at instantiation time.
+static inline hb_beamr_lib_context_t *get_ctx_from_exec_env(wasm_exec_env_t exec_env) {
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    return inst ? (hb_beamr_lib_context_t *)wasm_runtime_get_custom_data(inst) : NULL;
+}
+
 // invoke_v(index)
 void native_invoke_v(wasm_exec_env_t exec_env, uint64_t *args) {
-    hb_beamr_lib_context_t *ctx = (hb_beamr_lib_context_t*)wasm_runtime_get_function_attachment(exec_env);
+    hb_beamr_lib_context_t *ctx = get_ctx_from_exec_env(exec_env);
     LOG_STDERR_FLUSH("[CTX %p] native_invoke_v called with table_index %u", (void*)ctx, (uint32_t)args[0]);
     uint32_t table_index = (uint32_t)args[0];
     // No args, no results for invoke_v as per Emscripten convention
@@ -176,7 +187,7 @@ void native_invoke_v(wasm_exec_env_t exec_env, uint64_t *args) {
 
 // invoke_ii(index, a) -> i32
 void native_invoke_ii(wasm_exec_env_t exec_env, uint64_t *args) {
-    hb_beamr_lib_context_t *ctx = (hb_beamr_lib_context_t*)wasm_runtime_get_function_attachment(exec_env);
+    hb_beamr_lib_context_t *ctx = get_ctx_from_exec_env(exec_env);
     uint32_t table_index = (uint32_t)args[0];
     LOG_STDERR_FLUSH("[CTX %p] native_invoke_ii called with table_index %u, arg1 %u", (void*)ctx, table_index, (uint32_t)args[1]);
 
@@ -196,7 +207,7 @@ void native_invoke_ii(wasm_exec_env_t exec_env, uint64_t *args) {
 
 // invoke_iii(index, a, b) -> i32
 void native_invoke_iii(wasm_exec_env_t exec_env, uint64_t *args) {
-    hb_beamr_lib_context_t *ctx = (hb_beamr_lib_context_t*)wasm_runtime_get_function_attachment(exec_env);
+    hb_beamr_lib_context_t *ctx = get_ctx_from_exec_env(exec_env);
     uint32_t table_index = (uint32_t)args[0];
     LOG_STDERR_FLUSH("[CTX %p] native_invoke_iii called with table_index %u, arg1 %u, arg2 %u", 
                      (void*)ctx, table_index, (uint32_t)args[1], (uint32_t)args[2]);
@@ -216,7 +227,7 @@ void native_invoke_iii(wasm_exec_env_t exec_env, uint64_t *args) {
 
 // invoke_viii(index, a, b, c) -> void
 void native_invoke_viii(wasm_exec_env_t exec_env, uint64_t *args) {
-    hb_beamr_lib_context_t *ctx = (hb_beamr_lib_context_t*)wasm_runtime_get_function_attachment(exec_env);
+    hb_beamr_lib_context_t *ctx = get_ctx_from_exec_env(exec_env);
     uint32_t table_index = (uint32_t)args[0];
     LOG_STDERR_FLUSH("[CTX %p] native_invoke_viii called with table_index %u, arg1 %u, arg2 %u, arg3 %u",
                      (void*)ctx, table_index, (uint32_t)args[1], (uint32_t)args[2], (uint32_t)args[3]);
@@ -401,19 +412,19 @@ int main() {
     LOG_STDERR_FLUSH("Context created (WAMR Lib for Try/Catch): %p", (void*)ctx);
 
     hb_beamr_native_symbol_t eh_symbols[] = {
-        { "env", "__cxa_throw", (void*)native_cxa_throw, "(iii)", ctx },
-        { "env", "__cxa_rethrow", (void*)native_cxa_rethrow, "()", ctx },
-        { "env", "invoke_v", (void*)native_invoke_v, "(i)", ctx }, 
+        { "env", "__cxa_throw", (void*)native_cxa_throw, "(iii)", NULL },
+        { "env", "__cxa_rethrow", (void*)native_cxa_rethrow, "()", NULL },
+        { "env", "invoke_v", (void*)native_invoke_v, "(i)", NULL }, 
         // Guessed signatures for other invokes, may need adjustment
-        { "env", "invoke_iii", (void*)native_invoke_iii, "(iii)i", ctx }, 
-        { "env", "invoke_viii", (void*)native_invoke_viii, "(iiii)", ctx }, // Assuming void return, matches __cxa_throw params
-        { "env", "__cxa_begin_catch", (void*)native_cxa_begin_catch, "(i)i", ctx },
-        { "env", "__cxa_end_catch", (void*)native_cxa_end_catch, "()", ctx },
+        { "env", "invoke_iii", (void*)native_invoke_iii, "(iii)i", NULL }, 
+        { "env", "invoke_viii", (void*)native_invoke_viii, "(iiii)", NULL }, // Assuming void return, matches __cxa_throw params
+        { "env", "__cxa_begin_catch", (void*)native_cxa_begin_catch, "(i)i", NULL },
+        { "env", "__cxa_end_catch", (void*)native_cxa_end_catch, "()", NULL },
         // Add other stubs with guessed signatures - these are less critical for just trapping throws
-        { "env", "__cxa_find_matching_catch_2", (void*)native_cxa_find_matching_catch_2, "()i", ctx },
-        { "env", "__cxa_find_matching_catch_3", (void*)native_cxa_find_matching_catch_3, "(i)i", ctx },
-        { "env", "__resumeException", (void*)native_placeholder_trap, "(i)", ctx },
-        { "env", "invoke_ii", (void*)native_invoke_ii, "(ii)i", ctx }
+        { "env", "__cxa_find_matching_catch_2", (void*)native_cxa_find_matching_catch_2, "()i", NULL },
+        { "env", "__cxa_find_matching_catch_3", (void*)native_cxa_find_matching_catch_3, "(i)i", NULL },
+        { "env", "__resumeException", (void*)native_placeholder_trap, "(i)", NULL },
+        { "env", "invoke_ii", (void*)native_invoke_ii, "(ii)i", NULL }
     };
     uint32_t num_eh_symbols = sizeof(eh_symbols) / sizeof(hb_beamr_native_symbol_t);
 
