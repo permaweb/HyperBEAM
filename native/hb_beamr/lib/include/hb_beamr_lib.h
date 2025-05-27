@@ -73,6 +73,9 @@ hb_beamr_lib_context_t* hb_beamr_lib_create_context(void);
 void hb_beamr_lib_destroy_context(hb_beamr_lib_context_t* ctx);
 const char* hb_beamr_lib_get_last_error(hb_beamr_lib_context_t* ctx); // Gets detailed error string
 
+// New accessor
+WASM_RUNTIME_API_EXTERN wasm_module_inst_t hb_beamr_lib_get_module_instance(hb_beamr_lib_context_t* ctx);
+
 // For registering native symbols (host functions)
 // This structure mirrors WAMR's NativeSymbol but allows for easier construction
 // by the port driver. The void* user_function is the C function in the port driver.

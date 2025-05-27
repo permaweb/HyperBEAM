@@ -516,3 +516,22 @@ add_custom_command(TARGET MultithreadStressTest POST_BUILD
 add_test(NAME MultithreadStressTest COMMAND MultithreadStressTest)
 
 # TODO: Add C-API tests for AOT loaded modules (instantiate, call export, import call)
+
+add_executable(asynchronous_comms_test asynchronous_comms_test.c utils.c async_queue.c)
+target_link_libraries(asynchronous_comms_test PRIVATE hb_beamr_lib iwasm_static Threads::Threads)
+add_dependencies(asynchronous_comms_test fib_wasm_file_target)
+add_dependencies(asynchronous_comms_test import_test_wasm_file_target) # For import_test_module.wasm
+add_dependencies(asynchronous_comms_test nested_import_wasm_file_target) # For import_nested.wasm
+
+add_custom_command(TARGET asynchronous_comms_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${FIB_WASM_OUTPUT}
+    $<TARGET_FILE_DIR:asynchronous_comms_test>/basic_fib.wasm
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${IMPORT_TEST_WASM_OUTPUT}
+    $<TARGET_FILE_DIR:asynchronous_comms_test>/import_test_module.wasm
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${NESTED_IMPORT_WASM_OUTPUT}
+    $<TARGET_FILE_DIR:asynchronous_comms_test>/import_nested.wasm
+)
+add_test(NAME AsynchronousCommsTest COMMAND asynchronous_comms_test)

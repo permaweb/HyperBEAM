@@ -26,10 +26,11 @@ EMSCRIPTEN_KEEPALIVE
 unsigned int call_host_and_read(unsigned int index, unsigned int init_val) {
     // Check if index is within bounds
     if (index < 16) { // 16 is the size of global_data_buffer
-        volatile unsigned int* ptr_in_wasm_memory = &global_data_buffer[index];
-        *ptr_in_wasm_memory = init_val; // Set memory to init_val
+        global_data_buffer[index] = init_val;
+
         give_host_control(index); // Call the imported host function, passing the current index
-        return global_data_buffer[index]; // Return the (hopefully modified) value
+        
+        return global_data_buffer[index]; // Return the (hopefully modified) value - original version
     }
     // Return a distinct value on error or if index is out of bounds.
     return 0xFFFFFFFF;

@@ -812,4 +812,9 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
     free(argv_runtime);
 
     return final_rc;
+}
+
+wasm_module_inst_t hb_beamr_lib_get_module_instance(hb_beamr_lib_context_t* ctx) {
+    if (!ctx) return NULL;
+    return ctx->module_inst;
 } 
