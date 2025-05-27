@@ -584,3 +584,22 @@ add_custom_command(TARGET GenerateNativesTest POST_BUILD
         $<TARGET_FILE_DIR:GenerateNativesTest>/import_nested.wasm
 )
 add_test(NAME GenerateNativesTest COMMAND GenerateNativesTest)
+
+# --- Test: Async Import Test (threaded import resolution) ---
+add_executable(async_import_test async_import_test.c utils.c)
+find_package(Threads REQUIRED)
+
+# Link against hb_beamr_lib, WAMR static lib and pthread
+target_link_libraries(async_import_test PRIVATE hb_beamr_lib iwasm_static Threads::Threads)
+
+# Depends on the AOT fixture for import_nested
+add_dependencies(async_import_test nested_import_aot_file_target)
+
+add_custom_command(TARGET async_import_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${NESTED_IMPORT_AOT_OUTPUT}
+        $<TARGET_FILE_DIR:async_import_test>/import_nested.aot
+    COMMENT "Copying import_nested.aot for async_import_test"
+)
+
+add_test(NAME AsyncImportTest COMMAND async_import_test)
