@@ -105,7 +105,9 @@ static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t *args){
 typedef struct { int depth; } worker_arg_t;
 
 static void *depth_thread(void *arg){
-    worker_arg_t *wa = (worker_arg_t*)arg; int d = wa->depth; free(wa);
+    worker_arg_t *wa = (worker_arg_t*)arg;
+    int d = wa->depth;
+    free(wa);
     async_ctx_t *ctx = &g_ctx;
 
     wasm_runtime_init_thread_env();
@@ -218,13 +220,10 @@ int main(){
     g_ctx.fn_call_host_and_read = wasm_runtime_lookup_function(g_ctx.module_inst, "call_host_and_read");
     assert(g_ctx.fn_call_host_and_read);
 
-    /* Prepare ExecEnvs – create a dedicated ExecEnv for every depth so that
-       each worker thread owns its execution environment and they are not
-       shared concurrently across threads. */
+    /* Prepare ExecEnvs – create a global ExecEnv. */
+    wasm_exec_env_t global_ee = wasm_runtime_create_exec_env(g_ctx.module_inst, 128 * 1024);
     for(int i = 0; i < MAX_DEPTH; i++) {
-        /* 128 KiB matches the stack size used when the module was first
-           instantiated above.  Adjust if stack requirements change. */
-        g_ctx.exec_env_depth[i] = wasm_runtime_create_exec_env(g_ctx.module_inst, 128 * 1024);
+        g_ctx.exec_env_depth[i] = global_ee; // wasm_runtime_create_exec_env(g_ctx.module_inst, 128 * 1024);
         assert(g_ctx.exec_env_depth[i]);
     }
 
@@ -237,12 +236,9 @@ int main(){
     /* Join all spawned worker threads */
     for (int i = 0; i < MAX_DEPTH; i++) pthread_join(g_tids[i], NULL);
 
-    /* Clean-up: free the per-depth ExecEnvs now that all worker threads have
+    /* Clean-up: free the global ExecEnv now that all worker threads have
        completed. */
-    for (int i = 0; i < MAX_DEPTH; i++) {
-        wasm_runtime_destroy_exec_env(g_ctx.exec_env_depth[i]);
-        g_ctx.exec_env_depth[i] = NULL;
-    }
+    wasm_runtime_destroy_exec_env(global_ee);
 
     LOG("Test PASSED");
     printf("async_import_threads_test PASSED\n");
