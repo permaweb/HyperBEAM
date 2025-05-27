@@ -603,3 +603,20 @@ add_custom_command(TARGET async_import_test POST_BUILD
 )
 
 add_test(NAME AsyncImportTest COMMAND async_import_test)
+
+# --- Test: Async Import THREADS Test (each depth worker thread) ---
+add_executable(async_import_threads_test async_import_threads_test.c utils.c)
+find_package(Threads REQUIRED)
+
+target_link_libraries(async_import_threads_test PRIVATE hb_beamr_lib Threads::Threads)
+
+add_dependencies(async_import_threads_test nested_import_aot_file_target)
+
+add_custom_command(TARGET async_import_threads_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${NESTED_IMPORT_AOT_OUTPUT}
+        $<TARGET_FILE_DIR:async_import_threads_test>/import_nested.aot
+    COMMENT "Copying import_nested.aot for async_import_threads_test"
+)
+
+add_test(NAME AsyncImportThreadsTest COMMAND async_import_threads_test)
