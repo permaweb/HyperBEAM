@@ -44,17 +44,17 @@ list(StoreOpts, Path) when is_map(StoreOpts), is_binary(Path) ->
     Env = find_env(StoreOpts),
     PathSize = byte_size(Path),
     try
-       
-       Result = lmdb:fold(Env, default,
+       lmdb:fold(Env, default,
            fun(Key, _Value, Acc) ->
-               case byte_size(Key) >= PathSize andalso binary:part(Key, 0, PathSize) =:= Path of
+               % Only match on keys that have a larger prefix
+               case byte_size(Key) > PathSize andalso 
+                    binary:part(Key, 0, PathSize) =:= Path of
                   true -> [Key | Acc];
                   false -> Acc
                end
            end,
            []
-        ),
-       Result
+       )
     catch
        _:Error -> {error, Error}
     end;
