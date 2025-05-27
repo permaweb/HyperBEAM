@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 #include "hb_beamr_lib.h"
+#include "hb_beamr_fsm.h"
 
 // Command (Master -> Slave)
 
@@ -20,6 +21,7 @@ typedef struct {
     hb_beamr_lib_context_t *ctx; // context pointer owned by master
     int arg; // module_id or function_arg
     const char* func_name; // for CMD_CALL_EXPORT / nested import
+    hb_beamr_fsm_t *fsm;         // FSM handle pointer (optional, can be NULL)
 } command_t;
 
 // Event (Slave -> Master)

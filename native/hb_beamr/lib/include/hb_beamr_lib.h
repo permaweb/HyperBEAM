@@ -92,11 +92,6 @@ hb_beamr_lib_rc_t hb_beamr_lib_load_aot_module(hb_beamr_lib_context_t* ctx,
                                                uint8_t* aot_binary_buf,
                                                uint32_t aot_binary_size);
 
-// New function for pre-registering natives globally
-hb_beamr_lib_rc_t hb_beamr_lib_register_global_natives(const char* for_module_name,
-                                                       const hb_beamr_native_symbol_t* import_symbols,
-                                                       uint32_t num_import_symbols);
-
 hb_beamr_lib_rc_t hb_beamr_lib_instantiate(hb_beamr_lib_context_t* ctx,
                                            uint32_t stack_size, 
                                            uint32_t heap_size);
@@ -167,6 +162,59 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
     uint32_t num_results,   // Expected number of results
     wasm_val_t results[]    // Buffer to store results
 );
+
+// -----------------------------------------------------------------------------
+// Structured native symbol groups (one group per module)
+
+#include "wasm_export.h" // for NativeSymbol
+
+typedef struct {
+    const char          *module_name;  // Owned pointer inside the struct (malloc'd)
+    const hb_beamr_native_symbol_t *symbols;      // Array of symbols for this module
+    uint32_t             num_symbols;
+} hb_beamr_native_symbol_group_t;
+
+typedef struct {
+    hb_beamr_native_symbol_group_t *groups;  // Array of groups
+    uint32_t                        num_groups;
+} hb_beamr_native_symbols_structured_t;
+
+// Attachment metadata passed to the generic stub (holds duplicated strings)
+typedef struct {
+    char *module_name;
+    char *field_name;
+} hb_beamr_generated_attachment_t;
+
+// Module meta extracted from binary (imports information)
+typedef struct {
+    wasm_module_t   module_handle; // Loaded (uninstantiated) module, owned by meta
+    wasm_import_t  *imports;       // Copy of import descriptors (function ones kept)
+    uint32_t        import_count;  // Total entries in imports array
+} hb_beamr_module_meta_t;
+
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t
+hb_beamr_lib_module_meta(const uint8_t *wasm_binary,
+                         uint32_t wasm_binary_size,
+                         hb_beamr_module_meta_t *out_meta);
+
+HB_BEAMR_LIB_API void
+hb_beamr_lib_free_module_meta(hb_beamr_module_meta_t *meta);
+
+// Generate structured native symbols from module metadata, mapping every
+// imported function to the same C stub (user_function).
+
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t
+hb_beamr_lib_generate_natives(const hb_beamr_module_meta_t *meta,
+                                         void *user_function,
+                                         hb_beamr_native_symbols_structured_t *out_struct);
+
+HB_BEAMR_LIB_API void
+hb_beamr_lib_free_natives(hb_beamr_native_symbols_structured_t *structured);
+
+// Register all groups with the runtime.
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t
+hb_beamr_lib_register_global_natives(const hb_beamr_native_symbols_structured_t *structured);
+// -----------------------------------------------------------------------------
 
 #ifdef __cplusplus
 // ... existing code ...

@@ -156,11 +156,15 @@ static void *slave_thread(void *arg) {
             case CMD_REGISTER_NATIVES: {
                 hb_beamr_lib_rc_t rc = HB_BEAMR_LIB_ERROR_INVALID_ARGS;
                 if (cmd.arg == 1) {
-                    hb_beamr_native_symbol_t sym = {"env","host_add_one",(void*)native_host_add_one,"(i)i",NULL};
-                    rc = hb_beamr_lib_register_global_natives("env", &sym, 1);
+                    const hb_beamr_native_symbol_t sym_arr[] = {{"env", "host_add_one", (void*)native_host_add_one, "(i)i", NULL}};
+                    hb_beamr_native_symbol_group_t group_env = {"env", sym_arr, sizeof(sym_arr)/sizeof(sym_arr[0])};
+                    hb_beamr_native_symbols_structured_t symbols_structured = {&group_env, 1};
+                    rc = hb_beamr_lib_register_global_natives(&symbols_structured);
                 } else if (cmd.arg == 2) {
-                    hb_beamr_native_symbol_t sym_nested = {"env","give_host_control",(void*)native_give_host_control,"(i)", NULL};
-                    rc = hb_beamr_lib_register_global_natives("env", &sym_nested, 1);
+                    const hb_beamr_native_symbol_t sym_arr_nested[] = {{"env", "give_host_control", (void*)native_give_host_control, "(i)", NULL}};
+                    hb_beamr_native_symbol_group_t group_env_nested = {"env", sym_arr_nested, sizeof(sym_arr_nested)/sizeof(sym_arr_nested[0])};
+                    hb_beamr_native_symbols_structured_t symbols_structured_nested = {&group_env_nested, 1};
+                    rc = hb_beamr_lib_register_global_natives(&symbols_structured_nested);
                 }
                 push_evt((event_t){ rc == HB_BEAMR_LIB_SUCCESS ? EVT_OK : EVT_ERROR, rc});
                 break; }

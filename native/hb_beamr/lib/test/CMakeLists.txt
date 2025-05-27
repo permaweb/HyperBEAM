@@ -515,7 +515,21 @@ add_custom_command(TARGET MultithreadStressTest POST_BUILD
 )
 add_test(NAME MultithreadStressTest COMMAND MultithreadStressTest)
 
-# TODO: Add C-API tests for AOT loaded modules (instantiate, call export, import call)
+# --- FSM Version of Multithread Stress Test ---
+add_executable(MultithreadStressFSMTest multithread_stress_fsm_test.c utils.c)
+find_package(Threads REQUIRED)
+
+target_link_libraries(MultithreadStressFSMTest PRIVATE hb_beamr_lib iwasm_static Threads::Threads)
+add_dependencies(MultithreadStressFSMTest fib_wasm_file_target import_test_wasm_file_target)
+add_custom_command(TARGET MultithreadStressFSMTest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${FIB_WASM_OUTPUT}
+        $<TARGET_FILE_DIR:MultithreadStressFSMTest>/basic_fib.wasm
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${IMPORT_TEST_WASM_OUTPUT}
+        $<TARGET_FILE_DIR:MultithreadStressFSMTest>/import_test_module.wasm
+)
+add_test(NAME MultithreadStressFSMTest COMMAND MultithreadStressFSMTest)
 
 add_executable(asynchronous_comms_test asynchronous_comms_test.c utils.c async_queue.c)
 target_link_libraries(asynchronous_comms_test PRIVATE hb_beamr_lib iwasm_static Threads::Threads)
@@ -535,3 +549,38 @@ add_custom_command(TARGET asynchronous_comms_test POST_BUILD
     $<TARGET_FILE_DIR:asynchronous_comms_test>/import_nested.wasm
 )
 add_test(NAME AsynchronousCommsTest COMMAND asynchronous_comms_test)
+
+add_executable(fsm_test fsm_test.c utils.c)
+target_link_libraries(fsm_test PRIVATE hb_beamr_lib)
+add_dependencies(fsm_test fib_wasm_file_target)
+add_custom_command(TARGET fsm_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${FIB_WASM_OUTPUT}
+    $<TARGET_FILE_DIR:fsm_test>/basic_fib.wasm
+)
+add_test(NAME FSMTest COMMAND fsm_test)
+
+# FSM nested import test
+add_executable(FSMNestedImportTest fsm_nested_import_test.c utils.c)
+target_link_libraries(FSMNestedImportTest PRIVATE hb_beamr_lib iwasm_static)
+add_dependencies(FSMNestedImportTest nested_import_wasm_file_target)
+add_custom_command(TARGET FSMNestedImportTest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${CMAKE_CURRENT_BINARY_DIR}/import_nested.wasm
+    $<TARGET_FILE_DIR:FSMNestedImportTest>/import_nested.wasm
+)
+add_test(NAME FSMNestedImportTest COMMAND FSMNestedImportTest)
+
+# generate natives test
+add_executable(GenerateNativesTest generate_natives_test.c utils.c)
+target_link_libraries(GenerateNativesTest PRIVATE hb_beamr_lib iwasm_static)
+add_dependencies(GenerateNativesTest import_test_wasm_file_target nested_import_wasm_file_target)
+add_custom_command(TARGET GenerateNativesTest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_BINARY_DIR}/import_test_module.wasm
+        $<TARGET_FILE_DIR:GenerateNativesTest>/import_test_module.wasm
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_BINARY_DIR}/import_nested.wasm
+        $<TARGET_FILE_DIR:GenerateNativesTest>/import_nested.wasm
+)
+add_test(NAME GenerateNativesTest COMMAND GenerateNativesTest)

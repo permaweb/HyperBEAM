@@ -199,51 +199,6 @@ hb_beamr_lib_rc_t hb_beamr_lib_load_aot_module(
     return HB_BEAMR_LIB_SUCCESS;
 }
 
-hb_beamr_lib_rc_t hb_beamr_lib_register_global_natives(
-    const char* for_module_name, 
-    const hb_beamr_native_symbol_t* import_symbols, 
-    uint32_t num_import_symbols
-) {
-    if (!atomic_load_explicit(&g_wamr_runtime_initialized, memory_order_acquire)) {
-        // Cannot register natives if runtime wasn't even first initialized.
-        return HB_BEAMR_LIB_ERROR_WAMR_RUNTIME_INIT_FAILED; // Or a more specific "not initialized" error
-    }
-    if (!for_module_name || !import_symbols || num_import_symbols == 0) {
-        return HB_BEAMR_LIB_ERROR_INVALID_STATE; 
-    }
-
-    pthread_mutex_lock(&g_wamr_runtime_mutex);
-
-    NativeSymbol* wamr_symbols = (NativeSymbol*)malloc(sizeof(NativeSymbol) * num_import_symbols);
-    if (!wamr_symbols) {
-        pthread_mutex_unlock(&g_wamr_runtime_mutex);
-        return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED;
-    }
-
-    for (uint32_t i = 0; i < num_import_symbols; ++i) {
-        wamr_symbols[i].symbol = import_symbols[i].function_name;
-        wamr_symbols[i].func_ptr = import_symbols[i].user_function;
-        wamr_symbols[i].signature = import_symbols[i].signature;
-        wamr_symbols[i].attachment = import_symbols[i].attachment;
-    }
-
-    hb_beamr_lib_rc_t rc = HB_BEAMR_LIB_SUCCESS;
-
-    if (!wasm_runtime_register_natives_raw(for_module_name, wamr_symbols, num_import_symbols)) {
-        rc = HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED;
-    }
-
-    // Do NOT free wamr_symbols here if WAMR takes ownership, as per documentation.
-    // If registration failed we free to avoid leak.
-    if (rc != HB_BEAMR_LIB_SUCCESS) {
-        free(wamr_symbols);
-    }
-
-    pthread_mutex_unlock(&g_wamr_runtime_mutex);
-
-    return rc;
-}
-
 hb_beamr_lib_rc_t hb_beamr_lib_instantiate(
     hb_beamr_lib_context_t* ctx, 
     uint32_t stack_size, 
@@ -817,4 +772,131 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
 wasm_module_inst_t hb_beamr_lib_get_module_instance(hb_beamr_lib_context_t* ctx) {
     if (!ctx) return NULL;
     return ctx->module_inst;
+}
+
+// ============================ Structured Generated Natives Helper ===========
+
+static char valkind_to_sig_char(wasm_valkind_t k){
+    switch(k){case WASM_I32: return 'i'; case WASM_I64: return 'I'; case WASM_F32: return 'f'; case WASM_F64: return 'F'; default: return '?';}}
+
+static hb_beamr_lib_rc_t build_signature_from_ftype(wasm_func_type_t ftype, char **out_sig){
+    uint32_t pc = wasm_func_type_get_param_count(ftype);
+    uint32_t rc = wasm_func_type_get_result_count(ftype);
+    size_t len = 2 + pc + rc; // '(' params ')' results
+    char *sig = (char*)malloc(len+1);
+    if(!sig) return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED;
+    size_t idx=0; sig[idx++]='(';
+    for(uint32_t i=0;i<pc;i++){ sig[idx++]=valkind_to_sig_char(wasm_func_type_get_param_valkind(ftype,i)); }
+    sig[idx++]=')';
+    for(uint32_t i=0;i<rc;i++){ sig[idx++]=valkind_to_sig_char(wasm_func_type_get_result_valkind(ftype,i)); }
+    sig[idx]='\0';
+    *out_sig=sig; return HB_BEAMR_LIB_SUCCESS;
+}
+
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_generate_natives(
+        const hb_beamr_module_meta_t *meta, void *user_function,
+        hb_beamr_native_symbols_structured_t *out_struct){
+    if(!meta||!user_function||!out_struct) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    memset(out_struct,0,sizeof(*out_struct));
+    int32_t import_cnt = meta->import_count;
+    if(import_cnt<=0){ /* no imports */ return HB_BEAMR_LIB_SUCCESS; }
+    // First pass: count unique module names and function imports per module
+    typedef struct { char *name; uint32_t count; } mod_count_t;
+    mod_count_t *mods=NULL; uint32_t mod_cap=0, mod_used=0;
+    for(int32_t i=0;i<import_cnt;i++){
+        wasm_import_t imp; wasm_runtime_get_import_type(meta->module_handle,i,&imp);
+        if(imp.kind!=WASM_IMPORT_EXPORT_KIND_FUNC) continue;
+        // find or add module name
+        uint32_t idx; for(idx=0; idx<mod_used; idx++) if(strcmp(mods[idx].name, imp.module_name)==0) break;
+        if(idx==mod_used){ // add
+            if(mod_used==mod_cap){ mod_cap = mod_cap?mod_cap*2:4; mods = realloc(mods, mod_cap*sizeof(mod_count_t)); }
+            mods[mod_used].name = strdup(imp.module_name?imp.module_name:"env"); mods[mod_used].count = 0; mod_used++; }
+        mods[idx].count++; }
+    // allocate groups
+    hb_beamr_native_symbol_group_t *groups = (hb_beamr_native_symbol_group_t*)malloc(sizeof(*groups)*mod_used);
+    if(!groups){ for(uint32_t i=0;i<mod_used;i++) free(mods[i].name); free(mods); return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED; }
+    // allocate symbols arrays per group
+    for(uint32_t i=0;i<mod_used;i++){ groups[i].module_name = mods[i].name; groups[i].num_symbols = mods[i].count; groups[i].symbols = malloc(sizeof(hb_beamr_native_symbol_t)*mods[i].count); }
+
+    // second pass populate
+    uint32_t *cursor = calloc(mod_used,sizeof(uint32_t));
+    for(int32_t i=0;i<import_cnt;i++){
+        wasm_import_t imp; wasm_runtime_get_import_type(meta->module_handle,i,&imp);
+        if(imp.kind!=WASM_IMPORT_EXPORT_KIND_FUNC) continue;
+        // locate group index
+        uint32_t gidx; for(gidx=0;gidx<mod_used;gidx++) if(strcmp(groups[gidx].module_name, imp.module_name)==0) break;
+        uint32_t pos = cursor[gidx]++;
+        hb_beamr_native_symbol_t *sym = (hb_beamr_native_symbol_t*)&groups[gidx].symbols[pos];
+        sym->module_name = NULL;
+        sym->function_name = strdup(imp.name?imp.name:"");
+        sym->user_function = user_function;
+        build_signature_from_ftype(imp.u.func_type,(char**)&sym->signature);
+        hb_beamr_generated_attachment_t *att = malloc(sizeof(*att));
+        att->module_name=strdup(imp.module_name?imp.module_name:""); att->field_name=strdup(imp.name?imp.name:"");
+        sym->attachment = att;
+    }
+    free(cursor); free(mods); wasm_runtime_unload(meta->module_handle);
+    out_struct->groups=groups; out_struct->num_groups=mod_used; return HB_BEAMR_LIB_SUCCESS;
+}
+
+HB_BEAMR_LIB_API void hb_beamr_lib_free_natives(hb_beamr_native_symbols_structured_t *st){
+    if(!st||!st->groups) return; for(uint32_t g=0;g<st->num_groups;g++){
+        hb_beamr_native_symbol_group_t *grp=&st->groups[g];
+        for(uint32_t i=0;i<grp->num_symbols;i++){
+            hb_beamr_native_symbol_t *s=&grp->symbols[i];
+            hb_beamr_generated_attachment_t *att = (hb_beamr_generated_attachment_t*)s->attachment;
+            if(att){ free(att->module_name); free(att->field_name); free(att);} free((void*)s->function_name); free((void*)s->signature);
+        }
+        free(grp->symbols); free((void*)grp->module_name);
+    }
+    free(st->groups); st->groups=NULL; st->num_groups=0;
+}
+
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_register_global_natives(const hb_beamr_native_symbols_structured_t *st){
+    if(!st) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    for(uint32_t g=0; g<st->num_groups; g++){
+        hb_beamr_native_symbol_group_t grp = st->groups[g];
+        // Convert to NativeSymbol array on the fly
+        NativeSymbol *tmp = (NativeSymbol*)malloc(sizeof(NativeSymbol)*grp.num_symbols);
+        if(!tmp) return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED;
+        for(uint32_t i=0;i<grp.num_symbols;i++){
+            tmp[i].symbol    = grp.symbols[i].function_name;
+            tmp[i].func_ptr  = grp.symbols[i].user_function;
+            tmp[i].signature = grp.symbols[i].signature;
+            tmp[i].attachment= grp.symbols[i].attachment;
+        }
+        bool ok = wasm_runtime_register_natives_raw(grp.module_name, tmp, grp.num_symbols);
+        /* Do NOT free tmp: WAMR may access it later */
+        if(!ok) return HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED;
+    }
+    return HB_BEAMR_LIB_SUCCESS;
+}
+
+// ============================ end helper ===================================== 
+
+// Helper to gather meta
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_module_meta(const uint8_t *wasm_binary,
+                                                           uint32_t wasm_binary_size,
+                                                           hb_beamr_module_meta_t *out_meta){
+    if(!wasm_binary||!wasm_binary_size||!out_meta) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    memset(out_meta,0,sizeof(*out_meta));
+    char err[128];
+    wasm_module_t mod = wasm_runtime_load((uint8_t*)wasm_binary, wasm_binary_size, err, sizeof(err));
+    if(!mod) return HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED;
+    int32_t import_cnt = wasm_runtime_get_import_count(mod);
+    if(import_cnt<0){ wasm_runtime_unload(mod); return HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED; }
+    wasm_import_t *imports = NULL;
+    if(import_cnt>0){ imports = (wasm_import_t*)malloc(sizeof(wasm_import_t)*import_cnt);
+        if(!imports){ wasm_runtime_unload(mod); return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED; }
+        for(int32_t i=0;i<import_cnt;i++){ wasm_runtime_get_import_type(mod,i,&imports[i]); }
+    }
+    out_meta->module_handle = mod;
+    out_meta->imports = imports;
+    out_meta->import_count = import_cnt;
+    return HB_BEAMR_LIB_SUCCESS;
+}
+
+HB_BEAMR_LIB_API void hb_beamr_lib_free_module_meta(hb_beamr_module_meta_t *meta){
+    if(!meta) return; if(meta->imports) free(meta->imports); if(meta->module_handle) wasm_runtime_unload(meta->module_handle);
+    memset(meta,0,sizeof(*meta));
 } 

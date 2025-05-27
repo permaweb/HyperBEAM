@@ -60,16 +60,23 @@ int main() {
     hb_beamr_lib_rc_t rc = hb_beamr_lib_init_runtime_global(&init_args_wamr); 
     assert_rc_wice(rc, HB_BEAMR_LIB_SUCCESS, NULL, "hb_beamr_lib_init_runtime_global");
 
-    hb_beamr_native_symbol_t import_symbols[] = {
+    hb_beamr_native_symbols_structured_t import_symbols = {
+        .groups = (hb_beamr_native_symbol_group_t[]){
         {
             .module_name = "env", 
-            .function_name = "give_host_control",
-            .user_function = (void*)my_give_host_control_impl_wamr,
-            .signature = "(i)", 
-            .attachment = NULL 
-        }
+            .symbols = (hb_beamr_native_symbol_t[]){
+                {
+                    .function_name = "give_host_control",
+                    .user_function = (void*)my_give_host_control_impl_wamr,
+                    .signature = "(i)", 
+                    .attachment = NULL 
+                }
+            },
+            .num_symbols = 1
+        }},
+        .num_groups = 1
     };
-    rc = hb_beamr_lib_register_global_natives("env", import_symbols, 1);
+    rc = hb_beamr_lib_register_global_natives(&import_symbols);
     assert_rc_wice(rc, HB_BEAMR_LIB_SUCCESS, NULL, "hb_beamr_lib_register_global_natives");
     printf("Registered host functions globally.\n");
 

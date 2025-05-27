@@ -158,14 +158,15 @@ int main(void) {
     LOG_STDERR_FLUSH("hb_beamr_lib_init_runtime_global: %d", rc);
     assert(rc == HB_BEAMR_LIB_SUCCESS && "Runtime init failed");
 
-    hb_beamr_native_symbol_t sjlj_symbols[] = {
-        { "env", "invoke_vii", (void*)native_invoke_vii, "(iii)", NULL },
-        { "env", "invoke_iiii", (void*)native_invoke_iiii, "(iiii)i", NULL },
-        { "env", "_emscripten_throw_longjmp", (void*)native_emscripten_throw_longjmp, "()", NULL }
+    const hb_beamr_native_symbol_t symbols_env[] = {
+        {"env", "invoke_vii", (void*)native_invoke_vii, "(iii)", NULL},
+        {"env", "invoke_iiii", (void*)native_invoke_iiii, "(iiii)i", NULL},
+        {"env", "_emscripten_throw_longjmp", (void*)native_emscripten_throw_longjmp, "()", NULL}
     };
-    const uint32_t num_sjlj_symbols = sizeof(sjlj_symbols) / sizeof(hb_beamr_native_symbol_t);
+    hb_beamr_native_symbol_group_t group_env = {"env", symbols_env, sizeof(symbols_env)/sizeof(symbols_env[0])};
+    hb_beamr_native_symbols_structured_t sjlj_structured_symbols = {&group_env, 1};
 
-    rc = hb_beamr_lib_register_global_natives("env", sjlj_symbols, num_sjlj_symbols);
+    rc = hb_beamr_lib_register_global_natives(&sjlj_structured_symbols);
     LOG_STDERR_FLUSH("hb_beamr_lib_register_global_natives: %d, %s", rc, hb_beamr_lib_get_last_error(ctx));
     assert(rc == HB_BEAMR_LIB_SUCCESS && "Failed to register SJLJ natives");
 

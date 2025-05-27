@@ -64,18 +64,25 @@ int main() {
     }
     printf("AOT file %s read, size: %u bytes.\n", aot_filename, aot_file_size);
 
-    hb_beamr_native_symbol_t import_symbols[] = {
-        { 
+    hb_beamr_native_symbols_structured_t import_symbols = {
+        .groups = (hb_beamr_native_symbol_group_t[]){
+        {
             .module_name = "env", 
-            .function_name = "host_add_one", 
-            .user_function = (void*)generic_dispatcher_for_add_one, // Register generic dispatcher
-            .signature = "(i)i", // WAMR uses this to prepare args_raw for the dispatcher
-            .attachment = NULL // No attachment needed for this simple test dispatcher
+            .symbols = (hb_beamr_native_symbol_t[]){
+                {
+                    .function_name = "host_add_one", 
+                    .user_function = (void*)generic_dispatcher_for_add_one, // Register generic dispatcher
+                    .signature = "(i)i", // WAMR uses this to prepare args_raw for the dispatcher
+                    .attachment = NULL // No attachment needed for this simple test dispatcher
+                }
+            },
+            .num_symbols = 1
         }
+        },
+        .num_groups = 1
     };
-    uint32_t num_imports = sizeof(import_symbols) / sizeof(hb_beamr_native_symbol_t);
 
-    rc = hb_beamr_lib_register_global_natives("env", import_symbols, num_imports);
+    rc = hb_beamr_lib_register_global_natives(&import_symbols);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         fprintf(stderr, "Test FAILED: hb_beamr_lib_register_global_natives failed: %d\n", rc);
         goto cleanup_fail; 

@@ -1,4 +1,5 @@
 #include "hb_beamr_lib.h"
+#include "lib_export.h"
 #include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -411,22 +412,21 @@ int main() {
     assert(ctx != NULL && "hb_beamr_lib_create_context returned NULL");
     LOG_STDERR_FLUSH("Context created (WAMR Lib for Try/Catch): %p", (void*)ctx);
 
-    hb_beamr_native_symbol_t eh_symbols[] = {
-        { "env", "__cxa_throw", (void*)native_cxa_throw, "(iii)", NULL },
-        { "env", "__cxa_rethrow", (void*)native_cxa_rethrow, "()", NULL },
-        { "env", "invoke_v", (void*)native_invoke_v, "(i)", NULL }, 
-        // Guessed signatures for other invokes, may need adjustment
-        { "env", "invoke_iii", (void*)native_invoke_iii, "(iii)i", NULL }, 
-        { "env", "invoke_viii", (void*)native_invoke_viii, "(iiii)", NULL }, // Assuming void return, matches __cxa_throw params
-        { "env", "__cxa_begin_catch", (void*)native_cxa_begin_catch, "(i)i", NULL },
-        { "env", "__cxa_end_catch", (void*)native_cxa_end_catch, "()", NULL },
-        // Add other stubs with guessed signatures - these are less critical for just trapping throws
-        { "env", "__cxa_find_matching_catch_2", (void*)native_cxa_find_matching_catch_2, "()i", NULL },
-        { "env", "__cxa_find_matching_catch_3", (void*)native_cxa_find_matching_catch_3, "(i)i", NULL },
-        { "env", "__resumeException", (void*)native_placeholder_trap, "(i)", NULL },
-        { "env", "invoke_ii", (void*)native_invoke_ii, "(ii)i", NULL }
+    const hb_beamr_native_symbol_t symbols_env[] = {
+        {"env", "__cxa_throw", (void*)native_cxa_throw, "(iii)", NULL},
+        {"env", "__cxa_rethrow", (void*)native_cxa_rethrow, "()", NULL},
+        {"env", "invoke_v", (void*)native_invoke_v, "(i)", NULL},
+        {"env", "invoke_iii", (void*)native_invoke_iii, "(iii)i", NULL},
+        {"env", "invoke_viii", (void*)native_invoke_viii, "(iiii)", NULL},
+        {"env", "__cxa_begin_catch", (void*)native_cxa_begin_catch, "(i)i", NULL},
+        {"env", "__cxa_end_catch", (void*)native_cxa_end_catch, "()", NULL},
+        {"env", "__cxa_find_matching_catch_2", (void*)native_cxa_find_matching_catch_2, "()i", NULL},
+        {"env", "__cxa_find_matching_catch_3", (void*)native_cxa_find_matching_catch_3, "(i)i", NULL},
+        {"env", "__resumeException", (void*)native_placeholder_trap, "(i)", NULL},
+        {"env", "invoke_ii", (void*)native_invoke_ii, "(ii)i", NULL}
     };
-    uint32_t num_eh_symbols = sizeof(eh_symbols) / sizeof(hb_beamr_native_symbol_t);
+    hb_beamr_native_symbol_group_t group_env = {"env", symbols_env, sizeof(symbols_env)/sizeof(symbols_env[0])};
+    hb_beamr_native_symbols_structured_t eh_symbols_structured = {&group_env, 1};
 
     RuntimeInitArgs init_args;
     memset(&init_args, 0, sizeof(RuntimeInitArgs));
@@ -436,7 +436,7 @@ int main() {
     assert_rc_try_catch(rc, HB_BEAMR_LIB_SUCCESS, NULL, "hb_beamr_lib_init_runtime_global");
 
     // Register the EH native symbols globally
-    rc = hb_beamr_lib_register_global_natives("env", eh_symbols, num_eh_symbols);
+    rc = hb_beamr_lib_register_global_natives(&eh_symbols_structured);
     assert_rc_try_catch(rc, HB_BEAMR_LIB_SUCCESS, NULL, "hb_beamr_lib_register_global_natives for EH symbols");
     LOG_STDERR_FLUSH("Registered C++ EH ABI native symbols.");
 

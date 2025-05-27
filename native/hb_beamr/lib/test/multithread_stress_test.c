@@ -1,5 +1,6 @@
 #include "hb_beamr_lib.h"
 #include "utils.h"
+#include "wasm_export.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,12 @@
 
 #define NUM_WORKERS_PHASE 10
 #define ITERATIONS_PER_WORKER 50
+
+#define LOG_STDERR_FLUSH(format, ...) \
+    do { \
+        fprintf(stderr, "[:%d] " format "\n", __LINE__, ##__VA_ARGS__); \
+        fflush(stderr); \
+    } while (0)
 
 typedef enum { EV_FIB_START, EV_FIB_DONE, EV_IMP_START, EV_IMP_DONE } event_kind_t;
 
@@ -56,6 +63,12 @@ static void *worker_fib(void *arg) {
     int worker_id = *(int *)arg;
     free(arg);
 
+    if (wasm_runtime_thread_env_inited()) {
+        LOG_STDERR_FLUSH("[fib_worker %d] wasm_runtime_thread_env_inited() true", worker_id);
+    } else {
+        LOG_STDERR_FLUSH("[fib_worker %d] wasm_runtime_thread_env_inited() false", worker_id);
+    }
+
     if (!wasm_runtime_init_thread_env()) {
         g_failure = 1;
         return NULL;
@@ -77,7 +90,7 @@ static void *worker_fib(void *arg) {
         wasm_val_t results[1];
         hb_beamr_lib_rc_t rc = hb_beamr_lib_call_export(ctx, "fib", 1, args, 1, results);
         if (rc != HB_BEAMR_LIB_SUCCESS || results[0].of.i32 != expected) {
-            fprintf(stderr, "[fib worker] unexpected result %d (expected %d). err=%s\n", results[0].of.i32, expected, hb_beamr_lib_get_last_error(ctx));
+            LOG_STDERR_FLUSH("[fib worker %d] unexpected result %d (expected %d). err=%s\n", worker_id, results[0].of.i32, expected, hb_beamr_lib_get_last_error(ctx));
             g_failure = 1;
         }
         hb_beamr_lib_destroy_context(ctx);
@@ -133,10 +146,10 @@ static void *registrar_thread(void *unused) {
     // Delay to ensure overlap with phase A workers
     usleep(20 * 1000); // 20 ms
 
-    hb_beamr_native_symbol_t symbols[] = {
-        { "env", "host_add_one", (void*)native_host_add_one, "(i)i", NULL }
-    };
-    hb_beamr_lib_rc_t rc = hb_beamr_lib_register_global_natives("env", symbols, 1);
+    const hb_beamr_native_symbol_t sym_arr[] = {{"env", "host_add_one", (void*)native_host_add_one, "(i)i", NULL}};
+    hb_beamr_native_symbol_group_t group_env = {"env", sym_arr, sizeof(sym_arr)/sizeof(sym_arr[0])};
+    hb_beamr_native_symbols_structured_t symbols_structured = {&group_env, 1};
+    hb_beamr_lib_rc_t rc = hb_beamr_lib_register_global_natives(&symbols_structured);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         fprintf(stderr, "[registrar] failed to register natives rc=%d\n", rc);
         g_failure = 1;
