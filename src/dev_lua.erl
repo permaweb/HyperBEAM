@@ -174,6 +174,8 @@ initialize(Base, Modules, Opts) ->
         end,
     % Install the AO-Core Lua library into the state.
     {ok, State3} = dev_lua_lib:install(Base, State2, Opts),
+    % Install the string-ext library into the state.
+    % {ok, State4} = install_string_extensions(State3),
     % Return the base message with the state added to it.
     {ok, hb_private:set(Base, <<"state">>, State3, Opts)}.
 
@@ -427,6 +429,20 @@ decode_params([], _State) -> [];
 decode_params([Tref|Rest], State) ->
     Decoded = decode(luerl:decode(Tref, State)),
     [Decoded|decode_params(Rest, State)].
+
+%% @doc Install the string-ext library into the Lua state.
+%% @doc Install the string-ext library into the Lua state.
+% install_string_extensions(State) ->
+%     {ok, _, NewState} = luerl:do_dec(
+%         <<"
+%         local string_ext = _G.package.loaded['.string-ext']
+%         if string_ext and string_ext.install then
+%             string_ext.install()
+%         end
+%         ">>,
+%         State
+%     ),
+%     {ok, NewState}.
 
 %%% Tests
 simple_invocation_test() ->
@@ -710,6 +726,7 @@ aos_process_benchmark_test_() ->
         )
     end}.
 
+
 %%% Test helpers
 
 %% @doc Generate a Lua process message.
@@ -816,3 +833,45 @@ generate_stack(File) ->
 %         },
 %         #{}
 %     ).
+% 
+% 
+%% @doc Test string.gmatch functionality using separate test file
+string_gmatch_test() ->
+    {ok, Script} = file:read_file("scripts/string-gmatch-test.lua"),
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Script
+        },
+        <<"parameters">> => []
+    },
+    % Test 1: Basic word pattern matching
+    {ok, Result1} = hb_ao:resolve(Base, <<"run_string_gmatch">>, #{}),
+    ?event({gmatch_test_result1, Result1}),
+    ?assertEqual([<<"hello">>, <<"world">>, <<"test">>], Result1),
+    
+    % Test 2: Alphabetic pattern matching
+    {ok, Result2} = hb_ao:resolve(Base, <<"run_alpha_gmatch">>, #{}),
+    ?event({gmatch_test_result2, Result2}),
+    ?assertEqual([<<"Hello">>, <<"Lua">>, <<"user">>], Result2),
+    
+    % Test 3: Extract all words from sentence
+    {ok, Result3} = hb_ao:resolve(Base, <<"run_words_gmatch">>, #{}),
+    ?event({gmatch_test_result3, Result3}),
+    ?assertEqual([<<"The">>, <<"quick">>, <<"brown">>, <<"fox">>, <<"jumps">>, 
+                  <<"over">>, <<"the">>, <<"lazy">>, <<"dog">>], Result3),
+    
+    % Test 4: Extract numbers
+    {ok, Result4} = hb_ao:resolve(Base, <<"run_numbers_gmatch">>, #{}),
+    ?event({gmatch_test_result4, Result4}),
+    ?assertEqual([<<"25.99">>, <<"3.50">>, <<"29.49">>], Result4),
+    
+    % Test 5: Capture multiple groups
+    {ok, Result5} = hb_ao:resolve(Base, <<"run_groups_gmatch">>, #{}),
+    ?event({gmatch_test_result5, Result5}),
+    Expected5 = [
+        #{<<"name">> => <<"John">>, <<"age">> => <<"25">>, <<"job">> => <<"Engineer">>},
+        #{<<"name">> => <<"Mary">>, <<"age">> => <<"30">>, <<"job">> => <<"Designer">>}
+    ],
+    ?assertEqual(Expected5, Result5).
