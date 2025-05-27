@@ -493,4 +493,26 @@ add_custom_command(TARGET LongJmpTest POST_BUILD
 )
 add_test(NAME LongJmpTest COMMAND LongJmpTest)
 
+# --- Test: MultithreadStressTest (stress concurrent runtime usage) ---
+add_executable(MultithreadStressTest multithread_stress_test.c utils.c)
+# Need pthread for threads
+find_package(Threads REQUIRED)
+
+# Link against hb_beamr_lib, iwasm, pthread
+target_link_libraries(MultithreadStressTest PRIVATE hb_beamr_lib iwasm_static Threads::Threads)
+
+# Depend on wasm fixtures
+add_dependencies(MultithreadStressTest fib_wasm_file_target import_test_wasm_file_target)
+
+add_custom_command(TARGET MultithreadStressTest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${FIB_WASM_OUTPUT}
+        $<TARGET_FILE_DIR:MultithreadStressTest>/basic_fib.wasm
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${IMPORT_TEST_WASM_OUTPUT}
+        $<TARGET_FILE_DIR:MultithreadStressTest>/import_test_module.wasm
+    COMMENT "Copying wasm fixtures to MultithreadStressTest directory"
+)
+add_test(NAME MultithreadStressTest COMMAND MultithreadStressTest)
+
 # TODO: Add C-API tests for AOT loaded modules (instantiate, call export, import call)

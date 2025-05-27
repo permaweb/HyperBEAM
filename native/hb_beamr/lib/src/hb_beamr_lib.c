@@ -5,13 +5,23 @@
 #include <stdarg.h> // For va_list, va_start, va_end, vsnprintf
 #include <stdio.h>  // For vsnprintf, snprintf
 #include <stdbool.h> // For bool type
+#include <pthread.h> // For mutex to guard global runtime operations
+#include <stdatomic.h> // For atomic bool if available
 
 #define MAX_LAST_ERROR_MSG_SIZE 256
 
 // Global state for the library
-static bool g_wamr_runtime_initialized = false;
+static atomic_bool g_wamr_runtime_initialized = ATOMIC_VAR_INIT(false);
 static RuntimeInitArgs g_wamr_init_args;
-// We need to be careful if g_wamr_init_args.native_symbols itself points to memory that might be freed.
+// A mutex to protect WAMR runtime initialization/destruction and global native
+// registration operations.  This avoids races when multiple threads attempt
+// to initialise or tear-down the runtime concurrently, or when one thread is
+// registering natives while another thread is instantiating modules.
+//
+// The mutex is kept internal to this translation unit to avoid leaking a
+// synchronisation primitive into the public API.
+static pthread_mutex_t g_wamr_runtime_mutex = PTHREAD_MUTEX_INITIALIZER;
+// We need to be careful if g_wamr_init_args itself points to memory that might be freed.
 // For now, assuming the relevant parts (allocator settings) are by value or long-lived.
 // The RuntimeInitArgs struct itself will be copied.
 
@@ -50,9 +60,12 @@ static void set_error_msg_v(hb_beamr_lib_context_t* ctx, const char* format, ...
 }
 
 hb_beamr_lib_rc_t hb_beamr_lib_init_runtime_global(RuntimeInitArgs *init_args) {
-    if (g_wamr_runtime_initialized) {
-        // Or return success if already initialized with compatible args? For now, treat as error or ignore.
-        return HB_BEAMR_LIB_ERROR_INVALID_STATE; // Already initialized
+    pthread_mutex_lock(&g_wamr_runtime_mutex);
+
+    if (atomic_load_explicit(&g_wamr_runtime_initialized, memory_order_acquire)) {
+        pthread_mutex_unlock(&g_wamr_runtime_mutex);
+        // Already initialized by another thread.
+        return HB_BEAMR_LIB_SUCCESS;
     }
 
     RuntimeInitArgs effective_init_args;
@@ -65,21 +78,27 @@ hb_beamr_lib_rc_t hb_beamr_lib_init_runtime_global(RuntimeInitArgs *init_args) {
     }
 
     if (!wasm_runtime_full_init(&effective_init_args)) {
+        pthread_mutex_unlock(&g_wamr_runtime_mutex);
         return HB_BEAMR_LIB_ERROR_WAMR_RUNTIME_INIT_FAILED;
     }
 
     // Store the effective init args for potential re-use (e.g., in register_global_natives)
     g_wamr_init_args = effective_init_args;
-    g_wamr_runtime_initialized = true;
+    atomic_store_explicit(&g_wamr_runtime_initialized, true, memory_order_release);
+    pthread_mutex_unlock(&g_wamr_runtime_mutex);
     return HB_BEAMR_LIB_SUCCESS;
 }
 
 void hb_beamr_lib_destroy_runtime_global(void) {
-    if (g_wamr_runtime_initialized) {
+    pthread_mutex_lock(&g_wamr_runtime_mutex);
+
+    if (atomic_load_explicit(&g_wamr_runtime_initialized, memory_order_acquire)) {
         wasm_runtime_destroy();
-        g_wamr_runtime_initialized = false;
+        atomic_store_explicit(&g_wamr_runtime_initialized, false, memory_order_release);
         memset(&g_wamr_init_args, 0, sizeof(RuntimeInitArgs)); // Clear stored args
     }
+
+    pthread_mutex_unlock(&g_wamr_runtime_mutex);
 }
 
 // Implementation for hb_beamr_lib_create_context
@@ -185,7 +204,7 @@ hb_beamr_lib_rc_t hb_beamr_lib_register_global_natives(
     const hb_beamr_native_symbol_t* import_symbols, 
     uint32_t num_import_symbols
 ) {
-    if (!g_wamr_runtime_initialized) {
+    if (!atomic_load_explicit(&g_wamr_runtime_initialized, memory_order_acquire)) {
         // Cannot register natives if runtime wasn't even first initialized.
         return HB_BEAMR_LIB_ERROR_WAMR_RUNTIME_INIT_FAILED; // Or a more specific "not initialized" error
     }
@@ -193,8 +212,11 @@ hb_beamr_lib_rc_t hb_beamr_lib_register_global_natives(
         return HB_BEAMR_LIB_ERROR_INVALID_STATE; 
     }
 
+    pthread_mutex_lock(&g_wamr_runtime_mutex);
+
     NativeSymbol* wamr_symbols = (NativeSymbol*)malloc(sizeof(NativeSymbol) * num_import_symbols);
     if (!wamr_symbols) {
+        pthread_mutex_unlock(&g_wamr_runtime_mutex);
         return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED;
     }
 
@@ -205,15 +227,21 @@ hb_beamr_lib_rc_t hb_beamr_lib_register_global_natives(
         wamr_symbols[i].attachment = import_symbols[i].attachment;
     }
 
+    hb_beamr_lib_rc_t rc = HB_BEAMR_LIB_SUCCESS;
+
     if (!wasm_runtime_register_natives_raw(for_module_name, wamr_symbols, num_import_symbols)) {
-        free(wamr_symbols); // Still free if registration itself fails
-        return HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED; 
+        rc = HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED;
     }
 
     // Do NOT free wamr_symbols here if WAMR takes ownership, as per documentation.
-    // free(wamr_symbols);
-    // TODO: This implies a memory leak until a proper unregistration or runtime shutdown frees these.
-    return HB_BEAMR_LIB_SUCCESS;
+    // If registration failed we free to avoid leak.
+    if (rc != HB_BEAMR_LIB_SUCCESS) {
+        free(wamr_symbols);
+    }
+
+    pthread_mutex_unlock(&g_wamr_runtime_mutex);
+
+    return rc;
 }
 
 hb_beamr_lib_rc_t hb_beamr_lib_instantiate(
