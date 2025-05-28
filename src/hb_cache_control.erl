@@ -53,8 +53,8 @@ lookup(Msg1, Msg2, Opts) ->
         Settings = #{ <<"lookup">> := true } ->
             OutputScopedOpts = 
                 hb_store:scope(
-                    hb_opts:get(store_scope_resolved, local, Opts),
-                    Opts
+                    Opts,
+                    hb_opts:get(store_scope_resolved, local, Opts)
                 ),
             case hb_cache:read_resolved(Msg1, Msg2, OutputScopedOpts) of
                 {ok, Msg3} ->
