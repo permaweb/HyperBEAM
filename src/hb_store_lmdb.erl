@@ -23,6 +23,7 @@
 -export([start/1, stop/1, scope/0, scope/1, reset/1]).
 -export([read/2, write/3, list/2]).
 -export([make_group/2, make_link/3, type/2]).
+-export([path/2, add_path/3]).
 
 %% Test framework and project includes
 -include_lib("eunit/include/eunit.hrl").
@@ -336,6 +337,29 @@ make_link(StoreOpts, Existing, New) when is_list(Existing) ->
 make_link(StoreOpts, Existing, New) ->
    ExistingBin = hb_util:bin(Existing),
    write(StoreOpts, New, <<"link:", ExistingBin/binary>>). 
+
+%% @doc Transform a path into the store's canonical form.
+%% For LMDB, paths are simply joined with "/" separators.
+path(_StoreOpts, Path) when is_list(Path) ->
+    hb_util:bin(lists:join(<<"/">>, Path));
+path(_StoreOpts, Path) when is_binary(Path) ->
+    Path.
+
+%% @doc Add two path components together.
+%% For LMDB, this concatenates the path lists.
+add_path(_StoreOpts, Path1, Path2) when is_list(Path1), is_list(Path2) ->
+    Path1 ++ Path2;
+add_path(StoreOpts, Path1, Path2) when is_binary(Path1), is_binary(Path2) ->
+    % Convert binaries to lists, concatenate, then convert back
+    Parts1 = binary:split(Path1, <<"/">>, [global]),
+    Parts2 = binary:split(Path2, <<"/">>, [global]),
+    path(StoreOpts, Parts1 ++ Parts2);
+add_path(StoreOpts, Path1, Path2) when is_list(Path1), is_binary(Path2) ->
+    Parts2 = binary:split(Path2, <<"/">>, [global]),
+    path(StoreOpts, Path1 ++ Parts2);
+add_path(StoreOpts, Path1, Path2) when is_binary(Path1), is_list(Path2) ->
+    Parts1 = binary:split(Path1, <<"/">>, [global]),
+    path(StoreOpts, Parts1 ++ Path2).
 
 %% @doc Retrieve or create the LMDB environment handle for a database.
 %%
