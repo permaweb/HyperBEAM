@@ -150,13 +150,3 @@ function compute_routes(base, req, opts)
     end
     return base
 end
-
---- @function test_string_gmatch
---- @return table a table containing the results of string.gmatch test
-function test_string_gmatch()
-    local results = {}
-    for word in string.gmatch('hello world test', '%w+') do
-        table.insert(results, word)
-    end
-    return results
-end

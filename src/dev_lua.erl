@@ -174,8 +174,6 @@ initialize(Base, Modules, Opts) ->
         end,
     % Install the AO-Core Lua library into the state.
     {ok, State3} = dev_lua_lib:install(Base, State2, Opts),
-    % Install the string-ext library into the state.
-    % {ok, State4} = install_string_extensions(State3),
     % Return the base message with the state added to it.
     {ok, hb_private:set(Base, <<"state">>, State3, Opts)}.
 
@@ -429,20 +427,6 @@ decode_params([], _State) -> [];
 decode_params([Tref|Rest], State) ->
     Decoded = decode(luerl:decode(Tref, State)),
     [Decoded|decode_params(Rest, State)].
-
-%% @doc Install the string-ext library into the Lua state.
-%% @doc Install the string-ext library into the Lua state.
-% install_string_extensions(State) ->
-%     {ok, _, NewState} = luerl:do_dec(
-%         <<"
-%         local string_ext = _G.package.loaded['.string-ext']
-%         if string_ext and string_ext.install then
-%             string_ext.install()
-%         end
-%         ">>,
-%         State
-%     ),
-%     {ok, NewState}.
 
 %%% Tests
 simple_invocation_test() ->
@@ -725,8 +709,6 @@ aos_process_benchmark_test_() ->
             ]
         )
     end}.
-
-
 %%% Test helpers
 
 %% @doc Generate a Lua process message.
