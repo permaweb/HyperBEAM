@@ -111,17 +111,41 @@ write(StoreOpts, Key, Value) ->
 %% from that location instead. This creates a symbolic link mechanism that
 %% allows multiple keys to reference the same underlying data.
 %%
+%% When given a list of path segments, the function performs link resolution
+%% at each level of the path except the final segment, allowing path traversal
+%% through symbolic links to work transparently.
+%%
 %% Link resolution is transparent to the caller and can chain through multiple
 %% levels of indirection, though care should be taken to avoid circular references.
 %%
 %% @param StoreOpts Database configuration map  
-%% @param Key Binary key to read
+%% @param Key Binary key or list of path segments to read
 %% @returns {ok, Value} on success, {error, Reason} on failure
 -spec read(map(), binary() | list()) -> {ok, binary()} | {error, term()}.
 read(StoreOpts, Key) when is_list(Key) ->
-    KeyBin = hb_util:bin(lists:join(<<"/">>, Key)),
-    read(StoreOpts, KeyBin);
+    % For path lists, resolve links in each segment except the last
+    try
+        case resolve_path_links(StoreOpts, Key) of
+            {ok, ResolvedPath} ->
+                KeyBin = hb_util:bin(lists:join(<<"/">>, ResolvedPath)),
+                read_direct(StoreOpts, KeyBin);
+            {error, _} ->
+                % Convert errors to not_found for hb_store compatibility
+                not_found
+        end
+    catch
+        Class:Reason:Stacktrace ->
+            ?event(error, {resolve_path_links_failed, Class, Reason, Stacktrace}),
+            % Fallback to simple path join without link resolution
+            FallbackKeyBin = hb_util:bin(lists:join(<<"/">>, Key)),
+            read_direct(StoreOpts, FallbackKeyBin)
+    end;
 read(StoreOpts, Key) ->
+    read_direct(StoreOpts, Key).
+
+%% @doc Read a value directly from the database with link resolution.
+%% This is the internal implementation that handles actual database reads.
+read_direct(StoreOpts, Key) ->
     LinkPrefixSize = byte_size(<<"link:">>),
     case lmdb:get(find_env(StoreOpts), Key) of
         {ok, Value} ->
@@ -141,8 +165,56 @@ read(StoreOpts, Key) ->
             ?event(read_miss, {miss, Key}),
             find_or_spawn_instance(StoreOpts) ! {flush, self(), Ref = make_ref()},
             receive
-                {flushed, Ref} -> lmdb:get(find_env(StoreOpts), Key)
+                {flushed, Ref} -> 
+                    case lmdb:get(find_env(StoreOpts), Key) of
+                        {ok, Value} -> {ok, Value};
+                        not_found -> not_found
+                    end
             after ?CONNECT_TIMEOUT -> {error, timeout}
+            end
+    end.
+
+%% @doc Resolve links in a path, checking each segment except the last.
+%% Returns the resolved path where any intermediate links have been followed.
+resolve_path_links(StoreOpts, Path) ->
+    resolve_path_links(StoreOpts, Path, 0).
+
+%% Internal helper with depth limit to prevent infinite loops
+resolve_path_links(_StoreOpts, _Path, Depth) when Depth > 10 ->
+    % Prevent infinite loops with depth limit
+    {error, too_many_redirects};
+resolve_path_links(_StoreOpts, [LastSegment], _Depth) ->
+    % Base case: only one segment left, no link resolution needed
+    {ok, [LastSegment]};
+resolve_path_links(StoreOpts, [Head | Tail], Depth) ->
+    % Check if the first segment (Head) is a link
+    case lmdb:get(find_env(StoreOpts), Head) of
+        {ok, Value} ->
+            LinkPrefixSize = byte_size(<<"link:">>),
+            case byte_size(Value) > LinkPrefixSize andalso
+                binary:part(Value, 0, LinkPrefixSize) =:= <<"link:">> of
+                true ->
+                    % This segment is a link, resolve it
+                    Link = binary:part(Value, LinkPrefixSize, byte_size(Value) - LinkPrefixSize),
+                    LinkSegments = binary:split(Link, <<"/">>, [global]),
+                    % Replace Head with the link target and continue resolving
+                    resolve_path_links(StoreOpts, LinkSegments ++ Tail, Depth + 1);
+                false ->
+                    % Not a link, continue with the rest of the path
+                    case resolve_path_links(StoreOpts, Tail, Depth) of
+                        {ok, ResolvedTail} ->
+                            {ok, [Head | ResolvedTail]};
+                        {error, _} = Error ->
+                            Error
+                    end
+            end;
+        not_found ->
+            % Segment doesn't exist, continue without resolution
+            case resolve_path_links(StoreOpts, Tail, Depth) of
+                {ok, ResolvedTail} ->
+                    {ok, [Head | ResolvedTail]};
+                {error, _} = Error ->
+                    Error
             end
     end.
 
@@ -496,7 +568,7 @@ server_flush(RawState) ->
             RawState;
         _ ->
             % Commit the transaction and clean up state
-            Res = lmdb_nif:txn_commit(maps:get(<<"transaction">>, RawState)),
+            _Res = lmdb_nif:txn_commit(maps:get(<<"transaction">>, RawState)),
             notify_flush(RawState),
             RawState#{ <<"transaction">> => undefined, <<"instance">> => undefined }
     end.
@@ -705,4 +777,67 @@ link_key_list_test() ->
     timer:sleep(100),
     {ok, Result} = read(StoreOpts, <<"my-link">>),
     ?event({result, Result}),
-    ?assertEqual(<<"value">>, Result). 
+    ?assertEqual(<<"value">>, Result).
+
+%% @doc Path traversal link test - verifies link resolution during path traversal.
+%%
+%% This test verifies that when reading a path as a list, intermediate path
+%% segments that are links get resolved correctly. For example, if "link" 
+%% is a symbolic link to "group", then reading ["link", "key"] should 
+%% resolve to reading ["group", "key"].
+%%
+%% This functionality enables transparent redirection at the directory level,
+%% allowing reorganization of hierarchical data without breaking existing
+%% access patterns.
+path_traversal_link_test() ->
+    StoreOpts = #{
+      <<"prefix">> => <<"/tmp/store-8">>,
+      <<"max-size">> => ?DEFAULT_SIZE
+    },
+    % Create the actual data at group/key
+    write(StoreOpts, [<<"group">>, <<"key">>], <<"target-value">>),
+    % Create a link from "link" to "group"
+    make_link(StoreOpts, <<"group">>, <<"link">>),
+    timer:sleep(100),
+    % Reading via the link path should resolve to the target value
+    {ok, Result} = read(StoreOpts, [<<"link">>, <<"key">>]),
+    ?event({path_traversal_result, Result}),
+    ?assertEqual(<<"target-value">>, Result),
+    ok = stop(StoreOpts).
+
+%% @doc Test that matches the exact hb_store hierarchical test pattern
+exact_hb_store_test() ->
+    StoreOpts = #{
+      <<"prefix">> => <<"/tmp/store-exact">>,
+      <<"max-size">> => ?DEFAULT_SIZE
+    },
+    
+    % Follow exact same pattern as hb_store test
+    ?event(debug, step1_make_group),
+    make_group(StoreOpts, <<"test-dir1">>),
+    
+    ?event(debug, step2_write_file),
+    write(StoreOpts, [<<"test-dir1">>, <<"test-file">>], <<"test-data">>),
+    
+    ?event(debug, step3_make_link),
+    make_link(StoreOpts, [<<"test-dir1">>], <<"test-link">>),
+    
+    timer:sleep(1000),
+
+    % Debug: what does the link actually contain?
+    ?event(debug, step4_check_link),
+    {ok, LinkValue} = read(StoreOpts, <<"test-link">>),
+    ?event(debug, {link_value, LinkValue}),
+    
+    
+    % Debug: test intermediate steps
+    ?event(debug, step5_test_direct_read),
+    DirectResult = read(StoreOpts, <<"test-dir1/test-file">>),
+    ?event(debug, {direct_result, DirectResult}),
+    
+    % This should work: reading via the link path  
+    ?event(debug, step6_test_link_read),
+    Result = read(StoreOpts, [<<"test-link">>, <<"test-file">>]),
+    ?event(debug, {final_result, Result}),
+    ?assertEqual({ok, <<"test-data">>}, Result),
+    ok = stop(StoreOpts). 

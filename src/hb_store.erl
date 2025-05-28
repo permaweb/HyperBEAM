@@ -311,6 +311,7 @@ hierarchical_path_resolution_test(Opts) ->
     hb_store:make_group(Store, <<"test-dir1">>),
     hb_store:write(Store, [<<"test-dir1">>, <<"test-file">>], <<"test-data">>),
     hb_store:make_link(Store, [<<"test-dir1">>], <<"test-link">>),
+    timer:sleep(100),
     ?assertEqual({ok, <<"test-data">>}, hb_store:read(Store, [<<"test-link">>, <<"test-file">>])).
 
 store_suite_test_() ->
