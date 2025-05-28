@@ -111,9 +111,10 @@ write(StoreOpts, Key, Value) ->
 %% from that location instead. This creates a symbolic link mechanism that
 %% allows multiple keys to reference the same underlying data.
 %%
-%% When given a list of path segments, the function performs link resolution
-%% at each level of the path except the final segment, allowing path traversal
-%% through symbolic links to work transparently.
+%% When given a list of path segments, the function first attempts a direct read
+%% for optimal performance. Only if the direct read fails does it perform link
+%% resolution at each level of the path except the final segment, allowing path
+%% traversal through symbolic links to work transparently.
 %%
 %% Link resolution is transparent to the caller and can chain through multiple
 %% levels of indirection, though care should be taken to avoid circular references.
@@ -123,22 +124,30 @@ write(StoreOpts, Key, Value) ->
 %% @returns {ok, Value} on success, {error, Reason} on failure
 -spec read(map(), binary() | list()) -> {ok, binary()} | {error, term()}.
 read(StoreOpts, Key) when is_list(Key) ->
-    % For path lists, resolve links in each segment except the last
-    try
-        case resolve_path_links(StoreOpts, Key) of
-            {ok, ResolvedPath} ->
-                KeyBin = hb_util:bin(lists:join(<<"/">>, ResolvedPath)),
-                read_direct(StoreOpts, KeyBin);
-            {error, _} ->
-                % Convert errors to not_found for hb_store compatibility
-                not_found
-        end
-    catch
-        Class:Reason:Stacktrace ->
-            ?event(error, {resolve_path_links_failed, Class, Reason, Stacktrace}),
-            % Fallback to simple path join without link resolution
-            FallbackKeyBin = hb_util:bin(lists:join(<<"/">>, Key)),
-            read_direct(StoreOpts, FallbackKeyBin)
+    % Try direct read first (fast path for non-link paths)
+    DirectKeyBin = hb_util:bin(lists:join(<<"/">>, Key)),
+    case read_direct(StoreOpts, DirectKeyBin) of
+        {ok, Value} -> 
+            {ok, Value};
+        not_found ->
+            % Direct read failed, try link resolution (slow path)
+            try
+                case resolve_path_links(StoreOpts, Key) of
+                    {ok, ResolvedPath} ->
+                        ResolvedKeyBin = hb_util:bin(lists:join(<<"/">>, ResolvedPath)),
+                        read_direct(StoreOpts, ResolvedKeyBin);
+                    {error, _} ->
+                        % Convert errors to not_found for hb_store compatibility
+                        not_found
+                end
+            catch
+                Class:Reason:Stacktrace ->
+                    ?event(error, {resolve_path_links_failed, Class, Reason, Stacktrace}),
+                    % If link resolution fails, return not_found
+                    not_found
+            end;
+        Error -> 
+            Error
     end;
 read(StoreOpts, Key) ->
     read_direct(StoreOpts, Key).
