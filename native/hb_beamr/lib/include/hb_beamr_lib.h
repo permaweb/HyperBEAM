@@ -21,6 +21,7 @@
 #include "wasm_export.h" // For WAMR types like RuntimeInitArgs, wasm_module_inst_t, wasm_memory_inst_t
 // Note: wasm_val_t is also needed for call_export, it might come from wasm_export.h or a C-API header.
 // If not, #include "wasm_c_api.h" or similar might be needed for wasm_val_t if it's used by functions here.
+// #include <ei.h>
 
 // Opaque context handle declaration
 // The actual struct definition will be in hb_beamr_lib.c
@@ -185,26 +186,57 @@ typedef struct {
     char *field_name;
 } hb_beamr_generated_attachment_t;
 
-// Module meta extracted from binary (imports information)
+// -----------------------------------------------------------------------------
+// Module metadata extracted from a wasm_module_t
+// NOTE: All strings/arrays below are deep-copied so that the metadata remains
+// valid even after the original wasm_module_t has been unloaded/freed.
+
+// Function-specific metadata (used when kind==FUNC)
 typedef struct {
-    wasm_module_t   module_handle; // Loaded (uninstantiated) module, owned by meta
-    wasm_import_t  *imports;       // Copy of import descriptors (function ones kept)
-    uint32_t        import_count;  // Total entries in imports array
-} hb_beamr_module_meta_t;
+    char            *signature;     // WAMR signature string, e.g., "(ii)i" (owned)
+    uint32_t         param_count;
+    wasm_valkind_t  *param_types;   // owned array of size param_count
+    uint32_t         result_count;
+    wasm_valkind_t  *result_types;  // owned array of size result_count
+} hb_beamr_meta_func_t;
+
+typedef struct {
+    char                     *module_name;   // e.g. "env" (owned string)
+    char                     *field_name;    // import name (owned string)
+    wasm_import_export_kind_t kind;          // func/table/memory/global
+
+    /* Populated only if kind == FUNC */
+    hb_beamr_meta_func_t      func;
+} hb_beamr_meta_import_t;
+
+typedef struct {
+    char                     *name;          // export name (owned string)
+    wasm_import_export_kind_t kind;          // func/table/memory/global
+
+    /* Populated only if kind == FUNC */
+    hb_beamr_meta_func_t      func;
+} hb_beamr_meta_export_t;
+
+typedef struct {
+    hb_beamr_meta_import_t *imports;       // Array of imports (owned)
+    uint32_t                import_count;
+    hb_beamr_meta_export_t *exports;       // Array of exports (owned)
+    uint32_t                export_count;
+} hb_beamr_meta_module_t;
+// -----------------------------------------------------------------------------
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
-hb_beamr_lib_module_meta(const uint8_t *wasm_binary,
-                         uint32_t wasm_binary_size,
-                         hb_beamr_module_meta_t *out_meta);
+hb_beamr_lib_meta_module(wasm_module_t module,
+                         hb_beamr_meta_module_t *out_meta);
 
 HB_BEAMR_LIB_API void
-hb_beamr_lib_free_module_meta(hb_beamr_module_meta_t *meta);
+hb_beamr_lib_free_meta_module(hb_beamr_meta_module_t *meta);
 
 // Generate structured native symbols from module metadata, mapping every
 // imported function to the same C stub (user_function).
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
-hb_beamr_lib_generate_natives(const hb_beamr_module_meta_t *meta,
+hb_beamr_lib_generate_natives(const hb_beamr_meta_module_t *meta,
                                          void *user_function,
                                          hb_beamr_native_symbols_structured_t *out_struct);
 

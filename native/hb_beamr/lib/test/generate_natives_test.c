@@ -32,11 +32,16 @@ static void run_import_test_module(){
     uint8_t *buf_cpy = malloc(sz);
     assert(buf_cpy);
     memcpy(buf_cpy,buf,sz);
-    
+    char err[1024];
+    wasm_module_t mod = wasm_runtime_load(buf_cpy,sz,err,sizeof(err));
+    assert(mod);
 
-    hb_beamr_module_meta_t meta;
+    hb_beamr_meta_module_t meta;
     memset(&meta,0,sizeof(meta));
-    assert(hb_beamr_lib_module_meta(buf_cpy,sz,&meta)==HB_BEAMR_LIB_SUCCESS);
+    fprintf(stderr, "[DEBUG] hb_beamr_lib_meta_module\n");
+    assert(hb_beamr_lib_meta_module(mod,&meta)==HB_BEAMR_LIB_SUCCESS);
+    fprintf(stderr, "[DEBUG] hb_beamr_lib_meta_module done\n");
+    wasm_runtime_unload(mod);
 
     hb_beamr_native_symbols_structured_t structured;
     memset(&structured,0,sizeof(structured));

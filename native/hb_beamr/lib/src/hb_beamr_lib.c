@@ -745,6 +745,8 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
         return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
     }
 
+    // fprintf(stderr, "[DEBUG hb_beamr_lib_call_indirect] Calling wasm_runtime_call_wasm with cells_for_params: %d and argv_runtime: %p\n", cells_for_params, argv_runtime);
+    // bool success = wasm_runtime_call_wasm(ctx->exec_env, target_func_inst, cells_for_params, argv_runtime);
     bool success = wasm_runtime_call_indirect(ctx->exec_env, func_index, cells_for_params, argv_runtime);
 
     hb_beamr_lib_rc_t final_rc = HB_BEAMR_LIB_SUCCESS;
@@ -794,7 +796,7 @@ static hb_beamr_lib_rc_t build_signature_from_ftype(wasm_func_type_t ftype, char
 }
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_generate_natives(
-        const hb_beamr_module_meta_t *meta, void *user_function,
+        const hb_beamr_meta_module_t *meta, void *user_function,
         hb_beamr_native_symbols_structured_t *out_struct){
     if(!meta||!user_function||!out_struct) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
     memset(out_struct,0,sizeof(*out_struct));
@@ -804,7 +806,7 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_generate_natives(
     typedef struct { char *name; uint32_t count; } mod_count_t;
     mod_count_t *mods=NULL; uint32_t mod_cap=0, mod_used=0;
     for(int32_t i=0;i<import_cnt;i++){
-        wasm_import_t imp; wasm_runtime_get_import_type(meta->module_handle,i,&imp);
+        hb_beamr_meta_import_t imp = meta->imports[i];
         if(imp.kind!=WASM_IMPORT_EXPORT_KIND_FUNC) continue;
         // find or add module name
         uint32_t idx; for(idx=0; idx<mod_used; idx++) if(strcmp(mods[idx].name, imp.module_name)==0) break;
@@ -821,21 +823,22 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_generate_natives(
     // second pass populate
     uint32_t *cursor = calloc(mod_used,sizeof(uint32_t));
     for(int32_t i=0;i<import_cnt;i++){
-        wasm_import_t imp; wasm_runtime_get_import_type(meta->module_handle,i,&imp);
+        hb_beamr_meta_import_t imp = meta->imports[i];
         if(imp.kind!=WASM_IMPORT_EXPORT_KIND_FUNC) continue;
         // locate group index
         uint32_t gidx; for(gidx=0;gidx<mod_used;gidx++) if(strcmp(groups[gidx].module_name, imp.module_name)==0) break;
         uint32_t pos = cursor[gidx]++;
         hb_beamr_native_symbol_t *sym = (hb_beamr_native_symbol_t*)&groups[gidx].symbols[pos];
-        sym->module_name = NULL;
-        sym->function_name = strdup(imp.name?imp.name:"");
+        sym->module_name = NULL; // WAMR ignores this field in NativeSymbol
+        sym->function_name = strdup(imp.field_name?imp.field_name:"");
         sym->user_function = user_function;
-        build_signature_from_ftype(imp.u.func_type,(char**)&sym->signature);
+        sym->signature = strdup(imp.func.signature?imp.func.signature:"");
         hb_beamr_generated_attachment_t *att = malloc(sizeof(*att));
-        att->module_name=strdup(imp.module_name?imp.module_name:""); att->field_name=strdup(imp.name?imp.name:"");
+        att->module_name = strdup(imp.module_name?imp.module_name:"");
+        att->field_name  = strdup(imp.field_name?imp.field_name:"");
         sym->attachment = att;
     }
-    free(cursor); free(mods); wasm_runtime_unload(meta->module_handle);
+    free(cursor); free(mods);
     out_struct->groups=groups; out_struct->num_groups=mod_used; return HB_BEAMR_LIB_SUCCESS;
 }
 
@@ -875,28 +878,95 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_register_global_natives(const hb
 // ============================ end helper ===================================== 
 
 // Helper to gather meta
-HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_module_meta(const uint8_t *wasm_binary,
-                                                           uint32_t wasm_binary_size,
-                                                           hb_beamr_module_meta_t *out_meta){
-    if(!wasm_binary||!wasm_binary_size||!out_meta) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_module(wasm_module_t module,
+                                                           hb_beamr_meta_module_t *out_meta){
+    if(!module||!out_meta) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
     memset(out_meta,0,sizeof(*out_meta));
-    char err[128];
-    wasm_module_t mod = wasm_runtime_load((uint8_t*)wasm_binary, wasm_binary_size, err, sizeof(err));
-    if(!mod) return HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED;
-    int32_t import_cnt = wasm_runtime_get_import_count(mod);
-    if(import_cnt<0){ wasm_runtime_unload(mod); return HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED; }
-    wasm_import_t *imports = NULL;
-    if(import_cnt>0){ imports = (wasm_import_t*)malloc(sizeof(wasm_import_t)*import_cnt);
-        if(!imports){ wasm_runtime_unload(mod); return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED; }
-        for(int32_t i=0;i<import_cnt;i++){ wasm_runtime_get_import_type(mod,i,&imports[i]); }
+    int32_t import_cnt = wasm_runtime_get_import_count(module);
+    if(import_cnt<0){ return HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED; }
+    hb_beamr_meta_import_t *imports = NULL;
+    if(import_cnt>0){
+        imports = (hb_beamr_meta_import_t*)calloc(import_cnt, sizeof(hb_beamr_meta_import_t));
+        if(!imports){ return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED; }
+        for(int32_t i=0;i<import_cnt;i++){
+            wasm_import_t imp_tmp; wasm_runtime_get_import_type(module,i,&imp_tmp);
+            hb_beamr_meta_import_t *dst = &imports[i];
+            dst->module_name = strdup(imp_tmp.module_name?imp_tmp.module_name:"");
+            dst->field_name  = strdup(imp_tmp.name?imp_tmp.name:"");
+            dst->kind = imp_tmp.kind;
+            if(imp_tmp.kind == WASM_IMPORT_EXPORT_KIND_FUNC){
+                wasm_func_type_t ftype = imp_tmp.u.func_type;
+                dst->func.param_count = wasm_func_type_get_param_count(ftype);
+                if(dst->func.param_count){
+                    dst->func.param_types = (wasm_valkind_t*)malloc(sizeof(wasm_valkind_t)*dst->func.param_count);
+                    for(uint32_t p=0; p<dst->func.param_count; p++){ dst->func.param_types[p] = wasm_func_type_get_param_valkind(ftype,p); }
+                }
+                dst->func.result_count = wasm_func_type_get_result_count(ftype);
+                if(dst->func.result_count){
+                    dst->func.result_types = (wasm_valkind_t*)malloc(sizeof(wasm_valkind_t)*dst->func.result_count);
+                    for(uint32_t r=0; r<dst->func.result_count; r++){ dst->func.result_types[r] = wasm_func_type_get_result_valkind(ftype,r); }
+                }
+                build_signature_from_ftype(ftype, &dst->func.signature);
+            }
+        }
     }
-    out_meta->module_handle = mod;
+
+    int32_t export_cnt = wasm_runtime_get_export_count(module);
+    if(export_cnt<0){ /* cleanup */ if(imports){ /* deep free later */ }
+        return HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED; }
+    hb_beamr_meta_export_t *exports = NULL;
+    if(export_cnt>0){
+        exports = (hb_beamr_meta_export_t*)calloc(export_cnt, sizeof(hb_beamr_meta_export_t));
+        if(!exports){ /* free imports */ for(int32_t i=0;i<import_cnt;i++){ free(imports[i].module_name); free(imports[i].field_name); free(imports[i].func.signature); free(imports[i].func.param_types); free(imports[i].func.result_types);} free(imports); return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED; }
+        for(int32_t i=0;i<export_cnt;i++){
+            wasm_export_t exp_tmp; wasm_runtime_get_export_type(module,i,&exp_tmp);
+            hb_beamr_meta_export_t *dst=&exports[i];
+            dst->name = strdup(exp_tmp.name?exp_tmp.name:"");
+            dst->kind = exp_tmp.kind;
+            if(exp_tmp.kind == WASM_IMPORT_EXPORT_KIND_FUNC){
+                wasm_func_type_t ftype = exp_tmp.u.func_type;
+                dst->func.param_count = wasm_func_type_get_param_count(ftype);
+                if(dst->func.param_count){ dst->func.param_types = (wasm_valkind_t*)malloc(sizeof(wasm_valkind_t)*dst->func.param_count); for(uint32_t p=0;p<dst->func.param_count;p++){ dst->func.param_types[p]=wasm_func_type_get_param_valkind(ftype,p);} }
+                dst->func.result_count = wasm_func_type_get_result_count(ftype);
+                if(dst->func.result_count){ dst->func.result_types = (wasm_valkind_t*)malloc(sizeof(wasm_valkind_t)*dst->func.result_count); for(uint32_t r=0;r<dst->func.result_count;r++){ dst->func.result_types[r]=wasm_func_type_get_result_valkind(ftype,r);} }
+                build_signature_from_ftype(ftype,&dst->func.signature);
+            }
+        }
+    }
     out_meta->imports = imports;
     out_meta->import_count = import_cnt;
+    out_meta->exports = exports;
+    out_meta->export_count = export_cnt;
     return HB_BEAMR_LIB_SUCCESS;
 }
 
-HB_BEAMR_LIB_API void hb_beamr_lib_free_module_meta(hb_beamr_module_meta_t *meta){
-    if(!meta) return; if(meta->imports) free(meta->imports); if(meta->module_handle) wasm_runtime_unload(meta->module_handle);
+HB_BEAMR_LIB_API void hb_beamr_lib_free_meta_module(hb_beamr_meta_module_t *meta){
+    if(!meta) return;
+    if(meta->imports){
+        for(uint32_t i=0;i<meta->import_count;i++){
+            hb_beamr_meta_import_t *imp=&meta->imports[i];
+            free(imp->module_name); free(imp->field_name); free(imp->func.signature);
+            free(imp->func.param_types); free(imp->func.result_types);
+        }
+        free(meta->imports);
+    }
+    if(meta->exports){
+        for(uint32_t i=0;i<meta->export_count;i++){
+            hb_beamr_meta_export_t *exp=&meta->exports[i];
+            free(exp->name); free(exp->func.signature);
+            free(exp->func.param_types); free(exp->func.result_types);
+        }
+        free(meta->exports);
+    }
     memset(meta,0,sizeof(*meta));
-} 
+}
+
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_indirect() {
+    
+}
+
+// Erlang helpers
+
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_erlang_terms_to_export_wasm_vals(const char* buff, int* index, hb_beamr_meta_module_t* meta, wasm_val_t* vals, int count) {
+
+}

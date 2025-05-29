@@ -561,12 +561,12 @@ void wasm_execute_exported_function(void* raw) {
     const uint32_t param_count = wasm_func_get_param_count(func, proc->instance);
     wasm_valkind_t *param_types = driver_alloc(sizeof(wasm_valkind_t) * param_count);
     wasm_func_get_param_types(func, proc->instance, param_types);
-    DRV_DEBUG("Param types: %p", param_types);
+    DRV_DEBUG("Param count: %d, types: %p", param_count, param_types);
 
     const uint32_t result_count = wasm_func_get_result_count(func, proc->instance);
     wasm_valkind_t *result_types = driver_alloc(sizeof(wasm_valkind_t) * result_count);
     wasm_func_get_result_types(func, proc->instance, result_types);
-    DRV_DEBUG("Result types: %p", result_types);
+    DRV_DEBUG("Result count: %d, types: %p", result_count, result_types);
 
     wasm_val_vec_t args, results;
     wasm_val_vec_new_uninitialized(&args, param_count);
@@ -598,7 +598,7 @@ void wasm_execute_exported_function(void* raw) {
     // Call the function
     DRV_DEBUG("wasm_runtime_call_wasm_a: %s", function_name);
     bool call_success = wasm_runtime_call_wasm_a(exec_env, func, results.size, results.data, args.size, args.data);
-    DRV_DEBUG("wasm_runtime_call_wasm_a: %s, success: %d", function_name, call_success);
+    DRV_DEBUG("wasm_runtime_call_wasm_a: %s, success: %s", function_name, call_success ? "true" : "false");
 
     if (!call_success) {
         const char *exception = wasm_runtime_get_exception(proc->instance);

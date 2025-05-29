@@ -93,13 +93,12 @@ int import_arg_to_erl_term(ErlDrvTermData* term, enum wasm_valkind_enum kind, ui
 
 
 int erl_term_to_wasm_val(wasm_val_t* val, ei_term* term) {
-    DRV_DEBUG("Converting erl term to wasm val. Term: %d. Size: %d", term->value.i_val, term->size);
     switch (val->kind) {
         case WASM_I32:
-            val->of.i32 = (int) term->value.i_val;
+            val->of.i32 = (int32_t) term->value.i_val;
             break;
         case WASM_I64:
-            val->of.i64 = (long) term->value.i_val;
+            val->of.i64 = (int64_t) term->value.i_val;
             break;
         case WASM_F32:
             val->of.f32 = (float) term->value.d_val;
@@ -135,8 +134,8 @@ int erl_term_to_indirect_arg(uint32_t* val, enum wasm_valkind_enum val_kind, ei_
             *val = (uint32_t)(term->value.i_val);
             return 1;
         case WASM_I64:
-            *(val) = (uint32_t)(term->value.i_val & 0xFFFFFFFF);
-            *(val + 1) = (uint32_t)((term->value.i_val) >> 32);
+            *(val) = (uint32_t)((int64_t)term->value.i_val & 0xFFFFFFFF);
+            *(val + 1) = (uint32_t)(((int64_t)term->value.i_val) >> 32);
             return 2;
         case WASM_F32:
             *val = (uint32_t)(term->value.i_val);
@@ -174,7 +173,7 @@ int erl_term_to_import_result(enum wasm_valkind_enum val_kind, uint64_t* val, ei
             *val = (int) term->value.i_val;
             break;
         case WASM_I64:
-            *val = (long) term->value.i_val;
+            *val = (int64_t) term->value.i_val;
             break;
         case WASM_F32:
             *val = (float) term->value.d_val;
@@ -236,22 +235,111 @@ ei_term* decode_list(char* buff, int* index) {
     ei_term* res = driver_alloc(sizeof(ei_term) * arity);
 
     if(type == ERL_LIST_EXT) {
-        //DRV_DEBUG("Decoding list");
+        /* Consume the list header so that the index now points at the
+         * first element. */
         ei_decode_list_header(buff, index, &arity);
-        //DRV_DEBUG("Decoded list header. Arity: %d", arity);
+
         for(int i = 0; i < arity; i++) {
-            ei_decode_ei_term(buff, index, &res[i]);
-            DRV_DEBUG("Decoded term (assuming int) %d: %d", i, res[i].value.i_val);
+            int elem_type, elem_size;
+            ei_get_type(buff, index, &elem_type, &elem_size);
+
+            switch (elem_type) {
+                DRV_DEBUG("Decoding elem %d: %d", i, elem_type);
+
+                /* 32-bit (or smaller) integers */
+                case ERL_SMALL_INTEGER_EXT:
+                case ERL_INTEGER_EXT: {
+                    long val;
+                    ei_decode_long(buff, index, &val);
+                    res[i].ei_type = ERL_INTEGER_EXT;
+                    res[i].arity = 0;
+                    res[i].size = 0;
+                    res[i].value.i_val = val;
+                    DRV_DEBUG("Decoded SMALL/LONG int %d: %ld", i, val);
+                    break;
+                }
+
+                /* 64-bit integers are encoded as SMALL BIGs */
+                case ERL_SMALL_BIG_EXT:
+                case ERL_LARGE_BIG_EXT: {
+                    EI_LONGLONG val_ll;
+                    EI_ULONGLONG val_ull;
+                    if (ei_decode_longlong(buff, index, &val_ll) == 0) {
+                        res[i].ei_type = ERL_INTEGER_EXT;
+                        res[i].arity = 0;
+                        res[i].size = 0;
+                        res[i].value.i_val = val_ll; /* long is 64-bit on modern 64-bit platforms */
+                        DRV_DEBUG("Decoded BIG int %d: %lld", i, (long long)val_ll);
+                    } else if (ei_decode_ulonglong(buff, index, &val_ull) == 0) {
+                        /* This is outside of Erlang's 64-bit integer range. */
+                        /* Instead, we need to decode it as ulonglong */
+                        res[i].ei_type = ERL_INTEGER_EXT;
+                        res[i].arity = 0;
+                        res[i].size = 0;
+                        res[i].value.i_val = val_ull;
+                        DRV_DEBUG("Decoded ULONGBIG int %d: %llu", i, val_ull);
+                    } else {
+                        DRV_DEBUG("Failed to decode integer at pos %d", i);
+                        /* Fallback: mark as NIL */
+                        res[i].ei_type = ERL_NIL_EXT;
+                        res[i].value.i_val = 0;
+                    }
+                    break;
+                }
+
+                /* Floats */
+                case ERL_FLOAT_EXT:
+                case NEW_FLOAT_EXT: {
+                    double dval;
+                    ei_decode_double(buff, index, &dval);
+                    res[i].ei_type = ERL_FLOAT_EXT;
+                    res[i].arity = 0;
+                    res[i].size = 0;
+                    res[i].value.d_val = dval;
+                    DRV_DEBUG("Decoded float %d: %f", i, dval);
+                    break;
+                }
+
+                /* Strings come over as lists encoded as string ext when args
+                   are binaries – keep previous behaviour. */
+                case ERL_STRING_EXT: {
+                    unsigned char* str = driver_alloc(elem_size * sizeof(char) + 1);
+                    ei_decode_string(buff, index, (char*)str);
+                    res[i].ei_type = ERL_STRING_EXT;
+                    res[i].arity = elem_size;
+                    res[i].size = elem_size;
+                    /* Store pointer value temporarily as i_val (not used for strings currently) */
+                    res[i].value.i_val = 0;
+                    driver_free(str);
+                    DRV_DEBUG("Decoded string ext of size %d at pos %d", elem_size, i);
+                    break;
+                }
+
+                /* Fallback to existing generic decoder for any other term */
+                default:
+                    if (ei_decode_ei_term(buff, index, &res[i]) != 1) {
+                        /* If it wasn't decoded we need to skip it manually to
+                           keep the index in sync. */
+                        DRV_DEBUG("Falling back to ei_skip_term for unknown type %d", elem_type);
+                        ei_skip_term(buff, index);
+                    }
+                    break;
+            }
         }
+
+        /* Skip list tail (usually NIL) so that the caller's index points
+           past the list. We don't care about its value, only that it is
+           a valid term. */
+        ei_skip_term(buff, index);
     }
     else if(type == ERL_STRING_EXT) {
-        //DRV_DEBUG("Decoding list encoded as string");
+        /* Existing behaviour for lists encoded as strings */
         unsigned char* str = driver_alloc(arity * sizeof(char) + 1);
-        ei_decode_string(buff, index, str);
+        ei_decode_string(buff, index, (char*)str);
         for(int i = 0; i < arity; i++) {
             res[i].ei_type = ERL_INTEGER_EXT;
             res[i].value.i_val = (long) str[i];
-            DRV_DEBUG("Decoded term %d: %d", i, res[i].value.i_val);
+            DRV_DEBUG("Decoded term %d from string ext: %d", i, res[i].value.i_val);
         }
         driver_free(str);
     }
@@ -261,7 +349,7 @@ ei_term* decode_list(char* buff, int* index) {
         res[0].value.i_val = 0;
     }
     else {
-        DRV_DEBUG("Unknown type: %d", type);
+        DRV_DEBUG("Unknown type in decode_list: %d", type);
         return NULL;
     }
 

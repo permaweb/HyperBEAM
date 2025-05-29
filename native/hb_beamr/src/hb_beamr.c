@@ -40,9 +40,6 @@ static ErlDrvData wasm_driver_start(ErlDrvPort port, char *buff) {
     proc->port = port;
     DRV_DEBUG("Port: %p", proc->port);
 
-    // Set a base port key, which will be incremented for each async call to ensure
-    // that the calls are on different threads so cannot deadlock each other.
-    // TODO: This is not a good solution due to wasted overhead of threads.
     proc->port_key = driver_async_port_key(port);
     DRV_DEBUG("Port key: %d", proc->port_key);
 
