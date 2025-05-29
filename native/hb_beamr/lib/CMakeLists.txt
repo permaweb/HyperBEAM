@@ -138,6 +138,7 @@ target_link_libraries(vmlib ${WAMR_RUNTIME_LIB_DEPS})
 add_library(hb_beamr_lib STATIC
     src/hb_beamr_lib.c
     src/hb_beamr_fsm.c
+    src/hb_beamr_utils.c
 )
 
 # -----------------------------------------------------------------------------

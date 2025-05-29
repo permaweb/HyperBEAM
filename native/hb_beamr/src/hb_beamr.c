@@ -1,5 +1,7 @@
-#include "../include/hb_helpers.h"
-#include "../include/hb_wasm.h"
+#include "../include/hb_core.h"
+#include "../include/hb_async.h"
+#include "../include/hb_convert.h"
+#include "hb_beamr_lib.h"
 #include "hb_logging.h"
 #include "hb_driver.h"
 
@@ -57,14 +59,14 @@ static void wasm_driver_stop(ErlDrvData raw) {
     Proc* proc = (Proc*)raw;
     DRV_DEBUG("Stopping WASM driver");
 
-    if(proc->current_import) {
-        DRV_DEBUG("Shutting down during import response...");
-        proc->current_import->error_message = "WASM driver unloaded during import response";
-        proc->current_import->ready = 1;
-        DRV_DEBUG("Signalling import_response with error");
-        drv_signal(proc->current_import->response_ready, proc->current_import->cond, &proc->current_import->ready);
-        DRV_DEBUG("Signalled worker to fail. Locking is_running mutex to shutdown");
-    }
+    // if(proc->current_import) {
+    //     DRV_DEBUG("Shutting down during import response...");
+    //     proc->current_import->error_message = "WASM driver unloaded during import response";
+    //     proc->current_import->ready = 1;
+    //     DRV_DEBUG("Signalling import_response with error");
+    //     drv_signal(proc->current_import->response_ready, proc->current_import->cond, &proc->current_import->ready);
+    //     DRV_DEBUG("Signalled worker to fail. Locking is_running mutex to shutdown");
+    // }
 
     // We need to first grab the lock, then unlock it and destroy it. Must be a better way...
     DRV_DEBUG("Grabbing is_running mutex to shutdown...");
@@ -91,6 +93,7 @@ static void wasm_driver_stop(ErlDrvData raw) {
 static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) {
     DRV_DEBUG("WASM driver output received");
     Proc* proc = (Proc*)raw;
+    hb_beamr_lib_rc_t rc;
     //DRV_DEBUG("Port: %p", proc->port);
     //DRV_DEBUG("Port term: %p", proc->port_term);
 
@@ -125,14 +128,14 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         // the init message size + '\0' character
         mode = driver_alloc(mode_size + 1);
         ei_decode_atom(buff, &index, mode);
-        LoadWasmReq* mod_bin = driver_alloc(sizeof(LoadWasmReq));
-        mod_bin->proc = proc;
-        mod_bin->binary = wasm_binary;
-        mod_bin->size = size;
-        mod_bin->mode = mode;
-        //DRV_DEBUG("Calling for async thread to init");
-        proc->port_key++;
-        driver_async(proc->port, &proc->port_key, wasm_initialize_runtime, mod_bin, NULL);
+
+        InitHandlerReq* init_req = driver_alloc(sizeof(InitHandlerReq));
+        init_req->proc = proc;
+        init_req->binary = wasm_binary;
+        init_req->size = size;
+        init_req->mode = mode;
+        
+        driver_async(proc->port, NULL, wasm_initialize_runtime, init_req, NULL);
     } else if (strcmp(command, "call") == 0) {
         if (!proc->is_initialized) {
             send_error(proc->port_term, "Cannot run WASM function as module not initialized.");
@@ -142,18 +145,35 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         char* function_name = driver_alloc(MAXATOMLEN);
         ei_decode_string(buff, &index, function_name);
         DRV_DEBUG("Function name: %s", function_name);
-        proc->current_function = function_name;
 
-        DRV_DEBUG("Decoding args. Buff: %p. Index: %d", buff, index);
-        ei_term* current_args;
-        if (decode_list(buff, &index, &current_args) == -1) {
-            send_error(proc->port_term, "Failed to decode args");
+        hb_beamr_meta_func_t *func_meta = driver_alloc(sizeof(hb_beamr_meta_func_t));
+        rc = hb_beamr_lib_meta_export_func(proc->wasm_meta, function_name, &func_meta);
+        if (rc != HB_BEAMR_LIB_SUCCESS) {
+            send_error(proc->port_term, "Failed to get function meta data");
             return;
         }
-        proc->current_args = current_args;
 
-        proc->port_key++;
-        driver_async(proc->port, &proc->port_key, wasm_execute_exported_function, proc, NULL);
+        DRV_DEBUG("Decoding args. Buff: %p. Index: %d", buff, index);
+        wasm_val_t* args = driver_alloc(sizeof(wasm_val_t) * func_meta->param_count);
+        enum erl_port_buffer_to_wasm_vals_rc rc = erl_port_buffer_to_wasm_vals(buff, &index, func_meta->param_types, func_meta->param_count, &args);
+        if (rc != ERL_PORT_BUFFER_TO_WASM_VALS_SUCCESS) {
+            if (rc == ERL_PORT_BUFFER_TO_WASM_VALS_VALUE_OUT_OF_RANGE) {
+                send_error(proc->port_term, "Argument value out of range for wasm type");
+            } else {
+                send_error(proc->port_term, "Failed to decode arguments: %d", rc);
+            }
+            return;
+        }
+
+        CallExportHandlerReq* call_export_req = driver_alloc(sizeof(CallExportHandlerReq));
+        call_export_req->proc = proc;
+        call_export_req->function_name = function_name;
+        call_export_req->args = args;
+        call_export_req->arg_count = func_meta->param_count;
+        call_export_req->result_count = func_meta->result_count;
+        call_export_req->result_types = func_meta->result_types;
+
+        driver_async(proc->port, NULL, wasm_execute_exported_function, call_export_req, NULL);
     } 
     else if (strcmp(command, "indirect_call") == 0) {
         if (!proc->is_initialized) {
@@ -161,71 +181,45 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
             return;
         }
         DRV_DEBUG("Decoding indirect call");
-        ei_decode_long(buff, &index, &proc->current_function_ix);
-        DRV_DEBUG("Indirect function table index: %ld", proc->current_function_ix);
-        ei_term* current_args;
-        if (decode_list(buff, &index, &current_args) == -1) {
-            send_error(proc->port_term, "Failed to decode args");
+        long table_index;
+        ei_decode_long(buff, &index, &table_index);
+        DRV_DEBUG("Indirect function table index: %ld", table_index);
+
+        char* table_name = "__indirect_function_table";
+
+        hb_beamr_meta_func_t *func_meta = driver_alloc(sizeof(hb_beamr_meta_func_t));
+        rc = hb_beamr_lib_meta_indirect_func(proc->wasm_ctx, table_name, table_index, &func_meta);
+        if (rc != HB_BEAMR_LIB_SUCCESS) {
+            send_error(proc->port_term, "Failed to get indirect function meta data");
+            drv_unlock(proc->is_running);
             return;
         }
-        proc->current_args = current_args;
-	    DRV_DEBUG("Calling wasm_execute_indirect_function");
 
-        proc->port_key++;
-        driver_async(proc->port, &proc->port_key, wasm_execute_indirect_function, proc, NULL);
+        wasm_val_t* args = driver_alloc(sizeof(wasm_val_t) * func_meta->param_count);
+        enum erl_port_buffer_to_wasm_vals_rc rc = erl_port_buffer_to_wasm_vals(buff, &index, func_meta->param_types, func_meta->param_count, &args);
+        if (rc != ERL_PORT_BUFFER_TO_WASM_VALS_SUCCESS) {
+            if (rc == ERL_PORT_BUFFER_TO_WASM_VALS_VALUE_OUT_OF_RANGE) {
+                send_error(proc->port_term, "Argument value out of range for wasm type");
+            } else {
+                send_error(proc->port_term, "Failed to decode arguments: %d", rc);
+            }
+            return;
+        }
+        
+        CallIndirectHandlerReq* call_indirect_req = driver_alloc(sizeof(CallIndirectHandlerReq));
+        call_indirect_req->proc = proc;
+        call_indirect_req->table_name = table_name;
+        call_indirect_req->table_index = table_index;
+        call_indirect_req->args = args;
+        call_indirect_req->arg_count = func_meta->param_count;
+        call_indirect_req->result_types = func_meta->result_types;
+        call_indirect_req->result_count = func_meta->result_count;
+
+        driver_async(proc->port, NULL, wasm_execute_indirect_function, call_indirect_req, NULL);
     } 
     else if (strcmp(command, "import_response") == 0) {
-        // Handle import response
-        // TODO: We should probably start a mutex on the current_import object here.
-        // At the moment current_import->response_ready must not be locked so that signalling can happen.
-        DRV_DEBUG("Import response received. Providing...");
-        DRV_DEBUG("Import stack depth: %d, current_import: %p", proc->import_stack_depth, proc->current_import);
-        // print out the current_import object
-        DRV_DEBUG("Current import object cond: %p", proc->current_import->cond);
-        DRV_DEBUG("Current import object response_ready: %p", proc->current_import->response_ready);
-        DRV_DEBUG("Current import object ready: %d", proc->current_import->ready);
-        if (proc->current_import) {
-            DRV_DEBUG("Decoding import response from Erlang...");
-            ei_term* result_terms;
-            if (decode_list(buff, &index, &result_terms) == -1) {
-                send_error(proc->port_term, "Failed to decode import response");
-                return;
-            }
-            proc->current_import->result_terms = result_terms;
-            proc->current_import->error_message = NULL;
-
-            // Signal that the response is ready
-            drv_signal(
-                proc->current_import->response_ready,
-                proc->current_import->cond,
-                &proc->current_import->ready);
-
-            // Restore the previous import response
-            if (proc->import_stack_depth > 0) {
-                proc->import_stack_depth--; // Decrement depth FIRST
-                DRV_DEBUG("import_stack: Restoring previous import response at depth %d", proc->import_stack_depth);
-                DRV_DEBUG("import_stack: current_import Before (the one finishing): %p", proc->current_import);
-
-                if (proc->import_stack_depth == 0) {
-                    // Returned from the base import call, no previous context to restore.
-                    DRV_DEBUG("import_stack: Stack is now empty, setting current_import to NULL");
-                    proc->current_import = NULL;
-                } else {
-                    // Restore the import context from the element *below* the new depth.
-                    // (new_depth - 1) gives the index of the context we are returning to.
-                    proc->current_import = proc->import_stack[proc->import_stack_depth - 1];
-                    DRV_DEBUG("import_stack: Restored previous import context from index %d", proc->import_stack_depth - 1);
-                }
-                DRV_DEBUG("import_stack: current_import After (the one restored): %p", proc->current_import);
-            } else {
-                // This case should technically not be reachable if current_import was valid before the signal
-                DRV_DEBUG("import_stack: Error - import_stack_depth was already 0?");
-                proc->current_import = NULL; // Set to NULL for safety
-            }
-        } else {
-            DRV_DEBUG("[error] No pending import response waiting");
-            send_error(proc->port_term, "No pending import response waiting");
-        }
+        DRV_DEBUG("TODO: import_response");
+        send_error(proc->port_term, "TODO: import_response");
     } else if (strcmp(command, "write") == 0) {
         DRV_DEBUG("Write received");
         long ptr;
@@ -234,22 +228,16 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         ei_decode_long(buff, &index, &ptr);
         ei_get_type(buff, &index, &type, &size);
         size_t size_l = (long)size;
-        const char* wasm_binary;
-        int res = ei_decode_bitstring(buff, &index, &wasm_binary, NULL, &size_l);
+        const char* write_data;
+        int res = ei_decode_bitstring(buff, &index, &write_data, NULL, &size_l);
         DRV_DEBUG("Decoded binary. Res: %d. Size (bits): %ld", res, size_l);
         size_t size_bytes = size_l / 8;
         DRV_DEBUG("Write received. Ptr: %ld. Bytes: %ld", ptr, size_bytes);
-        size_t memory_size = get_memory_size(proc);
-        if(ptr + size_bytes > memory_size) {
-            DRV_DEBUG("Write request out of bounds.");
-            send_error(proc->port_term, "Write request out of bounds");
+        rc = hb_beamr_lib_direct_write_memory(proc->wasm_ctx, ptr, (uint8_t*)write_data, size_bytes);
+        if (rc != HB_BEAMR_LIB_SUCCESS) {
+            send_error(proc->port_term, hb_beamr_lib_get_last_error(proc->wasm_ctx));
             return;
         }
-        byte_t* memory_base = wasm_memory_get_base_address(get_memory(proc));
-        DRV_DEBUG("Memory location to write to: %p", memory_base + ptr);
-
-        memcpy(memory_base + ptr, wasm_binary, size_bytes);
-        DRV_DEBUG("Write complete");
 
         ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 2);
         msg[0] = ERL_DRV_ATOM;
@@ -263,22 +251,12 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         ei_decode_long(buff, &index, &ptr);
         ei_decode_long(buff, &index, &size);
         long size_l = (long)size;
-        long memory_size = get_memory_size(proc);
-        DRV_DEBUG("Read received. Ptr: %ld. Size: %ld. Memory size: %ld", ptr, size_l, memory_size);
-        if(ptr + size_l > memory_size) {
-            DRV_DEBUG("Read request out of bounds.");
-            send_error(proc->port_term, "Read request out of bounds");
+        
+        uint8_t* out_binary = driver_alloc(size_l);
+        rc = hb_beamr_lib_direct_read_memory(proc->wasm_ctx, ptr, (uint8_t*)out_binary, size_l);
+        if (rc != HB_BEAMR_LIB_SUCCESS) {
+            send_error(proc->port_term, hb_beamr_lib_get_last_error(proc->wasm_ctx));
             return;
-        }
-        char* out_binary = NULL;
-        if (memory_size > 0) {
-            byte_t* memory_base = wasm_memory_get_base_address(get_memory(proc));
-            DRV_DEBUG("Memory location to read from: %p", memory_base + ptr);
-            out_binary = driver_alloc(size_l);
-            memcpy(out_binary, memory_base + ptr, size_l);
-        } else {
-            DRV_DEBUG("No memory found, returning empty binary");
-            out_binary = driver_alloc(0);
         }
 
         DRV_DEBUG("Read complete. Binary: %p", out_binary);
@@ -298,15 +276,22 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
     }
     else if (strcmp(command, "size") == 0) {
         DRV_DEBUG("Size received");
-        long size = get_memory_size(proc);
-        DRV_DEBUG("Size: %ld", size);
+        uint8_t* memory_data;
+        size_t memory_size;
+        wasm_memory_inst_t memory;
+        rc = hb_beamr_lib_get_memory_info(proc->wasm_ctx, NULL, &memory_data, &memory_size, &memory);
+        if (rc != HB_BEAMR_LIB_SUCCESS) {
+            send_error(proc->port_term, hb_beamr_lib_get_last_error(proc->wasm_ctx));
+            return;
+        }
+        DRV_DEBUG("Size: %ld", memory_size);
 
         ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 6);
         int msg_index = 0;
         msg[msg_index++] = ERL_DRV_ATOM;
         msg[msg_index++] = atom_execution_result;
         msg[msg_index++] = ERL_DRV_INT;
-        msg[msg_index++] = size;
+        msg[msg_index++] = (long)memory_size;
         msg[msg_index++] = ERL_DRV_TUPLE;
         msg[msg_index++] = 2;
         erl_drv_output_term(proc->port_term, msg, msg_index);

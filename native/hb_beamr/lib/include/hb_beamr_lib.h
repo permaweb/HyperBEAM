@@ -34,16 +34,16 @@ typedef enum {
     HB_BEAMR_LIB_ERROR_WAMR_LOAD_FAILED,
     HB_BEAMR_LIB_ERROR_WAMR_INSTANTIATE_FAILED,
     HB_BEAMR_LIB_ERROR_WAMR_FUNCTION_LOOKUP_FAILED,
-    HB_BEAMR_LIB_ERROR_WAMR_CALL_FAILED = 7,
+    HB_BEAMR_LIB_ERROR_WAMR_CALL_FAILED,
     HB_BEAMR_LIB_ERROR_WAMR_VALIDATION_FAILED,
     HB_BEAMR_LIB_ERROR_INVALID_STATE,
     HB_BEAMR_LIB_ERROR_MODULE_NOT_LOADED,
     HB_BEAMR_LIB_ERROR_INSTANCE_NOT_CREATED,
-    HB_BEAMR_LIB_ERROR_NATIVE_LINKING_FAILED = 8,
-    HB_BEAMR_LIB_ERROR_SIGNATURE_PARSE_FAILED = 9,
-    HB_BEAMR_LIB_ERROR_INVALID_ARGS = 10,            
-    HB_BEAMR_LIB_ERROR_MEMORY_ACCESS_OUT_OF_BOUNDS = 11,
-    // ... other specific errors to be added
+    HB_BEAMR_LIB_ERROR_NATIVE_LINKING_FAILED,
+    HB_BEAMR_LIB_ERROR_SIGNATURE_PARSE_FAILED,
+    HB_BEAMR_LIB_ERROR_INVALID_ARGS,            
+    HB_BEAMR_LIB_ERROR_MEMORY_ACCESS_OUT_OF_BOUNDS,
+    HB_BEAMR_LIB_ERROR_NOT_FOUND,
 } hb_beamr_lib_rc_t;
 
 /**
@@ -250,15 +250,14 @@ hb_beamr_lib_register_global_natives(const hb_beamr_native_symbols_structured_t 
 // Indirect function metadata
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
+hb_beamr_lib_meta_export_func(hb_beamr_meta_module_t *meta, const char* func_name, hb_beamr_meta_func_t **out_func_meta);
+
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t
 hb_beamr_lib_meta_indirect_func(hb_beamr_lib_context_t* ctx, const char* table_name, int index, hb_beamr_meta_func_t **out_func_meta);
 
 // -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
-// Erlang terms to wasm vals
-
-HB_BEAMR_LIB_API hb_beamr_lib_rc_t
-hb_beamr_lib_erl_port_buffer_to_wasm_vals(const char* buff, int* index, wasm_valkind_t *val_kinds, uint32_t val_count, wasm_val_t **out_vals);
 
 #ifdef __cplusplus
 // ... existing code ...

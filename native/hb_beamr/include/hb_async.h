@@ -4,19 +4,6 @@
 #include "hb_core.h"
 
 /*
- * Function:  wasm_handle_import
- * --------------------
- * Handles the import for processing WASM imports.
- * 
- *  env: The environment (import hook) associated with the import.
- *  args: The arguments for the import function.
- *  results: The results of the import will be stored here.
- *
- *  returns: A WASM trap in case of an error, or NULL on success.
- */
-wasm_trap_t* wasm_handle_import(void* env, const wasm_val_vec_t* args, wasm_val_vec_t* results);
-
-/*
  * Function:  wasm_initialize_runtime
  * --------------------
  * Initializes the WASM module asynchronously.

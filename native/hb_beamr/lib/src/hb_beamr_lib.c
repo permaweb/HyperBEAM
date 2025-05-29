@@ -246,47 +246,6 @@ hb_beamr_lib_rc_t hb_beamr_lib_instantiate(
     // This allows native functions to retrieve the context and access per-instance state.
     wasm_runtime_set_custom_data(ctx->module_inst, (void*)ctx);
 
-    // --- Debug: Print module imports and exports AFTER instantiation ---
-    fprintf(stderr, "[DEBUG hb_beamr_lib_instantiate] Post-instantiation module info (from wasm_module: %p, instance: %p)\n", (void*)ctx->wasm_module, (void*)ctx->module_inst);
-    if (ctx->wasm_module) {
-        int32_t import_count = wasm_runtime_get_import_count(ctx->wasm_module);
-        fprintf(stderr, "  Import count: %d\n", import_count);
-        for (int32_t i = 0; i < import_count; ++i) {
-            wasm_import_t import_info;
-            wasm_runtime_get_import_type(ctx->wasm_module, i, &import_info);
-            const char* kind_str = "unknown_import_kind";
-            switch (import_info.kind) {
-                case WASM_IMPORT_EXPORT_KIND_FUNC: kind_str = "func"; break;
-                case WASM_IMPORT_EXPORT_KIND_TABLE: kind_str = "table"; break;
-                case WASM_IMPORT_EXPORT_KIND_MEMORY: kind_str = "memory"; break;
-                case WASM_IMPORT_EXPORT_KIND_GLOBAL: kind_str = "global"; break;
-            }
-            fprintf(stderr, "    Import [%d]: Module='%s', Name='%s', Kind=%s (%d)\n", 
-                    i, import_info.module_name ? import_info.module_name : "NULL", 
-                       import_info.name ? import_info.name : "NULL", 
-                       kind_str, import_info.kind);
-        }
-
-        int32_t export_count = wasm_runtime_get_export_count(ctx->wasm_module);
-        fprintf(stderr, "  Export count: %d\n", export_count);
-        for (int32_t i = 0; i < export_count; ++i) {
-            wasm_export_t export_info;
-            wasm_runtime_get_export_type(ctx->wasm_module, i, &export_info);
-            const char* kind_str = "unknown_export_kind";
-            switch (export_info.kind) {
-                case WASM_IMPORT_EXPORT_KIND_FUNC: kind_str = "func"; break;
-                case WASM_IMPORT_EXPORT_KIND_TABLE: kind_str = "table"; break;
-                case WASM_IMPORT_EXPORT_KIND_MEMORY: kind_str = "memory"; break;
-                case WASM_IMPORT_EXPORT_KIND_GLOBAL: kind_str = "global"; break;
-            }
-            fprintf(stderr, "    Export [%d]: Name='%s', Kind=%s (%d)\n", 
-                    i, export_info.name ? export_info.name : "NULL", 
-                       kind_str, export_info.kind);
-        }
-    }
-    fflush(stderr);
-    // --- End Debug ---
-
     set_error_msg(ctx, "Module instantiated successfully.");
     return HB_BEAMR_LIB_SUCCESS;
 }
@@ -980,6 +939,20 @@ HB_BEAMR_LIB_API void hb_beamr_lib_free_meta_module(hb_beamr_meta_module_t *meta
     memset(meta,0,sizeof(*meta));
 }
 
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_export_func(hb_beamr_meta_module_t *meta, const char* func_name, hb_beamr_meta_func_t **out_func_meta) {
+    if (!meta || !func_name || !out_func_meta) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    for (uint32_t i = 0; i < meta->export_count; i++) {
+        hb_beamr_meta_export_t *exp = &meta->exports[i];
+        if (exp->kind == WASM_IMPORT_EXPORT_KIND_FUNC) {
+            if (strcmp(exp->name, func_name) == 0) {
+                *out_func_meta = &exp->func;
+                return HB_BEAMR_LIB_SUCCESS;
+            }
+        }
+    }
+    return HB_BEAMR_LIB_ERROR_NOT_FOUND;
+}
+
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_indirect_func(hb_beamr_lib_context_t* ctx, const char* table_name, int index, hb_beamr_meta_func_t **out_func_meta) {
     if (!ctx || !table_name || !out_func_meta) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
     wasm_function_inst_t target_func_inst;
@@ -995,18 +968,6 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_indirect_func(hb_beamr_lib_
     wasm_func_get_param_types(target_func_inst, ctx->module_inst, (*out_func_meta)->param_types);
     wasm_func_get_result_types(target_func_inst, ctx->module_inst, (*out_func_meta)->result_types);
     (*out_func_meta)->signature = "()"; // We don't need this for indirect functions
-
-    return HB_BEAMR_LIB_SUCCESS;
-}
-
-// Erlang helpers
-
-HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_erl_port_buffer_to_wasm_vals(const char* buff, int* index, wasm_valkind_t *val_kinds, uint32_t val_count, wasm_val_t **out_vals) {
-    if (!buff || !index || !val_kinds || !val_count || !out_vals) {
-        return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
-    }
-
-    // TODO
 
     return HB_BEAMR_LIB_SUCCESS;
 }

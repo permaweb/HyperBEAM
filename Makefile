@@ -84,8 +84,6 @@ wamrc: compile
 test/%.aot: test/%.wasm
 	@echo "Compiling $< to $@ (ignoring errors)"
 	-$(WAMRC_BUILD_PATH)/wamrc \
-        --enable-nan-canonicalization \
-        --nan-canonicalization-sign-bit=0 \
         --bounds-checks=1 \
         -o $@ $<
 

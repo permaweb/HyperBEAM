@@ -43,6 +43,15 @@ static void run_import_test_module(){
     fprintf(stderr, "[DEBUG] hb_beamr_lib_meta_module done\n");
     wasm_runtime_unload(mod);
 
+    hb_beamr_meta_func_t *func_meta;
+    assert(hb_beamr_lib_meta_export_func(&meta,"wasm_add_two_via_host",&func_meta)==HB_BEAMR_LIB_SUCCESS);
+    fprintf(stderr, "func_meta: param_count: %d, param_types[0]: %d, result_count: %d, result_types[0]: %d, signature: %s\n", func_meta->param_count, func_meta->param_types[0], func_meta->result_count, func_meta->result_types[0], func_meta->signature);
+    assert(func_meta->param_count==1);
+    assert(func_meta->param_types[0]==WASM_I32);
+    assert(func_meta->result_count==1);
+    assert(func_meta->result_types[0]==WASM_I32);
+    assert(strcmp(func_meta->signature,"(i)i")==0);
+
     hb_beamr_native_symbols_structured_t structured;
     memset(&structured,0,sizeof(structured));
     assert(hb_beamr_lib_generate_natives(&meta,(void*)generic_stub,&structured)==HB_BEAMR_LIB_SUCCESS && structured.num_groups>0);
