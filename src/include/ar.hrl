@@ -14,9 +14,6 @@
 -define(MAX_TAG_NAME_SIZE, 3072).
 -define(MAX_TAG_VALUE_SIZE, 3072).
 
-%% The hashing algorithm used to calculate wallet addresses.
--define(HASH_ALG, sha256).
-
 -define(RSA_SIGN_ALG, rsa).
 -define(RSA_PRIV_KEY_SZ, 4096).
 

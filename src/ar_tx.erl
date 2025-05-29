@@ -1,7 +1,7 @@
-%%% @doc The module with utilities for transaction creation, signing, and verification.
+%%% @doc Utilities for Arweave L1 transaction creation, signing, and verification.
 -module(ar_tx).
 
--export([sign/2, verify/1, verify_tx_id/2]).
+-export([sign/2, verify/1, verify_tx_id/2, generate_id/2, get_owner_address/1]).
 -export([enforce_valid_tx/1, enforce_valid_unsigned_tx/1, enforce_valid_signed_tx/1]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
 
@@ -65,6 +65,20 @@ verify(TX) ->
 %% @doc Verify the given transaction actually has the given identifier.
 verify_tx_id(ExpectedID, #tx{ id = ID } = TX) ->
     ExpectedID == ID andalso verify_signature(TX) andalso verify_hash(TX).
+
+%% @doc Generate the ID for a given transaction.
+generate_id(TX, signed) ->
+    crypto:hash(sha256, TX#tx.signature);
+generate_id(TX, unsigned) ->
+    crypto:hash(sha256, generate_signature_data_segment(TX)).
+
+%% @doc Return the transaction's owner address. Take the cached value if available.
+get_owner_address(#tx{ owner = ?DEFAULT_OWNER }) ->
+	not_set;
+get_owner_address(#tx{ owner = Owner, signature_type = KeyType, owner_address = not_set }) ->
+	ar_wallet:to_address(Owner, KeyType);
+get_owner_address(#tx{ owner_address = OwnerAddress }) ->
+	OwnerAddress.
 
 %%%===================================================================
 %%% Private functions.
@@ -153,15 +167,17 @@ verify_v2(_) ->
 
 sign(TX, PrivKey, {KeyType, Owner}, SignatureDataSegment) ->
     true = enforce_valid_unsigned_tx(TX),
-    NewTX = TX#tx{ owner = Owner, signature_type = KeyType,
-            owner_address = ar_wallet:to_address(Owner, KeyType) },
-    Sig = ar_wallet:sign(PrivKey, SignatureDataSegment),
-    ID = crypto:hash(?HASH_ALG, <<Sig/binary>>),
-    NewTX#tx{ id = ID, signature = Sig }.
+    NewTX = TX#tx{ 
+        owner = Owner, 
+        signature_type = KeyType,
+        owner_address = ar_wallet:to_address(Owner, KeyType),
+        signature = ar_wallet:sign(PrivKey, SignatureDataSegment)
+    },
+    NewTX#tx{ id = generate_id(NewTX, signed) }.
 
 %% @doc Verify that the transaction's ID is a hash of its signature.
-verify_hash(#tx{ signature = Sig, id = ID }) ->
-    ID == crypto:hash(sha256, << Sig/binary >>).
+verify_hash(#tx{ id = ID } = TX) ->
+    ID == generate_id(TX, signed).
 
 collect_validation_results(_TXID, Checks) ->
     KeepFailed = fun
@@ -372,12 +388,12 @@ enforce_valid_tx(TX) ->
     ),
     % id will be set when the transaction is signed and can be empty before then
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.id, [0, 32]),
+        hb_util:check_size(TX#tx.id, [32]),
         {invalid_field, id, TX#tx.id}
     ),
     % Arweave L1 #tx doesn't support unsigned_id
     hb_util:ok_or_throw(TX,
-        hb_util:check_value(TX#tx.unsigned_id, [?DEFAULT_ID]),
+        hb_util:check_size(TX#tx.unsigned_id, [32]),
         {invalid_field, unsigned_id, TX#tx.unsigned_id}
     ),
     % last_tx can't be empty
@@ -417,7 +433,7 @@ enforce_valid_tx(TX) ->
         {invalid_field, data_root, TX#tx.data_root}
     ),
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.signature, [0, 65, byte_size(?DEFAULT_SIG)]),
+        hb_util:check_size(TX#tx.signature, [65, byte_size(?DEFAULT_SIG)]),
         {invalid_field, signature, TX#tx.signature}
     ),
     hb_util:ok_or_throw(TX,
@@ -517,7 +533,6 @@ new(Data) ->
     TX = #tx{
         format = 1,
         last_tx = crypto:strong_rand_bytes(32),
-        owner = crypto:strong_rand_bytes(512),
         data = Data,
         data_size = byte_size(Data)
     },
@@ -761,7 +776,7 @@ test_json_struct_to_tx_failure() ->
         <<"id">>         => hb_util:encode(crypto:strong_rand_bytes(32)),
         <<"last_tx">>    => hb_util:encode(crypto:strong_rand_bytes(32)),
         <<"owner">>      => hb_util:encode(crypto:strong_rand_bytes(512)),
-        <<"signature">>  => <<>>,
+        <<"signature">>  => hb_util:encode(crypto:strong_rand_bytes(512)),
         <<"quantity">>   => <<"0">>,
         <<"reward">>     => <<"0">>,
         <<"data_size">>  => <<"0">>,
@@ -922,8 +937,8 @@ test_tx_to_json_struct_failure() ->
     % Just run a single test to confirm that enforce_valid_signed_tx/1 is called. All other
     % validations are performed by enforce_valid_signed_tx/1 and tested in the
     % enforce_valid_signed_tx_test_() group.
-    TX = (new())#tx{ id = not_a_binary },
-    Reason = {invalid_field, id, not_a_binary},
+    TX = (new())#tx{ id = crypto:strong_rand_bytes(32), signature = ?DEFAULT_SIG },
+    Reason = {invalid_field, signature, ?DEFAULT_SIG},
 
     hb_test_utils:assert_throws(
         fun tx_to_json_struct/1,
@@ -972,7 +987,7 @@ test_enforce_valid_tx_happy() ->
 test_enforce_valid_tx_failure() ->
     BaseTX = new(),
 
-    InvalidUnsignedID = list_to_binary(lists:duplicate(32, $a)), % Guaranteed not ?DEFAULT_ID
+    InvalidUnsignedID = crypto:strong_rand_bytes(1),
     BadID31 = crypto:strong_rand_bytes(31),
     BadID33 = crypto:strong_rand_bytes(33),
     BadOwnerSize = crypto:strong_rand_bytes(byte_size(?DEFAULT_OWNER) - 1),
@@ -992,11 +1007,13 @@ test_enforce_valid_tx_failure() ->
         {invalid_format_atom, BaseTX#tx{format = an_atom}, {invalid_field, format, an_atom}},
         {id_too_short_31, BaseTX#tx{id = BadID31}, {invalid_field, id, BadID31}},
         {id_too_long_33, BaseTX#tx{id = BadID33}, {invalid_field, id, BadID33}},
+        {id_empty, BaseTX#tx{id = <<>>}, {invalid_field, id, <<>>}},
         {unsigned_id_invalid_val, BaseTX#tx{unsigned_id = InvalidUnsignedID}, {invalid_field, unsigned_id, InvalidUnsignedID}},
         {last_tx_empty, BaseTX#tx{last_tx = <<>>}, {invalid_field, last_tx, <<>>}},
         {last_tx_too_short_31, BaseTX#tx{last_tx = BadID31}, {invalid_field, last_tx, BadID31}},
         {last_tx_too_long_33, BaseTX#tx{last_tx = BadID33}, {invalid_field, last_tx, BadID33}},
         {owner_wrong_size, BaseTX#tx{owner = BadOwnerSize}, {invalid_field, owner, BadOwnerSize}},
+        {owner_empty, BaseTX#tx{owner = <<>>}, {invalid_field, owner, <<>>}},
         {target_too_short_31, BaseTX#tx{target = BadID31}, {invalid_field, target, BadID31}},
         {target_too_long_33, BaseTX#tx{target = BadID33}, {invalid_field, target, BadID33}},
         {quantity_not_integer, BaseTX#tx{quantity = <<"100">>}, {invalid_field, quantity, <<"100">>}},
@@ -1010,6 +1027,7 @@ test_enforce_valid_tx_failure() ->
         {signature_invalid_size_66, BaseTX#tx{signature = SigInvalidSize66}, {invalid_field, signature, SigInvalidSize66}},
         {signature_invalid_size_511, BaseTX#tx{signature = SigInvalidSize511}, {invalid_field, signature, SigInvalidSize511}},
         {signature_too_long_513, BaseTX#tx{signature = SigTooLong513}, {invalid_field, signature, SigTooLong513}},
+        {signature_empty, BaseTX#tx{signature = <<>>}, {invalid_field, signature, <<>>}},
         {reward_not_integer, BaseTX#tx{reward = 1.0}, {invalid_field, reward, 1.0}},
         {denomination_not_zero, BaseTX#tx{denomination = 1}, {invalid_field, denomination, 1}},
         {signature_type_not_rsa, BaseTX#tx{signature_type = ?ECDSA_KEY_TYPE}, {invalid_field, signature_type, ?ECDSA_KEY_TYPE}},
@@ -1051,6 +1069,7 @@ test_enforce_valid_unsigned_tx() ->
 test_enforce_valid_signed_tx() ->
     BaseTX = (new())#tx{ 
         id = crypto:strong_rand_bytes(32),
+        owner = crypto:strong_rand_bytes(512),
         signature = crypto:strong_rand_bytes(512) },
     ?assert(enforce_valid_signed_tx(BaseTX), "Base valid signed TX"),
 

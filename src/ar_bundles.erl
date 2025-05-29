@@ -1,6 +1,6 @@
 -module(ar_bundles).
 -export([signer/1, is_signed/1]).
--export([id/1, id/2, reset_ids/1, type/1, map/1, hd/1, member/2, find/2]).
+-export([id/1, id/2, generate_id/2, type/1, map/1, hd/1, member/2, find/2]).
 -export([manifest/1, manifest_item/1, parse_manifest/1]).
 -export([new_item/4, sign_item/2, verify_item/1]).
 -export([encode_tags/1, decode_tags/1]).
@@ -154,7 +154,7 @@ id(Item) -> id(Item, unsigned).
 id(Item, Type) when not is_record(Item, tx) ->
     id(normalize(Item), Type);
 id(Item = #tx { unsigned_id = ?DEFAULT_ID }, unsigned) ->
-    CorrectedItem = reset_ids(Item),
+    CorrectedItem = hb_tx:reset_ids(Item),
     CorrectedItem#tx.unsigned_id;
 id(#tx { unsigned_id = UnsignedID }, unsigned) ->
     UnsignedID;
@@ -162,6 +162,15 @@ id(#tx { id = ?DEFAULT_ID }, signed) ->
     not_signed;
 id(#tx { id = ID }, signed) ->
     ID.
+
+%% @doc Generate the ID for a given transaction.
+generate_id(Item, signed) ->
+    crypto:hash(sha256, Item#tx.signature);
+generate_id(Item, unsigned) ->
+    crypto:hash(
+        sha256,
+        data_item_signature_data(Item, unsigned)
+    ).
 
 %% @doc Return the first item in a bundle-map/list.
 hd(#tx { data = #{ <<"1">> := Msg } }) -> Msg;
@@ -220,7 +229,7 @@ manifest_item(_Item) -> undefined.
 
 %% @doc Create a new data item. Should only be used for testing.
 new_item(Target, Anchor, Tags, Data) ->
-    reset_ids(
+    hb_tx:reset_ids(
         #tx{
             format = ans104,
             target = Target,
@@ -237,7 +246,7 @@ sign_item(RawItem, {PrivKey, {KeyType, Owner}}) ->
     Item = (normalize_data(RawItem))#tx{format = ans104, owner = Owner, signature_type = KeyType},
     % Generate the signature from the data item's data segment in 'signed'-ready mode.
     Sig = ar_wallet:sign(PrivKey, data_item_signature_data(Item, signed)),
-    reset_ids(Item#tx{signature = Sig}).
+    hb_tx:reset_ids(Item#tx{signature = Sig}).
 
 %% @doc Verify the validity of a data item.
 verify_item(DataItem) ->
@@ -290,7 +299,7 @@ data_item_signature_data(RawItem, signed) ->
 
 %% @doc Verify the data item's ID matches the signature.
 verify_data_item_id(DataItem) ->
-    ExpectedID = crypto:hash(sha256, DataItem#tx.signature),
+    ExpectedID = generate_id(DataItem, signed),
     DataItem#tx.id == ExpectedID.
 
 %% @doc Verify the data item's signature.
@@ -312,7 +321,7 @@ verify_data_item_tags(DataItem) ->
     ),
     ValidCount andalso ValidTags.
 
-normalize(Item) -> reset_ids(normalize_data(Item)).
+normalize(Item) -> hb_tx:reset_ids(normalize_data(Item)).
 
 %% @doc Ensure that a data item (potentially containing a map or list) has a standard, serialized form.
 normalize_data(not_found) -> throw(not_found);
@@ -330,7 +339,7 @@ normalize_data(Item = #tx { data = Data }) when is_list(Data) ->
                         fun(Index, MapItem) ->
                             {
                                 integer_to_binary(Index),
-                                update_ids(normalize_data(MapItem))
+                                hb_tx:update_ids(normalize_data(MapItem))
                             }
                         end,
                         lists:seq(1, length(Data)),
@@ -463,40 +472,6 @@ enforce_valid_tx(TX) ->
     ),
     true.
 
-%% @doc Take an item and ensure that both the unsigned and signed IDs are
-%% appropriately set. This function is structured to fall through all cases
-%% of poorly formed items, recursively ensuring its correctness for each case
-%% until the item has a coherent set of IDs.
-%% The cases in turn are:
-%% - The item has no unsigned_id. This is never valid.
-%% - The item has the default signature and ID. This is valid.
-%% - The item has the default signature but a non-default ID. Reset the ID.
-%% - The item has a signature. We calculate the ID from the signature.
-%% - Valid: The item is fully formed and has both an unsigned and signed ID.
-update_ids(Item = #tx { unsigned_id = ?DEFAULT_ID }) ->
-    update_ids(
-        Item#tx {
-            unsigned_id =
-                crypto:hash(
-                    sha256,
-                    data_item_signature_data(Item, unsigned)
-                )
-        }
-    );
-update_ids(Item = #tx { id = ?DEFAULT_ID, signature = ?DEFAULT_SIG }) ->
-    Item;
-update_ids(Item = #tx { signature = ?DEFAULT_SIG }) ->
-    Item#tx { id = ?DEFAULT_ID };
-update_ids(Item = #tx { signature = Sig }) when Sig =/= ?DEFAULT_SIG ->
-    Item#tx { id = crypto:hash(sha256, Sig) };
-update_ids(TX) -> TX.
-
-%% @doc Re-calculate both of the IDs for an item. This is a wrapper
-%% function around `update_id/1' that ensures both IDs are set from
-%% scratch.
-reset_ids(Item) ->
-    update_ids(Item#tx { unsigned_id = ?DEFAULT_ID, id = ?DEFAULT_ID }).
-
 add_bundle_tags(Tags) -> ?BUNDLE_TAGS ++ (Tags -- ?BUNDLE_TAGS).
 
 add_list_tags(Tags) ->
@@ -520,7 +495,7 @@ finalize_bundle_data(Processed) ->
 to_serialized_pair(Item) ->
     % TODO: This is a hack to get the ID of the item. We need to do this because we may not
     % have the ID in 'item' if it is just a map/list. We need to make this more efficient.
-    Serialized = serialize(reset_ids(normalize(Item)), binary),
+    Serialized = serialize(hb_tx:reset_ids(normalize(Item)), binary),
     Deserialized = deserialize(Serialized, binary),
     UnsignedID = id(Deserialized, unsigned),
     {UnsignedID, Serialized}.
@@ -643,7 +618,7 @@ deserialize(Binary, binary) ->
     {Anchor, Rest3} = decode_optional_field(Rest2),
     {Tags, Data} = decode_tags(Rest3),
     maybe_unbundle(
-        reset_ids(#tx{
+        hb_tx:reset_ids(#tx{
             format = ans104,
             signature_type = SignatureType,
             signature = Signature,
@@ -903,10 +878,10 @@ test_with_zero_length_tag() ->
 
 test_unsigned_data_item_id() ->
     Item1 = deserialize(
-        serialize(reset_ids(#tx{format = ans104, data = <<"data1">>}))
+        serialize(hb_tx:reset_ids(#tx{format = ans104, data = <<"data1">>}))
     ),
     Item2 = deserialize(
-        serialize(reset_ids(#tx{format = ans104, data = <<"data2">>}))),
+        serialize(hb_tx:reset_ids(#tx{format = ans104, data = <<"data2">>}))),
     ?assertNotEqual(Item1#tx.unsigned_id, Item2#tx.unsigned_id).
 
 test_unsigned_data_item_normalization() ->

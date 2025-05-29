@@ -1,5 +1,8 @@
+%%% @doc Utilities for HyperBEAM-specific handling of transactions. Handles both ANS104
+%%% and Arewave L1 transactions.
 -module(hb_tx).
 -export([tx_to_tabm/6, tabm_to_tx/3, encoded_tags_to_map/1]).
+-export([reset_ids/1, update_ids/1]).
 
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -7,6 +10,32 @@
 %% The size at which a value should be made into a body item, instead of a
 %% tag.
 -define(MAX_TAG_VAL, 128).
+
+%% @doc Re-calculate both of the IDs for an item. This is a wrapper
+%% function around `update_id/1' that ensures both IDs are set from
+%% scratch.
+reset_ids(Item) ->
+    update_ids(Item#tx { unsigned_id = ?DEFAULT_ID, id = ?DEFAULT_ID }).
+
+%% @doc Take an item and ensure that both the unsigned and signed IDs are
+%% appropriately set. This function is structured to fall through all cases
+%% of poorly formed items, recursively ensuring its correctness for each case
+%% until the item has a coherent set of IDs.
+%% The cases in turn are:
+%% - The item has no unsigned_id. This is never valid.
+%% - The item has the default signature and ID. This is valid.
+%% - The item has the default signature but a non-default ID. Reset the ID.
+%% - The item has a signature. We calculate the ID from the signature.
+%% - Valid: The item is fully formed and has both an unsigned and signed ID.
+update_ids(Item = #tx { unsigned_id = ?DEFAULT_ID }) ->
+    update_ids(Item#tx { unsigned_id = generate_id(Item, unsigned) });
+update_ids(Item = #tx { id = ?DEFAULT_ID, signature = ?DEFAULT_SIG }) ->
+    Item;
+update_ids(Item = #tx { signature = ?DEFAULT_SIG }) ->
+    Item#tx { id = ?DEFAULT_ID };
+update_ids(Item = #tx { signature = Sig }) when Sig =/= ?DEFAULT_SIG ->
+    Item#tx { id = generate_id(Item, signed) };
+update_ids(TX) -> TX.
 
 tx_to_tabm(TX, TXKeys, Device, CommittedTags, Req, Opts) ->
     OriginalTagMap = encoded_tags_to_map(TX#tx.tags),
@@ -311,6 +340,16 @@ encoded_tags_to_map(Tags) ->
 %%%===================================================================
 %%% Private functions.
 %%%===================================================================
+
+%% @doc Generate the ID for a given transaction.
+generate_id(#tx{ format = ans104 } = TX, signed) ->
+    ar_bundles:generate_id(TX, signed);
+generate_id(TX, signed) ->
+    ar_tx:generate_id(TX, signed);
+generate_id(#tx{ format = ans104 } = TX, unsigned) ->
+    ar_bundles:generate_id(TX, unsigned);
+generate_id(TX, unsigned) ->
+    ar_tx:generate_id(TX, unsigned).
 
 %% @doc Check whether a list of key-value pairs contains only normalized keys.
 normal_tags(Tags) ->

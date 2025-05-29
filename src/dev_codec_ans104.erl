@@ -151,7 +151,7 @@ to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(NormTABM, Req, Opts) when is_map(NormTABM) ->
     TX = hb_tx:tabm_to_tx(NormTABM, Req, Opts),
     TXWithIDs =
-        try ar_bundles:reset_ids(ar_bundles:normalize(TX))
+        try hb_tx:reset_ids(ar_bundles:normalize(TX))
         catch
             _:Error ->
                 ?event({prepared_tx_before_ids,
@@ -182,3 +182,141 @@ from_maintains_tag_name_case_test() ->
         tags = [
             {<<"Test-Tag">>, <<"test-value">>}
         ]
+    },
+    SignedTX = ar_bundles:sign_item(TX, hb:wallet()),
+    ?event({signed_tx, SignedTX}),
+    ?assert(ar_bundles:verify_item(SignedTX)),
+    TABM = hb_util:ok(from(SignedTX, #{}, #{})),
+    ?event({tabm, TABM}),
+    ConvertedTX = hb_util:ok(to(TABM, #{}, #{})),
+    ?event({converted_tx, ConvertedTX}),
+    ?assert(ar_bundles:verify_item(ConvertedTX)),
+    ?assertEqual(ConvertedTX, ar_bundles:normalize(SignedTX)).
+
+restore_tag_name_case_from_cache_test() ->
+    Opts = #{ store => hb_test_utils:test_store() },
+    TX = #tx {
+        tags = [
+            {<<"Test-Tag">>, <<"test-value">>},
+            {<<"test-tag-2">>, <<"test-value-2">>}
+        ]
+    },
+    SignedTX = ar_bundles:sign_item(TX, ar_wallet:new()),
+    SignedMsg =
+        hb_message:convert(
+            SignedTX,
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            Opts
+        ),
+    SignedID = hb_message:id(SignedMsg, all),
+    ?event({signed_msg, SignedMsg}),
+    OnlyCommitted = hb_message:with_only_committed(SignedMsg, Opts),
+    ?event({only_committed, OnlyCommitted}),
+    {ok, ID} = hb_cache:write(SignedMsg, Opts),
+    ?event({id, ID}),
+    {ok, ReadMsg} = hb_cache:read(SignedID, Opts),
+    ?event({restored_msg, ReadMsg}),
+    {ok, ReadTX} = to(ReadMsg, #{}, Opts),
+    ?event({restored_tx, ReadTX}),
+    ?assert(hb_message:match(ReadMsg, SignedMsg)),
+    ?assert(ar_bundles:verify_item(ReadTX)).
+
+unsigned_duplicated_tag_name_test() ->
+    TX = hb_tx:reset_ids(ar_bundles:normalize(#tx {
+        tags = [
+            {<<"Test-Tag">>, <<"test-value">>},
+            {<<"test-tag">>, <<"test-value-2">>}
+        ]
+    })),
+    Msg = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ?event({msg, Msg}),
+    TX2 = hb_message:convert(Msg, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
+    ?event({tx2, TX2}),
+    ?assertEqual(TX, TX2).
+
+signed_duplicated_tag_name_test() ->
+    TX = ar_bundles:sign_item(#tx {
+        tags = [
+            {<<"Test-Tag">>, <<"test-value">>},
+            {<<"test-tag">>, <<"test-value-2">>}
+        ]
+    }, ar_wallet:new()),
+    Msg = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ?event({msg, Msg}),
+    TX2 = hb_message:convert(Msg, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
+    ?event({tx2, TX2}),
+    ?assertEqual(TX, TX2),
+    ?assert(ar_bundles:verify_item(TX2)).
+    
+simple_to_conversion_test() ->
+    Msg = #{
+        <<"first-tag">> => <<"first-value">>,
+        <<"second-tag">> => <<"second-value">>
+    },
+    {ok, Encoded} = to(Msg, #{}, #{}),
+    ?event({encoded, Encoded}),
+    {ok, Decoded} = from(Encoded, #{}, #{}),
+    ?event({decoded, Decoded}),
+    ?assert(hb_message:match(Msg, hb_message:uncommitted(Decoded, #{}))).
+
+only_committed_maintains_target_test() ->
+    TX = ar_bundles:sign_item(#tx {
+        target = crypto:strong_rand_bytes(32),
+        tags = [
+            {<<"test-tag">>, <<"test-value">>},
+            {<<"test-tag-2">>, <<"test-value-2">>}
+        ],
+        data = <<"test-data">>
+    }, ar_wallet:new()),
+    ?event({tx, TX}),
+    Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ?event({decoded, Decoded}),
+    {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, #{}),
+    ?event({only_committed, OnlyCommitted}),
+    Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
+    ?event({encoded, Encoded}),
+    ?assertEqual(TX, Encoded).
+
+type_tag_test() ->
+    TX =
+        ar_bundles:sign_item(
+            #tx {
+                tags = [{<<"type">>, <<"test-value">>}]
+            },
+            ar_wallet:new()
+        ),
+    ?event({tx, TX}),
+    Structured = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ?event({structured, Structured}),
+    TX2 = hb_message:convert(Structured, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
+    ?event({after_conversion, TX2}),
+    ?assertEqual(TX, TX2).
+    
+simple_signed_to_httpsig_test() ->
+    TX =
+        ar_bundles:sign_item(
+            #tx {
+                tags = [
+                    {<<"test-tag">>, <<"test-value">>},
+                    {<<"test-tag-2">>, <<"test-value-2">>},
+                    {<<"Capitalized-Tag">>, <<"test-value-3">>}
+                ]
+            },
+            ar_wallet:new()
+        ),
+    Structured1 = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ?event(debug, {tx, TX}),
+    TABM = hb_message:convert(TX, tabm, <<"ans104@1.0">>, #{}),
+    ?event(debug, {tabm, TABM}),
+    HTTPSig = hb_message:convert(TABM, <<"httpsig@1.0">>, tabm, #{}),
+    ?event(debug, {httpsig, HTTPSig}),
+    Structured2 = hb_message:convert(HTTPSig, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
+	Match = hb_message:match(Structured1, Structured2, #{}),
+    ?event(debug, {match, Match}),
+    ?assert(Match),
+    ?assert(hb_message:verify(Structured2, all, #{})),
+    HTTPSig2 = hb_message:convert(Structured2, <<"httpsig@1.0">>, <<"structured@1.0">>, #{}),
+    ?event(debug, {httpsig2, HTTPSig2}),
+    ?assert(hb_message:verify(HTTPSig2, all, #{})),
+    ?assert(hb_message:match(HTTPSig, HTTPSig2)).
