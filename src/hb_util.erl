@@ -918,16 +918,11 @@ check_value(Value, ExpectedValues) ->
     lists:member(Value, ExpectedValues).
 
 %% @doc Ensure that a value is of the given type.
-check_type(Value, binary) when is_binary(Value) -> true;
-check_type(Value, _) when is_binary(Value) -> false;
-check_type(Value, integer) when is_integer(Value) -> true;
-check_type(Value, _) when is_integer(Value) -> false;
-check_type(Value, list) when is_list(Value) -> true;
-check_type(Value, _) when is_list(Value) -> false;
-check_type(Value, map) when is_map(Value) -> true;
-check_type(Value, _) when is_map(Value) -> false;
-check_type(Value, tx) when is_record(Value, tx) -> true;
-check_type(Value, _) when is_record(Value, tx) -> false;
+check_type(Value, binary) -> is_binary(Value);
+check_type(Value, integer) -> is_integer(Value);
+check_type(Value, list) -> is_list(Value);
+check_type(Value, map) -> is_map(Value);
+check_type(Value, tx) -> is_record(Value, tx);
 check_type(Value, message) ->
     is_record(Value, tx) or is_map(Value) or is_list(Value);
 check_type(_Value, _) -> false.
