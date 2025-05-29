@@ -168,7 +168,8 @@ default_message() ->
         store =>
             [
                 #{
-                    <<"store-module">> => hb_store_fs,
+                    <<"store-module">> => hb_store_lmdb,
+                    <<"max-size">> => 600 * 1024 * 1024,
                     <<"prefix">> => <<"cache-mainnet">>
                 },
                 #{

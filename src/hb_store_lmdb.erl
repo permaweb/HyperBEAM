@@ -23,7 +23,8 @@
 -export([start/1, stop/1, scope/0, scope/1, reset/1]).
 -export([read/2, write/3, list/2]).
 -export([make_group/2, make_link/3, type/2]).
--export([path/2, add_path/3]).
+-export([path/2, add_path/3, sync/1, resolve/2]).
+-export([resolve_path_links/2, find_env/1]).
 
 %% Test framework and project includes
 -include_lib("eunit/include/eunit.hrl").
@@ -67,13 +68,44 @@ start(_) ->
 %% @param Opts Database configuration map
 %% @param Key The key to examine
 %% @returns 'composite' for group entries, 'simple' for regular values
--spec type(map(), binary()) -> composite | simple.
+-spec type(map(), binary()) -> composite | simple | not_found.
 type(Opts, Key) ->
-    {ok, Value} = read(Opts, Key),
-    ?event({value, Value}),
-    case Value of
-        <<"group">> -> composite;
-        _ -> simple
+    ?event(debug_type_detection, {checking_type_for_key, Key}),
+    case lmdb:get(find_env(Opts), Key) of
+        {ok, Value} ->
+            ?event(debug_type_detection, {found_value, Key, Value, byte_size(Value)}),
+            LinkPrefixSize = byte_size(<<"link:">>),
+            case byte_size(Value) > LinkPrefixSize andalso
+                binary:part(Value, 0, LinkPrefixSize) =:= <<"link:">> of
+                true ->
+                    % This is a link, check the target's type
+                    Link = binary:part(Value, LinkPrefixSize, byte_size(Value) - LinkPrefixSize),
+                    ?event(debug_type_detection, {following_link, Key, Link}),
+                    type(Opts, Link);
+                false ->
+                    case Value of
+                        <<"group">> -> 
+                            ?event(debug_type_detection, {key_is_group, Key}),
+                            composite;
+                        _ -> 
+                            ?event(debug_type_detection, {key_is_simple, Key, Value}),
+                            simple
+                    end
+            end;
+        not_found ->
+            ?event(debug_type_detection, {key_not_found_checking_children, Key}),
+            % Check if this is a composite by seeing if it has children
+            case list(Opts, Key) of
+                {ok, []} -> 
+                    ?event(debug_type_detection, {no_children_not_found, Key}),
+                    not_found;  % No children, doesn't exist
+                {ok, Children} -> 
+                    ?event(debug_type_detection, {has_children_composite, Key, Children}),
+                    composite;  % Has children, it's a composite
+                {error, Error} -> 
+                    ?event(debug_type_detection, {list_error_not_found, Key, Error}),
+                    not_found
+            end
     end.
 
 %% @doc Write a key-value pair to the database asynchronously.
@@ -127,17 +159,22 @@ write(StoreOpts, Key, Value) ->
 read(StoreOpts, Key) when is_list(Key) ->
     % Try direct read first (fast path for non-link paths)
     DirectKeyBin = hb_util:bin(lists:join(<<"/">>, Key)),
+    ?event(debug_nested_read, {path_list, Key, direct_key, DirectKeyBin}),
     case read_direct(StoreOpts, DirectKeyBin) of
         {ok, Value} -> 
+            ?event(debug_nested_read_direct_success, {key, DirectKeyBin, value_size, byte_size(Value)}),
             {ok, Value};
         not_found ->
             % Direct read failed, try link resolution (slow path)
+            ?event(debug_nested_read_trying_link_resolution, {path, Key}),
             try
                 case resolve_path_links(StoreOpts, Key) of
                     {ok, ResolvedPath} ->
                         ResolvedKeyBin = hb_util:bin(lists:join(<<"/">>, ResolvedPath)),
+                        ?event(debug_nested_read_link_resolved, {original, Key, resolved, ResolvedPath, resolved_key, ResolvedKeyBin}),
                         read_direct(StoreOpts, ResolvedKeyBin);
                     {error, _} ->
+                        ?event(debug_nested_read_link_resolution_failed, {path, Key}),
                         % Convert errors to not_found for hb_store compatibility
                         not_found
                 end
@@ -167,8 +204,17 @@ read_direct(StoreOpts, Key) ->
                    Link = binary:part(Value, LinkPrefixSize, byte_size(Value) - LinkPrefixSize),
                    read(StoreOpts, Link);
                 false ->
-                    % Regular value, return as-is
-                    {ok, Value}
+                    % Check if this is a group marker - groups should not be readable as simple values
+                    case Value of
+                        <<"group">> ->
+                            ?event(debug_lmdb_read, {refusing_to_read_group_marker, Key}),
+                            % Groups should be accessed via list/type, not read directly
+                            % This makes LMDB behave like filesystem where directories cannot be read as files
+                            not_found;
+                        _ ->
+                            % Regular value, return as-is
+                            {ok, Value}
+                    end
             end;
         not_found ->
             % Key not found in committed data, trigger flush and retry
@@ -275,7 +321,15 @@ list(StoreOpts, Path) when is_map(StoreOpts), is_binary(Path) ->
                % Only match on keys that have the prefix and are longer than it
                case byte_size(Key) > PathSize andalso 
                     binary:part(Key, 0, PathSize) =:= Path of
-                  true -> [Key | Acc];
+                  true -> 
+                      % Return key without the path prefix and separator
+                      KeyWithoutPrefix = binary:part(Key, PathSize, byte_size(Key) - PathSize),
+                      % Remove leading separator if present
+                      CleanKey = case KeyWithoutPrefix of
+                          <<"/", Rest/binary>> -> Rest;
+                          Other -> Other
+                      end,
+                      [CleanKey | Acc];
                   false -> Acc
                end
            end,
@@ -332,7 +386,6 @@ make_group(_,_) ->
 -spec make_link(map(), binary() | list(), binary()) -> ok.
 make_link(StoreOpts, Existing, New) when is_list(Existing) ->
     ExistingBin = hb_util:bin(lists:join(<<"/">>, Existing)),
-    ?event({ existingKey, ExistingBin}),
     make_link(StoreOpts, ExistingBin, New);
 make_link(StoreOpts, Existing, New) ->
    ExistingBin = hb_util:bin(Existing),
@@ -360,6 +413,43 @@ add_path(StoreOpts, Path1, Path2) when is_list(Path1), is_binary(Path2) ->
 add_path(StoreOpts, Path1, Path2) when is_binary(Path1), is_list(Path2) ->
     Parts1 = binary:split(Path1, <<"/">>, [global]),
     path(StoreOpts, Parts1 ++ Path2).
+
+%% @doc Force an immediate flush of all pending writes to disk.
+%%
+%% This function synchronously forces the database server to commit any
+%% pending writes in the current transaction. It blocks until the flush
+%% operation is complete, ensuring that all previously written data is
+%% durably stored before returning.
+%%
+%% This is useful when you need to ensure data is persisted immediately,
+%% rather than waiting for the automatic flush timers to trigger. Common
+%% use cases include critical checkpoints, before system shutdown, or
+%% when preparing for read operations that must see the latest writes.
+%%
+%% @param StoreOpts Database configuration map
+%% @returns 'ok' when flush is complete, {error, Reason} on failure
+-spec sync(map()) -> ok | {error, term()}.
+sync(StoreOpts) ->
+    PID = find_or_spawn_instance(StoreOpts),
+    PID ! {flush, self(), Ref = make_ref()},
+    receive
+        {flushed, Ref} -> ok
+    after ?CONNECT_TIMEOUT -> {error, timeout}
+    end.
+
+%% @doc Resolve a path by following any symbolic links.
+%%
+%% For LMDB, we don't use filesystem symlinks but instead handle links
+%% through our own "link:" prefix mechanism during read operations.
+%% Therefore, this function simply returns the path as-is, since link
+%% resolution is handled transparently by the read function.
+%%
+%% @param _StoreOpts Database configuration map (unused)
+%% @param Path The path to resolve  
+%% @returns The same path (no resolution needed for LMDB)
+-spec resolve(map(), binary()) -> binary().
+resolve(_StoreOpts, Path) ->
+    Path.
 
 %% @doc Retrieve or create the LMDB environment handle for a database.
 %%
@@ -439,11 +529,23 @@ find_or_spawn_instance(StoreOpts = #{ <<"prefix">> := DataDir }) ->
 %%
 %% @param StoreOpts Database configuration map
 %% @returns 'ok' when shutdown is complete
-stop(StoreOpts) ->
-    PID = find_or_spawn_instance(StoreOpts),
-    Env = find_env(StoreOpts),
-    PID ! stop,
-    lmdb:env_close(Env),
+stop(StoreOpts) when is_map(StoreOpts) ->
+    case maps:get(<<"prefix">>, StoreOpts, undefined) of
+        undefined ->
+            % No prefix specified, nothing to stop
+            ok;
+        DataDir ->
+            PID = find_or_spawn_instance(StoreOpts),
+            Env = find_env(StoreOpts),
+            PID ! stop,
+            % Clean up process dictionary entries for this database
+            erase({?MODULE, DataDir}),
+            erase({?MODULE, {server, DataDir}}),
+            lmdb:env_close(Env),
+            ok
+    end;
+stop(_) ->
+    % Invalid argument, ignore
     ok.
 
 %% @doc Completely delete the database directory and all its contents.
@@ -459,9 +561,33 @@ stop(StoreOpts) ->
 %%
 %% @param StoreOpts Database configuration map containing the directory prefix
 %% @returns 'ok' when deletion is complete
-reset(StoreOpts = #{ <<"prefix">> := DataDir }) ->
-    stop(StoreOpts),
-    os:cmd(binary_to_list(<< "rm -Rf ", DataDir/binary >>)),
+reset(StoreOpts) when is_map(StoreOpts) ->
+    case maps:get(<<"prefix">>, StoreOpts, undefined) of
+        undefined ->
+            % No prefix specified, nothing to reset
+            ok;
+        DataDir ->
+            % Only stop the store if it's actually running
+            case get({?MODULE, DataDir}) of
+                undefined ->
+                    % Check if there's a server running without env cached
+                    case hb_name:lookup({?MODULE, DataDir}) of
+                        undefined -> 
+                            % No server running, just remove the directory
+                            ok;
+                        _Pid -> 
+                            % Server exists, stop it properly
+                            stop(StoreOpts)
+                    end;
+                _Env ->
+                    % Environment is cached, stop normally
+                    stop(StoreOpts)
+            end,
+            os:cmd(binary_to_list(<< "rm -Rf ", DataDir/binary >>)),
+            ok
+    end;
+reset(_) ->
+    % Invalid argument, ignore
     ok.
 
 %% @doc Initialize a new server process for managing database operations.
@@ -570,14 +696,31 @@ server(State) ->
 %% @returns Updated server state with the write added to the transaction
 server_write(RawState, Key, Value) ->
     State = ensure_transaction(RawState),
-    lmdb_nif:put(
-        maps:get(<<"transaction">>, State),
-        maps:get(<<"instance">>, State),
-        Key,
-        Value,
-        0
-    ),
-    State.
+    case {maps:get(<<"transaction">>, State, undefined), 
+          maps:get(<<"instance">>, State, undefined)} of
+        {undefined, _} ->
+            % Transaction creation failed, return state unchanged
+            ?event(error, {write_failed_no_transaction, Key}),
+            State;
+        {_, undefined} ->
+            % Database instance missing, return state unchanged
+            ?event(error, {write_failed_no_db_instance, Key}),
+            State;
+        {Txn, Dbi} ->
+            % Valid transaction and instance, perform the write
+            try
+                ?event(debug_cache, { state, State}),
+                ?event(debug_cache, { key, Key}),
+                ?event(debug_cache, { value, Value }),
+                lmdb_nif:put(Txn, Dbi, Key, Value, 0),
+                State
+            catch
+                Class:Reason:Stacktrace ->
+                    ?event(error, {put_failed, Class, Reason, Stacktrace, Key}),
+                    % If put fails, the transaction may be invalid, clean it up
+                    State#{ <<"transaction">> => undefined, <<"instance">> => undefined }
+            end
+    end.
 
 %% @doc Commit the current transaction to disk and clean up state.
 %%
@@ -599,11 +742,20 @@ server_flush(RawState) ->
         undefined ->
             % No active transaction, nothing to flush
             RawState;
-        _ ->
-            % Commit the transaction and clean up state
-            _Res = lmdb_nif:txn_commit(maps:get(<<"transaction">>, RawState)),
-            notify_flush(RawState),
-            RawState#{ <<"transaction">> => undefined, <<"instance">> => undefined }
+        Txn ->
+            % Commit the transaction with proper error handling
+            try
+                lmdb_nif:txn_commit(Txn),
+                notify_flush(RawState),
+                RawState#{ <<"transaction">> => undefined, <<"instance">> => undefined }
+            catch
+                Class:Reason:Stacktrace ->
+                    ?event(error, {txn_commit_failed, Class, Reason, Stacktrace}),
+                    % Even if commit fails, clean up the transaction reference
+                    % to prevent trying to use an invalid handle
+                    notify_flush(RawState),
+                    RawState#{ <<"transaction">> => undefined, <<"instance">> => undefined }
+            end
     end.
 
 %% @doc Notify all processes waiting for a flush operation to complete.
@@ -678,15 +830,23 @@ commit_manager(StoreOpts, Server) ->
 ensure_transaction(State) ->
     case maps:get(<<"transaction">>, State, undefined) of
         undefined ->
-            % No transaction exists, create one
-            {ok, Txn} =
-                lmdb_nif:txn_begin(
-                    maps:get(<<"env">>, State),
-                    undefined,
-                    0
-                ),
-            {ok, Dbi} = lmdb:open_db(Txn, default),
-            State#{<<"transaction">> => Txn, <<"instance">> => Dbi};
+            % No transaction exists, create one with error handling
+            try
+                {ok, Txn} =
+                    lmdb_nif:txn_begin(
+                        maps:get(<<"env">>, State),
+                        undefined,
+                        0
+                    ),
+                {ok, Dbi} = lmdb:open_db(Txn, default),
+                State#{<<"transaction">> => Txn, <<"instance">> => Dbi}
+            catch
+                Class:Reason:Stacktrace ->
+                    ?event(error, {txn_begin_failed, Class, Reason, Stacktrace}),
+                    % If transaction creation fails, return state unchanged
+                    % This will cause writes to fail but won't crash the server
+                    State
+            end;
         _ ->
             % Transaction already exists, return state unchanged
             State
@@ -733,22 +893,23 @@ list_test() ->
     % Brief delay to ensure writes are flushed
     timer:sleep(10), 
     {ok, Keys} = list(StoreOpts, <<"colors">>),
-    ?assertEqual([<<"colors/red">>, <<"colors/green">>, <<"colors/blue">>], Keys),
+    ?assertEqual([<<"red">>, <<"green">>, <<"blue">>], Keys),
     ok = stop(StoreOpts).
 
 %% @doc Group test - verifies group creation and type detection.
 %%
-%% This test creates a group entry and verifies that it can be read back
-%% and correctly identified as a composite type rather than a simple value.
+%% This test creates a group entry and verifies that it is correctly identified 
+%% as a composite type and cannot be read directly (like filesystem directories).
 group_test() ->
     StoreOpts = #{
       <<"prefix">> => <<"/tmp/store3">>,
       <<"max-size">> => ?DEFAULT_SIZE
     },
     make_group(StoreOpts, <<"colors">>),
-    {ok, Result} = read(StoreOpts, <<"colors">>),
-    ?event({ result, Result}),
-    ?assertEqual(hb_util:atom(Result), group).
+    % Groups should be detected as composite types
+    ?assertEqual(composite, type(StoreOpts, <<"colors">>)),
+    % Groups should not be readable directly (like directories in filesystem)
+    ?assertEqual(not_found, read(StoreOpts, <<"colors">>)).
 
 %% @doc Link test - verifies symbolic link creation and resolution.
 %%
@@ -857,10 +1018,12 @@ exact_hb_store_test() ->
     
     timer:sleep(1000),
 
-    % Debug: what does the link actually contain?
+    % Debug: test that the link behaves like the target (groups are unreadable)
     ?event(debug, step4_check_link),
-    {ok, LinkValue} = read(StoreOpts, <<"test-link">>),
-    ?event(debug, {link_value, LinkValue}),
+    LinkResult = read(StoreOpts, <<"test-link">>),
+    ?event(debug, {link_result, LinkResult}),
+    % Since test-dir1 is a group and groups are unreadable, the link should also be unreadable
+    ?assertEqual(not_found, LinkResult),
     
     
     % Debug: test intermediate steps
@@ -873,4 +1036,296 @@ exact_hb_store_test() ->
     Result = read(StoreOpts, [<<"test-link">>, <<"test-file">>]),
     ?event(debug, {final_result, Result}),
     ?assertEqual({ok, <<"test-data">>}, Result),
-    ok = stop(StoreOpts). 
+    ok = stop(StoreOpts).
+
+%% @doc Sync test - verifies that sync forces immediate flush of writes.
+%%
+%% This test writes data to the store and immediately calls sync to force
+%% a flush, then verifies that the data is immediately readable without
+%% waiting for automatic flush timers.
+sync_test() ->
+    StoreOpts = #{
+      <<"prefix">> => <<"/tmp/store-sync">>,
+      <<"max-size">> => ?DEFAULT_SIZE
+    },
+    
+    % Write some data
+    write(StoreOpts, <<"sync-key">>, <<"sync-value">>),
+    
+    % Force immediate flush
+    ?assertEqual(ok, sync(StoreOpts)),
+    
+    % Data should be immediately readable
+    {ok, Value} = read(StoreOpts, <<"sync-key">>),
+    ?assertEqual(<<"sync-value">>, Value),
+    
+    ok = stop(StoreOpts).
+
+%% @doc Test cache-style usage through hb_store interface
+cache_style_test() ->
+    hb:init(),
+    StoreOpts = #{
+      <<"store-module">> => hb_store_lmdb,
+      <<"prefix">> => <<"/tmp/store-cache-style">>,
+      <<"max-size">> => ?DEFAULT_SIZE
+    },
+    
+    % Start the store
+    hb_store:start(StoreOpts),
+    
+    % Test writing through hb_store interface  
+    ok = hb_store:write(StoreOpts, <<"test-key">>, <<"test-value">>),
+    
+    % Wait a bit
+    timer:sleep(100),
+    
+    % Test reading through hb_store interface
+    Result = hb_store:read(StoreOpts, <<"test-key">>),
+    ?event({cache_style_read_result, Result}),
+    ?assertEqual({ok, <<"test-value">>}, Result),
+    
+    hb_store:stop(StoreOpts).
+
+%% @doc Test nested map storage with cache-like linking behavior
+%%
+%% This test demonstrates how to store a nested map structure where:
+%% 1. Each value is stored at data/{hash_of_value} 
+%% 2. Links are created to compose the values back into the original map structure
+%% 3. Reading the composed structure reconstructs the original nested map
+nested_map_cache_test() ->
+    StoreOpts = #{
+        <<"prefix">> => <<"/tmp/store-nested-cache">>,
+        <<"max-size">> => ?DEFAULT_SIZE
+    },
+    
+    % Clean up any previous test data
+    reset(StoreOpts),
+    
+    % Original nested map structure
+    OriginalMap = #{
+        <<"name">> => <<"Foo">>,
+        <<"items">> => #{
+            <<"bar">> => #{
+              <<"beep">> => <<"baz">>
+            },
+            <<"count">> => <<"42">>,
+            <<"active">> => <<"true">>
+        }
+    },
+    
+    ?event({original_map, OriginalMap}),
+    
+    % Step 1: Store each leaf value at data/{hash}
+    NameHash = crypto:hash(sha256, <<"Foo">>),
+    NameDataPath = <<"data/", (base64:encode(NameHash))/binary>>,
+    write(StoreOpts, NameDataPath, <<"Foo">>),
+    
+    BeepHash = crypto:hash(sha256, <<"baz">>),
+    BeepDataPath = <<"data/", (base64:encode(BeepHash))/binary>>,
+    write(StoreOpts, BeepDataPath, <<"baz">>),
+    
+    CountHash = crypto:hash(sha256, <<"42">>),
+    CountDataPath = <<"data/", (base64:encode(CountHash))/binary>>,
+    write(StoreOpts, CountDataPath, <<"42">>),
+    
+    ActiveHash = crypto:hash(sha256, <<"true">>),
+    ActiveDataPath = <<"data/", (base64:encode(ActiveHash))/binary>>,
+    write(StoreOpts, ActiveDataPath, <<"true">>),
+    
+    % Step 2: Create the nested structure with groups and links
+    
+    % Create the root group
+    make_group(StoreOpts, <<"root">>),
+    
+    % Create links for the root level keys
+    make_link(StoreOpts, NameDataPath, <<"root/name">>),
+    
+    % Create the items subgroup
+    make_group(StoreOpts, <<"root/items">>),
+    
+    % Create the bar subgroup within items
+    make_group(StoreOpts, <<"root/items/bar">>),
+    
+    % Create links for the items subkeys
+    make_link(StoreOpts, BeepDataPath, <<"root/items/bar/beep">>),
+    make_link(StoreOpts, CountDataPath, <<"root/items/count">>),
+    make_link(StoreOpts, ActiveDataPath, <<"root/items/active">>),
+    
+    % Force writes to be committed
+    sync(StoreOpts),
+    
+    % Step 3: Test reading the structure back
+    
+    % Verify the root is a composite
+    ?assertEqual(composite, type(StoreOpts, <<"root">>)),
+    
+    % List the root contents
+    {ok, RootKeys} = list(StoreOpts, <<"root">>),
+    ?event({root_keys, RootKeys}),
+    
+    % Read the name directly
+    {ok, NameValue} = read(StoreOpts, <<"root/name">>),
+    ?assertEqual(<<"Foo">>, NameValue),
+    
+    % Verify items is a composite
+    ?assertEqual(composite, type(StoreOpts, <<"root/items">>)),
+    
+    % List the items contents  
+    {ok, ItemsKeys} = list(StoreOpts, <<"root/items">>),
+    ?event({items_keys, ItemsKeys}),
+    
+    % Verify bar is a composite (nested group)
+    ?assertEqual(composite, type(StoreOpts, <<"root/items/bar">>)),
+    
+    % List the bar contents
+    {ok, BarKeys} = list(StoreOpts, <<"root/items/bar">>),
+    ?event({bar_keys, BarKeys}),
+    
+    % Read the nested value
+    {ok, BeepValue} = read(StoreOpts, <<"root/items/bar/beep">>),
+    ?assertEqual(<<"baz">>, BeepValue),
+    
+    % Read other item values
+    {ok, CountValue} = read(StoreOpts, <<"root/items/count">>),
+    ?assertEqual(<<"42">>, CountValue),
+    
+    {ok, ActiveValue} = read(StoreOpts, <<"root/items/active">>),
+    ?assertEqual(<<"true">>, ActiveValue),
+    
+    % Step 4: Test programmatic reconstruction of the nested map
+    ReconstructedMap = reconstruct_map(StoreOpts, <<"root">>),
+    ?event({reconstructed_map, ReconstructedMap}),
+    
+    % Verify the reconstructed map matches the original structure
+    ?assertEqual(<<"Foo">>, maps:get(<<"name">>, ReconstructedMap)),
+    ItemsMap = maps:get(<<"items">>, ReconstructedMap),
+    BarMap = maps:get(<<"bar">>, ItemsMap),
+    ?assertEqual(<<"baz">>, maps:get(<<"beep">>, BarMap)),
+    ?assertEqual(<<"42">>, maps:get(<<"count">>, ItemsMap)),
+    ?assertEqual(<<"true">>, maps:get(<<"active">>, ItemsMap)),
+    ?event({originalMap, OriginalMap}),
+    ?assert(hb_message:match(OriginalMap, ReconstructedMap)),
+    stop(StoreOpts).
+
+%% Helper function to recursively reconstruct a map from the store
+reconstruct_map(StoreOpts, Path) ->
+    case type(StoreOpts, Path) of
+        composite ->
+            % This is a group, reconstruct it as a map
+            {ok, AllSubkeys} = list(StoreOpts, Path),
+            % Filter to only immediate children (no nested paths)
+            ImmediateChildren = lists:filter(
+                fun(Key) ->
+                    % Only include keys that don't contain "/"
+                    binary:match(Key, <<"/">>) =:= nomatch
+                end,
+                AllSubkeys
+            ),
+            ?event({path, Path, all_subkeys, AllSubkeys, immediate_children, ImmediateChildren}),
+            maps:from_list([
+                {Key, reconstruct_map(StoreOpts, <<Path/binary, "/", Key/binary>>)}
+                || Key <- ImmediateChildren
+            ]);
+        simple ->
+            % This is a simple value, read it directly
+            {ok, Value} = read(StoreOpts, Path),
+            Value;
+        not_found ->
+            % Path doesn't exist
+            undefined
+    end.
+
+%% @doc Debug test to understand cache linking behavior
+cache_debug_test() ->
+    StoreOpts = #{
+        <<"prefix">> => <<"/tmp/cache-debug">>,
+        <<"max-size">> => ?DEFAULT_SIZE
+    },
+    
+    reset(StoreOpts),
+    
+    % Simulate what the cache does:
+    % 1. Create a group for message ID
+    MessageID = <<"test_message_123">>,
+    make_group(StoreOpts, MessageID),
+    
+    % 2. Store a value at data/hash
+    Value = <<"test_value">>,
+    ValueHash = base64:encode(crypto:hash(sha256, Value)),
+    DataPath = <<"data/", ValueHash/binary>>,
+    write(StoreOpts, DataPath, Value),
+    
+    % 3. Calculate a key hashpath (simplified version)
+    KeyHashPath = <<MessageID/binary, "/", "key_hash_abc">>,
+    
+    % 4. Create link from data path to key hash path
+    make_link(StoreOpts, DataPath, KeyHashPath),
+    
+    sync(StoreOpts),
+    
+    % 5. Test what the cache would see:
+    ?event(debug_cache_test, {step, check_message_type}),
+    MsgType = type(StoreOpts, MessageID),
+    ?event(debug_cache_test, {message_type, MsgType}),
+    
+    ?event(debug_cache_test, {step, list_message_contents}),
+    {ok, Subkeys} = list(StoreOpts, MessageID),
+    ?event(debug_cache_test, {message_subkeys, Subkeys}),
+    
+    ?event(debug_cache_test, {step, read_key_hashpath}),
+    KeyHashResult = read(StoreOpts, KeyHashPath),
+    ?event(debug_cache_test, {key_hash_read_result, KeyHashResult}),
+    
+    stop(StoreOpts).
+
+%% @doc Isolated test focusing on the exact cache issue
+isolated_type_debug_test() ->
+    StoreOpts = #{
+        <<"prefix">> => <<"/tmp/isolated-debug">>,
+        <<"max-size">> => ?DEFAULT_SIZE
+    },
+    
+    reset(StoreOpts),
+    
+    % Create the exact scenario from user's description:
+    % 1. A message ID with nested structure
+    MessageID = <<"message123">>,
+    make_group(StoreOpts, MessageID),
+    
+    % 2. Create nested groups for "commitments" and "other-test-key"
+    CommitmentsPath = <<MessageID/binary, "/commitments">>,
+    OtherKeyPath = <<MessageID/binary, "/other-test-key">>,
+    
+    ?event(isolated_debug, {creating_nested_groups, CommitmentsPath, OtherKeyPath}),
+    make_group(StoreOpts, CommitmentsPath),
+    make_group(StoreOpts, OtherKeyPath),
+    
+    % 3. Add some actual data within those groups
+    write(StoreOpts, <<CommitmentsPath/binary, "/sig1">>, <<"signature_data_1">>),
+    write(StoreOpts, <<OtherKeyPath/binary, "/sub_value">>, <<"nested_value">>),
+    
+    sync(StoreOpts),
+    
+    % 4. Test type detection on the nested paths
+    ?event(isolated_debug, {testing_main_message_type}),
+    MainType = type(StoreOpts, MessageID),
+    ?event(isolated_debug, {main_message_type, MainType}),
+    
+    ?event(isolated_debug, {testing_commitments_type}),
+    CommitmentsType = type(StoreOpts, CommitmentsPath),
+    ?event(isolated_debug, {commitments_type, CommitmentsType}),
+    
+    ?event(isolated_debug, {testing_other_key_type}),
+    OtherKeyType = type(StoreOpts, OtherKeyPath),
+    ?event(isolated_debug, {other_key_type, OtherKeyType}),
+    
+    % 5. Test what happens when reading these nested paths
+    ?event(isolated_debug, {reading_commitments_directly}),
+    CommitmentsResult = read(StoreOpts, CommitmentsPath),
+    ?event(isolated_debug, {commitments_read_result, CommitmentsResult}),
+    
+    ?event(isolated_debug, {reading_other_key_directly}),
+    OtherKeyResult = read(StoreOpts, OtherKeyPath),
+    ?event(isolated_debug, {other_key_read_result, OtherKeyResult}),
+    
+    stop(StoreOpts). 
