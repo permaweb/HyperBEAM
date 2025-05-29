@@ -5,6 +5,7 @@
 #include <ei.h>
 #include "wasm_c_api.h"
 #include "wasm_export.h"
+#include "hb_beamr_lib.h"
 #include <string.h>
 #include <stdarg.h>
 #include <time.h>

@@ -140,14 +140,57 @@ add_library(hb_beamr_lib STATIC
     src/hb_beamr_fsm.c
 )
 
-# Include directories for the library
+# -----------------------------------------------------------------------------
+# Erlang (ei.h) detection – required for erlang term conversion helpers
+# -----------------------------------------------------------------------------
+find_path(ERLANG_EI_INCLUDE_DIR
+          NAMES ei.h
+          HINTS
+            $ENV{ERLANG_ROOT}/usr/include
+            /usr/lib/erlang/usr/include
+            /usr/local/lib/erlang/usr/include
+            /opt/homebrew/opt/erlang/lib/erlang/usr/include
+            /usr/local/opt/erlang/lib/erlang/usr/include
+            /opt/local/lib/erlang/usr/include
+            /usr/include
+            /usr/local/include
+)
+
+if(NOT ERLANG_EI_INCLUDE_DIR)
+  message(FATAL_ERROR "Failed to locate ei.h. Please install Erlang/OTP or set ERLANG_EI_INCLUDE_DIR.")
+else()
+  message(STATUS "Found ei.h in: ${ERLANG_EI_INCLUDE_DIR}")
+endif()
+
+# Locate Erlang EI library (libei)
+find_library(ERLANG_EI_LIBRARY
+             NAMES ei
+             HINTS
+               $ENV{ERLANG_ROOT}/usr/lib
+               /usr/lib/erlang/usr/lib
+               /usr/local/lib/erlang/usr/lib
+               /opt/homebrew/opt/erlang/lib/erlang/usr/lib
+               /usr/local/opt/erlang/lib/erlang/usr/lib
+               /opt/local/lib/erlang/usr/lib
+               /usr/lib
+               /usr/local/lib
+)
+
+if(NOT ERLANG_EI_LIBRARY)
+  message(FATAL_ERROR "Failed to locate Erlang EI library (libei). Please install Erlang/OTP or set ERLANG_EI_LIBRARY.")
+else()
+  message(STATUS "Found libei: ${ERLANG_EI_LIBRARY}")
+endif()
+
+# Include directories for the hb_beamr_lib target
 target_include_directories(hb_beamr_lib PUBLIC
-    ${CMAKE_CURRENT_LIST_DIR}/include    # Public headers for hb_beamr_lib
-    ${WAMR_ROOT_DIR}/core/iwasm/include  # WAMR headers
+    ${CMAKE_CURRENT_LIST_DIR}/include            # Public headers for hb_beamr_lib
+    ${WAMR_ROOT_DIR}/core/iwasm/include          # WAMR headers
+    ${ERLANG_EI_INCLUDE_DIR}                     # Erlang ei.h
 )
 
 # Link against vmlib and export it
-target_link_libraries(hb_beamr_lib PUBLIC vmlib)
+target_link_libraries(hb_beamr_lib PUBLIC vmlib ${ERLANG_EI_LIBRARY})
 
 # =============================================================================
 # --- hb_beamr_capi_lib Target --- 
@@ -159,13 +202,14 @@ add_library(hb_beamr_capi_lib STATIC
 
 # Include directories for the CAPI library
 target_include_directories(hb_beamr_capi_lib PUBLIC
-    ${CMAKE_CURRENT_LIST_DIR}/include    # Public headers for hb_beamr_capi_lib (and hb_beamr_lib)
-    SYSTEM ${WAMR_ROOT_DIR}/core/iwasm/include  # WAMR headers (includes wasm_c_api.h and wasm_export.h)
+    ${CMAKE_CURRENT_LIST_DIR}/include                 # Public headers
+    SYSTEM ${WAMR_ROOT_DIR}/core/iwasm/include        # WAMR headers
+    ${ERLANG_EI_INCLUDE_DIR}                          # Erlang ei.h
 )
 
 # Link CAPI lib against vmlib (for WAMR specific calls if any, and transitively for runtime components)
 # and export it so tests or other consumers can link to it.
-target_link_libraries(hb_beamr_capi_lib PUBLIC vmlib)
+target_link_libraries(hb_beamr_capi_lib PUBLIC vmlib ${ERLANG_EI_LIBRARY})
 
 # Conditionally add the test subdirectory and enable testing
 if(BUILD_TESTING)

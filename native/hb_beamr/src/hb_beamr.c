@@ -145,7 +145,12 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         proc->current_function = function_name;
 
         DRV_DEBUG("Decoding args. Buff: %p. Index: %d", buff, index);
-        proc->current_args = decode_list(buff, &index);
+        ei_term* current_args;
+        if (decode_list(buff, &index, &current_args) == -1) {
+            send_error(proc->port_term, "Failed to decode args");
+            return;
+        }
+        proc->current_args = current_args;
 
         proc->port_key++;
         driver_async(proc->port, &proc->port_key, wasm_execute_exported_function, proc, NULL);
@@ -158,7 +163,12 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         DRV_DEBUG("Decoding indirect call");
         ei_decode_long(buff, &index, &proc->current_function_ix);
         DRV_DEBUG("Indirect function table index: %ld", proc->current_function_ix);
-        proc->current_args = decode_list(buff, &index);
+        ei_term* current_args;
+        if (decode_list(buff, &index, &current_args) == -1) {
+            send_error(proc->port_term, "Failed to decode args");
+            return;
+        }
+        proc->current_args = current_args;
 	    DRV_DEBUG("Calling wasm_execute_indirect_function");
 
         proc->port_key++;
@@ -176,7 +186,12 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         DRV_DEBUG("Current import object ready: %d", proc->current_import->ready);
         if (proc->current_import) {
             DRV_DEBUG("Decoding import response from Erlang...");
-            proc->current_import->result_terms = decode_list(buff, &index);
+            ei_term* result_terms;
+            if (decode_list(buff, &index, &result_terms) == -1) {
+                send_error(proc->port_term, "Failed to decode import response");
+                return;
+            }
+            proc->current_import->result_terms = result_terms;
             proc->current_import->error_message = NULL;
 
             // Signal that the response is ready

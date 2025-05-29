@@ -15,6 +15,7 @@ void beamr_print(int print, const char* file, int line, const char* format, ...)
         printf("[DBG#%p @ %s:%d] ", thread_id, file, line);
         vprintf(format, args);
         printf("\r\n");
+        fflush(stdout);
     }
     va_end(args);
 }

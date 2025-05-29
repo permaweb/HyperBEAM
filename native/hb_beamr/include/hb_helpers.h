@@ -89,10 +89,11 @@ int erl_terms_to_indirect_args(uint32_t* vals, wasm_valkind_t *val_kinds, uint32
  * 
  *  buff: The binary buffer containing the Erlang encoded terms.
  *  index: The index in the buffer to start decoding from.
+ *  out_terms: The pointer to the decoded list of Erlang terms.
  * 
- *  returns: A pointer to the decoded list of Erlang terms, or NULL if an error occurs.
+ *  returns: 0 on success, -1 on failure.
  */
-ei_term* decode_list(char* buff, int* index);
+int decode_list(char* buff, int* index, ei_term** out_terms);
 
 /*
  * Function: get_function_sig

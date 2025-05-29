@@ -7,6 +7,7 @@
 #include <stdbool.h> // For bool type
 #include <pthread.h> // For mutex to guard global runtime operations
 #include <stdatomic.h> // For atomic bool if available
+#include <ei.h>
 
 #define MAX_LAST_ERROR_MSG_SIZE 256
 
@@ -612,6 +613,43 @@ static bool convert_argv_to_wasm_vals(uint32_t num_wasm_results, const wasm_valk
     return true;
 }
 
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_get_indirect_func_inst(hb_beamr_lib_context_t* ctx, const char* table_name, uint32_t func_index, wasm_function_inst_t* out_func_inst) {
+    if (!ctx || !ctx->module_inst) {
+        if (ctx) set_error_msg(ctx, "Context, instance not initialized for indirect function lookup.");
+        return HB_BEAMR_LIB_ERROR_INSTANCE_NOT_CREATED;
+    }
+    
+    fprintf(stderr, "[DEBUG hb_beamr_lib_get_indirect_func_inst] Attempting to get table: '%s' from module_inst: %p\n", table_name, (void*)ctx->module_inst);
+
+    const char *effective_table_name = table_name;
+    if (effective_table_name == NULL || effective_table_name[0] == '\0') {
+        effective_table_name = "__indirect_function_table";
+    }
+
+    wasm_table_inst_t table_inst;
+    if (!wasm_runtime_get_export_table_inst(ctx->module_inst, effective_table_name, &table_inst)) {
+        set_error_msg_v(ctx, "Failed to get export table: %s", effective_table_name);
+        return HB_BEAMR_LIB_ERROR_WAMR_FUNCTION_LOOKUP_FAILED; // Or a table specific error
+    }
+
+    // Check if func_index is within table bounds
+    if (func_index >= table_inst.cur_size) {
+        set_error_msg_v(ctx, "Function index %u out of bounds for table %s (size %u).", 
+                        func_index, effective_table_name, table_inst.cur_size);
+        return HB_BEAMR_LIB_ERROR_WAMR_CALL_FAILED; // Or specific OOB error
+    }
+
+    // Get the function instance from the table to retrieve its signature
+    wasm_function_inst_t target_func_inst = wasm_table_get_func_inst(ctx->module_inst, &table_inst, func_index);
+    if (!target_func_inst) {
+        set_error_msg_v(ctx, "Failed to get function instance from table %s at index %u.", effective_table_name, func_index);
+        return HB_BEAMR_LIB_ERROR_WAMR_FUNCTION_LOOKUP_FAILED;
+    }
+
+    *out_func_inst = target_func_inst;
+    return HB_BEAMR_LIB_SUCCESS;
+}
+
 // Implementation for hb_beamr_lib_call_indirect
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
     hb_beamr_lib_context_t* ctx,
@@ -654,31 +692,12 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
     }
     // --- End Enhanced Debugging ---
 
-    fprintf(stderr, "[DEBUG hb_beamr_lib_call_indirect] Attempting to get table: '%s' from module_inst: %p\n", table_name, (void*)ctx->module_inst);
-
-    const char *effective_table_name = table_name;
-    if (effective_table_name == NULL || effective_table_name[0] == '\0') {
-        effective_table_name = "__indirect_function_table";
-    }
-
-    wasm_table_inst_t table_inst;
-    if (!wasm_runtime_get_export_table_inst(ctx->module_inst, effective_table_name, &table_inst)) {
-        set_error_msg_v(ctx, "Failed to get export table: %s", effective_table_name);
-        return HB_BEAMR_LIB_ERROR_WAMR_FUNCTION_LOOKUP_FAILED; // Or a table specific error
-    }
-
-    // Check if func_index is within table bounds
-    if (func_index >= table_inst.cur_size) {
-        set_error_msg_v(ctx, "Function index %u out of bounds for table %s (size %u).", 
-                        func_index, effective_table_name, table_inst.cur_size);
-        return HB_BEAMR_LIB_ERROR_WAMR_CALL_FAILED; // Or specific OOB error
-    }
-
-    // Get the function instance from the table to retrieve its signature
-    wasm_function_inst_t target_func_inst = wasm_table_get_func_inst(ctx->module_inst, &table_inst, func_index);
-    if (!target_func_inst) {
-        set_error_msg_v(ctx, "Failed to get function instance from table %s at index %u.", effective_table_name, func_index);
-        return HB_BEAMR_LIB_ERROR_WAMR_FUNCTION_LOOKUP_FAILED;
+    wasm_function_inst_t target_func_inst;
+    hb_beamr_lib_rc_t rc = hb_beamr_lib_get_indirect_func_inst(ctx, table_name, func_index, &target_func_inst);
+    if (rc != HB_BEAMR_LIB_SUCCESS) {
+        fprintf(stderr, "[DEBUG hb_beamr_lib_call_indirect] Failed to get function instance from table: %d\n", rc);
+        // set_error_msg(ctx, "Failed to get function instance from table.");
+        return rc;
     }
 
     uint32_t actual_param_count = wasm_func_get_param_count(target_func_inst, ctx->module_inst);
@@ -753,7 +772,7 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
     if (!success) {
         const char* exception = wasm_runtime_get_exception(ctx->module_inst);
         set_error_msg_v(ctx, "Error during indirect call to table '%s' index %u: %s", 
-                        effective_table_name, func_index, exception ? exception : "N/A");
+                        table_name, func_index, exception ? exception : "N/A");
         final_rc = HB_BEAMR_LIB_ERROR_WAMR_CALL_FAILED;
     } else {
         if (num_results > 0) {
@@ -961,12 +980,33 @@ HB_BEAMR_LIB_API void hb_beamr_lib_free_meta_module(hb_beamr_meta_module_t *meta
     memset(meta,0,sizeof(*meta));
 }
 
-HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_indirect() {
-    
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_indirect_func(hb_beamr_lib_context_t* ctx, const char* table_name, int index, hb_beamr_meta_func_t **out_func_meta) {
+    if (!ctx || !table_name || !out_func_meta) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    wasm_function_inst_t target_func_inst;
+    hb_beamr_lib_rc_t rc = hb_beamr_lib_get_indirect_func_inst(ctx, table_name, index, &target_func_inst);
+    if (rc != HB_BEAMR_LIB_SUCCESS) {
+        set_error_msg(ctx, "Failed to get function instance from table.");
+        return rc;
+    }
+    (*out_func_meta)->param_count = wasm_func_get_param_count(target_func_inst, ctx->module_inst);
+    (*out_func_meta)->result_count = wasm_func_get_result_count(target_func_inst, ctx->module_inst);
+    (*out_func_meta)->param_types = (wasm_valkind_t*)malloc(sizeof(wasm_valkind_t)*(*out_func_meta)->param_count);
+    (*out_func_meta)->result_types = (wasm_valkind_t*)malloc(sizeof(wasm_valkind_t)*(*out_func_meta)->result_count);
+    wasm_func_get_param_types(target_func_inst, ctx->module_inst, (*out_func_meta)->param_types);
+    wasm_func_get_result_types(target_func_inst, ctx->module_inst, (*out_func_meta)->result_types);
+    (*out_func_meta)->signature = "()"; // We don't need this for indirect functions
+
+    return HB_BEAMR_LIB_SUCCESS;
 }
 
 // Erlang helpers
 
-HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_erlang_terms_to_export_wasm_vals(const char* buff, int* index, hb_beamr_meta_module_t* meta, wasm_val_t* vals, int count) {
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_erl_port_buffer_to_wasm_vals(const char* buff, int* index, wasm_valkind_t *val_kinds, uint32_t val_count, wasm_val_t **out_vals) {
+    if (!buff || !index || !val_kinds || !val_count || !out_vals) {
+        return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    }
 
+    // TODO
+
+    return HB_BEAMR_LIB_SUCCESS;
 }

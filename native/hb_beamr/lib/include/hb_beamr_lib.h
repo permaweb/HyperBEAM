@@ -19,9 +19,7 @@
 #include <stdbool.h>
 #include <stddef.h> // For size_t
 #include "wasm_export.h" // For WAMR types like RuntimeInitArgs, wasm_module_inst_t, wasm_memory_inst_t
-// Note: wasm_val_t is also needed for call_export, it might come from wasm_export.h or a C-API header.
-// If not, #include "wasm_c_api.h" or similar might be needed for wasm_val_t if it's used by functions here.
-// #include <ei.h>
+#include <ei.h> // For conversion of erlang terms to wasm vals
 
 // Opaque context handle declaration
 // The actual struct definition will be in hb_beamr_lib.c
@@ -193,11 +191,11 @@ typedef struct {
 
 // Function-specific metadata (used when kind==FUNC)
 typedef struct {
-    char            *signature;     // WAMR signature string, e.g., "(ii)i" (owned)
     uint32_t         param_count;
     wasm_valkind_t  *param_types;   // owned array of size param_count
     uint32_t         result_count;
     wasm_valkind_t  *result_types;  // owned array of size result_count
+    char            *signature;     // WAMR signature string, e.g., "(ii)i" (owned)
 } hb_beamr_meta_func_t;
 
 typedef struct {
@@ -247,6 +245,20 @@ hb_beamr_lib_free_natives(hb_beamr_native_symbols_structured_t *structured);
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
 hb_beamr_lib_register_global_natives(const hb_beamr_native_symbols_structured_t *structured);
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// Indirect function metadata
+
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t
+hb_beamr_lib_meta_indirect_func(hb_beamr_lib_context_t* ctx, const char* table_name, int index, hb_beamr_meta_func_t **out_func_meta);
+
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// Erlang terms to wasm vals
+
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t
+hb_beamr_lib_erl_port_buffer_to_wasm_vals(const char* buff, int* index, wasm_valkind_t *val_kinds, uint32_t val_count, wasm_val_t **out_vals);
 
 #ifdef __cplusplus
 // ... existing code ...
