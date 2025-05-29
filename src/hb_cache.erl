@@ -94,7 +94,6 @@ write(Bin, Opts) when is_binary(Bin) ->
 do_write_message(Bin, AllIDs, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its given hash. Return the path.
     Hashpath = hb_path:hashpath(Bin, Opts),
-    ?event(debug_cache, { fullkey, {explicit, <<"data/", Hashpath/binary>>}}),
     ok = hb_store:write(Store, Path = <<"data/", Hashpath/binary>>, Bin),
     lists:map(fun(ID) -> hb_store:make_link(Store, Path, ID) end, AllIDs),
     {ok, Path};
@@ -105,13 +104,11 @@ do_write_message(Msg, AllIDs, Store, Opts) when is_map(Msg) ->
     AltIDs = AllIDs -- [UncommittedID],
     ?event({writing_message_with_unsigned_id, UncommittedID, {alt_ids, AltIDs}}),
     MsgHashpathAlg = hb_path:hashpath_alg(Msg),
-    ?event(debug_cache, {creating_group_for_uncommitted_id, UncommittedID}),
     hb_store:make_group(Store, UncommittedID),
     % Write the keys of the message into the store, rolling the keys into
     % hashpaths (having only two parts) as we do so.
     % We start by writing the group, such that if the message is empty, we
     % still have a group in the store.
-    ?event(debug_cache, {creating_group_again_for_uncommitted_id, UncommittedID}),
     hb_store:make_group(Store, UncommittedID),
     maps:map(
         fun(<<"device">>, Map) when is_map(Map) ->
@@ -129,10 +126,7 @@ do_write_message(Msg, AllIDs, Store, Opts) when is_map(Msg) ->
             ?event({key_hashpath_from_unsigned, KeyHashPath}),
             ValueAltIDs = calculate_all_ids(Value, Opts),
             {ok, Path} = do_write_message(Value, ValueAltIDs, Store, Opts),
-            ?event(debug_cache, {before_make_link, {data_path, Path}, {key_hash_path, KeyHashPath}, {uncommitted_id, UncommittedID}}),
             hb_store:make_link(Store, Path, KeyHashPath),
-            ?event(debug_cache, { path, Path}),
-            ?event(debug_cache, { key_hash_path, KeyHashPath}),
             ?event(
                 {
                     {link, KeyHashPath},
@@ -190,11 +184,8 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either a
 %% richly typed map or a direct binary.
 read(Path, Opts) ->
-    ?event(debug_cache_read_start, {path, Path}),
     case store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts) of
-        not_found -> 
-            ?event(debug_cache_read_not_found, {path, Path}),
-            not_found;
+        not_found -> not_found;
         {ok, Res} ->
             ?event({applying_types_to_read_message, Res}),
             Structured = dev_codec_structured:to(Res),
@@ -228,29 +219,17 @@ store_read(Path, Store, Opts, AlreadyRead) ->
 do_read(Path, Store, Opts, AlreadyRead) ->
     ResolvedFullPath = hb_store:resolve(Store, PathToBin = hb_path:to_binary(Path)),
     ?event({reading, {path, PathToBin}, {resolved, ResolvedFullPath}}),
-    Type = hb_store:type(Store, ResolvedFullPath),
-    ?event(debug_cache, {cache_read_type_check, {path, PathToBin}, {resolved_path, ResolvedFullPath}, {detected_type, Type}}),
-    case Type of
-        not_found -> 
-            ?event(debug_cache, {cache_read_not_found, PathToBin}),
-            not_found;
-        no_viable_store -> 
-            ?event(debug_cache, {cache_read_no_viable_store, PathToBin}),
-            not_found;
+    case hb_store:type(Store, ResolvedFullPath) of
+        not_found -> not_found;
+        no_viable_store -> not_found;
         simple ->
-            ?event(debug_cache, {cache_read_simple_path, PathToBin}),
             case hb_store:read(Store, ResolvedFullPath) of
-                {ok, Bin} -> 
-                    ?event(debug_cache, {cache_read_simple_result, {path, PathToBin}, {value, Bin}}),
-                    {ok, Bin};
-                {error, _} -> not_found;
-                not_found -> not_found;
-                no_viable_store -> not_found
+                {ok, Bin} -> {ok, Bin};
+                {error, _} -> not_found
             end;
         _ ->
             case hb_store:list(Store, ResolvedFullPath) of
                 {ok, Subpaths} ->
-                    ?event(debug_cache, {cache_listing, {resolved_path, ResolvedFullPath}, {found_subpaths, Subpaths}}),
                     ?event(
                         {listed,
                             {original_path, Path},
@@ -340,21 +319,15 @@ test_signed(Data, Wallet) ->
 test_store_binary(Opts) ->
     Bin = <<"Simple unsigned data item">>,
     {ok, ID} = write(Bin, Opts),
-    timer:sleep(10),
     {ok, RetrievedBin} = read(ID, Opts),
     ?assertEqual(Bin, RetrievedBin).
 
 test_store_unsigned_empty_message(Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
+	Store = hb_opts:get(store, no_viable_store, Opts),
     hb_store:reset(Store),
     Item = #{},
-    ?event(debug_cache, {starting_write, Item}),
     {ok, Path} = write(Item, Opts),
-    ?event(debug_cache, {write_completed, Path}),
-    timer:sleep(100),
-    ?event(debug_cache, {starting_read, Path}),
     {ok, RetrievedItem} = read(Path, Opts),
-    ?event(debug_cache, {read_completed, RetrievedItem}),
     ?event({retrieved_item, {path, {string, Path}}, {item, RetrievedItem}}),
     ?assert(hb_message:match(Item, RetrievedItem)).
 
@@ -363,7 +336,6 @@ test_store_simple_unsigned_message(Opts) ->
     Item = test_unsigned(<<"Simple unsigned data item">>),
     %% Write the simple unsigned item
     {ok, _Path} = write(Item, Opts),
-    timer:sleep(10),
     %% Read the item back
     ID = hb_util:human_id(hb_ao:get(id, Item)),
     {ok, RetrievedItem} = read(ID, Opts),
@@ -376,7 +348,6 @@ test_store_ans104_message(Opts) ->
     Item = #{ <<"type">> => <<"ANS104">>, <<"content">> => <<"Hello, world!">> },
     Committed = hb_message:commit(Item, hb:wallet()),
     {ok, _Path} = write(Committed, Opts),
-    timer:sleep(10),
     CommittedID = hb_util:human_id(hb_message:id(Committed, all)),
     UncommittedID = hb_util:human_id(hb_message:id(Committed, none)),
     ?event({test_message_ids, {uncommitted, UncommittedID}, {committed, CommittedID}}),
@@ -396,25 +367,10 @@ test_store_simple_signed_message(Opts) ->
     ?event({writing_message, Item}),
     %% Write the simple unsigned item
     {ok, _Path} = write(Item, Opts),
-    timer:sleep(10),
     %% Read the item back
     {ok, UID} = dev_message:id(Item, #{ <<"committers">> => <<"none">> }, Opts),
     {ok, RetrievedItemU} = read(UID, Opts),
     ?event({retreived_unsigned_message, {expected, Item}, {got, RetrievedItemU}}),
-    ?event(debug_signed_message_comparison, {
-        original_item, Item,
-        retrieved_item, RetrievedItemU,
-        original_keys, maps:keys(Item),
-        retrieved_keys, maps:keys(RetrievedItemU),
-        match_result, hb_message:match(Item, RetrievedItemU)
-    }),
-    ?event(debug_cache, {
-        original_item, Item,
-        retrieved_item, RetrievedItemU,
-        original_keys, maps:keys(Item),
-        retrieved_keys, maps:keys(RetrievedItemU),
-        match_result, hb_message:match(Item, RetrievedItemU)
-    }),
     ?assert(hb_message:match(Item, RetrievedItemU)),
     {ok, CommittedID} = dev_message:id(Item, #{ <<"committers">> => [Address] }, Opts),
     {ok, RetrievedItemS} = read(CommittedID, Opts),
@@ -458,7 +414,6 @@ test_deeply_nested_complex_message(Opts) ->
     ?event({test_message_ids, {uncommitted, UID}, {committed, CommittedID}}),
     %% Write the nested item
     {ok, _} = write(Outer, Opts),
-    timer:sleep(10),
     %% Read the deep value back using subpath
     {ok, DeepMsg} =
         read(
@@ -487,22 +442,18 @@ test_message_with_message(Opts) ->
     Msg = test_unsigned([<<"a">>, <<"b">>, <<"c">>]),
     ?event({writing_message, Msg}),
     {ok, Path} = write(Msg, Opts),
-    timer:sleep(10),
     {ok, RetrievedItem} = read(Path, Opts),
     ?assert(hb_message:match(Msg, RetrievedItem)).
 
 cache_suite_test_() ->
-    % Stores = hb_opts:get(store, no_viable_store, #{}),
-    Stores = [#{ <<"store-module">> => hb_store_fs, <<"max-size">> => 629145600, <<"prefix">> => <<"cache-fs">>}], 
-    ?event(debug_cache, {stores, Stores}),
     hb_store:generate_test_suite([
-        % {"store unsigned empty message", fun test_store_unsigned_empty_message/1},
-        % {"store binary", fun test_store_binary/1},
-        % {"store simple unsigned message", fun test_store_simple_unsigned_message/1},
-        {"store simple signed message", fun test_store_simple_signed_message/1}
-        % {"deeply nested complex message", fun test_deeply_nested_complex_message/1}
-        % {"message with message", fun test_message_with_message/1}
-    ], Stores).
+        {"store unsigned empty message", fun test_store_unsigned_empty_message/1},
+        {"store binary", fun test_store_binary/1},
+        {"store simple unsigned message", fun test_store_simple_unsigned_message/1},
+        {"store simple signed message", fun test_store_simple_signed_message/1},
+        {"deeply nested complex message", fun test_deeply_nested_complex_message/1},
+        {"message with message", fun test_message_with_message/1}
+    ]).
 
 %% @doc Test that message whose device is `#{}' cannot be written. If it were to
 %% be written, it would cause an infinite loop.
@@ -519,6 +470,6 @@ test_device_map_cannot_be_written_test() ->
     end.
 
 run_test() ->
-    Opts = #{ store =>  
+    Opts = #{ store => StoreOpts = 
         [#{ <<"store-module">> => hb_store_fs, <<"prefix">> => <<"cache-TEST">> }]},
     test_store_unsigned_empty_message(Opts).

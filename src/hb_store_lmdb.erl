@@ -316,7 +316,7 @@ list(StoreOpts, Path) when is_map(StoreOpts), is_binary(Path) ->
     Env = find_env(StoreOpts),
     PathSize = byte_size(Path),
     try
-       lmdb:fold(Env, default,
+       Children = lmdb:fold(Env, default,
            fun(Key, _Value, Acc) ->
                % Only match on keys that have the prefix and are longer than it
                case byte_size(Key) > PathSize andalso 
@@ -329,12 +329,28 @@ list(StoreOpts, Path) when is_map(StoreOpts), is_binary(Path) ->
                           <<"/", Rest/binary>> -> Rest;
                           Other -> Other
                       end,
-                      [CleanKey | Acc];
+                      % Only include immediate children (no nested paths)
+                      case binary:match(CleanKey, <<"/">>) of
+                          nomatch -> 
+                              % This is an immediate child, add it if not already present
+                              case lists:member(CleanKey, Acc) of
+                                  true -> Acc;
+                                  false -> [CleanKey | Acc]
+                              end;
+                          _ -> 
+                              % This is a nested path, extract only the immediate child part
+                              [ImmediateChild | _] = binary:split(CleanKey, <<"/">>, [global]),
+                              case lists:member(ImmediateChild, Acc) of
+                                  true -> Acc;
+                                  false -> [ImmediateChild | Acc]
+                              end
+                      end;
                   false -> Acc
                end
            end,
            []
-       )
+       ),
+       Children
     catch
        _:Error -> {error, Error}
     end;
@@ -363,6 +379,44 @@ make_group(StoreOpts, GroupName) when is_map(StoreOpts), is_binary(GroupName) ->
 make_group(_,_) ->
     {error, {badarg, "StoreOps must be map and GroupName must be a binary"}}.
 
+%% @doc Ensure all parent groups exist for a given path.
+%%
+%% This function creates the necessary parent groups for a path, similar to
+%% how filesystem stores use ensure_dir. For example, if the path is
+%% "a/b/c/file", it will ensure groups "a", "a/b", and "a/b/c" exist.
+%%
+%% @param StoreOpts Database configuration map
+%% @param Path The path whose parents should exist
+%% @returns ok
+-spec ensure_parent_groups(map(), binary()) -> ok.
+ensure_parent_groups(StoreOpts, Path) ->
+    PathParts = binary:split(Path, <<"/">>, [global]),
+    case PathParts of
+        [_] -> 
+            % Single segment, no parents to create
+            ok;
+        _ ->
+            % Multiple segments, create parent groups
+            ParentParts = lists:droplast(PathParts),
+            create_parent_groups(StoreOpts, [], ParentParts)
+    end.
+
+%% @doc Helper function to recursively create parent groups.
+create_parent_groups(_StoreOpts, _Current, []) ->
+    ok;
+create_parent_groups(StoreOpts, Current, [Next | Rest]) ->
+    NewCurrent = Current ++ [Next],
+    GroupPath = hb_util:bin(lists:join(<<"/">>, NewCurrent)),
+    % Only create group if it doesn't already exist - use direct LMDB check to avoid recursion
+    case lmdb:get(find_env(StoreOpts), GroupPath) of
+        not_found ->
+            make_group(StoreOpts, GroupPath);
+        {ok, _} ->
+            % Already exists, skip
+            ok
+    end,
+    create_parent_groups(StoreOpts, NewCurrent, Rest).
+
 %% @doc Create a symbolic link from a new key to an existing key.
 %%
 %% This function implements a symbolic link mechanism by storing a special
@@ -389,6 +443,10 @@ make_link(StoreOpts, Existing, New) when is_list(Existing) ->
     make_link(StoreOpts, ExistingBin, New);
 make_link(StoreOpts, Existing, New) ->
    ExistingBin = hb_util:bin(Existing),
+   % Debug: Log what links are being created
+   io:format("LMDB make_link: ~p -> ~p~n", [New, ExistingBin]),
+   % Ensure parent groups exist for the new link path (like filesystem ensure_dir)
+   ensure_parent_groups(StoreOpts, New),
    write(StoreOpts, New, <<"link:", ExistingBin/binary>>). 
 
 %% @doc Transform a path into the store's canonical form.
@@ -439,17 +497,42 @@ sync(StoreOpts) ->
 
 %% @doc Resolve a path by following any symbolic links.
 %%
-%% For LMDB, we don't use filesystem symlinks but instead handle links
-%% through our own "link:" prefix mechanism during read operations.
-%% Therefore, this function simply returns the path as-is, since link
-%% resolution is handled transparently by the read function.
+%% For LMDB, we handle links through our own "link:" prefix mechanism.
+%% This function resolves link chains in paths, similar to filesystem symlink resolution.
+%% It's used by the cache to resolve paths before type checking and reading.
 %%
-%% @param _StoreOpts Database configuration map (unused)
-%% @param Path The path to resolve  
-%% @returns The same path (no resolution needed for LMDB)
--spec resolve(map(), binary()) -> binary().
-resolve(_StoreOpts, Path) ->
-    Path.
+%% @param StoreOpts Database configuration map
+%% @param Path The path to resolve (binary or list)
+%% @returns The resolved path as a binary
+-spec resolve(map(), binary() | list()) -> binary().
+resolve(StoreOpts, Path) when is_binary(Path) ->
+    % Convert binary path to list for resolution, then back to binary
+    PathParts = binary:split(Path, <<"/">>, [global]),
+    ?event(debug_resolve, {resolving_binary_path, Path, path_parts, PathParts}),
+    case resolve_path_links(StoreOpts, PathParts) of
+        {ok, ResolvedParts} ->
+            Result = hb_util:bin(lists:join(<<"/">>, ResolvedParts)),
+            ?event(debug_resolve, {resolved_successfully, Path, to, Result}),
+            Result;
+        {error, Reason} ->
+            % If resolution fails, return original path
+            ?event(debug_resolve, {resolution_failed, Path, reason, Reason}),
+            Path
+    end;
+resolve(StoreOpts, Path) when is_list(Path) ->
+    % Handle list paths by resolving directly and converting to binary
+    ?event(debug_resolve, {resolving_list_path, Path}),
+    case resolve_path_links(StoreOpts, Path) of
+        {ok, ResolvedParts} ->
+            Result = hb_util:bin(lists:join(<<"/">>, ResolvedParts)),
+            ?event(debug_resolve, {resolved_list_successfully, Path, to, Result}),
+            Result;
+        {error, Reason} ->
+            % If resolution fails, return original path as binary
+            OrigPath = hb_util:bin(lists:join(<<"/">>, Path)),
+            ?event(debug_resolve, {list_resolution_failed, Path, reason, Reason, returning, OrigPath}),
+            OrigPath
+    end.
 
 %% @doc Retrieve or create the LMDB environment handle for a database.
 %%
@@ -709,9 +792,6 @@ server_write(RawState, Key, Value) ->
         {Txn, Dbi} ->
             % Valid transaction and instance, perform the write
             try
-                ?event(debug_cache, { state, State}),
-                ?event(debug_cache, { key, Key}),
-                ?event(debug_cache, { value, Value }),
                 lmdb_nif:put(Txn, Dbi, Key, Value, 0),
                 State
             catch
@@ -885,15 +965,24 @@ list_test() ->
         <<"prefix">> => <<"/tmp/store-2">>,
         <<"max-size">> => ?DEFAULT_SIZE
     },
+    reset(StoreOpts),
     write(StoreOpts, <<"colors/red">>, <<"1">>),
     write(StoreOpts, <<"colors/blue">>, <<"2">>),
     write(StoreOpts, <<"colors/green">>, <<"3">>),
+    % write(StoreOpts, <<"colors/multi/foo">>, <<"4">>),
     write(StoreOpts, <<"foo/bar">>, <<"baz">>),
     write(StoreOpts, <<"beep/boop">>, <<"bam">>),
     % Brief delay to ensure writes are flushed
     timer:sleep(10), 
-    {ok, Keys} = list(StoreOpts, <<"colors">>),
-    ?assertEqual([<<"red">>, <<"green">>, <<"blue">>], Keys),
+    ListResult = list(StoreOpts, <<"colors">>),
+    ?event({list_result, ListResult}),
+    case ListResult of
+        {ok, Keys} ->
+            ?assertEqual([<<"blue">>, <<"green">>, <<"red">>], lists:sort(Keys));
+        Other ->
+            ?event({unexpected_list_result, Other}),
+            ?assert(false)
+    end,
     ok = stop(StoreOpts).
 
 %% @doc Group test - verifies group creation and type detection.
@@ -1212,16 +1301,9 @@ reconstruct_map(StoreOpts, Path) ->
     case type(StoreOpts, Path) of
         composite ->
             % This is a group, reconstruct it as a map
-            {ok, AllSubkeys} = list(StoreOpts, Path),
-            % Filter to only immediate children (no nested paths)
-            ImmediateChildren = lists:filter(
-                fun(Key) ->
-                    % Only include keys that don't contain "/"
-                    binary:match(Key, <<"/">>) =:= nomatch
-                end,
-                AllSubkeys
-            ),
-            ?event({path, Path, all_subkeys, AllSubkeys, immediate_children, ImmediateChildren}),
+            {ok, ImmediateChildren} = list(StoreOpts, Path),
+            % The list function now correctly returns only immediate children
+            ?event({path, Path, immediate_children, ImmediateChildren}),
             maps:from_list([
                 {Key, reconstruct_map(StoreOpts, <<Path/binary, "/", Key/binary>>)}
                 || Key <- ImmediateChildren
@@ -1275,6 +1357,12 @@ cache_debug_test() ->
     ?event(debug_cache_test, {step, read_key_hashpath}),
     KeyHashResult = read(StoreOpts, KeyHashPath),
     ?event(debug_cache_test, {key_hash_read_result, KeyHashResult}),
+    
+    % 6. Test with path as list (what cache does):
+    ?event(debug_cache_test, {step, read_path_as_list}),
+    PathAsList = [MessageID, <<"key_hash_abc">>],
+    PathAsListResult = read(StoreOpts, PathAsList),
+    ?event(debug_cache_test, {path_as_list_result, PathAsListResult}),
     
     stop(StoreOpts).
 
