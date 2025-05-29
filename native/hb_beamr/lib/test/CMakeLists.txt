@@ -620,3 +620,72 @@ add_custom_command(TARGET async_import_threads_test POST_BUILD
 )
 
 add_test(NAME AsyncImportThreadsTest COMMAND async_import_threads_test)
+
+# --- Test: Async Import STRESS Test (large nested/concurrency) ---
+add_executable(async_import_stress_test async_import_stress_test.c utils.c)
+find_package(Threads REQUIRED)
+
+target_link_libraries(async_import_stress_test PRIVATE hb_beamr_lib Threads::Threads)
+
+# Re-use the compiled AOT fixture from import_nested; copy it twice so the
+# test finds both import_nested.aot and import_nested_wat.aot irrespective
+# of whether a separate WAT-based build is available.
+add_dependencies(async_import_stress_test nested_import_aot_file_target)
+
+add_custom_command(TARGET async_import_stress_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${NESTED_IMPORT_AOT_OUTPUT}
+        $<TARGET_FILE_DIR:async_import_stress_test>/import_nested.aot
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${NESTED_IMPORT_AOT_OUTPUT}
+        $<TARGET_FILE_DIR:async_import_stress_test>/import_nested_wat.aot
+    COMMENT "Copying import_nested AOT fixture(s) for async_import_stress_test"
+)
+
+add_test(NAME AsyncImportStressTest COMMAND async_import_stress_test)
+
+# ---------------------- New WAT Fixture: import_nested_wat ------------------
+set(NESTED_IMPORT_WAT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/import_nested_wat.wat)
+set(NESTED_IMPORT_WAT_WASM_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/import_nested_wat.wasm)
+
+if(EXISTS ${NESTED_IMPORT_WAT_SRC} AND WAT2WASM_EXECUTABLE)
+    add_custom_command(
+      OUTPUT ${NESTED_IMPORT_WAT_WASM_OUTPUT}
+      COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --blue "+++ Compiling fixture ${NESTED_IMPORT_WAT_SRC} to WASM (using wat2wasm) +++"
+      COMMAND ${WAT2WASM_EXECUTABLE} ${NESTED_IMPORT_WAT_SRC} -o ${NESTED_IMPORT_WAT_WASM_OUTPUT}
+      DEPENDS ${NESTED_IMPORT_WAT_SRC}
+      COMMENT "Compiling import_nested_wat.wat to WASM using wat2wasm..."
+      VERBATIM
+    )
+    add_custom_target(nested_import_wat_wasm_file_target DEPENDS ${NESTED_IMPORT_WAT_WASM_OUTPUT})
+else()
+    message(STATUS "import_nested_wat.wat not built (missing file or wat2wasm)")
+    add_custom_target(nested_import_wat_wasm_file_target)
+endif()
+
+# Compile to AOT if wamrc present
+set(NESTED_IMPORT_WAT_AOT_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/import_nested_wat.aot)
+if(DEFINED WAMRC_EXECUTABLE AND TARGET build_wamrc_exe)
+    add_custom_command(
+      OUTPUT ${NESTED_IMPORT_WAT_AOT_OUTPUT}
+      COMMAND ${WAMRC_EXECUTABLE} -o ${NESTED_IMPORT_WAT_AOT_OUTPUT} ${NESTED_IMPORT_WAT_WASM_OUTPUT}
+      DEPENDS nested_import_wat_wasm_file_target build_wamrc_exe
+      COMMENT "Compiling import_nested_wat.wasm to AOT..."
+      VERBATIM
+    )
+    add_custom_target(nested_import_wat_aot_file_target DEPENDS ${NESTED_IMPORT_WAT_AOT_OUTPUT})
+else()
+    add_custom_target(nested_import_wat_aot_file_target)
+endif()
+
+# Make the stress test depend on this new fixture so it is built beforehand
+add_dependencies(async_import_stress_test nested_import_wat_aot_file_target)
+
+# Copy the real generated file instead of duplicating the original, if built
+add_custom_command(TARGET async_import_stress_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${NESTED_IMPORT_WAT_AOT_OUTPUT}
+        $<TARGET_FILE_DIR:async_import_stress_test>/import_nested_wat.aot
+    COMMENT "Copying import_nested_wat.aot for async_import_stress_test"
+    VERBATIM
+)
