@@ -4,6 +4,7 @@
 #include <erl_driver.h>
 #include "hb_stubs.h"
 
+#define DRV_TRACE(format, ...) beamr_print(HB_TRACE, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define DRV_DEBUG(format, ...) beamr_print(HB_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define DRV_PRINT(format, ...) beamr_print(1, __FILE__, __LINE__, format, ##__VA_ARGS__)
 

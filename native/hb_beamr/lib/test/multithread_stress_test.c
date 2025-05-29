@@ -82,7 +82,7 @@ static void *worker_fib(void *arg) {
         hb_beamr_lib_context_t *ctx = hb_beamr_lib_create_context();
         if (!ctx) { g_failure = 1; break; }
         if (hb_beamr_lib_load_wasm_module(ctx, g_fib_bytes, g_fib_size) != HB_BEAMR_LIB_SUCCESS) { g_failure = 1; break; }
-        if (hb_beamr_lib_instantiate(ctx, 128 * 1024, 0) != HB_BEAMR_LIB_SUCCESS) { g_failure = 1; break; }
+        if (hb_beamr_lib_instantiate(ctx, 128 * 1024, 0, NULL) != HB_BEAMR_LIB_SUCCESS) { g_failure = 1; break; }
 
         wasm_val_t args[1];
         args[0].kind = WASM_I32;
@@ -119,7 +119,7 @@ static void *worker_import(void *arg) {
         hb_beamr_lib_context_t *ctx = hb_beamr_lib_create_context();
         if (!ctx) { g_failure = 1; break; }
         if (hb_beamr_lib_load_wasm_module(ctx, g_import_bytes, g_import_size) != HB_BEAMR_LIB_SUCCESS) { g_failure = 1; break; }
-        if (hb_beamr_lib_instantiate(ctx, 128 * 1024, 0) != HB_BEAMR_LIB_SUCCESS) { g_failure = 1; break; }
+        if (hb_beamr_lib_instantiate(ctx, 128 * 1024, 0, NULL) != HB_BEAMR_LIB_SUCCESS) { g_failure = 1; break; }
 
         wasm_val_t args[1];
         args[0].kind = WASM_I32;

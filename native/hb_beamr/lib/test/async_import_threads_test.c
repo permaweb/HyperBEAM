@@ -215,7 +215,7 @@ int main(){
     hb_beamr_lib_context_t *loader_ctx = hb_beamr_lib_create_context();
     uint32_t wasm_sz=0; uint8_t *wasm_buf = read_file_to_buffer("import_nested.aot", &wasm_sz);
     assert(hb_beamr_lib_load_wasm_module(loader_ctx, wasm_buf, wasm_sz)==HB_BEAMR_LIB_SUCCESS);
-    assert(hb_beamr_lib_instantiate(loader_ctx, 128*1024, 0)==HB_BEAMR_LIB_SUCCESS);
+    assert(hb_beamr_lib_instantiate(loader_ctx, 128*1024, 0, NULL)==HB_BEAMR_LIB_SUCCESS);
     g_ctx.module_inst = hb_beamr_lib_get_module_instance(loader_ctx);
     g_ctx.fn_call_host_and_read = wasm_runtime_lookup_function(g_ctx.module_inst, "call_host_and_read");
     assert(g_ctx.fn_call_host_and_read);

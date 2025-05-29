@@ -5,137 +5,160 @@
 #include "hb_driver.h"
 #include "hb_beamr_lib.h"
 #include "hb_beamr_utils.h"
+#include "wasm_export.h"
 
 extern ErlDrvTermData atom_ok;
 extern ErlDrvTermData atom_import;
 extern ErlDrvTermData atom_execution_result;
 
 static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t *args) {
-//     DRV_DEBUG("generic_import_native_symbol_func called, exec_env: %p, args: %p", exec_env, args);
-//     wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-//     DRV_DEBUG("Module instance: %p", module_inst);
+    DRV_DEBUG("generic_import_native_symbol_func called, exec_env: %p, args: %p", exec_env, args);
 
-//     NativeSymbolAttachment *attachment = (NativeSymbolAttachment *)wasm_runtime_get_function_attachment(exec_env);
-//     DRV_DEBUG("Attachment (%p)", attachment);
-//     if (!attachment) {
-//         DRV_DEBUG("Skipping import: No attachment found");
-//         return;
-//     }
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    DRV_DEBUG("Module instance: %p", module_inst);
 
-//     if (attachment->proc->import_stack_depth >= MAX_IMPORT_STACK_DEPTH) {
-//         DRV_DEBUG("Skipping import: Import stack depth exceeded");
-//         return;
-//     }
+    Proc *proc = wasm_runtime_get_custom_data(module_inst);
+    DRV_DEBUG("Proc: %p", proc);
 
-//     Proc *proc = attachment->proc;
-//     const char *module_name = attachment->module_name;
-//     const char *func_name = attachment->field_name;
-//     const char *signature = attachment->signature;
-//     DRV_DEBUG("Calling import %s.%s [%s]", module_name, func_name, signature);
+    // We already have the lock from the execute export/indirect function call
+    // drv_lock(proc->is_running);
 
-//     uint32_t param_count = attachment->param_count;
-//     wasm_valkind_t *param_kinds = attachment->param_kinds;
-//     uint32_t result_count = attachment->result_count;
-//     wasm_valkind_t *result_kinds = attachment->result_kinds;
-//     DRV_DEBUG("Param count: %d", param_count);
-//     DRV_DEBUG("Result count: %d", result_count);
-//     // int param_size = kinds_size(param_kinds, param_count);
-//     // int result_size = kinds_size(result_kinds, result_count);
-//     // DRV_DEBUG("Param size: %d", param_size);
-//     // DRV_DEBUG("Result size: %d", result_size);
+    hb_beamr_meta_import_t *attachment = (hb_beamr_meta_import_t *)wasm_runtime_get_function_attachment(exec_env);
+    DRV_DEBUG("Attachment (%p)", attachment);
+    if (!attachment) {
+        DRV_DEBUG("Skipping import: No attachment found");
+        return;
+    }
 
-//     // Initialize the message object
-//     int msg_size = sizeof(ErlDrvTermData) * ((2+(2*3)) + ((param_count + 1) * 2) + ((result_count + 1) * 2) + 2);
-//     DRV_DEBUG("Message size: %d", msg_size);
-//     ErlDrvTermData* msg = driver_alloc(msg_size);
-//     int msg_index = 0;
-//     msg[msg_index++] = ERL_DRV_ATOM;
-//     msg[msg_index++] = atom_import;
-//     msg[msg_index++] = ERL_DRV_STRING;
-//     msg[msg_index++] = (ErlDrvTermData) module_name;
-//     msg[msg_index++] = strlen(module_name);
-//     msg[msg_index++] = ERL_DRV_STRING;
-//     msg[msg_index++] = (ErlDrvTermData) func_name;
-//     msg[msg_index++] = strlen(func_name);
+    const char *module_name = attachment->module_name;
+    const char *func_name = attachment->field_name;
+    const char *signature = attachment->func.signature;
+    DRV_DEBUG("Calling import %s.%s [%s]", module_name, func_name, signature);
 
-//     // Encode args
-//     for (size_t i = 0; i < param_count; i++) {
-//         msg_index += import_arg_to_erl_term(&msg[msg_index], param_kinds[i], &args[i]);
-//     }
-//     msg[msg_index++] = ERL_DRV_NIL;
-//     msg[msg_index++] = ERL_DRV_LIST;
-//     msg[msg_index++] = param_count + 1;
+    uint32_t param_count = attachment->func.param_count;
+    wasm_valkind_t *param_kinds = attachment->func.param_types;
+    uint32_t result_count = attachment->func.result_count;
+    wasm_valkind_t *result_kinds = attachment->func.result_types;
 
-//     // Encode function signature
-//     msg[msg_index++] = ERL_DRV_STRING;
-//     msg[msg_index++] = (ErlDrvTermData) signature;
-//     msg[msg_index++] = strlen(signature);
+#ifdef HB_DEBUG
+    DRV_DEBUG("Import param types:");
+    hb_beamr_utils_print_wasm_val_kinds(param_kinds, param_count);
+    DRV_DEBUG("Import result types:");
+    hb_beamr_utils_print_wasm_val_kinds(result_kinds, result_count);
+#endif
 
-//     // Prepare the message to send to the Erlang side
-//     msg[msg_index++] = ERL_DRV_TUPLE;
-//     msg[msg_index++] = 5;
+    wasm_val_t* wasm_args = NULL;
+    hb_beamr_lib_rc_t rc = hb_beamr_lib_convert_raw_args_to_wasm_vals(args, param_kinds, param_count, &wasm_args);
+    if (rc != HB_BEAMR_LIB_SUCCESS) {
+        DRV_DEBUG("Failed to convert raw args to wasm vals");
+        return;
+    }
 
-//     // Initialize the result vector and set the required result types
-//     ImportResponse* this_import = driver_alloc(sizeof(ImportResponse));
-//     proc->current_import = this_import;
-//     proc->import_stack[proc->import_stack_depth++] = this_import;
-//     DRV_DEBUG("import_stack: Import stack depth: %d", proc->import_stack_depth);
+#ifdef HB_DEBUG
+    DRV_DEBUG("Wasm vals:");
+    hb_beamr_utils_print_wasm_vals(wasm_args, param_count);
+#endif
 
-//     // Create and initialize a is_running and condition variable for the response
-//     char* response_mutex_name = driver_alloc(128);
-//     sprintf(response_mutex_name, "response_mutex_%d", proc->import_stack_depth);
-//     char* response_cond_name = driver_alloc(128);
-//     sprintf(response_cond_name, "response_cond_%d", proc->import_stack_depth);
-    
-//     this_import->response_ready = erl_drv_mutex_create(response_mutex_name);
-//     this_import->cond = erl_drv_cond_create(response_cond_name);
-//     this_import->ready = 0;
+    // Initialize the message object
+    int base_msg_size = sizeof(ErlDrvTermData) * (
+        2 + // atom_import
+        3 + // module_name
+        3 + // func_name
+        // params will be added by wasm_vals_to_erl_msg
+        3 + // signature
+        2 // tuple
+        + 10 // good luck!
+    );
+    ErlDrvTermData* msg = driver_alloc(base_msg_size);
+    int msg_i = 0;
+    msg[msg_i++] = ERL_DRV_ATOM;
+    msg[msg_i++] = atom_import;
+    msg[msg_i++] = ERL_DRV_STRING;
+    msg[msg_i++] = (ErlDrvTermData) module_name;
+    msg[msg_i++] = strlen(module_name);
+    msg[msg_i++] = ERL_DRV_STRING;
+    msg[msg_i++] = (ErlDrvTermData) func_name;
+    msg[msg_i++] = strlen(func_name);
 
-//     DRV_DEBUG("Sending %d terms...", msg_index);
-//     DRV_DEBUG("Pre-send state: proc=%p, port=%lu, msg=%p, msg_index=%d", proc, proc->port_term, msg, msg_index);
-//     DRV_DEBUG("  module_name (%p): '%s'", module_name, module_name ? module_name : "(null)");
-//     DRV_DEBUG("  func_name (%p): '%s'", func_name, func_name ? func_name : "(null)");
-//     DRV_DEBUG("  signature (%p): '%s' (len=%zu)", signature, signature ? signature : "(null)", signature ? strlen(signature) : 0);
-//     DRV_DEBUG("About to call erl_drv_output_term");
-//     // Send the message to the caller process
-//     int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
-//     DRV_DEBUG("Call to erl_drv_output_term completed. Res: %d", msg_res);
-//     DRV_DEBUG("Message sent. Res: %d", msg_res);
+    // Encode args
+    int erc = wasm_vals_to_erl_msg(wasm_args, param_count, &msg, &msg_i, base_msg_size);
+    if (erc != 0) {
+        DRV_DEBUG("Failed to encode args to message");
+        return;
+    }
 
-//     // Wait for the response (we set this directly after the message was sent
-//     // so we have the lock, before Erlang sends us data back)
-//     DRV_DEBUG("Waiting for response");
-//     drv_unlock(proc->is_running);
-//     drv_wait(this_import->response_ready, this_import->cond, &this_import->ready);
-//     drv_lock(proc->is_running);
-//     DRV_DEBUG("Response ready");
+    // Encode function signature
+    msg[msg_i++] = ERL_DRV_STRING;
+    msg[msg_i++] = (ErlDrvTermData) signature;
+    msg[msg_i++] = strlen(signature);
 
-//     // Handle error in the response
-//     if (this_import->error_message) {
-//         DRV_DEBUG("Import execution failed. Error message: %s", proc->current_import->error_message);
-//         send_error(proc->port_term, "Import execution failed: %s", proc->current_import->error_message);
-//         return;
-//     }
+    // Prepare the message to send to the Erlang side
+    msg[msg_i++] = ERL_DRV_TUPLE;
+    msg[msg_i++] = 5;
 
-//     // Convert the response back to the function result, writing back to the args pointer
-//     int res = erl_terms_to_import_results(result_count, result_kinds, args, this_import->result_terms);
-//     if(res == -1) {
-//         DRV_DEBUG("Failed to convert terms to wasm vals");
-//         send_error(proc->port_term, "Failed to convert terms to wasm vals");
-//         return;
-//     }
+    // Initialize the result vector and set the required result types
+    CallContext *cc = &proc->call_stack[proc->call_stack_height - 1];
+    ImportState *is = &cc->import_state;
 
-//     // Clean up
-//     DRV_DEBUG("Destroying %s", erl_drv_cond_name(this_import->cond));
-//     erl_drv_cond_destroy(this_import->cond);
-//     DRV_DEBUG("Destroying %s", erl_drv_mutex_name(this_import->response_ready));
-//     erl_drv_mutex_destroy(this_import->response_ready);
-//     DRV_DEBUG("Cond and mutex destroyed");
+    is->meta = attachment;
+    is->ready = 0;
 
-//     // DRV_DEBUG("Cleaning up this_import (%p)", this_import);
-//     // driver_free(this_import);
+    // Send the message to the caller process
+    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_i);
+    DRV_DEBUG("Call to erl_drv_output_term completed. Res: %d", msg_res);
 
-//     DRV_DEBUG("generic_import_native_symbol_func completed (%s.%s)", module_name, func_name);
+    // Wait for the response (we set this directly after the message was sent
+    // so we have the lock, before Erlang sends us data back)
+    DRV_DEBUG("Waiting for import response");
+    drv_unlock(proc->is_running);
+    drv_wait(is->response_ready, is->cond, &is->ready);
+    drv_lock(proc->is_running);
+    DRV_DEBUG("Import response ready");
+
+    // Handle error in the response
+    if (is->error_message) {
+        DRV_DEBUG("Import execution failed. Error message: %s", is->error_message);
+        send_error(proc->port_term, "Import execution failed: %s", is->error_message);
+        driver_free(is->error_message);
+        return;
+    }
+
+#ifdef HB_DEBUG
+    DRV_DEBUG("Import results:");
+    hb_beamr_utils_print_wasm_vals(is->results, is->result_count);
+#endif
+
+    // assert(is->result_count == result_count);
+    rc = hb_beamr_lib_convert_wasm_vals_to_raw_args(is->results, is->result_count, args);
+    if (rc != HB_BEAMR_LIB_SUCCESS) {
+        DRV_DEBUG("Failed to convert wasm vals to raw args: %d", rc);
+        send_error(proc->port_term, "Failed to convert wasm vals to raw args: %d", rc);
+        return;
+    }
+
+    DRV_DEBUG("Converted import results to raw args");
+
+    // Cleanup any variables we allocated
+    if (wasm_args) {
+        free(wasm_args);
+    }
+    if (is->error_message) {
+        driver_free(is->error_message);
+    }
+    if (is->results) {
+        driver_free(is->results);
+    }
+
+    // Reset the import state
+    is->ready = 0;
+    is->error_message = NULL;
+    is->results = NULL;
+    is->result_count = 0;
+    // These ones we reuse
+    // is->response_ready = NULL;
+    // is->cond = NULL;
+
+    DRV_DEBUG("generic_import_native_symbol_func completed (%s.%s)", module_name, func_name);
 }
 
 void ensure_thread_init() {
@@ -164,7 +187,7 @@ void wasm_initialize_runtime(void* raw) {
     wasm_runtime_set_log_level(WASM_LOG_LEVEL_ERROR);
 #endif
 
-    DRV_DEBUG("Mode: %s", init_req->mode);
+    DRV_DEBUG("Mode: %s", init_req->run_mode);
 
     // if(strcmp(init_req->mode, "wasm") == 0) {
     //     DRV_DEBUG("Using WASM mode.");
@@ -175,7 +198,7 @@ void wasm_initialize_runtime(void* raw) {
 
     // create a temp module, just for meta data
     hb_beamr_lib_rc_t rc;
-    char *error_buffer = malloc(1024);
+    char *error_buffer = driver_alloc(1024);
 
     rc = hb_beamr_lib_init_runtime_global(NULL);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
@@ -184,11 +207,11 @@ void wasm_initialize_runtime(void* raw) {
         return;
     }
 
-    uint8_t* wasm_copy = malloc(init_req->size);
-    memcpy(wasm_copy, init_req->binary, init_req->size);
+    uint8_t* wasm_copy = driver_alloc(init_req->mod_size);
+    memcpy(wasm_copy, init_req->mod_bin, init_req->mod_size);
 
-    DRV_DEBUG("Loading WASM module %p @ %d from %p @ %d", wasm_copy, init_req->size, init_req->binary, init_req->size);
-    wasm_module_t tmp_module = wasm_runtime_load(wasm_copy, init_req->size, error_buffer, 1024);
+    DRV_DEBUG("Loading WASM module %p @ %d from %p @ %d", wasm_copy, init_req->mod_size, init_req->mod_bin, init_req->mod_size);
+    wasm_module_t tmp_module = wasm_runtime_load(wasm_copy, init_req->mod_size, error_buffer, 1024);
     if (tmp_module == NULL) {
         send_error(proc->port_term, "Failed to load temp WASM module: %s", error_buffer);
         drv_unlock(proc->is_running);
@@ -223,14 +246,14 @@ void wasm_initialize_runtime(void* raw) {
 
     // create a context
     hb_beamr_lib_context_t *wasm_ctx = hb_beamr_lib_create_context();
-    rc = hb_beamr_lib_load_wasm_module(wasm_ctx, init_req->binary, init_req->size);
+    rc = hb_beamr_lib_load_wasm_module(wasm_ctx, init_req->mod_bin, init_req->mod_size);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         send_error(proc->port_term, "Failed to load WASM module: %s", hb_beamr_lib_get_last_error(wasm_ctx));
         drv_unlock(proc->is_running);
         return;
     }
 
-    rc = hb_beamr_lib_instantiate(wasm_ctx, 256 * 1024, 1 * 1024 * 1024);
+    rc = hb_beamr_lib_instantiate(wasm_ctx, 256 * 1024, 1 * 1024 * 1024, proc);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         send_error(proc->port_term, "Failed to instantiate WASM module");
         drv_unlock(proc->is_running);
@@ -261,42 +284,53 @@ void wasm_initialize_runtime(void* raw) {
 void wasm_execute_exported_function(void* raw) {
     DRV_DEBUG("wasm_execute_exported_function called, raw: %p", raw);
 
-    CallExportHandlerReq* call_export_req = (CallExportHandlerReq*)raw;
-
-    Proc* proc = call_export_req->proc;
+    Proc* proc = (Proc*)raw;
     drv_lock(proc->is_running);
 
     ensure_thread_init();
+
+    DRV_DEBUG("wasm_execute_exported_function: proc: %p, call_stack_height: %d", proc, proc->call_stack_height);
+
+    CallContext *cc = &proc->call_stack[proc->call_stack_height - 1];
+    // assert(cc->call_request.call_type == CALL_EXPORT);
     
     hb_beamr_lib_context_t *wasm_ctx = proc->wasm_ctx;
     hb_beamr_meta_module_t *wasm_meta = proc->wasm_meta;
 
-    wasm_val_t* results = malloc(call_export_req->result_count * sizeof(wasm_val_t));
+    wasm_val_t* results = driver_alloc(cc->call_request.result_count * sizeof(wasm_val_t));
 
 #ifdef HB_DEBUG
-    DRV_DEBUG("Calling export: %s", call_export_req->function_name);
-    hb_beamr_utils_print_wasm_vals(call_export_req->args, call_export_req->arg_count);
-    hb_beamr_utils_print_wasm_val_kinds(call_export_req->result_types, call_export_req->result_count);
+    DRV_DEBUG("Calling export: %s", cc->call_request.call_export.function_name);
+    hb_beamr_utils_print_wasm_vals(cc->call_request.args, cc->call_request.arg_count);
+    hb_beamr_utils_print_wasm_val_kinds(cc->call_request.result_types, cc->call_request.result_count);
 #endif
 
-    hb_beamr_lib_rc_t rc = hb_beamr_lib_call_export(wasm_ctx, call_export_req->function_name, call_export_req->arg_count, call_export_req->args, call_export_req->result_count, results);
+    hb_beamr_lib_rc_t rc = hb_beamr_lib_call_export(wasm_ctx, cc->call_request.call_export.function_name, cc->call_request.arg_count, cc->call_request.args, cc->call_request.result_count, results);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         send_error(proc->port_term, "Failed to call exported function: %s", hb_beamr_lib_get_last_error(wasm_ctx));
         drv_unlock(proc->is_running);
         return;
     }
-
+    
     ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 4);
     int msg_i = 0;
     msg[msg_i++] = ERL_DRV_ATOM;
     msg[msg_i++] = atom_execution_result;
-    wasm_vals_to_erl_msg(results, call_export_req->result_count, &msg, &msg_i, 4);
+    if (wasm_vals_to_erl_msg(results, cc->call_request.result_count, &msg, &msg_i, 4) != 0) {
+        send_error(proc->port_term, "Failed to convert results to erl msg");
+        drv_unlock(proc->is_running);
+        return;
+    };
     msg[msg_i++] = ERL_DRV_TUPLE;
     msg[msg_i++] = 2;
 
     int send_res = erl_drv_output_term(proc->port_term, msg, msg_i);
     DRV_DEBUG("Send result: %d", send_res);
 
+fail1:
+    memset(&proc->call_stack[--proc->call_stack_height], 0, sizeof(CallContext));
+
+fail0:
 	DRV_DEBUG("Unlocking is_running mutex: %p", proc->is_running);
     drv_unlock(proc->is_running);
 }
@@ -304,37 +338,43 @@ void wasm_execute_exported_function(void* raw) {
 void wasm_execute_indirect_function(void *raw) {
     DRV_DEBUG("wasm_execute_indirect_function called, raw: %p", raw);
 
-    CallIndirectHandlerReq* call_indirect_req = (CallIndirectHandlerReq*)raw;
-    
-    Proc* proc = call_indirect_req->proc;
+    Proc* proc = (Proc*)raw;
     drv_lock(proc->is_running);
 
     ensure_thread_init();
 
-    DRV_DEBUG("Indirect function table name: %s", call_indirect_req->table_name);
-    DRV_DEBUG("Indirect function table index: %ld", call_indirect_req->table_index);
-    DRV_DEBUG("Indirect function args: %p", call_indirect_req->args);
+    CallContext *cc = &proc->call_stack[proc->call_stack_height - 1];
+    // assert(cc->call_request.call_type == CALL_INDIRECT);
+
+    DRV_DEBUG("Indirect function table name: %s", cc->call_request.call_indirect.table_name);
+    DRV_DEBUG("Indirect function table index: %ld", cc->call_request.call_indirect.table_index);
+    DRV_DEBUG("Indirect function args: %p", cc->call_request.args);
 
     hb_beamr_lib_context_t *wasm_ctx = proc->wasm_ctx;
     hb_beamr_meta_module_t *wasm_meta = proc->wasm_meta;
 
     hb_beamr_lib_rc_t rc;
 
-    wasm_val_t* results = malloc(call_indirect_req->result_count * sizeof(wasm_val_t));
+    wasm_val_t* results = driver_alloc(cc->call_request.result_count * sizeof(wasm_val_t));
 
 #ifdef HB_DEBUG
-    DRV_DEBUG("Calling indirect table: %s, index: %ld", call_indirect_req->table_name, call_indirect_req->table_index);
-    hb_beamr_utils_print_wasm_vals(call_indirect_req->args, call_indirect_req->arg_count);
-    hb_beamr_utils_print_wasm_val_kinds(call_indirect_req->result_types, call_indirect_req->result_count);
+    DRV_DEBUG("Calling indirect table: %s, index: %ld", cc->call_request.call_indirect.table_name, cc->call_request.call_indirect.table_index);
+    hb_beamr_utils_print_wasm_vals(cc->call_request.args, cc->call_request.arg_count);
+    hb_beamr_utils_print_wasm_val_kinds(cc->call_request.result_types, cc->call_request.result_count);
 #endif
 
-    rc = hb_beamr_lib_call_indirect(wasm_ctx, call_indirect_req->table_name, call_indirect_req->table_index, call_indirect_req->arg_count, call_indirect_req->args, call_indirect_req->result_count, results);
+    rc = hb_beamr_lib_call_indirect(wasm_ctx, cc->call_request.call_indirect.table_name, cc->call_request.call_indirect.table_index, cc->call_request.arg_count, cc->call_request.args, cc->call_request.result_count, results);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         send_error(proc->port_term, "Failed to call indirect function");
         drv_unlock(proc->is_running);
         return;
     }
 
+fail1:
+    memset(&proc->call_stack[--proc->call_stack_height], 0, sizeof(CallContext));
+
+fail0:
+    DRV_DEBUG("Indirect function call complete");
     drv_unlock(proc->is_running);
-    DRV_DEBUG("Indirect function call completed successfully");
+    return;
 }

@@ -17,7 +17,7 @@ static log_entry_t g_log[MAX_LOG];
 static atomic_int g_log_pos = 0;
 
 static void generic_stub(wasm_exec_env_t exec_env, uint64_t *args){
-    hb_beamr_generated_attachment_t *att = (hb_beamr_generated_attachment_t*)wasm_runtime_get_function_attachment(exec_env);
+    hb_beamr_meta_import_t *att = (hb_beamr_meta_import_t*)wasm_runtime_get_function_attachment(exec_env);
     int pos = atomic_fetch_add_explicit(&g_log_pos,1,memory_order_relaxed);
     if(pos < MAX_LOG){ strncpy(g_log[pos].module, att->module_name,31); strncpy(g_log[pos].field, att->field_name,63); }
     // Simple behaviour: if single i32->i32, add 1
@@ -60,7 +60,7 @@ static void run_import_test_module(){
 
     hb_beamr_lib_context_t *ctx=hb_beamr_lib_create_context();
     assert(hb_beamr_lib_load_wasm_module(ctx,buf,sz)==HB_BEAMR_LIB_SUCCESS);
-    assert(hb_beamr_lib_instantiate(ctx,128*1024,0)==HB_BEAMR_LIB_SUCCESS);
+    assert(hb_beamr_lib_instantiate(ctx,128*1024,0,NULL)==HB_BEAMR_LIB_SUCCESS);
 
     wasm_val_t a={.kind=WASM_I32,.of.i32=5}; wasm_val_t r; r.kind=WASM_I32;
     assert(hb_beamr_lib_call_export(ctx,"wasm_add_two_via_host",1,&a,1,&r)==HB_BEAMR_LIB_SUCCESS);

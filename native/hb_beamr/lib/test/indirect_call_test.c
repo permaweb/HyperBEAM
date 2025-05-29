@@ -122,7 +122,7 @@ int main() {
     printf("Module loaded (WAMR Lib for WAT Indirect Call Test).\n");
     fflush(stdout);
 
-    rc = hb_beamr_lib_instantiate(ctx, 0x10000, 0x10000); 
+    rc = hb_beamr_lib_instantiate(ctx, 0x10000, 0x10000, NULL); 
     assert_rc_indirect(rc, HB_BEAMR_LIB_SUCCESS, ctx, "hb_beamr_lib_instantiate for indirect_call_test");
     printf("Module instantiated (WAMR Lib for WAT Indirect Call Test).\n");
     

@@ -121,7 +121,7 @@ int main() {
     printf("Module loaded (WAMR Lib).\n");
     fflush(stdout);
 
-    rc = hb_beamr_lib_instantiate(ctx, 0, 0); 
+    rc = hb_beamr_lib_instantiate(ctx, 0, 0, NULL); 
     assert_rc_wamr(rc, HB_BEAMR_LIB_SUCCESS, ctx, "hb_beamr_lib_instantiate");
     printf("Module instantiated (WAMR Lib).\n");
     

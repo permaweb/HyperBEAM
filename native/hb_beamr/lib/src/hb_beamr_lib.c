@@ -201,9 +201,10 @@ hb_beamr_lib_rc_t hb_beamr_lib_load_aot_module(
 }
 
 hb_beamr_lib_rc_t hb_beamr_lib_instantiate(
-    hb_beamr_lib_context_t* ctx, 
+    hb_beamr_lib_context_t* ctx,
     uint32_t stack_size, 
-    uint32_t heap_size
+    uint32_t heap_size,
+    void* user_data_override
 ) {
     if (!ctx) {
         return HB_BEAMR_LIB_ERROR_INVALID_STATE;
@@ -242,9 +243,12 @@ hb_beamr_lib_rc_t hb_beamr_lib_instantiate(
         return HB_BEAMR_LIB_ERROR_WAMR_INSTANTIATE_FAILED;
     }
 
-    // Set the custom data for this instance to be the context itself.
-    // This allows native functions to retrieve the context and access per-instance state.
-    wasm_runtime_set_custom_data(ctx->module_inst, (void*)ctx);
+    if (user_data_override) {
+        wasm_runtime_set_custom_data(ctx->module_inst, user_data_override);
+    } else {
+        // If no override, use the context itself.
+        wasm_runtime_set_custom_data(ctx->module_inst, (void*)ctx);
+    }
 
     set_error_msg(ctx, "Module instantiated successfully.");
     return HB_BEAMR_LIB_SUCCESS;
@@ -515,7 +519,7 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_direct_write_memory(
 
 // Helper function to convert wasm_val_t (API type) to uint32_t array (WAMR runtime call type)
 // Returns the number of uint32_t cells used by parameters.
-static uint32_t convert_wasm_vals_to_argv(uint32_t num_wasm_args, const wasm_val_t wasm_args[], 
+uint32_t hb_beamr_lib_convert_wasm_vals_to_argv(uint32_t num_wasm_args, const wasm_val_t wasm_args[], 
                                           uint32_t max_argv_cells, uint32_t argv[], 
                                           const wasm_valkind_t param_kinds[]) {
     uint32_t current_argv_idx = 0;
@@ -549,7 +553,8 @@ static uint32_t convert_wasm_vals_to_argv(uint32_t num_wasm_args, const wasm_val
 }
 
 // Helper function to convert uint32_t array (WAMR runtime call type) back to wasm_val_t (API type)
-static bool convert_argv_to_wasm_vals(uint32_t num_wasm_results, const wasm_valkind_t result_kinds[], 
+// Returns the number of uint32_t cells used by results.
+uint32_t hb_beamr_lib_convert_argv_to_wasm_vals(uint32_t num_wasm_results, const wasm_valkind_t result_kinds[], 
                                       const uint32_t argv[], wasm_val_t wasm_results[]) {
     uint32_t current_argv_idx = 0;
     for (uint32_t i = 0; i < num_wasm_results; ++i) {
@@ -557,7 +562,8 @@ static bool convert_argv_to_wasm_vals(uint32_t num_wasm_results, const wasm_valk
         switch (result_kinds[i]) {
             case WASM_I32:
             case WASM_F32:
-                wasm_results[i].of.i32 = argv[current_argv_idx++];
+                wasm_results[i].of.i32 = argv[current_argv_idx];
+                current_argv_idx++;
                 break;
             case WASM_I64:
             case WASM_F64:
@@ -566,10 +572,10 @@ static bool convert_argv_to_wasm_vals(uint32_t num_wasm_results, const wasm_valk
                 break;
             // TODO: Handle WASM_EXTERNREF, WASM_FUNCREF, WASM_V128
             default:
-                return false; // Unsupported result type
+                return -1; // Unsupported result type
         }
     }
-    return true;
+    return current_argv_idx;
 }
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_get_indirect_func_inst(hb_beamr_lib_context_t* ctx, const char* table_name, uint32_t func_index, wasm_function_inst_t* out_func_inst) {
@@ -714,7 +720,7 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
     }
     memset(argv_runtime, 0, sizeof(uint32_t) * total_argv_cells);
 
-    uint32_t cells_for_params = convert_wasm_vals_to_argv(num_args, args, total_argv_cells, argv_runtime, actual_param_types);
+    uint32_t cells_for_params = hb_beamr_lib_convert_wasm_vals_to_argv(num_args, args, total_argv_cells, argv_runtime, actual_param_types);
     if (cells_for_params == (uint32_t)-1) {
         if (actual_param_types) free(actual_param_types);
         if (actual_result_types) free(actual_result_types);
@@ -735,7 +741,7 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
         final_rc = HB_BEAMR_LIB_ERROR_WAMR_CALL_FAILED;
     } else {
         if (num_results > 0) {
-            if (!convert_argv_to_wasm_vals(num_results, actual_result_types, argv_runtime, results)) {
+            if (!hb_beamr_lib_convert_argv_to_wasm_vals(num_results, actual_result_types, argv_runtime, results)) {
                 set_error_msg(ctx, "Failed to convert results from indirect call.");
                 final_rc = HB_BEAMR_LIB_ERROR_WAMR_CALL_FAILED; // Or a different error code
             }
@@ -755,6 +761,48 @@ wasm_module_inst_t hb_beamr_lib_get_module_instance(hb_beamr_lib_context_t* ctx)
 }
 
 // ============================ Structured Generated Natives Helper ===========
+/*
+ * ... native API should extract arguments one by one from args array with macro
+ *   native_raw_get_arg
+ * and write the return value back to args[0] with macro
+ *   native_raw_return_type and native_raw_set_return
+ */
+
+hb_beamr_lib_rc_t hb_beamr_lib_convert_raw_args_to_wasm_vals(uint64_t args[], wasm_valkind_t val_types[], uint32_t val_count, wasm_val_t** out_vals) {
+    if (!args || !val_types || !val_count || !out_vals) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    wasm_val_t* vals = (wasm_val_t*)malloc(sizeof(wasm_val_t) * val_count);
+    if (!vals) return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED;
+    for (uint32_t i = 0; i < val_count; i++) {
+        switch (val_types[i]) {
+            case WASM_I32:
+                vals[i].of.i32 = (int32_t)args[i];
+                break;
+            case WASM_I64:
+                vals[i].of.i64 = (int64_t)args[i];
+                break;
+            case WASM_F32:
+                vals[i].of.f32 = (float)args[i];
+                break;
+            case WASM_F64:
+                vals[i].of.f64 = (double)args[i];
+                break;
+            default:
+                free(vals);
+                return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+        }
+        vals[i].kind = val_types[i];
+    }
+    *out_vals = vals;
+    return HB_BEAMR_LIB_SUCCESS;
+}
+
+hb_beamr_lib_rc_t hb_beamr_lib_convert_wasm_vals_to_raw_args(wasm_val_t* vals, uint32_t val_count, uint64_t* out_args) {
+    if (!vals || !out_args) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    for (uint32_t i = 0; i < val_count; i++) {
+        out_args[i] = vals[i].of.i32;
+    }
+    return HB_BEAMR_LIB_SUCCESS;
+}
 
 static char valkind_to_sig_char(wasm_valkind_t k){
     switch(k){case WASM_I32: return 'i'; case WASM_I64: return 'I'; case WASM_F32: return 'f'; case WASM_F64: return 'F'; default: return '?';}}
@@ -811,9 +859,8 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_generate_natives(
         sym->function_name = strdup(imp.field_name?imp.field_name:"");
         sym->user_function = user_function;
         sym->signature = strdup(imp.func.signature?imp.func.signature:"");
-        hb_beamr_generated_attachment_t *att = malloc(sizeof(*att));
-        att->module_name = strdup(imp.module_name?imp.module_name:"");
-        att->field_name  = strdup(imp.field_name?imp.field_name:"");
+        hb_beamr_meta_import_t *att = malloc(sizeof(*att));
+        memcpy(att, &imp, sizeof(hb_beamr_meta_import_t));
         sym->attachment = att;
     }
     free(cursor); free(mods);
@@ -825,8 +872,8 @@ HB_BEAMR_LIB_API void hb_beamr_lib_free_natives(hb_beamr_native_symbols_structur
         hb_beamr_native_symbol_group_t *grp=&st->groups[g];
         for(uint32_t i=0;i<grp->num_symbols;i++){
             hb_beamr_native_symbol_t *s=&grp->symbols[i];
-            hb_beamr_generated_attachment_t *att = (hb_beamr_generated_attachment_t*)s->attachment;
-            if(att){ free(att->module_name); free(att->field_name); free(att);} free((void*)s->function_name); free((void*)s->signature);
+            hb_beamr_meta_import_t *att = (hb_beamr_meta_import_t*)s->attachment;
+            if(att){ free((void*)att->module_name); free((void*)att->field_name); free(att);} free((void*)s->function_name); free((void*)s->signature);
         }
         free(grp->symbols); free((void*)grp->module_name);
     }
@@ -953,6 +1000,20 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_export_func(hb_beamr_meta_m
     return HB_BEAMR_LIB_ERROR_NOT_FOUND;
 }
 
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_import_func(hb_beamr_meta_module_t *meta, const char* module_name, const char* field_name, hb_beamr_meta_func_t **out_func_meta) {
+    if (!meta || !module_name || !field_name || !out_func_meta) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    for (uint32_t i = 0; i < meta->import_count; i++) {
+        hb_beamr_meta_import_t *imp = &meta->imports[i];
+        if (imp->kind == WASM_IMPORT_EXPORT_KIND_FUNC) {
+            if (strcmp(imp->module_name, module_name) == 0 && strcmp(imp->field_name, field_name) == 0) {
+                *out_func_meta = &imp->func;
+                return HB_BEAMR_LIB_SUCCESS;
+            }
+        }
+    }
+    return HB_BEAMR_LIB_ERROR_NOT_FOUND;
+}
+
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_indirect_func(hb_beamr_lib_context_t* ctx, const char* table_name, int index, hb_beamr_meta_func_t **out_func_meta) {
     if (!ctx || !table_name || !out_func_meta) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
     wasm_function_inst_t target_func_inst;
@@ -970,4 +1031,11 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_indirect_func(hb_beamr_lib_
     (*out_func_meta)->signature = "()"; // We don't need this for indirect functions
 
     return HB_BEAMR_LIB_SUCCESS;
+}
+
+HB_BEAMR_LIB_API void hb_beamr_lib_meta_indirect_func_free(hb_beamr_meta_func_t *func_meta) {
+    if (!func_meta) return;
+    free(func_meta->param_types);
+    free(func_meta->result_types);
+    free(func_meta);
 }

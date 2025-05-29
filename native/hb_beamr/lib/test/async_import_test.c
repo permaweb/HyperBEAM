@@ -132,7 +132,7 @@ static void *worker_thread(void *arg) {
            HB_BEAMR_LIB_SUCCESS);
 
     // Instantiate.
-    assert(hb_beamr_lib_instantiate(ctx, 128 * 1024, 0) == HB_BEAMR_LIB_SUCCESS);
+    assert(hb_beamr_lib_instantiate(ctx, 128 * 1024, 0, NULL) == HB_BEAMR_LIB_SUCCESS);
 
     // call_host_and_read(index = 0, init_val = 100)
     wasm_val_t args[2];

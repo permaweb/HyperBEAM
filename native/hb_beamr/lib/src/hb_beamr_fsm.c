@@ -41,7 +41,7 @@ hb_beamr_lib_rc_t hb_beamr_fsm_instantiate(hb_beamr_fsm_t *fsm,
     if (!fsm || !ctx) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
     if (fsm->state != HB_BEAMR_FSM_STATE_MODULE_LOADED)
         return invalid_state(fsm);
-    hb_beamr_lib_rc_t rc = hb_beamr_lib_instantiate(ctx, stack_size, heap_size);
+    hb_beamr_lib_rc_t rc = hb_beamr_lib_instantiate(ctx, stack_size, heap_size, NULL);
     if (rc == HB_BEAMR_LIB_SUCCESS) {
         fsm->state = HB_BEAMR_FSM_STATE_INSTANTIATED;
     }

@@ -177,7 +177,7 @@ int main(void) {
     rc = hb_beamr_lib_load_aot_module(ctx, file_buf, file_size);
     assert(rc == HB_BEAMR_LIB_SUCCESS && "Module load failed");
 
-    rc = hb_beamr_lib_instantiate(ctx, 128 * 1024, 0);
+    rc = hb_beamr_lib_instantiate(ctx, 128 * 1024, 0, NULL);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         fprintf(stderr, "Instantiate failed: %s\n",
                 hb_beamr_lib_get_last_error(ctx));

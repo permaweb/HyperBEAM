@@ -62,7 +62,7 @@ enum erl_port_buffer_to_wasm_vals_rc erl_port_buffer_to_wasm_vals(const char* bu
             goto fail0;
         }
 
-        vals = malloc(sizeof(wasm_val_t) * val_count);
+        vals = driver_alloc(sizeof(wasm_val_t) * val_count);
 
         for(int i = 0; i < arity; i++) {
             int elem_type, elem_size;
@@ -289,7 +289,7 @@ enum erl_port_buffer_to_wasm_vals_rc erl_port_buffer_to_wasm_vals(const char* bu
             goto fail1;
         }
 
-        vals = malloc(sizeof(wasm_val_t) * arity);
+        vals = driver_alloc(sizeof(wasm_val_t) * arity);
 
         for(int i = 0; i < arity; i++) {
             wasm_valkind_t val_kind = val_kinds[i];
@@ -331,7 +331,7 @@ enum erl_port_buffer_to_wasm_vals_rc erl_port_buffer_to_wasm_vals(const char* bu
     return rc;
 
 fail1:
-    free(vals);
+    driver_free(vals);
 
 fail0:
     DRV_DEBUG("Failed to convert erl port buffer to wasm vals");
@@ -363,7 +363,7 @@ int wasm_val_to_erl_term(ErlDrvTermData* term, const wasm_val_t* val) {
     }
 }
 
-enum erl_port_buffer_to_wasm_vals_rc wasm_vals_to_erl_msg(const wasm_val_t* vals, const int val_count, ErlDrvTermData** msg, int* msg_i, int msg_base_size) {
+int wasm_vals_to_erl_msg(const wasm_val_t* vals, const int val_count, ErlDrvTermData** msg, int* msg_i, int msg_base_size) {
     if (!vals || !val_count || !msg || !msg_i) {
         goto fail0;
     }
@@ -371,9 +371,14 @@ enum erl_port_buffer_to_wasm_vals_rc wasm_vals_to_erl_msg(const wasm_val_t* vals
     // Send the results back to Erlang
     DRV_DEBUG("Results size: %d", val_count);
     DRV_DEBUG("Reallocating msg");
-    *msg = driver_realloc(*msg, sizeof(ErlDrvTermData) * (msg_base_size + 3 + (val_count * 2)));
+    *msg = driver_realloc(*msg, sizeof(ErlDrvTermData) * (
+        msg_base_size +
+        (val_count * 2) + // Each term is 2 ErlDrvTermData
+        3
+    ));
     for (size_t i = 0; i < val_count; i++) {
         int res_size = wasm_val_to_erl_term(&(*msg)[*msg_i], &vals[i]);
+        assert(res_size == 2);
         *msg_i += res_size;
     }
 
@@ -385,12 +390,16 @@ enum erl_port_buffer_to_wasm_vals_rc wasm_vals_to_erl_msg(const wasm_val_t* vals
     DRV_DEBUG("msg_i: %d", *msg_i);
     DRV_DEBUG("val_count: %d", val_count);
 
-    return true;
+    return 0;
 
 fail1:
-    free(msg);
+    driver_free(msg);
 
 fail0:
     DRV_DEBUG("Failed to convert wasm vals to erl port buffer");
-    return false;
+    return -1;
+}
+
+int wasm_val_kinds_to_erl_msg(const wasm_valkind_t* val_kinds, const int val_count, ErlDrvTermData** msg, int* msg_i, int msg_base_size) {
+
 }

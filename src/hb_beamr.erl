@@ -166,8 +166,8 @@ call(WASM, FuncRef, Args, ImportFun, StateMsg, Opts)
                 {command,
                     term_to_binary(
                         case is_integer(FuncRef) of
-                            true -> {indirect_call, FuncRef, Args};
-                            false -> {call, FuncRef, Args}
+                            true -> {call_indirect, FuncRef, Args};
+                            false -> {call_export, FuncRef, Args}
                         end
                     )
                 }
@@ -180,7 +180,7 @@ call(WASM, FuncRef, Args, ImportFun, StateMsg, Opts)
 
 %% @doc Stub import function for the WASM executor.
 stub(Msg1, _Msg2, _Opts) ->
-    ?event(stub_stdlib_called),
+    ?event(stub_import_called),
     {ok, [0], Msg1}.
 
 %% @doc Synchonously monitor the WASM executor for a call result and any
@@ -272,7 +272,7 @@ driver_loads_test() ->
 %% @doc Test standalone `hb_beamr' correctly after loading a WASM module.
 simple_wasm_test() ->
     {ok, File} = file:read_file("test/test.aot"),
-    {ok, WASM, _Imports, _Exports} = start(File),
+    {ok, WASM} = start(File),
     {ok, [Result]} = call(WASM, "fac", [5.0]),
     ?assertEqual(120.0, Result).
 

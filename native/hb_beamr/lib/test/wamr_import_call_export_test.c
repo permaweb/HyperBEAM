@@ -103,7 +103,7 @@ int main() {
     }
     printf("WASM module loaded successfully.\n");
 
-    rc = hb_beamr_lib_instantiate(ctx, 128 * 1024, 64 * 1024); 
+    rc = hb_beamr_lib_instantiate(ctx, 128 * 1024, 64 * 1024, NULL); 
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         fprintf(stderr, "Failed to instantiate module: %d. Error: %s\n", rc, hb_beamr_lib_get_last_error(ctx));
         hb_beamr_lib_destroy_context(ctx);

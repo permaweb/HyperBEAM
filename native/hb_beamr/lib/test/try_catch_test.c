@@ -454,7 +454,7 @@ int main() {
     LOG_STDERR_FLUSH("Module loaded (WAMR Lib for Try/Catch).");
 
     // Native symbols are now pre-registered globally, so instantiate doesn't need them.
-    rc = hb_beamr_lib_instantiate(ctx, 0x10000, 0x10000); 
+    rc = hb_beamr_lib_instantiate(ctx, 0x10000, 0x10000, NULL); 
     assert_rc_try_catch(rc, HB_BEAMR_LIB_SUCCESS, ctx, "hb_beamr_lib_instantiate for try_catch");
     LOG_STDERR_FLUSH("Module instantiated (WAMR Lib for Try/Catch).");
     

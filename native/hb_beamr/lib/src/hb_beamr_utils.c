@@ -50,7 +50,7 @@ char* wasm_valkind_to_string(const wasm_valkind_t val_kind) {
 void hb_beamr_utils_print_wasm_val_kinds(const wasm_valkind_t* vals, const int val_count) {
     fprintf(stderr, "Printing %d wasm val kinds\n", val_count);
     for (int i = 0; i < val_count; i++) {
-        fprintf(stderr, "- [%d]: (%d) %s\n", i, vals[i], wasm_valkind_to_string(vals[i]));
+        fprintf(stderr, "- [%d]: %s (%d)\n", i, wasm_valkind_to_string(vals[i]), vals[i]);
     }
     fflush(stderr);
 }

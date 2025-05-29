@@ -93,7 +93,18 @@ hb_beamr_lib_rc_t hb_beamr_lib_load_aot_module(hb_beamr_lib_context_t* ctx,
 
 hb_beamr_lib_rc_t hb_beamr_lib_instantiate(hb_beamr_lib_context_t* ctx,
                                            uint32_t stack_size, 
-                                           uint32_t heap_size);
+                                           uint32_t heap_size,
+                                           void* user_data_override);
+
+// argv
+uint32_t hb_beamr_lib_convert_wasm_vals_to_argv(uint32_t num_wasm_args, const wasm_val_t wasm_args[], 
+                                          uint32_t max_argv_cells, uint32_t argv[], 
+                                          const wasm_valkind_t param_kinds[]);
+uint32_t hb_beamr_lib_convert_argv_to_wasm_vals(uint32_t num_wasm_results, const wasm_valkind_t result_kinds[], 
+                                      const uint32_t argv[], wasm_val_t wasm_results[]);
+
+hb_beamr_lib_rc_t hb_beamr_lib_convert_raw_args_to_wasm_vals(uint64_t args[], wasm_valkind_t val_types[], uint32_t val_count, wasm_val_t** out_vals);
+hb_beamr_lib_rc_t hb_beamr_lib_convert_wasm_vals_to_raw_args(wasm_val_t* vals, uint32_t val_count, uint64_t* out_args);
 
 // Function Execution
 hb_beamr_lib_rc_t hb_beamr_lib_call_export(hb_beamr_lib_context_t* ctx,
@@ -178,12 +189,6 @@ typedef struct {
     uint32_t                        num_groups;
 } hb_beamr_native_symbols_structured_t;
 
-// Attachment metadata passed to the generic stub (holds duplicated strings)
-typedef struct {
-    char *module_name;
-    char *field_name;
-} hb_beamr_generated_attachment_t;
-
 // -----------------------------------------------------------------------------
 // Module metadata extracted from a wasm_module_t
 // NOTE: All strings/arrays below are deep-copied so that the metadata remains
@@ -249,11 +254,18 @@ hb_beamr_lib_register_global_natives(const hb_beamr_native_symbols_structured_t 
 // -----------------------------------------------------------------------------
 // Indirect function metadata
 
+
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
 hb_beamr_lib_meta_export_func(hb_beamr_meta_module_t *meta, const char* func_name, hb_beamr_meta_func_t **out_func_meta);
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
+hb_beamr_lib_meta_import_func(hb_beamr_meta_module_t *meta, const char* module_name, const char* field_name, hb_beamr_meta_func_t **out_func_meta);
+
+HB_BEAMR_LIB_API hb_beamr_lib_rc_t
 hb_beamr_lib_meta_indirect_func(hb_beamr_lib_context_t* ctx, const char* table_name, int index, hb_beamr_meta_func_t **out_func_meta);
+
+HB_BEAMR_LIB_API void
+hb_beamr_lib_meta_indirect_func_free(hb_beamr_meta_func_t *func_meta);
 
 // -----------------------------------------------------------------------------
 

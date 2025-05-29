@@ -47,7 +47,7 @@ int main() {
     printf("Module loaded: %s\n", hb_beamr_lib_get_last_error(ctx));
 
     // Instantiate with default stack and heap. No symbols needed for basic_fib.
-    rc = hb_beamr_lib_instantiate(ctx, 128 * 1024, 0);
+    rc = hb_beamr_lib_instantiate(ctx, 128 * 1024, 0, NULL);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         fprintf(stderr, "Test FAILED: hb_beamr_lib_instantiate failed. Error: %s\n", hb_beamr_lib_get_last_error(ctx));
         free(aot_file_buffer);

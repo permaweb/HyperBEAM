@@ -150,7 +150,7 @@ static void *slave_thread(void *arg) {
             case CMD_INSTANTIATE: {
                 hb_beamr_lib_context_t *ctx_local = cmd.ctx; if (!ctx_local){ push_evt((event_t){EVT_ERROR, HB_BEAMR_LIB_ERROR_INVALID_STATE}); break; }
                 LOG_STDERR_FLUSH("SLAVE: CMD_INSTANTIATE ctx=%p", (void*)ctx_local);
-                hb_beamr_lib_rc_t rc = hb_beamr_lib_instantiate(ctx_local, 128*1024, 0);
+                hb_beamr_lib_rc_t rc = hb_beamr_lib_instantiate(ctx_local, 128*1024, 0, NULL);
                 push_evt((event_t){ rc == HB_BEAMR_LIB_SUCCESS ? EVT_OK : EVT_ERROR, rc });
                 break; }
             case CMD_REGISTER_NATIVES: {

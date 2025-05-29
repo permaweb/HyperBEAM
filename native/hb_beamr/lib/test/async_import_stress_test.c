@@ -274,7 +274,7 @@ static void *instance_master(void *arg) {
 
     hb_beamr_lib_context_t *loader_ctx = hb_beamr_lib_create_context();
     assert(hb_beamr_lib_load_wasm_module(loader_ctx, wasm_buf, wasm_sz) == HB_BEAMR_LIB_SUCCESS);
-    assert(hb_beamr_lib_instantiate(loader_ctx, 128 * 1024, 0) == HB_BEAMR_LIB_SUCCESS);
+    assert(hb_beamr_lib_instantiate(loader_ctx, 128 * 1024, 0, NULL) == HB_BEAMR_LIB_SUCCESS);
 
     ictx->instance_lib_ctx = loader_ctx; /* Store for use by workers and import handler */
 

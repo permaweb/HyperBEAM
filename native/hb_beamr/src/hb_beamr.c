@@ -90,12 +90,19 @@ static void wasm_driver_stop(ErlDrvData raw) {
     DRV_DEBUG("Freed proc");
 }
 
+// Declare helper functions
+static void handle_init(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
+static void handle_call(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index, enum call_type call_type);
+static void handle_import_response(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
+static void handle_write(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
+static void handle_read(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
+static void handle_size(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
+
 static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) {
     DRV_DEBUG("WASM driver output received");
     Proc* proc = (Proc*)raw;
-    hb_beamr_lib_rc_t rc;
-    //DRV_DEBUG("Port: %p", proc->port);
-    //DRV_DEBUG("Port term: %p", proc->port_term);
+    DRV_TRACE("Port: %p", proc->port);
+    DRV_TRACE("Port term: %p", proc->port_term);
 
     int index = 0;
     int version;
@@ -103,204 +110,267 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         send_error(proc->port_term, "Failed to decode message header (version).");
         return;
     }
-    //DRV_DEBUG("Received term has version: %d", version);
-    //DRV_DEBUG("Index: %d. buff_len: %d. buff: %p", index, bufflen, buff);
+    DRV_TRACE("Received term has version: %d", version);
+    DRV_TRACE("Index: %d. buff_len: %d. buff: %p", index, bufflen, buff);
     int arity;
     ei_decode_tuple_header(buff, &index, &arity);
-    //DRV_DEBUG("Term arity: %d", arity);
+    DRV_TRACE("Term arity: %d", arity);
 
     char command[MAXATOMLEN];
     ei_decode_atom(buff, &index, command);
-    DRV_DEBUG("Port %p received command: %s, arity: %d", proc->port, command, arity);
+    DRV_TRACE("Port %p received command: %s, arity: %d", proc->port, command, arity);
     
     if (strcmp(command, "init") == 0) {
-        // Start async initialization
-        proc->pid = driver_caller(proc->port);
-        //DRV_DEBUG("Caller PID: %d", proc->pid);
-        int size, type, mode_size;
-        char* mode;
-        ei_get_type(buff, &index, &type, &size);
-        //DRV_DEBUG("WASM binary size: %d bytes. Type: %c", size, type);
-        void* wasm_binary = driver_alloc(size);
-        long size_l = (long)size;
-        ei_decode_binary(buff, &index, wasm_binary, &size_l);
-        ei_get_type(buff, &index, &type, &mode_size);
-        // the init message size + '\0' character
-        mode = driver_alloc(mode_size + 1);
-        ei_decode_atom(buff, &index, mode);
+        handle_init(proc, buff, bufflen, index);
+    } else if (strcmp(command, "call_export") == 0) {
+        handle_call(proc, buff, bufflen, index, CALL_EXPORT);
+    } else if (strcmp(command, "call_indirect") == 0) {
+        handle_call(proc, buff, bufflen, index, CALL_INDIRECT);
+    } else if (strcmp(command, "import_response") == 0) {
+        handle_import_response(proc, buff, bufflen, index);
+    } else if (strcmp(command, "write") == 0) {
+        handle_write(proc, buff, bufflen, index);
+    } else if (strcmp(command, "read") == 0) {
+        handle_read(proc, buff, bufflen, index);
+    } else if (strcmp(command, "size") == 0) {
+        handle_size(proc, buff, bufflen, index);
+    } else {
+        DRV_DEBUG("Unknown command: %s", command);
+        send_error(proc->port_term, "Unknown command");
+    }
+}
 
-        InitHandlerReq* init_req = driver_alloc(sizeof(InitHandlerReq));
-        init_req->proc = proc;
-        init_req->binary = wasm_binary;
-        init_req->size = size;
-        init_req->mode = mode;
-        
-        driver_async(proc->port, NULL, wasm_initialize_runtime, init_req, NULL);
-    } else if (strcmp(command, "call") == 0) {
-        if (!proc->is_initialized) {
-            send_error(proc->port_term, "Cannot run WASM function as module not initialized.");
-            return;
-        }
+static void handle_init(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) {
+// Start async initialization
+    proc->pid = driver_caller(proc->port);
+    DRV_TRACE("Caller PID: %d", proc->pid);
+    int size, type, mode_size;
+    char* mode;
+    ei_get_type(buff, &index, &type, &size);
+    DRV_TRACE("WASM binary size: %d bytes. Type: %c", size, type);
+    void* wasm_binary = driver_alloc(size);
+    long size_l = (long)size;
+    ei_decode_binary(buff, &index, wasm_binary, &size_l);
+    ei_get_type(buff, &index, &type, &mode_size);
+    // the init message size + '\0' character
+    mode = driver_alloc(mode_size + 1);
+    ei_decode_atom(buff, &index, mode);
+
+    InitHandlerReq* init_req = driver_alloc(sizeof(InitHandlerReq));
+    init_req->proc = proc;
+    init_req->mod_bin = wasm_binary;
+    init_req->mod_size = size;
+    init_req->run_mode = mode;
+    
+    driver_async(proc->port, NULL, wasm_initialize_runtime, init_req, NULL);
+}
+
+const char* DEFAULT_INDIRECT_TABLE_NAME = "__indirect_function_table";
+
+static void handle_call(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index, enum call_type call_type) {
+    hb_beamr_lib_rc_t rc;
+
+    if (!proc->is_initialized) {
+        send_error(proc->port_term, "Cannot run WASM function as module not initialized.");
+        return;
+    }
+
+    if (proc->call_stack_height >= MAX_CALL_STACK_DEPTH) {
+        send_error(proc->port_term, "Call stack overflow. Max depth: %d", MAX_CALL_STACK_DEPTH);
+        return;
+    }
+
+    CallRequest* cr = driver_alloc(sizeof(CallRequest));
+    memset(cr, 0, sizeof(CallRequest));
+    cr->call_type = call_type;
+
+    hb_beamr_meta_func_t *func_meta = driver_alloc(sizeof(hb_beamr_meta_func_t));
+    memset(func_meta, 0, sizeof(hb_beamr_meta_func_t));
+
+    if (call_type == CALL_EXPORT) {
         // Extract the function name and the args from the Erlang term and generate the wasm_val_vec_t
-        char* function_name = driver_alloc(MAXATOMLEN);
-        ei_decode_string(buff, &index, function_name);
-        DRV_DEBUG("Function name: %s", function_name);
+        cr->call_export.function_name = driver_alloc(MAXATOMLEN);
+        ei_decode_string(buff, &index, cr->call_export.function_name);
+        DRV_DEBUG("Function name: %s", cr->call_export.function_name);
 
-        hb_beamr_meta_func_t *func_meta = driver_alloc(sizeof(hb_beamr_meta_func_t));
-        rc = hb_beamr_lib_meta_export_func(proc->wasm_meta, function_name, &func_meta);
-        if (rc != HB_BEAMR_LIB_SUCCESS) {
-            send_error(proc->port_term, "Failed to get function meta data");
-            return;
-        }
-
-        DRV_DEBUG("Decoding args. Buff: %p. Index: %d", buff, index);
-        wasm_val_t* args = driver_alloc(sizeof(wasm_val_t) * func_meta->param_count);
-        enum erl_port_buffer_to_wasm_vals_rc rc = erl_port_buffer_to_wasm_vals(buff, &index, func_meta->param_types, func_meta->param_count, &args);
-        if (rc != ERL_PORT_BUFFER_TO_WASM_VALS_SUCCESS) {
-            if (rc == ERL_PORT_BUFFER_TO_WASM_VALS_VALUE_OUT_OF_RANGE) {
-                send_error(proc->port_term, "Argument value out of range for wasm type");
-            } else {
-                send_error(proc->port_term, "Failed to decode arguments: %d", rc);
-            }
-            return;
-        }
-
-        CallExportHandlerReq* call_export_req = driver_alloc(sizeof(CallExportHandlerReq));
-        call_export_req->proc = proc;
-        call_export_req->function_name = function_name;
-        call_export_req->args = args;
-        call_export_req->arg_count = func_meta->param_count;
-        call_export_req->result_count = func_meta->result_count;
-        call_export_req->result_types = func_meta->result_types;
-
-        driver_async(proc->port, NULL, wasm_execute_exported_function, call_export_req, NULL);
-    } 
-    else if (strcmp(command, "indirect_call") == 0) {
-        if (!proc->is_initialized) {
-            send_error(proc->port_term, "Cannot run WASM indirect function as module not initialized.");
-            return;
-        }
+        rc = hb_beamr_lib_meta_export_func(proc->wasm_meta, cr->call_export.function_name, &func_meta);
+    } else if (call_type == CALL_INDIRECT) {
         DRV_DEBUG("Decoding indirect call");
         long table_index;
         ei_decode_long(buff, &index, &table_index);
         DRV_DEBUG("Indirect function table index: %ld", table_index);
 
-        char* table_name = "__indirect_function_table";
+        cr->call_indirect.table_name = (char*)DEFAULT_INDIRECT_TABLE_NAME;
 
-        hb_beamr_meta_func_t *func_meta = driver_alloc(sizeof(hb_beamr_meta_func_t));
-        rc = hb_beamr_lib_meta_indirect_func(proc->wasm_ctx, table_name, table_index, &func_meta);
-        if (rc != HB_BEAMR_LIB_SUCCESS) {
-            send_error(proc->port_term, "Failed to get indirect function meta data");
-            drv_unlock(proc->is_running);
-            return;
-        }
-
-        wasm_val_t* args = driver_alloc(sizeof(wasm_val_t) * func_meta->param_count);
-        enum erl_port_buffer_to_wasm_vals_rc rc = erl_port_buffer_to_wasm_vals(buff, &index, func_meta->param_types, func_meta->param_count, &args);
-        if (rc != ERL_PORT_BUFFER_TO_WASM_VALS_SUCCESS) {
-            if (rc == ERL_PORT_BUFFER_TO_WASM_VALS_VALUE_OUT_OF_RANGE) {
-                send_error(proc->port_term, "Argument value out of range for wasm type");
-            } else {
-                send_error(proc->port_term, "Failed to decode arguments: %d", rc);
-            }
-            return;
-        }
-        
-        CallIndirectHandlerReq* call_indirect_req = driver_alloc(sizeof(CallIndirectHandlerReq));
-        call_indirect_req->proc = proc;
-        call_indirect_req->table_name = table_name;
-        call_indirect_req->table_index = table_index;
-        call_indirect_req->args = args;
-        call_indirect_req->arg_count = func_meta->param_count;
-        call_indirect_req->result_types = func_meta->result_types;
-        call_indirect_req->result_count = func_meta->result_count;
-
-        driver_async(proc->port, NULL, wasm_execute_indirect_function, call_indirect_req, NULL);
-    } 
-    else if (strcmp(command, "import_response") == 0) {
-        DRV_DEBUG("TODO: import_response");
-        send_error(proc->port_term, "TODO: import_response");
-    } else if (strcmp(command, "write") == 0) {
-        DRV_DEBUG("Write received");
-        long ptr;
-        int type, size;
-        ei_decode_tuple_header(buff, &index, &arity);
-        ei_decode_long(buff, &index, &ptr);
-        ei_get_type(buff, &index, &type, &size);
-        size_t size_l = (long)size;
-        const char* write_data;
-        int res = ei_decode_bitstring(buff, &index, &write_data, NULL, &size_l);
-        DRV_DEBUG("Decoded binary. Res: %d. Size (bits): %ld", res, size_l);
-        size_t size_bytes = size_l / 8;
-        DRV_DEBUG("Write received. Ptr: %ld. Bytes: %ld", ptr, size_bytes);
-        rc = hb_beamr_lib_direct_write_memory(proc->wasm_ctx, ptr, (uint8_t*)write_data, size_bytes);
-        if (rc != HB_BEAMR_LIB_SUCCESS) {
-            send_error(proc->port_term, hb_beamr_lib_get_last_error(proc->wasm_ctx));
-            return;
-        }
-
-        ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 2);
-        msg[0] = ERL_DRV_ATOM;
-        msg[1] = atom_ok;
-        erl_drv_output_term(proc->port_term, msg, 2);
+        rc = hb_beamr_lib_meta_indirect_func(proc->wasm_ctx, cr->call_indirect.table_name, table_index, &func_meta);
     }
-    else if (strcmp(command, "read") == 0) {
-        DRV_DEBUG("Read received");
-        long ptr, size;
-        ei_decode_tuple_header(buff, &index, &arity);
-        ei_decode_long(buff, &index, &ptr);
-        ei_decode_long(buff, &index, &size);
-        long size_l = (long)size;
-        
-        uint8_t* out_binary = driver_alloc(size_l);
-        rc = hb_beamr_lib_direct_read_memory(proc->wasm_ctx, ptr, (uint8_t*)out_binary, size_l);
-        if (rc != HB_BEAMR_LIB_SUCCESS) {
-            send_error(proc->port_term, hb_beamr_lib_get_last_error(proc->wasm_ctx));
-            return;
-        }
 
-        DRV_DEBUG("Read complete. Binary: %p", out_binary);
-
-        ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 7);
-        int msg_index = 0;
-        msg[msg_index++] = ERL_DRV_ATOM;
-        msg[msg_index++] = atom_execution_result;
-        msg[msg_index++] = ERL_DRV_BUF2BINARY;
-        msg[msg_index++] = (ErlDrvTermData)out_binary;
-        msg[msg_index++] = size_l;
-        msg[msg_index++] = ERL_DRV_TUPLE;
-        msg[msg_index++] = 2;
-        
-        int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
-        DRV_DEBUG("Read response sent: %d", msg_res);
+    if (rc != HB_BEAMR_LIB_SUCCESS) {
+        send_error(proc->port_term, "Failed to get indirect function meta data");
+        driver_free(cr);
+        return;
     }
-    else if (strcmp(command, "size") == 0) {
-        DRV_DEBUG("Size received");
-        uint8_t* memory_data;
-        size_t memory_size;
-        wasm_memory_inst_t memory;
-        rc = hb_beamr_lib_get_memory_info(proc->wasm_ctx, NULL, &memory_data, &memory_size, &memory);
-        if (rc != HB_BEAMR_LIB_SUCCESS) {
-            send_error(proc->port_term, hb_beamr_lib_get_last_error(proc->wasm_ctx));
-            return;
-        }
-        DRV_DEBUG("Size: %ld", memory_size);
 
-        ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 6);
-        int msg_index = 0;
-        msg[msg_index++] = ERL_DRV_ATOM;
-        msg[msg_index++] = atom_execution_result;
-        msg[msg_index++] = ERL_DRV_INT;
-        msg[msg_index++] = (long)memory_size;
-        msg[msg_index++] = ERL_DRV_TUPLE;
-        msg[msg_index++] = 2;
-        erl_drv_output_term(proc->port_term, msg, msg_index);
+    DRV_DEBUG("Decoding args. Buff: %p. Index: %d", buff, index);
+    wasm_val_t* args = NULL;
+    enum erl_port_buffer_to_wasm_vals_rc erc = erl_port_buffer_to_wasm_vals(buff, &index, func_meta->param_types, func_meta->param_count, &args);
+    if (erc != ERL_PORT_BUFFER_TO_WASM_VALS_SUCCESS) {
+        if (erc == ERL_PORT_BUFFER_TO_WASM_VALS_VALUE_OUT_OF_RANGE) {
+            send_error(proc->port_term, "Argument value out of range for wasm type");
+        } else {
+            send_error(proc->port_term, "Failed to decode arguments: %d", rc);
+        }
+        // driver_free(func_meta);
+        driver_free(cr);
+        return;
     }
-    else {
-        DRV_DEBUG("Unknown command: %s", command);
-        send_error(proc->port_term, "Unknown command");
+
+    cr->args = args;
+    cr->arg_count = func_meta->param_count;
+    cr->result_types = func_meta->result_types;
+    cr->result_count = func_meta->result_count;
+
+    CallContext *cc = &proc->call_stack[proc->call_stack_height++];
+    memcpy(&cc->call_request, cr, sizeof(CallRequest));
+    driver_free(cr);
+
+    // Initialize import response
+    ImportState *is = &cc->import_state;
+    memset(is, 0, sizeof(ImportState));
+    char* response_mutex_name = driver_alloc(128);
+    sprintf(response_mutex_name, "response_mutex_%d", proc->call_stack_height);
+    char* response_cond_name = driver_alloc(128);
+    sprintf(response_cond_name, "response_cond_%d", proc->call_stack_height);
+    is->response_ready = erl_drv_mutex_create(response_mutex_name);
+    is->cond = erl_drv_cond_create(response_cond_name);
+    is->meta = NULL;
+    is->ready = 0;
+    driver_free(response_mutex_name);
+    driver_free(response_cond_name);
+
+    if (call_type == CALL_EXPORT) {
+        driver_async(proc->port, NULL, wasm_execute_exported_function, proc, NULL);
+    } else if (call_type == CALL_INDIRECT) {
+        driver_async(proc->port, NULL, wasm_execute_indirect_function, proc, NULL);
     }
 }
+
+static void handle_import_response(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) {
+    DRV_DEBUG("Import response received. Providing...");
+
+    if (proc->call_stack_height == 0) {
+        DRV_DEBUG("[error] No pending import response waiting");
+        send_error(proc->port_term, "No pending import response waiting");
+        return;
+    }
+
+    CallContext *cc = &proc->call_stack[proc->call_stack_height - 1];
+    ImportState *is = &cc->import_state;
+
+    if (is->meta == NULL) {
+        DRV_DEBUG("Import response received but no import meta data available");
+        send_error(proc->port_term, "Import response received but no import meta data available");
+        return;
+    }
+
+    DRV_DEBUG("Decoding import response from Erlang...");
+    wasm_val_t* results = NULL;
+    enum erl_port_buffer_to_wasm_vals_rc erc = erl_port_buffer_to_wasm_vals(buff, &index, is->meta->func.result_types, is->meta->func.result_count, &results);
+    if (erc != ERL_PORT_BUFFER_TO_WASM_VALS_SUCCESS) {
+        send_error(proc->port_term, "Failed to decode import response");
+        return;
+    }
+
+    is->results = results;
+    is->result_count = is->meta->func.result_count;
+    is->error_message = NULL;
+
+    // Signal that the response is ready
+    drv_signal(is->response_ready, is->cond, &is->ready);
+}
+
+static void handle_write(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) {
+    DRV_DEBUG("Write received");
+    long ptr;
+    int type, size, arity;
+    ei_decode_tuple_header(buff, &index, &arity);
+    ei_decode_long(buff, &index, &ptr);
+    ei_get_type(buff, &index, &type, &size);
+    size_t size_l = (long)size;
+    const char* write_data;
+    int res = ei_decode_bitstring(buff, &index, &write_data, NULL, &size_l);
+    DRV_DEBUG("Decoded binary. Res: %d. Size (bits): %ld", res, size_l);
+    size_t size_bytes = size_l / 8;
+    DRV_DEBUG("Write received. Ptr: %ld. Bytes: %ld", ptr, size_bytes);
+    hb_beamr_lib_rc_t rc = hb_beamr_lib_direct_write_memory(proc->wasm_ctx, ptr, (uint8_t*)write_data, size_bytes);
+    if (rc != HB_BEAMR_LIB_SUCCESS) {
+        send_error(proc->port_term, hb_beamr_lib_get_last_error(proc->wasm_ctx));
+        return;
+    }
+
+    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 2);
+    msg[0] = ERL_DRV_ATOM;
+    msg[1] = atom_ok;
+    int msg_res = erl_drv_output_term(proc->port_term, msg, 2);
+    DRV_DEBUG("Write response sent: %d", msg_res);
+}
+
+static void handle_read(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) {
+    DRV_DEBUG("Read received");
+    int arity;
+    long ptr, size;
+    ei_decode_tuple_header(buff, &index, &arity);
+    ei_decode_long(buff, &index, &ptr);
+    ei_decode_long(buff, &index, &size);
+    long size_l = (long)size;
+    
+    uint8_t* out_binary = driver_alloc(size_l);
+    hb_beamr_lib_rc_t rc = hb_beamr_lib_direct_read_memory(proc->wasm_ctx, ptr, (uint8_t*)out_binary, size_l);
+    if (rc != HB_BEAMR_LIB_SUCCESS) {
+        send_error(proc->port_term, hb_beamr_lib_get_last_error(proc->wasm_ctx));
+        return;
+    }
+
+    DRV_DEBUG("Read complete. Binary: %p", out_binary);
+
+    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 7);
+    int msg_index = 0;
+    msg[msg_index++] = ERL_DRV_ATOM;
+    msg[msg_index++] = atom_execution_result;
+    msg[msg_index++] = ERL_DRV_BUF2BINARY;
+    msg[msg_index++] = (ErlDrvTermData)out_binary;
+    msg[msg_index++] = size_l;
+    msg[msg_index++] = ERL_DRV_TUPLE;
+    msg[msg_index++] = 2;
+    
+    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
+    DRV_DEBUG("Read response sent: %d", msg_res);
+}
+
+static void handle_size(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index) {
+    DRV_DEBUG("Size received");
+    uint8_t* memory_data;
+    size_t memory_size;
+    wasm_memory_inst_t memory;
+    hb_beamr_lib_rc_t rc = hb_beamr_lib_get_memory_info(proc->wasm_ctx, NULL, &memory_data, &memory_size, &memory);
+    if (rc != HB_BEAMR_LIB_SUCCESS) {
+        send_error(proc->port_term, hb_beamr_lib_get_last_error(proc->wasm_ctx));
+        return;
+    }
+    DRV_DEBUG("Size: %ld", memory_size);
+
+    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 6);
+    int msg_index = 0;
+    msg[msg_index++] = ERL_DRV_ATOM;
+    msg[msg_index++] = atom_execution_result;
+    msg[msg_index++] = ERL_DRV_INT;
+    msg[msg_index++] = (long)memory_size;
+    msg[msg_index++] = ERL_DRV_TUPLE;
+    msg[msg_index++] = 2;
+    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
+    DRV_DEBUG("Size response sent: %d", msg_res);
+}
+
 
 static ErlDrvEntry wasm_driver_entry = {
     NULL,
