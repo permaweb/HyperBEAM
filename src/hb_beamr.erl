@@ -1,4 +1,3 @@
-
 %%% @doc BEAMR: A WAMR wrapper for BEAM.
 %%% 
 %%% Beamr is a library that allows you to run WASM modules in BEAM, using the
@@ -281,82 +280,6 @@ simple_wasm_test() ->
 -define(U32_MAX, 4294967295).
 -define(I64_MAX, 9223372036854775807).
 -define(U64_MAX, 18446744073709551615).
-
-send_int_test() ->
-    {ok, File} = file:read_file("test/format.aot"),
-    {ok, WASM} = start(File),
-    % i32 - within i32 range ok
-    I32Case0 = 0,
-    ?event({i32_case0, I32Case0}),
-    {ok, [I32StrPtr]} = call(WASM, "format_i32", [I32Case0]),
-    {ok, I32Str0} = hb_beamr_io:read_string(WASM, I32StrPtr),
-    ?assertEqual(<<"0">>, I32Str0),
-    I32Case1 = ?I32_MAX,
-    ?event({i32_case1, I32Case1}),
-    {ok, [I32StrPtr]} = call(WASM, "format_i32", [I32Case1]),
-    {ok, I32Str1} = hb_beamr_io:read_string(WASM, I32StrPtr),
-    ?assertEqual(<<"2147483647">>, I32Str1),
-    I32Case2 = -(?I32_MAX + 1),
-    ?event({i32_case2, I32Case2}),
-    {ok, [I32StrPtr]} = call(WASM, "format_i32", [I32Case2]),
-    {ok, I32Str2} = hb_beamr_io:read_string(WASM, I32StrPtr),
-    ?assertEqual(<<"-2147483648">>, I32Str2),
-    % i32 - outside i32 range errors
-    I32Case3 = -(?I32_MAX + 2),
-    ?event({i32_case3, I32Case3}),
-    {error, "Argument value out of range for wasm type"} = call(WASM, "format_i32", [I32Case3]),
-    % u32 - within u32 range ok
-    U32Case0 = 0,
-    ?event({u32_case0, U32Case0}),
-    {ok, [U32StrPtr]} = call(WASM, "format_u32", [U32Case0]),
-    {ok, U32Str0} = hb_beamr_io:read_string(WASM, U32StrPtr),
-    ?assertEqual(<<"0">>, U32Str0),
-    U32Case1 = ?U32_MAX,
-    ?event({u32_case1, U32Case1}),
-    {ok, [U32StrPtr]} = call(WASM, "format_u32", [U32Case1]),
-    {ok, U32Str1} = hb_beamr_io:read_string(WASM, U32StrPtr),
-    ?assertEqual(<<"4294967295">>, U32Str1),
-    % u32 - outside u32 range errors
-    U32Case3 = (?U32_MAX + 1) + 255,
-    ?event({u32_case3, U32Case3}),
-    {error, "Argument value out of range for wasm type"} = call(WASM, "format_u32", [U32Case3]),
-    % i64 - within i64 range ok
-    I64Case0 = 0,
-    ?event({i64_case0, I64Case0}),
-    {ok, [I64StrPtr]} = call(WASM, "format_i64", [I64Case0]),
-    {ok, I64Str0} = hb_beamr_io:read_string(WASM, I64StrPtr),
-    ?assertEqual(<<"0">>, I64Str0),
-    I64Case1 = ?I64_MAX,
-    ?event({i64_case1, I64Case1}),
-    {ok, [I64StrPtr]} = call(WASM, "format_i64", [I64Case1]),
-    {ok, I64Str1} = hb_beamr_io:read_string(WASM, I64StrPtr),
-    ?assertEqual(<<"9223372036854775807">>, I64Str1),
-    I64Case2 = -(?I64_MAX + 1),
-    ?event({i64_case2, I64Case2}),
-    {ok, [I64StrPtr]} = call(WASM, "format_i64", [I64Case2]),
-    {ok, I64Str2} = hb_beamr_io:read_string(WASM, I64StrPtr),
-    ?assertEqual(<<"-9223372036854775808">>, I64Str2),
-    % i64 - outside i64 range errors
-    I64Case3 = -(?I64_MAX + 2),
-    ?event({i64_case3, I64Case3}),
-    {error, "Argument value out of range for wasm type"} = call(WASM, "format_i64", [I64Case3]),
-    % u64 - within u64 range ok
-    U64Case0 = 0,
-    ?event({u64_case0, U64Case0}),
-    {ok, [U64StrPtr]} = call(WASM, "format_u64", [U64Case0]),
-    {ok, U64Str0} = hb_beamr_io:read_string(WASM, U64StrPtr),
-    ?assertEqual(<<"0">>, U64Str0),
-    U64Case1 = ?U64_MAX,
-    ?event({u64_case1, U64Case1}),
-    {ok, [U64StrPtr]} = call(WASM, "format_u64", [U64Case1]),
-    {ok, U64Str1} = hb_beamr_io:read_string(WASM, U64StrPtr),
-    ?assertEqual(<<"18446744073709551615">>, U64Str1),
-    % u64 - outside u64 range errors
-    U64Case3 = (?U64_MAX + 1) + 255,
-    ?event({u64_case3, U64Case3}),
-    {error, "Argument value out of range for wasm type"} = call(WASM, "format_u64", [U64Case3]),
-    ok.
-
 -define(F32_MAX,               340282346638528859811704183484516925440.000000).
 -define(F32_MAX_STR_BIN,    <<"340282346638528859811704183484516925440.000000">>).
 -define(F32_MAX_10_STR_BIN, <<"3402823466385288598117041834845169254400.000000">>).
@@ -364,201 +287,126 @@ send_int_test() ->
 -define(F64_MAX_STR_BIN,    <<"179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.000000">>).
 -define(F64_MAX_10_STR_BIN, <<"1797693134862315708145274237317043567980705675258449965989174768031572607800285387605895586327668781715404589535143824642343213268894641827684675467035375169860499105765512820762454900903893289440758685084551339423045832369032229481658085593321233482747978262041447231687381771809192998812504040261841248583680.000000">>).
 
-send_float_test() ->
+send_value_test() ->
     {ok, File} = file:read_file("test/format.aot"),
     {ok, WASM} = start(File),
-    % f32 - within f32 range ok
-    F32Case0 = 0.000000,
-    ?event({f32_case0, F32Case0}),
-    {ok, [F32StrPtr]} = call(WASM, "format_f32", [F32Case0]),
-    {ok, F32Str} = hb_beamr_io:read_string(WASM, F32StrPtr),
-    ?assertEqual(<<"0.000000">>, F32Str),
-    F32Case1 = ?F32_MAX,
-    ?event({f32_case1, F32Case1}),
-    {ok, [F32StrPtr]} = call(WASM, "format_f32", [F32Case1]),
-    {ok, F32Str2} = hb_beamr_io:read_string(WASM, F32StrPtr),
-    ?assertEqual(?F32_MAX_STR_BIN, F32Str2),
-    % f32 - outside f32 range goes to inf
-    F32Case2 = ?F32_MAX * 10,
-    ?event({f32_case2, F32Case2}),
-    {ok, [F32StrPtr]} = call(WASM, "format_f32", [F32Case2]),
-    {ok, F32Str3} = hb_beamr_io:read_string(WASM, F32StrPtr),
-    ?assertEqual(<<"inf">>, F32Str3),
-    % f32 - +/-inf, +/-nan
-    F32Case3 = '+inf',
-    ?event({f32_case3, F32Case3}),
-    {ok, [F32StrPtr]} = call(WASM, "format_f32", [F32Case3]),
-    {ok, F32Str4} = hb_beamr_io:read_string(WASM, F32StrPtr),
-    ?assertEqual(<<"inf">>, F32Str4),
-    F32Case4 = '-inf',
-    ?event({f32_case4, F32Case4}),
-    {ok, [F32StrPtr]} = call(WASM, "format_f32", [F32Case4]),
-    {ok, F32Str5} = hb_beamr_io:read_string(WASM, F32StrPtr),
-    ?assertEqual(<<"-inf">>, F32Str5),
-    F32Case5 = 'nan',
-    ?event({f32_case5, F32Case5}),
-    {ok, [F32StrPtr]} = call(WASM, "format_f32", [F32Case5]),
-    {ok, F32Str6} = hb_beamr_io:read_string(WASM, F32StrPtr),
-    ?assertEqual(<<"nan">>, F32Str6),
-    % f64 - within f64 range ok
-    F64Case0 = 0.0,
-    ?event({f64_case0, F64Case0}),
-    {ok, [F64StrPtr]} = call(WASM, "format_f64", [F64Case0]),
-    {ok, F64Str} = hb_beamr_io:read_string(WASM, F64StrPtr),
-    ?assertEqual(<<"0.000000">>, F64Str),
-    F64Case1 = ?F64_MAX,
-    ?event({f64_case1, F64Case1}),
-    {ok, [F64StrPtr]} = call(WASM, "format_f64", [F64Case1]),
-    {ok, F64Str2} = hb_beamr_io:read_string(WASM, F64StrPtr),
-    ?assertEqual(?F64_MAX_STR_BIN, F64Str2),
-    % f64 - outside f64 range cannot be represented in erlang
+    %% Test helper
+    FormatAssert = fun
+        (Tag, Fun, Value, {error, ExpectedErr}) ->
+            ?event({Tag, Value}),
+            ?assertEqual({error, ExpectedErr}, call(WASM, Fun, [Value]));
+        (Tag, Fun, Value, ExpectedBin) ->
+            ?event({Tag, Value}),
+            {ok, [Ptr]} = call(WASM, Fun, [Value]),
+            {ok, Str} = hb_beamr_io:read_string(WASM, Ptr),
+            ?assertEqual(ExpectedBin, Str)
+    end,
+    %% Test cases
+    lists:foreach(
+        fun({Tag, Fun, Val, Exp}) ->
+            FormatAssert(Tag, Fun, Val, Exp)
+        end,
+        [
+            %% i32
+            {i32_case0, "format_i32", 0, <<"0">>},
+            {i32_case1, "format_i32", ?I32_MAX, <<"2147483647">>},
+            {i32_case2, "format_i32", -(?I32_MAX + 1), <<"-2147483648">>},
+            %% i32 - out of range
+            {i32_case3, "format_i32", -(?I32_MAX + 2), {error, "Argument value out of range for wasm type"}},
+            %% u32
+            {u32_case0, "format_u32", 0, <<"0">>},
+            {u32_case1, "format_u32", ?U32_MAX, <<"4294967295">>},
+            %% u32 - out of range
+            {u32_case3, "format_u32", (?U32_MAX + 1) + 255, {error, "Argument value out of range for wasm type"}},
+            %% i64
+            {i64_case0, "format_i64", 0, <<"0">>},
+            {i64_case1, "format_i64", ?I64_MAX, <<"9223372036854775807">>},
+            {i64_case2, "format_i64", -(?I64_MAX + 1), <<"-9223372036854775808">>},
+            %% i64 - out of range
+            {i64_case3, "format_i64", -(?I64_MAX + 2), {error, "Argument value out of range for wasm type"}},
+            %% u64
+            {u64_case0, "format_u64", 0, <<"0">>},
+            {u64_case1, "format_u64", ?U64_MAX, <<"18446744073709551615">>},
+            %% u64 - out of range
+            {u64_case3, "format_u64", (?U64_MAX + 1) + 255, {error, "Argument value out of range for wasm type"}},
+            %% f32
+            {f32_case0, "format_f32", 0.0, <<"0.000000">>},
+            {f32_case1, "format_f32", ?F32_MAX, ?F32_MAX_STR_BIN},
+            {f32_case2, "format_f32", ?F32_MAX * 10, <<"inf">>},
+            %% f32 - special atoms
+            {f32_case3, "format_f32", '+inf', <<"inf">>},
+            {f32_case4, "format_f32", '-inf', <<"-inf">>},
+            {f32_case5, "format_f32", 'nan', <<"nan">>},
+            %% f64 - within range
+            {f64_case0, "format_f64", 0.0, <<"0.000000">>},
+            {f64_case1, "format_f64", ?F64_MAX, ?F64_MAX_STR_BIN},
+            %% We can't test this one, because it can't be represented in erlang,
+            %% see proof at end of test.
+            % {f64_case2, "format_f64", ?F64_MAX * 10, <<"inf">>},
+            %% f64 - special atoms
+            {f64_case3, "format_f64", '+inf', <<"inf">>},
+            {f64_case4, "format_f64", '-inf', <<"-inf">>},
+            {f64_case5, "format_f64", 'nan', <<"nan">>}
+        ]
+    ),
+    %% f64 representation proof
     try
         _ = ?F64_MAX * 10,
         ?assert(false)
     catch
-        error:badarith ->
-            ok
+        error:badarith -> ok
     end,
-    % f64 - +/-inf, +/-nan
-    F64Case3 = '+inf',
-    ?event({f64_case3, F64Case3}),
-    {ok, [F64StrPtr]} = call(WASM, "format_f64", [F64Case3]),
-    {ok, F64Str4} = hb_beamr_io:read_string(WASM, F64StrPtr),
-    ?assertEqual(<<"inf">>, F64Str4),
-    F64Case4 = '-inf',
-    ?event({f64_case4, F64Case4}),
-    {ok, [F64StrPtr]} = call(WASM, "format_f64", [F64Case4]),
-    {ok, F64Str5} = hb_beamr_io:read_string(WASM, F64StrPtr),
-    ?assertEqual(<<"-inf">>, F64Str5),
-    F64Case5 = 'nan',
-    ?event({f64_case5, F64Case5}),
-    {ok, [F64StrPtr]} = call(WASM, "format_f64", [F64Case5]),
-    {ok, F64Str6} = hb_beamr_io:read_string(WASM, F64StrPtr),
-    ?assertEqual(<<"nan">>, F64Str6),
     ok.
 
-read_int_test() ->
+read_value_test() ->
     {ok, File} = file:read_file("test/parse.aot"),
     {ok, WASM} = start(File),
     {ok, [BufPtr]} = call(WASM, "global_buffer", []),
-    % i32 - within i32 range ok
-    I32Case0 = <<"0\0">>,
-    ?event({i32_case0, I32Case0}),
-    ok = hb_beamr_io:write(WASM, BufPtr, I32Case0),
-    {ok, [I32Res1]} = call(WASM, "parse_i32", [BufPtr]),
-    ?assertEqual(0, I32Res1),
-    I32Case1 = <<"2147483647\0">>,
-    ?event({i32_case1, I32Case1}),
-    ok = hb_beamr_io:write(WASM, BufPtr, I32Case1),
-    {ok, [I32Res2]} = call(WASM, "parse_i32", [BufPtr]),
-    ?assertEqual(?I32_MAX, I32Res2),
-    I32Case2 = <<"-2147483648\0">>,
-    ?event({i32_case2, I32Case2}),
-    ok = hb_beamr_io:write(WASM, BufPtr, I32Case2),
-    {ok, [I32Res3]} = call(WASM, "parse_i32", [BufPtr]),
-    ?assertEqual(-(?I32_MAX + 1), I32Res3),
-    % u32 - within i32 range ok
-    U32Case0 = <<"0\0">>,
-    ?event({u32_case0, U32Case0}),
-    ok = hb_beamr_io:write(WASM, BufPtr, U32Case0),
-    {ok, [U32Res0]} = call(WASM, "parse_u32", [BufPtr]),
-    ?assertEqual(0, U32Res0),
-    U32Case1 = <<"2147483647\0">>,
-    ?event({u32_case1, U32Case1}),
-    ok = hb_beamr_io:write(WASM, BufPtr, U32Case1),
-    {ok, [U32Res1]} = call(WASM, "parse_u32", [BufPtr]),
-    ?assertEqual(?I32_MAX, U32Res1),
-    % u32 - above I32_MAX gets interpreted as signed
-    U32Case2 = <<"2147483648\0">>,
-    ?event({u32_case2, U32Case2}),
-    ok = hb_beamr_io:write(WASM, BufPtr, U32Case2),
-    {ok, [U32Res2]} = call(WASM, "parse_u32", [BufPtr]),
-    ?assertEqual(-(?I32_MAX + 1), U32Res2),
-    % i64 - within i64 range ok
-    I64Case0 = <<"0\0">>,
-    ?event({i64_case0, I64Case0}),
-    ok = hb_beamr_io:write(WASM, BufPtr, I64Case0),
-    {ok, [I64Res0]} = call(WASM, "parse_i64", [BufPtr]),
-    ?assertEqual(0, I64Res0),
-    I64Case1 = <<"9223372036854775807\0">>,
-    ?event({i64_case1, I64Case1}),
-    ok = hb_beamr_io:write(WASM, BufPtr, I64Case1),
-    {ok, [I64Res1]} = call(WASM, "parse_i64", [BufPtr]),
-    ?assertEqual(?I64_MAX, I64Res1),
-    I64Case2 = <<"-9223372036854775808\0">>,
-    ?event({i64_case2, I64Case2}),
-    ok = hb_beamr_io:write(WASM, BufPtr, I64Case2),
-    {ok, [I64Res2]} = call(WASM, "parse_i64", [BufPtr]),
-    ?assertEqual(-(?I64_MAX + 1), I64Res2),
-    % u64 - within i64 range ok
-    U64Case0 = <<"0\0">>,
-    ?event({u64_case0, U64Case0}),
-    ok = hb_beamr_io:write(WASM, BufPtr, U64Case0),
-    {ok, [U64Res0]} = call(WASM, "parse_u64", [BufPtr]),
-    ?assertEqual(0, U64Res0),
-    U64Case1 = <<"9223372036854775807\0">>,
-    ?event({u64_case1, U64Case1}),
-    ok = hb_beamr_io:write(WASM, BufPtr, U64Case1),
-    {ok, [U64Res1]} = call(WASM, "parse_u64", [BufPtr]),
-    ?assertEqual(?I64_MAX, U64Res1),
-    % u64 - above I64_MAX gets interpreted as signed
-    U64Case2 = <<"9223372036854775808\0">>,
-    ?event({u64_case2, U64Case2}),
-    ok = hb_beamr_io:write(WASM, BufPtr, U64Case2),
-    {ok, [U64Res2]} = call(WASM, "parse_u64", [BufPtr]),
-    ?assertEqual(-(?I64_MAX + 1), U64Res2),
-    ok.
-
-read_float_test() ->
-    {ok, File} = file:read_file("test/parse.aot"),
-    {ok, WASM} = start(File),
-    {ok, [BufPtr]} = call(WASM, "global_buffer", []),
-    % f32 - within f32 range ok
-    F32Case0 = <<"0.000000\0">>,
-    ok = hb_beamr_io:write(WASM, BufPtr, F32Case0),
-    {ok, [F32Res0]} = call(WASM, "parse_f32", [BufPtr]),
-    ?assertEqual(0.000000, F32Res0),
-    F32Case1 = <<?F32_MAX_STR_BIN/binary, "\0">>,
-    ok = hb_beamr_io:write(WASM, BufPtr, F32Case1),
-    {ok, [F32Res1]} = call(WASM, "parse_f32", [BufPtr]),
-    ?assertEqual(?F32_MAX, F32Res1),
-    % f32 - outside f32 range goes to inf
-    F32Case2 = <<"3402823466385288598117041834845169254400.000000\0">>,
-    ok = hb_beamr_io:write(WASM, BufPtr, F32Case2),
-    {ok, [F32Res2]} = call(WASM, "parse_f32", [BufPtr]),
-    ?assertEqual('+inf', F32Res2),
-    F32Case3 = <<"-3402823466385288598117041834845169254400.000000\0">>,
-    ok = hb_beamr_io:write(WASM, BufPtr, F32Case3),
-    {ok, [F32Res3]} = call(WASM, "parse_f32", [BufPtr]),
-    ?assertEqual('-inf', F32Res3),
-    % f32 - nan
-    F32Case4 = <<"nan\0">>,
-    ok = hb_beamr_io:write(WASM, BufPtr, F32Case4),
-    {ok, [F32Res4]} = call(WASM, "parse_f32", [BufPtr]),
-    ?assertEqual(nan, F32Res4),
-    % f64 - within f64 range ok
-    F64Case0 = <<"0.000000\0">>,
-    ok = hb_beamr_io:write(WASM, BufPtr, F64Case0),
-    {ok, [F64Res0]} = call(WASM, "parse_f64", [BufPtr]),
-    ?assertEqual(0.000000, F64Res0),
-    F64Case1 = <<?F64_MAX_STR_BIN/binary, "\0">>,
-    ok = hb_beamr_io:write(WASM, BufPtr, F64Case1),
-    {ok, [F64Res1]} = call(WASM, "parse_f64", [BufPtr]),
-    ?assertEqual(?F64_MAX, F64Res1),
-    % f64 - outside f64 range goes to inf
-    F64Case2 = <<?F64_MAX_10_STR_BIN/binary, "\0">>,
-    ok = hb_beamr_io:write(WASM, BufPtr, F64Case2),
-    {ok, [F64Res2]} = call(WASM, "parse_f64", [BufPtr]),
-    ?assertEqual('+inf', F64Res2),
-    F64Case3 = <<"-", ?F64_MAX_10_STR_BIN/binary, "\0">>,
-    ok = hb_beamr_io:write(WASM, BufPtr, F64Case3),
-    {ok, [F64Res3]} = call(WASM, "parse_f64", [BufPtr]),
-    ?assertEqual('-inf', F64Res3),
-    % f64 - nan
-    F64Case4 = <<"nan\0">>,
-    ok = hb_beamr_io:write(WASM, BufPtr, F64Case4),
-    {ok, [F64Res4]} = call(WASM, "parse_f64", [BufPtr]),
-    ?assertEqual(nan, F64Res4),
+    %% Test helper
+    ParseAssert = fun(Tag, Fun, Bin, ExpectedVal) ->
+        ?event({Tag, Bin}),
+        ok = hb_beamr_io:write(WASM, BufPtr, Bin),
+        {ok, [Res]} = call(WASM, Fun, [BufPtr]),
+        ?assertEqual(ExpectedVal, Res)
+    end,
+    %% Test cases
+    lists:foreach(
+        fun({Tag, Fun, Bin, Exp}) ->
+            ParseAssert(Tag, Fun, Bin, Exp)
+        end,
+        [
+            %% i32
+            {i32_case0, "parse_i32", <<"0\0">>, 0},
+            {i32_case1, "parse_i32", <<"2147483647\0">>, ?I32_MAX},
+            {i32_case2, "parse_i32", <<"-2147483648\0">>, -(?I32_MAX + 1)},
+            %% u32
+            {u32_case0, "parse_u32", <<"0\0">>, 0},
+            {u32_case1, "parse_u32", <<"2147483647\0">>, ?I32_MAX},
+            {u32_case2, "parse_u32", <<"2147483648\0">>, -(?I32_MAX + 1)},
+            %% i64
+            {i64_case0, "parse_i64", <<"0\0">>, 0},
+            {i64_case1, "parse_i64", <<"9223372036854775807\0">>, ?I64_MAX},
+            {i64_case2, "parse_i64", <<"-9223372036854775808\0">>, -(?I64_MAX + 1)},
+            %% u64
+            {u64_case0, "parse_u64", <<"0\0">>, 0},
+            {u64_case1, "parse_u64", <<"9223372036854775807\0">>, ?I64_MAX},
+            {u64_case2, "parse_u64", <<"9223372036854775808\0">>, -(?I64_MAX + 1)},
+            %% f32
+            {f32_case0, "parse_f32", <<"0.000000\0">>, 0.0},
+            {f32_case1, "parse_f32", <<?F32_MAX_STR_BIN/binary, "\0">>, ?F32_MAX},
+            %% f32 - special atoms
+            {f32_case2, "parse_f32", <<?F32_MAX_10_STR_BIN/binary, "\0">>, '+inf'},
+            {f32_case3, "parse_f32", <<"-", ?F32_MAX_10_STR_BIN/binary, "\0">>, '-inf'},
+            {f32_case4, "parse_f32", <<"nan\0">>, nan},
+            %% f64
+            {f64_case0, "parse_f64", <<"0.000000\0">>, 0.0},
+            {f64_case1, "parse_f64", <<?F64_MAX_STR_BIN/binary, "\0">>, ?F64_MAX},
+            %% f64 - special atoms
+            {f64_case2, "parse_f64", <<?F64_MAX_10_STR_BIN/binary, "\0">>, '+inf'},
+            {f64_case3, "parse_f64", <<"-", ?F64_MAX_10_STR_BIN/binary, "\0">>, '-inf'},
+            {f64_case4, "parse_f64", <<"nan\0">>, nan}
+        ]
+    ),
     ok.
 
 %% @doc Test standalone `hb_beamr' correctly after loading a WASM module.
