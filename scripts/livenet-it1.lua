@@ -19,6 +19,8 @@ local utils = {
 
 -- Initialize State
 Stakes = Stakes or {}  -- Stores all stakes: address -> {amount, stakeTime, cooldownStart, status}
+Unstaking = Unstaking or {}
+UnstakingIndex = UnstakingIndex or {}
 TokenProcess = TokenProcess or "" -- Address of the token process
 MinimumStake = MinimumStake or utils.toBalanceValue(10 * 10 ^ 12) -- 10 tokens minimum
 
@@ -51,7 +53,7 @@ local function initStake(address)
   end
 end
 
-function isValidStake(Msg)
+function isValidStakeReq(Msg)
     if Msg.From == TokenProcess and Msg.Action == "Credit-Notice" and Msg["X-Action"] == "Stake" then
         return true
     else
@@ -60,7 +62,7 @@ function isValidStake(Msg)
 end
 
 -- Handler for staking tokens
-Handlers.add('stake',isValidStake, function(msg)
+Handlers.add('stake',isValidStakeReq, function(msg)
   assert(TokenProcess ~= "", "Token process not set")
   assert(type(msg.Tags.Quantity) == 'string', "Stake quantity required")
   
@@ -99,10 +101,10 @@ Handlers.add('stake',isValidStake, function(msg)
     types_of_nodes = {'sev-snp','tdx','jacked-in'}
   }
   
-  assert(msg.Tags["X-MinComplainers"], "Minimum Complainers required for slashing criteria")
-  local min_complainers = tonumber(msg.Tags["X-MinComplainers"])
-  assert(min_complainers and min_complainers >= 0, "MinComplainers must be a non-negative number")
-  slashing_criteria.minimum_number_of_complainer = min_complainers
+--   assert(msg.Tags["X-MinComplainers"], "Minimum Complainers required for slashing criteria")
+--   local min_complainers = tonumber(msg.Tags["X-MinComplainers"])
+--   assert(min_complainers and min_complainers >= 0, "MinComplainers must be a non-negative number")
+--   slashing_criteria.minimum_number_of_complainer = min_complainers
 
   assert(msg.Tags["X-MaxRequestCost"] and type(msg.Tags["X-MaxRequestCost"]) == 'string', "Maximum Request Cost required and must be a string")
   
@@ -136,21 +138,115 @@ Handlers.add('unstake', Handlers.utils.hasMatchingTag("Action", "Unstake"), func
   assert(Stakes[msg.From], "No active stake found")
 
   local staked = Stakes[msg.From]
-  assert(staked.status == STATUS.STAKED, "Stake is already in cooldown")
+  local quantity = msg.Tags.Quantity
+  assert(quantity and type(quantity) == 'string', "Unstake quantity required")
+  assert(staked and bint(staked.amount) >= bint(quantity), "Insufficient staked amount") 
   
   -- Start cooldown period
-  Stakes[msg.From].cooldownStart = msg.Timestamp
-  Stakes[msg.From].status = STATUS.IN_COOLDOWN
+  local amount = utils.subtract(staked.amount, quantity)
+  Stakes[msg.From].amount = amount
+  local release_at = utils.add(msg.Timestamp, staked.lock_duration)
+  Unstaking[msg.From] = {
+    [msg.Id] = {
+      amount = msg.Tags.Quantity,
+      release_at = release_at
+    }
+  }
+  UnstakingIndex[release_at] = {
+    user = msg.From,
+    amount = quantity,
+    msgId = msg.Id
+  }
   
     msg.reply({
         Action = "Unstake-Initiated",
         Data = json.encode({
         amount = staked.amount,
-        cooldownStart = staked.cooldownStart,
-        withdrawalAvailable = utils.add(staked.cooldownStart, tostring(CooldownPeriod))
+        releaseAt = release_at,
         })
     })
 end)
+
+local finalizationHandler = function(msg)
+  local currentTimestamp = bint(msg.Timestamp)
+  local remaining = {}
+
+  for ts, entries in pairs(UnstakingIndex) do
+    if utils.isGreaterThanOrEqual(currentTimestamp,ts) then
+      for _, entry in ipairs(entries) do
+        local user = entry.user
+        local msgId = entry.msgId
+        local amount = entry.amount
+
+        -- trnasfer money
+        local function safeTransfer(target, quantity)
+        local success, result = pcall(function()
+            return Send({
+                    Target = TokenProcess,
+                    Action = "Transfer",
+                    Recipient = target,
+                    Quantity = quantity,
+                }).receive().Tags
+            end)
+            
+            if not success then
+                -- Log error, notify user
+                return {
+                    success = false,
+                    error = result
+                }
+            end
+            
+            return {
+                success = true,
+                result = result
+            }
+        end
+        
+        local sendStake = safeTransfer(user, amount)
+        if sendStake.success then
+          -- Clean up Unstaking[user][msgId]
+          if Unstaking[user] then
+            Unstaking[user][msgId] = nil
+            if next(Unstaking[user]) == nil then
+              Unstaking[user] = nil
+            end
+          end
+        else
+          -- Re-add to retry queue
+          table.insert(remaining, {
+            user = user,
+            msgId = msgId,
+            amount = amount
+          })
+        end
+
+      end
+
+      -- If any failed, reassign to same timestamp
+      if #remaining > 0 then
+        UnstakingIndex[ts] = remaining
+      else
+        UnstakingIndex[ts] = nil  -- Clean up bucket if all succeeded
+      end
+    end
+  end
+end
+
+-- Finalization handler should be called for every message
+-- changed to continue to let messages pass-through
+Handlers.prepend("staking.finalize", function (msg) return "continue" end, finalizationHandler)
+
+
+
+
+-- ==============================================================================================
+-- Old withdrawing logic, kept for reference`
+-- ==============================================================================================
+
+
+
+
 
 -- Handler for withdrawing tokens after cooldown
 Handlers.add('withdraw', Handlers.utils.hasMatchingTag("Action", "Withdraw"), function(msg)
