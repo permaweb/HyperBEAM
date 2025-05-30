@@ -4,8 +4,12 @@
 #include "wasm_c_api.h"
 #include <ei.h>
 #include <stdint.h>
+#include <math.h>
 
 extern ErlDrvTermData atom_execution_result;
+extern ErlDrvTermData atom_pos_inf;
+extern ErlDrvTermData atom_neg_inf;
+extern ErlDrvTermData atom_nan;
 
 // Unions used for bit casting from unsigned to signed ints
 union sign_i32 {
@@ -18,10 +22,18 @@ union sign_i64 {
 };
 
 enum erl_port_buffer_to_wasm_vals_rc erl_port_buffer_to_wasm_vals(const char* buff, int* index, wasm_valkind_t *val_kinds, uint32_t val_count, wasm_val_t **out_vals) {
+    DRV_TRACE("erl_port_buffer_to_wasm_vals: buff: %p, index: %d, val_kinds: %p, val_count: %d, out_vals: %p", buff, *index, val_kinds, val_count, out_vals);
+    
     int rc = ERL_PORT_BUFFER_TO_WASM_VALS_UNSPECIFIED_ERROR; // General failure
 
-    if (!buff || !index || !val_kinds || !val_count || !out_vals) {
+    if (!buff || !index || !out_vals) {
         DRV_DEBUG("Invalid arguments");
+        rc = ERL_PORT_BUFFER_TO_WASM_VALS_INVALID_ARGUMENTS;
+        goto fail0;
+    }
+
+    if (val_count > 0 && !val_kinds) {
+        DRV_DEBUG("No val kinds provided");
         rc = ERL_PORT_BUFFER_TO_WASM_VALS_INVALID_ARGUMENTS;
         goto fail0;
     }
@@ -36,7 +48,7 @@ enum erl_port_buffer_to_wasm_vals_rc erl_port_buffer_to_wasm_vals(const char* bu
     DRV_DEBUG("Decoded buffer header. Arity: %d", arity);
     
     // Strings are lists of I32s, so we need to handle them separately
-    if(type != ERL_LIST_EXT && type != ERL_STRING_EXT) {
+    if(type != ERL_LIST_EXT && type != ERL_STRING_EXT && type != ERL_NIL_EXT) {
         DRV_DEBUG("Port buffer is not a list or string, type: %c", type);
         rc = ERL_PORT_BUFFER_TO_WASM_VALS_MALFORMED_BUFFER;
         goto fail0;
@@ -324,6 +336,9 @@ enum erl_port_buffer_to_wasm_vals_rc erl_port_buffer_to_wasm_vals(const char* bu
             }
         }
         driver_free(str);
+    } else if (type == ERL_NIL_EXT) {
+        DRV_DEBUG("Decoding nil");
+        vals = driver_alloc(sizeof(wasm_val_t) * 0);
     }
 
     *out_vals = vals;
@@ -334,36 +349,67 @@ fail1:
     driver_free(vals);
 
 fail0:
-    DRV_DEBUG("Failed to convert erl port buffer to wasm vals");
+    DRV_DEBUG("Failed to convert erl port buffer to wasm vals: %d", rc);
     return rc;
 }
 
-int wasm_val_to_erl_term(ErlDrvTermData* term, const wasm_val_t* val) {
+int wasm_val_to_erl_term(ErlDrvTermData* term, wasm_val_t* val) {
     DRV_DEBUG("Adding wasm val to erl term");
     switch (val->kind) {
         case WASM_I32:
             term[0] = ERL_DRV_INT;
             term[1] = val->of.i32;
-            return 2;
+            break;
         case WASM_I64:
             term[0] = ERL_DRV_INT64;
             term[1] = (ErlDrvTermData) &val->of.i64;
-            return 2;
-        case WASM_F32:
+            break;
+        case WASM_F32: {
+            float f = val->of.f32;
+            if (!isfinite(f)) {
+                term[0] = ERL_DRV_ATOM;
+                if (isnan(f)) {
+                    term[1] = atom_nan;
+                } else if (signbit(f)) {
+                    term[1] = atom_neg_inf;
+                } else {
+                    term[1] = atom_pos_inf;
+                }
+                return 2;
+            }
+
+            /* Convert finite f32 -> f64 for ERL_DRV_FLOAT */
+            val->of.f64 = (double)f; /* widen */
             term[0] = ERL_DRV_FLOAT;
-            term[1] = (ErlDrvTermData) &val->of.f32;
+            term[1] = (ErlDrvTermData)&val->of.f64;
             return 2;
-        case WASM_F64:
+        }
+        case WASM_F64: {
+            double d = val->of.f64;
+            if (!isfinite(d)) {
+                term[0] = ERL_DRV_ATOM;
+                if (isnan(d)) {
+                    term[1] = atom_nan;
+                } else if (signbit(d)) {
+                    term[1] = atom_neg_inf;
+                } else {
+                    term[1] = atom_pos_inf;
+                }
+                return 2;
+            }
+
             term[0] = ERL_DRV_FLOAT;
-            term[1] = (ErlDrvTermData) &val->of.f64;
+            term[1] = (ErlDrvTermData)&val->of.f64;
             return 2;
+        }
         default:
             DRV_DEBUG("Unsupported result type: %d", val->kind);
-            return 0;
+            return -1;
     }
+    return 2;
 }
 
-int wasm_vals_to_erl_msg(const wasm_val_t* vals, const int val_count, ErlDrvTermData** msg, int* msg_i, int msg_base_size) {
+int wasm_vals_to_erl_msg(wasm_val_t* vals, const int val_count, ErlDrvTermData** msg, int* msg_i, int msg_base_size) {
     if (!vals || !val_count || !msg || !msg_i) {
         goto fail0;
     }
@@ -372,9 +418,9 @@ int wasm_vals_to_erl_msg(const wasm_val_t* vals, const int val_count, ErlDrvTerm
     DRV_DEBUG("Results size: %d", val_count);
     DRV_DEBUG("Reallocating msg");
     *msg = driver_realloc(*msg, sizeof(ErlDrvTermData) * (
-        msg_base_size +
-        (val_count * 2) + // Each term is 2 ErlDrvTermData
-        3
+        + msg_base_size
+        + (val_count * 2) // Each term is 2 ErlDrvTermData
+        + 3 // List tail, type, and arity
     ));
     for (size_t i = 0; i < val_count; i++) {
         int res_size = wasm_val_to_erl_term(&(*msg)[*msg_i], &vals[i]);
@@ -398,8 +444,4 @@ fail1:
 fail0:
     DRV_DEBUG("Failed to convert wasm vals to erl port buffer");
     return -1;
-}
-
-int wasm_val_kinds_to_erl_msg(const wasm_valkind_t* val_kinds, const int val_count, ErlDrvTermData** msg, int* msg_i, int msg_base_size) {
-
 }

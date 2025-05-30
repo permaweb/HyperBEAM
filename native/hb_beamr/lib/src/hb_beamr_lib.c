@@ -988,9 +988,11 @@ HB_BEAMR_LIB_API void hb_beamr_lib_free_meta_module(hb_beamr_meta_module_t *meta
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_export_func(hb_beamr_meta_module_t *meta, const char* func_name, hb_beamr_meta_func_t **out_func_meta) {
     if (!meta || !func_name || !out_func_meta) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    // printf("meta_export_func: %s\n", func_name);
     for (uint32_t i = 0; i < meta->export_count; i++) {
         hb_beamr_meta_export_t *exp = &meta->exports[i];
         if (exp->kind == WASM_IMPORT_EXPORT_KIND_FUNC) {
+            // printf("- test: %s\n", exp->name);
             if (strcmp(exp->name, func_name) == 0) {
                 *out_func_meta = &exp->func;
                 return HB_BEAMR_LIB_SUCCESS;
@@ -1022,6 +1024,7 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_meta_indirect_func(hb_beamr_lib_
         set_error_msg(ctx, "Failed to get function instance from table.");
         return rc;
     }
+    *out_func_meta = (hb_beamr_meta_func_t*)malloc(sizeof(hb_beamr_meta_func_t));
     (*out_func_meta)->param_count = wasm_func_get_param_count(target_func_inst, ctx->module_inst);
     (*out_func_meta)->result_count = wasm_func_get_result_count(target_func_inst, ctx->module_inst);
     (*out_func_meta)->param_types = (wasm_valkind_t*)malloc(sizeof(wasm_valkind_t)*(*out_func_meta)->param_count);

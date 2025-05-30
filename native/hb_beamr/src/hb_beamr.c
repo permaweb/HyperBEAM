@@ -10,6 +10,9 @@ ErlDrvTermData atom_ok;
 ErlDrvTermData atom_error;
 ErlDrvTermData atom_import;
 ErlDrvTermData atom_execution_result;
+ErlDrvTermData atom_pos_inf;
+ErlDrvTermData atom_neg_inf;
+ErlDrvTermData atom_nan;
 
 static ErlDrvData wasm_driver_start(ErlDrvPort port, char *buff) {
     ErlDrvSysInfo info;
@@ -168,7 +171,7 @@ static void handle_init(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) 
 const char* DEFAULT_INDIRECT_TABLE_NAME = "__indirect_function_table";
 
 static void handle_call(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index, enum call_type call_type) {
-    hb_beamr_lib_rc_t rc;
+    hb_beamr_lib_rc_t rc = HB_BEAMR_LIB_SUCCESS;
 
     if (!proc->is_initialized) {
         send_error(proc->port_term, "Cannot run WASM function as module not initialized.");
@@ -184,8 +187,7 @@ static void handle_call(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index, 
     memset(cr, 0, sizeof(CallRequest));
     cr->call_type = call_type;
 
-    hb_beamr_meta_func_t *func_meta = driver_alloc(sizeof(hb_beamr_meta_func_t));
-    memset(func_meta, 0, sizeof(hb_beamr_meta_func_t));
+    hb_beamr_meta_func_t *func_meta = NULL;
 
     if (call_type == CALL_EXPORT) {
         // Extract the function name and the args from the Erlang term and generate the wasm_val_vec_t
@@ -206,7 +208,7 @@ static void handle_call(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index, 
     }
 
     if (rc != HB_BEAMR_LIB_SUCCESS) {
-        send_error(proc->port_term, "Failed to get indirect function meta data");
+        send_error(proc->port_term, "Failed to get function meta data: %d. %s", rc, hb_beamr_lib_get_last_error(proc->wasm_ctx));
         driver_free(cr);
         return;
     }
@@ -218,7 +220,7 @@ static void handle_call(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index, 
         if (erc == ERL_PORT_BUFFER_TO_WASM_VALS_VALUE_OUT_OF_RANGE) {
             send_error(proc->port_term, "Argument value out of range for wasm type");
         } else {
-            send_error(proc->port_term, "Failed to decode arguments: %d", rc);
+            send_error(proc->port_term, "Failed to decode arguments: %d", erc);
         }
         // driver_free(func_meta);
         driver_free(cr);
@@ -403,5 +405,8 @@ DRIVER_INIT(wasm_driver) {
     atom_error = driver_mk_atom("error");
     atom_import = driver_mk_atom("import");
     atom_execution_result = driver_mk_atom("execution_result");
+    atom_pos_inf = driver_mk_atom("+inf");
+    atom_neg_inf = driver_mk_atom("-inf");
+    atom_nan = driver_mk_atom("nan");
     return &wasm_driver_entry;
 }

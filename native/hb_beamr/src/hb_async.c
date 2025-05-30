@@ -311,6 +311,11 @@ void wasm_execute_exported_function(void* raw) {
         drv_unlock(proc->is_running);
         return;
     }
+
+#ifdef HB_DEBUG
+    DRV_DEBUG("Exported function results:");
+    hb_beamr_utils_print_wasm_vals(results, cc->call_request.result_count);
+#endif
     
     ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 4);
     int msg_i = 0;

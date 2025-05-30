@@ -16,7 +16,7 @@ void hb_beamr_utils_print_wasm_vals(const wasm_val_t* vals, const int val_count)
                 fprintf(stderr, "- [%d]: F32 %f\n", i, vals[i].of.f32);
                 break;
             case WASM_F64:
-                fprintf(stderr, "- [%d]: F64 %f\n", i, vals[i].of.f64);
+                fprintf(stderr, "- [%d]: F64 %lf\n", i, vals[i].of.f64);
                 break;
             default:
                 fprintf(stderr, "- [%d]: Unknown result type: %d\n", i, vals[i].kind);
