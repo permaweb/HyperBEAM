@@ -366,12 +366,7 @@ send_value_test() ->
         ]
     ),
     %% f64 representation proof
-    try
-        _ = ?F64_MAX * 10,
-        ?assert(false)
-    catch
-        error:badarith -> ok
-    end,
+    try _ = ?F64_MAX * 10, ?assert(false) catch error:badarith -> ok end,
     ok.
 
 read_value_test() ->
