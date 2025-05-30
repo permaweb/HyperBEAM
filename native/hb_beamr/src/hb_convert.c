@@ -1,7 +1,6 @@
 #include "../include/hb_convert.h"
 
 #include "hb_logging.h"
-#include "wasm_c_api.h"
 #include <ei.h>
 #include <stdint.h>
 #include <math.h>
