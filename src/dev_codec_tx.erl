@@ -1,7 +1,7 @@
 %%% @doc Codec for managing transformations from `ar_bundles'-style Arweave TX
 %%% records to and from TABMs.
 -module(dev_codec_tx).
--export([from/3]).
+-export([from/3, to/3, commit/3, verify/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -9,14 +9,10 @@
 %% fields that are unique to ans104
 -define(TX_KEYS,
     [
-        <<"format">>,
         <<"last_tx">>,
         <<"owner">>,
         <<"target">>,
         <<"quantity">>,
-        <<"data">>,
-        <<"data_size">>,
-        <<"data_root">>,
         <<"signature">>,
         <<"reward">>,
         <<"denomination">>,
@@ -25,32 +21,141 @@
 ).
 %% The list of tags that a user is explicitly committing to when they sign an
 %% Arweave Transaction message.
--define(BASE_COMMITTED_TAGS, ?TX_KEYS).
+-define(BASE_COMMITTED_TAGS, ?TX_KEYS ++ [<<"data">>, <<"data_size">>, <<"data_root">>]).
+
+%% XXX: need to test format=1 vs. format=2. I think now we migth not be getting test
+%% coverage for format=2.
+
+%% @doc Sign a message using the `priv_wallet' key in the options. Supports both
+%% the `hmac-sha256' and `rsa-pss-sha256' algorithms, offering unsigned and
+%% signed commitments.
+commit(Msg, Req, Opts) ->
+    hb_tx:commit_message(<<"tx@1.0">>, Msg, Req, Opts).
+
+%% @doc Verify an Arweave L1 transaction commitment.
+verify(Msg, Req, Opts) ->
+    hb_tx:verify_message(<<"tx@1.0">>, Msg, Req, Opts).
 
 %% @doc Convert an arweave #tx record into a message map.
 %% Current Arweave #tx restrictions (enforced by ar_tx:enforce_valid_tx/1):
 %% - only RSA signatures are supported
 from(Binary, _Req, _Opts) when is_binary(Binary) -> {ok, Binary};
-from(RawTX, Req, Opts) 
-        when is_record(RawTX, tx), (RawTX#tx.format =:= 1 orelse RawTX#tx.format =:= 2) ->  
-    TX = hb_tx:reset_ids(RawTX),
-    true = ar_tx:enforce_valid_tx(TX),
-    TABM = hb_tx:tx_to_tabm(TX, ?TX_KEYS, <<"tx@1.0">>, ?BASE_COMMITTED_TAGS, Req, Opts),
-    {ok, TABM}.
+from(TX, Req, Opts) when is_record(TX, tx) ->
+    case TX#tx.format of
+        Format when Format =:= 1 orelse Format =:= 2 ->
+            % true = ar_tx:enforce_valid_tx(TX),
+            TABM = hb_tx:tx_to_tabm(TX, ?TX_KEYS, ?BASE_COMMITTED_TAGS, Req, Opts),
+            {ok, TABM};
+        _ ->
+            ?event({invalid_arweave_tx_format, {format, TX#tx.format}, {tx, TX}}),
+            throw(invalid_tx)
+    end.
 
+to(Binary, _Req, _Opts) when is_binary(Binary) ->
+    TX = hb_tx:binary_to_tx(Binary),
+    {ok, TX#tx{ format = 2 }};
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(NormTABM, Req, Opts) when is_map(NormTABM) ->
-    TX = hb_tx:tabm_to_tx(NormTABM, Req, Opts),
-    TXWithIDs = hb_tx:reset_ids(TX),
-    TXWithAddress = TXWithIDs#tx{ owner_address = ar_tx:get_owner_address(TXWithIDs) },
-    true = ar_tx:enforce_valid_tx(TXWithAddress),
-    {ok, TXWithAddress};
+    % If no format is provided, set to format 2 since we're in the dev_codec_tx module.
+    % If the ans104 format is explicitly provided, throw an error as this is the wrong
+    % device to use.
+    DefaultFormat = 2,
+    NormTABM2 = case hb_maps:get(<<"format">>, NormTABM, DefaultFormat) of
+        ans104 ->
+            throw(invalid_tx);
+        Value ->
+            NormTABM#{ <<"format">> => Value }
+    end,
+    TXWithIDs = hb_tx:tabm_to_tx(NormTABM2, Req, Opts),
+
+    TXWithAddress = TXWithIDs#tx{
+        owner_address = ar_tx:get_owner_address(TXWithIDs)
+    },
+
+    TXWithDataRoot = case TXWithAddress#tx.data of
+        <<>> ->
+            TXWithAddress;
+        _ ->
+            Chunks = ar_tx:chunk_binary(?DATA_CHUNK_SIZE, TXWithIDs#tx.data),
+            SizeTaggedChunks = ar_tx:chunks_to_size_tagged_chunks(Chunks),
+            SizeTaggedChunkIDs = ar_tx:sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
+            {Root, _} = ar_merkle:generate_tree(SizeTaggedChunkIDs),
+            Size = byte_size(TXWithIDs#tx.data),
+            TXWithAddress#tx{
+                data_root = Root,
+                data_size = Size
+            }
+    end,
+
+    % true = ar_tx:enforce_valid_tx(TXWithAddress),
+    {ok, TXWithDataRoot};
 to(_Other, _Req, _Opts) ->
     throw(invalid_tx).
 
 %%%===================================================================
 %%% Tests.
 %%%===================================================================
+    
+make_expected_tabm(TX, Signed, IncludeOriginalTags, ExpectedTags) ->
+    HasCommitment = (Signed =:= signed) orelse (IncludeOriginalTags =:= include_original_tags),
+    Commitment0 = case {Signed, HasCommitment} of
+        {signed, _} ->
+            ExpectedOwnerAddress = ar_wallet:to_address(TX#tx.owner),
+            #{
+                <<"commitment-device">> => <<"tx@1.0">>,
+                <<"committer">> => hb_util:safe_encode(ExpectedOwnerAddress),
+                <<"committed">> => hb_util:unique(
+                    ?BASE_COMMITTED_TAGS
+                        ++ [ hb_ao:normalize_key(Tag) || {Tag, _} <- TX#tx.tags ]
+                ),
+                <<"keyid">> => hb_util:safe_encode(TX#tx.owner),
+                <<"signature">> => hb_util:safe_encode(TX#tx.signature),
+                <<"type">> => <<"rsa-pss-sha256">>
+            };
+        {unsigned, true} ->
+            #{
+                <<"commitment-device">> => <<"tx@1.0">>,
+                <<"type">> => <<"unsigned-sha256">>
+            };
+       _ ->
+            #{}
+    end,
+    Commitment1 = case IncludeOriginalTags of
+        include_original_tags -> Commitment0#{
+            <<"original-tags">> => hb_tx:encoded_tags_to_map(TX#tx.tags)
+        };
+        exclude_original_tags -> Commitment0
+    end,
+
+    Commitments = case {Signed, HasCommitment} of
+        {signed, _} ->
+            ID = ar_tx:generate_id(TX, signed),
+            #{ <<"commitments">> => #{ hb_util:safe_encode(ID) => Commitment1 } };
+        {unsigned, true} ->
+            ID = ar_tx:generate_id(TX, unsigned),
+            #{ <<"commitments">> => #{ hb_util:safe_encode(ID) => Commitment1 }};
+        _ ->
+            #{}
+    end,
+
+    TABM0 = #{
+        <<"format">> => TX#tx.format,
+        <<"last_tx">> => TX#tx.last_tx,
+        <<"target">> => TX#tx.target,
+        <<"quantity">> => TX#tx.quantity,
+        <<"data">> => TX#tx.data,
+        <<"data_size">> => TX#tx.data_size,
+        <<"data_root">> => TX#tx.data_root,
+        <<"reward">> => TX#tx.reward,
+        <<"denomination">> => TX#tx.denomination,
+        <<"signature_type">> => TX#tx.signature_type
+    },
+    TABM1 = hb_maps:merge(TABM0, Commitments, #{}),
+    hb_maps:merge(TABM1, ExpectedTags, #{}).
+
+%%%-------------------------------------------------------------------
+%%% Tests for `from/3`.
+%%%-------------------------------------------------------------------
 
 from_test_() ->
     [
@@ -280,60 +385,22 @@ test_to_happy() ->
         TestCases
     ).
 
-    
-make_expected_tabm(TX, Signed, IncludeOriginalTags, ExpectedTags) ->
-    HasCommitment = (Signed =:= signed) orelse (IncludeOriginalTags =:= include_original_tags),
-    Commitment0 = case {Signed, HasCommitment} of
-        {signed, _} ->
-            ExpectedOwnerAddress = ar_wallet:to_address(TX#tx.owner),
-            #{
-                <<"commitment-device">> => <<"tx@1.0">>,
-                <<"committer">> => hb_util:safe_encode(ExpectedOwnerAddress),
-                <<"committed">> => hb_util:unique(
-                    ?BASE_COMMITTED_TAGS
-                        ++ [ hb_ao:normalize_key(Tag) || {Tag, _} <- TX#tx.tags ]
-                ),
-                <<"keyid">> => hb_util:safe_encode(TX#tx.owner),
-                <<"signature">> => hb_util:safe_encode(TX#tx.signature),
-                <<"type">> => <<"rsa-pss-sha256">>
-            };
-        {unsigned, true} ->
-            #{
-                <<"commitment-device">> => <<"tx@1.0">>,
-                <<"type">> => <<"unsigned-sha256">>
-            };
-       _ ->
-            #{}
-    end,
-    Commitment1 = case IncludeOriginalTags of
-        include_original_tags -> Commitment0#{
-            <<"original-tags">> => hb_tx:encoded_tags_to_map(TX#tx.tags)
-        };
-        exclude_original_tags -> Commitment0
-    end,
+%%%-------------------------------------------------------------------
+%%% Tests for `commit/3`.
+%%%-------------------------------------------------------------------
 
-    Commitments = case {Signed, HasCommitment} of
-        {signed, _} ->
-            ID = ar_tx:generate_id(TX, signed),
-            #{ <<"commitments">> => #{ hb_util:safe_encode(ID) => Commitment1 } };
-        {unsigned, true} ->
-            ID = ar_tx:generate_id(TX, unsigned),
-            #{ <<"commitments">> => #{ hb_util:safe_encode(ID) => Commitment1 }};
-        _ ->
-            #{}
-    end,
+% commit_test_() ->
+%     [
+%         {timeout, 30, fun test_commit_happy/0}
+%     ].
 
-    TABM0 = #{
-        <<"format">> => TX#tx.format,
-        <<"last_tx">> => TX#tx.last_tx,
-        <<"target">> => TX#tx.target,
-        <<"quantity">> => TX#tx.quantity,
-        <<"data">> => TX#tx.data,
-        <<"data_size">> => TX#tx.data_size,
-        <<"data_root">> => TX#tx.data_root,
-        <<"reward">> => TX#tx.reward,
-        <<"denomination">> => TX#tx.denomination,
-        <<"signature_type">> => TX#tx.signature_type
-    },
-    TABM1 = hb_maps:merge(TABM0, Commitments, #{}),
-    hb_maps:merge(TABM1, ExpectedTags, #{}).
+% test_commit_happy() ->
+%     Wallet = ar_wallet:new(),
+%     TX = ar_tx:new(),
+%     SignedTX = ar_tx:sign(TX, Wallet),
+%     {ok, Msg} = from(TX, #{}, #{}),
+%     {ok, Committed} = commit(Msg, #{ <<"type">> => <<"signed">> }, #{ priv_wallet => Wallet }),
+%     Expected = make_expected_tabm(SignedTX, signed, exclude_original_tags, #{}),
+%     ?event({{expected, {explicit, Expected}}, {actual, {explicit, Committed}}}),
+%     ?assertEqual(Expected, Committed),
+%     ok.

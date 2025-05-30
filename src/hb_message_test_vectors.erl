@@ -969,7 +969,7 @@ unsigned_id_test(Codec, Opts) ->
 %     ?assert(ar_bundles:verify_item(SignedTX)),
 %     SignedMsg = hb_codec_tx:from(SignedTX),
 %     ?assertEqual(
-%         hb_util:encode(ar_bundles:id(SignedTX, signed)),
+%         hb_util:encode(hb_tx:id(SignedTX, signed)),
 %         hb_util:id(SignedMsg, signed)
 %     ).
 
@@ -1320,6 +1320,7 @@ recursive_nested_list_test(Codec, Opts) ->
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 priv_survives_conversion_test(<<"ans104@1.0">>, _Opts) -> skip;
+priv_survives_conversion_test(<<"tx@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(<<"json@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
     skip;

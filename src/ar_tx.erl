@@ -5,6 +5,8 @@
 -export([enforce_valid_tx/1, enforce_valid_unsigned_tx/1, enforce_valid_signed_tx/1]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
 
+-export([chunk_binary/2, chunks_to_size_tagged_chunks/1, sized_chunks_to_sized_chunk_ids/1]).
+
 %% Used for testing
 -export([new/0]).
 
@@ -126,15 +128,16 @@ signature_data_segment_v2(TX) ->
 
 %% @doc Generate the data segment to be signed for a given v1 TX.
 signature_data_segment_v1(TX) ->
-    true = enforce_valid_tx(TX),
+    NormTX = hb_tx:normalize_data(TX),
+    true = enforce_valid_tx(NormTX),
     <<
-        (TX#tx.owner)/binary,
-        (TX#tx.target)/binary,
-        (TX#tx.data)/binary,
-        (list_to_binary(integer_to_list(TX#tx.quantity)))/binary,
-        (list_to_binary(integer_to_list(TX#tx.reward)))/binary,
-        (TX#tx.last_tx)/binary,
-        (tags_to_binary(TX#tx.tags))/binary
+        (NormTX#tx.owner)/binary,
+        (NormTX#tx.target)/binary,
+        (NormTX#tx.data)/binary,
+        (list_to_binary(integer_to_list(NormTX#tx.quantity)))/binary,
+        (list_to_binary(integer_to_list(NormTX#tx.reward)))/binary,
+        (NormTX#tx.last_tx)/binary,
+        (tags_to_binary(NormTX#tx.tags))/binary
     >>.
 
 tags_to_list(Tags) ->
@@ -388,17 +391,17 @@ enforce_valid_tx(TX) ->
     ),
     % id will be set when the transaction is signed and can be empty before then
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.id, [32]),
+        hb_util:check_size(TX#tx.id, [0, 32]),
         {invalid_field, id, TX#tx.id}
     ),
     % Arweave L1 #tx doesn't support unsigned_id
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.unsigned_id, [32]),
+        hb_util:check_size(TX#tx.unsigned_id, [0, 32]),
         {invalid_field, unsigned_id, TX#tx.unsigned_id}
     ),
     % last_tx can't be empty
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.last_tx, [32]),
+        hb_util:check_size(TX#tx.last_tx, [0, 32]),
         {invalid_field, last_tx, TX#tx.last_tx}
     ),
     % owner can't be empty
@@ -418,11 +421,6 @@ enforce_valid_tx(TX) ->
         TX,
         hb_util:check_type(TX#tx.data, binary),
         {invalid_field, data, TX#tx.data}
-    ),
-    % Arweave L1 #tx doesn't support manifest
-    hb_util:ok_or_throw(TX,
-        hb_util:check_value(TX#tx.manifest, [undefined]),
-        {invalid_field, manifest, TX#tx.manifest}
     ),
     hb_util:ok_or_throw(TX,
         hb_util:check_type(TX#tx.data_size, integer),
@@ -504,6 +502,10 @@ enforce_valid_signed_tx(TX) ->
         {invalid_field, id, TX#tx.id}
     ),
     hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.last_tx, [32]),
+        {invalid_field, last_tx, TX#tx.last_tx}
+    ),
+    hb_util:ok_or_throw(TX,
         not hb_util:check_value(TX#tx.id, [?DEFAULT_ID]),
         {invalid_field, id, TX#tx.id}
     ),
@@ -518,6 +520,11 @@ enforce_valid_signed_tx(TX) ->
     hb_util:ok_or_throw(TX,
         not hb_util:check_value(TX#tx.owner, [?DEFAULT_OWNER]),
         {invalid_field, owner, TX#tx.owner}
+    ),
+    % Arweave L1 #tx doesn't support manifest
+    hb_util:ok_or_throw(TX,
+        hb_util:check_value(TX#tx.manifest, [undefined]),
+        {invalid_field, manifest, TX#tx.manifest}
     ),
     true.
 
