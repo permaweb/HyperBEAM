@@ -5,9 +5,9 @@
 -export([key_to_atom/2]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
 -export([find_value/2, find_value/3]).
--export([deep_merge/2, number/1, list_to_numbered_map/1]).
--export([is_ordered_list/1, message_to_ordered_list/1, message_to_ordered_list/2]).
--export([is_string_list/1, to_sorted_list/1, to_sorted_keys/1]).
+-export([deep_merge/2, deep_merge/3, number/1, list_to_numbered_message/1, list_replace/3]).
+-export([is_ordered_list/2, message_to_ordered_list/1, message_to_ordered_list/2]).
+-export([is_string_list/1, to_sorted_list/1, to_sorted_list/2, to_sorted_keys/1, to_sorted_keys/2]).
 -export([hd/1, hd/2, hd/3]).
 -export([remove_common/2, to_lower/1]).
 -export([maybe_throw/2]).
@@ -19,6 +19,7 @@
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, until/1, until/2, until/3]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
+-export([unique/1]).
 -include("include/hb.hrl").
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
@@ -123,15 +124,21 @@ is_string_list(MaybeString) ->
 
 %% @doc Given a map or KVList, return a deterministically sorted list of its
 %% key-value pairs.
-to_sorted_list(Msg) when is_map(Msg) ->
-    to_sorted_list(maps:to_list(Msg));
-to_sorted_list(Msg) when is_list(Msg) ->
-    lists:sort(fun({Key1, _}, {Key2, _}) -> Key1 < Key2 end, Msg).
+to_sorted_list(Msg) ->
+    to_sorted_list(Msg, #{}).
+to_sorted_list(Msg, Opts) when is_map(Msg) ->
+	to_sorted_list(hb_maps:to_list(Msg, Opts), Opts);
+to_sorted_list(Msg = [{_Key, _} | _], _Opts) when is_list(Msg) ->
+	lists:sort(fun({Key1, _}, {Key2, _}) -> Key1 < Key2 end, Msg);
+to_sorted_list(Msg, _Opts) when is_list(Msg) ->
+	lists:sort(fun(Key1, Key2) -> Key1 < Key2 end, Msg).
 
 %% @doc Given a map or KVList, return a deterministically ordered list of its keys.
-to_sorted_keys(Msg) when is_map(Msg) ->
-    to_sorted_keys(maps:keys(Msg));
-to_sorted_keys(Msg) when is_list(Msg) ->
+to_sorted_keys(Msg) ->
+	to_sorted_keys(Msg, #{}).
+to_sorted_keys(Msg, Opts) when is_map(Msg) ->
+    to_sorted_keys(hb_maps:keys(Msg, Opts), Opts);
+to_sorted_keys(Msg, _Opts) when is_list(Msg) ->
     lists:sort(fun(Key1, Key2) -> Key1 < Key2 end, Msg).
 
 %% @doc Convert keys in a map to atoms, lowering `-' to `_'.
@@ -232,13 +239,15 @@ to_hex(Bin) when is_binary(Bin) ->
     ).
 
 %% @doc Deep merge two maps, recursively merging nested maps.
-deep_merge(Map1, Map2) when is_map(Map1), is_map(Map2) ->
-    maps:fold(
+deep_merge(Map1, Map2) ->
+    deep_merge(Map1, Map2, #{}).
+deep_merge(Map1, Map2, Opts) when is_map(Map1), is_map(Map2) ->
+    hb_maps:fold(
         fun(Key, Value2, AccMap) ->
-            case maps:find(Key, AccMap) of
+            case hb_maps:find(Key, AccMap, Opts) of
                 {ok, Value1} when is_map(Value1), is_map(Value2) ->
                     % Both values are maps, recursively merge them
-                    AccMap#{Key => deep_merge(Value1, Value2)};
+                    AccMap#{Key => deep_merge(Value1, Value2, Opts)};
                 _ ->
                     % Either the key doesn't exist in Map1 or at least one of 
                     % the values isn't a map. Simply use the value from Map2
@@ -246,7 +255,8 @@ deep_merge(Map1, Map2) when is_map(Map1), is_map(Map2) ->
             end
         end,
         Map1,
-        Map2
+        Map2,
+		Opts
     ).
 
 %% @doc Label a list of elements with a number.
@@ -257,27 +267,66 @@ number(List) ->
     ).
 
 %% @doc Convert a list of elements to a map with numbered keys.
-list_to_numbered_map(List) ->
-    maps:from_list(number(List)).
+list_to_numbered_message(Msg) when is_map(Msg) ->
+    case is_ordered_list(Msg, #{}) of
+        true -> Msg;
+        false ->
+            throw({cannot_convert_to_numbered_message, Msg})
+    end;
+list_to_numbered_message(List) ->
+    hb_maps:from_list(number(List)).
 
 %% @doc Determine if the message given is an ordered list, starting from 1.
-is_ordered_list(Msg) when is_list(Msg) -> true;
-is_ordered_list(Msg) ->
-    is_ordered_list(1, hb_ao:normalize_keys(Msg)).
-is_ordered_list(_, Msg) when map_size(Msg) == 0 -> true;
-is_ordered_list(N, Msg) ->
+is_ordered_list(Msg, _Opts) when is_list(Msg) -> true;
+is_ordered_list(Msg, Opts) ->
+    is_ordered_list(1, hb_ao:normalize_keys(Msg, Opts), Opts).
+is_ordered_list(_, Msg, _Opts) when map_size(Msg) == 0 -> true;
+is_ordered_list(N, Msg, _Opts) ->
     case maps:get(NormKey = hb_ao:normalize_key(N), Msg, not_found) of
         not_found -> false;
         _ ->
             is_ordered_list(
                 N + 1,
-                maps:without([NormKey], Msg)
+                maps:without([NormKey], Msg),
+				_Opts
             )
     end.
 
+%% @doc Replace a key in a list with a new value.
+list_replace(List, Key, Value) ->
+    lists:foldr(
+        fun(Elem, Acc) ->
+            case Elem of
+                Key when is_list(Value) -> Value ++ Acc;
+                Key -> [Value | Acc];
+                _ -> [Elem | Acc]
+            end
+        end,
+        [],
+        List
+    ).
+
+%% @doc Take a list and return a list of unique elements. The function is
+%% order-preserving.
+unique(List) ->
+    lists:foldr(
+        fun(Item, Acc) ->
+            case lists:member(Item, Acc) of
+                true -> Acc;
+                false -> [Item | Acc]
+            end
+        end,
+        [],
+        List
+    ).
+
+%% @doc Returns the intersection of two lists, with stable ordering.
+list_intersection(List1, List2) ->
+    lists:filter(fun(Item) -> lists:member(Item, List2) end, List1).
+
 %% @doc Take a message with numbered keys and convert it to a list of tuples
-%% with the associated key as an integer and a value. Optionally, it takes a
-%% standard map of HyperBEAM runtime options.
+%% with the associated key as an integer. Optionally, it takes a standard
+%% message of HyperBEAM runtime options.
 message_to_ordered_list(Message) ->
     message_to_ordered_list(Message, #{}).
 message_to_ordered_list(Message, _Opts) when ?IS_EMPTY_MESSAGE(Message) ->
@@ -333,13 +382,14 @@ hd(Message, [Key|Rest], Index, ReturnType, Opts) ->
 %% @doc Find the value associated with a key in parsed a JSON structure list.
 find_value(Key, List) ->
     find_value(Key, List, undefined).
-
-find_value(Key, Map, Default) when is_map(Map) ->
-    case maps:find(Key, Map) of
+find_value(Key, Map, Default) ->
+	find_value(Key, Map, Default, #{}).
+find_value(Key, Map, Default, Opts) when is_map(Map) ->
+    case hb_maps:find(Key, Map, Opts) of
         {ok, Value} -> Value;
         error -> Default
     end;
-find_value(Key, List, Default) ->
+find_value(Key, List, Default, _Opts) ->
     case lists:keyfind(Key, 1, List) of
         {Key, Val} -> Val;
         false -> Default
@@ -404,8 +454,18 @@ debug_fmt(X, Indent) ->
                 format_indented("[!PRINT FAIL!]", Indent);
             _ ->
                 format_indented(
-                    "[PRINT FAIL:] ~80p~n===== PRINT ERROR WAS ~p:~p =====~n~p",
-                    [X, A, B, format_trace(C, hb_opts:get(stack_print_prefixes, [], #{}))],
+                    "[PRINT FAIL:] ~80p~n===== PRINT ERROR WAS ~p:~p =====~n~s",
+                    [
+                        X,
+                        A,
+                        B,
+                        hb_util:bin(
+                            format_trace(
+                                C,
+                                hb_opts:get(stack_print_prefixes, [], #{})
+                            )
+                        )
+                    ],
                     Indent
                 )
         end
@@ -558,6 +618,8 @@ format_binary(Bin) ->
     end.
 
 %% @doc Add `,' characters to a number every 3 digits to make it human readable.
+human_int(Float) when is_float(Float) ->
+    human_int(erlang:round(Float));
 human_int(Int) ->
     lists:reverse(add_commas(lists:reverse(integer_to_list(Int)))).
 
@@ -611,7 +673,7 @@ format_trace([], _) -> [];
 format_trace([Item|Rest], Prefixes) ->
     case element(1, Item) of
         Atom when is_atom(Atom) ->
-            case is_hb_module(Atom, Prefixes) of
+            case true of %is_hb_module(Atom, Prefixes) of
                 true ->
                     [
                         format_trace(Item, Prefixes) |
@@ -624,15 +686,15 @@ format_trace([Item|Rest], Prefixes) ->
 format_trace({Func, ArityOrTerm, Extras}, Prefixes) ->
     format_trace({no_module, Func, ArityOrTerm, Extras}, Prefixes);
 format_trace({Mod, Func, ArityOrTerm, Extras}, _Prefixes) ->
-    ExtraMap = maps:from_list(Extras),
+    ExtraMap = hb_maps:from_list(Extras),
     format_indented(
         "~p:~p/~p [~s]~n",
         [
             Mod, Func, ArityOrTerm,
-            case maps:get(line, ExtraMap, undefined) of
+            case hb_maps:get(line, ExtraMap, undefined) of
                 undefined -> "No details";
                 Line ->
-                    maps:get(file, ExtraMap)
+                    hb_maps:get(file, ExtraMap)
                         ++ ":" ++ integer_to_list(Line)
             end
         ],
@@ -644,6 +706,10 @@ is_hb_module(Atom) ->
     is_hb_module(Atom, hb_opts:get(stack_print_prefixes, [], #{})).
 is_hb_module(Atom, Prefixes) when is_atom(Atom) ->
     is_hb_module(atom_to_list(Atom), Prefixes);
+is_hb_module("hb_event" ++ _, _) ->
+    % Explicitly exclude hb_event from the stack trace, as it is always included,
+    % creating noise in the output.
+    false;
 is_hb_module(Str, Prefixes) ->
     case string:tokens(Str, "_") of
         [Pre|_] ->
@@ -670,7 +736,7 @@ format_trace_short(Trace) ->
     lists:join(
         " / ",
         lists:reverse(format_trace_short(
-            hb_opts:get(short_trace_len, 3, #{}),
+            hb_opts:get(short_trace_len, 6, #{}),
             false,
             Trace,
             hb_opts:get(stack_print_prefixes, [], #{})

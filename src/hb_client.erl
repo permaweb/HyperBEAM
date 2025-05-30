@@ -27,17 +27,18 @@ resolve(Node, Msg1, Msg2, Opts) ->
     ),
     hb_http:post(
         Node,
-        maps:merge(prefix_keys(<<"1.">>, Msg1, Opts), TABM2),
+        hb_maps:merge(prefix_keys(<<"1.">>, Msg1, Opts), TABM2, Opts),
         Opts
     ).
 
 prefix_keys(Prefix, Message, Opts) ->
-    maps:fold(
+    hb_maps:fold(
         fun(Key, Val, Acc) ->
-            maps:put(<<Prefix/binary, Key/binary>>, Val, Acc)
+            hb_maps:put(<<Prefix/binary, Key/binary>>, Val, Acc, Opts)
         end,
         #{},
-        hb_message:convert(Message, tabm, Opts)
+        hb_message:convert(Message, tabm, Opts),
+		Opts
     ).
 
 routes(Node, Opts) ->
@@ -77,9 +78,9 @@ arweave_timestamp() ->
                     <<(hb_opts:get(gateway))/binary, "/block/current">>
                 ),
             Fields = hb_json:decode(Body),
-            Timestamp = maps:get(<<"timestamp">>, Fields),
-            Hash = maps:get(<<"indep_hash">>, Fields),
-            Height = maps:get(<<"height">>, Fields),
+            Timestamp = hb_maps:get(<<"timestamp">>, Fields),
+            Hash = hb_maps:get(<<"indep_hash">>, Fields),
+            Height = hb_maps:get(<<"height">>, Fields),
             {Timestamp, Height, Hash}
     end.
 

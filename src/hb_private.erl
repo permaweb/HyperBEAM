@@ -35,7 +35,7 @@ from_message(_NonMapMessage) -> #{}.
 get(Key, Msg, Opts) ->
     get(Key, Msg, not_found, Opts).
 get(InputPath, Msg, Default, Opts) ->
-    Path = hb_path:term_to_path_parts(remove_private_specifier(InputPath)),
+    Path = hb_path:term_to_path_parts(remove_private_specifier(InputPath, Opts), Opts),
     ?event({get_private, {in, InputPath}, {out, Path}}),
     % Resolve the path against the private element of the message.
     Resolve =
@@ -51,7 +51,7 @@ get(InputPath, Msg, Default, Opts) ->
 
 %% @doc Helper function for setting a key in the private element of a message.
 set(Msg, InputPath, Value, Opts) ->
-    Path = remove_private_specifier(InputPath),
+    Path = remove_private_specifier(InputPath, Opts),
     Priv = from_message(Msg),
     ?event({set_private, {in, InputPath}, {out, Path}, {value, Value}, {opts, Opts}}),
     NewPriv = hb_ao:set(Priv, Path, Value, priv_ao_opts(Opts)),
@@ -79,8 +79,8 @@ is_private(Key) ->
 	end.
 
 %% @doc Remove the first key from the path if it is a private specifier.
-remove_private_specifier(InputPath) ->
-    case is_private(hd(Path = hb_path:term_to_path_parts(InputPath))) of
+remove_private_specifier(InputPath, Opts) ->
+    case is_private(hd(Path = hb_path:term_to_path_parts(InputPath, Opts))) of
         true -> tl(Path);
         false -> Path
     end.
@@ -91,11 +91,13 @@ priv_ao_opts(Opts) ->
     Opts#{ hashpath => ignore, cache_control => [<<"no-cache">>, <<"no-store">>] }.
 
 %% @doc Unset all of the private keys in a message.
-reset(Msg) ->
+reset(Msg) when is_map(Msg) ->
     maps:without(
         lists:filter(fun is_private/1, maps:keys(Msg)),
         Msg
-    ).
+    );
+reset(Other) ->
+    Other.
 
 %%% Tests
 

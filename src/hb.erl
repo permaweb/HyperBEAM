@@ -135,9 +135,9 @@ start_mainnet(Opts) ->
     io:format(
         "Started mainnet node at http://localhost:~p~n"
         "Operator: ~s~n",
-        [maps:get(port, Opts), Address]
+        [hb_maps:get(port, Opts, undefined, Opts), Address]
     ),
-    <<"http://localhost:", (integer_to_binary(maps:get(port, Opts)))/binary>>.
+    <<"http://localhost:", (integer_to_binary(hb_maps:get(port, Opts, undefined, Opts)))/binary>>.
 
 %%% @doc Start a server with a `simple-pay@1.0' pre-processor.
 start_simple_pay() ->
@@ -159,7 +159,7 @@ do_start_simple_pay(Opts) ->
         gun,
         os_mon
     ]),
-    Port = maps:get(port, Opts),
+    Port = hb_maps:get(port, Opts, undefined, Opts),
     Processor =
         #{
             <<"device">> => <<"p4@1.0">>,
@@ -198,9 +198,11 @@ topup(Node, Amount, Recipient, Wallet) ->
 wallet() ->
     wallet(hb_opts:get(priv_key_location)).
 wallet(Location) ->
+    wallet(Location, #{}).
+wallet(Location, Opts) ->
     case file:read_file_info(Location) of
         {ok, _} ->
-            ar_wallet:load_keyfile(Location);
+            ar_wallet:load_keyfile(Location, Opts);
         {error, _} -> 
             Res = ar_wallet:new_keyfile(?DEFAULT_KEY_TYPE, Location),
             ?event({created_new_keyfile, Location, address(Res)}),

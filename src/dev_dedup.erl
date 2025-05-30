@@ -15,15 +15,15 @@ info(_M1) ->
 
 %% @doc Forward the keys function to the message device, handle all others
 %% with deduplication. We only act on the first pass.
-handle(<<"keys">>, M1, _M2, _Opts) ->
-    dev_message:keys(M1);
+handle(<<"keys">>, M1, _M2, Opts) ->
+    dev_message:keys(M1, Opts);
 handle(<<"set">>, M1, M2, Opts) ->
     dev_message:set(M1, M2, Opts);
 handle(Key, M1, M2, Opts) ->
     ?event({dedup_handle, {key, Key}, {msg1, M1}, {msg2, M2}}),
     case hb_ao:get(<<"pass">>, {as, dev_message, M1}, 1, Opts) of
         1 ->
-            Msg2ID = hb_message:id(M2, all),
+            Msg2ID = hb_message:id(M2, all, Opts),
             Dedup = hb_ao:get(<<"dedup">>, {as, dev_message, M1}, [], Opts),
             ?event({dedup_checking, {existing, Dedup}}),
             case lists:member(Msg2ID, Dedup) of
@@ -34,7 +34,8 @@ handle(Key, M1, M2, Opts) ->
                     ?event({not_seen, Msg2ID}),
                     M3 = hb_ao:set(
                         M1,
-                        #{ <<"dedup">> => [Msg2ID|Dedup] }
+                        #{ <<"dedup">> => [Msg2ID|Dedup] },
+                        Opts
                     ),
                     ?event({dedup_updated, M3}),
                     {ok, M3}

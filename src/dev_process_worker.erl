@@ -64,7 +64,7 @@ server(GroupName, Msg1, Opts) ->
                 hb_ao:resolve(
                     Msg1,
                     #{ <<"path">> => <<"compute">>, <<"slot">> => TargetSlot },
-                    maps:merge(ListenerOpts, ServerOpts)
+                    hb_maps:merge(ListenerOpts, ServerOpts, Opts)
                 ),
             ?event(worker, {work_done, {group, GroupName}, {req, Msg2}, {res, Res}}),
             send_notification(Listener, GroupName, TargetSlot, Res),
@@ -172,7 +172,7 @@ info_test() ->
     test_init(),
     M1 = dev_process:test_wasm_process(<<"test/aos-2-pure-xs.wasm">>),
     Res = hb_ao:info(M1, #{}),
-    ?assertEqual(fun dev_process_worker:group/3, maps:get(grouper, Res)).
+    ?assertEqual(fun dev_process_worker:group/3, hb_maps:get(grouper, Res, undefined, #{})).
 
 grouper_test() ->
     test_init(),

@@ -95,7 +95,8 @@ augment_definition(BaseDef, Opts) ->
         BaseDef,
         #{
             <<"scheduler">> => Address
-        }
+        },
+        Opts
     ).
 
 %%% Tests
@@ -158,7 +159,7 @@ lookup_spawn_test() ->
         ?TEST_NAME,
         Opts
     ),
-    ?assertEqual(Process1, Process2).
+    ?assertEqual(hb_cache:ensure_all_loaded(Process1, Opts), hb_cache:ensure_all_loaded(Process2, Opts)).
 
 %% @doc Test that a process can be spawned, executed upon, and its result retrieved.
 lookup_execute_test() ->

@@ -57,13 +57,13 @@ install(Base, State, Opts) ->
                 #{};
             {ok, ExistingTable, _} ->
                 ?event({existing_ao_table, ExistingTable}),
-                dev_lua:decode(ExistingTable)
+                dev_lua:decode(ExistingTable, Opts)
         end,
     ?event({base_ao_table, BaseAOTable}),
     {ok, State2} =
         luerl:set_table_keys_dec(
             [ao],
-            dev_lua:encode(BaseAOTable),
+            dev_lua:encode(BaseAOTable, Opts),
             State
         ),
     {
@@ -80,7 +80,8 @@ install(Base, State, Opts) ->
                                 lists:map(
                                     fun(Arg) ->
                                         dev_lua:decode(
-                                            luerl:decode(Arg, ImportState)
+                                            luerl:decode(Arg, ImportState),
+                                            Opts
                                         )
                                     end,
                                     RawArgs
@@ -89,7 +90,7 @@ install(Base, State, Opts) ->
                             {Res, ResState} =
                                 ?MODULE:FuncName(Args, ImportState, ExecOpts),
                             % Encode the response for return to Lua
-                            return(Res, ResState)
+                            return(Res, ResState, Opts)
                         end,
                         StateIn
                     ),
@@ -107,9 +108,9 @@ install(Base, State, Opts) ->
     }.
 
 %% @doc Helper function for returning a result from a Lua function.
-return(Result, ExecState) ->
+return(Result, ExecState, Opts) ->
     ?event(lua_import, {import_returning, {result, Result}}),
-    TableEncoded = dev_lua:encode(Result),
+    TableEncoded = dev_lua:encode(hb_cache:ensure_all_loaded(Result, Opts), Opts),
     {ReturnParams, ResultingState} =
         lists:foldr(
             fun(LuaEncoded, {Params, StateIn}) ->
@@ -127,7 +128,7 @@ return(Result, ExecState) ->
 %% (using `hb_ao:resolve_many/2') variants.
 resolve([SingletonMsg], ExecState, ExecOpts) ->
     ?event({ao_core_resolver, {msg, SingletonMsg}}),
-    ParsedMsgs = hb_singleton:from(SingletonMsg),
+    ParsedMsgs = hb_singleton:from(SingletonMsg, ExecOpts),
     ?event({parsed_msgs_to_resolve, ParsedMsgs}),
     resolve({many, ParsedMsgs}, ExecState, ExecOpts);
 resolve([Base, Path], ExecState, ExecOpts) when is_binary(Path) ->

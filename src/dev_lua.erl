@@ -2,7 +2,7 @@
 -module(dev_lua).
 -export([info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
--export([encode/1, decode/1]).
+-export([encode/2, decode/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 %%% The set of functions that will be sandboxed by default if `sandbox' is set 
@@ -198,7 +198,7 @@ functions(Base, _Req, Opts) ->
                     >>,
                     State
                 ),
-            {ok, hb_util:message_to_ordered_list(decode(Res))}
+            {ok, hb_util:message_to_ordered_list(decode(Res, Opts))}
     end.
 
 %% @doc Sandbox (render inoperable) a set of Lua functions. Each function is
@@ -253,34 +253,37 @@ compute(Key, RawBase, Req, Opts) ->
             Opts#{ hashpath => ignore }
         ),
     ?event(debug_lua, parameters_found),
+    % Resolve all hyperstate links
+    ResolvedParams = hb_cache:ensure_all_loaded(Params, Opts),
     % Call the VM function with the given arguments.
     ?event(lua,
         {calling_lua_func,
             {function, Function},
-            {args, Params},
+            {args, ResolvedParams},
             {req, Req}
         }
     ),
     process_response(
         try luerl:call_function_dec(
             [Function],
-            encode(Params),
+            encode(ResolvedParams, Opts),
             State
         )
         catch
             _:Reason:Stacktrace -> {error, Reason, Stacktrace}
         end,
-        OldPriv
+        OldPriv,
+		Opts
     ).
 
 %% @doc Process a response to a Luerl invocation. Returns the typical AO-Core
 %% HyperBEAM response format.
-process_response({ok, [Result], NewState}, Priv) ->
-    process_response({ok, [<<"ok">>, Result], NewState}, Priv);
-process_response({ok, [Status, MsgResult], NewState}, Priv) ->
+process_response({ok, [Result], NewState}, Priv, Opts) ->
+    process_response({ok, [<<"ok">>, Result], NewState}, Priv, Opts);
+process_response({ok, [Status, MsgResult], NewState}, Priv, Opts) ->
     % If the result is a HyperBEAM device return (`{Status, Msg}'), decode it 
     % and add the previous `priv' element back into the resulting message.
-    case decode(MsgResult) of
+    case decode(MsgResult, Opts) of
         Msg when is_map(Msg) ->
             ?event(lua, {response, {status, Status}, {msg, Msg}}),
             {hb_util:atom(Status), Msg#{
@@ -290,18 +293,18 @@ process_response({ok, [Status, MsgResult], NewState}, Priv) ->
             }};
         NonMsgRes -> {hb_util:atom(Status), NonMsgRes}
     end;
-process_response({lua_error, RawError, State}, _Priv) ->
+process_response({lua_error, RawError, State}, _Priv, Opts) ->
     % An error occurred while calling the Lua function. Parse the stack trace
     % and return it.
-    Error = try decode(luerl:decode(RawError, State)) catch _:_ -> RawError end,
-    StackTrace = decode_stacktrace(luerl:get_stacktrace(State), State),
+    Error = try decode(luerl:decode(RawError, State), Opts) catch _:_ -> RawError end,
+    StackTrace = decode_stacktrace(luerl:get_stacktrace(State), State, Opts),
     ?event(lua_error, {lua_error, Error, {stacktrace, StackTrace}}),
     {error, #{
         <<"status">> => 500,
         <<"body">> => Error,
-        <<"trace">> => hb_ao:normalize_keys(StackTrace)
+        <<"trace">> => hb_ao:normalize_keys(StackTrace, Opts)
     }};
-process_response({error, Reason, Trace}, _Priv) ->
+process_response({error, Reason, Trace}, _Priv, _Opts) ->
     % An Erlang error occurred while calling the Lua function. Return it.
     ?event(lua_error, {trace, Trace}),
     TraceBin = iolist_to_binary(hb_util:format_trace(Trace)),
@@ -363,40 +366,40 @@ normalize(Base, _Req, RawOpts) ->
     end.
 
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message.
-decode(EncMsg = [{_K, _V} | _]) when is_list(EncMsg) ->
-    decode(maps:map(fun(_, V) -> decode(V) end, maps:from_list(EncMsg)));
-decode(Msg) when is_map(Msg) ->
+decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
+    decode(maps:map(fun(_, V) -> decode(V, Opts) end, maps:from_list(EncMsg)), Opts);
+decode(Msg, Opts) when is_map(Msg) ->
     % If the message is an ordered list encoded as a map, decode it to a list.
-    case hb_util:is_ordered_list(Msg) of
+    case hb_util:is_ordered_list(Msg, Opts) of
         true ->
-            lists:map(fun decode/1, hb_util:message_to_ordered_list(Msg));
+            lists:map(fun(V) -> decode(V, Opts) end, hb_util:message_to_ordered_list(Msg));
         false ->
             Msg
     end;
-decode(Other) ->
+decode(Other, _Opts) ->
     Other.
 
 %% @doc Encode a HyperBEAM `structured@1.0' message into a Lua term.
-encode(Map) when is_map(Map) ->
-    case hb_util:is_ordered_list(Map) of
-        true -> encode(hb_util:message_to_ordered_list(Map));
-        false -> maps:to_list(maps:map(fun(_, V) -> encode(V) end, Map))
+encode(Map, Opts) when is_map(Map) ->
+    case hb_util:is_ordered_list(Map, Opts) of
+        true -> encode(hb_util:message_to_ordered_list(Map), Opts);
+        false -> maps:to_list(maps:map(fun(_, V) -> encode(V, Opts) end, Map))
     end;
-encode(List) when is_list(List) ->
-    lists:map(fun encode/1, List);
-encode(Atom) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
+encode(List, _Opts) when is_list(List) ->
+    lists:map(fun(V) -> encode(V, _Opts) end, List);
+encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
     hb_util:bin(Atom);
-encode(Other) ->
+encode(Other, _Opts) ->
     Other.
 
 %% @doc Parse a Lua stack trace into a list of messages.
-decode_stacktrace(StackTrace, State0) ->
-    decode_stacktrace(StackTrace, State0, []).
-decode_stacktrace([], _State, Acc) ->
+decode_stacktrace(StackTrace, State0, Opts) ->
+    decode_stacktrace(StackTrace, State0, [], Opts).
+decode_stacktrace([], _State, Acc, _Opts) ->
     lists:reverse(Acc);
-decode_stacktrace([{FuncBin, ParamRefs, FileInfo} | Rest], State0, Acc) ->
+decode_stacktrace([{FuncBin, ParamRefs, FileInfo} | Rest], State0, Acc, Opts) ->
     %% Decode all the Lua table refs into Erlang terms
-    DecodedParams = decode_params(ParamRefs, State0),
+    DecodedParams = decode_params(ParamRefs, State0, Opts),
     %% Pull out the line number
     Line = proplists:get_value(line, FileInfo),
     File = proplists:get_value(file, FileInfo, undefined),
@@ -404,7 +407,7 @@ decode_stacktrace([{FuncBin, ParamRefs, FileInfo} | Rest], State0, Acc) ->
     %% Build our message‐map
     Entry = #{
         <<"function">>   => FuncBin,
-        <<"parameters">> => hb_util:list_to_numbered_map(DecodedParams)
+        <<"parameters">> => hb_util:list_to_numbered_message(DecodedParams)
     },
     MaybeLine =
         if is_binary(File) andalso is_integer(Line) ->
@@ -419,14 +422,14 @@ decode_stacktrace([{FuncBin, ParamRefs, FileInfo} | Rest], State0, Acc) ->
         true ->
             #{}
         end,
-    decode_stacktrace(Rest, State0, [maps:merge(Entry, MaybeLine)|Acc]).
+    decode_stacktrace(Rest, State0, [maps:merge(Entry, MaybeLine)|Acc], Opts).
 
 %% @doc Decode a list of Lua references, as found in a stack trace, into a
 %% list of Erlang terms.
-decode_params([], _State) -> [];
-decode_params([Tref|Rest], State) ->
-    Decoded = decode(luerl:decode(Tref, State)),
-    [Decoded|decode_params(Rest, State)].
+decode_params([], _State, _Opts) -> [];
+decode_params([Tref|Rest], State, Opts) ->
+    Decoded = decode(luerl:decode(Tref, State), Opts),
+    [Decoded|decode_params(Rest, State, Opts)].
 
 %%% Tests
 simple_invocation_test() ->
@@ -606,87 +609,103 @@ lua_http_hook_test() ->
 
 %% @doc Call a process whose `execution-device' is set to `lua@5.3a'.
 pure_lua_process_test() ->
-    Process = generate_lua_process("test/test.lua"),
+    Process = generate_lua_process("test/test.lua", #{}),
     {ok, _} = hb_cache:write(Process, #{}),
-    Message = generate_test_message(Process),
+    Message = generate_test_message(Process, #{}),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
-    ?event({results, Results}),
     ?assertEqual(42, hb_ao:get(<<"results/output/body">>, Results, #{})).
 
 pure_lua_process_benchmark_test_() ->
-    {timeout, 30, fun() ->
-        BenchMsgs = 200,
-        Process = generate_lua_process("test/test.lua"),
-        Message = generate_test_message(Process),
-        lists:foreach(
-            fun(X) ->
-                hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
-                ?event(debug_lua, {scheduled, X})
-            end,
-            lists:seq(1, BenchMsgs)
-        ),
-        ?event(debug_lua, {executing, BenchMsgs}),
-        BeforeExec = os:system_time(millisecond),
-        {ok, _} = hb_ao:resolve(
-            Process,
-            <<"now">>,
-            #{ hashpath => ignore, process_cache_frequency => 50 }
-        ),
-        AfterExec = os:system_time(millisecond),
-        ?event(debug_lua, {execution_time, (AfterExec - BeforeExec) / BenchMsgs}),
-        hb_util:eunit_print(
-            "Computed ~p pure Lua process executions in ~ps (~.2f calls/s)",
-            [
-                BenchMsgs,
-                (AfterExec - BeforeExec) / 1000,
-                BenchMsgs / ((AfterExec - BeforeExec) / 1000)
-            ]
-        )
-    end}.
+    {timeout, 30, fun pure_lua_process_benchmark/0}.
+pure_lua_process_benchmark() ->
+    BenchMsgs = 50,
+    hb:init(),
+    Opts = #{
+        process_async_cache => true,
+        hashpath => ignore,
+        process_cache_frequency => 50
+    },
+    Process = generate_lua_process("test/test.lua", Opts),
+    {ok, _} = hb_cache:write(Process, Opts),
+    Message = generate_test_message(Process, Opts),
+    lists:foreach(
+        fun(X) ->
+            hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
+            ?event(debug_lua, {scheduled, X})
+        end,
+        lists:seq(1, BenchMsgs)
+    ),
+    ?event(debug_lua, {executing, BenchMsgs}),
+    BeforeExec = os:system_time(millisecond),
+    {ok, _} = hb_ao:resolve(
+        Process,
+        <<"now">>,
+        #{ hashpath => ignore, process_cache_frequency => 50 }
+    ),
+    AfterExec = os:system_time(millisecond),
+    ?event(debug_lua, {execution_time, (AfterExec - BeforeExec) / BenchMsgs}),
+    hb_util:eunit_print(
+        "Computed ~p pure Lua process executions in ~ps (~.2f calls/s)",
+        [
+            BenchMsgs,
+            (AfterExec - BeforeExec) / 1000,
+            BenchMsgs / ((AfterExec - BeforeExec) / 1000)
+        ]
+    ).
 
 invoke_aos_test() ->
-    Process = generate_lua_process("test/hyper-aos.lua"),
+    Opts = #{},
+    Process = generate_lua_process("test/hyper-aos.lua", Opts),
     {ok, _} = hb_cache:write(Process, #{}),
-    Message = generate_test_message(Process),
+    Message = generate_test_message(Process, Opts),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output/data">>, #{}),
     ?assertEqual(<<"1">>, Results).
 
 aos_authority_not_trusted_test() ->
-    Process = generate_lua_process("test/hyper-aos.lua"),
+    Opts = #{ priv_wallet => ar_wallet:new() },
+    Process = generate_lua_process("test/hyper-aos.lua", Opts),
     ProcID = hb_message:id(Process, all),
-    {ok, _} = hb_cache:write(Process, #{}),
-    GuestWallet = ar_wallet:new(),
-    Message = hb_message:commit(#{
-        <<"path">> => <<"schedule">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> =>
-            hb_message:commit(
-                #{
-                    <<"target">> => ProcID,
-                    <<"type">> => <<"Message">>,
-                    <<"data">> => <<"1 + 1">>,
-                    <<"random-seed">> => rand:uniform(1337),
-                    <<"action">> => <<"Eval">>,
-                    <<"from-process">> => <<"1234">>
-
-        }, GuestWallet)
-      }, GuestWallet
+    {ok, _} = hb_cache:write(Process, Opts),
+    Message = hb_message:commit(
+        #{
+            <<"path">> => <<"schedule">>,
+            <<"method">> => <<"POST">>,
+            <<"body">> =>
+                hb_message:commit(
+                    #{
+                        <<"target">> => ProcID,
+                        <<"type">> => <<"Message">>,
+                        <<"data">> => <<"1 + 1">>,
+                        <<"random-seed">> => rand:uniform(1337),
+                        <<"action">> => <<"Eval">>,
+                        <<"from-process">> => <<"1234">>
+                    },
+                    Opts
+                )
+        },
+        Opts
     ),
+    ?event({message, Message}),
     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output/data">>, #{}),
-    ?assertEqual(Results, <<"Message is not trusted.">>).
+    ?assertEqual(<<"Message is not trusted.">>, Results).
 
 %% @doc Benchmark the performance of Lua executions.
 aos_process_benchmark_test_() ->
     {timeout, 30, fun() ->
-        BenchMsgs = 200,
-        Process = generate_lua_process("test/hyper-aos.lua"),
-        Message = generate_test_message(Process),
+        BenchMsgs = 10,
+        Opts = #{
+            process_async_cache => false,
+            hashpath => ignore,
+            process_cache_frequency => 50
+        },
+        Process = generate_lua_process("test/hyper-aos.lua", Opts),
+        Message = generate_test_message(Process, Opts),
         lists:foreach(
             fun(X) ->
-                hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
+                hb_ao:resolve(Process, Message, Opts),
                 ?event(debug_lua, {scheduled, X})
             end,
             lists:seq(1, BenchMsgs)
@@ -696,7 +715,7 @@ aos_process_benchmark_test_() ->
         {ok, _} = hb_ao:resolve(
             Process,
             <<"now">>,
-            #{ hashpath => ignore, process_cache_frequency => 50 }
+            Opts
         ),
         AfterExec = os:system_time(millisecond),
         ?event(debug_lua, {execution_time, (AfterExec - BeforeExec) / BenchMsgs}),
@@ -713,8 +732,9 @@ aos_process_benchmark_test_() ->
 %%% Test helpers
 
 %% @doc Generate a Lua process message.
-generate_lua_process(File) ->
-    Wallet = hb:wallet(),
+generate_lua_process(File, Opts) ->
+    NormOpts = Opts#{ priv_wallet => maps:get(priv_wallet, Opts, hb:wallet()) },
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), NormOpts),
     {ok, Module} = file:read_file(File),
     hb_message:commit(#{
         <<"device">> => <<"process@1.0">>,
@@ -732,12 +752,12 @@ generate_lua_process(File) ->
         <<"scheduler-location">> =>
             hb_util:human_id(ar_wallet:to_address(Wallet)),
         <<"test-random-seed">> => rand:uniform(1337)
-    }, Wallet).
+    }, NormOpts).
 
 %% @doc Generate a test message for a Lua process.
-generate_test_message(Process) ->
+generate_test_message(Process, Opts) ->
     ProcID = hb_message:id(Process, all),
-    Wallet = hb:wallet(),
+    NormOpts = Opts#{ priv_wallet => maps:get(priv_wallet, Opts, hb:wallet()) },
     Code = """ 
       Count = 0
       function add() 
@@ -762,10 +782,10 @@ generate_test_message(Process) ->
                         <<"random-seed">> => rand:uniform(1337),
                         <<"action">> => <<"Eval">>
                     },
-                    Wallet
+                    NormOpts
                 )
         },
-        Wallet
+        NormOpts
     ).
 
 %% @doc Generate a stack message for the Lua process.

@@ -24,7 +24,8 @@ estimate(_, EstimateReq, NodeMsg) ->
         false ->
             Messages =
                 hb_singleton:from(
-                    hb_ao:get(<<"request">>, EstimateReq, NodeMsg)
+                    hb_ao:get(<<"request">>, EstimateReq, NodeMsg),
+                    NodeMsg
                 ),
             {ok, length(Messages) * hb_opts:get(simple_pay_price, 1, NodeMsg)}
     end.
@@ -152,7 +153,7 @@ topup(_, Req, NodeMsg) ->
 
 %% @doc Check if the request is from the operator.
 is_operator(Req, NodeMsg) ->
-    Signers = hb_message:signers(Req),
+    Signers = hb_message:signers(Req, NodeMsg),
     OperatorAddr = hb_util:human_id(hb_opts:get(operator, undefined, NodeMsg)),
     lists:any(
         fun(Signer) ->
@@ -198,9 +199,9 @@ get_balance_and_top_up_test() ->
             Node,
             Req = hb_message:commit(
                 #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
-                ClientWallet
+                Opts#{ priv_wallet => ClientWallet }
             ),
-            #{}
+            Opts
         ),
     ?event({req_signers, hb_message:signers(Req)}),
     % Balance is given during the request, before the charge is made, so we 
@@ -216,9 +217,9 @@ get_balance_and_top_up_test() ->
                     <<"amount">> => 100,
                     <<"recipient">> => ClientAddress
                 },
-                HostWallet
+                Opts#{ priv_wallet => HostWallet }
             ),
-            #{}
+            Opts
         ),
     % The balance should now be 180, as the topup will have been added and will
     % not have generated a charge in itself. The top-up did not generate a charge
@@ -229,8 +230,8 @@ get_balance_and_top_up_test() ->
             Node,
             hb_message:commit(
                 #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
-                ClientWallet
+                Opts#{ priv_wallet => ClientWallet }
             ),
-            #{}
+            Opts
         ),
     ?assertEqual(180, Res2).

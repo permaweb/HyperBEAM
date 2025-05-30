@@ -166,14 +166,19 @@ exec_dummy_device(SigningWallet, Opts) ->
                     <<"variant">> => <<"ao.N.1">>,
                     <<"content-type">> => <<"application/beam">>,
                     <<"module-name">> => ModName,
-                    <<"requires-otp-release">> => erlang:system_info(otp_release),
+                    <<"requires-otp-release">> =>
+                        hb_util:bin(erlang:system_info(otp_release)),
                     <<"body">> => Bin
-                }
+                },
+				Opts
             ),
-            SigningWallet
+            Opts
         ),
     {ok, ID} = hb_cache:write(DevMsg, Opts),
-    ?assertEqual({ok, DevMsg}, hb_cache:read(ID, Opts)),
+    % Ensure that we can read the device message from the cache and that it matches
+    % the original message.
+    {ok, ReadMsg} = hb_cache:read(ID, Opts),
+    ?assertEqual(DevMsg, hb_cache:ensure_all_loaded(ReadMsg, Opts)),
     % Create a base message with the device ID, then request a dummy path from
     % it.
     hb_ao:resolve(
@@ -279,15 +284,15 @@ generate_device_with_keys_using_args() ->
         key_using_only_state =>
             fun(State) ->
                 {ok,
-                    <<(maps:get(<<"state_key">>, State))/binary>>
+                    <<(hb_maps:get(<<"state_key">>, State))/binary>>
                 }
             end,
         key_using_state_and_msg =>
             fun(State, Msg) ->
                 {ok,
                     <<
-                        (maps:get(<<"state_key">>, State))/binary,
-                        (maps:get(<<"msg_key">>, Msg))/binary
+                        (hb_maps:get(<<"state_key">>, State))/binary,
+                        (hb_maps:get(<<"msg_key">>, Msg))/binary
                     >>
                 }
             end,
@@ -295,9 +300,9 @@ generate_device_with_keys_using_args() ->
             fun(State, Msg, Opts) ->
                 {ok,
                     <<
-                        (maps:get(<<"state_key">>, State))/binary,
-                        (maps:get(<<"msg_key">>, Msg))/binary,
-                        (maps:get(<<"opts_key">>, Opts))/binary
+                        (hb_maps:get(<<"state_key">>, State, undefined, Opts))/binary,
+                        (hb_maps:get(<<"msg_key">>, Msg, undefined, Opts))/binary,
+                        (hb_maps:get(<<"opts_key">>, Opts, undefined, Opts))/binary
                     >>
                 }
             end
@@ -493,7 +498,7 @@ set_with_device_test(Opts) ->
                 #{
                     <<"set">> =>
                         fun(State, _Msg) ->
-                            Acc = maps:get(<<"set_count">>, State, <<"">>),
+                            Acc = hb_maps:get(<<"set_count">>, State, <<"">>, Opts),
                             {ok,
                                 State#{
                                     <<"set_count">> => << Acc/binary, "." >>
@@ -523,7 +528,7 @@ deep_set_test(Opts) ->
         hb_ao:set(Msg, [<<"a">>, <<"b">>, <<"c">>], <<"2">>, Opts)).
 
 deep_set_new_messages_test() ->
-    Opts = maps:get(opts, hd(test_opts())),
+    Opts = hb_maps:get(opts, hd(test_opts())),
     % Test that new messages are created when the path does not exist.
     Msg0 = #{ <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } } },
     Msg1 = hb_ao:set(Msg0, <<"d/e">>, <<"3">>, Opts),
@@ -576,7 +581,7 @@ deep_set_with_device_test(Opts) ->
                 % A device where the set function modifies the key
                 % and adds a modified flag.
                 {Key, Val} =
-                    hd(maps:to_list(maps:without([<<"path">>, <<"priv">>], Msg2))),
+                    hd(hb_maps:to_list(hb_maps:without([<<"path">>, <<"priv">>], Msg2, Opts), Opts)),
                 {ok, Msg1#{ Key => Val, <<"modified">> => true }}
             end
     },

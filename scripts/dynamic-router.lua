@@ -377,7 +377,7 @@ function performance_test()
     -- Record the starting scores for the nodes
     local t0_node1_score = state.routes[1].nodes[1].weight
     local t0_node2_score = state.routes[1].nodes[1].weight
-  
+
     if t0_node1_score ~= t0_node2_score then
         error("Initial node scores should be equal. Received: "
             .. tostring(t0_node1_score) .. " and " .. tostring(t0_node2_score))
@@ -403,7 +403,7 @@ function performance_test()
             state = state
         }}
     )
-  
+
     -- now trigger a recalc
     _, state = recalculate(state, { body = { path = "recalculate" } }, {})
 
@@ -429,6 +429,6 @@ function performance_test()
     if t1_node2_score >= t0_node2_score then
         error("Node 2 score should have decreased!")
     end
-    
+
     return "ok"
 end

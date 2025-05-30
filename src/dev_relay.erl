@@ -124,46 +124,54 @@ call_get_test() ->
 
 %% @doc Test that the `preprocess/3' function re-routes a request to remote
 %% peers, according to the node's routing table.
-request_hook_reroute_to_nearest_test() ->
-    Peer1 = <<"https://compute-1.forward.computer">>,
-    Peer2 = <<"https://compute-2.forward.computer">>,
-    HTTPSOpts = #{ http_client => httpc },
-    {ok, Address1} = hb_http:get(Peer1, <<"/~meta@1.0/info/address">>, HTTPSOpts),
-    {ok, Address2} = hb_http:get(Peer2, <<"/~meta@1.0/info/address">>, HTTPSOpts),
-    Peers = [Address1, Address2],
+preprocessor_reroute_to_nearest_test() ->
+    Nodes = 
+        lists:map(
+            fun(_) ->
+                Node = hb_http_server:start_node(),
+                {ok, Address} =
+                    hb_http:get(
+                        Node,
+                        <<"/~meta@1.0/info/address">>,
+                        #{}
+                    ),
+                {Address, Node}
+            end,
+            lists:seq(1, 3)
+        ),
     Node =
         hb_http_server:start_node(#{
             priv_wallet => ar_wallet:new(),
             routes =>
                 [
                     #{
-                        <<"template">> => <<"/.*~process@1.0/.*">>,
+                        <<"template">> => <<"/.*/.*/.*">>,
                         <<"strategy">> => <<"Nearest">>,
-                        <<"nodes">> => [
-                            #{
-                                <<"prefix">> => Peer1,
-                                <<"wallet">> => Address1
-                            },
-                            #{
-                                <<"prefix">> => Peer2,
-                                <<"wallet">> => Address2
-                            }
-                        ]
+                        <<"nodes">> =>
+                            lists:map(
+                                fun({Address, Node}) ->
+                                    #{
+                                        <<"prefix">> => Node,
+                                        <<"wallet">> => Address
+                                    }
+                                end,
+                                Nodes
+                            )
                     }
                 ],
             on => #{ <<"request">> => #{ <<"device">> => <<"relay@1.0">> } }
         }),
-    {ok, Res} =
-        hb_http:get(
-            Node,
-            <<"/CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM~process@1.0/slot">>,
-            #{}
+    Res =
+        lists:map(
+            fun(_) ->
+                hb_util:ok(
+                    hb_http:get(
+                        Node,
+                        <<"/~meta@1.0/info/address">>,
+                        #{}
+                    )
+                )
+            end,
+            lists:seq(1, 3)
         ),
-    ?event({res, Res}),
-    HasValidSigner = lists:any(
-        fun(Peer) ->
-            lists:member(Peer, hb_message:signers(Res))
-        end,
-        Peers
-    ),
-    ?assert(HasValidSigner).
+    ?assertEqual(1, sets:size(sets:from_list(Res))).

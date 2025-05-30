@@ -95,7 +95,7 @@ do_compute(ProcID, Msg2, Opts) ->
             JSONRes = hb_ao:get(<<"body">>, Response, Opts),
             ?event({
                 delegated_compute_res_metadata,
-                {req, maps:without([<<"body">>], Response)}
+                {req, hb_maps:without([<<"body">>], Response, Opts)}
             }),
             {ok, JSONRes};
         {Err, Error} when Err == error; Err == failure ->

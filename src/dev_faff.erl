@@ -33,7 +33,7 @@ estimate(_, Msg, NodeMsg) ->
 is_admissible(Msg, NodeMsg) ->
     AllowList = hb_opts:get(faff_allow_list, [], NodeMsg),
     Req = hb_ao:get(<<"request">>, Msg, NodeMsg),
-    Signers = hb_message:signers(Req),
+    Signers = hb_message:signers(Req, NodeMsg),
     ?event(payment, {is_admissible, {signers, Signers}, {allow_list, AllowList}}),
     lists:all(
         fun(Signer) -> lists:member(Signer, AllowList) end,

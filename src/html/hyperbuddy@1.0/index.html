@@ -1,145 +1,496 @@
 <!DOCTYPE html>
 <html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link
+            rel="icon"
+            type="image/png"
+            href="http://arweave.net/zMT0qotUQUmPUYhGcgLr80XhG7GRmYXeLWWGitok6Ao"
+        />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap"
+            rel="stylesheet"
+        />
+        <link rel="stylesheet" href="/~hyperbuddy@1.0/styles.css" />
 
-<head>
-	<meta charset="UTF-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<link rel="icon" type="image/png" href="https://arweave.net/oTMNDjwfn-Mv0bJZPGmMpDPPYWqINH6lQeTVc92bwjA" />
-	<link href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap"
-		rel="stylesheet" />
-	<link rel="stylesheet" href="styles.css" />
-	<title>HyperBEAM</title>
-</head>
+        <title>HyperBEAM</title>
+    </head>
+    <body>
+        <div class="view-wrapper">
+            <div class="header">
+                <a
+                    class="graph-link"
+                    href="/~cacheviz@1.0/index?target=."
+                    target="_blank"
+                >
+                    Cache Visualizer
+                </a>
+                <div class="header-inner">
+                    <div class="header-hyperbeam-chain">
+                        <video autoplay muted loop playsinline width="500">
+                            <source
+                                src="https://arweave.net/kvebTQY2E5J7Zx-SSnsbwxIqS0-BxII9Bb0bQc__Rmg"
+                                type="video/mp4"
+                            />
+                        </video>
+                    </div>
+                    <div class="header-main">
+                        <div class="header-left">
+                            <div class="video-container">
+                                <video
+                                    autoplay
+                                    muted
+                                    loop
+                                    playsinline
+                                    width="500"
+                                    class="light-video"
+                                >
+                                    <source
+                                        src="https://arweave.net/ewmiCoSJpWpNv02F7AW5ZCp4meyaJxZHbOD4WEsuDFY"
+                                        type="video/mp4"
+                                    />
+                                    Your browser does not support the video tag.
+                                </video>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="subheader">
+                        <div class="subheader-value">
+                            <p>Status:</p>
+                            <div class="subheader-indicator-wrapper">
+                                <div class="subheader-indicator"></div>
+                                <p>Live</p>
+                            </div>
+                        </div>
+                        <div class="subheader-value">
+                            <p>Operator:</p>
+                            <button id="operator-action" disabled="true">
+                                Loading...
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-<body>
+            <div class="explorer-view">
+                <div class="signature-wrapper border-wrapper-primary">
+                    <div class="signature-line">
+                        <span>Signature</span>
+                        <p>-</p>
+                    </div>
+                    <div class="signature-line">
+                        <span>Signer</span>
+                        <p>-</p>
+                    </div>
+                </div>
+                <div class="explorer-view-flex">
+                    <div class="explorers-wrapper">
+                        <div class="explorer-wrapper">
+                            <div class="explorer-header">
+                                <p>Links</p>
+                            </div>
+                            <div id="links-explorer" class="explorer"></div>
+                            <div class="explorer-footer">
+                                <p id="links-explorer-footer-value">
+                                    (0) Links
+                                </p>
+                            </div>
+                        </div>
 
+                        <div class="explorer-wrapper">
+                            <div class="explorer-header">
+                                <p>Signed Headers</p>
+                            </div>
+                            <div
+                                id="signed-headers-explorer"
+                                class="explorer"
+                            ></div>
+                            <div class="explorer-footer">
+                                <p id="headers-explorer-footer-value">
+                                    (0) Headers
+                                </p>
+                            </div>
+                        </div>
+                    </div>
 
-	<div class="header">
-		<a class="graph-link" href="/~hyperbuddy@1.0/graph" target="_blank">
-			Cache Visualizer
-		</a>
-		<div class="header-inner">
-			<div class="header-hyperbeam-chain">
-				<video autoplay muted loop playsinline width="500">
-					<source src="https://arweave.net/kvebTQY2E5J7Zx-SSnsbwxIqS0-BxII9Bb0bQc__Rmg" type="video/mp4" />
-				</video>
-			</div>
-			<div class="header-main">
-				<div class="header-left">
-					<div class="video-container">
-						<video autoplay muted loop playsinline width="500" class="light-video">
-							<source src="https://arweave.net/ewmiCoSJpWpNv02F7AW5ZCp4meyaJxZHbOD4WEsuDFY"
-								type="video/mp4" />
-							Your browser does not support the video tag.
-						</video>
-					</div>
-				</div>
-			</div>
-			<div class="subheader">
-				<div class="subheader-value">
-					<p>Status:</p>
-					<div class="subheader-indicator-wrapper">
-						<div class="subheader-indicator"></div>
-						<p>Live</p>
-					</div>
-				</div>
-				<div class="subheader-value">
-					<p>Operator:</p>
-					<button id="operator-action" disabled="true">
-						Loading...
-					</button>
-				</div>
-			</div>
-		</div>
-	</div>
+                    <div class="visual-wrapper">
+                        <div class="tabs-wrapper">
+                            <div class="tabs">
+                                <button
+                                    class="tab-button active"
+                                    data-id="cacheviz@1.0/index"
+                                    data-tab="cacheviz-tab"
+                                >
+                                    Cacheviz
+                                </button>
+                                <button
+                                    class="tab-button"
+                                    data-id="hyperbuddy@1.0/format"
+                                    data-tab="hyperbuddy-tab"
+                                >
+                                    Hyperbuddy
+                                </button>
+                            </div>
+                        </div>
+                        <div class="visual-body"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-	<div class="section-groups">
-		<div class="section-group">
-			<div class="section">
-				<h4 class="key-metric-header section-header">Uptime</h4>
-				<div class="key-metric-wrapper">
-					<h2 id="uptime-value" class="key-metric-value">-</h2>
-					<span class="key-metric-label">Seconds</span>
-				</div>
-			</div>
-			<div class="section">
-				<h4 class="key-metric-header section-header">
-					AO-Core Executions
-				</h4>
-				<div class="key-metric-wrapper">
-					<h2 id="executions-value" class="key-metric-value">
-						-
-					</h2>
-					<span class="key-metric-label">Executions</span>
-				</div>
-			</div>
-			<div class="section">
-				<h4 class="key-metric-header section-header">
-					System Load
-				</h4>
-				<div class="key-metric-wrapper">
-					<h2 id="system-value" class="key-metric-value">-</h2>
-					<span class="key-metric-label">CPU Average</span>
-				</div>
-			</div>
-		</div>
-		<div class="section-group">
-			<div class="section">
-				<h4 class="key-metric-header section-header">
-					Read Requests Handled
-				</h4>
-				<div class="key-metric-wrapper">
-					<h2 id="read-value" class="key-metric-value">-</h2>
-					<span class="key-metric-label">Requests</span>
-				</div>
-			</div>
-			<div class="section">
-				<h4 class="key-metric-header section-header">
-					Write Requests Handled
-				</h4>
-				<div class="key-metric-wrapper">
-					<h2 id="write-value" class="key-metric-value">-</h2>
-					<span class="key-metric-label">Requests</span>
-				</div>
-			</div>
-		</div>
-	</div>
+        <script>
+            function parseHeaders(input) {
+                const out = {};
+                input
+                    .split("\n")
+                    .map((l) => l.trim())
+                    .filter((l) => l && l.includes(":"))
+                    .forEach((line) => {
+                        const idx = line.indexOf(":");
+                        const key = line.slice(0, idx).trim();
+                        const val = line.slice(idx + 1).trim();
+                        out[key] = { data: val };
+                        if (key.includes("+link")) out[key].isLink = true;
+                    });
+                return out;
+            }
 
+            /**
+             * Parse a Signature-Input header value into structured entries.
+             * @param {string} inputHeader – the raw Signature-Input header *value* (no “Signature-Input:” prefix)
+             */
+            function parseSignatureInput(inputHeader) {
+                return inputHeader.split(/\s*,\s*/).map((entry) => {
+                    // Label is everything before the first '='
+                    const eq = entry.indexOf("=");
+                    const label = entry.slice(0, eq).trim();
 
+                    // Fields are inside the first "(...)"
+                    const parenMatch = entry.match(/=\(\s*([^)]+)\s*\)/);
+                    const fields = parenMatch
+                        ? Array.from(
+                              parenMatch[1].matchAll(/"([^"]+)"/g),
+                              (m) => m[1]
+                          )
+                        : [];
 
-	<div class="tabs-wrapper">
-		<div class="tabs">
-			<button class="tab-button active" data-tab="devices-tab">
-				Devices
-			</button>
-			<button class="tab-button" data-tab="metrics-tab">
-				Metrics
-			</button>
-			<button class="tab-button" data-tab="console-tab">
-				Console
-			</button>
-		</div>
+                    // Pull out any ;key="value" pairs
+                    const paramRegex = /;\s*([^=;\s]+)\s*=\s*"([^"]*)"/g;
+                    const params = {};
+                    let m;
+                    while ((m = paramRegex.exec(entry)) !== null) {
+                        params[m[1]] = m[2];
+                    }
 
-		<div id="devices-tab" class="tab-content active">
-			<div id="info-section-lines" class="device-cards-container">
-				<div class="info-line">
-					<p>Loading...</p>
-				</div>
-			</div>
-		</div>
+                    return {
+                        label,
+                        fields,
+                        alg: params.alg || "",
+                        keyid: params.keyid || "",
+                        ...(params.tag ? { tag: params.tag } : {}),
+                    };
+                });
+            }
 
-		<div id="metrics-tab" class="tab-content">
-			<div id="metrics-section"></div>
-		</div>
+            function joinHeaders(headers) {
+                return Array.from(headers.entries())
+                    .map(([name, value]) => `${name}: ${value}`)
+                    .join("\n");
+            }
 
-		<div id="console-tab" class="tab-content">
-			<div id="console-section"></div>
-		</div>
+            /**
+             * Given your parsed headers object (from parseHeaders) and the raw
+             * Signature-Input header value, return a new object containing
+             * only those headers which were covered by the signature-input.
+             */
+            function filterSignedHeaders(parsedHeaders, signatureInputValue) {
+                const sigInputs = parseSignatureInput(signatureInputValue);
 
-	</div>
+                // Collect all the field names covered
+                const covered = new Set(
+                    sigInputs.flatMap((si) =>
+                        si.fields.map((f) => f.toLowerCase())
+                    )
+                );
 
-	<!-- Load modular JavaScript files -->
-	<script type="module" src="main.js"></script>
-</body>
+                // Filter parsedHeaders keys by membership in covered
+                return Object.fromEntries(
+                    Object.entries(parsedHeaders).filter(([headerName]) =>
+                        covered.has(headerName.toLowerCase())
+                    )
+                );
+            }
 
+            /**
+             * @param {string} sigInputRaw
+             * @returns {Promise<string>} the derived “address” of the first non-HMAC signer
+             */
+            async function getSignerAddress(sigInputRaw) {
+                const entries = parseSignatureInput(sigInputRaw);
+                if (!entries.length) return "Unknown";
+
+                // Pick the first entry whose alg isn’t hmac-sha256 (i.e. the real pubkey)
+                const realEntry =
+                    entries.find(
+                        (e) => e.alg.toLowerCase() !== "hmac-sha256"
+                    ) || entries[0];
+                const rawKeyId = realEntry.keyid;
+
+                // Now decode it to bytes (base64url → Uint8Array)
+                const pubKeyBytes = base64UrlToUint8Array(rawKeyId);
+
+                // sha-256 the public key bytes
+                const hash = await crypto.subtle.digest("SHA-256", pubKeyBytes);
+                const hashArr = new Uint8Array(hash);
+
+                // base64url-encode the hash to get your “address”
+                const address = btoa(String.fromCharCode(...hashArr))
+                    .replace(/\+/g, "-")
+                    .replace(/\//g, "_")
+                    .replace(/=+$/, "");
+
+                return address;
+            }
+
+            /** Decode base64url string → Uint8Array */
+            function base64UrlToUint8Array(b64url) {
+                let b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+                // Pad to multiple of 4
+                while (b64.length % 4) b64 += "=";
+                const bin = atob(b64);
+                const arr = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) {
+                    arr[i] = bin.charCodeAt(i);
+                }
+                return arr;
+            }
+
+            async function renderExplorer(container, parsed, depth = 0) {
+                const body = document.createElement("div");
+                body.className = "explorer-body";
+
+                Object.entries(parsed).forEach(
+                    ([headerKey, { data, isLink }], idx, arr) => {
+                        const wrapper = document.createElement("div");
+                        wrapper.className = "explorer-body-row-wrapper";
+
+                        const row = document.createElement("div");
+                        row.className = "explorer-body-row";
+                        row.style.paddingLeft = `${depth * 20 + 15}px`;
+
+                        let arrow, nestedBody;
+                        if (isLink) {
+                            row.classList.add("explorer-action");
+
+                            arrow = document.createElement("span");
+                            arrow.className = "explorer-body-row-indicator";
+                            row.appendChild(arrow);
+
+                            wrapper._loaded = false;
+                            wrapper._isOpen = false;
+
+                            row.addEventListener("click", async () => {
+                                if (!wrapper._loaded) {
+                                    wrapper._loaded = true;
+                                    try {
+                                        const res = await fetch(
+                                            `${window.location.origin}/${data}`
+                                        );
+                                        const raw = joinHeaders(
+                                            res.headers
+                                        ).trim();
+                                        const child = parseHeaders(raw);
+
+                                        await renderExplorer(
+                                            nestedBody,
+                                            child,
+                                            depth + 1
+                                        );
+                                    } catch (e) {
+                                        console.error("Fetch failed:", e);
+                                    }
+                                    wrapper._isOpen = true;
+                                    nestedBody.style.display = "flex";
+                                    row.classList.add("explorer-body-row-open");
+                                    arrow.classList.add(
+                                        "explorer-body-row-indicator-open"
+                                    );
+                                } else {
+                                    wrapper._isOpen = !wrapper._isOpen;
+                                    if (wrapper._isOpen) {
+                                        nestedBody.style.display = "flex";
+                                        row.classList.add(
+                                            "explorer-body-row-open"
+                                        );
+                                        arrow.classList.add(
+                                            "explorer-body-row-indicator-open"
+                                        );
+                                    } else {
+                                        nestedBody.style.display = "none";
+                                        row.classList.remove(
+                                            "explorer-body-row-open"
+                                        );
+                                        arrow.classList.remove(
+                                            "explorer-body-row-indicator-open"
+                                        );
+                                    }
+                                }
+                            });
+                        }
+
+                        const keySpan = document.createElement("span");
+                        keySpan.textContent = headerKey + ":";
+                        row.appendChild(keySpan);
+
+                        const value = document.createElement("p");
+                        if (isLink)
+                            value.classList.add("explorer-body-link-value");
+                        value.textContent = data;
+                        row.appendChild(value);
+
+                        wrapper.appendChild(row);
+
+                        nestedBody = document.createElement("div");
+                        nestedBody.className = "explorer-body";
+                        nestedBody.style.display = "none";
+                        wrapper.appendChild(nestedBody);
+
+                        body.appendChild(wrapper);
+                    }
+                );
+
+                container.appendChild(body);
+            }
+
+            function renderSignature(signature, signer) {
+                const wrapper = document.querySelector(".signature-wrapper");
+
+                while (wrapper.firstChild) {
+                    wrapper.removeChild(wrapper.firstChild);
+                }
+
+                const signatureLine = document.createElement("div");
+                signatureLine.classList.add("signature-line");
+
+                const signatureKey = document.createElement("span");
+                signatureKey.innerText = "Signature";
+                signatureLine.appendChild(signatureKey);
+
+                const signatureValue = document.createElement("p");
+                signatureValue.innerText = signature;
+                signatureLine.appendChild(signatureValue);
+
+                const signerLine = document.createElement("div");
+                signerLine.classList.add("signature-line");
+
+                const signerKey = document.createElement("span");
+                signerKey.innerText = "Signer";
+                signerLine.appendChild(signerKey);
+
+                const signerValue = document.createElement("p");
+                signerValue.classList.add("tx-address");
+                signerValue.innerText = signer;
+                signerLine.appendChild(signerValue);
+
+                wrapper.appendChild(signatureLine);
+                wrapper.appendChild(signerLine);
+            }
+
+            async function renderInitialMessage() {
+                const res = await fetch(window.location.href);
+                const raw = joinHeaders(res.headers).trim();
+                const parsed = parseHeaders(raw);
+
+                const signature = res.headers.get("signature");
+                if (signature) {
+                    const signatureInput =
+                        parsed["signature-input"]?.data ?? "";
+
+                    const signer = signatureInput
+                        ? await getSignerAddress(signatureInput)
+                        : "Unknown";
+
+                    renderSignature(signature, signer);
+                }
+
+                // Get the signature-input header string
+                const sigInputRaw = parsed["signature-input"]?.data;
+
+                // If it's missing, render everything
+                const toRender = sigInputRaw
+                    ? filterSignedHeaders(parsed, sigInputRaw)
+                    : parsed;
+
+                renderExplorer(
+                    document.getElementById("signed-headers-explorer"),
+                    toRender,
+                    0
+                );
+
+                document.getElementById(
+                    "headers-explorer-footer-value"
+                ).innerText = `(${Object.keys(toRender).length}) Headers`;
+
+                let links = {};
+                for (const key of Object.keys(parsed)) {
+                    if (key.includes("+link")) {
+                        links[key] = parsed[key];
+                    }
+                }
+
+                if (Object.keys(links).length > 0) {
+                    renderExplorer(
+                        document.getElementById("links-explorer"),
+                        links,
+                        0
+                    );
+
+                    document.getElementById(
+                        "links-explorer-footer-value"
+                    ).innerText = `(${Object.keys(links).length}) Links`;
+                }
+            }
+
+            document.addEventListener("DOMContentLoaded", () => {
+                const container = document.querySelector(".visual-body");
+                const tabs = document.querySelectorAll(".tab-button");
+
+                const makeIframe = (device) => {
+                    const iframe = document.createElement("iframe");
+                    iframe.src = `${window.location.href}/~${device}`;
+                    iframe.id = "preview-frame";
+                    iframe.style.width = "100%";
+                    iframe.style.height = "100%";
+                    return iframe;
+                };
+                
+                const initial = document.querySelector(".tab-button.active");
+                if (initial)
+                    container.appendChild(makeIframe(initial.dataset.id));
+
+                tabs.forEach((tab) => {
+                    tab.addEventListener("click", () => {
+                        document
+                            .querySelectorAll(".tab-button.active")
+                            .forEach((t) => t.classList.remove("active"));
+                        tab.classList.add("active");
+
+                        const old = document.getElementById("preview-frame");
+                        if (old) old.remove();
+
+                        container.appendChild(makeIframe(tab.dataset.id));
+                    });
+                });
+            });
+
+            renderInitialMessage();
+        </script>
+
+        <script type="module">
+            import { fetchInfo } from "/~hyperbuddy@1.0/devices.js"
+
+            fetchInfo();
+        </script>
+    </body>
 </html>
