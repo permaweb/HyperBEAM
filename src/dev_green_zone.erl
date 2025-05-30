@@ -298,8 +298,8 @@ become(_M1, _M2, Opts) ->
             ?event(green_zone, {become, getting_key, NodeLocation, NodeID}),
             {ok, KeyResp} = hb_http:get(NodeLocation, 
                                        <<"/~greenzone@1.0/key">>, Opts),
-            Signers = hb_message:signers(KeyResp),
-            case hb_message:verify(KeyResp, Signers) and 
+            Signers = hb_message:signers(KeyResp, Opts),
+            case hb_message:verify(KeyResp, Signers, Opts) and 
                  lists:member(NodeID, Signers) of
                 false ->
                     % The response is not from the expected peer.
@@ -410,9 +410,9 @@ join_peer(PeerLocation, PeerID, _M1, M2, InitOpts) ->
                     ?event(green_zone, {join, join_response, PeerLocation, PeerID, Resp}),
                     % Ensure that the response is from the expected peer, avoiding
                     % the risk of a man-in-the-middle attack.
-                    Signers = hb_message:signers(Resp),
+                    Signers = hb_message:signers(Resp, Opts),
                     ?event(green_zone, {join, signers, Signers}),
-                    IsVerified = hb_message:verify(Resp, Signers),
+                    IsVerified = hb_message:verify(Resp, Signers, Opts),
                     ?event(green_zone, {join, verify, IsVerified}),
                     IsPeerSigner = lists:member(PeerID, Signers),
                     ?event(green_zone, {join, peer_is_signer, IsPeerSigner, PeerID}),	
@@ -518,10 +518,10 @@ maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) ->
                     {error, <<"Could not get required config from peer.">>};
                 {ok, RequiredConfig} ->
                     % Print the required config response.
-                    Signers = hb_message:signers(RequiredConfig),
+                    Signers = hb_message:signers(RequiredConfig, InitOpts),
                     ?event(green_zone, {req_conf_signers, {explicit, Signers}}),
                     % Extract and log the verification steps
-                    IsVerified = hb_message:verify(RequiredConfig, Signers),
+                    IsVerified = hb_message:verify(RequiredConfig, Signers, InitOpts),
                     ?event(green_zone, 
                         {req_opts, {verified, IsVerified}, {signers, Signers}}
                     ),
@@ -565,21 +565,21 @@ maybe_set_zone_opts(PeerLocation, PeerID, Req, InitOpts) ->
 calculate_node_message(RequiredOpts, Req, true) ->
     % Remove irrelevant fields from the request.
     StrippedReq =
-        maps:without(
+        hb_maps:without(
             [
                 <<"green_zone_adopt_config">>, <<"green_zone_peer_location">>,
                 <<"green_zone_peer_id">>, <<"path">>, <<"method">>
             ],
-            hb_message:uncommitted(Req)
+            hb_message:uncommitted(Req, RequiredOpts)
         ),
     % Convert atoms to binaries in RequiredOpts to prevent
     % binary_to_existing_atom errors.
     % The required config should override the request, if necessary.
-    maps:merge(StrippedReq, RequiredOpts);
+    hb_maps:merge(StrippedReq, RequiredOpts);
 calculate_node_message(RequiredOpts, Req, <<"true">>) ->
     calculate_node_message(RequiredOpts, Req, true);
 calculate_node_message(RequiredOpts, Req, List) when is_list(List) ->
-    calculate_node_message(RequiredOpts, maps:with(List, Req), true);
+    calculate_node_message(RequiredOpts, hb_maps:with(List, Req), true);
 calculate_node_message(RequiredOpts, Req, BinList) when is_binary(BinList) ->
     calculate_node_message(RequiredOpts, hb_util:list(BinList), Req).
 

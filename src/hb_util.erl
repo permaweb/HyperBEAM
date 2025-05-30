@@ -5,7 +5,7 @@
 -export([key_to_atom/2]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
 -export([find_value/2, find_value/3]).
--export([deep_merge/2, deep_merge/3, number/1, list_to_numbered_message/1, list_replace/3]).
+-export([deep_merge/3, number/1, list_to_numbered_message/1, list_replace/3]).
 -export([is_ordered_list/2, message_to_ordered_list/1, message_to_ordered_list/2]).
 -export([is_string_list/1, to_sorted_list/1, to_sorted_list/2, to_sorted_keys/1, to_sorted_keys/2]).
 -export([hd/1, hd/2, hd/3]).
@@ -239,8 +239,6 @@ to_hex(Bin) when is_binary(Bin) ->
     ).
 
 %% @doc Deep merge two maps, recursively merging nested maps.
-deep_merge(Map1, Map2) ->
-    deep_merge(Map1, Map2, #{}).
 deep_merge(Map1, Map2, Opts) when is_map(Map1), is_map(Map2) ->
     hb_maps:fold(
         fun(Key, Value2, AccMap) ->

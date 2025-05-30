@@ -332,12 +332,12 @@ post_location(Msg1, RawReq, Opts) ->
             not_found -> RawReq;
             Target -> hb_ao:get(Target, RawReq, not_found, Opts)
         end,
-    {ok, OnlyCommitted} = hb_message:with_only_committed(Req),
+    {ok, OnlyCommitted} = hb_message:with_only_committed(Req, Opts),
     ?event(scheduler_location,
         {scheduler_location_registration_request, OnlyCommitted}
     ),
     % Gather metadata for request validation.
-    Signers = hb_message:signers(OnlyCommitted),
+    Signers = hb_message:signers(OnlyCommitted, Opts),
     Self =
         hb_util:human_id(
             ar_wallet:to_address(

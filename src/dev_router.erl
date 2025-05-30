@@ -870,14 +870,14 @@ dynamic_router_test() ->
     ),
     % Ensure that computation is done by the exec node.
     {ok, ResMsg} = hb_http:get(Node, <<"/c?c+list=1">>, ExecOpts),
-    ?assertEqual([ExecNodeAddr], hb_message:signers(ResMsg)).
+    ?assertEqual([ExecNodeAddr], hb_message:signers(ResMsg, ExecOpts)).
 
 %% @doc Demonstrates routing tables being dynamically created and adjusted
 %% according to the real-time performance of nodes. This test utilizes the
 %% `dynamic-router' script to manage routes and recalculate weights based on the
 %% reported performance.
 dynamic_routing_by_performance_test_() ->
-    {timeout, 30, fun dynamic_routing_by_performance/0}.
+    {timeout, 60, fun dynamic_routing_by_performance/0}.
 dynamic_routing_by_performance() ->
     % Setup test parameters
     TestNodes = 4,

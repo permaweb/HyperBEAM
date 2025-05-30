@@ -6,7 +6,7 @@
         <link
             rel="icon"
             type="image/png"
-            href="http://arweave.net/zMT0qotUQUmPUYhGcgLr80XhG7GRmYXeLWWGitok6Ao"
+            href="https://arweave.net/rBcLwnVU2fWNEKUW8PY0TzEAPuCHMj2Vp6z6CedHJf0"
         />
         <link
             href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap"
@@ -17,63 +17,46 @@
     </head>
 
     <body>
-        <div class="view-wrapper">
-            <div class="header">
+        <header>
+            <div class="header-inner">
+                <div class="logo">
+                    <img
+                        src="https://arweave.net/Ggr1cz-jbiDS2gAVFHxkoKzmNQQD4WcMTfipWyuEmgY"
+                        alt="hyperbeam-logo"
+                    />
+                    <p>Dashboard</p>
+                </div>
+
                 <a
                     class="graph-link"
-                    href="/~cacheviz@1.0/index?target=."
+                    href="/~hyperbuddy@1.0/graph"
                     target="_blank"
                 >
                     Cache Visualizer
                 </a>
-                <div class="header-inner">
-                    <div class="header-hyperbeam-chain">
-                        <video autoplay muted loop playsinline width="500">
-                            <source
-                                src="https://arweave.net/kvebTQY2E5J7Zx-SSnsbwxIqS0-BxII9Bb0bQc__Rmg"
-                                type="video/mp4"
-                            />
-                        </video>
-                    </div>
-                    <div class="header-main">
-                        <div class="header-left">
-                            <div class="video-container">
-                                <video
-                                    autoplay
-                                    muted
-                                    loop
-                                    playsinline
-                                    width="500"
-                                    class="light-video"
-                                >
-                                    <source
-                                        src="https://arweave.net/ewmiCoSJpWpNv02F7AW5ZCp4meyaJxZHbOD4WEsuDFY"
-                                        type="video/mp4"
-                                    />
-                                    Your browser does not support the video tag.
-                                </video>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="subheader">
-                        <div class="subheader-value">
-                            <p>Status:</p>
-                            <div class="subheader-indicator-wrapper">
-                                <div class="subheader-indicator"></div>
-                                <p>Live</p>
-                            </div>
-                        </div>
-                        <div class="subheader-value">
-                            <p>Operator:</p>
-                            <button id="operator-action" disabled="true">
-                                Loading...
-                            </button>
-                        </div>
-                    </div>
-                </div>
             </div>
-
+        </header>
+        <div class="view-wrapper">
+            <div class="message-id-wrapper">
+                <img
+                    src="https://arweave.net/S3qpd4CF_VSPD9DfVaWD4McFQy6XAUto2FLidcjofpM"
+                    alt="hyperbeam-flag-flow"
+                    width="20px"
+                />
+                <span>Node Id:</span>
+                <p class="message-value">...</p>
+            </div>
             <div class="section-groups">
+                <div class="bg-video">
+                    <video
+                        src="https://arweave.net/tJd9JJa8ap5dHHvRAAPOE4Gh6VAY4h8KpBY1gzrtVWo"
+                        alt="bg-hyperbeam-video"
+                        autoplay
+                        loop
+                        muted
+                        playsinline
+                    ></video>
+                </div>
                 <div class="section-group">
                     <div class="section">
                         <h4 class="key-metric-header section-header">Uptime</h4>
@@ -131,20 +114,29 @@
 
             <div class="tabs-wrapper">
                 <div class="tabs">
-                    <button class="tab-button active" data-tab="devices-tab">
+                    <button
+                        class="tab-button dashboard-tab-button active"
+                        data-tab="devices-tab"
+                    >
                         Devices
                     </button>
-                    <button class="tab-button" data-tab="metrics-tab">
+                    <button
+                        class="tab-button dashboard-tab-button"
+                        data-tab="metrics-tab"
+                    >
                         Metrics
                     </button>
-                    <button class="tab-button" data-tab="console-tab">
+                    <button
+                        class="tab-button dashboard-tab-button"
+                        data-tab="console-tab"
+                    >
                         Console
                     </button>
                 </div>
 
                 <div id="devices-tab" class="tab-content active">
                     <div id="info-section-lines" class="device-cards-container">
-                        <div class="init-loading-wrapper">
+                        <div class="info-line">
                             <p>Loading...</p>
                         </div>
                     </div>
@@ -152,7 +144,6 @@
 
                 <div id="metrics-tab" class="tab-content">
                     <div id="metrics-section"></div>
-                    <div class="metrics-footer"></div>
                 </div>
 
                 <div id="console-tab" class="tab-content">
@@ -160,6 +151,19 @@
                 </div>
             </div>
         </div>
+        <footer>
+            <div class="footer-inner">
+                <div class="subheader">
+                    <div class="subheader-value">
+                        <p>Status:</p>
+                        <div class="subheader-indicator-wrapper">
+                            <div class="subheader-indicator"></div>
+                            <p>Live</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </footer>
 
         <!-- Load modular JavaScript files -->
         <script type="module" src="main.js"></script>

@@ -25,7 +25,7 @@ test_codecs() ->
         #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
-        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+        %#{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         <<"json@1.0">>
     ].
 

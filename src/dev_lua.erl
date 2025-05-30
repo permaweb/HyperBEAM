@@ -736,23 +736,26 @@ generate_lua_process(File, Opts) ->
     NormOpts = Opts#{ priv_wallet => maps:get(priv_wallet, Opts, hb:wallet()) },
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), NormOpts),
     {ok, Module} = file:read_file(File),
-    hb_message:commit(#{
-        <<"device">> => <<"process@1.0">>,
-        <<"type">> => <<"Process">>,
-        <<"scheduler-device">> => <<"scheduler@1.0">>,
-        <<"execution-device">> => <<"lua@5.3a">>,
-        <<"module">> => #{
-            <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Module
+    hb_message:commit(
+        #{
+            <<"device">> => <<"process@1.0">>,
+            <<"type">> => <<"Process">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"execution-device">> => <<"lua@5.3a">>,
+            <<"module">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => Module
+            },
+            <<"authority">> => [ 
+                hb:address(), 
+                <<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
+            ], 
+            <<"scheduler-location">> =>
+                hb_util:human_id(ar_wallet:to_address(Wallet)),
+            <<"test-random-seed">> => rand:uniform(1337)
         },
-        <<"authority">> => [ 
-          hb:address(), 
-          <<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
-        ], 
-        <<"scheduler-location">> =>
-            hb_util:human_id(ar_wallet:to_address(Wallet)),
-        <<"test-random-seed">> => rand:uniform(1337)
-    }, NormOpts).
+        NormOpts
+    ).
 
 %% @doc Generate a test message for a Lua process.
 generate_test_message(Process, Opts) ->

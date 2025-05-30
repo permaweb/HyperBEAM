@@ -130,7 +130,8 @@ do_push(Process, Assignment, Opts) ->
                                 <<"message">> => Msg
                             }
                     end,
-                    hb_ao:normalize_keys(Outbox)
+                    Outbox,
+                    Opts
                 ),
             {ok, maps:merge(Downstream, AdditionalRes#{
                 <<"slot">> => Slot,

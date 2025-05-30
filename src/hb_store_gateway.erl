@@ -266,3 +266,39 @@ store_opts_test() ->
         ),
     ?event(debug_gateway, {res, Res}),
     ?assertEqual(<<"Hello World">>,hb_ao:get(<<"data">>, Res)).
+
+%% @doc Test that items retreived from the gateway store are verifiable.
+verifiability_test() ->
+    hb_http_server:start_node(#{}),
+    {ok, Message} =
+        hb_cache:read(
+            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+            #{
+                store =>
+                    [
+                        #{
+                            <<"store-module">> => hb_store_gateway,
+                            <<"store">> => false
+                        }
+                    ]
+            }
+        ),
+    % Ensure that the message is verifiable after being converted to 
+    % httpsig@1.0 and back to structured@1.0.
+    HTTPSig =
+        hb_message:convert(
+            Message,
+            <<"httpsig@1.0">>,
+            <<"structured@1.0">>,
+            #{}
+        ),
+    ?assert(hb_message:verify(HTTPSig)),
+    Structured =
+        hb_message:convert(
+            HTTPSig,
+            <<"structured@1.0">>,
+            <<"httpsig@1.0">>,
+            #{}
+        ),
+    ?event(debug, {verifying, {structured, Structured}, {original, Message}}),
+    ?assert(hb_message:verify(Structured)).

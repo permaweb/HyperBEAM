@@ -1,6 +1,7 @@
 %%% @doc A module that helps to render given Key graphs into the .dot files
 -module(hb_cache_render).
 -export([render/1, render/2, cache_path_to_dot/2, cache_path_to_dot/3, dot_to_svg/1]).
+-export([get_graph_data/3]).
 % Preparing data for testing
 -export([prepare_unsigned_data/0, prepare_signed_data/0,
     prepare_deeply_nested_complex_message/0]).

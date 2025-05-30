@@ -6,7 +6,7 @@
         <link
             rel="icon"
             type="image/png"
-            href="http://arweave.net/zMT0qotUQUmPUYhGcgLr80XhG7GRmYXeLWWGitok6Ao"
+            href="https://arweave.net/rBcLwnVU2fWNEKUW8PY0TzEAPuCHMj2Vp6z6CedHJf0"
         />
         <link
             href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap"
@@ -17,77 +17,71 @@
         <title>HyperBEAM</title>
     </head>
     <body>
-        <div class="view-wrapper">
-            <div class="header">
-                <a
-                    class="graph-link"
-                    href="/~cacheviz@1.0/index?target=."
-                    target="_blank"
-                >
-                    Cache Visualizer
-                </a>
-                <div class="header-inner">
-                    <div class="header-hyperbeam-chain">
-                        <video autoplay muted loop playsinline width="500">
-                            <source
-                                src="https://arweave.net/kvebTQY2E5J7Zx-SSnsbwxIqS0-BxII9Bb0bQc__Rmg"
-                                type="video/mp4"
-                            />
-                        </video>
-                    </div>
-                    <div class="header-main">
-                        <div class="header-left">
-                            <div class="video-container">
-                                <video
-                                    autoplay
-                                    muted
-                                    loop
-                                    playsinline
-                                    width="500"
-                                    class="light-video"
-                                >
-                                    <source
-                                        src="https://arweave.net/ewmiCoSJpWpNv02F7AW5ZCp4meyaJxZHbOD4WEsuDFY"
-                                        type="video/mp4"
-                                    />
-                                    Your browser does not support the video tag.
-                                </video>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="subheader">
-                        <div class="subheader-value">
-                            <p>Status:</p>
-                            <div class="subheader-indicator-wrapper">
-                                <div class="subheader-indicator"></div>
-                                <p>Live</p>
-                            </div>
-                        </div>
-                        <div class="subheader-value">
-                            <p>Operator:</p>
-                            <button id="operator-action" disabled="true">
-                                Loading...
-                            </button>
-                        </div>
+        <header>
+            <div class="header-inner">
+                <div class="logo">
+                    <img
+                        src="https://arweave.net/Ggr1cz-jbiDS2gAVFHxkoKzmNQQD4WcMTfipWyuEmgY"
+                        alt="hyperbeam-logo"
+                    />
+                    <p>Hyperstate</p>
+                </div>
+                <div class="subheader">
+                    <div class="subheader-value">
+                        <p>Operator:</p>
+                        <button id="operator-action" disabled="true">
+                            Loading...
+                        </button>
                     </div>
                 </div>
             </div>
-
-            <div class="explorer-view">
-                <div class="signature-wrapper border-wrapper-primary">
-                    <div class="signature-line">
-                        <span>Signature</span>
-                        <p>-</p>
-                    </div>
-                    <div class="signature-line">
-                        <span>Signer</span>
-                        <p>-</p>
-                    </div>
+        </header>
+        <div class="view-wrapper">
+            <div class="message-id-wrapper">
+                <img
+                    src="https://arweave.net/S3qpd4CF_VSPD9DfVaWD4McFQy6XAUto2FLidcjofpM"
+                    alt="hyperbeam-flag-flow"
+                    width="20px"
+                />
+                <span>Message Id:</span>
+                <p class="message-value">...</p>
+            </div>
+            <div class="explorer-view-flex">
+                <div class="bg-video">
+                    <video
+                        src="https://arweave.net/tJd9JJa8ap5dHHvRAAPOE4Gh6VAY4h8KpBY1gzrtVWo"
+                        alt="bg-hyperbeam-video"
+                        autoplay
+                        loop
+                        muted
+                        playsinline
+                    ></video>
                 </div>
-                <div class="explorer-view-flex">
-                    <div class="explorers-wrapper">
+                <div class="explorers-wrapper">
+                    <div class="explorer-view">
+                        <div class="signature-wrapper border-wrapper-primary">
+                            <div class="signature-line">
+                                <span>Signature</span>
+                                <p>...</p>
+                            </div>
+                            <div class="signature-line">
+                                <span>Signer</span>
+                                <p>...</p>
+                            </div>
+                        </div>
                         <div class="explorer-wrapper">
                             <div class="explorer-header">
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="20"
+                                    height="20"
+                                    fill="#000"
+                                    viewBox="0 0 256 256"
+                                >
+                                    <path
+                                        d="M232,80a55.67,55.67,0,0,1-16.4,39.6l-30.07,30.06a8,8,0,0,1-11.31-11.32l30.07-30.06a40,40,0,1,0-56.57-56.56L117.66,81.77a8,8,0,0,1-11.32-11.32L136.4,40.4A56,56,0,0,1,232,80Zm-93.66,94.22-30.06,30.06a40,40,0,1,1-56.56-56.57l30.05-30.05a8,8,0,0,0-11.32-11.32L40.4,136.4a56,56,0,0,0,79.2,79.2l30.06-30.07a8,8,0,0,0-11.32-11.31Z"
+                                    ></path>
+                                </svg>
                                 <p>Links</p>
                             </div>
                             <div id="links-explorer" class="explorer"></div>
@@ -100,6 +94,17 @@
 
                         <div class="explorer-wrapper">
                             <div class="explorer-header">
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="20"
+                                    height="20"
+                                    fill="#000"
+                                    viewBox="0 0 256 256"
+                                >
+                                    <path
+                                        d="M120,176h-8v-4a28,28,0,0,0-56,0v4H48a8,8,0,0,0-8,8v40a8,8,0,0,0,8,8h72a8,8,0,0,0,8-8V184A8,8,0,0,0,120,176Zm-48-4a12,12,0,0,1,24,0v4H72Zm40,44H56V192h56ZM213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40v88a8,8,0,0,0,16,0V40h88V88a8,8,0,0,0,8,8h48V216H160a8,8,0,0,0,0,16h40a16,16,0,0,0,16-16V88A8,8,0,0,0,213.66,82.34ZM160,51.31,188.69,80H160Z"
+                                    ></path>
+                                </svg>
                                 <p>Signed Headers</p>
                             </div>
                             <div
@@ -113,31 +118,43 @@
                             </div>
                         </div>
                     </div>
-
-                    <div class="visual-wrapper">
-                        <div class="tabs-wrapper">
-                            <div class="tabs">
-                                <button
-                                    class="tab-button active"
-                                    data-id="cacheviz@1.0/index"
-                                    data-tab="cacheviz-tab"
-                                >
-                                    Cacheviz
-                                </button>
-                                <button
-                                    class="tab-button"
-                                    data-id="hyperbuddy@1.0/format"
-                                    data-tab="hyperbuddy-tab"
-                                >
-                                    Hyperbuddy
-                                </button>
-                            </div>
+                </div>
+                <div class="visual-wrapper">
+                    <div class="tabs-wrapper">
+                        <div class="tabs">
+                            <button
+                                class="tab-button hyperstate-tab-button active"
+                                data-id="cacheviz@1.0/index"
+                                data-tab="cacheviz-tab"
+                            >
+                                Cacheviz
+                            </button>
+                            <button
+                                class="tab-button hyperstate-tab-button"
+                                data-id="hyperbuddy@1.0/format"
+                                data-tab="hyperbuddy-tab"
+                            >
+                                Hyperbuddy
+                            </button>
                         </div>
-                        <div class="visual-body"></div>
                     </div>
+                    <div class="visual-body"></div>
                 </div>
             </div>
         </div>
+        <footer>
+            <div class="footer-inner">
+                <div class="subheader">
+                    <div class="subheader-value">
+                        <p>Status:</p>
+                        <div class="subheader-indicator-wrapper">
+                            <div class="subheader-indicator"></div>
+                            <p>Live</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </footer>
 
         <script>
             function parseHeaders(input) {
@@ -379,6 +396,7 @@
 
                 const signatureValue = document.createElement("p");
                 signatureValue.innerText = signature;
+                signatureValue.classList.add("signature-value", "copy-hover");
                 signatureLine.appendChild(signatureValue);
 
                 const signerLine = document.createElement("div");
@@ -389,12 +407,71 @@
                 signerLine.appendChild(signerKey);
 
                 const signerValue = document.createElement("p");
-                signerValue.classList.add("tx-address");
                 signerValue.innerText = signer;
+                signerValue.classList.add("signer-value", "copy-hover");
                 signerLine.appendChild(signerValue);
 
                 wrapper.appendChild(signatureLine);
                 wrapper.appendChild(signerLine);
+
+                // Add class or ID here for copy tooltip
+                enableTooltipAndCopy(".signature-value");
+                enableTooltipAndCopy(".signer-value");
+                enableTooltipAndCopy(".message-value");
+                enableTooltipAndCopy("#operator-action");
+            }
+
+            function enableTooltipAndCopy(selector) {
+                const el = document.querySelector(selector);
+                if (!el) return;
+
+                // Create tooltip
+                const tooltip = document.createElement("div");
+                tooltip.className = "custom-tooltip";
+                tooltip.style.position = "absolute";
+                tooltip.style.backgroundColor = "#333";
+                tooltip.style.color = "#fff";
+                tooltip.style.padding = "5px 10px";
+                tooltip.style.borderRadius = "4px";
+                tooltip.style.fontSize = "12px";
+                tooltip.style.whiteSpace = "nowrap";
+                tooltip.style.display = "none";
+                tooltip.style.zIndex = "9999";
+                tooltip.style.pointerEvents = "none";
+                document.body.appendChild(tooltip);
+
+                el.style.cursor = "pointer";
+
+                el.addEventListener("mouseenter", (e) => {
+                    tooltip.textContent = "Click to copy";
+                    tooltip.style.display = "block";
+                });
+
+                el.addEventListener("mousemove", (e) => {
+                    const tooltipRect = tooltip.getBoundingClientRect();
+                    tooltip.style.left = `${
+                        e.clientX - tooltipRect.width / 2
+                    }px`;
+                    tooltip.style.top = `${
+                        e.clientY - tooltipRect.height - 10
+                    }px`;
+                });
+
+                el.addEventListener("mouseleave", () => {
+                    tooltip.style.display = "none";
+                });
+
+                el.addEventListener("click", async () => {
+                    try {
+                        await navigator.clipboard.writeText(el.innerText);
+                        tooltip.textContent = "Copied!";
+                        setTimeout(() => {
+                            tooltip.style.display = "none";
+                        }, 1000);
+                    } catch (err) {
+                        console.error("Copy failed", err);
+                    }
+                });
             }
 
             async function renderInitialMessage() {
@@ -464,7 +541,7 @@
                     iframe.style.height = "100%";
                     return iframe;
                 };
-                
+
                 const initial = document.querySelector(".tab-button.active");
                 if (initial)
                     container.appendChild(makeIframe(initial.dataset.id));
@@ -488,7 +565,7 @@
         </script>
 
         <script type="module">
-            import { fetchInfo } from "/~hyperbuddy@1.0/devices.js"
+            import { fetchInfo } from "/~hyperbuddy@1.0/devices.js";
 
             fetchInfo();
         </script>

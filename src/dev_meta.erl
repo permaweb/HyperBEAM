@@ -351,7 +351,7 @@ is(Request, NodeMsg) ->
     is(operator, Request, NodeMsg).
 is(admin, Request, NodeMsg) ->
     % Does the caller have the right to change the node message?
-    RequestSigners = hb_message:signers(Request),
+    RequestSigners = hb_message:signers(Request, NodeMsg),
     ValidOperator =
         hb_util:bin(
             hb_opts:get(
@@ -381,7 +381,7 @@ is(operator, Req, NodeMsg) ->
     % Get the operator from the node message
     Operator = hb_opts:get(operator, unclaimed, NodeMsg),
     % Get the request signers
-    RequestSigners = hb_message:signers(Req),
+    RequestSigners = hb_message:signers(Req, NodeMsg),
     % Ensure the operator is present in the request
     lists:member(Operator, RequestSigners);
 is(initiator, Request, NodeMsg) ->
@@ -394,7 +394,7 @@ is(initiator, Request, NodeMsg) ->
             false;
         [InitializationRequest | _] ->
             % Extract signature from first entry
-            InitializationRequestSigners = hb_message:signers(InitializationRequest),
+            InitializationRequestSigners = hb_message:signers(InitializationRequest, NodeMsg),
             % Get request signers
             RequestSigners = hb_message:signers(Request),
             % Ensure all signers of the initalization request are present in the

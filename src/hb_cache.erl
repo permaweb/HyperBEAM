@@ -114,7 +114,7 @@ ensure_loaded(Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
                 Type -> dev_codec_structured:decode_value(Type, LoadedMsg)
             end;
         not_found ->
-            throw({necessary_message_not_found_b, Link})
+            throw({necessary_message_not_found, {lazy_link, Link}})
     end;
 ensure_loaded({link, ID, LinkOpts}, Opts) ->
 	ensure_loaded({link, ID, LinkOpts#{ <<"lazy">> => true}}, Opts);
@@ -549,16 +549,19 @@ test_signed(Data) -> test_signed(Data, ar_wallet:new()).
 test_signed(Data, Wallet) ->
     hb_message:commit(test_unsigned(Data), Wallet).
 
-test_store_binary(Opts) ->
+test_store_binary(Store) ->
     Bin = <<"Simple unsigned data item">>,
+    ?event(debug_store_test, {store, Store}),
+    Opts = #{ store => Store },
     {ok, ID} = write(Bin, Opts),
     {ok, RetrievedBin} = read(ID, Opts),
     ?assertEqual(Bin, RetrievedBin).
 
-test_store_unsigned_empty_message(Opts) ->
-	Store = hb_opts:get(store, no_viable_store, Opts),
+test_store_unsigned_empty_message(Store) ->
+    ?event(debug_store_test, {store, Store}),
     hb_store:reset(Store),
     Item = #{},
+    Opts = #{ store => Store },
     {ok, Path} = write(Item, Opts),
     {ok, RetrievedItem} = read(Path, Opts),
     ?event({retrieved_item, {path, {string, Path}}, {item, RetrievedItem}}),
@@ -582,8 +585,10 @@ test_store_unsigned_nested_empty_message(Opts) ->
     ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
 
 %% @doc Test storing and retrieving a simple unsigned item
-test_store_simple_unsigned_message(Opts) ->
+test_store_simple_unsigned_message(Store) ->
     Item = test_unsigned(<<"Simple unsigned data item">>),
+    ?event(debug_store_test, {store, Store}),
+    Opts = #{ store => Store },
     %% Write the simple unsigned item
     {ok, _Path} = write(Item, Opts),
     %% Read the item back
@@ -592,9 +597,10 @@ test_store_simple_unsigned_message(Opts) ->
     ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)),
     ok.
 
-test_store_ans104_message(Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
+test_store_ans104_message(Store) ->
+    ?event(debug_store_test, {store, Store}),
     hb_store:reset(Store),
+    Opts = #{ store => Store },
     Item = #{ <<"type">> => <<"ANS104">>, <<"content">> => <<"Hello, world!">> },
     Committed = hb_message:commit(Item, hb:wallet()),
     {ok, _Path} = write(Committed, Opts),
@@ -608,8 +614,9 @@ test_store_ans104_message(Opts) ->
     ok.
 
 %% @doc Test storing and retrieving a simple unsigned item
-test_store_simple_signed_message(Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
+test_store_simple_signed_message(Store) ->
+    ?event(debug_store_test, {store, Store}),
+    Opts = #{ store => Store },
     hb_store:reset(Store),
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
@@ -628,11 +635,11 @@ test_store_simple_signed_message(Opts) ->
     ok.
 
 %% @doc Test deeply nested item storage and retrieval
-test_deeply_nested_complex_message(Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
+test_deeply_nested_complex_message(Store) ->
+    ?event(debug_store_test, {store, Store}),
     hb_store:reset(Store),
     Wallet = ar_wallet:new(),
-    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{ store => Store, priv_wallet => Wallet },
     %% Create nested data
     Level3SignedSubmessage = test_signed([1,2,3], Opts#{priv_wallet => Wallet}),
     Outer =
@@ -696,9 +703,9 @@ test_deeply_nested_complex_message(Opts) ->
         )
     ).
 
-test_message_with_list(Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
+test_message_with_list(Store) ->
     hb_store:reset(Store),
+    Opts = #{ store => Store },
     Msg = test_unsigned([<<"a">>, <<"b">>, <<"c">>]),
     ?event({writing_message, Msg}),
     {ok, Path} = write(Msg, Opts),
@@ -731,14 +738,8 @@ test_device_map_cannot_be_written_test() ->
     end.
 
 run_test() ->
-    Opts =
-        #{
-            store =>
-                [
-                    #{
-                        <<"store-module">> => hb_store_fs,
-                        <<"prefix">> => <<"cache-TEST">>
-                    }
-                ]
-        },
-    test_deeply_nested_complex_message(Opts).
+    Store =
+        [
+            #{ <<"store-module">> => hb_store_fs, <<"prefix">> => <<"cache-TEST">> }
+        ],
+    test_deeply_nested_complex_message(Store).

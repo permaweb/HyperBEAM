@@ -36,7 +36,7 @@ estimate(_, EstimateReq, NodeMsg) ->
 debit(_, RawReq, NodeMsg) ->
     ?event(payment, {debit, RawReq}),
     Req = hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }),
-    case hb_message:signers(Req) of
+    case hb_message:signers(Req, NodeMsg) of
         [] ->
             ?event(payment, {debit, {error, <<"No signers">>}}),
             {ok, false};
@@ -85,11 +85,11 @@ balance(_, RawReq, NodeMsg) ->
     Target =
         case hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }) of
             not_found ->
-                case hb_message:signers(RawReq) of
+                case hb_message:signers(RawReq, NodeMsg) of
                     [] -> hb_ao:get(<<"target">>, RawReq, undefined, NodeMsg);
                     [Signer] -> Signer
                 end;
-            Req -> hd(hb_message:signers(Req))
+            Req -> hd(hb_message:signers(Req, NodeMsg))
         end,
     {ok, get_balance(Target, NodeMsg)}.
 
@@ -203,7 +203,7 @@ get_balance_and_top_up_test() ->
             ),
             Opts
         ),
-    ?event({req_signers, hb_message:signers(Req)}),
+    ?event({req_signers, hb_message:signers(Req, Opts)}),
     % Balance is given during the request, before the charge is made, so we 
     % should expect to see the original balance.
     ?assertEqual(100, Res),

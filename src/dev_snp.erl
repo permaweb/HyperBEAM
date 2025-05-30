@@ -106,6 +106,7 @@ verify(M1, M2, NodeOpts) ->
     ?event({nonce_matches, NonceMatches}),
     % Step 2: Verify the address and the signature.
     Signers = hb_message:signers(MsgWithJSONReport, NodeOpts),
+    Signers = hb_message:signers(MsgWithJSONReport, NodeOpts),
     ?event({snp_signers, {explicit, Signers}}),
     SigIsValid = hb_message:verify(MsgWithJSONReport, Signers),
     ?event({snp_sig_is_valid, SigIsValid}),

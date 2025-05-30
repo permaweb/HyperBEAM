@@ -2,7 +2,6 @@
 -export([info/3]).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([update_state/3, increment_counter/3, delay/3]).
--export([info/3]).
 -export([index/3, postprocess/3, load/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").

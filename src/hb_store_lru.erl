@@ -28,7 +28,7 @@
 
 %%% @doc The default capacity is used when no capacity is provided in the store
 %%% options.
--define(DEFAULT_LRU_CAPACITY, 100_000_000).
+-define(DEFAULT_LRU_CAPACITY, 4_000_000_000).
 
 %% @doc The server ID is either found in the `StoreOpts` or in the process
 %% dictionary, using the `server_id' key. This is typically set by the HTTP 
@@ -603,7 +603,10 @@ evict_all_entries(#{cache_table := Table}, Opts) ->
     ).
 
 offload_to_store(TailKey, TailValue, Links, Group, Opts) ->
-    case get_persistent_store(Opts) of
+    ?event(lru_offload, {offloading_to_store, Opts}),
+    FoundStore = get_persistent_store(Opts),
+    ?event(lru_offload, {found_store, FoundStore}),
+    case FoundStore of
         no_store ->
             ok;
         Store ->
@@ -613,18 +616,18 @@ offload_to_store(TailKey, TailValue, Links, Group, Opts) ->
                 _ ->
                     hb_store:make_group(Store, Group)
             end,
-            case hb_cache:write(TailValue, Opts#{store => Store}) of
+            case hb_store:write(Store, TailKey, TailValue) of
                 {ok, CacheID} ->
-                    hb_cache:link(CacheID, TailKey, Opts#{store => Store}),
+                    hb_store:make_link(Store, CacheID, TailKey),
                     lists:foreach(
                         fun(Link) ->
-                            hb_cache:link(Link, TailKey, Opts#{store => Store})
+                            hb_store:make_link(Store, Link, TailKey)
                         end,
                         Links
                     ),
                     ?event(cache_lru, {offloaded_key, TailKey}),
                     ok;
-                {error, Err} ->
+                Err ->
                     ?event(warning, {error_offloading_to_local_cache, Err}),
                     {error, Err}
             end
@@ -684,10 +687,7 @@ get_persistent_store(Opts) ->
     hb_maps:get(
         <<"persistent-store">>,
         Opts,
-        #{
-            <<"store-module">> => hb_store_fs,
-            <<"prefix">> => <<"cache-mainnet">>
-        }
+        no_store
     ).
 
 convert_if_list(Value) when is_list(Value) ->
@@ -741,13 +741,13 @@ test_opts(PersistentStore, Capacity) ->
     hb_http_server:set_default_opts(#{ store => StoreOpts }).
 
 unknown_value_test() ->
-    DefaultOpts = test_opts(no_store),
+    DefaultOpts = test_opts(default),
     StoreOpts = hb_opts:get(store, {error, store_not_found}, DefaultOpts),
     start(StoreOpts),
     ?assertEqual(not_found, read(StoreOpts, <<"key1">>)).
 
 cache_term_test() ->
-    DefaultOpts = test_opts(no_store),
+    DefaultOpts = test_opts(default),
     StoreOpts = hb_opts:get(store, {error, store_not_found}, DefaultOpts),
     start(StoreOpts),
     write(StoreOpts, <<"key1">>, <<"Hello">>),
@@ -853,7 +853,7 @@ type_test() ->
     ?assertEqual(simple, type(StoreOpts, <<"keylink">>)).
 
 replace_link_test() ->
-    DefaultOpts = test_opts(no_store),
+    DefaultOpts = test_opts(default),
     StoreOpts = hb_opts:get(store, {error, store_not_found}, DefaultOpts),
     start(StoreOpts),
     write(StoreOpts, <<"key1">>, <<"Hello">>),
