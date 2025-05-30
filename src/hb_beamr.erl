@@ -244,7 +244,8 @@ dispatch_response(_WASM, Term) ->
 
 %% @doc Check that a list of arguments is valid for a WASM function call.
 is_valid_arg_list(Args) when is_list(Args) ->
-    lists:all(fun(Arg) -> is_integer(Arg) or is_float(Arg) end, Args);
+    % also allow `+inf', `-inf', `nan' atoms
+    lists:all(fun(Arg) -> is_integer(Arg) or is_float(Arg) or is_atom(Arg) end, Args);
 is_valid_arg_list(_) ->
     false.
 
@@ -383,6 +384,22 @@ send_float_test() ->
     {ok, [F32StrPtr]} = call(WASM, "format_f32", [F32Case2]),
     {ok, F32Str3} = hb_beamr_io:read_string(WASM, F32StrPtr),
     ?assertEqual(<<"inf">>, F32Str3),
+    % f32 - +/-inf, +/-nan
+    F32Case3 = '+inf',
+    ?event({f32_case3, F32Case3}),
+    {ok, [F32StrPtr]} = call(WASM, "format_f32", [F32Case3]),
+    {ok, F32Str4} = hb_beamr_io:read_string(WASM, F32StrPtr),
+    ?assertEqual(<<"inf">>, F32Str4),
+    F32Case4 = '-inf',
+    ?event({f32_case4, F32Case4}),
+    {ok, [F32StrPtr]} = call(WASM, "format_f32", [F32Case4]),
+    {ok, F32Str5} = hb_beamr_io:read_string(WASM, F32StrPtr),
+    ?assertEqual(<<"-inf">>, F32Str5),
+    F32Case5 = 'nan',
+    ?event({f32_case5, F32Case5}),
+    {ok, [F32StrPtr]} = call(WASM, "format_f32", [F32Case5]),
+    {ok, F32Str6} = hb_beamr_io:read_string(WASM, F32StrPtr),
+    ?assertEqual(<<"nan">>, F32Str6),
     % f64 - within f64 range ok
     F64Case0 = 0.0,
     ?event({f64_case0, F64Case0}),
@@ -401,7 +418,24 @@ send_float_test() ->
     catch
         error:badarith ->
             ok
-    end.
+    end,
+    % f64 - +/-inf, +/-nan
+    F64Case3 = '+inf',
+    ?event({f64_case3, F64Case3}),
+    {ok, [F64StrPtr]} = call(WASM, "format_f64", [F64Case3]),
+    {ok, F64Str4} = hb_beamr_io:read_string(WASM, F64StrPtr),
+    ?assertEqual(<<"inf">>, F64Str4),
+    F64Case4 = '-inf',
+    ?event({f64_case4, F64Case4}),
+    {ok, [F64StrPtr]} = call(WASM, "format_f64", [F64Case4]),
+    {ok, F64Str5} = hb_beamr_io:read_string(WASM, F64StrPtr),
+    ?assertEqual(<<"-inf">>, F64Str5),
+    F64Case5 = 'nan',
+    ?event({f64_case5, F64Case5}),
+    {ok, [F64StrPtr]} = call(WASM, "format_f64", [F64Case5]),
+    {ok, F64Str6} = hb_beamr_io:read_string(WASM, F64StrPtr),
+    ?assertEqual(<<"nan">>, F64Str6),
+    ok.
 
 read_int_test() ->
     {ok, File} = file:read_file("test/parse.aot"),

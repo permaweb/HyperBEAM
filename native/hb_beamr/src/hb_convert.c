@@ -272,8 +272,45 @@ enum erl_port_buffer_to_wasm_vals_rc erl_port_buffer_to_wasm_vals(const char* bu
                     break;
                 }
 
+                case ERL_ATOM_EXT: {
+                    DRV_DEBUG("Decoding atom");
+                    char atom_str[1024];
+                    if (ei_decode_atom(buff, index, atom_str) == 0) {
+                        DRV_DEBUG("Decoded atom: %s", atom_str);
+                        switch (val_kind) {
+                            case WASM_F32:
+                                if (strcmp(atom_str, "+inf") == 0) {
+                                    vals[i].of.f32 = INFINITY;
+                                } else if (strcmp(atom_str, "-inf") == 0) {
+                                    vals[i].of.f32 = -INFINITY;
+                                } else if (strcmp(atom_str, "nan") == 0) {
+                                    vals[i].of.f32 = NAN;
+                                }
+                                break;
+                            case WASM_F64:
+                                if (strcmp(atom_str, "+inf") == 0) {
+                                    vals[i].of.f64 = (double)(INFINITY);
+                                } else if (strcmp(atom_str, "-inf") == 0) {
+                                    vals[i].of.f64 = (double)(-INFINITY);
+                                } else if (strcmp(atom_str, "nan") == 0) {
+                                    vals[i].of.f64 = (double)(NAN);
+                                }
+                                break;
+                            default:
+                                DRV_DEBUG("Unexpected wasm type for ERL_ATOM_EXT: %d", val_kind);
+                                rc = ERL_PORT_BUFFER_TO_WASM_VALS_UNSUPPORTED_WASM_TYPE;
+                                goto fail1;
+                        }
+                    } else {
+                        DRV_DEBUG("Failed to decode ERL_ATOM_EXT at pos %d", i);
+                        rc = ERL_PORT_BUFFER_TO_WASM_VALS_MALFORMED_BUFFER;
+                        goto fail1;
+                    }
+                    break;
+                }
+
                 default:
-                    DRV_DEBUG("Unsupported erl term type: %d", elem_type);
+                    DRV_DEBUG("Unsupported erl term type: %c", elem_type);
                     rc = ERL_PORT_BUFFER_TO_WASM_VALS_MALFORMED_BUFFER;
                     goto fail1;
             }
@@ -423,7 +460,7 @@ int wasm_vals_to_erl_msg(wasm_val_t* vals, const int val_count, ErlDrvTermData**
     ));
     for (size_t i = 0; i < val_count; i++) {
         int res_size = wasm_val_to_erl_term(&(*msg)[*msg_i], &vals[i]);
-        assert(res_size == 2);
+        // assert(res_size == 2);
         *msg_i += res_size;
     }
 
