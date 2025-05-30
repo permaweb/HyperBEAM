@@ -292,6 +292,10 @@ send_value_test() ->
     {ok, WASM} = start(File),
     %% Test helper
     FormatAssert = fun
+        (Tag, Fun, Value, error) ->
+            ?event({Tag, Value}),
+            {error, _} = call(WASM, Fun, [Value]),
+            ok;
         (Tag, Fun, Value, {error, ExpectedErr}) ->
             ?event({Tag, Value}),
             ?assertEqual({error, ExpectedErr}, call(WASM, Fun, [Value]));
@@ -311,24 +315,30 @@ send_value_test() ->
             {i32_case0, "format_i32", 0, <<"0">>},
             {i32_case1, "format_i32", ?I32_MAX, <<"2147483647">>},
             {i32_case2, "format_i32", -(?I32_MAX + 1), <<"-2147483648">>},
-            %% i32 - out of range
+            %% i32 - out of range error
             {i32_case3, "format_i32", -(?I32_MAX + 2), {error, "Argument value out of range for wasm type"}},
+            %% i32 - f32/f64 error
+            {i32_case4, "format_i32", 0.0, error},
+            {i32_case5, "format_i32", ?F64_MAX, error},
             %% u32
             {u32_case0, "format_u32", 0, <<"0">>},
             {u32_case1, "format_u32", ?U32_MAX, <<"4294967295">>},
-            %% u32 - out of range
-            {u32_case3, "format_u32", (?U32_MAX + 1) + 255, {error, "Argument value out of range for wasm type"}},
+            %% u32 - out of range error
+            {u32_case3, "format_u32", ?U32_MAX + 1, {error, "Argument value out of range for wasm type"}},
             %% i64
             {i64_case0, "format_i64", 0, <<"0">>},
             {i64_case1, "format_i64", ?I64_MAX, <<"9223372036854775807">>},
             {i64_case2, "format_i64", -(?I64_MAX + 1), <<"-9223372036854775808">>},
             %% i64 - out of range
             {i64_case3, "format_i64", -(?I64_MAX + 2), {error, "Argument value out of range for wasm type"}},
+            %% i64 - f32/f64 error
+            {i64_case4, "format_i64", 0.0, error},
+            {i64_case5, "format_i64", ?F64_MAX, error},
             %% u64
             {u64_case0, "format_u64", 0, <<"0">>},
             {u64_case1, "format_u64", ?U64_MAX, <<"18446744073709551615">>},
             %% u64 - out of range
-            {u64_case3, "format_u64", (?U64_MAX + 1) + 255, {error, "Argument value out of range for wasm type"}},
+            {u64_case3, "format_u64", ?U64_MAX + 1, {error, "Argument value out of range for wasm type"}},
             %% f32
             {f32_case0, "format_f32", 0.0, <<"0.000000">>},
             {f32_case1, "format_f32", ?F32_MAX, ?F32_MAX_STR_BIN},
@@ -337,6 +347,9 @@ send_value_test() ->
             {f32_case3, "format_f32", '+inf', <<"inf">>},
             {f32_case4, "format_f32", '-inf', <<"-inf">>},
             {f32_case5, "format_f32", 'nan', <<"nan">>},
+            %% f32 - i32/i64 cast (with imprecision)
+            {f32_case6, "format_f32", ?I32_MAX, <<"2147483648.000000">>}, 
+            {f32_case7, "format_f32", ?I64_MAX, <<"9223372036854775808.000000">>},
             %% f64 - within range
             {f64_case0, "format_f64", 0.0, <<"0.000000">>},
             {f64_case1, "format_f64", ?F64_MAX, ?F64_MAX_STR_BIN},
@@ -346,7 +359,10 @@ send_value_test() ->
             %% f64 - special atoms
             {f64_case3, "format_f64", '+inf', <<"inf">>},
             {f64_case4, "format_f64", '-inf', <<"-inf">>},
-            {f64_case5, "format_f64", 'nan', <<"nan">>}
+            {f64_case5, "format_f64", 'nan', <<"nan">>},
+            %% f64 - i32/i64 cast (i64 with imprecision)
+            {f64_case6, "format_f64", ?I32_MAX, <<"2147483647.000000">>},
+            {f64_case7, "format_f64", ?I64_MAX, <<"9223372036854775808.000000">>}
         ]
     ),
     %% f64 representation proof
@@ -398,13 +414,17 @@ read_value_test() ->
             {f32_case2, "parse_f32", <<?F32_MAX_10_STR_BIN/binary, "\0">>, '+inf'},
             {f32_case3, "parse_f32", <<"-", ?F32_MAX_10_STR_BIN/binary, "\0">>, '-inf'},
             {f32_case4, "parse_f32", <<"nan\0">>, nan},
+            %% all nans should be canonicalized
+            {f32_case5, "parse_f32", <<"-nan\0">>, nan},
             %% f64
             {f64_case0, "parse_f64", <<"0.000000\0">>, 0.0},
             {f64_case1, "parse_f64", <<?F64_MAX_STR_BIN/binary, "\0">>, ?F64_MAX},
             %% f64 - special atoms
             {f64_case2, "parse_f64", <<?F64_MAX_10_STR_BIN/binary, "\0">>, '+inf'},
             {f64_case3, "parse_f64", <<"-", ?F64_MAX_10_STR_BIN/binary, "\0">>, '-inf'},
-            {f64_case4, "parse_f64", <<"nan\0">>, nan}
+            {f64_case4, "parse_f64", <<"nan\0">>, nan},
+            %% all nans should be canonicalized
+            {f64_case5, "parse_f64", <<"-nan\0">>, nan}
         ]
     ),
     ok.
