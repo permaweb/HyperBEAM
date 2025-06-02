@@ -9,7 +9,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/../../common/wamr/cmake/wamr-src.cmake)
 
 # Fetch WAMR sources
 set(WAMR_GIT_REPOSITORY "https://github.com/permaweb/wasm-micro-runtime.git" CACHE STRING "Git repository URL for WAMR")
-set(WAMR_GIT_TAG "2.2.0-nan-canonicalization-fp-boundary-simd-immediate" CACHE STRING "Git tag or branch for WAMR")
+set(WAMR_GIT_TAG "2.2.0-nan-canon-2" CACHE STRING "Git tag or branch for WAMR")
 set(WAMR_SRC_DIR "${CMAKE_BINARY_DIR}/wamr-src" CACHE PATH "Directory for WAMR sources")
 fetch_wamr_source()
 
@@ -88,6 +88,10 @@ set(WAMR_BUILD_INTERP 1)
 set(WAMR_BUILD_FAST_INTERP 0)
 set(WAMR_BUILD_JIT 0)
 set(WAMR_BUILD_FAST_JIT 0)
+
+# Determinism - Fork options - NaN Canonicalization
+set(WAMR_BUILD_NAN_CANONICALIZATION 1)
+set(WAMR_NAN_CANONICALIZATION_SIGN_BIT 0)
 
 # AOT options
 set(WAMR_BUILD_AOT_STACK_FRAME 1) # TODO: Justification?

@@ -9,7 +9,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/../../common/wamr/cmake/wamr-llvm.cmake)
 
 # Fetch WAMR sources
 set(WAMR_GIT_REPOSITORY "https://github.com/permaweb/wasm-micro-runtime.git" CACHE STRING "Git repository URL for WAMR")
-set(WAMR_GIT_TAG "2.2.0-nan-canonicalization-fp-boundary-simd-immediate" CACHE STRING "Git tag or branch for WAMR")
+set(WAMR_GIT_TAG "2.2.0-nan-canon-2" CACHE STRING "Git tag or branch for WAMR")
 set(WAMR_SRC_DIR "${CMAKE_BINARY_DIR}/wamr-src" CACHE PATH "Directory for WAMR sources")
 fetch_wamr_source()
 
