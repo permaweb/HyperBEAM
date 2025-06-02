@@ -90,8 +90,6 @@ enum erl_port_buffer_to_wasm_vals_rc erl_port_buffer_to_wasm_vals(const char* bu
         
             // Convert based on the erl term
             switch (elem_type) {
-                DRV_DEBUG("Decoding elem %d: %d", i, elem_type);
-
                 /* 32-bit (or smaller) integers */
                 case ERL_SMALL_INTEGER_EXT:
                 case ERL_INTEGER_EXT: {

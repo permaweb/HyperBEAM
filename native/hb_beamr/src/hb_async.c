@@ -301,7 +301,9 @@ void wasm_execute_exported_function(void* raw) {
 
 #ifdef HB_DEBUG
     DRV_DEBUG("Calling export: %s", cc->call_request.call_export.function_name);
+    DRV_DEBUG("Exported function args:");
     hb_beamr_utils_print_wasm_vals(cc->call_request.args, cc->call_request.arg_count);
+    DRV_DEBUG("Exported function result types:");
     hb_beamr_utils_print_wasm_val_kinds(cc->call_request.result_types, cc->call_request.result_count);
 #endif
 
