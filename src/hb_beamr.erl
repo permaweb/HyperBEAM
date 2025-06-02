@@ -293,16 +293,17 @@ send_value_test() ->
     %% Test helper
     FormatAssert = fun
         (Tag, Fun, Value, error) ->
-            ?event({Tag, Value}),
+            ?event({expect_error, Tag, Value}),
             {error, _} = call(WASM, Fun, [Value]),
             ok;
         (Tag, Fun, Value, {error, ExpectedErr}) ->
-            ?event({Tag, Value}),
+            ?event({expect_error_msg, Tag, Value, ExpectedErr}),
             ?assertEqual({error, ExpectedErr}, call(WASM, Fun, [Value]));
         (Tag, Fun, Value, ExpectedBin) ->
-            ?event({Tag, Value}),
+            ?event({expect_result, Tag, Value}),
             {ok, [Ptr]} = call(WASM, Fun, [Value]),
             {ok, Str} = hb_beamr_io:read_string(WASM, Ptr),
+            ?event({Tag, {expected, ExpectedBin}, {result, Str}}),
             ?assertEqual(ExpectedBin, Str)
     end,
     %% Test cases
@@ -312,57 +313,65 @@ send_value_test() ->
         end,
         [
             %% i32
-            {i32_case0, "format_i32", 0, <<"0">>},
-            {i32_case1, "format_i32", ?I32_MAX, <<"2147483647">>},
-            {i32_case2, "format_i32", -(?I32_MAX + 1), <<"-2147483648">>},
+            {i32_0, "format_i32", 0, <<"0">>},
+            {i32_max, "format_i32", ?I32_MAX, <<"2147483647">>},
+            {i32_min, "format_i32", -(?I32_MAX + 1), <<"-2147483648">>},
+            %% i32 - <U32_MAX overflows
+            {i32_above_i32_max, "format_i32", ?I32_MAX + 1, <<"-2147483648">>},
             %% i32 - out of range error
-            {i32_case3, "format_i32", -(?I32_MAX + 2), {error, "Argument value out of range for wasm type"}},
+            {i32_above_u32_max, "format_i32", ?U32_MAX + 1, {error, "Argument value out of range for wasm type"}},
+            {i32_below_min, "format_i32", -(?I32_MAX + 2), {error, "Argument value out of range for wasm type"}},
             %% i32 - f32/f64 error
-            {i32_case4, "format_i32", 0.0, error},
-            {i32_case5, "format_i32", ?F64_MAX, error},
+            {i32_f32_0, "format_i32", 0.0, error},
+            {i32_f64_max, "format_i32", ?F64_MAX, error},
             %% u32
-            {u32_case0, "format_u32", 0, <<"0">>},
-            {u32_case1, "format_u32", ?U32_MAX, <<"4294967295">>},
+            {u32_0, "format_u32", 0, <<"0">>},
+            {u32_max, "format_u32", ?U32_MAX, <<"4294967295">>},
             %% u32 - out of range error
-            {u32_case3, "format_u32", ?U32_MAX + 1, {error, "Argument value out of range for wasm type"}},
+            {u32_above_max, "format_u32", ?U32_MAX + 1, {error, "Argument value out of range for wasm type"}},
             %% i64
-            {i64_case0, "format_i64", 0, <<"0">>},
-            {i64_case1, "format_i64", ?I64_MAX, <<"9223372036854775807">>},
-            {i64_case2, "format_i64", -(?I64_MAX + 1), <<"-9223372036854775808">>},
+            {i64_0, "format_i64", 0, <<"0">>},
+            {i64_max, "format_i64", ?I64_MAX, <<"9223372036854775807">>},
+            {i64_min, "format_i64", -(?I64_MAX + 1), <<"-9223372036854775808">>},
+            %% i64 - <U64_MAX overflows
+            {i64_above_i64_max, "format_i64", ?I64_MAX + 1, <<"-9223372036854775808">>},
             %% i64 - out of range
-            {i64_case3, "format_i64", -(?I64_MAX + 2), {error, "Argument value out of range for wasm type"}},
+            {i64_above_u64_max, "format_i64", ?U64_MAX + 1, {error, "Argument value out of range for wasm type"}},
+            {i64_below_min, "format_i64", -(?I64_MAX + 2), {error, "Argument value out of range for wasm type"}},
             %% i64 - f32/f64 error
-            {i64_case4, "format_i64", 0.0, error},
-            {i64_case5, "format_i64", ?F64_MAX, error},
+            {i64_f32_0, "format_i64", 0.0, error},
+            {i64_f64_max, "format_i64", ?F64_MAX, error},
             %% u64
-            {u64_case0, "format_u64", 0, <<"0">>},
-            {u64_case1, "format_u64", ?U64_MAX, <<"18446744073709551615">>},
+            {u64_0, "format_u64", 0, <<"0">>},
+            {u64_max, "format_u64", ?U64_MAX, <<"18446744073709551615">>},
             %% u64 - out of range
-            {u64_case3, "format_u64", ?U64_MAX + 1, {error, "Argument value out of range for wasm type"}},
+            {u64_above_max, "format_u64", ?U64_MAX + 1, {error, "Argument value out of range for wasm type"}},
             %% f32
-            {f32_case0, "format_f32", 0.0, <<"0.000000">>},
-            {f32_case1, "format_f32", ?F32_MAX, ?F32_MAX_STR_BIN},
-            {f32_case2, "format_f32", ?F32_MAX * 10, <<"inf">>},
+            {f32_0, "format_f32", 0.0, <<"0.000000">>},
+            {f32_1, "format_f32", 1.0, <<"1.000000">>},
+            {f32_max, "format_f32", ?F32_MAX, ?F32_MAX_STR_BIN},
+            {f32_above_max, "format_f32", ?F32_MAX * 10, <<"inf">>},
             %% f32 - special atoms
-            {f32_case3, "format_f32", '+inf', <<"inf">>},
-            {f32_case4, "format_f32", '-inf', <<"-inf">>},
-            {f32_case5, "format_f32", 'nan', <<"nan">>},
+            {f32_inf, "format_f32", '+inf', <<"inf">>},
+            {f32_neg_inf, "format_f32", '-inf', <<"-inf">>},
+            {f32_nan, "format_f32", 'nan', <<"nan">>},
             %% f32 - i32/i64 cast (with imprecision)
-            {f32_case6, "format_f32", ?I32_MAX, <<"2147483648.000000">>}, 
-            {f32_case7, "format_f32", ?I64_MAX, <<"9223372036854775808.000000">>},
+            {f32_i32_max, "format_f32", ?I32_MAX, <<"2147483648.000000">>}, 
+            {f32_i64_max, "format_f32", ?I64_MAX, <<"9223372036854775808.000000">>},
             %% f64 - within range
-            {f64_case0, "format_f64", 0.0, <<"0.000000">>},
-            {f64_case1, "format_f64", ?F64_MAX, ?F64_MAX_STR_BIN},
+            {f64_0, "format_f64", 0.0, <<"0.000000">>},
+            {f64_1, "format_f64", 1.0, <<"1.000000">>},
+            {f64_max, "format_f64", ?F64_MAX, ?F64_MAX_STR_BIN},
             %% We can't test this one, because it can't be represented in erlang,
             %% see proof at end of test.
-            % {f64_case2, "format_f64", ?F64_MAX * 10, <<"inf">>},
+            % {f64_case3, "format_f64", ?F64_MAX * 10, <<"inf">>},
             %% f64 - special atoms
-            {f64_case3, "format_f64", '+inf', <<"inf">>},
-            {f64_case4, "format_f64", '-inf', <<"-inf">>},
-            {f64_case5, "format_f64", 'nan', <<"nan">>},
+            {f64_inf, "format_f64", '+inf', <<"inf">>},
+            {f64_neg_inf, "format_f64", '-inf', <<"-inf">>},
+            {f64_nan, "format_f64", 'nan', <<"nan">>},
             %% f64 - i32/i64 cast (i64 with imprecision)
-            {f64_case6, "format_f64", ?I32_MAX, <<"2147483647.000000">>},
-            {f64_case7, "format_f64", ?I64_MAX, <<"9223372036854775808.000000">>}
+            {f64_i32_max, "format_f64", ?I32_MAX, <<"2147483647.000000">>},
+            {f64_i64_max, "format_f64", ?I64_MAX, <<"9223372036854775808.000000">>}
         ]
     ),
     %% f64 representation proof
@@ -378,6 +387,7 @@ read_value_test() ->
         ?event({Tag, Bin}),
         ok = hb_beamr_io:write(WASM, BufPtr, Bin),
         {ok, [Res]} = call(WASM, Fun, [BufPtr]),
+        ?event({Tag, {expected, ExpectedVal}, {result, Res}}),
         ?assertEqual(ExpectedVal, Res)
     end,
     %% Test cases
@@ -387,39 +397,39 @@ read_value_test() ->
         end,
         [
             %% i32
-            {i32_case0, "parse_i32", <<"0\0">>, 0},
-            {i32_case1, "parse_i32", <<"2147483647\0">>, ?I32_MAX},
-            {i32_case2, "parse_i32", <<"-2147483648\0">>, -(?I32_MAX + 1)},
+            {i32_0, "parse_i32", <<"0\0">>, 0},
+            {i32_max, "parse_i32", <<"2147483647\0">>, ?I32_MAX},
+            {i32_min, "parse_i32", <<"-2147483648\0">>, -(?I32_MAX + 1)},
             %% u32
-            {u32_case0, "parse_u32", <<"0\0">>, 0},
-            {u32_case1, "parse_u32", <<"2147483647\0">>, ?I32_MAX},
-            {u32_case2, "parse_u32", <<"2147483648\0">>, -(?I32_MAX + 1)},
+            {u32_0, "parse_u32", <<"0\0">>, 0},
+            {u32_max, "parse_u32", <<"2147483647\0">>, ?I32_MAX},
+            {u32_min, "parse_u32", <<"2147483648\0">>, -(?I32_MAX + 1)},
             %% i64
-            {i64_case0, "parse_i64", <<"0\0">>, 0},
-            {i64_case1, "parse_i64", <<"9223372036854775807\0">>, ?I64_MAX},
-            {i64_case2, "parse_i64", <<"-9223372036854775808\0">>, -(?I64_MAX + 1)},
+            {i64_0, "parse_i64", <<"0\0">>, 0},
+            {i64_max, "parse_i64", <<"9223372036854775807\0">>, ?I64_MAX},
+            {i64_min, "parse_i64", <<"-9223372036854775808\0">>, -(?I64_MAX + 1)},
             %% u64
-            {u64_case0, "parse_u64", <<"0\0">>, 0},
-            {u64_case1, "parse_u64", <<"9223372036854775807\0">>, ?I64_MAX},
-            {u64_case2, "parse_u64", <<"9223372036854775808\0">>, -(?I64_MAX + 1)},
+            {u64_0, "parse_u64", <<"0\0">>, 0},
+            {u64_max, "parse_u64", <<"9223372036854775807\0">>, ?I64_MAX},
+            {u64_min, "parse_u64", <<"9223372036854775808\0">>, -(?I64_MAX + 1)},
             %% f32
-            {f32_case0, "parse_f32", <<"0.000000\0">>, 0.0},
-            {f32_case1, "parse_f32", <<?F32_MAX_STR_BIN/binary, "\0">>, ?F32_MAX},
+            {f32_0, "parse_f32", <<"0.000000\0">>, 0.0},
+            {f32_max, "parse_f32", <<?F32_MAX_STR_BIN/binary, "\0">>, ?F32_MAX},
             %% f32 - special atoms
-            {f32_case2, "parse_f32", <<?F32_MAX_10_STR_BIN/binary, "\0">>, '+inf'},
-            {f32_case3, "parse_f32", <<"-", ?F32_MAX_10_STR_BIN/binary, "\0">>, '-inf'},
-            {f32_case4, "parse_f32", <<"nan\0">>, nan},
+            {f32_above_max, "parse_f32", <<?F32_MAX_10_STR_BIN/binary, "\0">>, '+inf'},
+            {f32_below_min, "parse_f32", <<"-", ?F32_MAX_10_STR_BIN/binary, "\0">>, '-inf'},
+            {f32_pos_nan, "parse_f32", <<"nan\0">>, nan},
             %% all nans should be canonicalized
-            {f32_case5, "parse_f32", <<"-nan\0">>, nan},
+            {f32_neg_nan, "parse_f32", <<"-nan\0">>, nan},
             %% f64
-            {f64_case0, "parse_f64", <<"0.000000\0">>, 0.0},
-            {f64_case1, "parse_f64", <<?F64_MAX_STR_BIN/binary, "\0">>, ?F64_MAX},
+            {f64_0, "parse_f64", <<"0.000000\0">>, 0.0},
+            {f64_max, "parse_f64", <<?F64_MAX_STR_BIN/binary, "\0">>, ?F64_MAX},
             %% f64 - special atoms
-            {f64_case2, "parse_f64", <<?F64_MAX_10_STR_BIN/binary, "\0">>, '+inf'},
-            {f64_case3, "parse_f64", <<"-", ?F64_MAX_10_STR_BIN/binary, "\0">>, '-inf'},
-            {f64_case4, "parse_f64", <<"nan\0">>, nan},
+            {f64_above_max, "parse_f64", <<?F64_MAX_10_STR_BIN/binary, "\0">>, '+inf'},
+            {f64_below_min, "parse_f64", <<"-", ?F64_MAX_10_STR_BIN/binary, "\0">>, '-inf'},
+            {f64_pos_nan, "parse_f64", <<"nan\0">>, nan},
             %% all nans should be canonicalized
-            {f64_case5, "parse_f64", <<"-nan\0">>, nan}
+            {f64_neg_nan, "parse_f64", <<"-nan\0">>, nan}
         ]
     ),
     ok.
