@@ -1595,7 +1595,7 @@ register_location_on_boot_test() ->
             priv_wallet => NotifiedPeerWallet,
             store => [
                 #{
-                    <<"store-module">> => hb_store_fs,
+                    <<"store-module">> => hb_store_lmdb,
                     <<"name">> => <<"cache-TEST/scheduler-location-notified">>
                 }
             ]
@@ -1695,7 +1695,7 @@ redirect_from_graphql() ->
     Opts =
         #{ store =>
             [
-                #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
+                #{ <<"store-module">> => hb_store_lmdb, <<"name">> => <<"cache-mainnet">> },
                 #{ <<"store-module">> => hb_store_gateway, <<"store">> => false }
             ]
         },
@@ -1766,8 +1766,8 @@ http_init(Opts) ->
 		priv_wallet => Wallet,
 		store => [
 			#{
-                <<"store-module">> => hb_store_lru,
-                <<"name">> => <<"cache-mainnet/lru">>
+                <<"store-module">> => hb_store_lmdb,
+                <<"name">> => <<"cache-mainnet/lmdb">>
             },
 			#{ <<"store-module">> => hb_store_gateway, <<"store">> => false }
 		]
@@ -1835,7 +1835,7 @@ http_get_schedule_redirect() ->
         #{
             store =>
                 [
-                    #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
+                    #{ <<"store-module">> => hb_store_lmdb, <<"name">> => <<"cache-mainnet">> },
                     #{ <<"store-module">> => hb_store_gateway, <<"opts">> => #{} }
                 ],
                 scheduler_follow_redirects => false

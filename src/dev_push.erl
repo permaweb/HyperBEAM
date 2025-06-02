@@ -591,7 +591,7 @@ full_push_test_() ->
             priv_wallet => hb:wallet(),
             cache_control => <<"always">>,
             store => [
-                #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
+                #{ <<"store-module">> => hb_store_lmdb, <<"name">> => <<"cache-TEST">> },
                 #{ <<"store-module">> => hb_store_gateway,
                     <<"store">> => #{
                         <<"store-module">> => hb_store_fs,
@@ -647,7 +647,7 @@ push_as_identity_test_() ->
                     priv_wallet => SchedulingWallet,
                     store => [
                         #{
-                            <<"store-module">> => hb_store_fs,
+                            <<"store-module">> => hb_store_lmdb,
                             <<"name">> => <<"cache-TEST/scheduler">>
                         }
                     ]
@@ -775,7 +775,7 @@ push_with_redirect_hint_test_disabled() ->
         Stores =
             [
                 #{
-                    <<"store-module">> => hb_store_fs,
+                    <<"store-module">> => hb_store_lmdb,
                     <<"name">> => <<"cache-TEST">>
                 }
             ],
@@ -861,7 +861,7 @@ push_prompts_encoding_change() ->
         cache_control => <<"always">>,
         store =>
             [
-                #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
+                #{ <<"store-module">> => hb_store_lmdb, <<"name">> => <<"cache-TEST">> },
                 % Include a gateway store so that we can get the legacynet 
                 % process when needed.
                 #{ <<"store-module">> => hb_store_gateway,
@@ -904,7 +904,7 @@ nested_push_prompts_encoding_change() ->
         cache_control => <<"always">>,
         store => [
             #{
-                <<"store-module">> => hb_store_fs,
+                <<"store-module">> => hb_store_lmdb,
                 <<"name">> => <<"cache-mainnet">>
             },
             #{

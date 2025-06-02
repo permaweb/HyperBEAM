@@ -330,6 +330,11 @@ get_cache_entry(Table, Key) ->
     
     fetch_cache_with_retry(Opts, Key, Retries) ->
         #{<<"cache-table">> := Table, <<"pid">> := Server} = hb_store:find(Opts),
+        % Always sync on first attempt to maintain consistency
+        case Retries =:= 1 of
+            true -> sync(Server);
+            false -> ok
+        end,
         case get_cache_entry(Table, Key) of
             nil ->
                 case Retries < ?RETRY_THRESHOLD of
