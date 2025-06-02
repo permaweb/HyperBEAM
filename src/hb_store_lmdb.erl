@@ -90,27 +90,27 @@ start(_) ->
 %% @returns 'composite' for group entries, 'simple' for regular values
 -spec type(map(), binary()) -> composite | simple | not_found.
 type(Opts, Key) ->
-    ?event(debug_type_detection, {checking_type_for_key, Key}),
+    ?event({checking_type_for_key, Key}),
     case read_with_flush(Opts, Key) of
         {ok, Value} ->
-            ?event(debug_type_detection, {found_value, Key, Value, byte_size(Value)}),
+            ?event({found_value, Key, Value, byte_size(Value)}),
             case is_link(Value) of
                 {true, Link} ->
                     % This is a link, check the target's type
-                    ?event(debug_type_detection, {following_link, Key, Link}),
+                    ?event({following_link, Key, Link}),
                     type(Opts, Link);
                 false ->
                     case Value of
                         <<"group">> -> 
-                            ?event(debug_type_detection, {key_is_group, Key}),
+                            ?event({key_is_group, Key}),
                             composite;
                         _ -> 
-                            ?event(debug_type_detection, {key_is_simple, Key, Value}),
+                            ?event({key_is_simple, Key, Value}),
                             simple
                     end
             end;
         not_found ->
-            ?event(debug_type_detection, {key_not_found_after_flush, Key}),
+            ?event({key_not_found_after_flush, Key}),
             not_found
     end.
 
@@ -215,7 +215,7 @@ read_with_retry(StoreOpts, Key, RetriesRemaining) when RetriesRemaining > 0 ->
             {ok, Value};
         not_found ->
             % Key not found in committed data, trigger flush and retry
-            ?event(read_miss, {miss, Key}),
+            ?event({miss_read_key, Key}),
             sync(StoreOpts),
             read_with_retry(StoreOpts, Key, RetriesRemaining - 1)
     end;
@@ -248,7 +248,7 @@ read_direct(StoreOpts, Key) ->
                     % Check if this is a group marker - groups should not be readable as simple values
                     case Value of
                         <<"group">> ->
-                            ?event(debug_lmdb_read, {refusing_to_read_group_marker, Key}),
+                            ?event({refusing_to_read_group_marker, Key}),
                             % Groups should be accessed via list/type, not read directly
                             not_found;
                         _ ->
@@ -352,7 +352,7 @@ list(StoreOpts, Path) when is_map(StoreOpts), is_binary(Path) ->
     % Check if Path is a link and resolve it if necessary
     ResolvedPath = case read_with_flush(StoreOpts, Path) of
         {ok, Value} ->
-            ?event(debug_lmdb, {found_value, Value}),
+            ?event({found_value, Value}),
             case is_link(Value) of
                 {true, Link} ->
                     % Path is a link, extract the target
@@ -364,11 +364,11 @@ list(StoreOpts, Path) when is_map(StoreOpts), is_binary(Path) ->
             end;
         not_found ->
             % Path not found, use original path
-            ?event(debug_lmdb, {path_not_found_for_list, Path}),
+            ?event({path_not_found_for_list, Path}),
             Path
     end,
     % List the children of the resolved path.
-    ?event(debug_lmdb, {listing_children, {resolved_path, ResolvedPath}}),
+    ?event({listing_children, {resolved_path, ResolvedPath}}),
     try
        % Ensure the path ends with "/" for proper prefix matching (like directory listing)
        SearchPath = case ResolvedPath of
@@ -406,7 +406,7 @@ list(StoreOpts, Path) when is_map(StoreOpts), is_binary(Path) ->
            end,
            []
        ),
-       ?event(debug_lmdb, {listing_path, Path, resolved_path, ResolvedPath, search_path, SearchPath, children, Children}),
+       ?event({listing_path, Path, resolved_path, ResolvedPath, search_path, SearchPath, children, Children}),
        Children
     catch
        _:Error -> {error, Error}
@@ -507,10 +507,10 @@ make_link(StoreOpts, Existing, New) ->
 %% @doc Transform a path into the store's canonical form.
 %% For LMDB, paths are simply joined with "/" separators.
 path(_StoreOpts, Path) when is_list(Path) ->
-    ?event(debug_nested_test, { hb_store_path, Path }),
+    ?event({ hb_store_path, Path }),
     hb_util:bin(lists:join(<<"/">>, Path));
 path(_StoreOpts, Path) when is_binary(Path) ->
-    ?event(debug_nested_test, { hb_store_path, Path }),
+    ?event({ hb_store_path, Path }),
     Path.
 
 %% @doc Add two path components together.
@@ -565,29 +565,29 @@ sync(StoreOpts) ->
 resolve(StoreOpts, Path) when is_binary(Path) ->
     % Convert binary path to list for resolution, then back to binary
     PathParts = binary:split(Path, <<"/">>, [global]),
-    ?event(debug_resolve, {resolving_binary_path, Path, path_parts, PathParts}),
+    ?event({resolving_binary_path, Path, path_parts, PathParts}),
     case resolve_path_links(StoreOpts, PathParts) of
         {ok, ResolvedParts} ->
             Result = hb_util:bin(lists:join(<<"/">>, ResolvedParts)),
-            ?event(debug_resolve, {resolved_successfully, Path, to, Result}),
+            ?event({resolved_successfully, Path, to, Result}),
             Result;
         {error, Reason} ->
             % If resolution fails, return original path
-            ?event(debug_resolve, {resolution_failed, Path, reason, Reason}),
+            ?event({resolution_failed, Path, reason, Reason}),
             Path
     end;
 resolve(StoreOpts, Path) when is_list(Path) ->
     % Handle list paths by resolving directly and converting to binary
-    ?event(debug_resolve, {resolving_list_path, Path}),
+    ?event({resolving_list_path, Path}),
     case resolve_path_links(StoreOpts, Path) of
         {ok, ResolvedParts} ->
             Result = hb_util:bin(lists:join(<<"/">>, ResolvedParts)),
-            ?event(debug_resolve, {resolved_list_successfully, Path, to, Result}),
+            ?event({resolved_list_successfully, Path, to, Result}),
             Result;
         {error, Reason} ->
             % If resolution fails, return original path as binary
             OrigPath = hb_util:bin(lists:join(<<"/">>, Path)),
-            ?event(debug_resolve, {list_resolution_failed, Path, reason, Reason, returning, OrigPath}),
+            ?event({list_resolution_failed, Path, reason, Reason, returning, OrigPath}),
             OrigPath
     end;
 resolve(_,_) -> not_found.
@@ -748,11 +748,11 @@ server_write(RawState, Key, Value) ->
           maps:get(<<"instance">>, State, undefined)} of
         {undefined, _} ->
             % Transaction creation failed, return state unchanged
-            ?event(error, {write_failed_no_transaction, Key}),
+            ?event({write_failed_no_transaction, Key}),
             State;
         {_, undefined} ->
             % Database instance missing, return state unchanged
-            ?event(error, {write_failed_no_db_instance, Key}),
+            ?event({write_failed_no_db_instance, Key}),
             State;
         {Txn, Dbi} ->
             % Valid transaction and instance, perform the write
@@ -761,7 +761,7 @@ server_write(RawState, Key, Value) ->
                 State
             catch
                 Class:Reason:Stacktrace ->
-                    ?event(error, {put_failed, Class, Reason, Stacktrace, Key}),
+                    ?event({put_failed, Class, Reason, Stacktrace, Key}),
                     % If put fails, the transaction may be invalid, clean it up
                     State#{ <<"transaction">> => undefined, <<"instance">> => undefined }
             end

@@ -1695,7 +1695,7 @@ redirect_from_graphql() ->
     Opts =
         #{ store =>
             [
-                #{ <<"store-module">> => hb_store_lmdb, <<"name">> => <<"cache-mainnet">> },
+                #{ <<"store-module">> => hb_store_lmdb, <<"name">> => <<"cache-lmdb">> },
                 #{ <<"store-module">> => hb_store_gateway, <<"store">> => false }
             ]
         },
@@ -1767,7 +1767,7 @@ http_init(Opts) ->
 		store => [
 			#{
                 <<"store-module">> => hb_store_lmdb,
-                <<"name">> => <<"cache-mainnet/lmdb">>
+                <<"name">> => <<"cache-lmdb">>
             },
 			#{ <<"store-module">> => hb_store_gateway, <<"store">> => false }
 		]
@@ -1835,7 +1835,7 @@ http_get_schedule_redirect() ->
         #{
             store =>
                 [
-                    #{ <<"store-module">> => hb_store_lmdb, <<"name">> => <<"cache-mainnet">> },
+                    #{ <<"store-module">> => hb_store_lmdb, <<"name">> => <<"cache-lmdb">> },
                     #{ <<"store-module">> => hb_store_gateway, <<"opts">> => #{} }
                 ],
                 scheduler_follow_redirects => false
