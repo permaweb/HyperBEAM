@@ -13,6 +13,9 @@
 
 %% @doc Load the driver for the WASM compiler...
 load_driver() ->
+    %% ensure hb_beamr is loaded first, so it finds its own libraries,
+    %% instead of beamrc's
+    hb_beamr:load_driver(),
     case erl_ddll:load(code:priv_dir(hb), ?MODULE) of
         ok -> ok;
         {error, already_loaded} -> ok;

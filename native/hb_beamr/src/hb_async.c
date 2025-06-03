@@ -67,7 +67,6 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
         // params will be added by wasm_vals_to_erl_msg
         3 + // signature
         2 // tuple
-        + 10 // good luck!
     );
     ErlDrvTermData* msg = driver_alloc(base_msg_size);
     int msg_i = 0;
@@ -104,22 +103,22 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     is->ready = 0;
 
     // Send the message to the caller process
-    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_i);
-    DRV_DEBUG("Call to erl_drv_output_term completed. Res: %d", msg_res);
+    int out_res = erl_drv_output_term(proc->port_term, msg, msg_i);
+    DRV_DEBUG("Call to erl_drv_output_term completed. Res: %d", out_res);
 
     // Wait for the response (we set this directly after the message was sent
     // so we have the lock, before Erlang sends us data back)
-    DRV_DEBUG("Waiting for import response");
+    DRV_DEBUG("Import response: unlocking is_running mutex and waiting on %s", erl_drv_cond_name(is->cond));
     drv_unlock(proc->is_running);
     drv_wait(is->response_ready, is->cond, &is->ready);
     drv_lock(proc->is_running);
-    DRV_DEBUG("Import response ready");
+    DRV_DEBUG("Import response: %s ready, relocked is_running mutex", erl_drv_cond_name(is->cond));
 
     // Handle error in the response
     if (is->error_message) {
         DRV_DEBUG("Import execution failed. Error message: %s", is->error_message);
         send_error(proc->port_term, "Import execution failed: %s", is->error_message);
-        driver_free(is->error_message);
+        wasm_runtime_set_exception(module_inst, is->error_message);
         return;
     }
 
@@ -133,10 +132,9 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         DRV_DEBUG("Failed to convert wasm vals to raw args: %d", rc);
         send_error(proc->port_term, "Failed to convert wasm vals to raw args: %d", rc);
-        return;
+    } else {
+        DRV_DEBUG("Converted import results to raw args");
     }
-
-    DRV_DEBUG("Converted import results to raw args");
 
     // Cleanup any variables we allocated
     if (wasm_args) {
@@ -150,6 +148,7 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     }
 
     // Reset the import state
+    is->meta = NULL;
     is->ready = 0;
     is->error_message = NULL;
     is->results = NULL;
@@ -270,8 +269,8 @@ void wasm_initialize_runtime(void* raw) {
     msg[msg_i++] = ERL_DRV_TUPLE;
     msg[msg_i++] = 1;
 
-    int send_res = erl_drv_output_term(proc->port_term, msg, msg_i);
-    DRV_DEBUG("Send result: %d", send_res);
+    int out_res = erl_drv_output_term(proc->port_term, msg, msg_i);
+    DRV_DEBUG("Call to erl_drv_output_term completed. Res: %d", out_res);
 
     // Set proc
     proc->wasm_ctx = wasm_ctx;
@@ -331,8 +330,8 @@ void wasm_execute_exported_function(void* raw) {
     msg[msg_i++] = ERL_DRV_TUPLE;
     msg[msg_i++] = 2;
 
-    int send_res = erl_drv_output_term(proc->port_term, msg, msg_i);
-    DRV_DEBUG("Send result: %d", send_res);
+    int out_res = erl_drv_output_term(proc->port_term, msg, msg_i);
+    DRV_DEBUG("Call to erl_drv_output_term completed. Res: %d", out_res);
 
 fail1:
     memset(&proc->call_stack[--proc->call_stack_height], 0, sizeof(CallContext));

@@ -53,6 +53,8 @@
 -export([start/1, start/2, call/3, call/4, call/5, call/6, stop/1, wasm_send/2]).
 %%% Utility API:
 -export([serialize/1, deserialize/2, stub/3]).
+%%% Used to prevent library conflicts with hb_beamrc
+-export([load_driver/0]).
 
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

@@ -42,7 +42,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-% -hb_debug(print).
+-hb_debug(print).
 
 %% @doc Export all functions aside the `instance/3' function.
 info(_Msg1, _Opts) ->
@@ -58,9 +58,9 @@ init(M1, M2, Opts) ->
     InPrefix = dev_stack:input_prefix(M1, M2, Opts),
     % Where we should read/write our own state to.
     Prefix = dev_stack:prefix(M1, M2, Opts),
-    % ?event({in_prefix, InPrefix}),
+    ?event({in_prefix, InPrefix, prefix, Prefix}),
     ImageBin =
-        case hb_ao:get(<<"image">>, M1, Opts) of
+        case hb_ao:get(<<InPrefix/binary, "/image">>, M1, Opts) of
             not_found ->
                 ?event({wasm_image_not_found}),
                 case hb_ao:get(<<"body">>, M1, Opts) of
@@ -70,7 +70,8 @@ init(M1, M2, Opts) ->
                                 wasm_init_error,
                                 <<
                                     "No viable image found in ",
-                                    "image."
+                                    InPrefix/binary,
+                                    "/image."
                                 >>,
                                 {msg1, M1}
                             }
@@ -100,7 +101,8 @@ init(M1, M2, Opts) ->
         end,
     % Start the WASM executor.
     {ok, _Imports, _Exports, AotBin} = hb_beamrc:compile(ImageBin),
-    {ok, Instance, _Imports2, _Exports2} = hb_beamr:start(AotBin, aot),
+    {ok, Instance} = hb_beamr:start(AotBin, aot),
+    % {ok, Instance} = hb_beamr:start(ImageBin, aot),
     % Set the WASM Instance, handler, and standard library invokation function.
     ?event({setting_wasm_instance, Instance, {prefix, Prefix}}),
     {ok,
@@ -127,6 +129,7 @@ init(M1, M2, Opts) ->
 
 %% @doc Take a BEAMR import call and resolve it using `hb_ao'.
 default_import_resolver(Msg1, Msg2, Opts) ->
+    ?event({default_import_resolver, Msg1, Msg2}),
     #{
         instance := WASM,
         module := Module,
@@ -135,6 +138,7 @@ default_import_resolver(Msg1, Msg2, Opts) ->
         func_sig := Signature
     } = Msg2,
     Prefix = dev_stack:prefix(Msg1, Msg2, Opts),
+    ?event({default_import_resolver_prefix, Prefix}),
     {ok, Msg3} =
         hb_ao:resolve(
             hb_private:set(
@@ -258,9 +262,11 @@ compute(RawM1, M2, Opts) ->
     % two different messages and get the same result:
     % - A message with a `State' key but no WASM instance in `priv/'.
     % - A message with a WASM instance in `priv/' but no `State' key.
+    ?event({compute_begin, RawM1, M2}),
     {ok, M1} = normalize(RawM1, M2, Opts),
-    ?event(running_compute),
+    ?event({compute_normalized, M1}),
     Prefix = dev_stack:prefix(M1, M2, Opts),
+    ?event({compute_prefix, Prefix}),
     case hb_ao:get(pass, M1, Opts) of
         X when X == 1 orelse X == not_found ->
             % Extract the WASM Instance, func, params, and standard library
@@ -307,7 +313,11 @@ compute(RawM1, M2, Opts) ->
                             {priv, hb_private:from_message(M1)}
                         }
                     ),
-                    {ok, Res, ResType, MsgAfterExecution} =
+                    ImportResolverPath = <<Prefix/binary, "/import-resolver">>,
+                    ?event({import_resolver_path, ImportResolverPath}),
+                    ImportResolver = hb_private:get(ImportResolverPath, M1, Opts),
+                    ?event({import_resolver, ImportResolver}),
+                    {ResType, Res, MsgAfterExecution} =
                         hb_beamr:call(
                             instance(M1, M2, Opts),
                             WASMFunction,
@@ -317,7 +327,7 @@ compute(RawM1, M2, Opts) ->
                                     [];
                                 Params -> Params
                             end,
-                            hb_private:get(<<Prefix/binary, "/import-resolver">>, M1, Opts),
+                            ImportResolver,
                             M1,
                             Opts
                         ),
@@ -425,7 +435,7 @@ import(Msg1, Msg2, Opts) ->
     ModName = hb_ao:get(<<"module">>, Msg2, Opts),
     FuncName = hb_ao:get(<<"func">>, Msg2, Opts),
     ?event({import_mod_func, {mod, ModName}, {func, FuncName}}),
-    Prefix = <<"wasm">>, %dev_stack:prefix(Msg1, Msg2, Opts),
+    Prefix = dev_stack:prefix(Msg1, Msg2, Opts),
     ?event({import_prefix, {prefix, Prefix}}),
     AdjustedPath =
         <<
@@ -506,7 +516,7 @@ input_prefix_test() ->
     ?event({after_init, Msg2}),
     Priv = hb_private:from_message(Msg2),
     ?assertMatch(
-        {ok, Instance} when is_reference(Instance),
+        {ok, Instance} when is_pid(Instance),
         hb_ao:resolve(Priv, <<"instance">>, #{})
     ),
     ?assertMatch(
@@ -530,7 +540,7 @@ process_prefixes_test() ->
     ?event({after_init, Msg3}),
     Priv = hb_private:from_message(Msg3),
     ?assertMatch(
-        {ok, Instance} when is_reference(Instance),
+        {ok, Instance} when is_pid(Instance),
         hb_ao:resolve(Priv, <<"wasm/instance">>, #{})
     ),
     ?assertMatch(
@@ -546,7 +556,7 @@ init_test() ->
     ?event({after_init, Msg1}),
     Priv = hb_private:from_message(Msg1),
     ?assertMatch(
-        {ok, Instance} when is_reference(Instance),
+        {ok, Instance} when is_pid(Instance),
         hb_ao:resolve(Priv, <<"instance">>, #{})
     ),
     ?assertMatch(
