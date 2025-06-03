@@ -77,6 +77,18 @@ fn execute_kernel_with_params(
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
+fn execute_kernel_with_params(
+    kernel_id: String,
+    input_data: rustler::Binary,
+    params: rustler::Binary,
+) -> NifResult<Vec<u8>> {
+    let kernel_src = retrieve_kernel_src(&kernel_id).unwrap();
+    let kem = pollster::block_on(KernelExecutor::new());
+    let result = kem.execute_kernel_with_uniform_default(&kernel_src, input_data.as_slice(), &params);
+    Ok(result)
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
 fn adapter_info() -> NifResult<String> {
     let adapter = pollster::block_on(KernelExecutor::get_adapter_info());
     Ok(adapter)
