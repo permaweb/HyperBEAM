@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
 // Simple image pixelizing kernel
-// deployment id (Arweave): -
+// deployment id (Arweave): K0YjS909xy9M5jUt8OfR_9pbNnWvCpmlGWgndoBNMt0
 
 @group(0) @binding(0)
 var<storage, read> input_pixels: array<u32>;
