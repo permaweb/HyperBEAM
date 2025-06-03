@@ -34,7 +34,7 @@ fn sample_pixel(x: i32, y: i32, width: i32, height: i32) -> vec4<f32> {
     if (x < 0 || x >= width || y < 0 || y >= height) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    
+
     let idx = u32(y * width + x);
     return unpack_rgba(input_pixels[idx]);
 }
@@ -54,30 +54,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Calculate which pixel block this thread belongs to
     let block_x = (x / pixel_size) * pixel_size;
     let block_y = (y / pixel_size) * pixel_size;
-    
+
     // Calculate the center of the pixel block for sampling
     let center_x = block_x + pixel_size / 2;
     let center_y = block_y + pixel_size / 2;
-    
-    
+
+
     var total_color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     var sample_count = 0;
-    
+
     for (var dy = 0; dy < pixel_size; dy++) {
         for (var dx = 0; dx < pixel_size; dx++) {
             let sample_x = block_x + dx;
             let sample_y = block_y + dy;
-            
+
             if (sample_x < width && sample_y < height) {
                 total_color += sample_pixel(sample_x, sample_y, width, height);
                 sample_count++;
             }
         }
     }
-    
+
     let block_color = total_color / f32(sample_count);
-    
-    
+
+
     // Write the block color to the output
     let idx = u32(y * width + x);
     output_pixels[idx] = pack_rgba(block_color);
