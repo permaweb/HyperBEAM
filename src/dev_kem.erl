@@ -81,7 +81,7 @@ execute_kernel_with_params(Msg1, _Msg2, Opts) ->
         RawParams = maps:get(<<"params">>, Body),
         
         % Convert input array to binary
-		InputData = << <<X:32/little>> || X <- RawInputData >>,
+		InputData = list_to_binary(RawInputData),  % Keep image bytes as bytes
 		Params = << <<X:32/little>> || X <- RawParams >>,
         
         Result = kem_nif:execute_kernel_with_params(KernelId, InputData, Params),
