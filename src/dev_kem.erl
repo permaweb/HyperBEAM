@@ -5,7 +5,7 @@
 %%% this device offer parallel computation on hardware level, boosting ao's parallel compute to a lower level
 
 -module(dev_kem).
--export([info/1, info/3, execute_kernel/3, get_adapter_info/3, test_ao/0]).
+-export([info/1, info/3, execute_kernel/3, execute_kernel_with_params/3, get_adapter_info/3, test_ao/0]).
 
 info(_) ->
     #{
@@ -13,6 +13,7 @@ info(_) ->
         handlers => #{
             <<"info">> => fun info/3,
             <<"execute_kernel">> => fun execute_kernel/3,
+			<<"execute_kernel_with_params">> => fun execute_kernel_with_params/3,
             <<"get_adapter_info">> => fun get_adapter_info/3
         }
     }.
@@ -25,7 +26,8 @@ info(_Msg1, _Msg2, _Opts) ->
         <<"paths">> => #{
             <<"info">> => <<"Get device info">>,
             <<"execute_kernel">> => <<"Execute kernel code">>,
-            <<"get_adapter_info">> => <<"Get GPU adapter info">>
+            <<"get_adapter_info">> => <<"Get GPU adapter info">>,
+			<<"execute_kernel_with_params">> => <<"Execute kernel code with params passed">>
         }
     },
     {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
@@ -49,6 +51,40 @@ execute_kernel(Msg1, _Msg2, Opts) ->
         InputData = list_to_binary(RawInputData),
         
         Result = kem_nif:execute_kernel(KernelId, InputData, OutputSizeHint),
+        {ok, #{<<"status">> => 200, <<"body">> => Result}}
+    catch
+        error:Error:Stack ->
+            io:format("~nError: ~p~n", [Error]),
+            io:format("Stack: ~p~n", [Stack]),
+            {error, #{
+                <<"status">> => 500,
+                <<"body">> => #{
+                    <<"error">> => <<"Failed to execute kernel">>,
+                    <<"details">> => Error
+                }
+            }}
+    end.
+
+%% @doc execute input_data and params against the source code of a given kernel_id
+execute_kernel_with_params(Msg1, _Msg2, Opts) ->
+    try
+        % decode the JSON body
+        RawBody = hb_ao:get(<<"body">>, Msg1, not_found, Opts),
+        io:format("~nRawBody: ~p~n", [RawBody]),
+        
+        Body = hb_json:decode(RawBody),
+        % io:format("~nDecoded Body: ~p~n", [Body]),
+        
+        % Now get parameters from decoded body
+        KernelId = maps:get(<<"kernel_id">>, Body),
+        RawInputData = maps:get(<<"input_data">>, Body),
+        RawParams = maps:get(<<"params">>, Body),
+        
+        % Convert input array to binary
+		InputData = << <<X:32/little>> || X <- RawInputData >>,
+		Params = << <<X:32/little>> || X <- RawParams >>,
+        
+        Result = kem_nif:execute_kernel_with_params(KernelId, InputData, Params),
         {ok, #{<<"status">> => 200, <<"body">> => Result}}
     catch
         error:Error:Stack ->
