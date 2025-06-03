@@ -36,7 +36,7 @@ fn execute_kernel_with_params(
 ) -> NifResult<Vec<u8>> {
     let kernel_src = retrieve_kernel_src(&kernel_id).unwrap();
     let kem = pollster::block_on(KernelExecutor::new());
-    let result = kem.execute_kernel_with_uniform_default(&kernel_src, input_data.as_slice(), &params);
+    let result = kem.execute_kernel_with_uniform_default(&kernel_src, input_data.as_slice(), params.as_slice());
     Ok(result)
 }
 
@@ -46,4 +46,4 @@ fn adapter_info() -> NifResult<String> {
     Ok(adapter)
 }
 
-rustler::init!("kem_nif", [hello, execute_kernel, adapter_info]);
+rustler::init!("kem_nif", [hello, execute_kernel, execute_kernel_with_params, adapter_info]);

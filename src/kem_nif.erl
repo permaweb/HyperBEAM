@@ -1,5 +1,5 @@
 -module(kem_nif).
--export([hello/0, execute_kernel/3, adapter_info/0]).
+-export([hello/0, execute_kernel/3, adapter_info/0, execute_kernel_with_params/3]).
 
 -on_load(init/0).
 -define(NOT_LOADED, not_loaded(?LINE)).
@@ -14,6 +14,13 @@ execute_kernel(KernelId, InputData, OutputSizeHint)
          is_binary(InputData),
          is_integer(OutputSizeHint),
          OutputSizeHint > 0 ->
+    ?NOT_LOADED.
+
+-spec execute_kernel_with_params(binary(), binary(), binary()) -> binary().
+execute_kernel_with_params(KernelId, InputData, Params) 
+    when is_binary(KernelId),
+         is_binary(InputData),
+         is_binary(Params) ->
     ?NOT_LOADED.
 
 -spec adapter_info() -> binary().
