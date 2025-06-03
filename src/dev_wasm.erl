@@ -34,7 +34,7 @@
 %%%             Raw binary WASM state
 %%% </pre>
 -module(dev_wasm).
--export([info/2, init/3, call/3, call/6, compute/3, import/3, terminate/3, snapshot/3, normalize/3]).
+-export([info/2, init/3, compute/3, import/3, terminate/3, snapshot/3, normalize/3]).
 %%% API for other devices:
 -export([instance/3]).
 %%% Test API:
@@ -158,101 +158,6 @@ default_import_resolver(Msg1, Msg2, Opts) ->
     NextState = hb_ao:get(state, Msg3, Opts),
     Response = hb_ao:get(results, Msg3, Opts),
     {ok, Response, NextState}.
-
-find_import_in_list([], _FunctionToCompare) ->
-    false;
-find_import_in_list([{func, ImportModule, ImportField, ParamTypes, ResultTypes} | RestImports], {TestImportModule, TestImportField})
-  when is_binary(ImportModule) and is_binary(ImportField) ->
-    if
-        ImportModule == TestImportModule andalso ImportField == TestImportField ->
-            {true, {matched_import_results, ParamTypes, ResultTypes}};
-        true ->
-            find_import_in_list(RestImports, {TestImportModule, TestImportField})
-    end;
-find_import_in_list([_ | RestImports], {TestImportModule, TestImportField}) -> 
-    find_import_in_list(RestImports, {TestImportModule, TestImportField}).
-
-get_import_func_type(InstMeta, {ImportModule, ImportField}) ->
-    ?event(get_import_func_type),
-    {{imports, Imports}, _} = InstMeta,
-    % ?event({get_import_res_type_inputs, #{imports => Imports, import_module => ImportModule, import_field => ImportField}}),
-    FoundImport = find_import_in_list(Imports, {ImportModule, ImportField}),
-    ?event({get_import_res_type_found_import, FoundImport}),
-    ResType = case FoundImport of
-        {true, {matched_import_results, ParamTypes, ResultTypes}} ->
-            {ok, {params, ParamTypes}, {results, ResultTypes}};
-        false -> {error, no_import_found}
-    end,
-    ?event({get_import_res_type_final_res_type, ResType}),
-    ResType.
-
-type_list_to_string_parts([]) ->
-    [];
-type_list_to_string_parts([Atom]) when is_atom(Atom) ->
-    [atom_to_binary(Atom, utf8)];
-type_list_to_string_parts([Atom | Rest]) when is_atom(Atom) ->
-    [atom_to_binary(Atom, utf8), <<", ">> | type_list_to_string_parts(Rest)].
-
-func_type_atoms_to_sig(ParamTypes, ResultTypes) ->
-    ?event({func_type_atoms_to_sig, {params, ParamTypes}, {results, ResultTypes}}),
-    ParamsString = iolist_to_binary(type_list_to_string_parts(ParamTypes)),
-    ResultsString = iolist_to_binary(type_list_to_string_parts(ResultTypes)),
-    Sig = <<"(", ParamsString/binary, ") -> (", ResultsString/binary, ")">>,
-    ?event({func_type_atoms_to_sig_final, Sig}),
-    Sig.
-
-call(Instance, Function, Params) ->
-    {ok, Res, _, _} = call(Instance, Function, Params, fun default_import_resolver/3, #{}, #{}),
-    {ok, Res}.
-call(Instance, Function, Params, ImportResolver, State1, Opts) ->
-    ?event({call_begin, Instance, Function, Params}),
-    {ok, InstMeta} = hb_wtime:meta(Instance),
-    case hb_wtime:call_begin(Instance, Function, Params) of
-        {ok, complete, ResultList} ->
-            ?event({call_complete, Instance, Function, Params, ResultList}),
-            {ok, ResultList, ok, State1};
-        {ok, import, [ImportModule, ImportField, ImportParams]} ->
-            % Start the import resolution loop
-            call_loop(Instance, InstMeta, ImportModule, ImportField, ImportParams, ImportResolver, State1, Opts);
-        {error, Reason} ->
-            ?event({call_begin_failed, Instance, Function, Params, Reason}),
-            {error, {call_begin_failed, Reason}}
-    end.
-
-%% Internal helper function to handle the host import loop.
-call_loop(Instance, InstMeta, ImportModule, ImportField, ImportParams, ImportResolver, CurrentState, Opts) ->
-    ?event({call_loop_begin, {{module, ImportModule}, {field, ImportField}, {params, ImportParams}, {import_resolver, ImportResolver}}}),
-    {ok, {params, ParamTypes}, {results, ResultTypes}} = get_import_func_type(InstMeta, {ImportModule, ImportField}),
-    ?event({call_loop_params, {param_types, ParamTypes}, {result_types, ResultTypes}}),
-    Signature = func_type_atoms_to_sig(ParamTypes, ResultTypes),
-    ?event({call_loop_signature, Signature}),
-    ImportRes = ImportResolver(CurrentState, #{
-        instance => Instance,
-        module => ImportModule,
-        func => ImportField,
-        args => ImportParams,
-        func_sig => Signature
-    }, Opts),
-    ?event({
-        import_resolver_result,
-        {in,  ImportModule, ImportField, ImportParams},
-        {out, ImportRes}
-    }),
-    case ImportRes of
-        {ok, HostResultList, NextState} ->
-            % Resume Wasm execution with the host result
-            case hb_wtime:call_continue(Instance, ImportModule, ImportField, HostResultList) of
-                {ok, complete, FinalResultList} ->
-                    {ok, FinalResultList, ok, NextState}; % Final completion
-                {ok, import, [NextImportModule, NextImportField, NextImportParams]} ->
-                    % Another import was needed, continue the loop
-                    call_loop(Instance, InstMeta, NextImportModule, NextImportField, NextImportParams, ImportResolver, NextState, Opts);
-                {error, Reason} ->
-                    {error, {call_continue_failed, Reason}}
-            end;
-        {error, Reason} ->
-            {error, {import_resolver_failed, Reason}}
-    end.
 
 %% @doc Call the WASM executor with a message that has been prepared by a prior
 %% pass.
