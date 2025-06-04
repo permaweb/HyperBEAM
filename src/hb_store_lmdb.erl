@@ -275,7 +275,6 @@ resolve_path_links(_StoreOpts, [LastSegment], _Depth) ->
     % Base case: only one segment left, no link resolution needed
     {ok, [LastSegment]};
 resolve_path_links(StoreOpts, Path, Depth) ->
-    sync(StoreOpts),
     resolve_path_links_acc(StoreOpts, Path, [], Depth).
 
 %% Internal helper that accumulates the resolved path
@@ -378,7 +377,6 @@ list(StoreOpts, Path) when is_map(StoreOpts), is_binary(Path) ->
            _ -> <<ResolvedPath/binary, "/">>
        end,
        SearchPathSize = byte_size(SearchPath),
-       sync(StoreOpts),
        Children = lmdb:fold(Env, default,
            fun(Key, _Value, Acc) ->
                % Match keys that start with our search path (like dir listing)

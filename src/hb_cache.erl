@@ -245,8 +245,8 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
 write_key(Base, <<"commitments">>, HPAlg, RawCommitments, Store, Opts) ->
     % Search to see if we already have commitments for this message locally.
     Commitments = prepare_commitments(RawCommitments, Opts),
-    LocalStore = hb_store:scope(Store, local),
-    case read(<<Base/binary, "/commitments">>, Opts#{ store => LocalStore }) of
+    % LocalStore = hb_store:scope(Store, local),
+    case disabled of % read(<<Base/binary, "/commitments">>, Opts#{ store => LocalStore }) of
         {ok, ExistingCommitments} ->
             % We do, so we need to merge the new commitments with the old ones.
             % We do this by fully loading the existing commitments, converting

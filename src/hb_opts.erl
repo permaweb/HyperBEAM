@@ -170,15 +170,20 @@ default_message() ->
         ],
         store =>
             [
+                % #{
+                %     <<"name">> => <<"cache-mainnet/lru">>,
+                %     <<"capacity">> => 512 * 1024 * 1024,
+                %     <<"store-module">> => hb_store_lru,
+                %     <<"persistent-store">> => #{
+                %         <<"store-module">> => hb_store_fs,
+                %         <<"name">> => <<"cache-mainnet/lru">>
+                %     }
+                % },
                 #{
-                    <<"name">> => <<"cache-mainnet/lru">>,
-                    <<"capacity">> => 512 * 1024 * 1024,
-                    <<"store-module">> => hb_store_lru,
-                    <<"persistent-store">> => #{
-                        <<"store-module">> => hb_store_fs,
-                        <<"name">> => <<"cache-mainnet/lru">>
-                    }
-                },
+                    <<"store-module">> => hb_store_lmdb,
+                    <<"name">> => <<"cache-mainnet/lmdb">>,
+                    <<"max-size">> => 4 * 1024 * 1024 * 1024
+                 },
                 #{
                     <<"store-module">> => hb_store_fs,
                     <<"name">> => <<"cache-mainnet">>
@@ -194,12 +199,8 @@ default_message() ->
                     <<"store">> => 
                     [
                         #{
-                            <<"name">> => <<"cache-mainnet/lru">>,
-                            <<"store-module">> => hb_store_lru,
-                            <<"persistent-store">> => #{
-                                <<"store-module">> => hb_store_fs,
-                                <<"name">> => <<"cache-mainnet/lru">>
-                            }
+                            <<"name">> => <<"cache-mainnet/lmdb">>,
+                            <<"store-module">> => hb_store_lmdb
                         }
                     ]
                 },
@@ -208,12 +209,8 @@ default_message() ->
                     <<"store">> =>
                         [
                             #{
-                                <<"name">> => <<"cache-mainnet/lru">>,
-                                <<"store-module">> => hb_store_lru,
-                                <<"persistent-store">> => #{
-                                    <<"store-module">> => hb_store_fs,
-                                    <<"name">> => <<"cache-mainnet/lru">>
-                                }
+                                <<"name">> => <<"cache-mainnet/lmdb">>,
+                                <<"store-module">> => hb_store_lmdb
                             }
                         ]
                 }
