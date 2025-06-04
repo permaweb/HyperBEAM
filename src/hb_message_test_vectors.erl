@@ -466,7 +466,9 @@ message_with_large_keys_test(Codec, Opts) ->
         <<"another_normal_key">> => <<"another_normal_value">>
     },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
+    ?event({encoded, {explicit, Encoded}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
+    ?event({matching, {input, Msg}, {output, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 %% @doc Check that a nested signed message with an embedded typed list can 
@@ -720,12 +722,6 @@ signed_message_encode_decode_verify_test(Codec, Opts) ->
         <<"test-5">> => <<"TEST VALUE 5">>
     },
     SignedMsg =
-        hb_message:commit(
-            Msg,
-            Opts,
-            Codec
-        ),
-    ?event({signed_msg, SignedMsg}),
     ?assertEqual(true, hb_message:verify(SignedMsg, all, Opts)),
     Encoded = hb_message:convert(SignedMsg, Codec, <<"structured@1.0">>, Opts),
     ?event({msg_encoded_as_codec, Encoded}),

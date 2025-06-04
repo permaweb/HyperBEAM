@@ -1,11 +1,9 @@
 %%% @doc Utilities for Arweave L1 transaction creation, signing, and verification.
 -module(ar_tx).
 
--export([sign/2, verify/1, verify_tx_id/2, generate_id/2, get_owner_address/1]).
+-export([sign/2, verify/1, verify_tx_id/2, generate_id/2, get_owner_address/1, data_root/1]).
 -export([enforce_valid_tx/1, enforce_valid_unsigned_tx/1, enforce_valid_signed_tx/1]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
-
--export([chunk_binary/2, chunks_to_size_tagged_chunks/1, sized_chunks_to_sized_chunk_ids/1]).
 
 %% Used for testing
 -export([new/0]).
@@ -82,6 +80,13 @@ get_owner_address(#tx{ owner = Owner, signature_type = KeyType, owner_address = 
 get_owner_address(#tx{ owner_address = OwnerAddress }) ->
 	OwnerAddress.
 
+data_root(Bin) ->
+    Chunks = chunk_binary(?DATA_CHUNK_SIZE, Bin),
+    SizeTaggedChunks = chunks_to_size_tagged_chunks(Chunks),
+    SizeTaggedChunkIDs = sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
+    {Root, _} = ar_merkle:generate_tree(SizeTaggedChunkIDs),
+    Root.
+
 %%%===================================================================
 %%% Private functions.
 %%%===================================================================
@@ -105,22 +110,24 @@ generate_signature_data_segment(_) ->
 
 %% @doc Generate the data segment to be signed for a given v2 TX.
 signature_data_segment_v2(TX) ->
-    true = enforce_valid_tx(TX),
+    NormTX = hb_tx:normalize_data(TX),
+    ?event({signature_data_segment_v2, {explicit, NormTX}}),
+    true = enforce_valid_tx(NormTX),
     List = [
-        << (integer_to_binary(TX#tx.format))/binary >>,
-        << (TX#tx.owner)/binary >>,
-        << (TX#tx.target)/binary >>,
-        << (list_to_binary(integer_to_list(TX#tx.quantity)))/binary >>,
-        << (list_to_binary(integer_to_list(TX#tx.reward)))/binary >>,
-        << (TX#tx.last_tx)/binary >>,
-        tags_to_list(TX#tx.tags),
-        << (integer_to_binary(TX#tx.data_size))/binary >>,
-        << (TX#tx.data_root)/binary >>
+        << (integer_to_binary(NormTX#tx.format))/binary >>,
+        << (NormTX#tx.owner)/binary >>,
+        << (NormTX#tx.target)/binary >>,
+        << (list_to_binary(integer_to_list(NormTX#tx.quantity)))/binary >>,
+        << (list_to_binary(integer_to_list(NormTX#tx.reward)))/binary >>,
+        << (NormTX#tx.last_tx)/binary >>,
+        tags_to_list(NormTX#tx.tags),
+        << (integer_to_binary(NormTX#tx.data_size))/binary >>,
+        << (NormTX#tx.data_root)/binary >>
     ],
     List2 =
-        case TX#tx.denomination > 0 of
+        case NormTX#tx.denomination > 0 of
             true ->
-                [<< (integer_to_binary(TX#tx.denomination))/binary >> | List];
+                [<< (integer_to_binary(NormTX#tx.denomination))/binary >> | List];
             false ->
                 List
         end,
@@ -521,11 +528,6 @@ enforce_valid_signed_tx(TX) ->
         not hb_util:check_value(TX#tx.owner, [?DEFAULT_OWNER]),
         {invalid_field, owner, TX#tx.owner}
     ),
-    % Arweave L1 #tx doesn't support manifest
-    hb_util:ok_or_throw(TX,
-        hb_util:check_value(TX#tx.manifest, [undefined]),
-        {invalid_field, manifest, TX#tx.manifest}
-    ),
     true.
 
 %%%===================================================================
@@ -538,7 +540,7 @@ new() ->
     new(<<>>).
 new(Data) ->
     TX = #tx{
-        format = 1,
+        format = 2,
         last_tx = crypto:strong_rand_bytes(32),
         data = Data,
         data_size = byte_size(Data)

@@ -330,13 +330,12 @@ serialize_bundle_data(Map, Item) when is_map(Map) ->
             hb_tx:id(NewManifest, unsigned)
         )
     };
-% serialize_bundle_data(List, Item) when is_list(List) ->
-%     % TODO: As of May 2025, this code can not be reached.
-%     Bin = finalize_bundle_data(lists:map(fun to_serialized_pair/1, List)),
-%     Item#tx{
-%         data = Bin,
-%         tags = add_bundle_tags(Item#tx.tags)
-%     };
+serialize_bundle_data(List, Item) when is_list(List) ->
+    Bin = finalize_bundle_data(lists:map(fun to_serialized_pair/1, List)),
+    Item#tx{
+        data = Bin,
+        tags = add_bundle_tags(Item#tx.tags)
+    };
 serialize_bundle_data(Data, _Item) ->
     throw({cannot_serialize_tx_data, must_be_map_or_list, Data}).
 

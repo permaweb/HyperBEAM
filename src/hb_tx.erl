@@ -44,7 +44,7 @@ id(Item) -> id(Item, unsigned).
 id(Item, Type) when not is_record(Item, tx) ->
     id(normalize(Item), Type);
 id(Item = #tx { unsigned_id = ?DEFAULT_ID }, unsigned) ->
-    CorrectedItem = hb_tx:reset_ids(Item),
+    CorrectedItem = reset_ids(Item),
     CorrectedItem#tx.unsigned_id;
 id(#tx { unsigned_id = UnsignedID }, unsigned) ->
     UnsignedID;
@@ -84,39 +84,24 @@ normalize(Item) -> reset_ids(normalize_data(Item)).
 %% @doc Ensure that a data item (potentially containing a map or list) has a standard, serialized form.
 normalize_data(not_found) -> throw(not_found);
 normalize_data(Bundle) when is_list(Bundle); is_map(Bundle) ->
-    ?event({normalize_data, bundle, Bundle}),
     normalize_data(#tx{ data = Bundle });
-% normalize_data(Item = #tx { data = Data }) when is_list(Data) ->
-%     ?event({normalize_data, list, Item}),
-%     normalize_data(
-%         Item#tx{
-%             tags = add_list_tags(Item#tx.tags),
-%             data =
-%                 maps:from_list(
-%                     lists:zipwith(
-%                         fun(Index, MapItem) ->
-%                             {
-%                                 integer_to_binary(Index),
-%                                 hb_tx:update_ids(normalize_data(MapItem))
-%                             }
-%                         end,
-%                         lists:seq(1, length(Data)),
-%                         Data
-%                     )
-%                 )
-%         }
-%     );
 normalize_data(Item = #tx{data = Bin}) when is_binary(Bin) ->
-    ?event({normalize_data, binary, Item}),
     normalize_data_size(Item);
 normalize_data(Item = #tx{data = Data}) ->
-    ?event({normalize_data, map, Item}),
     normalize_data_size(ar_bundles:serialize_bundle_data(Data, Item)).
 
 %% @doc Reset the data size of a data item. Assumes that the data is already normalized.
+normalize_data_size(Item = #tx{data = Bin, format = 2}) when is_binary(Bin) ->
+    normalize_data_root(Item);
 normalize_data_size(Item = #tx{data = Bin}) when is_binary(Bin) ->
     Item#tx{data_size = byte_size(Bin)};
 normalize_data_size(Item) -> Item.
+
+%% @doc Calculate the data root of a data item. Assumes that the data is already normalized.
+normalize_data_root(Item = #tx{data = Bin, format = 2})
+        when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
+    Item#tx{data_root = ar_tx:data_root(Bin), data_size = byte_size(Bin)};
+normalize_data_root(Item) -> Item.
 
 %% @doc Sign a message using the `priv_wallet' key in the options. Supports both
 %% the `hmac-sha256' and `rsa-pss-sha256' algorithms, offering unsigned and
@@ -128,10 +113,12 @@ commit_message(Codec, Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
 commit_message(Codec, Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
     % Convert the given message to an ANS-104 or Arweave TX record, sign it, and convert
     % it back to a structured message.
-    ?event({committing, {input, Msg}}),
+    ?event(xxx, {committing, {input, Msg}}),
     TX = hb_util:ok(codec_to_tx(Codec, hb_private:reset(Msg), Req, Opts)),
+    ?event(xxx, {commit_message, {tx, {explicit, TX}}}),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     Signed = sign(TX, Wallet),
+    ?event(xxx, {commit_message, {signed, {explicit, Signed}}}),
     SignedStructured =
         hb_message:convert(
             Signed,
@@ -139,6 +126,7 @@ commit_message(Codec, Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) 
             Codec,
             Opts
         ),
+    ?event(xxx, {commit_message, {signed_structured, {explicit, SignedStructured}}}),
     {ok, SignedStructured};
 commit_message(Codec, Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to ANS-104 or Arweave, then back.
@@ -166,7 +154,7 @@ verify_message(Codec, Msg, Req, Opts) ->
         ),
     ?event({verify, {only_with_commitment, OnlyWithCommitment}}),
     {ok, TX} = codec_to_tx(Codec, OnlyWithCommitment, Req, Opts),
-    ?event({verify, {encoded, TX}}),
+    ?event({verify, {encoded, {explicit, TX}}}),
     Res = verify(TX),
     {ok, Res}.
 
@@ -315,8 +303,9 @@ tx_to_tabm2(RawTX, TXKeys, CommittedTags, Req, Opts) ->
                     }
                 }
         end,
-    ?event({message_after_commitments, WithCommitments}),
-    hb_maps:without(?FILTERED_TAGS, WithCommitments, Opts).
+    Result = hb_maps:without(?FILTERED_TAGS, WithCommitments, Opts),
+    ?event({from_result, {explicit, Result}}),
+    Result.
       
 tabm_to_tx(NormTABM, Req, Opts) ->
     % Ensure that the TABM is fully loaded, for now.
@@ -383,6 +372,16 @@ tabm_to_tx(NormTABM, Req, Opts) ->
                 NormKey = hb_ao:normalize_key(Field),
                 case maps:find(NormKey, NormalizedMsgKeyMap) of
                     error -> {RemMap, [Default | Acc]};
+                    {ok, Value} when NormKey =:= <<"format">> ->
+                        {
+                            maps:remove(NormKey, RemMap),
+                            [coerce_format(Value) | Acc]
+                        };
+                    {ok, Value} when is_integer(Default) ->
+                        {
+                            maps:remove(NormKey, RemMap),
+                            [hb_util:int(Value) | Acc]
+                        };
                     {ok, Value} when is_binary(Default) andalso ?IS_ID(Value) ->
                         % NOTE: Do we really want to do this type coercion?
                         {
@@ -406,6 +405,10 @@ tabm_to_tx(NormTABM, Req, Opts) ->
     % Rebuild the tx record from the new list of fields and values.
     TXWithoutTags = list_to_tuple([tx | lists:reverse(BaseTXList)]),
     % Calculate which set of the remaining keys will be used as tags.
+    % Remaining: items where the value is less than or equal to ?MAX_TAG_VAL bytes will
+    %            stay as tags.
+    % RawDataItems: items where the value is greater than ?MAX_TAG_VAL bytes will get
+    %               converted to data items.
     {Remaining, RawDataItems} =
         lists:partition(
             fun({_Key, Value}) when is_binary(Value) ->
@@ -476,10 +479,10 @@ tabm_to_tx(NormTABM, Req, Opts) ->
                         }
                 }
         end,
-    
+    ?event({tx_with_data, {explicit, TXWithData}}),
     % Regenerate the IDs
     TXWithIDs =
-        try hb_tx:reset_ids(hb_tx:normalize(TXWithData))
+        try reset_ids(normalize(TXWithData))
         catch
             _:Error ->
                 ?event({prepared_tx_before_ids,
@@ -531,7 +534,7 @@ print(Item) ->
 
 format(Item) -> format(Item, 0).
 format(Item, Indent) when is_list(Item); is_map(Item) ->
-    format(hb_tx:normalize(Item), Indent);
+    format(normalize(Item), Indent);
 format(Item, Indent) when is_record(Item, tx) ->
     Valid = verify(Item),
     format_line(
@@ -712,6 +715,11 @@ codec_to_tx(<<"tx@1.0">>, Msg, Req, Opts) ->
 codec_to_tx(Codec, Msg, Req, Opts) ->
     ?event({codec_to_tx, {codec, Codec}, {msg, Msg}, {req, Req}}),
     throw({invalid_codec, Codec}).
+
+coerce_format(<<"ans104">>) -> ans104;
+coerce_format(<<"1">>) -> 1;
+coerce_format(<<"2">>) -> 2;
+coerce_format(Format) -> Format.
 
 %%%===================================================================
 %%% Tests.
