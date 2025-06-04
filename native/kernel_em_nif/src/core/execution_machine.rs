@@ -99,7 +99,7 @@ impl KernelExecutor {
         params: &[u8], // simplicity shortcut for berlin, assume output size = input size
     ) -> Vec<u8> {
         // sufficient defaults
-        // 256 working group,
+        // 16x16 working group,
 
         let width = u32::from_le_bytes([params[0], params[1], params[2], params[3]]);
         let height = u32::from_le_bytes([params[4], params[5], params[6], params[7]]);
@@ -114,8 +114,7 @@ impl KernelExecutor {
         let dispatch_x = (width + workgroup_size - 1) / workgroup_size;
         let dispatch_y = (height + workgroup_size - 1) / workgroup_size;
 
-        // Fix: Match your shader's @workgroup_size(16, 16)
-        let workgroup_size = (16, 16, 1); // ✅ 2D workgroup to match shader
+        let workgroup_size = (16, 16, 1); 
         let dispatch_size = (dispatch_x, dispatch_y, 1);
 
         self.execute_kernel_with_uniform(

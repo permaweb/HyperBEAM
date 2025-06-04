@@ -46,12 +46,6 @@ fn execute_kernel_with_params(
 ) -> NifResult<String> {
     let img = image::load_from_memory(&input_data).unwrap();
 
-    // let img = if img.width() > 2048 || img.height() > 2048 {
-    // 	img.resize(2048, 2048, image::imageops::FilterType::Lanczos3)
-    // } else {
-    // 	img
-    // };
-
     let rgba_img = img.to_rgba8();
     let (width, height) = rgba_img.dimensions();
     let pixel_bytes = rgba_img.into_raw();
