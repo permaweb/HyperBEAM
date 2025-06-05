@@ -45,11 +45,15 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
 
-  // Set initial state first, without transition
+  // Set initial state first, ensuring it's not animated.
   updatePaddings();
 
-  // Now add the transition style so subsequent changes are animated
-  addCssTransitionToMdContent();
+  // Defer adding the transition style.
+  // This ensures that the initial padding set by updatePaddings() above
+  // is applied before the transition is active, preventing animation on load.
+  setTimeout(function() {
+    addCssTransitionToMdContent();
+  }, 50); // Delay of 50ms to give more time for initial paint.
 
   window.addEventListener('scroll', function() {
     const scrollTop = window.scrollY || document.documentElement.scrollTop;

@@ -1,4 +1,4 @@
-# Devices
+# What are HyperBEAM Devices?
 
 Devices are the core functional units within HyperBEAM and AO-Core. They define how messages are processed and what actions can be performed.
 

@@ -11,7 +11,7 @@ At its heart, building on AO involves:
 1.  **Creating Processes:** Think of these as independent programs or stateful contracts. Each process has a unique ID and maintains its own state.
 2.  **Sending Messages:** You interact with processes by sending them messages. These messages trigger computations, update state, or cause the process to interact with other processes or the outside world.
 
-Messages are processed by [Devices](../begin/ao-devices.md), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
+Messages are processed by [Devices](../introduction/ao-devices.md), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
 
 ## Starting `aos`: Your Development Environment
 

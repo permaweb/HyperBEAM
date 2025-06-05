@@ -6,11 +6,15 @@
     const main = document.querySelector("main");
     const tabs = document.querySelector(".md-tabs");
 
-    const segments = window.location.pathname.split("/").filter(Boolean);
-    const arweavePath = segments.length === 1 && segments[0].length === 43;
-    const isHomepage = segments.length === 0 || arweavePath;
+    if (!header || !main) {
+      // console.warn("Header or main element not found for class update.");
+      return;
+    }
 
-    if (!header || !main) return;
+    const segments = window.location.pathname.split("/").filter(Boolean);
+    const isArweaveIdPath = segments.length === 1 && segments[0].length === 43;
+    const isRootPath = segments.length === 0;
+    const isHomepage = isRootPath || isArweaveIdPath;
 
     if (isHomepage) {
       header.classList.add("custom-homepage-header");
@@ -28,48 +32,18 @@
   // Initial run
   updateHeaderAndMainClass();
 
-  // Watch for URL changes
-  const observer = new MutationObserver(() => {
+  // Function to handle path changes
+  function handlePathChange() {
     if (window.location.pathname !== currentPath) {
       currentPath = window.location.pathname;
       updateHeaderAndMainClass();
     }
-  });
-
+  }
+  
+  // Watch for URL changes via MutationObserver (for client-side navigation)
+  const observer = new MutationObserver(handlePathChange);
   observer.observe(document.body, { childList: true, subtree: true });
 
+  // Also listen for popstate (browser back/forward)
   window.addEventListener("popstate", updateHeaderAndMainClass);
 })();
-
-document.addEventListener("DOMContentLoaded", function () {
-  function updateMainClass() {
-    const mainElement = document.querySelector("main");
-    const isHomepage = window.location.pathname === "/";
-
-    // Apply the homepage class if on the homepage, else remove it
-    if (isHomepage) {
-      mainElement.classList.add("custom-homepage-main");
-      mainElement.classList.remove("md-main");
-    } else {
-      mainElement.classList.add("md-main");
-      mainElement.classList.remove("custom-homepage-main");
-    }
-  }
-
-  // Initial update on page load
-  updateMainClass();
-
-  // Listen for link clicks and update the class after navigation
-  const links = document.querySelectorAll("a");
-  links.forEach((link) => {
-    link.addEventListener("click", function (event) {
-      // Small delay to ensure the page has started loading
-      setTimeout(updateMainClass, 0);
-    });
-  });
-
-  // Listen for popstate events (back/forward navigation)
-  window.addEventListener("popstate", function () {
-    setTimeout(updateMainClass, 500);
-  });
-});

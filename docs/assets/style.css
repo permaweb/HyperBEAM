@@ -878,3 +878,21 @@ h6 {
 		filter: brightness(1.3);
 	}
 }
+
+@keyframes fadeIn {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+.md-main__inner.md-grid {
+	opacity: 0; /* Start with opacity 0 */
+	animation: fadeIn 250ms ease-in-out forwards !important; /* Increased duration, added forwards and !important */
+}
+
+.md-nav__item.md-nav__item--active.md-nav__item--section.md-nav__item--nested > .md-nav__link {
+	display: none !important;
+}
