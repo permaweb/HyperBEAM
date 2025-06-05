@@ -1,12 +1,12 @@
 /* General Text Styles */
 h1 {
-    font-size: clamp(1.6rem, 1.5vw, 1.7rem) !important;
+    font-size: clamp(1.5rem, 1.5vw, 1.6rem) !important;
     color: rgba(60, 60, 67) !important;
     font-weight: 600 !important;
 }
 
 h2 {
-    font-size: clamp(1.2rem, 1.5vw, 1.3rem) !important;
+    font-size: clamp(0.8rem, 1.5vw, 1rem) !important;
     color: rgba(60, 60, 67);
     margin-top: 8px;
     /* Semi-transparent black */
@@ -20,6 +20,11 @@ p {
 li {
     font-size: clamp(0.6rem, 1.5vw, 0.75rem);
     line-height: 1.75;
+}
+
+.hyper-link {
+    text-decoration: underline;
+    color: rgba(0, 0, 0, 1)
 }
 
 img {
@@ -377,6 +382,7 @@ h6 {
     transition: all 1s;
     width: 100%;
     padding: 1rem 0.8rem;
+    gap: 2rem;
 }
 
 .hero-text-container {
@@ -390,12 +396,18 @@ h6 {
 
 .hero-button-cards-container {
     display: flex;
-    flex: 1.5 0 0;
+    flex: 1 0 0;
     gap: 0.5rem;
     height: 40%;
     min-height: 7rem;
     backdrop-filter: blur(50px);
+    justify-content: end;
 
+}
+
+.hero-button-cards-container a {
+    display: flex;
+    flex: 1 0 0;
 }
 
 .hero-button-card {
@@ -562,13 +574,13 @@ h6 {
 }
 
 .section-inner-content h1 {
-    font-size: clamp(1.1rem, 1.5vw, 1.2rem) !important;
+    font-size: clamp(1.2rem, 1.5vw, 1.6rem) !important;
     margin: 0 !important;
     font-weight: 500 !important;
 }
 
 .section-inner-content h2 {
-    font-size: clamp(0.65rem, 1.5vw, 0.7rem) !important;
+    font-size: clamp(0.6rem, 1.5vw, 0.7rem) !important;
     color: #6E6E6E;
     font-weight: 500;
 }
@@ -634,7 +646,7 @@ h6 {
     grid-template-rows: auto auto;
     gap: 2rem;
     width: 100%;
-    padding: 48px 0px;
+    padding: 92px 0px;
 }
 
 .column-container {
@@ -651,6 +663,7 @@ h6 {
     background: white;
     overflow: hidden;
     border-radius: 4px;
+
 }
 
 .full-span {
@@ -660,13 +673,13 @@ h6 {
 }
 
 .column-half-text {
-    justify-content: flex-start;
     display: flex;
-    flex-direction: column;
     height: 100%;
     width: 100%;
-    gap: 16px;
     padding: 16px;
+    gap: 5rem;
+    justify-content: space-between;
+    z-index: 10;
 }
 
 .column-text {
@@ -707,8 +720,13 @@ h6 {
     overflow: hidden;
 }
 
-.card p {
-    font-size: clamp(0.65rem, 1.5vw, 0.7rem) !important;
+.sub-p {
+    margin-top: 2rem;
+}
+
+.card p,
+.card span {
+    font-size: clamp(0.55rem, 1.5vw, 0.6rem) !important;
     color: #6E6E6E !important;
     font-weight: 500;
     line-height: normal;
@@ -736,6 +754,10 @@ h6 {
     display: flex;
     flex-direction: column;
     gap: 4px;
+}
+
+.column-half-text a {
+    margin-top: 15.5px;
 }
 
 .card span {
@@ -768,13 +790,21 @@ h6 {
     align-items: center;
     justify-content: center;
     background: #151515;
-    padding: 12.5px 60px;
+    padding: 12.5px 24px;
     border-radius: 4px;
     font-size: clamp(0.6rem, 1.5vw, 0.7rem);
     cursor: pointer;
     color: white;
-    gap: 8px;
+    gap: 16px;
     transition: all 100ms;
+    z-index: 5;
+    min-width: 235px;
+
+}
+
+.main-button p {
+    text-wrap: nowrap;
+    margin: 0;
 }
 
 .main-button:hover {
@@ -793,6 +823,8 @@ h6 {
     display: flex;
     width: 100%;
     overflow: hidden;
+    z-index: 5;
+
 }
 
 .absolute-half-img {
@@ -803,8 +835,15 @@ h6 {
 
 .absolute-full-img {
     position: absolute;
-    right: -35%;
-    bottom: -55%;
+    justify-content: end;
+    bottom: 0;
+    right: 0;
+    width: fit-content;
+}
+
+.absolute-full-img svg {
+    height: 100%;
+    padding: 4rem;
 }
 
 
@@ -919,6 +958,89 @@ h6 {
     /* Adds the prefix before the date */
 }
 
+@media (max-width: 700px) {
+    .hero-inner-content-bottom {
+        flex-direction: column;
+    }
+
+    .hero-button-cards-container {
+        flex-direction: column;
+    }
+
+    .monetize-fig svg {
+        padding: 0;
+    }
+}
+
+@media (max-width: 1200px) {
+    .hero-button-cards-container {
+        gap: 1rem;
+    }
+
+    .column-half-text {
+        flex-direction: column;
+    }
+
+    .grid-container {
+        min-height: 400px;
+    }
+
+    /* will have to change these to video */
+
+    .absolute-half-img {
+        justify-content: end;
+
+    }
+
+    .absolute-half-img img {
+        width: 75%;
+    }
+
+    /* end */
+
+    .cta-right {
+        justify-content: start;
+    }
+
+    .monetize-fig {
+        justify-content: flex-start;
+    }
+
+    .monetize-fig svg {
+        height: 500px;
+        padding-top: 48px;
+        padding-bottom: 48px;
+    }
+
+    .monetize-row,
+    .double-column-content {
+        flex-direction: column;
+    }
+
+    .double-column-content {
+        padding: 0;
+    }
+
+
+
+    .feature-cards {
+        grid-template-columns: repeat(1, 1fr);
+        gap: 2rem;
+    }
+
+    .column-text {
+        gap: 64px;
+    }
+
+    .column-container {
+        height: fit-content;
+    }
+
+    .double-single-grid-content {
+        display: flex;
+        flex-direction: column;
+    }
+}
 
 @keyframes flickerLight {
 

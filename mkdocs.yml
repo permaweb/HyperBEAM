@@ -182,8 +182,8 @@ theme:
   name: material
   custom_dir: docs/theme/templates
   language: en
-  logo: https://arweave.net/5C9fnvKroNSsJDNA06A9Fxs-qodSHwawlvhi_NDfZEY
-  favicon: https://arweave.net/9a6H0d05_yYikqmELDKA8Ma2I1oypwtIQHjEV5AhuS0
+  logo: https://arweave.net/Ggr1cz-jbiDS2gAVFHxkoKzmNQQD4WcMTfipWyuEmgY
+  favicon: https://arweave.net/rBcLwnVU2fWNEKUW8PY0TzEAPuCHMj2Vp6z6CedHJf0
   icon:
     repo: fontawesome/brands/github 
   features:
