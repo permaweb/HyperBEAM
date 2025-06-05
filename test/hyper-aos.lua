@@ -2266,9 +2266,9 @@ local function getOwnerAddress(m)
   local _owner = nil 
   utils.map(function (k)
     local c = m.commitments[k]
-    if c.type == "rsa-pss-sha512" then
+    if c.alg == "rsa-pss-sha512" then
       _owner = c.committer
-    elseif c.type == "signed" and c['commitment-device'] == "ans104" then
+    elseif c.alg == "signed" and c['commitment-device'] == "ans104" then
       _owner = c.commiter
     end
   end, utils.keys(m.commitments))
