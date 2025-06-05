@@ -1,46 +1,54 @@
 document.addEventListener('DOMContentLoaded', function() {
   const header = document.querySelector('.md-header');
-  const mainContent = document.querySelector('.md-main');
-  const mdContent = document.querySelector('.md-content');
+  const paddingTargetElement = document.querySelector('.md-content'); // Element for padding adjustments
+  const contentVisibilityTargetElement = document.querySelector('.md-main__inner.md-grid'); // Element to hide/show with transition
 
-  if (!header || !mainContent || !mdContent) {
-    // console.error('Required elements (.md-header, .md-main, or .md-content) not found for header scroll behavior.');
+  if (!header || !paddingTargetElement || !contentVisibilityTargetElement) {
+    console.error('Header scroll: Required elements (.md-header, .md-content, or .md-main__inner.md-grid) not found.');
     return;
   }
 
-  // Function to add CSS transition to .md-content for smooth padding changes
-  function addCssTransitionToMdContent() {
-    const styleId = 'md-content-padding-transition-style';
+  const HIDING_CLASS = 'content--initializing';
+
+  // Function to inject CSS for transition and initial hiding
+  function injectTransitionStyles() {
+    const styleId = 'md-content-transition-style';
     if (document.getElementById(styleId)) {
       return; // Style already added
     }
     const styleElement = document.createElement('style');
     styleElement.id = styleId;
-    // Using a common transition timing, similar to what Material for MkDocs might use
     styleElement.textContent = `
-      .md-content {
-        transition: padding-top 0.25s cubic-bezier(0.4, 0, 0.2, 1); /* Faster transition */
+      .md-main__inner.md-grid { /* Style for the element to be shown with transition */
+        opacity: 0;
+        transition: opacity 200ms ease-in-out; /* Tiny transition */
+      }
+      .${HIDING_CLASS} { /* Class to initially hide the content */
+        display: none !important;
+        opacity: 0 !important; /* Ensure opacity is 0 when hidden */
       }
     `;
     document.head.appendChild(styleElement);
   }
 
-  let headerHeight = header.offsetHeight;
+  // Initially hide the content and set up for transition
+  injectTransitionStyles();
+  contentVisibilityTargetElement.classList.add(HIDING_CLASS);
+
+  let headerHeight = 0;
 
   // Function to update paddings based on header state
   function updatePaddings() {
-    // It's important to use the height of the header when it's visible
-    // If header.classList.contains('header-hidden'), its offsetHeight might be its original height or 0 depending on CSS
-    // For simplicity, we'll grab a fresh measurement if it's visible, or use the last known good height
-    // This specific header's height doesn't change when 'header-hidden' is applied, only its transform.
-    // So, header.offsetHeight should remain consistent.
-    headerHeight = header.offsetHeight;
+    const currentHeaderHeight = header.offsetHeight;
+    if (currentHeaderHeight > 0) {
+        headerHeight = currentHeaderHeight;
+    }
 
     if (header.classList.contains('header-hidden')) {
-      if (mdContent) mdContent.style.paddingTop = '75px'; // Set to 100px when header is hidden
-      document.documentElement.style.scrollPaddingTop = '0'; // scrollPaddingTop might still need to be 0 for anchors
+      if (paddingTargetElement) paddingTargetElement.style.paddingTop = '75px';
+      document.documentElement.style.scrollPaddingTop = '0';
     } else {
-      if (mdContent) mdContent.style.paddingTop = headerHeight + 'px'; // Should animate
+      if (paddingTargetElement) paddingTargetElement.style.paddingTop = headerHeight + 'px';
       document.documentElement.style.scrollPaddingTop = headerHeight + 'px';
     }
   }
@@ -61,18 +69,17 @@ document.addEventListener('DOMContentLoaded', function() {
     if (scrollTop > 0) { // When scrolling down / header should be hidden
       if (!header.classList.contains('header-hidden')) {
         header.classList.add('header-hidden');
-        updatePaddings(); // Update paddings after class change
+        updatePaddings();
       }
     } else { // When at the top / header should be visible
       if (header.classList.contains('header-hidden')) {
         header.classList.remove('header-hidden');
-        updatePaddings(); // Update paddings after class change
+        updatePaddings();
       }
     }
   });
 
   window.addEventListener('resize', function() {
-    // Recalculate and update paddings on resize
     updatePaddings();
   });
 }); 

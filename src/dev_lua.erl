@@ -1,4 +1,4 @@
-%%% @doc A device that calls a Lua script upon a request and returns the result.
+%%% @doc A device that calls a Lua module upon a request and returns the result.
 -module(dev_lua).
 -export([info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
@@ -29,7 +29,7 @@
 ]).
 
 %% @doc All keys that are not directly available in the base message are 
-%% resolved by calling the Lua function in the script of the same name.
+%% resolved by calling the Lua function in the module of the same name.
 %% Additionally, we exclude the `keys', `set', `encode' and `decode' functions
 %% which are `message@1.0' core functions, and Lua public utility functions.
 info(Base) ->
@@ -46,7 +46,7 @@ init(Base, Req, Opts) ->
     ensure_initialized(Base, Req, Opts).
 
 %% @doc Initialize the Lua VM if it is not already initialized. Optionally takes
-%% the script as a  Binary string. If not provided, the script will be loaded
+%% the script as a  Binary string. If not provided, the module will be loaded
 %% from the base message.
 ensure_initialized(Base, _Req, Opts) ->
     case hb_private:from_message(Base) of
@@ -55,115 +55,115 @@ ensure_initialized(Base, _Req, Opts) ->
             {ok, Base};
         _ ->
             ?event(debug_lua, initializing_lua_state),
-            case find_scripts(Base, Opts) of
-                {ok, Scripts} ->
-                    initialize(Base, Scripts, Opts);
+            case find_modules(Base, Opts) of
+                {ok, Modules} ->
+                    initialize(Base, Modules, Opts);
                 Error ->
                     Error
             end
     end.
 
 %% @doc Find the script in the base message, either by ID or by string.
-find_scripts(Base, Opts) ->
-    case hb_ao:get(<<"script">>, {as, <<"message@1.0">>, Base}, Opts) of
+find_modules(Base, Opts) ->
+    case hb_ao:get(<<"module">>, {as, <<"message@1.0">>, Base}, Opts) of
         not_found ->
-            {error, <<"no-scripts-found">>};
-        Script when is_binary(Script) ->
-            find_scripts(Base#{ <<"script">> => [Script] }, Opts);
-        Script when is_map(Script) ->
-            % If the script is a map, check its content type to see if it is 
-            % a literal Lua script, or a map of scripts with content types.
-            case hb_ao:get(<<"content-type">>, Script, Opts) of
+            {error, <<"no-modules-found">>};
+        Module when is_binary(Module) ->
+            find_modules(Base#{ <<"module">> => [Module] }, Opts);
+        Module when is_map(Module) ->
+            % If the module is a map, check its content type to see if it is 
+            % a literal Lua module, or a map of modules with content types.
+            case hb_ao:get(<<"content-type">>, Module, Opts) of
                 CT when CT == <<"application/lua">> orelse CT == <<"text/x-lua">> ->
-                    find_scripts(Base#{ <<"script">> => [Script] }, Opts);
+                    find_modules(Base#{ <<"module">> => [Module] }, Opts);
                 _ ->
                     % If the script is not a literal Lua script, assume it is a
                     % map of scripts with content types, and recurse.
-                    find_scripts(Base#{ <<"script">> => maps:values(Script) }, Opts)
+                    find_modules(Base#{ <<"module">> => maps:values(Module) }, Opts)
             end;
-        Scripts when is_list(Scripts) ->
+        Modules when is_list(Modules) ->
             % We have found a list of scripts, load them.
-            load_scripts(Scripts, Opts)
+            load_modules(Modules, Opts)
     end.
 
-%% @doc Load a list of scripts for installation into the Lua VM.
-load_scripts(Scripts, Opts) -> load_scripts(Scripts, Opts, []).
-load_scripts([], _Opts, Acc) ->
+%% @doc Load a list of modules for installation into the Lua VM.
+load_modules(Modules, Opts) -> load_modules(Modules, Opts, []).
+load_modules([], _Opts, Acc) ->
     {ok, lists:reverse(Acc)};
-load_scripts([ScriptID | Rest], Opts, Acc) when ?IS_ID(ScriptID) ->
-    case hb_cache:read(ScriptID, Opts) of
-        {ok, Script} when is_binary(Script) ->
-            % The ID referred to a binary script item, so we add it to the list
+load_modules([ModuleID | Rest], Opts, Acc) when ?IS_ID(ModuleID) ->
+    case hb_cache:read(ModuleID, Opts) of
+        {ok, Module} when is_binary(Module) ->
+            % The ID referred to a binary module item, so we add it to the list
             % as-is.
-            load_scripts(Rest, Opts, [{ScriptID, Script}|Acc]);
-        {ok, ScriptMsg} when is_map(ScriptMsg) ->
+            load_modules(Rest, Opts, [{ModuleID, Module}|Acc]);
+        {ok, ModuleMsg} when is_map(ModuleMsg) ->
             % We read a message from the store, so we recurse upon the output,
-            % as if the script message had beeen given directly.
-            load_scripts([ScriptMsg|Rest], Opts, Acc);
+            % as if the module message had beeen given directly.
+            load_modules([ModuleMsg|Rest], Opts, Acc);
         not_found ->
             {error, #{
                 <<"status">> => 404,
-                <<"body">> => <<"Lua script '", ScriptID/binary, "' not found.">>
+                <<"body">> => <<"Lua module '", ModuleID/binary, "' not found.">>
             }}
     end;
-load_scripts([Script | Rest], Opts, Acc) when is_map(Script) ->
-    % We have found a message with a Lua script inside. Search for the binary
+load_modules([Module | Rest], Opts, Acc) when is_map(Module) ->
+    % We have found a message with a Lua module inside. Search for the binary
     % of the program in the body and the data.
-    ScriptBin =
+    ModuleBin =
         hb_ao:get_first(
             [
-                {Script, <<"body">>},
-                {Script, <<"data">>}
+                {Module, <<"body">>},
+                {Module, <<"data">>}
             ],
-            Script,
+            Module,
             Opts
         ),
-    case ScriptBin of
+    case ModuleBin of
         not_found ->
             {error, #{
                 <<"status">> => 404,
                 <<"body">> =>
                     <<
                         """
-                        Lua script not loadable. Lua scripts must have a
+                        Lua module not loadable. Lua modules must have a
                         `body' element set to a binary of the code to load.
                         """
                     >>,
-                <<"script">> => Script
+                <<"module">> => Module
             }};
-        ScriptBin ->
-            % Get the `module' key from the script message if it exists, or 
-            % return the script ID as the module name.
-            Module =
+        ModuleBin ->
+            % Get the `name' key from the script message if it exists, or 
+            % return the module ID as the module name.
+            Name =
                 hb_ao:get_first(
                     [
-                        {Script, <<"module">>},
-                        {Script, <<"id">>}
+                        {Module, <<"name">>},
+                        {Module, <<"id">>}
                     ],
-                    Script,
+                    Module,
                     Opts
                 ),
-            % Load the script into the Lua state.
-            load_scripts(Rest, Opts, [{Module, ScriptBin}|Acc])
+            % Load the module into the Lua state.
+            load_modules(Rest, Opts, [{Name, ModuleBin}|Acc])
     end.
 
-%% @doc Initialize a new Lua state with a given base message and script.
-initialize(Base, Scripts, Opts) ->
+%% @doc Initialize a new Lua state with a given base message and module.
+initialize(Base, Modules, Opts) ->
     State0 = luerl:init(),
     % Load each script into the Lua state.
     State1 =
         lists:foldl(
-            fun({ScriptID, ScriptBin}, StateIn) ->
+            fun({ModuleID, ModuleBin}, StateIn) ->
                 {ok, _, StateOut} =
                     luerl:do_dec(
-                        ScriptBin,
-                        [{module, hb_util:list(ScriptID)}],
+                        ModuleBin,
+                        [{name, hb_util:list(ModuleID)}],
                         StateIn
                     ),
                 StateOut
             end,
             State0,
-            Scripts
+            Modules
         ),
     % Apply any sandboxing rules to the state.
     State2 =
@@ -433,7 +433,7 @@ simple_invocation_test() ->
     {ok, Script} = file:read_file("test/test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
-        <<"script">> => #{
+        <<"module">> => #{
             <<"content-type">> => <<"application/lua">>,
             <<"body">> => Script
         },
@@ -441,18 +441,18 @@ simple_invocation_test() ->
     },
     ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})).
 
-load_scripts_by_id_test() ->
+load_modules_by_id_test() ->
     % Start a node to ensure the HTTP services are available.
     _Node = hb_http_server:start_node(#{}),
-    Script = <<"DosEHUAqhl_O5FH3vDqPlgGsG92Guxcm6nrwqnjsDKg">>,
-    {ok, Acc} = load_scripts([Script], #{}),
+    Module = <<"DosEHUAqhl_O5FH3vDqPlgGsG92Guxcm6nrwqnjsDKg">>,
+    {ok, Acc} = load_modules([Module], #{}),
     [{_,Code}|_] = Acc,
     <<Prefix:8/binary, _/binary>> = Code,
     ?assertEqual(<<"function">>, Prefix).
     
-multiple_scripts_test() ->
-    {ok, Script} = file:read_file("test/test.lua"),
-    Script2 =
+multiple_modules_test() ->
+    {ok, Module} = file:read_file("test/test.lua"),
+    Module2 =
         <<
             """
             function test_second_script()
@@ -462,14 +462,14 @@ multiple_scripts_test() ->
         >>,
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
-        <<"script">> => [
+        <<"module">> => [
             #{
                 <<"content-type">> => <<"application/lua">>,
-                <<"body">> => Script
+                <<"body">> => Module
             },
             #{
                 <<"content-type">> => <<"application/lua">>,
-                <<"body">> => Script2
+                <<"body">> => Module2
             }
         ],
         <<"parameters">> => []
@@ -478,12 +478,12 @@ multiple_scripts_test() ->
     ?assertEqual(4, hb_ao:get(<<"test_second_script">>, Base, #{})).
 
 error_response_test() ->
-    {ok, Script} = file:read_file("test/test.lua"),
+    {ok, Module} = file:read_file("test/test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
-        <<"script">> => #{
+        <<"module">> => #{
             <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Script
+            <<"body">> => Module
         },
         <<"parameters">> => []
     },
@@ -493,12 +493,12 @@ error_response_test() ->
     ).
 
 sandboxed_failure_test() ->
-    {ok, Script} = file:read_file("test/test.lua"),
+    {ok, Module} = file:read_file("test/test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
-        <<"script">> => #{
+        <<"module">> => #{
             <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Script
+            <<"body">> => Module
         },
         <<"parameters">> => [],
         <<"sandbox">> => true
@@ -507,12 +507,12 @@ sandboxed_failure_test() ->
 
 %% @doc Run an AO-Core resolution from the Lua environment.
 ao_core_sandbox_test() ->
-    {ok, Script} = file:read_file("test/test.lua"),
+    {ok, Module} = file:read_file("test/test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
-        <<"script">> => #{
+        <<"module">> => #{
             <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Script
+            <<"body">> => Module
         },
         <<"parameters">> => [],
         <<"device-sandbox">> => [<<"message@1.0">>]
@@ -522,12 +522,12 @@ ao_core_sandbox_test() ->
 
 %% @doc Run an AO-Core resolution from the Lua environment.
 ao_core_resolution_from_lua_test() ->
-    {ok, Script} = file:read_file("test/test.lua"),
+    {ok, Module} = file:read_file("test/test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
-        <<"script">> => #{
+        <<"module">> => #{
             <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Script
+            <<"body">> => Module
         },
         <<"parameters">> => []
     },
@@ -537,12 +537,12 @@ ao_core_resolution_from_lua_test() ->
 %% @doc Benchmark the performance of Lua executions.
 direct_benchmark_test() ->
     BenchTime = 3,
-    {ok, Script} = file:read_file("test/test.lua"),
+    {ok, Module} = file:read_file("test/test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
-        <<"script">> => #{
+        <<"module">> => #{
             <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Script
+            <<"body">> => Module
         },
         <<"parameters">> => []
     },
@@ -563,12 +563,12 @@ direct_benchmark_test() ->
 %% @doc Call a non-compute key on a Lua device message and ensure that the
 %% function of the same name in the script is called.
 invoke_non_compute_key_test() ->
-    {ok, Script} = file:read_file("test/test.lua"),
+    {ok, Module} = file:read_file("test/test.lua"),
     Base = #{
         <<"device">> => <<"lua@5.3a">>,
-        <<"script">> => #{
+        <<"module">> => #{
             <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Script
+            <<"body">> => Module
         },
         <<"test-value">> => 42
     },
@@ -585,18 +585,18 @@ invoke_non_compute_key_test() ->
     ?event({result2, Result2}),
     ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
 
-%% @doc Use a Lua script as a hook on the HTTP server via `~meta@1.0'.
+%% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
 lua_http_hook_test() ->
-    {ok, Script} = file:read_file("test/test.lua"),
+    {ok, Module} = file:read_file("test/test.lua"),
     Node = hb_http_server:start_node(
         #{
             on => #{
                 <<"request">> =>
                     #{
                         <<"device">> => <<"lua@5.3a">>,
-                        <<"script">> => #{
+                        <<"module">> => #{
                             <<"content-type">> => <<"application/lua">>,
-                            <<"body">> => Script
+                            <<"body">> => Module
                         }
                     }
             }
@@ -715,15 +715,15 @@ aos_process_benchmark_test_() ->
 %% @doc Generate a Lua process message.
 generate_lua_process(File) ->
     Wallet = hb:wallet(),
-    {ok, Script} = file:read_file(File),
+    {ok, Module} = file:read_file(File),
     hb_message:commit(#{
         <<"device">> => <<"process@1.0">>,
         <<"type">> => <<"Process">>,
         <<"scheduler-device">> => <<"scheduler@1.0">>,
         <<"execution-device">> => <<"lua@5.3a">>,
-        <<"script">> => #{
+        <<"module">> => #{
             <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Script
+            <<"body">> => Module
         },
         <<"authority">> => [ 
           hb:address(), 
@@ -771,7 +771,7 @@ generate_test_message(Process) ->
 %% @doc Generate a stack message for the Lua process.
 generate_stack(File) ->
     Wallet = hb:wallet(),
-    {ok, Script} = file:read_file(File),
+    {ok, Module} = file:read_file(File),
     Msg1 = #{
         <<"device">> => <<"Stack@1.0">>,
         <<"device-stack">> =>
@@ -783,13 +783,13 @@ generate_stack(File) ->
         <<"function">> => <<"json_result">>,
         <<"passes">> => 2,
         <<"stack-keys">> => [<<"init">>, <<"compute">>],
-        <<"script">> => Script,
+        <<"module">> => Module,
         <<"process">> => 
             hb_message:commit(#{
                 <<"type">> => <<"Process">>,
-                <<"script">> => #{
+                <<"module">> => #{
                     <<"content-type">> => <<"application/lua">>,
-                    <<"body">> => Script
+                    <<"body">> => Module
                 },
                 <<"scheduler">> => hb:address(),
                 <<"authority">> => hb:address()
@@ -798,21 +798,21 @@ generate_stack(File) ->
     {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, #{}),
     Msg2.
 
-execute_aos_call(Base) ->
-    Req =
-        hb_message:commit(#{
-                <<"action">> => <<"Eval">>,
-                <<"function">> => <<"json_result">>,
-                <<"data">> => <<"return 2">>
-            },
-            hb:wallet()
-        ),
-    execute_aos_call(Base, Req).
-execute_aos_call(Base, Req) ->
-    hb_ao:resolve(Base,
-        #{
-            <<"path">> => <<"compute">>,
-            <<"body">> => Req
-        },
-        #{}
-    ).
+% execute_aos_call(Base) ->
+%     Req =
+%         hb_message:commit(#{
+%                 <<"action">> => <<"Eval">>,
+%                 <<"function">> => <<"json_result">>,
+%                 <<"data">> => <<"return 2">>
+%             },
+%             hb:wallet()
+%         ),
+%     execute_aos_call(Base, Req).
+% execute_aos_call(Base, Req) ->
+%     hb_ao:resolve(Base,
+%         #{
+%             <<"path">> => <<"compute">>,
+%             <<"body">> => Req
+%         },
+%         #{}
+%     ).

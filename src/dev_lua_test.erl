@@ -1,4 +1,4 @@
-%%% A wrapper module for generating and executing EUnit tests for all Lua scripts.
+%%% A wrapper module for generating and executing EUnit tests for all Lua modules.
 %%% When executed with `rebar3 lua-test`, this module will be invoked and scan the
 %%% `scripts' directory for all Lua files, and generate an EUnit test suite for
 %%% each one. By default, an individual test is generated for each function in
@@ -124,15 +124,15 @@ suite(File, Funcs) ->
 %% @doc Create a new Lua environment for a given script.
 new_state(File) ->
     ?event(debug_lua_test, {generating_state_for, File}),
-    {ok, Script} = file:read_file(hb_util:list(File)),
+    {ok, Module} = file:read_file(hb_util:list(File)),
     {ok, _} =
         hb_ao:resolve(
             #{
                 <<"device">> => <<"lua@5.3a">>,
-                <<"script">> => #{
+                <<"module">> => #{
                     <<"content-type">> => <<"application/lua">>,
-                    <<"module">> => File,
-                    <<"body">> => Script
+                    <<"name">> => File,
+                    <<"body">> => Module
                 }
             },
             <<"init">>,

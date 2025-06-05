@@ -373,12 +373,12 @@ non_chargable_route_test() ->
     ?event({res3, Res3}),
     ?assertMatch({error, _}, Res3).
 
-%% @doc Ensure that Lua scripts can be used as pricing and ledger devices. Our
-%% scripts come in two parts:
-%% - A `process' script which is executed as a persistent `local-process' on the
+%% @doc Ensure that Lua modules can be used as pricing and ledger devices. Our
+%% modules come in two parts:
+%% - A `process' module which is executed as a persistent `local-process' on the
 %%   node, and which maintains the state of the ledger.
-%% - A `client' script, which is executed as a `p4@1.0' device, marshalling
-%%   requests to the `process' script.
+%% - A `client' module, which is executed as a `p4@1.0' device, marshalling
+%%   requests to the `process' module.
 lua_pricing_test() ->
     HostWallet = ar_wallet:new(),
     ClientWallet = ar_wallet:new(),
@@ -389,9 +389,9 @@ lua_pricing_test() ->
             <<"device">> => <<"p4@1.0">>,
             <<"ledger-device">> => <<"lua@5.3a">>,
             <<"pricing-device">> => <<"simple-pay@1.0">>,
-            <<"script">> => #{
+            <<"module">> => #{
                 <<"content-type">> => <<"text/x-lua">>,
-                <<"module">> => <<"scripts/p4-payment-client.lua">>,
+                <<"name">> => <<"scripts/p4-payment-client.lua">>,
                 <<"body">> => ClientScript
             },
             <<"ledger-path">> => <<"/ledger~node-process@1.0">>
@@ -417,9 +417,9 @@ lua_pricing_test() ->
                         <<"device">> => <<"process@1.0">>,
                         <<"execution-device">> => <<"lua@5.3a">>,
                         <<"scheduler-device">> => <<"scheduler@1.0">>,
-                        <<"script">> => #{
+                        <<"module">> => #{
                             <<"content-type">> => <<"text/x-lua">>,
-                            <<"module">> => <<"scripts/p4-payment-process.lua">>,
+                            <<"name">> => <<"scripts/p4-payment-process.lua">>,
                             <<"body">> => ProcessScript
                         },
                         <<"operator">> =>

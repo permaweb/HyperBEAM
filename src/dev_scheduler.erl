@@ -1314,7 +1314,7 @@ generate_local_schedule(Format, ProcID, From, To, Opts) ->
     % Determine and apply the formatting function to use for generation 
     % of the response, based on the `Accept' header.
     FormatterFun =
-        case Format of
+        case uri_string:percent_decode(Format) of
             <<"application/aos-2">> ->
                 fun dev_scheduler_formats:assignments_to_aos2/4;
             _ ->
