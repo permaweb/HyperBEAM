@@ -1267,6 +1267,7 @@ is_exported(_Info, _Key, _Opts) -> true.
 
 %% @doc Convert a key to a binary in normalized form.
 normalize_key(Key) -> normalize_key(Key, #{}).
+normalize_key(Key, _Opts) when ?IS_LINK(Key) -> normalize_key(hb_cache:ensure_loaded(Key, _Opts));
 normalize_key(Key, _Opts) when ?IS_ID(Key) -> Key;
 normalize_key(Key, _Opts) when is_binary(Key) ->
     hb_util:to_lower(Key);
