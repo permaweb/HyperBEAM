@@ -52,7 +52,7 @@ the config.flat file with any overrides you specify.
 To verify that your HyperBEAM node is running correctly, you can check:
 
 ```bash
-curl http://localhost:10000/~meta@1.0/info
+curl http://localhost:8734/~meta@1.0/info
 ```
 If you receive a response with node information, your HyperBEAM installation is working properly.
 

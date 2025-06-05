@@ -114,13 +114,13 @@ Some API endpoints require authentication using a signed message. This is done u
 ### Getting Node Information
 
 ```bash
-curl http://localhost:10000/~meta@1.0/info
+curl http://localhost:8734/~meta@1.0/info
 ```
 
 ### Creating a Process
 
 ```bash
-curl -X POST http://localhost:10000/~process@1.0/create \
+curl -X POST http://localhost:8734/~process@1.0/create \
   -H "Content-Type: application/json" \
   -d '{"module": "module-id", "scheduler": "scheduler-id"}'
 ```
@@ -128,7 +128,7 @@ curl -X POST http://localhost:10000/~process@1.0/create \
 ### Sending a Message to a Process
 
 ```bash
-curl -X POST http://localhost:10000/~process@1.0/push \
+curl -X POST http://localhost:8734/~process@1.0/push \
   -H "Content-Type: application/json" \
   -d '{"process": "process-id", "message": "Hello, World!"}'
 ```

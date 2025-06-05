@@ -17,7 +17,7 @@ The Compute Unit can be configured using:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `UNIT_MODE` | Operating mode (set to "hbu" for HyperBEAM) | - |
-| `HB_URL` | URL of your HyperBEAM instance | http://localhost:10000 |
+| `HB_URL` | URL of your HyperBEAM instance | http://localhost:8734 |
 | `PORT` | The port on which the CU server will listen | 6363 |
 | `WALLET_FILE` | Path to your Arweave wallet JSON file | - |
 | `NODE_CONFIG_ENV` | Configuration environment | "development" |
@@ -89,7 +89,7 @@ A minimal configuration file looks like this:
 
 ```bash
 UNIT_MODE=hbu
-HB_URL=http://localhost:10000
+HB_URL=http://localhost:8734
 PORT=6363
 WALLET_FILE=./wallet.json
 NODE_CONFIG_ENV="development"
