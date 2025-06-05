@@ -892,7 +892,3 @@ h6 {
 	opacity: 0; /* Start with opacity 0 */
 	animation: fadeIn 250ms ease-in-out forwards !important; /* Increased duration, added forwards and !important */
 }
-
-.md-nav__item.md-nav__item--active.md-nav__item--section.md-nav__item--nested > .md-nav__link {
-	display: none !important;
-}
