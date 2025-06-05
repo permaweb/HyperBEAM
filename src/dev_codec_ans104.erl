@@ -18,7 +18,7 @@
 ).
 %% The list of tags that a user is explicitly committing to when they sign an
 %% ANS-104 message.
--define(BASE_COMMITTED_TAGS, ?TX_KEYS ++ [<<"data">>, <<"type">>]).
+-define(BASE_COMMITTED_TAGS, ?TX_KEYS ++ [<<"data">>]).
 
 %% @doc Return the content type for the codec.
 content_type(_) -> {ok, <<"application/ans104">>}.

@@ -26,8 +26,8 @@ test_codecs() ->
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
         %#{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
-        <<"json@1.0">>
-        % <<"tx@1.0">>
+        <<"json@1.0">>,
+        <<"tx@1.0">>
     ].
 
 %% @doc Return a set of options for testing, taking the codec name as an
@@ -722,6 +722,12 @@ signed_message_encode_decode_verify_test(Codec, Opts) ->
         <<"test-5">> => <<"TEST VALUE 5">>
     },
     SignedMsg =
+        hb_message:commit(
+            Msg,
+            Opts,
+            Codec
+        ),
+    ?event({signed_msg, SignedMsg}),
     ?assertEqual(true, hb_message:verify(SignedMsg, all, Opts)),
     Encoded = hb_message:convert(SignedMsg, Codec, <<"structured@1.0">>, Opts),
     ?event({msg_encoded_as_codec, Encoded}),

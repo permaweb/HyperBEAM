@@ -13,11 +13,26 @@
 
 %% The size at which a value should be made into a body item, instead of a
 %% tag.
--define(MAX_TAG_VAL, 128).
+-define(MAX_TAG_VAL, 4096).
 
 % How many bytes of a binary to print with `print/1'.
 -define(BIN_PRINT, 20).
 -define(INDENT_SPACES, 2).
+
+%%% The list of keys that should be forced into the tag list, rather than being
+%%% encoded as fields in the TX record.
+-define(FORCED_TAG_FIELDS,
+    [
+        <<"quantity">>,
+        <<"manifest">>,
+        <<"data_size">>,
+        <<"data_tree">>,
+        <<"data_root">>,
+        <<"reward">>,
+        <<"denomination">>,
+        <<"signature_type">>
+    ]
+).
 
 %% List of tags that should be removed during `to'. These relate to the nested
 %% ar_bundles format that is used by the `ans104@1.0' codec.
@@ -201,12 +216,14 @@ tx_to_tabm2(RawTX, TXKeys, CommittedTags, Req, Opts) ->
         ),
     % Normalize `owner' to `keyid', remove 'id', and remove 'signature'
     TXKeysMap =
-        maps:without(
-            [<<"owner">>, <<"signature">>],
-            case maps:get(<<"owner">>, RawTXKeysMap, ?DEFAULT_OWNER) of
-                ?DEFAULT_OWNER -> RawTXKeysMap;
-                Owner -> RawTXKeysMap#{ <<"keyid">> => Owner }
-            end
+        hb_message:filter_default_keys(
+            maps:without(
+                [<<"owner">>, <<"signature">>],
+                case maps:get(<<"owner">>, RawTXKeysMap, ?DEFAULT_OWNER) of
+                    ?DEFAULT_OWNER -> RawTXKeysMap;
+                    Owner -> RawTXKeysMap#{ <<"keyid">> => Owner }
+                end
+            )
         ),
     % Generate a TABM from the tags.
     MapWithoutData =
@@ -245,6 +262,18 @@ tx_to_tabm2(RawTX, TXKeys, CommittedTags, Req, Opts) ->
         hb_ao:normalize_keys(hb_maps:merge(DataMap, MapWithoutData, Opts), Opts),
     %% Add the commitments to the message if the TX has a signature.
     ?event({message_before_commitments, NormalizedDataMap}),
+    CommittedKeys =
+        hb_ao:normalize_keys(
+            hb_util:unique(
+                CommittedTags ++
+                [
+                    hb_ao:normalize_key(Tag)
+                ||
+                    {Tag, _} <- TX#tx.tags
+                ] ++
+                hb_util:to_sorted_keys(NormalizedDataMap)
+            )
+        ),
     WithCommitments =
         case TX#tx.signature of
             ?DEFAULT_SIG ->
@@ -291,14 +320,20 @@ tx_to_tabm2(RawTX, TXKeys, CommittedTags, Req, Opts) ->
                     <<"signature">> => hb_util:encode(TX#tx.signature),
                     <<"type">> => <<"rsa-pss-sha256">>
                 },
+                CommitmentWithBundle =
+                    case lists:member(<<"bundle-format">>, maps:values(CommittedKeys)) of
+                        true -> Commitment#{ <<"bundle">> => true };
+                        false -> Commitment
+                    end,
                 WithoutBaseCommitment#{
                     <<"commitments">> => #{
                         ID =>
                             case normal_tags(TX#tx.tags) of
-                                true -> Commitment;
-                                false -> Commitment#{
-                                    <<"original-tags">> => OriginalTagMap
-                                }
+                                true -> CommitmentWithBundle;
+                                false ->
+                                    CommitmentWithBundle#{
+                                        <<"original-tags">> => OriginalTagMap
+                                    }
                             end
                     }
                 }
@@ -307,15 +342,41 @@ tx_to_tabm2(RawTX, TXKeys, CommittedTags, Req, Opts) ->
     ?event({from_result, {explicit, Result}}),
     Result.
       
-tabm_to_tx(NormTABM, Req, Opts) ->
-    % Ensure that the TABM is fully loaded, for now.
-    ?event({to, {norm, NormTABM}}),
+tabm_to_tx(RawTABM, Req, Opts) ->
+    % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
+    NormTABM = hb_message:filter_default_keys(RawTABM),
+    ?event({to, {inbound, NormTABM}, {req, Req}}),
+    MaybeBundle =
+        case hb_util:atom(hb_ao:get(<<"bundle">>, Req, false, Opts)) of
+            false -> NormTABM;
+            true ->
+                % Convert back to the fully loaded structured@1.0 message, then
+                % convert to TABM with bundling enabled.
+                Structured = hb_message:convert(NormTABM, <<"structured@1.0">>, Opts),
+                Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
+                % Convert to TABM with bundling enabled.
+                LoadedTABM =
+                    hb_message:convert(
+                        Loaded,
+                        tabm,
+                        #{
+                            <<"device">> => <<"structured@1.0">>,
+                            <<"bundle">> => true
+                        },
+                        Opts
+                    ),
+                % Ensure the commitments from the original message are the only
+                % ones in the fully loaded message.
+                LoadedComms = maps:get(<<"commitments">>, NormTABM, #{}),
+                LoadedTABM#{ <<"commitments">> => LoadedComms }
+        end,
+    ?event({to, {maybe_bundle, MaybeBundle}}),
     TABM =
         hb_ao:normalize_keys(
-            hb_maps:without([<<"commitments">>], NormTABM, Opts),
+            hb_maps:without([<<"commitments">>], MaybeBundle, Opts),
             Opts
         ),
-    Commitments = hb_maps:get(<<"commitments">>, NormTABM, #{}, Opts),
+    Commitments = hb_maps:get(<<"commitments">>, MaybeBundle, #{}, Opts),
     TABMWithComm =
         case hb_maps:keys(Commitments, Opts) of
             [] -> TABM;
@@ -366,11 +427,15 @@ tabm_to_tx(NormTABM, Req, Opts) ->
     NormalizedMsgKeyMap = hb_ao:normalize_keys(MsgKeyMap, Opts),
     % Iterate through the default fields, replacing them with the values from
     % the message map if they are present.
-    {RemainingMap, BaseTXList} =
+    ForcedTagFields =
+        maps:with(?FORCED_TAG_FIELDS, NormalizedMsgKeyMap),
+    NormalizedMsgKeyMap2 =
+        maps:without(?FORCED_TAG_FIELDS, NormalizedMsgKeyMap),
+    {RemainingMapWithoutForcedTags, BaseTXList} =
         lists:foldl(
             fun({Field, Default}, {RemMap, Acc}) ->
                 NormKey = hb_ao:normalize_key(Field),
-                case maps:find(NormKey, NormalizedMsgKeyMap) of
+                case maps:find(NormKey, NormalizedMsgKeyMap2) of
                     error -> {RemMap, [Default | Acc]};
                     {ok, Value} when NormKey =:= <<"format">> ->
                         {
@@ -399,9 +464,10 @@ tabm_to_tx(NormTABM, Req, Opts) ->
                         }
                 end
             end,
-            {NormalizedMsgKeyMap, []},
+            {NormalizedMsgKeyMap2, []},
             hb_message:default_tx_list()
         ),
+    RemainingMap = maps:merge(RemainingMapWithoutForcedTags, ForcedTagFields),
     % Rebuild the tx record from the new list of fields and values.
     TXWithoutTags = list_to_tuple([tx | lists:reverse(BaseTXList)]),
     % Calculate which set of the remaining keys will be used as tags.
@@ -505,7 +571,7 @@ binary_to_tx(Binary) ->
 
 %% @doc Convert an ANS-104/Arweave encoded tag list into a HyperBEAM-compatible map.
 encoded_tags_to_map(Tags) ->
-    hb_util:list_to_numbered_map(
+    hb_util:list_to_numbered_message(
         lists:map(
             fun({Key, Value}) ->
                 #{
