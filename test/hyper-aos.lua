@@ -2291,7 +2291,7 @@ local function getOwner(m)
     local c = m.commitments[k]
     if c.type == "rsa-pss-sha512" then
         id = c.committer
-    elseif c.alg == "signed" and c['commitment-device'] == "ans104" then
+    elseif c.type == "signed" and c['commitment-device'] == "ans104" then
         id = c.committer
     end
 end, utils.keys(m.commitments)
@@ -2451,7 +2451,7 @@ function process.handle(req, base)
       Utils.map(
         function (k)
           local c = m.commitments[k]
-          if c.alg == "rsa-pss-sha512" then
+          if c.type == "rsa-pss-sha512" then
             from = c.committer
           end
         end,
