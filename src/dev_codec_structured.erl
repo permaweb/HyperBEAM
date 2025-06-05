@@ -85,8 +85,6 @@ from(Msg, Req, Opts) when is_map(Msg) ->
             hb_util:to_sorted_keys(NormKeysMap, Opts)
         )
     ),
-    ?event(xxx, {types, {explicit, Types}}),
-    ?event(xxx, {values, {explicit, Values}}),
     % Encode the AoTypes as a structured dictionary
     % And include as a field on the produced TABM
     WithTypes =

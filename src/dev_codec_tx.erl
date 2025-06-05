@@ -416,8 +416,8 @@ test_hb_message_no_format_happy() ->
     RandomID = crypto:strong_rand_bytes(32),
     ExtraTestCases = [
         {data_root_only, 
-        #{ <<"data_root">> => RandomID, <<"data_size">> => 1024 },
-        #{ <<"data_root">> => RandomID, <<"data_size">> => 1024 }
+            #{ <<"data_root">> => RandomID, <<"data_size">> => 1024 },
+            #{ <<"data_root">> => RandomID, <<"data_size">> => 1024 }
         }
     ],
 

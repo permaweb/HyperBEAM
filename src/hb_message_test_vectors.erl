@@ -466,7 +466,7 @@ message_with_large_keys_test(Codec, Opts) ->
         <<"another_normal_key">> => <<"another_normal_value">>
     },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    ?event({encoded, {explicit, Encoded}}),
+    ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({matching, {input, Msg}, {output, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
@@ -1350,7 +1350,7 @@ encode_balance_table(Size, Codec, Opts) ->
             _ <- lists:seq(1, Size)
         },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    ?event({encoded, {explicit, Encoded}}),
+    ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({decoded, Decoded}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).

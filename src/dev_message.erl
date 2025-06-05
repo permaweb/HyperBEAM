@@ -255,11 +255,6 @@ commit(Self, Req, Opts) ->
             hb_message:convert(Base, tabm, CommitOpts),
             Opts
         ),
-    ?event(xxx, {commit,
-        {self, {explicit, Self}},
-        {base, {explicit, Base}},
-        {loaded, {explicit, Loaded}}
-    }),
     {ok, Committed} =
         apply(
             AttFun,

@@ -128,12 +128,10 @@ commit_message(Codec, Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
 commit_message(Codec, Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
     % Convert the given message to an ANS-104 or Arweave TX record, sign it, and convert
     % it back to a structured message.
-    ?event(xxx, {committing, {input, Msg}}),
+    ?event({committing, {input, Msg}}),
     TX = hb_util:ok(codec_to_tx(Codec, hb_private:reset(Msg), Req, Opts)),
-    ?event(xxx, {commit_message, {tx, {explicit, TX}}}),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     Signed = sign(TX, Wallet),
-    ?event(xxx, {commit_message, {signed, {explicit, Signed}}}),
     SignedStructured =
         hb_message:convert(
             Signed,
@@ -141,7 +139,6 @@ commit_message(Codec, Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) 
             Codec,
             Opts
         ),
-    ?event(xxx, {commit_message, {signed_structured, {explicit, SignedStructured}}}),
     {ok, SignedStructured};
 commit_message(Codec, Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to ANS-104 or Arweave, then back.
@@ -169,7 +166,7 @@ verify_message(Codec, Msg, Req, Opts) ->
         ),
     ?event({verify, {only_with_commitment, OnlyWithCommitment}}),
     {ok, TX} = codec_to_tx(Codec, OnlyWithCommitment, Req, Opts),
-    ?event({verify, {encoded, {explicit, TX}}}),
+    ?event({verify, {encoded, TX}}),
     Res = verify(TX),
     {ok, Res}.
 
@@ -338,9 +335,8 @@ tx_to_tabm2(RawTX, TXKeys, CommittedTags, Req, Opts) ->
                     }
                 }
         end,
-    Result = hb_maps:without(?FILTERED_TAGS, WithCommitments, Opts),
-    ?event({from_result, {explicit, Result}}),
-    Result.
+    ?event({message_after_commitments, WithCommitments}),
+    hb_maps:without(?FILTERED_TAGS, WithCommitments, Opts).
       
 tabm_to_tx(RawTABM, Req, Opts) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
@@ -545,7 +541,6 @@ tabm_to_tx(RawTABM, Req, Opts) ->
                         }
                 }
         end,
-    ?event({tx_with_data, {explicit, TXWithData}}),
     % Regenerate the IDs
     TXWithIDs =
         try reset_ids(normalize(TXWithData))
