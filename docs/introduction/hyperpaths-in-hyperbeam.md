@@ -1,4 +1,4 @@
-# Pathing in AO-Core
+# HyperPATHs in HyperBEAM
 
 ## Overview
 
@@ -122,11 +122,3 @@ HyperBEAM processes this as follows:
 5.  **Path Evaluation:**
     *   If `[PATH]` is `/items/1`, the response is the integer `1`.
     *   If `[PATH]` is `/config/key1`, the response is the binary `<<"val1">>`.
-
-## Best Practices
-
-1. Always verify cryptographic signatures on responses
-2. Use appropriate caching strategies for frequently accessed data
-3. Implement proper error handling for network requests
-4. Consider rate limits and performance implications
-5. Keep sensitive data secure and use appropriate authentication methods 

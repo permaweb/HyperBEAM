@@ -1,7 +1,411 @@
-Generated: 2025-06-06T15:18:18Z
+Generated: 2025-06-06T15:56:03Z
 
---- START OF FILE: docs/build/exposing-process-state.md ---
-# Exposing Process State with the Patch Device
+--- START OF FILE: docs/build/ao-connect.md ---
+## Guide: Spawning and Interacting with a hyperAOS Process
+
+This guide explains how to spawn and interact with a process using HyperBEAM and `aoconnect`.
+
+### Prerequisites
+- Node.js environment
+- `@permaweb/aoconnect` library
+- Wallet file (`wallet.json`) containing your cryptographic keys
+- Local Permaweb node running
+
+### Step 1: Environment Setup
+Install necessary dependencies:
+
+```bash
+npm install @permaweb/aoconnect
+```
+
+Ensure your wallet file (`wallet.json`) is correctly formatted and placed in your project directory.
+
+> NOTE: you can create a test wallet using this line:
+> `npx -y @permaweb/wallet > wallet.json`
+
+### Step 2: Establish Connection
+Create a new JavaScript file (e.g., `index.js`) and set up your Permaweb connection:
+
+```javascript
+import { connect, createSigner } from '@permaweb/aoconnect'
+import fs from 'node:fs'
+
+const jwk = JSON.parse(fs.readFileSync('wallet.json', 'utf-8'))
+
+const hyperAOS = "XcyVlrOvk4b9XifeUmkbqqGwPwwv1VW94hUhNnE7v14";
+
+async function main() {
+  const address = await fetch('http://localhost:10000/~meta@1.0/info/address')
+    .then(res => res.text())
+
+  const { request } = await connect({
+    MODE: 'mainnet',
+    URL: 'http://localhost:10000',
+    signer: createSigner(jwk)
+  })
+```
+
+### Step 3: Spawning a hyperAOS Process
+Use the following code snippet to spawn your hyperAOS process:
+
+```javascript
+  const processResult = await request({
+    method: 'POST',
+    device: 'process@1.0',
+    path: '/schedule',
+    type: 'Process',
+    scheduler: address,
+    script: hyperAOS,
+    'execution-device': 'lua@5.3a',
+    'scheduler-device': 'scheduler@1.0',
+    authority: address,
+    'Data-Protocol': 'ao',
+    Variant: 'ao.N.1',
+  })
+```
+
+### Step 4: Scheduling a Message
+Schedule a Lua expression evaluation within your spawned hyperAOS process:
+
+```javascript
+  const response = await request({
+    method: 'POST',
+    type: 'Message',
+    path: `/${processResult.process}~process@1.0/schedule`,
+    action: 'Eval',
+    data: '1 + 1',
+    'Data-Protocol': 'ao',
+    Variant: 'ao.N.1'
+  })
+```
+
+### Step 5: Retrieving Results
+
+In this section we are going to construct a hyperPATH to
+return the output of our computed evaluation.
+
+```javascript
+const hyperPath = 
+     `/${processResult.process}~process@1.0/compute` +
+      `&slot=${response.slot}/results/output`
+```
+
+Fetch the computation results from your scheduled message:
+
+```javascript
+  const result = await request({
+    method: 'GET',
+    path: hyperPath
+  })
+
+  console.log(result.body)
+}
+
+main()
+```
+
+### Running the demo
+
+```
+node index.js
+```
+
+Output
+
+```
+2
+```
+
+
+### Conclusion
+Following these steps, you've successfully spawned a process , scheduled a Lua computation, and retrieved its output. This approach allows you to develop dynamic, decentralized applications on the Permaweb using Lua scripting.
+--- END OF FILE: docs/build/ao-connect.md ---
+
+--- START OF FILE: docs/build/building-devices.md ---
+# Extending HyperBEAM with Devices
+
+We encourage you to extend HyperBEAM with devices for functionality that is general purpose and reusable across different applications.
+
+## What are Devices?
+
+As explained in [What are HyperBEAM Devices?](../devices/what-are-devices.md), devices are the core functional units within HyperBEAM. They are self-contained modules that process messages and perform specific actions, forming the building blocks of your application's logic.
+
+HyperBEAM comes with a set of powerful [built-in devices](../devices/overview.md) that handle everything from process management (`~process@1.0`) and message scheduling (`~scheduler@1.0`) to executing WebAssembly (`~wasm64@1.0`) and Lua scripts (`~lua@5.3a`).
+
+## Creating Your Own Devices (Coming Soon)
+
+We will create more in depth guides for building devices in Lua and Erlang in the future.
+
+--- END OF FILE: docs/build/building-devices.md ---
+
+--- START OF FILE: docs/build/extending-hyperbeam.md ---
+# Extending HyperBEAM
+
+HyperBEAM's modular design, built on AO-Core principles and Erlang/OTP, makes it highly extensible. You can add new functionalities or modify existing behaviors primarily by creating new **Devices** or implementing **Pre/Post-Processors**.
+
+!!! warning "Advanced Topic"
+    Extending HyperBEAM requires a good understanding of Erlang/OTP, the AO-Core protocol, and HyperBEAM's internal architecture. This guide provides a high-level overview; detailed implementation requires deeper exploration of the source code.
+
+## Approach 1: Creating New Devices
+
+This is the most common way to add significant new capabilities.
+A Device is essentially an Erlang module (typically named `dev_*.erl`) that processes AO-Core messages.
+
+**Steps:**
+
+1.  **Define Purpose:** Clearly define what your device will do. What kind of messages will it process? What state will it manage (if any)? What functions (keys) will it expose?
+2.  **Create Module:** Create a new Erlang module (e.g., `src/dev_my_new_device.erl`).
+3.  **Implement `info/0..2` (Optional but Recommended):** Define an `info` function to signal capabilities and requirements to HyperBEAM (e.g., exported keys, variant/version ID).
+    ```erlang
+    info() ->
+        #{
+          variant => <<"MyNewDevice/1.0">>,
+          exports => [<<"do_something">>, <<"get_status">>]
+        }.
+    ```
+4.  **Implement Key Functions:** Create Erlang functions corresponding to the keys your device exposes. These functions typically take `StateMessage`, `InputMessage`, and `Environment` as arguments and return `{ok, NewMessage}` or `{error, Reason}`.
+    ```erlang
+    do_something(StateMsg, InputMsg, Env) ->
+        % ... perform action based on InputMsg ...
+        NewState = ..., % Calculate new state
+        {ok, NewState}.
+
+    get_status(StateMsg, _InputMsg, _Env) ->
+        % ... read status from StateMsg ...
+        StatusData = ..., 
+        {ok, StatusData}.
+    ```
+5.  **Handle State (If Applicable):** Devices can be stateless or stateful. Stateful devices manage their state within the `StateMessage` passed between function calls.
+6.  **Register Device:** Ensure HyperBEAM knows about your device. This might involve adding it to build configurations or potentially a dynamic registration mechanism if available.
+7.  **Testing:** Write EUnit tests for your device's functions.
+
+**Example Idea:** A device that bridges to another blockchain network, allowing AO processes to read data or trigger transactions on that chain.
+
+## Approach 2: Building Pre/Post-Processors
+
+Pre/post-processors allow you to intercept incoming requests *before* they reach the target device/process (`preprocess`) or modify the response *after* execution (`postprocess`). These are often implemented using the `dev_stack` device or specific hooks within the request handling pipeline.
+
+**Use Cases:**
+
+*   **Authentication/Authorization:** Checking signatures or permissions before allowing execution.
+*   **Request Modification:** Rewriting requests, adding metadata, or routing based on specific criteria.
+*   **Response Formatting:** Changing the structure or content type of the response.
+*   **Metering/Logging:** Recording request details or charging for usage before or after execution.
+
+**Implementation:**
+
+Processors often involve checking specific conditions (like request path or headers) and then either:
+
+a.  Passing the request through unchanged.
+b.  Modifying the request/response message structure.
+c.  Returning an error or redirect.
+<!-- d. The guide on [Building Pre/Post-Processors](TODO:link-to-pre-post-processor-guide-once-available) provides a detailed example pattern, particularly focusing on exempting certain routes. -->
+
+**Example Idea:** A preprocessor that automatically adds a timestamp tag to all incoming messages for a specific process.
+<!-- 
+## Approach 3: Modifying Existing Devices (Use with Caution)
+
+You could directly modify the source code of existing `dev_*.erl` modules. However, this is generally discouraged as it makes future updates harder and can break compatibility. -->
+
+## Approach 3: Custom Routing Strategies
+
+While `dev_router` provides basic strategies (round-robin, etc.), you could potentially implement a custom load balancing or routing strategy module that `dev_router` could be configured to use. This would involve understanding the interfaces expected by `dev_router`.
+
+**Example Idea:** A routing strategy that queries worker nodes for their specific capabilities before forwarding a request.
+
+## Getting Started
+
+1.  **Familiarize Yourself:** Deeply understand Erlang/OTP and the HyperBEAM codebase (`src/` directory), especially [`hb_ao.erl`](../resources/source-code/hb_ao.md), [`hb_message.erl`](../resources/source-code/hb_message.md), and existing `dev_*.erl` modules relevant to your idea.
+2.  **Study Examples:** Look at simple devices like `dev_patch.erl` or more complex ones like `dev_process.erl` to understand patterns.
+3.  **Start Small:** Implement a minimal version of your idea first.
+4.  **Test Rigorously:** Use `rebar3 eunit` extensively.
+5.  **Engage Community:** Ask questions in developer channels if you get stuck.
+
+Extending HyperBEAM allows you to tailor the AO network's capabilities to specific needs, contributing to its rich and evolving ecosystem.
+
+--- END OF FILE: docs/build/extending-hyperbeam.md ---
+
+--- START OF FILE: docs/build/get-started-building-on-hyperbeam.md ---
+# Quickstart with HyperBEAM
+
+Welcome to building on AO, the decentralized supercomputer!
+
+AO combines the permanent storage of Arweave with the flexible, scalable computation enabled by the AO-Core protocol and its HyperBEAM implementation. This allows you to create truly autonomous applications, agents, and services that run trustlessly and permissionlessly.
+
+## Why build on HyperBEAM?
+
+Current cloud providers are centralized compute, which means you have to trust them with your data and your money. 
+
+HyperBEAM gives you severless decentralized compute... where you own your data and you pay for only what you need.
+
+## Thinking in HyperBEAM (Viksit)
+
+Your severless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a prcoess on HyperBEAM whos state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
+    
+At its heart, building on HyperBEAM involves:
+
+1.  **Processes:** Think of these as independent programs or stateful contracts. Each process has a unique ID and maintains its own state.
+2.  **Messages:** You interact with processes by sending them messages. These messages trigger computations, update state, or cause the process to interact with other processes or the outside world.
+
+Messages are processed by [Devices](../introduction/ao-devices.md), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
+
+## Starting `aos`: Your Development Environment
+
+The primary tool for interacting with AO and developing processes is `aos`, a command-line interface and development environment.
+
+=== "npm"
+    ```bash
+    npm i -g https://get_ao.arweave.net
+    ```
+
+=== "bun"
+    ```bash
+    bun install -g https://get_ao.arweave.net
+    ```
+
+=== "pnpm"
+    ```bash
+    pnpm add -g https://get_ao.arweave.net
+    ```
+
+**Installing HyperBEAM for Development**
+
+
+
+**Starting `aos`:**
+
+Simply run the command in your terminal:
+
+```bash
+aos --mainnet "localhost:8734" myMainnetProcess
+```
+
+This connects you to an interactive Lua environment running within a **process** on the AO network. This process acts as your command-line interface (CLI) to the AO network, allowing you to interact with other processes, manage your wallet, and develop new AO processes. By default, it connects to a process running on the mainnet Compute Unit (CU).
+
+!!! note
+    **What `aos` is doing:**
+
+    *   **Connecting:** Establishes a connection from your terminal to a remote process running the `aos` environment.
+    *   **Loading Wallet:** Looks for a default Arweave key file (usually `~/.aos.json` or specified via arguments) to load into the remote process context for signing outgoing messages.
+    *   **Providing Interface:** Gives you a Lua prompt (`[aos]>`) within the remote process where you can:
+    *   Load code for new persistent processes on the network.
+    *   Send messages to existing network processes.
+    *   Inspect process state.
+    *   Manage your local environment.
+
+## Your First Interaction: Intializing a Variable
+
+From the `aos` prompt, you can assign a variable. Let's assign a basic Lua process that just holds some data:
+
+```lua
+[aos]> myVariable = "Hello from aos!"
+-- This assigns the string "Hello from aos!" to the variable 'myVariable'
+-- within the current process's Lua environment.
+
+[aos]> myVariable
+-- Displays the content of 'myVariable'
+Hello from aos!
+```
+
+## Send Your First Message
+
+Let's send our variable to another process.
+
+```lua
+[aos]> Send({ Target = ao.id, Data = myVariable })
+```
+
+TODO: Add output
+
+
+## Creating Your First Handler
+
+Handlers are decentralized functions that can be triggered by messages.
+
+
+Follow these steps to create and interact with your first message handler in AO:
+
+1.  **Create a Lua File to Handle Messages:**
+    Create a new file named `main.lua` in your local directory and add the following Lua code:
+
+    ```lua
+    Handlers.add(
+      "HelloWorld",
+      function(msg)
+        -- This function gets called when a message with Action = "HelloWorld" arrives.
+        print("Handler triggered by message from: " .. msg.From)
+        -- It replies to the sender with a new message containing the specified data.
+        msg.reply({ Data = "Hello back from your process!" })
+      end
+    )
+
+    print("HelloWorld handler loaded.") -- Confirmation message
+    ```
+
+    *   `Handlers.add`: Registers a function to handle incoming messages.
+    *   `"HelloWorld"`: The name of this handler. It will be triggered by messages with `Action = "HelloWorld"`.
+    *   `function(msg)`: The function that executes when the handler is triggered. `msg` contains details about the incoming message (like `msg.From`, the sender's process ID).
+    *   `msg.reply({...})`: Sends a response message back to the original sender. The response must be a Lua table, typically containing a `Data` field.
+
+2.  **Load the Handler into `aos`:**
+    From your `aos` prompt, load the handler code into your running process:
+
+    ```lua
+    [aos]> .load main.lua
+    ```
+
+3.  **Send a Message to Trigger the Handler:**
+    Now, send a message to your own process (`ao.id` refers to the current process ID) with the action that matches your handler's name:
+
+    ```lua
+    [aos]> Send({ Target = ao.id, Action = "HelloWorld" })
+    ```
+
+4.  **Observe the Output:**
+    You should see two things happen in your `aos` terminal:
+    *   The `print` statement from your handler: `Handler triggered by message from: <your-process-id>`
+    *   A notification about the reply message: `New Message From <your-process-id>: Data = Hello back from your process!`
+
+5.  **Inspect the Reply Message:**
+    The reply message sent by your handler is now in your process's inbox. You can inspect its data like this:
+
+    ```lua
+    [aos]> Inbox[#Inbox].Data
+    ```
+    This should output: `"Hello back from your process!"`
+
+You've successfully created a handler, loaded it into your AO process, triggered it with a message, and received a reply!
+
+## Next Steps
+
+To dive deeper into AOS and AO, check out the [AO Cookbook](https://cookbook_ao.arweave.net/).
+
+<!-- *   **Serverless Compute:** Discover how to run WASM or Lua computations within your processes: [Serverless Decentralized Compute](./serverless-decentralized-compute.md) -->
+
+--- END OF FILE: docs/build/get-started-building-on-hyperbeam.md ---
+
+--- START OF FILE: docs/build/migrating-from-legacynet.md ---
+# Migrating from `legacynet` to HyperBEAM
+
+HyperBEAM represents a significant evolution from the original `legacynet`, offering a more robust, performant, and feature-rich environment for running AO processes. If you have processes currently running on `legacynet`, migrating them to HyperBEAM is a crucial step to leverage these advancements.
+
+## Why Migrate to HyperBEAM?
+
+HyperBEAM is not just an update; it's a new foundation designed for building high-performance decentralized applications. Key benefits include:
+
+*   **Enhanced Performance:** Built on Erlang/OTP, HyperBEAM's architecture is optimized for concurrency and fault tolerance, resulting in faster scheduling and more responsive applications.
+*   **Powerful Developer Tools:** HyperBEAM exposes all of it's state through HTTP, you can use any standard HTTP library to interact with it. 
+*   **Easy Extensibility:** It allows core feature extensiblity through [modular devices](../introduction/ao-devices.md).
+
+## Start Migrating Your Processes
+
+The process of migration involves updating your process to take advantage of the new features available in HyperBEAM. One of the most impactful new features is the ability to directly expose parts of your process state for immediate reading via HTTP, which dramatically improves the performance of web frontends and data-driven services.
+
+For a practical guide on how to use one of these new, powerful features to make your applications more performant, we strongly recommend reviewing our documentation on **[Exposing Process State with the Patch Device](./exposing-process-state.md)**. This guide will walk you through a new pattern available in HyperBEAM that can help you refactor your legacy processes for better performance and user experience.
+
+Take the next step and begin migrating your `legacynet` processes to HyperBEAM to build faster, more capable decentralized applications.
+
+## Exposing Process State with the Patch Device
 
 The [`~patch@1.0`](../resources/source-code/dev_patch.md) device provides a mechanism for AO processes to expose parts of their internal state, making it readable via direct HTTP GET requests along the process's HyperPATH.
 
@@ -110,230 +514,7 @@ It's recommended to use descriptive and specific keys for your cached data to pr
 *   **Not a Replacement for State:** Patching is primarily for *exposing* reads. It doesn't replace the core state management within your process handler logic.
 
 By using the `patch` device, you can make parts of your AO process state easily and efficiently readable over standard HTTP, bridging the gap between decentralized computation and web-based applications.
---- END OF FILE: docs/build/exposing-process-state.md ---
-
---- START OF FILE: docs/build/extending-hyperbeam.md ---
-# Extending HyperBEAM
-
-HyperBEAM's modular design, built on AO-Core principles and Erlang/OTP, makes it highly extensible. You can add new functionalities or modify existing behaviors primarily by creating new **Devices** or implementing **Pre/Post-Processors**.
-
-!!! warning "Advanced Topic"
-    Extending HyperBEAM requires a good understanding of Erlang/OTP, the AO-Core protocol, and HyperBEAM's internal architecture. This guide provides a high-level overview; detailed implementation requires deeper exploration of the source code.
-
-## Approach 1: Creating New Devices
-
-This is the most common way to add significant new capabilities.
-A Device is essentially an Erlang module (typically named `dev_*.erl`) that processes AO-Core messages.
-
-**Steps:**
-
-1.  **Define Purpose:** Clearly define what your device will do. What kind of messages will it process? What state will it manage (if any)? What functions (keys) will it expose?
-2.  **Create Module:** Create a new Erlang module (e.g., `src/dev_my_new_device.erl`).
-3.  **Implement `info/0..2` (Optional but Recommended):** Define an `info` function to signal capabilities and requirements to HyperBEAM (e.g., exported keys, variant/version ID).
-    ```erlang
-    info() ->
-        #{
-          variant => <<"MyNewDevice/1.0">>,
-          exports => [<<"do_something">>, <<"get_status">>]
-        }.
-    ```
-4.  **Implement Key Functions:** Create Erlang functions corresponding to the keys your device exposes. These functions typically take `StateMessage`, `InputMessage`, and `Environment` as arguments and return `{ok, NewMessage}` or `{error, Reason}`.
-    ```erlang
-    do_something(StateMsg, InputMsg, Env) ->
-        % ... perform action based on InputMsg ...
-        NewState = ..., % Calculate new state
-        {ok, NewState}.
-
-    get_status(StateMsg, _InputMsg, _Env) ->
-        % ... read status from StateMsg ...
-        StatusData = ..., 
-        {ok, StatusData}.
-    ```
-5.  **Handle State (If Applicable):** Devices can be stateless or stateful. Stateful devices manage their state within the `StateMessage` passed between function calls.
-6.  **Register Device:** Ensure HyperBEAM knows about your device. This might involve adding it to build configurations or potentially a dynamic registration mechanism if available.
-7.  **Testing:** Write EUnit tests for your device's functions.
-
-**Example Idea:** A device that bridges to another blockchain network, allowing AO processes to read data or trigger transactions on that chain.
-
-## Approach 2: Building Pre/Post-Processors
-
-Pre/post-processors allow you to intercept incoming requests *before* they reach the target device/process (`preprocess`) or modify the response *after* execution (`postprocess`). These are often implemented using the `dev_stack` device or specific hooks within the request handling pipeline.
-
-**Use Cases:**
-
-*   **Authentication/Authorization:** Checking signatures or permissions before allowing execution.
-*   **Request Modification:** Rewriting requests, adding metadata, or routing based on specific criteria.
-*   **Response Formatting:** Changing the structure or content type of the response.
-*   **Metering/Logging:** Recording request details or charging for usage before or after execution.
-
-**Implementation:**
-
-Processors often involve checking specific conditions (like request path or headers) and then either:
-
-a.  Passing the request through unchanged.
-b.  Modifying the request/response message structure.
-c.  Returning an error or redirect.
-<!-- d. The guide on [Building Pre/Post-Processors](TODO:link-to-pre-post-processor-guide-once-available) provides a detailed example pattern, particularly focusing on exempting certain routes. -->
-
-**Example Idea:** A preprocessor that automatically adds a timestamp tag to all incoming messages for a specific process.
-<!-- 
-## Approach 3: Modifying Existing Devices (Use with Caution)
-
-You could directly modify the source code of existing `dev_*.erl` modules. However, this is generally discouraged as it makes future updates harder and can break compatibility. -->
-
-## Approach 3: Custom Routing Strategies
-
-While `dev_router` provides basic strategies (round-robin, etc.), you could potentially implement a custom load balancing or routing strategy module that `dev_router` could be configured to use. This would involve understanding the interfaces expected by `dev_router`.
-
-**Example Idea:** A routing strategy that queries worker nodes for their specific capabilities before forwarding a request.
-
-## Getting Started
-
-1.  **Familiarize Yourself:** Deeply understand Erlang/OTP and the HyperBEAM codebase (`src/` directory), especially [`hb_ao.erl`](../resources/source-code/hb_ao.md), [`hb_message.erl`](../resources/source-code/hb_message.md), and existing `dev_*.erl` modules relevant to your idea.
-2.  **Study Examples:** Look at simple devices like `dev_patch.erl` or more complex ones like `dev_process.erl` to understand patterns.
-3.  **Start Small:** Implement a minimal version of your idea first.
-4.  **Test Rigorously:** Use `rebar3 eunit` extensively.
-5.  **Engage Community:** Ask questions in developer channels if you get stuck.
-
-Extending HyperBEAM allows you to tailor the AO network's capabilities to specific needs, contributing to its rich and evolving ecosystem.
-
---- END OF FILE: docs/build/extending-hyperbeam.md ---
-
---- START OF FILE: docs/build/get-started-building-on-ao-core.md ---
-# Getting Started Building on AO-Core
-
-Welcome to building on AO, the decentralized supercomputer!
-
-AO combines the permanent storage of Arweave with the flexible, scalable computation enabled by the AO-Core protocol and its HyperBEAM implementation. This allows you to create truly autonomous applications, agents, and services that run trustlessly and permissionlessly.
-
-## Core Idea: Processes & Messages
-
-At its heart, building on AO involves:
-
-1.  **Creating Processes:** Think of these as independent programs or stateful contracts. Each process has a unique ID and maintains its own state.
-2.  **Sending Messages:** You interact with processes by sending them messages. These messages trigger computations, update state, or cause the process to interact with other processes or the outside world.
-
-Messages are processed by [Devices](../introduction/ao-devices.md), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
-
-## Starting `aos`: Your Development Environment
-
-The primary tool for interacting with AO and developing processes is `aos`, a command-line interface and development environment.
-
-=== "npm"
-    ```bash
-    npm i -g https://get_ao.arweave.net
-    ```
-
-=== "bun"
-    ```bash
-    bun install -g https://get_ao.arweave.net
-    ```
-
-=== "pnpm"
-    ```bash
-    pnpm add -g https://get_ao.arweave.net
-    ```
-
-**Starting `aos`:**
-
-Simply run the command in your terminal:
-
-```bash
-aos
-```
-
-This connects you to an interactive Lua environment running within a **process** on the AO network. This process acts as your command-line interface (CLI) to the AO network, allowing you to interact with other processes, manage your wallet, and develop new AO processes. By default, it connects to a process running on the mainnet Compute Unit (CU).
-
-**What `aos` is doing:**
-
-*   **Connecting:** Establishes a connection from your terminal to a remote process running the `aos` environment.
-*   **Loading Wallet:** Looks for a default Arweave key file (usually `~/.aos.json` or specified via arguments) to load into the remote process context for signing outgoing messages.
-*   **Providing Interface:** Gives you a Lua prompt (`[aos]>`) within the remote process where you can:
-    *   Load code for new persistent processes on the network.
-    *   Send messages to existing network processes.
-    *   Inspect process state.
-    *   Manage your local environment.
-
-## Your First Interaction: Assigning a Variable
-
-From the `aos` prompt, you can assign a variable. Let's assign a basic Lua process that just holds some data:
-
-```lua
-[aos]> myVariable = "Hello from aos!"
--- This assigns the string "Hello from aos!" to the variable 'myVariable'
--- within the current process's Lua environment.
-
-[aos]> myVariable
--- Displays the content of 'myVariable'
-Hello from aos!
-```
-
-
-## Your First Handler
-
-Follow these steps to create and interact with your first message handler in AO:
-
-1.  **Create a Lua File to Handle Messages:**
-    Create a new file named `main.lua` in your local directory and add the following Lua code:
-
-    ```lua
-    Handlers.add(
-      "HelloWorld",
-      function(msg)
-        -- This function gets called when a message with Action = "HelloWorld" arrives.
-        print("Handler triggered by message from: " .. msg.From)
-        -- It replies to the sender with a new message containing the specified data.
-        msg.reply({ Data = "Hello back from your process!" })
-      end
-    )
-
-    print("HelloWorld handler loaded.") -- Confirmation message
-    ```
-
-    *   `Handlers.add`: Registers a function to handle incoming messages.
-    *   `"HelloWorld"`: The name of this handler. It will be triggered by messages with `Action = "HelloWorld"`.
-    *   `function(msg)`: The function that executes when the handler is triggered. `msg` contains details about the incoming message (like `msg.From`, the sender's process ID).
-    *   `msg.reply({...})`: Sends a response message back to the original sender. The response must be a Lua table, typically containing a `Data` field.
-
-2.  **Load the Handler into `aos`:**
-    From your `aos` prompt, load the handler code into your running process:
-
-    ```lua
-    [aos]> .load main.lua
-    ```
-
-3.  **Send a Message to Trigger the Handler:**
-    Now, send a message to your own process (`ao.id` refers to the current process ID) with the action that matches your handler's name:
-
-    ```lua
-    [aos]> Send({ Target = ao.id, Action = "HelloWorld" })
-    ```
-
-4.  **Observe the Output:**
-    You should see two things happen in your `aos` terminal:
-    *   The `print` statement from your handler: `Handler triggered by message from: <your-process-id>`
-    *   A notification about the reply message: `New Message From <your-process-id>: Data = Hello back from your process!`
-
-5.  **Inspect the Reply Message:**
-    The reply message sent by your handler is now in your process's inbox. You can inspect its data like this:
-
-    ```lua
-    [aos]> Inbox[#Inbox].Data
-    ```
-    This should output: `"Hello back from your process!"`
-
-You've successfully created a handler, loaded it into your AO process, triggered it with a message, and received a reply!
-
-## Next Steps
-
-This is just the beginning. To dive deeper:
-
-*   **AO Cookbook:** Explore practical examples and recipes for common tasks: [AO Cookbook](https://cookbook_ao.arweave.net/)
-*   **Expose Process State:** Learn how to make your process data accessible via HTTP using the `patch` device: [Exposing Process State](./exposing-process-state.md)
-*   **Serverless Compute:** Discover how to run WASM or Lua computations within your processes: [Serverless Decentralized Compute](./serverless-decentralized-compute.md)
-*   **aos Documentation:** Refer to the official `aos` documentation for detailed commands and usage.
-
---- END OF FILE: docs/build/get-started-building-on-ao-core.md ---
+--- END OF FILE: docs/build/migrating-from-legacynet.md ---
 
 --- START OF FILE: docs/build/serverless-decentralized-compute.md ---
 # Serverless Decentralized Compute on AO
@@ -997,7 +1178,7 @@ Versioning indicates the specific interface and behavior of the device. Changes 
 
 --- END OF FILE: docs/devices/what-are-devices.md ---
 
---- START OF FILE: docs/introduction/ao-devices.md ---
+--- START OF FILE: docs/introduction/hyperbeam-devices.md ---
 # AO Devices
 
 In AO-Core and its implementation HyperBEAM, **Devices** are modular components responsible for processing and interpreting [Messages](./what-is-ao-core.md#core-concepts). They define the specific logic for how computations are performed, data is handled, or interactions occur within the AO ecosystem.
@@ -1059,10 +1240,10 @@ The modular nature of AO Devices opens up vast possibilities for future expansio
 
 The Device framework ensures that AO can adapt and grow, incorporating new technologies and computational paradigms without requiring fundamental changes to the core protocol. This extensibility is key to AO's long-term vision of becoming a truly global, decentralized computer.
 
---- END OF FILE: docs/introduction/ao-devices.md ---
+--- END OF FILE: docs/introduction/hyperbeam-devices.md ---
 
---- START OF FILE: docs/introduction/pathing-in-ao-core.md ---
-# Pathing in AO-Core
+--- START OF FILE: docs/introduction/hyperpaths-in-hyperbeam.md ---
+# HyperPATHs in HyperBEAM
 
 ## Overview
 
@@ -1186,15 +1367,7 @@ HyperBEAM processes this as follows:
 5.  **Path Evaluation:**
     *   If `[PATH]` is `/items/1`, the response is the integer `1`.
     *   If `[PATH]` is `/config/key1`, the response is the binary `<<"val1">>`.
-
-## Best Practices
-
-1. Always verify cryptographic signatures on responses
-2. Use appropriate caching strategies for frequently accessed data
-3. Implement proper error handling for network requests
-4. Consider rate limits and performance implications
-5. Keep sensitive data secure and use appropriate authentication methods 
---- END OF FILE: docs/introduction/pathing-in-ao-core.md ---
+--- END OF FILE: docs/introduction/hyperpaths-in-hyperbeam.md ---
 
 --- START OF FILE: docs/introduction/what-is-ao-core.md ---
 # What is AO-Core?
@@ -1287,28 +1460,24 @@ In essence, HyperBEAM is the engine that drives the AO Computer, enabling a visi
 
 ## Core Components & Features
 
-- **Pluggable Devices:** The heart of HyperBEAM's extensibility. It includes essential built-in devices like [`~meta`](../devices/meta-at-1-0.md), [`~relay`](../devices/relay-at-1-0.md), [`~process`](../devices/process-at-1-0.md), [`~scheduler`](../devices/scheduler-at-1-0.md), and [`~wasm64`](../devices/wasm64-at-1-0.md) for core functionality, but the system is designed for easy addition of new custom devices.
+- **Modular Devices:** The heart of HyperBEAM's extensibility. It includes essential built-in devices like [`~meta`](../devices/meta-at-1-0.md), [`~relay`](../devices/relay-at-1-0.md), [`~process`](../devices/process-at-1-0.md), [`~scheduler`](../devices/scheduler-at-1-0.md), and [`~wasm64`](../devices/wasm64-at-1-0.md) for core functionality, but the system is designed for easy addition of new custom devices.
 - **Message System:** Everything in HyperBEAM is a "Message" — a map of named functions or binary data that can be processed, transformed, and cryptographically verified.
 - **HTTP Interface:** Nodes expose an HTTP server for interaction via standard web requests and HyperPATHs, structured URLs that represent computation paths (effectively a sequence of state transformations for messages).
-- **Modularity:** Its design supports easy extension, allowing new devices and functionalities to be added to the system.
 
 ## Architecture
 
 *   **Initialization Flow:** When a HyperBEAM node starts, it initializes the name service, scheduler registry, timestamp server, and HTTP server, establishing core services for process management, timing, communication, and storage.
 *   **Compute Model:** Computation follows the pattern `Message1(Message2) => Message3`, where messages are resolved through their devices and [paths](./pathing-in-ao-core.md). The integrity and history of these computations are ensured by **hashpaths**, which serves as a cryptographic audit trail.
-*   **Scheduler System:** The scheduler component manages execution order using ["slots"](../devices/scheduler-at-1-0.md#slot-system) — sequential positions that guarantee deterministic computation.
+*   **Scheduler System:** The scheduler component manages execution order using [slots](../devices/scheduler-at-1-0.md#slot-system) — sequential positions that guarantee deterministic computation.
 *   **Process Slots:** Each process has numbered slots starting from 0 that track message execution order, ensuring consistent computation even across distributed nodes.
 
 ## HTTP API and Pathing
 
-HyperBEAM exposes a powerful HTTP API that allows for interacting with processes and accessing data through structured URL patterns. We call URLs that represent computation paths *["HyperPATHs"](./pathing-in-ao-core.md#hyperpath-structure)*. The URL bar effectively functions as a command-line interface for AO's trustless and verifiable compute.
+HyperBEAM exposes a powerful HTTP API that allows for interacting with processes and accessing data through structured URL patterns. We call URLs that represent computation paths **[HyperPATHs](./hyperpaths-in-hyperbeam.md)**. The URL bar effectively functions as a command-line interface for AO's trustless and verifiable compute.
 
-For a comprehensive guide on constructing and interpreting paths in AO-Core, including detailed examples and best practices, see [Pathing in AO-Core](./pathing-in-ao-core.md).
+For a comprehensive guide on constructing and interpreting paths in HyperBEAM, including detailed examples and best practices, see [HyperPATHs in HyperBEAM](./hyperpaths-in-hyperbeam.md).
 
 In essence, HyperBEAM is the engine that powers the AO Computer, enabling the vision of a scalable, trust-minimized, decentralized supercomputer built on permanent storage.
-
-*See also: [HyperBEAM GitHub Repository](https://github.com/permaweb/HyperBEAM)*
-
 --- END OF FILE: docs/introduction/what-is-hyperbeam.md ---
 
 --- START OF FILE: docs/resources/llms.md ---
@@ -1363,7 +1532,7 @@ You can build a wide range of applications, including:
 
 ### Is HyperBEAM open source?
 
-Yes, HyperBEAM is open-source software licensed under the Business Source License License.
+Yes, HyperBEAM source available on [GitHub](https://github.com/permaweb/HyperBEAM) and licensed under the Business Source License.
 
 ### What is the current focus or phase of HyperBEAM development?
 

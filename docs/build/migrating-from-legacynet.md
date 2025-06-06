@@ -1,4 +1,24 @@
-# Exposing Process State with the Patch Device
+# Migrating from `legacynet` to HyperBEAM
+
+HyperBEAM represents a significant evolution from the original `legacynet`, offering a more robust, performant, and feature-rich environment for running AO processes. If you have processes currently running on `legacynet`, migrating them to HyperBEAM is a crucial step to leverage these advancements.
+
+## Why Migrate to HyperBEAM?
+
+HyperBEAM is not just an update; it's a new foundation designed for building high-performance decentralized applications. Key benefits include:
+
+*   **Enhanced Performance:** Built on Erlang/OTP, HyperBEAM's architecture is optimized for concurrency and fault tolerance, resulting in faster scheduling and more responsive applications.
+*   **Powerful Developer Tools:** HyperBEAM exposes all of it's state through HTTP, you can use any standard HTTP library to interact with it. 
+*   **Easy Extensibility:** It allows core feature extensiblity through [modular devices](../introduction/ao-devices.md).
+
+## Start Migrating Your Processes
+
+The process of migration involves updating your process to take advantage of the new features available in HyperBEAM. One of the most impactful new features is the ability to directly expose parts of your process state for immediate reading via HTTP, which dramatically improves the performance of web frontends and data-driven services.
+
+For a practical guide on how to use one of these new, powerful features to make your applications more performant, we strongly recommend reviewing our documentation on **[Exposing Process State with the Patch Device](./exposing-process-state.md)**. This guide will walk you through a new pattern available in HyperBEAM that can help you refactor your legacy processes for better performance and user experience.
+
+Take the next step and begin migrating your `legacynet` processes to HyperBEAM to build faster, more capable decentralized applications.
+
+## Exposing Process State with the Patch Device
 
 The [`~patch@1.0`](../resources/source-code/dev_patch.md) device provides a mechanism for AO processes to expose parts of their internal state, making it readable via direct HTTP GET requests along the process's HyperPATH.
 

@@ -25,7 +25,7 @@ You can build a wide range of applications, including:
 
 ### Is HyperBEAM open source?
 
-Yes, HyperBEAM is open-source software licensed under the Business Source License License.
+Yes, HyperBEAM source available on [GitHub](https://github.com/permaweb/HyperBEAM) and licensed under the Business Source License.
 
 ### What is the current focus or phase of HyperBEAM development?
 
