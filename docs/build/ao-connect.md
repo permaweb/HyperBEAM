@@ -29,8 +29,6 @@ import fs from 'node:fs'
 
 const jwk = JSON.parse(fs.readFileSync('wallet.json', 'utf-8'))
 
-const hyperAOS = "XcyVlrOvk4b9XifeUmkbqqGwPwwv1VW94hUhNnE7v14";
-
 async function main() {
   const address = await fetch('http://localhost:10000/~meta@1.0/info/address')
     .then(res => res.text())
@@ -46,18 +44,17 @@ async function main() {
 Use the following code snippet to spawn your hyperAOS process:
 
 ```javascript
+
+// schedules, computes, and pushes messages from the outbox
+
+
   const processResult = await request({
+    path: `/${processId}~process@1.0/push/serialize~json@1.0`,
     method: 'POST',
-    device: 'process@1.0',
-    path: '/schedule',
-    type: 'Process',
-    scheduler: address,
-    script: hyperAOS,
-    'execution-device': 'lua@5.3a',
-    'scheduler-device': 'scheduler@1.0',
-    authority: address,
-    'Data-Protocol': 'ao',
-    Variant: 'ao.N.1',
+    target: processId,
+    'tag1': 'value1',
+    'tag2': 'value2',
+    data: '1 + 1',
   })
 ```
 

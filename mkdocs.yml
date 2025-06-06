@@ -22,7 +22,9 @@ nav:
   - Build on HyperBEAM:
       - Quick Start: 'build/get-started-building-on-hyperbeam.md'
       - Migrating from Legacynet: 'build/migrating-from-legacynet.md'
+      - AO Connect: 'build/ao-connect.md'
       - Extending HyperBEAM with Devices: 'build/building-devices.md'
+
   - Devices:
       - 'What are HyperBEAM Devices?': 'devices/what-are-devices.md'
       - '~meta@1.0': 'devices/meta-at-1-0.md'
