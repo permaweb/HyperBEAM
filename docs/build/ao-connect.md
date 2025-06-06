@@ -1,12 +1,16 @@
-## Guide: Spawning and Interacting with a hyperAOS Process
-
-This guide explains how to spawn and interact with a process using HyperBEAM and `aoconnect`.
+# HyperBEAM from AO Connect
+This guide explains how to interact with a process using HyperBEAM and `aoconnect`.
 
 ### Prerequisites
 - Node.js environment
 - `@permaweb/aoconnect` library
+- The latest version of `aos`
 - Wallet file (`wallet.json`) containing your cryptographic keys
-- Local Permaweb node running
+- A `HyperBEAM` node running with the `genesis_wasm` profile. Start it from your HyperBEAM directory with:
+  ```bash
+  rebar3 as genesis_wasm shell
+  ```
+- The Process ID for a process created with `genesis_wasm` (this is the default in the latest version of `aos`).
 
 ### Step 1: Environment Setup
 Install necessary dependencies:
@@ -21,7 +25,7 @@ Ensure your wallet file (`wallet.json`) is correctly formatted and placed in you
 > `npx -y @permaweb/wallet > wallet.json`
 
 ### Step 2: Establish Connection
-Create a new JavaScript file (e.g., `index.js`) and set up your Permaweb connection:
+Create a new JavaScript file (e.g., `index.js`) and set up your Permaweb connection. You will need a `processId` of a process that you want to interact with.
 
 ```javascript
 import { connect, createSigner } from '@permaweb/aoconnect'
@@ -29,70 +33,29 @@ import fs from 'node:fs'
 
 const jwk = JSON.parse(fs.readFileSync('wallet.json', 'utf-8'))
 
-async function main() {
-  const address = await fetch('http://localhost:10000/~meta@1.0/info/address')
-    .then(res => res.text())
+// The Process ID to interact with
+const processId = "GMajLmn7Hv9dbmEM6-vWDl6chUgDLHYqzwh34CAllAQ";
 
-  const { request } = await connect({
+async function main() {
+  const { request } = connect({
     MODE: 'mainnet',
-    URL: 'http://localhost:10000',
+    URL: 'http://localhost:8734',
     signer: createSigner(jwk)
   })
-```
+}
 
-### Step 3: Spawning a hyperAOS Process
-Use the following code snippet to spawn your hyperAOS process:
+### Step 3: Pushing a Message to a Process
+Use the `request` function to send a message to the process. In `aoconnect`, this is done by using the `push` hyperpath.
 
 ```javascript
-
-// schedules, computes, and pushes messages from the outbox
-
-
   const processResult = await request({
-    path: `/${processId}~process@1.0/push/serialize~json@1.0`,
-    method: 'POST',
-    target: processId,
-    'tag1': 'value1',
-    'tag2': 'value2',
-    data: '1 + 1',
-  })
-```
+      path: `/${processId}~process@1.0/push/serialize~json@1.0`,
+      method: 'POST',
+      target: processId,
+      "signingFormat": "ANS-104"
+    })
 
-### Step 4: Scheduling a Message
-Schedule a Lua expression evaluation within your spawned hyperAOS process:
-
-```javascript
-  const response = await request({
-    method: 'POST',
-    type: 'Message',
-    path: `/${processResult.process}~process@1.0/schedule`,
-    action: 'Eval',
-    data: '1 + 1',
-    'Data-Protocol': 'ao',
-    Variant: 'ao.N.1'
-  })
-```
-
-### Step 5: Retrieving Results
-
-In this section we are going to construct a hyperPATH to
-return the output of our computed evaluation.
-
-```javascript
-const hyperPath = 
-     `/${processResult.process}~process@1.0/compute` +
-      `&slot=${response.slot}/results/output`
-```
-
-Fetch the computation results from your scheduled message:
-
-```javascript
-  const result = await request({
-    method: 'GET',
-    path: hyperPath
-  })
-
-  console.log(result.body)
+  console.log(processResult)
 }
 
 main()
@@ -100,16 +63,42 @@ main()
 
 ### Running the demo
 
+To run the full script, combine the snippets from Step 2 and 3 into `index.js`:
+
+```javascript
+import { connect, createSigner } from '@permaweb/aoconnect'
+import fs from 'node:fs'
+
+const jwk = JSON.parse(fs.readFileSync('wallet.json', 'utf-8'))
+
+const processId = "GMajLmn7Hv9dbmEM6-vWDl6chUgDLHYqzwh34CAllAQ";
+
+async function main() {
+  const { request } = connect({
+    MODE: 'mainnet',
+    URL: 'http://localhost:8734',
+    signer: createSigner(jwk)
+  })
+
+  const processResult = await request({
+      path: `/${processId}~process@1.0/push/serialize~json@1.0`,
+      method: 'POST',
+      target: processId,
+      "signingFormat": "ANS-104"
+    })
+
+  console.log(processResult)
+}
+
+main()
 ```
+
+Now, run it:
+```bash
 node index.js
 ```
 
-Output
-
-```
-2
-```
-
+You should see an object logged to the console, containing the ID of the message that was sent.
 
 ### Conclusion
-Following these steps, you've successfully spawned a process , scheduled a Lua computation, and retrieved its output. This approach allows you to develop dynamic, decentralized applications on the Permaweb using Lua scripting.
+Following these steps, you've successfully sent a message to a process. This is a fundamental interaction for building applications on hyperAOS.

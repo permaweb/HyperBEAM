@@ -1,4 +1,4 @@
-Generated: 2025-06-06T16:50:41Z
+Generated: 2025-06-06T18:25:35Z
 
 ## HyperBEAM Documentation Summary
 
@@ -23,7 +23,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 
 ### uuild
 
-* [ao connect](./build/ao-connect.html)
+* [HyperBEAM from AO Connect](./build/ao-connect.html)
 * [Extending HyperBEAM with Devices](./build/building-devices.html)
 * [Extending HyperBEAM](./build/extending-hyperbeam.html)
 * [Quick Start with HyperBEAM](./build/get-started-building-on-hyperbeam.html)
