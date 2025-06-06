@@ -710,6 +710,7 @@ h6 {
     width: 100%;
     gap: 16px;
     padding: 16px;
+    z-index: 10;
 }
 
 .feature-cards {
@@ -1064,6 +1065,10 @@ h6 {
     .absolute-half-img {
         justify-content: end;
 
+    }
+
+    .absolute-full-img {
+        display: none;
     }
 
     .absolute-half-img img {
