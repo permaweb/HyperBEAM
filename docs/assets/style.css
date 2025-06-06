@@ -989,6 +989,12 @@ h6 {
     justify-content: center;
 }
 
+.join-us-banner p {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .join-us-banner:hover {
     opacity: 95%;
 }
