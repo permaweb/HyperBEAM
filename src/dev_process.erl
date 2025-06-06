@@ -433,7 +433,7 @@ ensure_loaded(Msg1, Msg2, Opts) ->
             LoadRes =
                 dev_process_cache:latest(
                     ProcID,
-                    [<<"snapshot">>],
+                    [<<"snapshot+link">>],
                     TargetSlot,
                     Opts
                 ),
