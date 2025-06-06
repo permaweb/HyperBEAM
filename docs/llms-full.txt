@@ -1,4 +1,4 @@
-Generated: 2025-06-06T15:56:03Z
+Generated: 2025-06-06T16:28:12Z
 
 --- START OF FILE: docs/build/ao-connect.md ---
 ## Guide: Spawning and Interacting with a hyperAOS Process
@@ -226,7 +226,7 @@ Extending HyperBEAM allows you to tailor the AO network's capabilities to specif
 --- END OF FILE: docs/build/extending-hyperbeam.md ---
 
 --- START OF FILE: docs/build/get-started-building-on-hyperbeam.md ---
-# Quickstart with HyperBEAM
+# Quick Start with HyperBEAM
 
 Welcome to building on AO, the decentralized supercomputer!
 

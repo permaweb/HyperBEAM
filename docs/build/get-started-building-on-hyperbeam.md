@@ -1,4 +1,4 @@
-# Quickstart with HyperBEAM
+# Quick Start with HyperBEAM
 
 Welcome to building on AO, the decentralized supercomputer!
 
