@@ -2,13 +2,12 @@
 -module(hb_util).
 -export([int/1, float/1, atom/1, bin/1, list/1]).
 -export([id/1, id/2, native_id/1, human_id/1, short_id/1, human_int/1, to_hex/1]).
--export([key_to_atom/2, binary_to_addresses/1]).
+-export([key_to_atom/2]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
 -export([find_value/2, find_value/3]).
--export([deep_merge/3, number/1, list_to_numbered_message/1, list_replace/3]).
--export([is_ordered_list/2, message_to_ordered_list/1, message_to_ordered_list/2]).
--export([is_string_list/1]).
--export([to_sorted_list/1, to_sorted_list/2, to_sorted_keys/1, to_sorted_keys/2]).
+-export([deep_merge/2, number/1, list_to_numbered_map/1]).
+-export([is_ordered_list/1, message_to_ordered_list/1, message_to_ordered_list/2]).
+-export([is_string_list/1, to_sorted_list/1, to_sorted_keys/1]).
 -export([hd/1, hd/2, hd/3]).
 -export([remove_common/2, to_lower/1]).
 -export([maybe_throw/2]).
@@ -20,7 +19,6 @@
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, until/1, until/2, until/3]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
--export([unique/1]).
 -include("include/hb.hrl").
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
@@ -125,21 +123,15 @@ is_string_list(MaybeString) ->
 
 %% @doc Given a map or KVList, return a deterministically sorted list of its
 %% key-value pairs.
-to_sorted_list(Msg) ->
-    to_sorted_list(Msg, #{}).
-to_sorted_list(Msg, Opts) when is_map(Msg) ->
-	to_sorted_list(hb_maps:to_list(Msg, Opts), Opts);
-to_sorted_list(Msg = [{_Key, _} | _], _Opts) when is_list(Msg) ->
-	lists:sort(fun({Key1, _}, {Key2, _}) -> Key1 < Key2 end, Msg);
-to_sorted_list(Msg, _Opts) when is_list(Msg) ->
-	lists:sort(fun(Key1, Key2) -> Key1 < Key2 end, Msg).
+to_sorted_list(Msg) when is_map(Msg) ->
+    to_sorted_list(maps:to_list(Msg));
+to_sorted_list(Msg) when is_list(Msg) ->
+    lists:sort(fun({Key1, _}, {Key2, _}) -> Key1 < Key2 end, Msg).
 
 %% @doc Given a map or KVList, return a deterministically ordered list of its keys.
-to_sorted_keys(Msg) ->
-	to_sorted_keys(Msg, #{}).
-to_sorted_keys(Msg, Opts) when is_map(Msg) ->
-    to_sorted_keys(hb_maps:keys(Msg, Opts), Opts);
-to_sorted_keys(Msg, _Opts) when is_list(Msg) ->
+to_sorted_keys(Msg) when is_map(Msg) ->
+    to_sorted_keys(maps:keys(Msg));
+to_sorted_keys(Msg) when is_list(Msg) ->
     lists:sort(fun(Key1, Key2) -> Key1 < Key2 end, Msg).
 
 %% @doc Convert keys in a map to atoms, lowering `-' to `_'.
@@ -158,9 +150,7 @@ native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     Bin;
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 42 ->
-    Bin;
-native_id(Wallet = {_Priv, _Pub}) ->
-    native_id(ar_wallet:to_address(Wallet)).
+    Bin.
 
 %% @doc Convert a native binary ID to a human readable ID. If the ID is already
 %% a human readable ID, it is returned as is. If it is an ethereum address, it
@@ -170,9 +160,7 @@ human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
     Bin;
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 42 ->
-    Bin;
-human_id(Wallet = {_Priv, _Pub}) ->
-    human_id(ar_wallet:to_address(Wallet)).
+    Bin.
 
 %% @doc Return a short ID for the different types of IDs used in AO-Core.
 short_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
@@ -244,22 +232,21 @@ to_hex(Bin) when is_binary(Bin) ->
     ).
 
 %% @doc Deep merge two maps, recursively merging nested maps.
-deep_merge(Map1, Map2, Opts) when is_map(Map1), is_map(Map2) ->
-    hb_maps:fold(
+deep_merge(Map1, Map2) when is_map(Map1), is_map(Map2) ->
+    maps:fold(
         fun(Key, Value2, AccMap) ->
-            case hb_maps:find(Key, AccMap, Opts) of
+            case maps:find(Key, AccMap) of
                 {ok, Value1} when is_map(Value1), is_map(Value2) ->
                     % Both values are maps, recursively merge them
-                    AccMap#{Key => deep_merge(Value1, Value2, Opts)};
+                    AccMap#{Key => deep_merge(Value1, Value2)};
                 _ ->
-                    % Either the key doesn't exist in Map1 or at least one of 
+                    % Either the key doesn't exist in Map1 or at least one of
                     % the values isn't a map. Simply use the value from Map2
                     AccMap#{ Key => Value2 }
             end
         end,
         Map1,
-        Map2,
-		Opts
+        Map2
     ).
 
 %% @doc Label a list of elements with a number.
@@ -270,66 +257,27 @@ number(List) ->
     ).
 
 %% @doc Convert a list of elements to a map with numbered keys.
-list_to_numbered_message(Msg) when is_map(Msg) ->
-    case is_ordered_list(Msg, #{}) of
-        true -> Msg;
-        false ->
-            throw({cannot_convert_to_numbered_message, Msg})
-    end;
-list_to_numbered_message(List) ->
-    hb_maps:from_list(number(List)).
+list_to_numbered_map(List) ->
+    maps:from_list(number(List)).
 
 %% @doc Determine if the message given is an ordered list, starting from 1.
-is_ordered_list(Msg, _Opts) when is_list(Msg) -> true;
-is_ordered_list(Msg, Opts) ->
-    is_ordered_list(1, hb_ao:normalize_keys(Msg, Opts), Opts).
-is_ordered_list(_, Msg, _Opts) when map_size(Msg) == 0 -> true;
-is_ordered_list(N, Msg, _Opts) ->
+is_ordered_list(Msg) when is_list(Msg) -> true;
+is_ordered_list(Msg) ->
+    is_ordered_list(1, hb_ao:normalize_keys(Msg)).
+is_ordered_list(_, Msg) when map_size(Msg) == 0 -> true;
+is_ordered_list(N, Msg) ->
     case maps:get(NormKey = hb_ao:normalize_key(N), Msg, not_found) of
         not_found -> false;
         _ ->
             is_ordered_list(
                 N + 1,
-                maps:without([NormKey], Msg),
-				_Opts
+                maps:without([NormKey], Msg)
             )
     end.
 
-%% @doc Replace a key in a list with a new value.
-list_replace(List, Key, Value) ->
-    lists:foldr(
-        fun(Elem, Acc) ->
-            case Elem of
-                Key when is_list(Value) -> Value ++ Acc;
-                Key -> [Value | Acc];
-                _ -> [Elem | Acc]
-            end
-        end,
-        [],
-        List
-    ).
-
-%% @doc Take a list and return a list of unique elements. The function is
-%% order-preserving.
-unique(List) ->
-    lists:foldr(
-        fun(Item, Acc) ->
-            case lists:member(Item, Acc) of
-                true -> Acc;
-                false -> [Item | Acc]
-            end
-        end,
-        [],
-        List
-    ).
-
-%% @doc Returns the intersection of two lists, with stable ordering.
-list_intersection(List1, List2) ->
-    lists:filter(fun(Item) -> lists:member(Item, List2) end, List1).
-
 %% @doc Take a message with numbered keys and convert it to a list of tuples
-%% with the associated key as an integer. Optionally, it takes a standard
-%% message of HyperBEAM runtime options.
+%% with the associated key as an integer and a value. Optionally, it takes a
+%% standard map of HyperBEAM runtime options.
 message_to_ordered_list(Message) ->
     message_to_ordered_list(Message, #{}).
 message_to_ordered_list(Message, _Opts) when ?IS_EMPTY_MESSAGE(Message) ->
@@ -337,26 +285,14 @@ message_to_ordered_list(Message, _Opts) when ?IS_EMPTY_MESSAGE(Message) ->
 message_to_ordered_list(List, _Opts) when is_list(List) ->
     List;
 message_to_ordered_list(Message, Opts) ->
-    NormMessage = hb_ao:normalize_keys(Message, Opts),
-    Keys = hb_maps:keys(NormMessage, Opts) -- [<<"priv">>],
-    SortedKeys =
-        lists:map(
-            fun hb_ao:normalize_key/1,
-            lists:sort(lists:map(fun int/1, Keys))
-        ),
-    message_to_ordered_list(NormMessage, SortedKeys, erlang:hd(SortedKeys), Opts).
+    Keys = hb_ao:keys(Message, Opts),
+    IntKeys = lists:sort(lists:map(fun int/1, Keys)),
+    message_to_ordered_list(Message, IntKeys, erlang:hd(IntKeys), Opts).
 message_to_ordered_list(_Message, [], _Key, _Opts) ->
     [];
 message_to_ordered_list(Message, [Key|Keys], Key, Opts) ->
-    case hb_maps:get(Key, Message, undefined, Opts#{ hashpath => ignore }) of
-        undefined ->
-            throw(
-                {missing_key,
-                    {key, Key},
-                    {remaining_keys, Keys},
-                    {message, Message}
-                }
-            );
+    case hb_ao:get(Key, Message, Opts#{ hashpath => ignore }) of
+        undefined -> throw({missing_key, Key, {remaining_keys, Keys}});
         Value ->
             [
                 Value
@@ -364,13 +300,13 @@ message_to_ordered_list(Message, [Key|Keys], Key, Opts) ->
                 message_to_ordered_list(
                     Message,
                     Keys,
-                    hb_ao:normalize_key(int(Key) + 1),
+                    Key + 1,
                     Opts
                 )
             ]
     end;
-message_to_ordered_list(Message, [Key|_Keys], ExpectedKey, _Opts) ->
-    throw({missing_key, {expected, ExpectedKey, {next, Key}, {message, Message}}}).
+message_to_ordered_list(_Message, [Key|_Keys], ExpectedKey, _Opts) ->
+    throw({missing_key, {expected, ExpectedKey, {next, Key}}}).
 
 %% @doc Get the first element (the lowest integer key >= 1) of a numbered map.
 %% Optionally, it takes a specifier of whether to return the key or the value,
@@ -378,7 +314,7 @@ message_to_ordered_list(Message, [Key|_Keys], ExpectedKey, _Opts) ->
 hd(Message) -> hd(Message, value).
 hd(Message, ReturnType) ->
     hd(Message, ReturnType, #{ error_strategy => throw }).
-hd(Message, ReturnType, Opts) -> 
+hd(Message, ReturnType, Opts) ->
     hd(Message, hb_ao:keys(Message, Opts), 1, ReturnType, Opts).
 hd(_Map, [], _Index, _ReturnType, #{ error_strategy := throw }) ->
     throw(no_integer_keys);
@@ -397,14 +333,13 @@ hd(Message, [Key|Rest], Index, ReturnType, Opts) ->
 %% @doc Find the value associated with a key in parsed a JSON structure list.
 find_value(Key, List) ->
     find_value(Key, List, undefined).
-find_value(Key, Map, Default) ->
-	find_value(Key, Map, Default, #{}).
-find_value(Key, Map, Default, Opts) when is_map(Map) ->
-    case hb_maps:find(Key, Map, Opts) of
+
+find_value(Key, Map, Default) when is_map(Map) ->
+    case maps:find(Key, Map) of
         {ok, Value} -> Value;
         error -> Default
     end;
-find_value(Key, List, Default, _Opts) ->
+find_value(Key, List, Default) ->
     case lists:keyfind(Key, 1, List) of
         {Key, Val} -> Val;
         false -> Default
@@ -438,27 +373,20 @@ debug_print(X, Mod, Func, LineNum) ->
     Now = erlang:system_time(millisecond),
     Last = erlang:put(last_debug_print, Now),
     TSDiff = case Last of undefined -> 0; _ -> Now - Last end,
-    io:format(standard_error, "=== HB DEBUG ===[~pms in ~s @ ~s]==>~n~s~n",
+    LogMessage = io_lib:format("=== HB DEBUG ===[~pms in ~p @ ~s]==>~n~s",
         [
-            TSDiff,
-            case server_id() of
-                undefined -> bin(io_lib:format("~p", [self()]));
-                ServerID ->
-                    bin(io_lib:format("~s (~p)", [short_id(ServerID), self()]))
-            end,
+            TSDiff, self(),
             format_debug_trace(Mod, Func, LineNum),
             debug_fmt(X, 0)
         ]),
+    io:format(standard_error, "~s~n", [LogMessage]),
+    % Also send to live logs if available
+    try
+        hb_live_logs:add_log(lists:flatten(LogMessage))
+    catch
+        _:_ -> ok % Ignore if live logs not available
+    end,
     X.
-
-%% @doc Retreive the server ID of the calling process, if known.
-server_id() ->
-    server_id(#{ server_id => undefined }).
-server_id(Opts) ->
-    case hb_opts:get(server_id, undefined, Opts) of
-        undefined -> get(server_id);
-        ServerID -> ServerID
-    end.
 
 %% @doc Generate the appropriate level of trace for a given call.
 format_debug_trace(Mod, Func, Line) ->
@@ -483,18 +411,8 @@ debug_fmt(X, Indent) ->
                 format_indented("[!PRINT FAIL!]", Indent);
             _ ->
                 format_indented(
-                    "[PRINT FAIL:] ~80p~n===== PRINT ERROR WAS ~p:~p =====~n~s",
-                    [
-                        X,
-                        A,
-                        B,
-                        hb_util:bin(
-                            format_trace(
-                                C,
-                                hb_opts:get(stack_print_prefixes, [], #{})
-                            )
-                        )
-                    ],
+                    "[PRINT FAIL:] ~80p~n===== PRINT ERROR WAS ~p:~p =====~n~p",
+                    [X, A, B, format_trace(C, hb_opts:get(stack_print_prefixes, [], #{}))],
                     Indent
                 )
         end
@@ -647,8 +565,6 @@ format_binary(Bin) ->
     end.
 
 %% @doc Add `,' characters to a number every 3 digits to make it human readable.
-human_int(Float) when is_float(Float) ->
-    human_int(erlang:round(Float));
 human_int(Int) ->
     lists:reverse(add_commas(lists:reverse(integer_to_list(Int)))).
 
@@ -702,7 +618,7 @@ format_trace([], _) -> [];
 format_trace([Item|Rest], Prefixes) ->
     case element(1, Item) of
         Atom when is_atom(Atom) ->
-            case true of %is_hb_module(Atom, Prefixes) of
+            case is_hb_module(Atom, Prefixes) of
                 true ->
                     [
                         format_trace(Item, Prefixes) |
@@ -715,15 +631,15 @@ format_trace([Item|Rest], Prefixes) ->
 format_trace({Func, ArityOrTerm, Extras}, Prefixes) ->
     format_trace({no_module, Func, ArityOrTerm, Extras}, Prefixes);
 format_trace({Mod, Func, ArityOrTerm, Extras}, _Prefixes) ->
-    ExtraMap = hb_maps:from_list(Extras),
+    ExtraMap = maps:from_list(Extras),
     format_indented(
         "~p:~p/~p [~s]~n",
         [
             Mod, Func, ArityOrTerm,
-            case hb_maps:get(line, ExtraMap, undefined) of
+            case maps:get(line, ExtraMap, undefined) of
                 undefined -> "No details";
                 Line ->
-                    hb_maps:get(file, ExtraMap)
+                    maps:get(file, ExtraMap)
                         ++ ":" ++ integer_to_list(Line)
             end
         ],
@@ -735,10 +651,6 @@ is_hb_module(Atom) ->
     is_hb_module(Atom, hb_opts:get(stack_print_prefixes, [], #{})).
 is_hb_module(Atom, Prefixes) when is_atom(Atom) ->
     is_hb_module(atom_to_list(Atom), Prefixes);
-is_hb_module("hb_event" ++ _, _) ->
-    % Explicitly exclude hb_event from the stack trace, as it is always included,
-    % creating noise in the output.
-    false;
 is_hb_module(Str, Prefixes) ->
     case string:tokens(Str, "_") of
         [Pre|_] ->
@@ -761,11 +673,11 @@ print_trace_short(Trace, Mod, Func, Line) ->
     ).
 
 %% @doc Format a trace to a short string.
-format_trace_short(Trace) -> 
+format_trace_short(Trace) ->
     lists:join(
         " / ",
         lists:reverse(format_trace_short(
-            hb_opts:get(short_trace_len, 6, #{}),
+            hb_opts:get(short_trace_len, 3, #{}),
             false,
             Trace,
             hb_opts:get(stack_print_prefixes, [], #{})
@@ -838,57 +750,9 @@ weighted_random(List) ->
     Shuffled = shuffle(Normalized),
     pick_weighted(Shuffled, rand:uniform()).
 
-%% @doc Pick a random element from a list, weighted by the values in the list.
 pick_weighted([], _) ->
     error(empty_list);
 pick_weighted([{Item, Weight}|_Rest], Remaining) when Remaining < Weight ->
     Item;
 pick_weighted([{_Item, Weight}|Rest], Remaining) ->
     pick_weighted(Rest, Remaining - Weight).
-
-%% @doc Serialize the given list of addresses to a binary, using the structured
-%% fields format.
-addresses_to_binary(List) when is_list(List) ->
-    try
-        iolist_to_binary(
-            hb_structured_fields:list(
-                [
-                    {item, {string, hb_util:human_id(Addr)}, []}
-                ||
-                    Addr <- List
-                ]
-            )
-        )
-    catch
-        _:_ ->
-            error({cannot_parse_list, List})
-    end.
-
-%% @doc Parse a list from a binary. First attempts to parse the binary as a
-%% structured-fields list, and if that fails, it attempts to parse the list as
-%% a comma-separated value, stripping quotes and whitespace.
-binary_to_addresses(List) when is_list(List) ->
-    % If the argument is already a list, return it.
-    binary_to_addresses(List);
-binary_to_addresses(List) when is_binary(List) ->
-    try 
-        Res = lists:map(
-            fun({item, {string, Item}, []}) ->
-                Item
-            end,
-            hb_structured_fields:parse_list(List)
-        ),
-        Res
-    catch
-        _:_ ->
-        try
-            binary:split(
-                binary:replace(List, <<"\"">>, <<"">>, [global]),
-                <<",">>,
-                [global, trim_all]
-            )
-        catch
-            _:_ ->
-                error({cannot_parse_list, List})
-        end
-    end.
