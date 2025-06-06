@@ -4,9 +4,9 @@ Welcome to building on HyperBEAM, the decentralized operating system built on AO
 
 HyperBEAM leverages the permanent storage of Arweave with the flexible, scalable computation enabled by the AO-Core protocol and its HyperBEAM implementation. This allows you to create truly autonomous applications, agents, and services that run trustlessly and permissionlessly.
 
-## Why build on HyperBEAM?
+<!-- ## Why build on HyperBEAM?
 
-Current cloud providers offer centralized compute, which means you have to trust them with your data and your money.  HyperBEAM flips the script and gives you severless decentralized compute where you own your data and you pay for only what you need. 
+Current cloud providers offer centralized compute, which means you have to trust them with your data and your money.  HyperBEAM flips the script and gives you severless decentralized compute where you own your data and you pay for only what you need.  -->
 
 ## Thinking in HyperBEAM
 
@@ -67,13 +67,16 @@ From the `aos` prompt, you can assign a variable. Let's assign a basic Lua proce
 
 ```bash
 default@aos-2.0.6> myVariable = "Hello from aos!"
--- This assigns the string "Hello from aos!" to the variable 'myVariable'
--- within the current process's Lua environment.
+```
 
+This assigns the string "Hello from aos!" to the variable `myVariable` within the current process's Lua environment.
+
+```bash
 default@aos-2.0.6> myVariable
--- Displays the content of 'myVariable'
 Hello from aos!
 ```
+
+This displays the content of `myVariable`.
 
 ## Send Your First Message
 
@@ -85,14 +88,13 @@ default@aos-2.0.6> Send({ Target = ao.id, Data = myVariable })
 
 You should see the following output:
 
-```lua
+```bash
 New Message From <your-process-id>: Data = Hello from aos!
 ```
 
 ## Creating Your First Handler
 
 Handlers are decentralized functions that can be triggered by messages.
-
 
 Follow these steps to create and interact with your first message handler in AO:
 
@@ -103,14 +105,12 @@ Follow these steps to create and interact with your first message handler in AO:
     Handlers.add(
       "HelloWorld",
       function(msg)
-        -- This function gets called when a message with Action = "HelloWorld" arrives.
         print("Handler triggered by message from: " .. msg.From)
-        -- It replies to the sender with a new message containing the specified data.
         msg.reply({ Data = "Hello back from your process!" })
       end
     )
 
-    print("HelloWorld handler loaded.") -- Confirmation message
+    print("HelloWorld handler loaded.")
     ```
 
     *   `Handlers.add`: Registers a function to handle incoming messages.

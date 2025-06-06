@@ -334,9 +334,9 @@ Welcome to building on HyperBEAM, the decentralized operating system built on AO
 
 HyperBEAM leverages the permanent storage of Arweave with the flexible, scalable computation enabled by the AO-Core protocol and its HyperBEAM implementation. This allows you to create truly autonomous applications, agents, and services that run trustlessly and permissionlessly.
 
-## Why build on HyperBEAM?
+<!-- ## Why build on HyperBEAM?
 
-Current cloud providers offer centralized compute, which means you have to trust them with your data and your money.  HyperBEAM flips the script and gives you severless decentralized compute where you own your data and you pay for only what you need. 
+Current cloud providers offer centralized compute, which means you have to trust them with your data and your money.  HyperBEAM flips the script and gives you severless decentralized compute where you own your data and you pay for only what you need.  -->
 
 ## Thinking in HyperBEAM
 
@@ -397,13 +397,16 @@ From the `aos` prompt, you can assign a variable. Let's assign a basic Lua proce
 
 ```bash
 default@aos-2.0.6> myVariable = "Hello from aos!"
--- This assigns the string "Hello from aos!" to the variable 'myVariable'
--- within the current process's Lua environment.
+```
 
+This assigns the string "Hello from aos!" to the variable `myVariable` within the current process's Lua environment.
+
+```bash
 default@aos-2.0.6> myVariable
--- Displays the content of 'myVariable'
 Hello from aos!
 ```
+
+This displays the content of `myVariable`.
 
 ## Send Your First Message
 
@@ -415,14 +418,13 @@ default@aos-2.0.6> Send({ Target = ao.id, Data = myVariable })
 
 You should see the following output:
 
-```lua
+```bash
 New Message From <your-process-id>: Data = Hello from aos!
 ```
 
 ## Creating Your First Handler
 
 Handlers are decentralized functions that can be triggered by messages.
-
 
 Follow these steps to create and interact with your first message handler in AO:
 
@@ -433,14 +435,12 @@ Follow these steps to create and interact with your first message handler in AO:
     Handlers.add(
       "HelloWorld",
       function(msg)
-        -- This function gets called when a message with Action = "HelloWorld" arrives.
         print("Handler triggered by message from: " .. msg.From)
-        -- It replies to the sender with a new message containing the specified data.
         msg.reply({ Data = "Hello back from your process!" })
       end
     )
 
-    print("HelloWorld handler loaded.") -- Confirmation message
+    print("HelloWorld handler loaded.")
     ```
 
     *   `Handlers.add`: Registers a function to handle incoming messages.
@@ -1162,23 +1162,23 @@ Think of Devices as specialized engines or services that can be plugged into the
 
 HyperBEAM includes many preloaded devices that provide core functionality. Some key examples include:
 
-*   **[`~meta@1.0`](../devices/meta-at-1-0.md):** Configures the node itself (hardware specs, supported devices, payment info).
-*   **[`~process@1.0`](../devices/process-at-1-0.md):** Manages persistent, shared computational states (like traditional smart contracts, but more flexible).
-*   **[`~scheduler@1.0`](../devices/scheduler-at-1-0.md):** Handles the ordering and execution of messages within a process.
-*   **[`~wasm64@1.0`](../devices/wasm64-at-1-0.md):** Executes WebAssembly (WASM) code, allowing for complex computations written in languages like Rust, C++, etc.
-*   **[`~lua@5.3a`](../devices/lua-at-5-3a.md):** Executes Lua scripts.
-*   **[`~relay@1.0`](../devices/relay-at-1-0.md):** Forwards messages between AO nodes or to external HTTP endpoints.
-*   **[`~json@1.0`](../devices/json-at-1-0.md):** Provides access to JSON data structures using HyperPATHs.
-*   **[`~message@1.0`](../devices/message-at-1-0.md):** Manages message state and processing.
-*   **[`~patch@1.0`](../guides/exposing-process-state.md):** Applies state updates directly to a process, often used for migrating or managing process data.
+*   [`~meta@1.0`](../devices/meta-at-1-0.md): Configures the node itself (hardware specs, supported devices, payment info).
+*   [`~process@1.0`](../devices/process-at-1-0.md): Manages persistent, shared computational states (like traditional smart contracts, but more flexible).
+*   [`~scheduler@1.0`](../devices/scheduler-at-1-0.md): Handles the ordering and execution of messages within a process.
+*   [`~wasm64@1.0`](../devices/wasm64-at-1-0.md): Executes WebAssembly (WASM) code, allowing for complex computations written in languages like Rust, C++, etc.
+*   [`~lua@5.3a`](../devices/lua-at-5-3a.md): Executes Lua scripts.
+*   [`~relay@1.0`](../devices/relay-at-1-0.md): Forwards messages between AO nodes or to external HTTP endpoints.
+*   [`~json@1.0`](../devices/json-at-1-0.md): Provides access to JSON data structures using HyperPATHs.
+*   [`~message@1.0`](../devices/message-at-1-0.md): Manages message state and processing.
+*   [`~patch@1.0`](../guides/exposing-process-state.md): Applies state updates directly to a process, often used for migrating or managing process data.
 
 ## Beyond the Basics
 
 Devices aren't limited to just computation or state management. They can represent more abstract concepts:
 
-*   **Security Devices ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_codec_httpsig`](../resources/source-code/dev_codec_httpsig.md)):** Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
-*   **Payment/Access Control Devices ([`~p4@1.0`](../resources/source-code/dev_p4.md), [`~faff@1.0`](../resources/source-code/dev_faff.md)):** Manage metering, billing, or access control for node services.
-*   **Workflow/Utility Devices ([`dev_cron`](../resources/source-code/dev_cron.md), [`dev_stack`](../resources/source-code/dev_stack.md), [`dev_monitor`](../resources/source-code/dev_monitor.md)):** Coordinate complex execution flows, schedule tasks, or monitor process activity.
+*   **Security Devices** ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_codec_httpsig`](../resources/source-code/dev_codec_httpsig.md)): Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
+*   **Payment/Access Control Devices** ([`~p4@1.0`](../resources/source-code/dev_p4.md), [`~faff@1.0`](../resources/source-code/dev_faff.md)): Manage metering, billing, or access control for node services.
+*   **Workflow/Utility Devices** ([`dev_cron`](../resources/source-code/dev_cron.md), [`dev_stack`](../resources/source-code/dev_stack.md), [`dev_monitor`](../resources/source-code/dev_monitor.md)): Coordinate complex execution flows, schedule tasks, or monitor process activity.
 
 ## Using Devices
 
@@ -1219,7 +1219,7 @@ Understanding how to construct and interpret paths in AO-Core is fundamental to 
 
 Let's examine a typical HyperBEAM endpoint piece-by-piece:
 
-```
+```bash
 https://router-1.forward.computer/<procId>~process@1.0/now
 ```
 
@@ -1243,14 +1243,14 @@ Devices in AO-Core expose keys accessible via path components. Each key executes
 - `compute`: Serves the latest known state (faster than checking for new messages)
 
 Under the surface, these keys represent AO-Core messages. As we progress through the path, AO-Core applies each message to the existing state. You can access the full process state by visiting:
-```
+```bash
 /<procId>~process@1.0/now
 ```
 
 ### State Navigation
 
 You can browse through sub-messages and data fields by accessing them as keys. For example, if a process stores its interaction count in a field named `cache`, you can access it like this:
-```
+```bash
 /<procId>~process@1.0/compute/cache
 ```
 This shows the 'cache' of your process. Each response is:
@@ -1277,7 +1277,7 @@ The following examples illustrate using HyperPATH with various AO-Core processes
 
 To get the complete, real-time state of a process identified by `<procId>`, use the `/now` path component with the [`~process@1.0`](../devices/process-at-1-0.md) device:
 
-```
+```bash
 GET /<procId>~process@1.0/now
 ```
 
@@ -1287,7 +1287,7 @@ This instructs the AO-Core node to load the process and execute the `now` functi
 
 If a process maintains its state in a map and you want to access a specific field, like `at-slot`, using the faster `/compute` endpoint:
 
-```
+```bash
 GET /<procId>~process@1.0/compute/cache
 ```
 
@@ -1299,7 +1299,7 @@ This accesses the `compute` key on the [`~process@1.0`](../devices/process-at-1-
 
 Here's a simple example of using [`~message@1.0`](../devices/message-at-1-0.md) to create a message and retrieve a value:
 
-```
+```bash
 GET /~message@1.0&greeting="Hello"&count+integer=42/count
 ```
 
@@ -1316,7 +1316,7 @@ The [`~message@1.0`](../devices/message-at-1-0.md) device can be used to constru
 
 Consider the following URL:
 
-```
+```bash
 GET /~message@1.0&name="Alice"&age+integer=30&items+list="apple",1,"banana"&config+map=key1="val1";key2=true/[PATH]
 ```
 

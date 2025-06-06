@@ -8,7 +8,7 @@ Understanding how to construct and interpret paths in AO-Core is fundamental to 
 
 Let's examine a typical HyperBEAM endpoint piece-by-piece:
 
-```
+```bash
 https://router-1.forward.computer/<procId>~process@1.0/now
 ```
 
@@ -32,14 +32,14 @@ Devices in AO-Core expose keys accessible via path components. Each key executes
 - `compute`: Serves the latest known state (faster than checking for new messages)
 
 Under the surface, these keys represent AO-Core messages. As we progress through the path, AO-Core applies each message to the existing state. You can access the full process state by visiting:
-```
+```bash
 /<procId>~process@1.0/now
 ```
 
 ### State Navigation
 
 You can browse through sub-messages and data fields by accessing them as keys. For example, if a process stores its interaction count in a field named `cache`, you can access it like this:
-```
+```bash
 /<procId>~process@1.0/compute/cache
 ```
 This shows the 'cache' of your process. Each response is:
@@ -66,7 +66,7 @@ The following examples illustrate using HyperPATH with various AO-Core processes
 
 To get the complete, real-time state of a process identified by `<procId>`, use the `/now` path component with the [`~process@1.0`](../devices/process-at-1-0.md) device:
 
-```
+```bash
 GET /<procId>~process@1.0/now
 ```
 
@@ -76,7 +76,7 @@ This instructs the AO-Core node to load the process and execute the `now` functi
 
 If a process maintains its state in a map and you want to access a specific field, like `at-slot`, using the faster `/compute` endpoint:
 
-```
+```bash
 GET /<procId>~process@1.0/compute/cache
 ```
 
@@ -88,7 +88,7 @@ This accesses the `compute` key on the [`~process@1.0`](../devices/process-at-1-
 
 Here's a simple example of using [`~message@1.0`](../devices/message-at-1-0.md) to create a message and retrieve a value:
 
-```
+```bash
 GET /~message@1.0&greeting="Hello"&count+integer=42/count
 ```
 
@@ -105,7 +105,7 @@ The [`~message@1.0`](../devices/message-at-1-0.md) device can be used to constru
 
 Consider the following URL:
 
-```
+```bash
 GET /~message@1.0&name="Alice"&age+integer=30&items+list="apple",1,"banana"&config+map=key1="val1";key2=true/[PATH]
 ```
 
