@@ -26,7 +26,8 @@ test_codecs() ->
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
         %#{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
-        <<"json@1.0">>
+        <<"json@1.0">>,
+        <<"tx@1.0">>
     ].
 
 %% @doc Return a set of options for testing, taking the codec name as an
@@ -465,7 +466,9 @@ message_with_large_keys_test(Codec, Opts) ->
         <<"another_normal_key">> => <<"another_normal_value">>
     },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
+    ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
+    ?event({matching, {input, Msg}, {output, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 %% @doc Check that a nested signed message with an embedded typed list can 
@@ -968,7 +971,7 @@ unsigned_id_test(Codec, Opts) ->
 %     ?assert(ar_bundles:verify_item(SignedTX)),
 %     SignedMsg = hb_codec_tx:from(SignedTX),
 %     ?assertEqual(
-%         hb_util:encode(ar_bundles:id(SignedTX, signed)),
+%         hb_util:encode(hb_tx:id(SignedTX, signed)),
 %         hb_util:id(SignedMsg, signed)
 %     ).
 
@@ -1319,6 +1322,7 @@ recursive_nested_list_test(Codec, Opts) ->
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 priv_survives_conversion_test(<<"ans104@1.0">>, _Opts) -> skip;
+priv_survives_conversion_test(<<"tx@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(<<"json@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
     skip;
@@ -1346,7 +1350,7 @@ encode_balance_table(Size, Codec, Opts) ->
             _ <- lists:seq(1, Size)
         },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    ?event({encoded, {explicit, Encoded}}),
+    ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({decoded, Decoded}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).

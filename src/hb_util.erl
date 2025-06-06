@@ -1,6 +1,7 @@
 %% @doc A collection of utility functions for building with HyperBEAM.
 -module(hb_util).
 -export([int/1, float/1, atom/1, bin/1, list/1]).
+-export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, short_id/1, human_int/1, to_hex/1]).
 -export([key_to_atom/2, binary_to_addresses/1]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
@@ -21,6 +22,7 @@
 -export([ok/1, ok/2, until/1, until/2, until/3]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
 -export([unique/1]).
+-export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -include("include/hb.hrl").
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
@@ -71,6 +73,16 @@ list(Value) when is_binary(Value) ->
 list(Value) when is_list(Value) -> Value;
 list(Value) when is_atom(Value) -> atom_to_list(Value).
 
+%% @doc: rounds IntValue up to the nearest multiple of Nearest.
+%% Rounds up even if IntValue is already a multiple of Nearest.
+ceil_int(IntValue, Nearest) ->
+	IntValue - (IntValue rem Nearest) + Nearest.
+
+%% @doc: rounds IntValue down to the nearest multiple of Nearest.
+%% Doesn't change IntValue if it's already a multiple of Nearest.
+floor_int(IntValue, Nearest) ->
+	IntValue - (IntValue rem Nearest).
+
 %% @doc Unwrap a tuple of the form `{ok, Value}', or throw/return, depending on
 %% the value of the `error_strategy' option.
 ok(Value) -> ok(Value, #{}).
@@ -105,7 +117,7 @@ until(Condition, Fun, Count) ->
 %% a message explicitly, raw encoded ID, or an Erlang Arweave `tx' record.
 id(Item) -> id(Item, unsigned).
 id(TX, Type) when is_record(TX, tx) ->
-    encode(ar_bundles:id(TX, Type));
+    encode(hb_tx:id(TX, Type));
 id(Map, Type) when is_map(Map) ->
     hb_message:id(Map, Type);
 id(Bin, _) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
@@ -518,7 +530,7 @@ do_debug_fmt({X, Y}, Indent) when is_atom(X) and is_atom(Y) ->
     format_indented("~p: ~p", [X, Y], Indent);
 do_debug_fmt({X, Y}, Indent) when is_record(Y, tx) ->
     format_indented("~p: [TX item]~n~s",
-        [X, ar_bundles:format(Y, Indent + 1)],
+        [X, hb_tx:format(Y, Indent + 1)],
         Indent
     );
 do_debug_fmt({X, Y}, Indent) when is_map(Y) ->
@@ -892,3 +904,30 @@ binary_to_addresses(List) when is_binary(List) ->
                 error({cannot_parse_list, List})
         end
     end.
+
+%% @doc Force that a binary is either empty or the given number of bytes.
+check_size(Bin, {range, Start, End}) ->
+    check_type(Bin, binary)
+        andalso byte_size(Bin) >= Start
+        andalso byte_size(Bin) =< End;
+check_size(Bin, Sizes) ->
+    check_type(Bin, binary)
+        andalso lists:member(byte_size(Bin), Sizes).
+
+check_value(Value, ExpectedValues) ->
+    lists:member(Value, ExpectedValues).
+
+%% @doc Ensure that a value is of the given type.
+check_type(Value, binary) -> is_binary(Value);
+check_type(Value, integer) -> is_integer(Value);
+check_type(Value, list) -> is_list(Value);
+check_type(Value, map) -> is_map(Value);
+check_type(Value, tx) -> is_record(Value, tx);
+check_type(Value, message) ->
+    is_record(Value, tx) or is_map(Value) or is_list(Value);
+check_type(_Value, _) -> false.
+
+%% @doc Throw an error if the given value is not ok.
+ok_or_throw(_, true, _) -> true;
+ok_or_throw(_TX, false, Error) ->
+    throw(Error).
