@@ -373,12 +373,19 @@ debug_print(X, Mod, Func, LineNum) ->
     Now = erlang:system_time(millisecond),
     Last = erlang:put(last_debug_print, Now),
     TSDiff = case Last of undefined -> 0; _ -> Now - Last end,
-    io:format(standard_error, "=== HB DEBUG ===[~pms in ~p @ ~s]==>~n~s~n",
+    LogMessage = io_lib:format("=== HB DEBUG ===[~pms in ~p @ ~s]==>~n~s",
         [
             TSDiff, self(),
             format_debug_trace(Mod, Func, LineNum),
             debug_fmt(X, 0)
         ]),
+    io:format(standard_error, "~s~n", [LogMessage]),
+    % Also send to live logs if available
+    try
+        hb_live_logs:add_log(lists:flatten(LogMessage))
+    catch
+        _:_ -> ok % Ignore if live logs not available
+    end,
     X.
 
 %% @doc Generate the appropriate level of trace for a given call.
