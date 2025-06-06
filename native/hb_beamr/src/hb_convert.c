@@ -444,7 +444,8 @@ int wasm_val_to_erl_term(ErlDrvTermData* term, wasm_val_t* val) {
 }
 
 int wasm_vals_to_erl_msg(wasm_val_t* vals, const int val_count, ErlDrvTermData** msg, int* msg_i, int msg_base_size) {
-    if (!vals || !val_count || !msg || !msg_i) {
+    if (!vals || !msg || !msg_i) {
+        DRV_DEBUG("Invalid arguments: vals: %p, val_count: %d, msg: %p, msg_i: %d", vals, val_count, msg, *msg_i);
         goto fail0;
     }
     

@@ -57,23 +57,56 @@ static ErlDrvData wasm_driver_start(ErlDrvPort port, char *buff) {
     return (ErlDrvData)proc;
 }
 
+static char* call_info_str(CallContext* cc, int i) {
+    char *call_info_str = driver_alloc(128);
+    if (cc->call_request.call_type == CALL_EXPORT) {
+        sprintf(call_info_str, "Call %d to export: %s/%d->%d", i, cc->call_request.call_export.function_name, cc->call_request.arg_count, cc->call_request.result_count);
+    } else if (cc->call_request.call_type == CALL_INDIRECT) {
+        sprintf(call_info_str, "Call %d to indirect: %s#%d/%d->%d", i, cc->call_request.call_indirect.table_name, cc->call_request.call_indirect.table_index, cc->call_request.arg_count, cc->call_request.result_count);
+    } else {
+        sprintf(call_info_str, "Call %d: unknown", i);
+    }
+    return call_info_str;
+}
+
 static void wasm_driver_stop(ErlDrvData raw) {
     // DRV_DEBUG("IGNORING STOP");
     Proc* proc = (Proc*)raw;
-    DRV_DEBUG("Stopping WASM driver");
+    DRV_DEBUG("Stopping WASM driver!");
 
-    // if(proc->current_import) {
-    //     DRV_DEBUG("Shutting down during import response...");
-    //     proc->current_import->error_message = "WASM driver unloaded during import response";
-    //     proc->current_import->ready = 1;
-    //     DRV_DEBUG("Signalling import_response with error");
-    //     drv_signal(proc->current_import->response_ready, proc->current_import->cond, &proc->current_import->ready);
-    //     DRV_DEBUG("Signalled worker to fail. Locking is_running mutex to shutdown");
-    // }
+    if (proc->call_stack_height > 0) {
+        DRV_DEBUG("Shutting down during call stack...");
+        for (int i = proc->call_stack_height; i > 0; i--) {
+            CallContext *cc = &proc->call_stack[i-1];
+            char* info = call_info_str(cc, i);
+            DRV_DEBUG("Shutting down during call stack. Call info: %s", info);
+            
+            ImportState *is = &cc->import_state;
+            if (is->meta != NULL) {
+                DRV_DEBUG("Shutting down during import response...");
+                char* error_message = driver_alloc(128);
+                sprintf(error_message, "WASM driver unloaded during import response: %s", info);
+                is->error_message = error_message;
+                is->ready = 1;
+                drv_signal(is->response_ready, is->cond, &is->ready);
 
-    // We need to first grab the lock, then unlock it and destroy it. Must be a better way...
-    DRV_DEBUG("Grabbing is_running mutex to shutdown...");
-    drv_lock(proc->is_running);
+                // Wait until the import handler has finished
+                DRV_DEBUG("Unlocking is_running mutex to wait for import handler to finish");
+                drv_unlock(proc->is_running);
+                DRV_DEBUG("Waiting for import handler to finish");
+                drv_lock(is->response_ready);
+                DRV_DEBUG("Import handler finished, relocking is_running mutex");
+                drv_unlock(is->response_ready);
+                DRV_DEBUG("Relocking is_running mutex");
+                drv_lock(proc->is_running);
+                DRV_DEBUG("Relocked is_running mutex");
+            }
+
+            driver_free(info);
+        }
+    }
+
+    DRV_DEBUG("Unlocking is_running mutex to destroy it");
     drv_unlock(proc->is_running);
     DRV_DEBUG("Destroying is_running mutex");
     erl_drv_mutex_destroy(proc->is_running);
@@ -97,12 +130,16 @@ static void wasm_driver_stop(ErlDrvData raw) {
 static void handle_init(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
 static void handle_call(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index, enum call_type call_type);
 static void handle_import_response(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
+static void handle_import_exception(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
 static void handle_write(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
 static void handle_read(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
 static void handle_size(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_index);
 
 static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) {
-    DRV_DEBUG("WASM driver output received");
+    DRV_DEBUG("WASM driver output received!");
+    DRV_TRACE("Raw: %p", raw);
+    DRV_TRACE("Buff: %p", buff);
+    DRV_TRACE("Bufflen: %d", bufflen);
     Proc* proc = (Proc*)raw;
     DRV_TRACE("Port: %p", proc->port);
     DRV_TRACE("Port term: %p", proc->port_term);
@@ -110,6 +147,7 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
     int index = 0;
     int version;
     if(ei_decode_version(buff, &index, &version) != 0) {
+        DRV_DEBUG("Failed to decode message header (version).");
         send_error(proc->port_term, "Failed to decode message header (version).");
         return;
     }
@@ -131,6 +169,8 @@ static void wasm_driver_output(ErlDrvData raw, char *buff, ErlDrvSizeT bufflen) 
         handle_call(proc, buff, bufflen, index, CALL_INDIRECT);
     } else if (strcmp(command, "import_response") == 0) {
         handle_import_response(proc, buff, bufflen, index);
+    } else if (strcmp(command, "import_exception") == 0) {
+        handle_import_exception(proc, buff, bufflen, index);
     } else if (strcmp(command, "write") == 0) {
         handle_write(proc, buff, bufflen, index);
     } else if (strcmp(command, "read") == 0) {
@@ -165,6 +205,7 @@ static void handle_init(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) 
     init_req->mod_size = size;
     init_req->run_mode = mode;
     
+    DRV_DEBUG("driver_async -> wasm_initialize_runtime");
     driver_async(proc->port, NULL, wasm_initialize_runtime, init_req, NULL);
 }
 
@@ -203,6 +244,7 @@ static void handle_call(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index, 
         DRV_DEBUG("Indirect function table index: %ld", table_index);
 
         cr->call_indirect.table_name = (char*)DEFAULT_INDIRECT_TABLE_NAME;
+        cr->call_indirect.table_index = table_index;
 
         rc = hb_beamr_lib_meta_indirect_func(proc->wasm_ctx, cr->call_indirect.table_name, table_index, &func_meta);
     }
@@ -243,16 +285,22 @@ static void handle_call(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index, 
     sprintf(response_mutex_name, "response_mutex_%d", proc->call_stack_height);
     char* response_cond_name = driver_alloc(128);
     sprintf(response_cond_name, "response_cond_%d", proc->call_stack_height);
+    DRV_DEBUG("Creating response mutex and condition: %s, %s", response_mutex_name, response_cond_name);
     is->response_ready = erl_drv_mutex_create(response_mutex_name);
     is->cond = erl_drv_cond_create(response_cond_name);
     is->meta = NULL;
     is->ready = 0;
+    is->results = NULL;
+    is->result_count = 0;
+    is->error_message = NULL;
     driver_free(response_mutex_name);
     driver_free(response_cond_name);
 
     if (call_type == CALL_EXPORT) {
+        DRV_DEBUG("driver_async -> wasm_execute_exported_function");
         driver_async(proc->port, NULL, wasm_execute_exported_function, proc, NULL);
     } else if (call_type == CALL_INDIRECT) {
+        DRV_DEBUG("driver_async -> wasm_execute_indirect_function");
         driver_async(proc->port, NULL, wasm_execute_indirect_function, proc, NULL);
     }
 }
@@ -291,18 +339,45 @@ static void handle_import_response(Proc* proc, char* buff, ErlDrvSizeT bufflen, 
     drv_signal(is->response_ready, is->cond, &is->ready);
 }
 
+static void handle_import_exception(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) {
+    DRV_DEBUG("Import exception received. Providing...");
+
+    if (proc->call_stack_height == 0) {
+        DRV_DEBUG("[error] No pending import exception waiting");
+        send_error(proc->port_term, "No pending import exception waiting");
+        return;
+    }
+
+    CallContext *cc = &proc->call_stack[proc->call_stack_height - 1];
+    ImportState *is = &cc->import_state;
+
+    if (is->meta == NULL) {
+        DRV_DEBUG("Import exception received but no import meta data available");
+        send_error(proc->port_term, "Import exception received but no import meta data available");
+        return;
+    }
+
+    char* error_message = driver_alloc(128);
+    ei_decode_string(buff, &index, error_message);
+    DRV_DEBUG("Import exception message: %s", error_message);
+    is->error_message = error_message;
+
+    // Signal that the response is ready
+    drv_signal(is->response_ready, is->cond, &is->ready);
+}
+
 static void handle_write(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) {
     DRV_DEBUG("Write received");
     long ptr;
-    int type, size, arity;
+    int type, size_bits, arity;
     ei_decode_tuple_header(buff, &index, &arity);
     ei_decode_long(buff, &index, &ptr);
-    ei_get_type(buff, &index, &type, &size);
-    size_t size_l = (long)size;
+    ei_get_type(buff, &index, &type, &size_bits);
+    size_t size_bits_l = (long)size_bits;
     const char* write_data;
-    int res = ei_decode_bitstring(buff, &index, &write_data, NULL, &size_l);
-    DRV_DEBUG("Decoded binary. Res: %d. Size (bits): %ld", res, size_l);
-    size_t size_bytes = size_l / 8;
+    int res = ei_decode_bitstring(buff, &index, &write_data, NULL, &size_bits_l);
+    DRV_DEBUG("Decoded binary. Res: %d. Size (bits): %ld", res, size_bits_l);
+    size_t size_bytes = size_bits_l / 8;
     DRV_DEBUG("Write received. Ptr: %ld. Bytes: %ld", ptr, size_bytes);
     hb_beamr_lib_rc_t rc = hb_beamr_lib_direct_write_memory(proc->wasm_ctx, ptr, (uint8_t*)write_data, size_bytes);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
@@ -313,8 +388,7 @@ static void handle_write(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index)
     ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 2);
     msg[0] = ERL_DRV_ATOM;
     msg[1] = atom_ok;
-    int msg_res = erl_drv_output_term(proc->port_term, msg, 2);
-    DRV_DEBUG("Write response sent: %d", msg_res);
+    erl_drv_output_term(proc->port_term, msg, 2);
 }
 
 static void handle_read(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) {
@@ -326,6 +400,7 @@ static void handle_read(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) 
     ei_decode_long(buff, &index, &size);
     long size_l = (long)size;
     
+    DRV_DEBUG("Reading %ld bytes from %ld", size_l, ptr);
     uint8_t* out_binary = driver_alloc(size_l);
     hb_beamr_lib_rc_t rc = hb_beamr_lib_direct_read_memory(proc->wasm_ctx, ptr, (uint8_t*)out_binary, size_l);
     if (rc != HB_BEAMR_LIB_SUCCESS) {

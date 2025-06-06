@@ -17,6 +17,7 @@
 
 cmake_minimum_required(VERSION 3.14)
 include(FetchContent)
+find_package(Git QUIET) # To get GIT_EXECUTABLE for local changes check
 
 # Function to fetch WAMR source code
 function(fetch_wamr_source)
@@ -35,26 +36,54 @@ function(fetch_wamr_source)
   endif()
 
   message(STATUS "Using WAMR from: ${WAMR_GIT_REPOSITORY}#${WAMR_GIT_TAG}")
-  message(STATUS "Using WAMR source directory: ${WAMR_SRC_DIR}")
+  message(STATUS "Ensuring WAMR source is available at: ${WAMR_SRC_DIR}")
 
-  # Clone the repository
-  FetchContent_Declare(
-    wamr
+  # Base arguments for FetchContent_Declare
+  set(FC_ARGS
     GIT_REPOSITORY ${WAMR_GIT_REPOSITORY}
     GIT_TAG ${WAMR_GIT_TAG}
     SOURCE_DIR ${WAMR_SRC_DIR}
+    GIT_SHALLOW TRUE # Fetch only the latest commit history
   )
-  
-  # Make the content available
-  FetchContent_GetProperties(wamr)
-  if(NOT wamr_POPULATED)
-    message(STATUS "Fetching WAMR repository...")
-    FetchContent_MakeAvailable(wamr)
-    message(STATUS "WAMR repository cloned to: ${WAMR_SRC_DIR}")
+
+  if(EXISTS "${WAMR_SRC_DIR}/.git" AND IS_DIRECTORY "${WAMR_SRC_DIR}/.git")
+    message(STATUS "WAMR source directory ${WAMR_SRC_DIR} found with .git folder.")
+
+    if(GIT_EXECUTABLE)
+      execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C "${WAMR_SRC_DIR}" status --porcelain
+        OUTPUT_VARIABLE GIT_STATUS_OUTPUT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE GIT_STATUS_RESULT
+        ERROR_QUIET # Be resilient to git command issues in atypical setups
+      )
+      if(NOT GIT_STATUS_RESULT EQUAL 0 AND NOT GIT_STATUS_RESULT EQUAL "") # Check for actual failure code
+         message(WARNING "Git status check failed for ${WAMR_SRC_DIR} (Code: ${GIT_STATUS_RESULT}). Proceeding without local changes check.")
+      elseif(GIT_STATUS_OUTPUT)
+        message(WARNING "WAMR source directory ${WAMR_SRC_DIR} has local changes:\\n${GIT_STATUS_OUTPUT}\\nBuild will use these local changes.")
+      else()
+        message(STATUS "WAMR source directory ${WAMR_SRC_DIR} has no detected local changes.")
+      endif()
+    else()
+      message(WARNING "Git executable not found. Cannot check for local changes in ${WAMR_SRC_DIR}.")
+    endif()
+
+    # For existing directories, try to avoid network access if content matches tag.
+    list(APPEND FC_ARGS UPDATE_DISCONNECTED ON)
+    message(STATUS "Integrating existing WAMR content from ${WAMR_SRC_DIR} (UPDATE_DISCONNECTED=ON).")
+  else()
+    message(STATUS "WAMR source directory ${WAMR_SRC_DIR} not found or not a git repository. FetchContent will populate...")
+    # No UPDATE_DISCONNECTED here, as it needs to download.
   endif()
+
+  FetchContent_Declare(wamr ${FC_ARGS})
+  FetchContent_MakeAvailable(wamr) # Handles population if needed, and integration.
+
+  # After MakeAvailable, wamr_SOURCE_DIR is the definitive source directory.
+  message(STATUS "WAMR content from ${wamr_SOURCE_DIR} is now available for the build.")
   
-  # Export the variable to parent scope
-  set(WAMR_SRC_DIR ${WAMR_SRC_DIR} PARENT_SCOPE)
+  # Export the variable to parent scope, ensuring it's the one FetchContent actually used.
+  set(WAMR_SRC_DIR ${wamr_SOURCE_DIR} PARENT_SCOPE)
 endfunction()
 
 # Example CMakeLists.txt that uses this module:

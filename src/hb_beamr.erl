@@ -114,11 +114,11 @@ worker(Port, Listener) ->
             end,
             ok;
         {wasm_send, NewListener, Message} ->
-            ?event({wasm_send, {listener, NewListener}, {message, Message}}),
+            % ?event({wasm_send, {listener, NewListener}, {message, Message}}),
             Port ! {self(), Message},
             worker(Port, NewListener);
         WASMResult ->
-            ?event({wasm_result, {listener, Listener}, {result, WASMResult}}),
+            % ?event({wasm_result, {listener, Listener}, {result, WASMResult}}),
             Listener ! WASMResult,
             worker(Port, Listener)
     end.
@@ -207,7 +207,12 @@ monitor_call(WASM, ImportFun, StateMsg, Opts) ->
                         Opts
                     ),
                 ?event({import_ret, Module, Func, {args, Args}, {res, Res}}),
-                dispatch_response(WASM, Res),
+                case Res of
+                    {import_exception, Exception} ->
+                        dispatch_import_exception(WASM, Exception);
+                    Vals when is_list(Vals) ->
+                        dispatch_import_response(WASM, Vals)
+                end,
                 monitor_call(WASM, ImportFun, StateMsg2, Opts)
             catch
                 Err:Reason:Stack ->
@@ -232,7 +237,7 @@ monitor_call(WASM, ImportFun, StateMsg, Opts) ->
     end.
 
 %% @doc Check the type of an import response and dispatch it to a Beamr port.
-dispatch_response(WASM, Term) when is_pid(WASM) ->
+dispatch_import_response(WASM, Term) when is_pid(WASM) ->
 	case is_valid_arg_list(Term) of
 		true ->
 			wasm_send(WASM,
@@ -240,8 +245,14 @@ dispatch_response(WASM, Term) when is_pid(WASM) ->
 		false ->
 			throw({error, {invalid_response, Term}})
 	end;
-dispatch_response(_WASM, Term) ->
+dispatch_import_response(_WASM, Term) ->
 	throw({error, {invalid_response, Term}}).
+
+%% @doc Dispatch an import exception to the WASM executor.
+dispatch_import_exception(WASM, Exception) when is_pid(WASM) andalso is_list(Exception) ->
+    wasm_send(WASM, {command, term_to_binary({import_exception, Exception})});
+dispatch_import_exception(_WASM, Exception) ->
+    throw({error, {invalid_exception, Exception}}).
 
 %% @doc Check that a list of arguments is valid for a WASM function call.
 is_valid_arg_list(Args) when is_list(Args) ->

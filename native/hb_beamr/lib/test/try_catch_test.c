@@ -375,7 +375,10 @@ void test_try_catch_behavior(hb_beamr_lib_context_t* ctx) {
     LOG_STDERR_FLUSH("Calling my_funcs(2) - expecting integer throw to trap via host ABI...");
     rc = hb_beamr_lib_call_export(ctx, "my_funcs", 1, args, 1, results);
     assert_rc_try_catch(rc, HB_BEAMR_LIB_SUCCESS, ctx, "my_funcs(2) call (expecting trap)");
-    LOG_STDERR_FLUSH("my_funcs(2) correctly trapped/failed. Exception: %s", hb_beamr_lib_get_last_error(ctx));
+    char* str2 = read_wasm_string(ctx, results[0].of.i32, 255);
+    LOG_STDERR_FLUSH("my_funcs(2) result: %s", str2);
+    assert(strcmp(str2, "Catch") == 0 && "my_funcs(2) unexpected result string");
+    free(str2);
     // assert(strstr(hb_beamr_lib_get_last_error(ctx), "host_trap") != NULL && "Trap message mismatch for my_funcs(2)");
 
     // RESET_WASM_STATE();

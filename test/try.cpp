@@ -1,5 +1,8 @@
 // #define LOG_ENABLED
-#include "log.h"
+// #include "log.h"
+#ifndef LOG
+#define LOG(fmt, ...) do {} while (0)
+#endif
 
 #include <cstring>
 #include <stdexcept>

@@ -40,4 +40,6 @@ cache-*
 # These are platform-specific files
 test/*.aot
 
+*.log
+
 cu/

@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.14)
 project(hb_beamr_lib C)
 
+# Ensure Debug build type for debug symbols if not otherwise specified
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type (Release, Debug, etc.)" FORCE)
+  message(STATUS "hb_beamr_lib: Defaulting CMAKE_BUILD_TYPE to Debug for library debug symbols.")
+endif()
+
 # Option to enable building tests
 option(BUILD_TESTING "Build the tests" OFF)
 

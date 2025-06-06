@@ -769,7 +769,8 @@ wasm_module_inst_t hb_beamr_lib_get_module_instance(hb_beamr_lib_context_t* ctx)
  */
 
 hb_beamr_lib_rc_t hb_beamr_lib_convert_raw_args_to_wasm_vals(uint64_t args[], wasm_valkind_t val_types[], uint32_t val_count, wasm_val_t** out_vals) {
-    if (!args || !val_types || !val_count || !out_vals) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    if (!args || !out_vals) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
+    if (val_count > 0 && !val_types) return HB_BEAMR_LIB_ERROR_INVALID_ARGS;
     wasm_val_t* vals = (wasm_val_t*)malloc(sizeof(wasm_val_t) * val_count);
     if (!vals) return HB_BEAMR_LIB_ERROR_ALLOCATION_FAILED;
     for (uint32_t i = 0; i < val_count; i++) {

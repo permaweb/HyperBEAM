@@ -50,7 +50,7 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     wasm_val_t* wasm_args = NULL;
     hb_beamr_lib_rc_t rc = hb_beamr_lib_convert_raw_args_to_wasm_vals(args, param_kinds, param_count, &wasm_args);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
-        DRV_DEBUG("Failed to convert raw args to wasm vals");
+        DRV_DEBUG("Failed to convert raw args to wasm vals: %d", rc);
         return;
     }
 
@@ -117,23 +117,22 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     // Handle error in the response
     if (is->error_message) {
         DRV_DEBUG("Import execution failed. Error message: %s", is->error_message);
-        send_error(proc->port_term, "Import execution failed: %s", is->error_message);
+        // send_error(proc->port_term, "Import execution failed: %s", is->error_message);
         wasm_runtime_set_exception(module_inst, is->error_message);
-        return;
-    }
-
+    } else {
 #ifdef HB_DEBUG
-    DRV_DEBUG("Import results:");
-    hb_beamr_utils_print_wasm_vals(is->results, is->result_count);
+        DRV_DEBUG("Import results:");
+        hb_beamr_utils_print_wasm_vals(is->results, is->result_count);
 #endif
 
-    // assert(is->result_count == result_count);
-    rc = hb_beamr_lib_convert_wasm_vals_to_raw_args(is->results, is->result_count, args);
-    if (rc != HB_BEAMR_LIB_SUCCESS) {
-        DRV_DEBUG("Failed to convert wasm vals to raw args: %d", rc);
-        send_error(proc->port_term, "Failed to convert wasm vals to raw args: %d", rc);
-    } else {
-        DRV_DEBUG("Converted import results to raw args");
+        // assert(is->result_count == result_count);
+        rc = hb_beamr_lib_convert_wasm_vals_to_raw_args(is->results, is->result_count, args);
+        if (rc != HB_BEAMR_LIB_SUCCESS) {
+            DRV_DEBUG("Failed to convert wasm vals to raw args: %d", rc);
+            send_error(proc->port_term, "Failed to convert wasm vals to raw args: %d", rc);
+        } else {
+            DRV_DEBUG("Converted import results to raw args");
+        }
     }
 
     // Cleanup any variables we allocated
@@ -209,14 +208,19 @@ void wasm_initialize_runtime(void* raw) {
     uint8_t* wasm_copy = driver_alloc(init_req->mod_size);
     memcpy(wasm_copy, init_req->mod_bin, init_req->mod_size);
 
-    DRV_DEBUG("Loading WASM module %p @ %d from %p @ %d", wasm_copy, init_req->mod_size, init_req->mod_bin, init_req->mod_size);
+    DRV_DEBUG("Loading tmp WASM module %p @ %d from %p @ %d", wasm_copy, init_req->mod_size, init_req->mod_bin, init_req->mod_size);
     wasm_module_t tmp_module = wasm_runtime_load(wasm_copy, init_req->mod_size, error_buffer, 1024);
     if (tmp_module == NULL) {
         send_error(proc->port_term, "Failed to load temp WASM module: %s", error_buffer);
         drv_unlock(proc->is_running);
         return;
     }
-    
+
+#ifdef HB_DEBUG
+    #include "hb_beamr_utils.h"
+    hb_beamr_utils_print_module_info(tmp_module);
+#endif
+
     hb_beamr_meta_module_t *meta = driver_alloc(sizeof(hb_beamr_meta_module_t));
     rc = hb_beamr_lib_meta_module(tmp_module, meta);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
@@ -294,7 +298,6 @@ void wasm_execute_exported_function(void* raw) {
     // assert(cc->call_request.call_type == CALL_EXPORT);
     
     hb_beamr_lib_context_t *wasm_ctx = proc->wasm_ctx;
-    hb_beamr_meta_module_t *wasm_meta = proc->wasm_meta;
 
     wasm_val_t* results = driver_alloc(cc->call_request.result_count * sizeof(wasm_val_t));
 
@@ -308,9 +311,10 @@ void wasm_execute_exported_function(void* raw) {
 
     hb_beamr_lib_rc_t rc = hb_beamr_lib_call_export(wasm_ctx, cc->call_request.call_export.function_name, cc->call_request.arg_count, cc->call_request.args, cc->call_request.result_count, results);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
+        DRV_DEBUG("Failed to call exported function: %s", hb_beamr_lib_get_last_error(wasm_ctx));
         send_error(proc->port_term, "Failed to call exported function: %s", hb_beamr_lib_get_last_error(wasm_ctx));
-        drv_unlock(proc->is_running);
-        return;
+        wasm_runtime_clear_exception(hb_beamr_lib_get_module_instance(wasm_ctx));
+        goto fail1;
     }
 
 #ifdef HB_DEBUG
@@ -334,6 +338,9 @@ void wasm_execute_exported_function(void* raw) {
     DRV_DEBUG("Call to erl_drv_output_term completed. Res: %d", out_res);
 
 fail1:
+    DRV_DEBUG("Destroying call stack context: %d", proc->call_stack_height);
+    erl_drv_mutex_destroy(proc->call_stack[proc->call_stack_height - 1].import_state.response_ready);
+    erl_drv_cond_destroy(proc->call_stack[proc->call_stack_height - 1].import_state.cond);
     memset(&proc->call_stack[--proc->call_stack_height], 0, sizeof(CallContext));
 
 fail0:
@@ -357,7 +364,6 @@ void wasm_execute_indirect_function(void *raw) {
     DRV_DEBUG("Indirect function args: %p", cc->call_request.args);
 
     hb_beamr_lib_context_t *wasm_ctx = proc->wasm_ctx;
-    hb_beamr_meta_module_t *wasm_meta = proc->wasm_meta;
 
     hb_beamr_lib_rc_t rc;
 
@@ -371,12 +377,36 @@ void wasm_execute_indirect_function(void *raw) {
 
     rc = hb_beamr_lib_call_indirect(wasm_ctx, cc->call_request.call_indirect.table_name, cc->call_request.call_indirect.table_index, cc->call_request.arg_count, cc->call_request.args, cc->call_request.result_count, results);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
-        send_error(proc->port_term, "Failed to call indirect function");
-        drv_unlock(proc->is_running);
-        return;
+        DRV_DEBUG("Failed to call indirect function: %s", hb_beamr_lib_get_last_error(wasm_ctx));
+        send_error(proc->port_term, "Failed to call indirect function: %s", hb_beamr_lib_get_last_error(wasm_ctx));
+        wasm_runtime_clear_exception(hb_beamr_lib_get_module_instance(wasm_ctx));
+        goto fail1;
     }
 
+#ifdef HB_DEBUG
+    DRV_DEBUG("Exported function results:");
+    hb_beamr_utils_print_wasm_vals(results, cc->call_request.result_count);
+#endif
+    
+    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 4);
+    int msg_i = 0;
+    msg[msg_i++] = ERL_DRV_ATOM;
+    msg[msg_i++] = atom_execution_result;
+    if (wasm_vals_to_erl_msg(results, cc->call_request.result_count, &msg, &msg_i, 4) != 0) {
+        send_error(proc->port_term, "Failed to convert results to erl msg");
+        drv_unlock(proc->is_running);
+        return;
+    };
+    msg[msg_i++] = ERL_DRV_TUPLE;
+    msg[msg_i++] = 2;
+
+    int out_res = erl_drv_output_term(proc->port_term, msg, msg_i);
+    DRV_DEBUG("Call to erl_drv_output_term completed. Res: %d", out_res);
+
 fail1:
+    DRV_DEBUG("Destroying call stack context: %d", proc->call_stack_height);
+    erl_drv_mutex_destroy(proc->call_stack[proc->call_stack_height - 1].import_state.response_ready);
+    erl_drv_cond_destroy(proc->call_stack[proc->call_stack_height - 1].import_state.cond);
     memset(&proc->call_stack[--proc->call_stack_height], 0, sizeof(CallContext));
 
 fail0:

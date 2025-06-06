@@ -16,7 +16,12 @@ ifeq ($(shell uname -s),Darwin)
 else
     SHARED_LIB_EXT = so
 endif
-WAMRC_BUILD_PATH = _build/port_libs/hb_beamrc/wamr-src/wamr-compiler/build
+
+PORT_LIBS_DIR = $(BUILD_DIR)/port_libs
+BEAMR_LIB = $(PORT_LIBS_DIR)/hb_beamr/libhb_beamr_lib.a
+BEAMRC_LIB = $(PORT_LIBS_DIR)/hb_beamrc/libhb_beamrc_lib.$(SHARED_LIB_EXT)
+WAMRC_BUILD_DIR = $(PORT_LIBS_DIR)/hb_beamrc/wamr-src/wamr-compiler/build
+WAMRC = $(WAMRC_BUILD_DIR)/wamrc
 
 debug: debug-clean
 	CFLAGS="-DHB_DEBUG=1" rebar3 compile
@@ -54,36 +59,38 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 
 # TODO: Use the same `WAMR_SRC_DIR` for both `hb_beamr_lib` and `hb_beamrc_lib`
 
-_build/port_libs/hb_beamr/libhb_beamr_lib.$(SHARED_LIB_EXT):
+$(BEAMR_LIB):
 	make \
         -C "native/hb_beamr/lib" \
-        CMAKE_BUILD_DIR="$(BUILD_DIR)/port_libs/hb_beamr" \
+        CMAKE_BUILD_DIR="$(PORT_LIBS_DIR)/hb_beamr" \
         build
 
-_build/port_libs/hb_beamrc/libhb_beamrc_lib.$(SHARED_LIB_EXT):
+$(BEAMRC_LIB):
 	make \
         -C "native/hb_beamrc/lib" \
-        CMAKE_BUILD_DIR="$(BUILD_DIR)/port_libs/hb_beamrc" \
+        CMAKE_BUILD_DIR="$(PORT_LIBS_DIR)/hb_beamrc" \
         build
 
 port_libs: \
-    _build/port_libs/hb_beamr/libhb_beamr_lib.$(SHARED_LIB_EXT) \
-    _build/port_libs/hb_beamrc/libhb_beamrc_lib.$(SHARED_LIB_EXT)
+    $(BEAMR_LIB) \
+    $(BEAMRC_LIB)
 
 port_libs-clean:
-	rm -rf _build/port_libs
+	rm -rf $(PORT_LIBS_DIR)
 
-wamrc: compile
-	mkdir -p $(WAMRC_BUILD_PATH) && \
-	    cd $(WAMRC_BUILD_PATH) && \
-        cmake .. && \
-        make
+$(WAMRC): compile
+	mkdir -p $(WAMRC_BUILD_DIR) && \
+	    cd $(WAMRC_BUILD_DIR) && \
+	    cmake .. && \
+	    make
 
-# TODO: Find a way to keep this in sync with `hb_beamrc_lib`?
+wamrc: $(WAMRC)
+
+# TODO: Find a way to keep these flags in sync with `hb_beamrc_lib`?
 
 test/%.aot: test/%.wasm
 	@echo "Compiling $< to $@ (ignoring errors)"
-	-$(WAMRC_BUILD_PATH)/wamrc \
+	-$(WAMRC) \
         --enable-nan-canonicalization \
         --nan-canonicalization-sign-bit=0 \
         --bounds-checks=1 \

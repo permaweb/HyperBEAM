@@ -411,8 +411,10 @@ add_custom_command(
           --no-entry
           ${TRY_CATCH_FIXTURE_SRC}
           -o ${TRY_CATCH_WASM_OUTPUT}
+  COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --blue "+++ Dumping all sections for ${TRY_CATCH_WASM_OUTPUT} +++"
+  COMMAND wasm-objdump -x ${TRY_CATCH_WASM_OUTPUT}
   DEPENDS ${TRY_CATCH_FIXTURE_SRC}
-  COMMENT "Compiling C++ try_catch fixture to WASM using emcc..."
+  COMMENT "Compiling C++ try_catch fixture to WASM using emcc and dumping all sections..."
   VERBATIM
 )
 add_custom_target(try_catch_wasm_file_target DEPENDS ${TRY_CATCH_WASM_OUTPUT})
@@ -444,7 +446,7 @@ add_custom_command(TARGET TryCatchTest POST_BUILD
     $<TARGET_FILE_DIR:TryCatchTest>/try_catch.aot
     COMMENT "Copying try_catch.aot to TryCatchTest directory"
 )
-add_test(NAME TryCatchTest COMMAND TryCatchTest) # Re-enabled
+add_test(NAME TryCatchTest COMMAND TryCatchTest)
 
 # --- Compile Fixture: jmp.wasm (setjmp/longjmp test) ---
 set(JMP_FIXTURE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/jmp.cpp)
@@ -689,3 +691,128 @@ add_custom_command(TARGET async_import_stress_test POST_BUILD
     COMMENT "Copying import_nested_wat.aot for async_import_stress_test"
     VERBATIM
 )
+
+# --- Test: Minimal Indirect Call Segfault Test ---
+add_executable(MinimalIndirectCallTest minimal_indirect_call_test.c utils.c)
+target_link_libraries(MinimalIndirectCallTest PRIVATE hb_beamr_lib iwasm_static)
+# Depend on the target that creates simple_indirect.aot
+add_dependencies(MinimalIndirectCallTest simple_indirect_aot_file_target)
+
+add_custom_command(TARGET MinimalIndirectCallTest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${SIMPLE_INDIRECT_AOT_OUTPUT} # This is ${CMAKE_CURRENT_BINARY_DIR}/simple_indirect.aot
+    $<TARGET_FILE_DIR:MinimalIndirectCallTest>/simple_indirect.aot
+    COMMENT "Copying simple_indirect.aot for MinimalIndirectCallTest"
+)
+add_test(NAME MinimalIndirectCallTest COMMAND MinimalIndirectCallTest)
+
+# --- Compile Fixture: erlang_test_try.wasm (from test/try.cpp for specific segfault repro) ---
+set(ERLANG_TRY_FIXTURE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../../../../test/try.cpp) # Path relative to native/hb_beamr/lib/test
+set(ERLANG_TRY_WASM_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/erlang_test_try.wasm)
+
+if(NOT EXISTS ${ERLANG_TRY_FIXTURE_SRC})
+    message(FATAL_ERROR "Original try.cpp fixture source file not found at ${ERLANG_TRY_FIXTURE_SRC}.")
+endif()
+
+add_custom_command(
+  OUTPUT ${ERLANG_TRY_WASM_OUTPUT}
+  COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --blue "+++ Compiling fixture ${ERLANG_TRY_FIXTURE_SRC} to WASM (using emcc for C++) +++"
+  COMMAND ${EMCC_EXECUTABLE}
+          -O3 -g2 
+          -s STANDALONE_WASM
+          -s EXPORTED_FUNCTIONS=['_handle','_malloc','_free'] # Export handle, malloc, free
+          -fexceptions
+          -s DISABLE_EXCEPTION_CATCHING=0
+          --no-entry
+          ${ERLANG_TRY_FIXTURE_SRC}
+          -o ${ERLANG_TRY_WASM_OUTPUT}
+  COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --blue "+++ Dumping all sections for ${ERLANG_TRY_WASM_OUTPUT} +++"
+  COMMAND wasm-objdump -x ${ERLANG_TRY_WASM_OUTPUT}
+  DEPENDS ${ERLANG_TRY_FIXTURE_SRC}
+  COMMENT "Compiling original try.cpp fixture to WASM and dumping sections..."
+  VERBATIM
+)
+add_custom_target(erlang_test_try_wasm_file_target DEPENDS ${ERLANG_TRY_WASM_OUTPUT})
+
+# --- Compile Fixture: erlang_test_try.aot --- 
+set(ERLANG_TRY_AOT_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/erlang_test_try.aot)
+if(DEFINED WAMRC_EXECUTABLE AND TARGET build_wamrc_exe)
+    add_custom_command(
+      OUTPUT ${ERLANG_TRY_AOT_OUTPUT}
+      COMMAND ${WAMRC_EXECUTABLE} -o ${ERLANG_TRY_AOT_OUTPUT} ${ERLANG_TRY_WASM_OUTPUT}
+      DEPENDS erlang_test_try_wasm_file_target build_wamrc_exe
+      COMMENT "Compiling erlang_test_try.wasm to AOT..."
+      VERBATIM
+    )
+    add_custom_target(erlang_test_try_aot_file_target DEPENDS ${ERLANG_TRY_AOT_OUTPUT})
+else()
+    message(STATUS "WAMRC not available. AOT fixture erlang_test_try.aot will not be built.")
+    add_custom_target(erlang_test_try_aot_file_target)
+endif()
+
+
+# --- Test: Minimal Emscripten Nested Indirect Call Test (Reproduce Bus Error) ---
+# This test will now use minimal_host_call.aot
+add_executable(MinimalEmscriptenNestedIndirectTest minimal_emscripten_nested_indirect_test.c utils.c)
+
+target_link_libraries(MinimalEmscriptenNestedIndirectTest PRIVATE hb_beamr_lib iwasm_static)
+
+# MODIFIED: Depends on the target that creates minimal_host_call.aot
+add_dependencies(MinimalEmscriptenNestedIndirectTest minimal_host_call_aot_file_target)
+
+add_custom_command(TARGET MinimalEmscriptenNestedIndirectTest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo "Copying AOT file for MinimalEmscriptenNestedIndirectTest:"
+    COMMAND ${CMAKE_COMMAND} -E echo "  Source hardcoded path: /Users/elliot/Code/AO/Core/Project/HyperBEAM/native/hb_beamr/lib/_build/test/minimal_host_call.aot"
+    COMMAND ${CMAKE_COMMAND} -E echo "  Destination File: $<TARGET_FILE_DIR:MinimalEmscriptenNestedIndirectTest>/minimal_host_call.aot"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "/Users/elliot/Code/AO/Core/Project/HyperBEAM/native/hb_beamr/lib/_build/test/minimal_host_call.aot"  # HARDCODED PATH
+        "$<TARGET_FILE_DIR:MinimalEmscriptenNestedIndirectTest>/minimal_host_call.aot"
+    COMMENT "Copying minimal_host_call.aot for MinimalEmscriptenNestedIndirectTest"
+)
+add_test(NAME MinimalEmscriptenNestedIndirectTest COMMAND MinimalEmscriptenNestedIndirectTest)
+
+# ... The existing MinimalEmscriptenNestedIndirectTest add_test can be modified or replaced once C file is updated ...
+# ... For now, just ensuring the AOT build. The C test file needs to change module name it loads ...
+
+# --- Compile Fixture: minimal_host_call.wasm (from fixtures/minimal_host_call.cpp) ---
+set(MINIMAL_HOST_CALL_FIXTURE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal_host_call.cpp)
+set(MINIMAL_HOST_CALL_WASM_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/minimal_host_call.wasm)
+
+if(NOT EXISTS ${MINIMAL_HOST_CALL_FIXTURE_SRC})
+    message(FATAL_ERROR "minimal_host_call.cpp fixture source file not found at ${MINIMAL_HOST_CALL_FIXTURE_SRC}.")
+endif()
+
+add_custom_command(
+  OUTPUT ${MINIMAL_HOST_CALL_WASM_OUTPUT}
+  COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --blue "+++ Compiling fixture ${MINIMAL_HOST_CALL_FIXTURE_SRC} to WASM (using emcc) +++"
+  COMMAND ${EMCC_EXECUTABLE}
+          -O2 -g 
+          -s STANDALONE_WASM
+          -s EXPORTED_FUNCTIONS=['_handle','_malloc','_free'] 
+          -s ERROR_ON_UNDEFINED_SYMBOLS=0
+          --no-entry
+          ${MINIMAL_HOST_CALL_FIXTURE_SRC}
+          -o ${MINIMAL_HOST_CALL_WASM_OUTPUT}
+  COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --blue "+++ Dumping all sections for ${MINIMAL_HOST_CALL_WASM_OUTPUT} +++"
+  COMMAND wasm-objdump -x ${MINIMAL_HOST_CALL_WASM_OUTPUT}
+  DEPENDS ${MINIMAL_HOST_CALL_FIXTURE_SRC}
+  COMMENT "Compiling minimal_host_call.cpp fixture to WASM and dumping sections..."
+  VERBATIM
+)
+add_custom_target(minimal_host_call_wasm_file_target DEPENDS ${MINIMAL_HOST_CALL_WASM_OUTPUT})
+
+# --- Compile Fixture: minimal_host_call.aot --- 
+set(MINIMAL_HOST_CALL_AOT_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/minimal_host_call.aot)
+if(DEFINED WAMRC_EXECUTABLE AND TARGET build_wamrc_exe)
+    add_custom_command(
+      OUTPUT ${MINIMAL_HOST_CALL_AOT_OUTPUT}
+      COMMAND ${WAMRC_EXECUTABLE} -o ${MINIMAL_HOST_CALL_AOT_OUTPUT} ${MINIMAL_HOST_CALL_WASM_OUTPUT}
+      DEPENDS minimal_host_call_wasm_file_target build_wamrc_exe
+      COMMENT "Compiling minimal_host_call.wasm to AOT..."
+      VERBATIM
+    )
+    add_custom_target(minimal_host_call_aot_file_target DEPENDS ${MINIMAL_HOST_CALL_AOT_OUTPUT})
+else()
+    message(STATUS "WAMRC not available. AOT fixture minimal_host_call.aot will not be built.")
+    add_custom_target(minimal_host_call_aot_file_target)
+endif()
