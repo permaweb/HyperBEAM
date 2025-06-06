@@ -8,16 +8,16 @@ Each device listed here represents a specific capability available to AO process
 
 Below is a list of documented built-in devices. Each page details the device's purpose, available functions (keys), and usage examples where applicable.
 
-*   **[`~message@1.0`](./message-at-1-0.md):** Base message handling and manipulation.
-*   **[`~meta@1.0`](./meta-at-1-0.md):** Node configuration and metadata.
-*   **[`~process@1.0`](./process-at-1-0.md):** Persistent, shared process execution environment.
-*   **[`~scheduler@1.0`](./scheduler-at-1-0.md):** Message scheduling and execution ordering for processes.
-*   **[`~wasm64@1.0`](./wasm64-at-1-0.md):** WebAssembly (WASM) execution engine.
-*   **[`~lua@5.3a`](./lua-at-5-3a.md):** Lua script execution engine.
-*   **[`~relay@1.0`](./relay-at-1-0.md):** Relaying messages to other nodes or HTTP endpoints.
-*   **[`~json@1.0`](./json-at-1-0.md):** Provides access to JSON data structures using HyperPATHs.
+*   [`~message@1.0`](./message-at-1-0.md): Base message handling and manipulation.
+*   [`~meta@1.0`](./meta-at-1-0.md): Node configuration and metadata.
+*   [`~process@1.0`](./process-at-1-0.md): Persistent, shared process execution environment.
+*   [`~scheduler@1.0`](./scheduler-at-1-0.md): Message scheduling and execution ordering for processes.
+*   [`~wasm64@1.0`](./wasm64-at-1-0.md): WebAssembly (WASM) execution engine.
+*   [`~lua@5.3a`](./lua-at-5-3a.md): Lua script execution engine.
+*   [`~relay@1.0`](./relay-at-1-0.md): Relaying messages to other nodes or HTTP endpoints.
+*   [`~json@1.0`](./json-at-1-0.md): Provides access to JSON data structures using HyperPATHs.
 
-*(More devices will be documented here as specifications are finalized and reviewed.)*
+There can exist many more devices, but these are a few of the ones that are built into HyperBEAM.
 
 ## Device Naming and Versioning
 

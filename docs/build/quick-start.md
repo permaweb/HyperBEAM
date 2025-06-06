@@ -38,8 +38,6 @@ The primary tool for interacting with AO and developing processes is `aos`, a co
     pnpm add -g https://get_ao.arweave.net
     ```
 
-**Installing HyperBEAM for Development**
-
 While you don't need to run a HyperBEAM node yourself, you do need to connect to one to interact with the network during development.
 
 To start `aos`, simply run the command in your terminal:
@@ -61,34 +59,34 @@ This connects you to an interactive Lua environment running within a **process**
         *   Inspect process state.
         *   Manage your local environment.
 
-## Your First Interaction: Intializing a Variable
+## Intializing a Variable
 
 From the `aos` prompt, you can assign a variable. Let's assign a basic Lua process that just holds some data:
 
-```bash
+```lua
 default@aos-2.0.6> myVariable = "Hello from aos!"
 ```
 
 This assigns the string "Hello from aos!" to the variable `myVariable` within the current process's Lua environment.
 
-```bash
+```lua
 default@aos-2.0.6> myVariable
 Hello from aos!
 ```
 
 This displays the content of `myVariable`.
 
-## Send Your First Message
+## Sending Your First Message
 
 Let's send our variable to another process.
 
-```bash
+```lua
 default@aos-2.0.6> Send({ Target = ao.id, Data = myVariable })
 ```
 
 You should see the following output:
 
-```bash
+```lua
 New Message From <your-process-id>: Data = Hello from aos!
 ```
 
@@ -121,14 +119,14 @@ Follow these steps to create and interact with your first message handler in AO:
 2.  **Load the Handler into `aos`:**
     From your `aos` prompt, load the handler code into your running process:
 
-    ```bash
+    ```lua
     default@aos-2.0.6> .load main.lua
     ```
 
 3.  **Send a Message to Trigger the Handler:**
     Now, send a message to your own process (`ao.id` refers to the current process ID) with the action that matches your handler's name:
 
-    ```bash
+    ```lua
     default@aos-2.0.6> Send({ Target = ao.id, Action = "HelloWorld" })
     ```
 
@@ -140,7 +138,7 @@ Follow these steps to create and interact with your first message handler in AO:
 5.  **Inspect the Reply Message:**
     The reply message sent by your handler is now in your process's inbox. You can inspect its data like this:
 
-    ```bash
+    ```lua
     default@aos-2.0.6> Inbox[#Inbox].Data
     ```
     This should output: `"Hello back from your process!"`

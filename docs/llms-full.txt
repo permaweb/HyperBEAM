@@ -1,4 +1,4 @@
-Generated: 2025-06-06T21:54:43Z
+Generated: 2025-06-06T21:54:51Z
 
 --- START OF FILE: docs/build/ao-connect.md ---
 # HyperBEAM from AO Connect
@@ -368,8 +368,6 @@ The primary tool for interacting with AO and developing processes is `aos`, a co
     pnpm add -g https://get_ao.arweave.net
     ```
 
-**Installing HyperBEAM for Development**
-
 While you don't need to run a HyperBEAM node yourself, you do need to connect to one to interact with the network during development.
 
 To start `aos`, simply run the command in your terminal:
@@ -391,34 +389,34 @@ This connects you to an interactive Lua environment running within a **process**
         *   Inspect process state.
         *   Manage your local environment.
 
-## Your First Interaction: Intializing a Variable
+## Intializing a Variable
 
 From the `aos` prompt, you can assign a variable. Let's assign a basic Lua process that just holds some data:
 
-```bash
+```lua
 default@aos-2.0.6> myVariable = "Hello from aos!"
 ```
 
 This assigns the string "Hello from aos!" to the variable `myVariable` within the current process's Lua environment.
 
-```bash
+```lua
 default@aos-2.0.6> myVariable
 Hello from aos!
 ```
 
 This displays the content of `myVariable`.
 
-## Send Your First Message
+## Sending Your First Message
 
 Let's send our variable to another process.
 
-```bash
+```lua
 default@aos-2.0.6> Send({ Target = ao.id, Data = myVariable })
 ```
 
 You should see the following output:
 
-```bash
+```lua
 New Message From <your-process-id>: Data = Hello from aos!
 ```
 
@@ -451,14 +449,14 @@ Follow these steps to create and interact with your first message handler in AO:
 2.  **Load the Handler into `aos`:**
     From your `aos` prompt, load the handler code into your running process:
 
-    ```bash
+    ```lua
     default@aos-2.0.6> .load main.lua
     ```
 
 3.  **Send a Message to Trigger the Handler:**
     Now, send a message to your own process (`ao.id` refers to the current process ID) with the action that matches your handler's name:
 
-    ```bash
+    ```lua
     default@aos-2.0.6> Send({ Target = ao.id, Action = "HelloWorld" })
     ```
 
@@ -470,7 +468,7 @@ Follow these steps to create and interact with your first message handler in AO:
 5.  **Inspect the Reply Message:**
     The reply message sent by your handler is now in your process's inbox. You can inspect its data like this:
 
-    ```bash
+    ```lua
     default@aos-2.0.6> Inbox[#Inbox].Data
     ```
     This should output: `"Hello back from your process!"`
@@ -822,36 +820,6 @@ Before a node can process general requests, it usually needs to be initialized. 
 [meta module](../resources/source-code/dev_meta.md)
 --- END OF FILE: docs/devices/meta-at-1-0.md ---
 
---- START OF FILE: docs/devices/overview.md ---
-# Devices
-
-Devices are the core functional units within HyperBEAM and AO-Core. They define how messages are processed and what actions can be performed.
-
-Each device listed here represents a specific capability available to AO processes and nodes. Understanding these devices is key to building complex applications and configuring your HyperBEAM node effectively.
-
-## Available Devices
-
-Below is a list of documented built-in devices. Each page details the device's purpose, available functions (keys), and usage examples where applicable.
-
-*   **[`~message@1.0`](./message-at-1-0.md):** Base message handling and manipulation.
-*   **[`~meta@1.0`](./meta-at-1-0.md):** Node configuration and metadata.
-*   **[`~process@1.0`](./process-at-1-0.md):** Persistent, shared process execution environment.
-*   **[`~scheduler@1.0`](./scheduler-at-1-0.md):** Message scheduling and execution ordering for processes.
-*   **[`~wasm64@1.0`](./wasm64-at-1-0.md):** WebAssembly (WASM) execution engine.
-*   **[`~lua@5.3a`](./lua-at-5-3a.md):** Lua script execution engine.
-*   **[`~relay@1.0`](./relay-at-1-0.md):** Relaying messages to other nodes or HTTP endpoints.
-*   **[`~json@1.0`](./json-at-1-0.md):** Provides access to JSON data structures using HyperPATHs.
-
-*(More devices will be documented here as specifications are finalized and reviewed.)*
-
-## Device Naming and Versioning
-
-Devices are typically referenced using a name and version, like `~<name>@<version>` (e.g., `~process@1.0`). The tilde (`~`) often indicates a primary, user-facing device, while internal or utility devices might use a `dev_` prefix in the source code (e.g., `dev_router`).
-
-Versioning indicates the specific interface and behavior of the device. Changes to a device that break backward compatibility usually result in a version increment.
-
---- END OF FILE: docs/devices/overview.md ---
-
 --- START OF FILE: docs/devices/process-at-1-0.md ---
 # Device: ~process@1.0
 
@@ -1125,16 +1093,16 @@ Each device listed here represents a specific capability available to AO process
 
 Below is a list of documented built-in devices. Each page details the device's purpose, available functions (keys), and usage examples where applicable.
 
-*   **[`~message@1.0`](./message-at-1-0.md):** Base message handling and manipulation.
-*   **[`~meta@1.0`](./meta-at-1-0.md):** Node configuration and metadata.
-*   **[`~process@1.0`](./process-at-1-0.md):** Persistent, shared process execution environment.
-*   **[`~scheduler@1.0`](./scheduler-at-1-0.md):** Message scheduling and execution ordering for processes.
-*   **[`~wasm64@1.0`](./wasm64-at-1-0.md):** WebAssembly (WASM) execution engine.
-*   **[`~lua@5.3a`](./lua-at-5-3a.md):** Lua script execution engine.
-*   **[`~relay@1.0`](./relay-at-1-0.md):** Relaying messages to other nodes or HTTP endpoints.
-*   **[`~json@1.0`](./json-at-1-0.md):** Provides access to JSON data structures using HyperPATHs.
+*   [`~message@1.0`](./message-at-1-0.md): Base message handling and manipulation.
+*   [`~meta@1.0`](./meta-at-1-0.md): Node configuration and metadata.
+*   [`~process@1.0`](./process-at-1-0.md): Persistent, shared process execution environment.
+*   [`~scheduler@1.0`](./scheduler-at-1-0.md): Message scheduling and execution ordering for processes.
+*   [`~wasm64@1.0`](./wasm64-at-1-0.md): WebAssembly (WASM) execution engine.
+*   [`~lua@5.3a`](./lua-at-5-3a.md): Lua script execution engine.
+*   [`~relay@1.0`](./relay-at-1-0.md): Relaying messages to other nodes or HTTP endpoints.
+*   [`~json@1.0`](./json-at-1-0.md): Provides access to JSON data structures using HyperPATHs.
 
-*(More devices will be documented here as specifications are finalized and reviewed.)*
+There can exist many more devices, but these are a few of the ones that are built into HyperBEAM.
 
 ## Device Naming and Versioning
 
@@ -1447,6 +1415,13 @@ In essence, HyperBEAM is the engine that powers the AO Computer, enabling the vi
 --- END OF FILE: docs/introduction/what-is-hyperbeam.md ---
 
 --- START OF FILE: docs/resources/llms.md ---
+---
+hide:
+  - navigation
+  - toc
+classes: narrow-page
+---
+
 # LLM Context Files
 
 This section provides access to specially formatted files intended for consumption by Large Language Models (LLMs) to provide context about the HyperBEAM documentation.
@@ -1459,15 +1434,8 @@ This section provides access to specially formatted files intended for consumpti
     *   **Content**: A single text file containing the complete, concatenated content of all markdown documents from the specified documentation directories (`begin`, `run`, `guides`, `devices`, `resources`). Each file's content is clearly demarcated.
     *   **Usage**: Ideal for feeding the entire documentation content into an LLM for comprehensive context, analysis, or question-answering based on the full documentation set.
 
-!!! note "Generation Process"
-    These files are automatically generated by the `docs/build-all.sh` script during the documentation build process. They consolidate information from the following directories:
-
-    *   `docs/begin`
-    *   `docs/run`
-    *   `docs/guides`
-    *   `docs/devices`
-    *   `docs/resources`
-
+> **Generation Process**
+>   These files are automatically generated by the `docs/build-all.sh` script during the documentation build process. They consolidate information from the following directories: `docs/introduction`, `docs/run`, `docs/build`, `docs/devices`, `docs/resources`
 --- END OF FILE: docs/resources/llms.md ---
 
 --- START OF FILE: docs/resources/reference/faq.md ---

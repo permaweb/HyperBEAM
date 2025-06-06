@@ -1,4 +1,4 @@
-Generated: 2025-06-06T21:54:43Z
+Generated: 2025-06-06T21:54:51Z
 
 ## HyperBEAM Documentation Summary
 
@@ -36,7 +36,6 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [Device: ~lua@5.3a](./devices/lua-at-5-3a.html)
 * [Device: ~message@1.0](./devices/message-at-1-0.html)
 * [Device: ~meta@1.0](./devices/meta-at-1-0.html)
-* [Devices](./devices/overview.html)
 * [Device: ~process@1.0](./devices/process-at-1-0.html)
 * [Device: ~relay@1.0](./devices/relay-at-1-0.html)
 * [Device: ~scheduler@1.0](./devices/scheduler-at-1-0.html)
