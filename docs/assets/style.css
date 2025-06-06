@@ -938,6 +938,10 @@ h6 {
     color: black;
 }
 
+.md-footer nav {
+    padding: 2rem 0 2rem 0;
+}
+
 .md-footer__direction {
     font-size: clamp(0.35rem, 1.5vw, 0.45rem);
 }
@@ -945,136 +949,6 @@ h6 {
 .md-footer__title {
     font-size: clamp(0.75rem, 1.5vw, 0.85rem);
 }
-
-/* Code Highlighting Enhancement - Code Blocks Only */
-
-/* Code blocks */
-pre {
-    background-color: #f6f8fa !important;
-    border: 1px solid #e1e4e8 !important;
-    border-radius: 6px !important;
-    padding: 16px !important;
-    overflow: auto !important;
-    font-size: 0.85em !important;
-    line-height: 1.45 !important;
-    font-family: "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace !important;
-    margin: 1em 0 !important;
-}
-
-pre code {
-    background: transparent !important;
-    border: none !important;
-    padding: 0 !important;
-    font-size: inherit !important;
-    color: #24292e !important;
-    border-radius: 0 !important;
-}
-
-/* Highlighted code blocks with language */
-.highlight pre {
-    background-color: #263238 !important;
-    color: #eeffff !important;
-    border: 1px solid #37474f !important;
-}
-
-.highlight pre code {
-    color: #eeffff !important;
-}
-
-/* Syntax highlighting colors */
-.highlight .k { color: #c792ea !important; } /* Keywords */
-.highlight .s { color: #c3e88d !important; } /* Strings */
-.highlight .s1 { color: #c3e88d !important; } /* String single */
-.highlight .s2 { color: #c3e88d !important; } /* String double */
-.highlight .nb { color: #82aaff !important; } /* Built-ins */
-.highlight .nf { color: #82aaff !important; } /* Functions */
-.highlight .nc { color: #ffcb6b !important; } /* Classes */
-.highlight .nn { color: #ffcb6b !important; } /* Namespace */
-.highlight .no { color: #f78c6c !important; } /* Constants */
-.highlight .mi { color: #f78c6c !important; } /* Numbers */
-.highlight .mf { color: #f78c6c !important; } /* Float numbers */
-.highlight .c { color: #546e7a !important; } /* Comments */
-.highlight .c1 { color: #546e7a !important; } /* Comment single line */
-.highlight .cm { color: #546e7a !important; } /* Comment multiline */
-.highlight .o { color: #89ddff !important; } /* Operators */
-.highlight .p { color: #eeffff !important; } /* Punctuation */
-.highlight .nt { color: #f07178 !important; } /* HTML/XML tags */
-.highlight .na { color: #c792ea !important; } /* HTML/XML attributes */
-.highlight .nv { color: #eeffff !important; } /* Variables */
-
-/* Material theme code blocks for better contrast */
-.md-typeset .codehilite {
-    background-color: #263238 !important;
-    color: #eeffff !important;
-    border-radius: 6px !important;
-    border: 1px solid #37474f !important;
-}
-
-.md-typeset .codehilite pre {
-    background-color: transparent !important;
-    border: none !important;
-    margin: 0 !important;
-}
-
-
-/* Code fence with language label */
-.md-typeset .codehilite::before {
-    background-color: #37474f !important;
-    color: #b0bec5 !important;
-    font-size: 0.7rem !important;
-    padding: 0.2em 0.5em !important;
-    border-radius: 4px 4px 0 0 !important;
-    position: absolute !important;
-    right: 8px !important;
-    top: 8px !important;
-    font-family: "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace !important;
-}
-
-/* Enhanced keyboard shortcuts */
-kbd {
-    background-color: #fafbfc !important;
-    border: 1px solid #c6cbd1 !important;
-    border-bottom-color: #959da5 !important;
-    border-radius: 3px !important;
-    box-shadow: inset 0 -1px 0 #959da5 !important;
-    color: #444d56 !important;
-    display: inline-block !important;
-    font-size: 11px !important;
-    line-height: 10px !important;
-    padding: 3px 5px !important;
-    vertical-align: middle !important;
-    font-family: "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace !important;
-    font-weight: 600 !important;
-}
-
-/* Terminal/console styling */
-.language-bash pre,
-.language-shell pre,
-.language-console pre,
-.language-terminal pre {
-    background-color: #1e1e1e !important;
-    color: #d4d4d4 !important;
-    border: 1px solid #333 !important;
-}
-
-.language-bash code,
-.language-shell code,
-.language-console code,
-.language-terminal code {
-    color: #d4d4d4 !important;
-}
-
-/* JSON highlighting */
-.language-json .highlight .s2 { color: #ce9178 !important; } /* JSON strings */
-.language-json .highlight .kc { color: #569cd6 !important; } /* JSON booleans/null */
-
-/* JavaScript/TypeScript highlighting enhancements */
-.language-javascript .highlight .kd { color: #569cd6 !important; } /* var, let, const */
-.language-typescript .highlight .kd { color: #569cd6 !important; }
-
-/* Python highlighting enhancements */
-.language-python .highlight .k { color: #569cd6 !important; } /* def, class, import */
-.language-python .highlight .bp { color: #9cdcfe !important; } /* self, cls */
 
 /* Last Updated Date */
 .md-source-file {

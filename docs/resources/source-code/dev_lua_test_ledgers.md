@@ -10,7 +10,7 @@
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#apply_names-3">apply_names/3*</a></td><td>Apply a map of environment names to elements in either a map or list.</td></tr><tr><td valign="top"><a href="#balance-3">balance/3*</a></td><td>Retreive a single balance from the ledger.</td></tr><tr><td valign="top"><a href="#balance_total-3">balance_total/3*</a></td><td>Get the total balance for an ID across all ledgers in a set.</td></tr><tr><td valign="top"><a href="#balances-2">balances/2*</a></td><td>Get the balances of a ledger.</td></tr><tr><td valign="top"><a href="#balances-3">balances/3*</a></td><td></td></tr><tr><td valign="top"><a href="#comma_separated_scheduler_list_test-0">comma_separated_scheduler_list_test/0*</a></td><td>Ensure that the <code>hyper-token.lua</code> script can parse comma-separated
 IDs in the <code>scheduler</code> field of a message.</td></tr><tr><td valign="top"><a href="#do_apply_names-3">do_apply_names/3*</a></td><td></td></tr><tr><td valign="top"><a href="#ledger-2">ledger/2*</a></td><td>Generate a Lua process definition message.</td></tr><tr><td valign="top"><a href="#ledger-3">ledger/3*</a></td><td></td></tr><tr><td valign="top"><a href="#ledgers-2">ledgers/2*</a></td><td>Get the local expectation of a ledger's balances with peer ledgers.</td></tr><tr><td valign="top"><a href="#lua_script-1">lua_script/1*</a></td><td>Generate a Lua <code>script</code> key from a file or list of files.</td></tr><tr><td valign="top"><a href="#map-2">map/2*</a></td><td>Generate a complete overview of the test environment's balances and
-ledgers.</td></tr><tr><td valign="top"><a href="#map-3">map/3*</a></td><td></td></tr><tr><td valign="top"><a href="#multischeduler-0">multischeduler/0*</a></td><td></td></tr><tr><td valign="top"><a href="#multischeduler_test_-0">multischeduler_test_/0*</a></td><td>Verify that sub-ledgers can request and enforce multiple scheduler
+ledgers.</td></tr><tr><td valign="top"><a href="#map-3">map/3*</a></td><td></td></tr><tr><td valign="top"><a href="#multischeduler-0">multischeduler/0*</a></td><td></td></tr><tr><td valign="top"><a href="#multischeduler_test_disabled-0">multischeduler_test_disabled/0*</a></td><td>Verify that sub-ledgers can request and enforce multiple scheduler
 commitments.</td></tr><tr><td valign="top"><a href="#normalize_env-1">normalize_env/1*</a></td><td>Normalize a set of processes, representing ledgers in a test environment,
 to a canonical form: A map of <code>ID => Proc</code>.</td></tr><tr><td valign="top"><a href="#normalize_without_root-2">normalize_without_root/2*</a></td><td>Return the normalized environment without the root ledger.</td></tr><tr><td valign="top"><a href="#register-3">register/3*</a></td><td>Request that a peer register with a without sub-ledger.</td></tr><tr><td valign="top"><a href="#subledger-2">subledger/2*</a></td><td>Generate a test sub-ledger process definition message.</td></tr><tr><td valign="top"><a href="#subledger-3">subledger/3*</a></td><td></td></tr><tr><td valign="top"><a href="#subledger_deposit-0">subledger_deposit/0*</a></td><td></td></tr><tr><td valign="top"><a href="#subledger_deposit_test_-0">subledger_deposit_test_/0*</a></td><td>Verify that a user can deposit tokens into a sub-ledger.</td></tr><tr><td valign="top"><a href="#subledger_registration_test_disabled-0">subledger_registration_test_disabled/0*</a></td><td>Verify that peer ledgers on the same token are able to register mutually
 to establish a peer-to-peer connection.</td></tr><tr><td valign="top"><a href="#subledger_supply-3">subledger_supply/3*</a></td><td>Calculate the supply of tokens in all sub-ledgers, from the balances of
@@ -137,11 +137,11 @@ output more readable.
 
 `multischeduler() -> any()`
 
-<a name="multischeduler_test_-0"></a>
+<a name="multischeduler_test_disabled-0"></a>
 
-### multischeduler_test_/0 * ###
+### multischeduler_test_disabled/0 * ###
 
-`multischeduler_test_() -> any()`
+`multischeduler_test_disabled() -> any()`
 
 Verify that sub-ledgers can request and enforce multiple scheduler
 commitments. `hyper-token` always validates that peer `base` processes

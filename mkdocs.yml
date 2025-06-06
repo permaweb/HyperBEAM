@@ -244,6 +244,7 @@ extra_javascript:
   - js/toc-highlight.js
   - js/disable-preload-transition.js
   - js/header-scroll.js
+  - js/footer-docs.js
 
 extra:
   social:

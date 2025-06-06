@@ -1,4 +1,4 @@
-Generated: 2025-06-06T21:01:15Z
+Generated: 2025-06-06T21:43:09Z
 
 --- START OF FILE: docs/build/ao-connect.md ---
 # HyperBEAM from AO Connect
@@ -3365,7 +3365,7 @@ records to and from TABMs.
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td>Sign a message using the <code>priv_wallet</code> key in the options.</td></tr><tr><td valign="top"><a href="#content_type-1">content_type/1</a></td><td>Return the content type for the codec.</td></tr><tr><td valign="top"><a href="#deduplicating_from_list-2">deduplicating_from_list/2*</a></td><td>Deduplicate a list of key-value pairs by key, generating a list of
-values for each normalized key if there are duplicates.</td></tr><tr><td valign="top"><a href="#deserialize-3">deserialize/3</a></td><td>Deserialize a binary ans104 message to a TABM.</td></tr><tr><td valign="top"><a href="#do_from-3">do_from/3*</a></td><td></td></tr><tr><td valign="top"><a href="#encoded_tags_to_map-1">encoded_tags_to_map/1*</a></td><td>Convert an ANS-104 encoded tag list into a HyperBEAM-compatible map.</td></tr><tr><td valign="top"><a href="#from-3">from/3</a></td><td>Convert a #tx record into a message map recursively.</td></tr><tr><td valign="top"><a href="#from_maintains_tag_name_case_test-0">from_maintains_tag_name_case_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normal_tags-1">normal_tags/1*</a></td><td>Check whether a list of key-value pairs contains only normalized keys.</td></tr><tr><td valign="top"><a href="#normal_tags_test-0">normal_tags_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#only_committed_maintains_target_test-0">only_committed_maintains_target_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#restore_tag_name_case_from_cache_test-0">restore_tag_name_case_from_cache_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#serialize-3">serialize/3</a></td><td>Serialize a message or TX to a binary.</td></tr><tr><td valign="top"><a href="#signed_duplicated_tag_name_test-0">signed_duplicated_tag_name_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_signed_to_httpsig_test-0">simple_signed_to_httpsig_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_to_conversion_test-0">simple_to_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#tag_map_to_encoded_tags-1">tag_map_to_encoded_tags/1*</a></td><td>Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
+values for each normalized key if there are duplicates.</td></tr><tr><td valign="top"><a href="#deserialize-3">deserialize/3</a></td><td>Deserialize a binary ans104 message to a TABM.</td></tr><tr><td valign="top"><a href="#do_from-3">do_from/3*</a></td><td></td></tr><tr><td valign="top"><a href="#encoded_tags_to_map-1">encoded_tags_to_map/1*</a></td><td>Convert an ANS-104 encoded tag list into a HyperBEAM-compatible map.</td></tr><tr><td valign="top"><a href="#from-3">from/3</a></td><td>Convert a #tx record into a message map recursively.</td></tr><tr><td valign="top"><a href="#from_maintains_tag_name_case_test-0">from_maintains_tag_name_case_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normal_tags-1">normal_tags/1*</a></td><td>Check whether a list of key-value pairs contains only normalized keys.</td></tr><tr><td valign="top"><a href="#normal_tags_test-0">normal_tags_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#only_committed_maintains_target_test-0">only_committed_maintains_target_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#restore_tag_name_case_from_cache_test-0">restore_tag_name_case_from_cache_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#serialize-3">serialize/3</a></td><td>Serialize a message or TX to a binary.</td></tr><tr><td valign="top"><a href="#signed_duplicated_tag_name_test-0">signed_duplicated_tag_name_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_signed_to_httpsig_test_disabled-0">simple_signed_to_httpsig_test_disabled/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_to_conversion_test-0">simple_to_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#tag_map_to_encoded_tags-1">tag_map_to_encoded_tags/1*</a></td><td>Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
 recreating the original order of the tags.</td></tr><tr><td valign="top"><a href="#to-3">to/3</a></td><td>Internal helper to translate a message to its #tx record representation,
 which can then be used by ar_bundles to serialize the message.</td></tr><tr><td valign="top"><a href="#type_tag_test-0">type_tag_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#unsigned_duplicated_tag_name_test-0">unsigned_duplicated_tag_name_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify an ANS-104 commitment.</td></tr></table>
 
@@ -3477,11 +3477,11 @@ Serialize a message or TX to a binary.
 
 `signed_duplicated_tag_name_test() -> any()`
 
-<a name="simple_signed_to_httpsig_test-0"></a>
+<a name="simple_signed_to_httpsig_test_disabled-0"></a>
 
-### simple_signed_to_httpsig_test/0 * ###
+### simple_signed_to_httpsig_test_disabled/0 * ###
 
-`simple_signed_to_httpsig_test() -> any()`
+`simple_signed_to_httpsig_test_disabled() -> any()`
 
 <a name="simple_to_conversion_test-0"></a>
 
@@ -6174,7 +6174,7 @@ Wrapper for `hb_ao`'s `set` functionality.
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#apply_names-3">apply_names/3*</a></td><td>Apply a map of environment names to elements in either a map or list.</td></tr><tr><td valign="top"><a href="#balance-3">balance/3*</a></td><td>Retreive a single balance from the ledger.</td></tr><tr><td valign="top"><a href="#balance_total-3">balance_total/3*</a></td><td>Get the total balance for an ID across all ledgers in a set.</td></tr><tr><td valign="top"><a href="#balances-2">balances/2*</a></td><td>Get the balances of a ledger.</td></tr><tr><td valign="top"><a href="#balances-3">balances/3*</a></td><td></td></tr><tr><td valign="top"><a href="#comma_separated_scheduler_list_test-0">comma_separated_scheduler_list_test/0*</a></td><td>Ensure that the <code>hyper-token.lua</code> script can parse comma-separated
 IDs in the <code>scheduler</code> field of a message.</td></tr><tr><td valign="top"><a href="#do_apply_names-3">do_apply_names/3*</a></td><td></td></tr><tr><td valign="top"><a href="#ledger-2">ledger/2*</a></td><td>Generate a Lua process definition message.</td></tr><tr><td valign="top"><a href="#ledger-3">ledger/3*</a></td><td></td></tr><tr><td valign="top"><a href="#ledgers-2">ledgers/2*</a></td><td>Get the local expectation of a ledger's balances with peer ledgers.</td></tr><tr><td valign="top"><a href="#lua_script-1">lua_script/1*</a></td><td>Generate a Lua <code>script</code> key from a file or list of files.</td></tr><tr><td valign="top"><a href="#map-2">map/2*</a></td><td>Generate a complete overview of the test environment's balances and
-ledgers.</td></tr><tr><td valign="top"><a href="#map-3">map/3*</a></td><td></td></tr><tr><td valign="top"><a href="#multischeduler-0">multischeduler/0*</a></td><td></td></tr><tr><td valign="top"><a href="#multischeduler_test_-0">multischeduler_test_/0*</a></td><td>Verify that sub-ledgers can request and enforce multiple scheduler
+ledgers.</td></tr><tr><td valign="top"><a href="#map-3">map/3*</a></td><td></td></tr><tr><td valign="top"><a href="#multischeduler-0">multischeduler/0*</a></td><td></td></tr><tr><td valign="top"><a href="#multischeduler_test_disabled-0">multischeduler_test_disabled/0*</a></td><td>Verify that sub-ledgers can request and enforce multiple scheduler
 commitments.</td></tr><tr><td valign="top"><a href="#normalize_env-1">normalize_env/1*</a></td><td>Normalize a set of processes, representing ledgers in a test environment,
 to a canonical form: A map of <code>ID => Proc</code>.</td></tr><tr><td valign="top"><a href="#normalize_without_root-2">normalize_without_root/2*</a></td><td>Return the normalized environment without the root ledger.</td></tr><tr><td valign="top"><a href="#register-3">register/3*</a></td><td>Request that a peer register with a without sub-ledger.</td></tr><tr><td valign="top"><a href="#subledger-2">subledger/2*</a></td><td>Generate a test sub-ledger process definition message.</td></tr><tr><td valign="top"><a href="#subledger-3">subledger/3*</a></td><td></td></tr><tr><td valign="top"><a href="#subledger_deposit-0">subledger_deposit/0*</a></td><td></td></tr><tr><td valign="top"><a href="#subledger_deposit_test_-0">subledger_deposit_test_/0*</a></td><td>Verify that a user can deposit tokens into a sub-ledger.</td></tr><tr><td valign="top"><a href="#subledger_registration_test_disabled-0">subledger_registration_test_disabled/0*</a></td><td>Verify that peer ledgers on the same token are able to register mutually
 to establish a peer-to-peer connection.</td></tr><tr><td valign="top"><a href="#subledger_supply-3">subledger_supply/3*</a></td><td>Calculate the supply of tokens in all sub-ledgers, from the balances of
@@ -6301,11 +6301,11 @@ output more readable.
 
 `multischeduler() -> any()`
 
-<a name="multischeduler_test_-0"></a>
+<a name="multischeduler_test_disabled-0"></a>
 
-### multischeduler_test_/0 * ###
+### multischeduler_test_disabled/0 * ###
 
-`multischeduler_test_() -> any()`
+`multischeduler_test_disabled() -> any()`
 
 Verify that sub-ledgers can request and enforce multiple scheduler
 commitments. `hyper-token` always validates that peer `base` processes
