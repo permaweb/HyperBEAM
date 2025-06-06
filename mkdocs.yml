@@ -20,7 +20,7 @@ nav:
       - TEE Nodes: 'run/tee-nodes.md'
       - Joining/Running a Router: 'run/joining-running-a-router.md'
   - Build on HyperBEAM:
-      - Quick Start: 'build/get-started-building-on-hyperbeam.md'
+      - Quick Start: 'build/quick-start.md'
       - Migrating from Legacynet: 'build/migrating-from-legacynet.md'
       - AO Connect: 'build/ao-connect.md'
       - Extending HyperBEAM with Devices: 'build/building-devices.md'
@@ -174,7 +174,7 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
   - toc:
-      toc_depth: 3
+      toc_depth: 2
       permalink: true
 
 theme: 
