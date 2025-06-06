@@ -6,12 +6,12 @@
 %%% 2. When using `patches' to move all submessages in the source to the target,
 %%%    _if_ they have a `method' key of `PATCH' or a `device' key of `patch@1.0'.
 %%%
-%%% Source and destination paths may be prepended by `base:` or `req:` keys to
+%%% Source and destination paths may be prepended by `base:' or `req:' keys to
 %%% indicate that they are relative to either of the message's that the
 %%% computation is being performed on.
 %%%
 %%% The search order for finding the source and destination keys is as follows,
-%%% where `X` is either `from' or `to`:
+%%% where `X' is either `from' or `to':
 %%%
 %%% 1. The `patch-X' key of the execution message.
 %%% 2. The `X' key of the execution message.
@@ -22,7 +22,7 @@
 %%% allowing it to be used as an element of an execution stack pipeline, etc.
 -module(dev_patch).
 -export([all/3, patches/3]).
-%%% `execution-device` standard hooks:
+%%% `execution-device' standard hooks:
 -export([init/3, compute/3, normalize/3, snapshot/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
@@ -138,7 +138,7 @@ move(Mode, Msg1, Msg2, Opts) ->
                 #{ PatchFrom => NewSourceValue },
                 Opts
             ),
-        % If the `mode` is `patches`, we need to remove the `method` key from
+        % If the `mode' is `patches', we need to remove the `method' key from
         % them, if present.
         ToWriteMod =
             case Mode of

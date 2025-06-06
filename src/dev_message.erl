@@ -41,11 +41,11 @@ info() ->
 %% as follows:
 %% 1. Find the `default_index' key of the node message. If it is a binary,
 %%    it is assumed to be the name of a device, and we execute the resolution
-%%    `as` that ID.
+%%    `as' that ID.
 %% 2. Merge the base message with the default index message, favoring the default
 %%    index message's keys over those in the base message, unless the default
 %%    was a device name.
-%% 3. Execute the `default_index_path` (base: `index') upon the message,
+%% 3. Execute the `default_index_path' (base: `index') upon the message,
 %%    giving the rest of the request unchanged.
 index(Msg, Req, Opts) ->
     case hb_opts:get(default_index, not_found, Opts) of
@@ -397,11 +397,11 @@ committed(Self, Req, Opts) ->
             end,
             AllCommittedKeys
         ),
-    % Remove any `+link` suffixes from TABM-form committed keys if the `raw` flag
+    % Remove any `+link' suffixes from TABM-form committed keys if the `raw' flag
     % is not set. This means that callers to `committed/3' will receive a list of
     % keys that they can match  against the 'normal' representation of the message
     % in devices, etc., without exposure to TABM-specifics. If `raw' is set, the
-    % recipient receives the `committed` list in its unprocessed form.
+    % recipient receives the `committed' list in its unprocessed form.
     CommittedNormalizedKeys =
         case maps:get(<<"raw">>, Req, false) of
             true -> OnlyCommittedKeys;
@@ -501,7 +501,7 @@ commitment_ids_from_request(Base, Req, Opts) ->
     ?event({commitment_ids_from_request, {base, Base}, {req, Req}, {res, Res}}),
     Res.
 
-%% @doc Ensure that the `commitments` submessage of a base message is fully
+%% @doc Ensure that the `commitments' submessage of a base message is fully
 %% loaded into local memory.
 ensure_commitments_loaded(NonRelevant, _Opts) when not is_map(NonRelevant) ->
     NonRelevant;
@@ -647,7 +647,7 @@ set(Message1, NewValuesMsg, Opts) ->
             CommittedKeys
         ),
     ?event({setting, {overwritten_committed_keys, OverwrittenCommittedKeys}}),
-    % Combine with deep merge or if `set-mode` is `explicit' then just merge.
+    % Combine with deep merge or if `set-mode' is `explicit' then just merge.
     Merged =
         hb_private:set_priv(
             case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of

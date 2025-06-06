@@ -129,7 +129,7 @@ default_message() ->
         debug_print_indent => 2,
         debug_print => false,
         stack_print_prefixes => ["hb", "dev", "ar", "maps"],
-        debug_print_trace => short, % `short` | `false`. Has performance impact.
+        debug_print_trace => short, % `short' | `false'. Has performance impact.
         short_trace_len => 20,
         debug_metadata => true,
         debug_ids => true,
@@ -508,11 +508,12 @@ check_required_opts(KeyValuePairs, Opts) ->
 %%
 %% @param Opts The complete options map (will become first item in history)
 %% @param RequiredOpts A map of options that must be present and unchanging
-%% @returns {ok, <<"valid">>} when validation passes
-%% @returns {error, <<"missing_keys">>} when required keys are missing from first item
-%% @returns {error, <<"invalid_values">>} when first item values don't match requirements
-%% @returns {error, <<"modified_required_key">>} when history items modify required keys
-%% @returns {error, <<"validation_failed">>} when other validation errors occur
+%% @returns 
+%% `{ok, <<"valid">>}' when validation passes
+%% `{error, <<"missing_keys">>}' when required keys are missing from first item
+%% `{error, <<"invalid_values">>}' when first item values don't match requirements
+%% `{error, <<"modified_required_key">>}' when history items modify required keys
+%% `{error, <<"validation_failed">>}' when other validation errors occur
 -spec ensure_node_history(NodeHistory :: list() | term(), RequiredOpts :: map()) -> 
     {ok, binary()} | {error, binary()}.
 ensure_node_history(Opts, RequiredOpts) ->
@@ -661,8 +662,8 @@ as_identity_test() ->
     ?event({base_opts, Opts}),
     Identities = identities(Opts),
     ?event({identities, Identities}),
-    % The number of identities should be 5: `default`, its ID, `testname-1`,
-    % and its ID, and just the ID of `TestWallet2`.
+    % The number of identities should be 5: `default', its ID, `testname-1',
+    % and its ID, and just the ID of `TestWallet2'.
     ?assertEqual(5, maps:size(Identities)),
     % The wallets for each of the names should be the same as the wallets we
     % provided. We also check that the settings are applied correctly.

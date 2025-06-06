@@ -136,7 +136,7 @@ is_link_key(Key) when byte_size(Key) >= 5 ->
     binary:part(Key, byte_size(Key) - 5, 5) =:= <<"+link">>;
 is_link_key(_) -> false.
 
-%% @doc Remove any `+link` suffixes from a key.
+%% @doc Remove any `+link' suffixes from a key.
 remove_link_specifier(Key) ->
     case is_link_key(Key) of
         true -> binary:part(Key, 0, byte_size(Key) - 5);

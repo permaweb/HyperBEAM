@@ -12,7 +12,7 @@ their value.
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#binary_passthrough_test-0">binary_passthrough_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td></td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td></td></tr><tr><td valign="top"><a href="#deep_nesting_test-0">deep_nesting_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#deserialize-1">deserialize/1</a></td><td></td></tr><tr><td valign="top"><a href="#empty_map_test-0">empty_map_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#from-1">from/1</a></td><td>Convert a flat map to a TABM.</td></tr><tr><td valign="top"><a href="#inject_at_path-3">inject_at_path/3*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_paths_test-0">multiple_paths_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#nested_conversion_test-0">nested_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#path_list_test-0">path_list_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#serialize-1">serialize/1</a></td><td></td></tr><tr><td valign="top"><a href="#simple_conversion_test-0">simple_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#to-1">to/1</a></td><td>Convert a TABM to a flat map.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#binary_passthrough_test-0">binary_passthrough_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td></td></tr><tr><td valign="top"><a href="#deep_nesting_test-0">deep_nesting_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#deserialize-1">deserialize/1</a></td><td></td></tr><tr><td valign="top"><a href="#empty_map_test-0">empty_map_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#from-3">from/3</a></td><td>Convert a flat map to a TABM.</td></tr><tr><td valign="top"><a href="#inject_at_path-3">inject_at_path/3*</a></td><td></td></tr><tr><td valign="top"><a href="#inject_at_path-4">inject_at_path/4*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_paths_test-0">multiple_paths_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#nested_conversion_test-0">nested_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#path_list_test-0">path_list_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#serialize-1">serialize/1</a></td><td></td></tr><tr><td valign="top"><a href="#serialize-2">serialize/2</a></td><td></td></tr><tr><td valign="top"><a href="#simple_conversion_test-0">simple_conversion_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#to-3">to/3</a></td><td>Convert a TABM to a flat map.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -30,12 +30,6 @@ their value.
 ### commit/3 ###
 
 `commit(Msg, Req, Opts) -> any()`
-
-<a name="committed-3"></a>
-
-### committed/3 ###
-
-`committed(Msg, Req, Opts) -> any()`
 
 <a name="deep_nesting_test-0"></a>
 
@@ -55,11 +49,11 @@ their value.
 
 `empty_map_test() -> any()`
 
-<a name="from-1"></a>
+<a name="from-3"></a>
 
-### from/1 ###
+### from/3 ###
 
-`from(Bin) -> any()`
+`from(Bin, Req, Opts) -> any()`
 
 Convert a flat map to a TABM.
 
@@ -68,6 +62,12 @@ Convert a flat map to a TABM.
 ### inject_at_path/3 * ###
 
 `inject_at_path(Rest, Value, Map) -> any()`
+
+<a name="inject_at_path-4"></a>
+
+### inject_at_path/4 * ###
+
+`inject_at_path(Rest, Value, Map, Opts) -> any()`
 
 <a name="multiple_paths_test-0"></a>
 
@@ -93,17 +93,23 @@ Convert a flat map to a TABM.
 
 `serialize(Map) -> any()`
 
+<a name="serialize-2"></a>
+
+### serialize/2 ###
+
+`serialize(Map, Opts) -> any()`
+
 <a name="simple_conversion_test-0"></a>
 
 ### simple_conversion_test/0 * ###
 
 `simple_conversion_test() -> any()`
 
-<a name="to-1"></a>
+<a name="to-3"></a>
 
-### to/1 ###
+### to/3 ###
 
-`to(Bin) -> any()`
+`to(Bin, Req, Opts) -> any()`
 
 Convert a TABM to a flat map.
 

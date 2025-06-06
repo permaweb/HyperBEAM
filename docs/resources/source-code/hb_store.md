@@ -3,13 +3,58 @@
 
 
 
-<a name="index"></a>
+A simple abstraction layer for AO key value store operations.
+
+<a name="description"></a>
+
+## Description ##
+
+This interface allows us to swap out the underlying store implementation(s)
+as desired, without changing the API that `hb_cache` employs. Additionally,
+it enables node operators to customize their configuration to maximize
+performance, data availability, and other factors.
+
+Stores can be represented in a node's configuration as either a single
+message, or a (`structured@1.0`) list of store messages. If a list of stores
+is provided, the node will cycle through each until a viable store is found
+to execute the given function.
+
+A valid store must implement a _subset_ of the following functions:
+``start/1:      Initialize the store.
+stop/1:       Stop any processes (etc.) that manage the store.
+reset/1:      Restore the store to its original, empty state.
+scope/0:      A tag describing the`scope' of a stores search: `in_memory`,
+`local`, `remote`, `arweave`, etc. Used in order to allow
+node operators to prioritize their stores for search.
+make_group/2: Create a new group of keys in the store with the given ID.
+make_link/3:  Create a link (implying one key should redirect to another)
+from `existing` to `new` (in that order).
+type/2:       Return whether the value found at the given key is a
+`composite` (group) type, or a `simple` direct binary.
+read/2:       Read the data at the given location, returning a binary
+if it is a `simple` value, or a message if it is a complex
+term.
+write/3:      Write the given `key` with the associated `value` (in that
+order) to the store.
+list/2:       For `composite` type keys, return a list of its child keys.
+path/2:       Optionally transform a list of path parts into the store's
+canonical form.
+'''
+Each function takes a `store` message first, containing an arbitrary set
+of its necessary configuration keys, as well as the `store-module` key which
+refers to the Erlang module that implements the store.
+
+All functions must return `ok` or `{ok, Result}`, as appropriate. Other
+results will lead to the store manager (this module) iterating to the next
+store message given by the user. If none of the given store messages are
+able to execute a requested service, the store manager will return
+`not_found`.<a name="index"></a>
 
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_path-2">add_path/2</a></td><td>Add two path components together.</td></tr><tr><td valign="top"><a href="#add_path-3">add_path/3</a></td><td></td></tr><tr><td valign="top"><a href="#behavior_info-1">behavior_info/1</a></td><td></td></tr><tr><td valign="top"><a href="#call_all-3">call_all/3*</a></td><td>Call a function on all modules in the store.</td></tr><tr><td valign="top"><a href="#call_function-3">call_function/3*</a></td><td>Call a function on the first store module that succeeds.</td></tr><tr><td valign="top"><a href="#filter-2">filter/2</a></td><td>Takes a store object and a filter function or match spec, returning a
-new store object with only the modules that match the filter.</td></tr><tr><td valign="top"><a href="#generate_test_suite-1">generate_test_suite/1</a></td><td></td></tr><tr><td valign="top"><a href="#generate_test_suite-2">generate_test_suite/2</a></td><td></td></tr><tr><td valign="top"><a href="#get_store_scope-1">get_store_scope/1*</a></td><td>Ask a store for its own scope.</td></tr><tr><td valign="top"><a href="#hierarchical_path_resolution_test-1">hierarchical_path_resolution_test/1*</a></td><td>Ensure that we can resolve links through a directory.</td></tr><tr><td valign="top"><a href="#join-1">join/1</a></td><td>Join a list of path components together.</td></tr><tr><td valign="top"><a href="#list-2">list/2</a></td><td>List the keys in a group in the store.</td></tr><tr><td valign="top"><a href="#make_group-2">make_group/2</a></td><td>Make a group in the store.</td></tr><tr><td valign="top"><a href="#make_link-3">make_link/3</a></td><td>Make a link from one path to another in the store.</td></tr><tr><td valign="top"><a href="#path-1">path/1</a></td><td>Create a path from a list of path components.</td></tr><tr><td valign="top"><a href="#path-2">path/2</a></td><td></td></tr><tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read a key from the store.</td></tr><tr><td valign="top"><a href="#reset-1">reset/1</a></td><td>Delete all of the keys in a store.</td></tr><tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td>Follow links through the store to resolve a path to its ultimate target.</td></tr><tr><td valign="top"><a href="#resursive_path_resolution_test-1">resursive_path_resolution_test/1*</a></td><td>Ensure that we can resolve links recursively.</td></tr><tr><td valign="top"><a href="#scope-2">scope/2</a></td><td>Limit the store scope to only a specific (set of) option(s).</td></tr><tr><td valign="top"><a href="#simple_path_resolution_test-1">simple_path_resolution_test/1*</a></td><td>Test path resolution dynamics.</td></tr><tr><td valign="top"><a href="#sort-2">sort/2</a></td><td>Order a store by a preference of its scopes.</td></tr><tr><td valign="top"><a href="#start-1">start/1</a></td><td></td></tr><tr><td valign="top"><a href="#stop-1">stop/1</a></td><td></td></tr><tr><td valign="top"><a href="#store_suite_test_-0">store_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#test_stores-0">test_stores/0</a></td><td></td></tr><tr><td valign="top"><a href="#type-2">type/2</a></td><td>Get the type of element of a given path in the store.</td></tr><tr><td valign="top"><a href="#write-3">write/3</a></td><td>Write a key with a value to the store.</td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_path-2">add_path/2</a></td><td>Add two path components together.</td></tr><tr><td valign="top"><a href="#add_path-3">add_path/3</a></td><td></td></tr><tr><td valign="top"><a href="#behavior_info-1">behavior_info/1</a></td><td></td></tr><tr><td valign="top"><a href="#benchmark_key_read_write-1">benchmark_key_read_write/1*</a></td><td>Benchmark a store.</td></tr><tr><td valign="top"><a href="#benchmark_key_read_write-3">benchmark_key_read_write/3*</a></td><td></td></tr><tr><td valign="top"><a href="#benchmark_message_read_write-1">benchmark_message_read_write/1*</a></td><td></td></tr><tr><td valign="top"><a href="#benchmark_message_read_write-3">benchmark_message_read_write/3*</a></td><td></td></tr><tr><td valign="top"><a href="#benchmark_suite_test_-0">benchmark_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#call_all-3">call_all/3*</a></td><td>Call a function on all modules in the store.</td></tr><tr><td valign="top"><a href="#call_function-3">call_function/3*</a></td><td>Call a function on the first store module that succeeds.</td></tr><tr><td valign="top"><a href="#do_call_function-3">do_call_function/3*</a></td><td></td></tr><tr><td valign="top"><a href="#do_find-1">do_find/1*</a></td><td></td></tr><tr><td valign="top"><a href="#ensure_instance_alive-2">ensure_instance_alive/2*</a></td><td>Handle a found instance message.</td></tr><tr><td valign="top"><a href="#filter-2">filter/2</a></td><td>Takes a store object and a filter function or match spec, returning a
+new store object with only the modules that match the filter.</td></tr><tr><td valign="top"><a href="#find-1">find/1</a></td><td>Find or spawn a store instance by its store opts.</td></tr><tr><td valign="top"><a href="#generate_test_suite-1">generate_test_suite/1</a></td><td></td></tr><tr><td valign="top"><a href="#generate_test_suite-2">generate_test_suite/2</a></td><td></td></tr><tr><td valign="top"><a href="#get_store_scope-1">get_store_scope/1*</a></td><td>Ask a store for its own scope.</td></tr><tr><td valign="top"><a href="#hierarchical_path_resolution_test-1">hierarchical_path_resolution_test/1*</a></td><td>Ensure that we can resolve links through a directory.</td></tr><tr><td valign="top"><a href="#join-1">join/1</a></td><td>Join a list of path components together.</td></tr><tr><td valign="top"><a href="#list-2">list/2</a></td><td>List the keys in a group in the store.</td></tr><tr><td valign="top"><a href="#make_group-2">make_group/2</a></td><td>Make a group in the store.</td></tr><tr><td valign="top"><a href="#make_link-3">make_link/3</a></td><td>Make a link from one path to another in the store.</td></tr><tr><td valign="top"><a href="#path-1">path/1</a></td><td>Create a path from a list of path components.</td></tr><tr><td valign="top"><a href="#path-2">path/2</a></td><td></td></tr><tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read a key from the store.</td></tr><tr><td valign="top"><a href="#reset-1">reset/1</a></td><td>Delete all of the keys in a store.</td></tr><tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td>Follow links through the store to resolve a path to its ultimate target.</td></tr><tr><td valign="top"><a href="#resursive_path_resolution_test-1">resursive_path_resolution_test/1*</a></td><td>Ensure that we can resolve links recursively.</td></tr><tr><td valign="top"><a href="#rocks_stores-0">rocks_stores/0*</a></td><td></td></tr><tr><td valign="top"><a href="#scope-2">scope/2</a></td><td>Limit the store scope to only a specific (set of) option(s).</td></tr><tr><td valign="top"><a href="#simple_path_resolution_test-1">simple_path_resolution_test/1*</a></td><td>Test path resolution dynamics.</td></tr><tr><td valign="top"><a href="#sort-2">sort/2</a></td><td>Order a store by a preference of its scopes.</td></tr><tr><td valign="top"><a href="#spawn_instance-1">spawn_instance/1*</a></td><td>Create a new instance of a store and return its term.</td></tr><tr><td valign="top"><a href="#start-1">start/1</a></td><td>Ensure that a store, or list of stores, have all been started.</td></tr><tr><td valign="top"><a href="#stop-1">stop/1</a></td><td></td></tr><tr><td valign="top"><a href="#store_suite_test_-0">store_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#test_stores-0">test_stores/0</a></td><td>Return a list of stores for testing.</td></tr><tr><td valign="top"><a href="#type-2">type/2</a></td><td>Get the type of element of a given path in the store.</td></tr><tr><td valign="top"><a href="#write-3">write/3</a></td><td>Write a key with a value to the store.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -37,6 +82,40 @@ function, we concatenate the paths.
 
 `behavior_info(X1) -> any()`
 
+<a name="benchmark_key_read_write-1"></a>
+
+### benchmark_key_read_write/1 * ###
+
+`benchmark_key_read_write(Store) -> any()`
+
+Benchmark a store. By default, we write 10,000 keys and read 10,000
+keys. This can be altered by setting the `STORE_BENCH_WRITE_OPS` and
+`STORE_BENCH_READ_OPS` macros.
+
+<a name="benchmark_key_read_write-3"></a>
+
+### benchmark_key_read_write/3 * ###
+
+`benchmark_key_read_write(Store, WriteOps, ReadOps) -> any()`
+
+<a name="benchmark_message_read_write-1"></a>
+
+### benchmark_message_read_write/1 * ###
+
+`benchmark_message_read_write(Store) -> any()`
+
+<a name="benchmark_message_read_write-3"></a>
+
+### benchmark_message_read_write/3 * ###
+
+`benchmark_message_read_write(Store, WriteOps, ReadOps) -> any()`
+
+<a name="benchmark_suite_test_-0"></a>
+
+### benchmark_suite_test_/0 * ###
+
+`benchmark_suite_test_() -> any()`
+
 <a name="call_all-3"></a>
 
 ### call_all/3 * ###
@@ -52,7 +131,30 @@ Call a function on all modules in the store.
 `call_function(X, Function, Args) -> any()`
 
 Call a function on the first store module that succeeds. Returns its
-result, or no_viable_store if none of the stores succeed.
+result, or `not_found` if none of the stores succeed. If `TIME_CALLS` is set,
+this function will also time the call and increment the appropriate event
+counter.
+
+<a name="do_call_function-3"></a>
+
+### do_call_function/3 * ###
+
+`do_call_function(X, Function, Args) -> any()`
+
+<a name="do_find-1"></a>
+
+### do_find/1 * ###
+
+`do_find(StoreOpts) -> any()`
+
+<a name="ensure_instance_alive-2"></a>
+
+### ensure_instance_alive/2 * ###
+
+`ensure_instance_alive(StoreOpts, InstanceMessage) -> any()`
+
+Handle a found instance message. If it contains a PID, we check if it
+is alive. If it does not, we return it as is.
 
 <a name="filter-2"></a>
 
@@ -64,6 +166,14 @@ Takes a store object and a filter function or match spec, returning a
 new store object with only the modules that match the filter. The filter
 function takes 2 arguments: the scope and the options. It calls the store's
 scope function to get the scope of the module.
+
+<a name="find-1"></a>
+
+### find/1 ###
+
+`find(StoreOpts) -> any()`
+
+Find or spawn a store instance by its store opts.
 
 <a name="generate_test_suite-1"></a>
 
@@ -90,7 +200,7 @@ default scope (local).
 
 ### hierarchical_path_resolution_test/1 * ###
 
-`hierarchical_path_resolution_test(Opts) -> any()`
+`hierarchical_path_resolution_test(Store) -> any()`
 
 Ensure that we can resolve links through a directory.
 
@@ -173,15 +283,21 @@ Follow links through the store to resolve a path to its ultimate target.
 
 ### resursive_path_resolution_test/1 * ###
 
-`resursive_path_resolution_test(Opts) -> any()`
+`resursive_path_resolution_test(Store) -> any()`
 
 Ensure that we can resolve links recursively.
+
+<a name="rocks_stores-0"></a>
+
+### rocks_stores/0 * ###
+
+`rocks_stores() -> any()`
 
 <a name="scope-2"></a>
 
 ### scope/2 ###
 
-`scope(Scope, Opts) -> any()`
+`scope(Opts, Scope) -> any()`
 
 Limit the store scope to only a specific (set of) option(s).
 Takes either an Opts message or store, and either a single scope or a list
@@ -191,7 +307,7 @@ of scopes.
 
 ### simple_path_resolution_test/1 * ###
 
-`simple_path_resolution_test(Opts) -> any()`
+`simple_path_resolution_test(Store) -> any()`
 
 Test path resolution dynamics.
 
@@ -207,11 +323,21 @@ provided, it will be used as a preference order. If a map is provided,
 scopes will be ordered by the scores in the map. Any unknown scopes will
 default to a score of 0.
 
+<a name="spawn_instance-1"></a>
+
+### spawn_instance/1 * ###
+
+`spawn_instance(StoreOpts) -> any()`
+
+Create a new instance of a store and return its term.
+
 <a name="start-1"></a>
 
 ### start/1 ###
 
-`start(Modules) -> any()`
+`start(StoreOpts) -> any()`
+
+Ensure that a store, or list of stores, have all been started.
 
 <a name="stop-1"></a>
 
@@ -230,6 +356,10 @@ default to a score of 0.
 ### test_stores/0 ###
 
 `test_stores() -> any()`
+
+Return a list of stores for testing. Additional individual functions are
+used to generate store options for those whose drivers are not built by
+default into all HyperBEAM distributions.
 
 <a name="type-2"></a>
 

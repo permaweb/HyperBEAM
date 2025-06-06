@@ -36,18 +36,18 @@ the ledger device as the `amount` key.
 A ledger device should implement the following keys:
 
 ```
-<code>POST /credit?message=PaymentMessage&request=RequestMessage</code><code>POST /debit?amount=PriceMessage&request=RequestMessage</code><code>GET /balance?request=RequestMessage</code>
+<code>POST /credit?message=PaymentMessage&request=RequestMessage</code><code>POST /charge?amount=PriceMessage&request=RequestMessage</code><code>GET /balance?request=RequestMessage</code>
 ```
 
 The `type` key is optional and defaults to `pre`. If `type` is set to `post`,
-the debit must be applied to the ledger, whereas the `pre` type is used to
-check whether the debit would succeed before execution.<a name="index"></a>
+the charge must be applied to the ledger, whereas the `pre` type is used to
+check whether the charge would succeed before execution.<a name="index"></a>
 
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#balance-3">balance/3</a></td><td>Get the balance of a user in the ledger.</td></tr><tr><td valign="top"><a href="#faff_test-0">faff_test/0*</a></td><td>Simple test of p4's capabilities with the <code>faff@1.0</code> device.</td></tr><tr><td valign="top"><a href="#is_chargable_req-2">is_chargable_req/2*</a></td><td>The node operator may elect to make certain routes non-chargable, using
-the <code>routes</code> syntax also used to declare routes in <code>router@1.0</code>.</td></tr><tr><td valign="top"><a href="#lua_pricing_test-0">lua_pricing_test/0*</a></td><td>Ensure that Lua modules can be used as pricing and ledger devices.</td></tr><tr><td valign="top"><a href="#non_chargable_route_test-0">non_chargable_route_test/0*</a></td><td>Test that a non-chargable route is not charged for.</td></tr><tr><td valign="top"><a href="#request-3">request/3</a></td><td>Estimate the cost of a transaction and decide whether to proceed with
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#balance-3">balance/3</a></td><td>Get the balance of a user in the ledger.</td></tr><tr><td valign="top"><a href="#faff_test-0">faff_test/0*</a></td><td>Simple test of p4's capabilities with the <code>faff@1.0</code> device.</td></tr><tr><td valign="top"><a href="#hyper_token_ledger-0">hyper_token_ledger/0*</a></td><td></td></tr><tr><td valign="top"><a href="#hyper_token_ledger_test_-0">hyper_token_ledger_test_/0*</a></td><td>Ensure that Lua scripts can be used as pricing and ledger devices.</td></tr><tr><td valign="top"><a href="#is_chargable_req-2">is_chargable_req/2*</a></td><td>The node operator may elect to make certain routes non-chargable, using
+the <code>routes</code> syntax also used to declare routes in <code>router@1.0</code>.</td></tr><tr><td valign="top"><a href="#non_chargable_route_test-0">non_chargable_route_test/0*</a></td><td>Test that a non-chargable route is not charged for.</td></tr><tr><td valign="top"><a href="#request-3">request/3</a></td><td>Estimate the cost of a transaction and decide whether to proceed with
 a request.</td></tr><tr><td valign="top"><a href="#response-3">response/3</a></td><td>Postprocess the request after it has been fulfilled.</td></tr><tr><td valign="top"><a href="#test_opts-1">test_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-2">test_opts/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_opts-3">test_opts/3*</a></td><td></td></tr></table>
 
 
@@ -71,6 +71,28 @@ Get the balance of a user in the ledger.
 
 Simple test of p4's capabilities with the `faff@1.0` device.
 
+<a name="hyper_token_ledger-0"></a>
+
+### hyper_token_ledger/0 * ###
+
+`hyper_token_ledger() -> any()`
+
+<a name="hyper_token_ledger_test_-0"></a>
+
+### hyper_token_ledger_test_/0 * ###
+
+`hyper_token_ledger_test_() -> any()`
+
+Ensure that Lua scripts can be used as pricing and ledger devices. Our
+scripts come in two components:
+1. A `process` script which is executed as a persistent `local-process` on the
+node, and which maintains the state of the ledger. This process runs
+`hyper-token.lua` as its base, then adds the logic of `hyper-token-p4.lua`
+to it. This secondary script implements the `charge` function that `p4@1.0`
+will call to charge a user's account.
+2. A `client` script, which is executed as a `p4@1.0` ledger device, which
+uses `~push@1.0` to send requests to the ledger `process`.
+
 <a name="is_chargable_req-2"></a>
 
 ### is_chargable_req/2 * ###
@@ -79,19 +101,6 @@ Simple test of p4's capabilities with the `faff@1.0` device.
 
 The node operator may elect to make certain routes non-chargable, using
 the `routes` syntax also used to declare routes in `router@1.0`.
-
-<a name="lua_pricing_test-0"></a>
-
-### lua_pricing_test/0 * ###
-
-`lua_pricing_test() -> any()`
-
-Ensure that Lua modules can be used as pricing and ledger devices. Our
-modules come in two parts:
-- A `process` module which is executed as a persistent `local-process` on the
-node, and which maintains the state of the ledger.
-- A `client` module, which is executed as a `p4@1.0` device, marshalling
-requests to the `process` module.
 
 <a name="non_chargable_route_test-0"></a>
 

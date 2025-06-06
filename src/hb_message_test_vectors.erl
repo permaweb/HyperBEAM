@@ -214,7 +214,7 @@ suite_name(CodecSpec) when is_map(CodecSpec) ->
 %% @doc Tests a message transforming function to ensure that it is idempotent.
 %% Runs the conversion a total of 3 times, ensuring that the result remains
 %% unchanged. This function takes transformation functions that result in
-%% `{ok, Res}`-form messages, as well as bare message results.
+%% `{ok, Res}'-form messages, as well as bare message results.
 is_idempotent(Func, Msg, Opts) ->
     Run = fun(M) -> case Func(M) of {ok, Res} -> Res; Res -> Res end end,
     After1 = Run(Msg),
@@ -266,8 +266,8 @@ tabm_conversion_is_idempotent_test(_Codec, Opts) ->
 
 %% @doc Ensure that converting a message to a codec, then back to TABM multiple
 %% times results in the same message being returned. This test differs from its
-%% TABM form, as it shuttles (`to-from-to-...`), while the TABM test repeatedly
-%% encodes in a single direction (`to->to->...`).
+%% TABM form, as it shuttles (`to-from-to-...'), while the TABM test repeatedly
+%% encodes in a single direction (`to->to->...').
 codec_roundtrip_conversion_is_idempotent_test(Codec, Opts) ->
     Roundtrip =
         fun(M) ->
@@ -524,7 +524,7 @@ verify_nested_complex_signed_test(Codec, Opts) ->
     FoundInner = hb_maps:get(<<"body">>, Msg, not_found, Opts),
     LoadedFoundInner = hb_cache:ensure_all_loaded(FoundInner, Opts),
     % Verify that the fully loaded version of the inner message, and the one
-    % gained by applying `hb_maps:get` match and verify.
+    % gained by applying `hb_maps:get' match and verify.
     ?assert(hb_message:match(Inner, FoundInner, primary, Opts)),
     ?assert(hb_message:match(FoundInner, LoadedFoundInner, primary, Opts)),
     ?assert(hb_message:verify(Inner, all, Opts)),
@@ -1206,7 +1206,7 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
     ?assert(hb_message:verify(InnerFromDecoded, all, Opts)),
     ?assert(hb_message:verify(Decoded, all, Opts)),
     % 4. If the message is not a bundle, verify the inner message from the
-    % converted message, applying `with_only_committed` first.
+    % converted message, applying `with_only_committed' first.
     Inner = hb_maps:get(<<"inner">>, Msg, not_found, Opts),
     {ok, CommittedInner} =
         hb_message:with_only_committed(

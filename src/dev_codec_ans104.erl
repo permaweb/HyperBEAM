@@ -363,7 +363,7 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
     };
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(NormTABM, Req, Opts) when is_map(NormTABM) ->
-    % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
+    % Ensure that the TABM is fully loaded if the `bundle' key is set to true.
     ?event({to, {inbound, NormTABM}, {req, Req}}),
     MaybeBundle =
         case hb_util:atom(hb_ao:get(<<"bundle">>, Req, false, Opts)) of

@@ -153,7 +153,7 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % Resolve the handler message, setting the path to the handler name if
         % it is not already set. We ensure to ignore the hashpath such that the
         % handler does not affect the hashpath of a request's output. If the
-        % `hook/commit` key is set to `true`, the handler request will be
+        % `hook/commit' key is set to `true', the handler request will be
         % committed before execution.
         BaseReq =
             Req#{

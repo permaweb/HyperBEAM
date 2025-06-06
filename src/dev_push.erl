@@ -335,7 +335,7 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
     ),
     AugmentedMsg = augment_message(Origin, MsgToPush, Opts),
     ?event(push, {prepared_msg, {msg, AugmentedMsg}}, Opts),
-    % Load the `accept-id`'d wallet into the `Opts` map, if requested.
+    % Load the `accept-id''d wallet into the `Opts' map, if requested.
     SignedMsg = apply_security(AugmentedMsg, TargetProcess, Codec, Opts),
     ScheduleReq = #{
         <<"path">> => <<"schedule">>,
@@ -456,7 +456,7 @@ apply_security(authority, Msg, TargetProcess, Codec, Opts) ->
     case hb_ao:get(<<"authority">>, TargetProcess, Opts) of
         not_found -> apply_security(default, Msg, TargetProcess, Codec, Opts);
     	Authorities when is_list(Authorities) ->
-            % The `authority` key has already been parsed into a list of
+            % The `authority' key has already been parsed into a list of
             % committers. Sign with all local valid keys.
             commit_result(Msg, Authorities, Codec, Opts);
         Authority ->
@@ -895,7 +895,7 @@ push_prompts_encoding_change() ->
 
 -ifdef(ENABLE_GENESIS_WASM).
 %% @doc Test that a message that generates another message which resides on an
-%% ANS-104 scheduler leads to `~push@1.0` re-signing the message correctly.
+%% ANS-104 scheduler leads to `~push@1.0' re-signing the message correctly.
 %% Requires `ENABLE_GENESIS_WASM' to be enabled.
 nested_push_prompts_encoding_change_test_() ->
     {timeout, 30, fun nested_push_prompts_encoding_change/0}.

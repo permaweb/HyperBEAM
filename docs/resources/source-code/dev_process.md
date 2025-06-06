@@ -70,7 +70,7 @@ execution.</td></tr><tr><td valign="top"><a href="#do_test_restore-0">do_test_re
 up-to-date.</td></tr><tr><td valign="top"><a href="#ensure_process_key-2">ensure_process_key/2</a></td><td>Helper function to store a copy of the <code>process</code> key in the message.</td></tr><tr><td valign="top"><a href="#get_scheduler_slot_test-0">get_scheduler_slot_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_wasm_process_by_id_test-0">http_wasm_process_by_id_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>When the info key is called, we should return the process exports.</td></tr><tr><td valign="top"><a href="#init-0">init/0</a></td><td></td></tr><tr><td valign="top"><a href="#init-3">init/3*</a></td><td>Before computation begins, a boot phase is required.</td></tr><tr><td valign="top"><a href="#next-3">next/3*</a></td><td></td></tr><tr><td valign="top"><a href="#now-3">now/3</a></td><td>Returns the known state of the process at either the current slot, or
 the latest slot in the cache depending on the <code>process_now_from_cache</code> option.</td></tr><tr><td valign="top"><a href="#now_results_test_-0">now_results_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#persistent_process_test-0">persistent_process_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#prior_results_accessible_test_-0">prior_results_accessible_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#process_id-3">process_id/3</a></td><td>Returns the process ID of the current process.</td></tr><tr><td valign="top"><a href="#push-3">push/3</a></td><td>Recursively push messages to the scheduler until we find a message
 that does not lead to any further messages being scheduled.</td></tr><tr><td valign="top"><a href="#recursive_path_resolution_test-0">recursive_path_resolution_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#restore_test_-0">restore_test_/0*</a></td><td>Manually test state restoration without using the cache.</td></tr><tr><td valign="top"><a href="#run_as-4">run_as/4*</a></td><td>Run a message against Msg1, with the device being swapped out for
-the device found at <code>Key</code>.</td></tr><tr><td valign="top"><a href="#schedule-3">schedule/3</a></td><td>Wraps functions in the Scheduler device.</td></tr><tr><td valign="top"><a href="#schedule_aos_call-2">schedule_aos_call/2</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_aos_call-3">schedule_aos_call/3</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_on_process_test-0">schedule_on_process_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_test_message-2">schedule_test_message/2*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_test_message-3">schedule_test_message/3*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_wasm_call-3">schedule_wasm_call/3*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_wasm_call-4">schedule_wasm_call/4*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_wasm_persistent_worker_benchmark_test-0">simple_wasm_persistent_worker_benchmark_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#slot-3">slot/3</a></td><td></td></tr><tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td></td></tr><tr><td valign="top"><a href="#store_result-5">store_result/5*</a></td><td>Store the resulting state in the cache, potentially with the snapshot
+the device found at <code>Key</code>.</td></tr><tr><td valign="top"><a href="#schedule-3">schedule/3</a></td><td>Wraps functions in the Scheduler device.</td></tr><tr><td valign="top"><a href="#schedule_aos_call-2">schedule_aos_call/2</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_aos_call-3">schedule_aos_call/3</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_on_process_test_-0">schedule_on_process_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_test_message-3">schedule_test_message/3*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_test_message-4">schedule_test_message/4*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_wasm_call-3">schedule_wasm_call/3*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule_wasm_call-4">schedule_wasm_call/4*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_wasm_persistent_worker_benchmark_test-0">simple_wasm_persistent_worker_benchmark_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#slot-3">slot/3</a></td><td></td></tr><tr><td valign="top"><a href="#snapshot-3">snapshot/3</a></td><td></td></tr><tr><td valign="top"><a href="#store_result-5">store_result/5*</a></td><td>Store the resulting state in the cache, potentially with the snapshot
 key.</td></tr><tr><td valign="top"><a href="#test_aos_process-0">test_aos_process/0</a></td><td>Generate a process message with a random number, and the
 <code>dev_wasm</code> device for execution.</td></tr><tr><td valign="top"><a href="#test_aos_process-1">test_aos_process/1</a></td><td></td></tr><tr><td valign="top"><a href="#test_aos_process-2">test_aos_process/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_base_process-0">test_base_process/0*</a></td><td>Generate a process message with a random number, and no
 executor.</td></tr><tr><td valign="top"><a href="#test_base_process-1">test_base_process/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_device_compute_test-0">test_device_compute_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#test_wasm_process-1">test_wasm_process/1</a></td><td></td></tr><tr><td valign="top"><a href="#test_wasm_process-2">test_wasm_process/2*</a></td><td></td></tr><tr><td valign="top"><a href="#wasm_compute_from_id_test-0">wasm_compute_from_id_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#wasm_compute_test-0">wasm_compute_test/0*</a></td><td></td></tr></table>
@@ -328,23 +328,23 @@ Wraps functions in the Scheduler device.
 
 `schedule_aos_call(Msg1, Code, Opts) -> any()`
 
-<a name="schedule_on_process_test-0"></a>
+<a name="schedule_on_process_test_-0"></a>
 
-### schedule_on_process_test/0 * ###
+### schedule_on_process_test_/0 * ###
 
-`schedule_on_process_test() -> any()`
-
-<a name="schedule_test_message-2"></a>
-
-### schedule_test_message/2 * ###
-
-`schedule_test_message(Msg1, Text) -> any()`
+`schedule_on_process_test_() -> any()`
 
 <a name="schedule_test_message-3"></a>
 
 ### schedule_test_message/3 * ###
 
-`schedule_test_message(Msg1, Text, MsgBase) -> any()`
+`schedule_test_message(Msg1, Text, Opts) -> any()`
+
+<a name="schedule_test_message-4"></a>
+
+### schedule_test_message/4 * ###
+
+`schedule_test_message(Msg1, Text, MsgBase, Opts) -> any()`
 
 <a name="schedule_wasm_call-3"></a>
 

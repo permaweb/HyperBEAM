@@ -10,7 +10,8 @@ Wrapper for incrementing prometheus counters.
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#await_prometheus_started-0">await_prometheus_started/0*</a></td><td>Delay the event server until prometheus is started.</td></tr><tr><td valign="top"><a href="#handle_events-0">handle_events/0*</a></td><td></td></tr><tr><td valign="top"><a href="#handle_tracer-3">handle_tracer/3*</a></td><td></td></tr><tr><td valign="top"><a href="#increment-3">increment/3</a></td><td>Increment the counter for the given topic and message.</td></tr><tr><td valign="top"><a href="#log-1">log/1</a></td><td>Debugging log logging function.</td></tr><tr><td valign="top"><a href="#log-2">log/2</a></td><td></td></tr><tr><td valign="top"><a href="#log-3">log/3</a></td><td></td></tr><tr><td valign="top"><a href="#log-4">log/4</a></td><td></td></tr><tr><td valign="top"><a href="#log-5">log/5</a></td><td></td></tr><tr><td valign="top"><a href="#log-6">log/6</a></td><td></td></tr><tr><td valign="top"><a href="#parse_name-1">parse_name/1*</a></td><td></td></tr><tr><td valign="top"><a href="#server-0">server/0*</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#await_prometheus_started-0">await_prometheus_started/0*</a></td><td>Delay the event server until prometheus is started.</td></tr><tr><td valign="top"><a href="#counters-0">counters/0</a></td><td>Return a message containing the current counter values for all logged
+HyperBEAM events.</td></tr><tr><td valign="top"><a href="#handle_events-0">handle_events/0*</a></td><td></td></tr><tr><td valign="top"><a href="#handle_tracer-3">handle_tracer/3*</a></td><td></td></tr><tr><td valign="top"><a href="#increment-3">increment/3</a></td><td>Increment the counter for the given topic and message.</td></tr><tr><td valign="top"><a href="#increment-4">increment/4</a></td><td></td></tr><tr><td valign="top"><a href="#log-1">log/1</a></td><td>Debugging log logging function.</td></tr><tr><td valign="top"><a href="#log-2">log/2</a></td><td></td></tr><tr><td valign="top"><a href="#log-3">log/3</a></td><td></td></tr><tr><td valign="top"><a href="#log-4">log/4</a></td><td></td></tr><tr><td valign="top"><a href="#log-5">log/5</a></td><td></td></tr><tr><td valign="top"><a href="#log-6">log/6</a></td><td></td></tr><tr><td valign="top"><a href="#parse_name-1">parse_name/1*</a></td><td></td></tr><tr><td valign="top"><a href="#raw_counters-0">raw_counters/0*</a></td><td></td></tr><tr><td valign="top"><a href="#server-0">server/0*</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -24,6 +25,18 @@ Wrapper for incrementing prometheus counters.
 `await_prometheus_started() -> any()`
 
 Delay the event server until prometheus is started.
+
+<a name="counters-0"></a>
+
+### counters/0 ###
+
+`counters() -> any()`
+
+Return a message containing the current counter values for all logged
+HyperBEAM events. The result comes in a form as follows:
+/GroupName/EventName -> Count
+Where the `EventName` is derived from the value of the first term sent to the
+`?event(...)` macros.
 
 <a name="handle_events-0"></a>
 
@@ -48,6 +61,12 @@ counter if it doesn't exist. If the topic is `global`, the message is ignored.
 This means that events must specify a topic if they want to be counted,
 filtering debug messages. Similarly, events with a topic that begins with
 `debug` are ignored.
+
+<a name="increment-4"></a>
+
+### increment/4 ###
+
+`increment(Topic, Message, Opts, Count) -> any()`
 
 <a name="log-1"></a>
 
@@ -93,6 +112,12 @@ error.
 ### parse_name/1 * ###
 
 `parse_name(Name) -> any()`
+
+<a name="raw_counters-0"></a>
+
+### raw_counters/0 * ###
+
+`raw_counters() -> any()`
 
 <a name="server-0"></a>
 

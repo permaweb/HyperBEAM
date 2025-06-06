@@ -125,8 +125,8 @@ body_to_tabm(HTTP, Opts) ->
                         Opts
                     ),
                 % Calculate the ordered body keys of the multipart data. The
-                % nested body parts are labelled by `path`, rather than `key`:
-                % That is, a body part may contain a `/` in its key, representing
+                % nested body parts are labelled by `path', rather than `key':
+                % That is, a body part may contain a `/' in its key, representing
                 % that the nested form is not a direct child of the parent 
                 % message. Subsequently, we need to take just the first
                 % `path part' of the key and return the unique'd list.
@@ -306,9 +306,9 @@ to(TABM, Req, Opts) -> to(TABM, Req, [], Opts).
 to(Bin, _Req, _FormatOpts, _Opts) when is_binary(Bin) -> {ok, Bin};
 to(Link, _Req, _FormatOpts, _Opts) when ?IS_LINK(Link) -> {ok, Link};
 to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
-    % If the caller has specified that an `index` page is requested, we:
+    % If the caller has specified that an `index' page is requested, we:
     % 1. Convert the message to HTTPSig as usual.
-    % 2. Check if the `body` and `content-type` keys are set. If either are,
+    % 2. Check if the `body' and `content-type' keys are set. If either are,
     %    we return the message as normal.
     % 3. If they are not, we convert the given message back to its original
     %    form and resolve `path = index` upon it.
@@ -321,7 +321,7 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
     OrigContentType = hb_maps:get(<<"content-type">>, EncOriginal, <<>>, Opts),
     case {OrigBody, OrigContentType} of
         {<<>>, <<>>} ->
-            % The message has no body or content-type set. Resolve the `index`
+            % The message has no body or content-type set. Resolve the `index'
             % key upon it to derive it.
             Structured = hb_message:convert(TABM, <<"structured@1.0">>, Opts),
             try hb_ao:resolve(Structured, #{ <<"path">> => <<"index">> }, Opts) of
@@ -331,7 +331,7 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
                     IndexTABM = hb_message:convert(IndexMsg, tabm, Opts),
                     % Merge the index message with the original, favoring the 
                     % keys of the original in the event of conflict. Remove the
-                    % `priv` message, if present.
+                    % `priv' message, if present.
                     Merged =
                         hb_maps:merge(
                             hb_private:reset(IndexTABM),
@@ -937,7 +937,7 @@ encode_message_with_links_test() ->
     {ok, Read} = hb_cache:read(Path, #{}),
     % Ensure that the message now has a lazy link
     ?assertMatch({link, _, _}, maps:get(<<"typed-key">>, Read, #{})),
-    % Encode and decode the message as `httpsig@1.0`
+    % Encode and decode the message as `httpsig@1.0'
     Enc = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
     ?event({encoded, Enc}),
     Dec = hb_message:convert(Enc, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),

@@ -242,7 +242,7 @@ relay_nearest_test() ->
 %% @doc Test that a `relay@1.0/call' correctly commits requests as specified.
 %% We validate this by configuring two nodes: One that will execute a given
 %% request from a user, but only if the request is committed. The other node
-%% re-routes all requests to the first node, using `call`'s `commit-request'
+%% re-routes all requests to the first node, using `call''s `commit-request'
 %% key to sign the request during proxying. The initial request is not signed,
 %% such that the first node would otherwise reject the request outright.
 commit_request_test() ->

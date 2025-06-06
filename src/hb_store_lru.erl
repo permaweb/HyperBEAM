@@ -1,8 +1,8 @@
-%%% @doc An in-memory store implementation, following the `hb_store` behavior
+%%% @doc An in-memory store implementation, following the `hb_store' behavior
 %%% and interface. This implementation uses a least-recently-used cache first,
 %%% and offloads evicted data to a specified non-volatile store over time.
 %%%
-%%% This cache is registered under `{in_memory, HTTPServerID}`, in `hb_name`
+%%% This cache is registered under `{in_memory, HTTPServerID}`, in `hb_name'
 %%% so that all processes that are executing using the HTTP server’s Opts
 %%% can find it quickly.
 %%%
@@ -21,15 +21,13 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%%% @doc The default capacity is used when no capacity is provided in the store
-%%% options.
 -define(DEFAULT_LRU_CAPACITY, 4_000_000_000).
-
-%% @doc Maximum number of retries when fetching cache entries that aren't
-%% immediately found due to timing issues in concurrent operations.
 -define(RETRY_THRESHOLD, 2).
 
-%% @doc Start the LRU cache.
+%%% @doc The default capacity is used when no capacity is provided in the store
+%%% options. Maximum number of retries when fetching cache entries that aren't
+%%% immediately found due to timing issues in concurrent operations.
+%%  Start the LRU cache.
 start(StoreOpts = #{ <<"name">> := Name }) ->
     ?event(cache_lru, {starting_lru_server, Name}),
     From = self(),
@@ -680,7 +678,7 @@ replace_entry(State, Key, Value, ValueSize, {raw, OldEntry = #{ value := OldValu
     update_cache_size(State, PreviousSize, ValueSize);
 replace_entry(_State, _Key, _Value, _ValueSize, {raw, _}) -> ok;
 replace_entry(_State, _Key, _Value, _ValueSize, {Type, _}) ->
-    % Link or group should be handle directly with `make_link` or `make_group`
+    % Link or group should be handle directly with `make_link' or `make_group'
     % This aim of this function is to be used along with direct data insertion.
     throw({error, can_only_replace_raw_entry, {type, Type}}).
 update_recently_used(State, Key, Entry) ->
@@ -720,8 +718,8 @@ maybe_convert_to_binary(Value) when is_binary(Value) ->
 
 %%% Tests
 
-%% @doc Generate a set of options for testing. The default is to use an `fs`
-%% store as the persistent backing.
+%% @doc Generate a set of options for testing. The default is to use an `fs' store
+%% as the persistent backing.
 test_opts(PersistentStore) ->
     test_opts(PersistentStore, 1000000).
 test_opts(PersistentStore, Capacity) ->

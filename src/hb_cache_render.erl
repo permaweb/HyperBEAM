@@ -231,7 +231,7 @@ get_graph_data(Base, MaxSize, Opts) ->
     % Extract nodes and links for the visualization
     NodesMap = maps:get(nodes, Graph, #{}),
     ArcsMap = maps:get(arcs, Graph, #{}),
-    % Limit to top `MaxSize` nodes if there are too many
+    % Limit to top `MaxSize' nodes if there are too many
     NodesList = 
         case maps:size(NodesMap) > MaxSize of
             true ->

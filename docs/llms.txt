@@ -1,4 +1,4 @@
-Generated: 2025-06-06T19:09:26Z
+Generated: 2025-06-06T19:40:02Z
 
 ## HyperBEAM Documentation Summary
 
@@ -55,12 +55,14 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module ar_timestamp.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_timestamp.erl)](./resources/source-code/ar_timestamp.html)
 * [[Module ar_tx.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_tx.erl)](./resources/source-code/ar_tx.html)
 * [[Module ar_wallet.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_wallet.erl)](./resources/source-code/ar_wallet.html)
+* [[Module dev_apply.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_apply.erl)](./resources/source-code/dev_apply.html)
 * [[Module dev_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cache.erl)](./resources/source-code/dev_cache.html)
 * [[Module dev_cacheviz.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cacheviz.erl)](./resources/source-code/dev_cacheviz.html)
 * [[Module dev_codec_ans104.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_ans104.erl)](./resources/source-code/dev_codec_ans104.html)
 * [[Module dev_codec_flat.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_flat.erl)](./resources/source-code/dev_codec_flat.html)
 * [[Module dev_codec_httpsig.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_httpsig.erl)](./resources/source-code/dev_codec_httpsig.html)
 * [[Module dev_codec_httpsig_conv.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_httpsig_conv.erl)](./resources/source-code/dev_codec_httpsig_conv.html)
+* [[Module dev_codec_httpsig_siginfo.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_httpsig_siginfo.erl)](./resources/source-code/dev_codec_httpsig_siginfo.html)
 * [[Module dev_codec_json.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_json.erl)](./resources/source-code/dev_codec_json.html)
 * [[Module dev_codec_structured.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_structured.erl)](./resources/source-code/dev_codec_structured.html)
 * [[Module dev_cron.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cron.erl)](./resources/source-code/dev_cron.html)
@@ -78,6 +80,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module dev_lua.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_lua.erl)](./resources/source-code/dev_lua.html)
 * [[Module dev_lua_lib.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_lua_lib.erl)](./resources/source-code/dev_lua_lib.html)
 * [[Module dev_lua_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_lua_test.erl)](./resources/source-code/dev_lua_test.html)
+* [[Module dev_lua_test_ledgers.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_lua_test_ledgers.erl)](./resources/source-code/dev_lua_test_ledgers.html)
 * [[Module dev_manifest.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_manifest.erl)](./resources/source-code/dev_manifest.html)
 * [[Module dev_message.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_message.erl)](./resources/source-code/dev_message.html)
 * [[Module dev_meta.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_meta.erl)](./resources/source-code/dev_meta.html)
@@ -131,8 +134,11 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module hb_http_server.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_http_server.erl)](./resources/source-code/hb_http_server.html)
 * [[Module hb_json.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_json.erl)](./resources/source-code/hb_json.html)
 * [[Module hb_keccak.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_keccak.erl)](./resources/source-code/hb_keccak.html)
+* [[Module hb_link.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_link.erl)](./resources/source-code/hb_link.html)
 * [[Module hb_logger.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_logger.erl)](./resources/source-code/hb_logger.html)
+* [[Module hb_maps.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_maps.erl)](./resources/source-code/hb_maps.html)
 * [[Module hb_message.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_message.erl)](./resources/source-code/hb_message.html)
+* [[Module hb_message_test_vectors.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_message_test_vectors.erl)](./resources/source-code/hb_message_test_vectors.html)
 * [[Module hb_metrics_collector.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_metrics_collector.erl)](./resources/source-code/hb_metrics_collector.html)
 * [[Module hb_name.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_name.erl)](./resources/source-code/hb_name.html)
 * [[Module hb_opts.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_opts.erl)](./resources/source-code/hb_opts.html)
@@ -145,6 +151,8 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module hb_store.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_store.erl)](./resources/source-code/hb_store.html)
 * [[Module hb_store_fs.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_store_fs.erl)](./resources/source-code/hb_store_fs.html)
 * [[Module hb_store_gateway.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_store_gateway.erl)](./resources/source-code/hb_store_gateway.html)
+* [[Module hb_store_lmdb.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_store_lmdb.erl)](./resources/source-code/hb_store_lmdb.html)
+* [[Module hb_store_lru.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_store_lru.erl)](./resources/source-code/hb_store_lru.html)
 * [[Module hb_store_remote_node.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_store_remote_node.erl)](./resources/source-code/hb_store_remote_node.html)
 * [[Module hb_store_rocksdb.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_store_rocksdb.erl)](./resources/source-code/hb_store_rocksdb.html)
 * [[Module hb_structured_fields.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_structured_fields.erl)](./resources/source-code/hb_structured_fields.html)

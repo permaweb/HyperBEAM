@@ -242,8 +242,8 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
         ],
     CommittedKeys = from_siginfo_keys(Msg, BodyKeys, RawCommittedKeys),
     % Merge and cleanup the output.
-    % 1. Decode the `keyid` (typically a public key) to its raw byte form.
-    % 2. Decode the `signature` to its raw byte form.
+    % 1. Decode the `keyid' (typically a public key) to its raw byte form.
+    % 2. Decode the `signature' to its raw byte form.
     % 3. Filter undefined keys.
     % 4. Generate the ID for the commitment from the signature. We use a SHA2-256
     %    hash of the signature, unless the signature is 32 bytes, in which case we
@@ -378,7 +378,7 @@ committed_keys_to_siginfo([<<"body">> | Rest]) ->
 committed_keys_to_siginfo([Key | Rest]) ->
     [Key | committed_keys_to_siginfo(Rest)].
 
-%% @doc Convert an `alg` to a commitment device. If the `alg' has the form of
+%% @doc Convert an `alg' to a commitment device. If the `alg' has the form of
 %% a device specifier (`x@y.z...[/type]'), return the device. Otherwise, we 
 %% assume that the `alg' is a `type' of the `httpsig@1.0' algorithm.
 %% `type' is an optional key that allows for subtyping of the algorithm. When 
@@ -397,7 +397,7 @@ commitment_to_device_specifiers(Alg, _Opts) ->
             };
         [DevName, Specifiers] ->
             % The `alg' is a device specifier. We determine if a type is present
-            % by splitting on the `/` character.
+            % by splitting on the `/' character.
             case binary:split(Specifiers, <<"/">>) of
                 [_Version] ->
                     % The `alg' is a device specifier without a type.
@@ -428,7 +428,7 @@ commitment_to_alg(Commitment, _Opts) ->
     <<CommitmentDevice/binary, Type/binary>>.
 
 %% @doc Generate a signature name from a commitment. The commitment message is
-%% not expected to be complete: Only the `commitment-device`, and the
+%% not expected to be complete: Only the `commitment-device', and the
 %% `committer' or `keyid' keys are required.
 commitment_to_sig_name(Commitment) ->
     BaseStr =

@@ -390,7 +390,7 @@ maybe_subpath(Other, _Opts) -> Other.
 
 %% @doc Parse a key's type (applying it to the value) and device name if present.
 %% We allow ` ` characters as type indicators because some URL-string encoders
-%% (e.g. Chrome) will encode `+` characters in a form that query-string parsers
+%% (e.g. Chrome) will encode `+' characters in a form that query-string parsers
 %% interpret as ` ' characters.
 maybe_typed(Key, Value, Opts) ->
     case part([$+, $ ], Key) of

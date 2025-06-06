@@ -1,7 +1,7 @@
 %%% @doc A simple abstraction layer for AO key value store operations.
 %%% 
 %%% This interface allows us to swap out the underlying store implementation(s)
-%%% as desired, without changing the API that `hb_cache` employs. Additionally,
+%%% as desired, without changing the API that `hb_cache' employs. Additionally,
 %%% it enables node operators to customize their configuration to maximize
 %%% performance, data availability, and other factors.
 %%% 
@@ -11,7 +11,7 @@
 %%% to execute the given function.
 %%% 
 %%% A valid store must implement a _subset_ of the following functions:
-%%% ```
+%%% `'`
 %%%     start/1:      Initialize the store.
 %%%     stop/1:       Stop any processes (etc.) that manage the store.
 %%%     reset/1:      Restore the store to its original, empty state.
@@ -20,13 +20,13 @@
 %%%                   node operators to prioritize their stores for search.
 %%%     make_group/2: Create a new group of keys in the store with the given ID.
 %%%     make_link/3:  Create a link (implying one key should redirect to another)
-%%%                   from `existing` to `new` (in that order).
+%%%                   from `existing' to `new' (in that order).
 %%%     type/2:       Return whether the value found at the given key is a
 %%%                   `composite' (group) type, or a `simple' direct binary.
 %%%     read/2:       Read the data at the given location, returning a binary
 %%%                   if it is a `simple' value, or a message if it is a complex
 %%%                   term.
-%%%     write/3:      Write the given `key` with the associated `value` (in that
+%%%     write/3:      Write the given `key' with the associated `value' (in that
 %%%                   order) to the store.
 %%%     list/2:       For `composite' type keys, return a list of its child keys.
 %%%     path/2:       Optionally transform a list of path parts into the store's
@@ -36,11 +36,11 @@
 %%% of its necessary configuration keys, as well as the `store-module' key which
 %%% refers to the Erlang module that implements the store.
 %%% 
-%%% All functions must return `ok` or `{ok, Result}`, as appropriate. Other 
+%%% All functions must return `ok' or `{ok, Result}`, as appropriate. Other 
 %%% results will lead to the store manager (this module) iterating to the next
 %%% store message given by the user. If none of the given store messages are 
 %%% able to execute a requested service, the store manager will return 
-%%% `not_found`.
+%%% `not_found'.
 
 -module(hb_store).
 -export([behavior_info/1]).
@@ -258,7 +258,7 @@ resolve(Modules, Path) -> call_function(Modules, resolve, [Path]).
 list(Modules, Path) -> call_function(Modules, list, [Path]).
 
 %% @doc Call a function on the first store module that succeeds. Returns its
-%% result, or `not_found` if none of the stores succeed. If `TIME_CALLS` is set,
+%% result, or `not_found' if none of the stores succeed. If `TIME_CALLS' is set,
 %% this function will also time the call and increment the appropriate event
 %% counter.
 -ifdef(STORE_EVENTS).

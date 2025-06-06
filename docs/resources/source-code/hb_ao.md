@@ -12,29 +12,32 @@ AO-Core protocol in HyperBEAM.
 
 At the implementation level, every message is simply a collection of keys,
 dictated by its `Device`, that can be resolved in order to yield their
-values. Each key may return another message or a raw value:
+values. Each key may contain a link to another message or a raw value:
 
-`ao(Message1, Message2) -> {Status, Message3}`
+`ao(BaseMessage, RequestMessage) -> {Status, Result}`
 
-Under-the-hood, `AO-Core(Message1, Message2)` leads to the evaluation of
-`DeviceMod:PathPart(Message1, Message2)`, which defines the user compute
-to be performed. If `Message1` does not specify a device, `dev_message` is
-assumed. The key to resolve is specified by the `Path` field of the message.
+Under-the-hood, `AO-Core(BaseMessage, RequestMessage)` leads to a lookup of
+the `device` key of the base message, followed by the evaluation of
+`DeviceMod:PathPart(BaseMessage, RequestMessage)`, which defines the user
+compute to be performed. If `BaseMessage` does not specify a device,
+`~message@1.0` is assumed. The key to resolve is specified by the `path`
+field of the message.
 
-After each output, the `HashPath` is updated to include the `Message2`
+After each output, the `HashPath` is updated to include the `RequestMessage`
 that was executed upon it.
 
 Because each message implies a device that can resolve its keys, as well
 as generating a merkle tree of the computation that led to the result,
-you can see AO-Core protocol as a system for cryptographically chaining
+you can see the AO-Core protocol as a system for cryptographically chaining
 the execution of `combinators`. See `docs/ao-core-protocol.md` for more
 information about AO-Core.
 
-The `Fun(Message1, Message2)` pattern is repeated throughout the HyperBEAM
-codebase, sometimes with `MessageX` replaced with `MX` or `MsgX` for brevity.
+The `key(BaseMessage, RequestMessage)` pattern is repeated throughout the
+HyperBEAM codebase, sometimes with `BaseMessage` replaced with `Msg1`, `M1`
+or similar, and `RequestMessage` replaced with `Msg2`, `M2`, etc.
 
-Message3 can be either a new message or a raw output value (a binary, integer,
-float, atom, or list of such values).
+The result of any computation can be either a new message or a raw literal
+value (a binary, integer, float, atom, or list of such values).
 
 Devices can be expressed as either modules or maps. They can also be
 referenced by an Arweave ID, which can be used to load a device from
@@ -95,15 +98,16 @@ HyperBEAM device implementations are defined as follows:
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#deep_set-4">deep_set/4</a></td><td>Recursively search a map, resolving keys, and set the value of the key
 at the given path.</td></tr><tr><td valign="top"><a href="#default_module-0">default_module/0*</a></td><td>The default device is the identity device, which simply returns the
-value associated with any key as it exists in its Erlang map.</td></tr><tr><td valign="top"><a href="#device_set-4">device_set/4*</a></td><td>Call the device's <code>set</code> function.</td></tr><tr><td valign="top"><a href="#device_set-5">device_set/5*</a></td><td></td></tr><tr><td valign="top"><a href="#do_resolve_many-2">do_resolve_many/2*</a></td><td></td></tr><tr><td valign="top"><a href="#ensure_loaded-2">ensure_loaded/2*</a></td><td>Ensure that the message is loaded from the cache if it is an ID.</td></tr><tr><td valign="top"><a href="#error_execution-5">error_execution/5*</a></td><td>Handle an error in a device call.</td></tr><tr><td valign="top"><a href="#error_infinite-3">error_infinite/3*</a></td><td>Catch all return if we are in an infinite loop.</td></tr><tr><td valign="top"><a href="#error_invalid_intermediate_status-5">error_invalid_intermediate_status/5*</a></td><td></td></tr><tr><td valign="top"><a href="#error_invalid_message-3">error_invalid_message/3*</a></td><td>Catch all return if the message is invalid.</td></tr><tr><td valign="top"><a href="#find_exported_function-5">find_exported_function/5</a></td><td>Find the function with the highest arity that has the given name, if it
+value associated with any key as it exists in its Erlang map.</td></tr><tr><td valign="top"><a href="#device_set-4">device_set/4*</a></td><td>Call the device's <code>set</code> function.</td></tr><tr><td valign="top"><a href="#device_set-5">device_set/5*</a></td><td></td></tr><tr><td valign="top"><a href="#do_resolve_many-2">do_resolve_many/2*</a></td><td></td></tr><tr><td valign="top"><a href="#ensure_message_loaded-2">ensure_message_loaded/2*</a></td><td>Ensure that a message is loaded from the cache if it is an ID, or
+a link, such that it is ready for execution.</td></tr><tr><td valign="top"><a href="#error_execution-5">error_execution/5*</a></td><td>Handle an error in a device call.</td></tr><tr><td valign="top"><a href="#error_infinite-3">error_infinite/3*</a></td><td>Catch all return if we are in an infinite loop.</td></tr><tr><td valign="top"><a href="#error_invalid_intermediate_status-5">error_invalid_intermediate_status/5*</a></td><td></td></tr><tr><td valign="top"><a href="#error_invalid_message-3">error_invalid_message/3*</a></td><td>Catch all return if the message is invalid.</td></tr><tr><td valign="top"><a href="#find_exported_function-5">find_exported_function/5</a></td><td>Find the function with the highest arity that has the given name, if it
 exists.</td></tr><tr><td valign="top"><a href="#force_message-2">force_message/2</a></td><td></td></tr><tr><td valign="top"><a href="#get-2">get/2</a></td><td>Shortcut for resolving a key in a message without its status if it is
 <code>ok</code>.</td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr><tr><td valign="top"><a href="#get-4">get/4</a></td><td></td></tr><tr><td valign="top"><a href="#get_first-2">get_first/2</a></td><td>take a sequence of base messages and paths, then return the value of the
 first message that can be resolved using a path.</td></tr><tr><td valign="top"><a href="#get_first-3">get_first/3</a></td><td></td></tr><tr><td valign="top"><a href="#info-2">info/2</a></td><td>Get the info map for a device, optionally giving it a message if the
 device's info function is parameterized by one.</td></tr><tr><td valign="top"><a href="#info-3">info/3*</a></td><td></td></tr><tr><td valign="top"><a href="#info_handler_to_fun-4">info_handler_to_fun/4*</a></td><td>Parse a handler key given by a device's <code>info</code>.</td></tr><tr><td valign="top"><a href="#internal_opts-1">internal_opts/1*</a></td><td>The execution options that are used internally by this module
-when calling itself.</td></tr><tr><td valign="top"><a href="#is_exported-2">is_exported/2*</a></td><td></td></tr><tr><td valign="top"><a href="#is_exported-4">is_exported/4</a></td><td>Check if a device is guarding a key via its <code>exports</code> list.</td></tr><tr><td valign="top"><a href="#keys-1">keys/1</a></td><td>Shortcut to get the list of keys from a message.</td></tr><tr><td valign="top"><a href="#keys-2">keys/2</a></td><td></td></tr><tr><td valign="top"><a href="#keys-3">keys/3</a></td><td></td></tr><tr><td valign="top"><a href="#load_device-2">load_device/2</a></td><td>Load a device module from its name or a message ID.</td></tr><tr><td valign="top"><a href="#maybe_force_message-2">maybe_force_message/2*</a></td><td>Force the result of a device call into a message if the result is not
+when calling itself.</td></tr><tr><td valign="top"><a href="#is_exported-3">is_exported/3*</a></td><td></td></tr><tr><td valign="top"><a href="#is_exported-4">is_exported/4</a></td><td>Check if a device is guarding a key via its <code>exports</code> list.</td></tr><tr><td valign="top"><a href="#keys-1">keys/1</a></td><td>Shortcut to get the list of keys from a message.</td></tr><tr><td valign="top"><a href="#keys-2">keys/2</a></td><td></td></tr><tr><td valign="top"><a href="#keys-3">keys/3</a></td><td></td></tr><tr><td valign="top"><a href="#load_device-2">load_device/2</a></td><td>Load a device module from its name or a message ID.</td></tr><tr><td valign="top"><a href="#maybe_force_message-2">maybe_force_message/2*</a></td><td>Force the result of a device call into a message if the result is not
 requested by the <code>Opts</code>.</td></tr><tr><td valign="top"><a href="#message_to_device-2">message_to_device/2</a></td><td>Extract the device module from a message.</td></tr><tr><td valign="top"><a href="#message_to_fun-3">message_to_fun/3</a></td><td>Calculate the Erlang function that should be called to get a value for
-a given key from a device.</td></tr><tr><td valign="top"><a href="#normalize_key-1">normalize_key/1</a></td><td>Convert a key to a binary in normalized form.</td></tr><tr><td valign="top"><a href="#normalize_key-2">normalize_key/2</a></td><td></td></tr><tr><td valign="top"><a href="#normalize_keys-1">normalize_keys/1</a></td><td>Ensure that a message is processable by the AO-Core resolver: No lists.</td></tr><tr><td valign="top"><a href="#remove-2">remove/2</a></td><td>Remove a key from a message, using its underlying device.</td></tr><tr><td valign="top"><a href="#remove-3">remove/3</a></td><td></td></tr><tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td>Get the value of a message's key by running its associated device
-function.</td></tr><tr><td valign="top"><a href="#resolve-3">resolve/3</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_many-2">resolve_many/2</a></td><td>Resolve a list of messages in sequence.</td></tr><tr><td valign="top"><a href="#resolve_stage-4">resolve_stage/4*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_stage-5">resolve_stage/5*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_stage-6">resolve_stage/6*</a></td><td></td></tr><tr><td valign="top"><a href="#set-2">set/2</a></td><td>Shortcut for setting a key in the message using its underlying device.</td></tr><tr><td valign="top"><a href="#set-3">set/3</a></td><td></td></tr><tr><td valign="top"><a href="#set-4">set/4</a></td><td></td></tr><tr><td valign="top"><a href="#subresolve-4">subresolve/4*</a></td><td>Execute a sub-resolution.</td></tr><tr><td valign="top"><a href="#truncate_args-2">truncate_args/2</a></td><td>Truncate the arguments of a function to the number of arguments it
+a given key from a device.</td></tr><tr><td valign="top"><a href="#normalize_key-1">normalize_key/1</a></td><td>Convert a key to a binary in normalized form.</td></tr><tr><td valign="top"><a href="#normalize_key-2">normalize_key/2</a></td><td></td></tr><tr><td valign="top"><a href="#normalize_keys-1">normalize_keys/1</a></td><td>Ensure that a message is processable by the AO-Core resolver: No lists.</td></tr><tr><td valign="top"><a href="#normalize_keys-2">normalize_keys/2</a></td><td></td></tr><tr><td valign="top"><a href="#remove-2">remove/2</a></td><td>Remove a key from a message, using its underlying device.</td></tr><tr><td valign="top"><a href="#remove-3">remove/3</a></td><td></td></tr><tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td>Get the value of a message's key by running its associated device
+function.</td></tr><tr><td valign="top"><a href="#resolve-3">resolve/3</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_many-2">resolve_many/2</a></td><td>Resolve a list of messages in sequence.</td></tr><tr><td valign="top"><a href="#resolve_stage-4">resolve_stage/4*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_stage-5">resolve_stage/5*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_stage-6">resolve_stage/6*</a></td><td></td></tr><tr><td valign="top"><a href="#set-3">set/3</a></td><td>Shortcut for setting a key in the message using its underlying device.</td></tr><tr><td valign="top"><a href="#set-4">set/4</a></td><td></td></tr><tr><td valign="top"><a href="#subresolve-4">subresolve/4*</a></td><td>Execute a sub-resolution.</td></tr><tr><td valign="top"><a href="#truncate_args-2">truncate_args/2</a></td><td>Truncate the arguments of a function to the number of arguments it
 actually takes.</td></tr><tr><td valign="top"><a href="#verify_device_compatibility-2">verify_device_compatibility/2*</a></td><td>Verify that a device is compatible with the current machine.</td></tr></table>
 
 
@@ -154,14 +158,14 @@ Call the device's `set` function.
 
 `do_resolve_many(MsgList, Opts) -> any()`
 
-<a name="ensure_loaded-2"></a>
+<a name="ensure_message_loaded-2"></a>
 
-### ensure_loaded/2 * ###
+### ensure_message_loaded/2 * ###
 
-`ensure_loaded(MsgID, Opts) -> any()`
+`ensure_message_loaded(MsgID, Opts) -> any()`
 
-Ensure that the message is loaded from the cache if it is an ID. If is
-not loadable or already present, we raise an error.
+Ensure that a message is loaded from the cache if it is an ID, or
+a link, such that it is ready for execution.
 
 <a name="error_execution-5"></a>
 
@@ -290,11 +294,11 @@ Parse a handler key given by a device's `info`.
 The execution options that are used internally by this module
 when calling itself.
 
-<a name="is_exported-2"></a>
+<a name="is_exported-3"></a>
 
-### is_exported/2 * ###
+### is_exported/3 * ###
 
-`is_exported(Info, Key) -> any()`
+`is_exported(Info, Key, Opts) -> any()`
 
 <a name="is_exported-4"></a>
 
@@ -404,9 +408,15 @@ Convert a key to a binary in normalized form.
 
 ### normalize_keys/1 ###
 
-`normalize_keys(Msg1) -> any()`
+`normalize_keys(Msg) -> any()`
 
 Ensure that a message is processable by the AO-Core resolver: No lists.
+
+<a name="normalize_keys-2"></a>
+
+### normalize_keys/2 ###
+
+`normalize_keys(Msg1, Opts) -> any()`
 
 <a name="remove-2"></a>
 
@@ -426,7 +436,7 @@ Remove a key from a message, using its underlying device.
 
 ### resolve/2 ###
 
-`resolve(SingletonMsg, Opts) -> any()`
+`resolve(Path, Opts) -> any()`
 
 Get the value of a message's key by running its associated device
 function. Optionally, takes options that control the runtime environment.
@@ -469,7 +479,7 @@ directly from the store. No execution is performed.
 
 ### resolve_stage/4 * ###
 
-`resolve_stage(X1, Raw, Msg2, Opts) -> any()`
+`resolve_stage(X1, Link, Msg2, Opts) -> any()`
 
 <a name="resolve_stage-5"></a>
 
@@ -483,22 +493,16 @@ directly from the store. No execution is performed.
 
 `resolve_stage(X1, Func, Msg1, Msg2, ExecName, Opts) -> any()`
 
-<a name="set-2"></a>
-
-### set/2 ###
-
-`set(Msg1, Msg2) -> any()`
-
-Shortcut for setting a key in the message using its underlying device.
-Like the `get/3` function, this function honors the `error_strategy` option.
-`set` works with maps and recursive paths while maintaining the appropriate
-`HashPath` for each step.
-
 <a name="set-3"></a>
 
 ### set/3 ###
 
 `set(RawMsg1, RawMsg2, Opts) -> any()`
+
+Shortcut for setting a key in the message using its underlying device.
+Like the `get/3` function, this function honors the `error_strategy` option.
+`set` works with maps and recursive paths while maintaining the appropriate
+`HashPath` for each step.
 
 <a name="set-4"></a>
 

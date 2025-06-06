@@ -4,6 +4,7 @@
 
 
 A simple exemplar decentralized proof of authority consensus algorithm
+A simple exemplar decentralized proof of authority consensus algorithm
 for AO processes.
 
 <a name="description"></a>
@@ -22,9 +23,9 @@ Commitment flow:
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_commitments-2">add_commitments/2*</a></td><td></td></tr><tr><td valign="top"><a href="#commit_to_results-2">commit_to_results/2*</a></td><td></td></tr><tr><td valign="top"><a href="#execute-3">execute/3</a></td><td></td></tr><tr><td valign="top"><a href="#extract_opts-1">extract_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#find_process-2">find_process/2*</a></td><td>Find the process that this message is targeting, in order to
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_commitments-3">add_commitments/3*</a></td><td></td></tr><tr><td valign="top"><a href="#commit_to_results-3">commit_to_results/3*</a></td><td></td></tr><tr><td valign="top"><a href="#execute-3">execute/3</a></td><td></td></tr><tr><td valign="top"><a href="#extract_opts-1">extract_opts/1*</a></td><td></td></tr><tr><td valign="top"><a href="#find_process-2">find_process/2*</a></td><td>Find the process that this message is targeting, in order to
 determine which commitments to add.</td></tr><tr><td valign="top"><a href="#init-2">init/2</a></td><td></td></tr><tr><td valign="top"><a href="#is_user_signed-1">is_user_signed/1</a></td><td>Determines if a user committed.</td></tr><tr><td valign="top"><a href="#pfiltermap-2">pfiltermap/2*</a></td><td>Helper function for parallel execution of commitment
-gathering.</td></tr><tr><td valign="top"><a href="#push-2">push/2</a></td><td>Hook used by the MU pathway (currently) to add commitments to an
+gathering.</td></tr><tr><td valign="top"><a href="#push-3">push/3</a></td><td>Hook used by the MU pathway (currently) to add commitments to an
 outbound message if the computation requests it.</td></tr><tr><td valign="top"><a href="#return_error-2">return_error/2*</a></td><td></td></tr><tr><td valign="top"><a href="#validate-2">validate/2*</a></td><td></td></tr><tr><td valign="top"><a href="#validate_commitment-3">validate_commitment/3*</a></td><td></td></tr><tr><td valign="top"><a href="#validate_stage-3">validate_stage/3*</a></td><td></td></tr><tr><td valign="top"><a href="#validate_stage-4">validate_stage/4*</a></td><td></td></tr></table>
 
 
@@ -32,17 +33,17 @@ outbound message if the computation requests it.</td></tr><tr><td valign="top"><
 
 ## Function Details ##
 
-<a name="add_commitments-2"></a>
+<a name="add_commitments-3"></a>
 
-### add_commitments/2 * ###
+### add_commitments/3 * ###
 
-`add_commitments(NewMsg, S) -> any()`
+`add_commitments(NewMsg, S, Opts) -> any()`
 
-<a name="commit_to_results-2"></a>
+<a name="commit_to_results-3"></a>
 
-### commit_to_results/2 * ###
+### commit_to_results/3 * ###
 
-`commit_to_results(Msg, S) -> any()`
+`commit_to_results(Msg, S, Opts) -> any()`
 
 <a name="execute-3"></a>
 
@@ -88,11 +89,11 @@ Determines if a user committed
 Helper function for parallel execution of commitment
 gathering.
 
-<a name="push-2"></a>
+<a name="push-3"></a>
 
-### push/2 ###
+### push/3 ###
 
-`push(Item, S) -> any()`
+`push(Item, S, Opts) -> any()`
 
 Hook used by the MU pathway (currently) to add commitments to an
 outbound message if the computation requests it.

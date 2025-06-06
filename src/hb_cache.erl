@@ -244,8 +244,8 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
 %% @doc Write a single key for a message into the store.
 write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
     % The commitments are a special case: We calculate the single-part hashpath
-    % for the `baseID/commitments` key, then write each commitment to the store
-    % and link it to `baseCommHP/commitmentID`.
+    % for the `baseID/commitments' key, then write each commitment to the store
+    % and link it to `baseCommHP/commitmentID'.
     Commitments = prepare_commitments(RawCommitments, Opts),
     CommitmentsBase = commitment_path(Base, Opts),
     ok = hb_store:make_group(Store, CommitmentsBase),
@@ -268,7 +268,7 @@ write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
         end,
         Commitments
     ),
-    % Link the commitments base to `base/commitments`.
+    % Link the commitments base to `base/commitments'.
     hb_store:make_link(Store, CommitmentsBase, <<Base/binary, "/commitments">>);
 write_key(Base, Key, HPAlg, Value, Store, Opts) ->
     KeyHashPath =
@@ -282,7 +282,7 @@ write_key(Base, Key, HPAlg, Value, Store, Opts) ->
     hb_store:make_link(Store, Path, KeyHashPath),
     {ok, Path}.
 
-%% @doc The `structured@1.0` encoder does not typically encode `commitments`,
+%% @doc The `structured@1.0' encoder does not typically encode `commitments',
 %% subsequently, when we encounter a commitments message we prepare its contents
 %% separately, then write each to the store.
 prepare_commitments(RawCommitments, Opts) ->

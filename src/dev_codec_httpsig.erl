@@ -34,16 +34,16 @@ opts(RawOpts) ->
 %% This function supports two modes of operation:
 %% 1. `format: binary`, yielding a raw binary HTTP/1.1-style response that can 
 %%    either be stored or emitted raw accross a transport medium.
-%% 2. `format: components`, yielding a message containing `headers` and `body`
+%% 2. `format: components`, yielding a message containing `headers' and `body'
 %%    keys, suitable for use in connecting to HTTP-response flows implemented 
 %%    by other servers.
 %% 
-%% Optionally, the `index` key can be set to override resolution of the default
-%% index page into HTTP responses that do not contain their own `body` field.
+%% Optionally, the `index' key can be set to override resolution of the default
+%% index page into HTTP responses that do not contain their own `body' field.
 serialize(Msg, Opts) -> serialize(Msg, #{}, Opts).
 serialize(Msg, #{ <<"format">> := <<"components">> }, Opts) ->
-    % Convert to HTTPSig via TABM through calling `hb_message:convert` rather
-    % than executing `to/3` directly. This ensures that our responses are 
+    % Convert to HTTPSig via TABM through calling `hb_message:convert' rather
+    % than executing `to/3' directly. This ensures that our responses are 
     % normalized.
     {ok, EncMsg} = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts),
     {ok,
@@ -53,7 +53,7 @@ serialize(Msg, #{ <<"format">> := <<"components">> }, Opts) ->
         }
     };
 serialize(Msg, _Req, Opts) ->
-    % We assume the default format of `binary` if none of the prior clauses
+    % We assume the default format of `binary' if none of the prior clauses
     % match.
     HTTPSig = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts), 
     {ok, dev_codec_httpsig_conv:encode_http_msg(HTTPSig, Opts) }.
@@ -234,11 +234,11 @@ maybe_bundle_tag_commitment(Commitment, Req, _Opts) ->
         false -> Commitment
     end.
 
-%% @doc Derive the set of keys to commit to from a `commit` request and a 
+%% @doc Derive the set of keys to commit to from a `commit' request and a 
 %% base message.
 keys_to_commit(_Base, #{ <<"committed">> := Explicit}, _Opts) ->
     % Case 1: Explicitly provided keys to commit.
-    % Add `+link` specifiers to the user given list as necessary, in order for
+    % Add `+link' specifiers to the user given list as necessary, in order for
     % their given keys to match the HTTPSig encoded TABM form.
     hb_util:list_to_numbered_message(Explicit);
 keys_to_commit(Base, _Req, Opts) ->
@@ -289,7 +289,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
             maps:get(<<"committed">>, Commitment, []),
             Opts
         ),
-    % Normalize the keys to their maybe-linked form, adding `+link` if necessary.
+    % Normalize the keys to their maybe-linked form, adding `+link' if necessary.
     Inputs =
         lists:map(
             fun(Key) ->

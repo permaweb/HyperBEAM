@@ -552,7 +552,7 @@ type(Msg) when is_map(Msg) ->
 %%      `strict': All keys in both maps be present and match.
 %%      `only_present': Only present keys in both maps must match.
 %%      `primary': Only the primary map's keys must be present.
-%% Returns `true` or `{ErrType, Err}`.
+%% Returns `true' or `{ErrType, Err}'.
 match(Map1, Map2) ->
     match(Map1, Map2, strict).
 match(Map1, Map2, Mode) ->

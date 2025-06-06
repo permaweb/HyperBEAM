@@ -377,7 +377,7 @@ list(Opts, Path) when is_map(Opts), is_binary(Path) ->
 list(_, _) ->
     {error, {badarg, <<"StoreOpts must be a map and Path must be an binary">>}}.
 
-%% @doc Fold over a database after a given path. The `Fun` is called with
+%% @doc Fold over a database after a given path. The `Fun' is called with
 %% the key and value, and the accumulator.
 fold_after(Opts, Path, Fun, Acc) ->
     #{ <<"db">> := DBInstance, <<"env">> := Env } = find_env(Opts),
@@ -875,8 +875,8 @@ ensure_transaction(State) ->
 %% the LMDB store implementation correctly handles various scenarios including
 %% basic read/write operations, hierarchical listing, group creation, link
 %% resolution, and type detection.
-
-%% @doc Basic store test - verifies fundamental read/write functionality.
+%% 
+%% Basic store test - verifies fundamental read/write functionality.
 %%
 %% This test creates a temporary database, writes a key-value pair, reads it
 %% back to verify correctness, and cleans up by stopping the database. It

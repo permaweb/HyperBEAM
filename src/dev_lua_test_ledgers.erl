@@ -1,7 +1,7 @@
-%%% A collection of Eunit tests for the `lua@5.3a` device, and the 
-%%% `hyper-token.lua` script. These tests are designed to validate the
+%%% A collection of Eunit tests for the `lua@5.3a' device, and the 
+%%% `hyper-token.lua' script. These tests are designed to validate the
 %%% functionality of both of these components, and to provide examples
-%%% of how to use the `lua@5.3a` device.
+%%% of how to use the `lua@5.3a' device.
 %%% 
 %%% The module is split into four components:
 %%% 1. A simple ledger client library.
@@ -24,7 +24,7 @@
 %%% Ledger client library.
 %%% 
 %%% A simple, thin library for generating ledgers and interacting with 
-%%% `hyper-token.lua` processes.
+%%% `hyper-token.lua' processes.
 
 %% @doc Generate a Lua process definition message.
 ledger(Script, Opts) ->
@@ -209,7 +209,7 @@ balances(Prefix, ProcMsg, Opts) ->
     Balances = hb_ao:get(<<Prefix/binary, "/balance">>, ProcMsg, #{}, Opts),
     hb_private:reset(hb_cache:ensure_all_loaded(Balances, Opts)).
 
-%% @doc Get the supply of a ledger, either `now` or `initial`.
+%% @doc Get the supply of a ledger, either `now' or `initial'.
 supply(ProcMsg, Opts) ->
     supply(now, ProcMsg, Opts).
 supply(Mode, ProcMsg, Opts) ->
@@ -317,13 +317,13 @@ do_apply_names(Item, Names, _Opts) ->
 %%% 
 %%% Complex assertions that verify specific invariants about the state of
 %%% ledgers in a test environment. These are used to validate the correctness
-%%% of the `hyper-token.lua` script. Tested invariants are listed below.
+%%% of the `hyper-token.lua' script. Tested invariants are listed below.
 %%% 
-%%% For every timestep `t_n`, the following invariants must hold:
-%%% 1. The root ledger supply at `t_0` must match the current supply.
-%%% 2. For every sub-ledger `l`, each expected balance held in `l/now/ledgers`
-%%%    must equal the balance found at `peer/now/balance/l`.
-%%% 3. The sum of all values in `/now/balance` across all sub-ledgers must
+%%% For every timestep `t_n', the following invariants must hold:
+%%% 1. The root ledger supply at `t_0' must match the current supply.
+%%% 2. For every sub-ledger `l', each expected balance held in `l/now/ledgers'
+%%%    must equal the balance found at `peer/now/balance/l'.
+%%% 3. The sum of all values in `/now/balance' across all sub-ledgers must
 %%%    equal the root ledger's supply.
 
 %% @doc Execute all invariant checks for a pair of root ledger and sub-ledgers.
@@ -388,7 +388,7 @@ verify_peer_balances(ValidateProc, AllProcs, Opts) ->
 %%% Test utilities.
 
 %% @doc Normalize a set of processes, representing ledgers in a test environment,
-%% to a canonical form: A map of `ID => Proc`.
+%% to a canonical form: A map of `ID => Proc'.
 normalize_env(Procs) when is_map(Procs) ->
     normalize_env(maps:values(Procs));
 normalize_env(Procs) when is_list(Procs) ->
@@ -413,7 +413,7 @@ test_opts() ->
 
 %%% Test cases.
 
-%% @doc Test the `transfer` function.
+%% @doc Test the `transfer' function.
 %% 1. Alice has 100 tokens on a root ledger.
 %% 2. Alice sends 1 token to Bob.
 %% 3. Alice has 99 tokens, and Bob has 1 token.
@@ -704,11 +704,11 @@ unregistered_peer_transfer() ->
 %% 
 %% The grammar supported by `hyper-token.lua' allows for the following, where 
 %% `X = scheduler | authority`:
-%% - `X`: A list of `X`s that must (by default) be present in the
+%% - `X': A list of `X's that must (by default) be present in the
 %%   peer ledger's `X' field.
-%% - `X-match`: A count of the number of `X`s that must be present in the
+%% - `X-match': A count of the number of `X's that must be present in the
 %%   peer ledger's `X' field.
-%% - `X-required`: A list of `X`s that always must be present in the
+%% - `X-required': A list of `X's that always must be present in the
 %%   peer ledger's `X' field.
 multischeduler_test_() -> {timeout, 30, fun multischeduler/0}.
 multischeduler() ->

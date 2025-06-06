@@ -9,7 +9,7 @@
 %% @doc Return a message containing the current counter values for all logged
 %% HyperBEAM events. The result comes in a form as follows:
 %%      /GroupName/EventName -> Count
-%% Where the `EventName` is derived from the value of the first term sent to the
+%% Where the `EventName' is derived from the value of the first term sent to the
 %% `?event(...)' macros.
 counters() ->
     UnaggregatedCounts =

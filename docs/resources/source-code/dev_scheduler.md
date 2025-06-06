@@ -27,18 +27,19 @@ Process: `#{ id, Scheduler: #{ Authority } }`
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#benchmark_suite-2">benchmark_suite/2*</a></td><td></td></tr><tr><td valign="top"><a href="#benchmark_suite_test_-0">benchmark_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#cache_remote_schedule-2">cache_remote_schedule/2*</a></td><td>Cache a schedule received from a remote scheduler.</td></tr><tr><td valign="top"><a href="#check_lookahead_and_local_cache-4">check_lookahead_and_local_cache/4*</a></td><td>Check if we have a result from a lookahead worker or from our local
 cache.</td></tr><tr><td valign="top"><a href="#checkpoint-1">checkpoint/1</a></td><td>Returns the current state of the scheduler.</td></tr><tr><td valign="top"><a href="#do_get_remote_schedule-6">do_get_remote_schedule/6*</a></td><td>Get a schedule from a remote scheduler, unless we already have already
-read all of the assignments from the local cache.</td></tr><tr><td valign="top"><a href="#do_post_schedule-4">do_post_schedule/4*</a></td><td>Post schedule the message.</td></tr><tr><td valign="top"><a href="#filter_json_assignments-3">filter_json_assignments/3*</a></td><td>Filter JSON assignment results from a remote legacy scheduler.</td></tr><tr><td valign="top"><a href="#find_message_to_schedule-3">find_message_to_schedule/3*</a></td><td>Search the given base and request message pair to find the message to
-schedule.</td></tr><tr><td valign="top"><a href="#find_remote_scheduler-3">find_remote_scheduler/3*</a></td><td>Use the SchedulerLocation to the remote path and return a redirect.</td></tr><tr><td valign="top"><a href="#find_server-3">find_server/3*</a></td><td>Locate the correct scheduling server for a given process.</td></tr><tr><td valign="top"><a href="#find_server-4">find_server/4*</a></td><td></td></tr><tr><td valign="top"><a href="#find_target_id-3">find_target_id/3*</a></td><td>Find the schedule ID from a given request.</td></tr><tr><td valign="top"><a href="#generate_local_schedule-5">generate_local_schedule/5*</a></td><td>Generate a <code>GET /schedule</code> response for a process.</td></tr><tr><td valign="top"><a href="#generate_redirect-3">generate_redirect/3*</a></td><td>Generate a redirect message to a scheduler.</td></tr><tr><td valign="top"><a href="#get_hint-2">get_hint/2*</a></td><td>If a hint is present in the string, return it.</td></tr><tr><td valign="top"><a href="#get_local_assignments-4">get_local_assignments/4*</a></td><td>Get the assignments for a process, and whether the request was truncated.</td></tr><tr><td valign="top"><a href="#get_local_schedule_test-0">get_local_schedule_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#get_location-3">get_location/3*</a></td><td>Search for the location of the scheduler in the scheduler-location
+read all of the assignments from the local cache.</td></tr><tr><td valign="top"><a href="#do_post_schedule-4">do_post_schedule/4*</a></td><td>Post schedule the message.</td></tr><tr><td valign="top"><a href="#filter_json_assignments-4">filter_json_assignments/4*</a></td><td>Filter JSON assignment results from a remote legacy scheduler.</td></tr><tr><td valign="top"><a href="#find_message_to_schedule-3">find_message_to_schedule/3*</a></td><td>Search the given base and request message pair to find the message to
+schedule.</td></tr><tr><td valign="top"><a href="#find_next_assignment-5">find_next_assignment/5*</a></td><td>Get the assignments for a process from the message cache, local cache,
+or the inbox (thanks to a lookahead-worker).</td></tr><tr><td valign="top"><a href="#find_process_message-4">find_process_message/4*</a></td><td>Find the process message for a given process ID and base message.</td></tr><tr><td valign="top"><a href="#find_remote_scheduler-3">find_remote_scheduler/3*</a></td><td>Use the SchedulerLocation to find the remote path and return a redirect.</td></tr><tr><td valign="top"><a href="#find_server-3">find_server/3*</a></td><td>Locate the correct scheduling server for a given process.</td></tr><tr><td valign="top"><a href="#find_server-4">find_server/4*</a></td><td></td></tr><tr><td valign="top"><a href="#find_target_id-3">find_target_id/3*</a></td><td>Find the schedule ID from a given request.</td></tr><tr><td valign="top"><a href="#generate_local_schedule-5">generate_local_schedule/5*</a></td><td>Generate a <code>GET /schedule</code> response for a process.</td></tr><tr><td valign="top"><a href="#generate_redirect-3">generate_redirect/3*</a></td><td>Generate a redirect message to a scheduler.</td></tr><tr><td valign="top"><a href="#get_hint-2">get_hint/2*</a></td><td>If a hint is present in the string, return it.</td></tr><tr><td valign="top"><a href="#get_local_assignments-4">get_local_assignments/4*</a></td><td>Get the assignments for a process, and whether the request was truncated.</td></tr><tr><td valign="top"><a href="#get_local_schedule_test-0">get_local_schedule_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#get_location-3">get_location/3*</a></td><td>Search for the location of the scheduler in the scheduler-location
 cache.</td></tr><tr><td valign="top"><a href="#get_remote_schedule-5">get_remote_schedule/5*</a></td><td>Get a schedule from a remote scheduler, but first read all of the
 assignments from the local cache that we already know about.</td></tr><tr><td valign="top"><a href="#get_schedule-3">get_schedule/3*</a></td><td>Generate and return a schedule for a process, optionally between
-two slots -- labelled as <code>from</code> and <code>to</code>.</td></tr><tr><td valign="top"><a href="#http_get_json_schedule_test_-0">http_get_json_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_schedule_as_aos2_test_-0">http_get_legacy_schedule_as_aos2_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_schedule_slot_range_test_-0">http_get_legacy_schedule_slot_range_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_schedule_test_-0">http_get_legacy_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_slot_test_-0">http_get_legacy_slot_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule-4">http_get_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule-5">http_get_schedule/5*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule_redirect_test-0">http_get_schedule_redirect_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule_test_-0">http_get_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_slot-2">http_get_slot/2*</a></td><td></td></tr><tr><td valign="top"><a href="#http_init-0">http_init/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_init-1">http_init/1*</a></td><td></td></tr><tr><td valign="top"><a href="#http_post_legacy_schedule_test_-0">http_post_legacy_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_post_schedule_sign-4">http_post_schedule_sign/4*</a></td><td></td></tr><tr><td valign="top"><a href="#http_post_schedule_test-0">http_post_schedule_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#info-0">info/0</a></td><td>This device uses a default_handler to route requests to the correct
-function.</td></tr><tr><td valign="top"><a href="#location-3">location/3</a></td><td>Router for <code>record</code> requests.</td></tr><tr><td valign="top"><a href="#many_clients-1">many_clients/1*</a></td><td></td></tr><tr><td valign="top"><a href="#message_cached_assignments-2">message_cached_assignments/2*</a></td><td>Non-device exported helper to get the cached assignments held in a
+two slots -- labelled as <code>from</code> and <code>to</code>.</td></tr><tr><td valign="top"><a href="#http_get_json_schedule_test_-0">http_get_json_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_schedule_as_aos2_test_-0">http_get_legacy_schedule_as_aos2_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_schedule_slot_range_test_-0">http_get_legacy_schedule_slot_range_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_schedule_test_-0">http_get_legacy_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_legacy_slot_test_-0">http_get_legacy_slot_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule-4">http_get_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule-5">http_get_schedule/5*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule_redirect-0">http_get_schedule_redirect/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule_redirect_test_-0">http_get_schedule_redirect_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_schedule_test_-0">http_get_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_get_slot-2">http_get_slot/2*</a></td><td></td></tr><tr><td valign="top"><a href="#http_init-0">http_init/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_init-1">http_init/1*</a></td><td></td></tr><tr><td valign="top"><a href="#http_post_legacy_schedule_test_-0">http_post_legacy_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_post_schedule-0">http_post_schedule/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_post_schedule_sign-4">http_post_schedule_sign/4*</a></td><td></td></tr><tr><td valign="top"><a href="#http_post_schedule_test_-0">http_post_schedule_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#info-0">info/0</a></td><td>This device uses a default_handler to route requests to the correct
+function.</td></tr><tr><td valign="top"><a href="#is_local_scheduler-4">is_local_scheduler/4*</a></td><td>Determine if a scheduler is local.</td></tr><tr><td valign="top"><a href="#location-3">location/3</a></td><td>Router for <code>record</code> requests.</td></tr><tr><td valign="top"><a href="#many_clients-1">many_clients/1*</a></td><td></td></tr><tr><td valign="top"><a href="#message_cached_assignments-2">message_cached_assignments/2*</a></td><td>Non-device exported helper to get the cached assignments held in a
 process.</td></tr><tr><td valign="top"><a href="#next-3">next/3</a></td><td>Load the schedule for a process into the cache, then return the next
-assignment.</td></tr><tr><td valign="top"><a href="#node_from_redirect-2">node_from_redirect/2*</a></td><td>Get the node URL from a redirect.</td></tr><tr><td valign="top"><a href="#post_legacy_schedule-4">post_legacy_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#post_location-3">post_location/3*</a></td><td>Generate a new scheduler location record and register it.</td></tr><tr><td valign="top"><a href="#post_remote_schedule-4">post_remote_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#post_schedule-3">post_schedule/3*</a></td><td>Schedules a new message on the SU.</td></tr><tr><td valign="top"><a href="#read_local_assignments-4">read_local_assignments/4*</a></td><td>Get the assignments for a process.</td></tr><tr><td valign="top"><a href="#redirect_from_graphql_test-0">redirect_from_graphql_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#redirect_to_hint_test-0">redirect_to_hint_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#register_location_on_boot_test-0">register_location_on_boot_test/0*</a></td><td>Test that a scheduler location is registered on boot.</td></tr><tr><td valign="top"><a href="#register_new_process_test-0">register_new_process_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#register_scheduler_test-0">register_scheduler_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#remote_slot-3">remote_slot/3*</a></td><td>Get the current slot from a remote scheduler.</td></tr><tr><td valign="top"><a href="#remote_slot-4">remote_slot/4*</a></td><td>Get the current slot from a remote scheduler, based on the variant of
+assignment.</td></tr><tr><td valign="top"><a href="#node_from_redirect-2">node_from_redirect/2*</a></td><td>Get the node URL from a redirect.</td></tr><tr><td valign="top"><a href="#parse_schedulers-1">parse_schedulers/1</a></td><td>General utility functions that are available to other modules.</td></tr><tr><td valign="top"><a href="#post_legacy_schedule-4">post_legacy_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#post_location-3">post_location/3*</a></td><td>Generate a new scheduler location record and register it.</td></tr><tr><td valign="top"><a href="#post_remote_schedule-4">post_remote_schedule/4*</a></td><td></td></tr><tr><td valign="top"><a href="#post_schedule-3">post_schedule/3*</a></td><td>Schedules a new message on the SU.</td></tr><tr><td valign="top"><a href="#read_local_assignments-4">read_local_assignments/4*</a></td><td>Get the assignments for a process.</td></tr><tr><td valign="top"><a href="#redirect_from_graphql-0">redirect_from_graphql/0*</a></td><td></td></tr><tr><td valign="top"><a href="#redirect_from_graphql_test_-0">redirect_from_graphql_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#redirect_to_hint_test-0">redirect_to_hint_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#register_location_on_boot_test-0">register_location_on_boot_test/0*</a></td><td>Test that a scheduler location is registered on boot.</td></tr><tr><td valign="top"><a href="#register_new_process_test-0">register_new_process_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#register_scheduler_test-0">register_scheduler_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#remote_slot-3">remote_slot/3*</a></td><td>Get the current slot from a remote scheduler.</td></tr><tr><td valign="top"><a href="#remote_slot-4">remote_slot/4*</a></td><td>Get the current slot from a remote scheduler, based on the variant of
 the process's scheduler.</td></tr><tr><td valign="top"><a href="#router-4">router/4</a></td><td>The default handler for the scheduler device.</td></tr><tr><td valign="top"><a href="#schedule-3">schedule/3</a></td><td>A router for choosing between getting the existing schedule, or
 scheduling a new message.</td></tr><tr><td valign="top"><a href="#schedule_message_and_get_slot_test-0">schedule_message_and_get_slot_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#single_resolution-1">single_resolution/1*</a></td><td></td></tr><tr><td valign="top"><a href="#slot-3">slot/3</a></td><td>Returns information about the current slot for a process.</td></tr><tr><td valign="top"><a href="#spawn_lookahead_worker-3">spawn_lookahead_worker/3*</a></td><td>Spawn a new Erlang process to fetch the next assignments from the local
 cache, if we have them available.</td></tr><tr><td valign="top"><a href="#start-0">start/0</a></td><td>Helper to ensure that the environment is started.</td></tr><tr><td valign="top"><a href="#status-3">status/3</a></td><td>Returns information about the entire scheduler.</td></tr><tr><td valign="top"><a href="#status_test-0">status_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#test_process-0">test_process/0</a></td><td>Generate a _transformed_ process message, not as they are generated
-by users.</td></tr><tr><td valign="top"><a href="#test_process-1">test_process/1*</a></td><td></td></tr><tr><td valign="top"><a href="#without_hint-1">without_hint/1*</a></td><td>Take a process ID or target with a potential hint and return just the
+by users.</td></tr><tr><td valign="top"><a href="#test_process-1">test_process/1*</a></td><td></td></tr><tr><td valign="top"><a href="#validate_next_slot-5">validate_next_slot/5*</a></td><td>Validate the <code>next</code> slot generated by <code>find_next_assignment</code>.</td></tr><tr><td valign="top"><a href="#without_hint-1">without_hint/1*</a></td><td>Take a process ID or target with a potential hint and return just the
 process ID.</td></tr></table>
 
 
@@ -105,11 +106,11 @@ Post schedule the message. `Msg2` by this point has been refined to only
 committed keys, and to only include the `target` message that is to be
 scheduled.
 
-<a name="filter_json_assignments-3"></a>
+<a name="filter_json_assignments-4"></a>
 
-### filter_json_assignments/3 * ###
+### filter_json_assignments/4 * ###
 
-`filter_json_assignments(JSONRes, To, From) -> any()`
+`filter_json_assignments(JSONRes, To, From, Opts) -> any()`
 
 Filter JSON assignment results from a remote legacy scheduler.
 
@@ -124,13 +125,32 @@ schedule. The precidence order for search is as follows:
 1. `Msg2/body`
 2. `Msg2`
 
+<a name="find_next_assignment-5"></a>
+
+### find_next_assignment/5 * ###
+
+`find_next_assignment(Msg1, Msg2, Schedule, LastSlot, Opts) -> any()`
+
+Get the assignments for a process from the message cache, local cache,
+or the inbox (thanks to a lookahead-worker).
+
+<a name="find_process_message-4"></a>
+
+### find_process_message/4 * ###
+
+`find_process_message(ProcID, Msg1, ToSched, Opts) -> any()`
+
+Find the process message for a given process ID and base message.
+
 <a name="find_remote_scheduler-3"></a>
 
 ### find_remote_scheduler/3 * ###
 
-`find_remote_scheduler(ProcID, Scheduler, Opts) -> any()`
+`find_remote_scheduler(ProcID, Rest, Opts) -> any()`
 
-Use the SchedulerLocation to the remote path and return a redirect.
+Use the SchedulerLocation to find the remote path and return a redirect.
+If there are multiple locations, try each one in turn until we find the first
+that matches.
 
 <a name="find_server-3"></a>
 
@@ -271,11 +291,17 @@ we redirect to the remote scheduler or proxy based on the node opts.
 
 `http_get_schedule(N, PMsg, From, To, Format) -> any()`
 
-<a name="http_get_schedule_redirect_test-0"></a>
+<a name="http_get_schedule_redirect-0"></a>
 
-### http_get_schedule_redirect_test/0 * ###
+### http_get_schedule_redirect/0 * ###
 
-`http_get_schedule_redirect_test() -> any()`
+`http_get_schedule_redirect() -> any()`
+
+<a name="http_get_schedule_redirect_test_-0"></a>
+
+### http_get_schedule_redirect_test_/0 * ###
+
+`http_get_schedule_redirect_test_() -> any()`
 
 <a name="http_get_schedule_test_-0"></a>
 
@@ -307,17 +333,23 @@ we redirect to the remote scheduler or proxy based on the node opts.
 
 `http_post_legacy_schedule_test_() -> any()`
 
+<a name="http_post_schedule-0"></a>
+
+### http_post_schedule/0 * ###
+
+`http_post_schedule() -> any()`
+
 <a name="http_post_schedule_sign-4"></a>
 
 ### http_post_schedule_sign/4 * ###
 
 `http_post_schedule_sign(Node, Msg, ProcessMsg, Wallet) -> any()`
 
-<a name="http_post_schedule_test-0"></a>
+<a name="http_post_schedule_test_-0"></a>
 
-### http_post_schedule_test/0 * ###
+### http_post_schedule_test_/0 * ###
 
-`http_post_schedule_test() -> any()`
+`http_post_schedule_test_() -> any()`
 
 <a name="info-0"></a>
 
@@ -327,6 +359,16 @@ we redirect to the remote scheduler or proxy based on the node opts.
 
 This device uses a default_handler to route requests to the correct
 function.
+
+<a name="is_local_scheduler-4"></a>
+
+### is_local_scheduler/4 * ###
+
+`is_local_scheduler(ProcID, ProcMsg, Rest, Opts) -> any()`
+
+Determine if a scheduler is local. If so, return the PID and options.
+We start the local server if we _can_ be the scheduler and it does not already
+exist.
 
 <a name="location-3"></a>
 
@@ -370,6 +412,14 @@ a `Current-Slot` key. It stores a local cache of the schedule in the
 
 Get the node URL from a redirect.
 
+<a name="parse_schedulers-1"></a>
+
+### parse_schedulers/1 ###
+
+`parse_schedulers(SchedLoc) -> any()`
+
+General utility functions that are available to other modules.
+
 <a name="post_legacy_schedule-4"></a>
 
 ### post_legacy_schedule/4 * ###
@@ -409,11 +459,17 @@ for this scheduler. If so, it schedules the message and returns the assignment.
 
 Get the assignments for a process.
 
-<a name="redirect_from_graphql_test-0"></a>
+<a name="redirect_from_graphql-0"></a>
 
-### redirect_from_graphql_test/0 * ###
+### redirect_from_graphql/0 * ###
 
-`redirect_from_graphql_test() -> any()`
+`redirect_from_graphql() -> any()`
+
+<a name="redirect_from_graphql_test_-0"></a>
+
+### redirect_from_graphql_test_/0 * ###
+
+`redirect_from_graphql_test_() -> any()`
 
 <a name="redirect_to_hint_test-0"></a>
 
@@ -539,7 +595,15 @@ by users. See `dev_process` for examples of AO process messages.
 
 ### test_process/1 * ###
 
-`test_process(Wallet) -> any()`
+`test_process(Address) -> any()`
+
+<a name="validate_next_slot-5"></a>
+
+### validate_next_slot/5 * ###
+
+`validate_next_slot(Msg1, Assignments, Lookahead, Last, Opts) -> any()`
+
+Validate the `next` slot generated by `find_next_assignment`.
 
 <a name="without_hint-1"></a>
 
