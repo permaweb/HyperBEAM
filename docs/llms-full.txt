@@ -1,4 +1,4 @@
-Generated: 2025-06-06T22:03:13Z
+Generated: 2025-06-06T22:28:21Z
 
 --- START OF FILE: docs/build/ao-connect.md ---
 # HyperBEAM from AO Connect
@@ -103,9 +103,9 @@ We encourage you to extend HyperBEAM with devices for functionality that is gene
 
 ## What are Devices?
 
-As explained in [What are HyperBEAM Devices?](../devices/what-are-devices.md), devices are the core functional units within HyperBEAM. They are self-contained modules that process messages and perform specific actions, forming the building blocks of your application's logic.
+As explained in the [introduction](../introduction/hyperbeam-devices.md), devices are the core functional units within HyperBEAM. They are self-contained modules that process messages and perform specific actions, forming the building blocks of your application's logic.
 
-HyperBEAM comes with a set of powerful [built-in devices](../devices/overview.md) that handle everything from process management (`~process@1.0`) and message scheduling (`~scheduler@1.0`) to executing WebAssembly (`~wasm64@1.0`) and Lua scripts (`~lua@5.3a`).
+HyperBEAM comes with a set of powerful [built-in devices](../devices/what-are-devices.md) that handle everything from process management (`~process@1.0`) and message scheduling (`~scheduler@1.0`) to executing WebAssembly (`~wasm64@1.0`) and Lua scripts (`~lua@5.3a`).
 
 ## Creating Your Own Devices (Coming Soon)
 
@@ -211,7 +211,7 @@ HyperBEAM is not just an update; it's a new foundation designed for building hig
 
 *   **Enhanced Performance:** Built on Erlang/OTP, HyperBEAM's architecture is optimized for concurrency and fault tolerance, resulting in faster scheduling and more responsive applications.
 *   **Powerful Developer Tools:** HyperBEAM exposes all of it's state through HTTP, you can use any standard HTTP library to interact with it. 
-*   **Easy Extensibility:** It allows core feature extensiblity through [modular devices](../introduction/ao-devices.md).
+*   **Easy Extensibility:** It allows core feature extensibility through [modular devices](../introduction/hyperbeam-devices.md).
 
 The process of migration involves updating your process to take advantage of the new features available in HyperBEAM. One of the most impactful new features is the ability to directly expose parts of your process state for immediate reading via HTTP, which dramatically improves the performance of web frontends and data-driven services.
 
@@ -340,7 +340,7 @@ Current cloud providers offer centralized compute, which means you have to trust
 
 ## Thinking in HyperBEAM
 
-Your severless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a prcoess on HyperBEAM whos state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
+Your serverless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a process on HyperBEAM whose state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
     
 At its heart, building on HyperBEAM involves:
 
@@ -389,7 +389,7 @@ This connects you to an interactive Lua environment running within a **process**
         *   Inspect process state.
         *   Manage your local environment.
 
-## Intializing a Variable
+## Initializing a Variable
 
 From the `aos` prompt, you can assign a variable. Let's assign a basic Lua process that just holds some data:
 
@@ -441,43 +441,7 @@ Follow these steps to create and interact with your first message handler in AO:
     print("HelloWorld handler loaded.")
     ```
 
-    *   `Handlers.add`: Registers a function to handle incoming messages.
-    *   `"HelloWorld"`: The name of this handler. It will be triggered by messages with `Action = "HelloWorld"`.
-    *   `function(msg)`: The function that executes when the handler is triggered. `msg` contains details about the incoming message (like `msg.From`, the sender's process ID).
-    *   `msg.reply({...})`: Sends a response message back to the original sender. The response must be a Lua table, typically containing a `Data` field.
-
-2.  **Load the Handler into `aos`:**
-    From your `aos` prompt, load the handler code into your running process:
-
-    ```lua
-    default@aos-2.0.6> .load main.lua
-    ```
-
-3.  **Send a Message to Trigger the Handler:**
-    Now, send a message to your own process (`ao.id` refers to the current process ID) with the action that matches your handler's name:
-
-    ```lua
-    default@aos-2.0.6> Send({ Target = ao.id, Action = "HelloWorld" })
-    ```
-
-4.  **Observe the Output:**
-    You should see two things happen in your `aos` terminal:
-    *   The `print` statement from your handler: `Handler triggered by message from: <your-process-id>`
-    *   A notification about the reply message: `New Message From <your-process-id>: Data = Hello back from your process!`
-
-5.  **Inspect the Reply Message:**
-    The reply message sent by your handler is now in your process's inbox. You can inspect its data like this:
-
-    ```lua
-    default@aos-2.0.6> Inbox[#Inbox].Data
-    ```
-    This should output: `"Hello back from your process!"`
-
-You've successfully created a handler, loaded it into your AO process, triggered it with a message, and received a reply!
-
-## Next Steps
-
-To dive deeper into AOS and AO, check out the [AO Cookbook](https://cookbook_ao.arweave.net/).
+    *   `
 --- END OF FILE: docs/build/quick-start.md ---
 
 --- START OF FILE: docs/build/serverless-decentralized-compute.md ---
@@ -731,7 +695,7 @@ The `message@1.0` device reserves several keys for specific operations:
 *   **`set_path`**: A special case for setting the `path` key itself, which cannot be done via the standard `set` operation.
 *   **`remove`**: Removes one or more specified keys from the message. Requires an `item` or `items` parameter.
 *   **`keys`**: Returns a list of all public (non-private) keys present in the message map.
-*   **`id`**: Calculates and returns the ID (hash) of the message. Considers active commitments based on specified `committers`. May delegate ID calculation to a device specified by the message\'s `id-device` key or the default ([`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
+*   **`id`**: Calculates and returns the ID (hash) of the message. Considers active commitments based on specified `committers`. May delegate ID calculation to a device specified by the message's `id-device` key
 *   **`commit`**: Creates a commitment (e.g., a signature) for the message. Requires parameters like `commitment-device` and potentially committer information. Delegates the actual commitment generation to the specified device (default [`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
 *   **`committers`**: Returns a list of committers associated with the commitments in the message. Can be filtered by request parameters.
 *   **`commitments`**: Used internally and in requests to filter or specify which commitments to operate on (e.g., for `id` or `verify`).
@@ -833,7 +797,7 @@ A message tagged with `Device: process@1.0` (the "Process Definition Message") d
 
 *   **Scheduler Device:** Determines the order of incoming messages (assignments) to be processed. (Defaults to [`~scheduler@1.0`](../resources/source-code/dev_scheduler.md)).
 *   **Execution Device:** Executes the actual computation based on the current state and the scheduled message. Often configured as [`dev_stack`](../resources/source-code/dev_stack.md) to allow multiple computational steps (e.g., running WASM, applying cron jobs, handling proofs).
-*   **Push Device:** Handles the injection of new messages into the process\'s schedule. (Defaults to [`~push@1.0`](../resources/source-code/dev_push.md)).
+*   **Push Device:** Handles the injection of new messages into the process's schedule. (Defaults to [`~push@1.0`](../resources/source-code/dev_push.md)).
 
 The `~process@1.0` device acts as a router, intercepting requests and delegating them to the appropriate configured device (scheduler, executor, etc.) by temporarily swapping the device tag on the message before resolving.
 
@@ -1004,10 +968,10 @@ These keys are typically accessed via the [`~process@1.0`](../resources/source-c
 
 ## Interaction with Other Components
 
-*   **[`~process@1.0`](../resources/source-code/dev_process.md):** The primary user of the scheduler, calling `next` to drive process execution.
-*   **[`~push@1.0`](../resources/source-code/dev_push.md):** Often used to add messages to the schedule via `POST /schedule`.
-*   **`dev_scheduler_cache`:** Internal module used for caching assignments locally on the node to reduce latency.
-*   **Scheduling Unit (SU):** Schedulers may interact with external entities (like Arweave gateways or dedicated SU nodes) to fetch or commit schedules, although `~scheduler@1.0` aims for a simpler, often node-local or SU-client model.
+*   [`~process@1.0`](../resources/source-code/dev_process.md): The primary user of the scheduler, calling `next` to drive process execution.
+*   [`~push@1.0`](../resources/source-code/dev_push.md): Often used to add messages to the schedule via `POST /schedule`.
+*   `dev_scheduler_cache`: Internal module used for caching assignments locally on the node to reduce latency.
+*   Scheduling Unit (SU): Schedulers may interact with external entities (like Arweave gateways or dedicated SU nodes) to fetch or commit schedules, although `~scheduler@1.0` aims for a simpler, often node-local or SU-client model.
 
 `~scheduler@1.0` provides the fundamental mechanism for ordered, sequential execution within the potentially asynchronous and parallel environment of AO.
 
@@ -1150,7 +1114,7 @@ Devices aren't limited to just computation or state management. They can represe
 
 ## Using Devices
 
-Devices are typically invoked via [HyperPATHs](./pathing-in-ao-core.md). The path specifies which Device should interpret the subsequent parts of the path or the request body.
+Devices are typically invoked via [HyperPATHs](./hyperpaths-in-hyperbeam.md). The path specifies which Device should interpret the subsequent parts of the path or the request body.
 
 ```
 # Example: Execute the 'now' key on the process device for a specific process
@@ -1261,7 +1225,7 @@ GET /<procId>~process@1.0/compute/cache
 
 This accesses the `compute` key on the [`~process@1.0`](../devices/process-at-1-0.md) device and then navigates to the `cache` key within the resulting state map. Using this path, you will see the latest 'cache' of your process (the number of interactions it has received). Every piece of relevant information about your process can be accessed similarly, effectively providing a native API.
 
-(Note: This represents direct navigation within the process state structure. For accessing data specifically published via the `~patch@1.0` device, see the documentation on [Exposing Process State](../build/exposing-process-state.md), which typically uses the `/cache/` path.)
+(Note: This represents direct navigation within the process state structure. For accessing data specifically published via the `~patch@1.0` device, see the documentation on [Exposing Process State](../build/migrating-from-legacynet.md#exposing-process-state-with-the-patch-device), which typically uses the `/cache/` path.)
 
 ### Example 3: Basic `~message@1.0` Usage
 
@@ -1358,7 +1322,7 @@ AO-Core revolves around three fundamental components:
 <rect x="50.8" y="0.8" width="14.4" height="14.4" fill="white" stroke="#5F5F5F" stroke-width="1"/>
 </svg>
 </div>
-<p>Structures that link messages over time, creating a verifiable history of computations. </p> <p>Paths allow users to navigate the computation graph and access specific states or results. </p> <P>They leverage <code>HashPaths</code>, cryptographic fingerprints representing the sequence of operations leading to a specific message state, ensuring traceability and integrity.</p>
+<p>Structures that link messages over time, creating a verifiable history of computations. </p> <p>Paths allow users to navigate the computation graph and access specific states or results. </p> <p>They leverage <code>HashPaths</code>, cryptographic fingerprints representing the sequence of operations leading to a specific message state, ensuring traceability and integrity.</p>
 </div>
 
 </div>
@@ -1385,7 +1349,7 @@ HyperBEAM is the primary, production-ready implementation of the [AO-Core protoc
 
 HyperBEAM transforms the abstract concepts of AO-Core—such as [Messages](./what-is-ao-core.md#core-concepts), [Devices](./what-is-ao-core.md#core-concepts), and [Paths](./what-is-ao-core.md#core-concepts)—into a concrete, operational system. Here's why it's pivotal to the AO ecosystem:
 
-- **Modularity via Devices:** HyperBEAM introduces a uniquely modular architecture centered around [Devices](./ao-devices.md). These pluggable components define specific computational logic—like running WASM, managing state, or relaying data—allowing for unprecedented flexibility. Users can extend the system by creating custom Devices to fit their specific computational needs.
+- **Modularity via Devices:** HyperBEAM introduces a uniquely modular architecture centered around [Devices](./hyperbeam-devices.md). These pluggable components define specific computational logic—like running WASM, managing state, or relaying data—allowing for unprecedented flexibility. Users can extend the system by creating custom Devices to fit their specific computational needs.
 - **Decentralized OS:** It equips nodes with the infrastructure to join the AO network, manage resources, execute computations, and communicate seamlessly.
 
 Built on the Erlang/OTP framework, HyperBEAM provides a robust and secure foundation that leverages the BEAM virtual machine for exceptional concurrency, fault tolerance, and scalability. This abstracts away underlying hardware, allowing diverse nodes to contribute resources without compatibility issues. The system governs how nodes coordinate and interact.
@@ -1401,7 +1365,7 @@ In essence, HyperBEAM is the engine that drives the AO Computer, enabling a visi
 ## Architecture
 
 *   **Initialization Flow:** When a HyperBEAM node starts, it initializes the name service, scheduler registry, timestamp server, and HTTP server, establishing core services for process management, timing, communication, and storage.
-*   **Compute Model:** Computation follows the pattern `Message1(Message2) => Message3`, where messages are resolved through their devices and [paths](./pathing-in-ao-core.md). The integrity and history of these computations are ensured by **hashpaths**, which serves as a cryptographic audit trail.
+*   **Compute Model:** Computation follows the pattern `Message1(Message2) => Message3`, where messages are resolved through their devices and [paths](./hyperpaths-in-hyperbeam.md). The integrity and history of these computations are ensured by **hashpaths**, which serves as a cryptographic audit trail.
 *   **Scheduler System:** The scheduler component manages execution order using [slots](../devices/scheduler-at-1-0.md#slot-system) — sequential positions that guarantee deterministic computation.
 *   **Process Slots:** Each process has numbered slots starting from 0 that track message execution order, ensuring consistent computation even across distributed nodes.
 
@@ -1433,7 +1397,7 @@ This section provides access to specially formatted files intended for consumpti
     *   **Content**: A single text file containing the complete, concatenated content of all markdown documents from the specified documentation directories (`begin`, `run`, `guides`, `devices`, `resources`). Each file's content is clearly demarcated.
     *   **Usage**: Ideal for feeding the entire documentation content into an LLM for comprehensive context, analysis, or question-answering based on the full documentation set.
 
-> **Generation Process:`**
+> **Generation Process:**
 >   These files are automatically generated by the `docs/build-all.sh` script during the documentation build process. They consolidate information from the following directories: `docs/introduction`, `docs/run`, `docs/build`, `docs/devices`, `docs/resources`
 --- END OF FILE: docs/resources/llms.md ---
 
@@ -1465,17 +1429,17 @@ You can build a wide range of applications, including:
 
 ### Is HyperBEAM open source?
 
-Yes, HyperBEAM source available on [GitHub](https://github.com/permaweb/HyperBEAM) and licensed under the Business Source License.
+Yes, HyperBEAM is source available on [GitHub](https://github.com/permaweb/HyperBEAM) and licensed under the Business Source License.
 
 ### What is the current focus or phase of HyperBEAM development?
 
-The initial development phase focuses on integrating AO processes more deeply with HyperBEAM. A key part of this is phasing out the reliance on traditional "dryrun" simulations for reading process state. Instead, processes are encouraged to use the [~patch@1.0 device](../../resources/source-code/dev_patch.md) to expose specific parts of their state directly via HyperPATH GET requests. This allows for more efficient and direct state access, particularly for web interfaces and external integrations. You can learn more about this mechanism in the [Exposing Process State with the Patch Device](../../build/exposing-process-state.md) guide.
+The initial development phase focuses on integrating AO processes more deeply with HyperBEAM. A key part of this is phasing out the reliance on traditional "dryrun" simulations for reading process state. Instead, processes are encouraged to use the [~patch@1.0 device](../../resources/source-code/dev_patch.md) to expose specific parts of their state directly via HyperPATH GET requests. This allows for more efficient and direct state access, particularly for web interfaces and external integrations. You can learn more about this mechanism in the [Exposing Process State with the Patch Device](../../build/migrating-from-legacynet.md#exposing-process-state-with-the-patch-device) guide.
 
 ## Installation and Setup
 
 ### What are the system requirements for running HyperBEAM?
 
-Currently, HyperBEAM is primarily tested and documented for Ubuntu 22.04. Support for macOS and other platforms will be added in future updates. For detailed requirements, see the [System Requirements](../getting-started/requirements.md) page.
+Currently, HyperBEAM is primarily tested and documented for Ubuntu 22.04. Support for macOS and other platforms will be added in future updates. For detailed requirements, see the [System Requirements](../../run/configuring-your-machine.md) page.
 
 ### Can I run HyperBEAM in a container?
 
@@ -24444,7 +24408,7 @@ These options control caching behavior. **Note:** Detailed storage configuration
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `cache_lookup_hueristics` | Boolean | false | Whether to use caching heuristics or always consult the local data store |
+| `cache_lookup_heuristics` | Boolean | false | Whether to use caching heuristics or always consult the local data store |
 | `access_remote_cache_for_client` | Boolean | false | Whether to access data from remote caches for client requests |
 | `store_all_signed` | Boolean | true | Whether the node should store all signed messages |
 | `await_inprogress` | Atom/Boolean | named | Whether to await in-progress executions (false, named, true) |
@@ -24631,7 +24595,7 @@ To successfully build and run a HyperBEAM node, your system needs several softwa
         ncurses-dev \
         libssl-dev \
         sudo \
-        curl
+        curl \
         ca-certificates
     ```
 
@@ -24789,7 +24753,7 @@ rebar3 as rocksdb, genesis_wasm shell
 
 HyperBEAM offers various configuration options (port, key file, data storage, logging, etc.). These are primarily set using a `config.flat` file and can be overridden by environment variables or command-line arguments.
 
-See the dedicated **[Configuring Your HyperBEAM Node](./configuring-your-machine.md)** guide for detailed information on all configuration methods and options.
+See the dedicated [Configuring Your HyperBEAM Node](./configuring-your-machine.md) guide for detailed information on all configuration methods and options.
 
 ## Verify Installation
 

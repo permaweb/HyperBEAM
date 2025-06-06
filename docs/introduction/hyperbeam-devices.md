@@ -35,7 +35,7 @@ Devices aren't limited to just computation or state management. They can represe
 
 ## Using Devices
 
-Devices are typically invoked via [HyperPATHs](./pathing-in-ao-core.md). The path specifies which Device should interpret the subsequent parts of the path or the request body.
+Devices are typically invoked via [HyperPATHs](./hyperpaths-in-hyperbeam.md). The path specifies which Device should interpret the subsequent parts of the path or the request body.
 
 ```
 # Example: Execute the 'now' key on the process device for a specific process

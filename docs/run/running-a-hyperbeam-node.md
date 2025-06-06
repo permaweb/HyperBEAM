@@ -24,7 +24,7 @@ To successfully build and run a HyperBEAM node, your system needs several softwa
         ncurses-dev \
         libssl-dev \
         sudo \
-        curl
+        curl \
         ca-certificates
     ```
 
@@ -182,7 +182,7 @@ rebar3 as rocksdb, genesis_wasm shell
 
 HyperBEAM offers various configuration options (port, key file, data storage, logging, etc.). These are primarily set using a `config.flat` file and can be overridden by environment variables or command-line arguments.
 
-See the dedicated **[Configuring Your HyperBEAM Node](./configuring-your-machine.md)** guide for detailed information on all configuration methods and options.
+See the dedicated [Configuring Your HyperBEAM Node](./configuring-your-machine.md) guide for detailed information on all configuration methods and options.
 
 ## Verify Installation
 

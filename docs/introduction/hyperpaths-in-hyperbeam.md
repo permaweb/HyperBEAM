@@ -82,7 +82,7 @@ GET /<procId>~process@1.0/compute/cache
 
 This accesses the `compute` key on the [`~process@1.0`](../devices/process-at-1-0.md) device and then navigates to the `cache` key within the resulting state map. Using this path, you will see the latest 'cache' of your process (the number of interactions it has received). Every piece of relevant information about your process can be accessed similarly, effectively providing a native API.
 
-(Note: This represents direct navigation within the process state structure. For accessing data specifically published via the `~patch@1.0` device, see the documentation on [Exposing Process State](../build/exposing-process-state.md), which typically uses the `/cache/` path.)
+(Note: This represents direct navigation within the process state structure. For accessing data specifically published via the `~patch@1.0` device, see the documentation on [Exposing Process State](../build/migrating-from-legacynet.md#exposing-process-state-with-the-patch-device), which typically uses the `/cache/` path.)
 
 ### Example 3: Basic `~message@1.0` Usage
 

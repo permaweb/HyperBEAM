@@ -7,7 +7,7 @@ HyperBEAM is the primary, production-ready implementation of the [AO-Core protoc
 
 HyperBEAM transforms the abstract concepts of AO-Core—such as [Messages](./what-is-ao-core.md#core-concepts), [Devices](./what-is-ao-core.md#core-concepts), and [Paths](./what-is-ao-core.md#core-concepts)—into a concrete, operational system. Here's why it's pivotal to the AO ecosystem:
 
-- **Modularity via Devices:** HyperBEAM introduces a uniquely modular architecture centered around [Devices](./ao-devices.md). These pluggable components define specific computational logic—like running WASM, managing state, or relaying data—allowing for unprecedented flexibility. Users can extend the system by creating custom Devices to fit their specific computational needs.
+- **Modularity via Devices:** HyperBEAM introduces a uniquely modular architecture centered around [Devices](./hyperbeam-devices.md). These pluggable components define specific computational logic—like running WASM, managing state, or relaying data—allowing for unprecedented flexibility. Users can extend the system by creating custom Devices to fit their specific computational needs.
 - **Decentralized OS:** It equips nodes with the infrastructure to join the AO network, manage resources, execute computations, and communicate seamlessly.
 
 Built on the Erlang/OTP framework, HyperBEAM provides a robust and secure foundation that leverages the BEAM virtual machine for exceptional concurrency, fault tolerance, and scalability. This abstracts away underlying hardware, allowing diverse nodes to contribute resources without compatibility issues. The system governs how nodes coordinate and interact.
@@ -23,7 +23,7 @@ In essence, HyperBEAM is the engine that drives the AO Computer, enabling a visi
 ## Architecture
 
 *   **Initialization Flow:** When a HyperBEAM node starts, it initializes the name service, scheduler registry, timestamp server, and HTTP server, establishing core services for process management, timing, communication, and storage.
-*   **Compute Model:** Computation follows the pattern `Message1(Message2) => Message3`, where messages are resolved through their devices and [paths](./pathing-in-ao-core.md). The integrity and history of these computations are ensured by **hashpaths**, which serves as a cryptographic audit trail.
+*   **Compute Model:** Computation follows the pattern `Message1(Message2) => Message3`, where messages are resolved through their devices and [paths](./hyperpaths-in-hyperbeam.md). The integrity and history of these computations are ensured by **hashpaths**, which serves as a cryptographic audit trail.
 *   **Scheduler System:** The scheduler component manages execution order using [slots](../devices/scheduler-at-1-0.md#slot-system) — sequential positions that guarantee deterministic computation.
 *   **Process Slots:** Each process has numbered slots starting from 0 that track message execution order, ensuring consistent computation even across distributed nodes.
 

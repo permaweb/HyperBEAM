@@ -52,7 +52,7 @@ AO-Core revolves around three fundamental components:
 <rect x="50.8" y="0.8" width="14.4" height="14.4" fill="white" stroke="#5F5F5F" stroke-width="1"/>
 </svg>
 </div>
-<p>Structures that link messages over time, creating a verifiable history of computations. </p> <p>Paths allow users to navigate the computation graph and access specific states or results. </p> <P>They leverage <code>HashPaths</code>, cryptographic fingerprints representing the sequence of operations leading to a specific message state, ensuring traceability and integrity.</p>
+<p>Structures that link messages over time, creating a verifiable history of computations. </p> <p>Paths allow users to navigate the computation graph and access specific states or results. </p> <p>They leverage <code>HashPaths</code>, cryptographic fingerprints representing the sequence of operations leading to a specific message state, ensuring traceability and integrity.</p>
 </div>
 
 </div>

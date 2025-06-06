@@ -10,7 +10,7 @@ Current cloud providers offer centralized compute, which means you have to trust
 
 ## Thinking in HyperBEAM
 
-Your severless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a prcoess on HyperBEAM whos state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
+Your serverless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a process on HyperBEAM whose state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
     
 At its heart, building on HyperBEAM involves:
 
@@ -59,7 +59,7 @@ This connects you to an interactive Lua environment running within a **process**
         *   Inspect process state.
         *   Manage your local environment.
 
-## Intializing a Variable
+## Initializing a Variable
 
 From the `aos` prompt, you can assign a variable. Let's assign a basic Lua process that just holds some data:
 
@@ -111,40 +111,4 @@ Follow these steps to create and interact with your first message handler in AO:
     print("HelloWorld handler loaded.")
     ```
 
-    *   `Handlers.add`: Registers a function to handle incoming messages.
-    *   `"HelloWorld"`: The name of this handler. It will be triggered by messages with `Action = "HelloWorld"`.
-    *   `function(msg)`: The function that executes when the handler is triggered. `msg` contains details about the incoming message (like `msg.From`, the sender's process ID).
-    *   `msg.reply({...})`: Sends a response message back to the original sender. The response must be a Lua table, typically containing a `Data` field.
-
-2.  **Load the Handler into `aos`:**
-    From your `aos` prompt, load the handler code into your running process:
-
-    ```lua
-    default@aos-2.0.6> .load main.lua
-    ```
-
-3.  **Send a Message to Trigger the Handler:**
-    Now, send a message to your own process (`ao.id` refers to the current process ID) with the action that matches your handler's name:
-
-    ```lua
-    default@aos-2.0.6> Send({ Target = ao.id, Action = "HelloWorld" })
-    ```
-
-4.  **Observe the Output:**
-    You should see two things happen in your `aos` terminal:
-    *   The `print` statement from your handler: `Handler triggered by message from: <your-process-id>`
-    *   A notification about the reply message: `New Message From <your-process-id>: Data = Hello back from your process!`
-
-5.  **Inspect the Reply Message:**
-    The reply message sent by your handler is now in your process's inbox. You can inspect its data like this:
-
-    ```lua
-    default@aos-2.0.6> Inbox[#Inbox].Data
-    ```
-    This should output: `"Hello back from your process!"`
-
-You've successfully created a handler, loaded it into your AO process, triggered it with a message, and received a reply!
-
-## Next Steps
-
-To dive deeper into AOS and AO, check out the [AO Cookbook](https://cookbook_ao.arweave.net/).
+    *   `

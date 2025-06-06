@@ -25,17 +25,17 @@ You can build a wide range of applications, including:
 
 ### Is HyperBEAM open source?
 
-Yes, HyperBEAM source available on [GitHub](https://github.com/permaweb/HyperBEAM) and licensed under the Business Source License.
+Yes, HyperBEAM is source available on [GitHub](https://github.com/permaweb/HyperBEAM) and licensed under the Business Source License.
 
 ### What is the current focus or phase of HyperBEAM development?
 
-The initial development phase focuses on integrating AO processes more deeply with HyperBEAM. A key part of this is phasing out the reliance on traditional "dryrun" simulations for reading process state. Instead, processes are encouraged to use the [~patch@1.0 device](../../resources/source-code/dev_patch.md) to expose specific parts of their state directly via HyperPATH GET requests. This allows for more efficient and direct state access, particularly for web interfaces and external integrations. You can learn more about this mechanism in the [Exposing Process State with the Patch Device](../../build/exposing-process-state.md) guide.
+The initial development phase focuses on integrating AO processes more deeply with HyperBEAM. A key part of this is phasing out the reliance on traditional "dryrun" simulations for reading process state. Instead, processes are encouraged to use the [~patch@1.0 device](../../resources/source-code/dev_patch.md) to expose specific parts of their state directly via HyperPATH GET requests. This allows for more efficient and direct state access, particularly for web interfaces and external integrations. You can learn more about this mechanism in the [Exposing Process State with the Patch Device](../../build/migrating-from-legacynet.md#exposing-process-state-with-the-patch-device) guide.
 
 ## Installation and Setup
 
 ### What are the system requirements for running HyperBEAM?
 
-Currently, HyperBEAM is primarily tested and documented for Ubuntu 22.04. Support for macOS and other platforms will be added in future updates. For detailed requirements, see the [System Requirements](../getting-started/requirements.md) page.
+Currently, HyperBEAM is primarily tested and documented for Ubuntu 22.04. Support for macOS and other platforms will be added in future updates. For detailed requirements, see the [System Requirements](../../run/configuring-your-machine.md) page.
 
 ### Can I run HyperBEAM in a container?
 

@@ -8,7 +8,7 @@ HyperBEAM is not just an update; it's a new foundation designed for building hig
 
 *   **Enhanced Performance:** Built on Erlang/OTP, HyperBEAM's architecture is optimized for concurrency and fault tolerance, resulting in faster scheduling and more responsive applications.
 *   **Powerful Developer Tools:** HyperBEAM exposes all of it's state through HTTP, you can use any standard HTTP library to interact with it. 
-*   **Easy Extensibility:** It allows core feature extensiblity through [modular devices](../introduction/ao-devices.md).
+*   **Easy Extensibility:** It allows core feature extensibility through [modular devices](../introduction/hyperbeam-devices.md).
 
 The process of migration involves updating your process to take advantage of the new features available in HyperBEAM. One of the most impactful new features is the ability to directly expose parts of your process state for immediate reading via HTTP, which dramatically improves the performance of web frontends and data-driven services.
 
