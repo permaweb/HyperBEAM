@@ -137,6 +137,15 @@ h6 {
     border-bottom: 0;
 }
 
+.custom-homepage-header .md-logo {
+    opacity: 0;
+}
+
+.md-logo {
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
 /* Logo Customization */
 .md-logo img {
     height: 0.9rem !important;
@@ -456,6 +465,17 @@ h6 {
     font-size: clamp(0.65rem, 1.5vw, 0.7rem) !important;
     color: #c0c0c0 !important;
     font-weight: 500;
+}
+
+.hyperbeam-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.hyperbeam-heading img {
+    width: 48px;
+    filter: invert(1);
 }
 
 .hero-main-heading h2,
@@ -824,7 +844,6 @@ h6 {
     width: 100%;
     overflow: hidden;
     z-index: 5;
-
 }
 
 .absolute-half-img {
@@ -840,6 +859,7 @@ h6 {
     bottom: 0;
     right: 0;
     width: fit-content;
+    margin-right: 3rem;
 }
 
 .absolute-full-img svg {
@@ -855,7 +875,7 @@ h6 {
 
 
 .fig {
-    object-fit: cover;
+    width: 75%;
 }
 
 .what-is-hyperbeam-fig {
