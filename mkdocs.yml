@@ -12,18 +12,17 @@ nav:
   - Introduction:
       - What is HyperBEAM?: 'introduction/what-is-hyperbeam.md'
       - What is AO-Core?: 'introduction/what-is-ao-core.md'
-      - AO Devices: 'introduction/ao-devices.md'
-      - Pathing in AO-Core: 'introduction/pathing-in-ao-core.md'
+      - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
+      - HyperPATHs: 'introduction/hyperpaths-in-hyperbeam.md'
   - Run a Node:
       - Running a HyperBEAM node: 'run/running-a-hyperbeam-node.md'
       - Configuring your machine: 'run/configuring-your-machine.md'
       - TEE nodes: 'run/tee-nodes.md'
       - Joining/running a router: 'run/joining-running-a-router.md'
   - Build on HyperBEAM:
-      - Get started building on AO-Core: 'build/get-started-building-on-ao-core.md'
-      - Exposing process state: 'build/exposing-process-state.md'
-      - Serverless decentralized compute: 'build/serverless-decentralized-compute.md'
-      - Extending HyperBEAM: 'build/extending-hyperbeam.md'
+      - Quick Start: 'build/get-started-building-on-hyperbeam.md'
+      - Migrating from legacynet: 'build/migrating-from-legacynet.md'
+      - Extending HyperBEAM with Devices: 'build/building-devices.md'
   - Devices:
       - 'What are HyperBEAM Devices?': 'devices/what-are-devices.md'
       - '~meta@1.0': 'devices/meta-at-1-0.md'
@@ -38,7 +37,7 @@ nav:
       # - Troubleshooting: 'resources/reference/troubleshooting.md'
     - FAQ: 'resources/reference/faq.md'
     - Glossary: 'resources/reference/glossary.md'
-    - LLMs.txt: 'resources/llms.md'
+    # - LLMs.txt: 'resources/llms.md'
     - Source Code:
       - Modules:
         - ar_bundles: 'resources/source-code/ar_bundles.md'
@@ -143,6 +142,8 @@ nav:
         - hb_volume: 'resources/source-code/hb_volume.md'
         - hb: 'resources/source-code/hb.md'
         - rsa_pss: 'resources/source-code/rsa_pss.md'
+  - Fuel Your LLM: 'resources/llms.md' 
+      # - Overview: 
   # - Community:
   #   - Contribute Overview: 'community/guidelines.md'
     # - Development Setup: 'community/setup.md'
@@ -173,7 +174,7 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
   - toc:
-      toc_depth: 2
+      toc_depth: 3
       permalink: true
 
 theme: 
@@ -206,6 +207,8 @@ theme:
     # Palette toggle for light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
+      code: 
+        highlight_theme: dracula
       primary: white
       accent: blue
       toggle:
