@@ -644,7 +644,7 @@ h6 {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     grid-template-rows: auto auto;
-    gap: 2rem;
+    gap: 4rem;
     width: 100%;
     padding: 92px 0px;
 }
@@ -831,6 +831,7 @@ h6 {
     position: absolute;
     bottom: 0;
     width: 100%;
+    justify-content: center;
 }
 
 .absolute-full-img {
@@ -977,14 +978,6 @@ h6 {
     gap: 3rem;
 }
 
-
-
-@media (max-width: 1220px) {
-    .grid-docs {
-        grid-template-columns: 1fr;
-    }
-}
-
 .grid-docs-card {
     display: flex;
     flex-direction: column;
@@ -1010,6 +1003,16 @@ h6 {
 }
 
 @media (max-width: 700px) {
+    .grid-docs {
+        grid-template-columns: repeat(1, 1fr);
+        gap: 0.5rem;
+
+    }
+
+    .grid-docs-card-fig {
+        max-width: 200px;
+    }
+
     .hero-inner-content-bottom {
         flex-direction: column;
     }

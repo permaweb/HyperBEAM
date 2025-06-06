@@ -1,4 +1,5 @@
 # What is HyperBEAM?
+<img src="https://arweave.net/S3qpd4CF_VSPD9DfVaWD4McFQy6XAUto2FLidcjofpM" alt="hb-flag" width="48" />
 
 HyperBEAM is the primary, production-ready implementation of the [AO-Core protocol](./what-is-ao-core.md), built on the robust Erlang/OTP framework. It serves as a decentralized operating system, powering the AO Computer—a scalable, trust-minimized, distributed supercomputer built on permanent storage. HyperBEAM provides the runtime environment and essential services to execute AO-Core computations across a network of distributed nodes.
 
