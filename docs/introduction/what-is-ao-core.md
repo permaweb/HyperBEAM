@@ -24,7 +24,7 @@ AO-Core revolves around three fundamental components:
 
 <div class="grid-docs-card">
 <p><strong>Devices</strong></p>
-<div>
+
 <div class="grid-docs-card-fig">
 <svg width="85" height="68" viewBox="0 0 85 68" fill="none" xmlns="http://www.w3.org/2000/svg">
 <path d="M54 26H72V50" stroke="#6F6F6F" stroke-width="1" stroke-linejoin="round" stroke-dasharray="1 1"/>

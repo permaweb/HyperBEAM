@@ -36,7 +36,7 @@ input {
 }
 
 body {
-    --docs-max-width: 60rem;
+    --docs-max-width: 65rem;
     --homepage-max-width: 90rem;
     --sections-max-width: 80rem;
     --parallax-perspective: 2rem;
@@ -974,7 +974,7 @@ h6 {
 .grid-docs {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 2rem;
+    gap: 3rem;
 }
 
 
@@ -1134,7 +1134,7 @@ h6 {
 .md-main__inner.md-grid {
     opacity: 0;
     /* Start with opacity 0 */
-    animation: fadeIn 250ms ease-in-out forwards !important;
+    animation: fadeIn 175ms ease-in-out forwards !important;
     /* Increased duration, added forwards and !important */
 }
 
