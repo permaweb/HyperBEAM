@@ -4,13 +4,11 @@ Welcome to building on AO, the decentralized supercomputer!
 
 AO combines the permanent storage of Arweave with the flexible, scalable computation enabled by the AO-Core protocol and its HyperBEAM implementation. This allows you to create truly autonomous applications, agents, and services that run trustlessly and permissionlessly.
 
-## Why build on HyperBEAM? TODO
+## Why build on HyperBEAM?
 
-Current cloud providers are centralized compute, which means you have to trust them with your data and your money. 
+Current cloud providers offer centralized compute, which means you have to trust them with your data and your money.  HyperBEAM flips the script and gives you severless decentralized compute where you own your data and you pay for only what you need.
 
-HyperBEAM gives you severless decentralized compute... where you own your data and you pay for only what you need.
-
-## Thinking in HyperBEAM TODO (Viksit)
+## Thinking in HyperBEAM
 
 Your severless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a prcoess on HyperBEAM whos state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
     
