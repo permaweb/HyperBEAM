@@ -1436,7 +1436,3 @@ kbd {
     animation: dots 1.5s steps(3, jump-none) infinite;
     margin-left: 0.5rem;
 }
-
-.narrow-page {
-    max-width: 60%;
-}

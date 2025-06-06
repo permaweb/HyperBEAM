@@ -2,7 +2,6 @@
 hide:
   - navigation
   - toc
-classes: narrow-page
 ---
 
 # LLM Context Files
