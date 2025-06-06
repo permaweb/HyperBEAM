@@ -1,8 +1,4 @@
-<<<<<<<< HEAD:docs/build/quick-start.md
 # Quick Start with HyperBEAM
-========
-# Quickstart with HyperBEAM
->>>>>>>> jajablinky/ultra-landing-page-updated-apr-docs:docs/build/get-started-building-on-hyperbeam.md
 
 Welcome to building on AO, the decentralized supercomputer!
 
@@ -10,17 +6,9 @@ AO combines the permanent storage of Arweave with the flexible, scalable computa
 
 ## Why build on HyperBEAM?
 
-<<<<<<<< HEAD:docs/build/quick-start.md
 Current cloud providers offer centralized compute, which means you have to trust them with your data and your money.  HyperBEAM flips the script and gives you severless decentralized compute where you own your data and you pay for only what you need.
 
 ## Thinking in HyperBEAM
-========
-Current cloud providers are centralized compute, which means you have to trust them with your data and your money. 
-
-HyperBEAM gives you severless decentralized compute... where you own your data and you pay for only what you need.
-
-## Thinking in HyperBEAM (Viksit)
->>>>>>>> jajablinky/ultra-landing-page-updated-apr-docs:docs/build/get-started-building-on-hyperbeam.md
 
 Your severless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a prcoess on HyperBEAM whos state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
     

@@ -1,4 +1,4 @@
-Generated: 2025-06-06T19:40:02Z
+Generated: 2025-06-06T19:56:48Z
 
 --- START OF FILE: docs/build/ao-connect.md ---
 # HyperBEAM from AO Connect
@@ -200,6 +200,175 @@ Extending HyperBEAM allows you to tailor the AO network's capabilities to specif
 
 --- END OF FILE: docs/build/extending-hyperbeam.md ---
 
+--- START OF FILE: docs/build/get-started-building-on-hyperbeam.md ---
+<<<<<<<< HEAD:docs/build/quick-start.md
+# Quick Start with HyperBEAM
+========
+# Quickstart with HyperBEAM
+>>>>>>>> jajablinky/ultra-landing-page-updated-apr-docs:docs/build/get-started-building-on-hyperbeam.md
+
+Welcome to building on AO, the decentralized supercomputer!
+
+AO combines the permanent storage of Arweave with the flexible, scalable computation enabled by the AO-Core protocol and its HyperBEAM implementation. This allows you to create truly autonomous applications, agents, and services that run trustlessly and permissionlessly.
+
+## Why build on HyperBEAM?
+
+<<<<<<<< HEAD:docs/build/quick-start.md
+Current cloud providers offer centralized compute, which means you have to trust them with your data and your money.  HyperBEAM flips the script and gives you severless decentralized compute where you own your data and you pay for only what you need.
+
+## Thinking in HyperBEAM
+========
+Current cloud providers are centralized compute, which means you have to trust them with your data and your money. 
+
+HyperBEAM gives you severless decentralized compute... where you own your data and you pay for only what you need.
+
+## Thinking in HyperBEAM (Viksit)
+>>>>>>>> jajablinky/ultra-landing-page-updated-apr-docs:docs/build/get-started-building-on-hyperbeam.md
+
+Your severless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a prcoess on HyperBEAM whos state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
+    
+At its heart, building on HyperBEAM involves:
+
+1.  **Processes:** Think of these as independent programs or stateful contracts. Each process has a unique ID and maintains its own state.
+2.  **Messages:** You interact with processes by sending them messages. These messages trigger computations, update state, or cause the process to interact with other processes or the outside world.
+
+Messages are processed by [Devices](../introduction/ao-devices.md), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
+
+## Starting `aos`: Your Development Environment
+
+The primary tool for interacting with AO and developing processes is `aos`, a command-line interface and development environment.
+
+=== "npm"
+    ```bash
+    npm i -g https://get_ao.arweave.net
+    ```
+
+=== "bun"
+    ```bash
+    bun install -g https://get_ao.arweave.net
+    ```
+
+=== "pnpm"
+    ```bash
+    pnpm add -g https://get_ao.arweave.net
+    ```
+
+**Installing HyperBEAM for Development**
+
+
+
+**Starting `aos`:**
+
+Simply run the command in your terminal:
+
+```bash
+aos --mainnet "localhost:8734" myMainnetProcess
+```
+
+This connects you to an interactive Lua environment running within a **process** on the AO network. This process acts as your command-line interface (CLI) to the AO network, allowing you to interact with other processes, manage your wallet, and develop new AO processes. By default, it connects to a process running on the mainnet Compute Unit (CU).
+
+!!! note
+    **What `aos` is doing:**
+
+    *   **Connecting:** Establishes a connection from your terminal to a remote process running the `aos` environment.
+    *   **Loading Wallet:** Looks for a default Arweave key file (usually `~/.aos.json` or specified via arguments) to load into the remote process context for signing outgoing messages.
+    *   **Providing Interface:** Gives you a Lua prompt (`[aos]>`) within the remote process where you can:
+    *   Load code for new persistent processes on the network.
+    *   Send messages to existing network processes.
+    *   Inspect process state.
+    *   Manage your local environment.
+
+## Your First Interaction: Intializing a Variable
+
+From the `aos` prompt, you can assign a variable. Let's assign a basic Lua process that just holds some data:
+
+```lua
+[aos]> myVariable = "Hello from aos!"
+-- This assigns the string "Hello from aos!" to the variable 'myVariable'
+-- within the current process's Lua environment.
+
+[aos]> myVariable
+-- Displays the content of 'myVariable'
+Hello from aos!
+```
+
+## Send Your First Message
+
+Let's send our variable to another process.
+
+```lua
+[aos]> Send({ Target = ao.id, Data = myVariable })
+```
+
+TODO: Add output
+
+
+## Creating Your First Handler
+
+Handlers are decentralized functions that can be triggered by messages.
+
+
+Follow these steps to create and interact with your first message handler in AO:
+
+1.  **Create a Lua File to Handle Messages:**
+    Create a new file named `main.lua` in your local directory and add the following Lua code:
+
+    ```lua
+    Handlers.add(
+      "HelloWorld",
+      function(msg)
+        -- This function gets called when a message with Action = "HelloWorld" arrives.
+        print("Handler triggered by message from: " .. msg.From)
+        -- It replies to the sender with a new message containing the specified data.
+        msg.reply({ Data = "Hello back from your process!" })
+      end
+    )
+
+    print("HelloWorld handler loaded.") -- Confirmation message
+    ```
+
+    *   `Handlers.add`: Registers a function to handle incoming messages.
+    *   `"HelloWorld"`: The name of this handler. It will be triggered by messages with `Action = "HelloWorld"`.
+    *   `function(msg)`: The function that executes when the handler is triggered. `msg` contains details about the incoming message (like `msg.From`, the sender's process ID).
+    *   `msg.reply({...})`: Sends a response message back to the original sender. The response must be a Lua table, typically containing a `Data` field.
+
+2.  **Load the Handler into `aos`:**
+    From your `aos` prompt, load the handler code into your running process:
+
+    ```lua
+    [aos]> .load main.lua
+    ```
+
+3.  **Send a Message to Trigger the Handler:**
+    Now, send a message to your own process (`ao.id` refers to the current process ID) with the action that matches your handler's name:
+
+    ```lua
+    [aos]> Send({ Target = ao.id, Action = "HelloWorld" })
+    ```
+
+4.  **Observe the Output:**
+    You should see two things happen in your `aos` terminal:
+    *   The `print` statement from your handler: `Handler triggered by message from: <your-process-id>`
+    *   A notification about the reply message: `New Message From <your-process-id>: Data = Hello back from your process!`
+
+5.  **Inspect the Reply Message:**
+    The reply message sent by your handler is now in your process's inbox. You can inspect its data like this:
+
+    ```lua
+    [aos]> Inbox[#Inbox].Data
+    ```
+    This should output: `"Hello back from your process!"`
+
+You've successfully created a handler, loaded it into your AO process, triggered it with a message, and received a reply!
+
+## Next Steps
+
+To dive deeper into AOS and AO, check out the [AO Cookbook](https://cookbook_ao.arweave.net/).
+
+<!-- *   **Serverless Compute:** Discover how to run WASM or Lua computations within your processes: [Serverless Decentralized Compute](./serverless-decentralized-compute.md) -->
+
+--- END OF FILE: docs/build/get-started-building-on-hyperbeam.md ---
+
 --- START OF FILE: docs/build/migrating-from-legacynet.md ---
 # Migrating from `legacynet` to HyperBEAM
 
@@ -351,8 +520,6 @@ At its heart, building on HyperBEAM involves:
 
 1.  **Processes:** Think of these as independent programs or stateful contracts. Each process has a unique ID and maintains its own state.
 2.  **Messages:** You interact with processes by sending them messages. These messages trigger computations, update state, or cause the process to interact with other processes or the outside world.
-1.  **Processes:** Think of these as independent programs or stateful contracts. Each process has a unique ID and maintains its own state.
-2.  **Messages:** You interact with processes by sending them messages. These messages trigger computations, update state, or cause the process to interact with other processes or the outside world.
 
 Messages are processed by [Devices](../introduction/ao-devices.md), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
 
@@ -379,16 +546,11 @@ The primary tool for interacting with AO and developing processes is `aos`, a co
 
 
 
-**Installing HyperBEAM for Development**
-
-
-
 **Starting `aos`:**
 
 Simply run the command in your terminal:
 
 ```bash
-aos --mainnet "localhost:8734" myMainnetProcess
 aos --mainnet "localhost:8734" myMainnetProcess
 ```
 
@@ -396,12 +558,7 @@ This connects you to an interactive Lua environment running within a **process**
 
 !!! note
     **What `aos` is doing:**
-!!! note
-    **What `aos` is doing:**
 
-    *   **Connecting:** Establishes a connection from your terminal to a remote process running the `aos` environment.
-    *   **Loading Wallet:** Looks for a default Arweave key file (usually `~/.aos.json` or specified via arguments) to load into the remote process context for signing outgoing messages.
-    *   **Providing Interface:** Gives you a Lua prompt (`[aos]>`) within the remote process where you can:
     *   **Connecting:** Establishes a connection from your terminal to a remote process running the `aos` environment.
     *   **Loading Wallet:** Looks for a default Arweave key file (usually `~/.aos.json` or specified via arguments) to load into the remote process context for signing outgoing messages.
     *   **Providing Interface:** Gives you a Lua prompt (`[aos]>`) within the remote process where you can:
@@ -410,7 +567,6 @@ This connects you to an interactive Lua environment running within a **process**
     *   Inspect process state.
     *   Manage your local environment.
 
-## Your First Interaction: Intializing a Variable
 ## Your First Interaction: Intializing a Variable
 
 From the `aos` prompt, you can assign a variable. Let's assign a basic Lua process that just holds some data:
@@ -435,20 +591,6 @@ Let's send our variable to another process.
 
 TODO: Add output
 
-## Send Your First Message
-
-Let's send our variable to another process.
-
-```lua
-[aos]> Send({ Target = ao.id, Data = myVariable })
-```
-
-TODO: Add output
-
-
-## Creating Your First Handler
-
-Handlers are decentralized functions that can be triggered by messages.
 
 ## Creating Your First Handler
 
@@ -513,7 +655,6 @@ You've successfully created a handler, loaded it into your AO process, triggered
 To dive deeper into AOS and AO, check out the [AO Cookbook](https://cookbook_ao.arweave.net/).
 
 <!-- *   **Serverless Compute:** Discover how to run WASM or Lua computations within your processes: [Serverless Decentralized Compute](./serverless-decentralized-compute.md) -->
-
 --- END OF FILE: docs/build/quick-start.md ---
 
 --- START OF FILE: docs/build/serverless-decentralized-compute.md ---
@@ -1179,7 +1320,6 @@ Versioning indicates the specific interface and behavior of the device. Changes 
 --- END OF FILE: docs/devices/what-are-devices.md ---
 
 --- START OF FILE: docs/introduction/hyperbeam-devices.md ---
---- START OF FILE: docs/introduction/hyperbeam-devices.md ---
 # AO Devices
 
 In AO-Core and its implementation HyperBEAM, **Devices** are modular components responsible for processing and interpreting [Messages](./what-is-ao-core.md#core-concepts). They define the specific logic for how computations are performed, data is handled, or interactions occur within the AO ecosystem.
@@ -1242,10 +1382,7 @@ The modular nature of AO Devices opens up vast possibilities for future expansio
 The Device framework ensures that AO can adapt and grow, incorporating new technologies and computational paradigms without requiring fundamental changes to the core protocol. This extensibility is key to AO's long-term vision of becoming a truly global, decentralized computer.
 
 --- END OF FILE: docs/introduction/hyperbeam-devices.md ---
---- END OF FILE: docs/introduction/hyperbeam-devices.md ---
 
---- START OF FILE: docs/introduction/hyperpaths-in-hyperbeam.md ---
-# HyperPATHs in HyperBEAM
 --- START OF FILE: docs/introduction/hyperpaths-in-hyperbeam.md ---
 # HyperPATHs in HyperBEAM
 
@@ -1372,7 +1509,6 @@ HyperBEAM processes this as follows:
     *   If `[PATH]` is `/items/1`, the response is the integer `1`.
     *   If `[PATH]` is `/config/key1`, the response is the binary `<<"val1">>`.
 --- END OF FILE: docs/introduction/hyperpaths-in-hyperbeam.md ---
---- END OF FILE: docs/introduction/hyperpaths-in-hyperbeam.md ---
 
 --- START OF FILE: docs/introduction/what-is-ao-core.md ---
 # What is AO-Core?
@@ -1466,7 +1602,6 @@ In essence, HyperBEAM is the engine that drives the AO Computer, enabling a visi
 ## Core Components & Features
 
 - **Modular Devices:** The heart of HyperBEAM's extensibility. It includes essential built-in devices like [`~meta`](../devices/meta-at-1-0.md), [`~relay`](../devices/relay-at-1-0.md), [`~process`](../devices/process-at-1-0.md), [`~scheduler`](../devices/scheduler-at-1-0.md), and [`~wasm64`](../devices/wasm64-at-1-0.md) for core functionality, but the system is designed for easy addition of new custom devices.
-- **Modular Devices:** The heart of HyperBEAM's extensibility. It includes essential built-in devices like [`~meta`](../devices/meta-at-1-0.md), [`~relay`](../devices/relay-at-1-0.md), [`~process`](../devices/process-at-1-0.md), [`~scheduler`](../devices/scheduler-at-1-0.md), and [`~wasm64`](../devices/wasm64-at-1-0.md) for core functionality, but the system is designed for easy addition of new custom devices.
 - **Message System:** Everything in HyperBEAM is a "Message" — a map of named functions or binary data that can be processed, transformed, and cryptographically verified.
 - **HTTP Interface:** Nodes expose an HTTP server for interaction via standard web requests and HyperPATHs, structured URLs that represent computation paths (effectively a sequence of state transformations for messages).
 
@@ -1475,15 +1610,12 @@ In essence, HyperBEAM is the engine that drives the AO Computer, enabling a visi
 *   **Initialization Flow:** When a HyperBEAM node starts, it initializes the name service, scheduler registry, timestamp server, and HTTP server, establishing core services for process management, timing, communication, and storage.
 *   **Compute Model:** Computation follows the pattern `Message1(Message2) => Message3`, where messages are resolved through their devices and [paths](./pathing-in-ao-core.md). The integrity and history of these computations are ensured by **hashpaths**, which serves as a cryptographic audit trail.
 *   **Scheduler System:** The scheduler component manages execution order using [slots](../devices/scheduler-at-1-0.md#slot-system) — sequential positions that guarantee deterministic computation.
-*   **Scheduler System:** The scheduler component manages execution order using [slots](../devices/scheduler-at-1-0.md#slot-system) — sequential positions that guarantee deterministic computation.
 *   **Process Slots:** Each process has numbered slots starting from 0 that track message execution order, ensuring consistent computation even across distributed nodes.
 
 ## HTTP API and Pathing
 
 HyperBEAM exposes a powerful HTTP API that allows for interacting with processes and accessing data through structured URL patterns. We call URLs that represent computation paths **[HyperPATHs](./hyperpaths-in-hyperbeam.md)**. The URL bar effectively functions as a command-line interface for AO's trustless and verifiable compute.
-HyperBEAM exposes a powerful HTTP API that allows for interacting with processes and accessing data through structured URL patterns. We call URLs that represent computation paths **[HyperPATHs](./hyperpaths-in-hyperbeam.md)**. The URL bar effectively functions as a command-line interface for AO's trustless and verifiable compute.
 
-For a comprehensive guide on constructing and interpreting paths in HyperBEAM, including detailed examples and best practices, see [HyperPATHs in HyperBEAM](./hyperpaths-in-hyperbeam.md).
 For a comprehensive guide on constructing and interpreting paths in HyperBEAM, including detailed examples and best practices, see [HyperPATHs in HyperBEAM](./hyperpaths-in-hyperbeam.md).
 
 In essence, HyperBEAM is the engine that powers the AO Computer, enabling the vision of a scalable, trust-minimized, decentralized supercomputer built on permanent storage.
@@ -1541,7 +1673,6 @@ You can build a wide range of applications, including:
 
 ### Is HyperBEAM open source?
 
-Yes, HyperBEAM source available on [GitHub](https://github.com/permaweb/HyperBEAM) and licensed under the Business Source License.
 Yes, HyperBEAM source available on [GitHub](https://github.com/permaweb/HyperBEAM) and licensed under the Business Source License.
 
 ### What is the current focus or phase of HyperBEAM development?

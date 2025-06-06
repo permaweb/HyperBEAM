@@ -14,8 +14,6 @@ nav:
       - What is AO-Core?: 'introduction/what-is-ao-core.md'
       - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
       - HyperPATHs: 'introduction/hyperpaths-in-hyperbeam.md'
-      - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
-      - HyperPATHs: 'introduction/hyperpaths-in-hyperbeam.md'
   - Run a Node:
       - Running a HyperBEAM Node: 'run/running-a-hyperbeam-node.md'
       - Configuring Your Machine: 'run/configuring-your-machine.md'
@@ -26,7 +24,6 @@ nav:
       - Migrating from Legacynet: 'build/migrating-from-legacynet.md'
       - AO Connect: 'build/ao-connect.md'
       - Extending HyperBEAM with Devices: 'build/building-devices.md'
-
   - Devices:
       - 'What are HyperBEAM Devices?': 'devices/what-are-devices.md'
       - '~meta@1.0': 'devices/meta-at-1-0.md'
@@ -178,7 +175,7 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
   - toc:
-      toc_depth: 3
+      toc_depth: 2
       permalink: true
 
 theme: 
