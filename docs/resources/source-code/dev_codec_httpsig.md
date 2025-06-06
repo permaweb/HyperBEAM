@@ -1,6 +1,7 @@
+# [Module dev_codec_httpsig.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_httpsig.erl)
 
 
-# Module dev_codec_httpsig #
+
 
 This module implements HTTP Message Signatures as described in RFC-9421
 (https://datatracker.ietf.org/doc/html/rfc9421), as an AO-Core device.

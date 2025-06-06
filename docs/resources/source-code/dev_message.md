@@ -1,6 +1,7 @@
+# [Module dev_message.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_message.erl)
 
 
-# Module dev_message #
+
 
 The identity device: For non-reserved keys, it simply returns a key
 from the message as it is found in the message's underlying Erlang map.

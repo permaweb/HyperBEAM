@@ -1,6 +1,7 @@
+# [Module dev_patch.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_patch.erl)
 
 
-# Module dev_patch #
+
 
 A device that can be used to reorganize a message: Moving data from
 one path inside it to another.

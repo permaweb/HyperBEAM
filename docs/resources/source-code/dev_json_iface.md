@@ -1,6 +1,7 @@
+# [Module dev_json_iface.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_json_iface.erl)
 
 
-# Module dev_json_iface #
+
 
 A device that provides a way for WASM execution to interact with
 the HyperBEAM (and AO) systems, using JSON as a shared data representation.

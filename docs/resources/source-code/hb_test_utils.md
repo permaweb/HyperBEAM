@@ -1,6 +1,7 @@
+# [Module hb_test_utils.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_test_utils.erl)
 
 
-# Module hb_test_utils #
+
 
 Simple utilities for testing HyperBEAM.
 

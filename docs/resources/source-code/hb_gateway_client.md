@@ -1,6 +1,7 @@
+# [Module hb_gateway_client.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_gateway_client.erl)
 
 
-# Module hb_gateway_client #
+
 
 Implementation of Arweave's GraphQL API to gain access to specific
 items of data stored on the network.

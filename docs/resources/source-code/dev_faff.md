@@ -1,6 +1,7 @@
+# [Module dev_faff.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_faff.erl)
 
 
-# Module dev_faff #
+
 
 A module that implements a 'friends and family' pricing policy.
 

@@ -1,6 +1,7 @@
+# [Module ar_bundles.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_bundles.erl)
 
 
-# Module ar_bundles #
+
 
 <a name="index"></a>
 

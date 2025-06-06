@@ -1,6 +1,7 @@
+# [Module dev_delegated_compute.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_delegated_compute.erl)
 
 
-# Module dev_delegated_compute #
+
 
 Simple wrapper module that enables compute on remote machines,
 implementing the JSON-Iface.

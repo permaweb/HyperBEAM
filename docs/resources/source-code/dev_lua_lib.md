@@ -1,6 +1,7 @@
+# [Module dev_lua_lib.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_lua_lib.erl)
 
 
-# Module dev_lua_lib #
+
 
 A module for providing AO library functions to the Lua environment.
 

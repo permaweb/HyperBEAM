@@ -1,6 +1,7 @@
+# [Module ar_timestamp.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_timestamp.erl)
 
 
-# Module ar_timestamp #
+
 
 <a name="index"></a>
 

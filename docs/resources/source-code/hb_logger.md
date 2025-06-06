@@ -1,6 +1,7 @@
+# [Module hb_logger.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_logger.erl)
 
 
-# Module hb_logger #
+
 
 <a name="index"></a>
 

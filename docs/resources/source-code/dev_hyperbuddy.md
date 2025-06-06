@@ -1,6 +1,7 @@
+# [Module dev_hyperbuddy.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_hyperbuddy.erl)
 
 
-# Module dev_hyperbuddy #
+
 
 A device that renders a REPL-like interface for AO-Core via HTML.
 

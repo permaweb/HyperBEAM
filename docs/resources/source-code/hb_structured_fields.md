@@ -1,6 +1,7 @@
+# [Module hb_structured_fields.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_structured_fields.erl)
 
 
-# Module hb_structured_fields #
+
 
 A module for parsing and converting between Erlang and HTTP Structured
 Fields, as described in RFC-9651.

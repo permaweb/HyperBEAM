@@ -1,6 +1,7 @@
+# [Module dev_codec_flat.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_flat.erl)
 
 
-# Module dev_codec_flat #
+
 
 A codec for turning TABMs into/from flat Erlang maps that have
 (potentially multi-layer) paths as their keys, and a normal TABM binary as

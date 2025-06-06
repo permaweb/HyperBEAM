@@ -1,6 +1,7 @@
+# [Module hb_client.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_client.erl)
 
 
-# Module hb_client #
+
 
 <a name="index"></a>
 

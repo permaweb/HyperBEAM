@@ -1,6 +1,7 @@
+# [Module hb_event.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_event.erl)
 
 
-# Module hb_event #
+
 
 Wrapper for incrementing prometheus counters.
 

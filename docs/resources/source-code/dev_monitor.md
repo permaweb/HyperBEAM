@@ -1,6 +1,7 @@
+# [Module dev_monitor.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_monitor.erl)
 
 
-# Module dev_monitor #
+
 
 <a name="index"></a>
 

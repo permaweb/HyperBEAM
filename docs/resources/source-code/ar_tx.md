@@ -1,6 +1,7 @@
+# [Module ar_tx.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_tx.erl)
 
 
-# Module ar_tx #
+
 
 The module with utilities for transaction creation, signing, and verification.
 

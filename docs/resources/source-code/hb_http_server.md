@@ -1,6 +1,7 @@
+# [Module hb_http_server.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_http_server.erl)
 
 
-# Module hb_http_server #
+
 
 A router that attaches a HTTP server to the AO-Core resolver.
 
