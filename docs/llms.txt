@@ -1,4 +1,4 @@
-Generated: 2025-06-06T07:50:35Z
+Generated: 2025-06-06T15:56:03Z
 
 ## HyperBEAM Documentation Summary
 
@@ -9,8 +9,8 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 
 ### introduction
 
-* [AO Devices](./introduction/ao-devices.html)
-* [Pathing in AO-Core](./introduction/pathing-in-ao-core.html)
+* [AO Devices](./introduction/hyperbeam-devices.html)
+* [HyperPATHs in HyperBEAM](./introduction/hyperpaths-in-hyperbeam.html)
 * [What is AO-Core?](./introduction/what-is-ao-core.html)
 * [What is HyperBEAM?](./introduction/what-is-hyperbeam.html)
 
@@ -23,9 +23,11 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 
 ### uuild
 
-* [Exposing Process State with the Patch Device](./build/exposing-process-state.html)
+* [ao connect](./build/ao-connect.html)
+* [Extending HyperBEAM with Devices](./build/building-devices.html)
 * [Extending HyperBEAM](./build/extending-hyperbeam.html)
-* [Getting Started Building on AO-Core](./build/get-started-building-on-ao-core.html)
+* [Quickstart with HyperBEAM](./build/get-started-building-on-hyperbeam.html)
+* [Migrating from `legacynet` to HyperBEAM](./build/migrating-from-legacynet.html)
 * [Serverless Decentralized Compute on AO](./build/serverless-decentralized-compute.html)
 
 ### devices

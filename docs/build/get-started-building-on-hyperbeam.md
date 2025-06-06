@@ -1,15 +1,23 @@
-# Getting Started Building on AO-Core
+# Quickstart with HyperBEAM
 
 Welcome to building on AO, the decentralized supercomputer!
 
 AO combines the permanent storage of Arweave with the flexible, scalable computation enabled by the AO-Core protocol and its HyperBEAM implementation. This allows you to create truly autonomous applications, agents, and services that run trustlessly and permissionlessly.
 
-## Core Idea: Processes & Messages
+## Why build on HyperBEAM?
 
-At its heart, building on AO involves:
+Current cloud providers are centralized compute, which means you have to trust them with your data and your money. 
 
-1.  **Creating Processes:** Think of these as independent programs or stateful contracts. Each process has a unique ID and maintains its own state.
-2.  **Sending Messages:** You interact with processes by sending them messages. These messages trigger computations, update state, or cause the process to interact with other processes or the outside world.
+HyperBEAM gives you severless decentralized compute... where you own your data and you pay for only what you need.
+
+## Thinking in HyperBEAM (Viksit)
+
+Your severless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a prcoess on HyperBEAM whos state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
+    
+At its heart, building on HyperBEAM involves:
+
+1.  **Processes:** Think of these as independent programs or stateful contracts. Each process has a unique ID and maintains its own state.
+2.  **Messages:** You interact with processes by sending them messages. These messages trigger computations, update state, or cause the process to interact with other processes or the outside world.
 
 Messages are processed by [Devices](../introduction/ao-devices.md), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
 
@@ -32,27 +40,32 @@ The primary tool for interacting with AO and developing processes is `aos`, a co
     pnpm add -g https://get_ao.arweave.net
     ```
 
+**Installing HyperBEAM for Development**
+
+
+
 **Starting `aos`:**
 
 Simply run the command in your terminal:
 
 ```bash
-aos
+aos --mainnet "localhost:8734" myMainnetProcess
 ```
 
 This connects you to an interactive Lua environment running within a **process** on the AO network. This process acts as your command-line interface (CLI) to the AO network, allowing you to interact with other processes, manage your wallet, and develop new AO processes. By default, it connects to a process running on the mainnet Compute Unit (CU).
 
-**What `aos` is doing:**
+!!! note
+    **What `aos` is doing:**
 
-*   **Connecting:** Establishes a connection from your terminal to a remote process running the `aos` environment.
-*   **Loading Wallet:** Looks for a default Arweave key file (usually `~/.aos.json` or specified via arguments) to load into the remote process context for signing outgoing messages.
-*   **Providing Interface:** Gives you a Lua prompt (`[aos]>`) within the remote process where you can:
+    *   **Connecting:** Establishes a connection from your terminal to a remote process running the `aos` environment.
+    *   **Loading Wallet:** Looks for a default Arweave key file (usually `~/.aos.json` or specified via arguments) to load into the remote process context for signing outgoing messages.
+    *   **Providing Interface:** Gives you a Lua prompt (`[aos]>`) within the remote process where you can:
     *   Load code for new persistent processes on the network.
     *   Send messages to existing network processes.
     *   Inspect process state.
     *   Manage your local environment.
 
-## Your First Interaction: Assigning a Variable
+## Your First Interaction: Intializing a Variable
 
 From the `aos` prompt, you can assign a variable. Let's assign a basic Lua process that just holds some data:
 
@@ -66,8 +79,21 @@ From the `aos` prompt, you can assign a variable. Let's assign a basic Lua proce
 Hello from aos!
 ```
 
+## Send Your First Message
 
-## Your First Handler
+Let's send our variable to another process.
+
+```lua
+[aos]> Send({ Target = ao.id, Data = myVariable })
+```
+
+TODO: Add output
+
+
+## Creating Your First Handler
+
+Handlers are decentralized functions that can be triggered by messages.
+
 
 Follow these steps to create and interact with your first message handler in AO:
 
@@ -124,9 +150,6 @@ You've successfully created a handler, loaded it into your AO process, triggered
 
 ## Next Steps
 
-This is just the beginning. To dive deeper:
+To dive deeper into AOS and AO, check out the [AO Cookbook](https://cookbook_ao.arweave.net/).
 
-*   **AO Cookbook:** Explore practical examples and recipes for common tasks: [AO Cookbook](https://cookbook_ao.arweave.net/)
-*   **Expose Process State:** Learn how to make your process data accessible via HTTP using the `patch` device: [Exposing Process State](./exposing-process-state.md)
-*   **Serverless Compute:** Discover how to run WASM or Lua computations within your processes: [Serverless Decentralized Compute](./serverless-decentralized-compute.md)
-*   **aos Documentation:** Refer to the official `aos` documentation for detailed commands and usage.
+<!-- *   **Serverless Compute:** Discover how to run WASM or Lua computations within your processes: [Serverless Decentralized Compute](./serverless-decentralized-compute.md) -->
