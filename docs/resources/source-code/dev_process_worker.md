@@ -1,7 +1,6 @@
-# [Module dev_process_worker.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_process_worker.erl)
 
 
-
+# Module dev_process_worker #
 
 A long-lived process worker that keeps state in memory between
 calls.

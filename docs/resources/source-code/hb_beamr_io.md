@@ -1,7 +1,6 @@
-# [Module hb_beamr_io.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_beamr_io.erl)
 
 
-
+# Module hb_beamr_io #
 
 Simple interface for memory management for Beamr instances.
 

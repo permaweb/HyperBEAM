@@ -1,7 +1,6 @@
-# [Module hb_util.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_util.erl)
 
 
-
+# Module hb_util #
 
 A collection of utility functions for building with HyperBEAM.
 

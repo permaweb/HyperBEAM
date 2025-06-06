@@ -1,7 +1,6 @@
-# [Module hb_store.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_store.erl)
 
 
-
+# Module hb_store #
 
 <a name="index"></a>
 

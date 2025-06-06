@@ -1,7 +1,6 @@
-# [Module dev_cacheviz.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cacheviz.erl)
 
 
-
+# Module dev_cacheviz #
 
 A device that generates renders (or renderable dot output) of a node's
 cache.

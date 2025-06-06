@@ -1,7 +1,6 @@
-# [Module dev_scheduler_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_scheduler_cache.erl)
 
 
-
+# Module dev_scheduler_cache #
 
 <a name="index"></a>
 

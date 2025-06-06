@@ -1,7 +1,6 @@
-# [Module hb_store_rocksdb.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_store_rocksdb.erl)
 
 
-
+# Module hb_store_rocksdb #
 
 A process wrapper over rocksdb storage.
 

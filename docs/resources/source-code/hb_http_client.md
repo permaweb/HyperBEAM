@@ -1,7 +1,6 @@
-# [Module hb_http_client.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_http_client.erl)
 
 
-
+# Module hb_http_client #
 
 A wrapper library for gun.
 

@@ -1,7 +1,6 @@
-# [Module hb_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_cache.erl)
 
 
-
+# Module hb_cache #
 
 A cache of AO-Core protocol messages and compute results.
 

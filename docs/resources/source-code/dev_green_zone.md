@@ -1,7 +1,6 @@
-# [Module dev_green_zone.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_green_zone.erl)
 
 
-
+# Module dev_green_zone #
 
 The green zone device, which provides secure communication and identity
 management between trusted nodes.

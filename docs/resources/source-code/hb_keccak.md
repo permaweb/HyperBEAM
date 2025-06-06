@@ -1,7 +1,6 @@
-# [Module hb_keccak.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_keccak.erl)
 
 
-
+# Module hb_keccak #
 
 <a name="index"></a>
 
