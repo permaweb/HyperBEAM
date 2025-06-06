@@ -1,4 +1,4 @@
-Generated: 2025-06-04T03:11:58Z
+Generated: 2025-06-06T08:58:51Z
 
 ## HyperBEAM Documentation Summary
 
@@ -39,6 +39,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [Device: ~relay@1.0](./devices/relay-at-1-0.html)
 * [Device: ~scheduler@1.0](./devices/scheduler-at-1-0.html)
 * [Device: ~wasm64@1.0](./devices/wasm64-at-1-0.html)
+* [What are HyperBEAM Devices?](./devices/what-are-devices.html)
 
 ### resources
 

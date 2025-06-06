@@ -40,7 +40,7 @@ Create a `.env` file with the following minimal configuration:
 
 ```bash
 UNIT_MODE=hbu
-HB_URL=http://localhost:10000
+HB_URL=http://localhost:8734
 PORT=6363
 WALLET_FILE=./wallet.json
 NODE_CONFIG_ENV="development"

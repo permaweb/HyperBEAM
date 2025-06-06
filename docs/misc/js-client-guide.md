@@ -51,7 +51,7 @@ import { HyperBEAMClient } from './hyperbeam-client.js';
 
 // Create a client instance
 const client = new HyperBEAMClient({
-    nodeUrl: 'http://localhost:10000',  // HyperBEAM node URL
+    nodeUrl: 'http://localhost:8734',  // HyperBEAM node URL
     keyPath: 'wallet.json'              // Path to your wallet key file
 });
 

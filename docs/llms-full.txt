@@ -1,4 +1,4 @@
-Generated: 2025-06-04T03:11:58Z
+Generated: 2025-06-06T08:58:51Z
 
 --- START OF FILE: docs/build/exposing-process-state.md ---
 # Exposing Process State with the Patch Device
@@ -213,7 +213,7 @@ At its heart, building on AO involves:
 1.  **Creating Processes:** Think of these as independent programs or stateful contracts. Each process has a unique ID and maintains its own state.
 2.  **Sending Messages:** You interact with processes by sending them messages. These messages trigger computations, update state, or cause the process to interact with other processes or the outside world.
 
-Messages are processed by [Devices](../begin/ao-devices.md), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
+Messages are processed by [Devices](../introduction/ao-devices.md), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
 
 ## Starting `aos`: Your Development Environment
 
@@ -415,7 +415,7 @@ This usually involves interacting with nodes specifically advertised as TEE-enab
 *   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_codec_httpsig`](../resources/source-code/dev_codec_httpsig.md)).
 *   You might query the [`~snp@1.0`](../resources/source-code/dev_snp.md) device directly on the node to get its attestation report.
 
-Refer to documentation on [TEE Nodes](./run/tee-nodes.md) and the [`~snp@1.0`](../resources/source-code/dev_snp.md) device for details.
+Refer to documentation on [TEE Nodes](../run/tee-nodes.md) and the [`~snp@1.0`](../resources/source-code/dev_snp.md) device for details.
 
 By leveraging WASM, Lua, and optional TEE attestations, AO provides a powerful platform for building complex, verifiable, and truly decentralized serverless applications.
 
@@ -967,6 +967,36 @@ This setup allows AO processes to leverage the computational power and language 
 
 --- END OF FILE: docs/devices/wasm64-at-1-0.md ---
 
+--- START OF FILE: docs/devices/what-are-devices.md ---
+# What are HyperBEAM Devices?
+
+Devices are the core functional units within HyperBEAM and AO-Core. They define how messages are processed and what actions can be performed.
+
+Each device listed here represents a specific capability available to AO processes and nodes. Understanding these devices is key to building complex applications and configuring your HyperBEAM node effectively.
+
+## Available Devices
+
+Below is a list of documented built-in devices. Each page details the device's purpose, available functions (keys), and usage examples where applicable.
+
+*   **[`~message@1.0`](./message-at-1-0.md):** Base message handling and manipulation.
+*   **[`~meta@1.0`](./meta-at-1-0.md):** Node configuration and metadata.
+*   **[`~process@1.0`](./process-at-1-0.md):** Persistent, shared process execution environment.
+*   **[`~scheduler@1.0`](./scheduler-at-1-0.md):** Message scheduling and execution ordering for processes.
+*   **[`~wasm64@1.0`](./wasm64-at-1-0.md):** WebAssembly (WASM) execution engine.
+*   **[`~lua@5.3a`](./lua-at-5-3a.md):** Lua script execution engine.
+*   **[`~relay@1.0`](./relay-at-1-0.md):** Relaying messages to other nodes or HTTP endpoints.
+*   **[`~json@1.0`](./json-at-1-0.md):** Provides access to JSON data structures using HyperPATHs.
+
+*(More devices will be documented here as specifications are finalized and reviewed.)*
+
+## Device Naming and Versioning
+
+Devices are typically referenced using a name and version, like `~<name>@<version>` (e.g., `~process@1.0`). The tilde (`~`) often indicates a primary, user-facing device, while internal or utility devices might use a `dev_` prefix in the source code (e.g., `dev_router`).
+
+Versioning indicates the specific interface and behavior of the device. Changes to a device that break backward compatibility usually result in a version increment.
+
+--- END OF FILE: docs/devices/what-are-devices.md ---
+
 --- START OF FILE: docs/introduction/ao-devices.md ---
 # AO Devices
 
@@ -1175,9 +1205,56 @@ AO-Core is the foundational protocol underpinning the [AO Computer](https://ao.a
 
 AO-Core revolves around three fundamental components:
 
-1.  **Messages:** The smallest units of data and computation. Messages can be simple data blobs or maps of named functions. They are the primary means of communication and triggering execution within the system. Messages are cryptographically linked, forming a verifiable computation graph.
-2.  **Devices:** Modules responsible for interpreting and processing messages. Each device defines specific logic for how messages are handled (e.g., executing WASM, storing data, relaying information). This modular design allows nodes to specialize and the system to be highly extensible.
-3.  **Paths:** Structures that link messages over time, creating a verifiable history of computations. Paths allow users to navigate the computation graph and access specific states or results. They leverage `HashPaths`, cryptographic fingerprints representing the sequence of operations leading to a specific message state, ensuring traceability and integrity.
+<div class="grid-docs">
+
+<div class="grid-docs-card">
+<p><strong>Messages</strong></p>
+<div class="grid-docs-card-fig">
+<svg width="73" height="26" viewBox="0 0 73 26" fill="none" xmlns="http://www.w3.org/2000/svg">
+<line x1="0.5" x2="0.5" y2="26" stroke="#5F5F5F"/>
+<line x1="72.5" x2="72.5" y2="26" stroke="#5F5F5F"/>
+<path d="M9 13H21.0416" stroke="#5F5F5F" stroke-width="2" stroke-linecap="square"/>
+<path d="M31.0416 13H43.0832" stroke="#5F5F5F" stroke-width="2" stroke-linecap="square"/>
+<path d="M53.0832 13H65.1248" stroke="#5F5F5F" stroke-width="2" stroke-linecap="square"/>
+</svg>
+</div>
+<p>The smallest units of data and computation. Messages can be simple data blobs or maps of named functions.</p> <p>They are the primary means of communication and triggering execution within the system.</p> <p>Messages are cryptographically linked, forming a verifiable computation graph.</p>
+</div>
+
+<div class="grid-docs-card">
+<p><strong>Devices</strong></p>
+<div>
+<div class="grid-docs-card-fig">
+<svg width="85" height="68" viewBox="0 0 85 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M54 26H72V50" stroke="#6F6F6F" stroke-width="1" stroke-linejoin="round" stroke-dasharray="1 1"/>
+<path d="M25 1H43V25" stroke="#6F6F6F" stroke-width="1" stroke-linejoin="round" stroke-dasharray="1 1"/>
+<rect x="0.238661" y="0.625025" width="25.4567" height="18.2528" rx="0.954642" fill="white" stroke="#6F6F6F" stroke-width="1"/>
+<rect x="29.8775" y="25.0153" width="25.4567" height="18.2528" rx="0.954642" fill="white" stroke="#6F6F6F" stroke-width="1"/>
+<rect x="59.2387" y="49.2387" width="25.4567" height="18.2528" rx="0.954642" fill="white" stroke="#6F6F6F" stroke-width="1"/>
+</svg>
+</div>
+<div>
+<p>Modules responsible for interpreting and processing messages. </p> <p>Each device defines specific logic for how messages are handled (e.g., executing WASM, storing data, relaying information). </p><p>This modular design allows nodes to specialize and the system to be highly extensible.</p>
+</div>
+</div>
+
+<div class="grid-docs-card">
+<p><strong>Paths</strong></p>
+<div class="grid-docs-card-fig">
+<svg width="66" height="66" viewBox="0 0 66 66" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M15 31H28" stroke="#5F5F5F" stroke-width="1" stroke-dasharray="1 1"/>
+<path d="M35 51V38" stroke="#5F5F5F" stroke-width="1" stroke-dasharray="1 1"/>
+<path d="M42 24.1924L51.1924 15" stroke="#5F5F5F" stroke-width="1" stroke-dasharray="1 1"/>
+<rect x="0.8" y="23.8" width="14.4" height="14.4" fill="white" stroke="#5F5F5F" stroke-width="1"/>
+<rect x="27.8" y="23.8" width="14.4" height="14.4" fill="white" stroke="#5F5F5F" stroke-width="1"/>
+<rect x="27.8" y="50.8" width="14.4" height="14.4" fill="white" stroke="#5F5F5F" stroke-width="1"/>
+<rect x="50.8" y="0.8" width="14.4" height="14.4" fill="white" stroke="#5F5F5F" stroke-width="1"/>
+</svg>
+</div>
+<p>Structures that link messages over time, creating a verifiable history of computations. </p> <p>Paths allow users to navigate the computation graph and access specific states or results. </p> <P>They leverage <code>HashPaths</code>, cryptographic fingerprints representing the sequence of operations leading to a specific message state, ensuring traceability and integrity.</p>
+</div>
+
+</div>
 
 ## Key Principles
 
@@ -8556,11 +8633,13 @@ it if it does not exist). Otherwise, the message specified by the given
 `slot` key will be pushed.
 
 Optional parameters:
+
 `/result-depth`: The depth to which the full contents of the result
 will be included in the response. Default: 1, returning
 the full result of the first message, but only the 'tree'
 of downstream messages.
-`/push-mode`:    Whether or not the push should be done asynchronously.
+
+`/push-mode`: Whether or not the push should be done asynchronously.
 Default: `sync`, pushing synchronously.
 
 <a name="push_prompts_encoding_change_test-0"></a>
@@ -21326,7 +21405,7 @@ See the dedicated **[Configuring Your HyperBEAM Node](./configuring-your-machine
 To quickly check if your node is running and accessible, you can send a request to its `~meta@1.0` device (assuming default port 10000):
 
 ```bash
-curl http://localhost:10000/~meta@1.0/info
+curl http://localhost:8734/~meta@1.0/info
 ```
 
 A JSON response containing node information indicates success.

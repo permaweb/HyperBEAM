@@ -189,7 +189,7 @@ See the dedicated **[Configuring Your HyperBEAM Node](./configuring-your-machine
 To quickly check if your node is running and accessible, you can send a request to its `~meta@1.0` device (assuming default port 10000):
 
 ```bash
-curl http://localhost:10000/~meta@1.0/info
+curl http://localhost:8734/~meta@1.0/info
 ```
 
 A JSON response containing node information indicates success.

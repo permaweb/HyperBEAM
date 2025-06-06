@@ -7,11 +7,15 @@
     const body = document.querySelector("body");
     const tabs = document.querySelector(".md-tabs");
 
-    const segments = window.location.pathname.split("/").filter(Boolean);
-    const arweavePath = segments.length === 1 && segments[0].length === 43;
-    const isHomepage = segments.length === 0 || arweavePath;
+    if (!header || !main) {
+      // console.warn("Header or main element not found for class update.");
+      return;
+    }
 
-    if (!header || !main) return;
+    const segments = window.location.pathname.split("/").filter(Boolean);
+    const isArweaveIdPath = segments.length === 1 && segments[0].length === 43;
+    const isRootPath = segments.length === 0;
+    const isHomepage = isRootPath || isArweaveIdPath;
 
     if (isHomepage) {
       header.classList.add("custom-homepage-header");
@@ -30,16 +34,19 @@
   // Initial run
   updateHeaderAndMainClass();
 
-  // Watch for URL changes
-  const observer = new MutationObserver(() => {
+  // Function to handle path changes
+  function handlePathChange() {
     if (window.location.pathname !== currentPath) {
       currentPath = window.location.pathname;
       updateHeaderAndMainClass();
     }
-  });
+  }
 
+  // Watch for URL changes via MutationObserver (for client-side navigation)
+  const observer = new MutationObserver(handlePathChange);
   observer.observe(document.body, { childList: true, subtree: true });
 
+  // Also listen for popstate (browser back/forward)
   window.addEventListener("popstate", updateHeaderAndMainClass);
 })();
 

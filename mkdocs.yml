@@ -25,7 +25,7 @@ nav:
       - Serverless decentralized compute: 'build/serverless-decentralized-compute.md'
       - Extending HyperBEAM: 'build/extending-hyperbeam.md'
   - Devices:
-      - Overview: 'devices/overview.md'
+      - 'What are HyperBEAM Devices?': 'devices/what-are-devices.md'
       - '~meta@1.0': 'devices/meta-at-1-0.md'
       - '~process@1.0': 'devices/process-at-1-0.md'
       - '~message@1.0': 'devices/message-at-1-0.md'
@@ -35,11 +35,11 @@ nav:
       - '~scheduler@1.0': 'devices/scheduler-at-1-0.md'
       - '~relay@1.0': 'devices/relay-at-1-0.md'
   - Resources:
-    # - Overview: 'resources/source-code/index.md'
+      # - Troubleshooting: 'resources/reference/troubleshooting.md'
     - FAQ: 'resources/reference/faq.md'
-    - LLMs.txt: 'resources/llms.md'
     - Glossary: 'resources/reference/glossary.md'
-    - Source Code Modules:
+    - LLMs.txt: 'resources/llms.md'
+    - Source Code:
       - Modules:
         - ar_bundles: 'resources/source-code/ar_bundles.md'
         - ar_deep_hash: 'resources/source-code/ar_deep_hash.md'
@@ -143,8 +143,6 @@ nav:
         - hb_volume: 'resources/source-code/hb_volume.md'
         - hb: 'resources/source-code/hb.md'
         - rsa_pss: 'resources/source-code/rsa_pss.md'
-    # - Troubleshooting: 'resources/reference/troubleshooting.md'
-
   # - Community:
   #   - Contribute Overview: 'community/guidelines.md'
     # - Development Setup: 'community/setup.md'
