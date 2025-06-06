@@ -28,7 +28,7 @@ once(_Msg1, Msg2, Opts) ->
 		not_found ->
 			{error, <<"No cron path found in message.">>};
 		CronPath ->
-			ReqMsgID = hb_message:id(Msg2, all),
+			ReqMsgID = hb_message:id(Msg2, all, Opts),
 			% make the path specific for the end device to be used
 			ModifiedMsg2 =
                 maps:remove(
@@ -78,7 +78,7 @@ every(_Msg1, Msg2, Opts) ->
 				true ->
 					ok
 				end,
-				ReqMsgID = hb_message:id(Msg2, all),
+				ReqMsgID = hb_message:id(Msg2, all, Opts),
 				ModifiedMsg2 =
                     maps:remove(
                         <<"cron-path">>,
@@ -142,7 +142,7 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
 	?event(
         {cron_every_worker_executing,
             {path, CronPath},
-            {req_id, hb_message:id(Req, all)}
+            {req_id, hb_message:id(Req, all, Opts)}
         }
     ),
 	try

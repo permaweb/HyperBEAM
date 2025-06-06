@@ -32,7 +32,7 @@ enabled() -> false.
 
 -ifdef(ENABLE_ROCKSDB).
 %% @doc Start the RocksDB store.
-start_link(#{ <<"store-module">> := hb_store_rocksdb, <<"prefix">> := Dir}) ->
+start_link(#{ <<"store-module">> := hb_store_rocksdb, <<"name">> := Dir}) ->
     ?event(rocksdb, {starting, Dir}),
     application:ensure_all_started(rocksdb),
     gen_server:start_link({local, ?MODULE}, ?MODULE, Dir, []);
@@ -57,7 +57,7 @@ start_link(_Opts) -> ignore.
 
 -endif.
 
-start(Opts = #{ <<"store-module">> := hb_store_rocksdb, <<"prefix">> := _Dir}) ->
+start(Opts = #{ <<"store-module">> := hb_store_rocksdb, <<"name">> := _Dir}) ->
     start_link(Opts);
 start(Opts) ->
     start_link(Opts).
@@ -178,7 +178,7 @@ type(Opts, RawKey) ->
     Opts :: any(),
     Key :: binary(),
     Result :: ok | {error, already_added}.
-make_group(#{ <<"prefix">> := _DataDir }, Key) ->
+make_group(#{ <<"name">> := _DataDir }, Key) ->
     gen_server:call(?MODULE, {make_group, Key}, ?TIMEOUT);
 make_group(_Opts, Key) ->
     gen_server:call(?MODULE, {make_group, Key}, ?TIMEOUT).
@@ -402,7 +402,7 @@ get_or_start_server() ->
     % Store = lists:keyfind(hb_store_rocksdb2, 1, hb_store:test_stores()),
     Opts = #{
         <<"store-module">> => hb_store_rocksdb,
-        <<"prefix">> => <<"cache-TEST/rocksdb">>
+        <<"name">> => <<"cache-TEST/rocksdb">>
     },
     case start_link(Opts) of
         {ok, Pid} ->

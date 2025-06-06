@@ -105,7 +105,8 @@ verify(M1, M2, NodeOpts) ->
     NonceMatches = report_data_matches(Address, NodeMsgID, Nonce),
     ?event({nonce_matches, NonceMatches}),
     % Step 2: Verify the address and the signature.
-    Signers = hb_message:signers(MsgWithJSONReport),
+    Signers = hb_message:signers(MsgWithJSONReport, NodeOpts),
+    Signers = hb_message:signers(MsgWithJSONReport, NodeOpts),
     ?event({snp_signers, {explicit, Signers}}),
     SigIsValid = hb_message:verify(MsgWithJSONReport, Signers),
     ?event({snp_sig_is_valid, SigIsValid}),
@@ -128,7 +129,10 @@ verify(M1, M2, NodeOpts) ->
                             fun atom_to_binary/1,
                             ?COMMITTED_PARAMETERS
                         ),
-                        hb_ao:get(<<"local-hashes">>, Msg, NodeOpts)
+                        hb_cache:ensure_all_loaded(
+                            hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
+                            NodeOpts
+                        )
                     )
                 )
             )
@@ -170,16 +174,17 @@ verify(M1, M2, NodeOpts) ->
 %% message ID), as well as the expected measurement (firmware, kernel, and VMSAs
 %% hashes).
 generate(_M1, _M2, Opts) ->
-    ?event({generate_opts, {explicit, Opts}}),
-    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
+    LoadedOpts = hb_cache:ensure_all_loaded(Opts, Opts),
+    ?event({generate_opts, {explicit, LoadedOpts}}),
+    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, LoadedOpts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     % ?event({snp_wallet, Wallet}),
     % Remove the `priv*' keys from the options.
     {ok, PublicNodeMsgID} =
         dev_message:id(
-                NodeMsg = hb_private:reset(Opts),
+                NodeMsg = hb_private:reset(LoadedOpts),
                 #{ <<"committers">> => <<"none">> },
-                Opts
+                LoadedOpts
             ),
     RawPublicNodeMsgID = hb_util:native_id(PublicNodeMsgID),
     ?event({snp_node_msg, NodeMsg}),
@@ -189,28 +194,24 @@ generate(_M1, _M2, Opts) ->
     ?event({snp_address,  byte_size(Address)}),
     ReportData = generate_nonce(Address, RawPublicNodeMsgID),
     ?event({snp_report_data, byte_size(ReportData)}),
-
-    LocalHashes = hd(hb_opts:get(snp_trusted, [#{}], Opts)),
+    LocalHashes = hd(hb_opts:get(snp_trusted, [#{}], LoadedOpts)),
     ?event(snp_local_hashes, {explicit, LocalHashes}),
-    
     {ok, ReportJSON} = dev_snp_nif:generate_attestation_report(ReportData, 1),
     ?event({snp_report_json, ReportJSON}),
-
     ?event(
         {snp_report_generated,
             {nonce, ReportData},
             {report, ReportJSON}
         }
     ),
-    ReportMsg = hb_message:commit(#{
-        <<"local-hashes">> => LocalHashes,
-        <<"nonce">> => hb_util:encode(ReportData),
-        <<"address">> => Address,
-        <<"node-message">> => NodeMsg,
-        <<"report">> => ReportJSON
-    }, Wallet),
-    
-    ?event({verify_res, hb_message:verify(ReportMsg)}),
+    ReportMsg = 
+        #{
+            <<"local-hashes">> => LocalHashes,
+            <<"nonce">> => hb_util:encode(ReportData),
+            <<"address">> => Address,
+            <<"node-message">> => NodeMsg,
+            <<"report">> => ReportJSON
+        },
     ?event({snp_report_msg, ReportMsg}),
     {ok, ReportMsg}.
 
