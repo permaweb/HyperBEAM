@@ -11,6 +11,8 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 
 * [AO Devices](./introduction/hyperbeam-devices.html)
 * [HyperPATHs in HyperBEAM](./introduction/hyperpaths-in-hyperbeam.html)
+* [AO Devices](./introduction/hyperbeam-devices.html)
+* [HyperPATHs in HyperBEAM](./introduction/hyperpaths-in-hyperbeam.html)
 * [What is AO-Core?](./introduction/what-is-ao-core.html)
 * [What is HyperBEAM?](./introduction/what-is-hyperbeam.html)
 

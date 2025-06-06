@@ -14,6 +14,8 @@ nav:
       - What is AO-Core?: 'introduction/what-is-ao-core.md'
       - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
       - HyperPATHs: 'introduction/hyperpaths-in-hyperbeam.md'
+      - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
+      - HyperPATHs: 'introduction/hyperpaths-in-hyperbeam.md'
   - Run a Node:
       - Running a HyperBEAM Node: 'run/running-a-hyperbeam-node.md'
       - Configuring Your Machine: 'run/configuring-your-machine.md'
@@ -39,7 +41,7 @@ nav:
       # - Troubleshooting: 'resources/reference/troubleshooting.md'
     - FAQ: 'resources/reference/faq.md'
     - Glossary: 'resources/reference/glossary.md'
-    - LLMs.txt: 'resources/llms.md'
+    # - LLMs.txt: 'resources/llms.md'
     - Source Code:
       - Modules:
         - ar_bundles: 'resources/source-code/ar_bundles.md'
@@ -144,6 +146,8 @@ nav:
         - hb_volume: 'resources/source-code/hb_volume.md'
         - hb: 'resources/source-code/hb.md'
         - rsa_pss: 'resources/source-code/rsa_pss.md'
+  - Fuel Your LLM: 'resources/llms.md' 
+      # - Overview: 
   # - Community:
   #   - Contribute Overview: 'community/guidelines.md'
     # - Development Setup: 'community/setup.md'
@@ -174,7 +178,7 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
   - toc:
-      toc_depth: 2
+      toc_depth: 3
       permalink: true
 
 theme: 
