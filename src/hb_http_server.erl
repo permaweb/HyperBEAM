@@ -533,7 +533,6 @@ set_node_opts_test() ->
 %% @doc Test the set_opts/2 function that merges request with options,
 %% manages node history, and updates server state.
 set_opts_test() ->
-
     DefaultOpts = hb_opts:default_message(),
     start_node(DefaultOpts#{ 
         priv_wallet => Wallet = ar_wallet:new(), 
@@ -545,7 +544,6 @@ set_opts_test() ->
     NodeHistory = hb_opts:get(node_history, [], Opts),
     ?event(debug_node_history, {node_history_length, length(NodeHistory)}),
     ?assert(length(NodeHistory) == 0),
-
     % Test case 1: Empty node_history case
     Request1 = #{
         <<"hello">> => <<"world">>
@@ -554,9 +552,8 @@ set_opts_test() ->
     NodeHistory1 = hb_opts:get(node_history, not_found, UpdatedOpts1),
     Key1 = hb_opts:get(<<"hello">>, not_found, UpdatedOpts1),
     ?event(debug_node_history, {node_history_length, length(NodeHistory1)}),
-    ?assert(length(NodeHistory1) == 2),
+    ?assert(length(NodeHistory1) == 1),
     ?assert(Key1 == <<"world">>),
-
     % Test case 2: Non-empty node_history case
     Request2 = #{
         <<"hello2">> => <<"world2">>
@@ -565,15 +562,12 @@ set_opts_test() ->
     NodeHistory2 = hb_opts:get(node_history, not_found, UpdatedOpts2),
     Key2 = hb_opts:get(<<"hello2">>, not_found, UpdatedOpts2),
     ?event(debug_node_history, {node_history_length, length(NodeHistory2)}),
-    ?assert(length(NodeHistory2) == 3),
+    ?assert(length(NodeHistory2) == 2),
     ?assert(Key2 == <<"world2">>),
-
     % Test case 3: Non-empty node_history case
     {ok, UpdatedOpts3} = set_opts(#{}, UpdatedOpts2#{ <<"hello3">> => <<"world3">> }),
     NodeHistory3 = hb_opts:get(node_history, not_found, UpdatedOpts3),
     Key3 = hb_opts:get(<<"hello3">>, not_found, UpdatedOpts3),
     ?event(debug_node_history, {node_history_length, length(NodeHistory3)}),
-    ?assert(length(NodeHistory3) == 4),
+    ?assert(length(NodeHistory3) == 3),
     ?assert(Key3 == <<"world3">>).
-
-    

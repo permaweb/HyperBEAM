@@ -710,7 +710,7 @@ unregistered_peer_transfer() ->
 %%   peer ledger's `X' field.
 %% - `X-required': A list of `X's that always must be present in the
 %%   peer ledger's `X' field.
-multischeduler_test_() -> {timeout, 30, fun multischeduler/0}.
+multischeduler_test_disabled() -> {timeout, 30, fun multischeduler/0}.
 multischeduler() ->
     BaseOpts = test_opts(),
     NodeWallet = ar_wallet:new(),

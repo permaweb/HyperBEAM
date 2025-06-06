@@ -138,7 +138,7 @@ to(TABM0, Req, Opts) ->
     % 3. Recursively decode any maps that we encounter;
     % 4. Return the remaining keys and values as a map.
     ResMsg =
-        hb_message:filter_default_keys(maps:fold(
+        maps:fold(
             fun (<<"ao-types">>, _Value, Acc) -> Acc;
             (RawKey, BinValue, Acc) when is_binary(BinValue) ->
                 case hb_maps:find(hb_ao:normalize_key(RawKey), Types, Opts) of
@@ -160,7 +160,7 @@ to(TABM0, Req, Opts) ->
             end,
             #{},
             TABM1
-        )),
+        ),
     % If the message is a list, we need to convert it back.
     case maps:get(<<".">>, Types, not_found) of
         not_found -> {ok, ResMsg};

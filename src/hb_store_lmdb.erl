@@ -303,7 +303,6 @@ scope(_) -> scope().
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
 -spec list(map(), binary()) -> {ok, [binary()]} | {error, term()}.
 list(Opts, Path) when is_map(Opts), is_binary(Path) ->
-    Env = find_env(Opts),
     % Check if Path is a link and resolve it if necessary
     ResolvedPath =
         case read_with_flush(Opts, Path) of
@@ -393,7 +392,7 @@ fold_after(Opts, Path, Fun, Acc) ->
 
 fold_cursor(not_found, Txn, Cur, _Fun, Acc) ->
     ok = elmdb:ro_txn_cursor_close(Cur),
-    ok = elmdb:ro_txn_commit(Txn),
+    ok = elmdb:ro_txn_abort(Txn),
     {ok, Acc};
 fold_cursor({ok, Key, Value}, Txn, Cur, Fun, Acc) ->
     fold_cursor(
@@ -592,8 +591,8 @@ start(Opts = #{ <<"name">> := DataDir }) ->
         elmdb:env_open(
             hb_util:list(DataDir),
             [
-                map_async,
-                {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)}
+                {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
+                no_mem_init, no_read_ahead
             ]
         ),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
@@ -741,7 +740,8 @@ server_write(RawState, Key, Value) ->
                 Class:Reason:Stacktrace ->
                     ?event(error, {put_failed, Class, Reason, Stacktrace, Key}),
                     % If put fails, the transaction may be invalid, clean it up
-                    State#{ <<"transaction">> => undefined }
+                    State#{ <<"transaction">> => undefined },
+                ok
             end
     end.
 

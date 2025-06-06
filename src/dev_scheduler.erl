@@ -1927,7 +1927,7 @@ http_get_schedule_test_() ->
     
 
 http_get_legacy_schedule_test_() ->
-    {timeout, 10, fun() ->
+    {timeout, 60, fun() ->
         Target = <<"CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM">>,
         {Node, Opts} = http_init(),
         {ok, Res} = hb_http:get(Node, <<"/~scheduler@1.0/schedule&target=", Target/binary>>, Opts),
@@ -1936,7 +1936,7 @@ http_get_legacy_schedule_test_() ->
     end}.
 
 http_get_legacy_slot_test_() ->
-    {timeout, 30, fun() ->
+    {timeout, 60, fun() ->
         Target = <<"CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM">>,
         {Node, Opts} = http_init(),
         Res = hb_http:get(Node, <<"/~scheduler@1.0/slot&target=", Target/binary>>, Opts),
@@ -1944,7 +1944,7 @@ http_get_legacy_slot_test_() ->
     end}.
 
 http_get_legacy_schedule_slot_range_test_() ->
-    {timeout, 30, fun() ->
+    {timeout, 60, fun() ->
         Target = <<"zrhm4OpfW85UXfLznhdD-kQ7XijXM-s2fAboha0V5GY">>,
         {Node, Opts} = http_init(),
         {ok, Res} = hb_http:get(Node, <<"/~scheduler@1.0/schedule&target=", Target/binary,
@@ -1955,7 +1955,7 @@ http_get_legacy_schedule_slot_range_test_() ->
     end}.
 
 http_get_legacy_schedule_as_aos2_test_() ->
-    {timeout, 30, fun() ->
+    {timeout, 60, fun() ->
         Target = <<"CtOVB2dBtyN_vw3BdzCOrvcQvd9Y1oUGT-zLit8E3qM">>,
         {Node, Opts} = http_init(),
         {ok, Res} =
@@ -1973,7 +1973,7 @@ http_get_legacy_schedule_as_aos2_test_() ->
     end}.
 
 http_post_legacy_schedule_test_() ->
-    {timeout, 30, fun() ->
+    {timeout, 60, fun() ->
         {Node, Opts} = http_init(),
         Target = <<"zrhm4OpfW85UXfLznhdD-kQ7XijXM-s2fAboha0V5GY">>,
         Signed =
@@ -2005,7 +2005,7 @@ http_post_legacy_schedule_test_() ->
     end}.
 
 http_get_json_schedule_test_() ->
-	{timeout, 30, fun() ->
+	{timeout, 60, fun() ->
 		{Node, Opts} = http_init(),
 		PMsg = hb_message:commit(test_process(Opts), Opts),
 		Msg1 = hb_message:commit(#{

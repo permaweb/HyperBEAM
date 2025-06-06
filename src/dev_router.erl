@@ -967,6 +967,7 @@ dynamic_routing_by_performance() ->
                 XNode =
                     hb_http_server:start_node(
                         #{
+                            store => hb_opts:get(store),
                             on =>
                                 #{
                                     <<"request">> => #{
