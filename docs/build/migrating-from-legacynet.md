@@ -10,13 +10,7 @@ HyperBEAM is not just an update; it's a new foundation designed for building hig
 *   **Powerful Developer Tools:** HyperBEAM exposes all of it's state through HTTP, you can use any standard HTTP library to interact with it. 
 *   **Easy Extensibility:** It allows core feature extensiblity through [modular devices](../introduction/ao-devices.md).
 
-## Start Migrating Your Processes
-
 The process of migration involves updating your process to take advantage of the new features available in HyperBEAM. One of the most impactful new features is the ability to directly expose parts of your process state for immediate reading via HTTP, which dramatically improves the performance of web frontends and data-driven services.
-
-For a practical guide on how to use one of these new, powerful features to make your applications more performant, we strongly recommend reviewing our documentation on **[Exposing Process State with the Patch Device](./migrating-from-legacynet.md#exposing-process-state-with-the-patch-device)**. This guide will walk you through a new pattern available in HyperBEAM that can help you refactor your legacy processes for better performance and user experience.
-
-Take the next step and begin migrating your `legacynet` processes to HyperBEAM to build faster, more capable decentralized applications.
 
 ## Exposing Process State with the Patch Device
 
@@ -36,7 +30,7 @@ This is particularly useful for:
 
 ### How it Works
 
-1.  **Process Logic:** Inside your AO process code (e.g., in Lua or WASM), when you want to expose data, you construct an **Outbound Message** targeted at the [`~patch@1.0`](../resources/source-code/dev_patch.md) device.
+1.  **Process Logic:** Inside your AO process code (e.g., in Lua or WASM), when you want to expose data, you construct an *outbound message* targeted at the [`~patch@1.0`](../resources/source-code/dev_patch.md) device.
 2.  **Patch Message Format:** This outbound message typically includes tags that specify:
     *   `device = 'patch@1.0'`
     *   A `cache` tag containing a table. The **keys** within this table become the final segments in the HyperPATH used to access the data, and the **values** are the data itself.
@@ -99,13 +93,14 @@ Handlers.add(
     print("Published data to /cache/currentstatus")
   end
 )
+```
 
+```bash
 -- Spawning and interacting
-[aos]> MyProcess = spawn(MyModule)
+default@aos-2.0.6> MyProcess = spawn(MyModule)
 
-[aos]> Send({ Target = MyProcess, Action = "PublishData" })
+default@aos-2.0.6> Send({ Target = MyProcess, Action = "PublishData" })
 -- Wait a moment for scheduling
-
 ```
 
 ### Avoiding Key Conflicts

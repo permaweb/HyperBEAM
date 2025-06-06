@@ -22,13 +22,13 @@ WebAssembly (WASM) allows you to run precompiled code written in languages like 
 2.  **Upload:** Upload the `.wasm` file to Arweave to get a `<WasmCodeTxID>`.
 3.  **Spawn Process (using `aos`):**
     ```lua
-    [aos]> Send({ Target = "AOS", Action = "Spawn", Module = "<WasmCodeTxID>", Scheduler = "<OptionalSchedulerProcessID>" })
+    default@aos-2.0.6> Send({ Target = "AOS", Action = "Spawn", Module = "<WasmCodeTxID>", Scheduler = "<OptionalSchedulerProcessID>" })
     -- This returns a <ProcessID>
     ```
     *(Note: The exact spawning mechanism might vary; consult `aos` or relevant SDK documentation. You specify that this process uses WASM.)*
 4.  **Send Message to Trigger Execution:**
     ```lua
-    [aos]> Send({ Target = "<ProcessID>", Action = "ExecuteFunction", InputData = "Some data for WASM" })
+    default@aos-2.0.6> Send({ Target = "<ProcessID>", Action = "ExecuteFunction", InputData = "Some data for WASM" })
     ```
     The HyperBEAM node executing this will load the WASM module identified by `<WasmCodeTxID>`, run its handler function (triggered by `Action = "ExecuteFunction"`) with `"Some data for WASM"` as input, and update the state of `<ProcessID>`.
 
@@ -53,12 +53,12 @@ Lua provides a lightweight scripting environment directly within AO.
     ```
 2.  **Load & Spawn (using `aos`):**
     ```lua
-    [aos]> .load my_script.lua
-    [aos]> MyLuaProcess = spawn(MyModule)
+    default@aos-2.0.6> .load my_script.lua
+    default@aos-2.0.6> MyLuaProcess = spawn(MyModule)
     ```
 3.  **Send Message:**
     ```lua
-    [aos]> Send({ Target = MyLuaProcess, Action = "Calculate", Value = "7" })
+    default@aos-2.0.6> Send({ Target = MyLuaProcess, Action = "Calculate", Value = "7" })
     ```
     The node executes the `Calculate` handler within the Lua script associated with `MyLuaProcess`. -->
 
