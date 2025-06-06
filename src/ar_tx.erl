@@ -206,4 +206,4 @@ tx_to_json_struct(
             false ->
                 Fields
         end,
-    maps:from_list(Fields2).
+    hb_maps:from_list(Fields2).

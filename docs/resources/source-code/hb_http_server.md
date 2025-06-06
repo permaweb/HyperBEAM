@@ -23,9 +23,10 @@ the execution parameters of all downstream requests to be controlled.<a name="in
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#allowed_methods-2">allowed_methods/2</a></td><td>Return the list of allowed methods for the HTTP server.</td></tr><tr><td valign="top"><a href="#cors_reply-2">cors_reply/2*</a></td><td>Reply to CORS preflight requests.</td></tr><tr><td valign="top"><a href="#get_opts-1">get_opts/1</a></td><td></td></tr><tr><td valign="top"><a href="#handle_request-3">handle_request/3*</a></td><td>Handle all non-CORS preflight requests as AO-Core requests.</td></tr><tr><td valign="top"><a href="#http3_conn_sup_loop-0">http3_conn_sup_loop/0*</a></td><td></td></tr><tr><td valign="top"><a href="#init-2">init/2</a></td><td>Entrypoint for all HTTP requests.</td></tr><tr><td valign="top"><a href="#new_server-1">new_server/1*</a></td><td>Trigger the creation of a new HTTP server node.</td></tr><tr><td valign="top"><a href="#read_body-1">read_body/1*</a></td><td>Helper to grab the full body of a HTTP request, even if it's chunked.</td></tr><tr><td valign="top"><a href="#read_body-2">read_body/2*</a></td><td></td></tr><tr><td valign="top"><a href="#set_default_opts-1">set_default_opts/1</a></td><td></td></tr><tr><td valign="top"><a href="#set_node_opts_test-0">set_node_opts_test/0*</a></td><td>Ensure that the <code>start</code> hook can be used to modify the node options.</td></tr><tr><td valign="top"><a href="#set_opts-1">set_opts/1</a></td><td>Merges the provided <code>Opts</code> with uncommitted values from <code>Request</code>,
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#allowed_methods-2">allowed_methods/2</a></td><td>Return the list of allowed methods for the HTTP server.</td></tr><tr><td valign="top"><a href="#cors_reply-2">cors_reply/2*</a></td><td>Reply to CORS preflight requests.</td></tr><tr><td valign="top"><a href="#get_opts-0">get_opts/0</a></td><td>Get the node message for the current process.</td></tr><tr><td valign="top"><a href="#get_opts-1">get_opts/1</a></td><td></td></tr><tr><td valign="top"><a href="#handle_request-3">handle_request/3*</a></td><td>Handle all non-CORS preflight requests as AO-Core requests.</td></tr><tr><td valign="top"><a href="#http3_conn_sup_loop-0">http3_conn_sup_loop/0*</a></td><td></td></tr><tr><td valign="top"><a href="#init-2">init/2</a></td><td>Entrypoint for all HTTP requests.</td></tr><tr><td valign="top"><a href="#new_server-1">new_server/1*</a></td><td>Trigger the creation of a new HTTP server node.</td></tr><tr><td valign="top"><a href="#read_body-1">read_body/1*</a></td><td>Helper to grab the full body of a HTTP request, even if it's chunked.</td></tr><tr><td valign="top"><a href="#read_body-2">read_body/2*</a></td><td></td></tr><tr><td valign="top"><a href="#set_default_opts-1">set_default_opts/1</a></td><td>Apply the default node message to the given opts map.</td></tr><tr><td valign="top"><a href="#set_node_opts_test-0">set_node_opts_test/0*</a></td><td>Ensure that the <code>start</code> hook can be used to modify the node options.</td></tr><tr><td valign="top"><a href="#set_opts-1">set_opts/1</a></td><td>Merges the provided <code>Opts</code> with uncommitted values from <code>Request</code>,
 preserves the http_server value, and updates node_history by prepending
-the <code>Request</code>.</td></tr><tr><td valign="top"><a href="#set_opts-2">set_opts/2</a></td><td></td></tr><tr><td valign="top"><a href="#start-0">start/0</a></td><td>Starts the HTTP server.</td></tr><tr><td valign="top"><a href="#start-1">start/1</a></td><td></td></tr><tr><td valign="top"><a href="#start_http2-3">start_http2/3*</a></td><td></td></tr><tr><td valign="top"><a href="#start_http3-3">start_http3/3*</a></td><td></td></tr><tr><td valign="top"><a href="#start_node-0">start_node/0</a></td><td>Test that we can start the server, send a message, and get a response.</td></tr><tr><td valign="top"><a href="#start_node-1">start_node/1</a></td><td></td></tr></table>
+the <code>Request</code>.</td></tr><tr><td valign="top"><a href="#set_opts-2">set_opts/2</a></td><td></td></tr><tr><td valign="top"><a href="#set_opts_test-0">set_opts_test/0*</a></td><td>Test the set_opts/2 function that merges request with options,
+manages node history, and updates server state.</td></tr><tr><td valign="top"><a href="#set_proc_server_id-1">set_proc_server_id/1</a></td><td>Initialize the server ID for the current process.</td></tr><tr><td valign="top"><a href="#start-0">start/0</a></td><td>Starts the HTTP server.</td></tr><tr><td valign="top"><a href="#start-1">start/1</a></td><td></td></tr><tr><td valign="top"><a href="#start_http2-3">start_http2/3*</a></td><td></td></tr><tr><td valign="top"><a href="#start_http3-3">start_http3/3*</a></td><td></td></tr><tr><td valign="top"><a href="#start_node-0">start_node/0</a></td><td>Test that we can start the server, send a message, and get a response.</td></tr><tr><td valign="top"><a href="#start_node-1">start_node/1</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -47,6 +48,14 @@ Return the list of allowed methods for the HTTP server.
 `cors_reply(Req, ServerID) -> any()`
 
 Reply to CORS preflight requests.
+
+<a name="get_opts-0"></a>
+
+### get_opts/0 ###
+
+`get_opts() -> any()`
+
+Get the node message for the current process.
 
 <a name="get_opts-1"></a>
 
@@ -112,6 +121,8 @@ Helper to grab the full body of a HTTP request, even if it's chunked.
 
 `set_default_opts(Opts) -> any()`
 
+Apply the default node message to the given opts map.
+
 <a name="set_node_opts_test-0"></a>
 
 ### set_node_opts_test/0 * ###
@@ -140,6 +151,23 @@ variable 'node_msg' with the resulting options map.
 ### set_opts/2 ###
 
 `set_opts(Request, Opts) -> any()`
+
+<a name="set_opts_test-0"></a>
+
+### set_opts_test/0 * ###
+
+`set_opts_test() -> any()`
+
+Test the set_opts/2 function that merges request with options,
+manages node history, and updates server state.
+
+<a name="set_proc_server_id-1"></a>
+
+### set_proc_server_id/1 ###
+
+`set_proc_server_id(ServerID) -> any()`
+
+Initialize the server ID for the current process.
 
 <a name="start-0"></a>
 

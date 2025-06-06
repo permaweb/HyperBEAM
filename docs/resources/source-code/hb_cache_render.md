@@ -10,26 +10,26 @@ A module that helps to render given Key graphs into the .dot files.
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_arc-4">add_arc/4*</a></td><td>Add an arc to the graph.</td></tr><tr><td valign="top"><a href="#add_node-3">add_node/3*</a></td><td>Add a node to the graph.</td></tr><tr><td valign="top"><a href="#cache_path_to_dot-2">cache_path_to_dot/2</a></td><td>Generate a dot file from a cache path and options/store.</td></tr><tr><td valign="top"><a href="#cache_path_to_dot-3">cache_path_to_dot/3</a></td><td></td></tr><tr><td valign="top"><a href="#cache_path_to_graph-3">cache_path_to_graph/3</a></td><td>Main function to collect graph elements.</td></tr><tr><td valign="top"><a href="#collect_output-2">collect_output/2*</a></td><td>Helper function to collect output from port.</td></tr><tr><td valign="top"><a href="#dot_to_svg-1">dot_to_svg/1</a></td><td>Convert a dot graph to SVG format.</td></tr><tr><td valign="top"><a href="#extract_label-1">extract_label/1*</a></td><td>Extract a label from a path.</td></tr><tr><td valign="top"><a href="#get_graph_data-1">get_graph_data/1</a></td><td>Get graph data for the Three.js visualization.</td></tr><tr><td valign="top"><a href="#get_label-1">get_label/1*</a></td><td>Extract a readable label from a path.</td></tr><tr><td valign="top"><a href="#get_node_type-1">get_node_type/1*</a></td><td>Convert node color from hb_cache_render to node type for visualization.</td></tr><tr><td valign="top"><a href="#graph_to_dot-1">graph_to_dot/1*</a></td><td>Generate the DOT file from the graph.</td></tr><tr><td valign="top"><a href="#prepare_deeply_nested_complex_message-0">prepare_deeply_nested_complex_message/0</a></td><td></td></tr><tr><td valign="top"><a href="#prepare_signed_data-0">prepare_signed_data/0</a></td><td></td></tr><tr><td valign="top"><a href="#prepare_unsigned_data-0">prepare_unsigned_data/0</a></td><td></td></tr><tr><td valign="top"><a href="#process_composite_node-6">process_composite_node/6*</a></td><td>Process a composite (directory) node.</td></tr><tr><td valign="top"><a href="#process_simple_node-6">process_simple_node/6*</a></td><td>Process a simple (leaf) node.</td></tr><tr><td valign="top"><a href="#render-1">render/1</a></td><td>Render the given Key into svg.</td></tr><tr><td valign="top"><a href="#render-2">render/2</a></td><td></td></tr><tr><td valign="top"><a href="#test_signed-2">test_signed/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_unsigned-1">test_unsigned/1*</a></td><td></td></tr><tr><td valign="top"><a href="#traverse_store-4">traverse_store/4*</a></td><td>Traverse the store recursively to build the graph.</td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_arc-5">add_arc/5*</a></td><td>Add an arc to the graph.</td></tr><tr><td valign="top"><a href="#add_node-4">add_node/4*</a></td><td>Add a node to the graph.</td></tr><tr><td valign="top"><a href="#cache_path_to_dot-2">cache_path_to_dot/2</a></td><td>Generate a dot file from a cache path and options/store.</td></tr><tr><td valign="top"><a href="#cache_path_to_dot-3">cache_path_to_dot/3</a></td><td></td></tr><tr><td valign="top"><a href="#cache_path_to_graph-3">cache_path_to_graph/3</a></td><td>Main function to collect graph elements.</td></tr><tr><td valign="top"><a href="#cache_path_to_graph-4">cache_path_to_graph/4*</a></td><td></td></tr><tr><td valign="top"><a href="#collect_output-2">collect_output/2*</a></td><td>Helper function to collect output from port.</td></tr><tr><td valign="top"><a href="#dot_to_svg-1">dot_to_svg/1</a></td><td>Convert a dot graph to SVG format.</td></tr><tr><td valign="top"><a href="#extract_label-1">extract_label/1*</a></td><td>Extract a label from a path.</td></tr><tr><td valign="top"><a href="#get_graph_data-3">get_graph_data/3</a></td><td>Get graph data for the Three.js visualization.</td></tr><tr><td valign="top"><a href="#get_label-1">get_label/1*</a></td><td>Extract a readable label from a path.</td></tr><tr><td valign="top"><a href="#get_node_type-1">get_node_type/1*</a></td><td>Convert node color from hb_cache_render to node type for visualization.</td></tr><tr><td valign="top"><a href="#graph_to_dot-2">graph_to_dot/2*</a></td><td>Generate the DOT file from the graph.</td></tr><tr><td valign="top"><a href="#prepare_deeply_nested_complex_message-0">prepare_deeply_nested_complex_message/0</a></td><td></td></tr><tr><td valign="top"><a href="#prepare_signed_data-0">prepare_signed_data/0</a></td><td></td></tr><tr><td valign="top"><a href="#prepare_unsigned_data-0">prepare_unsigned_data/0</a></td><td></td></tr><tr><td valign="top"><a href="#process_composite_node-7">process_composite_node/7*</a></td><td>Process a composite (directory) node.</td></tr><tr><td valign="top"><a href="#process_simple_node-7">process_simple_node/7*</a></td><td>Process a simple (leaf) node.</td></tr><tr><td valign="top"><a href="#render-1">render/1</a></td><td>Render the given Key into svg.</td></tr><tr><td valign="top"><a href="#render-2">render/2</a></td><td></td></tr><tr><td valign="top"><a href="#test_signed-2">test_signed/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_unsigned-1">test_unsigned/1*</a></td><td></td></tr><tr><td valign="top"><a href="#traverse_store-5">traverse_store/5*</a></td><td>Traverse the store recursively to build the graph.</td></tr></table>
 
 
 <a name="functions"></a>
 
 ## Function Details ##
 
-<a name="add_arc-4"></a>
+<a name="add_arc-5"></a>
 
-### add_arc/4 * ###
+### add_arc/5 * ###
 
-`add_arc(Graph, From, To, Label) -> any()`
+`add_arc(Graph, From, To, Label, Opts) -> any()`
 
 Add an arc to the graph
 
-<a name="add_node-3"></a>
+<a name="add_node-4"></a>
 
-### add_node/3 * ###
+### add_node/4 * ###
 
-`add_node(Graph, ID, Color) -> any()`
+`add_node(Graph, ID, Color, Opts) -> any()`
 
 Add a node to the graph
 
@@ -55,6 +55,12 @@ Generate a dot file from a cache path and options/store
 
 Main function to collect graph elements
 
+<a name="cache_path_to_graph-4"></a>
+
+### cache_path_to_graph/4 * ###
+
+`cache_path_to_graph(InitPath, GraphOpts, Store, Opts) -> any()`
+
 <a name="collect_output-2"></a>
 
 ### collect_output/2 * ###
@@ -79,11 +85,11 @@ Convert a dot graph to SVG format
 
 Extract a label from a path
 
-<a name="get_graph_data-1"></a>
+<a name="get_graph_data-3"></a>
 
-### get_graph_data/1 ###
+### get_graph_data/3 ###
 
-`get_graph_data(Opts) -> any()`
+`get_graph_data(Base, MaxSize, Opts) -> any()`
 
 Get graph data for the Three.js visualization
 
@@ -103,11 +109,11 @@ Extract a readable label from a path
 
 Convert node color from hb_cache_render to node type for visualization
 
-<a name="graph_to_dot-1"></a>
+<a name="graph_to_dot-2"></a>
 
-### graph_to_dot/1 * ###
+### graph_to_dot/2 * ###
 
-`graph_to_dot(Graph) -> any()`
+`graph_to_dot(Graph, Opts) -> any()`
 
 Generate the DOT file from the graph
 
@@ -129,19 +135,19 @@ Generate the DOT file from the graph
 
 `prepare_unsigned_data() -> any()`
 
-<a name="process_composite_node-6"></a>
+<a name="process_composite_node-7"></a>
 
-### process_composite_node/6 * ###
+### process_composite_node/7 * ###
 
-`process_composite_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph) -> any()`
+`process_composite_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph, Opts) -> any()`
 
 Process a composite (directory) node
 
-<a name="process_simple_node-6"></a>
+<a name="process_simple_node-7"></a>
 
-### process_simple_node/6 * ###
+### process_simple_node/7 * ###
 
-`process_simple_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph) -> any()`
+`process_simple_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph, Opts) -> any()`
 
 Process a simple (leaf) node
 
@@ -171,11 +177,11 @@ Render the given Key into svg
 
 `test_unsigned(Data) -> any()`
 
-<a name="traverse_store-4"></a>
+<a name="traverse_store-5"></a>
 
-### traverse_store/4 * ###
+### traverse_store/5 * ###
 
-`traverse_store(Store, Key, Parent, Graph) -> any()`
+`traverse_store(Store, Path, Parent, Graph, Opts) -> any()`
 
 Traverse the store recursively to build the graph
 

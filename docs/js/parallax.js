@@ -9,15 +9,15 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
-  // 2) Grab only the homepage header and its logo
+  // 2) Grab only the homepage header, its logo, and the hero wrapper
   const header = document.querySelector(".custom-homepage-header");
   const scrollContainer = document.querySelector(".custom-homepage-main");
   const logo = header?.querySelector(".md-logo");
+  const heroFloating = document.querySelector(".hero-floating-wrapper");
 
-  if (!header || !scrollContainer || !logo) {
-    // If something is missing, bail out quietly
+  if (!header || !scrollContainer || !logo || !heroFloating) {
     return console.log(
-      "Homepage-header or scroll-container or .md-logo not found."
+      "Homepage-header, scroll-container, .md-logo, or .hero-floating-wrapper not found."
     );
   }
 
@@ -28,24 +28,42 @@ document.addEventListener("DOMContentLoaded", () => {
     const scrollTop = scrollContainer.scrollTop;
     const vh = window.innerHeight;
 
-    const fadeStart = vh * 1.35; // header BG starts at 135% of viewport height
-    const fadeEnd = vh * 1.45; // fully opaque at 145%
+    const headerFadeStart = vh * 1.35; // header BG starts at 135% of viewport height
+    const headerFadeEnd = vh * 1.45; // fully opaque at 145%
 
-    let opacity;
-    if (scrollTop <= fadeStart) {
-      opacity = 0;
-    } else if (scrollTop >= fadeEnd) {
-      opacity = 1;
+    const logoFadeStart = vh * 1.1;
+    const logoFadeEnd = vh * 1.2;
+
+    // Calculate header opacity (0 → 1 between headerFadeStart and headerFadeEnd)
+    let headerOpacity;
+    if (scrollTop <= headerFadeStart) {
+      headerOpacity = 0;
+    } else if (scrollTop >= headerFadeEnd) {
+      headerOpacity = 1;
     } else {
-      opacity = (scrollTop - fadeStart) / (fadeEnd - fadeStart);
+      headerOpacity =
+        (scrollTop - headerFadeStart) / (headerFadeEnd - headerFadeStart);
+    }
+
+    // Calculate logo opacity (0 → 1 between logoFadeStart and logoFadeEnd)
+    let logoOpacity;
+    if (scrollTop <= logoFadeStart) {
+      logoOpacity = 0;
+    } else if (scrollTop >= logoFadeEnd) {
+      logoOpacity = 1;
+    } else {
+      logoOpacity = (scrollTop - logoFadeStart) / (logoFadeEnd - logoFadeStart);
     }
 
     // 3) Apply fade to header background + invert filter
-    header.style.backgroundColor = `rgba(255, 255, 255, ${opacity})`;
-    header.style.filter = `invert(${1 - opacity})`;
+    header.style.backgroundColor = `rgba(255, 255, 255, ${headerOpacity})`;
+    header.style.filter = `invert(${1 - headerOpacity})`;
 
     // 4) Sync the logo’s opacity
-    logo.style.opacity = opacity;
+    logo.style.opacity = logoOpacity;
+
+    // 5) Fade out .hero-floating-wrapper in the same window (inverse of headerOpacity)
+    heroFloating.style.opacity = 1 - headerOpacity;
   }
 
   scrollContainer.addEventListener("scroll", () => {

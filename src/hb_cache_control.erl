@@ -53,8 +53,8 @@ lookup(Msg1, Msg2, Opts) ->
         Settings = #{ <<"lookup">> := true } ->
             OutputScopedOpts = 
                 hb_store:scope(
-                    hb_opts:get(store_scope_resolved, local, Opts),
-                    Opts
+                    Opts,
+                    hb_opts:get(store_scope_resolved, local, Opts)
                 ),
             case hb_cache:read_resolved(Msg1, Msg2, OutputScopedOpts) of
                 {ok, Msg3} ->
@@ -180,7 +180,7 @@ is_explicit_lookup(Msg1, #{ <<"path">> := Key }, Opts) ->
     % If we have `only-if-cached' in the opts, we always force lookup, too.
     case specifiers_to_cache_settings(hb_opts:get(cache_control, [], Opts)) of
         #{ <<"only-if-cached">> := true } -> false;
-        _ -> is_map(Msg1) andalso maps:is_key(Key, Msg1)
+        _ -> is_map(Msg1) andalso hb_maps:is_key(Key, Msg1, Opts)
     end.
 
 %% @doc Derive cache settings from a series of option sources and the opts,
@@ -193,7 +193,7 @@ is_explicit_lookup(Msg1, #{ <<"path">> := Key }, Opts) ->
 derive_cache_settings(SourceList, Opts) ->
     lists:foldr(
         fun(Source, Acc) ->
-            maybe_set(Acc, cache_source_to_cache_settings(Source))
+            maybe_set(Acc, cache_source_to_cache_settings(Source, Opts), Opts)
         end,
         #{ <<"store">> => ?DEFAULT_STORE_OPT, <<"lookup">> => ?DEFAULT_LOOKUP_OPT },
         [{opts, Opts}|lists:filter(fun erlang:is_map/1, SourceList)]
@@ -201,16 +201,16 @@ derive_cache_settings(SourceList, Opts) ->
 
 %% @doc Takes a key and two maps, returning the first map with the key set to
 %% the value of the second map _if_ the value is not undefined.
-maybe_set(Map1, Map2) ->
+maybe_set(Map1, Map2, Opts) ->
     lists:foldl(
         fun(Key, AccMap) ->
-            case maps:get(Key, Map2) of
+            case hb_maps:get(Key, Map2, undefined, Opts) of
                 undefined -> AccMap;
-                Value -> maps:put(Key, Value, AccMap)
+                Value -> hb_maps:put(Key, Value, AccMap, Opts)
             end
         end,
         Map1,
-        maps:keys(Map2)
+        hb_maps:keys(Map2, Opts)
     ).
 
 %% @doc Convert a cache source to a cache setting. The setting _must_ always be
@@ -219,14 +219,14 @@ maybe_set(Map1, Map2) ->
 %% cases, except where an `Opts' specifies that hashpaths should not be updated,
 %% which leads to the result not being cached (as it may be stored with an 
 %% incorrect hashpath).
-cache_source_to_cache_settings({opts, Opts}) ->
+cache_source_to_cache_settings({opts, Opts}, _) ->
     CCMap = specifiers_to_cache_settings(hb_opts:get(cache_control, [], Opts)),
     case hb_opts:get(hashpath, update, Opts) of
         ignore -> CCMap#{ <<"store">> => false };
         _ -> CCMap
     end;
-cache_source_to_cache_settings(Msg) ->
-    case dev_message:get(<<"cache-control">>, Msg) of
+cache_source_to_cache_settings(Msg, Opts) ->
+    case dev_message:get(<<"cache-control">>, Msg, Opts) of
         {ok, CC} -> specifiers_to_cache_settings(CC);
         {error, not_found} -> #{}
     end.
@@ -346,7 +346,8 @@ message_without_cache_control_test() ->
 opts_source_cache_control_test() ->
     Result =
         cache_source_to_cache_settings(
-            {opts, opts_with_cc([<<"no-store">>])}
+            {opts, opts_with_cc([<<"no-store">>])},
+            #{}
         ),
     ?assertEqual(#{
         <<"store">> => false,
@@ -356,7 +357,7 @@ opts_source_cache_control_test() ->
 
 message_source_cache_control_test() ->
     Msg = msg_with_cc([<<"no-cache">>]),
-    Result = cache_source_to_cache_settings(Msg),
+    Result = cache_source_to_cache_settings(Msg, #{}),
     ?assertEqual(#{
         <<"store">> => undefined,
         <<"lookup">> => false,

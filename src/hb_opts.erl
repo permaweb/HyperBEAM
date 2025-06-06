@@ -13,8 +13,9 @@
 %%% deterministic behavior impossible, the caller should fail the execution 
 %%% with a refusal to execute.
 -module(hb_opts).
--export([get/1, get/2, get/3, load/1, load_bin/1]).
--export([default_message/0, mimic_default_types/2, validate_node_history/1, validate_node_history/3]).
+-export([get/1, get/2, get/3, as/2, identities/1, load/1, load/2, load_bin/2]).
+-export([default_message/0, mimic_default_types/3]).
+-export([ensure_node_history/2]).
 -export([check_required_opts/2]).
 -include("include/hb.hrl").
 
@@ -49,6 +50,7 @@ default_message() ->
         %% Preloaded devices for the node to use. These names override
         %% resolution of devices via ID to the default implementations.
         preloaded_devices => [
+            #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
             #{<<"name">> => <<"compute@1.0">>, <<"module">> => dev_cu},
             #{<<"name">> => <<"cache@1.0">>, <<"module">> => dev_cache},
@@ -126,14 +128,15 @@ default_message() ->
         debug_print_binary_max => 60,
         debug_print_indent => 2,
         debug_print => false,
-        stack_print_prefixes => ["hb", "dev", "ar"],
+        stack_print_prefixes => ["hb", "dev", "ar", "maps"],
         debug_print_trace => short, % `short' | `false'. Has performance impact.
-        short_trace_len => 5,
+        short_trace_len => 20,
         debug_metadata => true,
         debug_ids => true,
         debug_committers => false,
-        debug_show_priv => false,
-        snp_trusted => [],
+        debug_show_priv => if_present,
+        debug_resolve_links => false,
+		trusted => #{},
         routes => [
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
@@ -167,9 +170,22 @@ default_message() ->
         ],
         store =>
             [
+                % #{
+                %     <<"name">> => <<"cache-mainnet/lru">>,
+                %     <<"capacity">> => 512 * 1024 * 1024,
+                %     <<"store-module">> => hb_store_lru,
+                %     <<"persistent-store">> => #{
+                %         <<"store-module">> => hb_store_fs,
+                %         <<"name">> => <<"cache-mainnet/lru">>
+                %     }
+                % },
+                #{
+                    <<"name">> => <<"cache-mainnet/lmdb">>,
+                    <<"store-module">> => hb_store_lmdb
+                },
                 #{
                     <<"store-module">> => hb_store_fs,
-                    <<"prefix">> => <<"cache-mainnet">>
+                    <<"name">> => <<"cache-mainnet">>
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
@@ -180,24 +196,25 @@ default_message() ->
                         }
                     ],
                     <<"store">> => 
-                     [
+                    [
                         #{
-                            <<"store-module">> => hb_store_fs,
-                            <<"prefix">> => <<"cache-mainnet">>
-                         }
-                     ]
+                            <<"store-module">> => hb_store_lmdb,
+                            <<"name">> => <<"cache-mainnet/lmdb">>
+                        }
+                    ]
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
                     <<"store">> =>
                         [
                             #{
-                                <<"store-module">> => hb_store_fs,
-                                <<"prefix">> => <<"cache-mainnet">>
+                                <<"store-module">> => hb_store_lmdb,
+                                <<"name">> => <<"cache-mainnet/lmdb">>
                             }
                         ]
                 }
             ],
+        default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
         % Should we use the latest cached state of a process when computing?
         process_now_from_cache => false,
         % Should we trust the GraphQL API when converting to ANS-104? Some GQL
@@ -246,8 +263,8 @@ get(Key, Default, Opts = #{ only := local }) ->
         error -> 
             Default
     end;
-get(Key, Default, #{ only := global }) ->
-    case global_get(Key, hb_opts_not_found) of
+get(Key, Default, Opts = #{ only := global }) ->
+    case global_get(Key, hb_opts_not_found, Opts) of
         hb_opts_not_found -> Default;
         Value -> Value
     end;
@@ -294,14 +311,14 @@ get(Key, Default, Opts) ->
 ).
 
 %% @doc Get an environment variable or configuration key.
-global_get(Key, Default) ->
+global_get(Key, Default, Opts) ->
     case maps:get(Key, ?ENV_KEYS, Default) of
-        Default -> config_lookup(Key, Default);
+        Default -> config_lookup(Key, Default, Opts);
         {EnvKey, ValParser, DefaultValue} when is_function(ValParser) ->
             ValParser(cached_os_env(EnvKey, normalize_default(DefaultValue)));
         {EnvKey, ValParser} when is_function(ValParser) ->
             case cached_os_env(EnvKey, not_found) of
-                not_found -> config_lookup(Key, Default);
+                not_found -> config_lookup(Key, Default, Opts);
                 Value -> ValParser(Value)
             end;
         {EnvKey, DefaultValue} ->
@@ -334,31 +351,39 @@ normalize_default(Default) -> Default.
 %% @doc An abstraction for looking up configuration variables. In the future,
 %% this is the function that we will want to change to support a more dynamic
 %% configuration system.
-config_lookup(Key, Default) -> maps:get(Key, default_message(), Default).
+config_lookup(Key, Default, Opts) -> hb_maps:get(Key, default_message(), Default, Opts).
 
 %% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the 
 %% keys to those in the default message.
-load(Path) ->
+load(Path) -> load(Path, #{}).
+load(Path, Opts) ->
     case file:read_file(Path) of
         {ok, Bin} ->
-            load_bin(Bin);
+            load_bin(Bin, Opts);
         _ -> {error, not_found}
     end.
-load_bin(Bin) ->
-    try dev_codec_flat:deserialize(Bin) of
-        {ok, Map} -> {ok, mimic_default_types(Map, new_atoms)}
+load_bin(Bin, Opts) ->
+    % Trim trailing whitespace from each line in the file.
+    Ls =
+        lists:map(
+            fun(Line) -> string:trim(Line, trailing) end,
+            binary:split(Bin, <<"\n">>, [global])
+        ),
+    try dev_codec_flat:deserialize(iolist_to_binary(lists:join(<<"\n">>, Ls))) of
+        {ok, Map} ->
+            {ok, mimic_default_types(Map, new_atoms, Opts)}
     catch
         error:B -> {error, B}
     end.
 
 %% @doc Mimic the types of the default message for a given map.
-mimic_default_types(Map, Mode) ->
+mimic_default_types(Map, Mode, Opts) ->
     Default = default_message(),
-    maps:from_list(lists:map(
+    hb_maps:from_list(lists:map(
         fun({Key, Value}) ->
             NewKey = try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end,
             NewValue = 
-                case maps:get(NewKey, Default, not_found) of
+                case hb_maps:get(NewKey, Default, not_found, Opts) of
                     not_found -> Value;
                     DefaultValue when is_atom(DefaultValue) ->
                         hb_util:atom(Value);
@@ -372,43 +397,69 @@ mimic_default_types(Map, Mode) ->
                 end,
             {NewKey, NewValue}
         end,
-        maps:to_list(Map)
+        hb_maps:to_list(Map, Opts)
     )).
-    
-%% @doc Validate that the node_history length is within an acceptable range.
-%% @param Opts The options map containing node_history
-%% @param MinLength The minimum acceptable length of node_history
-%% @param MaxLength The maximum acceptable length of node_history
-%% @returns `{ok, Length}' if `MinLength =< Length =< MaxLength',
-%% or `{error, Reason}' if the length is outside the range.
-validate_node_history(Opts) ->
-    validate_node_history(Opts, 1, 1).
-validate_node_history(Opts, MinLength, MaxLength) ->
-    Length = length(hb_opts:get(node_history, [], Opts)),
-    if
-        Length >= MinLength, Length =< MaxLength -> 
-            {ok, Length};
-        Length < MinLength -> 
-            {
-                error,
-                <<
-                    "Node history too short. Expected at least ",
-                    (integer_to_binary(MinLength))/binary,
-                    " entries, got ",
-                    (integer_to_binary(Length))/binary,
-                    "."
-                >>
-            };
-        true -> 
-            {
-                error,
-                <<
-                    "Node history too long. Expected at most ",
-                    (integer_to_binary(MaxLength))/binary,
-                    " entries, got ",
-                    (integer_to_binary(Length))/binary,
-                    "."
-                >>
+
+%% @doc Find a given identity from the `identities' map, and return the options
+%% merged with the sub-options for that identity.
+as(Identity, Opts) ->
+    case identities(Opts) of
+        #{ Identity := SubOpts } ->
+            ?event({found_identity_sub_opts_are, SubOpts}),
+            {ok, maps:merge(Opts, mimic_default_types(SubOpts, new_atoms, Opts))};
+        _ ->
+            {error, not_found}
+    end.
+
+%% @doc Find all known IDs and their sub-options from the `priv_ids' map. Allows
+%% the identities to be named, or based on addresses. The results are normalized
+%% such that the map returned by this function contains both mechanisms for 
+%% finding an identity and its sub-options. Additionally, sub-options are also
+%% normalized such that the `address' property is present and accurate for all
+%% given identities.
+identities(Opts) ->
+    identities(hb:wallet(), Opts).
+identities(Default, Opts) ->
+    Named = ?MODULE:get(identities, #{}, Opts),
+    % Generate an address-based map of identities.
+    Addresses =
+        maps:from_list(lists:filtermap(
+            fun({_Name, SubOpts}) ->
+                case maps:find(priv_wallet, SubOpts) of
+                    {ok, Wallet} ->
+                        Addr = hb_util:human_id(ar_wallet:to_address(Wallet)),
+                        {true, {Addr, SubOpts}};
+                    error -> false
+                end
+            end,
+            maps:to_list(Named)
+        )),
+    % Merge the named and address-based maps. Normalize each result to ensure
+    % that the `address' property is present and accurate.
+    Identities =
+        maps:map(
+            fun(_NameOrID, SubOpts) ->
+                case maps:find(priv_wallet, SubOpts) of
+                    {ok, Wallet} ->
+                        SubOpts#{ <<"address">> => hb_util:human_id(Wallet) };
+                    error -> SubOpts
+                end
+            end,
+            maps:merge(Named, Addresses)
+        ),
+    ?event({identities_without_default, Identities}),
+    % Add a default identity if one is not already present.
+    DefaultWallet = ?MODULE:get(priv_wallet, Default, Opts),
+    case maps:find(DefaultID = hb_util:human_id(DefaultWallet), Identities) of
+        {ok, _} -> Identities;
+        error ->
+            Identities#{
+                DefaultID => #{
+                    priv_wallet => DefaultWallet
+                },
+                <<"default">> => #{
+                    priv_wallet => DefaultWallet
+                }
             }
     end.
 
@@ -442,6 +493,103 @@ check_required_opts(KeyValuePairs, Opts) ->
             ),
             ErrorMsg = <<"Missing required opts: ", MissingOptsStr/binary>>,
             {error, ErrorMsg}
+    end.
+
+%% @doc Ensures all items in a node history meet required configuration options.
+%%
+%% This function verifies that the first item (complete opts) contains all required
+%% configuration options and that their values match the expected format. Then it
+%% validates that subsequent history items (which represent differences) never
+%% modify any of the required keys from the first item.
+%%
+%% Validation is performed in two steps:
+%% 1. Checks that the first item has all required keys and valid values
+%% 2. Verifies that subsequent items don't modify any required keys from the first item
+%%
+%% @param Opts The complete options map (will become first item in history)
+%% @param RequiredOpts A map of options that must be present and unchanging
+%% @returns 
+%% `{ok, <<"valid">>}' when validation passes
+%% `{error, <<"missing_keys">>}' when required keys are missing from first item
+%% `{error, <<"invalid_values">>}' when first item values don't match requirements
+%% `{error, <<"modified_required_key">>}' when history items modify required keys
+%% `{error, <<"validation_failed">>}' when other validation errors occur
+-spec ensure_node_history(NodeHistory :: list() | term(), RequiredOpts :: map()) -> 
+    {ok, binary()} | {error, binary()}.
+ensure_node_history(Opts, RequiredOpts) ->
+    ?event(validate_history_items, {required_opts, RequiredOpts}),
+    maybe
+        % Get the node history from the options
+        NodeHistory = hb_opts:get(node_history, [], Opts),
+        % Add the Opts to the node history to validate all items
+        NodeHistoryWithOpts = [ Opts | NodeHistory ],
+        % Normalize required options
+        NormalizedRequiredOpts ?= hb_ao:normalize_keys(RequiredOpts),
+        % Normalize all node history items once
+        NormalizedNodeHistory ?= lists:map(
+            fun(Item) -> 
+                hb_ao:normalize_keys(Item)
+            end,
+            NodeHistoryWithOpts
+        ),
+        % Get the first item (complete opts) and remaining items (differences)
+        [FirstItem | RemainingItems] = NormalizedNodeHistory,
+        
+        % Step 1: Validate first item has all required keys
+        FirstItemKeysPresent = lists:all(
+            fun(Key) ->
+                maps:is_key(Key, FirstItem)
+            end,
+            maps:keys(NormalizedRequiredOpts)
+        ),
+        true ?= FirstItemKeysPresent orelse {error, keys_missing},
+        
+        % Step 2: Validate first item values match requirements
+        FirstItemValuesMatch = hb_message:match(FirstItem, NormalizedRequiredOpts, only_present),
+        true ?= (FirstItemValuesMatch == true) orelse {error, values_invalid},
+        % Step 3: Check that remaining items don't modify required keys
+        NoRequiredKeysModified = lists:all(
+            fun(HistoryItem) ->
+                % For each required key, if it exists in this history item,
+                % it must match the value from the first item
+                lists:all(
+                    fun(RequiredKey) ->
+                        case maps:find(RequiredKey, HistoryItem) of
+                            {ok, Value} ->
+                                % Key exists in history item, check it matches first item
+                                case maps:find(RequiredKey, FirstItem) of
+                                    {ok, Value} -> true; % Values match
+                                    {ok, _DifferentValue} -> false; % Values differ
+                                    error -> false % Key missing from first item (shouldn't happen)
+                                end;
+                            error ->
+                                % Key doesn't exist in this history item, which is fine
+                                true
+                        end
+                    end,
+                    maps:keys(NormalizedRequiredOpts)
+                )
+            end,
+            RemainingItems
+        ),
+        true ?= NoRequiredKeysModified orelse {error, required_key_modified},
+        
+        % If we've made it this far, everything is valid
+        ?event({validate_node_history_items, all_items_valid}),
+        {ok, <<"valid">>}
+    else
+        {error, keys_missing} ->
+            ?event({validate_node_history_items, validation_failed, missing_keys}),
+            {error, <<"missing_keys">>};
+        {error, values_invalid} ->
+            ?event({validate_node_history_items, validation_failed, invalid_values}),
+            {error, <<"invalid_values">>};
+        {error, required_key_modified} ->
+            ?event({validate_node_history_items, validation_failed, required_key_modified}),
+            {error, <<"modified_required_key">>};
+        _ ->
+            ?event({validate_node_history_items, validation_failed, unknown}),
+            {error, <<"validation_failed">>}
     end.
 
 %%% Tests
@@ -483,32 +631,148 @@ load_test() ->
     % port: 1234
     % host: https://ao.computer
     % await-inprogress: false
-    {ok, Conf} = load("test/config.flat"),
+    {ok, Conf} = load("test/config.flat", #{}),
     ?event({loaded, {explicit, Conf}}),
     % Ensure we convert types as expected.
-    ?assertEqual(1234, maps:get(port, Conf)),
+    ?assertEqual(1234, hb_maps:get(port, Conf)),
     % A binary
-    ?assertEqual(<<"https://ao.computer">>, maps:get(host, Conf)),
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
-    ?assertEqual(false, maps:get(await_inprogress, Conf)).
+    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)).
 
-validate_node_history_test() ->
-    % Test default values (min=1, max=1)
-    ?assertEqual({ok, 1}, validate_node_history(#{node_history => [entry1]})),
-    ?assertEqual({error, <<"Node history too short. Expected at least 1 entries, got 0.">>}, 
-                 validate_node_history(#{})),
-    ?assertEqual({error, <<"Node history too long. Expected at most 1 entries, got 2.">>}, 
-                 validate_node_history(#{node_history => [entry1, entry2]})),
-    % Test with custom range
-    ?assertEqual({ok, 0}, validate_node_history(#{}, 0, 2)),
-    ?assertEqual({ok, 1}, validate_node_history(#{node_history => [entry1]}, 0, 2)),
-    ?assertEqual({ok, 2}, validate_node_history(#{node_history => [entry1, entry2]}, 0, 2)),
-    % Test range validations
-    ?assertEqual({error, <<"Node history too short. Expected at least 2 entries, got 1.">>}, 
-                 validate_node_history(#{node_history => [entry1]}, 2, 4)),
-    ?assertEqual({error, <<"Node history too long. Expected at most 2 entries, got 3.">>}, 
-                 validate_node_history(#{node_history => [entry1, entry2, entry3]}, 1, 2)),
-    % Test edge cases
-    ?assertEqual({ok, 3}, validate_node_history(#{node_history => [entry1, entry2, entry3]}, 3, 3)),
-    ?assertEqual({ok, 0}, validate_node_history(#{}, 0, 0)).
+as_identity_test() ->
+    DefaultWallet = ar_wallet:new(),
+    TestWallet1 = ar_wallet:new(),
+    TestWallet2 = ar_wallet:new(),
+    TestID2 = hb_util:human_id(TestWallet2),
+    Opts = #{
+        test_key => 0,
+        priv_wallet => DefaultWallet,
+        identities => #{
+            <<"testname-1">> => #{
+                priv_wallet => TestWallet1,
+                test_key => 1
+            },
+            TestID2 => #{
+                priv_wallet => TestWallet2,
+                test_key => 2
+            }
+        }
+    },
+    ?event({base_opts, Opts}),
+    Identities = identities(Opts),
+    ?event({identities, Identities}),
+    % The number of identities should be 5: `default', its ID, `testname-1',
+    % and its ID, and just the ID of `TestWallet2'.
+    ?assertEqual(5, maps:size(Identities)),
+    % The wallets for each of the names should be the same as the wallets we
+    % provided. We also check that the settings are applied correctly.
+    ?assertMatch(
+        {ok, #{ priv_wallet := DefaultWallet, test_key := 0 }},
+        as(<<"default">>, Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ priv_wallet := DefaultWallet, test_key := 0 }},
+        as(hb_util:human_id(DefaultWallet), Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ priv_wallet := TestWallet1, test_key := 1 }},
+        as(<<"testname-1">>, Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ priv_wallet := TestWallet1, test_key := 1 }},
+        as(hb_util:human_id(TestWallet1), Opts)
+    ),
+    ?assertMatch(
+        {ok, #{ priv_wallet := TestWallet2, test_key := 2 }},
+        as(TestID2, Opts)
+    ).
+    
+ensure_node_history_test() ->
+    % Define some test data
+    RequiredOpts = #{
+        key1 => 
+            #{
+                <<"type">> => <<"string">>,
+                <<"value">> => <<"value1">>
+            },
+        key2 => <<"value2">>
+    },
+    % Test case: All items have required options
+    ValidOpts =
+    #{
+        <<"key1">> => 
+            #{
+                <<"type">> => <<"string">>,
+                <<"value">> => <<"value1">>
+            }, 
+        <<"key2">> => <<"value2">>, 
+        <<"extra">> => <<"value">>,
+        node_history => [
+            #{
+                <<"key1">> => 
+                    #{
+                        <<"type">> => <<"string">>,
+                        <<"value">> => <<"value1">>
+                    }, 
+                <<"key2">> => <<"value2">>, 
+                <<"extra">> => <<"value">>
+            },
+            #{
+                <<"key1">> => 
+                    #{
+                        <<"type">> => <<"string">>,
+                        <<"value">> => <<"value1">>
+                    }, 
+                <<"key2">> => <<"value2">>
+            }
+        ]
+    },
+    ?assertEqual({ok, <<"valid">>}, ensure_node_history(ValidOpts, RequiredOpts)),
+    ?event({valid_items, ValidOpts}),
+    % Test Missing items
+    MissingItems = 
+    #{
+        <<"key1">> => 
+            #{
+                <<"type">> => <<"string">>,
+                <<"value">> => <<"value1">>
+            }, 
+        node_history => [
+            #{
+                <<"key1">> => 
+                    #{
+                        <<"type">> => <<"string">>,
+                        <<"value">> => <<"value1">>
+                    }
+                % missing key2
+
+            }
+        ]
+    },
+
+    ?assertEqual({error, <<"missing_keys">>}, ensure_node_history(MissingItems, RequiredOpts)),
+    ?event({missing_items, MissingItems}),
+    % Test Invalid items
+    InvalidItems =
+        #{
+            <<"key1">> => 
+                #{
+                    <<"type">> => <<"string">>,
+                    <<"value">> => <<"value">>
+                }, 
+            <<"key2">> => <<"value2">>,
+            node_history =>
+                [
+                    #{
+                        <<"key1">> => 
+                            #{
+                                <<"type">> => <<"string">>,
+                                <<"value">> => <<"value2">>
+                            },
+                        <<"key2">> => <<"value3">>
+                    }
+                ]
+        },
+    ?assertEqual({error, <<"invalid_values">>}, ensure_node_history(InvalidItems, RequiredOpts)).
 -endif.

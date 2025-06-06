@@ -15,13 +15,14 @@ nav:
       - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
       - HyperPATHs: 'introduction/hyperpaths-in-hyperbeam.md'
   - Run a Node:
-      - Running a HyperBEAM node: 'run/running-a-hyperbeam-node.md'
-      - Configuring your machine: 'run/configuring-your-machine.md'
-      - TEE nodes: 'run/tee-nodes.md'
-      - Joining/running a router: 'run/joining-running-a-router.md'
+      - Running a HyperBEAM Node: 'run/running-a-hyperbeam-node.md'
+      - Configuring Your Machine: 'run/configuring-your-machine.md'
+      - TEE Nodes: 'run/tee-nodes.md'
+      - Joining/Running a Router: 'run/joining-running-a-router.md'
   - Build on HyperBEAM:
-      - Quick Start: 'build/get-started-building-on-hyperbeam.md'
-      - Migrating from legacynet: 'build/migrating-from-legacynet.md'
+      - Quick Start: 'build/quick-start.md'
+      - Migrating from Legacynet: 'build/migrating-from-legacynet.md'
+      - AO Connect: 'build/ao-connect.md'
       - Extending HyperBEAM with Devices: 'build/building-devices.md'
   - Devices:
       - 'What are HyperBEAM Devices?': 'devices/what-are-devices.md'
@@ -174,7 +175,7 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
   - toc:
-      toc_depth: 3
+      toc_depth: 2
       permalink: true
 
 theme: 

@@ -15,7 +15,7 @@ https://specs.ar.io/?tx=lXLd0OPwo-dJLB_Amz5jgIeDhiOkjXuM3-r0H_aiNj0<a name="inde
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#info-0">info/0</a></td><td>Use the <code>route/4</code> function as the handler for all requests, aside
-from <code>keys</code> and <code>set</code>, which are handled by the default resolver.</td></tr><tr><td valign="top"><a href="#manifest-3">manifest/3*</a></td><td>Find and deserialize a manifest from the given base.</td></tr><tr><td valign="top"><a href="#route-4">route/4*</a></td><td>Route a request to the associated data via its manifest.</td></tr></table>
+from <code>keys</code> and <code>set</code>, which are handled by the default resolver.</td></tr><tr><td valign="top"><a href="#manifest-3">manifest/3*</a></td><td>Find and deserialize a manifest from the given base.</td></tr><tr><td valign="top"><a href="#resolve_test-0">resolve_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route-4">route/4*</a></td><td>Route a request to the associated data via its manifest.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -38,6 +38,12 @@ from `keys` and `set`, which are handled by the default resolver.
 `manifest(Base, Req, Opts) -> any()`
 
 Find and deserialize a manifest from the given base.
+
+<a name="resolve_test-0"></a>
+
+### resolve_test/0 * ###
+
+`resolve_test() -> any()`
 
 <a name="route-4"></a>
 

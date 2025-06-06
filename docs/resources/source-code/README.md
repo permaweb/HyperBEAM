@@ -13,12 +13,14 @@
 <tr><td><a href="ar_timestamp.md" class="module">ar_timestamp</a></td></tr>
 <tr><td><a href="ar_tx.md" class="module">ar_tx</a></td></tr>
 <tr><td><a href="ar_wallet.md" class="module">ar_wallet</a></td></tr>
+<tr><td><a href="dev_apply.md" class="module">dev_apply</a></td></tr>
 <tr><td><a href="dev_cache.md" class="module">dev_cache</a></td></tr>
 <tr><td><a href="dev_cacheviz.md" class="module">dev_cacheviz</a></td></tr>
 <tr><td><a href="dev_codec_ans104.md" class="module">dev_codec_ans104</a></td></tr>
 <tr><td><a href="dev_codec_flat.md" class="module">dev_codec_flat</a></td></tr>
 <tr><td><a href="dev_codec_httpsig.md" class="module">dev_codec_httpsig</a></td></tr>
 <tr><td><a href="dev_codec_httpsig_conv.md" class="module">dev_codec_httpsig_conv</a></td></tr>
+<tr><td><a href="dev_codec_httpsig_siginfo.md" class="module">dev_codec_httpsig_siginfo</a></td></tr>
 <tr><td><a href="dev_codec_json.md" class="module">dev_codec_json</a></td></tr>
 <tr><td><a href="dev_codec_structured.md" class="module">dev_codec_structured</a></td></tr>
 <tr><td><a href="dev_cron.md" class="module">dev_cron</a></td></tr>
@@ -36,6 +38,7 @@
 <tr><td><a href="dev_lua.md" class="module">dev_lua</a></td></tr>
 <tr><td><a href="dev_lua_lib.md" class="module">dev_lua_lib</a></td></tr>
 <tr><td><a href="dev_lua_test.md" class="module">dev_lua_test</a></td></tr>
+<tr><td><a href="dev_lua_test_ledgers.md" class="module">dev_lua_test_ledgers</a></td></tr>
 <tr><td><a href="dev_manifest.md" class="module">dev_manifest</a></td></tr>
 <tr><td><a href="dev_message.md" class="module">dev_message</a></td></tr>
 <tr><td><a href="dev_meta.md" class="module">dev_meta</a></td></tr>
@@ -89,8 +92,11 @@
 <tr><td><a href="hb_http_server.md" class="module">hb_http_server</a></td></tr>
 <tr><td><a href="hb_json.md" class="module">hb_json</a></td></tr>
 <tr><td><a href="hb_keccak.md" class="module">hb_keccak</a></td></tr>
+<tr><td><a href="hb_link.md" class="module">hb_link</a></td></tr>
 <tr><td><a href="hb_logger.md" class="module">hb_logger</a></td></tr>
+<tr><td><a href="hb_maps.md" class="module">hb_maps</a></td></tr>
 <tr><td><a href="hb_message.md" class="module">hb_message</a></td></tr>
+<tr><td><a href="hb_message_test_vectors.md" class="module">hb_message_test_vectors</a></td></tr>
 <tr><td><a href="hb_metrics_collector.md" class="module">hb_metrics_collector</a></td></tr>
 <tr><td><a href="hb_name.md" class="module">hb_name</a></td></tr>
 <tr><td><a href="hb_opts.md" class="module">hb_opts</a></td></tr>
@@ -103,6 +109,8 @@
 <tr><td><a href="hb_store.md" class="module">hb_store</a></td></tr>
 <tr><td><a href="hb_store_fs.md" class="module">hb_store_fs</a></td></tr>
 <tr><td><a href="hb_store_gateway.md" class="module">hb_store_gateway</a></td></tr>
+<tr><td><a href="hb_store_lmdb.md" class="module">hb_store_lmdb</a></td></tr>
+<tr><td><a href="hb_store_lru.md" class="module">hb_store_lru</a></td></tr>
 <tr><td><a href="hb_store_remote_node.md" class="module">hb_store_remote_node</a></td></tr>
 <tr><td><a href="hb_store_rocksdb.md" class="module">hb_store_rocksdb</a></td></tr>
 <tr><td><a href="hb_structured_fields.md" class="module">hb_structured_fields</a></td></tr>

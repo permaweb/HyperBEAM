@@ -14,7 +14,7 @@ HyperBEAM is not just an update; it's a new foundation designed for building hig
 
 The process of migration involves updating your process to take advantage of the new features available in HyperBEAM. One of the most impactful new features is the ability to directly expose parts of your process state for immediate reading via HTTP, which dramatically improves the performance of web frontends and data-driven services.
 
-For a practical guide on how to use one of these new, powerful features to make your applications more performant, we strongly recommend reviewing our documentation on **[Exposing Process State with the Patch Device](./exposing-process-state.md)**. This guide will walk you through a new pattern available in HyperBEAM that can help you refactor your legacy processes for better performance and user experience.
+For a practical guide on how to use one of these new, powerful features to make your applications more performant, we strongly recommend reviewing our documentation on **[Exposing Process State with the Patch Device](./migrating-from-legacynet.md#exposing-process-state-with-the-patch-device)**. This guide will walk you through a new pattern available in HyperBEAM that can help you refactor your legacy processes for better performance and user experience.
 
 Take the next step and begin migrating your `legacynet` processes to HyperBEAM to build faster, more capable decentralized applications.
 
@@ -22,7 +22,7 @@ Take the next step and begin migrating your `legacynet` processes to HyperBEAM t
 
 The [`~patch@1.0`](../resources/source-code/dev_patch.md) device provides a mechanism for AO processes to expose parts of their internal state, making it readable via direct HTTP GET requests along the process's HyperPATH.
 
-## Why Use the Patch Device?
+### Why Use the Patch Device?
 
 Standard AO process execution typically involves sending a message to a process, letting it compute, and then potentially reading results from its outbox or state after the computation is scheduled and finished. This is asynchronous.
 
@@ -34,7 +34,7 @@ This is particularly useful for:
 *   **Data Feeds:** Exposing specific metrics or state variables for monitoring or integration with other systems.
 *   **Caching:** Allowing frequently accessed data to be retrieved efficiently via simple HTTP GETs.
 
-## How it Works
+### How it Works
 
 1.  **Process Logic:** Inside your AO process code (e.g., in Lua or WASM), when you want to expose data, you construct an **Outbound Message** targeted at the [`~patch@1.0`](../resources/source-code/dev_patch.md) device.
 2.  **Patch Message Format:** This outbound message typically includes tags that specify:
@@ -53,7 +53,7 @@ This is particularly useful for:
     ```
     The HyperBEAM node serving the request will resolve the path up to `/compute/cache` (or `/now/cache`), then use the logic associated with the patched data (`mydatakey`) to return the `MyValue` directly.
 
-## Initial State Sync (Optional)
+### Initial State Sync (Optional)
 
 It can be beneficial to expose the initial state of your process via the `patch` device as soon as the process is loaded or spawned. This makes key data points immediately accessible via HTTP GET requests without requiring an initial interaction message to trigger a `Send` to the patch device.
 
@@ -85,7 +85,7 @@ end
 
 This ensures that clients or frontends can immediately query essential data like token balances as soon as the process ID is known, improving the responsiveness of applications built on AO.
 
-## Example (Lua in `aos`)
+### Example (Lua in `aos`)
 
 ```lua
 -- In your process code (e.g., loaded via .load)
@@ -108,7 +108,7 @@ Handlers.add(
 
 ```
 
-## Avoiding Key Conflicts
+### Avoiding Key Conflicts
 
 When defining keys within the `cache` table (e.g., `cache = { mydatakey = MyValue }`), these keys become path segments under `/cache/` (e.g., `/compute/cache/mydatakey` or `/now/cache/mydatakey`). It's important to choose keys that do not conflict with existing, reserved path segments used by HyperBEAM or the `~process` device itself for state access.
 

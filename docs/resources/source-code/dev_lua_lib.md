@@ -26,7 +26,7 @@ the first term is typically the status, and the second term is the result.<a nam
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#convert_as-1">convert_as/1*</a></td><td>Converts any <code>as</code> terms from Lua to their HyperBEAM equivalents.</td></tr><tr><td valign="top"><a href="#event-3">event/3</a></td><td>Allows Lua scripts to signal events using the HyperBEAM hosts internal
-event system.</td></tr><tr><td valign="top"><a href="#install-3">install/3</a></td><td>Install the library into the given Lua environment.</td></tr><tr><td valign="top"><a href="#resolve-3">resolve/3</a></td><td>A wrapper function for performing AO-Core resolutions.</td></tr><tr><td valign="top"><a href="#return-2">return/2*</a></td><td>Helper function for returning a result from a Lua function.</td></tr><tr><td valign="top"><a href="#set-3">set/3</a></td><td>Wrapper for <code>hb_ao</code>'s <code>set</code> functionality.</td></tr></table>
+event system.</td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td>A wrapper for <code>hb_ao</code>'s <code>get</code> functionality.</td></tr><tr><td valign="top"><a href="#install-3">install/3</a></td><td>Install the library into the given Lua environment.</td></tr><tr><td valign="top"><a href="#resolve-3">resolve/3</a></td><td>A wrapper function for performing AO-Core resolutions.</td></tr><tr><td valign="top"><a href="#return-3">return/3*</a></td><td>Helper function for returning a result from a Lua function.</td></tr><tr><td valign="top"><a href="#set-3">set/3</a></td><td>Wrapper for <code>hb_ao</code>'s <code>set</code> functionality.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -50,6 +50,14 @@ Converts any `as` terms from Lua to their HyperBEAM equivalents.
 Allows Lua scripts to signal events using the HyperBEAM hosts internal
 event system.
 
+<a name="get-3"></a>
+
+### get/3 ###
+
+`get(X1, ExecState, ExecOpts) -> any()`
+
+A wrapper for `hb_ao`'s `get` functionality.
+
 <a name="install-3"></a>
 
 ### install/3 ###
@@ -68,11 +76,11 @@ A wrapper function for performing AO-Core resolutions. Offers both the
 single-message (using `hb_singleton:from/1` to parse) and multiple-message
 (using `hb_ao:resolve_many/2`) variants.
 
-<a name="return-2"></a>
+<a name="return-3"></a>
 
-### return/2 * ###
+### return/3 * ###
 
-`return(Result, ExecState) -> any()`
+`return(Result, ExecState, Opts) -> any()`
 
 Helper function for returning a result from a Lua function.
 

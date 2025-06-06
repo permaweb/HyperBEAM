@@ -21,9 +21,11 @@ For more details, see the HTTP Structured Fields (RFC-9651) specification.<a nam
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td></td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td></td></tr><tr><td valign="top"><a href="#decode_value-2">decode_value/2</a></td><td>Convert non-binary values to binary for serialization.</td></tr><tr><td valign="top"><a href="#encode_value-1">encode_value/1</a></td><td>Convert a term to a binary representation, emitting its type for
-serialization as a separate tag.</td></tr><tr><td valign="top"><a href="#from-1">from/1</a></td><td>Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).</td></tr><tr><td valign="top"><a href="#implicit_keys-1">implicit_keys/1</a></td><td>Find the implicit keys of a TABM.</td></tr><tr><td valign="top"><a href="#list_encoding_test-0">list_encoding_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#parse_ao_types-1">parse_ao_types/1*</a></td><td>Parse the <code>ao-types</code> field of a TABM and return a map of keys and their
-types.</td></tr><tr><td valign="top"><a href="#to-1">to/1</a></td><td>Convert a TABM into a native HyperBEAM message.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td></td></tr><tr><td valign="top"><a href="#decode_ao_types-2">decode_ao_types/2</a></td><td>Parse the <code>ao-types</code> field of a TABM and return a map of keys and their
+types.</td></tr><tr><td valign="top"><a href="#decode_value-2">decode_value/2</a></td><td>Convert non-binary values to binary for serialization.</td></tr><tr><td valign="top"><a href="#encode_ao_types-2">encode_ao_types/2</a></td><td>Generate an <code>ao-types</code> structured field from a map of keys and their
+types.</td></tr><tr><td valign="top"><a href="#encode_value-1">encode_value/1</a></td><td>Convert a term to a binary representation, emitting its type for
+serialization as a separate tag.</td></tr><tr><td valign="top"><a href="#from-3">from/3</a></td><td>Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).</td></tr><tr><td valign="top"><a href="#implicit_keys-1">implicit_keys/1*</a></td><td>Find the implicit keys of a TABM.</td></tr><tr><td valign="top"><a href="#implicit_keys-2">implicit_keys/2</a></td><td></td></tr><tr><td valign="top"><a href="#is_list_from_ao_types-2">is_list_from_ao_types/2</a></td><td>Determine if the <code>ao-types</code> field of a TABM indicates that the message
+is a list.</td></tr><tr><td valign="top"><a href="#linkify_mode-2">linkify_mode/2*</a></td><td>Discern the linkify mode from the request and the options.</td></tr><tr><td valign="top"><a href="#list_encoding_test-0">list_encoding_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#to-3">to/3</a></td><td>Convert a TABM into a native HyperBEAM message.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -36,11 +38,14 @@ types.</td></tr><tr><td valign="top"><a href="#to-1">to/1</a></td><td>Convert a 
 
 `commit(Msg, Req, Opts) -> any()`
 
-<a name="committed-3"></a>
+<a name="decode_ao_types-2"></a>
 
-### committed/3 ###
+### decode_ao_types/2 ###
 
-`committed(Msg, Req, Opts) -> any()`
+`decode_ao_types(Msg, Opts) -> any()`
+
+Parse the `ao-types` field of a TABM and return a map of keys and their
+types
 
 <a name="decode_value-2"></a>
 
@@ -49,6 +54,15 @@ types.</td></tr><tr><td valign="top"><a href="#to-1">to/1</a></td><td>Convert a 
 `decode_value(Type, Value) -> any()`
 
 Convert non-binary values to binary for serialization.
+
+<a name="encode_ao_types-2"></a>
+
+### encode_ao_types/2 ###
+
+`encode_ao_types(Types, Opts) -> any()`
+
+Generate an `ao-types` structured field from a map of keys and their
+types.
 
 <a name="encode_value-1"></a>
 
@@ -59,21 +73,44 @@ Convert non-binary values to binary for serialization.
 Convert a term to a binary representation, emitting its type for
 serialization as a separate tag.
 
-<a name="from-1"></a>
+<a name="from-3"></a>
 
-### from/1 ###
+### from/3 ###
 
-`from(Bin) -> any()`
+`from(Bin, Req, Opts) -> any()`
 
 Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
 
 <a name="implicit_keys-1"></a>
 
-### implicit_keys/1 ###
+### implicit_keys/1 * ###
 
 `implicit_keys(Req) -> any()`
 
 Find the implicit keys of a TABM.
+
+<a name="implicit_keys-2"></a>
+
+### implicit_keys/2 ###
+
+`implicit_keys(Req, Opts) -> any()`
+
+<a name="is_list_from_ao_types-2"></a>
+
+### is_list_from_ao_types/2 ###
+
+`is_list_from_ao_types(Types, Opts) -> any()`
+
+Determine if the `ao-types` field of a TABM indicates that the message
+is a list.
+
+<a name="linkify_mode-2"></a>
+
+### linkify_mode/2 * ###
+
+`linkify_mode(Req, Opts) -> any()`
+
+Discern the linkify mode from the request and the options.
 
 <a name="list_encoding_test-0"></a>
 
@@ -81,20 +118,11 @@ Find the implicit keys of a TABM.
 
 `list_encoding_test() -> any()`
 
-<a name="parse_ao_types-1"></a>
+<a name="to-3"></a>
 
-### parse_ao_types/1 * ###
+### to/3 ###
 
-`parse_ao_types(Msg) -> any()`
-
-Parse the `ao-types` field of a TABM and return a map of keys and their
-types
-
-<a name="to-1"></a>
-
-### to/1 ###
-
-`to(Bin) -> any()`
+`to(Bin, Req, Opts) -> any()`
 
 Convert a TABM into a native HyperBEAM message.
 
