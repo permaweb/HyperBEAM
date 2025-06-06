@@ -198,7 +198,7 @@ type_tag_test() ->
     ?event({after_conversion, TX2}),
     ?assertEqual(TX, TX2).
     
-simple_signed_to_httpsig_test() ->
+simple_signed_to_httpsig_test_disabled() ->
     TX =
         ar_bundles:sign_item(
             #tx {

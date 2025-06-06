@@ -308,11 +308,7 @@ tx_to_tabm2(RawTX, TXKeys, CommittedTags, Req, Opts) ->
                 Commitment = #{
                     <<"commitment-device">> => Device,
                     <<"committer">> => Address,
-                    <<"committed">> =>
-                        hb_util:unique(
-                            CommittedTags
-                                ++ [ hb_ao:normalize_key(Tag) || {Tag, _} <- TX#tx.tags ]
-                        ),
+                    <<"committed">> => CommittedKeys,
                     <<"keyid">> => hb_util:encode(TX#tx.owner),
                     <<"signature">> => hb_util:encode(TX#tx.signature),
                     <<"type">> => <<"rsa-pss-sha256">>
