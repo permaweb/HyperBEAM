@@ -105,10 +105,9 @@ register(_M1, _M2, Opts) ->
         %% Post registration request to the router node
         %% The message includes our route details and attestation for verification
         {ok, _} = hb_http:post(
-            RouterNode, 
+            RouterNode,
+            <<"/router~node-process@1.0/schedule">>,
             #{
-                <<"path">> => <<"/router~node-process@1.0/schedule">>,
-                <<"method">> => <<"POST">>,
                 <<"body">> =>
                     hb_cache:ensure_all_loaded(
                         hb_message:commit(
