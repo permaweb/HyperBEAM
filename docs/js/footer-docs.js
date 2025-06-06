@@ -16,7 +16,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // 3. Define your banner HTML (exactly as you provided)
   const bannerHTML = `
     <a href="https://github.com/permaweb/HyperBEAM">
-      <div class="join-us-banner">
+      <div class="join-us-banner-alt">
         <p>
           Made with 
           <svg width="12" height="12" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">

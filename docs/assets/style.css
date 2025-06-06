@@ -993,6 +993,25 @@ h6 {
     justify-content: center;
 }
 
+.join-us-banner-alt {
+    background: #F9F9F9;
+    border-top: 1px solid #E6E6E6;
+    display: flex;
+    padding: 1rem;
+    align-items: center;
+    justify-content: center;
+}
+
+.join-us-banner-alt p {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.join-us-banner-alt:hover {
+    opacity: 70%;
+}
+
 .join-us-banner p {
     display: flex;
     align-items: center;
