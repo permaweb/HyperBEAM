@@ -1,4 +1,4 @@
-Generated: 2025-06-05T08:58:09Z
+Generated: 2025-06-06T07:21:33Z
 
 --- START OF FILE: docs/build/exposing-process-state.md ---
 # Exposing Process State with the Patch Device
@@ -8586,11 +8586,13 @@ it if it does not exist). Otherwise, the message specified by the given
 `slot` key will be pushed.
 
 Optional parameters:
+
 `/result-depth`: The depth to which the full contents of the result
 will be included in the response. Default: 1, returning
 the full result of the first message, but only the 'tree'
 of downstream messages.
-`/push-mode`:    Whether or not the push should be done asynchronously.
+
+`/push-mode`: Whether or not the push should be done asynchronously.
 Default: `sync`, pushing synchronously.
 
 <a name="push_prompts_encoding_change_test-0"></a>
@@ -21192,7 +21194,6 @@ To successfully build and run a HyperBEAM node, your system needs several softwa
         libssl-dev \
         sudo \
         curl
-        curl
         ca-certificates
     ```
 
@@ -21236,14 +21237,6 @@ Installation methods:
     asdf install erlang <version> # e.g., 27.0
     asdf global erlang <version>
     ``` -->
-<!-- 
-=== "asdf (Recommended)"
-    Tools like `asdf-vm` with the `asdf-erlang` plugin are highly recommended for managing multiple Erlang versions across platforms.
-    ```bash
-    asdf plugin add erlang https://github.com/asdf-vm/asdf-erlang.git
-    asdf install erlang <version> # e.g., 27.0
-    asdf global erlang <version>
-    ``` -->
 
 === "Source Build"
     Download from [erlang.org](https://www.erlang.org/downloads) and follow the build instructions for your platform.
@@ -21263,13 +21256,11 @@ Installation methods:
     Get the `rebar3` binary from the [official website](https://rebar3.org/). Place the downloaded `rebar3` file in your system's `PATH` (e.g., `/usr/local/bin`) and make it executable (`chmod +x rebar3`).
 
 <!-- === "asdf (Recommended)"
-<!-- === "asdf (Recommended)"
     If using `asdf`, you can install it via the `rebar` plugin:
     ```bash
     asdf plugin add rebar https://github.com/asdf-vm/asdf-rebar.git
     asdf install rebar <version> # e.g., 3.23.0
     asdf global rebar <version>
-    ``` -->
     ``` -->
 
 ### Node.js
@@ -21367,7 +21358,7 @@ See the dedicated **[Configuring Your HyperBEAM Node](./configuring-your-machine
 To quickly check if your node is running and accessible, you can send a request to its `~meta@1.0` device (assuming default port 10000):
 
 ```bash
-curl http://localhost:10000/~meta@1.0/info
+curl http://localhost:8734/~meta@1.0/info
 ```
 
 A JSON response containing node information indicates success.

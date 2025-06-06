@@ -23,10 +23,6 @@ document.addEventListener('DOMContentLoaded', function() {
         opacity: 0;
         transition: opacity 200ms ease-in-out; /* Tiny transition */
       }
-      .${HIDING_CLASS} { /* Class to initially hide the content */
-        display: none !important;
-        opacity: 0 !important; /* Ensure opacity is 0 when hidden */
-      }
     `;
     document.head.appendChild(styleElement);
   }

@@ -890,5 +890,5 @@ h6 {
 
 .md-main__inner.md-grid {
 	opacity: 0; /* Start with opacity 0 */
-	animation: fadeIn 250ms ease-in-out forwards !important; /* Increased duration, added forwards and !important */
+	animation: fadeIn 175ms ease-in-out forwards !important; /* Increased duration, added forwards and !important */
 }
