@@ -18,6 +18,9 @@ In HyperBEAM, the `dev_router` module (and associated logic) implements routing 
 
 Routers often maintain information about the capabilities and load of worker nodes they know about.
 
+!!! note "Using Routers as a Client"
+    To use a router as a client, simply make HyperPATH requests to the router's URL: `https://router-1.forward.computer/<process_id>~<device>/<key>...`. The router will automatically route your request to an appropriate worker node.
+
 ## Node Registration Process
 
 HyperBEAM nodes can register themselves with router networks to offer computational services. The registration process involves configuring route parameters and submitting signed registration requests to router nodes.
@@ -216,14 +219,43 @@ To run a node that explicitly acts *more* like a router, you would typically con
 
 ## Joining an Existing Router Network
 
-As a user or developer, you typically don't *run* the main public routers (like `router-1.forward.computer`). Instead, you configure your client applications (or your own local node if it needs to relay requests) to *use* these public routers as entry points.
+To join an existing router network means to register your HyperBEAM node as a compute provider that can handle requests routed by the network. This makes your node part of the distributed computation infrastructure.
 
-When making HyperPATH calls, you simply target the public router's URL:
+### Prerequisites for Joining
 
+Before joining a router network, ensure your node:
+
+1. **Has computational capabilities** you want to offer (specific devices, WASM execution, etc.)
+2. **Is properly configured** with unique process IDs and route templates
+3. **Has network connectivity** to communicate with router nodes
+4. **Meets any trust requirements** of the target router network
+
+### Joining Process
+
+The joining process is essentially the node registration process detailed above:
+
+1. **Configure your node** with appropriate route parameters
+2. **Submit a registration request** to the target router
+3. **Pass validation checks** (signature verification, admissibility, etc.)
+4. **Get added to the routing table** and start receiving routed requests
+
+Once successfully joined, your node will:
+- Receive computational requests from the router
+- Execute the requested operations
+- Return results to clients via the router
+- Participate in the distributed AO network
+
+### Example: Joining router-1.forward.computer
+
+```erlang
+% Configure your node to join the public router
+{router_node, "https://router-1.forward.computer"},
+{router_prefix, "/my-unique-node-id~"},
+{router_template, "/my-unique-node-id~process@1.0/.*"},
+{router_price, 50}  % Competitive pricing for services
 ```
-https://<router_url>/<process_id>~<device>/<key>...
-```
-The router handles directing your request to an appropriate compute node.
+
+
 
 ## Monitoring Registration Status
 
@@ -248,7 +280,7 @@ hb_ao:call(RouterProcessID, <<"routes">>, #{}, Opts).
 hb_ao:call(RouterProcessID, <<"status">>, #{}, Opts).
 ```
 
-## Troubleshooting Registration
+<!-- ## Troubleshooting Registration
 
 Common registration issues and solutions:
 
@@ -265,7 +297,7 @@ Common registration issues and solutions:
 ### Configuration Errors
 - Validate all required parameters are set
 - Check route template syntax
-- Verify price is within acceptable range
+- Verify price is within acceptable range -->
 
 ## Further Exploration
 
