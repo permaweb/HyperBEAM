@@ -43,8 +43,8 @@ will be generated according to Msg1's algorithm choice.<a name="index"></a>
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#do_to_binary-1">do_to_binary/1*</a></td><td></td></tr><tr><td valign="top"><a href="#from_message-2">from_message/2</a></td><td>Extract the request path or hashpath from a message.</td></tr><tr><td valign="top"><a href="#hashpath-2">hashpath/2</a></td><td>Add an ID of a Msg2 to the HashPath of another message.</td></tr><tr><td valign="top"><a href="#hashpath-3">hashpath/3</a></td><td></td></tr><tr><td valign="top"><a href="#hashpath-4">hashpath/4</a></td><td></td></tr><tr><td valign="top"><a href="#hashpath_alg-1">hashpath_alg/1</a></td><td>Get the hashpath function for a message from its HashPath-Alg.</td></tr><tr><td valign="top"><a href="#hashpath_direct_msg2_test-0">hashpath_direct_msg2_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#hashpath_test-0">hashpath_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#hd-2">hd/2</a></td><td>Extract the first key from a <code>Message2</code>'s <code>Path</code> field.</td></tr><tr><td valign="top"><a href="#hd_test-0">hd_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#matches-2">matches/2</a></td><td>Check if two keys match.</td></tr><tr><td valign="top"><a href="#multiple_hashpaths_test-0">multiple_hashpaths_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize-1">normalize/1</a></td><td>Normalize a path to a binary, removing the leading slash if present.</td></tr><tr><td valign="top"><a href="#pop_from_message_test-0">pop_from_message_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#pop_from_path_list_test-0">pop_from_path_list_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#pop_request-2">pop_request/2</a></td><td>Pop the next element from a request path or path list.</td></tr><tr><td valign="top"><a href="#priv_remaining-2">priv_remaining/2</a></td><td>Return the <code>Remaining-Path</code> of a message, from its hidden <code>AO-Core</code>
-key.</td></tr><tr><td valign="top"><a href="#priv_store_remaining-2">priv_store_remaining/2</a></td><td>Store the remaining path of a message in its hidden <code>AO-Core</code> key.</td></tr><tr><td valign="top"><a href="#push_request-2">push_request/2</a></td><td>Add a message to the head (next to execute) of a request path.</td></tr><tr><td valign="top"><a href="#queue_request-2">queue_request/2</a></td><td>Queue a message at the back of a request path.</td></tr><tr><td valign="top"><a href="#regex_matches-2">regex_matches/2</a></td><td>Check if two keys match using regex.</td></tr><tr><td valign="top"><a href="#regex_matches_test-0">regex_matches_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#term_to_path_parts-1">term_to_path_parts/1</a></td><td>Convert a term into an executable path.</td></tr><tr><td valign="top"><a href="#term_to_path_parts-2">term_to_path_parts/2</a></td><td></td></tr><tr><td valign="top"><a href="#term_to_path_parts_test-0">term_to_path_parts_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#tl-2">tl/2</a></td><td>Return the message without its first path element.</td></tr><tr><td valign="top"><a href="#tl_test-0">tl_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#to_binary-1">to_binary/1</a></td><td>Convert a path of any form to a binary.</td></tr><tr><td valign="top"><a href="#to_binary_test-0">to_binary_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#validate_path_transitions-2">validate_path_transitions/2*</a></td><td></td></tr><tr><td valign="top"><a href="#verify_hashpath-2">verify_hashpath/2</a></td><td>Verify the HashPath of a message, given a list of messages that
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#do_to_binary-1">do_to_binary/1*</a></td><td></td></tr><tr><td valign="top"><a href="#from_message-3">from_message/3</a></td><td>Extract the request path or hashpath from a message.</td></tr><tr><td valign="top"><a href="#hashpath-2">hashpath/2</a></td><td>Add an ID of a Msg2 to the HashPath of another message.</td></tr><tr><td valign="top"><a href="#hashpath-3">hashpath/3</a></td><td></td></tr><tr><td valign="top"><a href="#hashpath-4">hashpath/4</a></td><td></td></tr><tr><td valign="top"><a href="#hashpath_alg-2">hashpath_alg/2</a></td><td>Get the hashpath function for a message from its HashPath-Alg.</td></tr><tr><td valign="top"><a href="#hashpath_direct_msg2_test-0">hashpath_direct_msg2_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#hashpath_test-0">hashpath_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#hd-2">hd/2</a></td><td>Extract the first key from a <code>Message2</code>'s <code>Path</code> field.</td></tr><tr><td valign="top"><a href="#hd_test-0">hd_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#matches-2">matches/2</a></td><td>Check if two keys match.</td></tr><tr><td valign="top"><a href="#multiple_hashpaths_test-0">multiple_hashpaths_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize-1">normalize/1</a></td><td>Normalize a path to a binary, removing the leading slash if present.</td></tr><tr><td valign="top"><a href="#pop_from_message_test-0">pop_from_message_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#pop_from_path_list_test-0">pop_from_path_list_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#pop_request-2">pop_request/2</a></td><td>Pop the next element from a request path or path list.</td></tr><tr><td valign="top"><a href="#priv_remaining-2">priv_remaining/2</a></td><td>Return the <code>Remaining-Path</code> of a message, from its hidden <code>AO-Core</code>
+key.</td></tr><tr><td valign="top"><a href="#priv_store_remaining-2">priv_store_remaining/2</a></td><td>Store the remaining path of a message in its hidden <code>AO-Core</code> key.</td></tr><tr><td valign="top"><a href="#priv_store_remaining-3">priv_store_remaining/3</a></td><td></td></tr><tr><td valign="top"><a href="#push_request-2">push_request/2</a></td><td>Add a message to the head (next to execute) of a request path.</td></tr><tr><td valign="top"><a href="#push_request-3">push_request/3</a></td><td></td></tr><tr><td valign="top"><a href="#queue_request-2">queue_request/2</a></td><td>Queue a message at the back of a request path.</td></tr><tr><td valign="top"><a href="#queue_request-3">queue_request/3</a></td><td></td></tr><tr><td valign="top"><a href="#regex_matches-2">regex_matches/2</a></td><td>Check if two keys match using regex.</td></tr><tr><td valign="top"><a href="#regex_matches_test-0">regex_matches_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#term_to_path_parts-1">term_to_path_parts/1</a></td><td>Convert a term into an executable path.</td></tr><tr><td valign="top"><a href="#term_to_path_parts-2">term_to_path_parts/2</a></td><td></td></tr><tr><td valign="top"><a href="#term_to_path_parts_test-0">term_to_path_parts_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#tl-2">tl/2</a></td><td>Return the message without its first path element.</td></tr><tr><td valign="top"><a href="#tl_test-0">tl_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#to_binary-1">to_binary/1</a></td><td>Convert a path of any form to a binary.</td></tr><tr><td valign="top"><a href="#to_binary_test-0">to_binary_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#validate_path_transitions-2">validate_path_transitions/2*</a></td><td></td></tr><tr><td valign="top"><a href="#verify_hashpath-2">verify_hashpath/2</a></td><td>Verify the HashPath of a message, given a list of messages that
 represent its history.</td></tr><tr><td valign="top"><a href="#verify_hashpath_test-0">verify_hashpath_test/0*</a></td><td></td></tr></table>
 
 
@@ -58,11 +58,11 @@ represent its history.</td></tr><tr><td valign="top"><a href="#verify_hashpath_t
 
 `do_to_binary(Path) -> any()`
 
-<a name="from_message-2"></a>
+<a name="from_message-3"></a>
 
-### from_message/2 ###
+### from_message/3 ###
 
-`from_message(X1, Msg) -> any()`
+`from_message(Type, Link, Opts) -> any()`
 
 Extract the request path or hashpath from a message. We do not use
 AO-Core for this resolution because this function is called from inside AO-Core
@@ -91,11 +91,11 @@ Add an ID of a Msg2 to the HashPath of another message.
 
 `hashpath(Msg1, Msg2, HashpathAlg, Opts) -> any()`
 
-<a name="hashpath_alg-1"></a>
+<a name="hashpath_alg-2"></a>
 
-### hashpath_alg/1 ###
+### hashpath_alg/2 ###
 
-`hashpath_alg(Msg) -> any()`
+`hashpath_alg(Msg, Opts) -> any()`
 
 Get the hashpath function for a message from its HashPath-Alg.
 If no hashpath algorithm is specified, the protocol defaults to
@@ -189,6 +189,12 @@ can be safely used inside the main AO-Core resolve function.
 
 Store the remaining path of a message in its hidden `AO-Core` key.
 
+<a name="priv_store_remaining-3"></a>
+
+### priv_store_remaining/3 ###
+
+`priv_store_remaining(Msg, RemainingPath, Opts) -> any()`
+
 <a name="push_request-2"></a>
 
 ### push_request/2 ###
@@ -196,6 +202,12 @@ Store the remaining path of a message in its hidden `AO-Core` key.
 `push_request(Msg, Path) -> any()`
 
 Add a message to the head (next to execute) of a request path.
+
+<a name="push_request-3"></a>
+
+### push_request/3 ###
+
+`push_request(Msg, Path, Opts) -> any()`
 
 <a name="queue_request-2"></a>
 
@@ -205,7 +217,13 @@ Add a message to the head (next to execute) of a request path.
 
 Queue a message at the back of a request path. `path` is the only
 key that we cannot use dev_message's `set/3` function for (as it expects
-the compute path to be there), so we use `maps:put/3` instead.
+the compute path to be there), so we use `hb_maps:put/3` instead.
+
+<a name="queue_request-3"></a>
+
+### queue_request/3 ###
+
+`queue_request(Msg, Path, Opts) -> any()`
 
 <a name="regex_matches-2"></a>
 
@@ -234,7 +252,7 @@ atoms. Notably, it does not support strings as lists of characters.
 
 ### term_to_path_parts/2 ###
 
-`term_to_path_parts(Binary, Opts) -> any()`
+`term_to_path_parts(Link, Opts) -> any()`
 
 <a name="term_to_path_parts_test-0"></a>
 

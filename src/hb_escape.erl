@@ -5,8 +5,9 @@
 %%% Subsequently, we encode all header keys to lowercase %-encoded URI-style
 %%% strings because transmission.
 -module(hb_escape).
--export([encode/1, decode/1, encode_keys/1, decode_keys/1]).
+-export([encode/1, decode/1, encode_keys/2, decode_keys/2]).
 -include_lib("eunit/include/eunit.hrl").
+-include("include/hb.hrl").
 
 %% @doc Encode a binary as a URI-encoded string.
 encode(Bin) when is_binary(Bin) ->
@@ -17,24 +18,24 @@ decode(Bin) when is_binary(Bin) ->
     list_to_binary(percent_unescape(binary_to_list(Bin))).
 
 %% @doc Return a message with all of its keys decoded.
-decode_keys(Msg) when is_map(Msg) ->
-    maps:from_list(
+decode_keys(Msg, Opts) when is_map(Msg) ->
+    hb_maps:from_list(
         lists:map(
             fun({Key, Value}) -> {decode(Key), Value} end,
-            maps:to_list(Msg)
+            hb_maps:to_list(Msg, Opts)
         )
     );
-decode_keys(Other) -> Other.
+decode_keys(Other, _Opts) -> Other.
 
 %% @doc URI encode keys in the base layer of a message. Does not recurse.
-encode_keys(Msg) when is_map(Msg) ->
-    maps:from_list(
+encode_keys(Msg, Opts) when is_map(Msg) ->
+    hb_maps:from_list(
         lists:map(
             fun({Key, Value}) -> {encode(Key), Value} end,
-            maps:to_list(Msg)
+            hb_maps:to_list(Msg, Opts)
         )
     );
-encode_keys(Other) -> Other.
+encode_keys(Other, _Opts) -> Other.
 
 %% @doc Escape a list of characters as a URI-encoded string.
 percent_escape([]) -> [];
@@ -42,7 +43,7 @@ percent_escape([C | Cs]) when C >= $a, C =< $z -> [C | percent_escape(Cs)];
 percent_escape([C | Cs]) when C >= $0, C =< $9 -> [C | percent_escape(Cs)];
 percent_escape([C | Cs]) when
         C == $.; C == $-; C == $_; C == $/;
-        C == $?; C == $&; C == $+ ->
+        C == $?; C == $& ->
     [C | percent_escape(Cs)];
 percent_escape([C | Cs]) -> [escape_byte(C) | percent_escape(Cs)].
 
@@ -78,12 +79,24 @@ escape_unescape_identity_test() ->
     TestCases = [
         <<"hello">>,
         <<"hello, world!">>,
+        <<"hello+list">>,
         <<"special@chars#here">>,
         <<"UPPERCASE">>,
         <<"MixedCASEstring">>,
         <<"12345">>,
         <<>> % Empty string
     ],
+    ?event(parsing,
+        {escape_unescape_identity_test,
+            {test_cases,
+                [
+                        {Case, {explicit, encode(Case)}}
+                    ||
+                        Case <- TestCases
+                ]
+            }
+        }
+    ),
     lists:foreach(fun(TestCase) ->
         ?assertEqual(TestCase, decode(encode(TestCase)))
     end, TestCases).

@@ -29,7 +29,7 @@ and private elements of messages.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#from_message-1">from_message/1</a></td><td>Return the <code>private</code> key from a message.</td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td>Helper for getting a value from the private element of a message.</td></tr><tr><td valign="top"><a href="#get-4">get/4</a></td><td></td></tr><tr><td valign="top"><a href="#get_private_key_test-0">get_private_key_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#is_private-1">is_private/1</a></td><td>Check if a key is private.</td></tr><tr><td valign="top"><a href="#priv_ao_opts-1">priv_ao_opts/1*</a></td><td>The opts map that should be used when resolving paths against the
-private element of a message.</td></tr><tr><td valign="top"><a href="#remove_private_specifier-1">remove_private_specifier/1*</a></td><td>Remove the first key from the path if it is a private specifier.</td></tr><tr><td valign="top"><a href="#reset-1">reset/1</a></td><td>Unset all of the private keys in a message.</td></tr><tr><td valign="top"><a href="#set-3">set/3</a></td><td></td></tr><tr><td valign="top"><a href="#set-4">set/4</a></td><td>Helper function for setting a key in the private element of a message.</td></tr><tr><td valign="top"><a href="#set_priv-2">set_priv/2</a></td><td>Helper function for setting the complete private element of a message.</td></tr><tr><td valign="top"><a href="#set_private_test-0">set_private_test/0*</a></td><td></td></tr></table>
+private element of a message.</td></tr><tr><td valign="top"><a href="#remove_private_specifier-2">remove_private_specifier/2*</a></td><td>Remove the first key from the path if it is a private specifier.</td></tr><tr><td valign="top"><a href="#reset-1">reset/1</a></td><td>Unset all of the private keys in a message.</td></tr><tr><td valign="top"><a href="#set-3">set/3</a></td><td></td></tr><tr><td valign="top"><a href="#set-4">set/4</a></td><td>Helper function for setting a key in the private element of a message.</td></tr><tr><td valign="top"><a href="#set_priv-2">set_priv/2</a></td><td>Helper function for setting the complete private element of a message.</td></tr><tr><td valign="top"><a href="#set_private_test-0">set_private_test/0*</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -84,11 +84,11 @@ Check if a key is private.
 The opts map that should be used when resolving paths against the
 private element of a message.
 
-<a name="remove_private_specifier-1"></a>
+<a name="remove_private_specifier-2"></a>
 
-### remove_private_specifier/1 * ###
+### remove_private_specifier/2 * ###
 
-`remove_private_specifier(InputPath) -> any()`
+`remove_private_specifier(InputPath, Opts) -> any()`
 
 Remove the first key from the path if it is a private specifier.
 

@@ -14,8 +14,9 @@ assigning multiple messages to the same slot.<a name="index"></a>
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#assign-3">assign/3*</a></td><td>Assign a message to the next slot.</td></tr><tr><td valign="top"><a href="#do_assign-3">do_assign/3*</a></td><td>Generate and store the actual assignment message.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Get the current slot from the scheduling server.</td></tr><tr><td valign="top"><a href="#maybe_inform_recipient-5">maybe_inform_recipient/5*</a></td><td></td></tr><tr><td valign="top"><a href="#new_proc_test_-0">new_proc_test_/0*</a></td><td>Test the basic functionality of the server.</td></tr><tr><td valign="top"><a href="#next_hashchain-2">next_hashchain/2*</a></td><td>Create the next element in a chain of hashes that links this and prior
-assignments.</td></tr><tr><td valign="top"><a href="#schedule-2">schedule/2</a></td><td>Call the appropriate scheduling server to assign a message.</td></tr><tr><td valign="top"><a href="#server-1">server/1*</a></td><td>The main loop of the server.</td></tr><tr><td valign="top"><a href="#start-2">start/2</a></td><td>Start a scheduling server for a given computation.</td></tr><tr><td valign="top"><a href="#stop-1">stop/1</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#assign-3">assign/3*</a></td><td>Assign a message to the next slot.</td></tr><tr><td valign="top"><a href="#commit_assignment-2">commit_assignment/2*</a></td><td>Commit to the assignment using all of our appropriate wallets.</td></tr><tr><td valign="top"><a href="#commitment_wallets-2">commitment_wallets/2*</a></td><td>Determine the appropriate list of keys to use to commit assignments for
+a process.</td></tr><tr><td valign="top"><a href="#do_assign-3">do_assign/3*</a></td><td>Generate and store the actual assignment message.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Get the current slot from the scheduling server.</td></tr><tr><td valign="top"><a href="#maybe_inform_recipient-5">maybe_inform_recipient/5*</a></td><td>Potentially inform the caller that the assignment has been scheduled.</td></tr><tr><td valign="top"><a href="#new_proc_test-0">new_proc_test/0*</a></td><td>Test the basic functionality of the server.</td></tr><tr><td valign="top"><a href="#next_hashchain-3">next_hashchain/3*</a></td><td>Create the next element in a chain of hashes that links this and prior
+assignments.</td></tr><tr><td valign="top"><a href="#schedule-2">schedule/2</a></td><td>Call the appropriate scheduling server to assign a message.</td></tr><tr><td valign="top"><a href="#server-1">server/1*</a></td><td>The main loop of the server.</td></tr><tr><td valign="top"><a href="#start-3">start/3</a></td><td>Start a scheduling server for a given computation.</td></tr><tr><td valign="top"><a href="#stop-1">stop/1</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -29,6 +30,23 @@ assignments.</td></tr><tr><td valign="top"><a href="#schedule-2">schedule/2</a><
 `assign(State, Message, ReplyPID) -> any()`
 
 Assign a message to the next slot.
+
+<a name="commit_assignment-2"></a>
+
+### commit_assignment/2 * ###
+
+`commit_assignment(BaseAssignment, State) -> any()`
+
+Commit to the assignment using all of our appropriate wallets.
+
+<a name="commitment_wallets-2"></a>
+
+### commitment_wallets/2 * ###
+
+`commitment_wallets(ProcMsg, Opts) -> any()`
+
+Determine the appropriate list of keys to use to commit assignments for
+a process.
 
 <a name="do_assign-3"></a>
 
@@ -52,19 +70,24 @@ Get the current slot from the scheduling server.
 
 `maybe_inform_recipient(Mode, ReplyPID, Message, Assignment, State) -> any()`
 
-<a name="new_proc_test_-0"></a>
+Potentially inform the caller that the assignment has been scheduled.
+The main assignment loop calls this function repeatedly at different stages
+of the assignment process. The scheduling mode determines which stages
+trigger an update.
 
-### new_proc_test_/0 * ###
+<a name="new_proc_test-0"></a>
 
-`new_proc_test_() -> any()`
+### new_proc_test/0 * ###
+
+`new_proc_test() -> any()`
 
 Test the basic functionality of the server.
 
-<a name="next_hashchain-2"></a>
+<a name="next_hashchain-3"></a>
 
-### next_hashchain/2 * ###
+### next_hashchain/3 * ###
 
-`next_hashchain(HashChain, Message) -> any()`
+`next_hashchain(HashChain, Message, Opts) -> any()`
 
 Create the next element in a chain of hashes that links this and prior
 assignments.
@@ -86,11 +109,11 @@ Call the appropriate scheduling server to assign a message.
 The main loop of the server. Simply waits for messages to assign and
 returns the current slot.
 
-<a name="start-2"></a>
+<a name="start-3"></a>
 
-### start/2 ###
+### start/3 ###
 
-`start(ProcID, Opts) -> any()`
+`start(ProcID, Proc, Opts) -> any()`
 
 Start a scheduling server for a given computation.
 

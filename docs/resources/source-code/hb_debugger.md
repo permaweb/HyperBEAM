@@ -23,8 +23,8 @@ Boot time is approximately 10 seconds.<a name="index"></a>
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#await_breakpoint-0">await_breakpoint/0</a></td><td>Await a new breakpoint being set by the debugger.</td></tr><tr><td valign="top"><a href="#await_breakpoint-1">await_breakpoint/1*</a></td><td></td></tr><tr><td valign="top"><a href="#await_debugger-0">await_debugger/0*</a></td><td>Await a debugger to be attached to the node.</td></tr><tr><td valign="top"><a href="#await_debugger-1">await_debugger/1*</a></td><td></td></tr><tr><td valign="top"><a href="#interpret-1">interpret/1*</a></td><td>Attempt to interpret a specified module to load it into the debugger.</td></tr><tr><td valign="top"><a href="#is_debugging_node_connected-0">is_debugging_node_connected/0*</a></td><td>Is another Distributed Erlang node connected to us?.</td></tr><tr><td valign="top"><a href="#start-0">start/0</a></td><td></td></tr><tr><td valign="top"><a href="#start_and_break-2">start_and_break/2</a></td><td>A bootstrapping function to wait for an external debugger to be attached,
-then add a breakpoint on the specified <code>Module:Function(Args)</code>, then call it.</td></tr><tr><td valign="top"><a href="#start_and_break-3">start_and_break/3</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#await_breakpoint-0">await_breakpoint/0</a></td><td>Await a new breakpoint being set by the debugger.</td></tr><tr><td valign="top"><a href="#await_breakpoint-1">await_breakpoint/1*</a></td><td></td></tr><tr><td valign="top"><a href="#await_debugger-0">await_debugger/0*</a></td><td>Await a debugger to be attached to the node.</td></tr><tr><td valign="top"><a href="#await_debugger-1">await_debugger/1*</a></td><td></td></tr><tr><td valign="top"><a href="#interpret-1">interpret/1*</a></td><td>Attempt to interpret a specified module to load it into the debugger.</td></tr><tr><td valign="top"><a href="#interpret_modules-1">interpret_modules/1*</a></td><td>Interpret modules from a list of atom prefixes.</td></tr><tr><td valign="top"><a href="#is_debugging_node_connected-0">is_debugging_node_connected/0*</a></td><td>Is another Distributed Erlang node connected to us?.</td></tr><tr><td valign="top"><a href="#start-0">start/0</a></td><td></td></tr><tr><td valign="top"><a href="#start_and_break-2">start_and_break/2</a></td><td>A bootstrapping function to wait for an external debugger to be attached,
+then add a breakpoint on the specified <code>Module:Function(Args)</code>, then call it.</td></tr><tr><td valign="top"><a href="#start_and_break-3">start_and_break/3</a></td><td></td></tr><tr><td valign="top"><a href="#start_and_break-4">start_and_break/4</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -73,6 +73,14 @@ process and wait for it to complete. If we do not receive a response in a
 reasonable amount of time, we assume that the module failed to load and
 return `false`.
 
+<a name="interpret_modules-1"></a>
+
+### interpret_modules/1 * ###
+
+`interpret_modules(Prefixes) -> any()`
+
+Interpret modules from a list of atom prefixes.
+
 <a name="is_debugging_node_connected-0"></a>
 
 ### is_debugging_node_connected/0 * ###
@@ -101,4 +109,10 @@ then add a breakpoint on the specified `Module:Function(Args)`, then call it.
 ### start_and_break/3 ###
 
 `start_and_break(Module, Function, Args) -> any()`
+
+<a name="start_and_break-4"></a>
+
+### start_and_break/4 ###
+
+`start_and_break(Module, Function, Args, DebuggerScope) -> any()`
 

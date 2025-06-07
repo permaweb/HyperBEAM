@@ -153,17 +153,28 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % Resolve the handler message, setting the path to the handler name if
         % it is not already set. We ensure to ignore the hashpath such that the
         % handler does not affect the hashpath of a request's output. If the
-        % `hook/commit` key is set to `true`, the handler request will be
+        % `hook/commit' key is set to `true', the handler request will be
         % committed before execution.
         BaseReq =
             Req#{
                 <<"path">> => hb_ao:get(<<"path">>, Handler, HookName, Opts),
                 <<"method">> => hb_ao:get(<<"method">>, Handler, <<"GET">>, Opts)
             },
-        PreparedReq =
-            case hb_ao:get(<<"hook/commit-request">>, Handler, false, Opts) of
-                true -> hb_message:commit(BaseReq, Opts);
-                false -> BaseReq
+        CommitReqBin = 
+            hb_util:bin(
+                hb_ao:get(<<"hook/commit-request">>, Handler, <<"false">>, Opts)
+            ),
+        {PreparedBase, PreparedReq} =
+            case CommitReqBin of
+                <<"true">> ->
+                    {
+                        case hb_message:signers(Handler, Opts) of
+                            [] -> hb_message:commit(Handler, Opts);
+                            _ -> Handler
+                        end,
+                        hb_message:commit(BaseReq, Opts)
+                    };
+                <<"false">> -> {Handler, BaseReq}
             end,
         ?event(hook,
             {resolving_handler, 
@@ -175,7 +186,7 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % Resolve the prepared request upon the handler.
         {Status, Res} =
             hb_ao:resolve(
-                Handler,
+                PreparedBase,
                 PreparedReq,
                 Opts#{ hashpath => ignore }
             ),

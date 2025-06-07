@@ -105,12 +105,12 @@
 -include("include/hb.hrl").
 
 info(Msg) ->
-    maps:merge(
+    hb_maps:merge(
         #{
             handler => fun router/4,
             excludes => [<<"set">>, <<"keys">>]
         },
-        case maps:get(<<"stack-keys">>, Msg, not_found) of
+        case hb_maps:get(<<"stack-keys">>, Msg, not_found) of
             not_found -> #{};
             StackKeys -> #{ exports => StackKeys }
         end
@@ -131,9 +131,9 @@ output_prefix(Msg1, _Msg2, Opts) ->
 %% @doc The device stack key router. Sends the request to `resolve_stack',
 %% except for `set/2' which is handled by the default implementation in
 %% `dev_message'.
-router(<<"keys">>, Message1, Message2, _Opts) ->
+router(<<"keys">>, Message1, Message2, Opts) ->
 	?event({keys_called, {msg1, Message1}, {msg2, Message2}}),
-	dev_message:keys(Message1);
+	dev_message:keys(Message1, Opts);
 router(Key, Message1, Message2, Opts) ->
     case hb_path:matches(Key, <<"transform">>) of
         true -> transformer_message(Message1, Opts);
@@ -172,14 +172,15 @@ transformer_message(Msg1, Opts) ->
 			<<"device">> => #{
 				info =>
 					fun() ->
-                        maps:merge(
+                        hb_maps:merge(
                             BaseInfo,
                             #{
                                 handler =>
                                     fun(Key, MsgX1) ->
                                         transform(MsgX1, Key, Opts)
                                     end
-                            }
+                            },
+							Opts
                         )
 					end,
 				<<"type">> => <<"stack-transformer">>
@@ -261,7 +262,7 @@ transform(Msg1, Key, Opts) ->
 %% @doc The main device stack execution engine. See the moduledoc for more
 %% information.
 resolve_fold(Message1, Message2, Opts) ->
-	{ok, InitDevMsg} = dev_message:get(<<"device">>, Message1),
+	{ok, InitDevMsg} = dev_message:get(<<"device">>, Message1, Opts),
     StartingPassValue =
         hb_ao:get(<<"pass">>, {as, dev_message, Message1}, unset, Opts),
     PreparedMessage = hb_ao:set(Message1, <<"pass">>, 1, Opts),
@@ -351,7 +352,7 @@ resolve_map(Message1, Message2, Opts) ->
             Opts
         ),
     Res = {ok,
-        maps:filtermap(
+        hb_maps:filtermap(
             fun(Key, _Dev) ->
                 {ok, OrigWithDev} = transform(Message1, Key, Opts),
                 case hb_ao:resolve(OrigWithDev, Message2, Opts) of
@@ -359,7 +360,8 @@ resolve_map(Message1, Message2, Opts) ->
                     _ -> false
                 end
             end,
-            maps:without(?AO_CORE_KEYS, hb_ao:normalize_keys(DevKeys))
+            hb_maps:without(?AO_CORE_KEYS, hb_ao:normalize_keys(DevKeys, Opts), Opts),
+			Opts
         )
     },
     Res.
@@ -443,10 +445,10 @@ transform_external_call_device_test() ->
 									handler =>
 										fun(<<"keys">>, MsgX1) ->
                                             ?event({test_dev_keys_called, MsgX1}),
-											{ok, maps:keys(MsgX1)};
+											{ok, hb_maps:keys(MsgX1, #{})};
 										(Key, MsgX1) ->
 											{ok, Value} =
-												dev_message:get(Key, MsgX1),
+												dev_message:get(Key, MsgX1, #{}),
 											dev_message:set(
 												MsgX1,
 												#{ Key =>

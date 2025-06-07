@@ -18,6 +18,7 @@
 %%% Boolean: boolean()
 -module(hb_structured_fields).
 -export([parse_dictionary/1, parse_item/1, parse_list/1, parse_bare_item/1]).
+-export([parse_binary/1]).
 -export([dictionary/1, item/1, list/1, bare_item/1, from_bare_item/1]).
 -export([to_dictionary/1, to_list/1, to_item/1, to_item/2]).
 -include_lib("eunit/include/eunit.hrl").
@@ -165,7 +166,8 @@ key_to_binary(Key) -> iolist_to_binary(Key).
 parse_dictionary(<<>>) ->
     [];
 parse_dictionary(<<C, R/bits>>) when ?IS_ALPHA(C)
-        or ?IS_DIGIT(C) or (C =:= $*) or (C =:= $%) or (C =:= $_) or (C =:= $-) ->
+        or ?IS_DIGIT(C) or (C =:= $*) or (C =:= $%) or (C =:= $_) or (C =:= $-) 
+        or (C =:= $.) ->
     parse_dict_key(R, [], <<C>>).
 
 parse_dict_key(<<$=, $(, R0/bits>>, Acc, K) ->
@@ -366,6 +368,8 @@ parse_token(R, Acc) ->
     {{token, Acc}, R}.
 
 %% @doc Parse a byte sequence binary.
+parse_binary(Bin) when is_binary(Bin) ->
+    parse_binary(Bin, <<>>).
 parse_binary(<<$:, R/bits>>, Acc) ->
     {{binary, base64:decode(Acc)}, R};
 parse_binary(<<C, R/bits>>, Acc) when ?IS_ALPHANUM(C) or (C =:= $+) or (C =:= $/) or (C =:= $=) ->
@@ -377,20 +381,20 @@ parse_struct_hd_test_() ->
     lists:flatten([
         begin
             {ok, JSON} = file:read_file(File),
-            Tests = jsx:decode(JSON, [return_maps]),
+            Tests = json:decode(JSON),
             [
                 {iolist_to_binary(io_lib:format("~s: ~s", [filename:basename(File), Name])), fun() ->
                     %% The implementation is strict. We fail whenever we can.
-                    CanFail = maps:get(<<"can_fail">>, Test, false),
-                    MustFail = maps:get(<<"must_fail">>, Test, false),
+                    CanFail = hb_maps:get(<<"can_fail">>, Test, false),
+                    MustFail = hb_maps:get(<<"must_fail">>, Test, false),
                     io:format(
                         "must fail ~p~nexpected json ~0p~n",
-                        [MustFail, maps:get(<<"expected">>, Test, undefined)]
+                        [MustFail, hb_maps:get(<<"expected">>, Test, undefined)]
                     ),
                     Expected =
                         case MustFail of
                             true -> undefined;
-                            false -> expected_to_term(maps:get(<<"expected">>, Test))
+                            false -> expected_to_term(hb_maps:get(<<"expected">>, Test))
                         end,
                     io:format("expected term: ~0p", [Expected]),
                     Raw = raw_to_binary(Raw0),
@@ -641,38 +645,7 @@ params(Params) ->
     || Param <- Params
     ].
 
--ifdef(TEST).
-struct_hd_identity_test_() ->
-    Files = filelib:wildcard("deps/structured-header-tests/*.json"),
-    lists:flatten([
-        begin
-            {ok, JSON} = file:read_file(File),
-            Tests = jsx:decode(JSON, [return_maps]),
-            [
-                {iolist_to_binary(io_lib:format("~s: ~s", [filename:basename(File), Name])), fun() ->
-                    io:format("expected json ~0p~n", [Expected0]),
-                    Expected = expected_to_term(Expected0),
-                    io:format("expected term: ~0p", [Expected]),
-                    case HeaderType of
-                        <<"dictionary">> ->
-                            Expected = parse_dictionary(iolist_to_binary(dictionary(Expected)));
-                        <<"item">> ->
-                            Expected = parse_item(iolist_to_binary(item(Expected)));
-                        <<"list">> ->
-                            Expected = parse_list(iolist_to_binary(list(Expected)))
-                    end
-                end}
-            || #{
-                    <<"name">> := Name,
-                    <<"header_type">> := HeaderType,
-                    %% We only run tests that must not fail.
-                    <<"expected">> := Expected0
-                } <- Tests
-            ]
-        end
-    || File <- Files
-    ]).
--endif.
+%%% Tests
 
 to_dictionary_test() ->
     {ok, SfDictionary} = to_dictionary(#{
@@ -696,7 +669,12 @@ to_dictionary_test() ->
         lists:keyfind(<<"fizz">>, 1, SfDictionary)    
     ),
     ?assertEqual(
-        {<<"item-with">>, {item, {string,<<"params">>}, [{<<"first">>, {token,<<"param">>}}, {<<"another">>, true}]}},
+        {<<"item-with">>,
+            {item,
+                {string,<<"params">>},
+                [{<<"first">>, {token,<<"param">>}}, {<<"another">>, true}]
+            }
+        },
         lists:keyfind(<<"item-with">>, 1, SfDictionary)    
     ),
     ?assertEqual(
@@ -716,15 +694,37 @@ to_dictionary_test() ->
         lists:keyfind(<<"empty">>, 1, SfDictionary)
     ),
     ?assertEqual(
-        {<<"inner">>, {list, [{item, {string, <<"a">>}, []}, {item, {token, <<"b">>}, []}, {item, true, []}, {item, 3, []}], []}},
+        {
+            <<"inner">>,
+            {
+                list,
+                [
+                    {item, {string, <<"a">>}, []},
+                    {item, {token, <<"b">>}, []},
+                    {item, true, []},
+                    {item, 3, []}
+                ],
+                []
+            }
+        },
         lists:keyfind(<<"inner">>, 1, SfDictionary)
     ),
     ?assertEqual(
-        {<<"inner_with_params">>, {list , [{item, 1, []}, {item, 2, []}], [{<<"first">>, {token, <<"param">>}}]}},
+        {<<"inner_with_params">>,
+            {list,
+                [{item, 1, []}, {item, 2, []}],
+                [{<<"first">>, {token, <<"param">>}}]
+            }
+        },
         lists:keyfind(<<"inner_with_params">>, 1, SfDictionary)
     ),
     ?assertEqual(
-       {<<"inner_inner_params">>, {list, [{item, 1, [{<<"heres">>, {string, <<"one">>}}]}, {item, 2, []}], []}},
+       {<<"inner_inner_params">>,
+            {list,
+                [{item, 1, [{<<"heres">>, {string, <<"one">>}}]}, {item, 2, []}],
+                []
+            }
+        },
         lists:keyfind(<<"inner_inner_params">>, 1, SfDictionary)
     ),
     dictionary(SfDictionary).
@@ -752,13 +752,22 @@ to_item_test() ->
 
 to_list_test() ->
     ?assertEqual(
-        to_list([1,2,<<"three">>, [4, <<"five">>], {list, [6, <<"seven">>], [{first, param}]}]),
+        to_list(
+            [1, 2, <<"three">>, [4, <<"five">>],
+                {list, [6, <<"seven">>],
+                    [{<<"first">>, {token, <<"param">>}}]
+                }
+            ]
+        ),
         {ok, [
             {item, 1, []},
             {item, 2, []},
             {item, {string, <<"three">>}, []},
             {list, [{ item, 4, []}, {item, {string, <<"five">>}, []}], []},
-            {list, [{ item, 6, []}, {item, {string, <<"seven">>}, []}], [{<<"first">>, {token, <<"param">>}}]}
+            {list,
+                [{ item, 6, []}, {item, {string, <<"seven">>}, []}],
+                [{<<"first">>, {token, <<"param">>}}]
+            }
         ]}
     ),
     ok.

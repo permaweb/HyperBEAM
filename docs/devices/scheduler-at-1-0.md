@@ -55,10 +55,10 @@ These keys are typically accessed via the [`~process@1.0`](../resources/source-c
 
 ## Interaction with Other Components
 
-*   **[`~process@1.0`](../resources/source-code/dev_process.md):** The primary user of the scheduler, calling `next` to drive process execution.
-*   **[`~push@1.0`](../resources/source-code/dev_push.md):** Often used to add messages to the schedule via `POST /schedule`.
-*   **`dev_scheduler_cache`:** Internal module used for caching assignments locally on the node to reduce latency.
-*   **Scheduling Unit (SU):** Schedulers may interact with external entities (like Arweave gateways or dedicated SU nodes) to fetch or commit schedules, although `~scheduler@1.0` aims for a simpler, often node-local or SU-client model.
+*   [`~process@1.0`](../resources/source-code/dev_process.md): The primary user of the scheduler, calling `next` to drive process execution.
+*   [`~push@1.0`](../resources/source-code/dev_push.md): Often used to add messages to the schedule via `POST /schedule`.
+*   `dev_scheduler_cache`: Internal module used for caching assignments locally on the node to reduce latency.
+*   Scheduling Unit (SU): Schedulers may interact with external entities (like Arweave gateways or dedicated SU nodes) to fetch or commit schedules, although `~scheduler@1.0` aims for a simpler, often node-local or SU-client model.
 
 `~scheduler@1.0` provides the fundamental mechanism for ordered, sequential execution within the potentially asynchronous and parallel environment of AO.
 

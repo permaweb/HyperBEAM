@@ -59,43 +59,28 @@ The `hb_cache` module is responsible for storing and retrieving messages in
 the HyperBEAM stores configured on the node. Each store has its own storage
 backend, but each works with simple key-value pairs. Subsequently, the
 `hb_cache` module uses TABMs as the internal format for storing and
-retrieving messages.<a name="index"></a>
+retrieving messages.
+
+Test vectors to ensure the functioning of this module and the codecs that
+interact with it are found in `hb_message_test_vectors.erl`.<a name="index"></a>
 
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#basic_map_codec_test-1">basic_map_codec_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#binary_to_binary_test-1">binary_to_binary_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#commit-2">commit/2</a></td><td>Sign a message with the given wallet.</td></tr><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td></td></tr><tr><td valign="top"><a href="#commitment-2">commitment/2</a></td><td>Extract a commitment from a message given a <code>committer</code> ID, or a spec
-message to match against.</td></tr><tr><td valign="top"><a href="#commitment-3">commitment/3</a></td><td></td></tr><tr><td valign="top"><a href="#committed-1">committed/1</a></td><td>Return the list of committed keys from a message.</td></tr><tr><td valign="top"><a href="#committed-2">committed/2</a></td><td></td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td></td></tr><tr><td valign="top"><a href="#committed_empty_keys_test-1">committed_empty_keys_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#committed_keys_test-1">committed_keys_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#complex_signed_message_test-1">complex_signed_message_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#convert-3">convert/3</a></td><td>Convert a message from one format to another.</td></tr><tr><td valign="top"><a href="#convert-4">convert/4</a></td><td></td></tr><tr><td valign="top"><a href="#deep_multisignature_test-0">deep_multisignature_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#deeply_nested_committed_keys_test-0">deeply_nested_committed_keys_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#deeply_nested_message_with_content_test-1">deeply_nested_message_with_content_test/1*</a></td><td>Test that we can convert a 3 layer nested message into a tx record and back.</td></tr><tr><td valign="top"><a href="#deeply_nested_message_with_only_content-1">deeply_nested_message_with_only_content/1*</a></td><td></td></tr><tr><td valign="top"><a href="#default_keys_removed_test-0">default_keys_removed_test/0*</a></td><td>Test that the filter_default_keys/1 function removes TX fields
-that have the default values found in the tx record, but not those that
-have been set by the user.</td></tr><tr><td valign="top"><a href="#default_tx_list-0">default_tx_list/0</a></td><td>Get the ordered list of fields as AO-Core keys and default values of
-the tx record.</td></tr><tr><td valign="top"><a href="#default_tx_message-0">default_tx_message/0*</a></td><td>Get the normalized fields and default values of the tx record.</td></tr><tr><td valign="top"><a href="#empty_string_in_tag_test-1">empty_string_in_tag_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#encode_balance_table-2">encode_balance_table/2*</a></td><td></td></tr><tr><td valign="top"><a href="#encode_large_balance_table_test-1">encode_large_balance_table_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#encode_small_balance_table_test-1">encode_small_balance_table_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#filter_default_keys-1">filter_default_keys/1</a></td><td>Remove keys from a map that have the default values found in the tx
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#commit-2">commit/2</a></td><td>Sign a message with the given wallet.</td></tr><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td></td></tr><tr><td valign="top"><a href="#commitment-2">commitment/2</a></td><td>Extract a commitment from a message given a <code>committer</code> ID, or a spec
+message to match against.</td></tr><tr><td valign="top"><a href="#commitment-3">commitment/3</a></td><td></td></tr><tr><td valign="top"><a href="#commitment_devices-2">commitment_devices/2</a></td><td>Return the devices for which there are commitments on a message.</td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td>Return the list of committed keys from a message.</td></tr><tr><td valign="top"><a href="#conversion_spec_to_req-2">conversion_spec_to_req/2*</a></td><td>Get a codec device and request params from the given conversion request.</td></tr><tr><td valign="top"><a href="#convert-3">convert/3</a></td><td>Convert a message from one format to another.</td></tr><tr><td valign="top"><a href="#convert-4">convert/4</a></td><td></td></tr><tr><td valign="top"><a href="#default_tx_list-0">default_tx_list/0</a></td><td>Get the ordered list of fields as AO-Core keys and default values of
+the tx record.</td></tr><tr><td valign="top"><a href="#default_tx_message-0">default_tx_message/0*</a></td><td>Get the normalized fields and default values of the tx record.</td></tr><tr><td valign="top"><a href="#filter_default_keys-1">filter_default_keys/1</a></td><td>Remove keys from a map that have the default values found in the tx
 record.</td></tr><tr><td valign="top"><a href="#find_target-3">find_target/3</a></td><td>Implements a standard pattern in which the target for an operation is
 found by looking for a <code>target</code> key in the request.</td></tr><tr><td valign="top"><a href="#format-1">format/1</a></td><td>Format a message for printing, optionally taking an indentation level
-to start from.</td></tr><tr><td valign="top"><a href="#format-2">format/2</a></td><td></td></tr><tr><td valign="top"><a href="#from_tabm-4">from_tabm/4*</a></td><td></td></tr><tr><td valign="top"><a href="#generate_test_suite-1">generate_test_suite/1*</a></td><td></td></tr><tr><td valign="top"><a href="#get_codec-2">get_codec/2*</a></td><td>Get a codec from the options.</td></tr><tr><td valign="top"><a href="#hashpath_sign_verify_test-1">hashpath_sign_verify_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message.</td></tr><tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr><tr><td valign="top"><a href="#id-3">id/3</a></td><td></td></tr><tr><td valign="top"><a href="#large_body_committed_keys_test-1">large_body_committed_keys_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#match-2">match/2</a></td><td>Check if two maps match, including recursively checking nested maps.</td></tr><tr><td valign="top"><a href="#match-3">match/3</a></td><td></td></tr><tr><td valign="top"><a href="#match_modes_test-0">match_modes_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#match_test-1">match_test/1*</a></td><td>Test that the message matching function works.</td></tr><tr><td valign="top"><a href="#matchable_keys-1">matchable_keys/1*</a></td><td></td></tr><tr><td valign="top"><a href="#message_suite_test_-0">message_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#message_with_large_keys_test-1">message_with_large_keys_test/1*</a></td><td>Test that the data field is correctly managed when we have multiple
-uses for it (the 'data' key itself, as well as keys that cannot fit in
-tags).</td></tr><tr><td valign="top"><a href="#message_with_simple_embedded_list_test-1">message_with_simple_embedded_list_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#minimization_test-0">minimization_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#minimize-1">minimize/1</a></td><td>Remove keys from the map that can be regenerated.</td></tr><tr><td valign="top"><a href="#minimize-2">minimize/2*</a></td><td></td></tr><tr><td valign="top"><a href="#nested_body_list_test-1">nested_body_list_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#nested_empty_map_test-1">nested_empty_map_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#nested_message_with_large_content_test-1">nested_message_with_large_content_test/1*</a></td><td>Test that the data field is correctly managed when we have multiple
-uses for it (the 'data' key itself, as well as keys that cannot fit in
-tags).</td></tr><tr><td valign="top"><a href="#nested_message_with_large_keys_and_content_test-1">nested_message_with_large_keys_and_content_test/1*</a></td><td>Check that large keys and data fields are correctly handled together.</td></tr><tr><td valign="top"><a href="#nested_message_with_large_keys_test-1">nested_message_with_large_keys_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#nested_structured_fields_test-1">nested_structured_fields_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize-1">normalize/1*</a></td><td>Return a map with only the keys that necessary, without those that can
-be regenerated.</td></tr><tr><td valign="top"><a href="#print-1">print/1</a></td><td>Pretty-print a message.</td></tr><tr><td valign="top"><a href="#print-2">print/2*</a></td><td></td></tr><tr><td valign="top"><a href="#priv_survives_conversion_test-1">priv_survives_conversion_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#recursive_nested_list_test-1">recursive_nested_list_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#restore_priv-2">restore_priv/2*</a></td><td>Add the existing <code>priv</code> sub-map back to a converted message, honoring
-any existing <code>priv</code> sub-map that may already be present.</td></tr><tr><td valign="top"><a href="#run_test-0">run_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set_body_codec_test-1">set_body_codec_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#sign_node_message_test-1">sign_node_message_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#signed_deep_message_test-1">signed_deep_message_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#signed_list_test-1">signed_list_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#signed_message_encode_decode_verify_test-1">signed_message_encode_decode_verify_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#signed_message_with_derived_components_test-1">signed_message_with_derived_components_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#signed_nested_data_key_test-1">signed_nested_data_key_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#signed_only_committed_data_field_test-1">signed_only_committed_data_field_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#signed_with_inner_signed_message_test-1">signed_with_inner_signed_message_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#signers-1">signers/1</a></td><td>Return all of the committers on a message that have 'normal', 256 bit,
-addresses.</td></tr><tr><td valign="top"><a href="#simple_nested_message_test-1">simple_nested_message_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#single_layer_message_to_encoding_test-1">single_layer_message_to_encoding_test/1*</a></td><td>Test that we can convert a message into a tx record and back.</td></tr><tr><td valign="top"><a href="#structured_field_atom_parsing_test-1">structured_field_atom_parsing_test/1*</a></td><td>Structured field parsing tests.</td></tr><tr><td valign="top"><a href="#structured_field_decimal_parsing_test-1">structured_field_decimal_parsing_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#tabm_ao_ids_equal_test-1">tabm_ao_ids_equal_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_codecs-0">test_codecs/0*</a></td><td></td></tr><tr><td valign="top"><a href="#to_tabm-3">to_tabm/3*</a></td><td></td></tr><tr><td valign="top"><a href="#type-1">type/1</a></td><td>Return the type of an encoded message.</td></tr><tr><td valign="top"><a href="#uncommitted-1">uncommitted/1</a></td><td>Return the unsigned version of a message in AO-Core format.</td></tr><tr><td valign="top"><a href="#unsigned_id_test-1">unsigned_id_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#verify-1">verify/1</a></td><td>wrapper function to verify a message.</td></tr><tr><td valign="top"><a href="#verify-2">verify/2</a></td><td></td></tr><tr><td valign="top"><a href="#with_commitments-2">with_commitments/2</a></td><td>Filter messages that do not match the 'spec' given.</td></tr><tr><td valign="top"><a href="#with_commitments-3">with_commitments/3*</a></td><td></td></tr><tr><td valign="top"><a href="#with_only_committed-1">with_only_committed/1</a></td><td>Return a message with only the committed keys.</td></tr><tr><td valign="top"><a href="#with_only_committed-2">with_only_committed/2</a></td><td></td></tr><tr><td valign="top"><a href="#with_only_committers-2">with_only_committers/2</a></td><td>Return the message with only the specified committers attached.</td></tr><tr><td valign="top"><a href="#without_commitments-2">without_commitments/2</a></td><td>Filter messages that match the 'spec' given.</td></tr><tr><td valign="top"><a href="#without_commitments-3">without_commitments/3*</a></td><td></td></tr></table>
+to start from.</td></tr><tr><td valign="top"><a href="#format-2">format/2</a></td><td></td></tr><tr><td valign="top"><a href="#from_tabm-4">from_tabm/4*</a></td><td></td></tr><tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message.</td></tr><tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr><tr><td valign="top"><a href="#id-3">id/3</a></td><td></td></tr><tr><td valign="top"><a href="#is_signed_key-3">is_signed_key/3</a></td><td>Determine whether a specific key is part of a message's commitments.</td></tr><tr><td valign="top"><a href="#match-2">match/2</a></td><td>Check if two maps match, including recursively checking nested maps.</td></tr><tr><td valign="top"><a href="#match-3">match/3</a></td><td></td></tr><tr><td valign="top"><a href="#match-4">match/4</a></td><td></td></tr><tr><td valign="top"><a href="#matchable_keys-1">matchable_keys/1*</a></td><td></td></tr><tr><td valign="top"><a href="#minimize-1">minimize/1</a></td><td>Remove keys from the map that can be regenerated.</td></tr><tr><td valign="top"><a href="#minimize-2">minimize/2*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize-2">normalize/2*</a></td><td>Return a map with only the keys that necessary, without those that can
+be regenerated.</td></tr><tr><td valign="top"><a href="#print-1">print/1</a></td><td>Pretty-print a message.</td></tr><tr><td valign="top"><a href="#print-2">print/2*</a></td><td></td></tr><tr><td valign="top"><a href="#restore_priv-3">restore_priv/3*</a></td><td>Add the existing <code>priv</code> sub-map back to a converted message, honoring
+any existing <code>priv</code> sub-map that may already be present.</td></tr><tr><td valign="top"><a href="#signers-2">signers/2</a></td><td>Return all of the committers on a message that have 'normal', 256 bit,
+addresses.</td></tr><tr><td valign="top"><a href="#to_tabm-3">to_tabm/3*</a></td><td></td></tr><tr><td valign="top"><a href="#type-1">type/1</a></td><td>Return the type of an encoded message.</td></tr><tr><td valign="top"><a href="#uncommitted-1">uncommitted/1</a></td><td>Return the unsigned version of a message in AO-Core format.</td></tr><tr><td valign="top"><a href="#uncommitted-2">uncommitted/2</a></td><td></td></tr><tr><td valign="top"><a href="#unsafe_match-5">unsafe_match/5*</a></td><td></td></tr><tr><td valign="top"><a href="#verify-1">verify/1</a></td><td>wrapper function to verify a message.</td></tr><tr><td valign="top"><a href="#verify-2">verify/2</a></td><td></td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td></td></tr><tr><td valign="top"><a href="#with_commitments-3">with_commitments/3</a></td><td>Filter messages that do not match the 'spec' given.</td></tr><tr><td valign="top"><a href="#with_only_committed-2">with_only_committed/2</a></td><td>Return a message with only the committed keys.</td></tr><tr><td valign="top"><a href="#with_only_committers-2">with_only_committers/2</a></td><td>Return the message with only the specified committers attached.</td></tr><tr><td valign="top"><a href="#with_only_committers-3">with_only_committers/3</a></td><td></td></tr><tr><td valign="top"><a href="#without_commitments-3">without_commitments/3</a></td><td>Filter messages that match the 'spec' given.</td></tr></table>
 
 
 <a name="functions"></a>
 
 ## Function Details ##
-
-<a name="basic_map_codec_test-1"></a>
-
-### basic_map_codec_test/1 * ###
-
-`basic_map_codec_test(Codec) -> any()`
-
-<a name="binary_to_binary_test-1"></a>
-
-### binary_to_binary_test/1 * ###
-
-`binary_to_binary_test(Codec) -> any()`
 
 <a name="commit-2"></a>
 
@@ -127,19 +112,13 @@ message to match against. Returns only the first matching commitment, or
 
 `commitment(CommitterID, Msg, Opts) -> any()`
 
-<a name="committed-1"></a>
+<a name="commitment_devices-2"></a>
 
-### committed/1 ###
+### commitment_devices/2 ###
 
-`committed(Msg) -> any()`
+`commitment_devices(Msg, Opts) -> any()`
 
-Return the list of committed keys from a message.
-
-<a name="committed-2"></a>
-
-### committed/2 ###
-
-`committed(Msg, Committers) -> any()`
+Return the devices for which there are commitments on a message.
 
 <a name="committed-3"></a>
 
@@ -147,23 +126,18 @@ Return the list of committed keys from a message.
 
 `committed(Msg, List, Opts) -> any()`
 
-<a name="committed_empty_keys_test-1"></a>
+Return the list of committed keys from a message.
 
-### committed_empty_keys_test/1 * ###
+<a name="conversion_spec_to_req-2"></a>
 
-`committed_empty_keys_test(Codec) -> any()`
+### conversion_spec_to_req/2 * ###
 
-<a name="committed_keys_test-1"></a>
+`conversion_spec_to_req(Spec, Opts) -> any()`
 
-### committed_keys_test/1 * ###
-
-`committed_keys_test(Codec) -> any()`
-
-<a name="complex_signed_message_test-1"></a>
-
-### complex_signed_message_test/1 * ###
-
-`complex_signed_message_test(Codec) -> any()`
+Get a codec device and request params from the given conversion request.
+Expects conversion spec to either be a binary codec name, or a map with a
+`device` key and other parameters. Additionally honors the `always_bundle`
+key in the node message if present.
 
 <a name="convert-3"></a>
 
@@ -189,42 +163,6 @@ available. The conversion from a TABM is done by the target codec.
 
 `convert(Msg, TargetFormat, SourceFormat, Opts) -> any()`
 
-<a name="deep_multisignature_test-0"></a>
-
-### deep_multisignature_test/0 * ###
-
-`deep_multisignature_test() -> any()`
-
-<a name="deeply_nested_committed_keys_test-0"></a>
-
-### deeply_nested_committed_keys_test/0 * ###
-
-`deeply_nested_committed_keys_test() -> any()`
-
-<a name="deeply_nested_message_with_content_test-1"></a>
-
-### deeply_nested_message_with_content_test/1 * ###
-
-`deeply_nested_message_with_content_test(Codec) -> any()`
-
-Test that we can convert a 3 layer nested message into a tx record and back.
-
-<a name="deeply_nested_message_with_only_content-1"></a>
-
-### deeply_nested_message_with_only_content/1 * ###
-
-`deeply_nested_message_with_only_content(Codec) -> any()`
-
-<a name="default_keys_removed_test-0"></a>
-
-### default_keys_removed_test/0 * ###
-
-`default_keys_removed_test() -> any()`
-
-Test that the filter_default_keys/1 function removes TX fields
-that have the default values found in the tx record, but not those that
-have been set by the user.
-
 <a name="default_tx_list-0"></a>
 
 ### default_tx_list/0 ###
@@ -241,30 +179,6 @@ the tx record.
 `default_tx_message() -> any()`
 
 Get the normalized fields and default values of the tx record.
-
-<a name="empty_string_in_tag_test-1"></a>
-
-### empty_string_in_tag_test/1 * ###
-
-`empty_string_in_tag_test(Codec) -> any()`
-
-<a name="encode_balance_table-2"></a>
-
-### encode_balance_table/2 * ###
-
-`encode_balance_table(Size, Codec) -> any()`
-
-<a name="encode_large_balance_table_test-1"></a>
-
-### encode_large_balance_table_test/1 * ###
-
-`encode_large_balance_table_test(Codec) -> any()`
-
-<a name="encode_small_balance_table_test-1"></a>
-
-### encode_small_balance_table_test/1 * ###
-
-`encode_small_balance_table_test(Codec) -> any()`
 
 <a name="filter_default_keys-1"></a>
 
@@ -308,26 +222,6 @@ to start from.
 
 `from_tabm(Msg, TargetFormat, OldPriv, Opts) -> any()`
 
-<a name="generate_test_suite-1"></a>
-
-### generate_test_suite/1 * ###
-
-`generate_test_suite(Suite) -> any()`
-
-<a name="get_codec-2"></a>
-
-### get_codec/2 * ###
-
-`get_codec(TargetFormat, Opts) -> any()`
-
-Get a codec from the options.
-
-<a name="hashpath_sign_verify_test-1"></a>
-
-### hashpath_sign_verify_test/1 * ###
-
-`hashpath_sign_verify_test(Codec) -> any()`
-
 <a name="id-1"></a>
 
 ### id/1 ###
@@ -340,7 +234,7 @@ Return the ID of a message.
 
 ### id/2 ###
 
-`id(Msg, Committers) -> any()`
+`id(Msg, Opts) -> any()`
 
 <a name="id-3"></a>
 
@@ -348,11 +242,13 @@ Return the ID of a message.
 
 `id(Msg, RawCommitters, Opts) -> any()`
 
-<a name="large_body_committed_keys_test-1"></a>
+<a name="is_signed_key-3"></a>
 
-### large_body_committed_keys_test/1 * ###
+### is_signed_key/3 ###
 
-`large_body_committed_keys_test(Codec) -> any()`
+`is_signed_key(Key, Msg, Opts) -> any()`
+
+Determine whether a specific key is part of a message's commitments.
 
 <a name="match-2"></a>
 
@@ -365,6 +261,7 @@ Takes an optional mode argument to control the matching behavior:
 `strict`: All keys in both maps be present and match.
 `only_present`: Only present keys in both maps must match.
 `primary`: Only the primary map's keys must be present.
+Returns `true` or `{ErrType, Err}`.
 
 <a name="match-3"></a>
 
@@ -372,53 +269,17 @@ Takes an optional mode argument to control the matching behavior:
 
 `match(Map1, Map2, Mode) -> any()`
 
-<a name="match_modes_test-0"></a>
+<a name="match-4"></a>
 
-### match_modes_test/0 * ###
+### match/4 ###
 
-`match_modes_test() -> any()`
-
-<a name="match_test-1"></a>
-
-### match_test/1 * ###
-
-`match_test(Codec) -> any()`
-
-Test that the message matching function works.
+`match(Map1, Map2, Mode, Opts) -> any()`
 
 <a name="matchable_keys-1"></a>
 
 ### matchable_keys/1 * ###
 
 `matchable_keys(Map) -> any()`
-
-<a name="message_suite_test_-0"></a>
-
-### message_suite_test_/0 * ###
-
-`message_suite_test_() -> any()`
-
-<a name="message_with_large_keys_test-1"></a>
-
-### message_with_large_keys_test/1 * ###
-
-`message_with_large_keys_test(Codec) -> any()`
-
-Test that the data field is correctly managed when we have multiple
-uses for it (the 'data' key itself, as well as keys that cannot fit in
-tags).
-
-<a name="message_with_simple_embedded_list_test-1"></a>
-
-### message_with_simple_embedded_list_test/1 * ###
-
-`message_with_simple_embedded_list_test(Codec) -> any()`
-
-<a name="minimization_test-0"></a>
-
-### minimization_test/0 * ###
-
-`minimization_test() -> any()`
 
 <a name="minimize-1"></a>
 
@@ -435,53 +296,11 @@ additional list of keys to include in the minimization.
 
 `minimize(RawVal, ExtraKeys) -> any()`
 
-<a name="nested_body_list_test-1"></a>
+<a name="normalize-2"></a>
 
-### nested_body_list_test/1 * ###
+### normalize/2 * ###
 
-`nested_body_list_test(Codec) -> any()`
-
-<a name="nested_empty_map_test-1"></a>
-
-### nested_empty_map_test/1 * ###
-
-`nested_empty_map_test(Codec) -> any()`
-
-<a name="nested_message_with_large_content_test-1"></a>
-
-### nested_message_with_large_content_test/1 * ###
-
-`nested_message_with_large_content_test(Codec) -> any()`
-
-Test that the data field is correctly managed when we have multiple
-uses for it (the 'data' key itself, as well as keys that cannot fit in
-tags).
-
-<a name="nested_message_with_large_keys_and_content_test-1"></a>
-
-### nested_message_with_large_keys_and_content_test/1 * ###
-
-`nested_message_with_large_keys_and_content_test(Codec) -> any()`
-
-Check that large keys and data fields are correctly handled together.
-
-<a name="nested_message_with_large_keys_test-1"></a>
-
-### nested_message_with_large_keys_test/1 * ###
-
-`nested_message_with_large_keys_test(Codec) -> any()`
-
-<a name="nested_structured_fields_test-1"></a>
-
-### nested_structured_fields_test/1 * ###
-
-`nested_structured_fields_test(Codec) -> any()`
-
-<a name="normalize-1"></a>
-
-### normalize/1 * ###
-
-`normalize(Map) -> any()`
+`normalize(Map, Opts) -> any()`
 
 Return a map with only the keys that necessary, without those that can
 be regenerated.
@@ -500,135 +319,23 @@ Pretty-print a message.
 
 `print(Msg, Indent) -> any()`
 
-<a name="priv_survives_conversion_test-1"></a>
+<a name="restore_priv-3"></a>
 
-### priv_survives_conversion_test/1 * ###
+### restore_priv/3 * ###
 
-`priv_survives_conversion_test(Codec) -> any()`
-
-<a name="recursive_nested_list_test-1"></a>
-
-### recursive_nested_list_test/1 * ###
-
-`recursive_nested_list_test(Codec) -> any()`
-
-<a name="restore_priv-2"></a>
-
-### restore_priv/2 * ###
-
-`restore_priv(Msg, EmptyPriv) -> any()`
+`restore_priv(Msg, EmptyPriv, Opts) -> any()`
 
 Add the existing `priv` sub-map back to a converted message, honoring
 any existing `priv` sub-map that may already be present.
 
-<a name="run_test-0"></a>
+<a name="signers-2"></a>
 
-### run_test/0 * ###
+### signers/2 ###
 
-`run_test() -> any()`
-
-<a name="set_body_codec_test-1"></a>
-
-### set_body_codec_test/1 * ###
-
-`set_body_codec_test(Codec) -> any()`
-
-<a name="sign_node_message_test-1"></a>
-
-### sign_node_message_test/1 * ###
-
-`sign_node_message_test(Codec) -> any()`
-
-<a name="signed_deep_message_test-1"></a>
-
-### signed_deep_message_test/1 * ###
-
-`signed_deep_message_test(Codec) -> any()`
-
-<a name="signed_list_test-1"></a>
-
-### signed_list_test/1 * ###
-
-`signed_list_test(Codec) -> any()`
-
-<a name="signed_message_encode_decode_verify_test-1"></a>
-
-### signed_message_encode_decode_verify_test/1 * ###
-
-`signed_message_encode_decode_verify_test(Codec) -> any()`
-
-<a name="signed_message_with_derived_components_test-1"></a>
-
-### signed_message_with_derived_components_test/1 * ###
-
-`signed_message_with_derived_components_test(Codec) -> any()`
-
-<a name="signed_nested_data_key_test-1"></a>
-
-### signed_nested_data_key_test/1 * ###
-
-`signed_nested_data_key_test(Codec) -> any()`
-
-<a name="signed_only_committed_data_field_test-1"></a>
-
-### signed_only_committed_data_field_test/1 * ###
-
-`signed_only_committed_data_field_test(Codec) -> any()`
-
-<a name="signed_with_inner_signed_message_test-1"></a>
-
-### signed_with_inner_signed_message_test/1 * ###
-
-`signed_with_inner_signed_message_test(Codec) -> any()`
-
-<a name="signers-1"></a>
-
-### signers/1 ###
-
-`signers(Msg) -> any()`
+`signers(Msg, Opts) -> any()`
 
 Return all of the committers on a message that have 'normal', 256 bit,
 addresses.
-
-<a name="simple_nested_message_test-1"></a>
-
-### simple_nested_message_test/1 * ###
-
-`simple_nested_message_test(Codec) -> any()`
-
-<a name="single_layer_message_to_encoding_test-1"></a>
-
-### single_layer_message_to_encoding_test/1 * ###
-
-`single_layer_message_to_encoding_test(Codec) -> any()`
-
-Test that we can convert a message into a tx record and back.
-
-<a name="structured_field_atom_parsing_test-1"></a>
-
-### structured_field_atom_parsing_test/1 * ###
-
-`structured_field_atom_parsing_test(Codec) -> any()`
-
-Structured field parsing tests.
-
-<a name="structured_field_decimal_parsing_test-1"></a>
-
-### structured_field_decimal_parsing_test/1 * ###
-
-`structured_field_decimal_parsing_test(Codec) -> any()`
-
-<a name="tabm_ao_ids_equal_test-1"></a>
-
-### tabm_ao_ids_equal_test/1 * ###
-
-`tabm_ao_ids_equal_test(Codec) -> any()`
-
-<a name="test_codecs-0"></a>
-
-### test_codecs/0 * ###
-
-`test_codecs() -> any()`
 
 <a name="to_tabm-3"></a>
 
@@ -648,15 +355,21 @@ Return the type of an encoded message.
 
 ### uncommitted/1 ###
 
-`uncommitted(Bin) -> any()`
+`uncommitted(Msg) -> any()`
 
 Return the unsigned version of a message in AO-Core format.
 
-<a name="unsigned_id_test-1"></a>
+<a name="uncommitted-2"></a>
 
-### unsigned_id_test/1 * ###
+### uncommitted/2 ###
 
-`unsigned_id_test(Codec) -> any()`
+`uncommitted(Bin, Opts) -> any()`
+
+<a name="unsafe_match-5"></a>
+
+### unsafe_match/5 * ###
+
+`unsafe_match(Map1, Map2, Mode, Path, Opts) -> any()`
 
 <a name="verify-1"></a>
 
@@ -672,27 +385,27 @@ wrapper function to verify a message.
 
 `verify(Msg, Committers) -> any()`
 
-<a name="with_commitments-2"></a>
+<a name="verify-3"></a>
 
-### with_commitments/2 ###
+### verify/3 ###
 
-`with_commitments(Spec, Msg) -> any()`
+`verify(Msg, Committers, Opts) -> any()`
+
+<a name="with_commitments-3"></a>
+
+### with_commitments/3 ###
+
+`with_commitments(Spec, Msg, Opts) -> any()`
 
 Filter messages that do not match the 'spec' given. The underlying match
 is performed in the `only_present` mode, such that match specifications only
 need to specify the keys that must be present.
 
-<a name="with_commitments-3"></a>
+<a name="with_only_committed-2"></a>
 
-### with_commitments/3 * ###
+### with_only_committed/2 ###
 
-`with_commitments(Spec, Msg, Opts) -> any()`
-
-<a name="with_only_committed-1"></a>
-
-### with_only_committed/1 ###
-
-`with_only_committed(Msg) -> any()`
+`with_only_committed(Msg, Opts) -> any()`
 
 Return a message with only the committed keys. If no commitments are
 present, the message is returned unchanged. This means that you need to
@@ -703,12 +416,6 @@ check if the message is:
 is such that expensive operations like signature verification are not
 performed unless necessary.
 
-<a name="with_only_committed-2"></a>
-
-### with_only_committed/2 ###
-
-`with_only_committed(Msg, Opts) -> any()`
-
 <a name="with_only_committers-2"></a>
 
 ### with_only_committers/2 ###
@@ -717,18 +424,18 @@ performed unless necessary.
 
 Return the message with only the specified committers attached.
 
-<a name="without_commitments-2"></a>
+<a name="with_only_committers-3"></a>
 
-### without_commitments/2 ###
+### with_only_committers/3 ###
 
-`without_commitments(Spec, Msg) -> any()`
-
-Filter messages that match the 'spec' given. Inverts the `with_commitments/2`
-function, such that only messages that do _not_ match the spec are returned.
+`with_only_committers(Msg, Committers, Opts) -> any()`
 
 <a name="without_commitments-3"></a>
 
-### without_commitments/3 * ###
+### without_commitments/3 ###
 
 `without_commitments(Spec, Msg, Opts) -> any()`
+
+Filter messages that match the 'spec' given. Inverts the `with_commitments/2`
+function, such that only messages that do _not_ match the spec are returned.
 

@@ -11,7 +11,8 @@
 %%% 
 %%% Boot time is approximately 10 seconds.
 -module(hb_debugger).
--export([start/0, start_and_break/2, start_and_break/3, await_breakpoint/0]).
+-export([start/0, start_and_break/2, start_and_break/3, start_and_break/4]).
+-export([await_breakpoint/0]).
 
 %% Wait for another node (which we assume to be the debugger) to be attached,
 %% then return to the caller.
@@ -54,22 +55,58 @@ interpret(Module) ->
     after 250 -> false
     end.
 
+%% @doc Interpret modules from a list of atom prefixes.
+interpret_modules(Prefixes) when is_binary(Prefixes) ->
+    interpret_modules(binary:split(Prefixes, <<",">>, [global, trim_all]));
+interpret_modules(Prefixes) when is_list(Prefixes) ->
+    RelevantModules =
+        lists:filter(
+            fun(Mod) ->
+                ModBin = hb_util:bin(Mod),
+                lists:any(
+                    fun(Prefix) ->
+                        PrefixBin = hb_util:bin(Prefix),
+                        binary:longest_common_prefix([ModBin, PrefixBin]) ==
+                            byte_size(PrefixBin)
+                    end,
+                    Prefixes
+                )
+            end,
+            hb_util:all_hb_modules()
+        ),
+    io:format("Relevant modules: ~p.~n", [RelevantModules]),
+    lists:foreach(
+        fun(Mod) ->
+            io:format("Interpreting module: ~p.~n", [Mod]),
+            interpret(Mod)
+        end,
+        RelevantModules
+    ),
+    RelevantModules.
+
 %% @doc A bootstrapping function to wait for an external debugger to be attached,
 %% then add a breakpoint on the specified `Module:Function(Args)', then call it.
 start_and_break(Module, Function) ->
-    start_and_break(Module, Function, []).
+    start_and_break(Module, Function, [], []).
 start_and_break(Module, Function, Args) ->
-    start(),
-    interpret(Module),
-    SetRes = int:break_in(Module, Function, length(Args)),
-    io:format(
-        "Breakpoint set. Result from `int:break_in/3': ~p.~n",
-        [SetRes]
-    ),
-    io:format("Invoking function...~n", []),
-    apply(Module, Function, Args),
-    io:format("Function invoked. Terminating.~n", []),
-    init:stop().
+    start_and_break(Module, Function, Args, []).
+start_and_break(Module, Function, Args, DebuggerScope) ->
+    timer:sleep(1000),
+    spawn(fun() ->
+        start(),
+        interpret(Module),
+        interpret_modules(DebuggerScope),
+        SetRes = int:break_in(Module, Function, length(Args)),
+        io:format(
+            "Breakpoint set. Result from `int:break_in/3': ~p.~n",
+            [SetRes]
+        ),
+        io:format("Invoking function...~n", []),
+        apply(Module, Function, Args),
+        io:format("Function invoked. Terminating.~n", []),
+        init:stop(),
+        erlang:halt()
+    end).
 
 %% @doc Await a debugger to be attached to the node.
 await_debugger() -> await_debugger(0).

@@ -2,29 +2,47 @@
 %%% It acts as a deliberate 'bottleneck' to prevent the server accidentally
 %%% assigning multiple messages to the same slot.
 -module(dev_scheduler_server).
--export([start/2, schedule/2, stop/1]).
+-export([start/3, schedule/2, stop/1]).
 -export([info/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 %% @doc Start a scheduling server for a given computation.
-start(ProcID, Opts) ->
+start(ProcID, Proc, Opts) ->
     ?event(scheduling, {starting_scheduling_server, {proc_id, ProcID}}),
     spawn_link(
         fun() ->
+            % Before we start, register the scheduler name.
+            case hb_name:register({<<"scheduler@1.0">>, ProcID}) of
+                ok -> ok;
+                error ->
+                    throw(
+                        {another_scheduler_is_already_registered,
+                            {proc_id, ProcID}
+                        }
+                    )
+            end,
+            % Write the process to the cache. We are the provider-of-last-resort
+            % for this data.
+            hb_cache:write(Proc, Opts),
             case hb_opts:get(scheduling_mode, disabled, Opts) of
                 disabled ->
                     throw({scheduling_disabled_on_node, {requested_for, ProcID}});
                 _ -> ok
             end,
-            hb_name:register({dev_scheduler, ProcID}),
             {CurrentSlot, HashChain} =
                 case dev_scheduler_cache:latest(ProcID, Opts) of
                     not_found ->
                         ?event({starting_new_schedule, {proc_id, ProcID}}),
                         {-1, <<>>};
                     {Slot, Chain} ->
-                        ?event({continuing_schedule, {proc_id, ProcID}, {current_slot, Slot}}),
+                        ?event(
+                            {continuing_schedule,
+                                {proc_id, ProcID},
+                                {current_slot, Slot},
+                                {hash_chain, Chain}
+                            }
+                        ),
                         {Slot, Chain}
                 end,
             ?event(
@@ -38,12 +56,40 @@ start(ProcID, Opts) ->
                 #{
                     id => ProcID,
                     current => CurrentSlot,
-                    wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts),
                     hash_chain => HashChain,
+                    wallets => commitment_wallets(Proc, Opts),
+                    mode =>
+                        hb_opts:get(
+                            scheduling_mode,
+                            remote_confirmation,
+                            Opts
+                        ),
                     opts => Opts
                 }
             )
         end
+    ).
+
+%% @doc Determine the appropriate list of keys to use to commit assignments for
+%% a process.
+commitment_wallets(ProcMsg, Opts) ->
+    SchedulerVal =
+        hb_ao:get_first(
+            [
+                {ProcMsg, <<"scheduler">>},
+                {ProcMsg, <<"scheduler-location">>}
+            ],
+            [],
+            Opts
+        ),
+    lists:filtermap(
+        fun(Scheduler) ->
+            case hb_opts:as(Scheduler, Opts) of
+                {ok, #{ priv_wallet := Wallet }} -> {true, Wallet};
+                _ -> false
+            end
+        end,
+        dev_scheduler:parse_schedulers(SchedulerVal)
     ).
 
 %% @doc Call the appropriate scheduling server to assign a message.
@@ -90,32 +136,48 @@ assign(State, Message, ReplyPID) ->
 
 %% @doc Generate and store the actual assignment message.
 do_assign(State, Message, ReplyPID) ->
-    HashChain = next_hashchain(maps:get(hash_chain, State), Message),
+    % Ensure that only committed keys from the message are included in the
+    % assignment.
+    {ok, OnlyAttested} =
+        hb_message:with_only_committed(
+            Message,
+            Opts = maps:get(opts, State)
+        ),
+    HashChain =
+        next_hashchain(
+            maps:get(hash_chain, State),
+            OnlyAttested,
+            Opts
+        ),
     NextSlot = maps:get(current, State) + 1,
     % Run the signing of the assignment and writes to the disk in a separate
     % process.
     AssignFun =
         fun() ->
             {Timestamp, Height, Hash} = ar_timestamp:get(),
-            Assignment = hb_message:commit(#{
-                <<"path">> =>
-                    case hb_path:from_message(request, Message) of
-                        undefined -> <<"compute">>;
-                        Path -> Path
-                    end,
-                <<"data-protocol">> => <<"ao">>,
-                <<"variant">> => <<"ao.N.1">>,
-                <<"process">> => hb_util:id(maps:get(id, State)),
-                <<"epoch">> => <<"0">>,
-                <<"slot">> => NextSlot,
-                <<"block-height">> => Height,
-                <<"block-hash">> => hb_util:human_id(Hash),
-                <<"block-timestamp">> => Timestamp,
-                % Note: Local time on the SU, not Arweave
-                <<"timestamp">> => erlang:system_time(millisecond),
-                <<"hash-chain">> => hb_util:id(HashChain),
-                <<"body">> => Message
-            }, maps:get(wallet, State)),
+            Assignment =
+                commit_assignment(
+                    #{
+                        <<"path">> =>
+                            case hb_path:from_message(request, Message, Opts) of
+                                undefined -> <<"compute">>;
+                                Path -> Path
+                            end,
+                        <<"data-protocol">> => <<"ao">>,
+                        <<"variant">> => <<"ao.N.1">>,
+                        <<"process">> => hb_util:id(maps:get(id, State)),
+                        <<"epoch">> => <<"0">>,
+                        <<"slot">> => NextSlot,
+                        <<"block-height">> => Height,
+                        <<"block-hash">> => hb_util:human_id(Hash),
+                        <<"block-timestamp">> => Timestamp,
+                        % Note: Local time on the SU, not Arweave
+                        <<"timestamp">> => erlang:system_time(millisecond),
+                        <<"hash-chain">> => hb_util:id(HashChain),
+                        <<"body">> => OnlyAttested
+                    },
+                    State
+                ),
             AssignmentID = hb_message:id(Assignment, all),
             ?event(scheduling,
                 {assigned,
@@ -132,7 +194,7 @@ do_assign(State, Message, ReplyPID) ->
                 State
             ),
             ?event(starting_message_write),
-            ok = dev_scheduler_cache:write(Assignment, maps:get(opts, State)),
+            ok = dev_scheduler_cache:write(Assignment, Opts),
             maybe_inform_recipient(
                 local_confirmation,
                 ReplyPID,
@@ -142,7 +204,7 @@ do_assign(State, Message, ReplyPID) ->
             ),
             ?event(writes_complete),
             ?event(uploading_assignment),
-            hb_client:upload(Assignment, maps:get(opts, State)),
+            hb_client:upload(Assignment, Opts),
             ?event(uploads_complete),
             maybe_inform_recipient(
                 remote_confirmation,
@@ -152,7 +214,7 @@ do_assign(State, Message, ReplyPID) ->
                 State
             )
         end,
-    case hb_opts:get(scheduling_mode, sync, maps:get(opts, State)) of
+    case hb_opts:get(scheduling_mode, sync, Opts) of
         aggressive ->
             spawn(AssignFun);
         Other ->
@@ -164,17 +226,32 @@ do_assign(State, Message, ReplyPID) ->
         hash_chain := HashChain
     }.
 
+%% @doc Commit to the assignment using all of our appropriate wallets.
+commit_assignment(BaseAssignment, State) ->
+    Wallets = maps:get(wallets, State),
+    lists:foldr(
+        fun(Wallet, Assignment) ->
+            hb_message:commit(Assignment, Wallet)
+        end,
+        BaseAssignment,
+        Wallets
+    ).
+
+%% @doc Potentially inform the caller that the assignment has been scheduled.
+%% The main assignment loop calls this function repeatedly at different stages
+%% of the assignment process. The scheduling mode determines which stages
+%% trigger an update.
 maybe_inform_recipient(Mode, ReplyPID, Message, Assignment, State) ->
-    case hb_opts:get(scheduling_mode, remote_confirmation, maps:get(opts, State)) of
+    case maps:get(mode, State) of
         Mode -> ReplyPID ! {scheduled, Message, Assignment};
         _ -> ok
     end.
 
 %% @doc Create the next element in a chain of hashes that links this and prior
 %% assignments.
-next_hashchain(HashChain, Message) ->
+next_hashchain(HashChain, Message, Opts) ->
     ?event({creating_next_hashchain, {hash_chain, HashChain}, {message, Message}}),
-    ID = hb_message:id(Message, all),
+    ID = hb_message:id(Message, all, Opts),
     crypto:hash(
         sha256,
         << HashChain/binary, ID/binary >>
@@ -183,34 +260,32 @@ next_hashchain(HashChain, Message) ->
 %% TESTS
 
 %% @doc Test the basic functionality of the server.
-new_proc_test_() ->
-	{timeout, 20, fun() -> 
-		Wallet = ar_wallet:new(),
-		SignedItem = hb_message:commit(
-			#{ <<"data">> => <<"test">>, <<"random-key">> => rand:uniform(10000) },
-			Wallet
-		),
-		SignedItem2 = hb_message:commit(
-			#{ <<"data">> => <<"test2">> },
-			Wallet
-		),
-		SignedItem3 = hb_message:commit(
-			#{
-				<<"data">> => <<"test2">>,
-				<<"deep-key">> =>
-					#{ <<"data">> => <<"test3">> }
-			},
-			Wallet
-		),
-		dev_scheduler_registry:find(hb_ao:get(id, SignedItem), true),
-		schedule(ID = hb_ao:get(id, SignedItem), SignedItem),
-		schedule(ID, SignedItem2),
-		schedule(ID, SignedItem3),
-		?assertMatch(
-			#{ current := 2 },
-			dev_scheduler_server:info(dev_scheduler_registry:find(ID))
-		)
-	end}.
+new_proc_test() ->
+    Wallet = ar_wallet:new(),
+    SignedItem = hb_message:commit(
+        #{ <<"data">> => <<"test">>, <<"random-key">> => rand:uniform(10000) },
+        Wallet
+    ),
+    SignedItem2 = hb_message:commit(
+        #{ <<"data">> => <<"test2">> },
+        Wallet
+    ),
+    SignedItem3 = hb_message:commit(
+        #{
+            <<"data">> => <<"test2">>,
+            <<"deep-key">> =>
+                #{ <<"data">> => <<"test3">> }
+        },
+        Wallet
+    ),
+    dev_scheduler_registry:find(hb_message:id(SignedItem, all), SignedItem),
+    schedule(ID = hb_message:id(SignedItem, all), SignedItem),
+    schedule(ID, SignedItem2),
+    schedule(ID, SignedItem3),
+    ?assertMatch(
+        #{ current := 2 },
+        dev_scheduler_server:info(dev_scheduler_registry:find(ID))
+    ).
     
 
 % benchmark_test() ->

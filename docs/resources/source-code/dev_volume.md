@@ -173,7 +173,7 @@ and mounts it
 6. Updates the node's store configuration to use the mounted volume
 
 Config options in Opts map:
-- volume_key: (Required) The encryption key
+- priv_volume_key: (Required) The encryption key
 - volume_device: Base device path
 - volume_partition: Partition path
 - volume_partition_type: Filesystem type

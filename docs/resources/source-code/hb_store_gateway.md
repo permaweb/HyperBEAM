@@ -11,7 +11,7 @@ GraphQL routes, additionally including additional store-specific routes.
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cache_read_message_test-0">cache_read_message_test/0*</a></td><td>Ensure that saving to the gateway store works.</td></tr><tr><td valign="top"><a href="#external_http_access_test-0">external_http_access_test/0*</a></td><td>Test that the default node config allows for data to be accessed.</td></tr><tr><td valign="top"><a href="#graphql_as_store_test_-0">graphql_as_store_test_/0*</a></td><td>Store is accessible via the default options.</td></tr><tr><td valign="top"><a href="#graphql_from_cache_test-0">graphql_from_cache_test/0*</a></td><td>Stored messages are accessible via <code>hb_cache</code> accesses.</td></tr><tr><td valign="top"><a href="#list-2">list/2</a></td><td></td></tr><tr><td valign="top"><a href="#manual_local_cache_test-0">manual_local_cache_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#maybe_cache-2">maybe_cache/2*</a></td><td>Cache the data if the cache is enabled.</td></tr><tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read the data at the given key from the GraphQL route.</td></tr><tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td></td></tr><tr><td valign="top"><a href="#resolve_on_gateway_test_-0">resolve_on_gateway_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#scope-1">scope/1</a></td><td>The scope of a GraphQL store is always remote, due to performance.</td></tr><tr><td valign="top"><a href="#specific_route_test-0">specific_route_test/0*</a></td><td>Routes can be specified in the options, overriding the default routes.</td></tr><tr><td valign="top"><a href="#store_opts_test-0">store_opts_test/0*</a></td><td>Test to verify store opts is being set for Data-Protocol ao.</td></tr><tr><td valign="top"><a href="#type-2">type/2</a></td><td>Get the type of the data at the given key.</td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cache_read_message_test-0">cache_read_message_test/0*</a></td><td>Ensure that saving to the gateway store works.</td></tr><tr><td valign="top"><a href="#external_http_access_test-0">external_http_access_test/0*</a></td><td>Test that the default node config allows for data to be accessed.</td></tr><tr><td valign="top"><a href="#graphql_as_store_test_-0">graphql_as_store_test_/0*</a></td><td>Store is accessible via the default options.</td></tr><tr><td valign="top"><a href="#graphql_from_cache_test-0">graphql_from_cache_test/0*</a></td><td>Stored messages are accessible via <code>hb_cache</code> accesses.</td></tr><tr><td valign="top"><a href="#list-2">list/2</a></td><td></td></tr><tr><td valign="top"><a href="#manual_local_cache_test-0">manual_local_cache_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#maybe_cache-2">maybe_cache/2*</a></td><td>Cache the data if the cache is enabled.</td></tr><tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read the data at the given key from the GraphQL route.</td></tr><tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td></td></tr><tr><td valign="top"><a href="#scope-1">scope/1</a></td><td>The scope of a GraphQL store is always remote, due to performance.</td></tr><tr><td valign="top"><a href="#specific_route_test-0">specific_route_test/0*</a></td><td>Routes can be specified in the options, overriding the default routes.</td></tr><tr><td valign="top"><a href="#store_opts_test-0">store_opts_test/0*</a></td><td>Test to verify store opts is being set for Data-Protocol ao.</td></tr><tr><td valign="top"><a href="#type-2">type/2</a></td><td>Get the type of the data at the given key.</td></tr><tr><td valign="top"><a href="#verifiability_test-0">verifiability_test/0*</a></td><td>Test that items retreived from the gateway store are verifiable.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -87,12 +87,6 @@ to read the data if the key is an ID.
 
 `resolve(X1, Key) -> any()`
 
-<a name="resolve_on_gateway_test_-0"></a>
-
-### resolve_on_gateway_test_/0 * ###
-
-`resolve_on_gateway_test_() -> any()`
-
 <a name="scope-1"></a>
 
 ### scope/1 ###
@@ -130,4 +124,12 @@ Test to verify store opts is being set for Data-Protocol ao
 Get the type of the data at the given key. We potentially cache the
 result, so that we don't have to read the data from the GraphQL route
 multiple times.
+
+<a name="verifiability_test-0"></a>
+
+### verifiability_test/0 * ###
+
+`verifiability_test() -> any()`
+
+Test that items retreived from the gateway store are verifiable.
 

@@ -15,7 +15,7 @@ as examples of how to interact with HyperBEAM nodes.<a name="index"></a>
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#create_schedule_aos2_test_disabled-0">create_schedule_aos2_test_disabled/0*</a></td><td></td></tr><tr><td valign="top"><a href="#paid_wasm_test-0">paid_wasm_test/0*</a></td><td>Gain signed WASM responses from a node and verify them.</td></tr><tr><td valign="top"><a href="#relay_with_payments_test-0">relay_with_payments_test/0*</a></td><td>Start a node running the simple pay meta device, and use it to relay
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#create_schedule_aos2_test_disabled-0">create_schedule_aos2_test_disabled/0*</a></td><td></td></tr><tr><td valign="top"><a href="#paid_wasm-0">paid_wasm/0*</a></td><td></td></tr><tr><td valign="top"><a href="#paid_wasm_test_-0">paid_wasm_test_/0*</a></td><td>Gain signed WASM responses from a node and verify them.</td></tr><tr><td valign="top"><a href="#relay_with_payments_test-0">relay_with_payments_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#relay_with_payments_test_-0">relay_with_payments_test_/0*</a></td><td>Start a node running the simple pay meta device, and use it to relay
 a message for a client.</td></tr><tr><td valign="top"><a href="#schedule-2">schedule/2*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule-3">schedule/3*</a></td><td></td></tr><tr><td valign="top"><a href="#schedule-4">schedule/4*</a></td><td></td></tr></table>
 
 
@@ -29,11 +29,17 @@ a message for a client.</td></tr><tr><td valign="top"><a href="#schedule-2">sche
 
 `create_schedule_aos2_test_disabled() -> any()`
 
-<a name="paid_wasm_test-0"></a>
+<a name="paid_wasm-0"></a>
 
-### paid_wasm_test/0 * ###
+### paid_wasm/0 * ###
 
-`paid_wasm_test() -> any()`
+`paid_wasm() -> any()`
+
+<a name="paid_wasm_test_-0"></a>
+
+### paid_wasm_test_/0 * ###
+
+`paid_wasm_test_() -> any()`
 
 Gain signed WASM responses from a node and verify them.
 1. Start the client with a small balance.
@@ -46,6 +52,12 @@ Gain signed WASM responses from a node and verify them.
 ### relay_with_payments_test/0 * ###
 
 `relay_with_payments_test() -> any()`
+
+<a name="relay_with_payments_test_-0"></a>
+
+### relay_with_payments_test_/0 * ###
+
+`relay_with_payments_test_() -> any()`
 
 Start a node running the simple pay meta device, and use it to relay
 a message for a client. We must ensure:

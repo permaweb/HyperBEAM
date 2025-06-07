@@ -70,7 +70,7 @@ These options control caching behavior. **Note:** Detailed storage configuration
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `cache_lookup_hueristics` | Boolean | false | Whether to use caching heuristics or always consult the local data store |
+| `cache_lookup_heuristics` | Boolean | false | Whether to use caching heuristics or always consult the local data store |
 | `access_remote_cache_for_client` | Boolean | false | Whether to access data from remote caches for client requests |
 | `store_all_signed` | Boolean | true | Whether the node should store all signed messages |
 | `await_inprogress` | Atom/Boolean | named | Whether to await in-progress executions (false, named, true) |

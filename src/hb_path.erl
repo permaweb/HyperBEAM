@@ -29,11 +29,14 @@
 %%% message. When Msg2's are applied to a Msg1, the resulting Msg3's HashPath
 %%% will be generated according to Msg1's algorithm choice.
 -module(hb_path).
--export([hashpath/2, hashpath/3, hashpath/4, hashpath_alg/1]).
--export([hd/2, tl/2, push_request/2, queue_request/2, pop_request/2]).
--export([priv_remaining/2, priv_store_remaining/2]).
+-export([hashpath/2, hashpath/3, hashpath/4, hashpath_alg/2]).
+-export([hd/2, tl/2]).
+-export([push_request/2, push_request/3]).
+-export([queue_request/2, queue_request/3]).
+-export([pop_request/2]).
+-export([priv_remaining/2, priv_store_remaining/2, priv_store_remaining/3]).
 -export([verify_hashpath/2]).
--export([term_to_path_parts/1, term_to_path_parts/2, from_message/2]).
+-export([term_to_path_parts/1, term_to_path_parts/2, from_message/3]).
 -export([matches/2, to_binary/1, regex_matches/2, normalize/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -71,15 +74,17 @@ tl(Path, Opts) when is_list(Path) ->
 %% @doc Return the `Remaining-Path' of a message, from its hidden `AO-Core'
 %% key. Does not use the `get' or set `hb_private' functions, such that it
 %% can be safely used inside the main AO-Core resolve function.
-priv_remaining(Msg, _Opts) ->
+priv_remaining(Msg, Opts) ->
     Priv = hb_private:from_message(Msg),
-    AOCore = maps:get(<<"ao-core">>, Priv, #{}),
-    maps:get(<<"remaining">>, AOCore, undefined).
+    AOCore = hb_maps:get(<<"ao-core">>, Priv, #{}, Opts),
+    hb_maps:get(<<"remaining">>, AOCore, undefined, Opts).
 
 %% @doc Store the remaining path of a message in its hidden `AO-Core' key.
 priv_store_remaining(Msg, RemainingPath) ->
+    priv_store_remaining(Msg, RemainingPath, #{}).
+priv_store_remaining(Msg, RemainingPath, Opts) ->
     Priv = hb_private:from_message(Msg),
-    AOCore = maps:get(<<"ao-core">>, Priv, #{}),
+    AOCore = hb_maps:get(<<"ao-core">>, Priv, #{}, Opts),
     Msg#{
         <<"priv">> =>
             Priv#{
@@ -95,7 +100,7 @@ hashpath(Bin, _Opts) when is_binary(Bin) ->
     % Default hashpath for a binary message is its SHA2-256 hash.
     hb_util:human_id(hb_crypto:sha256(Bin));
 hashpath(RawMsg1, Opts) ->
-    Msg1 = hb_ao:normalize_keys(RawMsg1),
+    Msg1 = hb_ao:normalize_keys(RawMsg1, Opts),
     case hb_private:from_message(Msg1) of
         #{ <<"hashpath">> := HP } -> HP;
         _ ->
@@ -112,18 +117,26 @@ hashpath(RawMsg1, Opts) ->
                     )
                 )
             catch
-                _A:_B:_ST -> throw({badarg, {unsupported_type, Msg1}, _ST})
+                A:B:ST ->
+                    throw(
+                        {badarg,
+                            {unsupported_type, Msg1},
+                            {error, A},
+                            {details, B},
+                            {stacktrace, ST}
+                        }
+                    )
             end
     end.
 hashpath(Msg1, Msg2, Opts) when is_map(Msg1) ->
     Msg1Hashpath = hashpath(Msg1, Opts),
-    HashpathAlg = hashpath_alg(Msg1),
+    HashpathAlg = hashpath_alg(Msg1, Opts),
     hashpath(Msg1Hashpath, Msg2, HashpathAlg, Opts);
 hashpath(Msg1, Msg2, Opts) ->
     throw({hashpath_not_viable, Msg1, Msg2, Opts}).
 hashpath(Msg1, Msg2, HashpathAlg, Opts) when is_map(Msg2) ->
-    Msg2WithoutMeta = maps:without(?AO_CORE_KEYS, Msg2),
-    ReqPath = from_message(request, Msg2),
+    Msg2WithoutMeta = hb_maps:without(?AO_CORE_KEYS, Msg2, Opts),
+    ReqPath = from_message(request, Msg2, Opts),
     case {map_size(Msg2WithoutMeta), ReqPath} of
         {0, _} when ReqPath =/= undefined ->
             hashpath(Msg1, to_binary(hd(ReqPath)), HashpathAlg, Opts);
@@ -136,10 +149,10 @@ hashpath(Msg1, Msg2, HashpathAlg, Opts) when is_map(Msg2) ->
                 ),
             hashpath(Msg1, hb_util:human_id(Msg2ID), HashpathAlg, Opts)
     end;
-hashpath(Msg1Hashpath, HumanMsg2ID, HashpathAlg, _Opts) ->
+hashpath(Msg1Hashpath, HumanMsg2ID, HashpathAlg, Opts) ->
     ?event({hashpath, {msg1hp, {explicit, Msg1Hashpath}}, {msg2id, {explicit, HumanMsg2ID}}}),
     HP = 
-        case term_to_path_parts(Msg1Hashpath) of
+        case term_to_path_parts(Msg1Hashpath, Opts) of
             [_] ->
                 << Msg1Hashpath/binary, "/", HumanMsg2ID/binary >>;
             [Prev1, Prev2] ->
@@ -163,8 +176,8 @@ hashpath(Msg1Hashpath, HumanMsg2ID, HashpathAlg, _Opts) ->
 %%% @doc Get the hashpath function for a message from its HashPath-Alg.
 %%% If no hashpath algorithm is specified, the protocol defaults to
 %%% `sha-256-chain'.
-hashpath_alg(Msg) ->
-    case dev_message:get(<<"hashpath-alg">>, Msg) of
+hashpath_alg(Msg, Opts) ->
+    case dev_message:get(<<"hashpath-alg">>, Msg, Opts) of
         {ok, <<"sha-256-chain">>} ->
             fun hb_crypto:sha256_chain/2;
         {ok, <<"accumulate-256">>} ->
@@ -175,19 +188,21 @@ hashpath_alg(Msg) ->
 
 %%% @doc Add a message to the head (next to execute) of a request path.
 push_request(Msg, Path) ->
-    maps:put(<<"path">>, term_to_path_parts(Path) ++ from_message(request, Msg), Msg).
+    push_request(Msg, Path, #{}).
+push_request(Msg, Path, Opts) ->
+    hb_maps:put(<<"path">>, term_to_path_parts(Path, Opts) ++ from_message(request, Msg, Opts), Msg, Opts).
 
 %%% @doc Pop the next element from a request path or path list.
 pop_request(undefined, _Opts) -> undefined;
 pop_request(Msg, Opts) when is_map(Msg) ->
     %?event({popping_request, {msg, Msg}, {opts, Opts}}),
-    case pop_request(from_message(request, Msg), Opts) of
+    case pop_request(from_message(request, Msg, Opts), Opts) of
         undefined -> undefined;
         {undefined, _} -> undefined;
         {Head, []} -> {Head, undefined};
         {Head, Rest} ->
             ?event({popped_request, Head, Rest}),
-            {Head, maps:put(<<"path">>, Rest, Msg)}
+            {Head, hb_maps:put(<<"path">>, Rest, Msg, Opts)}
     end;
 pop_request([], _Opts) -> undefined;
 pop_request([Head|Rest], _Opts) ->
@@ -195,15 +210,17 @@ pop_request([Head|Rest], _Opts) ->
 
 %%% @doc Queue a message at the back of a request path. `path' is the only
 %%% key that we cannot use dev_message's `set/3' function for (as it expects
-%%% the compute path to be there), so we use `maps:put/3' instead.
+%%% the compute path to be there), so we use `hb_maps:put/3' instead.
 queue_request(Msg, Path) ->
-    maps:put(<<"path">>, from_message(request, Msg) ++ term_to_path_parts(Path), Msg).
+    queue_request(Msg, Path, #{}).
+queue_request(Msg, Path, Opts) ->
+    hb_maps:put(<<"path">>, from_message(request, Msg, Opts) ++ term_to_path_parts(Path), Msg, Opts).
 	
 %%% @doc Verify the HashPath of a message, given a list of messages that
 %%% represent its history.
 verify_hashpath([Msg1, Msg2, Msg3|Rest], Opts) ->
     CorrectHashpath = hashpath(Msg1, Msg2, Opts),
-    FromMsg3 = from_message(hashpath, Msg3),
+    FromMsg3 = from_message(hashpath, Msg3, Opts),
     CorrectHashpath == FromMsg3 andalso
         case Rest of
             [] -> true;
@@ -216,16 +233,20 @@ verify_hashpath([Msg1, Msg2, Msg3|Rest], Opts) ->
 %% viable hashpath and path in its Erlang map at all times, unless the message
 %% is directly from a user (in which case paths and hashpaths will not have 
 %% been assigned yet).
-from_message(hashpath, Msg) -> hashpath(Msg, #{});
-from_message(request, #{ path := Path }) -> term_to_path_parts(Path);
-from_message(request, #{ <<"path">> := Path }) -> term_to_path_parts(Path);
-from_message(request, #{ <<"Path">> := Path }) -> term_to_path_parts(Path);
-from_message(request, _) -> undefined.
+from_message(Type, Link, Opts) when ?IS_LINK(Link) ->
+    from_message(Type, hb_cache:ensure_loaded(Link, Opts), Opts);
+from_message(hashpath, Msg, Opts) -> hashpath(Msg, Opts);
+from_message(request, #{ path := Path }, Opts) -> term_to_path_parts(Path, Opts);
+from_message(request, #{ <<"path">> := Path }, Opts) -> term_to_path_parts(Path, Opts);
+from_message(request, #{ <<"Path">> := Path }, Opts) -> term_to_path_parts(Path, Opts);
+from_message(request, _, _Opts) -> undefined.
 
 %% @doc Convert a term into an executable path. Supports binaries, lists, and
 %% atoms. Notably, it does not support strings as lists of characters.
 term_to_path_parts(Path) ->
     term_to_path_parts(Path, #{ error_strategy => throw }).
+term_to_path_parts(Link, Opts) when ?IS_LINK(Link) ->
+    term_to_path_parts(hb_cache:ensure_loaded(Link, Opts), Opts);
 term_to_path_parts([], _Opts) -> undefined;
 term_to_path_parts(<<>>, _Opts) -> undefined;
 term_to_path_parts(<<"/">>, _Opts) -> [];
@@ -354,7 +375,7 @@ hd_test() ->
     ?assertEqual(undefined, hd(#{ <<"path">> => undefined }, #{})).
 
 tl_test() ->
-    ?assertMatch([<<"b">>, <<"c">>], maps:get(<<"path">>, tl(#{ <<"path">> => [<<"a">>, <<"b">>, <<"c">>] }, #{}))),
+    ?assertMatch([<<"b">>, <<"c">>], hb_maps:get(<<"path">>, tl(#{ <<"path">> => [<<"a">>, <<"b">>, <<"c">>] }, #{}))),
     ?assertEqual(undefined, tl(#{ <<"path">> => [] }, #{})),
     ?assertEqual(undefined, tl(#{ <<"path">> => <<"a">> }, #{})),
     ?assertEqual(undefined, tl(#{ <<"path">> => undefined }, #{})),

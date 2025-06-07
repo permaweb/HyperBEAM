@@ -1901,9 +1901,9 @@ local function getId(m)
   local id = ""
   utils.map(function (k)
     local c = m.commitments[k]
-    if c.alg == "rsa-pss-sha512" then
+    if c.type == "rsa-pss-sha512" then
       id = k
-    elseif c.alg == "signed" and c['commitment-device'] == "ans104" then
+    elseif c.type == "signed" and c['commitment-device'] == "ans104" then
       id = k
     end
   end, utils.keys(m.commitments)
@@ -1912,22 +1912,21 @@ local function getId(m)
 end
 
 function ao.init(env)
-  if ao.id == "" then ao.id = getId(env.process) end
+  if _G.ao.id == "" then _G.ao.id = getId(env.process) end
 
   -- if ao._module == "" then
   --   ao._module = env.Module.Id
   -- end
   -- TODO: need to deal with assignables
-  if #ao.authorities < 1 then
+  if # _G.ao.authorities < 1 then
       if type(env.process.authority) == 'string' then
-        ao.authorities = { env.process.authority }
+        _G.ao.authorities = { env.process.authority }
       else
-        ao.authorities = env.process.authority
+        _G.ao.authorities = env.process.authority
       end
   end
-
-  ao.outbox = {Output = {}, Messages = {}, Spawns = {}, Assignments = {}}
-  ao.env = env
+  _G.ao.outbox = {Output = {}, Messages = {}, Spawns = {}, Assignments = {}}
+  _G.ao.env = env
 
 end
 
@@ -2290,13 +2289,13 @@ local function getOwner(m)
 
   utils.map(function (k)
     local c = m.commitments[k]
-    if c.alg == "rsa-pss-sha512" then
-      id = c.committer
+    if c.type == "rsa-pss-sha512" then
+        id = c.committer
     elseif c.alg == "signed" and c['commitment-device'] == "ans104" then
-      id = c.committer
+        id = c.committer
     end
-  end, utils.keys(m.commitments)
-  )
+end, utils.keys(m.commitments)
+)
   return id
 end
 
@@ -2348,19 +2347,20 @@ function state.isTrusted(req)
     return true
   end
   local _trusted = false
-
+  
   if req.body['from-process'] then
     _trusted = utils.includes(
-      req.body['from-process'],
-      ao.authorities
+        req.body['from-process'],
+        ao.authorities
     )
-  end
+end
 
-  if not _trusted then
+if not _trusted then
     _trusted = utils.includes(
-      getOwner(req.body), ao.authorities
+        getOwner(req.body), ao.authorities
     )
-  end
+end
+
   return _trusted
 end
 
@@ -2435,7 +2435,6 @@ function process.handle(req, base)
       }
     })
   end
-
   req.reply = function (_reply)
     local _from = state.getFrom(req)
     _reply.target = _reply.target and _reply.target or _from
@@ -2447,12 +2446,12 @@ function process.handle(req, base)
 
   -- state.checkSlot(msg, ao)
   Handlers.add("_eval", function (_req)
-    local function getMsgFrom(m)
+    local function getOwnerFrom(m)
       local from = ""
       Utils.map(
         function (k)
           local c = m.commitments[k]
-          if c.alg == "rsa-pss-sha512" then
+          if c.type == "rsa-pss-sha512" then
             from = c.committer
           end
         end,
@@ -2460,7 +2459,7 @@ function process.handle(req, base)
       )
       return from
     end
-    return _req.body.action == "Eval" and Owner == getMsgFrom(_req.body)
+    return _req.body.action == "Eval" and Owner == getOwnerFrom(_req.body)
   end, eval(ao))
 
   Handlers.add("_default",

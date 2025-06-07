@@ -8,7 +8,7 @@
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#find-2">find/2</a></td><td></td></tr><tr><td valign="top"><a href="#find-3">find/3</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#find-2">find/2</a></td><td></td></tr><tr><td valign="top"><a href="#find-3">find/3</a></td><td></td></tr><tr><td valign="top"><a href="#find-4">find/4*</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -26,4 +26,10 @@
 ### find/3 ###
 
 `find(Type, ID, Address) -> any()`
+
+<a name="find-4"></a>
+
+### find/4 * ###
+
+`find(Type, ID, Address, Opts) -> any()`
 

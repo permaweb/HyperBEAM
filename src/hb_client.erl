@@ -4,7 +4,7 @@
 %% Arweave node API
 -export([arweave_timestamp/0]).
 %% Arweave bundling and data access API
--export([upload/2]).
+-export([upload/2, upload/3]).
 %% Tests
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -27,17 +27,18 @@ resolve(Node, Msg1, Msg2, Opts) ->
     ),
     hb_http:post(
         Node,
-        maps:merge(prefix_keys(<<"1.">>, Msg1, Opts), TABM2),
+        hb_maps:merge(prefix_keys(<<"1.">>, Msg1, Opts), TABM2, Opts),
         Opts
     ).
 
 prefix_keys(Prefix, Message, Opts) ->
-    maps:fold(
+    hb_maps:fold(
         fun(Key, Val, Acc) ->
-            maps:put(<<Prefix/binary, Key/binary>>, Val, Acc)
+            hb_maps:put(<<Prefix/binary, Key/binary>>, Val, Acc, Opts)
         end,
         #{},
-        hb_message:convert(Message, tabm, Opts)
+        hb_message:convert(Message, tabm, Opts),
+		Opts
     ).
 
 routes(Node, Opts) ->
@@ -77,17 +78,27 @@ arweave_timestamp() ->
                     <<(hb_opts:get(gateway))/binary, "/block/current">>
                 ),
             Fields = hb_json:decode(Body),
-            Timestamp = maps:get(<<"timestamp">>, Fields),
-            Hash = maps:get(<<"indep_hash">>, Fields),
-            Height = maps:get(<<"height">>, Fields),
+            Timestamp = hb_maps:get(<<"timestamp">>, Fields),
+            Hash = hb_maps:get(<<"indep_hash">>, Fields),
+            Height = hb_maps:get(<<"height">>, Fields),
             {Timestamp, Height, Hash}
     end.
 
 %%% Bundling and data access API
 
 %% @doc Upload a data item to the bundler node.
+%% Note: Uploads once per commitment device. Callers should filter the 
+%% commitments to only include the ones they are interested in, if this is not
+%% the desired behavior.
 upload(Msg, Opts) ->
-    upload(Msg, Opts, hb_ao:get(<<"codec-device">>, Msg, <<"httpsig@1.0">>, Opts)).
+    UploadResults = 
+        lists:map(
+            fun(Device) ->
+                upload(Msg, Opts, Device)
+            end,
+            hb_message:commitment_devices(Msg, Opts)
+        ),
+    {ok, UploadResults}.
 upload(Msg, Opts, <<"httpsig@1.0">>) ->
     case hb_opts:get(bundler_httpsig, not_found, Opts) of
         not_found ->

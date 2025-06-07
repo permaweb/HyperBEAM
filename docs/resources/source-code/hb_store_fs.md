@@ -3,12 +3,35 @@
 
 
 
-<a name="index"></a>
+A key-value store implementation, following the `hb_store` behavior
+and interface.
+
+<a name="description"></a>
+
+## Description ##
+
+This implementation utilizes the node's local file system as
+its storage mechanism, offering an alternative to other store's that require
+the compilation of additional libraries in order to function.
+
+As this store implementation operates using Erlang's native `file` and
+`filelib` mechanisms, it largely inherits its performance characteristics
+from those of the underlying OS/filesystem drivers. Certain filesystems can
+be quite performant for the types of workload that HyperBEAM AO-Core execution
+requires (many reads and writes to explicit keys, few directory 'listing' or
+search operations), awhile others perform suboptimally.
+
+Additionally, thisstore implementation offers the ability for simple
+integration of HyperBEAM with other non-volatile storage media: `hb_store_fs`
+will interact with any service that implements the host operating system's
+native filesystem API. By mounting devices via `FUSE` (etc), HyperBEAM is
+able to interact with a large number of existing storage systems (for example,
+S3-compatible cloud storage APIs, etc).<a name="index"></a>
 
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_prefix-2">add_prefix/2*</a></td><td>Add the directory prefix to a path.</td></tr><tr><td valign="top"><a href="#list-2">list/2</a></td><td>List contents of a directory in the store.</td></tr><tr><td valign="top"><a href="#make_group-2">make_group/2</a></td><td>Create a directory (group) in the store.</td></tr><tr><td valign="top"><a href="#make_link-3">make_link/3</a></td><td>Create a symlink, handling the case where the link would point to itself.</td></tr><tr><td valign="top"><a href="#read-1">read/1*</a></td><td></td></tr><tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read a key from the store, following symlinks as needed.</td></tr><tr><td valign="top"><a href="#remove_prefix-2">remove_prefix/2*</a></td><td>Remove the directory prefix from a path.</td></tr><tr><td valign="top"><a href="#reset-1">reset/1</a></td><td>Reset the store by completely removing its directory and recreating it.</td></tr><tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td>Replace links in a path successively, returning the final path.</td></tr><tr><td valign="top"><a href="#resolve-3">resolve/3*</a></td><td></td></tr><tr><td valign="top"><a href="#scope-1">scope/1</a></td><td>The file-based store is always local, for now.</td></tr><tr><td valign="top"><a href="#start-1">start/1</a></td><td>Initialize the file system store with the given data directory.</td></tr><tr><td valign="top"><a href="#stop-1">stop/1</a></td><td>Stop the file system store.</td></tr><tr><td valign="top"><a href="#type-1">type/1*</a></td><td></td></tr><tr><td valign="top"><a href="#type-2">type/2</a></td><td>Determine the type of a key in the store.</td></tr><tr><td valign="top"><a href="#write-3">write/3</a></td><td>Write a value to the specified path in the store.</td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_prefix-2">add_prefix/2*</a></td><td>Add the directory prefix to a path.</td></tr><tr><td valign="top"><a href="#list-2">list/2</a></td><td>List contents of a directory in the store.</td></tr><tr><td valign="top"><a href="#make_group-2">make_group/2</a></td><td>Create a directory (group) in the store.</td></tr><tr><td valign="top"><a href="#make_link-3">make_link/3</a></td><td>Create a symlink, handling the case where the link would point to itself.</td></tr><tr><td valign="top"><a href="#read-1">read/1*</a></td><td></td></tr><tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read a key from the store, following symlinks as needed.</td></tr><tr><td valign="top"><a href="#remove_prefix-2">remove_prefix/2*</a></td><td>Remove the directory prefix from a path.</td></tr><tr><td valign="top"><a href="#reset-1">reset/1</a></td><td>Reset the store by completely removing its directory and recreating it.</td></tr><tr><td valign="top"><a href="#resolve-2">resolve/2</a></td><td>Replace links in a path successively, returning the final path.</td></tr><tr><td valign="top"><a href="#resolve-3">resolve/3*</a></td><td></td></tr><tr><td valign="top"><a href="#scope-0">scope/0</a></td><td>The file-based store is always local, for now.</td></tr><tr><td valign="top"><a href="#scope-1">scope/1</a></td><td></td></tr><tr><td valign="top"><a href="#start-1">start/1</a></td><td>Initialize the file system store with the given data directory.</td></tr><tr><td valign="top"><a href="#stop-1">stop/1</a></td><td>Stop the file system store.</td></tr><tr><td valign="top"><a href="#type-1">type/1*</a></td><td></td></tr><tr><td valign="top"><a href="#type-2">type/2</a></td><td>Determine the type of a key in the store.</td></tr><tr><td valign="top"><a href="#write-3">write/3</a></td><td>Write a value to the specified path in the store.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -100,14 +123,20 @@ will resolve "a/b/c" to "Correct data".
 
 `resolve(Opts, CurrPath, Rest) -> any()`
 
+<a name="scope-0"></a>
+
+### scope/0 ###
+
+`scope() -> any()`
+
+The file-based store is always local, for now. In the future, we may
+want to allow that an FS store is shared across a cluster and thus remote.
+
 <a name="scope-1"></a>
 
 ### scope/1 ###
 
 `scope(X1) -> any()`
-
-The file-based store is always local, for now. In the future, we may
-want to allow that an FS store is shared across a cluster and thus remote.
 
 <a name="start-1"></a>
 

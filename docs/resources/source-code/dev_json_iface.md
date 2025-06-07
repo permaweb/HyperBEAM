@@ -49,16 +49,16 @@ The device has the following requirements and interface:
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#aos_stack_benchmark_test_-0">aos_stack_benchmark_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#basic_aos_call_test_-0">basic_aos_call_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#compute-3">compute/3</a></td><td>On first pass prepare the call, on second pass get the results.</td></tr><tr><td valign="top"><a href="#denormalize_message-1">denormalize_message/1*</a></td><td>Normalize a message for AOS-compatibility.</td></tr><tr><td valign="top"><a href="#env_read-3">env_read/3*</a></td><td>Read the results out of the execution environment.</td></tr><tr><td valign="top"><a href="#env_write-5">env_write/5*</a></td><td>Write the message and process into the execution environment.</td></tr><tr><td valign="top"><a href="#generate_aos_msg-2">generate_aos_msg/2</a></td><td></td></tr><tr><td valign="top"><a href="#generate_stack-1">generate_stack/1</a></td><td></td></tr><tr><td valign="top"><a href="#generate_stack-2">generate_stack/2</a></td><td></td></tr><tr><td valign="top"><a href="#header_case_string-1">header_case_string/1*</a></td><td></td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the device.</td></tr><tr><td valign="top"><a href="#json_to_message-2">json_to_message/2</a></td><td>Translates a compute result -- either from a WASM execution using the
-JSON-Iface, or from a <code>Legacy</code> CU -- and transforms it into a result message.</td></tr><tr><td valign="top"><a href="#maybe_list_to_binary-1">maybe_list_to_binary/1*</a></td><td></td></tr><tr><td valign="top"><a href="#message_to_json_struct-1">message_to_json_struct/1</a></td><td></td></tr><tr><td valign="top"><a href="#message_to_json_struct-2">message_to_json_struct/2*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize_results-1">normalize_results/1*</a></td><td>Normalize the results of an evaluation.</td></tr><tr><td valign="top"><a href="#postprocess_outbox-3">postprocess_outbox/3*</a></td><td>Post-process messages in the outbox to add the correct <code>from-process</code>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#aos_stack_benchmark_test_-0">aos_stack_benchmark_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#basic_aos_call_test_-0">basic_aos_call_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#compute-3">compute/3</a></td><td>On first pass prepare the call, on second pass get the results.</td></tr><tr><td valign="top"><a href="#denormalize_message-2">denormalize_message/2*</a></td><td>Normalize a message for AOS-compatibility.</td></tr><tr><td valign="top"><a href="#env_read-3">env_read/3*</a></td><td>Read the results out of the execution environment.</td></tr><tr><td valign="top"><a href="#env_write-5">env_write/5*</a></td><td>Write the message and process into the execution environment.</td></tr><tr><td valign="top"><a href="#generate_aos_msg-2">generate_aos_msg/2</a></td><td></td></tr><tr><td valign="top"><a href="#generate_stack-1">generate_stack/1</a></td><td></td></tr><tr><td valign="top"><a href="#generate_stack-2">generate_stack/2</a></td><td></td></tr><tr><td valign="top"><a href="#header_case_string-1">header_case_string/1*</a></td><td></td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the device.</td></tr><tr><td valign="top"><a href="#json_to_message-2">json_to_message/2</a></td><td>Translates a compute result -- either from a WASM execution using the
+JSON-Iface, or from a <code>Legacy</code> CU -- and transforms it into a result message.</td></tr><tr><td valign="top"><a href="#maybe_list_to_binary-1">maybe_list_to_binary/1*</a></td><td></td></tr><tr><td valign="top"><a href="#message_to_json_struct-2">message_to_json_struct/2</a></td><td></td></tr><tr><td valign="top"><a href="#message_to_json_struct-3">message_to_json_struct/3*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize_results-1">normalize_results/1*</a></td><td>Normalize the results of an evaluation.</td></tr><tr><td valign="top"><a href="#postprocess_outbox-3">postprocess_outbox/3*</a></td><td>Post-process messages in the outbox to add the correct <code>from-process</code>
 and <code>from-image</code> tags.</td></tr><tr><td valign="top"><a href="#prep_call-3">prep_call/3*</a></td><td>Prepare the WASM environment for execution by writing the process string and
-the message as JSON representations into the WASM environment.</td></tr><tr><td valign="top"><a href="#prepare_header_case_tags-1">prepare_header_case_tags/1*</a></td><td>Convert a message without an <code>original-tags</code> field into a list of
-key-value pairs, with the keys in HTTP header-case.</td></tr><tr><td valign="top"><a href="#prepare_tags-1">prepare_tags/1*</a></td><td>Prepare the tags of a message as a key-value list, for use in the
+the message as JSON representations into the WASM environment.</td></tr><tr><td valign="top"><a href="#prepare_header_case_tags-2">prepare_header_case_tags/2*</a></td><td>Convert a message without an <code>original-tags</code> field into a list of
+key-value pairs, with the keys in HTTP header-case.</td></tr><tr><td valign="top"><a href="#prepare_tags-2">prepare_tags/2*</a></td><td>Prepare the tags of a message as a key-value list, for use in the
 construction of the JSON-Struct message.</td></tr><tr><td valign="top"><a href="#preprocess_results-2">preprocess_results/2*</a></td><td>After the process returns messages from an evaluation, the
 signing node needs to add some tags to each message and spawn such that
 the target process knows these messages are created by a process.</td></tr><tr><td valign="top"><a href="#results-3">results/3*</a></td><td>Read the computed results out of the WASM environment, assuming that
 the environment has been set up by <code>prep_call/3</code> and that the WASM executor
-has been called with <code>computed{pass=1}</code>.</td></tr><tr><td valign="top"><a href="#safe_to_id-1">safe_to_id/1*</a></td><td></td></tr><tr><td valign="top"><a href="#tags_to_map-1">tags_to_map/1*</a></td><td>Convert a message with tags into a map of their key-value pairs.</td></tr><tr><td valign="top"><a href="#test_init-0">test_init/0*</a></td><td></td></tr></table>
+has been called with <code>computed{pass=1}</code>.</td></tr><tr><td valign="top"><a href="#safe_to_id-1">safe_to_id/1*</a></td><td></td></tr><tr><td valign="top"><a href="#tags_to_map-2">tags_to_map/2*</a></td><td>Convert a message with tags into a map of their key-value pairs.</td></tr><tr><td valign="top"><a href="#test_init-0">test_init/0*</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -85,11 +85,11 @@ has been called with <code>computed{pass=1}</code>.</td></tr><tr><td valign="top
 
 On first pass prepare the call, on second pass get the results.
 
-<a name="denormalize_message-1"></a>
+<a name="denormalize_message-2"></a>
 
-### denormalize_message/1 * ###
+### denormalize_message/2 * ###
 
-`denormalize_message(Message) -> any()`
+`denormalize_message(Message, Opts) -> any()`
 
 Normalize a message for AOS-compatibility.
 
@@ -156,17 +156,17 @@ JSON-Iface, or from a `Legacy` CU -- and transforms it into a result message.
 
 `maybe_list_to_binary(List) -> any()`
 
-<a name="message_to_json_struct-1"></a>
-
-### message_to_json_struct/1 ###
-
-`message_to_json_struct(RawMsg) -> any()`
-
 <a name="message_to_json_struct-2"></a>
 
-### message_to_json_struct/2 * ###
+### message_to_json_struct/2 ###
 
-`message_to_json_struct(RawMsg, Features) -> any()`
+`message_to_json_struct(RawMsg, Opts) -> any()`
+
+<a name="message_to_json_struct-3"></a>
+
+### message_to_json_struct/3 * ###
+
+`message_to_json_struct(RawMsg, Features, Opts) -> any()`
 
 <a name="normalize_results-1"></a>
 
@@ -189,25 +189,25 @@ and `from-image` tags.
 
 ### prep_call/3 * ###
 
-`prep_call(M1, M2, Opts) -> any()`
+`prep_call(RawM1, RawM2, Opts) -> any()`
 
 Prepare the WASM environment for execution by writing the process string and
 the message as JSON representations into the WASM environment.
 
-<a name="prepare_header_case_tags-1"></a>
+<a name="prepare_header_case_tags-2"></a>
 
-### prepare_header_case_tags/1 * ###
+### prepare_header_case_tags/2 * ###
 
-`prepare_header_case_tags(TABM) -> any()`
+`prepare_header_case_tags(TABM, Opts) -> any()`
 
 Convert a message without an `original-tags` field into a list of
 key-value pairs, with the keys in HTTP header-case.
 
-<a name="prepare_tags-1"></a>
+<a name="prepare_tags-2"></a>
 
-### prepare_tags/1 * ###
+### prepare_tags/2 * ###
 
-`prepare_tags(Msg) -> any()`
+`prepare_tags(Msg, Opts) -> any()`
 
 Prepare the tags of a message as a key-value list, for use in the
 construction of the JSON-Struct message.
@@ -238,11 +238,11 @@ has been called with `computed{pass=1}`.
 
 `safe_to_id(ID) -> any()`
 
-<a name="tags_to_map-1"></a>
+<a name="tags_to_map-2"></a>
 
-### tags_to_map/1 * ###
+### tags_to_map/2 * ###
 
-`tags_to_map(Msg) -> any()`
+`tags_to_map(Msg, Opts) -> any()`
 
 Convert a message with tags into a map of their key-value pairs.
 

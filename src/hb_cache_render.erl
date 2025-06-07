@@ -1,10 +1,10 @@
 %%% @doc A module that helps to render given Key graphs into the .dot files
 -module(hb_cache_render).
 -export([render/1, render/2, cache_path_to_dot/2, cache_path_to_dot/3, dot_to_svg/1]).
+-export([get_graph_data/3, cache_path_to_graph/3]).
 % Preparing data for testing
 -export([prepare_unsigned_data/0, prepare_signed_data/0,
     prepare_deeply_nested_complex_message/0]).
--export([cache_path_to_graph/3, get_graph_data/1]).
 -include("include/hb.hrl").
 
 %% @doc Render the given Key into svg
@@ -23,80 +23,93 @@ render(ToRender, StoreOrOpts) ->
 cache_path_to_dot(ToRender, StoreOrOpts) ->
     cache_path_to_dot(ToRender, #{}, StoreOrOpts).
 cache_path_to_dot(ToRender, RenderOpts, StoreOrOpts) ->
-    graph_to_dot(cache_path_to_graph(ToRender, RenderOpts, StoreOrOpts)).
+    graph_to_dot(cache_path_to_graph(ToRender, RenderOpts, StoreOrOpts), StoreOrOpts).
 
 %% @doc Main function to collect graph elements
 cache_path_to_graph(ToRender, GraphOpts, StoreOrOpts) when is_map(StoreOrOpts) ->
     Store = hb_opts:get(store, no_viable_store, StoreOrOpts),
-    cache_path_to_graph(ToRender, GraphOpts, Store);
-cache_path_to_graph(all, GraphOpts, Store) ->
-    {ok, Keys} = hb_store:list(Store, "/"),
-    cache_path_to_graph(Store, GraphOpts, Keys);
-cache_path_to_graph(InitPath, GraphOpts, Store) when is_binary(InitPath) ->
-    {ok, Keys} = hb_store:list(Store, InitPath),
-    cache_path_to_graph(Store, GraphOpts, Keys);
-cache_path_to_graph(Store, GraphOpts, RootKeys) ->
+    ?event({store, Store}),
+    cache_path_to_graph(ToRender, GraphOpts, Store, StoreOrOpts).
+cache_path_to_graph(all, GraphOpts, Store, Opts) ->
+    {ok, Keys} = hb_store:list(Store, <<"/">>),
+    ?event({all_keys, Keys}),
+    cache_path_to_graph(Store, GraphOpts, Keys, Opts);
+cache_path_to_graph(InitPath, GraphOpts, Store, Opts) when is_binary(InitPath) ->
+    cache_path_to_graph(Store, GraphOpts, [InitPath], Opts);
+cache_path_to_graph(Store, GraphOpts, RootKeys, Opts) ->
     % Use a map to track nodes, arcs and visited paths (to avoid cycles)
     EmptyGraph = GraphOpts#{ nodes => #{}, arcs => #{}, visited => #{} },
     % Process all root keys and get the final graph
     lists:foldl(
-        fun(Key, Acc) -> traverse_store(Store, Key, undefined, Acc) end,
+        fun(Key, Acc) -> traverse_store(Store, Key, undefined, Acc, Opts) end,
         EmptyGraph,
         RootKeys
     ).
 
 %% @doc Traverse the store recursively to build the graph
-traverse_store(Store, Key, Parent, Graph) ->
+traverse_store(Store, Path, Parent, Graph, Opts) ->
     % Get the path and check if we've already visited it
-    JoinedPath = hb_store:join(Key),
-    ResolvedPath = hb_store:resolve(Store, Key),
+    JoinedPath = hb_store:join(Path),
+    ResolvedPath =
+        case hb_link:is_link_key(JoinedPath) of
+            true ->
+                ?event({is_link_key, {path, Path}, {res_path, JoinedPath}}),
+                {ok, Link} = hb_store:read(Store, hb_store:resolve(Store, JoinedPath)),
+                ?event({resolved_link, {read, Link}}),
+                hb_store:resolve(Store, Link);
+            false -> hb_store:resolve(Store, Path)
+        end,
+    ?event({traverse_store, {path, Path}, {joined_path, JoinedPath}, {resolved_path, ResolvedPath}, {parent, Parent}}),
     % Skip if we've already processed this node
-    case maps:get(visited, Graph, #{}) of
-        #{JoinedPath := _} -> Graph;
+    case hb_maps:get(visited, Graph, #{}, Opts) of
+        #{ JoinedPath := _ } -> Graph;
         _ ->
             % Mark as visited to avoid cycles
-            Graph1 = Graph#{visited => maps:put(JoinedPath, true, maps:get(visited, Graph, #{}))},
+            Graph1 = Graph#{visited => hb_maps:put(JoinedPath, true, hb_maps:get(visited, Graph, #{}, Opts), Opts)},
+            % ?event({traverse_store, {key, Key}, {graph1, Graph1}}),
             % Process node based on its type
-            case hb_store:type(Store, Key) of
+            case hb_store:type(Store, ResolvedPath) of
                 simple -> 
-                    process_simple_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph1);
+                    process_simple_node(Store, Path, Parent, ResolvedPath, JoinedPath, Graph1, Opts);
                 composite -> 
-                    process_composite_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph1);
+                    process_composite_node(Store, Path, Parent, ResolvedPath, JoinedPath, Graph1, Opts);
                 _ -> 
+                    ?event({unknown_node_type, {path, Path}, {type, hb_store:type(Store, Path)}}),
                     Graph1
             end
     end.
 
 %% @doc Process a simple (leaf) node
-process_simple_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph) ->
+process_simple_node(_Store, Key, Parent, ResolvedPath, JoinedPath, Graph, Opts) ->
+    % ?event({process_simple_node, {key, Key}, {resolved_path, ResolvedPath}}),
     % Add the node to the graph
-    case maps:get(render_data, Graph, true) of
+    case hb_maps:get(render_data, Graph, true, Opts) of
         false -> Graph;
         true ->
-            Graph1 = add_node(Graph, ResolvedPath, "lightblue"),
+            Graph1 = add_node(Graph, ResolvedPath, "lightblue", Opts),
             % If we have a parent, add an arc from parent to this node
             case Parent of
                 undefined -> Graph1;
                 ParentPath -> 
                     Label = extract_label(JoinedPath),
-                    add_arc(Graph1, ParentPath, ResolvedPath, Label)
+                    add_arc(Graph1, ParentPath, ResolvedPath, Label, Opts)
             end
     end.
 
 %% @doc Process a composite (directory) node
-process_composite_node(_Store, "data", _Parent, _ResolvedPath, _JoinedPath, Graph) ->
+process_composite_node(_Store, <<"data">>, _Parent, _ResolvedPath, _JoinedPath, Graph, _Opts) ->
     % Data is a special case: It contains every binary item in the store.
     % We don't need to render it.
     Graph;
-process_composite_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph) ->
+process_composite_node(Store, _Key, Parent, ResolvedPath, JoinedPath, Graph, Opts) ->
     % Add the node to the graph
-    Graph1 = add_node(Graph, ResolvedPath, "lightcoral"),
+    Graph1 = add_node(Graph, ResolvedPath, "lightcoral", Opts),
     % If we have a parent, add an arc from parent to this node
     Graph2 = case Parent of
         undefined -> Graph1;
         ParentPath -> 
             Label = extract_label(JoinedPath),
-            add_arc(Graph1, ParentPath, ResolvedPath, Label)
+            add_arc(Graph1, ParentPath, ResolvedPath, Label, Opts)
     end,
     % Process children recursively
     case hb_store:list(Store, ResolvedPath) of
@@ -104,7 +117,7 @@ process_composite_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph) ->
             lists:foldl(
                 fun(SubItem, Acc) ->
                     ChildKey = [ResolvedPath, SubItem],
-                    traverse_store(Store, ChildKey, ResolvedPath, Acc)
+                    traverse_store(Store, ChildKey, ResolvedPath, Acc, Opts)
                 end,
                 Graph2,
                 SubItems
@@ -113,15 +126,15 @@ process_composite_node(Store, Key, Parent, ResolvedPath, JoinedPath, Graph) ->
     end.
 
 %% @doc Add a node to the graph
-add_node(Graph, ID, Color) ->
-    Nodes = maps:get(nodes, Graph, #{}),
-    Graph#{nodes => maps:put(ID, {ID, Color}, Nodes)}.
+add_node(Graph, ID, Color, Opts) ->
+    Nodes = hb_maps:get(nodes, Graph, #{}, Opts),
+    Graph#{nodes => hb_maps:put(ID, {ID, Color}, Nodes, Opts)}.
 
 %% @doc Add an arc to the graph
-add_arc(Graph, From, To, Label) ->
+add_arc(Graph, From, To, Label, Opts) ->
     ?event({insert_arc, {id1, From}, {id2, To}, {label, Label}}),
-    Arcs = maps:get(arcs, Graph, #{}),
-    Graph#{arcs => maps:put({From, To, Label}, true, Arcs)}.
+    Arcs = hb_maps:get(arcs, Graph, #{}, Opts),
+    Graph#{arcs => hb_maps:put({From, To, Label}, true, Arcs, Opts)}.
 
 %% @doc Extract a label from a path
 extract_label(Path) ->
@@ -136,14 +149,14 @@ extract_label(Path) ->
     end.
 
 %% @doc Generate the DOT file from the graph
-graph_to_dot(Graph) ->
+graph_to_dot(Graph, Opts) ->
     % Create graph header
     Header = [
         <<"digraph filesystem {\n">>,
         <<"  node [shape=circle];\n">>
     ],
     % Create nodes section
-    Nodes = maps:fold(
+    Nodes = hb_maps:fold(
         fun(ID, {Label, Color}, Acc) ->
             [
                 Acc,
@@ -154,10 +167,11 @@ graph_to_dot(Graph) ->
             ]
         end,
         [],
-        maps:get(nodes, Graph, #{})
+        hb_maps:get(nodes, Graph, #{}, Opts),
+		Opts
     ),
     % Create arcs section
-    Arcs = maps:fold(
+    Arcs = hb_maps:fold(
         fun({From, To, Label}, _, Acc) ->
             [
                 Acc,
@@ -168,7 +182,8 @@ graph_to_dot(Graph) ->
             ]
         end,
         [],
-        maps:get(arcs, Graph, #{})
+        hb_maps:get(arcs, Graph, #{}, Opts),
+		Opts
     ),
     % Create graph footer
     Footer = <<"}\n">>,
@@ -202,74 +217,67 @@ collect_output(Port, Acc) ->
     end.
 
 %% @doc Get graph data for the Three.js visualization
-get_graph_data(Opts) ->
-    % Get the store from options
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    
+get_graph_data(Base, MaxSize, Opts) ->
     % Try to generate graph using hb_cache_render
-    Graph = try
-        % Use hb_cache_render to build the graph
-        {ok, Keys} = hb_store:list(Store, "/"),
-        cache_path_to_graph(Store, #{}, Keys)
-    catch
-        Error:Reason:Stack -> 
-            ?event({hyperbuddy_graph_error, Error, Reason, Stack}),
-            #{nodes => #{}, arcs => #{}, visited => #{}}
-    end,
-    
+    Graph =
+        try
+            % Use hb_cache_render to build the graph
+            cache_path_to_graph(Base, #{}, Opts)
+        catch
+            Error:Reason:Stack -> 
+                ?event({hyperbuddy_graph_error, Error, Reason, Stack}),
+                #{nodes => #{}, arcs => #{}, visited => #{}}
+        end,
     % Extract nodes and links for the visualization
     NodesMap = maps:get(nodes, Graph, #{}),
     ArcsMap = maps:get(arcs, Graph, #{}),
-    
-    % Limit to top 500 nodes if there are too many
+    % Limit to top `MaxSize' nodes if there are too many
     NodesList = 
-        case maps:size(NodesMap) > 50000 of
+        case maps:size(NodesMap) > MaxSize of
             true ->
                 % Take a subset of nodes
                 {ReducedNodes, _} = lists:split(
-                    500,
+                    MaxSize,
                     maps:to_list(NodesMap)
                 ),
                 ReducedNodes;
             false ->
                 maps:to_list(NodesMap)
         end,
-    
     % Get node IDs for filtering links
     NodeIds = [ID || {ID, _} <- NodesList],
-    
     % Convert to JSON format for web visualization
-    Nodes = [
-        #{
-            <<"id">> => ID,
-            <<"label">> => get_label(hb_util:bin(ID)),
-            <<"type">> => get_node_type(Color)
-        }
-        || {ID, {_, Color}} <- NodesList
-    ],
-    
+    Nodes =
+        [
+                #{
+                    <<"id">> => ID,
+                    <<"label">> => get_label(hb_util:bin(ID)),
+                    <<"type">> => get_node_type(Color)
+                }
+            ||
+                {ID, {_, Color}} <- NodesList
+        ],
     % Filter links to only include those between nodes we're showing
-    FilteredLinks = [
-        {From, To, Label}
-        || {From, To, Label} <- maps:keys(ArcsMap),
-           lists:member(From, NodeIds) andalso lists:member(To, NodeIds)
-    ],
-    
-    Links = [
-        #{
-            <<"source">> => From,
-            <<"target">> => To,
-            <<"label">> => Label
-        }
-        || {From, To, Label} <- FilteredLinks
-    ],
-    
+    FilteredLinks =
+        [
+                {From, To, Label}
+            ||
+                {From, To, Label} <- maps:keys(ArcsMap),
+                    lists:member(From, NodeIds)
+                    andalso lists:member(To, NodeIds)
+        ],
+    Links =
+        [
+                #{
+                    <<"source">> => From,
+                    <<"target">> => To,
+                    <<"label">> => Label
+                }
+            ||
+                {From, To, Label} <- FilteredLinks
+        ],
     % Return the JSON data
-    JsonData = hb_json:encode(#{
-        <<"nodes">> => Nodes,
-        <<"links">> => Links
-    }),
-    
+    JsonData = hb_json:encode(#{ <<"nodes">> => Nodes, <<"links">> => Links }),
     {ok, #{
         <<"body">> => JsonData,
         <<"content-type">> => <<"application/json">>
@@ -300,7 +308,7 @@ prepare_unsigned_data() ->
     Opts = #{
         store => #{
             <<"store-module">> => hb_store_fs,
-            <<"prefix">> => <<"cache-TEST/render-fs">>
+            <<"name">> => <<"cache-TEST/render-fs">>
         }
     },
     Item = test_unsigned(#{ <<"key">> => <<"Simple unsigned data item">> }),
@@ -310,7 +318,7 @@ prepare_signed_data() ->
     Opts = #{
         store => #{
             <<"store-module">> => hb_store_fs,
-            <<"prefix">> => <<"cache-TEST/render-fs">>
+            <<"name">> => <<"cache-TEST/render-fs">>
         }
     },
     Wallet = ar_wallet:new(),
@@ -322,7 +330,7 @@ prepare_deeply_nested_complex_message() ->
     Opts = #{
         store => #{
             <<"store-module">> => hb_store_fs,
-            <<"prefix">> => <<"cache-TEST/render-fs">>
+            <<"name">> => <<"cache-TEST/render-fs">>
         }
     },
     Wallet = ar_wallet:new(),

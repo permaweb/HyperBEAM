@@ -38,9 +38,9 @@ Syntax overview:
        Key:
            - key: <code><<"value">></code> => #{ key => <code><<"value">></code>, ... } for all messages
            - n.key: <code><<"value">></code> => #{ key => <code><<"value">></code>, ... } for Nth message
-           - key+Int: 1 => #{ key => 1, ... }
-           - key+Res: /nested/path => #{ key => (resolve /nested/path), ... }
-           - N.Key+Res=(/a/b/c) => #{ Key => (resolve /a/b/c), ... }
+           - key+int: 1 => #{ key => 1, ... }
+           - key+res: /nested/path => #{ key => (resolve /nested/path), ... }
+           - N.Key+res=(/a/b/c) => #{ Key => (resolve /a/b/c), ... }
 ```
 
 <a name="types"></a>
@@ -72,11 +72,11 @@ tabm_message() = map()
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#all_path_parts-2">all_path_parts/2*</a></td><td>Extract all of the parts from the binary, given (a list of) separators.</td></tr><tr><td valign="top"><a href="#append_path-2">append_path/2*</a></td><td></td></tr><tr><td valign="top"><a href="#apply_types-1">apply_types/1*</a></td><td>Step 3: Apply types to values and remove specifiers.</td></tr><tr><td valign="top"><a href="#basic_hashpath_test-0">basic_hashpath_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#basic_hashpath_to_test-0">basic_hashpath_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#build-3">build/3*</a></td><td></td></tr><tr><td valign="top"><a href="#build_messages-2">build_messages/2*</a></td><td>Step 5: Merge the base message with the scoped messages.</td></tr><tr><td valign="top"><a href="#decode_string-1">decode_string/1*</a></td><td>Attempt Cowboy URL decode, then sanitize the result.</td></tr><tr><td valign="top"><a href="#from-1">from/1</a></td><td>Normalize a singleton TABM message into a list of executable AO-Core
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#all_path_parts-2">all_path_parts/2*</a></td><td>Extract all of the parts from the binary, given (a list of) separators.</td></tr><tr><td valign="top"><a href="#append_path-2">append_path/2*</a></td><td></td></tr><tr><td valign="top"><a href="#apply_types-2">apply_types/2*</a></td><td>Step 3: Apply types to values and remove specifiers.</td></tr><tr><td valign="top"><a href="#basic_hashpath_test-0">basic_hashpath_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#basic_hashpath_to_test-0">basic_hashpath_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#build_messages-3">build_messages/3*</a></td><td>Step 5: Merge the base message with the scoped messages.</td></tr><tr><td valign="top"><a href="#decode_string-1">decode_string/1*</a></td><td>Attempt Cowboy URL decode, then sanitize the result.</td></tr><tr><td valign="top"><a href="#do_build-4">do_build/4*</a></td><td></td></tr><tr><td valign="top"><a href="#from-2">from/2</a></td><td>Normalize a singleton TABM message into a list of executable AO-Core
 messages.</td></tr><tr><td valign="top"><a href="#group_scoped-2">group_scoped/2*</a></td><td>Step 4: Group headers/query by N-scope.</td></tr><tr><td valign="top"><a href="#inlined_keys_test-0">inlined_keys_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#inlined_keys_to_test-0">inlined_keys_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#maybe_join-2">maybe_join/2*</a></td><td>Join a list of items with a separator, or return the first item if there
-is only one item.</td></tr><tr><td valign="top"><a href="#maybe_subpath-1">maybe_subpath/1*</a></td><td>Check if the string is a subpath, returning it in parsed form,
-or the original string with a specifier.</td></tr><tr><td valign="top"><a href="#maybe_typed-2">maybe_typed/2*</a></td><td>Parse a key's type (applying it to the value) and device name if present.</td></tr><tr><td valign="top"><a href="#multiple_inlined_keys_test-0">multiple_inlined_keys_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_inlined_keys_to_test-0">multiple_inlined_keys_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_messages_test-0">multiple_messages_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_messages_to_test-0">multiple_messages_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize_base-1">normalize_base/1*</a></td><td>Normalize the base path.</td></tr><tr><td valign="top"><a href="#parse_explicit_message_test-0">parse_explicit_message_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#parse_full_path-1">parse_full_path/1*</a></td><td>Parse the relative reference into path, query, and fragment.</td></tr><tr><td valign="top"><a href="#parse_inlined_key_val-1">parse_inlined_key_val/1*</a></td><td>Extrapolate the inlined key-value pair from a path segment.</td></tr><tr><td valign="top"><a href="#parse_inlined_keys-2">parse_inlined_keys/2*</a></td><td>Parse inlined key-value pairs from a path segment.</td></tr><tr><td valign="top"><a href="#parse_part-1">parse_part/1*</a></td><td>Parse a path part into a message or an ID.</td></tr><tr><td valign="top"><a href="#parse_part_mods-2">parse_part_mods/2*</a></td><td>Parse part modifiers:
-1.</td></tr><tr><td valign="top"><a href="#parse_scope-1">parse_scope/1*</a></td><td>Get the scope of a key.</td></tr><tr><td valign="top"><a href="#part-2">part/2*</a></td><td>Extract the characters from the binary until a separator is found.</td></tr><tr><td valign="top"><a href="#part-4">part/4*</a></td><td></td></tr><tr><td valign="top"><a href="#path_messages-1">path_messages/1*</a></td><td>Step 2: Decode, split and sanitize the path.</td></tr><tr><td valign="top"><a href="#path_parts-2">path_parts/2*</a></td><td>Split the path into segments, filtering out empty segments and
+is only one item.</td></tr><tr><td valign="top"><a href="#maybe_subpath-2">maybe_subpath/2*</a></td><td>Check if the string is a subpath, returning it in parsed form,
+or the original string with a specifier.</td></tr><tr><td valign="top"><a href="#maybe_typed-3">maybe_typed/3*</a></td><td>Parse a key's type (applying it to the value) and device name if present.</td></tr><tr><td valign="top"><a href="#multiple_inlined_keys_test-0">multiple_inlined_keys_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_inlined_keys_to_test-0">multiple_inlined_keys_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_messages_test-0">multiple_messages_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_messages_to_test-0">multiple_messages_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize_base-1">normalize_base/1*</a></td><td>Normalize the base path.</td></tr><tr><td valign="top"><a href="#parse_explicit_message_test-0">parse_explicit_message_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#parse_full_path-1">parse_full_path/1*</a></td><td>Parse the relative reference into path, query, and fragment.</td></tr><tr><td valign="top"><a href="#parse_inlined_key_val-2">parse_inlined_key_val/2*</a></td><td>Extrapolate the inlined key-value pair from a path segment.</td></tr><tr><td valign="top"><a href="#parse_part-2">parse_part/2*</a></td><td>Parse a path part into a message or an ID.</td></tr><tr><td valign="top"><a href="#parse_part_mods-3">parse_part_mods/3*</a></td><td>Parse part modifiers:
+1.</td></tr><tr><td valign="top"><a href="#parse_scope-1">parse_scope/1*</a></td><td>Get the scope of a key.</td></tr><tr><td valign="top"><a href="#part-2">part/2*</a></td><td>Extract the characters from the binary until a separator is found.</td></tr><tr><td valign="top"><a href="#part-4">part/4*</a></td><td></td></tr><tr><td valign="top"><a href="#path_messages-2">path_messages/2*</a></td><td>Step 2: Decode, split and sanitize the path.</td></tr><tr><td valign="top"><a href="#path_parts-2">path_parts/2*</a></td><td>Split the path into segments, filtering out empty segments and
 segments that are too long.</td></tr><tr><td valign="top"><a href="#path_parts_test-0">path_parts_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#scoped_key_test-0">scoped_key_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#scoped_key_to_test-0">scoped_key_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_to_test-0">simple_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#single_message_test-0">single_message_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#subpath_in_inlined_test-0">subpath_in_inlined_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#subpath_in_inlined_to_test-0">subpath_in_inlined_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#subpath_in_key_test-0">subpath_in_key_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#subpath_in_key_to_test-0">subpath_in_key_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#subpath_in_path_test-0">subpath_in_path_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#subpath_in_path_to_test-0">subpath_in_path_to_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#to-1">to/1</a></td><td>Convert a list of AO-Core message into TABM message.</td></tr><tr><td valign="top"><a href="#to_suite_test_-0">to_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#type-1">type/1*</a></td><td></td></tr><tr><td valign="top"><a href="#typed_key_test-0">typed_key_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#typed_key_to_test-0">typed_key_to_test/0*</a></td><td></td></tr></table>
 
 
@@ -98,11 +98,11 @@ Extract all of the parts from the binary, given (a list of) separators.
 
 `append_path(PathPart, Message) -> any()`
 
-<a name="apply_types-1"></a>
+<a name="apply_types-2"></a>
 
-### apply_types/1 * ###
+### apply_types/2 * ###
 
-`apply_types(Msg) -> any()`
+`apply_types(Msg, Opts) -> any()`
 
 Step 3: Apply types to values and remove specifiers.
 
@@ -118,17 +118,11 @@ Step 3: Apply types to values and remove specifiers.
 
 `basic_hashpath_to_test() -> any()`
 
-<a name="build-3"></a>
+<a name="build_messages-3"></a>
 
-### build/3 * ###
+### build_messages/3 * ###
 
-`build(I, Rest, ScopedKeys) -> any()`
-
-<a name="build_messages-2"></a>
-
-### build_messages/2 * ###
-
-`build_messages(Msgs, ScopedModifications) -> any()`
+`build_messages(Msgs, ScopedModifications, Opts) -> any()`
 
 Step 5: Merge the base message with the scoped messages.
 
@@ -140,11 +134,17 @@ Step 5: Merge the base message with the scoped messages.
 
 Attempt Cowboy URL decode, then sanitize the result.
 
-<a name="from-1"></a>
+<a name="do_build-4"></a>
 
-### from/1 ###
+### do_build/4 * ###
 
-`from(Path) -> any()`
+`do_build(I, Rest, ScopedKeys, Opts) -> any()`
+
+<a name="from-2"></a>
+
+### from/2 ###
+
+`from(RawMsg, Opts) -> any()`
 
 Normalize a singleton TABM message into a list of executable AO-Core
 messages.
@@ -179,22 +179,25 @@ Step 4: Group headers/query by N-scope.
 Join a list of items with a separator, or return the first item if there
 is only one item. If there are no items, return an empty binary.
 
-<a name="maybe_subpath-1"></a>
+<a name="maybe_subpath-2"></a>
 
-### maybe_subpath/1 * ###
+### maybe_subpath/2 * ###
 
-`maybe_subpath(Str) -> any()`
+`maybe_subpath(Str, Opts) -> any()`
 
 Check if the string is a subpath, returning it in parsed form,
 or the original string with a specifier.
 
-<a name="maybe_typed-2"></a>
+<a name="maybe_typed-3"></a>
 
-### maybe_typed/2 * ###
+### maybe_typed/3 * ###
 
-`maybe_typed(Key, Value) -> any()`
+`maybe_typed(Key, Value, Opts) -> any()`
 
 Parse a key's type (applying it to the value) and device name if present.
+We allow `` characters as type indicators because some URL-string encoders
+(e.g. Chrome) will encode `+` characters in a form that query-string parsers
+interpret as `` characters.
 
 <a name="multiple_inlined_keys_test-0"></a>
 
@@ -242,30 +245,21 @@ Normalize the base path.
 
 Parse the relative reference into path, query, and fragment.
 
-<a name="parse_inlined_key_val-1"></a>
+<a name="parse_inlined_key_val-2"></a>
 
-### parse_inlined_key_val/1 * ###
+### parse_inlined_key_val/2 * ###
 
-`parse_inlined_key_val(Bin) -> any()`
+`parse_inlined_key_val(Bin, Opts) -> any()`
 
 Extrapolate the inlined key-value pair from a path segment. If the
 key has a value, it may provide a type (as with typical keys), but if a
 value is not provided, it is assumed to be a boolean `true`.
 
-<a name="parse_inlined_keys-2"></a>
+<a name="parse_part-2"></a>
 
-### parse_inlined_keys/2 * ###
+### parse_part/2 * ###
 
-`parse_inlined_keys(InlinedMsgBin, Msg) -> any()`
-
-Parse inlined key-value pairs from a path segment. Each key-value pair
-is separated by `&` and is of the form `K=V`.
-
-<a name="parse_part-1"></a>
-
-### parse_part/1 * ###
-
-`parse_part(ID) -> any()`
+`parse_part(ID, Opts) -> any()`
 
 Parse a path part into a message or an ID.
 Applies the syntax rules outlined in the module doc, in the following order:
@@ -274,11 +268,11 @@ Applies the syntax rules outlined in the module doc, in the following order:
 3. Inlined key-value pairs
 4. Device specifier
 
-<a name="parse_part_mods-2"></a>
+<a name="parse_part_mods-3"></a>
 
-### parse_part_mods/2 * ###
+### parse_part_mods/3 * ###
 
-`parse_part_mods(X1, Msg) -> any()`
+`parse_part_mods(X1, Msg, Opts) -> any()`
 
 Parse part modifiers:
 1. `~Device` => `{as, Device, Msg}`
@@ -309,11 +303,11 @@ accumulated characters, and the rest of the binary.
 
 `part(Seps, X2, Depth, CurrAcc) -> any()`
 
-<a name="path_messages-1"></a>
+<a name="path_messages-2"></a>
 
-### path_messages/1 * ###
+### path_messages/2 * ###
 
-`path_messages(RawBin) -> any()`
+`path_messages(RawBin, Opts) -> any()`
 
 Step 2: Decode, split and sanitize the path. Split by `/` but avoid
 subpath components, such that their own path parts are not dissociated from

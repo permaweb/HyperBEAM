@@ -10,18 +10,26 @@ A device that renders a REPL-like interface for AO-Core via HTML.
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#format-3">format/3</a></td><td>Employ HyperBEAM's internal pretty printer to format a message.</td></tr><tr><td valign="top"><a href="#info-0">info/0</a></td><td>Export an explicit list of files via http.</td></tr><tr><td valign="top"><a href="#metrics-3">metrics/3</a></td><td>The main HTML page for the REPL device.</td></tr><tr><td valign="top"><a href="#return_file-1">return_file/1*</a></td><td>Read a file from disk and serve it as a static HTML page.</td></tr><tr><td valign="top"><a href="#serve-4">serve/4*</a></td><td>Serve a file from the priv directory.</td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#events-3">events/3</a></td><td>Return the current event counters as a message.</td></tr><tr><td valign="top"><a href="#format-3">format/3</a></td><td>Employ HyperBEAM's internal pretty printer to format a message.</td></tr><tr><td valign="top"><a href="#info-0">info/0</a></td><td>Export an explicit list of files via http.</td></tr><tr><td valign="top"><a href="#metrics-3">metrics/3</a></td><td>The main HTML page for the REPL device.</td></tr><tr><td valign="top"><a href="#return_file-1">return_file/1*</a></td><td>Read a file from disk and serve it as a static HTML page.</td></tr><tr><td valign="top"><a href="#return_file-2">return_file/2</a></td><td></td></tr><tr><td valign="top"><a href="#serve-4">serve/4*</a></td><td>Serve a file from the priv directory.</td></tr></table>
 
 
 <a name="functions"></a>
 
 ## Function Details ##
 
+<a name="events-3"></a>
+
+### events/3 ###
+
+`events(X1, Req, Opts) -> any()`
+
+Return the current event counters as a message.
+
 <a name="format-3"></a>
 
 ### format/3 ###
 
-`format(Base, X2, X3) -> any()`
+`format(Base, Req, Opts) -> any()`
 
 Employ HyperBEAM's internal pretty printer to format a message.
 
@@ -48,6 +56,12 @@ The main HTML page for the REPL device.
 `return_file(Name) -> any()`
 
 Read a file from disk and serve it as a static HTML page.
+
+<a name="return_file-2"></a>
+
+### return_file/2 ###
+
+`return_file(Device, Name) -> any()`
 
 <a name="serve-4"></a>
 

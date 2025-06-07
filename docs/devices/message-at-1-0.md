@@ -43,7 +43,7 @@ The `message@1.0` device reserves several keys for specific operations:
 *   **`set_path`**: A special case for setting the `path` key itself, which cannot be done via the standard `set` operation.
 *   **`remove`**: Removes one or more specified keys from the message. Requires an `item` or `items` parameter.
 *   **`keys`**: Returns a list of all public (non-private) keys present in the message map.
-*   **`id`**: Calculates and returns the ID (hash) of the message. Considers active commitments based on specified `committers`. May delegate ID calculation to a device specified by the message\'s `id-device` key or the default ([`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
+*   **`id`**: Calculates and returns the ID (hash) of the message. Considers active commitments based on specified `committers`. May delegate ID calculation to a device specified by the message's `id-device` key
 *   **`commit`**: Creates a commitment (e.g., a signature) for the message. Requires parameters like `commitment-device` and potentially committer information. Delegates the actual commitment generation to the specified device (default [`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
 *   **`committers`**: Returns a list of committers associated with the commitments in the message. Can be filtered by request parameters.
 *   **`commitments`**: Used internally and in requests to filter or specify which commitments to operate on (e.g., for `id` or `verify`).

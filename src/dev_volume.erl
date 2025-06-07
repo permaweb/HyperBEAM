@@ -48,7 +48,7 @@ info(_Msg1, _Msg2, _Opts) ->
             <<"mount">> => #{
                 <<"description">> => <<"Mount an encrypted volume">>,
                 <<"required_node_opts">> => #{
-                    <<"volume_key">> => <<"The encryption key">>,
+                    <<"priv_volume_key">> => <<"The encryption key">>,
                     <<"volume_device">> => <<"The base device path">>,
                     <<"volume_partition">> => <<"The partition path">>,
                     <<"volume_partition_type">> => <<"The partition type">>,
@@ -76,7 +76,7 @@ info(_Msg1, _Msg2, _Opts) ->
 %% 6. Updates the node's store configuration to use the mounted volume
 %%
 %% Config options in Opts map:
-%% - volume_key: (Required) The encryption key
+%% - priv_volume_key: (Required) The encryption key
 %% - volume_device: Base device path
 %% - volume_partition: Partition path
 %% - volume_partition_type: Filesystem type
@@ -92,16 +92,23 @@ info(_Msg1, _Msg2, _Opts) ->
 -spec mount(term(), term(), map()) -> {ok, binary()} | {error, binary()}.
 mount(_M1, _M2, Opts) ->
     % Check if an encrypted key was sent in the request
-    EncryptedKey = hb_opts:get(volume_key, not_found, Opts),
+    EncryptedKey = hb_opts:get(priv_volume_key, not_found, Opts),
     % Determine if we need to decrypt a key or use one from config
     ?event(debug_mount, {mount, encrypted_key, EncryptedKey}),
-    Key = case decrypt_volume_key(EncryptedKey, Opts) of
-        {ok, DecryptedKey} ->
+    SkipDecryption = hb_opts:get(volume_skip_decryption, <<"false">>, Opts),
+    Key = case SkipDecryption of
+        <<"true">> ->
+            ?event(debug_mount, {mount, skip_decryption, true}),
+            EncryptedKey;
+        _ ->
+            case decrypt_volume_key(EncryptedKey, Opts) of
+                {ok, DecryptedKey} ->
             ?event(debug_mount, {mount, decrypted_key, DecryptedKey}),
-            DecryptedKey;
-        {error, DecryptError} ->
-            ?event(debug_mount, {mount, key_decrypt_error, DecryptError}),
-            not_found
+                    DecryptedKey;
+                {error, DecryptError} ->
+                    ?event(debug_mount, {mount, key_decrypt_error, DecryptError}),
+                    not_found
+            end
     end,
     Device = hb_opts:get(volume_device, not_found, Opts),
     Partition = hb_opts:get(volume_partition, not_found, Opts),
@@ -111,7 +118,7 @@ mount(_M1, _M2, Opts) ->
     StorePath = hb_opts:get(volume_store_path, not_found, Opts),
     % Check for missing required node options
     case hb_opts:check_required_opts([
-        {<<"volume_key">>, Key},
+        {<<"priv_volume_key">>, Key},
         {<<"volume_device">>, Device},
         {<<"volume_partition">>, Partition},
         {<<"volume_partition_type">>, PartitionType},

@@ -28,14 +28,35 @@ stored as a set of links commitment IDs and the uncommitted message.
 
 Before writing a message to the store, we convert it to Type-Annotated
 Binary Messages (TABMs), such that each of the keys in the message is
-either a map or a direct binary.<a name="index"></a>
+either a map or a direct binary.
+
+Nested keys are lazily loaded from the stores, such that large deeply
+nested messages where only a small part of the data is actually used are
+not loaded into memory unnecessarily. In order to ensure that a message is
+loaded from the cache after a `read`, we can use the `ensure_loaded/1` and
+`ensure_all_loaded/1` functions. Ensure loaded will load the exact value
+that has been requested, while ensure all loaded will load the entire
+structure of the message into memory.
+
+Lazily loadable `links` are expressed as a tuple of the following form:
+`{link, ID, LinkOpts}`, where `ID` is the path to the data in the store,
+and `LinkOpts` is a map of suggested options to use when loading the data.
+In particular, this module ensures to stash the `store` option in `LinkOpts`,
+such that the `read` function can use the correct store without having to
+search unnecessarily. By providing an `Opts` argument to `ensure_loaded` or
+`ensure_all_loaded`, the caller can specify additional options to use when
+loading the data -- overriding the suggested options in the link.<a name="index"></a>
 
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cache_suite_test_-0">cache_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#calculate_all_ids-2">calculate_all_ids/2*</a></td><td>Calculate the IDs for a message.</td></tr><tr><td valign="top"><a href="#do_read-4">do_read/4*</a></td><td>Read a path from the store.</td></tr><tr><td valign="top"><a href="#do_write_message-4">do_write_message/4*</a></td><td></td></tr><tr><td valign="top"><a href="#link-3">link/3</a></td><td>Make a link from one path to another in the store.</td></tr><tr><td valign="top"><a href="#list-2">list/2</a></td><td>List all items under a given path.</td></tr><tr><td valign="top"><a href="#list_numbered-2">list_numbered/2</a></td><td>List all items in a directory, assuming they are numbered.</td></tr><tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read the message at a path.</td></tr><tr><td valign="top"><a href="#read_resolved-3">read_resolved/3</a></td><td>Read the output of a prior computation, given Msg1, Msg2, and some
-options.</td></tr><tr><td valign="top"><a href="#run_test-0">run_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#store_read-3">store_read/3*</a></td><td>List all of the subpaths of a given path, read each in turn, returning a
-flat map.</td></tr><tr><td valign="top"><a href="#store_read-4">store_read/4*</a></td><td></td></tr><tr><td valign="top"><a href="#test_deeply_nested_complex_message-1">test_deeply_nested_complex_message/1*</a></td><td>Test deeply nested item storage and retrieval.</td></tr><tr><td valign="top"><a href="#test_device_map_cannot_be_written_test-0">test_device_map_cannot_be_written_test/0*</a></td><td>Test that message whose device is <code>#{}</code> cannot be written.</td></tr><tr><td valign="top"><a href="#test_message_with_message-1">test_message_with_message/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_signed-1">test_signed/1</a></td><td></td></tr><tr><td valign="top"><a href="#test_signed-2">test_signed/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_store_ans104_message-1">test_store_ans104_message/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_store_binary-1">test_store_binary/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_store_simple_signed_message-1">test_store_simple_signed_message/1*</a></td><td>Test storing and retrieving a simple unsigned item.</td></tr><tr><td valign="top"><a href="#test_store_simple_unsigned_message-1">test_store_simple_unsigned_message/1*</a></td><td>Test storing and retrieving a simple unsigned item.</td></tr><tr><td valign="top"><a href="#test_store_unsigned_empty_message-1">test_store_unsigned_empty_message/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_unsigned-1">test_unsigned/1</a></td><td></td></tr><tr><td valign="top"><a href="#to_integer-1">to_integer/1*</a></td><td></td></tr><tr><td valign="top"><a href="#write-2">write/2</a></td><td>Write a message to the cache.</td></tr><tr><td valign="top"><a href="#write_binary-3">write_binary/3</a></td><td>Write a raw binary keys into the store and link it at a given hashpath.</td></tr><tr><td valign="top"><a href="#write_binary-4">write_binary/4*</a></td><td></td></tr><tr><td valign="top"><a href="#write_hashpath-2">write_hashpath/2</a></td><td>Write a hashpath and its message to the store and link it.</td></tr><tr><td valign="top"><a href="#write_hashpath-3">write_hashpath/3*</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cache_suite_test_-0">cache_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#calculate_all_ids-2">calculate_all_ids/2*</a></td><td>Calculate the IDs for a message.</td></tr><tr><td valign="top"><a href="#commitment_path-2">commitment_path/2*</a></td><td>Generate the commitment path for a given base path.</td></tr><tr><td valign="top"><a href="#do_write_message-3">do_write_message/3*</a></td><td></td></tr><tr><td valign="top"><a href="#ensure_all_loaded-1">ensure_all_loaded/1</a></td><td>Ensure that all of the components of a message (whether a map, list,
+or immediate value) are recursively fully loaded from the stores into memory.</td></tr><tr><td valign="top"><a href="#ensure_all_loaded-2">ensure_all_loaded/2</a></td><td></td></tr><tr><td valign="top"><a href="#ensure_loaded-1">ensure_loaded/1</a></td><td>Ensure that a value is loaded from the cache if it is an ID or a link.</td></tr><tr><td valign="top"><a href="#ensure_loaded-2">ensure_loaded/2</a></td><td></td></tr><tr><td valign="top"><a href="#link-3">link/3</a></td><td>Make a link from one path to another in the store.</td></tr><tr><td valign="top"><a href="#list-2">list/2</a></td><td>List all items under a given path.</td></tr><tr><td valign="top"><a href="#list_numbered-2">list_numbered/2</a></td><td>List all items in a directory, assuming they are numbered.</td></tr><tr><td valign="top"><a href="#prepare_commitments-2">prepare_commitments/2*</a></td><td>The <code>structured@1.0</code> encoder does not typically encode <code>commitments</code>,
+subsequently, when we encounter a commitments message we prepare its contents
+separately, then write each to the store.</td></tr><tr><td valign="top"><a href="#prepare_links-4">prepare_links/4*</a></td><td>Prepare a set of links from a listing of subpaths.</td></tr><tr><td valign="top"><a href="#read-2">read/2</a></td><td>Read the message at a path.</td></tr><tr><td valign="top"><a href="#read_ao_types-4">read_ao_types/4*</a></td><td>Read and parse the ao-types for a given path if it is in the supplied
+list of subpaths, returning a map of keys and their types.</td></tr><tr><td valign="top"><a href="#read_resolved-3">read_resolved/3</a></td><td>Read the output of a prior computation, given Msg1, Msg2, and some
+options.</td></tr><tr><td valign="top"><a href="#run_test-0">run_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#store_read-3">store_read/3*</a></td><td>List all of the subpaths of a given path and return a map of keys and
+links to the subpaths, including their types.</td></tr><tr><td valign="top"><a href="#test_deeply_nested_complex_message-1">test_deeply_nested_complex_message/1*</a></td><td>Test deeply nested item storage and retrieval.</td></tr><tr><td valign="top"><a href="#test_device_map_cannot_be_written_test-0">test_device_map_cannot_be_written_test/0*</a></td><td>Test that message whose device is <code>#{}</code> cannot be written.</td></tr><tr><td valign="top"><a href="#test_message_with_list-1">test_message_with_list/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_signed-1">test_signed/1</a></td><td></td></tr><tr><td valign="top"><a href="#test_signed-2">test_signed/2*</a></td><td></td></tr><tr><td valign="top"><a href="#test_store_ans104_message-1">test_store_ans104_message/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_store_binary-1">test_store_binary/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_store_simple_signed_message-1">test_store_simple_signed_message/1*</a></td><td>Test storing and retrieving a simple unsigned item.</td></tr><tr><td valign="top"><a href="#test_store_simple_unsigned_message-1">test_store_simple_unsigned_message/1*</a></td><td>Test storing and retrieving a simple unsigned item.</td></tr><tr><td valign="top"><a href="#test_store_unsigned_empty_message-1">test_store_unsigned_empty_message/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_store_unsigned_nested_empty_message-1">test_store_unsigned_nested_empty_message/1*</a></td><td></td></tr><tr><td valign="top"><a href="#test_unsigned-1">test_unsigned/1</a></td><td></td></tr><tr><td valign="top"><a href="#to_integer-1">to_integer/1*</a></td><td></td></tr><tr><td valign="top"><a href="#types_to_implicit-1">types_to_implicit/1*</a></td><td>Convert a map of ao-types to an implicit map of types.</td></tr><tr><td valign="top"><a href="#write-2">write/2</a></td><td>Write a message to the cache.</td></tr><tr><td valign="top"><a href="#write_binary-3">write_binary/3</a></td><td>Write a raw binary keys into the store and link it at a given hashpath.</td></tr><tr><td valign="top"><a href="#write_binary-4">write_binary/4*</a></td><td></td></tr><tr><td valign="top"><a href="#write_hashpath-2">write_hashpath/2</a></td><td>Write a hashpath and its message to the store and link it.</td></tr><tr><td valign="top"><a href="#write_hashpath-3">write_hashpath/3*</a></td><td></td></tr><tr><td valign="top"><a href="#write_key-6">write_key/6*</a></td><td>Write a single key for a message into the store.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -56,20 +77,56 @@ flat map.</td></tr><tr><td valign="top"><a href="#store_read-4">store_read/4*</a
 
 Calculate the IDs for a message.
 
-<a name="do_read-4"></a>
+<a name="commitment_path-2"></a>
 
-### do_read/4 * ###
+### commitment_path/2 * ###
 
-`do_read(Path, Store, Opts, AlreadyRead) -> any()`
+`commitment_path(Base, Opts) -> any()`
 
-Read a path from the store. Unsafe: May recurse indefinitely if circular
-links are present.
+Generate the commitment path for a given base path.
 
-<a name="do_write_message-4"></a>
+<a name="do_write_message-3"></a>
 
-### do_write_message/4 * ###
+### do_write_message/3 * ###
 
-`do_write_message(Bin, AllIDs, Store, Opts) -> any()`
+`do_write_message(Bin, Store, Opts) -> any()`
+
+<a name="ensure_all_loaded-1"></a>
+
+### ensure_all_loaded/1 ###
+
+`ensure_all_loaded(Msg) -> any()`
+
+Ensure that all of the components of a message (whether a map, list,
+or immediate value) are recursively fully loaded from the stores into memory.
+This is a catch-all function that is useful in situations where ensuring a
+message contains no links is important, but it carries potentially extreme
+performance costs.
+
+<a name="ensure_all_loaded-2"></a>
+
+### ensure_all_loaded/2 ###
+
+`ensure_all_loaded(Link, Opts) -> any()`
+
+<a name="ensure_loaded-1"></a>
+
+### ensure_loaded/1 ###
+
+`ensure_loaded(Msg) -> any()`
+
+Ensure that a value is loaded from the cache if it is an ID or a link.
+If it is not loadable we raise an error. If the value is a message, we will
+load only the first `layer` of it: Representing all nested messages inside
+the result as links. If the value has an associated `type` key in the extra
+options, we apply it to the read value, 'lazily' recreating a `structured@1.0`
+form.
+
+<a name="ensure_loaded-2"></a>
+
+### ensure_loaded/2 ###
+
+`ensure_loaded(Lk, RawOpts) -> any()`
 
 <a name="link-3"></a>
 
@@ -96,6 +153,24 @@ List all items under a given path.
 
 List all items in a directory, assuming they are numbered.
 
+<a name="prepare_commitments-2"></a>
+
+### prepare_commitments/2 * ###
+
+`prepare_commitments(RawCommitments, Opts) -> any()`
+
+The `structured@1.0` encoder does not typically encode `commitments`,
+subsequently, when we encounter a commitments message we prepare its contents
+separately, then write each to the store.
+
+<a name="prepare_links-4"></a>
+
+### prepare_links/4 * ###
+
+`prepare_links(RootPath, Subpaths, Store, Opts) -> any()`
+
+Prepare a set of links from a listing of subpaths.
+
 <a name="read-2"></a>
 
 ### read/2 ###
@@ -104,6 +179,15 @@ List all items in a directory, assuming they are numbered.
 
 Read the message at a path. Returns in `structured@1.0` format: Either a
 richly typed map or a direct binary.
+
+<a name="read_ao_types-4"></a>
+
+### read_ao_types/4 * ###
+
+`read_ao_types(Path, Subpaths, Store, Opts) -> any()`
+
+Read and parse the ao-types for a given path if it is in the supplied
+list of subpaths, returning a map of keys and their types.
 
 <a name="read_resolved-3"></a>
 
@@ -126,21 +210,14 @@ options.
 
 `store_read(Path, Store, Opts) -> any()`
 
-List all of the subpaths of a given path, read each in turn, returning a
-flat map. We track the paths that we have already read to avoid circular
-links.
-
-<a name="store_read-4"></a>
-
-### store_read/4 * ###
-
-`store_read(Path, Store, Opts, AlreadyRead) -> any()`
+List all of the subpaths of a given path and return a map of keys and
+links to the subpaths, including their types.
 
 <a name="test_deeply_nested_complex_message-1"></a>
 
 ### test_deeply_nested_complex_message/1 * ###
 
-`test_deeply_nested_complex_message(Opts) -> any()`
+`test_deeply_nested_complex_message(Store) -> any()`
 
 Test deeply nested item storage and retrieval
 
@@ -153,11 +230,11 @@ Test deeply nested item storage and retrieval
 Test that message whose device is `#{}` cannot be written. If it were to
 be written, it would cause an infinite loop.
 
-<a name="test_message_with_message-1"></a>
+<a name="test_message_with_list-1"></a>
 
-### test_message_with_message/1 * ###
+### test_message_with_list/1 * ###
 
-`test_message_with_message(Opts) -> any()`
+`test_message_with_list(Store) -> any()`
 
 <a name="test_signed-1"></a>
 
@@ -175,19 +252,19 @@ be written, it would cause an infinite loop.
 
 ### test_store_ans104_message/1 * ###
 
-`test_store_ans104_message(Opts) -> any()`
+`test_store_ans104_message(Store) -> any()`
 
 <a name="test_store_binary-1"></a>
 
 ### test_store_binary/1 * ###
 
-`test_store_binary(Opts) -> any()`
+`test_store_binary(Store) -> any()`
 
 <a name="test_store_simple_signed_message-1"></a>
 
 ### test_store_simple_signed_message/1 * ###
 
-`test_store_simple_signed_message(Opts) -> any()`
+`test_store_simple_signed_message(Store) -> any()`
 
 Test storing and retrieving a simple unsigned item
 
@@ -195,7 +272,7 @@ Test storing and retrieving a simple unsigned item
 
 ### test_store_simple_unsigned_message/1 * ###
 
-`test_store_simple_unsigned_message(Opts) -> any()`
+`test_store_simple_unsigned_message(Store) -> any()`
 
 Test storing and retrieving a simple unsigned item
 
@@ -203,7 +280,13 @@ Test storing and retrieving a simple unsigned item
 
 ### test_store_unsigned_empty_message/1 * ###
 
-`test_store_unsigned_empty_message(Opts) -> any()`
+`test_store_unsigned_empty_message(Store) -> any()`
+
+<a name="test_store_unsigned_nested_empty_message-1"></a>
+
+### test_store_unsigned_nested_empty_message/1 * ###
+
+`test_store_unsigned_nested_empty_message(Store) -> any()`
 
 <a name="test_unsigned-1"></a>
 
@@ -216,6 +299,14 @@ Test storing and retrieving a simple unsigned item
 ### to_integer/1 * ###
 
 `to_integer(Value) -> any()`
+
+<a name="types_to_implicit-1"></a>
+
+### types_to_implicit/1 * ###
+
+`types_to_implicit(Types) -> any()`
+
+Convert a map of ao-types to an implicit map of types.
 
 <a name="write-2"></a>
 
@@ -261,4 +352,12 @@ Write a hashpath and its message to the store and link it.
 ### write_hashpath/3 * ###
 
 `write_hashpath(HP, Msg, Opts) -> any()`
+
+<a name="write_key-6"></a>
+
+### write_key/6 * ###
+
+`write_key(Base, Key, HPAlg, RawCommitments, Store, Opts) -> any()`
+
+Write a single key for a message into the store.
 

@@ -10,7 +10,7 @@ A message tagged with `Device: process@1.0` (the "Process Definition Message") d
 
 *   **Scheduler Device:** Determines the order of incoming messages (assignments) to be processed. (Defaults to [`~scheduler@1.0`](../resources/source-code/dev_scheduler.md)).
 *   **Execution Device:** Executes the actual computation based on the current state and the scheduled message. Often configured as [`dev_stack`](../resources/source-code/dev_stack.md) to allow multiple computational steps (e.g., running WASM, applying cron jobs, handling proofs).
-*   **Push Device:** Handles the injection of new messages into the process\'s schedule. (Defaults to [`~push@1.0`](../resources/source-code/dev_push.md)).
+*   **Push Device:** Handles the injection of new messages into the process's schedule. (Defaults to [`~push@1.0`](../resources/source-code/dev_push.md)).
 
 The `~process@1.0` device acts as a router, intercepting requests and delegating them to the appropriate configured device (scheduler, executor, etc.) by temporarily swapping the device tag on the message before resolving.
 

@@ -10,7 +10,7 @@ Simple utilities for testing HyperBEAM.
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#run-4">run/4</a></td><td></td></tr><tr><td valign="top"><a href="#satisfies_requirements-1">satisfies_requirements/1*</a></td><td>Determine if the environment satisfies the given test requirements.</td></tr><tr><td valign="top"><a href="#suite_with_opts-2">suite_with_opts/2</a></td><td>Run each test in a suite with each set of options.</td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#run-4">run/4</a></td><td></td></tr><tr><td valign="top"><a href="#satisfies_requirements-1">satisfies_requirements/1*</a></td><td>Determine if the environment satisfies the given test requirements.</td></tr><tr><td valign="top"><a href="#suite_with_opts-2">suite_with_opts/2</a></td><td>Run each test in a suite with each set of options.</td></tr><tr><td valign="top"><a href="#test_store-0">test_store/0</a></td><td>Generate a new, unique test store as an isolated context for an execution.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -45,4 +45,12 @@ the test name, description, and test function.
 The list of `Opts` should contain maps with the `name` and `opts` keys.
 Each element may also contain a `skip` key with a list of test names to skip.
 They can also contain a `desc` key with a description of the options.
+
+<a name="test_store-0"></a>
+
+### test_store/0 ###
+
+`test_store() -> any()`
+
+Generate a new, unique test store as an isolated context for an execution.
 

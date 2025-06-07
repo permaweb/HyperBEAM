@@ -17,25 +17,27 @@ behaviour of the device when these keys are set.<a name="index"></a>
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#calculate_ids-3">calculate_ids/3*</a></td><td></td></tr><tr><td valign="top"><a href="#cannot_get_private_keys_test-0">cannot_get_private_keys_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#case_insensitive_get-2">case_insensitive_get/2*</a></td><td>Key matching should be case insensitive, following RFC-9110, so we
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#calculate_id-3">calculate_id/3*</a></td><td></td></tr><tr><td valign="top"><a href="#cannot_get_private_keys_test-0">cannot_get_private_keys_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#case_insensitive_get-3">case_insensitive_get/3*</a></td><td>Key matching should be case insensitive, following RFC-9110, so we
 implement a case-insensitive key lookup rather than delegating to
-<code>maps:get/2</code>.</td></tr><tr><td valign="top"><a href="#case_insensitive_get_test-0">case_insensitive_get_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td>Commit to a message, using the <code>commitment-device</code> key to specify the
-device that should be used to commit to the message.</td></tr><tr><td valign="top"><a href="#commitment_ids_from_committers-2">commitment_ids_from_committers/2*</a></td><td>Returns a list of commitment IDs in a commitments map that are relevant
+<code>hb_maps:get/2</code>.</td></tr><tr><td valign="top"><a href="#case_insensitive_get_test-0">case_insensitive_get_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td>Commit to a message, using the <code>commitment-device</code> key to specify the
+device that should be used to commit to the message.</td></tr><tr><td valign="top"><a href="#commitment_ids_from_committers-3">commitment_ids_from_committers/3*</a></td><td>Returns a list of commitment IDs in a commitments map that are relevant
 for a list of given committer addresses.</td></tr><tr><td valign="top"><a href="#commitment_ids_from_request-3">commitment_ids_from_request/3*</a></td><td>Implements a standardized form of specifying commitment IDs for a
-message request.</td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td>Return the list of committed keys from a message.</td></tr><tr><td valign="top"><a href="#committers-1">committers/1</a></td><td>Return the committers of a message that are present in the given request.</td></tr><tr><td valign="top"><a href="#committers-2">committers/2</a></td><td></td></tr><tr><td valign="top"><a href="#committers-3">committers/3</a></td><td></td></tr><tr><td valign="top"><a href="#deep_unset_test-0">deep_unset_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#exec_for_commitment-5">exec_for_commitment/5*</a></td><td>Execute a function for a single commitment in the context of its
-parent message.</td></tr><tr><td valign="top"><a href="#get-2">get/2</a></td><td>Return the value associated with the key as it exists in the message's
-underlying Erlang map.</td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr><tr><td valign="top"><a href="#get_keys_mod_test-0">get_keys_mod_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message, using the <code>committers</code> list if it exists.</td></tr><tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr><tr><td valign="top"><a href="#id-3">id/3</a></td><td></td></tr><tr><td valign="top"><a href="#id_device-1">id_device/1*</a></td><td>Locate the ID device of a message.</td></tr><tr><td valign="top"><a href="#info-0">info/0</a></td><td>Return the info for the identity device.</td></tr><tr><td valign="top"><a href="#is_private_mod_test-0">is_private_mod_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#key_from_device_test-0">key_from_device_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#keys-1">keys/1</a></td><td>Get the public keys of a message.</td></tr><tr><td valign="top"><a href="#keys_from_device_test-0">keys_from_device_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#private_keys_are_filtered_test-0">private_keys_are_filtered_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#remove-2">remove/2</a></td><td>Remove a key or keys from a message.</td></tr><tr><td valign="top"><a href="#remove_test-0">remove_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#run_test-0">run_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set-3">set/3</a></td><td>Deep merge keys in a message.</td></tr><tr><td valign="top"><a href="#set_conflicting_keys_test-0">set_conflicting_keys_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set_ignore_undefined_test-0">set_ignore_undefined_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set_path-3">set_path/3</a></td><td>Special case of <code>set/3</code> for setting the <code>path</code> key.</td></tr><tr><td valign="top"><a href="#unset_with_set_test-0">unset_with_set_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify a message.</td></tr><tr><td valign="top"><a href="#verify_test-0">verify_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#with_relevant_commitments-3">with_relevant_commitments/3*</a></td><td>Return a message with only the relevant commitments for a given request.</td></tr></table>
+message request.</td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td>Return the list of committed keys from a message.</td></tr><tr><td valign="top"><a href="#committers-1">committers/1</a></td><td>Return the committers of a message that are present in the given request.</td></tr><tr><td valign="top"><a href="#committers-2">committers/2</a></td><td></td></tr><tr><td valign="top"><a href="#committers-3">committers/3</a></td><td></td></tr><tr><td valign="top"><a href="#deep_unset_test-0">deep_unset_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#ensure_commitments_loaded-2">ensure_commitments_loaded/2*</a></td><td>Ensure that the <code>commitments</code> submessage of a base message is fully
+loaded into local memory.</td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td>Return the value associated with the key as it exists in the message's
+underlying Erlang map.</td></tr><tr><td valign="top"><a href="#get-4">get/4</a></td><td></td></tr><tr><td valign="top"><a href="#get_keys_mod_test-0">get_keys_mod_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#id-1">id/1</a></td><td>Return the ID of a message, using the <code>committers</code> list if it exists.</td></tr><tr><td valign="top"><a href="#id-2">id/2</a></td><td></td></tr><tr><td valign="top"><a href="#id-3">id/3</a></td><td></td></tr><tr><td valign="top"><a href="#id_device-2">id_device/2*</a></td><td>Locate the ID device of a message.</td></tr><tr><td valign="top"><a href="#index-3">index/3</a></td><td>Generate an index page for a message, in the event that the <code>body</code> and
+<code>content-type</code> of a message returned to the client are both empty.</td></tr><tr><td valign="top"><a href="#info-0">info/0</a></td><td>Return the info for the identity device.</td></tr><tr><td valign="top"><a href="#is_private_mod_test-0">is_private_mod_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#key_from_device_test-0">key_from_device_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#keys-1">keys/1</a></td><td>Get the public keys of a message.</td></tr><tr><td valign="top"><a href="#keys-2">keys/2</a></td><td></td></tr><tr><td valign="top"><a href="#keys_from_device_test-0">keys_from_device_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#private_keys_are_filtered_test-0">private_keys_are_filtered_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#remove-2">remove/2</a></td><td>Remove a key or keys from a message.</td></tr><tr><td valign="top"><a href="#remove-3">remove/3</a></td><td></td></tr><tr><td valign="top"><a href="#remove_test-0">remove_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set-3">set/3</a></td><td>Deep merge keys in a message.</td></tr><tr><td valign="top"><a href="#set_conflicting_keys_test-0">set_conflicting_keys_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set_ignore_undefined_test-0">set_ignore_undefined_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#set_path-3">set_path/3</a></td><td>Special case of <code>set/3</code> for setting the <code>path</code> key.</td></tr><tr><td valign="top"><a href="#unset_with_set_test-0">unset_with_set_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify a message.</td></tr><tr><td valign="top"><a href="#verify_commitment-3">verify_commitment/3*</a></td><td>Execute a function for a single commitment in the context of its
+parent message.</td></tr><tr><td valign="top"><a href="#verify_test-0">verify_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#with_relevant_commitments-3">with_relevant_commitments/3*</a></td><td>Return a message with only the relevant commitments for a given request.</td></tr></table>
 
 
 <a name="functions"></a>
 
 ## Function Details ##
 
-<a name="calculate_ids-3"></a>
+<a name="calculate_id-3"></a>
 
-### calculate_ids/3 * ###
+### calculate_id/3 * ###
 
-`calculate_ids(Base, Req, NodeOpts) -> any()`
+`calculate_id(Base, Req, NodeOpts) -> any()`
 
 <a name="cannot_get_private_keys_test-0"></a>
 
@@ -43,15 +45,15 @@ underlying Erlang map.</td></tr><tr><td valign="top"><a href="#get-3">get/3</a><
 
 `cannot_get_private_keys_test() -> any()`
 
-<a name="case_insensitive_get-2"></a>
+<a name="case_insensitive_get-3"></a>
 
-### case_insensitive_get/2 * ###
+### case_insensitive_get/3 * ###
 
-`case_insensitive_get(Key, Msg) -> any()`
+`case_insensitive_get(Key, Msg, Opts) -> any()`
 
 Key matching should be case insensitive, following RFC-9110, so we
 implement a case-insensitive key lookup rather than delegating to
-`maps:get/2`. Encode the key to a binary if it is not already.
+`hb_maps:get/2`. Encode the key to a binary if it is not already.
 
 <a name="case_insensitive_get_test-0"></a>
 
@@ -69,11 +71,11 @@ Commit to a message, using the `commitment-device` key to specify the
 device that should be used to commit to the message. If the key is not set,
 the default device (`httpsig@1.0`) is used.
 
-<a name="commitment_ids_from_committers-2"></a>
+<a name="commitment_ids_from_committers-3"></a>
 
-### commitment_ids_from_committers/2 * ###
+### commitment_ids_from_committers/3 * ###
 
-`commitment_ids_from_committers(CommitterAddrs, Commitments) -> any()`
+`commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) -> any()`
 
 Returns a list of commitment IDs in a commitments map that are relevant
 for a list of given committer addresses.
@@ -125,32 +127,30 @@ Return the committers of a message that are present in the given request.
 
 `deep_unset_test() -> any()`
 
-<a name="exec_for_commitment-5"></a>
+<a name="ensure_commitments_loaded-2"></a>
 
-### exec_for_commitment/5 * ###
+### ensure_commitments_loaded/2 * ###
 
-`exec_for_commitment(Func, Base, Commitment, Req, Opts) -> any()`
+`ensure_commitments_loaded(NonRelevant, Opts) -> any()`
 
-Execute a function for a single commitment in the context of its
-parent message.
-Note: Assumes that the `commitments` key has already been removed from the
-message if applicable.
-
-<a name="get-2"></a>
-
-### get/2 ###
-
-`get(Key, Msg) -> any()`
-
-Return the value associated with the key as it exists in the message's
-underlying Erlang map. First check the public keys, then check case-
-insensitively if the key is a binary.
+Ensure that the `commitments` submessage of a base message is fully
+loaded into local memory.
 
 <a name="get-3"></a>
 
 ### get/3 ###
 
-`get(Key, Msg, Msg2) -> any()`
+`get(Key, Msg, Opts) -> any()`
+
+Return the value associated with the key as it exists in the message's
+underlying Erlang map. First check the public keys, then check case-
+insensitively if the key is a binary.
+
+<a name="get-4"></a>
+
+### get/4 ###
+
+`get(Key, Msg, Msg2, Opts) -> any()`
 
 <a name="get_keys_mod_test-0"></a>
 
@@ -190,15 +190,33 @@ if/when non-map message structures are created.
 
 `id(Base, Req, NodeOpts) -> any()`
 
-<a name="id_device-1"></a>
+<a name="id_device-2"></a>
 
-### id_device/1 * ###
+### id_device/2 * ###
 
-`id_device(X1) -> any()`
+`id_device(X1, Opts) -> any()`
 
 Locate the ID device of a message. The ID device is determined the
 `device` set in _all_ of the commitments. If no commitments are present,
 the default device (`httpsig@1.0`) is used.
+
+<a name="index-3"></a>
+
+### index/3 ###
+
+`index(Msg, Req, Opts) -> any()`
+
+Generate an index page for a message, in the event that the `body` and
+`content-type` of a message returned to the client are both empty. We do this
+as follows:
+1. Find the `default_index` key of the node message. If it is a binary,
+it is assumed to be the name of a device, and we execute the resolution
+`as` that ID.
+2. Merge the base message with the default index message, favoring the default
+index message's keys over those in the base message, unless the default
+was a device name.
+3. Execute the `default_index_path` (base: `index`) upon the message,
+giving the rest of the request unchanged.
 
 <a name="info-0"></a>
 
@@ -228,6 +246,12 @@ Return the info for the identity device.
 
 Get the public keys of a message.
 
+<a name="keys-2"></a>
+
+### keys/2 ###
+
+`keys(Msg, Opts) -> any()`
+
 <a name="keys_from_device_test-0"></a>
 
 ### keys_from_device_test/0 * ###
@@ -244,21 +268,21 @@ Get the public keys of a message.
 
 ### remove/2 ###
 
-`remove(Message1, X2) -> any()`
+`remove(Message1, Key) -> any()`
 
 Remove a key or keys from a message.
+
+<a name="remove-3"></a>
+
+### remove/3 ###
+
+`remove(Message1, X2, Opts) -> any()`
 
 <a name="remove_test-0"></a>
 
 ### remove_test/0 * ###
 
 `remove_test() -> any()`
-
-<a name="run_test-0"></a>
-
-### run_test/0 * ###
-
-`run_test() -> any()`
 
 <a name="set-3"></a>
 
@@ -307,6 +331,17 @@ Verify a message. By default, all commitments are verified. The
 `committers` key in the request can be used to specify that only the
 commitments from specific committers should be verified. Similarly, specific
 commitments can be specified using the `commitments` key.
+
+<a name="verify_commitment-3"></a>
+
+### verify_commitment/3 * ###
+
+`verify_commitment(Base, Commitment, Opts) -> any()`
+
+Execute a function for a single commitment in the context of its
+parent message.
+Note: Assumes that the `commitments` key has already been removed from the
+message if applicable.
 
 <a name="verify_test-0"></a>
 

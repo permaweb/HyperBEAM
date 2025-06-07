@@ -244,5 +244,5 @@ log_server_events(Bin) when is_binary(Bin) ->
     log_server_events(binary:split(Bin, <<"\n">>, [global]));
 log_server_events([Remaining]) -> Remaining;
 log_server_events([Line | Rest]) ->
-    ?event(genesis_wasm_server, {server_logged, Line}),
+    ?event(genesis_wasm_server, {server_logged, {string, Line}}),
     log_server_events(Rest).

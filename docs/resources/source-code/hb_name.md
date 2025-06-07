@@ -3,7 +3,7 @@
 
 
 
-An abstraction for name registration/deregistration in Hyperbeam.
+An abstraction for name registration/deregistration in HyperBEAM.
 
 <a name="description"></a>
 

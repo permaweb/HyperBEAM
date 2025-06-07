@@ -9,16 +9,16 @@
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#accept_to_codec-2">accept_to_codec/2</a></td><td>Calculate the codec name to use for a reply given its initiating Cowboy
-request, the parsed TABM request, and the response message.</td></tr><tr><td valign="top"><a href="#add_cors_headers-2">add_cors_headers/2*</a></td><td>Add permissive CORS headers to a message, if the message has not already
+request, the parsed TABM request, and the response message.</td></tr><tr><td valign="top"><a href="#add_cors_headers-3">add_cors_headers/3*</a></td><td>Add permissive CORS headers to a message, if the message has not already
 specified CORS headers.</td></tr><tr><td valign="top"><a href="#allowed_status-2">allowed_status/2*</a></td><td>Check if a status is allowed, according to the configuration.</td></tr><tr><td valign="top"><a href="#ans104_wasm_test-0">ans104_wasm_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#codec_to_content_type-2">codec_to_content_type/2*</a></td><td>Call the <code>content-type</code> key on a message with the given codec, using
 a fast-path for options that are not needed for this one-time lookup.</td></tr><tr><td valign="top"><a href="#cors_get_test-0">cors_get_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#default_codec-1">default_codec/1*</a></td><td>Return the default codec for the given options.</td></tr><tr><td valign="top"><a href="#empty_inbox-1">empty_inbox/1*</a></td><td>Empty the inbox of the current process for all messages with the given
-reference.</td></tr><tr><td valign="top"><a href="#encode_reply-3">encode_reply/3*</a></td><td>Generate the headers and body for a HTTP response message.</td></tr><tr><td valign="top"><a href="#get-2">get/2</a></td><td>Gets a URL via HTTP and returns the resulting message in deserialized
+reference.</td></tr><tr><td valign="top"><a href="#encode_reply-4">encode_reply/4*</a></td><td>Generate the headers and body for a HTTP response message.</td></tr><tr><td valign="top"><a href="#get-2">get/2</a></td><td>Gets a URL via HTTP and returns the resulting message in deserialized
 form.</td></tr><tr><td valign="top"><a href="#get-3">get/3</a></td><td></td></tr><tr><td valign="top"><a href="#get_deep_signed_wasm_state_test-0">get_deep_signed_wasm_state_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#get_deep_unsigned_wasm_state_test-0">get_deep_unsigned_wasm_state_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_response_to_httpsig-4">http_response_to_httpsig/4*</a></td><td>Convert a HTTP response to a httpsig message.</td></tr><tr><td valign="top"><a href="#httpsig_to_tabm_singleton-3">httpsig_to_tabm_singleton/3*</a></td><td>HTTPSig messages are inherently mixed into the transport layer, so they
-require special handling in order to be converted to a normalized message.</td></tr><tr><td valign="top"><a href="#maybe_add_unsigned-3">maybe_add_unsigned/3*</a></td><td>Add the method and path to a message, if they are not already present.</td></tr><tr><td valign="top"><a href="#message_to_request-2">message_to_request/2*</a></td><td>Given a message, return the information needed to make the request.</td></tr><tr><td valign="top"><a href="#mime_to_codec-2">mime_to_codec/2*</a></td><td>Find a codec name from a mime-type.</td></tr><tr><td valign="top"><a href="#multirequest-5">multirequest/5*</a></td><td>Dispatch the same HTTP request to many nodes.</td></tr><tr><td valign="top"><a href="#multirequest_opt-5">multirequest_opt/5*</a></td><td>Get a value for a multirequest option from the config or message.</td></tr><tr><td valign="top"><a href="#multirequest_opts-3">multirequest_opts/3*</a></td><td>Get the multirequest options from the config or message.</td></tr><tr><td valign="top"><a href="#nested_ao_resolve_test-0">nested_ao_resolve_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#parallel_multirequest-8">parallel_multirequest/8*</a></td><td>Dispatch the same HTTP request to many nodes in parallel.</td></tr><tr><td valign="top"><a href="#parallel_responses-7">parallel_responses/7*</a></td><td>Collect the necessary number of responses, and stop workers if
+require special handling in order to be converted to a normalized message.</td></tr><tr><td valign="top"><a href="#index_request_test-0">index_request_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#index_test-0">index_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#message_to_request-2">message_to_request/2</a></td><td>Given a message, return the information needed to make the request.</td></tr><tr><td valign="top"><a href="#mime_to_codec-2">mime_to_codec/2*</a></td><td>Find a codec name from a mime-type.</td></tr><tr><td valign="top"><a href="#multirequest-5">multirequest/5*</a></td><td>Dispatch the same HTTP request to many nodes.</td></tr><tr><td valign="top"><a href="#multirequest_opt-5">multirequest_opt/5*</a></td><td>Get a value for a multirequest option from the config or message.</td></tr><tr><td valign="top"><a href="#multirequest_opts-3">multirequest_opts/3*</a></td><td>Get the multirequest options from the config or message.</td></tr><tr><td valign="top"><a href="#nested_ao_resolve_test-0">nested_ao_resolve_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#normalize_unsigned-3">normalize_unsigned/3*</a></td><td>Add the method and path to a message, if they are not already present.</td></tr><tr><td valign="top"><a href="#parallel_multirequest-8">parallel_multirequest/8*</a></td><td>Dispatch the same HTTP request to many nodes in parallel.</td></tr><tr><td valign="top"><a href="#parallel_responses-7">parallel_responses/7*</a></td><td>Collect the necessary number of responses, and stop workers if
 configured to do so.</td></tr><tr><td valign="top"><a href="#post-3">post/3</a></td><td>Posts a message to a URL on a remote peer via HTTP.</td></tr><tr><td valign="top"><a href="#post-4">post/4</a></td><td></td></tr><tr><td valign="top"><a href="#prepare_request-6">prepare_request/6*</a></td><td>Turn a set of request arguments into a request message, formatted in the
-preferred format.</td></tr><tr><td valign="top"><a href="#remove_unsigned_fields-2">remove_unsigned_fields/2*</a></td><td></td></tr><tr><td valign="top"><a href="#reply-4">reply/4</a></td><td>Reply to the client's HTTP request with a message.</td></tr><tr><td valign="top"><a href="#reply-5">reply/5*</a></td><td></td></tr><tr><td valign="top"><a href="#req_to_tabm_singleton-3">req_to_tabm_singleton/3</a></td><td>Convert a cowboy request to a normalized message.</td></tr><tr><td valign="top"><a href="#request-2">request/2</a></td><td>Posts a binary to a URL on a remote peer via HTTP, returning the raw
+preferred format.</td></tr><tr><td valign="top"><a href="#remove_unless_signed-3">remove_unless_signed/3*</a></td><td>Remove all keys from the message unless they are signed.</td></tr><tr><td valign="top"><a href="#reply-4">reply/4</a></td><td>Reply to the client's HTTP request with a message.</td></tr><tr><td valign="top"><a href="#reply-5">reply/5*</a></td><td></td></tr><tr><td valign="top"><a href="#req_to_tabm_singleton-3">req_to_tabm_singleton/3</a></td><td>Convert a cowboy request to a normalized message.</td></tr><tr><td valign="top"><a href="#request-2">request/2</a></td><td>Posts a binary to a URL on a remote peer via HTTP, returning the raw
 binary body.</td></tr><tr><td valign="top"><a href="#request-4">request/4</a></td><td></td></tr><tr><td valign="top"><a href="#request-5">request/5</a></td><td></td></tr><tr><td valign="top"><a href="#route_to_request-3">route_to_request/3*</a></td><td>Parse a <code>dev_router:route</code> response and return a tuple of request
-parameters.</td></tr><tr><td valign="top"><a href="#run_wasm_signed_test-0">run_wasm_signed_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#run_wasm_unsigned_test-0">run_wasm_unsigned_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#send_encoded_node_message_test-2">send_encoded_node_message_test/2*</a></td><td></td></tr><tr><td valign="top"><a href="#send_flat_encoded_node_message_test-0">send_flat_encoded_node_message_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#send_json_encoded_node_message_test-0">send_json_encoded_node_message_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#send_large_signed_request_test-0">send_large_signed_request_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#serial_multirequest-7">serial_multirequest/7*</a></td><td>Serially request a message, collecting responses until the required
+parameters.</td></tr><tr><td valign="top"><a href="#run_wasm_signed_test-0">run_wasm_signed_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#run_wasm_unsigned_test-0">run_wasm_unsigned_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#send_large_signed_request_test-0">send_large_signed_request_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#serial_multirequest-7">serial_multirequest/7*</a></td><td>Serially request a message, collecting responses until the required
 number of responses have been gathered.</td></tr><tr><td valign="top"><a href="#simple_ao_resolve_signed_test-0">simple_ao_resolve_signed_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#simple_ao_resolve_unsigned_test-0">simple_ao_resolve_unsigned_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#start-0">start/0</a></td><td></td></tr><tr><td valign="top"><a href="#wasm_compute_request-3">wasm_compute_request/3*</a></td><td></td></tr><tr><td valign="top"><a href="#wasm_compute_request-4">wasm_compute_request/4*</a></td><td></td></tr></table>
 
 
@@ -41,11 +41,11 @@ order for finding the codec is:
 Options can be specified in mime-type format (`application/*`) or in
 AO device format (`device@1.0`).
 
-<a name="add_cors_headers-2"></a>
+<a name="add_cors_headers-3"></a>
 
-### add_cors_headers/2 * ###
+### add_cors_headers/3 * ###
 
-`add_cors_headers(Msg, ReqHdr) -> any()`
+`add_cors_headers(Msg, ReqHdr, Opts) -> any()`
 
 Add permissive CORS headers to a message, if the message has not already
 specified CORS headers.
@@ -96,11 +96,11 @@ Return the default codec for the given options.
 Empty the inbox of the current process for all messages with the given
 reference.
 
-<a name="encode_reply-3"></a>
+<a name="encode_reply-4"></a>
 
-### encode_reply/3 * ###
+### encode_reply/4 * ###
 
-`encode_reply(TABMReq, Message, Opts) -> any()`
+`encode_reply(Status, TABMReq, Message, Opts) -> any()`
 
 Generate the headers and body for a HTTP response message.
 
@@ -151,20 +151,21 @@ In particular, the signatures are verified if present and required by the
 node configuration. Additionally, non-committed fields are removed from the
 message if it is signed, with the exception of the `path` and `method` fields.
 
-<a name="maybe_add_unsigned-3"></a>
+<a name="index_request_test-0"></a>
 
-### maybe_add_unsigned/3 * ###
+### index_request_test/0 * ###
 
-`maybe_add_unsigned(Req, Msg, Opts) -> any()`
+`index_request_test() -> any()`
 
-Add the method and path to a message, if they are not already present.
-The precidence order for finding the path is:
-1. The path in the message
-2. The path in the request URI
+<a name="index_test-0"></a>
+
+### index_test/0 * ###
+
+`index_test() -> any()`
 
 <a name="message_to_request-2"></a>
 
-### message_to_request/2 * ###
+### message_to_request/2 ###
 
 `message_to_request(M, Opts) -> any()`
 
@@ -219,6 +220,19 @@ the message take precidence over the options in the config.
 
 `nested_ao_resolve_test() -> any()`
 
+<a name="normalize_unsigned-3"></a>
+
+### normalize_unsigned/3 * ###
+
+`normalize_unsigned(Req, Msg, Opts) -> any()`
+
+Add the method and path to a message, if they are not already present.
+Remove browser-added fields that are unhelpful during processing (for example,
+`content-length`).
+The precidence order for finding the path is:
+1. The path in the message
+2. The path in the request URI
+
 <a name="parallel_multirequest-8"></a>
 
 ### parallel_multirequest/8 * ###
@@ -258,13 +272,16 @@ resulting message in deserialized form.
 `prepare_request(Format, Method, Peer, Path, RawMessage, Opts) -> any()`
 
 Turn a set of request arguments into a request message, formatted in the
-preferred format.
+preferred format. This function honors the `accept-bundle` option, if it is
+already present in the message, and sets it to `true` if it is not.
 
-<a name="remove_unsigned_fields-2"></a>
+<a name="remove_unless_signed-3"></a>
 
-### remove_unsigned_fields/2 * ###
+### remove_unless_signed/3 * ###
 
-`remove_unsigned_fields(Msg, Opts) -> any()`
+`remove_unless_signed(Key, Msg, Opts) -> any()`
+
+Remove all keys from the message unless they are signed.
 
 <a name="reply-4"></a>
 
@@ -329,24 +346,6 @@ parameters.
 ### run_wasm_unsigned_test/0 * ###
 
 `run_wasm_unsigned_test() -> any()`
-
-<a name="send_encoded_node_message_test-2"></a>
-
-### send_encoded_node_message_test/2 * ###
-
-`send_encoded_node_message_test(Config, Codec) -> any()`
-
-<a name="send_flat_encoded_node_message_test-0"></a>
-
-### send_flat_encoded_node_message_test/0 * ###
-
-`send_flat_encoded_node_message_test() -> any()`
-
-<a name="send_json_encoded_node_message_test-0"></a>
-
-### send_json_encoded_node_message_test/0 * ###
-
-`send_json_encoded_node_message_test() -> any()`
 
 <a name="send_large_signed_request_test-0"></a>
 

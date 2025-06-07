@@ -16,10 +16,10 @@ response to a request.<a name="index"></a>
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cache_binary_result_test-0">cache_binary_result_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#cache_message_result_test-0">cache_message_result_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#cache_source_to_cache_settings-1">cache_source_to_cache_settings/1*</a></td><td>Convert a cache source to a cache setting.</td></tr><tr><td valign="top"><a href="#derive_cache_settings-2">derive_cache_settings/2*</a></td><td>Derive cache settings from a series of option sources and the opts,
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#cache_binary_result_test-0">cache_binary_result_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#cache_message_result_test-0">cache_message_result_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#cache_source_to_cache_settings-2">cache_source_to_cache_settings/2*</a></td><td>Convert a cache source to a cache setting.</td></tr><tr><td valign="top"><a href="#derive_cache_settings-2">derive_cache_settings/2*</a></td><td>Derive cache settings from a series of option sources and the opts,
 honoring precidence order.</td></tr><tr><td valign="top"><a href="#dispatch_cache_write-4">dispatch_cache_write/4*</a></td><td>Dispatch the cache write to a worker process if requested.</td></tr><tr><td valign="top"><a href="#empty_message_list_test-0">empty_message_list_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#exec_likely_faster_heuristic-3">exec_likely_faster_heuristic/3*</a></td><td>Determine whether we are likely to be faster looking up the result in
 our cache (hoping we have it), or executing it directly.</td></tr><tr><td valign="top"><a href="#hashpath_ignore_prevents_storage_test-0">hashpath_ignore_prevents_storage_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#is_explicit_lookup-3">is_explicit_lookup/3*</a></td><td></td></tr><tr><td valign="top"><a href="#lookup-3">lookup/3*</a></td><td></td></tr><tr><td valign="top"><a href="#maybe_lookup-3">maybe_lookup/3</a></td><td>Handles cache lookup, modulated by the caching options requested by
-the user.</td></tr><tr><td valign="top"><a href="#maybe_set-2">maybe_set/2*</a></td><td>Takes a key and two maps, returning the first map with the key set to
+the user.</td></tr><tr><td valign="top"><a href="#maybe_set-3">maybe_set/3*</a></td><td>Takes a key and two maps, returning the first map with the key set to
 the value of the second map _if_ the value is not undefined.</td></tr><tr><td valign="top"><a href="#maybe_store-4">maybe_store/4</a></td><td>Write a resulting M3 message to the cache if requested.</td></tr><tr><td valign="top"><a href="#message_source_cache_control_test-0">message_source_cache_control_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#message_without_cache_control_test-0">message_without_cache_control_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#msg_precidence_overrides_test-0">msg_precidence_overrides_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#msg_with_cc-1">msg_with_cc/1*</a></td><td></td></tr><tr><td valign="top"><a href="#multiple_directives_test-0">multiple_directives_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#necessary_messages_not_found_error-3">necessary_messages_not_found_error/3*</a></td><td>Generate a message to return when the necessary messages to execute a
 cache lookup are not found in the cache.</td></tr><tr><td valign="top"><a href="#no_cache_directive_test-0">no_cache_directive_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#no_store_directive_test-0">no_store_directive_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#only_if_cached_directive_test-0">only_if_cached_directive_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#only_if_cached_not_found_error-3">only_if_cached_not_found_error/3*</a></td><td>Generate a message to return when <code>only_if_cached</code> was specified, and
 we don't have a cached result.</td></tr><tr><td valign="top"><a href="#opts_override_message_settings_test-0">opts_override_message_settings_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#opts_source_cache_control_test-0">opts_source_cache_control_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#opts_with_cc-1">opts_with_cc/1*</a></td><td></td></tr><tr><td valign="top"><a href="#specifiers_to_cache_settings-1">specifiers_to_cache_settings/1*</a></td><td>Convert a cache control list as received via HTTP headers into a
@@ -42,11 +42,11 @@ normalized map of simply whether we should store and/or lookup the result.</td><
 
 `cache_message_result_test() -> any()`
 
-<a name="cache_source_to_cache_settings-1"></a>
+<a name="cache_source_to_cache_settings-2"></a>
 
-### cache_source_to_cache_settings/1 * ###
+### cache_source_to_cache_settings/2 * ###
 
-`cache_source_to_cache_settings(Msg) -> any()`
+`cache_source_to_cache_settings(Msg, Opts) -> any()`
 
 Convert a cache source to a cache setting. The setting _must_ always be
 directly in the source, not an AO-Core-derivable value. The
@@ -125,11 +125,11 @@ a 504 `Status`.
 `no_cache`:       If set, the cached values are never used. Returns
 `continue` to the caller.
 
-<a name="maybe_set-2"></a>
+<a name="maybe_set-3"></a>
 
-### maybe_set/2 * ###
+### maybe_set/3 * ###
 
-`maybe_set(Map1, Map2) -> any()`
+`maybe_set(Map1, Map2, Opts) -> any()`
 
 Takes a key and two maps, returning the first map with the key set to
 the value of the second map _if_ the value is not undefined.

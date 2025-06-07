@@ -26,7 +26,7 @@ allow us to test multiple HashPath algorithms in HyperBEAM.<a name="index"></a>
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#accumulate-2">accumulate/2</a></td><td>Accumulate two IDs into a single commitment.</td></tr><tr><td valign="top"><a href="#count_zeroes-1">count_zeroes/1*</a></td><td>Count the number of leading zeroes in a bitstring.</td></tr><tr><td valign="top"><a href="#sha256-1">sha256/1</a></td><td>Wrap Erlang's <code>crypto:hash/2</code> to provide a standard interface.</td></tr><tr><td valign="top"><a href="#sha256_chain-2">sha256_chain/2</a></td><td>Add a new ID to the end of a SHA-256 hash chain.</td></tr><tr><td valign="top"><a href="#sha256_chain_test-0">sha256_chain_test/0*</a></td><td>Check that <code>sha-256-chain</code> correctly produces a hash matching
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#accumulate-1">accumulate/1</a></td><td>Accumulate two IDs, or a list of IDs, into a single commitment.</td></tr><tr><td valign="top"><a href="#accumulate-2">accumulate/2</a></td><td></td></tr><tr><td valign="top"><a href="#count_zeroes-1">count_zeroes/1*</a></td><td>Count the number of leading zeroes in a bitstring.</td></tr><tr><td valign="top"><a href="#sha256-1">sha256/1</a></td><td>Wrap Erlang's <code>crypto:hash/2</code> to provide a standard interface.</td></tr><tr><td valign="top"><a href="#sha256_chain-2">sha256_chain/2</a></td><td>Add a new ID to the end of a SHA-256 hash chain.</td></tr><tr><td valign="top"><a href="#sha256_chain_test-0">sha256_chain_test/0*</a></td><td>Check that <code>sha-256-chain</code> correctly produces a hash matching
 the machine's OpenSSL lib's output.</td></tr></table>
 
 
@@ -34,14 +34,26 @@ the machine's OpenSSL lib's output.</td></tr></table>
 
 ## Function Details ##
 
+<a name="accumulate-1"></a>
+
+### accumulate/1 ###
+
+`accumulate(IDs) -> any()`
+
+Accumulate two IDs, or a list of IDs, into a single commitment. This
+function requires that the IDs given are already cryptographically-secure,
+256-bit values. No further cryptographic operations are performed upon the
+values, they are simply added together.
+
+This is useful in situations where the ordering of the IDs is not important,
+or explicitly detrimental to the utility of the final commitment. No ordering
+information is preserved in the final commitment.
+
 <a name="accumulate-2"></a>
 
 ### accumulate/2 ###
 
 `accumulate(ID1, ID2) -> any()`
-
-Accumulate two IDs into a single commitment.
-Experimental! This is not necessarily a cryptographically-secure operation.
 
 <a name="count_zeroes-1"></a>
 
