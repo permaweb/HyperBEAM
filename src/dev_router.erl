@@ -72,10 +72,10 @@ info(_Msg1, _Msg2, _Opts) ->
     },
     {ok, InfoBody}.
 
-%% A exposed register function that allows telling the current node to register
-%% a new route with a remote router node. This function should also be itempotent
+%% @doc Register function that allows telling the current node to register
+%% a new route with a remote router node. This function should also be idempotent.
 %% so that it can be called only once.
-register(_M1, _M2, Opts) ->
+register(_M1, M2, Opts) ->
     maybe
         %% Extract all required parameters from options
         %% These values will be used to construct the registration message
@@ -83,17 +83,11 @@ register(_M1, _M2, Opts) ->
         Prefix = hb_opts:get(<<"router_prefix">>, not_found, Opts),
         Price = hb_opts:get(<<"router_price">>, not_found, Opts),
         Template = hb_opts:get(<<"router_template">>, not_found, Opts),
-        %% Generate attestation for secure node validation
-        %% This proves the node's identity to the router
-        Attestion = 
-            hb_cache:ensure_all_loaded(
-                hb_message:commit(
-                    hb_util:ok(dev_snp:generate(#{}, #{}, Opts)),
-                    Opts
-                ),
-                Opts
-            ),
-        ?event(debug_register, {attestion, Attestion}),
+        {ok, SigOpts} =
+            case hb_ao:get(<<"as">>, M2, not_found, Opts) of
+                not_found -> {ok, Opts};
+                AsID -> hb_opts:as(AsID, Opts)
+            end,
         %% Validate that all required parameters are present
         %% This will return {error, Reason} if any parameter is missing or invalid
         {ok, _} = hb_opts:check_required_opts([
@@ -106,26 +100,20 @@ register(_M1, _M2, Opts) ->
         %% The message includes our route details and attestation for verification
         {ok, _} = hb_http:post(
             RouterNode,
-            #{
-                <<"path">> => <<"/router~node-process@1.0/schedule">>,
-                <<"body">> =>
-                    hb_cache:ensure_all_loaded(
-                        hb_message:commit(
-                            #{
-                                <<"path">> => <<"register">>,
-                                <<"route">> =>
-                                #{
-                                    <<"prefix">> => Prefix,
-                                    <<"template">> => Template,
-                                    <<"price">> => Price
-                                },
-                                <<"body">> => Attestion
-                            },
-                            Opts
-                        ),
-                        Opts
-                    )
-            },
+            <<"/router~node-process@1.0/schedule">>,
+            hb_message:commit(
+                #{
+                    <<"subject">> => <<"self">>,
+                    <<"action">> => <<"register">>,
+                    <<"route">> =>
+                        #{
+                            <<"prefix">> => Prefix,
+                            <<"template">> => Template,
+                            <<"price">> => Price
+                        }
+                },
+                SigOpts
+            ),
             Opts
         ),
         {ok, <<"Route registered.">>}

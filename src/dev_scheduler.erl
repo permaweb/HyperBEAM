@@ -1471,13 +1471,25 @@ find_target_id(Msg1, Msg2, Opts) ->
 
 %% @doc Search the given base and request message pair to find the message to
 %% schedule. The precidence order for search is as follows:
-%% 1. `Msg2/body'
-%% 2. `Msg2'
+%% 1. A key in `Msg2' with the value `self', indicating that the entire message
+%%    is the subject.
+%% 2. A key in `Msg2' with another value, present in that message.
+%% 3. The body of the message.
+%% 4. The message itself.
 find_message_to_schedule(_Msg1, Msg2, Opts) ->
-    case hb_ao:resolve(Msg2, <<"body">>, Opts#{ hashpath => ignore }) of
-        {ok, Body} ->
-            Body;
-        _ -> Msg2
+    Subject =
+        hb_ao:get(
+            <<"subject">>,
+            Msg2,
+            not_found,
+            Opts#{ hashpath => ignore }
+        ),
+    case Subject of
+        <<"self">> -> Msg2;
+        not_found ->
+            hb_ao:get(<<"body">>, Msg2, Msg2, Opts#{ hashpath => ignore });
+        Subject ->
+            hb_ao:get(Subject, Msg2, Opts#{ hashpath => ignore })
     end.
 
 %% @doc Generate a `GET /schedule' response for a process.

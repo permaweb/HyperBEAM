@@ -5,7 +5,7 @@
 %%% and node identity cloning. All operations are protected by hardware 
 %%% commitment and encryption.
 -module(dev_green_zone).
--export([info/1, info/3, join/3, init/3, become/3, key/3]).
+-export([info/1, info/3, join/3, init/3, become/3, key/3, is_trusted/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("public_key/include/public_key.hrl").
@@ -18,7 +18,7 @@
 %% @param _ Ignored parameter
 %% @returns A map with the `exports' key containing a list of allowed functions
 info(_) -> 
-    #{ exports => [info, init, join, become, key] }.
+    #{ exports => [info, init, join, become, key, is_trusted] }.
 
 %% @doc Provides information about the green zone device and its API.
 %%
@@ -98,6 +98,22 @@ default_zone_required_opts(Opts) ->
         % initialized => permanent
     }.
 
+%% @doc Returns `true' if the request is signed by a trusted node.
+is_trusted(_M1, Req, Opts) ->
+    Signers = hb_message:signers(Req, Opts),
+    {ok,
+        hb_util:bin(
+            lists:any(
+                fun(Signer) ->
+                    lists:member(
+                        Signer,
+                        maps:keys(hb_opts:get(trusted_nodes, #{}, Opts))
+                    )
+                end,
+                Signers
+            )
+        )
+    }.
 
 %% @doc Initialize the green zone for a node.
 %%
@@ -193,15 +209,14 @@ init(_M1, _M2, Opts) ->
         {ok, map()} | {error, binary()}.
 join(M1, M2, Opts) ->
     ?event(green_zone, {join, start}),
-            PeerLocation = hb_opts:get(<<"green_zone_peer_location">>, undefined, Opts),
-            PeerID = hb_opts:get(<<"green_zone_peer_id">>, undefined, Opts),
-            ?event(green_zone, {join_peer, PeerLocation, PeerID}),
-            if (PeerLocation =:= undefined) or (PeerID =:= undefined) ->
-                validate_join(M1, M2, hb_cache:ensure_all_loaded(Opts, Opts));
-            true ->
-                join_peer(PeerLocation, PeerID, M1, M2, Opts)
+    PeerLocation = hb_opts:get(<<"green_zone_peer_location">>, undefined, Opts),
+    PeerID = hb_opts:get(<<"green_zone_peer_id">>, undefined, Opts),
+    ?event(green_zone, {join_peer, PeerLocation, PeerID}),
+    if (PeerLocation =:= undefined) or (PeerID =:= undefined) ->
+        validate_join(M1, M2, hb_cache:ensure_all_loaded(Opts, Opts));
+    true ->
+        join_peer(PeerLocation, PeerID, M1, M2, Opts)
     end.
-
 
 %% @doc Encrypts and provides the node's private key for secure sharing.
 %%

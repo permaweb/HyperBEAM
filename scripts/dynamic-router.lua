@@ -203,11 +203,25 @@ end
 -- Register a new host to a route.
 function register(state, assignment, opts)
     state = ensure_defaults(state)
+    ao.event({"register", { state = state, assignment = assignment, opts = opts }})
     local req = assignment.body
+
+    -- If the message is signed by an explicitly trusted peer, we can skip the
+    -- is-admissible check.
+    if state["trusted"] then
+        local committers = ao.get("committers", req)
+        for _, committer in ipairs(committers) do
+            if committer == state["trusted"] then
+                state = add_node(state, req)
+                return recalculate(state, assignment, opts)
+            end
+        end
+    end
+
     req.path = state["is-admissible"].path or "is-admissible"
     local status, is_admissible = ao.resolve(state["is-admissible"], req)
 
-    ao.event("is-admissible result:", { status, is_admissible })
+    ao.event({"is-admissible result:", { status, is_admissible }})
     if status == "ok" and is_admissible == "true" then
         state = add_node(state, req)
         return recalculate(state, assignment, opts)
@@ -270,11 +284,11 @@ function duration(state, assignment, opts)
 end
 
 function compute(state, assignment, opts)
-    if assignment.body.path == "register" then
+    if assignment.body.action == "register" then
         return register(state, assignment, opts)
-    elseif assignment.body.path == "recalculate" then
+    elseif assignment.body.action == "recalculate" then
         return recalculate(state, assignment, opts)
-    elseif assignment.body.path == "performance" then
+    elseif assignment.body.action == "performance" then
         return duration(state, assignment, opts)
     else
         -- If we have been called without a relevant path, simply ensure that
