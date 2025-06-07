@@ -122,8 +122,11 @@ Filter JSON assignment results from a remote legacy scheduler.
 
 Search the given base and request message pair to find the message to
 schedule. The precidence order for search is as follows:
-1. `Msg2/body`
-2. `Msg2`
+1. A key in `Msg2` with the value `self`, indicating that the entire message
+is the subject.
+2. A key in `Msg2` with another value, present in that message.
+3. The body of the message.
+4. The message itself.
 
 <a name="find_next_assignment-5"></a>
 

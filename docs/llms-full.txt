@@ -1,4 +1,4 @@
-Generated: 2025-06-06T22:28:21Z
+Generated: 2025-06-07T07:08:10Z
 
 --- START OF FILE: docs/build/ao-connect.md ---
 # HyperBEAM from AO Connect
@@ -1439,7 +1439,7 @@ The initial development phase focuses on integrating AO processes more deeply wi
 
 ### What are the system requirements for running HyperBEAM?
 
-Currently, HyperBEAM is primarily tested and documented for Ubuntu 22.04. Support for macOS and other platforms will be added in future updates. For detailed requirements, see the [System Requirements](../../run/configuring-your-machine.md) page.
+Currently, HyperBEAM is primarily tested and documented for Ubuntu 22.04 and macOS. Other platforms will be added in future updates. For detailed requirements, see the [System Requirements](../../run/configuring-your-machine.md) page.
 
 ### Can I run HyperBEAM in a container?
 
@@ -1453,7 +1453,7 @@ To update HyperBEAM:
 2. Rebuild the application
 3. Restart the HyperBEAM service
 
-Specific update instructions will vary depending on your installation method.
+Specific update instructions will vary depending on your [installation method](../../run/running-a-hyperbeam-node.md).
 
 ### Can I run multiple HyperBEAM nodes on a single machine?
 
@@ -1483,7 +1483,7 @@ You can use any programming language that compiles to WebAssembly (WASM) for cre
 
 Debugging processes in HyperBEAM can be done through:
 
-1. Logging messages to the system log
+1. Logging messages to the system log (`DEBUG=HB_PRINT rebar3 shell`)
 2. Monitoring process state and message flow
 3. Inspecting memory usage and performance metrics
 
@@ -4915,7 +4915,7 @@ commitment and encryption.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_trusted_node-4">add_trusted_node/4*</a></td><td>Adds a node to the trusted nodes list with its commitment report.</td></tr><tr><td valign="top"><a href="#become-3">become/3</a></td><td>Clones the identity of a target node in the green zone.</td></tr><tr><td valign="top"><a href="#calculate_node_message-3">calculate_node_message/3*</a></td><td>Generate the node message that should be set prior to joining
-a green zone.</td></tr><tr><td valign="top"><a href="#decrypt_zone_key-2">decrypt_zone_key/2*</a></td><td>Decrypts an AES key using the node's RSA private key.</td></tr><tr><td valign="top"><a href="#default_zone_required_opts-1">default_zone_required_opts/1*</a></td><td>Provides the default required options for a green zone.</td></tr><tr><td valign="top"><a href="#encrypt_payload-2">encrypt_payload/2*</a></td><td>Encrypts an AES key with a node's RSA public key.</td></tr><tr><td valign="top"><a href="#finalize_become-5">finalize_become/5*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Controls which functions are exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Provides information about the green zone device and its API.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the green zone for a node.</td></tr><tr><td valign="top"><a href="#join-3">join/3</a></td><td>Initiates the join process for a node to enter an existing green zone.</td></tr><tr><td valign="top"><a href="#join_peer-5">join_peer/5*</a></td><td>Processes a join request to a specific peer node.</td></tr><tr><td valign="top"><a href="#key-3">key/3</a></td><td>Encrypts and provides the node's private key for secure sharing.</td></tr><tr><td valign="top"><a href="#maybe_set_zone_opts-4">maybe_set_zone_opts/4*</a></td><td>Adopts configuration from a peer when joining a green zone.</td></tr><tr><td valign="top"><a href="#rsa_wallet_integration_test-0">rsa_wallet_integration_test/0*</a></td><td>Test RSA operations with the existing wallet structure.</td></tr><tr><td valign="top"><a href="#try_mount_encrypted_volume-2">try_mount_encrypted_volume/2*</a></td><td>Attempts to mount an encrypted volume using the green zone AES key.</td></tr><tr><td valign="top"><a href="#validate_join-3">validate_join/3*</a></td><td>Validates an incoming join request from another node.</td></tr><tr><td valign="top"><a href="#validate_peer_opts-2">validate_peer_opts/2*</a></td><td>Validates that a peer's configuration matches required options.</td></tr></table>
+a green zone.</td></tr><tr><td valign="top"><a href="#decrypt_zone_key-2">decrypt_zone_key/2*</a></td><td>Decrypts an AES key using the node's RSA private key.</td></tr><tr><td valign="top"><a href="#default_zone_required_opts-1">default_zone_required_opts/1*</a></td><td>Provides the default required options for a green zone.</td></tr><tr><td valign="top"><a href="#encrypt_payload-2">encrypt_payload/2*</a></td><td>Encrypts an AES key with a node's RSA public key.</td></tr><tr><td valign="top"><a href="#finalize_become-5">finalize_become/5*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Controls which functions are exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Provides information about the green zone device and its API.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the green zone for a node.</td></tr><tr><td valign="top"><a href="#is_trusted-3">is_trusted/3</a></td><td>Returns <code>true</code> if the request is signed by a trusted node.</td></tr><tr><td valign="top"><a href="#join-3">join/3</a></td><td>Initiates the join process for a node to enter an existing green zone.</td></tr><tr><td valign="top"><a href="#join_peer-5">join_peer/5*</a></td><td>Processes a join request to a specific peer node.</td></tr><tr><td valign="top"><a href="#key-3">key/3</a></td><td>Encrypts and provides the node's private key for secure sharing.</td></tr><tr><td valign="top"><a href="#maybe_set_zone_opts-4">maybe_set_zone_opts/4*</a></td><td>Adopts configuration from a peer when joining a green zone.</td></tr><tr><td valign="top"><a href="#rsa_wallet_integration_test-0">rsa_wallet_integration_test/0*</a></td><td>Test RSA operations with the existing wallet structure.</td></tr><tr><td valign="top"><a href="#try_mount_encrypted_volume-2">try_mount_encrypted_volume/2*</a></td><td>Attempts to mount an encrypted volume using the green zone AES key.</td></tr><tr><td valign="top"><a href="#validate_join-3">validate_join/3*</a></td><td>Validates an incoming join request from another node.</td></tr><tr><td valign="top"><a href="#validate_peer_opts-2">validate_peer_opts/2*</a></td><td>Validates that a peer's configuration matches required options.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -5108,6 +5108,14 @@ Config options in Opts map:
 - green_zone_required_config: (Optional) Custom configuration requirements
 - priv_wallet: (Optional) Existing wallet to use instead of creating a new one
 - priv_green_zone_aes: (Optional) Existing AES key, if already part of a zone
+
+<a name="is_trusted-3"></a>
+
+### is_trusted/3 ###
+
+`is_trusted(M1, Req, Opts) -> any()`
+
+Returns `true` if the request is signed by a trusted node.
 
 <a name="join-3"></a>
 
@@ -9483,7 +9491,8 @@ according to the real-time performance of nodes.</td></tr><tr><td valign="top"><
 (either progressing backwards or forwards), assuming a
 256-bit field.</td></tr><tr><td valign="top"><a href="#find_target_path-2">find_target_path/2*</a></td><td>Find the target path to route for a request message.</td></tr><tr><td valign="top"><a href="#generate_hashpaths-1">generate_hashpaths/1*</a></td><td></td></tr><tr><td valign="top"><a href="#generate_nodes-1">generate_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#get_routes_test-0">get_routes_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Exported function for getting device info, controls which functions are
 exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>HTTP info response providing information about this device.</td></tr><tr><td valign="top"><a href="#load_routes-1">load_routes/1*</a></td><td>Load the current routes for the node.</td></tr><tr><td valign="top"><a href="#local_dynamic_router-0">local_dynamic_router/0*</a></td><td></td></tr><tr><td valign="top"><a href="#local_dynamic_router_test_-0">local_dynamic_router_test_/0*</a></td><td>Example of a Lua module being used as the <code>route_provider</code> for a
-HyperBEAM node.</td></tr><tr><td valign="top"><a href="#local_process_route_provider-0">local_process_route_provider/0*</a></td><td></td></tr><tr><td valign="top"><a href="#local_process_route_provider_test_-0">local_process_route_provider_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#lowest_distance-1">lowest_distance/1*</a></td><td>Find the node with the lowest distance to the given hashpath.</td></tr><tr><td valign="top"><a href="#lowest_distance-2">lowest_distance/2*</a></td><td></td></tr><tr><td valign="top"><a href="#match-3">match/3</a></td><td>Find the first matching template in a list of known routes.</td></tr><tr><td valign="top"><a href="#match_routes-3">match_routes/3*</a></td><td></td></tr><tr><td valign="top"><a href="#match_routes-4">match_routes/4*</a></td><td></td></tr><tr><td valign="top"><a href="#preprocess-3">preprocess/3</a></td><td>Preprocess a request to check if it should be relayed to a different node.</td></tr><tr><td valign="top"><a href="#register-3">register/3</a></td><td></td></tr><tr><td valign="top"><a href="#request_hook_reroute_to_nearest_test-0">request_hook_reroute_to_nearest_test/0*</a></td><td>Test that the <code>preprocess/3</code> function re-routes a request to remote
+HyperBEAM node.</td></tr><tr><td valign="top"><a href="#local_process_route_provider-0">local_process_route_provider/0*</a></td><td></td></tr><tr><td valign="top"><a href="#local_process_route_provider_test_-0">local_process_route_provider_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#lowest_distance-1">lowest_distance/1*</a></td><td>Find the node with the lowest distance to the given hashpath.</td></tr><tr><td valign="top"><a href="#lowest_distance-2">lowest_distance/2*</a></td><td></td></tr><tr><td valign="top"><a href="#match-3">match/3</a></td><td>Find the first matching template in a list of known routes.</td></tr><tr><td valign="top"><a href="#match_routes-3">match_routes/3*</a></td><td></td></tr><tr><td valign="top"><a href="#match_routes-4">match_routes/4*</a></td><td></td></tr><tr><td valign="top"><a href="#preprocess-3">preprocess/3</a></td><td>Preprocess a request to check if it should be relayed to a different node.</td></tr><tr><td valign="top"><a href="#register-3">register/3</a></td><td>Register function that allows telling the current node to register
+a new route with a remote router node.</td></tr><tr><td valign="top"><a href="#request_hook_reroute_to_nearest_test-0">request_hook_reroute_to_nearest_test/0*</a></td><td>Test that the <code>preprocess/3</code> function re-routes a request to remote
 peers via <code>~relay@1.0</code>, according to the node's routing table.</td></tr><tr><td valign="top"><a href="#route-2">route/2</a></td><td>Find the appropriate route for the given message.</td></tr><tr><td valign="top"><a href="#route-3">route/3</a></td><td></td></tr><tr><td valign="top"><a href="#route_provider_test-0">route_provider_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route_regex_matches_test-0">route_regex_matches_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#route_template_message_matches_test-0">route_template_message_matches_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#routes-3">routes/3</a></td><td>Device function that returns all known routes.</td></tr><tr><td valign="top"><a href="#simulate-4">simulate/4*</a></td><td></td></tr><tr><td valign="top"><a href="#simulation_distribution-2">simulation_distribution/2*</a></td><td></td></tr><tr><td valign="top"><a href="#simulation_occurences-2">simulation_occurences/2*</a></td><td></td></tr><tr><td valign="top"><a href="#strategy_suite_test_-0">strategy_suite_test_/0*</a></td><td></td></tr><tr><td valign="top"><a href="#template_matches-3">template_matches/3*</a></td><td>Check if a message matches a message template or path regex.</td></tr><tr><td valign="top"><a href="#unique_nodes-1">unique_nodes/1*</a></td><td></td></tr><tr><td valign="top"><a href="#unique_test-1">unique_test/1*</a></td><td></td></tr><tr><td valign="top"><a href="#weighted_random_strategy_test-0">weighted_random_strategy_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#within_norms-3">within_norms/3*</a></td><td></td></tr></table>
 
 
@@ -9762,6 +9771,10 @@ Preprocess a request to check if it should be relayed to a different node.
 ### register/3 ###
 
 `register(M1, M2, Opts) -> any()`
+
+Register function that allows telling the current node to register
+a new route with a remote router node. This function should also be idempotent.
+so that it can be called only once.
 
 <a name="request_hook_reroute_to_nearest_test-0"></a>
 
@@ -10451,8 +10464,11 @@ Filter JSON assignment results from a remote legacy scheduler.
 
 Search the given base and request message pair to find the message to
 schedule. The precidence order for search is as follows:
-1. `Msg2/body`
-2. `Msg2`
+1. A key in `Msg2` with the value `self`, indicating that the entire message
+is the subject.
+2. A key in `Msg2` with another value, present in that message.
+3. The body of the message.
+4. The message itself.
 
 <a name="find_next_assignment-5"></a>
 
