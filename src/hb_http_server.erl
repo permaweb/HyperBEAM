@@ -307,6 +307,12 @@ handle_request(RawReq, Body, ServerID) ->
                 },
                 RawReq
             );
+        <<"/logs">> ->
+            handle_logs_request(Req, cowboy_req:parse_qs(Req), NodeMsg);
+        <<"/logs/raw">> ->
+            handle_logs_raw_request(Req, cowboy_req:parse_qs(Req), NodeMsg);
+        <<"/logs/json">> ->
+            handle_logs_json_request(Req, cowboy_req:parse_qs(Req), NodeMsg);
         _ ->
             % The request is of normal AO-Core form, so we parse it and invoke
             % the meta@1.0 device to handle it.
@@ -360,6 +366,116 @@ handle_request(RawReq, Body, ServerID) ->
                     )
 			end
 end.
+
+handle_logs_request(Req, QS, _NodeMsg) ->
+    Lines = case lists:keyfind(<<"lines">>, 1, QS) of
+        {_, LinesStr} -> 
+            try binary_to_integer(LinesStr) 
+            catch _:_ -> 100 end;
+        false -> 100
+    end,
+    
+    Refresh = case lists:keyfind(<<"refresh">>, 1, QS) of
+        {_, RefreshStr} -> 
+            try binary_to_integer(RefreshStr) 
+            catch _:_ -> 1 end;
+        false -> 1
+    end,
+    
+    Logs = hb_live_logs:get_logs(Lines),
+    Html = generate_logs_html(Logs, Refresh),
+    
+    {ok, cowboy_req:reply(200, #{
+        <<"content-type">> => <<"text/html; charset=utf-8">>,
+        <<"cache-control">> => <<"no-cache, no-store, must-revalidate">>
+    }, Html, Req), no_state}.
+
+handle_logs_raw_request(Req, QS, _NodeMsg) ->
+    Lines = case lists:keyfind(<<"lines">>, 1, QS) of
+        {_, LinesStr} -> 
+            try binary_to_integer(LinesStr) 
+            catch _:_ -> 100 end;
+        false -> 100
+    end,
+    
+    Logs = hb_live_logs:get_logs(Lines),
+    Text = generate_logs_text(Logs),
+    
+    {ok, cowboy_req:reply(200, #{
+        <<"content-type">> => <<"text/plain; charset=utf-8">>,
+        <<"cache-control">> => <<"no-cache, no-store, must-revalidate">>
+    }, Text, Req), no_state}.
+
+handle_logs_json_request(Req, QS, _NodeMsg) ->
+    Lines = case lists:keyfind(<<"lines">>, 1, QS) of
+        {_, LinesStr} -> 
+            try binary_to_integer(LinesStr) 
+            catch _:_ -> 100 end;
+        false -> 100
+    end,
+    
+    Logs = hb_live_logs:get_logs(Lines),
+    % Convert logs to JSON-safe format by removing raw_timestamp
+    JsonLogs = lists:map(fun(#{timestamp := TS, message := Msg}) ->
+        #{timestamp => TS, message => Msg}
+    end, Logs),
+    Json = hb_json:encode(#{logs => JsonLogs}),
+    
+    {ok, cowboy_req:reply(200, #{
+        <<"content-type">> => <<"application/json; charset=utf-8">>,
+        <<"cache-control">> => <<"no-cache, no-store, must-revalidate">>
+    }, Json, Req), no_state}.
+
+generate_logs_html(Logs, Refresh) ->
+    LogsHtml = lists:map(fun(#{timestamp := TS, message := Msg}) ->
+        EscapedMsg = escape_html(Msg),
+        [<<"<div class='log-entry'><span class='timestamp'>[">>, TS, <<"]</span> ">>, 
+         <<"<span class='message'>">>, EscapedMsg, <<"</span></div>\n">>]
+    end, Logs),
+    
+    [<<"<!DOCTYPE html>
+<html>
+<head>
+    <title>HyperBEAM Logs</title>
+    <meta http-equiv='refresh' content='">>, integer_to_binary(Refresh), <<"'>
+    <style>
+        body { font-family: 'Courier New', monospace; background: #1e1e1e; color: #d4d4d4; margin: 0; padding: 20px; }
+        .header { border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 20px; }
+        .log-entry { margin: 2px 0; white-space: pre-wrap; }
+        .timestamp { color: #569cd6; }
+        .message { color: #d4d4d4; }
+        .controls { margin-bottom: 20px; }
+        .controls a { color: #4ec9b0; text-decoration: none; margin-right: 15px; }
+        .controls a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class='header'>
+        <h1>load_hb HyperBEAM node logs</h1>
+        <div class='controls'>
+            <a href='/logs/json'>JSON format</a>
+        </div>
+    </div>
+    <div class='logs'>">>, LogsHtml, <<"</div>
+</body>
+</html>">>].
+
+generate_logs_text(Logs) ->
+    lists:map(fun(#{timestamp := TS, message := Msg}) ->
+        [<<"[">>, TS, <<"] ">>, Msg]
+    end, Logs).
+
+escape_html(Bin) when is_binary(Bin) ->
+    escape_html(binary_to_list(Bin));
+escape_html(Str) when is_list(Str) ->
+    lists:map(fun
+        ($<) -> <<"&lt;">>;
+        ($>) -> <<"&gt;">>;
+        ($&) -> <<"&amp;">>;
+        ($") -> <<"&quot;">>;
+        ($') -> <<"&#39;">>;
+        (C) -> C
+    end, Str).
 
 %% @doc Return the list of allowed methods for the HTTP server.
 allowed_methods(Req, State) ->
@@ -425,6 +541,7 @@ set_default_opts(Opts) ->
 %% @doc Test that we can start the server, send a message, and get a response.
 start_node() ->
     start_node(#{}).
+
 start_node(Opts) ->
     application:ensure_all_started([
         kernel,
@@ -440,4 +557,5 @@ start_node(Opts) ->
     hb_sup:start_link(Opts),
     ServerOpts = set_default_opts(Opts),
     {ok, _Listener, Port} = new_server(ServerOpts),
-    <<"http://localhost:", (integer_to_binary(Port))/binary, "/">>.
+    Host = hb_opts:get(host, <<"localhost">>, ServerOpts),
+    <<"http://", Host/binary, ":", (integer_to_binary(Port))/binary, "/">>.
