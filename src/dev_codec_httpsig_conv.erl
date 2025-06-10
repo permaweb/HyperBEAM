@@ -519,13 +519,13 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                                     GroupedBodyMap,
                                     undefined
                                 ),
-                            ValueWithCommitted =
-                                case Committed of
-                                    undefined -> Value;
-                                    Committed ->
-                                        maps:put(<<"committed">>, Committed, Value)
-                                end,
-                            encode_body_part(Key, ValueWithCommitted, InlineKey, Opts)
+                            ?event(debug_committed,
+                                {part_committed,
+                                    {committed, Committed},
+                                    {part_with_siginfo, Value}
+                                }
+                            ),
+                            encode_body_part(Key, Value, InlineKey, Opts)
                         end,
                         GroupedBodyMap,
                         Opts
@@ -956,3 +956,36 @@ encode_message_with_links_test() ->
     % Ensure that the result is the same as the original message
     ?event({decoded, Dec}),
     ?assert(hb_message:match(Msg, Dec, strict, #{})).
+
+bundled_signature_encoding_test() ->
+    Opts = #{ priv_wallet => hb:wallet() },
+    Msg =
+        hb_message:commit(
+            #{
+                <<"test-key">> => <<"A">>,
+                <<"inner">> =>
+                    hb_message:commit(
+                        #{
+                            <<"nested">> => <<"B">>
+                        },
+                        Opts
+                    )
+            },
+            Opts
+        ),
+    Converted =
+        hb_message:convert(
+            Msg,
+            #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
+            Opts
+        ),
+    Body = hb_maps:get(<<"body">>, Converted),
+    ?event(debug_test,
+        {
+            message,
+            {headers, {explicit, maps:without([<<"body">>], Converted)}},
+            {body, {string, Body}}
+        }
+    ),
+    % Ensure that the encoded binary has no `+link` elements.
+    ?assertEqual(nomatch, binary:match(Body, <<"+link">>, [])).
