@@ -285,9 +285,8 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
             ?event(debug_accept, {request_message, {message, Message}}),
             {ok, FilteredMessage} =
                 case hb_message:signers(Message, Opts) of
-                    [] -> Message;
-                    _ ->
-                        hb_message:with_only_committed(Message, Opts)
+                    [] -> {ok, Message};
+                    _ -> hb_message:with_only_committed(Message, Opts)
                 end,
             ReqBase#{
                 headers =>
@@ -504,13 +503,12 @@ reply(Req, TABMReq, Status, RawMessage, Opts) ->
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
     EncodedHeaders = hb_private:reset(HeadersWithCors),
-    ?event(http,
+    ?event(http_encoded,
         {http_replying,
             {status, {explicit, Status}},
-            {path, hb_maps:get(<<"path">>, Req, undefined_path, Opts)},
-            {raw_message, RawMessage},
-            {enc_headers, {explicit, EncodedHeaders}},
-            {enc_body, EncodedBody}
+            {message, RawMessage},
+            {headers, {explicit, EncodedHeaders}},
+            {body, EncodedBody}
         }
     ),
     % Cowboy handles cookies in headers separately, so we need to manipulate
@@ -751,6 +749,13 @@ codec_to_content_type(Codec, Opts) ->
 
 %% @doc Convert a cowboy request to a normalized message.
 req_to_tabm_singleton(Req, Body, Opts) ->
+    ?event(http_encoded,
+        {
+            http_request_pre_parsing,
+            {req, {explicit, Req}},
+            {body, {string, Body}}
+        }
+    ),
     case cowboy_req:header(<<"codec-device">>, Req, <<"httpsig@1.0">>) of
         <<"httpsig@1.0">> ->
 			?event({req_to_tabm_singleton, {request, {explicit, Req}, {body, {string, Body}}}}),
