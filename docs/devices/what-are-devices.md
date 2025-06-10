@@ -15,7 +15,7 @@ Below is a list of documented built-in devices. Each page details the device's p
 *   [`~wasm64@1.0`](./wasm64-at-1-0.md): WebAssembly (WASM) execution engine.
 *   [`~lua@5.3a`](./lua-at-5-3a.md): Lua script execution engine.
 *   [`~relay@1.0`](./relay-at-1-0.md): Relaying messages to other nodes or HTTP endpoints.
-*   [`~json@1.0`](./json-at-1-0.md): Provides access to JSON data structures using HyperPATHs.
+*   [`~json@1.0`](./json-at-1-0.md): Provides access to JSON data structures.
 
 There can exist many more devices, but these are a few of the ones that are built into HyperBEAM.
 

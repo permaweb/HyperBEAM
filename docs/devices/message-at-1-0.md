@@ -2,7 +2,7 @@
 
 ## Overview
 
-The [`~message@1.0`](../resources/source-code/dev_message.md) device is a fundamental built-in device in HyperBEAM. It serves as the identity device for standard AO-Core messages, which are represented as Erlang maps internally. Its primary function is to allow manipulation and inspection of these message maps directly via HyperPATH requests, without needing a persistent process state.
+The [`~message@1.0`](../resources/source-code/dev_message.md) device is a fundamental built-in device in HyperBEAM. It serves as the identity device for standard AO-Core messages, which are represented as Erlang maps internally. Its primary function is to allow manipulation and inspection of these message maps directly via HTTP requests, without needing a persistent process state.
 
 This device is particularly useful for:
 
@@ -13,7 +13,7 @@ This device is particularly useful for:
 
 ## Core Functionality
 
-The `message@1.0` device treats the message itself as the state it operates on. Key operations are accessed via path segments in the HyperPATH.
+The `message@1.0` device treats the message itself as the state it operates on. Key operations are accessed via path segments in the HTTP path.
 
 ### Key Access (`/key`)
 
@@ -53,7 +53,7 @@ The `message@1.0` device reserves several keys for specific operations:
 
 Keys prefixed with `priv` (e.g., `priv_key`, `private.data`) are considered private and cannot be accessed or listed via standard `get` or `keys` operations.
 
-## HyperPATH Example
+## HTTP Example
 
 This example demonstrates creating a transient message and retrieving a value:
 

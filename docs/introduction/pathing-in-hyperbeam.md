@@ -1,14 +1,10 @@
-# HyperPATHs in HyperBEAM
+# Paths in HyperBEAM
 
 ## Overview
 
 Understanding how to construct and interpret paths in AO-Core is fundamental to working with HyperBEAM. This guide explains the structure and components of AO-Core paths, enabling you to effectively interact with processes and access their data.
 
-## What is a HyperPATH?
-
-At the end of the day, HyperBEAM is accessible via simple URLs. The term "HyperPATH" is used because users will be referring to HyperBEAM URLs in ways they never would have any other URL in the past. A HyperPATH is a simple way of describing the path used to call a sequence of devices to transform a message to achieve a new result.
-
-## HyperPATH Structure
+## HyperBEAM Path Structure
 
 Let's examine a typical HyperBEAM endpoint piece-by-piece:
 
@@ -64,7 +60,7 @@ This powerful feature enables the expression of complex data structures directly
 
 ## Examples
 
-The following examples illustrate using HyperPATH with various AO-Core processes and devices. While these cover a few specific use cases, HyperBEAM's extensible nature allows interaction with any device or process via HyperPATH. For a deeper understanding, we encourage exploring the [source code](https://github.com/permaweb/hyperbeam) and experimenting with different paths.
+The following examples illustrate using HTTP paths with various AO-Core processes and devices. While these cover a few specific use cases, HyperBEAM's extensible nature allows interaction with any device or process via HTTP paths. For a deeper understanding, we encourage exploring the [source code](https://github.com/permaweb/hyperbeam) and experimenting with different paths.
 
 ### Example 1: Accessing Full Process State
 

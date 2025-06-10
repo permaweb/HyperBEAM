@@ -20,7 +20,7 @@ This device acts as an HTTP client within the AO ecosystem. It allows a node or 
         *   `requires-sign`: (Optional, boolean) If true, the request message (`target`) will be signed using the node's key before sending. Defaults to `false`.
         *   `http-client`: (Optional) Specify a custom HTTP client module to use (defaults to node's configured `relay_http_client`).
     *   **Response:** `{ok, <ResponseMessage>}` where `<ResponseMessage>` is the full message received from the remote peer, or `{error, Reason}`.
-    *   **Example HyperPATH:**
+    *   **Example:**
         ```
         GET /~relay@1.0/call?method=GET&path=https://example.com
         ```

@@ -13,7 +13,7 @@ nav:
       - What is HyperBEAM?: 'introduction/what-is-hyperbeam.md'
       - What is AO-Core?: 'introduction/what-is-ao-core.md'
       - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
-      - HyperPATHs: 'introduction/hyperpaths-in-hyperbeam.md'
+      - Pathing in HyperBEAM: 'introduction/pathing-in-hyperbeam.md'
   - Run a Node:
       - Running a HyperBEAM Node: 'run/running-a-hyperbeam-node.md'
       - Configuring Your Machine: 'run/configuring-your-machine.md'

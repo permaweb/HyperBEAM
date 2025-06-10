@@ -151,7 +151,7 @@ This command:
 
 1.  Starts the Erlang Virtual Machine (BEAM) with all HyperBEAM modules loaded.
 2.  Initializes the node with default settings (from `hb_opts.erl`).
-3.  Starts the default HTTP server (typically on **port 10000**), making the node accessible via HyperPATHs.
+3.  Starts the default HTTP server (typically on **port 8734**), making the node accessible.
 4.  Drops you into an interactive Erlang shell where you can interact with the running node.
 
 This basic setup is suitable for local development and exploring HyperBEAM's functionalities.

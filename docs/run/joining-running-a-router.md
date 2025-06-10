@@ -9,7 +9,7 @@ Router nodes play a crucial role in the HyperBEAM network by directing incoming 
 
 In HyperBEAM, the `dev_router` module (and associated logic) implements routing functionality. A node configured as a router typically:
 
-1.  Receives external HTTP requests (HyperPATH calls).
+1.  Receives external HTTP requests.
 2.  Parses the request path to determine the target process, device, and desired operation.
 3.  Consults its routing table or logic to select an appropriate downstream worker node (which might be itself or another node).
 4.  Forwards the request to the selected worker.
@@ -19,7 +19,7 @@ In HyperBEAM, the `dev_router` module (and associated logic) implements routing 
 Routers often maintain information about the capabilities and load of worker nodes they know about.
 
 !!! note "Using Routers as a Client"
-    To use a router as a client, simply make HyperPATH requests to the router's URL: `https://dev-router.forward.computer/<process_id>~<device>/<key>...`. The router will automatically route your request to an appropriate worker node.
+    To use a router as a client, simply make HTTP requests to the router's URL: `https://dev-router.forward.computer/<process_id>~<device>/<key>...`. The router will automatically route your request to an appropriate worker node.
 
 ## Node Registration Process
 *Coming soon...*

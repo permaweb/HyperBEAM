@@ -14,13 +14,13 @@ The process of migration involves updating your process to take advantage of the
 
 ## Exposing Process State with the Patch Device
 
-The [`~patch@1.0`](../resources/source-code/dev_patch.md) device provides a mechanism for AO processes to expose parts of their internal state, making it readable via direct HTTP GET requests along the process's HyperPATH.
+The [`~patch@1.0`](../resources/source-code/dev_patch.md) device provides a mechanism for AO processes to expose parts of their internal state, making it readable via direct HTTP GET requests.
 
 ### Why Use the Patch Device?
 
 Standard AO process execution typically involves sending a message to a process, letting it compute, and then potentially reading results from its outbox or state after the computation is scheduled and finished. This is asynchronous.
 
-The `patch` device allows for a more direct, synchronous-like read pattern. A process can use it to "patch" specific data elements from its internal state into a location that becomes directly accessible via a HyperPATH GET request *before* the full asynchronous scheduling might complete.
+The `patch` device allows for a more direct, synchronous-like read pattern. A process can use it to "patch" specific data elements from its internal state into a location that becomes directly accessible via an HTTP GET request *before* the full asynchronous scheduling might complete.
 
 This is particularly useful for:
 
@@ -33,7 +33,7 @@ This is particularly useful for:
 1.  **Process Logic:** Inside your AO process code (e.g., in Lua or WASM), when you want to expose data, you construct an *outbound message* targeted at the [`~patch@1.0`](../resources/source-code/dev_patch.md) device.
 2.  **Patch Message Format:** This outbound message typically includes tags that specify:
     *   `device = 'patch@1.0'`
-    *   A `cache` tag containing a table. The **keys** within this table become the final segments in the HyperPATH used to access the data, and the **values** are the data itself.
+    *   A `cache` tag containing a table. The **keys** within this table become the final segments in the HTTP path used to access the data, and the **values** are the data itself.
     *   Example Lua using `aos`: `Send({ Target = ao.id, device = 'patch@1.0', cache = { mydatakey = MyValue } })`
 3.  **HyperBEAM Execution:** When HyperBEAM executes the process schedule and encounters this outbound message:
     *   It invokes the `dev_patch` module.
@@ -109,14 +109,14 @@ When defining keys within the `cache` table (e.g., `cache = { mydatakey = MyValu
 
 Using reserved keywords as your cache keys can lead to routing conflicts or prevent you from accessing your patched data as expected. While the exact list can depend on device implementations, it's wise to avoid keys commonly associated with state access, such as: `now`, `compute`, `state`, `info`, `test`.
 
-It's recommended to use descriptive and specific keys for your cached data to prevent clashes with the underlying HyperPATH routing mechanisms. For example, instead of `cache = { state = ... }`, prefer `cache = { myappstate = ... }` or `cache = { usercount = ... }`.
+It's recommended to use descriptive and specific keys for your cached data to prevent clashes with path parameters used by HyperBEAM itself. For example, instead of `cache = { state = ... }`, prefer `cache = { myappstate = ... }` or `cache = { usercount = ... }`.
 
 !!! warning
-    Be aware that HTTP path resolution is case-insensitive and automatically normalizes paths to lowercase. While the `patch` device itself stores keys with case sensitivity (e.g., distinguishing `MyKey` from `mykey`), accessing them via an HTTP GET request will treat `/cache/MyKey` and `/cache/mykey` as the same path. This means that using keys that only differ in case (like `MyKey` and `mykey` in your `cache` table) will result in unpredictable behavior or data overwrites when accessed via HyperPATH. To prevent these issues, it is **strongly recommended** to use **consistently lowercase keys** within the `cache` table (e.g., `mykey`, `usercount`, `appstate`).
+    Be aware that HTTP path resolution is case-insensitive and automatically normalizes paths to lowercase. While the `patch` device itself stores keys with case sensitivity (e.g., distinguishing `MyKey` from `mykey`), accessing them via an HTTP GET request will treat `/cache/MyKey` and `/cache/mykey` as the same path. This means that using keys that only differ in case (like `MyKey` and `mykey` in your `cache` table) will result in unpredictable behavior or data overwrites when accessed via HTTP. To prevent these issues, it is **strongly recommended** to use **consistently lowercase keys** within the `cache` table (e.g., `mykey`, `usercount`, `appstate`).
 
 ## Key Points
 
-*   **Path Structure:** The data is exposed under the `/cache/` path segment. The tag name you use *inside* the `cache` table in the `Send` call (e.g., `currentstatus`) becomes the final segment in the accessible HyperPATH (e.g., `/compute/cache/currentstatus`).
+*   **Path Structure:** The data is exposed under the `/cache/` path segment. The tag name you use *inside* the `cache` table in the `Send` call (e.g., `currentstatus`) becomes the final segment in the HTTP path (e.g., `/compute/cache/currentstatus`).
 *   **Data Types:** The `patch` device typically handles basic data types (strings, numbers) within the `cache` table effectively. Complex nested tables might require specific encoding or handling.
 *   **`compute` vs `now`:** Accessing patched data via `/compute/cache/...` typically serves the last known patched value quickly. Accessing via `/now/cache/...` might involve more computation to ensure the absolute latest state before checking for the patched key under `/cache/`.
 *   **Not a Replacement for State:** Patching is primarily for *exposing* reads. It doesn't replace the core state management within your process handler logic.

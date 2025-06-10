@@ -16,7 +16,7 @@ The `~process@1.0` device acts as a router, intercepting requests and delegating
 
 ## Key Functions (Keys)
 
-These keys are accessed via HyperPATHs relative to the Process Definition Message ID (`<ProcessID>`).
+These keys are accessed via an HTTP path relative to the Process Definition Message ID (`<ProcessID>`).
 
 *   **`GET /<ProcessID>~process@1.0/schedule`**
     *   **Action:** Delegates to the configured Scheduler Device (via the process's `schedule/3` function) to retrieve the current schedule or state.

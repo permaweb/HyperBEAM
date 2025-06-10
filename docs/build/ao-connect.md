@@ -41,7 +41,7 @@ const { request } = connect({
 ```
 
 ## Step 3: Pushing a Message to a Process
-Use the `request` function to send a message to the process. In `aoconnect`, this is done by using the `push` hyperpath.
+Use the `request` function to send a message to the process. In `aoconnect`, this is done by using the `push` path parameter.
 
 ```javascript
 const processResult = await request({

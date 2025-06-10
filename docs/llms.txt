@@ -1,4 +1,4 @@
-Generated: 2025-06-07T07:23:54Z
+Generated: 2025-06-10T16:34:01Z
 
 ## HyperBEAM Documentation Summary
 
@@ -10,7 +10,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 ### introduction
 
 * [AO Devices](./introduction/hyperbeam-devices.html)
-* [HyperPATHs in HyperBEAM](./introduction/hyperpaths-in-hyperbeam.html)
+* [Paths in HyperBEAM](./introduction/pathing-in-hyperbeam.html)
 * [What is AO-Core?](./introduction/what-is-ao-core.html)
 * [What is HyperBEAM?](./introduction/what-is-hyperbeam.html)
 
@@ -48,6 +48,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [Frequently Asked Questions](./resources/reference/faq.html)
 * [Glossary](./resources/reference/glossary.html)
 * [Troubleshooting Guide](./resources/reference/troubleshooting.html)
+* [The hb application #](./resources/source-code/README.html)
 * [[Module ar_bundles.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_bundles.erl)](./resources/source-code/ar_bundles.html)
 * [[Module ar_deep_hash.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_deep_hash.erl)](./resources/source-code/ar_deep_hash.html)
 * [[Module ar_rate_limiter.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_rate_limiter.erl)](./resources/source-code/ar_rate_limiter.html)
@@ -161,5 +162,4 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module hb_util.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_util.erl)](./resources/source-code/hb_util.html)
 * [[Module hb_volume.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_volume.erl)](./resources/source-code/hb_volume.html)
 * [Source Code Documentation](./resources/source-code/index.html)
-* [The hb application #](./resources/source-code/README.html)
 * [[Module rsa_pss.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/rsa_pss.erl)](./resources/source-code/rsa_pss.html)
