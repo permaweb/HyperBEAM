@@ -21,6 +21,7 @@
 
 %%% The list of keys that should be forced into the tag list, rather than being
 %%% encoded as fields in the TX record.
+%%% If these are specified in the message they are ignored but preserved.
 -define(FORCED_TAG_FIELDS,
     [
         <<"quantity">>,
@@ -334,76 +335,22 @@ tx_to_tabm2(RawTX, TXKeys, CommittedTags, Req, Opts) ->
     ?event({message_after_commitments, WithCommitments}),
     hb_maps:without(?FILTERED_TAGS, WithCommitments, Opts).
       
-tabm_to_tx(RawTABM, Req, Opts) ->
-    % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
-    NormTABM = hb_message:filter_default_keys(RawTABM),
-    ?event({to, {inbound, NormTABM}, {req, Req}}),
-    MaybeBundle =
-        case hb_util:atom(hb_ao:get(<<"bundle">>, Req, false, Opts)) of
-            false -> NormTABM;
-            true ->
-                % Convert back to the fully loaded structured@1.0 message, then
-                % convert to TABM with bundling enabled.
-                Structured = hb_message:convert(NormTABM, <<"structured@1.0">>, Opts),
-                Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
-                % Convert to TABM with bundling enabled.
-                LoadedTABM =
-                    hb_message:convert(
-                        Loaded,
-                        tabm,
-                        #{
-                            <<"device">> => <<"structured@1.0">>,
-                            <<"bundle">> => true
-                        },
-                        Opts
-                    ),
-                % Ensure the commitments from the original message are the only
-                % ones in the fully loaded message.
-                LoadedComms = maps:get(<<"commitments">>, NormTABM, #{}),
-                LoadedTABM#{ <<"commitments">> => LoadedComms }
-        end,
-    ?event({to, {maybe_bundle, MaybeBundle}}),
-    TABM =
-        hb_ao:normalize_keys(
-            hb_maps:without([<<"commitments">>], MaybeBundle, Opts),
-            Opts
-        ),
-    Commitments = hb_maps:get(<<"commitments">>, MaybeBundle, #{}, Opts),
-    TABMWithComm =
-        case hb_maps:keys(Commitments, Opts) of
-            [] -> TABM;
-            [ID] ->
-                Commitment = hb_maps:get(ID, Commitments),
-                TABMWithoutCommitmentKeys =
-                    TABM#{
-                        <<"signature">> =>
-                            hb_util:decode(
-                                maps:get(<<"signature">>, Commitment,
-                                    hb_util:encode(?DEFAULT_SIG)
-                                )
-                            ),
-                        <<"owner">> =>
-                            hb_util:decode(
-                                maps:get(<<"keyid">>, Commitment,
-                                    hb_util:encode(?DEFAULT_OWNER)
-                                )
-                            )
-                    },
-                WithOrigKeys =
-                    case maps:get(<<"original-tags">>, Commitment, undefined) of
-                        undefined -> TABMWithoutCommitmentKeys;
-                        OrigKeys ->
-                            TABMWithoutCommitmentKeys#{
-                                <<"original-tags">> => OrigKeys
-                            }
-                    end,
-                ?event({flattened_tabm, WithOrigKeys}),
-                WithOrigKeys;
-            _ -> throw({multisignatures_not_supported_by_ans104, NormTABM})
-        end,
-    OriginalTagMap = hb_maps:get(<<"original-tags">>, TABMWithComm, #{}, Opts),
+tabm_to_tx(TABM0, Req, Opts) ->
+    ?event({to, {inbound, TABM0}, {req, Req}}),
+
+    TABM1 = maybe_bundle(TABM0, Req, Opts),
+    ?event({to, {maybe_bundle, TABM1}}),
+
+    TABM2 = flatten_commitments(TABM1, Opts),
+    ?event({to, {flatten_commitments, TABM2}}),
+    
+    % Extract the original tags. They will be re-added later as top-level keys.
+    % Since they came from the `commitments` field, we assume all of the original tags
+    % are already valid tag values (e.g. binaries less than ?MAX_TAG_VAL bytes).
+    OriginalTagMap = hb_maps:get(<<"original-tags">>, TABM2, #{}, Opts),
     OriginalTags = tag_map_to_encoded_tags(OriginalTagMap),
-    TABMNoOrigTags = hb_maps:without([<<"original-tags">>], TABMWithComm, Opts),
+    TABM3 = hb_maps:without([<<"original-tags">>], TABM2, Opts),
+    
     % Translate the keys into a binary map. If a key has a value that is a map,
     % we recursively turn its children into messages. Notably, we do not simply
     % call message_to_tx/1 on the inner map because that would lead to adding
@@ -413,7 +360,7 @@ tabm_to_tx(RawTABM, Req, Opts) ->
             fun(_Key, Msg) when is_map(Msg) -> hb_util:ok(dev_codec_ans104:to(Msg, Req, Opts));
             (_Key, Value) -> Value
             end,
-            TABMNoOrigTags,
+            TABM3,
             Opts
         ),
     NormalizedMsgKeyMap = hb_ao:normalize_keys(MsgKeyMap, Opts),
@@ -550,6 +497,73 @@ tabm_to_tx(RawTABM, Req, Opts) ->
         end,
     ?event({to_result, {explicit, TXWithIDs}}),
     TXWithIDs.
+
+maybe_bundle(TABM, Req, Opts) ->
+    % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
+    case hb_util:atom(hb_ao:get(<<"bundle">>, Req, false, Opts)) of
+        false -> TABM;
+        true ->
+            % Convert back to the fully loaded structured@1.0 message, then
+            % convert to TABM with bundling enabled.
+            Structured = hb_message:convert(TABM, <<"structured@1.0">>, Opts),
+            Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
+            % Convert to TABM with bundling enabled. This disables linkify_mode
+            LoadedTABM =
+                hb_message:convert(
+                    Loaded,
+                    tabm,
+                    #{
+                        <<"device">> => <<"structured@1.0">>,
+                        <<"bundle">> => true
+                    },
+                    Opts
+                ),
+            % Ensure the commitments from the original message are the only
+            % ones in the fully loaded message.
+            LoadedCommitments = maps:get(<<"commitments">>, TABM, #{}),
+            LoadedTABM#{ <<"commitments">> => LoadedCommitments }
+    end.
+
+flatten_commitments(TABM, Opts) ->
+    TABMWithoutCommitments = hb_ao:normalize_keys(
+        hb_maps:without([<<"commitments">>], TABM, Opts),
+        Opts
+    ),
+    Commitments = hb_maps:get(<<"commitments">>, TABM, #{}, Opts),
+    case hb_maps:keys(Commitments, Opts) of
+        [] ->
+            TABMWithoutCommitments;
+        [ID] ->
+            Commitment = hb_maps:get(ID, Commitments),
+            % Flatten the commitment into the 'signature' and 'owner' keys.
+            FlattenedTABM0 =
+                TABMWithoutCommitments#{
+                    <<"signature">> =>
+                        hb_util:decode(
+                            maps:get(<<"signature">>, Commitment,
+                                hb_util:encode(?DEFAULT_SIG)
+                            )
+                        ),
+                    <<"owner">> =>
+                        hb_util:decode(
+                            maps:get(<<"keyid">>, Commitment,
+                                hb_util:encode(?DEFAULT_OWNER)
+                            )
+                        )
+                },
+            % Flatten the original tags into the 'original-tags' key.
+            FlattenedTABM1 =
+                case maps:get(<<"original-tags">>, Commitment, undefined) of
+                    undefined -> FlattenedTABM0;
+                    OrigKeys ->
+                        FlattenedTABM0#{
+                            <<"original-tags">> => OrigKeys
+                        }
+                end,
+            ?event({flattened_tabm, FlattenedTABM1}),
+            FlattenedTABM1;
+        _ -> throw({multisignatures_not_supported_by_ans104, TABM})
+    end.
 
 binary_to_tx(Binary) ->
     % ans104 and Arweave cannot serialize just a simple binary or get an ID for it, so
