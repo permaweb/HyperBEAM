@@ -792,6 +792,7 @@ encode_http_msg(Msg, Opts) ->
     % Convert the message to a HTTP-Sig encoded output.
     Httpsig = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts),
     % Serialize the headers, to be included in the part of the multipart response
+    % The `content-disposition` field must always be the first.
     HeaderList =
         lists:foldl(
             fun ({HeaderName, RawHeaderVal}, Acc) ->
@@ -800,7 +801,18 @@ encode_http_msg(Msg, Opts) ->
                 [<<HeaderName/binary, ": ", HVal/binary>> | Acc]
             end,
             [],
-            hb_maps:to_list(hb_maps:without([<<"body">>, <<"priv">>], Httpsig, Opts), Opts)
+            case hb_maps:get(<<"content-disposition">>, Httpsig, undefined, Opts) of
+                undefined -> [];
+                CD -> [{<<"content-disposition">>, CD}]
+            end ++ 
+            hb_maps:to_list(
+                hb_maps:without(
+                    [<<"body">>, <<"content-disposition">>, <<"priv">>],
+                    Httpsig,
+                    Opts
+                ),
+                Opts
+            )
         ),
     EncodedHeaders = iolist_to_binary(lists:join(?CRLF, lists:reverse(HeaderList))),
     case hb_maps:get(<<"body">>, Httpsig, <<>>, Opts) of
