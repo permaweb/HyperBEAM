@@ -19,11 +19,11 @@ In HyperBEAM, the `dev_router` module (and associated logic) implements routing 
 Routers often maintain information about the capabilities and load of worker nodes they know about.
 
 !!! note "Using Routers as a Client"
-    To use a router as a client, simply make HyperPATH requests to the router's URL: `https://router-1.forward.computer/<process_id>~<device>/<key>...`. The router will automatically route your request to an appropriate worker node.
+    To use a router as a client, simply make HyperPATH requests to the router's URL: `https://dev-router.forward.computer/<process_id>~<device>/<key>...`. The router will automatically route your request to an appropriate worker node.
 
 ## Node Registration Process
-
-HyperBEAM nodes can register themselves with router networks to offer computational services. The registration process involves configuring route parameters and submitting signed registration requests to router nodes.
+*Coming soon...*
+<!-- HyperBEAM nodes can register themselves with router networks to offer computational services. The registration process involves configuring route parameters and submitting signed registration requests to router nodes.
 
 ### Registration Configuration
 
@@ -31,7 +31,7 @@ Before registering with a router, your node needs to be configured with the foll
 
 ```erlang
 % Core registration parameters
-{router_node, "https://router-1.forward.computer"},  % Target router endpoint
+{router_node, "https://dev-router.forward.computer"},  % Target router endpoint
 {router_prefix, "/my-process-id~"},                 % Route prefix to register
 {router_price, 100},                                % Price for computation (units)
 {router_template, "/my-process-id~process@1.0/.*"}, % Route template pattern
@@ -72,7 +72,7 @@ ao.send({
 Nodes can also register directly via HTTP POST to the router's schedule endpoint:
 
 ```bash
-curl -X POST https://router-1.forward.computer/router~node-process@1.0/schedule \
+curl -X POST https://dev-router.forward.computer/router~node-process@1.0/schedule \
   -H "Content-Type: application/json" \
   -d '{
     "subject": "self",
@@ -92,7 +92,7 @@ Using the HyperBEAM device system:
 ```erlang
 % Call the router device's register function
 hb_ao:call(RouterProcessID, <<"register">>, #{
-    <<"router_node">> => <<"https://router-1.forward.computer">>,
+    <<"router_node">> => <<"https://dev-router.forward.computer">>,
     <<"router_prefix">> => <<"/my-process-id~">>,
     <<"router_template">> => <<"/my-process-id~process@1.0/.*">>,
     <<"router_price">> => 100
@@ -179,7 +179,7 @@ Create or update your node configuration file:
 % config/sys.config or similar
 [
     {hyperbeam, [
-        {router_node, "https://router-1.forward.computer"},
+        {router_node, "https://dev-router.forward.computer"},
         {router_prefix, "/my-unique-prefix~"},
         {router_template, "/my-unique-prefix~process@1.0/.*"},
         {router_price, 100},
@@ -195,7 +195,7 @@ Create or update your node configuration file:
 DEBUG=HB_PRINT rebar3 shell --config config/sys.config
 
 # Or use environment variables
-ROUTER_NODE="https://router-1.forward.computer" \
+ROUTER_NODE="https://dev-router.forward.computer" \
 ROUTER_PREFIX="/my-prefix~" \
 ROUTER_TEMPLATE="/my-prefix~process@1.0/.*" \
 ROUTER_PRICE=100 \
@@ -245,11 +245,11 @@ Once successfully joined, your node will:
 - Return results to clients via the router
 - Participate in the distributed AO network
 
-### Example: Joining router-1.forward.computer
+### Example: Joining dev-router.forward.computer
 
 ```erlang
 % Configure your node to join the public router
-{router_node, "https://router-1.forward.computer"},
+{router_node, "https://dev-router.forward.computer"},
 {router_prefix, "/my-unique-node-id~"},
 {router_template, "/my-unique-node-id~process@1.0/.*"},
 {router_price, 50}  % Competitive pricing for services
@@ -304,4 +304,4 @@ Common registration issues and solutions:
 *   Examine the `dev_router.erl` source code for detailed implementation.
 *   Review the `scripts/dynamic-router.lua` for router-side logic.
 *   Review the available configuration options in `hb_opts.erl` related to routing (`routes`, strategies, etc.).
-*   Consult community channels for best practices on deploying production routers.
+*   Consult community channels for best practices on deploying production routers. -->

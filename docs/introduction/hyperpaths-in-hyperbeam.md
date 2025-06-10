@@ -4,17 +4,21 @@
 
 Understanding how to construct and interpret paths in AO-Core is fundamental to working with HyperBEAM. This guide explains the structure and components of AO-Core paths, enabling you to effectively interact with processes and access their data.
 
+## What is a HyperPATH?
+
+At the end of the day, HyperBEAM is accessible via simple URLs. The term "HyperPATH" is used because users will be referring to HyperBEAM URLs in ways they never would have any other URL in the past. A HyperPATH is a simple way of describing the path used to call a sequence of devices to transform a message to achieve a new result.
+
 ## HyperPATH Structure
 
 Let's examine a typical HyperBEAM endpoint piece-by-piece:
 
 ```bash
-https://router-1.forward.computer/<procId>~process@1.0/now
+https://dev-router.forward.computer/<procId>~process@1.0/now
 ```
 
-### Node URL (`router-1.forward.computer`)
+### Node URL (`dev-router.forward.computer`)
 
-The HTTP response from this node includes a signature from the host's key. By accessing the [`~snp@1.0`](../resources/source-code/dev_snp.md) device, you can verify that the node is running in a genuine Trusted Execution Environment (TEE), ensuring computation integrity. You can replace `router-1.forward.computer` with any HyperBEAM TEE node operated by any party while maintaining trustless guarantees.
+The HTTP response from this node includes a signature from the host's key. By accessing the [`~snp@1.0`](../resources/source-code/dev_snp.md) device, you can verify that the node is running in a genuine Trusted Execution Environment (TEE), ensuring computation integrity. You can replace `dev-router.forward.computer` with any HyperBEAM TEE node operated by any party while maintaining trustless guarantees.
 
 ### Process Path (`/<procId>~process@1.0`)
 

@@ -43,7 +43,7 @@ While you don't need to run a HyperBEAM node yourself, you do need to connect to
 To start `aos`, simply run the command in your terminal:
 
 ```bash
-aos --mainnet "https://router-1.forward.computer" myMainnetProcess
+aos --mainnet "https://dev-router.forward.computer" myMainnetProcess
 ```
 
 This connects you to an interactive Lua environment running within a **process** on the AO network. This process acts as your command-line interface (CLI) to the AO network, allowing you to interact with other processes, manage your wallet, and develop new AO processes. When you specify `--mainnet <URL>`, it connects to the `genesis_wasm` device running on the HyperBEAM node at the supplied URL.

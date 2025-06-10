@@ -66,6 +66,16 @@ Together, these components form a complete execution environment for AO processe
 
 ## Development and Usage
 
+### What is the difference between a HyperPATH and a Hashpath?
+
+While the terms are sometimes used interchangeably in the community, they refer to two distinct concepts. In short: developers use **HyperPATHs** to issue commands, while HyperBEAM uses **Hashpaths** internally as a cryptographic reference.
+
+-   **HyperPATH: The User Command**
+    A HyperPATH is the portion of a URL that tells HyperBEAM what to *do*. Think of it as a command or a recipe. When you construct a path like `/<ProcessID>~process@1.0/now`, you are creating a HyperPATH to instruct the network to execute a sequence of operations. As a developer, the HyperPATH is the primary way you will interact with AO processes.
+
+-   **Hashpath: The Internal Fingerprint**
+    A Hashpath is an internal, under-the-hood mechanism. It's a unique, 43-character cryptographic identifier that acts as a permanent "fingerprint" for a specific message or a point in a process's state. Nodes use these compact Hashpaths to communicate with each other efficiently without sending bulky data. For most development, you do not need to interact with Hashpaths directly.
+    
 ### What programming languages can I use with HyperBEAM?
 
 You can use any programming language that compiles to WebAssembly (WASM) for creating modules that run on the Compute Unit. This includes languages like:
