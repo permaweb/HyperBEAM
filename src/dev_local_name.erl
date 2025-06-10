@@ -35,7 +35,7 @@ default_lookup(Key, _, Req, Opts) ->
 %% @doc Takes a `key' and `value' argument and registers the name. The caller
 %% must be the node operator in order to register a name.
 register(_, Req, Opts) ->
-    case dev_meta:is_operator(Req, Opts) of
+    case dev_meta:is(admin, Req, Opts) of
         false ->
             {error,
                 #{

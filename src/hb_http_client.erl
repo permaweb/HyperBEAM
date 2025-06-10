@@ -64,8 +64,10 @@ httpc_req(Args, _, Opts) ->
         end,
     ?event(http, {httpc_req, Method, URL, Request}),
     HTTPCOpts = [{full_result, true}, {body_format, binary}],
+	StartTime = os:system_time(millisecond),
     case httpc:request(Method, Request, [], HTTPCOpts) of
         {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
+	        EndTime = os:system_time(millisecond),
             RespHeaders =
                 [
                     {list_to_binary(Key), list_to_binary(Value)}
@@ -73,6 +75,14 @@ httpc_req(Args, _, Opts) ->
                     {Key, Value} <- RawRespHeaders
                 ],
             ?event(http, {httpc_resp, Status, RespHeaders, RespBody}),
+            record_duration(#{
+                    <<"request-method">> => method_to_bin(Method),
+                    <<"request-path">> => hb_util:bin(Path),
+                    <<"status-class">> => get_status_class(Status),
+                    <<"duration">> => EndTime - StartTime
+                },
+                Opts
+            ),
             {ok, Status, RespHeaders, RespBody};
         {error, Reason} ->
             ?event(http, {httpc_error, Reason}),
@@ -80,7 +90,7 @@ httpc_req(Args, _, Opts) ->
     end.
 
 gun_req(Args, ReestablishedConnection, Opts) ->
-	StartTime = erlang:monotonic_time(),
+	StartTime = os:system_time(millisecond),
 	#{ peer := Peer, path := Path, method := Method } = Args,
 	Response =
         case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
@@ -103,23 +113,96 @@ gun_req(Args, ReestablishedConnection, Opts) ->
             Error ->
                 Error
 	    end,
-	EndTime = erlang:monotonic_time(),
+	EndTime = os:system_time(millisecond),
 	%% Only log the metric for the top-level call to req/2 - not the recursive call
 	%% that happens when the connection is reestablished.
 	case ReestablishedConnection of
 		true ->
 			ok;
 		false ->
-            case application:get_application(prometheus) of
-                undefined -> ok;
-                _ -> prometheus_histogram:observe(http_request_duration_seconds, [
-                        method_to_list(Method),
-                        Path,
-                        get_status_class(Response)
-                    ], EndTime - StartTime)
-            end
+            record_duration(#{
+                    <<"request-method">> => method_to_bin(Method),
+                    <<"request-path">> => hb_util:bin(Path),
+                    <<"status-class">> => get_status_class(Response),
+                    <<"duration">> => EndTime - StartTime
+                },
+                Opts
+            )
 	end,
 	Response.
+
+%% @doc Record the duration of the request in an async process. We write the 
+%% data to prometheus if the application is enabled, as well as invoking the
+%% `http_monitor' if appropriate.
+record_duration(Details, Opts) ->
+    spawn(
+        fun() ->
+            % First, write to prometheus if it is enabled. Prometheus works
+            % only with strings as lists, so we encode the data before granting
+            % it.
+            GetFormat = fun(Key) -> hb_util:list(maps:get(Key, Details)) end,
+            case application:get_application(prometheus) of
+                undefined -> ok;
+                _ ->
+                    prometheus_histogram:observe(
+                        http_request_duration_seconds,
+                        lists:map(
+                            GetFormat,
+                            [
+                                <<"request-method">>,
+                                <<"request-path">>,
+                                <<"status-class">>
+                            ]
+                        ),
+                        maps:get(<<"duration">>, Details)
+                    )
+            end,
+            maybe_invoke_monitor(
+                Details#{ <<"path">> => <<"duration">> },
+                Opts
+            )
+        end
+    ).
+
+%% @doc Invoke the HTTP monitor message with AO-Core, if it is set in the 
+%% node message key. We invoke the given message with the `body' set to a signed
+%% version of the details. This allows node operators to configure their machine
+%% to record duration statistics into customized data stores, computations, or
+%% processes etc. Additionally, we include the `http_reference' value, if set in
+%% the given `opts'.
+%% 
+%% We use `hb_ao:get' rather than `hb_opts:get', as settings configured
+%% by the `~router@1.0' route `opts' key are unable to generate atoms.
+maybe_invoke_monitor(Details, Opts) ->
+    case hb_ao:get(<<"http_monitor">>, Opts, Opts) of
+        not_found -> ok;
+        Monitor ->
+            % We have a monitor message. Place the `details' into the body, set
+            % the `method' to "POST", add the `http_reference' (if applicable)
+            % and sign the request. We use the node message's wallet as the
+            % source of the key.
+            MaybeWithReference =
+                case hb_ao:get(<<"http_reference">>, Opts, Opts) of
+                    not_found -> Details;
+                    Ref -> Details#{ <<"reference">> => Ref }
+                end,
+            Req =
+                Monitor#{
+                    <<"body">> =>
+                        hb_message:commit(
+                            MaybeWithReference#{
+                                <<"method">> => <<"POST">>
+                            },
+                            Opts
+                        )
+                },
+            % Use the singleton parse to generate the message sequence to 
+            % execute.
+            ReqMsgs = hb_singleton:from(Req),
+            Res = hb_ao:resolve_many(ReqMsgs, Opts),
+            ?event(http_monitor, {resolved_monitor, Res})
+    end.
+
 %%% ==================================================================
 %%% gen_server callbacks.
 %%% ==================================================================
@@ -448,33 +531,33 @@ reply_error([PendingRequest | PendingRequests], Reason) ->
 record_response_status(Method, Path, Response) ->
 	inc_prometheus_counter(gun_requests_total,
         [
-            method_to_list(Method),
+            hb_util:list(method_to_bin(Method)),
 			Path,
-			get_status_class(Response)
+			hb_util:list(get_status_class(Response))
         ],
         1
     ).
 
-method_to_list(get) ->
-	"GET";
-method_to_list(post) ->
-	"POST";
-method_to_list(put) ->
-	"PUT";
-method_to_list(head) ->
-	"HEAD";
-method_to_list(delete) ->
-	"DELETE";
-method_to_list(connect) ->
-	"CONNECT";
-method_to_list(options) ->
-	"OPTIONS";
-method_to_list(trace) ->
-	"TRACE";
-method_to_list(patch) ->
-	"PATCH";
-method_to_list(_) ->
-	"unknown".
+method_to_bin(get) ->
+	<<"GET">>;
+method_to_bin(post) ->
+	<<"POST">>;
+method_to_bin(put) ->
+	<<"PUT">>;
+method_to_bin(head) ->
+	<<"HEAD">>;
+method_to_bin(delete) ->
+	<<"DELETE">>;
+method_to_bin(connect) ->
+	<<"CONNECT">>;
+method_to_bin(options) ->
+	<<"OPTIONS">>;
+method_to_bin(trace) ->
+	<<"TRACE">>;
+method_to_bin(patch) ->
+	<<"PATCH">>;
+method_to_bin(_) ->
+	<<"unknown">>.
 
 request(PID, Args, Opts) ->
 	Timer =
@@ -590,37 +673,37 @@ upload_metric(_) ->
 get_status_class({ok, {{Status, _}, _, _, _, _}}) ->
 	get_status_class(Status);
 get_status_class({error, connection_closed}) ->
-	"connection_closed";
+	<<"connection_closed">>;
 get_status_class({error, connect_timeout}) ->
-	"connect_timeout";
+	<<"connect_timeout">>;
 get_status_class({error, timeout}) ->
-	"timeout";
+	<<"timeout">>;
 get_status_class({error,{shutdown,timeout}}) ->
-	"shutdown_timeout";
+	<<"shutdown_timeout">>;
 get_status_class({error, econnrefused}) ->
-	"econnrefused";
+	<<"econnrefused">>;
 get_status_class({error, {shutdown,econnrefused}}) ->
-	"shutdown_econnrefused";
+	<<"shutdown_econnrefused">>;
 get_status_class({error, {shutdown,ehostunreach}}) ->
-	"shutdown_ehostunreach";
+	<<"shutdown_ehostunreach">>;
 get_status_class({error, {shutdown,normal}}) ->
-	"shutdown_normal";
+	<<"shutdown_normal">>;
 get_status_class({error, {closed,_}}) ->
-	"closed";
+	<<"closed">>;
 get_status_class({error, noproc}) ->
-	"noproc";
+	<<"noproc">>;
 get_status_class(208) ->
-	"already_processed";
+	<<"already_processed">>;
 get_status_class(Data) when is_integer(Data), Data > 0 ->
-	prometheus_http:status_class(Data);
+	hb_util:bin(prometheus_http:status_class(Data));
 get_status_class(Data) when is_binary(Data) ->
 	case catch binary_to_integer(Data) of
 		{_, _} ->
-			"unknown";
+			<<"unknown">>;
 		Status ->
 			get_status_class(Status)
 	end;
 get_status_class(Data) when is_atom(Data) ->
-	atom_to_list(Data);
+	atom_to_binary(Data);
 get_status_class(_) ->
-	"unknown".
+	<<"unknown">>.

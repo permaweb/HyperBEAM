@@ -16,7 +16,7 @@ log(Topic, X, Mod, undefined, Line, Opts) -> log(Topic, X, Mod, "", Line, Opts);
 log(Topic, X, Mod, Func, undefined, Opts) -> log(Topic, X, Mod, Func, "", Opts);
 log(Topic, X, ModAtom, Func, Line, Opts) when is_atom(ModAtom) ->
     % Increment by message adding Topic as label
-    increment(Topic, X, Opts),
+    try increment(Topic, X, Opts) catch _:_ -> ignore_error end,
     % Check if the module has the `hb_debug' attribute set to `print'.
     case lists:member({hb_debug, [print]}, ModAtom:module_info(attributes)) of
         true -> hb_util:debug_print(X, atom_to_list(ModAtom), Func, Line);
@@ -24,38 +24,43 @@ log(Topic, X, ModAtom, Func, Line, Opts) when is_atom(ModAtom) ->
             % Check if the module has the `hb_debug' attribute set to `no_print'.
             case lists:keyfind(hb_debug, 1, ModAtom:module_info(attributes)) of
                 {hb_debug, [no_print]} -> X;
-                _ -> log(Topic, X, atom_to_list(ModAtom), Func, Line, Opts)
+                _ -> log(Topic, X, hb_util:bin(ModAtom), Func, Line, Opts)
             end
     end;
-log(Topic, X, ModStr, Func, Line, Opts) ->
+log(Topic, X, Mod, Func, Line, Opts) ->
     % Check if the debug_print option has the topic in it if set.
-    case hb_opts:get(debug_print, false, Opts) of
-        ModList when is_list(ModList) ->
-            case lists:member(ModStr, ModList)
-                orelse lists:member(atom_to_list(Topic), ModList)
+    case Printable = hb_opts:get(debug_print, false, Opts) of
+        EventList when is_list(EventList) ->
+            case lists:member(Mod, EventList)
+                orelse lists:member(hb_util:bin(Topic), EventList)
             of
-                true -> hb_util:debug_print(X, ModStr, Func, Line);
+                true -> hb_util:debug_print(X, Mod, Func, Line);
                 false -> X
             end;
-        true -> hb_util:debug_print(X, ModStr, Func, Line);
+        true -> hb_util:debug_print(X, Mod, Func, Line);
         false -> X
     end,
-	handle_tracer(Topic, X, Opts).
+	handle_tracer(Topic, X, Opts),
+    % Return the logged value to the caller. This allows callers to insert 
+    % `?event(...)' macros into the flow of other executions, without having to
+    % break functional style.
+    X.
 
 handle_tracer(Topic, X, Opts) ->
 	AllowedTopics = [http, ao_core, ao_result],
 	case lists:member(Topic, AllowedTopics) of
 		true -> 
-			case maps:get(trace, Opts, undefined) of
+			case hb_opts:get(trace, undefined, Opts) of
 				undefined -> 
 					case tuple_to_list(X) of
 						[_ | Rest] -> 
 							try
 								Map = maps:from_list(Rest),
-								TopicOpts = maps:get(opts, Map, #{}),
-								case maps:get(trace, TopicOpts, undefined) of
+								TopicOpts = hb_opts:get(opts, #{}, Map),
+								case hb_opts:get(trace, undefined, TopicOpts) of
 									undefined ->  ok;
-									TracePID -> hb_tracer:record_step(TracePID, {Topic, X})
+									TracePID ->
+                                        hb_tracer:record_step(TracePID, {Topic, X})
 								end
 							catch
 								_:_ -> ok
@@ -140,4 +145,5 @@ parse_name(Name) when is_atom(Name) ->
 parse_name(Name) when is_binary(Name) ->
     Name;
 parse_name(Name) when is_list(Name) ->
-    iolist_to_binary(Name).
+    iolist_to_binary(Name);
+parse_name(_) -> no_event_name.

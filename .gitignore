@@ -19,6 +19,7 @@ logs
 *.iml
 rebar3.crashdump
 *~
+/venv
 
 *.json
 !.vscode/*
@@ -40,4 +41,7 @@ cache-*
 
 cu/
 mkdocs-site/
+mkdocs-site-id.txt
+mkdocs-site-manifest.csv
+!test/admissible-report-wallet.json
 deployment.sh

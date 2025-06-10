@@ -14,15 +14,23 @@ get_wallet() ->
     % TODO: We might want to use a different wallet per SU later.
     hb:wallet().
 
+%%% @doc Find a process associated with the processor ID in the local registry
+%%% If the process is not found, it will not create a new one 
 find(ProcID) -> find(ProcID, false).
+
+%%% @doc Find a process associated with the processor ID in the local registry
+%%% If the process is not found and `GenIfNotHosted' is true, it attemps to create a new one 
 find(ProcID, GenIfNotHosted) ->
     find(ProcID, GenIfNotHosted, #{ priv_wallet => hb:wallet() }).
+
+%%% @doc Same as `find/2' but with additional options passed when spawning a new process (if needed)
 find(ProcID, GenIfNotHosted, Opts) ->
     case hb_name:lookup({dev_scheduler, ProcID}) of
         undefined -> maybe_new_proc(ProcID, GenIfNotHosted, Opts);
         Pid -> Pid
     end.
 
+%%% @doc Return a list of all currently registered ProcID.
 get_processes() ->
     ?event({getting_processes, hb_name:all()}),
     [ ProcID || {{dev_scheduler, ProcID}, _} <- hb_name:all() ].

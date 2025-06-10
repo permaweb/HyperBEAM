@@ -235,3 +235,34 @@ resolve_on_gateway_test_() ->
             ),
         ?assertMatch(#{ <<"assignments">> := _ }, X)
     end}.
+
+%% @doc Test to verify store opts is being set for Data-Protocol ao
+store_opts_test() ->
+    Opts = #{
+        cache_control => <<"cache">>,
+        store =>
+            [
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"prefix">> => <<"cache-TEST">>
+                },
+                #{ <<"store-module">> => hb_store_gateway, 
+                        <<"store">> => false,
+                        <<"subindex">> => [
+                        #{
+                            <<"name">> => <<"Data-Protocol">>,
+                            <<"value">> => <<"ao">>
+                        }
+                    ]
+                }
+            ]
+        },
+    Node = hb_http_server:start_node(Opts),
+    {ok, Res} = 
+        hb_http:get(
+            Node,
+            <<"myb2p8_TSM0KSgBMoG-nu6TLuqWwPmdZM5V2QSUeNmM">>,
+            #{}
+        ),
+    ?event(debug_gateway, {res, Res}),
+    ?assertEqual(<<"Hello World">>,hb_ao:get(<<"data">>, Res)).

@@ -13,7 +13,9 @@
 %%% deterministic behavior impossible, the caller should fail the execution 
 %%% with a refusal to execute.
 -module(hb_opts).
--export([get/1, get/2, get/3, load/1, default_message/0, mimic_default_types/2]).
+-export([get/1, get/2, get/3, load/1, load_bin/1]).
+-export([default_message/0, mimic_default_types/2, validate_node_history/1, validate_node_history/3]).
+-export([check_required_opts/2]).
 -include("include/hb.hrl").
 
 %% @doc The default configuration options of the hyperbeam node.
@@ -85,6 +87,7 @@ default_message() ->
             #{<<"name">> => <<"stack@1.0">>, <<"module">> => dev_stack},
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
+            #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
 			% temporal hack, for the future should load it from config
@@ -121,7 +124,7 @@ default_message() ->
         mode => debug,
         % Every modification to `Opts' called directly by the node operator
         % should be recorded here.
-		node_history => [],
+        node_history => [],
         debug_stack_depth => 40,
         debug_print_map_line_threshold => 30,
         debug_print_binary_max => 60,
@@ -131,10 +134,10 @@ default_message() ->
         debug_print_trace => short, % `short' | `false'. Has performance impact.
         short_trace_len => 5,
         debug_metadata => true,
-        debug_ids => false,
+        debug_ids => true,
         debug_committers => false,
         debug_show_priv => false,
-		trusted => #{},
+        snp_trusted => [],
         routes => [
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
@@ -168,8 +171,28 @@ default_message() ->
         ],
         store =>
             [
-                #{ <<"store-module">> => hb_store_fs, <<"prefix">> => <<"cache-mainnet">> },
-                #{ <<"store-module">> => hb_store_gateway,
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"prefix">> => <<"cache-mainnet">>
+                },
+                #{
+                    <<"store-module">> => hb_store_gateway,
+                    <<"subindex">> => [
+                        #{
+                            <<"name">> => <<"Data-Protocol">>,
+                            <<"value">> => <<"ao">>
+                        }
+                    ],
+                    <<"store">> => 
+                     [
+                        #{
+                            <<"store-module">> => hb_store_fs,
+                            <<"prefix">> => <<"cache-mainnet">>
+                         }
+                     ]
+                },
+                #{
+                    <<"store-module">> => hb_store_gateway,
                     <<"store">> =>
                         [
                             #{
@@ -248,9 +271,9 @@ get(Key, Default, Opts) ->
     ?MODULE:get(Key, Default, Opts#{ prefer => local }).
 
 -ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, "error").
+-define(DEFAULT_PRINT_OPTS, "error,http_error").
 -else.
--define(DEFAULT_PRINT_OPTS, "error,http_short,compute_short,push_short").
+-define(DEFAULT_PRINT_OPTS, "error,http_error,http_short,compute_short,push_short").
 -endif.
 
 -define(ENV_KEYS,
@@ -264,10 +287,13 @@ get(Key, Default, Opts) ->
                 fun
                     (Str) when Str == "1" -> true;
                     (Str) when Str == "true" -> true;
-                    (Str) -> string:tokens(Str, ",")
+                    (Str) ->
+                        lists:map(fun hb_util:bin/1, string:tokens(Str, ","))
                 end,
                 ?DEFAULT_PRINT_OPTS
-            }
+            },
+        lua_scripts => {"LUA_SCRIPTS", "scripts"},
+        lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests}
     }
 ).
 
@@ -319,12 +345,14 @@ config_lookup(Key, Default) -> maps:get(Key, default_message(), Default).
 load(Path) ->
     case file:read_file(Path) of
         {ok, Bin} ->
-            try dev_codec_flat:deserialize(Bin) of
-                {ok, Map} -> {ok, mimic_default_types(Map, new_atoms)}
-            catch
-                error:B -> {error, B}
-            end;
+            load_bin(Bin);
         _ -> {error, not_found}
+    end.
+load_bin(Bin) ->
+    try dev_codec_flat:deserialize(Bin) of
+        {ok, Map} -> {ok, mimic_default_types(Map, new_atoms)}
+    catch
+        error:B -> {error, B}
     end.
 
 %% @doc Mimic the types of the default message for a given map.
@@ -332,7 +360,7 @@ mimic_default_types(Map, Mode) ->
     Default = default_message(),
     maps:from_list(lists:map(
         fun({Key, Value}) ->
-            NewKey = hb_util:key_to_atom(Key, Mode),
+            NewKey = try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end,
             NewValue = 
                 case maps:get(NewKey, Default, not_found) of
                     not_found ->
@@ -350,6 +378,75 @@ mimic_default_types(Map, Mode) ->
         maps:to_list(Map)
     )).
     
+%% @doc Validate that the node_history length is within an acceptable range.
+%% @param Opts The options map containing node_history
+%% @param MinLength The minimum acceptable length of node_history
+%% @param MaxLength The maximum acceptable length of node_history
+%% @returns `{ok, Length}' if `MinLength =< Length =< MaxLength',
+%% or `{error, Reason}' if the length is outside the range.
+validate_node_history(Opts) ->
+    validate_node_history(Opts, 1, 1).
+validate_node_history(Opts, MinLength, MaxLength) ->
+    Length = length(hb_opts:get(node_history, [], Opts)),
+    if
+        Length >= MinLength, Length =< MaxLength -> 
+            {ok, Length};
+        Length < MinLength -> 
+            {
+                error,
+                <<
+                    "Node history too short. Expected at least ",
+                    (integer_to_binary(MinLength))/binary,
+                    " entries, got ",
+                    (integer_to_binary(Length))/binary,
+                    "."
+                >>
+            };
+        true -> 
+            {
+                error,
+                <<
+                    "Node history too long. Expected at most ",
+                    (integer_to_binary(MaxLength))/binary,
+                    " entries, got ",
+                    (integer_to_binary(Length))/binary,
+                    "."
+                >>
+            }
+    end.
+
+%% @doc Utility function to check for required options in a list.
+%% Takes a list of {Name, Value} pairs and returns:
+%% - {ok, Opts} when all required options are present (Value =/= not_found)
+%% - {error, ErrorMsg} with a message listing all missing options when any are not_found
+%% @param KeyValuePairs A list of {Name, Value} pairs to check.
+%% @param Opts The original options map to return if validation succeeds.
+%% @returns `{ok, Opts}' if all required options are present, or
+%% `{error, <<"Missing required parameters: ", MissingOptsStr/binary>>}'
+%% where `MissingOptsStr' is a comma-separated list of missing option names.
+-spec check_required_opts(list({binary(), term()}), map()) -> 
+    {ok, map()} | {error, binary()}.
+check_required_opts(KeyValuePairs, Opts) ->
+    MissingOpts = lists:filtermap(
+        fun({Name, Value}) ->
+            case Value of
+                not_found -> {true, Name};
+                _ -> false
+            end
+        end,
+        KeyValuePairs
+    ),
+    case MissingOpts of
+        [] -> 
+            {ok, Opts};
+        _ ->
+            MissingOptsStr = binary:list_to_bin(
+                lists:join(<<", ">>, MissingOpts)
+            ),
+            ErrorMsg = <<"Missing required opts: ", MissingOptsStr/binary>>,
+            {error, ErrorMsg}
+    end.
+
 %%% Tests
 
 -ifdef(TEST).
@@ -397,4 +494,24 @@ load_test() ->
     ?assertEqual(<<"https://ao.computer">>, maps:get(host, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
     ?assertEqual(false, maps:get(await_inprogress, Conf)).
+
+validate_node_history_test() ->
+    % Test default values (min=1, max=1)
+    ?assertEqual({ok, 1}, validate_node_history(#{node_history => [entry1]})),
+    ?assertEqual({error, <<"Node history too short. Expected at least 1 entries, got 0.">>}, 
+                 validate_node_history(#{})),
+    ?assertEqual({error, <<"Node history too long. Expected at most 1 entries, got 2.">>}, 
+                 validate_node_history(#{node_history => [entry1, entry2]})),
+    % Test with custom range
+    ?assertEqual({ok, 0}, validate_node_history(#{}, 0, 2)),
+    ?assertEqual({ok, 1}, validate_node_history(#{node_history => [entry1]}, 0, 2)),
+    ?assertEqual({ok, 2}, validate_node_history(#{node_history => [entry1, entry2]}, 0, 2)),
+    % Test range validations
+    ?assertEqual({error, <<"Node history too short. Expected at least 2 entries, got 1.">>}, 
+                 validate_node_history(#{node_history => [entry1]}, 2, 4)),
+    ?assertEqual({error, <<"Node history too long. Expected at most 2 entries, got 3.">>}, 
+                 validate_node_history(#{node_history => [entry1, entry2, entry3]}, 1, 2)),
+    % Test edge cases
+    ?assertEqual({ok, 3}, validate_node_history(#{node_history => [entry1, entry2, entry3]}, 3, 3)),
+    ?assertEqual({ok, 0}, validate_node_history(#{}, 0, 0)).
 -endif.

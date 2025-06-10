@@ -7,28 +7,39 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Push either a message or an assigned slot number.
+%% @doc Push either a message or an assigned slot number. If a `Process' is
+%% provided in the `body' of the request, it will be scheduled (initializing
+%% it if it does not exist). Otherwise, the message specified by the given
+%% `slot' key will be pushed.
+%% 
+%% Optional parameters:
+%% `/result-depth': The depth to which the full contents of the result
+%%                    will be included in the response. Default: 1, returning 
+%%                    the full result of the first message, but only the 'tree'
+%%                    of downstream messages.
+%%  `/push-mode':    Whether or not the push should be done asynchronously.
+%%                    Default: `sync', pushing synchronously.
 push(Base, Req, Opts) ->
-    ModBase = dev_process:as_process(Base, Opts),
-    ?event(push, {push_base, {base, ModBase}, {req, Req}}, Opts),
+    Process = dev_process:as_process(Base, Opts),
+    ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
     case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Req}, no_slot, Opts) of
         no_slot ->
-            case schedule_initial_message(ModBase, Req, Opts) of
+            case schedule_initial_message(Process, Req, Opts) of
                 {ok, Assignment} ->
                     case find_type(hb_ao:get(<<"body">>, Assignment, Opts), Opts) of
                         <<"Message">> ->
                             ?event(push,
                                 {pushing_message,
-                                    {base, ModBase},
+                                    {base, Process},
                                     {assignment, Assignment}
                                 },
                                 Opts
                             ),
-                            push_with_mode(ModBase, Assignment, Opts);
+                            push_with_mode(Process, Assignment, Opts);
                         <<"Process">> ->
                             ?event(push,
                                 {initializing_process,
-                                    {base, ModBase},
+                                    {base, Process},
                                     {assignment, Assignment}},
                                 Opts
                             ),
@@ -36,55 +47,55 @@ push(Base, Req, Opts) ->
                     end;
                 {error, Res} -> {error, Res}
             end;
-        _ -> push_with_mode(ModBase, Req, Opts)
+        _ -> push_with_mode(Process, Req, Opts)
     end.
 
-push_with_mode(Base, Req, Opts) ->
-    Mode = is_async(Base, Req, Opts),
+push_with_mode(Process, Req, Opts) ->
+    Mode = is_async(Process, Req, Opts),
     case Mode of
         <<"sync">> ->
-            do_push(Base, Req, Opts);
+            do_push(Process, Req, Opts);
         <<"async">> ->
-            spawn(fun() -> do_push(Base, Req, Opts) end)
+            spawn(fun() -> do_push(Process, Req, Opts) end)
     end.
 
 %% @doc Determine if the push is asynchronous.
-is_async(Base, Req, Opts) ->
+is_async(Process, Req, Opts) ->
     hb_ao:get_first(
         [
             {Req, <<"push-mode">>},
-            {Base, <<"push-mode">>},
-            {Base, <<"process/push-mode">>}
+            {Process, <<"push-mode">>},
+            {Process, <<"process/push-mode">>}
         ],
         <<"sync">>,
         Opts
     ).
 
-%% @doc Push a message or slot number.
-do_push(Base, Assignment, Opts) ->
+%% @doc Push a message or slot number, including its downstream results.
+do_push(Process, Assignment, Opts) ->
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
-    ID = dev_process:process_id(Base, #{}, Opts),
+    ID = dev_process:process_id(Process, #{}, Opts),
     ?event(push, {push_computing_outbox, {process_id, ID}, {slot, Slot}}),
     {Status, Result} = hb_ao:resolve(
-        {as, <<"process@1.0">>, Base},
+        {as, <<"process@1.0">>, Process},
         #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
         Opts#{ hashpath => ignore }
     ),
+    % Determine if we should include the full compute result in our response.
+    IncludeDepth = hb_ao:get(<<"result-depth">>, Assignment, 1, Opts),
     AdditionalRes =
-        case IncludeDepth = hb_opts:get(push_include_result, 1, Opts) of
+        case IncludeDepth of
             X when X > 0 -> Result;
             _ -> #{}
         end,
-    NextOpts =
-        Opts#{
-            push_include_result => IncludeDepth - 1
-        },
+    ?event(push_depth, {depth, IncludeDepth, {assignment, Assignment}}),
     ?event(push, {push_computed, {process, ID}, {slot, Slot}}),
     case {Status, hb_ao:get(<<"outbox">>, Result, #{}, Opts)} of
         {ok, NoResults} when ?IS_EMPTY_MESSAGE(NoResults) ->
-            ?event(push_short, {push_complete, {process, {string, ID}}, {slot, Slot}}),
+            ?event(push_short, {done, {process, {string, ID}}, {slot, Slot}}),
             {ok, AdditionalRes#{ <<"slot">> => Slot, <<"process">> => ID }};
         {ok, Outbox} ->
+            ?event(push, {push_found_outbox, {outbox, Outbox}}),
             Downstream =
                 maps:map(
                     fun(Key, MsgToPush = #{ <<"target">> := Target }) ->
@@ -92,17 +103,22 @@ do_push(Base, Assignment, Opts) ->
                             {ok, PushBase} ->
                                 push_result_message(
                                     PushBase,
-                                    Slot,
-                                    Key,
                                     MsgToPush,
-                                    NextOpts
+                                    #{
+                                        <<"process">> => ID,
+                                        <<"slot">> => Slot,
+                                        <<"outbox-key">> => Key,
+                                        <<"result-depth">> => IncludeDepth
+                                    },
+                                    Opts
                                 );
                             not_found ->
                                 #{
                                     <<"response">> => <<"error">>,
                                     <<"status">> => 404,
                                     <<"target">> => Target,
-                                    <<"reason">> => <<"Could not access target process!">>
+                                    <<"reason">> =>
+                                        <<"Could not access target process!">>
                                 }
                         end;
                        (Key, Msg) ->
@@ -114,33 +130,45 @@ do_push(Base, Assignment, Opts) ->
                                 <<"message">> => Msg
                             }
                     end,
-                    Outbox
+                    hb_ao:normalize_keys(Outbox)
                 ),
             {ok, maps:merge(Downstream, AdditionalRes#{
                 <<"slot">> => Slot,
                 <<"process">> => ID
             })};
-        {Err, Error} when Err == error; Err == failure -> {error, Error}
+        {Err, Error} when Err == error; Err == failure ->
+            ?event(push, {push_failed_to_find_outbox, {error, Error}}, Opts),
+            {error, Error}
     end.
 
-push_result_message(Base, FromSlot, Key, MsgToPush, Opts) ->
+%% @doc Push a downstream message result. The `Origin' map contains information
+%% about the origin of the message: The process that originated the message,
+%% the slot number from which it was sent, and the outbox key of the message,
+%% and the depth to which downstream results should be included in the message.
+push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
     case hb_ao:get(<<"target">>, MsgToPush, undefined, Opts) of
         undefined ->
-            ?event(push, {skip_no_target, {key, Key}, MsgToPush}, Opts),
+            ?event(push,
+                {skip_no_target, {msg, MsgToPush}, {origin, Origin}},
+                Opts
+            ),
             #{};
         TargetID ->
             ?event(push,
                 {pushing_child,
-                    {originates_from_slot, FromSlot},
-                    {outbox_key, Key},
-                    {target_id, TargetID}
+                    {target, TargetID},
+                    {msg, MsgToPush},
+                    {origin, Origin}
                 },
                 Opts
             ),
-            case schedule_result(Base, MsgToPush, Opts) of
+            case schedule_result(TargetProcess, MsgToPush, Origin, Opts) of
                 {ok, Assignment} ->
+                    % Analyze the result of the message push.
                     NextSlotOnProc = hb_ao:get(<<"slot">>, Assignment, Opts),
                     PushedMsg = hb_ao:get(<<"body">>, Assignment, Opts),
+                    % Get the ID of the message that was pushed. We already have
+                    % the 'origin' message, but we need the signed ID.
                     PushedMsgID = hb_message:id(PushedMsg, all, Opts),
                     ?event(push_short,
                         {pushed_message_to,
@@ -152,11 +180,23 @@ push_result_message(Base, FromSlot, Key, MsgToPush, Opts) ->
                     TargetAsProcess = dev_process:ensure_process_key(TargetBase, Opts),
                     RecvdID = hb_message:id(TargetBase, all),
                     ?event(push, {recvd_id, {id, RecvdID}, {msg, TargetAsProcess}}),
-                    Resurse = hb_ao:resolve(
-                        {as, <<"process@1.0">>, TargetAsProcess},
-                        #{ <<"path">> => <<"push">>, <<"slot">> => NextSlotOnProc },
-                        Opts#{ cache_control => <<"always">> }
-                    ),
+                    % Push the message downstream. We decrease the result-depth.
+                    Resurse =
+                        hb_ao:resolve(
+                            {as, <<"process@1.0">>, TargetAsProcess},
+                            #{
+                                <<"path">> => <<"push">>,
+                                <<"slot">> => NextSlotOnProc,
+                                <<"result-depth">> =>
+                                    hb_ao:get(
+                                        <<"result-depth">>,
+                                        Origin,
+                                        1,
+                                        Opts
+                                    ) - 1
+                            },
+                            Opts#{ cache_control => <<"always">> }
+                        ),
                     case Resurse of
                         {ok, Downstream} ->
                             #{
@@ -208,22 +248,27 @@ extract(target, Raw) ->
     {Target, _} = split_target(Raw),
     Target.
 
+%% @doc Split the target into the process ID and the optional query string.
 split_target(RawTarget) ->
     case binary:split(RawTarget, [<<"?">>, <<"&">>]) of
         [Target, QStr] -> {Target, QStr};
         _ -> {RawTarget, <<>>}
     end.
 
-schedule_result(Base, MsgToPush, Opts) ->
-    schedule_result(Base, MsgToPush, <<"httpsig@1.0">>, Opts).
-schedule_result(Base, MsgToPush, Codec, Opts) ->
+%% @doc Add the necessary keys to the message to be scheduled, then schedule it.
+%% If the remote scheduler does not support the given codec, it will be
+%% downgraded and re-signed.
+schedule_result(TargetProcess, MsgToPush, Origin, Opts) ->
+    schedule_result(TargetProcess, MsgToPush, <<"httpsig@1.0">>, Origin, Opts).
+schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
     Target = hb_ao:get(<<"target">>, MsgToPush, Opts),
     ?event(push,
         {push_scheduling_result,
             {target, {string, Target}},
-            {target_process, Base},
+            {target_process, TargetProcess},
             {msg, MsgToPush},
-            {codec, Codec}
+            {codec, Codec},
+            {origin, Origin}
         },
         Opts
     ),
@@ -233,7 +278,7 @@ schedule_result(Base, MsgToPush, Codec, Opts) ->
             <<"path">> => <<"schedule">>,
             <<"body">> =>
                 SignedMsg = hb_message:commit(
-                    additional_keys(Base, MsgToPush, Opts),
+                    additional_keys(Origin, MsgToPush, Opts),
                     Opts,
                     Codec
                 )
@@ -246,11 +291,11 @@ schedule_result(Base, MsgToPush, Codec, Opts) ->
     ),
     {ErlStatus, Res} =
         hb_ao:resolve(
-            {as, <<"process@1.0">>, Base},
+            {as, <<"process@1.0">>, TargetProcess},
             SignedReq,
             Opts#{ cache_control => <<"always">> }
         ),
-    ?event(push, {push_scheduling_result, {status, ErlStatus}, {response, Res}}, Opts),
+    ?event(push, {push_sched_result, {status, ErlStatus}, {response, Res}}, Opts),
     case {ErlStatus, hb_ao:get(<<"status">>, Res, 200, Opts)} of
         {ok, 200} ->
             {ok, Res};
@@ -261,13 +306,26 @@ schedule_result(Base, MsgToPush, Codec, Opts) ->
             SignedNormMsg = hb_message:commit(NormMsg, Opts),
             remote_schedule_result(Location, SignedNormMsg, Opts);
         {error, 422} ->
-            ?event(push, {received_wrong_format, {422, Res}, {codec, Codec}}, Opts),
+            ?event(push, {wrong_format, {422, Res}, {codec, Codec}}, Opts),
             case Codec of
                 <<"ans104@1.0">> ->
                     {error, Res};
                 <<"httpsig@1.0">> ->
-                    ?event(push, {downgrading_to_ans104, {422, Res}, {codec, Codec}}, Opts),
-                    schedule_result(Base, MsgToPush, <<"ans104@1.0">>, Opts)
+                    ?event(push,
+                        {downgrading_to_ans104,
+                            {422, Res},
+                            {codec, Codec},
+                            {origin, Origin}
+                        },
+                        Opts
+                    ),
+                    schedule_result(
+                        TargetProcess,
+                        MsgToPush,
+                        <<"ans104@1.0">>,
+                        Origin,
+                        Opts
+                    )
             end;
         {error, _} ->
             {error, Res}
@@ -275,14 +333,15 @@ schedule_result(Base, MsgToPush, Codec, Opts) ->
 
 %% @doc Set the necessary keys in order for the recipient to know where the
 %% message came from.
-additional_keys(FromMsg, ToSched, Opts) ->
+additional_keys(Origin, ToSched, Opts) ->
+    ?event(push, {adding_keys, {origin, Origin}, {to, ToSched}}, Opts),
     hb_ao:set(
         ToSched,
         #{
             <<"data-protocol">> => <<"ao">>,
             <<"variant">> => <<"ao.N.1">>,
             <<"type">> => <<"Message">>,
-            <<"from-process">> => hb_message:id(FromMsg, all, Opts)
+            <<"from-process">> => maps:get(<<"process">>, Origin)
         },
         Opts#{ hashpath => ignore }
     ).
@@ -398,12 +457,18 @@ full_push_test_() ->
         )
     end}.
 
-multi_process_push_test_disabled() ->
+multi_process_push_test_() ->
     {timeout, 30, fun() ->
         dev_process:init(),
         Opts = #{
             priv_wallet => hb:wallet(),
-            cache_control => <<"always">>
+            cache_control => <<"always">>,
+            store => [
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"prefix">> => <<"cache-TEST">>
+                }
+            ]
         },
         Proc1 = dev_process:test_aos_process(Opts),
         hb_cache:write(Proc1, Opts),
@@ -426,18 +491,8 @@ multi_process_push_test_disabled() ->
             },
             Opts
         ),
-        ProcID1 =
-            hb_ao:get(
-                <<"process/id">>,
-                dev_process:ensure_process_key(Proc1, Opts),
-                Opts
-            ),
-        ProcID2 =
-            hb_ao:get(
-                <<"process/id">>,
-                dev_process:ensure_process_key(Proc2, Opts),
-                Opts
-            ),
+        ProcID1 = hb_message:id(Proc1, all, Opts),
+        ProcID2 = hb_message:id(Proc2, all, Opts),
         ?event(push, {testing_with, {proc1_id, ProcID1}, {proc2_id, ProcID2}}),
         {ok, ToPush} = dev_process:schedule_aos_call(
             Proc2,
@@ -448,7 +503,7 @@ multi_process_push_test_disabled() ->
                 "       print(\"GOT PONG\")\n"
                 "   end\n"
                 ")\n"
-                "Send({ Target = \"", (ProcID1)/binary, "\", Action = \"Ping\" })\n"
+                "Send({ Target = \"", (ProcID1)/binary, "\", Action = \"Ping\" })"
             >>
         ),
         SlotToPush = hb_ao:get(<<"slot">>, ToPush, Opts),
@@ -456,7 +511,8 @@ multi_process_push_test_disabled() ->
         Msg3 =
             #{
                 <<"path">> => <<"push">>,
-                <<"slot">> => SlotToPush
+                <<"slot">> => SlotToPush,
+                <<"result-depth">> => 1
             },
         {ok, PushResult} = hb_ao:resolve(Proc2, Msg3, Opts),
         ?event(push, {push_result_proc2, PushResult}),
@@ -468,7 +524,13 @@ multi_process_push_test_disabled() ->
 push_with_redirect_hint_test_disabled() ->
     {timeout, 30, fun() ->
         dev_process:init(),
-        Stores = [#{ <<"store-module">> => hb_store_fs, <<"prefix">> => <<"cache-TEST">> }],
+        Stores =
+            [
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"prefix">> => <<"cache-TEST">>
+                }
+            ],
         ExtOpts = #{ priv_wallet => ar_wallet:new(), store => Stores },
         LocalOpts = #{ priv_wallet => hb:wallet(), store => Stores },
         ExtScheduler = hb_http_server:start_node(ExtOpts),
@@ -477,7 +539,13 @@ push_with_redirect_hint_test_disabled() ->
         Client = dev_process:test_aos_process(),
         PongServer = dev_process:test_aos_process(ExtOpts),
         % Push the new process that runs on the external scheduler
-        {ok, ServerSchedResp} = hb_http:post(ExtScheduler, <<"/push">>, PongServer, ExtOpts),
+        {ok, ServerSchedResp} =
+            hb_http:post(
+                ExtScheduler,
+                <<"/push">>,
+                PongServer,
+                ExtOpts
+            ),
         ?event(push, {pong_server_sched_resp, ServerSchedResp}),
         % Get the IDs of the server process
         PongServerID =
@@ -594,13 +662,15 @@ ping_pong_script(Limit) ->
 
 reply_script() ->
     <<
-        "Handlers.add(\"Reply\",\n"
-        "   function (test) return true end,\n"
-        "   function(m)\n"
-        "       print(\"Replying to...\")\n"
-        "       print(m.From)\n"
-        "       Send({ Target = m.From, Action = \"Reply\", Message = \"Pong!\" })\n"
-        "       print(\"Done.\")\n"
-        "   end\n"
-        ")\n"
+        """
+        Handlers.add("Reply",
+           { Action = "Ping" },
+           function(m)
+               print("Replying to...")
+               print(m.From)
+               Send({ Target = m.From, Action = "Reply", Message = "Pong!" })
+               print("Done.")
+           end
+        )
+        """
     >>.

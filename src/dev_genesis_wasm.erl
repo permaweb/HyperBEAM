@@ -32,7 +32,11 @@ compute(Msg, Msg2, Opts) ->
                     {ok, Msg4} =
                         hb_ao:resolve(
                             Msg3,
-                            {as, <<"patch@1.0">>, Msg2},
+                            {
+                                as,
+                                <<"patch@1.0">>,
+                                Msg2#{ <<"patch-from">> => <<"/results/outbox">> }
+                            },
                             Opts
                         ),
                     % Return the patched message.

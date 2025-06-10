@@ -57,14 +57,16 @@ verify({{rsa, PublicExpnt}, Pub}, Data, Sig, DigestType) when PublicExpnt =:= 65
 %% @doc Generate an address from a public key.
 to_address(Pubkey) ->
     to_address(Pubkey, ?DEFAULT_KEY_TYPE).
-to_address(PubKey, {rsa, 65537}) when bit_size(PubKey) == 256 ->
+to_address(PubKey, _) when bit_size(PubKey) == 256 ->
     %% Small keys are not secure, nobody is using them, the clause
     %% is for backwards-compatibility.
     PubKey;
-to_address({{_, _, PubKey}, {_, PubKey}}, {rsa, 65537}) ->
+to_address({{_, _, PubKey}, {_, PubKey}}, _) ->
     to_address(PubKey);
 to_address(PubKey, {rsa, 65537}) ->
-    to_rsa_address(PubKey).
+    to_rsa_address(PubKey);
+to_address(PubKey, {ecdsa, 256}) ->
+	to_ecdsa_address(PubKey).
 
 %% @doc Generate a new wallet public and private key, with a corresponding keyfile.
 %% The provided key is used as part of the file name.
@@ -193,6 +195,9 @@ to_rsa_address(PubKey) ->
 
 hash_address(PubKey) ->
     crypto:hash(sha256, PubKey).
+
+to_ecdsa_address(PubKey) ->
+	hb_keccak:key_to_ethereum_address(PubKey).
 
 %%%===================================================================
 %%% Private functions.

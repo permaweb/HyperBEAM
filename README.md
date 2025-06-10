@@ -99,7 +99,7 @@ To start a shell with profiles:
 rebar3 as rocksdb shell
 
 # Multiple profiles
-rebar3 as rocksdb,genesis_wasm shell
+rebar3 as rocksdb, genesis_wasm shell
 ```
 
 To create a release with profiles:
@@ -266,42 +266,36 @@ schedule of another execution.
 Details on other devices found in the pre-loaded set can be located in their 
 respective documentation.
 
+## Documentation
+
+HyperBEAM uses [MkDocs](https://www.mkdocs.org/) with the [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) theme to build its documentation site. All documentation source files are located in the `docs/` directory.
+
+To build and view the documentation locally:
+
+```bash
+# Create and activate a virtual environment (optional but recommended)
+python3 -m venv venv
+source venv/bin/activate  # (macOS/Linux) On Windows use `venv\Scripts\activate`
+
+# Install required packages
+pip3 install mkdocs mkdocs-material mkdocs-git-revision-date-localized-plugin
+
+# Build the docs
+./docs/build-all.sh
+
+# Serve the docs
+cd mkdocs-site
+python3 -m http.server 8000 
+# Then open http://127.0.0.1:8000/ in your browser
+```
+
+For more details on the documentation structure, how to contribute, and other information, please see the [full documentation README](./docs/README.md).
+
 ## Contributing
 
 HyperBEAM is developed as an open source implementation of the AO-Core protocol 
 by [Forward Research](https://fwd.arweave.net). Pull Requests are always welcome!
 
-To get started building on HyperBEAM, check out the [hacking on HyperBEAM](./docs/contribute/setup.md)
+To get started building on HyperBEAM, check out the [hacking on HyperBEAM](./docs/misc/hacking-on-hyperbeam.md)
 guide.
 
-## Documentation
-
-HyperBEAM uses [MkDocs](https://www.mkdocs.org/) with the [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) theme to build its documentation site.
-
-Building the documentation requires Python 3, pip, and the following packages:
-```bash
-pip3 install mkdocs mkdocs-material
-```
-
-- **Source Files:** All documentation source files (Markdown `.md`, images, CSS) are located in the `docs/` directory.
-- **Source Code Docs:** Erlang source code documentation is generated using `rebar3 edoc` (with the `edown_doclet` plugin) into the `docs/source-code-docs/` directory as Markdown files. These are then incorporated into the main MkDocs site.
-- **Build Script:** The entire process (compiling, generating edoc, processing source docs, building the site) is handled by the `./docs/build-all.sh` script.
-
-To build and view the documentation locally:
-
-1.  Ensure you are in the project root directory.
-2.  Run the build script:
-    ```bash
-    ./docs/build-all.sh
-    ```
-
-This script performs the following steps:
-- Compiles the Erlang project (`rebar3 compile`).
-- Generates Markdown documentation from source code comments (`rebar3 edoc`) into `docs/source-code-docs/`.
-- Processes the generated source code Markdown files (updates index, cleans up TOCs).
-- Builds the MkDocs site into the `dist/mkdocs` directory (`mkdocs build`).
-- Starts a local development server (`mkdocs serve`) to view the site at `http://127.0.0.1:8000/`.
-
-Press `Ctrl+C` in the terminal where the script is running to stop the local server.
-
-The final static site is generated in the `dist/mkdocs` directory, as configured in `mkdocs.yml` (`site_dir: dist/mkdocs`).

@@ -1,149 +1,154 @@
-site_name: 'HyperBEAM Documentation'
+site_name: 'HyperBEAM - Documentation'
 repo_url: https://github.com/permaweb/HyperBEAM
 repo_name: 'permaweb/HyperBEAM'
-site_url: https://permaweb.github.io/
+site_url: http://[::]:8000/
 
 docs_dir: docs
 site_dir: mkdocs-site
 
+use_directory_urls: false
+
 nav:
-  - Home: 'index.md'
-  - Getting Started:
-    - Overview: 'getting-started/index.md'
-    - System Requirements: 'getting-started/requirements.md'
-    - Installation:
-      - Overview: 'getting-started/installation/index.md'
-      - System Dependencies: 'getting-started/installation/dependencies.md'
-      - Erlang: 'getting-started/installation/erlang.md'
-      - Rebar3: 'getting-started/installation/rebar3.md'
-      - Node.js: 'getting-started/installation/nodejs.md'
-      - Rust: 'getting-started/installation/rust.md'
-  - HyperBEAM:
-    - Overview: 'hyperbeam/index.md'
-    - Setup: 'hyperbeam/setup.md'
-    - Configuration:
-      - Overview: 'hyperbeam/configuration/index.md'
-      - Configuration Methods: 'hyperbeam/configuration/configuration-methods.md'
-      - Configuration Options: 'hyperbeam/configuration/configuration-options.md'
-      - Storage Configuration: 'hyperbeam/configuration/storage-configuration.md'
-      - Routing Configuration: 'hyperbeam/configuration/routing-configuration.md'
-      - Configuration Examples: 'hyperbeam/configuration/configuration-examples.md'
-    - Testing: 'hyperbeam/testing.md'
-    # - API Reference: 'hyperbeam/api.md'
-  - Compute Unit:
-    - Overview: 'compute-unit/index.md'
-    - Setup: 'compute-unit/setup.md'
-    - Configuration: 'compute-unit/configuration.md'
-  - Trusted Execution (TEE):
-    - Overview: 'tee/index.md'
-  - Guides:
-    - Overview: 'guides/index.md'
-    - HB JavaScript Client: 'guides/js-client-guide.md'
-  - Source Code:
-    - Overview: 'source-code-docs/index.md'
-    - Modules:
-      - ar_bundles: 'source-code-docs/ar_bundles.md'
-      - ar_deep_hash: 'source-code-docs/ar_deep_hash.md'
-      - ar_rate_limiter: 'source-code-docs/ar_rate_limiter.md'
-      - ar_timestamp: 'source-code-docs/ar_timestamp.md'
-      - ar_tx: 'source-code-docs/ar_tx.md'
-      - ar_wallet: 'source-code-docs/ar_wallet.md'
-      - dev_cache: 'source-code-docs/dev_cache.md'
-      - dev_cacheviz: 'source-code-docs/dev_cacheviz.md'
-      - dev_codec_ans104: 'source-code-docs/dev_codec_ans104.md'
-      - dev_codec_flat: 'source-code-docs/dev_codec_flat.md'
-      - dev_codec_httpsig: 'source-code-docs/dev_codec_httpsig.md'
-      - dev_codec_httpsig_conv: 'source-code-docs/dev_codec_httpsig_conv.md'
-      - dev_codec_json: 'source-code-docs/dev_codec_json.md'
-      - dev_codec_structured: 'source-code-docs/dev_codec_structured.md'
-      - dev_cron: 'source-code-docs/dev_cron.md'
-      - dev_cu: 'source-code-docs/dev_cu.md'
-      - dev_dedup: 'source-code-docs/dev_dedup.md'
-      - dev_delegated_compute: 'source-code-docs/dev_delegated_compute.md'
-      - dev_faff: 'source-code-docs/dev_faff.md'
-      - dev_genesis_wasm: 'source-code-docs/dev_genesis_wasm.md'
-      - dev_green_zone: 'source-code-docs/dev_green_zone.md'
-      - dev_hyperbuddy: 'source-code-docs/dev_hyperbuddy.md'
-      - dev_json_iface: 'source-code-docs/dev_json_iface.md'
-      - dev_lookup: 'source-code-docs/dev_lookup.md'
-      - dev_lua: 'source-code-docs/dev_lua.md'
-      - dev_manifest: 'source-code-docs/dev_manifest.md'
-      - dev_message: 'source-code-docs/dev_message.md'
-      - dev_meta: 'source-code-docs/dev_meta.md'
-      - dev_monitor: 'source-code-docs/dev_monitor.md'
-      - dev_multipass: 'source-code-docs/dev_multipass.md'
-      - dev_p4: 'source-code-docs/dev_p4.md'
-      - dev_patch: 'source-code-docs/dev_patch.md'
-      - dev_poda: 'source-code-docs/dev_poda.md'
-      - dev_process: 'source-code-docs/dev_process.md'
-      - dev_process_cache: 'source-code-docs/dev_process_cache.md'
-      - dev_process_worker: 'source-code-docs/dev_process_worker.md'
-      - dev_push: 'source-code-docs/dev_push.md'
-      - dev_relay: 'source-code-docs/dev_relay.md'
-      - dev_router: 'source-code-docs/dev_router.md'
-      - dev_scheduler: 'source-code-docs/dev_scheduler.md'
-      - dev_scheduler_cache: 'source-code-docs/dev_scheduler_cache.md'
-      - dev_scheduler_formats: 'source-code-docs/dev_scheduler_formats.md'
-      - dev_scheduler_registry: 'source-code-docs/dev_scheduler_registry.md'
-      - dev_scheduler_server: 'source-code-docs/dev_scheduler_server.md'
-      - dev_simple_pay: 'source-code-docs/dev_simple_pay.md'
-      - dev_snp: 'source-code-docs/dev_snp.md'
-      - dev_snp_nif: 'source-code-docs/dev_snp_nif.md'
-      - dev_stack: 'source-code-docs/dev_stack.md'
-      - dev_test: 'source-code-docs/dev_test.md'
-      - dev_wasi: 'source-code-docs/dev_wasi.md'
-      - dev_wasm: 'source-code-docs/dev_wasm.md'
-      - hb: 'source-code-docs/hb.md'
-      - hb_ao: 'source-code-docs/hb_ao.md'
-      - hb_ao_test_vectors: 'source-code-docs/hb_ao_test_vectors.md'
-      - hb_app: 'source-code-docs/hb_app.md'
-      - hb_beamr: 'source-code-docs/hb_beamr.md'
-      - hb_beamr_io: 'source-code-docs/hb_beamr_io.md'
-      - hb_cache: 'source-code-docs/hb_cache.md'
-      - hb_cache_control: 'source-code-docs/hb_cache_control.md'
-      - hb_cache_render: 'source-code-docs/hb_cache_render.md'
-      - hb_client: 'source-code-docs/hb_client.md'
-      - hb_crypto: 'source-code-docs/hb_crypto.md'
-      - hb_debugger: 'source-code-docs/hb_debugger.md'
-      - hb_escape: 'source-code-docs/hb_escape.md'
-      - hb_event: 'source-code-docs/hb_event.md'
-      - hb_examples: 'source-code-docs/hb_examples.md'
-      - hb_features: 'source-code-docs/hb_features.md'
-      - hb_gateway_client: 'source-code-docs/hb_gateway_client.md'
-      - hb_http: 'source-code-docs/hb_http.md'
-      - hb_http_benchmark_tests: 'source-code-docs/hb_http_benchmark_tests.md'
-      - hb_http_client: 'source-code-docs/hb_http_client.md'
-      - hb_http_client_sup: 'source-code-docs/hb_http_client_sup.md'
-      - hb_http_server: 'source-code-docs/hb_http_server.md'
-      - hb_json: 'source-code-docs/hb_json.md'
-      - hb_logger: 'source-code-docs/hb_logger.md'
-      - hb_message: 'source-code-docs/hb_message.md'
-      - hb_metrics_collector: 'source-code-docs/hb_metrics_collector.md'
-      - hb_name: 'source-code-docs/hb_name.md'
-      - hb_opts: 'source-code-docs/hb_opts.md'
-      - hb_path: 'source-code-docs/hb_path.md'
-      - hb_persistent: 'source-code-docs/hb_persistent.md'
-      - hb_private: 'source-code-docs/hb_private.md'
-      - hb_process_monitor: 'source-code-docs/hb_process_monitor.md'
-      - hb_router: 'source-code-docs/hb_router.md'
-      - hb_singleton: 'source-code-docs/hb_singleton.md'
-      - hb_store: 'source-code-docs/hb_store.md'
-      - hb_store_fs: 'source-code-docs/hb_store_fs.md'
-      - hb_store_gateway: 'source-code-docs/hb_store_gateway.md'
-      - hb_store_remote_node: 'source-code-docs/hb_store_remote_node.md'
-      - hb_store_rocksdb: 'source-code-docs/hb_store_rocksdb.md'
-      - hb_structured_fields: 'source-code-docs/hb_structured_fields.md'
-      - hb_sup: 'source-code-docs/hb_sup.md'
-      - hb_test_utils: 'source-code-docs/hb_test_utils.md'
-      - hb_util: 'source-code-docs/hb_util.md'
-      - rsa_pss: 'source-code-docs/rsa_pss.md'
-  - Reference:
-    - Troubleshooting: 'reference/troubleshooting.md'
-    - Glossary: 'reference/glossary.md'
-    - FAQ: 'reference/faq.md'
-  - Contribute:
-    - Development Setup: 'contribute/setup.md'
-    - Contribution Guidelines: 'contribute/guidelines.md'
+  - Introduction:
+      - What is AO-Core?: 'introduction/what-is-ao-core.md'
+      - What is HyperBEAM?: 'introduction/what-is-hyperbeam.md'
+      - AO Devices: 'introduction/ao-devices.md'
+      - Pathing in AO-Core: 'introduction/pathing-in-ao-core.md'
+  - Run a Node:
+      - Running a HyperBEAM node: 'run/running-a-hyperbeam-node.md'
+      - Configuring your machine: 'run/configuring-your-machine.md'
+      - TEE nodes: 'run/tee-nodes.md'
+      - Joining/running a router: 'run/joining-running-a-router.md'
+  - Build on HyperBEAM:
+      - Get started building on AO-Core: 'build/get-started-building-on-ao-core.md'
+      - Exposing process state: 'build/exposing-process-state.md'
+      - Serverless decentralized compute: 'build/serverless-decentralized-compute.md'
+      - Extending HyperBEAM: 'build/extending-hyperbeam.md'
+  - Devices:
+      - Overview: 'devices/overview.md'
+      - '~meta@1.0': 'devices/meta-at-1-0.md'
+      - '~process@1.0': 'devices/process-at-1-0.md'
+      - '~message@1.0': 'devices/message-at-1-0.md'
+      - '~wasm64@1.0': 'devices/wasm64-at-1-0.md'
+      - '~lua@5.3a': 'devices/lua-at-5-3a.md'
+      - '~json@1.0': 'devices/json-at-1-0.md'
+      - '~scheduler@1.0': 'devices/scheduler-at-1-0.md'
+      - '~relay@1.0': 'devices/relay-at-1-0.md'
+  - Resources:
+    # - Overview: 'resources/source-code/index.md'
+    - FAQ: 'resources/reference/faq.md'
+    - LLMs.txt: 'resources/llms.md'
+    - Glossary: 'resources/reference/glossary.md'
+    - Source Code Modules:
+      - Modules:
+        - ar_bundles: 'resources/source-code/ar_bundles.md'
+        - ar_deep_hash: 'resources/source-code/ar_deep_hash.md'
+        - ar_rate_limiter: 'resources/source-code/ar_rate_limiter.md'
+        - ar_timestamp: 'resources/source-code/ar_timestamp.md'
+        - ar_tx: 'resources/source-code/ar_tx.md'
+        - ar_wallet: 'resources/source-code/ar_wallet.md'
+        - dev_cache: 'resources/source-code/dev_cache.md'
+        - dev_cacheviz: 'resources/source-code/dev_cacheviz.md'
+        - dev_codec_ans104: 'resources/source-code/dev_codec_ans104.md'
+        - dev_codec_flat: 'resources/source-code/dev_codec_flat.md'
+        - dev_codec_httpsig_conv: 'resources/source-code/dev_codec_httpsig_conv.md'
+        - dev_codec_httpsig: 'resources/source-code/dev_codec_httpsig.md'
+        - dev_codec_json: 'resources/source-code/dev_codec_json.md'
+        - dev_codec_structured: 'resources/source-code/dev_codec_structured.md'
+        - dev_cron: 'resources/source-code/dev_cron.md'
+        - dev_cu: 'resources/source-code/dev_cu.md'
+        - dev_dedup: 'resources/source-code/dev_dedup.md'
+        - dev_delegated_compute: 'resources/source-code/dev_delegated_compute.md'
+        - dev_faff: 'resources/source-code/dev_faff.md'
+        - dev_genesis_wasm: 'resources/source-code/dev_genesis_wasm.md'
+        - dev_green_zone: 'resources/source-code/dev_green_zone.md'
+        - dev_hyperbuddy: 'resources/source-code/dev_hyperbuddy.md'
+        - dev_json_iface: 'resources/source-code/dev_json_iface.md'
+        - dev_local_name: 'resources/source-code/dev_local_name.md'
+        - dev_lookup: 'resources/source-code/dev_lookup.md'
+        - dev_lua_lib: 'resources/source-code/dev_lua_lib.md'
+        - dev_lua_test: 'resources/source-code/dev_lua_test.md'
+        - dev_lua: 'resources/source-code/dev_lua.md'
+        - dev_manifest: 'resources/source-code/dev_manifest.md'
+        - dev_message: 'resources/source-code/dev_message.md'
+        - dev_meta: 'resources/source-code/dev_meta.md'
+        - dev_monitor: 'resources/source-code/dev_monitor.md'
+        - dev_multipass: 'resources/source-code/dev_multipass.md'
+        - dev_name: 'resources/source-code/dev_name.md'
+        - dev_node_process: 'resources/source-code/dev_node_process.md'
+        - dev_p4: 'resources/source-code/dev_p4.md'
+        - dev_patch: 'resources/source-code/dev_patch.md'
+        - dev_poda: 'resources/source-code/dev_poda.md'
+        - dev_process_cache: 'resources/source-code/dev_process_cache.md'
+        - dev_process_worker: 'resources/source-code/dev_process_worker.md'
+        - dev_process: 'resources/source-code/dev_process.md'
+        - dev_push: 'resources/source-code/dev_push.md'
+        - dev_relay: 'resources/source-code/dev_relay.md'
+        - dev_router: 'resources/source-code/dev_router.md'
+        - dev_scheduler_cache: 'resources/source-code/dev_scheduler_cache.md'
+        - dev_scheduler_formats: 'resources/source-code/dev_scheduler_formats.md'
+        - dev_scheduler_registry: 'resources/source-code/dev_scheduler_registry.md'
+        - dev_scheduler_server: 'resources/source-code/dev_scheduler_server.md'
+        - dev_scheduler: 'resources/source-code/dev_scheduler.md'
+        - dev_simple_pay: 'resources/source-code/dev_simple_pay.md'
+        - dev_snp_nif: 'resources/source-code/dev_snp_nif.md'
+        - dev_snp: 'resources/source-code/dev_snp.md'
+        - dev_stack: 'resources/source-code/dev_stack.md'
+        - dev_test: 'resources/source-code/dev_test.md'
+        - dev_wasi: 'resources/source-code/dev_wasi.md'
+        - dev_wasm: 'resources/source-code/dev_wasm.md'
+        - hb_ao_test_vectors: 'resources/source-code/hb_ao_test_vectors.md'
+        - hb_ao: 'resources/source-code/hb_ao.md'
+        - hb_app: 'resources/source-code/hb_app.md'
+        - hb_beamr_io: 'resources/source-code/hb_beamr_io.md'
+        - hb_beamr: 'resources/source-code/hb_beamr.md'
+        - hb_cache_control: 'resources/source-code/hb_cache_control.md'
+        - hb_cache_render: 'resources/source-code/hb_cache_render.md'
+        - hb_cache: 'resources/source-code/hb_cache.md'
+        - hb_client: 'resources/source-code/hb_client.md'
+        - hb_crypto: 'resources/source-code/hb_crypto.md'
+        - hb_debugger: 'resources/source-code/hb_debugger.md'
+        - hb_escape: 'resources/source-code/hb_escape.md'
+        - hb_event: 'resources/source-code/hb_event.md'
+        - hb_examples: 'resources/source-code/hb_examples.md'
+        - hb_features: 'resources/source-code/hb_features.md'
+        - hb_gateway_client: 'resources/source-code/hb_gateway_client.md'
+        - hb_http_benchmark_tests: 'resources/source-code/hb_http_benchmark_tests.md'
+        - hb_http_client_sup: 'resources/source-code/hb_http_client_sup.md'
+        - hb_http_client: 'resources/source-code/hb_http_client.md'
+        - hb_http_server: 'resources/source-code/hb_http_server.md'
+        - hb_http: 'resources/source-code/hb_http.md'
+        - hb_json: 'resources/source-code/hb_json.md'
+        - hb_logger: 'resources/source-code/hb_logger.md'
+        - hb_message: 'resources/source-code/hb_message.md'
+        - hb_metrics_collector: 'resources/source-code/hb_metrics_collector.md'
+        - hb_name: 'resources/source-code/hb_name.md'
+        - hb_opts: 'resources/source-code/hb_opts.md'
+        - hb_path: 'resources/source-code/hb_path.md'
+        - hb_persistent: 'resources/source-code/hb_persistent.md'
+        - hb_private: 'resources/source-code/hb_private.md'
+        - hb_process_monitor: 'resources/source-code/hb_process_monitor.md'
+        - hb_router: 'resources/source-code/hb_router.md'
+        - hb_singleton: 'resources/source-code/hb_singleton.md'
+        - hb_store_fs: 'resources/source-code/hb_store_fs.md'
+        - hb_store_gateway: 'resources/source-code/hb_store_gateway.md'
+        - hb_store_remote_node: 'resources/source-code/hb_store_remote_node.md'
+        - hb_store_rocksdb: 'resources/source-code/hb_store_rocksdb.md'
+        - hb_store: 'resources/source-code/hb_store.md'
+        - hb_structured_fields: 'resources/source-code/hb_structured_fields.md'
+        - hb_sup: 'resources/source-code/hb_sup.md'
+        - hb_test_utils: 'resources/source-code/hb_test_utils.md'
+        - hb_tracer: 'resources/source-code/hb_tracer.md'
+        - hb_util: 'resources/source-code/hb_util.md'
+        - hb_volume: 'resources/source-code/hb_volume.md'
+        - hb: 'resources/source-code/hb.md'
+        - rsa_pss: 'resources/source-code/rsa_pss.md'
+    # - Troubleshooting: 'resources/reference/troubleshooting.md'
+
+  # - Community:
+  #   - Contribute Overview: 'community/guidelines.md'
+    # - Development Setup: 'community/setup.md'
+    # - Contributing Documentation: 'community/contributing-docs.md'
 
 markdown_extensions:
   - attr_list
@@ -161,6 +166,7 @@ markdown_extensions:
       pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
+  - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.critic
@@ -168,23 +174,31 @@ markdown_extensions:
   - def_list
   - pymdownx.tasklist:
       custom_checkbox: true
+  - toc:
+      toc_depth: 2
+      permalink: true
 
 theme: 
   name: material
+  custom_dir: docs/theme/templates
   language: en
-  logo: assets/images/favicon.png
+  logo: https://arweave.net/e8SdCkAlqpMqvBSUuHu7sYpfZWoJsRKG7XuK0EXon_0
+  favicon: https://arweave.net/zMT0qotUQUmPUYhGcgLr80XhG7GRmYXeLWWGitok6Ao
   icon:
     repo: fontawesome/brands/github 
   features:
-    - navigation.instant
+    # - navigation.instant
     - navigation.instant.progress
+    - navigation.instant.prefetch
     - navigation.tracking
-    # - navigation.sections
+    - navigation.sections
     - navigation.path
-    - navigation.top
-    # - navigation.expand
+    - navigation.expand
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.indexes
-    - toc.follow
+    - navigation.prune
+    - toc.integrate
     - content.tooltips
     - content.code.copy
     - content.code.select
@@ -194,33 +208,45 @@ theme:
     # Palette toggle for light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: black
-      accent: green
+      primary: white
+      accent: blue
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     # Palette toggle for dark mode
     - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: black
-      accent: green
+      scheme: default
+      primary: white
+      accent: blue
       toggle:
-        icon: material/brightness-4
+        icon: material/brightness-7
         name: Switch to light mode
   font:
-    text: Inter
-  nav_style: dark
+    text: DM Sans
+  nav_style: default
   highlightjs: true
+
 
 plugins:
   - search
+  - git-revision-date-localized
 
 extra_css:
-  - assets/css/style.css
-  - assets/css/custom.css
+  - assets/style.css
  
+extra_javascript:
+  - js/utc-time.js
+  - js/custom-header.js
+  - js/parallax.js
+  - js/navigation.js
+  - js/toc-highlight.js
+  - js/disable-preload-transition.js
+  - js/header-scroll.js
+
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/permaweb/HyperBEAM
+      link: https://github.com/permaweb/hyperBEAM
       name: GitHub
+  generator: false
+

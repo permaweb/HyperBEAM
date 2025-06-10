@@ -33,7 +33,26 @@
 %%   ar: String!
 %% }
 read(ID, Opts) ->
-    Query =
+    Query = case maps:is_key(<<"subindex">>, Opts) of
+      true -> 
+        Tags = subindex_to_tags(maps:get(<<"subindex">>, Opts)),
+        #{
+            <<"query">> =>
+                <<
+                    "query($transactionIds: [ID!]!) { ",
+                        "transactions(ids: $transactionIds,",
+                        "tags: ", (Tags)/binary , ",",
+                        "first: 1){ ",
+                            "edges { ", (item_spec())/binary , " } ",
+                        "} ",
+                    "} "
+                >>,
+            <<"variables">> =>
+                #{
+                    <<"transactionIds">> => [hb_util:human_id(ID)]
+                }
+        };
+      false -> 
         #{
             <<"query">> =>
                 <<
@@ -47,7 +66,8 @@ read(ID, Opts) ->
                 #{
                     <<"transactionIds">> => [hb_util:human_id(ID)]
                 }
-        },
+        }
+    end,
     case query(Query, Opts) of
         {error, Reason} -> {error, Reason};
         {ok, GqlMsg} ->
@@ -176,13 +196,19 @@ result_to_message(ExpectedID, Item, Opts) ->
     ?event(gateway, {data, {id, ExpectedID}, {data, Data}, {item, Item}}, Opts),
     % Convert the response to an ANS-104 message.
     Tags = hb_ao:get(<<"tags">>, Item, GQLOpts),
+	Signature = hb_util:decode(hb_ao:get(<<"signature">>, Item, GQLOpts)),
+	SignatureType = case byte_size(Signature) of
+		65 -> {ecdsa, 256};
+		512 -> {rsa, 65537};
+		_ -> unsupported_tx_signature_type
+	end,
     TX =
         #tx {
             format = ans104,
             id = hb_util:decode(ExpectedID),
             last_tx = normalize_null(hb_ao:get(<<"anchor">>, Item, GQLOpts)),
-            signature =
-                hb_util:decode(hb_ao:get(<<"signature">>, Item, GQLOpts)),
+            signature = Signature,
+            signature_type = SignatureType,
             target =
                 decode_or_null(
                     hb_ao:get_first(
@@ -267,6 +293,28 @@ decode_or_null(Bin) when is_binary(Bin) ->
 decode_or_null(_) ->
     <<>>.
 
+%% @doc Takes a list of messages with `name' and `value' fields, and formats
+%% them as a GraphQL `tags' argument.
+subindex_to_tags(Subindex) ->
+    Formatted =
+        lists:map(
+            fun(Spec) ->
+                io_lib:format(
+                    "{ name: \"~s\", values: [\"~s\"]}",
+                    [
+                        hb_ao:get(<<"name">>, Spec),
+                        hb_ao:get(<<"value">>, Spec)
+                    ]
+                )
+            end,
+            hb_util:message_to_ordered_list(Subindex)
+        ),
+    ListInner =
+        hb_util:bin(
+            string:join([lists:flatten(E) || E <- Formatted], ", ")
+        ),
+    <<"[", ListInner/binary, "]">>.
+
 %%% Tests
 ans104_no_data_item_test() ->
     % Start a random node so that all of the services come up.
@@ -286,3 +334,27 @@ scheduler_location_test() ->
     ?event(gateway, {scheduler_location, {explicit, hb_ao:get(<<"url">>, Res, #{})}}),
     % Will need updating when Legacynet terminates.
     ?assertEqual(<<"https://su-router.ao-testnet.xyz">>, hb_ao:get(<<"url">>, Res, #{})).
+
+%% @doc Test l1 message from graphql
+l1_transaction_test() ->
+    _Node = hb_http_server:start_node(#{}),
+    {ok, Res} = read(<<"uJBApOt4ma3pTfY6Z4xmknz5vAasup4KcGX7FJ0Of8w">>, #{}),
+    ?event(gateway, {l1_transaction, Res}),
+    Data = maps:get(<<"data">>, Res),
+    ?assertEqual(<<"Hello World">>, Data).
+
+%% @doc Test l2 message from graphql
+l2_dataitem_test() ->
+    _Node = hb_http_server:start_node(#{}),
+    {ok, Res} = read(<<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>, #{}),
+    ?event(gateway, {l2_dataitem, Res}),
+    Data = maps:get(<<"data">>, Res),
+    ?assertEqual(<<"Hello World">>, Data).
+
+%% @doc Test optimistic index
+ao_dataitem_test() ->
+    _Node = hb_http_server:start_node(#{}),
+    {ok, Res} = read(<<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>, #{ }),
+    ?event(gateway, {l2_dataitem, Res}),
+    Data = maps:get(<<"data">>, Res),
+    ?assertEqual(<<"Hello World">>, Data).

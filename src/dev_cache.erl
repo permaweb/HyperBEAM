@@ -24,6 +24,7 @@
 read(_M1, M2, Opts) ->
     Location = hb_ao:get(<<"target">>, M2, Opts),
     ?event({read, {key_extracted, Location}}),
+    ?event(debug_gateway, cache_read),
     case hb_cache:read(Location, Opts) of
         {ok, Res} ->
             ?event({read, {cache_result, ok, Res}}),
@@ -48,7 +49,8 @@ read(_M1, M2, Opts) ->
         not_found ->
             % The cache does not have this ID,but it may still be an explicit
             % `data/' path.
-            Store = hb_opts:get(store, [], Opts),
+            % Store = hb_opts:get(store, [], Opts),
+            Store = maps:get(store, Opts),
             ?event(dev_cache, {read, {location, Location}, {store, Store}}),
             hb_store:read(Store, Location)
     end.

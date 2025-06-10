@@ -6,11 +6,11 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% The size at which a value should be made into a body item, instead of a
-%% tag.
+%%% The size at which a value should be made into a body item, instead of a
+%%% tag.
 -define(MAX_TAG_VAL, 128).
-%% The list of TX fields that users can set directly. Data is excluded because
-%% it may be set by the codec in order to support nested messages.
+%%% The list of TX fields that users can set directly. Data is excluded because
+%%% it may be set by the codec in order to support nested messages.
 -define(TX_KEYS,
     [
         <<"id">>,
@@ -20,11 +20,25 @@
         <<"signature">>
     ]
 ).
-%% The list of tags that a user is explicitly committing to when they sign an
-%% ANS-104 message.
+%%% The list of keys that should be forced into the tag list, rather than being
+%%% encoded as fields in the TX record.
+-define(FORCED_TAG_FIELDS,
+    [
+        <<"quantity">>,
+        <<"manifest">>,
+        <<"data_size">>,
+        <<"data_tree">>,
+        <<"data_root">>,
+        <<"reward">>,
+        <<"denomination">>,
+        <<"signature_type">>
+    ]
+).
+%%% The list of tags that a user is explicitly committing to when they sign an
+%%% ANS-104 message.
 -define(COMMITTED_TAGS, ?TX_KEYS ++ [<<"data">>]).
-%% List of tags that should be removed during `to'. These relate to the nested
-%% ar_bundles format that is used by the `ans104@1.0' codec.
+%%% List of tags that should be removed during `to'. These relate to the nested
+%%% ar_bundles format that is used by the `ans104@1.0' codec.
 -define(FILTERED_TAGS,
     [
         <<"bundle-format">>,
@@ -274,7 +288,7 @@ do_from(RawTX) ->
                         }
                 end;
             _ ->
-                Address = hb_util:human_id(ar_wallet:to_address(TX#tx.owner)),
+                Address = hb_util:human_id(ar_wallet:to_address(TX#tx.owner, TX#tx.signature_type)),
                 WithoutBaseCommitment =
                     maps:without(
                         [
@@ -454,10 +468,12 @@ to(RawTABM) when is_map(RawTABM) ->
             end,
             M
         ),
-    NormalizedMsgKeyMap = hb_ao:normalize_keys(MsgKeyMap),
+    MsgKeyMap2 = hb_ao:normalize_keys(MsgKeyMap),
     % Iterate through the default fields, replacing them with the values from
     % the message map if they are present.
-    {RemainingMap, BaseTXList} =
+    ForcedTagFields = maps:with(?FORCED_TAG_FIELDS, MsgKeyMap2),
+    NormalizedMsgKeyMap = maps:without(?FORCED_TAG_FIELDS, MsgKeyMap2),
+    {RemainingMapWithoutForcedTags, BaseTXList} =
         lists:foldl(
             fun({Field, Default}, {RemMap, Acc}) ->
                 NormKey = hb_ao:normalize_key(Field),
@@ -483,6 +499,7 @@ to(RawTABM) when is_map(RawTABM) ->
             {NormalizedMsgKeyMap, []},
             hb_message:default_tx_list()
         ),
+    RemainingMap = maps:merge(RemainingMapWithoutForcedTags, ForcedTagFields),
     % Rebuild the tx record from the new list of fields and values.
     TXWithoutTags = list_to_tuple([tx | lists:reverse(BaseTXList)]),
     % Calculate which set of the remaining keys will be used as tags.
@@ -678,3 +695,32 @@ only_committed_maintains_target_test() ->
     Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?event({encoded, Encoded}),
     ?assertEqual(TX, Encoded).
+
+quantity_field_is_ignored_in_from_test() ->
+    % Ensure that converting from a signed TX with a quantity field results
+    % in a message _without_ a quantity field.
+    TX =
+        ar_bundles:sign_item(
+            #tx {
+                tags = [
+                    {<<"test-key">>, <<"value">>}
+                ],
+                quantity = 100
+            },
+            ar_wallet:new()
+        ),
+    ?event({tx, TX}),
+    EncodedMsg = from(TX),
+    ?assertEqual(not_found, hb_ao:get(<<"quantity">>, EncodedMsg, #{})).
+
+quantity_key_encoded_as_tag_test() ->
+    % Ensure that the reciprocal behavior works: converting a message with
+    % a quantity key should yield a tag, rather than a quantity field.
+    Msg = #{ <<"quantity">> => <<"100">> },
+    EncodedTX = to(Msg),
+    ?event({msg, Msg}),
+    ?assertEqual(0, EncodedTX#tx.quantity),
+    % Ensure that converting back to a message yields the original.
+    DecodedMsg2 = from(EncodedTX),
+    ?event({decoded_msg2, DecodedMsg2}),
+    ?assert(hb_message:match(Msg, DecodedMsg2) == true).

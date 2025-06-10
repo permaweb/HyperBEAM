@@ -10,11 +10,13 @@ info() ->
         routes => #{
             <<"index">> => <<"index.html">>,
             <<"console">> => <<"console.html">>,
+            <<"graph">> => <<"graph.html">>,
 			<<"styles.css">> => <<"styles.css">>,
 			<<"metrics.js">> => <<"metrics.js">>,
 			<<"devices.js">> => <<"devices.js">>,
 			<<"utils.js">> => <<"utils.js">>,
-			<<"main.js">> => <<"main.js">>
+			<<"main.js">> => <<"main.js">>,
+			<<"graph.js">> => <<"graph.js">>
         }
     }.
 
@@ -47,6 +49,7 @@ format(Base, _, _) ->
 %% listed in the `routes' field of the `info/0' return value.
 serve(<<"keys">>, M1, _M2, _Opts) -> dev_message:keys(M1);
 serve(<<"set">>, M1, M2, Opts) -> dev_message:set(M1, M2, Opts);
+serve(<<"graph-data">>, _, _, Opts) -> hb_cache_render:get_graph_data(Opts);
 serve(Key, _, _, _) ->
     ?event({hyperbuddy_serving, Key}),
     case maps:get(Key, maps:get(routes, info(), no_routes), undefined) of

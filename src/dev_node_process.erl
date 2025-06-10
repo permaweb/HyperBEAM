@@ -49,7 +49,7 @@ spawn_register(Name, Opts) ->
             Signed = hb_message:commit(augment_definition(BaseDef, Opts), Opts),
             ID = hb_message:id(Signed, signed, Opts),
             ?event(node_process, {spawned, {name, Name}, {process, Signed}}),
-            % `POST` to the schedule device for the process to start its sequence.
+            % `POST' to the schedule device for the process to start its sequence.
             {ok, Assignment} =
                 hb_ao:resolve(
                     Signed,
@@ -105,13 +105,16 @@ augment_definition(BaseDef, Opts) ->
 
 %% @doc Helper function to generate a test environment and its options.
 generate_test_opts() ->
-    {ok, Script} = file:read_file(<<"test/test.lua">>),
+    {ok, Module} = file:read_file(<<"test/test.lua">>),
     generate_test_opts(#{
         ?TEST_NAME => #{
             <<"device">> => <<"process@1.0">>,
             <<"execution-device">> => <<"lua@5.3a">>,
             <<"scheduler-device">> => <<"scheduler@1.0">>,
-            <<"script">> => Script
+            <<"module">> => #{
+                <<"content-type">> => <<"text/x-lua">>,
+                <<"body">> => Module
+            }
         }
     }).
 generate_test_opts(Defs) ->

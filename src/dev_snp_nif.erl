@@ -49,7 +49,7 @@ generate_attestation_report_test() ->
 compute_launch_digest_test() ->
 	%% Define the data structure
 	ArgsMap = #{ 
-		vcpus => 1,
+		vcpus => 32,
 		vcpu_type => 5, 
 		vmm_type => 1,
 		guest_features => 16#1,
@@ -63,10 +63,9 @@ compute_launch_digest_test() ->
 
 		%% Call the NIF
 	{ok, Result} = dev_snp_nif:compute_launch_digest(ArgsMap),
-
 	%% Expected result
     EncTestVector =
-        <<"Lhgbg_pneEf5Ebaj1ru3lIFu7RXHY4jBVnjSd-Yk7D0jIryZ3aLdks4YOWfjajKW">>,
+        <<"wmSDSQYuzE2M3rQcourJnDJHgalADM8TBev3gyjM5ObRNOn8oglvVznFbaWhajU_">>,
 	?assertMatch(EncTestVector, hb_util:encode(Result)).
 
 verify_measurement_test() ->

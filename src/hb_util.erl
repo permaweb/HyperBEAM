@@ -6,7 +6,7 @@
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
 -export([find_value/2, find_value/3]).
 -export([deep_merge/2, number/1, list_to_numbered_map/1]).
--export([message_to_ordered_list/1, message_to_ordered_list/2]).
+-export([is_ordered_list/1, message_to_ordered_list/1, message_to_ordered_list/2]).
 -export([is_string_list/1, to_sorted_list/1, to_sorted_keys/1]).
 -export([hd/1, hd/2, hd/3]).
 -export([remove_common/2, to_lower/1]).
@@ -15,8 +15,9 @@
 -export([format_maybe_multiline/2, remove_trailing_noise/2]).
 -export([debug_print/4, debug_fmt/1, debug_fmt/2, eunit_print/2]).
 -export([print_trace/4, trace_macro_helper/5, print_trace_short/4]).
+-export([format_trace/1, format_trace_short/1]).
+-export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, until/1, until/2, until/3]).
--export([format_trace_short/1, is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
 -include("include/hb.hrl").
 
@@ -38,7 +39,9 @@ float(Str) when is_binary(Str) ->
 float(Str) when is_list(Str) ->
     list_to_float(Str);
 float(Float) when is_float(Float) ->
-    Float.
+    Float;
+float(Int) when is_integer(Int) ->
+    Int / 1.
 
 %% @doc Coerce a string to an atom.
 atom(Str) when is_binary(Str) ->
@@ -63,7 +66,8 @@ bin(Value) when is_binary(Value) ->
 %% @doc Coerce a value to a list.
 list(Value) when is_binary(Value) ->
     binary_to_list(Value);
-list(Value) when is_list(Value) -> Value.
+list(Value) when is_list(Value) -> Value;
+list(Value) when is_atom(Value) -> atom_to_list(Value).
 
 %% @doc Unwrap a tuple of the form `{ok, Value}', or throw/return, depending on
 %% the value of the `error_strategy' option.
@@ -136,11 +140,7 @@ key_to_atom(Key, Mode) ->
     WithoutDashes = binary:replace(Key, <<"-">>, <<"_">>, [global]),
     case Mode of
         new_atoms -> binary_to_atom(WithoutDashes, utf8);
-        _ ->
-            try binary_to_existing_atom(WithoutDashes, utf8)
-            catch
-                error:badarg -> WithoutDashes
-            end
+        _ -> binary_to_existing_atom(WithoutDashes, utf8)
     end.
 
 %% @doc Convert a human readable ID to a native binary ID. If the ID is already
@@ -148,13 +148,18 @@ key_to_atom(Key, Mode) ->
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
     decode(Bin);
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
+    Bin;
+native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 42 ->
     Bin.
 
 %% @doc Convert a native binary ID to a human readable ID. If the ID is already
-%% a human readable ID, it is returned as is.
+%% a human readable ID, it is returned as is. If it is an ethereum address, it
+%% is returned as is.
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     encode(Bin);
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
+    Bin;
+human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 42 ->
     Bin.
 
 %% @doc Return a short ID for the different types of IDs used in AO-Core.
@@ -254,6 +259,21 @@ number(List) ->
 %% @doc Convert a list of elements to a map with numbered keys.
 list_to_numbered_map(List) ->
     maps:from_list(number(List)).
+
+%% @doc Determine if the message given is an ordered list, starting from 1.
+is_ordered_list(Msg) when is_list(Msg) -> true;
+is_ordered_list(Msg) ->
+    is_ordered_list(1, hb_ao:normalize_keys(Msg)).
+is_ordered_list(_, Msg) when map_size(Msg) == 0 -> true;
+is_ordered_list(N, Msg) ->
+    case maps:get(NormKey = hb_ao:normalize_key(N), Msg, not_found) of
+        not_found -> false;
+        _ ->
+            is_ordered_list(
+                N + 1,
+                maps:without([NormKey], Msg)
+            )
+    end.
 
 %% @doc Take a message with numbered keys and convert it to a list of tuples
 %% with the associated key as an integer and a value. Optionally, it takes a
@@ -422,7 +442,11 @@ do_debug_fmt({X, Y}, Indent) when is_record(Y, tx) ->
 do_debug_fmt({X, Y}, Indent) when is_map(Y) ->
     Formatted = format_maybe_multiline(Y, Indent + 1),
     HasNewline = lists:member($\n, Formatted),
-    format_indented("~p~s",
+    format_indented(
+        case is_binary(X) of
+            true -> "~s";
+            false -> "~p"
+        end ++ "~s",
         [
             X,
             case HasNewline of
@@ -581,18 +605,15 @@ print_trace(Stack, Label, CallerInfo) ->
     io:format(standard_error, "=== ~s ===~s==>~n~s",
         [
             Label, CallerInfo,
-            lists:flatten(
-                format_trace(
-                    Stack,
-                    hb_opts:get(stack_print_prefixes, [], #{})
-                )
-            )
+            lists:flatten(format_trace(Stack))
         ]).
 
 %% @doc Format a stack trace as a list of strings, one for each stack frame.
 %% Each stack frame is formatted if it matches the `stack_print_prefixes'
 %% option. At the first frame that does not match a prefix in the
 %% `stack_print_prefixes' option, the rest of the stack is not formatted.
+format_trace(Stack) ->
+    format_trace(Stack, hb_opts:get(stack_print_prefixes, [], #{})).
 format_trace([], _) -> [];
 format_trace([Item|Rest], Prefixes) ->
     case element(1, Item) of

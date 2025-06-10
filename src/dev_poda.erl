@@ -1,11 +1,4 @@
--module(dev_poda).
--export([init/2, execute/3]).
--export([is_user_signed/1]).
--export([push/2]).
--include("include/hb.hrl").
--hb_debug(print).
-
-%%% A simple exemplar decentralized proof of authority consensus algorithm
+%%% @doc A simple exemplar decentralized proof of authority consensus algorithm
 %%% for AO processes. This device is split into two flows, spanning three
 %%% actions.
 %%% 
@@ -14,6 +7,12 @@
 %%% 2. Validation of incoming messages before execution.
 %%% Commitment flow:
 %%% 1. Adding commitments to results, either on a CU or MU.
+-module(dev_poda).
+-export([init/2, execute/3]).
+-export([is_user_signed/1]).
+-export([push/2]).
+-include("include/hb.hrl").
+-hb_debug(print).
 
 %%% Execution flow: Initialization.
 
@@ -168,6 +167,7 @@ return_error(S = #{ <<"wallet">> := Wallet }, Reason) ->
         }
     }}.
 
+%%% @doc Determines if a user committed
 is_user_signed(#tx { data = #{ <<"body">> := Msg } }) ->
     ?no_prod(use_real_commitment_detection),
     lists:keyfind(<<"from-process">>, 1, Msg#tx.tags) == false;

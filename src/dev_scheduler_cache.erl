@@ -120,13 +120,13 @@ read_location(Address, Opts) ->
     Res.
 
 %% @doc Write the latest known scheduler location for an address.
-write_location(LocationMsg, Opts) ->
-    Signers = hb_message:signers(LocationMsg),
+write_location(LocMsg, Opts) ->
+    Signers = hb_message:signers(LocMsg),
     ?event({writing_location_msg,
         {signers, Signers},
-        {location_msg, LocationMsg}
+        {location_msg, LocMsg}
     }),
-    case hb_cache:write(LocationMsg, Opts) of
+    case hb_message:verify(LocMsg, all) andalso hb_cache:write(LocMsg, Opts) of
         {ok, RootPath} ->
             lists:foreach(
                 fun(Signer) ->
@@ -145,6 +145,9 @@ write_location(LocationMsg, Opts) ->
                 Signers
             ),
             ok;
+        false ->
+            % The message is not valid, so we don't cache it.
+            {error, <<"Invalid scheduler location message. Not caching.">>};
         {error, Reason} ->
             ?event(warning, {failed_to_cache_location_msg, {reason, Reason}}),
             {error, Reason}

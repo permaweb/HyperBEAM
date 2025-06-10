@@ -8,7 +8,7 @@
 %% `rebar3 eunit --test hb_ao_test_vectors:run_test'
 %% Comment/uncomment out as necessary.
 run_test() ->
-    hb_test_utils:run(start_as, normal, test_suite(), test_opts()).
+    hb_test_utils:run(step_hook, normal, test_suite(), test_opts()).
 
 %% @doc Run each test in the file with each set of options. Start and reset
 %% the store for each test.
@@ -73,7 +73,9 @@ test_suite() ->
         {denormalized_device_key, "denormalized device key",
             fun denormalized_device_key_test/1},
         {list_transform, "list transform",
-            fun list_transform_test/1}
+            fun list_transform_test/1},
+        {step_hook, "step hook",
+            fun step_hook_test/1}
     ].
 
 test_opts() ->
@@ -263,8 +265,9 @@ resolve_binary_key_test(Opts) ->
         {ok, <<"1">>},
         hb_ao:resolve(
             #{
-                <<"Test-Header">> => <<"1">> },
-                <<"Test-Header">>,
+                <<"Test-Header">> => <<"1">>
+            },
+            <<"Test-Header">>,
             Opts
         )
     ).
@@ -768,3 +771,49 @@ continue_as_test(Opts) ->
             Opts
         )
     ).
+
+step_hook_test(InitOpts) ->
+    % Test that the step hook is called correctly. We do this by sending ourselves
+    % a message each time the hook is called. We also send a `reference', such 
+    % that this test is uniquely identified and further/prior tests do not affect
+    % it.
+    Self = self(),
+    Ref = make_ref(),
+    Opts =
+        InitOpts#{
+            on =>
+                #{
+                    <<"step">> =>
+                        #{
+                            <<"device">> =>
+                                #{
+                                    <<"step">> =>
+                                        fun(_, Req, _) ->
+                                            ?event(ao_core, {step_hook, {self(), Ref}}),
+                                            Self ! {step, Ref},
+                                            {ok, Req}
+                                        end
+                                }
+                        }
+                }
+        },
+    Msg = #{
+        <<"a">> =>
+            #{
+                <<"b">> =>
+                    #{
+                        <<"c">> => <<"1">>
+                    }
+            }
+    },
+    % Test that the response has completed and is correct.
+    ?assertMatch(
+        {ok, <<"1">>},
+        hb_ao:resolve(
+            Msg,
+            #{ <<"path">> => <<"a/b/c">> },
+            Opts
+        )
+    ),
+    % Test that the step hook was called.
+    ?assert(receive {step, Ref} -> true after 100 -> false end).

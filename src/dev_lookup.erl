@@ -5,6 +5,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%%% @doc Fetch a resource from the cache using "target" ID extracted from the message
 read(_M1, M2, Opts) ->
     ID = hb_ao:get(<<"target">>, M2, Opts),
     ?event({lookup, {id, ID}, {opts, Opts}}),

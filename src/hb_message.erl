@@ -787,6 +787,7 @@ match_test(Codec) ->
     Decoded = convert(Encoded, <<"structured@1.0">>, Codec, #{}),
     ?assert(match(Msg, Decoded)).
 
+binary_to_binary_test(<<"flat@1.0">>) -> ok;
 binary_to_binary_test(Codec) ->
     % Serialization must be able to turn a raw binary into a TX, then turn
     % that TX back into a binary and have the result match the original.

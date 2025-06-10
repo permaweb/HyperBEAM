@@ -1,150 +1,145 @@
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <link
-            rel="icon"
-            type="image/png"
-            href="https://arweave.net/oTMNDjwfn-Mv0bJZPGmMpDPPYWqINH6lQeTVc92bwjA"
-        />
-        <link
-            href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap"
-            rel="stylesheet"
-        />
-        <link rel="stylesheet" href="styles.css" />
-        <title>HyperBEAM</title>
-    </head>
-    <body>
-        <div class="header">
-            <div class="header-hyperbeam-chain">
-                <video autoplay muted loop playsinline width="500">
-                    <source
-                        src="https://arweave.net/kvebTQY2E5J7Zx-SSnsbwxIqS0-BxII9Bb0bQc__Rmg"
-                        type="video/mp4"
-                    />
-                </video>
-            </div>
-            <div class="header-main">
-                <div class="header-left">
-                    <div class="video-container">
-                        <video
-                            autoplay
-                            muted
-                            loop
-                            playsinline
-                            width="500"
-                            class="light-video"
-                        >
-                            <source
-                                src="https://arweave.net/ewmiCoSJpWpNv02F7AW5ZCp4meyaJxZHbOD4WEsuDFY"
-                                type="video/mp4"
-                            />
-                            Your browser does not support the video tag.
-                        </video>
-                    </div>
-                </div>
-            </div>
-            <div class="subheader">
-                <div class="subheader-value">
-                    <p>Status:</p>
-                    <div class="subheader-indicator-wrapper">
-                        <div class="subheader-indicator"></div>
-                        <p>Live</p>
-                    </div>
-                </div>
-                <div class="subheader-value">
-                    <p>Operator:</p>
-                    <button id="operator-action" disabled="true">
-                        Loading...
-                    </button>
-                </div>
-            </div>
-        </div>
 
-        <div class="section-groups">
-            <div class="section-group">
-                <div class="section">
-                    <h4 class="key-metric-header section-header">Uptime</h4>
-                    <div class="key-metric-wrapper">
-                        <h2 id="uptime-value" class="key-metric-value">-</h2>
-                        <span class="key-metric-label">Seconds</span>
-                    </div>
-                </div>
-                <div class="section">
-                    <h4 class="key-metric-header section-header">
-                        AO-Core Executions
-                    </h4>
-                    <div class="key-metric-wrapper">
-                        <h2 id="executions-value" class="key-metric-value">
-                            -
-                        </h2>
-                        <span class="key-metric-label">Executions</span>
-                    </div>
-                </div>
-                <div class="section">
-                    <h4 class="key-metric-header section-header">
-                        System Load
-                    </h4>
-                    <div class="key-metric-wrapper">
-                        <h2 id="system-value" class="key-metric-value">-</h2>
-                        <span class="key-metric-label">CPU Average</span>
-                    </div>
-                </div>
-            </div>
-            <div class="section-group">
-                <div class="section">
-                    <h4 class="key-metric-header section-header">
-                        Read Requests Handled
-                    </h4>
-                    <div class="key-metric-wrapper">
-                        <h2 id="read-value" class="key-metric-value">-</h2>
-                        <span class="key-metric-label">Requests</span>
-                    </div>
-                </div>
-                <div class="section">
-                    <h4 class="key-metric-header section-header">
-                        Write Requests Handled
-                    </h4>
-                    <div class="key-metric-wrapper">
-                        <h2 id="write-value" class="key-metric-value">-</h2>
-                        <span class="key-metric-label">Requests</span>
-                    </div>
-                </div>
-            </div>
-        </div>
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<link rel="icon" type="image/png" href="https://arweave.net/oTMNDjwfn-Mv0bJZPGmMpDPPYWqINH6lQeTVc92bwjA" />
+	<link href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap"
+		rel="stylesheet" />
+	<link rel="stylesheet" href="styles.css" />
+	<title>HyperBEAM</title>
+</head>
 
-        <div class="tabs-wrapper">
-            <div class="tabs">
-                <button class="tab-button active" data-tab="devices-tab">
-                    Devices
-                </button>
-                <button class="tab-button" data-tab="metrics-tab">
-                    Metrics
-                </button>
-                <button class="tab-button" data-tab="console-tab">
-                    Console
-                </button>
-            </div>
+<body>
 
-            <div id="devices-tab" class="tab-content active">
-                <div id="info-section-lines" class="device-cards-container">
-                    <div class="info-line">
-                        <p>Loading...</p>
-                    </div>
-                </div>
-            </div>
 
-            <div id="metrics-tab" class="tab-content">
-                <div id="metrics-section"></div>
-            </div>
+	<div class="header">
+		<a class="graph-link" href="/~hyperbuddy@1.0/graph" target="_blank">
+			Cache Visualizer
+		</a>
+		<div class="header-inner">
+			<div class="header-hyperbeam-chain">
+				<video autoplay muted loop playsinline width="500">
+					<source src="https://arweave.net/kvebTQY2E5J7Zx-SSnsbwxIqS0-BxII9Bb0bQc__Rmg" type="video/mp4" />
+				</video>
+			</div>
+			<div class="header-main">
+				<div class="header-left">
+					<div class="video-container">
+						<video autoplay muted loop playsinline width="500" class="light-video">
+							<source src="https://arweave.net/ewmiCoSJpWpNv02F7AW5ZCp4meyaJxZHbOD4WEsuDFY"
+								type="video/mp4" />
+							Your browser does not support the video tag.
+						</video>
+					</div>
+				</div>
+			</div>
+			<div class="subheader">
+				<div class="subheader-value">
+					<p>Status:</p>
+					<div class="subheader-indicator-wrapper">
+						<div class="subheader-indicator"></div>
+						<p>Live</p>
+					</div>
+				</div>
+				<div class="subheader-value">
+					<p>Operator:</p>
+					<button id="operator-action" disabled="true">
+						Loading...
+					</button>
+				</div>
+			</div>
+		</div>
+	</div>
 
-            <div id="console-tab" class="tab-content">
-                <div id="console-section"></div>
-            </div>
-        </div>
+	<div class="section-groups">
+		<div class="section-group">
+			<div class="section">
+				<h4 class="key-metric-header section-header">Uptime</h4>
+				<div class="key-metric-wrapper">
+					<h2 id="uptime-value" class="key-metric-value">-</h2>
+					<span class="key-metric-label">Seconds</span>
+				</div>
+			</div>
+			<div class="section">
+				<h4 class="key-metric-header section-header">
+					AO-Core Executions
+				</h4>
+				<div class="key-metric-wrapper">
+					<h2 id="executions-value" class="key-metric-value">
+						-
+					</h2>
+					<span class="key-metric-label">Executions</span>
+				</div>
+			</div>
+			<div class="section">
+				<h4 class="key-metric-header section-header">
+					System Load
+				</h4>
+				<div class="key-metric-wrapper">
+					<h2 id="system-value" class="key-metric-value">-</h2>
+					<span class="key-metric-label">CPU Average</span>
+				</div>
+			</div>
+		</div>
+		<div class="section-group">
+			<div class="section">
+				<h4 class="key-metric-header section-header">
+					Read Requests Handled
+				</h4>
+				<div class="key-metric-wrapper">
+					<h2 id="read-value" class="key-metric-value">-</h2>
+					<span class="key-metric-label">Requests</span>
+				</div>
+			</div>
+			<div class="section">
+				<h4 class="key-metric-header section-header">
+					Write Requests Handled
+				</h4>
+				<div class="key-metric-wrapper">
+					<h2 id="write-value" class="key-metric-value">-</h2>
+					<span class="key-metric-label">Requests</span>
+				</div>
+			</div>
+		</div>
+	</div>
 
-        <!-- Load modular JavaScript files -->
-        <script type="module" src="main.js"></script>
-    </body>
+
+
+	<div class="tabs-wrapper">
+		<div class="tabs">
+			<button class="tab-button active" data-tab="devices-tab">
+				Devices
+			</button>
+			<button class="tab-button" data-tab="metrics-tab">
+				Metrics
+			</button>
+			<button class="tab-button" data-tab="console-tab">
+				Console
+			</button>
+		</div>
+
+		<div id="devices-tab" class="tab-content active">
+			<div id="info-section-lines" class="device-cards-container">
+				<div class="info-line">
+					<p>Loading...</p>
+				</div>
+			</div>
+		</div>
+
+		<div id="metrics-tab" class="tab-content">
+			<div id="metrics-section"></div>
+		</div>
+
+		<div id="console-tab" class="tab-content">
+			<div id="console-section"></div>
+		</div>
+
+	</div>
+
+	<!-- Load modular JavaScript files -->
+	<script type="module" src="main.js"></script>
+</body>
+
 </html>

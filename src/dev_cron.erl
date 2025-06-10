@@ -180,13 +180,13 @@ parse_time(BinString) ->
 stop_once_test() ->
 	% Start a new node
 	Node = hb_http_server:start_node(),
-	% Set up a standard test worker (even though long_task doesn't use its state)
+	% Set up a standard test worker (even though delay doesn't use its state)
 	TestWorkerPid = spawn(fun test_worker/0),
 	TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
 	hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
-	% Create a "once" task targeting the long_task function
+	% Create a "once" task targeting the delay function
 	OnceUrlPath = <<"/~cron@1.0/once?test-id=", TestWorkerNameId/binary,
-				 "&cron-path=/~test-device@1.0/long_task">>,
+				 "&cron-path=/~test-device@1.0/delay">>,
 	{ok, OnceTaskID} = hb_http:get(Node, OnceUrlPath, #{}),
 	?event({'cron:stop_once:test:created', {task_id, OnceTaskID}}),
 	% Give a short delay to ensure the task has started and called handle,
