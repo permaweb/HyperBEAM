@@ -142,10 +142,7 @@ verify(M1, M2, NodeOpts) ->
                             fun atom_to_binary/1,
                             ?COMMITTED_PARAMETERS
                         ),
-                        hb_cache:ensure_all_loaded(
-                            hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
-                            NodeOpts
-                        )
+                        hb_maps:get(<<"local-hashes">>, Msg, NodeOpts)
                     )
                 )
             )
