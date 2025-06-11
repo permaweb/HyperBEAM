@@ -685,5 +685,15 @@ a:hover {
 	background: var(--section-bg-color-alt1);
 	color: var(--indicator-color-active);
 	text-decoration: none;
+}
 
+.load-network-logo {
+	display: flex;
+	justify-content: center;
+	margin-bottom: 20px;
+}
+
+.load-network-logo img {
+	max-width: 300px;
+	height: auto;
 }
