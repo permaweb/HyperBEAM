@@ -1,4 +1,4 @@
-Generated: 2025-06-10T16:34:01Z
+Generated: 2025-06-10T16:36:39Z
 
 --- START OF FILE: docs/build/ao-connect.md ---
 # HyperBEAM from AO Connect
@@ -1141,7 +1141,7 @@ The Device framework ensures that AO can adapt and grow, incorporating new techn
 --- END OF FILE: docs/introduction/hyperbeam-devices.md ---
 
 --- START OF FILE: docs/introduction/pathing-in-hyperbeam.md ---
-# Paths in HyperBEAM
+# Pathing in HyperBEAM
 
 ## Overview
 

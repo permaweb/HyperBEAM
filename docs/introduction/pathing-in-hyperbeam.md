@@ -1,4 +1,4 @@
-# Paths in HyperBEAM
+# Pathing in HyperBEAM
 
 ## Overview
 

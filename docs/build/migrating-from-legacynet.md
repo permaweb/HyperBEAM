@@ -57,6 +57,9 @@ This pattern typically involves checking a flag within your process state to ens
 -- Place this logic at the top level of your process script, 
 -- outside of specific handlers, so it runs on load.
 
+Balances = { token1 = 100, token2 = 200 } -- A table of balances
+TotalSupply = 1984 -- A single total supply value
+
 -- Initialize the sync flag if it doesn't exist
 InitialSync = InitialSync or 'INCOMPLETE'
 
@@ -74,7 +77,7 @@ end
 
 1.  `InitialSync = InitialSync or 'INCOMPLETE'`: This line ensures the `InitialSync` variable exists in the process state, initializing it to `'INCOMPLETE'` if it's the first time the code runs.
 2.  `if InitialSync == 'INCOMPLETE' then`: The code proceeds only if the initial sync hasn't been marked as complete.
-3.  `Send(...)`: The relevant state (`Balances`, `TotalSupply`) is sent to the `patch` device, making it available under `/cache/balances` and `/cache/totalsupply`.
+3.  `Send(...)`: The relevant state (`Balances`, `TotalSupply`) is sent to the `patch` device, making it available under `<process-id>~process@1.0/cache/balances` and `<process-id>~process@1.0/cache/totalsupply`.
 4.  `InitialSync = 'COMPLETE'`: The flag is updated, so this block won't execute again in future message handlers within the same process lifecycle.
 
 This ensures that clients or frontends can immediately query essential data like token balances as soon as the process ID is known, improving the responsiveness of applications built on AO.
