@@ -1,19 +1,23 @@
-
 %%% @doc A wrapper around the hb_cache module that provides a more
 %%% convenient interface for reading the result of a process at a given slot or
 %%% message ID.
 -module(dev_process_cache).
 -export([latest/2, latest/3, latest/4, read/2, read/3, write/4]).
 -include_lib("eunit/include/eunit.hrl").
+
 -include("include/hb.hrl").
+
 
 %% @doc Read the result of a process at a given slot.
 read(ProcID, Opts) ->
     hb_util:ok(latest(ProcID, Opts)).
+
+
 read(ProcID, SlotRef, Opts) ->
     ?event({reading_computed_result, ProcID, SlotRef}),
     Path = path(ProcID, SlotRef, Opts),
     hb_cache:read(Path, Opts).
+
 
 %% @doc Write a process computation result to the cache.
 write(ProcID, Slot, Msg, Opts) ->
@@ -25,47 +29,49 @@ write(ProcID, Slot, Msg, Opts) ->
     % Link the item to the message ID path in the store.
     MsgIDPath =
         path(
-            ProcID,
-            ID = hb_util:human_id(hb_ao:get(id, Msg, Opts)),
-            Opts
-        ),
+          ProcID,
+          ID = hb_util:human_id(hb_ao:get(id, Msg, Opts)),
+          Opts),
     ?event(
-        {linking_id,
-            {proc_id, ProcID},
-            {slot, Slot},
-            {id, ID},
-            {path, MsgIDPath}
-        }
-    ),
+      {linking_id,
+       {proc_id, ProcID},
+       {slot, Slot},
+       {id, ID},
+       {path, MsgIDPath}}),
     hb_cache:link(Root, MsgIDPath, Opts),
     % Return the slot number path.
     {ok, SlotNumPath}.
 
+
 %% @doc Calculate the path of a result, given a process ID and a slot.
 path(ProcID, Ref, Opts) ->
     path(ProcID, Ref, [], Opts).
+
+
 path(ProcID, Ref, PathSuffix, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     hb_store:path(
-        Store,
-        [
-            <<"computed">>,
-            hb_util:human_id(ProcID)
-        ] ++
-        case Ref of
-            Int when is_integer(Int) -> ["slot", integer_to_binary(Int)];
-            root -> [];
-            slot_root -> ["slot"];
-            _ -> [Ref]
-        end ++ PathSuffix
-    ).
+      Store,
+      [<<"computed">>,
+       hb_util:human_id(ProcID)] ++
+      case Ref of
+          Int when is_integer(Int) -> ["slot", integer_to_binary(Int)];
+          root -> [];
+          slot_root -> ["slot"];
+          _ -> [Ref]
+      end ++ PathSuffix).
+
 
 %% @doc Retrieve the latest slot for a given process. Optionally state a limit
 %% on the slot number to search for, as well as a required path that the slot
 %% must have.
 latest(ProcID, Opts) -> latest(ProcID, [], Opts).
+
+
 latest(ProcID, RequiredPath, Opts) ->
     latest(ProcID, RequiredPath, undefined, Opts).
+
+
 latest(ProcID, RawRequiredPath, Limit, Opts) ->
     ?event({latest_called, {proc_id, ProcID}, {required_path, RawRequiredPath}, {limit, Limit}, {opts, Opts}}),
     % Convert the required path to a list of _binary_ keys.
@@ -75,9 +81,8 @@ latest(ProcID, RawRequiredPath, Limit, Opts) ->
             [] -> [];
             _ ->
                 hb_path:term_to_path_parts(
-                    RawRequiredPath,
-                    Opts
-                )
+                  RawRequiredPath,
+                  Opts)
         end,
     ?event({required_path_converted, {proc_id, ProcID}, {required_path, RequiredPath}}),
     Path = path(ProcID, slot_root, Opts),
@@ -89,21 +94,18 @@ latest(ProcID, RawRequiredPath, Limit, Opts) ->
             _ -> lists:filter(fun(Slot) -> Slot =< Limit end, AllSlots)
         end,
     ?event(
-        {finding_latest_slot,
-            {proc_id, hb_util:human_id(ProcID)},
-            {limit, Limit},
-            {path, Path},
-            {slots_in_range, CappedSlots}
-        }
-    ),
+      {finding_latest_slot,
+       {proc_id, hb_util:human_id(ProcID)},
+       {limit, Limit},
+       {path, Path},
+       {slots_in_range, CappedSlots}}),
     % Find the highest slot that has the necessary path.
     BestSlot =
         first_with_path(
-            ProcID,
-            RequiredPath,
-            lists:reverse(lists:sort(CappedSlots)),
-            Opts
-        ),
+          ProcID,
+          RequiredPath,
+          lists:reverse(lists:sort(CappedSlots)),
+          Opts),
     case BestSlot of
         not_found ->
             % No slot found with the necessary path was found.
@@ -114,15 +116,17 @@ latest(ProcID, RawRequiredPath, Limit, Opts) ->
             {ok, SlotNum, Msg}
     end.
 
+
 %% @doc Find the latest assignment with the requested path suffix.
 first_with_path(ProcID, RequiredPath, Slots, Opts) ->
     first_with_path(
-        ProcID,
-        RequiredPath,
-        Slots,
-        Opts,
-        hb_opts:get(store, no_viable_store, Opts)
-    ).
+      ProcID,
+      RequiredPath,
+      Slots,
+      Opts,
+      hb_opts:get(store, no_viable_store, Opts)).
+
+
 first_with_path(_ProcID, _Required, [], _Opts, _Store) ->
     not_found;
 first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
@@ -136,26 +140,23 @@ first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
             Slot
     end.
 
+
 %%% Tests
+
 
 process_cache_suite_test_() ->
     hb_store:generate_test_suite(
-        [
-            {"write and read process outputs", fun test_write_and_read_output/1},
-            {"find latest output (with path)", fun find_latest_outputs/1}
-        ],
-        [
-            {Name, Opts}
-        ||
-            {Name, Opts} <- hb_store:test_stores()
-        ]
-    ).
+      [{"write and read process outputs", fun test_write_and_read_output/1},
+       {"find latest output (with path)", fun find_latest_outputs/1}],
+      [ {Name, Opts}
+        || {Name, Opts} <- hb_store:test_stores() ]).
+
 
 %% @doc Test for writing multiple computed outputs, then getting them by
 %% their slot number and by their signed and unsigned IDs.
 test_write_and_read_output(Opts) ->
     Proc = hb_cache:test_signed(
-        #{ <<"test-item">> => hb_cache:test_unsigned(<<"test-body-data">>) }),
+             #{<<"test-item">> => hb_cache:test_unsigned(<<"test-body-data">>)}),
     ProcID = hb_util:human_id(hb_ao:get(id, Proc)),
     Item1 = hb_cache:test_signed(<<"Simple signed output #1">>),
     Item2 = hb_cache:test_unsigned(<<"Simple unsigned output #2">>),
@@ -176,6 +177,7 @@ test_write_and_read_output(Opts) ->
         read(ProcID, hb_util:human_id(hb_message:id(Item2, all)), Opts),
     ?assert(hb_message:match(Item2, ReadItem2ByID)).
 
+
 %% @doc Test for retrieving the latest computed output for a process.
 find_latest_outputs(Opts) ->
     % Create test environment.
@@ -186,17 +188,17 @@ find_latest_outputs(Opts) ->
     ProcID = hb_util:human_id(hb_ao:get(id, Proc1, Opts)),
     % Create messages for the slots, with only the middle slot having a
     % `/Process' field, while the top slot has a `/Deep/Process' field.
-    Msg0 = #{ <<"Results">> => #{ <<"Result-Number">> => 0 } },
+    Msg0 = #{<<"Results">> => #{<<"Result-Number">> => 0}},
     Msg1 =
-        #{ 
-            <<"Results">> => #{ <<"Result-Number">> => 1 }, 
-            <<"Process">> => Proc1 
-        },
+        #{
+          <<"Results">> => #{<<"Result-Number">> => 1},
+          <<"Process">> => Proc1
+         },
     Msg2 =
-        #{ 
-            <<"Results">> => #{ <<"Result-Number">> => 2 }, 
-            <<"Deep">> => #{ <<"Process">> => Proc1 } 
-        },
+        #{
+          <<"Results">> => #{<<"Result-Number">> => 2},
+          <<"Deep">> => #{<<"Process">> => Proc1}
+         },
     % Write the messages to the cache.
     {ok, _} = write(ProcID, 0, Msg0, Opts),
     {ok, _} = write(ProcID, 1, Msg1, Opts),

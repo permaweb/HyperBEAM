@@ -17,12 +17,12 @@
 %% @doc Record used for parsing relevant components of a cursor-browsable
 %% response.
 -record(result, {
-    messages = [],
-    assignments = [],
-    spawns = [],
-    output = [],
-    cursor = undefined
-}).
+          messages = [],
+          assignments = [],
+          spawns = [],
+          output = [],
+          cursor = undefined
+         }).
 
 %%% Functional macros that pass the current module and line number to the
 %%% underlying function.

@@ -8,30 +8,35 @@
 %%% to be called with the current process state during each pass. The monitor
 %%% functions must not mutate state.
 
-init(State, _, InitState) ->
-    {ok, State#{ <<"monitors">> => InitState }}.
 
-execute(Message, State = #{ <<"pass">> := Pass, <<"passes">> := Passes }) when Pass == Passes ->
+init(State, _, InitState) ->
+    {ok, State#{<<"monitors">> => InitState}}.
+
+
+execute(Message, State = #{<<"pass">> := Pass, <<"passes">> := Passes}) when Pass == Passes ->
     signal(State, {message, Message});
 execute(_, S) -> {ok, S}.
 
-add_monitor(Mon, State = #{ <<"monitors">> := Monitors }) ->
-    {ok, State#{ <<"monitors">> => [Mon | Monitors] }}.
+
+add_monitor(Mon, State = #{<<"monitors">> := Monitors}) ->
+    {ok, State#{<<"monitors">> => [Mon | Monitors]}}.
+
 
 end_of_schedule(State) -> signal(State, end_of_schedule).
 
-signal(State = #{ <<"monitors">> := StartingMonitors }, Signal) ->
+
+signal(State = #{<<"monitors">> := StartingMonitors}, Signal) ->
     RemainingMonitors =
         lists:filter(
-            fun(Mon) ->
-                case Mon(State, Signal) of
-                    done -> false;
-                    _ -> true
-                end
-            end,
-            StartingMonitors
-        ),
+          fun(Mon) ->
+                  case Mon(State, Signal) of
+                      done -> false;
+                      _ -> true
+                  end
+          end,
+          StartingMonitors),
     ?event({remaining_monitors, length(RemainingMonitors)}),
-    {ok, State#{ <<"monitors">> := RemainingMonitors }}.
+    {ok, State#{<<"monitors">> := RemainingMonitors}}.
+
 
 uses() -> all.

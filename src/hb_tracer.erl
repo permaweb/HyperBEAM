@@ -7,12 +7,14 @@
 
 -include("include/hb.hrl").
 
+
 %%% @doc Start a new tracer acting as queue of events registered.
 start_trace() ->
     Trace = #{steps => queue:new()},
     TracePID = spawn(fun() -> trace_loop(Trace) end),
     ?event(trace, {trace_started, TracePID}),
     TracePID.
+
 
 trace_loop(Trace) ->
     receive
@@ -24,16 +26,20 @@ trace_loop(Trace) ->
         {get_trace, From} ->
             % Convert queue to list for the response
             TraceWithList =
-                Trace#{steps =>
-                           queue:to_list(
-                               maps:get(steps, Trace))},
+                Trace#{
+                  steps =>
+                      queue:to_list(
+                        maps:get(steps, Trace))
+                 },
             From ! {trace, TraceWithList},
             trace_loop(Trace)
     end.
 
+
 %%% @doc Register a new step into a tracer
 record_step(TracePID, Step) ->
     TracePID ! {record_step, Step}.
+
 
 %%% @doc Exports the complete queue of events
 get_trace(TracePID) ->
@@ -41,37 +47,39 @@ get_trace(TracePID) ->
     receive
         {trace, Trace} ->
             Trace
-    after 5000 ->
-        ?event(trace, {trace_timeout, TracePID}),
-        {trace, #{}}
+    after
+        5000 ->
+            ?event(trace, {trace_timeout, TracePID}),
+            {trace, #{}}
     end.
+
 
 %%% @doc Format a trace for error in a user-friendly emoji oriented output
 format_error_trace(Trace) ->
     Steps = maps:get(steps, Trace, []),
     TraceMap =
         lists:foldl(fun(TraceItem, Acc) ->
-                       case TraceItem of
-                           {http, {parsed_singleton, _ReqSingleton, _}} ->
-                               maps:put(request_parsing, true, Acc);
-                           {ao_core, {stage, Stage, _Task}} ->
-                                maps:put(resolve_stage, Stage, Acc);
-                           {ao_result,
-                            {load_device_failed, _, _, _, _, {exec_exception, Exception}, _, _}} ->
-                               maps:put(error, Exception, Acc);
-                           {ao_result,
-                            {exec_failed,
-                             _,
-                             _,
-                             _,
-                             {func, Fun},
-                             _,
-                             {exec_exception, Error},
-                             _,
-                             _}} ->
-                               maps:put(error, {Fun, Error}, Acc);
-                           _ -> Acc
-                       end
+                            case TraceItem of
+                                {http, {parsed_singleton, _ReqSingleton, _}} ->
+                                    maps:put(request_parsing, true, Acc);
+                                {ao_core, {stage, Stage, _Task}} ->
+                                    maps:put(resolve_stage, Stage, Acc);
+                                {ao_result,
+                                 {load_device_failed, _, _, _, _, {exec_exception, Exception}, _, _}} ->
+                                    maps:put(error, Exception, Acc);
+                                {ao_result,
+                                 {exec_failed,
+                                  _,
+                                  _,
+                                  _,
+                                  {func, Fun},
+                                  _,
+                                  {exec_exception, Error},
+                                  _,
+                                  _}} ->
+                                    maps:put(error, {Fun, Error}, Acc);
+                                _ -> Acc
+                            end
                     end,
                     #{},
                     Steps),
@@ -94,8 +102,9 @@ format_error_trace(Trace) ->
                 ParsingTrace;
             Stage ->
                 StageEmoji = stage_to_emoji(Stage),
-                try << ParsingTrace/binary, "\n", StageEmoji/binary,
-                        " Resolved steps of your execution" >>
+                try
+                    <<ParsingTrace/binary, "\n", StageEmoji/binary,
+                      " Resolved steps of your execution">>
                 catch
                     error:badarg ->
                         iolist_to_binary(io_lib:format("~p", [ParsingTrace]))
@@ -114,13 +123,16 @@ format_error_trace(Trace) ->
             <<StageTrace/binary, "\n", FailureEmoji/binary, "Error ", Error/binary>>
     end.
 
+
 checkmark_emoji() ->
     % Unicode for checkmark
-    <<"\xE2\x9C\x85">>. % \xE2\x9C\x85 is the checkmark emoji in UTF-8
+    <<"\xE2\x9C\x85">>.  % \xE2\x9C\x85 is the checkmark emoji in UTF-8
+
 
 failure_emoji() ->
     % Unicode for failure emoji
-    <<"\xE2\x9D\x8C">>. % \xE2\x9D\x8C is the failure emoji in UTF-8
+    <<"\xE2\x9D\x8C">>.  % \xE2\x9D\x8C is the failure emoji in UTF-8
+
 
 % Helper function to convert stage number to emoji
 stage_to_emoji(Stage) when Stage >= 1, Stage =< 9 ->

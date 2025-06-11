@@ -4,30 +4,31 @@
 -export([dot/3, svg/3, json/3, index/3, js/3]).
 -include("include/hb.hrl").
 
+
 %% @doc Output the dot representation of the cache, or a specific path within
 %% the cache set by the `target' key in the request.
 dot(_, Req, Opts) ->
     Target = hb_ao:get(<<"target">>, Req, all, Opts),
     Dot =
         hb_cache_render:cache_path_to_dot(
-            Target,
-            #{
-                render_data =>
-                    hb_util:atom(
-                        hb_ao:get(<<"render-data">>, Req, false, Opts)
-                    )
-            },
-            Opts
-        ),
-    {ok, #{ <<"content-type">> => <<"text/vnd.graphviz">>, <<"body">> => Dot }}.
+          Target,
+          #{
+            render_data =>
+                hb_util:atom(
+                  hb_ao:get(<<"render-data">>, Req, false, Opts))
+           },
+          Opts),
+    {ok, #{<<"content-type">> => <<"text/vnd.graphviz">>, <<"body">> => Dot}}.
+
 
 %% @doc Output the SVG representation of the cache, or a specific path within
 %% the cache set by the `target' key in the request.
 svg(Base, Req, Opts) ->
-    {ok, #{ <<"body">> := Dot }} = dot(Base, Req, Opts),
+    {ok, #{<<"body">> := Dot}} = dot(Base, Req, Opts),
     ?event(cacheviz, {dot, Dot}),
     Svg = hb_cache_render:dot_to_svg(Dot),
-    {ok, #{ <<"content-type">> => <<"image/svg+xml">>, <<"body">> => Svg }}.
+    {ok, #{<<"content-type">> => <<"image/svg+xml">>, <<"body">> => Svg}}.
+
 
 %% @doc Return a JSON representation of the cache graph, suitable for use with
 %% the `graph.js' library. If the request specifies a `target' key, we use that
@@ -37,7 +38,7 @@ json(Base, Req, Opts) ->
     ?event({json, {base, Base}, {req, Req}}),
     Target =
         case hb_ao:get(<<"target">>, Req, Opts) of
-            not_found -> 
+            not_found ->
                 case map_size(maps:without([<<"device">>], hb_private:reset(Base))) of
                     0 ->
                         all;
@@ -59,10 +60,12 @@ json(Base, Req, Opts) ->
     ?event({graph_data, Res}),
     Res.
 
+
 %% @doc Return a renderer in HTML form for the JSON format.
 index(Base, _, _Opts) ->
     ?event({cacheviz_index, {base, Base}}),
     dev_hyperbuddy:return_file(<<"cacheviz@1.0">>, <<"graph.html">>).
+
 
 %% @doc Return a JS library that can be used to render the JSON format.
 js(_, _, _Opts) ->

@@ -1,8 +1,8 @@
 %%% @doc Secure Volume Management for HyperBEAM Nodes
 %%%
-%%% This module handles encrypted storage operations for HyperBEAM, providing 
-%%% a robust and secure approach to data persistence. It manages the complete 
-%%% lifecycle of encrypted volumes from detection to creation, formatting, and 
+%%% This module handles encrypted storage operations for HyperBEAM, providing
+%%% a robust and secure approach to data persistence. It manages the complete
+%%% lifecycle of encrypted volumes from detection to creation, formatting, and
 %%% mounting.
 %%%
 %%% Key responsibilities:
@@ -10,12 +10,12 @@
 %%% - Encrypted partition creation and formatting
 %%% - Secure mounting using cryptographic keys
 %%% - Store path reconfiguration to use mounted volumes
-%%% - Automatic handling of various system states 
+%%% - Automatic handling of various system states
 %%%   (new device, existing partition, etc.)
 %%%
-%%% The primary entry point is the `mount/3' function, which orchestrates the 
-%%% entire process based on the provided configuration parameters. This module 
-%%% works alongside `hb_volume' which provides the low-level operations for 
+%%% The primary entry point is the `mount/3' function, which orchestrates the
+%%% entire process based on the provided configuration parameters. This module
+%%% works alongside `hb_volume' which provides the low-level operations for
 %%% device manipulation.
 %%%
 %%% Security considerations:
@@ -28,41 +28,45 @@
 -module(dev_volume).
 -export([info/1, info/3, mount/3, public_key/3]).
 -include("include/hb.hrl").
+
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("public_key/include/public_key.hrl").
 
+
 %% @doc Exported function for getting device info, controls which functions are
 %% exposed via the device API.
-info(_) -> 
-    #{ exports => [info, mount, public_key] }.
+info(_) ->
+    #{exports => [info, mount, public_key]}.
+
 
 %% @doc HTTP info response providing information about this device
 info(_Msg1, _Msg2, _Opts) ->
     InfoBody = #{
-        <<"description">> => <<"Secure Volume Management for HyperBEAM Nodes">>,
-        <<"version">> => <<"1.0">>,
-        <<"api">> => #{
-            <<"info">> => #{
-                <<"description">> => <<"Get device info">>
-            },
-            <<"mount">> => #{
-                <<"description">> => <<"Mount an encrypted volume">>,
-                <<"required_node_opts">> => #{
-                    <<"priv_volume_key">> => <<"The encryption key">>,
-                    <<"volume_device">> => <<"The base device path">>,
-                    <<"volume_partition">> => <<"The partition path">>,
-                    <<"volume_partition_type">> => <<"The partition type">>,
-                    <<"volume_name">> => <<"The name for the encrypted volume">>,
-                    <<"volume_mount_point">> => <<"Where to mount the volume">>,
-                    <<"volume_store_path">> => <<"The store path on the volume">>
-                }
-            },
-            <<"public_key">> => #{
-                <<"description">> => <<"Get the node's public key for encrypted key exchange">>
-            }
-        }
-    },
+                 <<"description">> => <<"Secure Volume Management for HyperBEAM Nodes">>,
+                 <<"version">> => <<"1.0">>,
+                 <<"api">> => #{
+                                <<"info">> => #{
+                                                <<"description">> => <<"Get device info">>
+                                               },
+                                <<"mount">> => #{
+                                                 <<"description">> => <<"Mount an encrypted volume">>,
+                                                 <<"required_node_opts">> => #{
+                                                                               <<"priv_volume_key">> => <<"The encryption key">>,
+                                                                               <<"volume_device">> => <<"The base device path">>,
+                                                                               <<"volume_partition">> => <<"The partition path">>,
+                                                                               <<"volume_partition_type">> => <<"The partition type">>,
+                                                                               <<"volume_name">> => <<"The name for the encrypted volume">>,
+                                                                               <<"volume_mount_point">> => <<"Where to mount the volume">>,
+                                                                               <<"volume_store_path">> => <<"The store path on the volume">>
+                                                                              }
+                                                },
+                                <<"public_key">> => #{
+                                                      <<"description">> => <<"Get the node's public key for encrypted key exchange">>
+                                                     }
+                               }
+                },
     {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
+
 
 %% @doc Handles the complete process of secure encrypted volume mounting.
 %%
@@ -71,7 +75,7 @@ info(_Msg1, _Msg2, _Opts) ->
 %% 2. Checks if the base device exists
 %% 3. Checks if the partition exists on the device
 %% 4. If the partition exists, attempts to mount it
-%% 5. If the partition doesn't exist, creates it, formats it with encryption 
+%% 5. If the partition doesn't exist, creates it, formats it with encryption
 %%    and mounts it
 %% 6. Updates the node's store configuration to use the mounted volume
 %%
@@ -97,19 +101,19 @@ mount(_M1, _M2, Opts) ->
     ?event(debug_mount, {mount, encrypted_key, EncryptedKey}),
     SkipDecryption = hb_opts:get(volume_skip_decryption, <<"false">>, Opts),
     Key = case SkipDecryption of
-        <<"true">> ->
-            ?event(debug_mount, {mount, skip_decryption, true}),
-            EncryptedKey;
-        _ ->
-            case decrypt_volume_key(EncryptedKey, Opts) of
-                {ok, DecryptedKey} ->
-            ?event(debug_mount, {mount, decrypted_key, DecryptedKey}),
-                    DecryptedKey;
-                {error, DecryptError} ->
-                    ?event(debug_mount, {mount, key_decrypt_error, DecryptError}),
-                    not_found
-            end
-    end,
+              <<"true">> ->
+                  ?event(debug_mount, {mount, skip_decryption, true}),
+                  EncryptedKey;
+              _ ->
+                  case decrypt_volume_key(EncryptedKey, Opts) of
+                      {ok, DecryptedKey} ->
+                          ?event(debug_mount, {mount, decrypted_key, DecryptedKey}),
+                          DecryptedKey;
+                      {error, DecryptError} ->
+                          ?event(debug_mount, {mount, key_decrypt_error, DecryptError}),
+                          not_found
+                  end
+          end,
     Device = hb_opts:get(volume_device, not_found, Opts),
     Partition = hb_opts:get(volume_partition, not_found, Opts),
     PartitionType = hb_opts:get(volume_partition_type, not_found, Opts),
@@ -117,28 +121,33 @@ mount(_M1, _M2, Opts) ->
     MountPoint = hb_opts:get(volume_mount_point, not_found, Opts),
     StorePath = hb_opts:get(volume_store_path, not_found, Opts),
     % Check for missing required node options
-    case hb_opts:check_required_opts([
-        {<<"priv_volume_key">>, Key},
-        {<<"volume_device">>, Device},
-        {<<"volume_partition">>, Partition},
-        {<<"volume_partition_type">>, PartitionType},
-        {<<"volume_name">>, VolumeName}, 
-        {<<"volume_mount_point">>, MountPoint},
-        {<<"volume_store_path">>, StorePath}
-    ], Opts) of
+    case hb_opts:check_required_opts([{<<"priv_volume_key">>, Key},
+                                      {<<"volume_device">>, Device},
+                                      {<<"volume_partition">>, Partition},
+                                      {<<"volume_partition_type">>, PartitionType},
+                                      {<<"volume_name">>, VolumeName},
+                                      {<<"volume_mount_point">>, MountPoint},
+                                      {<<"volume_store_path">>, StorePath}],
+                                     Opts) of
         {ok, _} ->
             ?event(debug_mount, {mount, device, Device}),
             ?event(debug_mount, {mount, partition, Partition}),
             ?event(debug_mount, {mount, partition_type, PartitionType}),
-            ?event(debug_mount, {mount, mount_point, MountPoint}),	
+            ?event(debug_mount, {mount, mount_point, MountPoint}),
             check_base_device(
-                Device, Partition, PartitionType, VolumeName, 
-                MountPoint, StorePath, Key, Opts
-            );
+              Device,
+              Partition,
+              PartitionType,
+              VolumeName,
+              MountPoint,
+              StorePath,
+              Key,
+              Opts);
         {error, ErrorMsg} ->
             ?event(mount, {error, ErrorMsg}),
             {error, ErrorMsg}
     end.
+
 
 %% @doc Returns the node's public key for secure key exchange.
 %%
@@ -167,19 +176,20 @@ public_key(_M1, _M2, Opts) ->
         {{_KeyType, _Priv, Pub}, _PubKey} ->
             % Convert to a standard RSA format (PKCS#1 or X.509)
             RsaPubKey = #'RSAPublicKey'{
-                publicExponent = 65537,  % Common RSA exponent
-                modulus = crypto:bytes_to_integer(Pub)
-            },
+                          publicExponent = 65537,  % Common RSA exponent
+                          modulus = crypto:bytes_to_integer(Pub)
+                         },
             % Convert to DER format
             DerEncoded = public_key:der_encode('RSAPublicKey', RsaPubKey),
             % Base64 encode for transmission
             Base64Key = base64:encode(DerEncoded),
             {ok, #{
-                <<"status">> => 200,
-                <<"public_key">> => Base64Key,
-                <<"message">> => <<"Use this public key to encrypt your volume key">>
-            }}
+                   <<"status">> => 200,
+                   <<"public_key">> => Base64Key,
+                   <<"message">> => <<"Use this public key to encrypt your volume key">>
+                  }}
     end.
+
 
 %% @doc Decrypts an encrypted volume key using the node's private key.
 %%
@@ -203,10 +213,10 @@ decrypt_volume_key(EncryptedKeyBase64, Opts) ->
             {{_KeyType = {rsa, E}, Priv, Pub}, _PubKey} ->
                 % Create RSA private key record for decryption
                 RsaPrivKey = #'RSAPrivateKey'{
-                    publicExponent = E,
-                    modulus = crypto:bytes_to_integer(Pub),
-                    privateExponent = crypto:bytes_to_integer(Priv)
-                },
+                               publicExponent = E,
+                               modulus = crypto:bytes_to_integer(Pub),
+                               privateExponent = crypto:bytes_to_integer(Priv)
+                              },
                 % Decrypt the key
                 DecryptedKey = public_key:decrypt_private(EncryptedKey, RsaPrivKey),
                 {ok, DecryptedKey}
@@ -216,6 +226,7 @@ decrypt_volume_key(EncryptedKeyBase64, Opts) ->
             ?event(debug_mount, {decrypt_volume_key, error, Error}),
             {error, <<"Failed to decrypt volume key">>}
     end.
+
 
 %% @doc Check if the base device exists and if it does, check if the partition exists.
 %% @param Device The base device to check.
@@ -228,26 +239,33 @@ decrypt_volume_key(EncryptedKeyBase64, Opts) ->
 %% @param Opts The options to check.
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
--spec check_base_device(
-    term(), term(), term(), term(), term(), term(), term(), map()
-) -> {ok, binary()} | {error, binary()}.
-check_base_device(
-    Device, Partition, PartitionType, VolumeName, MountPoint, StorePath, 
-    Key, Opts
-) ->
+-spec check_base_device(term(), term(), term(), term(), term(), term(), term(), map()) -> {ok, binary()} | {error, binary()}.
+check_base_device(Device,
+                  Partition,
+                  PartitionType,
+                  VolumeName,
+                  MountPoint,
+                  StorePath,
+                  Key,
+                  Opts) ->
     case hb_volume:check_for_device(Device) of
         false ->
             % Base device doesn't exist
-            ?event(debug_mount, 
-                {device_check, error, <<"Base device not found">>}
-            ),
+            ?event(debug_mount,
+                   {device_check, error, <<"Base device not found">>}),
             {error, <<"Base device not found">>};
         true ->
             check_partition(
-                Device, Partition, PartitionType, VolumeName, 
-                MountPoint, StorePath, Key, Opts
-            )
+              Device,
+              Partition,
+              PartitionType,
+              VolumeName,
+              MountPoint,
+              StorePath,
+              Key,
+              Opts)
     end.
+
 
 %% @doc Check if the partition exists. If it does, attempt to mount it.
 %% If it doesn't exist, create it, format it with encryption and mount it.
@@ -261,26 +279,33 @@ check_base_device(
 %% @param Opts The options to check.
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
--spec check_partition(
-    term(), term(), term(), term(), term(), term(), term(), map()
-) -> {ok, binary()} | {error, binary()}.
-check_partition(
-    Device, Partition, PartitionType, VolumeName, MountPoint, StorePath, 
-    Key, Opts
-) ->
+-spec check_partition(term(), term(), term(), term(), term(), term(), term(), map()) -> {ok, binary()} | {error, binary()}.
+check_partition(Device,
+                Partition,
+                PartitionType,
+                VolumeName,
+                MountPoint,
+                StorePath,
+                Key,
+                Opts) ->
     case hb_volume:check_for_device(Partition) of
         true ->
             % Partition exists, try mounting it
             mount_existing_partition(
-                Partition, Key, MountPoint, VolumeName, StorePath, Opts
-            );
+              Partition, Key, MountPoint, VolumeName, StorePath, Opts);
         false ->
             % Partition doesn't exist, create it
             create_and_mount_partition(
-                Device, Partition, PartitionType, Key, 
-                MountPoint, VolumeName, StorePath, Opts
-            )
+              Device,
+              Partition,
+              PartitionType,
+              Key,
+              MountPoint,
+              VolumeName,
+              StorePath,
+              Opts)
     end.
+
 
 %% @doc Mount an existing partition.
 %% @param Partition The partition to mount.
@@ -291,12 +316,8 @@ check_partition(
 %% @param Opts The options to mount.
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
--spec mount_existing_partition(
-    term(), term(), term(), term(), term(), map()
-) -> {ok, binary()} | {error, binary()}.
-mount_existing_partition(
-    Partition, Key, MountPoint, VolumeName, StorePath, Opts
-) ->
+-spec mount_existing_partition(term(), term(), term(), term(), term(), map()) -> {ok, binary()} | {error, binary()}.
+mount_existing_partition(Partition, Key, MountPoint, VolumeName, StorePath, Opts) ->
     ?event(debug_mount, {mount_volume, attempt, Partition}),
     case hb_volume:mount_disk(Partition, Key, MountPoint, VolumeName) of
         {ok, MountResult} ->
@@ -306,6 +327,7 @@ mount_existing_partition(
             ?event(debug_mount, {mount_volume, error, MountError}),
             {error, <<"Failed to mount volume">>}
     end.
+
 
 %% @doc Create, format and mount a new partition.
 %% @param Device The device to create the partition on.
@@ -318,24 +340,26 @@ mount_existing_partition(
 %% @param Opts The options to mount.
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
--spec create_and_mount_partition(
-    term(), term(), term(), term(), term(), term(), term(), map()
-) -> {ok, binary()} | {error, binary()}.
-create_and_mount_partition(
-    Device, Partition, PartitionType, Key, 
-    MountPoint, VolumeName, StorePath, Opts
-) ->
+-spec create_and_mount_partition(term(), term(), term(), term(), term(), term(), term(), map()) -> {ok, binary()} | {error, binary()}.
+create_and_mount_partition(Device,
+                           Partition,
+                           PartitionType,
+                           Key,
+                           MountPoint,
+                           VolumeName,
+                           StorePath,
+                           Opts) ->
     ?event(debug_mount, {create_partition, attempt, Device}),
     case hb_volume:create_partition(Device, PartitionType) of
         {ok, PartitionResult} ->
             ?event(debug_mount, {partition_create, success, PartitionResult}),
             format_and_mount(
-                Partition, Key, MountPoint, VolumeName, StorePath, Opts
-            );
+              Partition, Key, MountPoint, VolumeName, StorePath, Opts);
         {error, PartitionError} ->
             ?event(debug_mount, {partition_create, error, PartitionError}),
             {error, <<"Failed to create partition">>}
     end.
+
 
 %% @doc Format and mount a newly created partition.
 %% @param Partition The partition to format and mount.
@@ -346,22 +370,18 @@ create_and_mount_partition(
 %% @param Opts The options to mount.
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
--spec format_and_mount(
-    term(), term(), term(), term(), term(), map()
-) -> {ok, binary()} | {error, binary()}.
-format_and_mount(
-    Partition, Key, MountPoint, VolumeName, StorePath, Opts
-) ->
+-spec format_and_mount(term(), term(), term(), term(), term(), map()) -> {ok, binary()} | {error, binary()}.
+format_and_mount(Partition, Key, MountPoint, VolumeName, StorePath, Opts) ->
     case hb_volume:format_disk(Partition, Key) of
         {ok, FormatResult} ->
             ?event(debug_mount, {format_disk, success, FormatResult}),
             mount_formatted_partition(
-                Partition, Key, MountPoint, VolumeName, StorePath, Opts
-            );
+              Partition, Key, MountPoint, VolumeName, StorePath, Opts);
         {error, FormatError} ->
             ?event(debug_mount, {format_disk, error, FormatError}),
             {error, <<"Failed to format disk">>}
     end.
+
 
 %% @doc Mount a newly formatted partition.
 %% @param Partition The partition to mount.
@@ -372,12 +392,8 @@ format_and_mount(
 %% @param Opts The options to mount.
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
--spec mount_formatted_partition(
-    term(), term(), term(), term(), term(), map()
-) -> {ok, binary()} | {error, binary()}.
-mount_formatted_partition(
-    Partition, Key, MountPoint, VolumeName, StorePath, Opts
-) ->
+-spec mount_formatted_partition(term(), term(), term(), term(), term(), map()) -> {ok, binary()} | {error, binary()}.
+mount_formatted_partition(Partition, Key, MountPoint, VolumeName, StorePath, Opts) ->
     case hb_volume:mount_disk(Partition, Key, MountPoint, VolumeName) of
         {ok, RetryMountResult} ->
             ?event(debug_mount, {mount_volume, success, RetryMountResult}),
@@ -386,6 +402,7 @@ mount_formatted_partition(
             ?event(debug_mount, {mount_volume, error, RetryMountError}),
             {error, <<"Failed to mount newly formatted volume">>}
     end.
+
 
 %% @doc Update the store path to use the mounted volume.
 %% @param StorePath The store path to update.
@@ -403,6 +420,7 @@ update_store_path(StorePath, Opts) ->
             ?event(debug_mount, {store_update, error, StoreError}),
             {error, <<"Failed to update store">>}
     end.
+
 
 %% @doc Update the node's configuration with the new store.
 %% @param NewStore The new store to update the node's configuration with.

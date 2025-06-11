@@ -2,7 +2,7 @@
 %%% A simple exemplar decentralized proof of authority consensus algorithm
 %%% for AO processes. This device is split into two flows, spanning three
 %%% actions.
-%%% 
+%%%
 %%% Execution flow:
 %%% 1. Initialization.
 %%% 2. Validation of incoming messages before execution.
@@ -17,27 +17,31 @@
 
 %%% Execution flow: Initialization.
 
+
 init(S, Params) ->
     {ok, S, extract_opts(Params)}.
+
 
 extract_opts(Params) ->
     Authorities =
         lists:filtermap(
-            fun({<<"authority">>, Addr}) -> {true, Addr};
-                (_) -> false end,
-                Params
-        ),
+          fun({<<"authority">>, Addr}) -> {true, Addr};
+             (_) -> false
+          end,
+          Params),
     {_, RawQuorum} = lists:keyfind(<<"quorum">>, 1, Params),
     Quorum = binary_to_integer(RawQuorum),
     ?event({poda_authorities, Authorities}),
     #{
-        authorities => Authorities,
-        quorum => Quorum
-    }.
+      authorities => Authorities,
+      quorum => Quorum
+     }.
+
 
 %%% Execution flow: Pre-execution validation.
 
-execute(Outer = #tx { data = #{ <<"body">> := Msg } }, S = #{ <<"pass">> := 1 }, Opts) ->
+
+execute(Outer = #tx{data = #{<<"body">> := Msg}}, S = #{<<"pass">> := 1}, Opts) ->
     case is_user_signed(Msg) of
         true ->
             {ok, S};
@@ -48,79 +52,77 @@ execute(Outer = #tx { data = #{ <<"body">> := Msg } }, S = #{ <<"pass">> := 1 },
                     % Add the validations to the VFS.
                     Comms =
                         hb_maps:to_list(
-                            case Msg of 
-                                #tx { data = #{ <<"commitments">> := #tx { data = X } }} -> X;
-                                #tx { data = #{ <<"commitments">> := X }} -> X;
-                                #{ <<"commitments">> := X } -> X
-                            end,
-                            Opts
-                        ),
+                          case Msg of
+                              #tx{data = #{<<"commitments">> := #tx{data = X}}} -> X;
+                              #tx{data = #{<<"commitments">> := X}} -> X;
+                              #{<<"commitments">> := X} -> X
+                          end,
+                          Opts),
                     VFS1 =
                         lists:foldl(
-                            fun({_, Commitment}, Acc) ->
-                                Id = ar_bundles:signer(Commitment),
-                                Encoded = hb_util:encode(Id),
-                                hb_maps:put(
+                          fun({_, Commitment}, Acc) ->
+                                  Id = ar_bundles:signer(Commitment),
+                                  Encoded = hb_util:encode(Id),
+                                  hb_maps:put(
                                     <<"/commitments/", Encoded/binary>>,
                                     Commitment#tx.data,
                                     Acc,
-									Opts
-                                )
-                            end,
-                            hb_maps:get(vfs, S, #{}, Opts),
-                            Comms
-                        ),
+                                    Opts)
+                          end,
+                          hb_maps:get(vfs, S, #{}, Opts),
+                          Comms),
                     % Update the arg prefix to include the unwrapped message.
-                    {ok, S#{ <<"vfs">> => VFS1, <<"arg_prefix">> =>
-                        [
-                            % Traverse two layers of `/Message/Message' to get
-                            % the actual message, then replace `/Message' with it.
-                            Outer#tx{
-                                data = (Outer#tx.data)#{
-                                    <<"body">> => hb_maps:get(<<"body">>, Msg#tx.data, Opts)
-                                }
-                            }
-                        ]
-                    }};
+                    {ok, S#{
+                           <<"vfs">> => VFS1,
+                           <<"arg_prefix">> =>
+                               [
+                                % Traverse two layers of `/Message/Message' to get
+                                % the actual message, then replace `/Message' with it.
+                                Outer#tx{
+                                  data = (Outer#tx.data)#{
+                                           <<"body">> => hb_maps:get(<<"body">>, Msg#tx.data, Opts)
+                                          }
+                                 }]
+                          }};
                 {false, Reason} -> return_error(S, Reason)
             end
     end;
-execute(_M, S = #{ <<"pass">> := 3, <<"results">> := _Results }, _Opts) ->
+execute(_M, S = #{<<"pass">> := 3, <<"results">> := _Results}, _Opts) ->
     {ok, S};
 execute(_M, S, _Opts) ->
     {ok, S}.
 
+
 validate(Msg, Opts) ->
     validate_stage(1, Msg, Opts).
 
+
 validate_stage(1, Msg, Opts) when is_record(Msg, tx) ->
     validate_stage(1, Msg#tx.data, Opts);
-validate_stage(1, #{ <<"commitments">> := Commitments, <<"body">> := Content }, Opts) ->
+validate_stage(1, #{<<"commitments">> := Commitments, <<"body">> := Content}, Opts) ->
     validate_stage(2, Commitments, Content, Opts);
 validate_stage(1, _M, _Opts) -> {false, <<"Required PoDA messages missing">>}.
 
-validate_stage(2, #tx { data = Commitments }, Content, Opts) ->
+
+validate_stage(2, #tx{data = Commitments}, Content, Opts) ->
     validate_stage(2, Commitments, Content, Opts);
 validate_stage(2, Commitments, Content, Opts) ->
     % Ensure that all commitments are valid and signed by a
     % trusted authority.
-    case
-        lists:all(
-            fun({_, Comm}) ->
-                ar_bundles:verify_item(Comm)
-            end,
-            hb_maps:to_list(Commitments, Opts)
-        ) of
+    case lists:all(
+           fun({_, Comm}) ->
+                   ar_bundles:verify_item(Comm)
+           end,
+           hb_maps:to_list(Commitments, Opts)) of
         true -> validate_stage(3, Content, Commitments, Opts);
         false -> {false, <<"Invalid commitments">>}
     end;
 
-validate_stage(3, Content, Commitments, Opts = #{ <<"quorum">> := Quorum }) ->
+validate_stage(3, Content, Commitments, Opts = #{<<"quorum">> := Quorum}) ->
     Validations =
         lists:filter(
-            fun({_, Comm}) -> validate_commitment(Content, Comm, Opts) end,
-            hb_maps:to_list(Commitments, Opts)
-        ),
+          fun({_, Comm}) -> validate_commitment(Content, Comm, Opts) end,
+          hb_maps:to_list(Commitments, Opts)),
     ?event({poda_validations, length(Validations)}),
     case length(Validations) >= Quorum of
         true ->
@@ -129,6 +131,7 @@ validate_stage(3, Content, Commitments, Opts = #{ <<"quorum">> := Quorum }) ->
         false -> {false, <<"Not enough validations">>}
     end.
 
+
 validate_commitment(Msg, Comm, Opts) ->
     MsgID = hb_util:encode(ar_bundles:id(Msg, unsigned)),
     AttSigner = hb_util:encode(ar_bundles:signer(Comm)),
@@ -136,8 +139,8 @@ validate_commitment(Msg, Comm, Opts) ->
     ValidSigner = lists:member(AttSigner, hb_maps:get(authorities, Opts, undefined, Opts)),
     ValidSignature = ar_bundles:verify_item(Comm),
     RelevantMsg = ar_bundles:id(Comm, unsigned) == MsgID orelse
-        (lists:keyfind(<<"commitment-for">>, 1, Comm#tx.tags)
-            == {<<"commitment-for">>, MsgID}) orelse
+        (lists:keyfind(<<"commitment-for">>, 1, Comm#tx.tags) ==
+         {<<"commitment-for">>, MsgID}) orelse
         ar_bundles:member(ar_bundles:id(Msg, unsigned), Comm),
     case ValidSigner and ValidSignature and RelevantMsg of
         false ->
@@ -146,174 +149,167 @@ validate_commitment(Msg, Comm, Opts) ->
                     {signer, AttSigner},
                     {valid_signer, ValidSigner},
                     {valid_signature, ValidSignature},
-                    {relevant_msg, RelevantMsg}}
-            ),
+                    {relevant_msg, RelevantMsg}}),
             false;
         true -> true
     end.
 
+
 %%% Execution flow: Error handling.
 %%% Skip execution of this message, instead returning an error message.
-return_error(S = #{ <<"wallet">> := Wallet }, Reason) ->
+return_error(S = #{<<"wallet">> := Wallet}, Reason) ->
     ?event({poda_return_error, Reason}),
     ?debug_wait(10000),
     {skip, S#{
-        results => #{
-            <<"/outbox">> =>
-                ar_bundles:sign_item(
-                    #tx{
-                        data = Reason,
-                        tags = [{<<"error">>, <<"PoDA">>}]
-                    },
-                    Wallet
-                )
-        }
-    }}.
+             results => #{
+                          <<"/outbox">> =>
+                              ar_bundles:sign_item(
+                                #tx{
+                                  data = Reason,
+                                  tags = [{<<"error">>, <<"PoDA">>}]
+                                 },
+                                Wallet)
+                         }
+            }}.
+
 
 %%% @doc Determines if a user committed
-is_user_signed(#tx { data = #{ <<"body">> := Msg } }) ->
+is_user_signed(#tx{data = #{<<"body">> := Msg}}) ->
     ?no_prod(use_real_commitment_detection),
     lists:keyfind(<<"from-process">>, 1, Msg#tx.tags) == false;
 is_user_signed(_) -> true.
 
+
 %%% Commitment flow: Adding commitments to results.
+
 
 %% @doc Hook used by the MU pathway (currently) to add commitments to an
 %% outbound message if the computation requests it.
-push(_Item, S = #{ <<"results">> := ResultsMsg }, Opts) ->
+push(_Item, S = #{<<"results">> := ResultsMsg}, Opts) ->
     NewRes = commit_to_results(ResultsMsg, S, Opts),
-    {ok, S#{ <<"results">> => NewRes }}.
+    {ok, S#{<<"results">> => NewRes}}.
+
 
 commit_to_results(Msg, S, Opts) ->
     case is_map(Msg#tx.data) of
         true ->
             % Add commitments to the outbox and spawn items.
             hb_maps:map(
-                fun(Key, IndexMsg) ->
-                    ?no_prod("Currently we only commit to the outbox and spawn items."
-                        "Make it general?"),
-                    case lists:member(Key, [<<"/outbox">>, <<"/spawn">>]) of
-                        true ->
-                            ?event({poda_starting_to_commit_to_result, Key}),
-                            hb_maps:map(
+              fun(Key, IndexMsg) ->
+                      ?no_prod("Currently we only commit to the outbox and spawn items."
+                               "Make it general?"),
+                      case lists:member(Key, [<<"/outbox">>, <<"/spawn">>]) of
+                          true ->
+                              ?event({poda_starting_to_commit_to_result, Key}),
+                              hb_maps:map(
                                 fun(_, DeepMsg) -> add_commitments(DeepMsg, S, Opts) end,
                                 IndexMsg#tx.data,
-								Opts	
-                            );
-                        false -> IndexMsg
-                    end
-                end,
-                Msg#tx.data,
-				Opts
-            );
+                                Opts);
+                          false -> IndexMsg
+                      end
+              end,
+              Msg#tx.data,
+              Opts);
         false -> Msg
     end.
 
-add_commitments(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _Store, <<"logger">> := _Logger, <<"wallet">> := Wallet }, Opts) ->
+
+add_commitments(NewMsg, S = #{<<"assignment">> := Assignment, <<"store">> := _Store, <<"logger">> := _Logger, <<"wallet">> := Wallet}, Opts) ->
     Process = find_process(NewMsg, S),
     case is_record(Process, tx) andalso lists:member({<<"device">>, <<"PODA">>}, Process#tx.tags) of
         true ->
-            #{ <<"authorities">> := InitAuthorities, <<"quorum">> := Quorum } =
+            #{<<"authorities">> := InitAuthorities, <<"quorum">> := Quorum} =
                 extract_opts(Process#tx.tags),
             ?event({poda_push, InitAuthorities, Quorum}),
             % Aggregate validations from other nodes.
             % TODO: Filter out commitments from the current node.
             MsgID = hb_util:encode(ar_bundles:id(NewMsg, unsigned)),
-            ?event({poda_add_commitments_from, InitAuthorities, {self,hb:address()}}),
+            ?event({poda_add_commitments_from, InitAuthorities, {self, hb:address()}}),
             Commitments = pfiltermap(
-                fun(Address) ->
-                    case hb_router:find(compute, ar_bundles:id(Process, unsigned), Address, Opts) of
-                        {ok, ComputeNode} ->
-                            ?event({poda_asking_peer_for_commitment, ComputeNode, <<"commit-to">>, MsgID}),
-                            Res = hb_client:resolve(
-                                ComputeNode,
-                                ar_bundles:id(Process, signed),
-                                ar_bundles:id(Assignment, signed),
-                                #{ <<"commit-to">> => MsgID }
-                            ),
-                            case Res of
-                                {ok, Comm} ->
-                                    ?event({poda_got_commitment_from_peer, ComputeNode}),
-                                    {true, Comm};
-                                _ -> false
-                            end;
-                        _ -> false
-                    end
-                end,
-                ?event(InitAuthorities -- [hb:address()])
-            ),
+                            fun(Address) ->
+                                    case hb_router:find(compute, ar_bundles:id(Process, unsigned), Address, Opts) of
+                                        {ok, ComputeNode} ->
+                                            ?event({poda_asking_peer_for_commitment, ComputeNode, <<"commit-to">>, MsgID}),
+                                            Res = hb_client:resolve(
+                                                    ComputeNode,
+                                                    ar_bundles:id(Process, signed),
+                                                    ar_bundles:id(Assignment, signed),
+                                                    #{<<"commit-to">> => MsgID}),
+                                            case Res of
+                                                {ok, Comm} ->
+                                                    ?event({poda_got_commitment_from_peer, ComputeNode}),
+                                                    {true, Comm};
+                                                _ -> false
+                                            end;
+                                        _ -> false
+                                    end
+                            end,
+                            ?event(InitAuthorities -- [hb:address()])),
             LocalCommitment = ar_bundles:sign_item(
-                #tx{ tags = [{<<"commitment-for">>, MsgID}], data = <<>> },
-                Wallet
-            ),
+                                #tx{tags = [{<<"commitment-for">>, MsgID}], data = <<>>},
+                                Wallet),
             CompleteCommitments =
                 ar_bundles:sign_item(
-                    ar_bundles:normalize(
-                        #tx {
-                            data = 
-                                hb_maps:from_list(
-                                    lists:zipwith(
-                                        fun(Index, Comm) -> {integer_to_binary(Index), Comm} end,
-                                        lists:seq(1, length([LocalCommitment | Commitments])),
-                                        AttList = [LocalCommitment | Commitments]
-                                    )
-                                )
-                        }
-                    ),
-                    Wallet
-                ),
-            CommitmentBundle = ar_bundles:sign_item(
-                ar_bundles:normalize(
+                  ar_bundles:normalize(
                     #tx{
-                        target = NewMsg#tx.target,
-                        data = #{
-                            <<"commitments">> => CompleteCommitments,
-                            <<"body">> => NewMsg
-                        }
-                    }
-                ),
-                Wallet
-            ),
+                      data =
+                          hb_maps:from_list(
+                            lists:zipwith(
+                              fun(Index, Comm) -> {integer_to_binary(Index), Comm} end,
+                              lists:seq(1, length([LocalCommitment | Commitments])),
+                              AttList = [LocalCommitment | Commitments]))
+                     }),
+                  Wallet),
+            CommitmentBundle = ar_bundles:sign_item(
+                                 ar_bundles:normalize(
+                                   #tx{
+                                     target = NewMsg#tx.target,
+                                     data = #{
+                                              <<"commitments">> => CompleteCommitments,
+                                              <<"body">> => NewMsg
+                                             }
+                                    }),
+                                 Wallet),
             ?event({poda_commitment_bundle_signed, {commitments, length(AttList)}}),
             CommitmentBundle;
         false -> NewMsg
     end.
 
+
 %% @doc Helper function for parallel execution of commitment
 %% gathering.
 pfiltermap(Pred, List) ->
     Parent = self(),
-    Pids = lists:map(fun(X) -> 
-        spawn_monitor(fun() -> 
-            Result = {X, Pred(X)},
-            ?event({pfiltermap, sending_result, self()}),
-            Parent ! {self(), Result}
-        end)
-    end, List),
+    Pids = lists:map(fun(X) ->
+                             spawn_monitor(fun() ->
+                                                   Result = {X, Pred(X)},
+                                                   ?event({pfiltermap, sending_result, self()}),
+                                                   Parent ! {self(), Result}
+                                           end)
+                     end,
+                     List),
     ?event({pfiltermap, waiting_for_results, Pids}),
-    [
-        Res
-    ||
-        {true, Res} <-
-            lists:map(fun({Pid, Ref}) ->
-                receive
-                    {Pid, {_Item, Result}} ->
-                        ?event({pfiltermap, received_result, Pid}),
-                        Result;
-                    % Handle crashes as filterable events
-                    {'DOWN', Ref, process, Pid, _Reason} ->
-                        ?event({pfiltermap, crashed, Pid}),
-                        false;
-                    Other ->
-                        ?event({pfiltermap, unexpected_message, Other}),
-                        false
-                end
-            end, Pids)
-    ].
+    [ Res
+      || {true, Res} <- lists:map(fun({Pid, Ref}) ->
+                                          receive
+                                              {Pid, {_Item, Result}} ->
+                                                  ?event({pfiltermap, received_result, Pid}),
+                                                  Result;
+                                              % Handle crashes as filterable events
+                                              {'DOWN', Ref, process, Pid, _Reason} ->
+                                                  ?event({pfiltermap, crashed, Pid}),
+                                                  false;
+                                              Other ->
+                                                  ?event({pfiltermap, unexpected_message, Other}),
+                                                  false
+                                          end
+                                  end,
+                                  Pids) ].
+
 
 %% @doc Find the process that this message is targeting, in order to
 %% determine which commitments to add.
-find_process(Item, #{ <<"logger">> := _Logger, <<"store">> := Store }) ->
+find_process(Item, #{<<"logger">> := _Logger, <<"store">> := Store}) ->
     case Item#tx.target of
         X when X =/= <<>> ->
             ?event({poda_find_process, hb_util:id(Item#tx.target)}),

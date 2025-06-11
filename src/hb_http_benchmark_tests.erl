@@ -1,5 +1,6 @@
 -module(hb_http_benchmark_tests).
 -include("include/hb.hrl").
+
 -include_lib("eunit/include/eunit.hrl").
 
 %% Allows to decrease or increase expected performance based on the current
@@ -81,7 +82,6 @@
 %         [Iterations, BenchTime, Iterations / BenchTime]
 %     ),
 %     ?assert(Iterations > 100 / ?PERFORMANCE_DIVIDER).
-
 
 % run_wasm_signed_benchmark_test_disabled() ->
 %     BenchTime = 1,

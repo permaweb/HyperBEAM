@@ -1,5 +1,5 @@
 -define(IS_ALPHA(C),
-    (C =:= $a) or (C =:= $b) or (C =:= $c) or (C =:= $d) or (C =:= $e) or
+        (C =:= $a) or (C =:= $b) or (C =:= $c) or (C =:= $d) or (C =:= $e) or
         (C =:= $f) or (C =:= $g) or (C =:= $h) or (C =:= $i) or (C =:= $j) or
         (C =:= $k) or (C =:= $l) or (C =:= $m) or (C =:= $n) or (C =:= $o) or
         (C =:= $p) or (C =:= $q) or (C =:= $r) or (C =:= $s) or (C =:= $t) or
@@ -10,61 +10,52 @@
         (C =:= $K) or (C =:= $L) or (C =:= $M) or (C =:= $N) or (C =:= $O) or
         (C =:= $P) or (C =:= $Q) or (C =:= $R) or (C =:= $S) or (C =:= $T) or
         (C =:= $U) or (C =:= $V) or (C =:= $W) or (C =:= $X) or (C =:= $Y) or
-        (C =:= $Z)
-).
+        (C =:= $Z)).
 
 -define(IS_ALPHANUM(C), ?IS_ALPHA(C) or ?IS_DIGIT(C)).
 -define(IS_CHAR(C), C > 0, C < 128).
 
 -define(IS_DIGIT(C),
-    (C =:= $0) or (C =:= $1) or (C =:= $2) or (C =:= $3) or (C =:= $4) or
-        (C =:= $5) or (C =:= $6) or (C =:= $7) or (C =:= $8) or (C =:= $9)
-).
+        (C =:= $0) or (C =:= $1) or (C =:= $2) or (C =:= $3) or (C =:= $4) or
+        (C =:= $5) or (C =:= $6) or (C =:= $7) or (C =:= $8) or (C =:= $9)).
 
 -define(IS_ETAGC(C), C =:= 16#21; C >= 16#23, C =/= 16#7f).
 
 -define(IS_HEX(C),
-    ?IS_DIGIT(C) or
+        ?IS_DIGIT(C) or
         (C =:= $a) or (C =:= $b) or (C =:= $c) or
         (C =:= $d) or (C =:= $e) or (C =:= $f) or
         (C =:= $A) or (C =:= $B) or (C =:= $C) or
-        (C =:= $D) or (C =:= $E) or (C =:= $F)
-).
+        (C =:= $D) or (C =:= $E) or (C =:= $F)).
 
 -define(IS_LHEX(C),
-    ?IS_DIGIT(C) or
+        ?IS_DIGIT(C) or
         (C =:= $a) or (C =:= $b) or (C =:= $c) or
-        (C =:= $d) or (C =:= $e) or (C =:= $f)
-).
+        (C =:= $d) or (C =:= $e) or (C =:= $f)).
 
 -define(IS_TOKEN(C),
-    ?IS_ALPHA(C) or ?IS_DIGIT(C) or
+        ?IS_ALPHA(C) or ?IS_DIGIT(C) or
         (C =:= $!) or (C =:= $#) or (C =:= $$) or (C =:= $%) or (C =:= $&) or
         (C =:= $') or (C =:= $*) or (C =:= $+) or (C =:= $-) or (C =:= $.) or
-        (C =:= $^) or (C =:= $_) or (C =:= $`) or (C =:= $|) or (C =:= $~)
-).
+        (C =:= $^) or (C =:= $_) or (C =:= $`) or (C =:= $|) or (C =:= $~)).
 
 -define(IS_TOKEN68(C),
-    ?IS_ALPHA(C) or ?IS_DIGIT(C) or
+        ?IS_ALPHA(C) or ?IS_DIGIT(C) or
         (C =:= $-) or (C =:= $.) or (C =:= $_) or
-        (C =:= $~) or (C =:= $+) or (C =:= $/)
-).
+        (C =:= $~) or (C =:= $+) or (C =:= $/)).
 
 -define(IS_URI_UNRESERVED(C),
-    ?IS_ALPHA(C) or ?IS_DIGIT(C) or
-        (C =:= $-) or (C =:= $.) or (C =:= $_) or (C =:= $~)
-).
+        ?IS_ALPHA(C) or ?IS_DIGIT(C) or
+        (C =:= $-) or (C =:= $.) or (C =:= $_) or (C =:= $~)).
 
 -define(IS_URI_GEN_DELIMS(C),
-    (C =:= $:) or (C =:= $/) or (C =:= $?) or (C =:= $#) or
-        (C =:= $[) or (C =:= $]) or (C =:= $@)
-).
+        (C =:= $:) or (C =:= $/) or (C =:= $?) or (C =:= $#) or
+        (C =:= $[) or (C =:= $]) or (C =:= $@)).
 
 -define(IS_URI_SUB_DELIMS(C),
-    (C =:= $!) or (C =:= $$) or (C =:= $&) or (C =:= $') or
+        (C =:= $!) or (C =:= $$) or (C =:= $&) or (C =:= $') or
         (C =:= $() or (C =:= $)) or (C =:= $*) or (C =:= $+) or
-        (C =:= $,) or (C =:= $;) or (C =:= $=)
-).
+        (C =:= $,) or (C =:= $;) or (C =:= $=)).
 
 -define(IS_VCHAR(C), C =:= $\t; C > 31, C < 127).
 -define(IS_VCHAR_OBS(C), C =:= $\t; C > 31, C =/= 127).
