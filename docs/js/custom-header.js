@@ -6,7 +6,8 @@
     const main = document.querySelector("main");
     const body = document.querySelector("body");
     const tabs = document.querySelector(".md-tabs");
-
+    const drawerIcon = document.querySelector(".md-icon");
+    console.log(drawerIcon, "drawericon");
     if (!header || !main) {
       // console.warn("Header or main element not found for class update.");
       return;
@@ -22,6 +23,7 @@
       main.classList.add("custom-homepage-main");
       main.classList.remove("md-main");
       body.style.background = "#000";
+      drawerIcon.style.display = "none";
       if (tabs) tabs.style.display = "none";
     } else {
       header.classList.remove("custom-homepage-header");
@@ -59,6 +61,7 @@ document.addEventListener("DOMContentLoaded", function () {
     if (isHomepage) {
       mainElement.classList.add("custom-homepage-main");
       mainElement.classList.remove("md-main");
+
       if (tabs) tabs.style.display = "none";
     } else {
       if (tabs) tabs.style.display = "";
