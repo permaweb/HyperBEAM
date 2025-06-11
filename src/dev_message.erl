@@ -344,7 +344,7 @@ committed(Self, Req, Opts) ->
     % commitments are loaded.
     {ok, RawBase} =
         hb_message:find_target(
-            hb_cache:ensure_all_loaded(Self, Opts),
+            Self,
             Req,
             Opts
         ),
