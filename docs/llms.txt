@@ -1,4 +1,4 @@
-Generated: 2025-06-11T19:12:35Z
+Generated: 2025-06-12T19:34:21Z
 
 ## HyperBEAM Documentation Summary
 
@@ -25,6 +25,16 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 
 * [HyperBEAM from AO Connect](./build/ao-connect.html)
 * [Extending HyperBEAM with Devices](./build/building-devices.html)
+* [Device: ~json@1.0](./build/devices/json-at-1-0.html)
+* [Device: ~lua@5.3a](./build/devices/lua-at-5-3a.html)
+* [Device: ~message@1.0](./build/devices/message-at-1-0.html)
+* [Device: ~meta@1.0](./build/devices/meta-at-1-0.html)
+* [Device: ~process@1.0](./build/devices/process-at-1-0.html)
+* [Device: ~relay@1.0](./build/devices/relay-at-1-0.html)
+* [Device: ~scheduler@1.0](./build/devices/scheduler-at-1-0.html)
+* [Source Code Documentation](./build/devices/source-code/index.html)
+* [Device: ~wasm64@1.0](./build/devices/wasm64-at-1-0.html)
+* [What are HyperBEAM Devices?](./build/devices/what-are-devices.html)
 * [Extending HyperBEAM](./build/extending-hyperbeam.html)
 * [Migrating from `legacynet` to HyperBEAM](./build/migrating-from-legacynet.html)
 * [Quick Start with HyperBEAM](./build/quick-start.html)
@@ -32,15 +42,6 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 
 ### devices
 
-* [Device: ~json@1.0](./devices/json-at-1-0.html)
-* [Device: ~lua@5.3a](./devices/lua-at-5-3a.html)
-* [Device: ~message@1.0](./devices/message-at-1-0.html)
-* [Device: ~meta@1.0](./devices/meta-at-1-0.html)
-* [Device: ~process@1.0](./devices/process-at-1-0.html)
-* [Device: ~relay@1.0](./devices/relay-at-1-0.html)
-* [Device: ~scheduler@1.0](./devices/scheduler-at-1-0.html)
-* [Device: ~wasm64@1.0](./devices/wasm64-at-1-0.html)
-* [What are HyperBEAM Devices?](./devices/what-are-devices.html)
 
 ### resources
 
@@ -48,6 +49,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [Frequently Asked Questions](./resources/reference/faq.html)
 * [Glossary](./resources/reference/glossary.html)
 * [Troubleshooting Guide](./resources/reference/troubleshooting.html)
+* [The hb application #](./resources/source-code/README.html)
 * [[Module ar_bundles.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_bundles.erl)](./resources/source-code/ar_bundles.html)
 * [[Module ar_deep_hash.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_deep_hash.erl)](./resources/source-code/ar_deep_hash.html)
 * [[Module ar_rate_limiter.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/ar_rate_limiter.erl)](./resources/source-code/ar_rate_limiter.html)
@@ -161,5 +163,4 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module hb_util.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_util.erl)](./resources/source-code/hb_util.html)
 * [[Module hb_volume.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_volume.erl)](./resources/source-code/hb_volume.html)
 * [Source Code Documentation](./resources/source-code/index.html)
-* [The hb application #](./resources/source-code/README.html)
 * [[Module rsa_pss.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/rsa_pss.erl)](./resources/source-code/rsa_pss.html)

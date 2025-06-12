@@ -231,7 +231,7 @@ h6 {
 }
 
 .md-tabs__list {
-    justify-content: space-between;
+    justify-content: space-around;
 }
 
 .md-tabs__item {
