@@ -18,7 +18,7 @@ path given in `to`.
 _if_ they have a `method` key of `PATCH` or a `device` key of `patch@1.0`.
 
 Source and destination paths may be prepended by `base:` or `req:` keys to
-indicate that they are relative to either of the message`s that the
+indicate that they are relative to either of the message's that the
 computation is being performed on.
 
 The search order for finding the source and destination keys is as follows,

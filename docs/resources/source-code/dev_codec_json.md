@@ -15,7 +15,7 @@ This codec utilizes the httpsig@1.0 codec for signing and verifying.<a name="ind
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td></td></tr><tr><td valign="top"><a href="#committed-1">committed/1</a></td><td></td></tr><tr><td valign="top"><a href="#content_type-1">content_type/1</a></td><td>Return the content type for the codec.</td></tr><tr><td valign="top"><a href="#deserialize-3">deserialize/3</a></td><td>Deserialize the JSON string found at the given path.</td></tr><tr><td valign="top"><a href="#from-1">from/1</a></td><td>Decode a JSON string to a message.</td></tr><tr><td valign="top"><a href="#serialize-3">serialize/3</a></td><td>Serialize a message to a JSON string.</td></tr><tr><td valign="top"><a href="#to-1">to/1</a></td><td>Encode a message to a JSON string.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#commit-3">commit/3</a></td><td></td></tr><tr><td valign="top"><a href="#committed-3">committed/3</a></td><td></td></tr><tr><td valign="top"><a href="#content_type-1">content_type/1</a></td><td>Return the content type for the codec.</td></tr><tr><td valign="top"><a href="#deserialize-3">deserialize/3</a></td><td>Deserialize the JSON string found at the given path.</td></tr><tr><td valign="top"><a href="#from-3">from/3</a></td><td>Decode a JSON string to a message.</td></tr><tr><td valign="top"><a href="#serialize-3">serialize/3</a></td><td>Serialize a message to a JSON string.</td></tr><tr><td valign="top"><a href="#to-3">to/3</a></td><td>Encode a message to a JSON string.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -28,11 +28,11 @@ This codec utilizes the httpsig@1.0 codec for signing and verifying.<a name="ind
 
 `commit(Msg, Req, Opts) -> any()`
 
-<a name="committed-1"></a>
+<a name="committed-3"></a>
 
-### committed/1 ###
+### committed/3 ###
 
-`committed(Msg) -> any()`
+`committed(Msg, Req, Opts) -> any()`
 
 <a name="content_type-1"></a>
 
@@ -50,11 +50,11 @@ Return the content type for the codec.
 
 Deserialize the JSON string found at the given path.
 
-<a name="from-1"></a>
+<a name="from-3"></a>
 
-### from/1 ###
+### from/3 ###
 
-`from(Map) -> any()`
+`from(Map, Req, Opts) -> any()`
 
 Decode a JSON string to a message.
 
@@ -66,11 +66,11 @@ Decode a JSON string to a message.
 
 Serialize a message to a JSON string.
 
-<a name="to-1"></a>
+<a name="to-3"></a>
 
-### to/1 ###
+### to/3 ###
 
-`to(Msg) -> any()`
+`to(Msg, Req, Opts) -> any()`
 
 Encode a message to a JSON string.
 

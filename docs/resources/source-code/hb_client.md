@@ -8,7 +8,7 @@
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_route-3">add_route/3</a></td><td></td></tr><tr><td valign="top"><a href="#arweave_timestamp-0">arweave_timestamp/0</a></td><td>Grab the latest block information from the Arweave gateway node.</td></tr><tr><td valign="top"><a href="#prefix_keys-3">prefix_keys/3*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve-4">resolve/4</a></td><td>Resolve a message pair on a remote node.</td></tr><tr><td valign="top"><a href="#routes-2">routes/2</a></td><td></td></tr><tr><td valign="top"><a href="#upload-2">upload/2</a></td><td>Upload a data item to the bundler node.</td></tr><tr><td valign="top"><a href="#upload-3">upload/3*</a></td><td></td></tr><tr><td valign="top"><a href="#upload_empty_message_test-0">upload_empty_message_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#upload_empty_raw_ans104_test-0">upload_empty_raw_ans104_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#upload_raw_ans104_test-0">upload_raw_ans104_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#upload_raw_ans104_with_anchor_test-0">upload_raw_ans104_with_anchor_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#upload_single_layer_message_test-0">upload_single_layer_message_test/0*</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_route-3">add_route/3</a></td><td></td></tr><tr><td valign="top"><a href="#arweave_timestamp-0">arweave_timestamp/0</a></td><td>Grab the latest block information from the Arweave gateway node.</td></tr><tr><td valign="top"><a href="#prefix_keys-3">prefix_keys/3*</a></td><td></td></tr><tr><td valign="top"><a href="#resolve-4">resolve/4</a></td><td>Resolve a message pair on a remote node.</td></tr><tr><td valign="top"><a href="#routes-2">routes/2</a></td><td></td></tr><tr><td valign="top"><a href="#upload-2">upload/2</a></td><td>Upload a data item to the bundler node.</td></tr><tr><td valign="top"><a href="#upload-3">upload/3</a></td><td></td></tr><tr><td valign="top"><a href="#upload_empty_message_test-0">upload_empty_message_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#upload_empty_raw_ans104_test-0">upload_empty_raw_ans104_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#upload_raw_ans104_test-0">upload_raw_ans104_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#upload_raw_ans104_with_anchor_test-0">upload_raw_ans104_with_anchor_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#upload_single_layer_message_test-0">upload_single_layer_message_test/0*</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -59,10 +59,13 @@ and then adjusting the "Path" field from the second message.
 `upload(Msg, Opts) -> any()`
 
 Upload a data item to the bundler node.
+Note: Uploads once per commitment device. Callers should filter the
+commitments to only include the ones they are interested in, if this is not
+the desired behavior.
 
 <a name="upload-3"></a>
 
-### upload/3 * ###
+### upload/3 ###
 
 `upload(Msg, Opts, X3) -> any()`
 

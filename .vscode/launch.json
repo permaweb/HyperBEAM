@@ -14,7 +14,7 @@
       "internalConsoleOptions": "openOnSessionStart",
       "module": "hb_debugger",
       "function": "start_and_break",
-      "args": "[${input:moduleName}, ${input:functionName}, [${input:funcArgs}]]"
+      "args": "[${input:moduleName}, ${input:functionName}, [${input:funcArgs}], <<\"${input:debuggerScope}\">>]"
     },
     {
       "name": "Attach to a 'rebar3 debugger' node.",
@@ -65,6 +65,11 @@
       "id": "funcArgs",
       "type": "promptString",
       "description": "(Optional) Pass arguments to the function:"
+    },
+    {
+      "id": "debuggerScope",
+      "type": "promptString",
+      "description": "(Optional) Additional modules/prefixes for debugger scope:"
     }
   ]
 }

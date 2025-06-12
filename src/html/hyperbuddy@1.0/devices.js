@@ -1,4 +1,4 @@
-import { get, formatDisplayAmount, copyToClipboard } from '/~hyperbuddy@1.0/utils.js';
+import { get, copyToClipboard } from '/~hyperbuddy@1.0/utils.js';
 
 // Set up global message handler for console communications
 window.addEventListener('message', (event) => {
@@ -70,66 +70,68 @@ function parseInfo(text) {
 function renderInfoGroups(groups, devicesStr) {
   const devices = JSON.parse(devicesStr);
   const container = document.getElementById("info-section-lines");
-  
-  // Clear previous content
-  container.innerHTML = "";
-  
-  // Make sure it has the right class
-  container.className = "device-cards-container";
-  
-  for (const [key, device] of Object.entries(devices)) {
-    if(key == "device") continue;
-    const [name, variant] = device.name.split("@");
-    
-    // Create a card for each device
-    const card = document.createElement("div");
-    card.classList.add("device-card");
-    
-    // Create device name element
-    const deviceName = document.createElement("div");
-    deviceName.classList.add("device-name");
-    deviceName.textContent = name;
-    
-    // Create variant element with color based on version number
-    const deviceVariant = document.createElement("div");
-    deviceVariant.classList.add("device-variant");
-    
-    // Add color class based on version number
-    const versionNum = parseFloat(variant);
-    if (versionNum >= 1.0) {
-      deviceVariant.classList.add("device-variant-high");
-    } else if (versionNum >= 0.5) {
-      deviceVariant.classList.add("device-variant-medium");
-    } else {
-      deviceVariant.classList.add("device-variant-low");
+
+  if (container) {
+
+    // Clear previous content
+    container.innerHTML = "";
+
+    // Make sure it has the right class
+    container.className = "device-cards-container";
+
+    for (const [key, device] of Object.entries(devices)) {
+      if (key == "device") continue;
+      const [name, variant] = device.name.split("@");
+
+      // Create a card for each device
+      const card = document.createElement("div");
+      card.classList.add("device-card");
+
+      // Create device name element
+      const deviceName = document.createElement("div");
+      deviceName.classList.add("device-name");
+      deviceName.textContent = name;
+
+      // Create variant element with color based on version number
+      const deviceVariant = document.createElement("div");
+      deviceVariant.classList.add("device-variant");
+
+      // Add color class based on version number
+      const versionNum = parseFloat(variant);
+      if (versionNum >= 1.0) {
+        deviceVariant.classList.add("device-variant-high");
+      } else if (versionNum >= 0.5) {
+        deviceVariant.classList.add("device-variant-medium");
+      } else {
+        deviceVariant.classList.add("device-variant-low");
+      }
+
+      deviceVariant.textContent = variant;
+
+      // Add elements to card
+      card.appendChild(deviceName);
+      card.appendChild(deviceVariant);
+
+      // Add card to container
+      container.appendChild(card);
     }
-    
-    deviceVariant.textContent = variant;
-    
-    // Add elements to card
-    card.appendChild(deviceName);
-    card.appendChild(deviceVariant);
-    
-    // Add card to container
-    container.appendChild(card);
   }
 }
 
-/**
- * Fetch info data from the server
- */
 async function fetchInfo() {
   try {
     const operatorAddress = await get("/~meta@1.0/info/address");
     const operatorAction = document.getElementById("operator-action");
-    operatorAction.innerHTML = formatAddress(operatorAddress);
-    operatorAction.value = operatorAddress;
-    operatorAction.disabled = false;
-    
-    // Add click handler for the operator button
-    operatorAction.addEventListener("click", function() {
-      copyToClipboard(this);
-    });
+
+    if (operatorAction) {
+      operatorAction.innerHTML = formatAddress(operatorAddress);
+      operatorAction.value = operatorAddress;
+      operatorAction.disabled = false;
+
+      operatorAction.addEventListener("click", function () {
+        copyToClipboard(this);
+      });
+    }
 
     const info = await get("/~meta@1.0/info");
     const deviceInfo =
@@ -165,6 +167,17 @@ function addConsole() {
   container.appendChild(consoleContainer);
 }
 
+function addGraph() {
+  const container = document.getElementById("cache-section");
+  const cacheContainer = document.createElement("iframe");
+  cacheContainer.style.width = "100%";
+  cacheContainer.style.minHeight = "500px";
+  cacheContainer.style.border = "none";
+  cacheContainer.src = "/~hyperbuddy@1.0/graph";
+  cacheContainer.id = "cache-iframe";
+  container.appendChild(cacheContainer);
+}
+
 /**
  * Expand the console to take over the entire screen
  */
@@ -173,7 +186,7 @@ function expandConsole() {
   if (!consoleIframe) {
     return;
   }
-  
+
   // Save original position and size
   if (!consoleIframe.dataset.originalStyles) {
     consoleIframe.dataset.originalStyles = JSON.stringify({
@@ -186,7 +199,7 @@ function expandConsole() {
       zIndex: consoleIframe.style.zIndex
     });
   }
-  
+
   // Apply fullscreen styles directly to the iframe
   consoleIframe.style.position = "fixed";
   consoleIframe.style.top = "0";
@@ -195,7 +208,7 @@ function expandConsole() {
   consoleIframe.style.height = "100%";
   consoleIframe.style.minHeight = "100%";
   consoleIframe.style.zIndex = "9999";
-  
+
   // Notify the iframe that it's now expanded
   setTimeout(() => {
     if (consoleIframe.contentWindow) {
@@ -211,11 +224,11 @@ function expandConsole() {
  */
 function exitExpandedConsole() {
   const consoleIframe = document.getElementById("console-iframe");
-  
+
   if (!consoleIframe) {
     return;
   }
-  
+
   // Restore original position and size
   if (consoleIframe.dataset.originalStyles) {
     const originalStyles = JSON.parse(consoleIframe.dataset.originalStyles);
@@ -236,7 +249,7 @@ function exitExpandedConsole() {
     consoleIframe.style.minHeight = "500px";
     consoleIframe.style.zIndex = "";
   }
-  
+
   // Notify the iframe that it's now in normal mode
   setTimeout(() => {
     if (consoleIframe.contentWindow) {
@@ -253,6 +266,7 @@ export {
   renderInfoGroups,
   fetchInfo,
   addConsole,
+  addGraph,
   expandConsole,
   exitExpandedConsole
 }; 

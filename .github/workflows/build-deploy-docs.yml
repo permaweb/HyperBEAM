@@ -52,6 +52,7 @@ jobs:
           . ~/otp-27.0/activate
           echo "Erlang version:"
           erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
+
       # Install system dependencies needed for HyperBEAM
       - name: Install system dependencies
         run: |
@@ -62,15 +63,19 @@ jobs:
             ncurses-dev \
             libssl-dev \
             ca-certificates
+
       # Debug step - display the region with syntax error
       - name: Debug syntax error region
         run: |
           echo "Showing the region with syntax error in hb_message.erl:"
           sed -n '1440,1460p' src/hb_message.erl || echo "File not found or cannot be read"
+
           echo "Checking for syntax error fix files:"
           find . -name "*.erl.fix" -o -name "hb_message.erl.*" | grep -v ".beam" || echo "No fix files found"
+
           echo "Erlang version:"
           . ~/otp-27.0/activate && erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
+
       # Install rebar3
       - name: Install rebar3
         run: |
@@ -79,12 +84,14 @@ jobs:
           curl -O https://s3.amazonaws.com/rebar3/rebar3 && chmod +x rebar3
           sudo mv rebar3 /usr/local/bin/rebar3
           . ~/otp-27.0/activate && rebar3 --version
+
       # Install Rust toolchain (needed for WASM components)
       - name: Install Rust and Cargo
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           source "$HOME/.cargo/env"
+
       # Setup Node.js
       - name: ⎔ Setup Node
         uses: actions/setup-node@v3
@@ -96,13 +103,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install mkdocs mkdocs-material mkdocs-git-revision-date-localized-plugin
+
       - name: 🛠 Build Docs
         run: |
           . ~/otp-27.0/activate
           SKIP_COMPILE=1 SKIP_EDOC=1 ./docs/build-all.sh -v
+
   # Build and deploy the artifacts to Arweave via ArDrive
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dpshade/docs-content-styling'
     runs-on: ubuntu-22.04
     # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
     # However, do NOT cancel in-progress runs as we want to allow these deployments to complete.
@@ -131,6 +140,7 @@ jobs:
           . ~/otp-27.0/activate
           echo "Erlang version:"
           erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
+
       # Install system dependencies needed for HyperBEAM
       - name: Install system dependencies
         run: |
@@ -141,15 +151,19 @@ jobs:
             ncurses-dev \
             libssl-dev \
             ca-certificates
+
       # Debug step - display the region with syntax error
       - name: Debug syntax error region
         run: |
           echo "Showing the region with syntax error in hb_message.erl:"
           sed -n '1440,1460p' src/hb_message.erl || echo "File not found or cannot be read"
+
           echo "Checking for syntax error fix files:"
           find . -name "*.erl.fix" -o -name "hb_message.erl.*" | grep -v ".beam" || echo "No fix files found"
+
           echo "Erlang version:"
           . ~/otp-27.0/activate && erl -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'
+
       # Install rebar3
       - name: Install rebar3
         run: |
@@ -158,17 +172,20 @@ jobs:
           curl -O https://s3.amazonaws.com/rebar3/rebar3 && chmod +x rebar3
           sudo mv rebar3 /usr/local/bin/rebar3
           . ~/otp-27.0/activate && rebar3 --version
+
       # Install Rust toolchain (needed for WASM components)
       - name: Install Rust and Cargo
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           source "$HOME/.cargo/env"
+
       # Install pip dependencies and cache them
       - name: 📦 Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install mkdocs mkdocs-material mkdocs-git-revision-date-localized-plugin
+
       # Setup Node.js (needed for npx deploy command)
       - name: ⎔ Setup Node
         uses: actions/setup-node@v3
@@ -184,13 +201,16 @@ jobs:
           VER=`node --version`; echo "Node ver:   $VER"
           VER=`npm --version`; echo "npm ver:    $VER"
           . ~/otp-27.0/activate && erl -eval 'io:format("Erlang OTP version: ~s~n", [erlang:system_info(otp_release)]), halt().'
+
       - name: 🛠 Build Docs
         id: build_artifacts
         run: |
           . ~/otp-27.0/activate
           SKIP_COMPILE=1 SKIP_EDOC=1 ./docs/build-all.sh -v
           touch mkdocs-site/.nojekyll
+
           echo "artifacts_output_dir=mkdocs-site" >> $GITHUB_OUTPUT
+
       - name: 💾 Publish to Arweave
         id: publish_artifacts
         run: |

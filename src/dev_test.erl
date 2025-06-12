@@ -1,7 +1,8 @@
 -module(dev_test).
+-export([info/3]).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([update_state/3, increment_counter/3, delay/3]).
--export([info/3]).
+-export([index/3, postprocess/3, load/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -45,6 +46,19 @@ info(_Msg1, _Msg2, _Opts) ->
 	},
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
+%% @doc Example index handler.
+index(Msg, _Req, Opts) ->
+    Name = hb_ao:get(<<"name">>, Msg, <<"turtles">>, Opts),
+    {ok,
+        #{
+            <<"content-type">> => <<"text/html">>,
+            <<"body">> => <<"i like ", Name/binary, "!">>
+        }
+    }.
+
+%% @doc Return a message with the device set to this module.
+load(Base, _, _Opts) ->
+    {ok, Base#{ <<"device">> => <<"test-device@1.0">> }}.
 
 test_func(_) ->
 	{ok, <<"GOOD_FUNCTION">>}.
@@ -105,6 +119,12 @@ mul(Msg1, Msg2) ->
 %% @doc Do nothing when asked to snapshot.
 snapshot(_Msg1, _Msg2, _Opts) ->
     {ok, #{}}.
+
+%% @doc Set the `postprocessor-called' key to true in the HTTP server.
+postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
+    ?event({postprocess_called, Opts}),
+    hb_http_server:set_opts(Opts#{ <<"postprocessor-called">> => true }),
+    {ok, Msgs}.
 
 %% @doc Find a test worker's PID and send it an update message.
 update_state(_Msg, Msg2, _Opts) ->

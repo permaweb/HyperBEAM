@@ -24,7 +24,7 @@ To successfully build and run a HyperBEAM node, your system needs several softwa
         ncurses-dev \
         libssl-dev \
         sudo \
-        curl
+        curl \
         ca-certificates
     ```
 
@@ -151,7 +151,7 @@ This command:
 
 1.  Starts the Erlang Virtual Machine (BEAM) with all HyperBEAM modules loaded.
 2.  Initializes the node with default settings (from `hb_opts.erl`).
-3.  Starts the default HTTP server (typically on **port 10000**), making the node accessible via HyperPATHs.
+3.  Starts the default HTTP server (typically on **port 8734**), making the node accessible.
 4.  Drops you into an interactive Erlang shell where you can interact with the running node.
 
 This basic setup is suitable for local development and exploring HyperBEAM's functionalities.
@@ -182,14 +182,14 @@ rebar3 as rocksdb, genesis_wasm shell
 
 HyperBEAM offers various configuration options (port, key file, data storage, logging, etc.). These are primarily set using a `config.flat` file and can be overridden by environment variables or command-line arguments.
 
-See the dedicated **[Configuring Your HyperBEAM Node](./configuring-your-machine.md)** guide for detailed information on all configuration methods and options.
+See the dedicated [Configuring Your HyperBEAM Node](./configuring-your-machine.md) guide for detailed information on all configuration methods and options.
 
 ## Verify Installation
 
 To quickly check if your node is running and accessible, you can send a request to its `~meta@1.0` device (assuming default port 10000):
 
 ```bash
-curl http://localhost:10000/~meta@1.0/info
+curl http://localhost:8734/~meta@1.0/info
 ```
 
 A JSON response containing node information indicates success.
