@@ -6,7 +6,7 @@
 %%% This device acts as both a pricing device and a ledger device, by p4's
 %%% definition.
 -module(dev_simple_pay).
--export([estimate/3, debit/3, balance/3, topup/3]).
+-export([estimate/3, charge/3, balance/3, topup/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -24,26 +24,35 @@ estimate(_, EstimateReq, NodeMsg) ->
         false ->
             Messages =
                 hb_singleton:from(
-                    hb_ao:get(<<"request">>, EstimateReq, NodeMsg)
+                    hb_ao:get(<<"request">>, EstimateReq, NodeMsg),
+                    NodeMsg
                 ),
-            {ok, length(Messages) * hb_opts:get(simple_pay_price, 1, NodeMsg)}
+            % Attempt to find the price from the router registration options,
+            % if it exists. If not, use the simple pay price.
+            RouterOpts = hb_opts:get(router_registration_opts, #{}, NodeMsg),
+            Price =
+                case hb_ao:get(<<"price">>, RouterOpts, not_found, NodeMsg) of
+                    not_found -> hb_opts:get(simple_pay_price, 1, NodeMsg);
+                    P -> P
+                end,
+            {ok, length(Messages) * Price}
     end.
 
 %% @doc Preprocess a request by checking the ledger and charging the user. We 
 %% can charge the user at this stage because we know statically what the price
 %% will be
-debit(_, RawReq, NodeMsg) ->
-    ?event(payment, {debit, RawReq}),
+charge(_, RawReq, NodeMsg) ->
+    ?event(payment, {charge, RawReq}),
     Req = hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }),
-    case hb_message:signers(Req) of
+    case hb_message:signers(Req, NodeMsg) of
         [] ->
-            ?event(payment, {debit, {error, <<"No signers">>}}),
+            ?event(payment, {charge, {error, <<"No signers">>}}),
             {ok, false};
         [Signer] ->
             UserBalance = get_balance(Signer, NodeMsg),
             Price = hb_ao:get(<<"quantity">>, RawReq, 0, NodeMsg),
             ?event(payment,
-                {debit,
+                {charge,
                     {user, Signer},
                     {balance, UserBalance},
                     {price, Price}
@@ -59,16 +68,16 @@ debit(_, RawReq, NodeMsg) ->
                     {ok, true};
                 false ->
                     ?event(payment,
-                        {debit,
+                        {charge,
                             {user, Signer},
                             {balance, UserBalance},
                             {price, Price}
                         }
                     ),
                     {error, #{
-                        <<"status">> => 429,
+                        <<"status">> => 402,
                         <<"body">> => <<"Insufficient funds. "
-                            "User balance before debit: ",
+                            "User balance before charge: ",
                                 (hb_util:bin(UserBalance))/binary,
                             ". Price of request: ",
                                 (hb_util:bin(Price))/binary,
@@ -84,11 +93,11 @@ balance(_, RawReq, NodeMsg) ->
     Target =
         case hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }) of
             not_found ->
-                case hb_message:signers(RawReq) of
+                case hb_message:signers(RawReq, NodeMsg) of
                     [] -> hb_ao:get(<<"target">>, RawReq, undefined, NodeMsg);
                     [Signer] -> Signer
                 end;
-            Req -> hd(hb_message:signers(Req))
+            Req -> hd(hb_message:signers(Req, NodeMsg))
         end,
     {ok, get_balance(Target, NodeMsg)}.
 
@@ -152,14 +161,19 @@ topup(_, Req, NodeMsg) ->
 
 %% @doc Check if the request is from the operator.
 is_operator(Req, NodeMsg) ->
-    Signers = hb_message:signers(Req),
-    OperatorAddr = hb_util:human_id(hb_opts:get(operator, undefined, NodeMsg)),
+    is_operator(Req, NodeMsg, hb_opts:get(operator, undefined, NodeMsg)).
+
+is_operator(Req, NodeMsg, OperatorAddr) when ?IS_ID(OperatorAddr) ->
+    Signers = hb_message:signers(Req, NodeMsg),
+    HumanOperatorAddr = hb_util:human_id(OperatorAddr),
     lists:any(
         fun(Signer) ->
-            OperatorAddr =:= hb_util:human_id(Signer)
+            HumanOperatorAddr =:= hb_util:human_id(Signer)
         end,
         Signers
-    ).
+    );
+is_operator(_, _, _) ->
+    false.
 
 %%% Tests
 
@@ -198,11 +212,11 @@ get_balance_and_top_up_test() ->
             Node,
             Req = hb_message:commit(
                 #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
-                ClientWallet
+                Opts#{ priv_wallet => ClientWallet }
             ),
-            #{}
+            Opts
         ),
-    ?event({req_signers, hb_message:signers(Req)}),
+    ?event({req_signers, hb_message:signers(Req, Opts)}),
     % Balance is given during the request, before the charge is made, so we 
     % should expect to see the original balance.
     ?assertEqual(100, Res),
@@ -216,9 +230,9 @@ get_balance_and_top_up_test() ->
                     <<"amount">> => 100,
                     <<"recipient">> => ClientAddress
                 },
-                HostWallet
+                Opts#{ priv_wallet => HostWallet }
             ),
-            #{}
+            Opts
         ),
     % The balance should now be 180, as the topup will have been added and will
     % not have generated a charge in itself. The top-up did not generate a charge
@@ -228,9 +242,9 @@ get_balance_and_top_up_test() ->
         hb_http:get(
             Node,
             hb_message:commit(
-                #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
-                ClientWallet
+                #{<<"path">> => <<"/~p4@1.0/balance">>},
+                Opts#{ priv_wallet => ClientWallet }
             ),
-            #{}
+            Opts
         ),
     ?assertEqual(180, Res2).

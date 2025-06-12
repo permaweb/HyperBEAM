@@ -74,10 +74,10 @@ handle_cast({throttle, Peer, Path, From}, State) ->
 	#state{ traces = Traces, opts = Opts } = State,
 	{Type, Limit} = hb_opts:get(throttle_rpm_by_path, Path, Opts),
 	Now = os:system_time(millisecond),
-	case maps:get({Peer, Type}, Traces, not_found) of
+	case hb_maps:get({Peer, Type}, Traces, not_found, Opts) of
 		not_found ->
 			gen_server:reply(From, ok),
-			Traces2 = maps:put({Peer, Type}, {1, queue:from_list([Now])}, Traces),
+			Traces2 = hb_maps:put({Peer, Type}, {1, queue:from_list([Now])}, Traces, Opts),
 			{noreply, State#state{ traces = Traces2 }};
 		{N, Trace} ->
 			{N2, Trace2} = cut_trace(N, queue:in(Now, Trace), Now, Opts),
@@ -103,7 +103,7 @@ handle_cast({throttle, Peer, Path, From}, State) ->
 					{noreply, State};
 				false ->
 					gen_server:reply(From, ok),
-					Traces2 = maps:put({Peer, Type}, {N2 + 1, Trace2}, Traces),
+					Traces2 = hb_maps:put({Peer, Type}, {N2 + 1, Trace2}, Traces, Opts),
 					{noreply, State#state{ traces = Traces2 }}
 			end
 	end;

@@ -82,7 +82,7 @@
 %%% modules of the hyperbeam node.
 -module(hb).
 %%% Configuration and environment:
--export([init/0, now/0, build/0]).
+-export([init/0, now/0, build/0, deploy_scripts/0]).
 %%% Base start configurations:
 -export([start_simple_pay/0, start_simple_pay/1, start_simple_pay/2]).
 -export([topup/3, topup/4]).
@@ -123,7 +123,7 @@ start_mainnet(Opts) ->
     hb_http_server:start_node(
         FinalOpts =
             BaseOpts#{
-                store => #{ <<"store-module">> => hb_store_fs, <<"prefix">> => <<"cache-mainnet">> },
+                store => #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
                 priv_wallet => Wallet
             }
     ),
@@ -135,9 +135,9 @@ start_mainnet(Opts) ->
     io:format(
         "Started mainnet node at http://localhost:~p~n"
         "Operator: ~s~n",
-        [maps:get(port, Opts), Address]
+        [hb_maps:get(port, Opts, undefined, Opts), Address]
     ),
-    <<"http://localhost:", (integer_to_binary(maps:get(port, Opts)))/binary>>.
+    <<"http://localhost:", (integer_to_binary(hb_maps:get(port, Opts, undefined, Opts)))/binary>>.
 
 %%% @doc Start a server with a `simple-pay@1.0' pre-processor.
 start_simple_pay() ->
@@ -159,7 +159,7 @@ do_start_simple_pay(Opts) ->
         gun,
         os_mon
     ]),
-    Port = maps:get(port, Opts),
+    Port = hb_maps:get(port, Opts, undefined, Opts),
     Processor =
         #{
             <<"device">> => <<"p4@1.0">>,
@@ -181,6 +181,36 @@ do_start_simple_pay(Opts) ->
     ),
     <<"http://localhost:", (integer_to_binary(Port))/binary>>.
 
+%% @doc Upload all scripts from the `scripts' directory to the node to Arweave,
+%% printing their IDs.
+deploy_scripts() ->
+    deploy_scripts("scripts/").
+deploy_scripts(Dir) ->
+    Files = filelib:wildcard(Dir ++ "*.lua"),
+    lists:foreach(fun(File) ->
+        {ok, Script} = file:read_file(File),
+        Msg =
+            hb_message:commit(
+                #{
+                    <<"data-protocol">> => <<"ao">>,
+                    <<"variant">> => <<"ao.N.1">>,
+                    <<"type">> => <<"module">>,
+                    <<"content-type">> => <<"application/lua">>,
+                    <<"name">> => hb_util:bin(File),
+                    <<"body">> => Script
+                },
+                wallet(),
+                <<"ans104@1.0">>
+            ),
+        {Status, _} = hb_client:upload(Msg, #{}, <<"ans104@1.0">>),
+        io:format(
+            "~s: ~s (upload status: ~p)~n",
+            [File, hb_util:id(Msg), Status]
+        )
+    end, Files),
+    ok.
+
+
 %% @doc Helper for topping up a user's balance on a simple-pay node.
 topup(Node, Amount, Recipient) ->
     topup(Node, Amount, Recipient, wallet()).
@@ -198,9 +228,11 @@ topup(Node, Amount, Recipient, Wallet) ->
 wallet() ->
     wallet(hb_opts:get(priv_key_location)).
 wallet(Location) ->
+    wallet(Location, #{}).
+wallet(Location, Opts) ->
     case file:read_file_info(Location) of
         {ok, _} ->
-            ar_wallet:load_keyfile(Location);
+            ar_wallet:load_keyfile(Location, Opts);
         {error, _} -> 
             Res = ar_wallet:new_keyfile(?DEFAULT_KEY_TYPE, Location),
             ?event({created_new_keyfile, Location, address(Res)}),

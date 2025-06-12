@@ -1,10 +1,52 @@
 %%% @doc Wrapper for incrementing prometheus counters.
 -module(hb_event).
--export([log/1, log/2, log/3, log/4, log/5, log/6, increment/3]).
+-export([counters/0, log/1, log/2, log/3, log/4, log/5, log/6]).
+-export([increment/3, increment/4]).
 -include("include/hb.hrl").
 
 -define(OVERLOAD_QUEUE_LENGTH, 10000).
 
+%% @doc Return a message containing the current counter values for all logged
+%% HyperBEAM events. The result comes in a form as follows:
+%%      /GroupName/EventName -> Count
+%% Where the `EventName` is derived from the value of the first term sent to the
+%% `?event(...)' macros.
+counters() ->
+    UnaggregatedCounts =
+        [
+            {Group, Name, Count}
+        ||
+            {{default, <<"event">>, [Group, Name], _}, Count, _}
+                <- raw_counters()
+        ],
+    lists:foldl(
+        fun({Group, Name, Count}, Acc) -> 
+            Acc#{
+                Group => (maps:get(Group, Acc, #{}))#{
+                    Name => maps:get(Name, maps:get(Group, Acc, #{}), 0) + Count
+                }
+            }
+        end,
+        #{},
+        UnaggregatedCounts
+    ).
+
+-ifdef(STORE_EVENTS).
+raw_counters() ->
+    ets:tab2list(prometheus_counter_table).
+-else.
+raw_counters() ->
+    [].
+-endif.
+
+-ifdef(NO_EVENTS).
+log(_X) -> ok.
+log(_Topic, _X) -> ok.
+log(_Topic, _X, _Mod) -> ok.
+log(_Topic, _X, _Mod, _Func) -> ok.
+log(_Topic, _X, _Mod, _Func, _Line) -> ok.
+log(_Topic, _X, _Mod, _Func, _Line, _Opts) -> ok.
+-else.
 %% @doc Debugging log logging function. For now, it just prints to standard
 %% error.
 log(X) -> log(global, X).
@@ -29,7 +71,7 @@ log(Topic, X, ModAtom, Func, Line, Opts) when is_atom(ModAtom) ->
     end;
 log(Topic, X, Mod, Func, Line, Opts) ->
     % Check if the debug_print option has the topic in it if set.
-    case Printable = hb_opts:get(debug_print, false, Opts) of
+    case hb_opts:get(debug_print, false, Opts) of
         EventList when is_list(EventList) ->
             case lists:member(Mod, EventList)
                 orelse lists:member(hb_util:bin(Topic), EventList)
@@ -45,6 +87,7 @@ log(Topic, X, Mod, Func, Line, Opts) ->
     % `?event(...)' macros into the flow of other executions, without having to
     % break functional style.
     X.
+-endif.
 
 handle_tracer(Topic, X, Opts) ->
 	AllowedTopics = [http, ao_core, ao_result],
@@ -78,26 +121,28 @@ handle_tracer(Topic, X, Opts) ->
 %% This means that events must specify a topic if they want to be counted,
 %% filtering debug messages. Similarly, events with a topic that begins with
 %% `debug' are ignored.
-increment(global, _Message, _Opts) -> ignored;
-increment(ao_core, _Message, _Opts) -> ignored;
-increment(ao_internal, _Message, _Opts) -> ignored;
-increment(ao_devices, _Message, _Opts) -> ignored;
-increment(ao_subresolution, _Message, _Opts) -> ignored;
-increment(signature_base, _Message, _Opts) -> ignored;
-increment(id_base, _Message, _Opts) -> ignored;
-increment(parsing, _Message, _Opts) -> ignored;
-increment(Topic, Message, _Opts) ->
+increment(Topic, Message, Opts) ->
+    increment(Topic, Message, Opts, 1).
+increment(global, _Message, _Opts, _Count) -> ignored;
+increment(ao_core, _Message, _Opts, _Count) -> ignored;
+increment(ao_internal, _Message, _Opts, _Count) -> ignored;
+increment(ao_devices, _Message, _Opts, _Count) -> ignored;
+increment(ao_subresolution, _Message, _Opts, _Count) -> ignored;
+increment(signature_base, _Message, _Opts, _Count) -> ignored;
+increment(id_base, _Message, _Opts, _Count) -> ignored;
+increment(parsing, _Message, _Opts, _Count) -> ignored;
+increment(Topic, Message, _Opts, Count) ->
     case parse_name(Message) of
         <<"debug", _/binary>> -> ignored;
         EventName ->
             TopicBin = parse_name(Topic),
             case hb_name:lookup(?MODULE) of
                 Pid when is_pid(Pid) ->
-                    Pid ! {increment, TopicBin, EventName};
+                    Pid ! {increment, TopicBin, EventName, Count};
                 undefined ->
                     PID = spawn(fun() -> server() end),
                     hb_name:register(?MODULE, PID),
-                    PID ! {increment, TopicBin, EventName}
+                    PID ! {increment, TopicBin, EventName, Count}
             end
     end.
 
@@ -112,7 +157,7 @@ server() ->
     handle_events().
 handle_events() ->
     receive
-        {increment, TopicBin, EventName} ->
+        {increment, TopicBin, EventName, Count} ->
             case erlang:process_info(self(), message_queue_len) of
                 {message_queue_len, Len} when Len > ?OVERLOAD_QUEUE_LENGTH ->
                     ?debug_print(
@@ -124,7 +169,7 @@ handle_events() ->
                     );
                 _ -> ignored
             end,
-            prometheus_counter:inc(<<"event">>, [TopicBin, EventName]),
+            prometheus_counter:inc(<<"event">>, [TopicBin, EventName], Count),
             handle_events()
     end.
 

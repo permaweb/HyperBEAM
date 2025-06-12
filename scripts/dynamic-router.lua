@@ -203,11 +203,25 @@ end
 -- Register a new host to a route.
 function register(state, assignment, opts)
     state = ensure_defaults(state)
+    ao.event({"register", { state = state, assignment = assignment, opts = opts }})
     local req = assignment.body
+
+    -- If the message is signed by an explicitly trusted peer, we can skip the
+    -- is-admissible check.
+    if state["trusted-peer"] then
+        local committers = ao.get("committers", req)
+        for _, committer in ipairs(committers) do
+            if committer == state["trusted-peer"] then
+                state = add_node(state, req)
+                return recalculate(state, assignment, opts)
+            end
+        end
+    end
+
     req.path = state["is-admissible"].path or "is-admissible"
     local status, is_admissible = ao.resolve(state["is-admissible"], req)
 
-    ao.event("is-admissible result:", { status, is_admissible })
+    ao.event({"is-admissible result:", { status, is_admissible }})
     if status == "ok" and is_admissible == "true" then
         state = add_node(state, req)
         return recalculate(state, assignment, opts)
@@ -270,11 +284,11 @@ function duration(state, assignment, opts)
 end
 
 function compute(state, assignment, opts)
-    if assignment.body.path == "register" then
+    if assignment.body.action == "register" then
         return register(state, assignment, opts)
-    elseif assignment.body.path == "recalculate" then
+    elseif assignment.body.action == "recalculate" then
         return recalculate(state, assignment, opts)
-    elseif assignment.body.path == "performance" then
+    elseif assignment.body.action == "performance" then
         return duration(state, assignment, opts)
     else
         -- If we have been called without a relevant path, simply ensure that
@@ -377,7 +391,7 @@ function performance_test()
     -- Record the starting scores for the nodes
     local t0_node1_score = state.routes[1].nodes[1].weight
     local t0_node2_score = state.routes[1].nodes[1].weight
-  
+
     if t0_node1_score ~= t0_node2_score then
         error("Initial node scores should be equal. Received: "
             .. tostring(t0_node1_score) .. " and " .. tostring(t0_node2_score))
@@ -403,7 +417,7 @@ function performance_test()
             state = state
         }}
     )
-  
+
     -- now trigger a recalc
     _, state = recalculate(state, { body = { path = "recalculate" } }, {})
 
@@ -429,6 +443,6 @@ function performance_test()
     if t1_node2_score >= t0_node2_score then
         error("Node 2 score should have decreased!")
     end
-    
+
     return "ok"
 end
