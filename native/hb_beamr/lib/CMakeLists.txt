@@ -90,7 +90,11 @@ message(STATUS "Configuring WAMR for Platform: ${WAMR_BUILD_PLATFORM}, Target: $
 
 # Run mode: We are only supporting AOT compilation currently.
 set(WAMR_BUILD_AOT 1)
-set(WAMR_BUILD_INTERP 1)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(WAMR_BUILD_INTERP 1) # Enabled for debug mode
+else()
+    set(WAMR_BUILD_INTERP 0) # Disabled for release mode
+endif()
 set(WAMR_BUILD_FAST_INTERP 0)
 set(WAMR_BUILD_JIT 0)
 set(WAMR_BUILD_FAST_JIT 0)
@@ -103,10 +107,15 @@ set(WAMR_NAN_CANONICALIZATION_SIGN_BIT 0)
 set(WAMR_BUILD_AOT_STACK_FRAME 1) # TODO: Justification?
 
 # Debug options
-# TODO: set conditionally?
-set(WAMR_BUILD_DEBUG_AOT 1)
-set(WAMR_BUILD_DUMP_CALL_STACK 1)
-set(WAMR_BUILD_MEMORY_PROFILING 1)
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(WAMR_BUILD_DEBUG_AOT 1)
+    set(WAMR_BUILD_DUMP_CALL_STACK 1)
+    set(WAMR_BUILD_MEMORY_PROFILING 1)
+else()
+    set(WAMR_BUILD_DEBUG_AOT 0)
+    set(WAMR_BUILD_DUMP_CALL_STACK 0)
+    set(WAMR_BUILD_MEMORY_PROFILING 0)
+endif()
 
 # Features
 set(WAMR_BUILD_MEMORY64 1) # Memory >4GB
