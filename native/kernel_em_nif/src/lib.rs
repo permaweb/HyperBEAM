@@ -3,7 +3,7 @@ pub mod core;
 pub mod tests;
 pub mod utils;
 use crate::core::arweave::retrieve_kernel_src;
-use crate::core::execution_machine::KernelExecutor;
+use crate::core::execution_machine::{KernelExecutor, KernelExecutorOpts};
 use crate::utils::load0::upload_to_load0;
 use image::ImageBuffer;
 use image::ImageFormat;
@@ -30,7 +30,7 @@ fn execute_kernel(
     output_size_hint: u64,
 ) -> NifResult<Vec<u8>> {
     let kernel_src = retrieve_kernel_src(&kernel_id).unwrap();
-    let kem = pollster::block_on(KernelExecutor::new());
+    let kem = pollster::block_on(KernelExecutor::new(KernelExecutorOpts::default()));
     let result =
         kem.execute_kernel_default(&kernel_src, input_data.as_slice(), Some(output_size_hint));
     Ok(result)
@@ -56,7 +56,7 @@ fn execute_kernel_with_params(
         50 // default pixel size
     };
     let kernel_src = retrieve_kernel_src(&kernel_id).unwrap();
-    let kem = pollster::block_on(KernelExecutor::new());
+    let kem = pollster::block_on(KernelExecutor::new(KernelExecutorOpts::default()));
     let result = kem.execute_kernel_with_uniform_default(
         &kernel_src,
         pixel_bytes.as_slice(),

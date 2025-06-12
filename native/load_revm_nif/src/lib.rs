@@ -20,7 +20,11 @@ fn hello() -> NifResult<String> {
 }
 
 #[rustler::nif]
-fn eval_bytecode(signed_raw_tx: String, state: String, cout_state_path: String) -> NifResult<String> {
+fn eval_bytecode(
+    signed_raw_tx: String,
+    state: String,
+    cout_state_path: String,
+) -> NifResult<String> {
     let state_option = if state.is_empty() { None } else { Some(state) };
     let evaluated_state: (String, String) = eval(signed_raw_tx, state_option, cout_state_path)?;
     Ok(evaluated_state.0)
@@ -28,7 +32,7 @@ fn eval_bytecode(signed_raw_tx: String, state: String, cout_state_path: String) 
 
 #[rustler::nif]
 fn get_appchain_state(chain_id: &str) -> NifResult<String> {
-	let state = get_state(chain_id);
+    let state = get_state(chain_id);
     Ok(state)
 }
 

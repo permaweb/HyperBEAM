@@ -6,10 +6,7 @@ pub fn parse_address(addr: &str) -> Result<Address, String> {
         return Err("Address must be 20 bytes (40 hex characters)".to_string());
     }
 
-    let bytes = match hex::decode(addr) {
-        Ok(b) => b,
-        Err(_) => return Err("Invalid hex string".to_string()),
-    };
+    let bytes = hex::decode(addr).map_err(|e| "Invalid hex string".to_string())?;
 
     let mut address = [0u8; 20];
     address.copy_from_slice(&bytes);

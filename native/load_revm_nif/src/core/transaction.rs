@@ -16,7 +16,7 @@ pub fn get_tx_object(raw_tx_hex: &str) -> Transaction {
     rlp::decode(&raw_tx_bytes).unwrap()
 }
 
-pub fn get_tx_kind(tx: Transaction) -> TxKind {
+pub fn get_tx_kind(tx: &Transaction) -> TxKind {
     if tx.to.is_none() {
         TxKind::Create
     } else {

@@ -6,24 +6,37 @@ use wgpu::{Adapter, util::DeviceExt};
 
 use super::adapter::AdapterInfoRes;
 
-pub struct KernelExecutor {
+pub struct KernelExecutor<'a, 'b> {
+    config: KernelExecutorOpts<'a, 'b>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
 }
 
-impl KernelExecutor {
-    /// create a new KernelExecutor
-    pub async fn new() -> Self {
-        // initialize wgpu instance
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+pub struct KernelExecutorOpts<'a, 'b> {
+    pub instance_descriptor: wgpu::InstanceDescriptor,
+    pub opts: wgpu::RequestAdapterOptions<'a, 'b>,
+}
 
-        // find a suitable GPU
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
+impl<'a, 'b> Default for KernelExecutorOpts<'a, 'b> {
+    fn default() -> Self {
+        Self {
+            instance_descriptor: wgpu::InstanceDescriptor::default(),
+            opts: wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
-            })
+            },
+        }
+    }
+}
+
+impl<'a, 'b> KernelExecutor<'a, 'b> {
+    /// create a new KernelExecutor
+    pub async fn new(config: KernelExecutorOpts<'a, 'b>) -> Self {
+        let instance = wgpu::Instance::new(&config.instance_descriptor);
+        // find a suitable GPU
+        let adapter = instance
+            .request_adapter(&config.opts)
             .await
             .expect("Failed to find an appropriate adapter");
 
@@ -41,7 +54,11 @@ impl KernelExecutor {
             .await
             .expect("Failed to create device");
 
-        Self { device, queue }
+        Self {
+            device,
+            queue,
+            config,
+        }
     }
     pub async fn get_adapter_info() -> String {
         // initialize wgpu instance
@@ -114,7 +131,7 @@ impl KernelExecutor {
         let dispatch_x = (width + workgroup_size - 1) / workgroup_size;
         let dispatch_y = (height + workgroup_size - 1) / workgroup_size;
 
-        let workgroup_size = (16, 16, 1); 
+        let workgroup_size = (16, 16, 1);
         let dispatch_size = (dispatch_x, dispatch_y, 1);
 
         self.execute_kernel_with_uniform(
