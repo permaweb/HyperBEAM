@@ -103,14 +103,14 @@ ensure_started(Opts) ->
                         Port =
                             open_port(
                                 {spawn_executable,
-                                    "_build/genesis-wasm-server/launch-monitored.sh"
+                                    "/opt/_build/genesis-wasm-server/launch-monitored.sh"
                                 },
                                 [
                                     binary, use_stdio, stderr_to_stdout,
                                     {args, [
                                         "npm",
                                         "--prefix",
-                                        "_build/genesis-wasm-server",
+                                        "/opt/_build/genesis-wasm-server",
                                         "run",
                                         "dev"
                                     ]},
