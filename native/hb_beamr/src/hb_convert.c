@@ -55,9 +55,13 @@ enum erl_port_buffer_to_wasm_vals_rc erl_port_buffer_to_wasm_vals(const char* bu
 
     // In either case, the arity must match the val_count
     if (arity != val_count) {
-        DRV_DEBUG("Arity mismatch. Port buffer arity: %d, Wasm val count: %d", arity, val_count);
-        rc = ERL_PORT_BUFFER_TO_WASM_VALS_MALFORMED_BUFFER;
-        goto fail0;
+        if (arity >= val_count) {
+            DRV_DEBUG("ERROR: Arity (%d) exceeds val_count (%d).", arity, val_count);
+            rc = ERL_PORT_BUFFER_TO_WASM_VALS_MALFORMED_BUFFER;
+            goto fail0;
+        } else {
+            DRV_DEBUG("WARNING: Arity (%d) is less than val_count (%d).", arity, val_count);
+        }
     }
 
     wasm_val_t* vals = NULL;
@@ -451,12 +455,15 @@ int wasm_vals_to_erl_msg(wasm_val_t* vals, const int val_count, ErlDrvTermData**
     
     // Send the results back to Erlang
     DRV_DEBUG("Results size: %d", val_count);
-    DRV_DEBUG("Reallocating msg");
-    *msg = driver_realloc(*msg, sizeof(ErlDrvTermData) * (
+
+    int new_msg_size = sizeof(ErlDrvTermData) * (
         + msg_base_size
         + (val_count * 2) // Each term is 2 ErlDrvTermData
         + 3 // List tail, type, and arity
-    ));
+    );
+    DRV_DEBUG("Reallocating msg to %d bytes", new_msg_size);
+    *msg = driver_realloc(*msg, new_msg_size);
+
     for (size_t i = 0; i < val_count; i++) {
         int res_size = wasm_val_to_erl_term(&(*msg)[*msg_i], &vals[i]);
         // assert(res_size == 2);
@@ -471,7 +478,7 @@ int wasm_vals_to_erl_msg(wasm_val_t* vals, const int val_count, ErlDrvTermData**
     DRV_DEBUG("msg_i: %d", *msg_i);
     DRV_DEBUG("val_count: %d", val_count);
 
-    return 0;
+    return new_msg_size;
 
 fail1:
     driver_free(msg);

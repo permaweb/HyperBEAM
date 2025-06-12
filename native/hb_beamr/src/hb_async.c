@@ -7,6 +7,10 @@
 #include "hb_beamr_utils.h"
 #include "wasm_export.h"
 
+#if HB_DEBUG==1
+#include "hb_beamr_utils.h"
+#endif
+
 extern ErlDrvTermData atom_ok;
 extern ErlDrvTermData atom_import;
 extern ErlDrvTermData atom_execution_result;
@@ -40,7 +44,7 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
     uint32_t result_count = attachment->func.result_count;
     wasm_valkind_t *result_kinds = attachment->func.result_types;
 
-#ifdef HB_DEBUG
+#if HB_DEBUG==1
     DRV_DEBUG("Import param types:");
     hb_beamr_utils_print_wasm_val_kinds(param_kinds, param_count);
     DRV_DEBUG("Import result types:");
@@ -54,34 +58,37 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
         return;
     }
 
-#ifdef HB_DEBUG
+#if HB_DEBUG==1
     DRV_DEBUG("Wasm vals:");
     hb_beamr_utils_print_wasm_vals(wasm_args, param_count);
 #endif
 
     // Initialize the message object
-    int base_msg_size = sizeof(ErlDrvTermData) * (
-        2 + // atom_import
-        3 + // module_name
-        3 + // func_name
-        // params will be added by wasm_vals_to_erl_msg
-        3 + // signature
-        2 // tuple
+    int msg_base_size = sizeof(ErlDrvTermData) * (
+        + 2 // atom_import
+        + 3 // module_name string
+        + 3 // func_name string
+        // + ? // params will be added by wasm_vals_to_erl_msg
+        + 3 // signature string
+        + 2 // tuple
     );
-    ErlDrvTermData* msg = driver_alloc(base_msg_size);
+
+    ErlDrvTermData* msg = driver_alloc(msg_base_size);
     int msg_i = 0;
+
     msg[msg_i++] = ERL_DRV_ATOM;
     msg[msg_i++] = atom_import;
+
     msg[msg_i++] = ERL_DRV_STRING;
     msg[msg_i++] = (ErlDrvTermData) module_name;
     msg[msg_i++] = strlen(module_name);
+
     msg[msg_i++] = ERL_DRV_STRING;
     msg[msg_i++] = (ErlDrvTermData) func_name;
     msg[msg_i++] = strlen(func_name);
 
     // Encode args
-    int erc = wasm_vals_to_erl_msg(wasm_args, param_count, &msg, &msg_i, base_msg_size);
-    if (erc != 0) {
+    if (wasm_vals_to_erl_msg(wasm_args, param_count, &msg, &msg_i, msg_base_size) <= 0) {
         DRV_DEBUG("Failed to encode args to message");
         return;
     }
@@ -120,7 +127,7 @@ static void generic_import_native_symbol_func(wasm_exec_env_t exec_env, uint64_t
         // send_error(proc->port_term, "Import execution failed: %s", is->error_message);
         wasm_runtime_set_exception(module_inst, is->error_message);
     } else {
-#ifdef HB_DEBUG
+#if HB_DEBUG==1
         DRV_DEBUG("Import results:");
         hb_beamr_utils_print_wasm_vals(is->results, is->result_count);
 #endif
@@ -216,8 +223,7 @@ void wasm_initialize_runtime(void* raw) {
         return;
     }
 
-#ifdef HB_DEBUG
-    #include "hb_beamr_utils.h"
+#if HB_DEBUG==1
     hb_beamr_utils_print_module_info(tmp_module);
 #endif
 
@@ -264,12 +270,16 @@ void wasm_initialize_runtime(void* raw) {
     }
 
     // Generate the erlang message
-    int init_msg_size = sizeof(ErlDrvTermData) * 2;
+    int init_msg_size = sizeof(ErlDrvTermData) * (
+        + 2 // atom_execution_result
+        + 2 // tuple
+    );
     ErlDrvTermData* msg = driver_alloc(init_msg_size);
     int msg_i = 0;
 
     msg[msg_i++] = ERL_DRV_ATOM;
     msg[msg_i++] = atom_execution_result;
+
     msg[msg_i++] = ERL_DRV_TUPLE;
     msg[msg_i++] = 1;
 
@@ -301,11 +311,11 @@ void wasm_execute_exported_function(void* raw) {
 
     wasm_val_t* results = driver_alloc(cc->call_request.result_count * sizeof(wasm_val_t));
 
-#ifdef HB_DEBUG
+#if HB_DEBUG==1
     DRV_DEBUG("Calling export: %s", cc->call_request.call_export.function_name);
-    DRV_DEBUG("Exported function args:");
+    DRV_DEBUG("- args:");
     hb_beamr_utils_print_wasm_vals(cc->call_request.args, cc->call_request.arg_count);
-    DRV_DEBUG("Exported function result types:");
+    DRV_DEBUG("- result types:");
     hb_beamr_utils_print_wasm_val_kinds(cc->call_request.result_types, cc->call_request.result_count);
 #endif
 
@@ -317,20 +327,28 @@ void wasm_execute_exported_function(void* raw) {
         goto fail1;
     }
 
-#ifdef HB_DEBUG
+#if HB_DEBUG==1
     DRV_DEBUG("Exported function results:");
     hb_beamr_utils_print_wasm_vals(results, cc->call_request.result_count);
 #endif
     
-    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 4);
+    int msg_base_size = sizeof(ErlDrvTermData) * (
+        + 2 // atom_execution_result
+        // + ? // results will be added by wasm_vals_to_erl_msg
+        + 2 // tuple
+    );
+    ErlDrvTermData* msg = driver_alloc(msg_base_size);
     int msg_i = 0;
+
     msg[msg_i++] = ERL_DRV_ATOM;
     msg[msg_i++] = atom_execution_result;
-    if (wasm_vals_to_erl_msg(results, cc->call_request.result_count, &msg, &msg_i, 4) != 0) {
+
+    if (wasm_vals_to_erl_msg(results, cc->call_request.result_count, &msg, &msg_i, msg_base_size) <= 0) {
         send_error(proc->port_term, "Failed to convert results to erl msg");
         drv_unlock(proc->is_running);
         return;
     };
+
     msg[msg_i++] = ERL_DRV_TUPLE;
     msg[msg_i++] = 2;
 
@@ -369,9 +387,11 @@ void wasm_execute_indirect_function(void *raw) {
 
     wasm_val_t* results = driver_alloc(cc->call_request.result_count * sizeof(wasm_val_t));
 
-#ifdef HB_DEBUG
+#if HB_DEBUG==1
     DRV_DEBUG("Calling indirect table: %s, index: %ld", cc->call_request.call_indirect.table_name, cc->call_request.call_indirect.table_index);
+    DRV_DEBUG("- args:");
     hb_beamr_utils_print_wasm_vals(cc->call_request.args, cc->call_request.arg_count);
+    DRV_DEBUG("- result types:");
     hb_beamr_utils_print_wasm_val_kinds(cc->call_request.result_types, cc->call_request.result_count);
 #endif
 
@@ -383,20 +403,28 @@ void wasm_execute_indirect_function(void *raw) {
         goto fail1;
     }
 
-#ifdef HB_DEBUG
-    DRV_DEBUG("Exported function results:");
+#if HB_DEBUG==1
+    DRV_DEBUG("Indirect function results:");
     hb_beamr_utils_print_wasm_vals(results, cc->call_request.result_count);
 #endif
     
-    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 4);
+    int msg_base_size = sizeof(ErlDrvTermData) * (
+        + 2 // atom_execution_result
+        // + ? // results will be added by wasm_vals_to_erl_msg
+        + 2 // tuple
+    );
+    ErlDrvTermData* msg = driver_alloc(msg_base_size);
     int msg_i = 0;
+
     msg[msg_i++] = ERL_DRV_ATOM;
     msg[msg_i++] = atom_execution_result;
-    if (wasm_vals_to_erl_msg(results, cc->call_request.result_count, &msg, &msg_i, 4) != 0) {
+
+    if (wasm_vals_to_erl_msg(results, cc->call_request.result_count, &msg, &msg_i, msg_base_size) <= 0) {
         send_error(proc->port_term, "Failed to convert results to erl msg");
         drv_unlock(proc->is_running);
         return;
     };
+
     msg[msg_i++] = ERL_DRV_TUPLE;
     msg[msg_i++] = 2;
 

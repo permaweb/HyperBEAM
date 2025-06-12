@@ -12,5 +12,6 @@ enum erl_port_buffer_to_wasm_vals_rc {
 
 enum erl_port_buffer_to_wasm_vals_rc erl_port_buffer_to_wasm_vals(const char* buff, int* index, wasm_valkind_t *val_kinds, uint32_t val_count, wasm_val_t **out_vals);
 
+// Reallocates msg to the new size and returns the new size
 // May modify the vals array
 int wasm_vals_to_erl_msg(wasm_val_t* vals, int val_count, ErlDrvTermData** msg, int* index, int msg_base_size);

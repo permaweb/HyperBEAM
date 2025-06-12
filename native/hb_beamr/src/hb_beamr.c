@@ -401,26 +401,33 @@ static void handle_read(Proc* proc, char* buff, ErlDrvSizeT bufflen, int index) 
     long size_l = (long)size;
     
     DRV_DEBUG("Reading %ld bytes from %ld", size_l, ptr);
-    uint8_t* out_binary = driver_alloc(size_l);
-    hb_beamr_lib_rc_t rc = hb_beamr_lib_direct_read_memory(proc->wasm_ctx, ptr, (uint8_t*)out_binary, size_l);
+    uint8_t* read_data = driver_alloc(size_l);
+    hb_beamr_lib_rc_t rc = hb_beamr_lib_direct_read_memory(proc->wasm_ctx, ptr, (uint8_t*)read_data, size_l);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         send_error(proc->port_term, hb_beamr_lib_get_last_error(proc->wasm_ctx));
         return;
     }
 
-    DRV_DEBUG("Read complete. Binary: %p", out_binary);
+    DRV_DEBUG("Read complete. Binary: %p", read_data);
 
-    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 7);
-    int msg_index = 0;
-    msg[msg_index++] = ERL_DRV_ATOM;
-    msg[msg_index++] = atom_execution_result;
-    msg[msg_index++] = ERL_DRV_BUF2BINARY;
-    msg[msg_index++] = (ErlDrvTermData)out_binary;
-    msg[msg_index++] = size_l;
-    msg[msg_index++] = ERL_DRV_TUPLE;
-    msg[msg_index++] = 2;
+    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * (
+        2 + // atom_execution_result
+        3 + // buf2binary
+        2 // tuple
+    ));
+    int msg_i = 0;
+
+    msg[msg_i++] = ERL_DRV_ATOM;
+    msg[msg_i++] = atom_execution_result;
+
+    msg[msg_i++] = ERL_DRV_BUF2BINARY;
+    msg[msg_i++] = (ErlDrvTermData)read_data;
+    msg[msg_i++] = size_l;
+
+    msg[msg_i++] = ERL_DRV_TUPLE;
+    msg[msg_i++] = 2;
     
-    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
+    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_i);
     DRV_DEBUG("Read response sent: %d", msg_res);
 }
 
@@ -436,15 +443,23 @@ static void handle_size(Proc* proc, char* buff, ErlDrvSizeT bufflen, int start_i
     }
     DRV_DEBUG("Size: %ld", memory_size);
 
-    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * 6);
-    int msg_index = 0;
-    msg[msg_index++] = ERL_DRV_ATOM;
-    msg[msg_index++] = atom_execution_result;
-    msg[msg_index++] = ERL_DRV_INT;
-    msg[msg_index++] = (long)memory_size;
-    msg[msg_index++] = ERL_DRV_TUPLE;
-    msg[msg_index++] = 2;
-    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_index);
+    ErlDrvTermData* msg = driver_alloc(sizeof(ErlDrvTermData) * (
+        + 2 // atom_execution_result
+        + 2 // int
+        + 2 // tuple
+    ));
+    int msg_i = 0;
+
+    msg[msg_i++] = ERL_DRV_ATOM;
+    msg[msg_i++] = atom_execution_result;
+
+    msg[msg_i++] = ERL_DRV_INT;
+    msg[msg_i++] = (ErlDrvTermData)memory_size;
+
+    msg[msg_i++] = ERL_DRV_TUPLE;
+    msg[msg_i++] = 2;
+
+    int msg_res = erl_drv_output_term(proc->port_term, msg, msg_i);
     DRV_DEBUG("Size response sent: %d", msg_res);
 }
 

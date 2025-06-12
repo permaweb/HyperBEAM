@@ -178,7 +178,26 @@ void send_compilation_result(Proc* proc, WasmInterfaceFunction* imports, size_t 
     DRV_DEBUG("AOT module size: %d bytes", aot_module_size);
 
     // Send the compilation result to the caller
-    int msg_size = sizeof(ErlDrvTermData) * (2 + 3 + 5 + (13 * import_count) + (11 * export_count) + 4);
+    int msg_size = sizeof(ErlDrvTermData) * (
+        2 + // atom_compilation_result
+        import_count * (
+            2 + // import kind
+            3 + // module_name string
+            3 + // field_name string
+            3 + // signature string
+            2 // tuple
+        ) + // imports
+        3 + // import list
+        export_count * (
+            2 + // export kind
+            3 + // field_name string
+            3 + // signature string
+            2 // tuple
+        ) + // exports
+        3 + // export list
+        3 + // buf2binary
+        2 // tuple
+    );
     ErlDrvTermData* msg = driver_alloc(msg_size);
     int msg_i = 0;
 
@@ -193,15 +212,19 @@ void send_compilation_result(Proc* proc, WasmInterfaceFunction* imports, size_t 
 
         msg[msg_i++] = ERL_DRV_ATOM;
         msg[msg_i++] = driver_mk_atom((char*)wasm_import_export_kind_to_string(import.kind));
+
         msg[msg_i++] = ERL_DRV_STRING;
         msg[msg_i++] = (ErlDrvTermData)import.module_name;
         msg[msg_i++] = strlen(import.module_name);
+
         msg[msg_i++] = ERL_DRV_STRING;
         msg[msg_i++] = (ErlDrvTermData)import.field_name;
         msg[msg_i++] = strlen(import.field_name);
+
         msg[msg_i++] = ERL_DRV_STRING;
         msg[msg_i++] = (ErlDrvTermData)import.signature;
         msg[msg_i++] = strlen(import.signature);
+
         msg[msg_i++] = ERL_DRV_TUPLE;
         msg[msg_i++] = 4;
     }
@@ -220,12 +243,15 @@ void send_compilation_result(Proc* proc, WasmInterfaceFunction* imports, size_t 
 
         msg[msg_i++] = ERL_DRV_ATOM;
         msg[msg_i++] = driver_mk_atom((char *)wasm_import_export_kind_to_string(export.kind));
+
         msg[msg_i++] = ERL_DRV_STRING;
         msg[msg_i++] = (ErlDrvTermData)export.field_name;
         msg[msg_i++] = strlen(export.field_name);
+
         msg[msg_i++] = ERL_DRV_STRING;
         msg[msg_i++] = (ErlDrvTermData)send_signature;
         msg[msg_i++] = strlen(send_signature);
+
         msg[msg_i++] = ERL_DRV_TUPLE;
         msg[msg_i++] = 3;
     }
@@ -237,6 +263,7 @@ void send_compilation_result(Proc* proc, WasmInterfaceFunction* imports, size_t 
     msg[msg_i++] = ERL_DRV_BUF2BINARY;
     msg[msg_i++] = (ErlDrvTermData)aot_module;
     msg[msg_i++] = aot_module_size;
+
     msg[msg_i++] = ERL_DRV_TUPLE;
     msg[msg_i++] = 4;
     
