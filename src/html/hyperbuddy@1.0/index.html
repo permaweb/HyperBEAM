@@ -306,11 +306,24 @@
                                         const raw = joinHeaders(
                                             res.headers
                                         ).trim();
-                                        const child = parseHeaders(raw);
+                                        
+                                        const parsed = parseHeaders(raw);
+
+                                        // Get the signature-input header string
+                                        const sigInputRaw =
+                                            parsed["signature-input"]?.data;
+
+                                        // If it's missing, render everything
+                                        const toRender = sigInputRaw
+                                            ? filterSignedHeaders(
+                                                  parsed,
+                                                  sigInputRaw
+                                              )
+                                            : parsed;
 
                                         await renderExplorer(
                                             nestedBody,
-                                            child,
+                                            toRender,
                                             depth + 1
                                         );
                                     } catch (e) {

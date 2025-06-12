@@ -1,7 +1,7 @@
 %%% @doc Codec for managing transformations from `ar_bundles'-style Arweave TX
 %%% records to and from TABMs.
 -module(dev_codec_ans104).
--export([to/3, from/3, commit/3, verify/3, content_type/1]).
+-export([to/3, from/3, commit/3, verify/3, content_type/1, normalize_data/1]).
 -export([serialize/3, deserialize/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -190,8 +190,20 @@ do_from(RawTX, Req, Opts) ->
         end,
     % Merge the data map with the rest of the TX map and remove any keys that
     % are not part of the message.
-    NormalizedDataMap =
+    NormKeyDataMap =
         hb_ao:normalize_keys(hb_maps:merge(DataMap, MapWithoutData, Opts), Opts),
+    % Normalize the `data` field to the `ao-data-key's value, if set.
+    NormalizedDataMap =
+        case maps:get(<<"ao-data-key">>, NormKeyDataMap, undefined) of
+            undefined -> NormKeyDataMap;
+            DataKey ->
+                % Remove the `data' and `ao-data-key' fields from the map, then
+                % add the `data' field with the value of the `ao-data-key' field.
+                (maps:without([<<"data">>, <<"ao-data-key">>], NormKeyDataMap))#{
+                    DataKey => maps:get(<<"data">>, NormKeyDataMap, ?DEFAULT_DATA)
+                }
+        end,
+    ?event({norm_tx_keys_map, {explicit, NormalizedDataMap}}),
     %% Add the commitments to the message if the TX has a signature.
     ?event({message_before_commitments, NormalizedDataMap}),
     CommittedKeys =
@@ -366,7 +378,9 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
-    NormTABM = hb_message:filter_default_keys(RawTABM),
+    RawTABM2 = hb_message:filter_default_keys(RawTABM),
+    % Calculate and normalize the `data', if applicable.
+    NormTABM = normalize_data(RawTABM2),
     ?event({to, {inbound, NormTABM}, {req, Req}}),
     MaybeBundle =
         case hb_util:atom(hb_ao:get(<<"bundle">>, Req, false, Opts)) of
@@ -569,6 +583,42 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
 to(_Other, _Req, _Opts) ->
     throw(invalid_tx).
 
+%% @doc Normalize the data field of a message to its appropriate value in a TABM.
+normalize_data(Msg) ->
+    case maps:is_key(<<"ao-data-key">>, Msg) of
+        true -> Msg;
+        false ->
+            case inline_key(Msg) of
+                <<"data">> -> Msg;
+                InlineKey ->
+                    (maps:without([InlineKey], Msg))#{
+                        <<"ao-data-key">> => InlineKey,
+                        <<"data">> => maps:get(InlineKey, Msg)
+                    }
+            end
+    end.
+
+%% @doc Determine if an `ao-data-key` should be added to the message.
+inline_key(Msg) ->
+    InlineKey = maps:get(<<"ao-data-key">>, Msg, undefined),
+    case {
+        InlineKey,
+        maps:get(<<"data">>, Msg, ?DEFAULT_DATA) == ?DEFAULT_DATA,
+        maps:is_key(<<"body">>, Msg)
+            andalso not ?IS_LINK(maps:get(<<"body">>, Msg, undefined))
+    } of
+        {Explicit, _, _} when Explicit =/= undefined ->
+            % ao-data-key already exists, so we honor it.
+            InlineKey;
+        {_, true, true} -> 
+            % There is no specific data field set, but there is a body, so we
+            % use that as the `inline-key`.
+            <<"body">>;
+        _ ->
+            % Default: `data' resolves to `data'.
+            <<"data">>
+    end.
+
 %%% ANS-104-specific testing cases.
 
 normal_tags_test() ->
@@ -697,7 +747,25 @@ type_tag_test() ->
     TX2 = hb_message:convert(Structured, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?event({after_conversion, TX2}),
     ?assertEqual(TX, TX2).
-    
+
+ao_data_key_test() ->
+    Msg =
+        hb_message:commit(
+            #{
+                <<"other-key">> => <<"Normal value">>,
+                <<"body">> => <<"Body value">>
+            },
+            #{ priv_wallet => hb:wallet() },
+            <<"ans104@1.0">>
+        ),
+    ?event({msg, Msg}),
+    Enc = hb_message:convert(Msg, <<"ans104@1.0">>, #{}),
+    ?event({enc, Enc}),
+    ?assertEqual(<<"Body value">>, Enc#tx.data),
+    Dec = hb_message:convert(Enc, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ?event({dec, Dec}),
+    ?assert(hb_message:verify(Dec, all, #{})).
+        
 simple_signed_to_httpsig_test_disabled() ->
     TX =
         ar_bundles:sign_item(

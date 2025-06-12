@@ -58,10 +58,12 @@ info(_Msg1, _Msg2, _Opts) ->
             },
             <<"register">> => #{
                 <<"description">> => <<"Register a route with a remote router node">>,
-                    <<"peer_location">> => <<"Location of the router peer">>,
+                <<"router_registration_opts">> => #{
+                    <<"registration-peer">> => <<"Location of the router peer">>,
                     <<"prefix">> => <<"Prefix for the route">>,
                     <<"price">> => <<"Price for the route">>,
                     <<"template">> => <<"Template to match the route">>
+                }
             },
             <<"preprocess">> => #{
                 <<"description">> => <<"Preprocess a request to check if it should be relayed">>

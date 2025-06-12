@@ -66,7 +66,7 @@
 %%% Helpers:
 -export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
--export([print/1, format/1, format/2]).
+-export([print/1, format/1, format/2, format/3]).
 -include("include/hb.hrl").
 
 %% @doc Convert a message from one format to another. Taking a message in the
@@ -359,19 +359,21 @@ signers(Msg, Opts) ->
 %% @doc Pretty-print a message.
 print(Msg) -> print(Msg, 0).
 print(Msg, Indent) ->
-    io:format(standard_error, "~s", [lists:flatten(format(Msg, Indent))]).
+    io:format(standard_error, "~s", [lists:flatten(format(Msg, #{}, Indent))]).
 
 %% @doc Format a message for printing, optionally taking an indentation level
 %% to start from.
-format(Item) -> format(Item, 0).
-format(Bin, Indent) when is_binary(Bin) ->
+format(Item) -> format(Item, #{}).
+format(Item, Opts) -> format(Item, Opts, 0).
+format(Bin, Opts, Indent) when is_binary(Bin) ->
     hb_util:format_indented(
         hb_util:format_binary(Bin),
+        Opts,
         Indent
     );
-format(List, Indent) when is_list(List) ->
-    format(lists:map(fun hb_ao:normalize_key/1, List), Indent);
-format(Map, Indent) when is_map(Map) ->
+format(List, Opts, Indent) when is_list(List) ->
+    format(lists:map(fun hb_ao:normalize_key/1, List), Opts, Indent);
+format(Map, Opts, Indent) when is_map(Map) ->
     % Define helper functions for formatting elements of the map.
     ValOrUndef =
         fun(<<"hashpath">>) ->
@@ -382,7 +384,7 @@ format(Map, Indent) when is_map(Map) ->
                     undefined
             end;
         (Key) ->
-            case dev_message:get(Key, Map, #{}) of
+            case dev_message:get(Key, Map, Opts) of
                 {ok, Val} ->
                     case hb_util:short_id(Val) of
                         undefined -> Val;
@@ -408,9 +410,9 @@ format(Map, Indent) when is_map(Map) ->
                     {<<"*S">>, ValOrUndef(<<"id">>)}
                 ];
             true ->
-                {ok, UID} = dev_message:id(Map, #{}, #{}),
+                {ok, UID} = dev_message:id(Map, #{}, Opts),
                 {ok, ID} =
-                    dev_message:id(Map, #{ <<"commitments">> => <<"all">> }, #{}),
+                    dev_message:id(Map, #{ <<"commitments">> => <<"all">> }, Opts),
                 [
                     {<<"#P">>, hb_util:short_id(ValOrUndef(<<"hashpath">>))},
                     {<<"*U">>, hb_util:short_id(UID)}
@@ -421,10 +423,10 @@ format(Map, Indent) when is_map(Map) ->
                 end
         end,
     CommitterMetadata =
-        case hb_opts:get(debug_committers, true, #{}) of
+        case hb_opts:get(debug_committers, true, Opts) of
             false -> [];
             true ->
-                case dev_message:committers(Map) of
+                case dev_message:committers(Map, #{}, Opts) of
                     {ok, []} -> [];
                     {ok, [Committer]} ->
                         [{<<"Comm.">>, hb_util:short_id(Committer)}];
@@ -461,6 +463,7 @@ format(Map, Indent) when is_map(Map) ->
                     ", "
                 )
             ],
+            Opts,
             Indent
         ),
     % Put the path and device rows into the output at the _top_ of the map.
@@ -474,7 +477,7 @@ format(Map, Indent) when is_map(Map) ->
     % 2. `if_present' -- show priv only if there are keys inside
     % 2. `always' -- always show priv
     FooterKeys =
-        case {hb_opts:get(debug_show_priv, false, #{}), hb_maps:get(<<"priv">>, Map, #{})} of
+        case {hb_opts:get(debug_show_priv, false, Opts), hb_maps:get(<<"priv">>, Map, #{}, Opts)} of
             {false, _} -> [];
             {if_present, #{}} -> [];
             {_, Priv} -> [{<<"!Private!">>, Priv}]
@@ -487,7 +490,7 @@ format(Map, Indent) when is_map(Map) ->
     % Format the remaining 'normal' keys and values.
     Res = lists:map(
         fun({Key, Val}) ->
-            NormKey = hb_ao:normalize_key(Key, #{ error_strategy => ignore }),
+            NormKey = hb_ao:normalize_key(Key, Opts#{ error_strategy => ignore }),
             KeyStr = 
                 case NormKey of
                     undefined ->
@@ -501,7 +504,7 @@ format(Map, Indent) when is_map(Map) ->
                     lists:flatten([KeyStr]),
                     case Val of
                         NextMap when is_map(NextMap) ->
-                            hb_util:format_maybe_multiline(NextMap, Indent + 2);
+                            hb_util:format_maybe_multiline(NextMap, Opts, Indent + 2);
                         _ when (byte_size(Val) == 32) or (byte_size(Val) == 43) ->
                             Short = hb_util:short_id(Val),
                             io_lib:format("~s [*]", [Short]);
@@ -510,11 +513,12 @@ format(Map, Indent) when is_map(Map) ->
                         Bin when is_binary(Bin) ->
                             hb_util:format_binary(Bin);
                         Link when ?IS_LINK(Link) ->
-                            hb_link:format(Link);
+                            hb_link:format(Link, Opts);
                         Other ->
                             io_lib:format("~p", [Other])
                     end
                 ],
+                Opts,
                 Indent + 1
             )
         end,
@@ -527,9 +531,9 @@ format(Map, Indent) when is_map(Map) ->
                 Header ++ ["\n"] ++ Res ++ hb_util:format_indented("}", Indent)
             )
     end;
-format(Item, Indent) ->
+format(Item, Opts, Indent) ->
     % Whatever we have is not a message map.
-    hb_util:format_indented("~p", [Item], Indent).
+    hb_util:format_indented("~p", [Item], Opts, Indent).
 
 %% @doc Return the type of an encoded message.
 type(TX) when is_record(TX, tx) -> tx;

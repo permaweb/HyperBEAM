@@ -123,7 +123,20 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             ?event(push, {push_found_outbox, {outbox, Outbox}}),
             Downstream =
                 hb_maps:map(
-                    fun(Key, MsgToPush = #{ <<"target">> := Target }) ->
+                    fun(Key, RawMsgToPush = #{ <<"target">> := Target }) ->
+                        MsgToPush =
+                            case maybe_evaluate_message(RawMsgToPush, Opts) of
+                                {ok, R} -> R;
+                                Err ->
+                                    #{
+                                        <<"resolve">> => <<"error">>,
+                                        <<"target">> => ID,
+                                        <<"status">> => 400,
+                                        <<"outbox-index">> => Key,
+                                        <<"reason">> => Err,
+                                        <<"source">> => RawMsgToPush
+                                    }
+                            end,
                         case hb_cache:read(Target, Opts) of
                             {ok, DownstreamProcess} ->
                                 push_result_message(
@@ -180,6 +193,39 @@ do_push(PrimaryProcess, Assignment, Opts) ->
         {Err, Error} when Err == error; Err == failure ->
             ?event(push, {push_failed_to_find_outbox, {error, Error}}, Opts),
             {error, Error}
+    end.
+
+
+%% @doc If the outbox message has a path we interpret it as a request to perform
+%% AO-Core eval and schedule the result. Additionally, we  remove the `target` 
+%% from the base message before execution and re-add it to the result, such that
+%% the target to schedule the execution result upon is not confused with
+%% functional components of the evaluation.
+maybe_evaluate_message(Message, Opts) ->
+    case hb_ao:get(<<"resolve">>, Message, Opts) of
+        not_found -> {ok, Message};
+        ResolvePath ->
+            ReqMsg =
+                maps:without(
+                    [<<"target">>],
+                    Message
+                ),
+            ResolveOpts = Opts#{ force_message => true },
+            case hb_ao:resolve(ReqMsg#{ <<"path">> => ResolvePath }, ResolveOpts) of
+                {ok, EvalRes} ->
+                    {
+                        ok,
+                        EvalRes#{
+                            <<"target">> =>
+                                hb_ao:get(
+                                    <<"target">>,
+                                    Message,
+                                    Opts
+                                )
+                        }
+                    };
+                Err -> Err
+            end
     end.
 
 %% @doc Push a downstream message result. The `Origin' map contains information
@@ -891,6 +937,28 @@ push_prompts_encoding_change() ->
         ),
     ?assertMatch({error, #{ <<"status">> := 422 }}, Res).
 
+oracle_push_test_() -> {timeout, 30, fun oracle_push/0}.
+oracle_push() ->
+    dev_process:init(),
+    Client = dev_process:test_aos_process(),
+    {ok, _} = hb_cache:write(Client, #{}),
+    {ok, _} = dev_process:schedule_aos_call(Client, oracle_script()),
+    Msg3 =
+        #{
+            <<"path">> => <<"push">>,
+            <<"slot">> => 0
+        },
+    {ok, PushResult} = hb_ao:resolve(Client, Msg3, #{ priv_wallet => hb:wallet() }),
+    ?event({result, PushResult}),
+    ComputeRes =
+        hb_ao:resolve(
+            Client,
+            <<"now/results/data">>,
+            #{ priv_wallet => hb:wallet() }
+        ),
+    ?event({compute_res, ComputeRes}),
+    ?assertMatch({ok, _}, ComputeRes).
+
 -ifdef(ENABLE_GENESIS_WASM).
 %% @doc Test that a message that generates another message which resides on an
 %% ANS-104 scheduler leads to `~push@1.0` re-signing the message correctly.
@@ -1011,5 +1079,25 @@ message_to_legacynet_scheduler_script() ->
                print("Done.")
            end
         )
+        """
+    >>.
+
+oracle_script() ->
+    <<
+        """
+        Handlers.add("Oracle",
+            function(m)
+                return true
+            end,
+            function(m)
+                print(m.Body)
+            end
+        )
+        Send({
+            target = ao.id,
+            resolve = "/~relay@1.0/call",
+            ["relay-path"] = "https://arweave.net"
+        })
+        
         """
     >>.

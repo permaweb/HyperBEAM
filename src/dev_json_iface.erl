@@ -98,12 +98,13 @@ denormalize_message(Message, Opts) ->
 message_to_json_struct(RawMsg, Opts) ->
     message_to_json_struct(RawMsg, [owner_as_address], Opts).
 message_to_json_struct(RawMsg, Features, Opts) ->
-    TABM = 
+    DeNormTABM = 
         hb_message:convert(
             hb_private:reset(RawMsg),
             tabm,
             Opts
         ),
+    TABM = dev_codec_ans104:normalize_data(DeNormTABM),
     MsgWithoutCommitments = hb_maps:without([<<"commitments">>], TABM, Opts),
     ID = hb_message:id(RawMsg, all),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),

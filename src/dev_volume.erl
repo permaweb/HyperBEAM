@@ -411,6 +411,7 @@ update_store_path(StorePath, Opts) ->
 %% `{error, Binary}' on failure with error message.
 -spec update_node_config(term(), map()) -> {ok, binary()} | {error, binary()}.
 update_node_config(NewStore, Opts) ->
+    ?event(debug_mount, {update_node_config, new_store, NewStore}),
     ok = hb_http_server:set_opts(Opts#{store => NewStore}),
     ?event(debug_mount, {store_update, config_updated}),
     {ok, <<"Volume mounted and store updated successfully">>}.

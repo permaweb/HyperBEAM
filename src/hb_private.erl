@@ -73,9 +73,10 @@ set_priv(Msg, PrivMap) ->
 
 %% @doc Check if a key is private.
 is_private(Key) ->
-	case hb_ao:normalize_key(Key) of
+	try hb_ao:normalize_key(Key) of
 		<<"priv", _/binary>> -> true;
 		_ -> false
+    catch _:_ -> false
 	end.
 
 %% @doc Remove the first key from the path if it is a private specifier.
@@ -90,22 +91,44 @@ remove_private_specifier(InputPath, Opts) ->
 priv_ao_opts(Opts) ->
     Opts#{ hashpath => ignore, cache_control => [<<"no-cache">>, <<"no-store">>] }.
 
-%% @doc Unset all of the private keys in a message.
+%% @doc Unset all of the private keys in a message or deep Erlang term.
+%% This function operates on all types of data, such that it can be used on
+%% non-message terms to ensure that `priv` elements can _never_ pass through.
 reset(Msg) when is_map(Msg) ->
-    maps:without(
-        lists:filter(fun is_private/1, maps:keys(Msg)),
-        Msg
+    maps:map(
+        fun(_Key, Val) -> reset(Val) end,
+        maps:without(
+            lists:filter(fun is_private/1, maps:keys(Msg)),
+            Msg
+        )
     );
+reset(List) when is_list(List) ->
+    % Check if any of the terms in the list are private specifiers, return an
+    % empty list if so.
+    case lists:any(fun is_private/1, List) of
+        true -> [];
+        false ->
+            % The list itself is safe. Check each of the children.
+            lists:map(fun reset/1, List)
+    end;
+reset(Tuple) when is_tuple(Tuple) ->
+    list_to_tuple(reset(tuple_to_list(Tuple)));
 reset(NonMapMessage) ->
     NonMapMessage.
 
 %%% Tests
 
 set_private_test() ->
-    ?assertEqual(#{<<"a">> => 1, <<"priv">> => #{<<"b">> => 2}}, set(#{<<"a">> => 1}, <<"b">>, 2, #{})),
+    ?assertEqual(
+        #{<<"a">> => 1, <<"priv">> => #{<<"b">> => 2}},
+        set(#{<<"a">> => 1}, <<"b">>, 2, #{})
+    ),
     Res = set(#{<<"a">> => 1}, <<"a">>, 1, #{}),
     ?assertEqual(#{<<"a">> => 1, <<"priv">> => #{<<"a">> => 1}}, Res),
-    ?assertEqual(#{<<"a">> => 1, <<"priv">> => #{<<"a">> => 1}}, set(Res, a, 1, #{})).
+    ?assertEqual(
+        #{<<"a">> => 1, <<"priv">> => #{<<"a">> => 1}},
+        set(Res, a, 1, #{})
+    ).
 
 get_private_key_test() ->
     M1 = #{<<"a">> => 1, <<"priv">> => #{<<"b">> => 2}},
