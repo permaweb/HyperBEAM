@@ -133,24 +133,30 @@ commit_message(Codec, Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) 
     TX = hb_util:ok(codec_to_tx(Codec, hb_private:reset(Msg), Req, Opts)),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     Signed = sign(TX, Wallet),
-    SignedStructured =
+    SignedTABM =
         hb_message:convert(
             Signed,
-            <<"structured@1.0">>,
+            tabm,
             Codec,
             Opts
         ),
-    {ok, SignedStructured};
+    {ok, SignedTABM};
 commit_message(Codec, Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     % Remove the commitments from the message, convert it to ANS-104 or Arweave, then back.
     % This forces the message to be normalized and the unsigned ID to be
     % recalculated.
+    TX = hb_message:convert(
+        hb_maps:without([<<"commitments">>], Msg, Opts),
+        Codec,
+        tabm,
+        Opts
+    ),
     {
         ok,
         hb_message:convert(
-            hb_maps:without([<<"commitments">>], Msg, Opts),
+            TX,
+            tabm,
             Codec,
-            <<"structured@1.0">>,
             Opts
         )
     }.

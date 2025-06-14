@@ -6,9 +6,6 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% The size at which a value should be made into a body item, instead of a
-%% tag.
--define(MAX_TAG_VAL, 4096).
 %% The list of TX fields that users can set directly. Data is excluded because
 %% it may be set by the codec in order to support nested messages.
 -define(TX_KEYS,
@@ -23,15 +20,6 @@
 %% The list of tags that a user is explicitly committing to when they sign an
 %% ANS-104 message.
 -define(BASE_COMMITTED_TAGS, ?TX_KEYS ++ [<<"data">>]).
-%% List of tags that should be removed during `to'. These relate to the nested
-%% ar_bundles format that is used by the `ans104@1.0' codec.
--define(FILTERED_TAGS,
-    [
-        <<"bundle-format">>,
-        <<"bundle-map">>,
-        <<"bundle-version">>
-    ]
-).
 
 %% @doc Return the content type for the codec.
 content_type(_) -> {ok, <<"application/ans104">>}.
@@ -68,15 +56,6 @@ from(TX = #tx{ format = ans104 }, Req, Opts) ->
 from(TX, _Req, _Opts) when is_record(TX, tx) ->
     ?event({invalid_ans104_tx_format, {format, TX#tx.format}, {tx, TX}}),
     throw(invalid_tx).
-
-do_from(RawTX, Req, Opts) ->
-    % Ensure the TX is fully deserialized.
-    TX = ar_bundles:deserialize(hb_tx:normalize(RawTX)),
-
-    TABM = hb_tx:tx_to_tabm(TX, ?BASE_COMMITTED_TAGS, Req, Opts),
-
-    Res = hb_maps:without(?FILTERED_TAGS, TABM, Opts),
-    {ok, Res}.
 
 %% @doc Translate a message to its #tx record representation,
 %% which can then be used by ar_bundles to serialize the message. We call the 
