@@ -499,6 +499,10 @@ enforce_valid_signed_tx(TX) ->
         not hb_util:check_value(TX#tx.signature, [?DEFAULT_SIG]),
         {invalid_field, signature, TX#tx.signature}
     ),
+    hb_util:ok_or_throw(TX,
+        not hb_util:check_value(TX#tx.owner, [?DEFAULT_OWNER]),
+        {invalid_field, owner, TX#tx.owner}
+    ),
     true.
 
 %%%===================================================================
@@ -757,14 +761,14 @@ test_json_struct_to_tx_failure() ->
         <<"id">>         => hb_util:encode(crypto:strong_rand_bytes(32)),
         <<"last_tx">>    => hb_util:encode(crypto:strong_rand_bytes(32)),
         <<"owner">>      => hb_util:encode(crypto:strong_rand_bytes(512)),
-        <<"signature">>  => hb_util:encode(<<>>),
+        <<"signature">>  => <<>>,
         <<"quantity">>   => <<"0">>,
         <<"reward">>     => <<"0">>,
         <<"data_size">>  => <<"0">>,
-        <<"data">>       => hb_util:encode(<<>>),
+        <<"data">>       => <<>>,
         <<"target">>     => <<>>,
         <<"tags">>       => [],
-        <<"data_root">>  => hb_util:encode(<<>>)
+        <<"data_root">>  => <<>>
     },
 
     BadIDBin  = crypto:strong_rand_bytes(31),
@@ -792,7 +796,16 @@ test_json_struct_to_tx_failure() ->
         {tag_name_invalid_b64, BaseStruct#{ <<"tags">> => BadTagName }, badarg},
         {tag_value_invalid_b64, BaseStruct#{ <<"tags">> => BadTagValue }, badarg},
         {target_invalid_b64, BaseStruct#{ <<"target">> => InvalidB64 }, badarg},
-        {invalid_signature_type, BaseStruct#{ <<"owner">> => <<>> }, {badmatch, {ecdsa,secp256k1}}}
+        {invalid_signature_type, BaseStruct#{ <<"owner">> => <<>> }, {badmatch, {ecdsa,secp256k1}}},
+        {no_signature, BaseStruct#{ <<"signature">> => <<>> }, {invalid_field,signature,<<>>}},
+        {default_signature, BaseStruct#{ <<"signature">> => hb_util:encode(?DEFAULT_SIG) }, {invalid_field,signature,?DEFAULT_SIG}},
+        {no_id, BaseStruct#{ <<"id">> => <<>> }, {badmatch,0}},
+        {default_id, BaseStruct#{ <<"id">> => hb_util:encode(?DEFAULT_ID) }, {invalid_field,id,?DEFAULT_ID}},
+        {default_owner, BaseStruct#{
+                <<"signature">> => hb_util:encode(crypto:strong_rand_bytes(512)),
+                <<"owner">> => hb_util:encode(?DEFAULT_OWNER)
+            },
+            {invalid_field,owner,?DEFAULT_OWNER}}
         ],
 
     lists:foreach(
@@ -906,9 +919,9 @@ test_tx_to_json_struct_happy() ->
     ).
 
 test_tx_to_json_struct_failure() ->
-    % Just run a single test to confirm that enforce_valid_tx/1 is called. All other
-    % validations are performed by enforce_valid_tx/1 and tested in the
-    % enforce_valid_tx_test_() group.
+    % Just run a single test to confirm that enforce_valid_signed_tx/1 is called. All other
+    % validations are performed by enforce_valid_signed_tx/1 and tested in the
+    % enforce_valid_signed_tx_test_() group.
     TX = (new())#tx{ id = not_a_binary },
     Reason = {invalid_field, id, not_a_binary},
 
@@ -916,7 +929,7 @@ test_tx_to_json_struct_failure() ->
         fun tx_to_json_struct/1,
         [TX],
         Reason,
-        "tx_to_json_struct/1 failed to enforce_valid_tx"
+        "tx_to_json_struct/1 failed to enforce_valid_signed_tx"
     ).
 
 
