@@ -20,8 +20,8 @@
     ]
 ).
 
-%%% The list of tags that a user is explicitly committing to when they sign an
-%%% ANS-104 message.
+%% The list of tags that a user is explicitly committing to when they sign an
+%% ANS-104 message.
 -define(BASE_COMMITTED_TAGS, ?TX_KEYS ++ [<<"data">>]).
 %% List of tags that should be removed during `to'. These relate to the nested
 %% ar_bundles format that is used by the `ans104@1.0' codec.
@@ -53,78 +53,25 @@ deserialize(TX, Req, Opts) when is_record(TX, tx) ->
 %% @doc Sign a message using the `priv_wallet' key in the options. Supports both
 %% the `hmac-sha256' and `rsa-pss-sha256' algorithms, offering unsigned and
 %% signed commitments.
-commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
-    commit(Msg, Req#{ <<"type">> => <<"unsigned-sha256">> }, Opts);
-commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
-    commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha256">> }, Opts);
-commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
-    % Convert the given message to an ANS-104 TX record, sign it, and convert
-    % it back to a structured message.
-    ?event({committing, {input, {explicit, Msg}}}),
-    Signed =
-        ar_bundles:sign_item(
-            hb_util:ok(to(hb_private:reset(Msg), Req, Opts)),
-            hb_opts:get(priv_wallet, no_viable_wallet, Opts)
-        ),
-    ?event({committing, {signed, {explicit, Signed}}}),
-    SignedTABM =
-        hb_message:convert(
-            Signed,
-            tabm,
-            <<"ans104@1.0">>,
-            Opts
-        ),
-    {ok, SignedTABM};
-commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
-    % Remove the commitments from the message, convert it to ANS-104, then back.
-    % This forces the message to be normalized and the unsigned ID to be
-    % recalculated.
-    TX = hb_message:convert(
-        hb_maps:without([<<"commitments">>], Msg, Opts),
-        <<"ans104@1.0">>,
-        tabm,
-        Opts
-    ),
-    {
-        ok,
-        hb_message:convert(
-            TX,
-            tabm,
-            <<"ans104@1.0">>,
-            Opts
-        )
-    }.
+commit(Msg, Req, Opts) ->
+    hb_tx:commit_message(<<"ans104@1.0">>, Msg, Req, Opts).
 
 %% @doc Verify an ANS-104 commitment.
 verify(Msg, Req, Opts) ->
-    ?event({verify, {base, Msg}, {req, Req}}),
-    OnlyWithCommitment =
-        hb_private:reset(
-            hb_message:with_commitments(
-                Req,
-                Msg,
-                Opts
-            )
-        ),
-    ?event({verify, {only_with_commitment, OnlyWithCommitment}}),
-    {ok, TX} = to(OnlyWithCommitment, Req, Opts),
-    ?event({verify, {encoded, TX}}),
-    Res = ar_bundles:verify_item(TX),
-    {ok, Res}.
+    hb_tx:verify_message(<<"ans104@1.0">>, Msg, Req, Opts).
 
 %% @doc Convert a #tx record into a message map recursively.
 from(Binary, _Req, _Opts) when is_binary(Binary) -> {ok, Binary};
-from(#tx{ format = ans104 } = TX, Req, Opts) ->
-    case lists:keyfind(<<"ao-type">>, 1, TX#tx.tags) of
-        false ->
-            do_from(TX, Req, Opts);
-        {<<"ao-type">>, <<"binary">>} ->
-            {ok, TX#tx.data}
-    end.
+from(TX = #tx{ format = ans104 }, Req, Opts) ->
+    TABM = hb_tx:tx_to_tabm(TX, ?TX_KEYS, ?BASE_COMMITTED_TAGS, Req, Opts),
+    {ok, TABM};
+from(TX, _Req, _Opts) when is_record(TX, tx) ->
+    ?event({invalid_ans104_tx_format, {format, TX#tx.format}, {tx, TX}}),
+    throw(invalid_tx).
 
 do_from(RawTX, Req, Opts) ->
     % Ensure the TX is fully deserialized.
-    TX = ar_bundles:deserialize(ar_bundles:normalize(RawTX)),
+    TX = ar_bundles:deserialize(hb_tx:normalize(RawTX)),
 
     TABM = hb_tx:tx_to_tabm(TX, <<"ans104@1.0">>, ?BASE_COMMITTED_TAGS, Req, Opts),
 
@@ -137,20 +84,10 @@ do_from(RawTX, Req, Opts) ->
 %% do this recursively to handle nested messages. The base case is that we hit
 %% a binary, which we return as is.
 to(Binary, _Req, _Opts) when is_binary(Binary) ->
-    % ar_bundles cannot serialize just a simple binary or get an ID for it, so
-    % we turn it into a TX record with a special tag, tx_to_message will
-    % identify this tag and extract just the binary.
-    {ok,
-        #tx{
-            tags = [{<<"ao-type">>, <<"binary">>}],
-            data = Binary
-        }
-    };
+    {ok, hb_tx:binary_to_tx(Binary)};
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(InputTABM, Req, Opts) when is_map(InputTABM) ->
-    TX = hb_tx:tabm_to_tx(InputTABM, Req, Opts),
-    ?event({to, {result, TX}}),
-    {ok, TX};
+    {ok, hb_tx:tabm_to_tx(InputTABM, Req, Opts)};
 to(_Other, _Req, _Opts) ->
     throw(invalid_tx).
 
@@ -183,7 +120,7 @@ from_maintains_tag_name_case_test() ->
     ConvertedTX = hb_util:ok(to(TABM, #{}, #{})),
     ?event({converted_tx, ConvertedTX}),
     ?assert(ar_bundles:verify_item(ConvertedTX)),
-    ?assertEqual(ConvertedTX, ar_bundles:normalize(SignedTX)).
+    ?assertEqual(ConvertedTX, hb_tx:normalize(SignedTX)).
 
 restore_tag_name_case_from_cache_test() ->
     Opts = #{ store => hb_test_utils:test_store() },
@@ -215,7 +152,7 @@ restore_tag_name_case_from_cache_test() ->
     ?assert(ar_bundles:verify_item(ReadTX)).
 
 unsigned_duplicated_tag_name_test() ->
-    TX = ar_bundles:reset_ids(ar_bundles:normalize(#tx {
+    TX = hb_tx:reset_ids(hb_tx:normalize(#tx {
         tags = [
             {<<"Test-Tag">>, <<"test-value">>},
             {<<"test-tag">>, <<"test-value-2">>}

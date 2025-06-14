@@ -1,5 +1,12 @@
+%%% @doc Utilities for HyperBEAM-specific handling of transactions. Handles both ANS104
+%%% and Arewave L1 transactions.
 -module(hb_tx).
--export([tx_to_tabm/5, tabm_to_tx/3, encoded_tags_to_map/1]).
+-export([signer/1, is_signed/1]).
+-export([tx_to_tabm/4, tabm_to_tx/3, binary_to_tx/1, encoded_tags_to_map/1]).
+-export([id/1, id/2, reset_ids/1, update_ids/1]).
+-export([normalize/1, normalize_data/1]).
+-export([commit_message/4, verify_message/4, verify/1]).
+-export([print/1, format/1, format/2]).
 
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -24,7 +31,169 @@
     ]
 ).
 
-tx_to_tabm(TX, Device, CommittedTags, Req, Opts) ->
+% How many bytes of a binary to print with `print/1'.
+-define(BIN_PRINT, 20).
+-define(INDENT_SPACES, 2).
+
+%% List of tags that should be removed during `to'. These relate to the nested
+%% ar_bundles format that is used by the `ans104@1.0' codec.
+-define(FILTERED_TAGS,
+    [
+        <<"bundle-format">>,
+        <<"bundle-map">>,
+        <<"bundle-version">>
+    ]
+).
+
+%% @doc Return the address of the signer of an item, if it is signed.
+signer(#tx { owner = ?DEFAULT_OWNER }) -> undefined;
+signer(Item) -> crypto:hash(sha256, Item#tx.owner).
+
+%% @doc Check if an item is signed.
+is_signed(Item) ->
+    Item#tx.signature =/= ?DEFAULT_SIG.
+
+%% @doc Return the ID of an item -- either signed or unsigned as specified.
+%% If the item is unsigned and the user requests the signed ID, we return
+%% the atom `not_signed'. In all other cases, we return the ID of the item.
+id(Item) -> id(Item, unsigned).
+id(Item, Type) when not is_record(Item, tx) ->
+    id(normalize(Item), Type);
+id(Item = #tx { unsigned_id = ?DEFAULT_ID }, unsigned) ->
+    CorrectedItem = reset_ids(Item),
+    CorrectedItem#tx.unsigned_id;
+id(#tx { unsigned_id = UnsignedID }, unsigned) ->
+    UnsignedID;
+id(#tx { id = ?DEFAULT_ID }, signed) ->
+    not_signed;
+id(#tx { id = ID }, signed) ->
+    ID.
+
+%% @doc Re-calculate both of the IDs for an item. This is a wrapper
+%% function around `update_id/1' that ensures both IDs are set from
+%% scratch.
+reset_ids(Item) ->
+    update_ids(Item#tx { unsigned_id = ?DEFAULT_ID, id = ?DEFAULT_ID }).
+
+%% @doc Take an item and ensure that both the unsigned and signed IDs are
+%% appropriately set. This function is structured to fall through all cases
+%% of poorly formed items, recursively ensuring its correctness for each case
+%% until the item has a coherent set of IDs.
+%% The cases in turn are:
+%% - The item has no unsigned_id. This is never valid.
+%% - The item has the default signature and ID. This is valid.
+%% - The item has the default signature but a non-default ID. Reset the ID.
+%% - The item has a signature. We calculate the ID from the signature.
+%% - Valid: The item is fully formed and has both an unsigned and signed ID.
+update_ids(Item = #tx { unsigned_id = ?DEFAULT_ID }) ->
+    update_ids(Item#tx { unsigned_id = generate_id(Item, unsigned) });
+update_ids(Item = #tx { id = ?DEFAULT_ID, signature = ?DEFAULT_SIG }) ->
+    Item;
+update_ids(Item = #tx { signature = ?DEFAULT_SIG }) ->
+    Item#tx { id = ?DEFAULT_ID };
+update_ids(Item = #tx { signature = Sig }) when Sig =/= ?DEFAULT_SIG ->
+    Item#tx { id = generate_id(Item, signed) };
+update_ids(TX) -> TX.
+
+normalize(Item) -> reset_ids(normalize_data(Item)).
+
+%% @doc Ensure that a data item (potentially containing a map or list) has a standard, serialized form.
+normalize_data(not_found) -> throw(not_found);
+normalize_data(Bundle) when is_list(Bundle); is_map(Bundle) ->
+    normalize_data(#tx{ data = Bundle });
+normalize_data(Item = #tx{data = Bin}) when is_binary(Bin) ->
+    normalize_data_size(Item);
+normalize_data(Item = #tx{data = Data}) ->
+    normalize_data_size(ar_bundles:serialize_bundle_data(Data, Item)).
+
+%% @doc Reset the data size of a data item. Assumes that the data is already normalized.
+normalize_data_size(Item = #tx{data = Bin}) when is_binary(Bin) ->
+    Item#tx{data_size = byte_size(Bin)};
+normalize_data_size(Item) -> Item.
+
+%% @doc Calculate the data root of a data item. Assumes that the data is already normalized.
+normalize_data_root(Item = #tx{data = Bin, format = 2})
+        when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
+    Item#tx{data_root = ar_tx:data_root(Bin), data_size = byte_size(Bin)};
+normalize_data_root(Item) -> Item.
+
+%% @doc Sign a message using the `priv_wallet' key in the options. Supports both
+%% the `hmac-sha256' and `rsa-pss-sha256' algorithms, offering unsigned and
+%% signed commitments.
+commit_message(Codec, Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
+    commit_message(Codec, Msg, Req#{ <<"type">> => <<"unsigned-sha256">> }, Opts);
+commit_message(Codec, Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
+    commit_message(Codec, Msg, Req#{ <<"type">> => <<"rsa-pss-sha256">> }, Opts);
+commit_message(Codec, Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
+    % Convert the given message to an ANS-104 or Arweave TX record, sign it, and convert
+    % it back to a structured message.
+    ?event({committing, {input, Msg}}),
+    TX = hb_util:ok(codec_to_tx(Codec, hb_private:reset(Msg), Req, Opts)),
+    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
+    Signed = sign(TX, Wallet),
+    SignedStructured =
+        hb_message:convert(
+            Signed,
+            <<"structured@1.0">>,
+            Codec,
+            Opts
+        ),
+    {ok, SignedStructured};
+commit_message(Codec, Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
+    % Remove the commitments from the message, convert it to ANS-104 or Arweave, then back.
+    % This forces the message to be normalized and the unsigned ID to be
+    % recalculated.
+    {
+        ok,
+        hb_message:convert(
+            hb_maps:without([<<"commitments">>], Msg, Opts),
+            Codec,
+            <<"structured@1.0">>,
+            Opts
+        )
+    }.
+
+verify_message(Codec, Msg, Req, Opts) ->
+    ?event({verify, {base, Msg}, {req, Req}}),
+    OnlyWithCommitment =
+        hb_private:reset(
+            hb_message:with_commitments(
+                Req,
+                Msg,
+                Opts
+            )
+        ),
+    ?event({verify, {only_with_commitment, OnlyWithCommitment}}),
+    {ok, TX} = codec_to_tx(Codec, OnlyWithCommitment, Req, Opts),
+    ?event({verify, {encoded, TX}}),
+    Res = verify(TX),
+    {ok, Res}.
+
+sign(#tx{ format = ans104 } = TX, Wallet) ->
+    ar_bundles:sign_item(TX, Wallet);
+sign(TX, Wallet) ->
+    ar_tx:sign(TX, Wallet).
+
+verify(#tx{ format = ans104 } = TX) ->
+    ar_bundles:verify_item(TX);
+verify(TX) ->
+    ar_tx:verify(TX). 
+
+tx_to_tabm(RawTX, CommittedTags, Req, Opts) ->
+    case lists:keyfind(<<"ao-type">>, 1, RawTX#tx.tags) of
+        false ->
+            tx_to_tabm2(RawTX, CommittedTags, Req, Opts);
+        {<<"ao-type">>, <<"binary">>} ->
+            RawTX#tx.data
+    end.
+
+tx_to_tabm2(RawTX, CommittedTags, Req, Opts) ->
+    Device = case RawTX#tx.format of
+        ans104 -> <<"ans104@1.0">>;
+        _ -> <<"tx@1.0">>
+    end,
+    % Ensure the TX is fully deserialized.
+    TX = ar_bundles:deserialize(normalize(RawTX)),
     % Initialize message from the transaction tags
     RawTags = deduplicating_from_list(TX#tx.tags, Opts),
 
@@ -39,7 +208,9 @@ tx_to_tabm(TX, Device, CommittedTags, Req, Opts) ->
     TABM2 = set_map_data_or_throw(TABM1, TX, Req, Opts),
 
     % 3. Add the commitments to the message if the TX has a signature.
-    add_commitments(TABM2, TX, Device, CommittedTags, Opts).
+    TABM3 = add_commitments(TABM2, TX, Device, CommittedTags, Opts),
+
+    hb_maps:without(?FILTERED_TAGS, TABM3, Opts).
 
 tabm_to_tx(InputTABM, Req, Opts) ->
     NormalizedTABM = hb_ao:normalize_keys(normalize_data(InputTABM), Opts),
@@ -70,7 +241,16 @@ tabm_to_tx(InputTABM, Req, Opts) ->
     % 5. Set the data items on the #tx record.
     TXWithData = set_tx_data_or_throw(TXWithoutData, DataItems, Req, Opts),
 
-   ar_bundles:reset_ids(ar_bundles:normalize(TXWithData)).
+    hb_tx:reset_ids(hb_tx:normalize(TXWithData)).
+
+binary_to_tx(Binary) ->
+    % ans104 and Arweave cannot serialize just a simple binary or get an ID for it, so
+    % we turn it into a TX record with a special tag, tx_to_message will
+    % identify this tag and extract just the binary.
+    #tx{
+        tags = [{<<"ao-type">>, <<"binary">>}],
+        data = Binary
+    }.
 
 %%% ------------------------------------------------------------------------------------------
 %%% tx_to_tabm/5 helpers
@@ -587,6 +767,16 @@ deduplicating_from_list(Tags, Opts) ->
         ),
     Res.
 
+%% @doc Generate the ID for a given transaction.
+generate_id(#tx{ format = ans104 } = TX, signed) ->
+    ar_bundles:generate_id(TX, signed);
+generate_id(TX, signed) ->
+    ar_tx:generate_id(TX, signed);
+generate_id(#tx{ format = ans104 } = TX, unsigned) ->
+    ar_bundles:generate_id(TX, unsigned);
+generate_id(TX, unsigned) ->
+    ar_tx:generate_id(TX, unsigned).
+
 % Helper function to coerce a value to match the type of the default value
 coerce_value(<<"data">>, Value, _DefaultValue) ->
     {ok, Value};
@@ -627,6 +817,137 @@ field_index(Field) ->
         false -> throw({invalid_field, Field})
     end.
 
+%% @doc Convert a HyperBEAM-compatible map into an ANS-104/Arweave encoded tag list,
+%% recreating the original order of the tags.
+tag_map_to_encoded_tags(TagMap) ->
+    OrderedList = hb_util:message_to_ordered_list(hb_private:reset(TagMap)),
+    ?event({ordered_tagmap, {explicit, OrderedList}, {input, {explicit, TagMap}}}),
+    lists:map(
+        fun(#{ <<"name">> := Key, <<"value">> := Value }) ->
+            {Key, Value}
+        end,
+        OrderedList
+    ).
+
+print(Item) ->
+    io:format(standard_error, "~s", [lists:flatten(format(Item))]).
+
+format(Item) -> format(Item, 0).
+format(Item, Indent) when is_list(Item); is_map(Item) ->
+    format(hb_tx:normalize(Item), Indent);
+format(Item, Indent) when is_record(Item, tx) ->
+    Valid = verify(Item),
+    format_line(
+        "TX ( ~s: ~s ) {",
+        [
+            if
+                Item#tx.signature =/= ?DEFAULT_SIG ->
+                    lists:flatten(
+                        io_lib:format(
+                            "~s (signed) ~s (unsigned)",
+                            [
+                                hb_util:safe_encode(id(Item, signed)),
+                                hb_util:safe_encode(id(Item, unsigned))
+                            ]
+                        )
+                    );
+                true -> hb_util:safe_encode(id(Item, unsigned))
+            end,
+            if
+                Valid == true -> "[SIGNED+VALID]";
+                true -> "[UNSIGNED/INVALID]"
+            end
+        ],
+        Indent
+    ) ++
+    case (not Valid) andalso Item#tx.signature =/= ?DEFAULT_SIG of
+        true ->
+            format_line("!!! CAUTION: ITEM IS SIGNED BUT INVALID !!!", Indent + 1);
+        false -> []
+    end ++
+    case is_signed(Item) of
+        true ->
+            format_line("Signer: ~s", [hb_util:encode(signer(Item))], Indent + 1);
+        false -> []
+    end ++
+    format_line("Target: ~s", [
+            case Item#tx.target of
+                <<>> -> "[NONE]";
+                Target -> hb_util:id(Target)
+            end
+        ], Indent + 1) ++
+    format_line("Tags:", Indent + 1) ++
+    lists:map(
+        fun({Key, Val}) -> format_line("~s -> ~s", [Key, Val], Indent + 2) end,
+        Item#tx.tags
+    ) ++
+    format_line("Data:", Indent + 1) ++ format_data(Item, Indent + 2) ++
+    format_line("}", Indent);
+format(Item, Indent) ->
+    % Whatever we have, its not a tx...
+    format_line("INCORRECT ITEM: ~p", [Item], Indent).
+
+format_data(Item, Indent) when is_binary(Item#tx.data) ->
+    case lists:keyfind(<<"bundle-format">>, 1, Item#tx.tags) of
+        {_, _} ->
+            format_data(ar_bundles:deserialize(ar_bundles:serialize(Item)), Indent);
+        false ->
+            format_line(
+                "Binary: ~p... <~p bytes>",
+                [format_binary(Item#tx.data), byte_size(Item#tx.data)],
+                Indent
+            )
+    end;
+format_data(Item, Indent) when is_map(Item#tx.data) ->
+    format_line("Map:", Indent) ++
+    lists:map(
+        fun({Name, MapItem}) ->
+            format_line("~s ->", [Name], Indent + 1) ++
+            format(MapItem, Indent + 2)
+        end,
+        maps:to_list(Item#tx.data)
+    );
+format_data(Item, Indent) when is_list(Item#tx.data) ->
+    format_line("List:", Indent) ++
+    lists:map(
+        fun(ListItem) ->
+            format(ListItem, Indent + 1)
+        end,
+        Item#tx.data
+    ).
+
+format_binary(Bin) ->
+    lists:flatten(
+        io_lib:format(
+            "~p",
+            [
+                binary:part(
+                    Bin,
+                    0,
+                    case byte_size(Bin) of
+                        X when X < ?BIN_PRINT -> X;
+                        _ -> ?BIN_PRINT
+                    end
+                )
+            ]
+        )
+    ).
+
+format_line(Str, Indent) -> format_line(Str, "", Indent).
+format_line(RawStr, Fmt, Ind) ->
+    io_lib:format(
+        [$\s || _ <- lists:seq(1, Ind * ?INDENT_SPACES)] ++
+            lists:flatten(RawStr) ++ "\n",
+        Fmt
+    ).
+
+codec_to_tx(<<"ans104@1.0">>, Msg, Req, Opts) ->
+    dev_codec_ans104:to(Msg, Req, Opts);
+codec_to_tx(<<"tx@1.0">>, Msg, Req, Opts) ->
+    dev_codec_tx:to(Msg, Req, Opts);
+codec_to_tx(Codec, Msg, Req, Opts) ->
+    ?event({codec_to_tx, {codec, Codec}, {msg, Msg}, {req, Req}}),
+    throw({invalid_codec, Codec}).
 %%% ------------------------------------------------------------------------------------------
 %%% Tests.
 %%% ------------------------------------------------------------------------------------------
