@@ -107,6 +107,8 @@ normalize_data(Item = #tx{data = Data}) ->
     normalize_data_size(ar_bundles:serialize_bundle_data(Data, Item)).
 
 %% @doc Reset the data size of a data item. Assumes that the data is already normalized.
+normalize_data_size(Item = #tx{data = Bin, format = 2}) when is_binary(Bin) ->
+    normalize_data_root(Item);
 normalize_data_size(Item = #tx{data = Bin}) when is_binary(Bin) ->
     Item#tx{data_size = byte_size(Bin)};
 normalize_data_size(Item) -> Item.
@@ -213,7 +215,7 @@ tx_to_tabm2(RawTX, CommittedTags, Req, Opts) ->
     hb_maps:without(?FILTERED_TAGS, TABM3, Opts).
 
 tabm_to_tx(InputTABM, Req, Opts) ->
-    NormalizedTABM = hb_ao:normalize_keys(normalize_data(InputTABM), Opts),
+    NormalizedTABM = hb_ao:normalize_keys(normalize_data_field(InputTABM), Opts),
     ?event({to, {input_tabm, {explicit, NormalizedTABM}}}),
 
     TABM = maybe_bundle(NormalizedTABM, Req, Opts),
@@ -458,7 +460,7 @@ normal_tags(Tags) ->
 
 
 %% @doc Normalize the data field of a message to its appropriate value in a TABM.
-normalize_data(Msg) ->
+normalize_data_field(Msg) ->
     case maps:is_key(<<"ao-data-key">>, Msg) of
         true -> Msg;
         false ->
@@ -816,18 +818,6 @@ field_index(Field) ->
         {Field, Index} -> Index + 1;
         false -> throw({invalid_field, Field})
     end.
-
-%% @doc Convert a HyperBEAM-compatible map into an ANS-104/Arweave encoded tag list,
-%% recreating the original order of the tags.
-tag_map_to_encoded_tags(TagMap) ->
-    OrderedList = hb_util:message_to_ordered_list(hb_private:reset(TagMap)),
-    ?event({ordered_tagmap, {explicit, OrderedList}, {input, {explicit, TagMap}}}),
-    lists:map(
-        fun(#{ <<"name">> := Key, <<"value">> := Value }) ->
-            {Key, Value}
-        end,
-        OrderedList
-    ).
 
 print(Item) ->
     io:format(standard_error, "~s", [lists:flatten(format(Item))]).

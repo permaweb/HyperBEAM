@@ -63,7 +63,7 @@ verify(Msg, Req, Opts) ->
 %% @doc Convert a #tx record into a message map recursively.
 from(Binary, _Req, _Opts) when is_binary(Binary) -> {ok, Binary};
 from(TX = #tx{ format = ans104 }, Req, Opts) ->
-    TABM = hb_tx:tx_to_tabm(TX, ?TX_KEYS, ?BASE_COMMITTED_TAGS, Req, Opts),
+    TABM = hb_tx:tx_to_tabm(TX, ?BASE_COMMITTED_TAGS, Req, Opts),
     {ok, TABM};
 from(TX, _Req, _Opts) when is_record(TX, tx) ->
     ?event({invalid_ans104_tx_format, {format, TX#tx.format}, {tx, TX}}),
@@ -73,7 +73,7 @@ do_from(RawTX, Req, Opts) ->
     % Ensure the TX is fully deserialized.
     TX = ar_bundles:deserialize(hb_tx:normalize(RawTX)),
 
-    TABM = hb_tx:tx_to_tabm(TX, <<"ans104@1.0">>, ?BASE_COMMITTED_TAGS, Req, Opts),
+    TABM = hb_tx:tx_to_tabm(TX, ?BASE_COMMITTED_TAGS, Req, Opts),
 
     Res = hb_maps:without(?FILTERED_TAGS, TABM, Opts),
     {ok, Res}.

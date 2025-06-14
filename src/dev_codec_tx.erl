@@ -46,7 +46,7 @@ from(TX, Req, Opts) when is_record(TX, tx) ->
     case TX#tx.format of
         Format when Format =:= 1 orelse Format =:= 2 ->
             true = ar_tx:enforce_valid_tx(TX),
-            TABM = hb_tx:tx_to_tabm(TX, tx_keys(TX), committed_tags(TX), Req, Opts),
+            TABM = hb_tx:tx_to_tabm(TX, committed_tags(TX), Req, Opts),
             {ok, TABM};
         _ ->
             ?event({invalid_arweave_tx_format, {format, TX#tx.format}, {tx, TX}}),
