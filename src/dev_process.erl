@@ -452,18 +452,20 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                     % the public component of a message) into memory.
                     % Do not update the hashpath while we do this, and remove
                     % the snapshot key after we have normalized the message.
-                    ?event(compute, {loaded_state_checkpoint, ProcID, MaybeLoadedSlot}),
+                    LoadedSnapshotMsg = hb_cache:ensure_all_loaded(MaybeLoadedSnapshotMsg, Opts),
+                    LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
+                    ?event(compute, {loaded_state_checkpoint, ProcID, LoadedSlot}),
                     {ok, Normalized} =
                         run_as(
                             <<"execution">>,
-                            MaybeLoadedSnapshotMsg,
+                            LoadedSnapshotMsg,
                             normalize,
                             Opts#{ hashpath => ignore }
                         ),
                     NormalizedWithoutSnapshot = hb_maps:remove(<<"snapshot">>, Normalized, Opts),
                     ?event({loaded_state_checkpoint_result,
                         {proc_id, ProcID},
-                        {slot, MaybeLoadedSlot},
+                        {slot, LoadedSlot},
                         {after_normalization, NormalizedWithoutSnapshot}
                     }),
                     {ok, NormalizedWithoutSnapshot};

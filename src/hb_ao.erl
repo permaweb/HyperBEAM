@@ -1459,7 +1459,7 @@ info(Msg, Opts) ->
     info(message_to_device(Msg, Opts), Msg, Opts).
 info(DevMod, Msg, Opts) ->
 	%?event({calculating_info, {dev, DevMod}, {msg, Msg}}),
-    case find_exported_function(Msg, DevMod, info, 2, Opts) of
+	case find_exported_function(Msg, DevMod, info, 1, Opts) of
 		{ok, Fun} ->
 			Res = apply(Fun, truncate_args(Fun, [Msg, Opts])),
 			% ?event({

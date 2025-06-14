@@ -213,7 +213,7 @@ join(M1, M2, Opts) ->
     PeerID = hb_opts:get(<<"green_zone_peer_id">>, undefined, Opts),
     ?event(green_zone, {join_peer, PeerLocation, PeerID}),
     if (PeerLocation =:= undefined) or (PeerID =:= undefined) ->
-        validate_join(M1, M2, Opts);
+        validate_join(M1, M2, hb_cache:ensure_all_loaded(Opts, Opts));
     true ->
         join_peer(PeerLocation, PeerID, M1, M2, Opts)
     end.
@@ -420,7 +420,10 @@ join_peer(PeerLocation, PeerID, _M1, M2, InitOpts) ->
                 Opts
             ),
             % Create an committed join request using the wallet.
-            Req = hb_message:commit(MergedReq, Wallet),
+            Req = hb_cache:ensure_all_loaded(
+                hb_message:commit(MergedReq, Wallet),
+                Opts
+            ),
             ?event({join_req, {explicit, Req}}),
             ?event({verify_res, hb_message:verify(Req)}),
             % Log that the commitment report is being sent to the peer.
@@ -865,3 +868,4 @@ rsa_wallet_integration_test() ->
     ?assertEqual(PlainText, Decrypted),
     % Verify wallet structure
     ?assertEqual(KeyType, {rsa, 65537}).
+
