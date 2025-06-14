@@ -213,8 +213,7 @@ balances(Prefix, ProcMsg, Opts) ->
 supply(ProcMsg, Opts) ->
     supply(now, ProcMsg, Opts).
 supply(Mode, ProcMsg, Opts) ->
-    Loaded = hb_cache:ensure_all_loaded(ProcMsg, Opts),
-    lists:sum(maps:values(balances(Mode, Loaded, Opts))).
+    lists:sum(maps:values(balances(Mode, ProcMsg, Opts))).
 
 %% @doc Calculate the supply of tokens in all sub-ledgers, from the balances of
 %% the root ledger.

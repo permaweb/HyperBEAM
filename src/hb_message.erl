@@ -734,13 +734,13 @@ find_target(Self, Req, Opts) ->
         cache_control => [<<"no-cache">>, <<"no-store">>]
     },
     {ok,
-        case hb_ao:get(<<"target">>, Req, <<"self">>, GetOpts) of
+        case hb_maps:get(<<"target">>, Req, <<"self">>, GetOpts) of
             <<"self">> -> Self;
             Key ->
-                hb_ao:get(
+                hb_maps:get(
                     Key,
                     Req,
-                    hb_ao:get(<<"body">>, Req, GetOpts),
+                    hb_maps:get(<<"body">>, Req, GetOpts),
                     GetOpts
                 )
         end

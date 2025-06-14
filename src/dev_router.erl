@@ -287,16 +287,15 @@ apply_routes(Msg, R, Opts) ->
 %% - `suffix': The suffix to add to the path.
 %% - `replace': A regex to replace in the path.
 apply_route(Msg, Route, Opts) ->
-    LoadedRoute = hb_cache:ensure_all_loaded(Route, Opts),
-    RouteOpts = hb_maps:get(<<"opts">>, LoadedRoute, #{}),
-    LoadedMsg = hb_cache:ensure_all_loaded(Msg, Opts),
+    % LoadedRoute = hb_cache:ensure_all_loaded(Route, Opts),
+    RouteOpts = hb_maps:get(<<"opts">>, Route, #{}),
     {ok, #{
         <<"opts">> => RouteOpts,
         <<"uri">> =>
             hb_util:ok(
                 do_apply_route(
-                    LoadedMsg,
-                    hb_maps:without([<<"opts">>], LoadedRoute, Opts),
+                    Msg,
+                    hb_maps:without([<<"opts">>], Route, Opts),
                     Opts
                 )
             )
