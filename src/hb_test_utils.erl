@@ -1,6 +1,6 @@
 %%% @doc Simple utilities for testing HyperBEAM.
 -module(hb_test_utils).
--export([suite_with_opts/2, run/4, test_store/0]).
+-export([suite_with_opts/2, run/4, test_store/0, assert_throws/4]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -90,3 +90,17 @@ run(Name, OptsName, Suite, OptsList) ->
             OName == OptsName
         ],
     Test(Opts).
+
+%% @doc Assert that a function throws an expected exception. Needed to work around some
+%% limitations in ?assertException (e.g. no way to attach an error message to the failure)
+assert_throws(Fun, Args, ExpectedException, Label) ->
+	Error = try 
+		apply(Fun, Args),
+		failed_to_throw
+	catch
+		error:ExpectedException -> expected_exception;
+		ExpectedException -> expected_exception;
+		error:Other -> {wrong_exception, Other};
+		Other -> {wrong_exception, Other}
+	end,
+	?assertEqual(expected_exception, Error, Label).
