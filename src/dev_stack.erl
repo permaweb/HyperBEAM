@@ -97,20 +97,20 @@
 %%% In this example, the `device' key is mutated a number of times, but the
 %%% resulting HashPath remains correct and verifiable.
 -module(dev_stack).
--export([info/2, router/4, prefix/3, input_prefix/3, output_prefix/3]).
+-export([info/1, router/4, prefix/3, input_prefix/3, output_prefix/3]).
 %%% Test exports
 -export([generate_append_device/1]).
 -include_lib("eunit/include/eunit.hrl").
 
 -include("include/hb.hrl").
 
-info(Msg, Opts) ->
+info(Msg) ->
     hb_maps:merge(
         #{
             handler => fun router/4,
             excludes => [<<"set">>, <<"keys">>]
         },
-        case hb_maps:get(<<"stack-keys">>, Msg, not_found, Opts) of
+        case hb_maps:get(<<"stack-keys">>, Msg, not_found) of
             not_found -> #{};
             StackKeys -> #{ exports => StackKeys }
         end
@@ -166,7 +166,7 @@ router(Message1, Message2, Opts) ->
 %% 		keyInDevice executed on DeviceName against Msg1.
 transformer_message(Msg1, Opts) ->
 	?event({creating_transformer, {for, Msg1}}),
-    BaseInfo = info(Msg1, Opts),
+    BaseInfo = info(Msg1),
 	{ok, 
 		Msg1#{
 			<<"device">> => #{
