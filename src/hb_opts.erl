@@ -783,4 +783,29 @@ ensure_node_history_test() ->
                 ]
         },
     ?assertEqual({error, invalid_values}, ensure_node_history(InvalidItems, RequiredOpts)).
+
+%% @doc Test notify_device configuration option
+notify_device_config_test() ->
+    % Test default value from default_message()
+    ?assertEqual(undefined, ?MODULE:get(notify_device)),
+    
+    % Test with configured value in opts
+    OptsWithNotify = #{notify_device => <<"notify@1.0">>},
+    ?assertEqual(<<"notify@1.0">>, ?MODULE:get(notify_device, undefined, OptsWithNotify)),
+    ?event(debug, {notify_device, ?MODULE:get(notify_device, undefined, OptsWithNotify)}),
+    
+    % Test override behavior - local opts should take precedence
+    ?assertEqual(<<"notify@1.0">>, ?MODULE:get(notify_device, undefined, OptsWithNotify)),
+    ?event(debug, {notify_device, ?MODULE:get(notify_device, undefined, OptsWithNotify)}),
+    
+    % Test with different notify device
+    CustomOpts = #{notify_device => <<"custom-notify@2.0">>},
+    ?assertEqual(<<"custom-notify@2.0">>, ?MODULE:get(notify_device, undefined, CustomOpts)),
+    ?event(debug, {notify_device, ?MODULE:get(notify_device, undefined, CustomOpts)}),
+    
+    % Test default when not configured
+    EmptyOpts = #{},
+    ?assertEqual(undefined, ?MODULE:get(notify_device, undefined, EmptyOpts)),
+    ?event(debug, {notify_device, ?MODULE:get(notify_device, undefined, EmptyOpts)}).
+
 -endif.
