@@ -1,4 +1,4 @@
-Generated: 2025-06-16T17:07:24Z
+Generated: 2025-06-16T17:30:51Z
 
 ## HyperBEAM Documentation Summary
 
@@ -7,21 +7,21 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 
 ## Documentation Pages by Section
 
-### introduction
+### Introduction
 
 * [AO Devices](./introduction/hyperbeam-devices.html)
 * [Pathing in HyperBEAM](./introduction/pathing-in-hyperbeam.html)
 * [What is AO-Core?](./introduction/what-is-ao-core.html)
 * [What is HyperBEAM?](./introduction/what-is-hyperbeam.html)
 
-### run
+### Run
 
 * [Configuring Your HyperBEAM Node](./run/configuring-your-machine.html)
 * [Joining or Running a Router Node](./run/joining-running-a-router.html)
 * [Running a HyperBEAM Node](./run/running-a-hyperbeam-node.html)
 * [Trusted Execution Environment (TEE)](./run/tee-nodes.html)
 
-### uuild
+### Build
 
 * [HyperBEAM from AO Connect](./build/ao-connect.html)
 * [Extending HyperBEAM with Devices](./build/building-devices.html)
@@ -40,10 +40,10 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [Quick Start with HyperBEAM](./build/quick-start.html)
 * [Serverless Decentralized Compute on AO](./build/serverless-decentralized-compute.html)
 
-### devices
+### Devices
 
 
-### resources
+### Resources
 
 * [LLM Context Files](./resources/llms.html)
 * [Frequently Asked Questions](./resources/reference/faq.html)

@@ -90,13 +90,19 @@ To contribute documentation to HyperBEAM, follow these steps:
      source venv/bin/activate
      pip3 install mkdocs mkdocs-material mkdocs-git-revision-date-localized-plugin
      ```
-   - Run the build script to verify your changes:
+   - Start the docs server
+     ```bash
+     mkdocs serve
+     ```
+
+6. **Build Your Changes**
+  - Run the build script to verify your changes:
      ```bash
      ./docs/build-all.sh
      ```
    - View the documentation locally at `http://127.0.0.1:8000/`
 
-6. **Submit a Pull Request**
+7. **Submit a Pull Request**
    - Create a new branch for your documentation changes
    - Commit your changes with a descriptive message
    - Submit a PR with:
@@ -107,7 +113,7 @@ To contribute documentation to HyperBEAM, follow these steps:
        - Any related issues or discussions
      - Screenshots of the rendered documentation (if applicable)
 
-7. **Review Process**
+8. **Review Process**
    - The HyperBEAM team will review your PR
    - Be prepared to make adjustments based on feedback
    - Once approved, your documentation will be merged into the main repository
