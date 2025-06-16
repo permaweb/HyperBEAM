@@ -41,12 +41,7 @@ register(StateMsg, InputMsg, Opts) ->
     
     % Extract template specification (supports both map and regex templates)
     TemplateResult = case hb_ao:get(<<"template">>, InputMsg, Opts) of
-        not_found ->
-            % Fallback to legacy pattern field for compatibility
-            case hb_ao:get(<<"pattern">>, InputMsg, Opts) of
-                not_found -> {error, <<"No template or pattern specified">>};
-                Pattern -> {ok, Pattern}
-            end;
+        not_found -> {error, <<"No template specified">>};
         TemplateSpec -> {ok, TemplateSpec}
     end,
     
@@ -77,13 +72,9 @@ register(StateMsg, InputMsg, Opts) ->
 unregister(StateMsg, InputMsg, Opts) ->
     ?event(notify, {unregister_listener, InputMsg}),
     
-    % Extract template or pattern for removal
+    % Extract template for removal
     TemplateResult = case hb_ao:get(<<"template">>, InputMsg, Opts) of
-        not_found ->
-            case hb_ao:get(<<"pattern">>, InputMsg, Opts) of
-                not_found -> {error, <<"No template or pattern specified">>};
-                Pattern -> {ok, Pattern}
-            end;
+        not_found -> {error, <<"No template specified">>};
         TemplateSpec -> {ok, TemplateSpec}
     end,
     
@@ -166,12 +157,7 @@ stream(_StateMsg, InputMsg, Opts) ->
     ?event(notify, {start_stream, InputMsg}),
     
     % Extract template for filtering events (supports both map and regex templates)
-    Template = case hb_ao:get(<<"template">>, InputMsg, Opts) of
-        not_found ->
-            % Fallback to pattern field for legacy compatibility
-            hb_ao:get(<<"pattern">>, InputMsg, <<".*">>, Opts); % Default regex matches all
-        TemplateSpec -> TemplateSpec
-    end,
+    Template = hb_ao:get(<<"template">>, InputMsg, <<".*">>, Opts),
     
     % Create streaming response headers
     Headers = #{
@@ -702,29 +688,20 @@ device_registration_test() ->
     Listeners2 = maps:get(<<"listeners">>, NewState2),
     ?assertEqual(2, maps:size(Listeners2)),
     
-    % Test legacy pattern field
-    InputMsg3 = #{
-        <<"pattern">> => #{ <<"action">> => <<"test">> },
-        <<"stream">> => <<"test-stream-3">>
-    },
-    
-    {ok, NewState3} = register(NewState2, InputMsg3, #{}),
-    Listeners3 = maps:get(<<"listeners">>, NewState3),
-    ?assertEqual(3, maps:size(Listeners3)),
     
     % Test unregistration - unregister the first template we added
     UnregMsg = #{
         <<"template">> => #{ <<"device">> => <<"test@1.0">> }
     },
     
-    ?event(debug, {before_unregister, {listeners_count, maps:size(maps:get(<<"listeners">>, NewState3))}}),
-    {ok, NewState4} = unregister(NewState3, UnregMsg, #{}),
-    Listeners4 = maps:get(<<"listeners">>, NewState4),
-    ?event(debug, {after_unregister, {listeners_count, maps:size(Listeners4)}, {keys, maps:keys(Listeners4)}}),
-    ?assertEqual(2, maps:size(Listeners4)), % Should have 2 left (regex + pattern)
+    ?event(debug, {before_unregister, {listeners_count, maps:size(maps:get(<<"listeners">>, NewState2))}}),
+    {ok, NewState3} = unregister(NewState2, UnregMsg, #{}),
+    Listeners3 = maps:get(<<"listeners">>, NewState3),
+    ?event(debug, {after_unregister, {listeners_count, maps:size(Listeners3)}, {keys, maps:keys(Listeners3)}}),
+    ?assertEqual(1, maps:size(Listeners3)), % Should have 1 left (regex)
     
     % Verify the correct template was removed
-    ?assertNot(maps:is_key({template, #{ <<"device">> => <<"test@1.0">> }}, Listeners4)),
+    ?assertNot(maps:is_key({template, #{ <<"device">> => <<"test@1.0">> }}, Listeners3)),
     
     % Test error cases
     ?assertMatch({error, _}, register(StateMsg, #{}, #{})),
@@ -851,15 +828,8 @@ stream_function_test() ->
     },
     
     {ok, Result2} = stream(#{}, InputMsg2, #{}),
-    ?assertEqual(200, maps:get(<<"status">>, Result2)),
+    ?assertEqual(200, maps:get(<<"status">>, Result2)).
     
-    % Test with legacy pattern
-    InputMsg3 = #{
-        <<"pattern">> => #{ <<"action">> => <<"compute">> }
-    },
-    
-    {ok, Result3} = stream(#{}, InputMsg3, #{}),
-    ?assertEqual(200, maps:get(<<"status">>, Result3)).
 
 %% @doc Test dead process cleanup
 dead_process_cleanup_test() ->
