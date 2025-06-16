@@ -2,18 +2,18 @@
 
 ## Overview
 
-The [`~lua@5.3a`](../resources/source-code/dev_lua.md) device enables the execution of Lua scripts within the HyperBEAM environment. It provides an isolated sandbox where Lua code can process incoming messages, interact with other devices, and manage state.
+The [`~lua@5.3a`](./source-code/dev_lua.html) device enables the execution of Lua scripts within the HyperBEAM environment. It provides an isolated sandbox where Lua code can process incoming messages, interact with other devices, and manage state.
 
 ## Core Concept: Lua Script Execution
 
-This device allows processes to perform computations defined in Lua scripts. Similar to the [`~wasm64@1.0`](../resources/source-code/dev_wasm.md) device, it manages the lifecycle of a Lua execution state associated with the process.
+This device allows processes to perform computations defined in Lua scripts. Similar to the [`~wasm64@1.0`](./source-code/dev_wasm.html) device, it manages the lifecycle of a Lua execution state associated with the process.
 
 ## Key Functions (Keys)
 
-These keys are typically used within an execution stack (managed by [`dev_stack`](../resources/source-code/dev_stack.md)) for an AO process.
+These keys are typically used within an execution stack (managed by [`dev_stack`](./source-code/dev_stack.html)) for an AO process.
 
 *   **`init`**
-    *   **Action:** Initializes the Lua environment for the process. It finds and loads the Lua script(s) associated with the process, creates a `luerl` state, applies sandboxing rules if specified, installs the [`dev_lua_lib`](../resources/source-code/dev_lua_lib.md) (providing AO-specific functions like `ao.send`), and stores the initialized state in the process's private area (`priv/state`).
+    *   **Action:** Initializes the Lua environment for the process. It finds and loads the Lua script(s) associated with the process, creates a `luerl` state, applies sandboxing rules if specified, installs the [`dev_lua_lib`](./source-code/dev_lua_lib.html) (providing AO-specific functions like `ao.send`), and stores the initialized state in the process's private area (`priv/state`).
     *   **Inputs (Expected in Process Definition or `init` Message):**
         *   `script`: Can be:
             *   An Arweave Transaction ID of the Lua script file.
@@ -48,14 +48,14 @@ The `sandbox` option in the process definition restricts potentially harmful Lua
 
 ## AO Library (`dev_lua_lib`)
 
-The `init` function automatically installs a helper library ([`dev_lua_lib`](../resources/source-code/dev_lua_lib.md)) into the Lua state. This library typically provides functions for interacting with the AO environment from within the Lua script, such as:
+The `init` function automatically installs a helper library ([`dev_lua_lib`](./source-code/dev_lua_lib.html)) into the Lua state. This library typically provides functions for interacting with the AO environment from within the Lua script, such as:
 
 *   `ao.send({ Target = ..., ... })`: To send messages from the process.
 *   Access to message tags and data.
 
 ## Usage within `dev_stack`
 
-Like [`~wasm64@1.0`](../resources/source-code/dev_wasm.md), the `~lua@5.3a` device is typically used within an execution stack.
+Like [`~wasm64@1.0`](./source-code/dev_wasm.html), the `~lua@5.3a` device is typically used within an execution stack.
 
 ```text
 # Example Process Definition Snippet
@@ -67,4 +67,4 @@ Sandbox: true
 
 This device offers a lightweight, integrated scripting capability for AO processes, suitable for a wide range of tasks from simple logic to more complex state management and interactions.
 
-[lua module](../resources/source-code/dev_lua.md)
+[lua module](./source-code/dev_lua.html)

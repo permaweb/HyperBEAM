@@ -2,7 +2,7 @@
 
 ## Overview
 
-The [`~meta@1.0`](../resources/source-code/dev_meta.md) device provides access to metadata and configuration information about the local HyperBEAM node and the broader AO network.
+The [`~meta@1.0`](./source-code/dev_meta.html) device provides access to metadata and configuration information about the local HyperBEAM node and the broader AO network.
 
 This device is essential for:
 
@@ -30,7 +30,7 @@ While the `info` key is the primary interaction point, the `NodeMsg` managed by 
 *   `operator`: The address designated as the node operator (defaults to the address derived from `priv_wallet`).
 *   `initialized`: Status indicating if the node setup is temporary or permanent.
 *   `preprocessor` / `postprocessor`: Optional messages defining pre/post-processing logic for requests.
-*   `routes`: Routing table used by [`dev_router`](../resources/source-code/dev_router.md).
+*   `routes`: Routing table used by [`dev_router`](./source-code/dev_router.html).
 *   `store`: Configuration for data storage.
 *   `trace`: Debug tracing options.
 *   `p4_*`: Payment configuration.
@@ -40,7 +40,7 @@ While the `info` key is the primary interaction point, the `NodeMsg` managed by 
 
 ## Utility Functions (Internal/Module Level)
 
-The [`dev_meta.erl`](../resources/source-code/dev_meta.md) module also contains helper functions used internally or callable from other Erlang modules:
+The [`dev_meta.erl`](./source-code/dev_meta.html) module also contains helper functions used internally or callable from other Erlang modules:
 
 *   `is_operator(<RequestMsg>, <NodeMsg>) -> boolean()`: Checks if the signer of `RequestMsg` matches the configured `operator` in `NodeMsg`.
 
@@ -52,4 +52,4 @@ The `~meta` device applies the node's configured `preprocessor` message before r
 
 Before a node can process general requests, it usually needs to be initialized. Attempts to access devices other than `~meta@1.0/info` before initialization typically result in an error. Initialization often involves setting essential parameters like the operator key via a `POST` to `info`.
 
-[meta module](../resources/source-code/dev_meta.md)
+[meta module](./source-code/dev_meta.html)

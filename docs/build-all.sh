@@ -105,7 +105,7 @@ log_success "Edoc generation completed"
 
 # --- Step 3: Process source code documentation ---
 log_step "Processing source code documentation"
-DOCS_DIR="$ROOT_DIR/docs/resources/source-code"
+DOCS_DIR="$ROOT_DIR/docs/build/devices/source-code"
 INDEX_FILE="$DOCS_DIR/index.md"
 
 # Check if the directory and index file exist
@@ -277,7 +277,7 @@ DOC_DIRS=(
     "$ROOT_DIR/docs/introduction"
     "$ROOT_DIR/docs/run"
     "$ROOT_DIR/docs/build"
-    "$ROOT_DIR/docs/devices"
+    "$ROOT_DIR/docs/build/devices"
     "$ROOT_DIR/docs/resources"
 )
 

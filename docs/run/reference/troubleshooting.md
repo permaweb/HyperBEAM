@@ -1,6 +1,6 @@
-# Troubleshooting Guide
+# Node Operator Troubleshooting Guide
 
-This guide addresses common issues you might encounter when working with HyperBEAM and the Compute Unit.
+This guide addresses common issues you might encounter when installing and running a HyperBEAM node.
 
 ## Installation Issues
 
@@ -61,17 +61,6 @@ This guide addresses common issues you might encounter when working with HyperBE
 - Check that the wallet file exists and is correctly formatted
 - Verify the `.env` file has all required settings
 
-### Memory Errors in Compute Unit
-
-**Symptoms**: Out of memory errors or excessive memory usage
-
-**Solutions**:
-
-- Adjust the `PROCESS_WASM_MEMORY_MAX_LIMIT` environment variable
-- Enable garbage collection by setting an appropriate `GC_INTERVAL_MS`
-- Monitor memory usage and adjust limits as needed
-- If on a low-memory system, reduce concurrent process execution
-
 ## Integration Issues
 
 ### HyperBEAM Can't Connect to Compute Unit
@@ -83,17 +72,6 @@ This guide addresses common issues you might encounter when working with HyperBE
 - Verify the CU is running: `curl http://localhost:6363`
 - Ensure there are no firewall rules blocking the connection
 - Verify network configuration if components are on different machines
-
-### Process Execution Fails
-
-**Symptoms**: Errors when deploying or executing processes
-
-**Solutions**:
-
-- Check both HyperBEAM and CU logs for specific error messages
-- Verify that the WASM module is correctly compiled and valid
-- Test with a simple example process to isolate the issue
-- Adjust memory limits if the process requires more resources
 
 ## Getting Help
 

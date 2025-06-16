@@ -15,13 +15,15 @@ nav:
   #     - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
   #     - Pathing in HyperBEAM: 'introduction/pathing-in-hyperbeam.md'
   - Build on HyperBEAM:
+      - Introduction: "build/what-is-hyperbeam.md"
       - Quick Start: "build/quick-start.md"
-      - Migrating from Legacynet: "build/migrating-from-legacynet.md"
+      - Migration: "build/migrating-from-legacynet.md"
       - AO Connect: "build/ao-connect.md"
-      - Extending HyperBEAM with Devices: "build/building-devices.md"
+      - Pathing: "build/pathing-in-hyperbeam.md"
+      - Building Devices: "build/building-devices.md"
       - Devices:
-          - "What are HyperBEAM Devices?": "build/devices/what-are-devices.md"
-          - Starter Devices:
+          - "Overview": "build/devices/hyperbeam-devices.md"
+          - "Core Devices":
               - ~meta@1.0: "build/devices/meta-at-1-0.md"
               - ~process@1.0: "build/devices/process-at-1-0.md"
               - ~message@1.0: "build/devices/message-at-1-0.md"
@@ -30,12 +32,20 @@ nav:
               - ~json@1.0: "build/devices/json-at-1-0.md"
               - ~scheduler@1.0: "build/devices/scheduler-at-1-0.md"
               - ~relay@1.0: "build/devices/relay-at-1-0.md"
-          - Source Code: "https://github.com/permaweb/HyperBEAM"
+          - "Source Code": "https://github.com/permaweb/HyperBEAM"
+      - Reference:
+          - FAQ: "build/reference/faq.md"
+          - Glossary: "build/reference/glossary.md"
+          - Troubleshooting: "build/reference/troubleshooting.md"
 
   - Run a Node:
       - Running a HyperBEAM Node: "run/running-a-hyperbeam-node.md"
       - Configuring Your Machine: "run/configuring-your-machine.md"
       - TEE Nodes: "run/tee-nodes.md"
+      - Reference:
+          - FAQ: "run/reference/faq.md"
+          - Glossary: "run/reference/glossary.md"
+          - Troubleshooting: "run/reference/troubleshooting.md"
       - Joining/Running a Router: "run/joining-running-a-router.md"
 
   # - Resources:

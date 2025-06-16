@@ -10,14 +10,14 @@ Current cloud providers offer centralized compute, which means you have to trust
 
 ## Thinking in HyperBEAM
 
-Your serverless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a process on HyperBEAM whose state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
+Your severless function can be a simple Lua script, or it can be a more complex WASM module. It will be deployed as a prcoess on HyperBEAM whos state is stored on Arweave and is cached on HyperBEAM nodes. This gives you both benefits: permanence and speed.
     
 At its heart, building on HyperBEAM involves:
 
 1.  **Processes:** Think of these as independent programs or stateful contracts. Each process has a unique ID and maintains its own state.
 2.  **Messages:** You interact with processes by sending them messages. These messages trigger computations, update state, or cause the process to interact with other processes or the outside world.
 
-Messages are processed by [Devices](../introduction/ao-devices.md), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
+Messages are processed by [Devices](../build/devices/), which define *how* the computation happens (e.g., running WASM code, executing Lua scripts, managing state transitions).
 
 ## Starting `aos`: Your Development Environment
 
@@ -38,17 +38,26 @@ The primary tool for interacting with AO and developing processes is `aos`, a co
     pnpm add -g https://get_ao.arweave.net
     ```
 
+**Installing HyperBEAM for Development**
+
 While you don't need to run a HyperBEAM node yourself, you do need to connect to one to interact with the network during development.
 
 To start `aos`, simply run the command in your terminal:
 
 ```bash
-aos --mainnet "https://dev-router.forward.computer" myMainnetProcess
+aos --mainnet "https://router-1.forward.computer" myMainnetProcess
 ```
 
 This connects you to an interactive Lua environment running within a **process** on the AO network. This process acts as your command-line interface (CLI) to the AO network, allowing you to interact with other processes, manage your wallet, and develop new AO processes. When you specify `--mainnet <URL>`, it connects to the `genesis_wasm` device running on the HyperBEAM node at the supplied URL.
 
-!!! note
+!!! note "Running a Local HyperBEAM Node"
+    If you are running HyperBEAM locally and want to use that node when booting up `aos`, you must run with the `genesis_wasm` profile:
+    ```bash
+    rebar3 as genesis_wasm shell
+    ```
+    Until `aos` is fully HyperBEAM native, the `genesis_wasm` profile is required to run a local Compute Unit (CU) for executing `aos`.
+
+<!-- !!! note
     **What `aos` is doing:**
 
     *   **Connecting:** Establishes a connection from your terminal to a remote process running the `aos` environment.
@@ -57,36 +66,36 @@ This connects you to an interactive Lua environment running within a **process**
         *   Load code for new persistent processes on the network.
         *   Send messages to existing network processes.
         *   Inspect process state.
-        *   Manage your local environment.
+        *   Manage your local environment. -->
 
-## Initializing a Variable
+## Your First Interaction: Intializing a Variable
 
 From the `aos` prompt, you can assign a variable. Let's assign a basic Lua process that just holds some data:
 
-```lua
+```bash
 default@aos-2.0.6> myVariable = "Hello from aos!"
 ```
 
 This assigns the string "Hello from aos!" to the variable `myVariable` within the current process's Lua environment.
 
-```lua
+```bash
 default@aos-2.0.6> myVariable
 Hello from aos!
 ```
 
 This displays the content of `myVariable`.
 
-## Sending Your First Message
+## Send Your First Message
 
 Let's send our variable to another process.
 
-```lua
+```bash
 default@aos-2.0.6> Send({ Target = ao.id, Data = myVariable })
 ```
 
 You should see the following output:
 
-```lua
+```bash
 New Message From <your-process-id>: Data = Hello from aos!
 ```
 
@@ -111,4 +120,40 @@ Follow these steps to create and interact with your first message handler in AO:
     print("HelloWorld handler loaded.")
     ```
 
-    *   `
+    *   `Handlers.add`: Registers a function to handle incoming messages.
+    *   `"HelloWorld"`: The name of this handler. It will be triggered by messages with `Action = "HelloWorld"`.
+    *   `function(msg)`: The function that executes when the handler is triggered. `msg` contains details about the incoming message (like `msg.From`, the sender's process ID).
+    *   `msg.reply({...})`: Sends a response message back to the original sender. The response must be a Lua table, typically containing a `Data` field.
+
+2.  **Load the Handler into `aos`:**
+    From your `aos` prompt, load the handler code into your running process:
+
+    ```bash
+    default@aos-2.0.6> .load main.lua
+    ```
+
+3.  **Send a Message to Trigger the Handler:**
+    Now, send a message to your own process (`ao.id` refers to the current process ID) with the action that matches your handler's name:
+
+    ```bash
+    default@aos-2.0.6> Send({ Target = ao.id, Action = "HelloWorld" })
+    ```
+
+4.  **Observe the Output:**
+    You should see two things happen in your `aos` terminal:
+    *   The `print` statement from your handler: `Handler triggered by message from: <your-process-id>`
+    *   A notification about the reply message: `New Message From <your-process-id>: Data = Hello back from your process!`
+
+5.  **Inspect the Reply Message:**
+    The reply message sent by your handler is now in your process's inbox. You can inspect its data like this:
+
+    ```bash
+    default@aos-2.0.6> Inbox[#Inbox].Data
+    ```
+    This should output: `"Hello back from your process!"`
+
+You've successfully created a handler, loaded it into your AO process, triggered it with a message, and received a reply!
+
+## Next Steps
+
+To dive deeper into AOS and AO, check out the [AO Processes Cookbook](https://cookbook_ao.arweave.net/).

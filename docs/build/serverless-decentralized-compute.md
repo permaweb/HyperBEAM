@@ -7,11 +7,11 @@ AO enables powerful "serverless" computation patterns by allowing you to run cod
 Instead of deploying code to centralized servers, you deploy code *to* the Arweave permaweb and instantiate it as an AO process. Interactions happen by sending messages to this process ID.
 
 *   **Code Deployment:** Your WASM binary or Lua script is uploaded to Arweave, getting a permanent transaction ID.
-*   **Process Spawning:** You create an AO process, associating it with your code's transaction ID and specifying the appropriate compute device ([`~wasm64@1.0`](../devices/wasm64-at-1-0.md) or [`~lua@5.3a`](../devices/lua-at-5-3a.md)).
+*   **Process Spawning:** You create an AO process, associating it with your code's transaction ID and specifying the appropriate compute device ([`~wasm64@1.0`](../build/devices/wasm64-at-1-0.md) or [`~lua@5.3a`](../build/devices/lua-at-5-3a.md)).
 *   **Execution via Messages:** Sending a message to the process ID triggers the HyperBEAM node (that picks up the message) to:
     1.  Load the process state.
     2.  Fetch the associated WASM/Lua code from Arweave.
-    3.  Execute the code using the relevant device ([`dev_wasm`](../resources/source-code/dev_wasm.md) or [`dev_lua`](../resources/source-code/dev_lua.md)), passing the message data and current state.
+    3.  Execute the code using the relevant device ([`dev_wasm`](../build/devices/source-code/dev_wasm.html) or [`dev_lua`](../build/devices/source-code/dev_lua.html)), passing the message data and current state.
     4.  Update the process state based on the execution results.
 <!-- 
 ## Example 1: Running WASM Containers
@@ -62,11 +62,11 @@ Lua provides a lightweight scripting environment directly within AO.
     ```
     The node executes the `Calculate` handler within the Lua script associated with `MyLuaProcess`. -->
 
-## TEE Attestations (via [`~snp@1.0`](../resources/source-code/dev_snp.md))
+## TEE Attestations (via [`~snp@1.0`](../build/devices/source-code/dev_snp.html))
 
 If a HyperBEAM node performing these computations runs within a supported Trusted Execution Environment (like AMD SEV-SNP), it can provide cryptographic proof of execution.
 
-*   **How it works:** The [`~snp@1.0`](../resources/source-code/dev_snp.md) device interacts with the TEE hardware.
+*   **How it works:** The [`~snp@1.0`](../build/devices/source-code/dev_snp.html) device interacts with the TEE hardware.
 *   **Signed Responses:** When a TEE-enabled node processes your message (e.g., executes your WASM function), the HTTP response containing the result can be cryptographically signed by a key that *provably* only exists inside the TEE.
 *   **Verification:** Clients receiving this response can verify the signature against the TEE platform's attestation mechanism (e.g., AMD's KDS) to gain high confidence that the computation was performed correctly and confidentially within the secure environment, untampered by the node operator.
 
@@ -74,9 +74,9 @@ If a HyperBEAM node performing these computations runs within a supported Truste
 
 This usually involves interacting with nodes specifically advertised as TEE-enabled. The exact mechanism for requesting and verifying attestations depends on the specific TEE technology and node configuration.
 
-*   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_codec_httpsig`](../resources/source-code/dev_codec_httpsig.md)).
-*   You might query the [`~snp@1.0`](../resources/source-code/dev_snp.md) device directly on the node to get its attestation report.
+*   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_codec_httpsig`](../build/devices/source-code/dev_codec_httpsig.html)).
+*   You might query the [`~snp@1.0`](../build/devices/source-code/dev_snp.html) device directly on the node to get its attestation report.
 
-Refer to documentation on [TEE Nodes](../run/tee-nodes.md) and the [`~snp@1.0`](../resources/source-code/dev_snp.md) device for details.
+Refer to documentation on [TEE Nodes](../run/tee-nodes.md) and the [`~snp@1.0`](../build/devices/source-code/dev_snp.html) device for details.
 
 By leveraging WASM, Lua, and optional TEE attestations, AO provides a powerful platform for building complex, verifiable, and truly decentralized serverless applications.
