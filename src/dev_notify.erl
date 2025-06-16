@@ -465,16 +465,16 @@ notification_manager_loop(State) ->
 %% @doc Handle event dispatch by matching against registered listeners
 handle_event_dispatch(Event, Opts) ->
     try
-        % Get all registered listeners using new key structure
-        AllListeners = ets:tab2list(notification_listeners),
-        
-        % Spawn short-lived worker processes for actual dispatching
-        % This keeps the manager process responsive
-        lists:foreach(fun({{Template, StreamPid}, Ref}) ->
+        % Use ets:foldl instead of tab2list to avoid copying entire table
+        % This eliminates memory allocation overhead for large listener tables
+        ets:foldl(fun({{Template, StreamPid}, Ref}, Acc) ->
+            % Spawn short-lived worker processes for actual dispatching
+            % This keeps the manager process responsive
             spawn(fun() -> 
                 try_dispatch_to_listener(Template, StreamPid, Ref, Event, Opts)
-            end)
-        end, AllListeners)
+            end),
+            Acc
+        end, ok, notification_listeners)
     catch
         _:_ ->
             % Table might not exist, ignore
