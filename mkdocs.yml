@@ -31,7 +31,6 @@ nav:
             - ~scheduler@1.0: 'build/devices/scheduler-at-1-0.md'
             - ~relay@1.0: 'build/devices/relay-at-1-0.md'
           - Source Code: 'https://github.com/permaweb/HyperBEAM'
-      - Resources:
 
   - Run a Node:
       - Running a HyperBEAM Node: 'run/running-a-hyperbeam-node.md'

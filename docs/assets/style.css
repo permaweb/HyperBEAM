@@ -36,7 +36,7 @@ input {
 }
 
 body {
-    --docs-max-width: 65rem;
+    --docs-max-width: 90rem;
     --homepage-max-width: 90rem;
     --sections-max-width: 80rem;
     --parallax-perspective: 2rem;
@@ -59,6 +59,10 @@ h1, h2, h3, h4, h5, h6 {
     padding-bottom: 10px;
 }
 */
+
+.md-main {
+    margin-top: 1.5rem;
+}
 
 .md-content h2,
 h3,
@@ -110,7 +114,7 @@ h6 {
 }
 
 [data-md-toggle=drawer]:checked~.md-container .md-sidebar--primary {
-    transform: translateX(15rem) !important;
+    transform: translateX(12rem) !important;
     z-index: 50 !important;
 }
 
@@ -121,6 +125,7 @@ h6 {
 .md-grid {
     /* transition: all 1s; this occurs on initial load, causing strange UI artifact */
     max-width: var(--docs-max-width);
+    margin: 0 auto;
 }
 
 .md-main__inner {
@@ -219,11 +224,11 @@ h6 {
 
 
 .md-sidebar {
-    width: 15rem;
+    width: 12rem;
 }
 
 [dir=ltr] .md-sidebar__inner {
-    padding-right: calc(100% - 15rem);
+    padding-right: calc(100% - 12rem);
 }
 
 .md-nav--secondary {
@@ -240,6 +245,11 @@ h6 {
 
 .md-tabs__link {
     font-size: clamp(0.65rem, 1.5vw, 0.65rem) !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    margin-top: 0;
 }
 
 .md-tabs__list {
@@ -250,14 +260,8 @@ h6 {
 
 .md-tabs__item {
     display: flex;
-    align-items: center;
-    justify-content: center;
     height: 1.5rem;
     width: 100%;
-}
-
-.md-tabs__item a {
-    margin-top: 0px;
 }
 
 /* Search Form Customization */
