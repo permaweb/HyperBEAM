@@ -42,11 +42,11 @@ nav:
       - Running a HyperBEAM Node: "run/running-a-hyperbeam-node.md"
       - Configuring Your Machine: "run/configuring-your-machine.md"
       - TEE Nodes: "run/tee-nodes.md"
+      - Joining/Running a Router: "run/joining-running-a-router.md"
       - Reference:
           - FAQ: "run/reference/faq.md"
           - Glossary: "run/reference/glossary.md"
           - Troubleshooting: "run/reference/troubleshooting.md"
-      - Joining/Running a Router: "run/joining-running-a-router.md"
 
   # - Resources:
   #     # - Troubleshooting: 'resources/reference/troubleshooting.md'

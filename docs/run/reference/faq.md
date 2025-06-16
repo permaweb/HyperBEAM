@@ -18,7 +18,7 @@ While technically possible, running HyperBEAM in Docker containers or other cont
 
 To update HyperBEAM:
 
-1. Pull the latest code from the repository
+1. Pull the latest code from the repository (check [Discord](https://discord.gg/V3yjzrBxPM) for the branch of Beta releases)
 2. Rebuild the application
 3. Restart the HyperBEAM service
 
