@@ -1,10 +1,17 @@
 %%% @doc A device that provides real-time notifications for AO process events.
 %%% It integrates with the existing event system (hb_event) and allows clients
 %%% to subscribe to specific events using HTTP/3 streams.
+%%% 
+%%% Uses a long-running notification manager process to handle high-frequency
+%%% message matching and dispatching efficiently.
 -module(dev_notify).
 -export([info/1, info/3, dispatch/3, register/3, unregister/3, stream/3]).
+-export([start_notification_manager/0, stop_notification_manager/0]).
+-export([notification_manager_loop/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+-define(NOTIFICATION_MANAGER, hb_notification_manager).
 
 %% @doc Device API information
 info(_) ->
@@ -62,48 +69,23 @@ unregister(StateMsg, InputMsg, Opts) ->
             {ok, StateMsg#{<<"listeners">> => NewState}}
     end.
 
-%% @doc Dispatch an event to registered listeners
-dispatch(StateMsg, InputMsg, Opts) ->
+%% @doc Dispatch an event to registered listeners via the notification manager
+dispatch(_StateMsg, InputMsg, Opts) ->
     ?event(notify, {dispatch_event, InputMsg}),
-    Listeners = maps:get(<<"listeners">>, StateMsg, #{}),
     
-    % Spawn a worker process for non-blocking dispatch
-    spawn(fun() ->
-        dispatch_to_listeners(InputMsg, Listeners, Opts)
-    end),
-    
-    {ok, <<"OK">>}.
-
-%% @doc Internal function to dispatch events to matching listeners
-dispatch_to_listeners(Event, Listeners, Opts) ->
-    maps:fold(
-        fun({pattern, Pattern}, Stream, _) ->
-            case hb_message:match(Event, Pattern) of
-                true ->
-                    ?event(notify, {matched_pattern, Pattern, Event}),
-                    % Use Cowboy's http/3 push to send the event
-                    push_event(Stream, Event, Opts);
-                false ->
-                    ok
-            end
-        end,
-        ok,
-        Listeners
-    ).
-
-%% @doc Push an event to a stream using Cowboy's HTTP/3 streaming
-push_event(StreamRef, Event, _Opts) ->
-    try
-        % Convert event to JSON
-        EventJson = hb_util:encode(Event),
-        % Stream the event data with nofin to keep connection alive
-        cowboy_req:stream_body(EventJson, nofin, StreamRef),
-        ?event(notify, {event_pushed, {stream, StreamRef}, {event_size, byte_size(EventJson)}})
-    catch
-        Class:Reason ->
-            ?event(notify, {push_error, {Class, Reason}}),
-            ok
+    % Send event to the long-running notification manager process
+    case whereis(?NOTIFICATION_MANAGER) of
+        undefined ->
+            ?event(notify, {manager_not_started, starting_manager}),
+            start_notification_manager(),
+            dispatch(_StateMsg, InputMsg, Opts);
+        ManagerPid ->
+            ManagerPid ! {dispatch_event, InputMsg, Opts},
+            {ok, <<"OK">>}
     end.
+
+%% Note: dispatch_to_listeners and push_event functions are now handled
+%% by the notification manager process for better performance.
 
 %% @doc Start a streaming connection for real-time event notifications
 stream(_StateMsg, InputMsg, Opts) ->
@@ -161,16 +143,19 @@ create_streaming_body(Pattern, Opts) ->
     end.
 
 %% @doc Register a streaming connection for receiving notifications
-register_stream(StreamId, Pattern, Req, _Opts) ->
-    % Store stream info in ETS table or process registry
-    % For now, we'll use a simple approach with process dictionary
-    Streams = get(notification_streams),
-    NewStreams = case Streams of
-        undefined -> #{StreamId => #{pattern => Pattern, req => Req}};
-        _ -> Streams#{StreamId => #{pattern => Pattern, req => Req}}
-    end,
-    put(notification_streams, NewStreams),
-    ?event(notify, {stream_registered, {stream_id, StreamId}, {pattern, Pattern}}).
+register_stream(StreamId, Pattern, _Req, _Opts) ->
+    % Ensure notification manager is running
+    start_notification_manager(),
+    
+    % Register with the notification manager
+    case whereis(?NOTIFICATION_MANAGER) of
+        undefined ->
+            ?event(notify, {manager_not_available, {stream_id, StreamId}});
+        ManagerPid ->
+            StreamPid = self(),
+            ManagerPid ! {register_listener, Pattern, StreamPid, StreamId},
+            ?event(notify, {stream_registered_with_manager, {stream_id, StreamId}, {pattern, Pattern}})
+    end.
 
 %% @doc Keep the streaming connection alive and handle events
 stream_loop(StreamId, Req, Opts) ->
@@ -198,11 +183,129 @@ stream_loop(StreamId, Req, Opts) ->
 
 %% @doc Unregister a streaming connection
 unregister_stream(StreamId) ->
-    Streams = get(notification_streams),
-    case Streams of
+    % Unregister with the notification manager
+    case whereis(?NOTIFICATION_MANAGER) of
+        undefined ->
+            ?event(notify, {manager_not_available_for_unregister, {stream_id, StreamId}});
+        ManagerPid ->
+            ManagerPid ! {unregister_listener, StreamId},
+            ?event(notify, {stream_unregistered_from_manager, {stream_id, StreamId}})
+    end.
+
+%% ============================================================================
+%% Notification Manager Process
+%% ============================================================================
+
+%% @doc Start the long-running notification manager process
+start_notification_manager() ->
+    case whereis(?NOTIFICATION_MANAGER) of
+        undefined ->
+            % Initialize ETS table for fast listener lookups
+            case ets:info(notification_listeners) of
+                undefined ->
+                    ets:new(notification_listeners, [named_table, public, bag, {read_concurrency, true}]);
+                _ -> ok
+            end,
+            
+            % Start the manager process
+            ManagerPid = spawn_link(fun() -> 
+                register(?NOTIFICATION_MANAGER, self()),
+                ?event(notify, {notification_manager_started, self()}),
+                notification_manager_loop(#{})
+            end),
+            {ok, ManagerPid};
+        Pid ->
+            {already_started, Pid}
+    end.
+
+%% @doc Stop the notification manager process
+stop_notification_manager() ->
+    case whereis(?NOTIFICATION_MANAGER) of
         undefined -> ok;
-        _ -> 
-            NewStreams = maps:remove(StreamId, Streams),
-            put(notification_streams, NewStreams)
-    end,
-    ?event(notify, {stream_unregistered, {stream_id, StreamId}}). 
+        Pid ->
+            Pid ! stop,
+            % Clean up ETS table
+            case ets:info(notification_listeners) of
+                undefined -> ok;
+                _ -> ets:delete(notification_listeners)
+            end,
+            ok
+    end.
+
+%% @doc Main loop for the notification manager process
+notification_manager_loop(State) ->
+    receive
+        {dispatch_event, Event, Opts} ->
+            % Handle event dispatch in the main manager process
+            % This keeps the work minimal to avoid blocking
+            handle_event_dispatch(Event, Opts),
+            notification_manager_loop(State);
+            
+        {register_listener, Pattern, StreamPid, Ref} ->
+            % Register a new listener
+            ets:insert(notification_listeners, {Pattern, StreamPid, Ref}),
+            ?event(notify, {listener_registered, {pattern, Pattern}, {stream, StreamPid}, {ref, Ref}}),
+            notification_manager_loop(State);
+            
+        {unregister_listener, Ref} ->
+            % Remove listener by reference
+            ets:match_delete(notification_listeners, {'_', '_', Ref}),
+            ?event(notify, {listener_unregistered, {ref, Ref}}),
+            notification_manager_loop(State);
+            
+        {get_stats} ->
+            % Return statistics about registered listeners
+            Stats = #{
+                total_listeners => ets:info(notification_listeners, size),
+                manager_pid => self(),
+                state => State
+            },
+            ?event(notify, {manager_stats, Stats}),
+            notification_manager_loop(State);
+            
+        stop ->
+            ?event(notify, {notification_manager_stopping, self()}),
+            ok;
+            
+        Msg ->
+            ?event(notify, {unexpected_message, Msg}),
+            notification_manager_loop(State)
+    end.
+
+%% @doc Handle event dispatch by matching against registered listeners
+handle_event_dispatch(Event, Opts) ->
+    % Get all registered listeners
+    AllListeners = ets:tab2list(notification_listeners),
+    
+    % Spawn short-lived worker processes for actual dispatching
+    % This keeps the manager process responsive
+    lists:foreach(fun({Pattern, StreamPid, Ref}) ->
+        spawn(fun() -> 
+            try_dispatch_to_listener(Pattern, StreamPid, Ref, Event, Opts)
+        end)
+    end, AllListeners).
+
+%% @doc Try to dispatch an event to a specific listener if pattern matches
+try_dispatch_to_listener(Pattern, StreamPid, Ref, Event, _Opts) ->
+    try
+        case hb_message:match(Event, Pattern) of
+            true ->
+                ?event(notify, {matched_pattern, {pattern, Pattern}, {ref, Ref}}),
+                % Send event to the stream process
+                case is_process_alive(StreamPid) of
+                    true ->
+                        StreamPid ! {notify_event, Event},
+                        ?event(notify, {event_sent, {stream, StreamPid}, {ref, Ref}});
+                    false ->
+                        % Clean up dead process
+                        ets:match_delete(notification_listeners, {'_', StreamPid, '_'}),
+                        ?event(notify, {dead_stream_cleaned, {stream, StreamPid}})
+                end;
+            false ->
+                % Pattern didn't match, no action needed
+                ok
+        end
+    catch
+        Class:Reason ->
+            ?event(notify, {dispatch_error, {class, Class}, {reason, Reason}, {pattern, Pattern}})
+    end. 

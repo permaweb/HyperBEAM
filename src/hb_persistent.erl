@@ -223,33 +223,43 @@ notify(GroupName, Msg2, Msg3, Opts) ->
     end.
 
 %% @doc Dispatch notification events to the notify device if one is configured.
-%% This is done asynchronously to avoid blocking the main resolution process.
+%% This sends events directly to the notification manager process for efficient handling.
 dispatch_to_notify_device(GroupName, Msg2, Msg3, Opts) ->
     case hb_opts:get(notify_device, undefined, Opts) of
         undefined -> 
             ok; % No notify device configured
-        NotifyDeviceSpec ->
-            % Spawn async process to handle notification dispatch
-            % This ensures we don't block the main resolution loop
-            spawn(fun() -> 
-                try
-                    NotifyMsg = #{
-                        <<"device">> => NotifyDeviceSpec,
-                        <<"listeners">> => #{}  % Will be populated by the device
-                    },
-                    EventMsg = #{
-                        <<"group">> => GroupName,
-                        <<"request">> => Msg2,
-                        <<"result">> => Msg3,
-                        <<"timestamp">> => erlang:system_time(millisecond)
-                    },
-                    % Call the notify device's dispatch function
-                    hb_ao:resolve(NotifyMsg, #{<<"path">> => <<"dispatch">>, <<"event">> => EventMsg}, Opts)
-                catch
-                    Class:Reason ->
-                        ?event({notify_dispatch_error, {class, Class}, {reason, Reason}})
-                end
-            end)
+        _NotifyDeviceSpec ->
+            % Create event message for dispatching
+            EventMsg = #{
+                <<"group">> => GroupName,
+                <<"request">> => Msg2,
+                <<"result">> => Msg3,
+                <<"timestamp">> => erlang:system_time(millisecond)
+            },
+            
+            % Send directly to notification manager if available
+            % This is much more efficient than spawning and calling hb_ao:resolve
+            case whereis(hb_notification_manager) of
+                undefined ->
+                    % Manager not started, try to start it via the device
+                    spawn(fun() -> 
+                        try
+                            dev_notify:start_notification_manager(),
+                            case whereis(hb_notification_manager) of
+                                undefined -> 
+                                    ?event({notify_manager_start_failed, GroupName});
+                                ManagerPid ->
+                                    ManagerPid ! {dispatch_event, EventMsg, Opts}
+                            end
+                        catch
+                            Class:Reason ->
+                                ?event({notify_dispatch_error, {class, Class}, {reason, Reason}})
+                        end
+                    end);
+                ManagerPid ->
+                    % Send directly to manager process (minimal overhead)
+                    ManagerPid ! {dispatch_event, EventMsg, Opts}
+            end
     end.
 
 %% @doc Forward requests to a newly delegated execution process.
