@@ -7,7 +7,7 @@ HyperBEAM is the primary, production-ready implementation of the [AO-Core protoc
 
 HyperBEAM transforms the abstract concepts of AO-Core—such as [Messages](./what-is-ao-core.md#core-concepts), [Devices](./what-is-ao-core.md#core-concepts), and [Paths](./what-is-ao-core.md#core-concepts)—into a concrete, operational system. Here's why it's pivotal to the AO ecosystem:
 
-- **Modularity via Devices:** HyperBEAM introduces a uniquely modular architecture centered around [Devices](./hyperbeam-devices.md). These pluggable components define specific computational logic—like running WASM, managing state, or relaying data—allowing for unprecedented flexibility. Users can extend the system by creating custom Devices to fit their specific computational needs.
+- **Modularity via Devices:** HyperBEAM introduces a uniquely modular architecture centered around [Devices](./devices/hyperbeam-devices.md). These pluggable components define specific computational logic—like running WASM, managing state, or relaying data—allowing for unprecedented flexibility. Users can extend the system by creating custom Devices to fit their specific computational needs.
 - **Decentralized OS:** It equips nodes with the infrastructure to join the AO network, manage resources, execute computations, and communicate seamlessly.
 
 Built on the Erlang/OTP framework, HyperBEAM provides a robust and secure foundation that leverages the BEAM virtual machine for exceptional concurrency, fault tolerance, and scalability. This abstracts away underlying hardware, allowing diverse nodes to contribute resources without compatibility issues. The system governs how nodes coordinate and interact.
