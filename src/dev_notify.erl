@@ -354,7 +354,7 @@ start_notification_manager() ->
             % Initialize ETS table for fast listener lookups
             case ets:info(notification_listeners) of
                 undefined ->
-                    ets:new(notification_listeners, [named_table, public, bag, {read_concurrency, true}]);
+                    ets:new(notification_listeners, [named_table, public, set, {read_concurrency, true}]);
                 _ -> ok
             end,
             
@@ -423,14 +423,15 @@ notification_manager_loop(State) ->
             notification_manager_loop(State);
             
         {register_listener, Template, StreamPid, Ref} ->
-            % Register a new listener with template
-            ets:insert(notification_listeners, {Template, StreamPid, Ref}),
+            % Register a new listener with template using new key structure
+            % Key is {{Template, StreamPid}, Ref} to ensure deduplication by {Template, StreamPid}
+            ets:insert(notification_listeners, {{Template, StreamPid}, Ref}),
             ?event(notify, {listener_registered, {template, Template}, {stream, StreamPid}, {ref, Ref}}),
             notification_manager_loop(State);
             
         {unregister_listener, Ref} ->
-            % Remove listener by reference
-            ets:match_delete(notification_listeners, {'_', '_', Ref}),
+            % Remove listener by reference using new key structure
+            ets:match_delete(notification_listeners, {'_', Ref}),
             ?event(notify, {listener_unregistered, {ref, Ref}}),
             notification_manager_loop(State);
             
@@ -464,12 +465,12 @@ notification_manager_loop(State) ->
 %% @doc Handle event dispatch by matching against registered listeners
 handle_event_dispatch(Event, Opts) ->
     try
-        % Get all registered listeners
+        % Get all registered listeners using new key structure
         AllListeners = ets:tab2list(notification_listeners),
         
         % Spawn short-lived worker processes for actual dispatching
         % This keeps the manager process responsive
-        lists:foreach(fun({Template, StreamPid, Ref}) ->
+        lists:foreach(fun({{Template, StreamPid}, Ref}) ->
             spawn(fun() -> 
                 try_dispatch_to_listener(Template, StreamPid, Ref, Event, Opts)
             end)
@@ -492,8 +493,8 @@ try_dispatch_to_listener(Template, StreamPid, Ref, Event, Opts) ->
                         StreamPid ! {notify_event, Event},
                         ?event(notify, {event_sent, {stream, StreamPid}, {ref, Ref}});
                     false ->
-                        % Clean up dead process
-                        ets:match_delete(notification_listeners, {'_', StreamPid, '_'}),
+                        % Clean up dead process using new key structure
+                        ets:match_delete(notification_listeners, {{'_', StreamPid}, '_'}),
                         ?event(notify, {dead_stream_cleaned, {stream, StreamPid}})
                 end;
             false ->
@@ -752,7 +753,7 @@ listener_registration_test() ->
     
     % Check listener is registered
     AllListeners = ets:tab2list(notification_listeners),
-    ?assert(lists:member({Template, StreamPid, Ref}, AllListeners)),
+    ?assert(lists:member({{Template, StreamPid}, Ref}, AllListeners)),
     
     % Unregister listener
     ManagerPid ! {unregister_listener, Ref},
@@ -760,7 +761,7 @@ listener_registration_test() ->
     
     % Check listener is removed
     AllListeners2 = ets:tab2list(notification_listeners),
-    ?assertNot(lists:member({Template, StreamPid, Ref}, AllListeners2)),
+    ?assertNot(lists:member({{Template, StreamPid}, Ref}, AllListeners2)),
     
     stop_notification_manager().
 
@@ -880,8 +881,8 @@ dead_process_cleanup_test() ->
     
     % Verify it's in the table
     AllListeners = ets:tab2list(notification_listeners),
-    ?event(debug, {listeners_before_cleanup, {count, length(AllListeners)}, {has_dead_process, lists:member({Template, DeadPid, Ref}, AllListeners)}}),
-    ?assert(lists:member({Template, DeadPid, Ref}, AllListeners)),
+    ?event(debug, {listeners_before_cleanup, {count, length(AllListeners)}, {has_dead_process, lists:member({{Template, DeadPid}, Ref}, AllListeners)}}),
+    ?assert(lists:member({{Template, DeadPid}, Ref}, AllListeners)),
     
     % Dispatch an event that matches
     Event = #{ <<"device">> => <<"message@1.0">> },
@@ -891,8 +892,8 @@ dead_process_cleanup_test() ->
     
     % Dead process should be cleaned up
     AllListeners2 = ets:tab2list(notification_listeners),
-    ?event(debug, {listeners_after_cleanup, {count, length(AllListeners2)}, {dead_process_removed, not lists:member({Template, DeadPid, Ref}, AllListeners2)}}),
-    ?assertNot(lists:member({Template, DeadPid, Ref}, AllListeners2)),
+    ?event(debug, {listeners_after_cleanup, {count, length(AllListeners2)}, {dead_process_removed, not lists:member({{Template, DeadPid}, Ref}, AllListeners2)}}),
+    ?assertNot(lists:member({{Template, DeadPid}, Ref}, AllListeners2)),
     
     stop_notification_manager().
 
@@ -1017,7 +1018,7 @@ error_handling_test() ->
     Ref = make_ref(),
     
     % Register invalid template (insert directly to bypass validation)
-    ets:insert(notification_listeners, {InvalidTemplate, TestPid, Ref}),
+    ets:insert(notification_listeners, {{InvalidTemplate, TestPid}, Ref}),
     
     % Dispatch event - should handle error gracefully
     Event = #{ <<"test">> => <<"data">> },
@@ -1109,7 +1110,7 @@ duplicate_listener_registration_test() ->
     
     % Check how many entries are in the ETS table
     AllListeners = ets:tab2list(notification_listeners),
-    MatchingListeners = [L || {T, P, _R} = L <- AllListeners, T =:= Template, P =:= StreamPid],
+    MatchingListeners = [L || {{T, P}, _R} = L <- AllListeners, T =:= Template, P =:= StreamPid],
     ?event(debug, {duplicate_registrations_found, {count, length(MatchingListeners)}, {entries, MatchingListeners}}),
     
     % This test will FAIL with current implementation - showing the bug
@@ -1164,7 +1165,7 @@ multiple_registration_scenarios_test() ->
     ManagerPid ! {register_listener, Template1, Stream1, make_ref()},
     timer:sleep(10),
     
-    Listeners1 = [L || {T, P, _R} = L <- ets:tab2list(notification_listeners), T =:= Template1, P =:= Stream1],
+    Listeners1 = [L || {{T, P}, _R} = L <- ets:tab2list(notification_listeners), T =:= Template1, P =:= Stream1],
     ?event(debug, {scenario1_duplicates, {count, length(Listeners1)}}),
     % Same template/stream should only be registered once
     ?assertEqual(1, length(Listeners1), "Same template/stream should only be registered once"),
@@ -1178,7 +1179,7 @@ multiple_registration_scenarios_test() ->
     ManagerPid ! {register_listener, Template2, Stream2B, make_ref()},
     timer:sleep(10),
     
-    Listeners2 = [L || {T, _P, _R} = L <- ets:tab2list(notification_listeners), T =:= Template2],
+    Listeners2 = [L || {{T, _P}, _R} = L <- ets:tab2list(notification_listeners), T =:= Template2],
     ?event(debug, {scenario2_different_streams, {count, length(Listeners2)}}),
     ?assertEqual(2, length(Listeners2), "Different streams with same template should be allowed"),
     
@@ -1191,7 +1192,7 @@ multiple_registration_scenarios_test() ->
     ManagerPid ! {register_listener, Template3B, Stream3, make_ref()},
     timer:sleep(10),
     
-    Listeners3 = [L || {_T, P, _R} = L <- ets:tab2list(notification_listeners), P =:= Stream3],
+    Listeners3 = [L || {{_T, P}, _R} = L <- ets:tab2list(notification_listeners), P =:= Stream3],
     ?event(debug, {scenario3_different_templates, {count, length(Listeners3)}}),
     ?assertEqual(2, length(Listeners3), "Same stream with different templates should be allowed"),
     
