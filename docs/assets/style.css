@@ -184,22 +184,25 @@ h6 {
     margin-top: 4px;
 }
 
+.md-tabs__item--active {
+    background: rgb(239, 239, 239);
+}
+
 .md-tabs__item--active .md-tabs__link {
     position: relative;
     font-weight: 700;
 }
 
-.md-tabs__item--active .md-tabs__link::after {
+/* .md-tabs__item--active::after {
     content: "";
     position: absolute;
-    bottom: -8px;
-    left: 5%;
-    width: 90%;
+    bottom: 0px;
+    width: 100%;
     height: 2px;
     background-color: black;
     border-radius: 1px;
     transition: all 0.3s ease;
-}
+} */
 
 
 .md-nav__link:hover {
@@ -212,6 +215,8 @@ h6 {
     font-weight: 700;
     background: rgb(237, 237, 237);
 }
+
+
 
 .md-sidebar {
     width: 15rem;
@@ -226,18 +231,29 @@ h6 {
 }
 
 /* Tab Navigation */
+
+.md-tabs {
+    border-top: .05rem solid #00000012;
+}
+
+
+
 .md-tabs__link {
     font-size: clamp(0.65rem, 1.5vw, 0.65rem) !important;
 }
 
 .md-tabs__list {
     justify-content: space-around;
+    border-left: .05rem solid #00000012;
+    border-right: .05rem solid #00000012;
 }
 
 .md-tabs__item {
-
+    display: flex;
+    align-items: center;
+    justify-content: center;
     height: 1.5rem;
-
+    width: 100%;
 }
 
 .md-tabs__item a {
