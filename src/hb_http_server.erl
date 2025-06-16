@@ -427,7 +427,12 @@ get_opts(NodeMsg = #{ http_server := no_server_ref }) ->
     NodeMsg;
 get_opts(NodeMsg) ->
     ServerRef = hb_opts:get(http_server, no_server_ref, NodeMsg),
-    cowboy:get_env(ServerRef, node_msg, no_node_msg).
+    try cowboy:get_env(ServerRef, node_msg, no_node_msg)
+    catch error:badarg ->
+        % If the server is not yet started, might happen with dev_hook
+        % So we just return the original NodeMsg.
+        NodeMsg
+    end.
 
 set_default_opts(Opts) ->
     % Create a temporary opts map that does not include the defaults.

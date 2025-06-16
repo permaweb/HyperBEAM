@@ -105,29 +105,29 @@ extract_job_details(Job) ->
     Type = maps:get(<<"type">>, AugmentedData, undefined),
     Interval = maps:get(<<"interval">>, AugmentedData, undefined),
     WorkerMsg = maps:get(<<"worker_msg">>, AugmentedData, #{}),
+    CronPath = maps:get(<<"cron-path">>, AugmentedData, undefined),
     if TaskId == undefined orelse Type == undefined orelse not is_map(WorkerMsg) orelse WorkerMsg == #{} ->
         ?event({normalize_skipping_invalid_job, {reason, invalid_structure}, {raw_job, Job}}),
         {error, {unknown_task_id, invalid_job_structure}};
        true ->
-            {ok, #{ task_id => TaskId, type => Type, interval => Interval, worker_msg => WorkerMsg }}
+            {ok, #{ task_id => TaskId, type => Type, interval => Interval, worker_msg => WorkerMsg, cron_path => CronPath }}
     end.
 
 %% Helper function to reconstruct the original message for once/every from cached details
 reconstruct_original_msg(DetailsMap) ->
-    #{ task_id := TaskId, type := Type, interval := Interval, worker_msg := WorkerMsg } = DetailsMap,
-    TargetPath = maps:get(<<"path">>, WorkerMsg, undefined),
-    if TargetPath == undefined ->
+    #{ task_id := TaskId, type := Type, interval := Interval, worker_msg := WorkerMsg, cron_path := CronPath } = DetailsMap,
+    if CronPath == undefined ->
         ?event({normalize_skipping_no_target_path, {task_id, TaskId}, {worker_msg, WorkerMsg}}),
-        {error, no_target_path};
+        {error, no_cron_path};
        true ->
             OtherParams = maps:remove(<<"path">>, WorkerMsg),
-            OriginalMsg0 = maps:put(<<"cron-path">>, TargetPath, OtherParams),
+            OriginalMsg0 = maps:put(<<"cron-path">>, CronPath, OtherParams),
             OriginalMsg1 = case Type of
                                <<"every">> when Interval =/= null andalso Interval =/= undefined -> 
                                    maps:put(<<"interval">>, Interval, OriginalMsg0);
                                _ -> OriginalMsg0
                            end,
-            OriginalMsgPath = <<"/~cron@1.0/", Type/binary>>,
+            OriginalMsgPath = <<Type/binary>>,
             OriginalMsg = maps:put(<<"path">>, OriginalMsgPath, OriginalMsg1),
             {ok, OriginalMsg}
     end.
@@ -287,7 +287,8 @@ every(_Msg1, Msg2, Opts) ->
 						MinimalAugmentedData = #{ 
 							<<"type">> => <<"every">>,
 							<<"interval">> => IntervalString,
-							<<"worker_msg">> => ModifiedMsg2 
+							<<"worker_msg">> => ModifiedMsg2,
+                            <<"cron-path">> => CronPath
 						},
 						% Cache the augmented task data
 						{ok, PutResult} = cache_put(ReqMsgID, MinimalAugmentedData, cron_opts(Opts)),
