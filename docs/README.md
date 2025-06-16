@@ -88,14 +88,12 @@ To contribute documentation to HyperBEAM, follow these steps:
      ```bash
      python3 -m venv venv
      source venv/bin/activate
-     pip3 install mkdocs mkdocs-material
-     mkdocs-git-revision-date-localized-plugin
+     pip3 install mkdocs mkdocs-material mkdocs-git-revision-date-localized-plugin
      ```
    - Start the docs server
      ```bash
      mkdocs serve
      ```
-   
 
 6. **Build Your Changes**
   - Run the build script to verify your changes:
