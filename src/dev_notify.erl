@@ -1077,4 +1077,177 @@ receive_loop(Count) ->
             receive_loop(Count + 1)
     after 10 ->
         exit({received_count, Count})
+    end.
+
+%% @doc Test duplicate listener registration bug
+duplicate_listener_registration_test() ->
+    % Ensure clean state
+    stop_notification_manager(),
+    timer:sleep(50),
+    
+    start_notification_manager(),
+    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ?assert(is_process_alive(ManagerPid)),
+    
+    % Create test stream process that counts events
+    TestPid = self(),
+    StreamPid = spawn(fun() ->
+        duplicate_event_counter(0)
+    end),
+    
+    % Register the same template and stream multiple times
+    Template = #{ <<"device">> => <<"duplicate-test@1.0">> },
+    Ref1 = make_ref(),
+    Ref2 = make_ref(),
+    Ref3 = make_ref(),
+    
+    ?event(debug, {registering_duplicate_listeners, {template, Template}, {stream_pid, StreamPid}}),
+    ManagerPid ! {register_listener, Template, StreamPid, Ref1},
+    ManagerPid ! {register_listener, Template, StreamPid, Ref2},
+    ManagerPid ! {register_listener, Template, StreamPid, Ref3},
+    timer:sleep(20), % Allow registrations to process
+    
+    % Check how many entries are in the ETS table
+    AllListeners = ets:tab2list(notification_listeners),
+    MatchingListeners = [L || {T, P, _R} = L <- AllListeners, T =:= Template, P =:= StreamPid],
+    ?event(debug, {duplicate_registrations_found, {count, length(MatchingListeners)}, {entries, MatchingListeners}}),
+    
+    % This test will FAIL with current implementation - showing the bug
+    % The same {Template, StreamPid} should only be registered once
+    ?assertEqual(1, length(MatchingListeners), "Same template/stream should only be registered once"),
+    
+    % Dispatch one event
+    Event = #{ <<"device">> => <<"duplicate-test@1.0">>, <<"message">> => <<"test">> },
+    ManagerPid ! {dispatch_event, Event, #{}},
+    timer:sleep(50),
+    
+    % Stream should receive the event only once
+    StreamPid ! {get_count, TestPid},
+    receive
+        {event_count, Count} ->
+            ?event(debug, {event_count_received, Count}),
+            ?assertEqual(1, Count, "Event should be received only once, not duplicated")
+    after 500 ->
+        ?assert(false, "Should have received event count")
+    end,
+    
+    stop_notification_manager().
+
+%% Helper process that counts duplicate events
+duplicate_event_counter(Count) ->
+    receive
+        {notify_event, Event} ->
+            ?event(debug, {duplicate_counter_received_event, {count, Count + 1}, {event, Event}}),
+            duplicate_event_counter(Count + 1);
+        {get_count, ReplyPid} ->
+            ReplyPid ! {event_count, Count},
+            duplicate_event_counter(Count)
+    after 1000 ->
+        exit({final_count, Count})
+    end.
+
+%% @doc Test multiple registration attempts with different scenarios
+multiple_registration_scenarios_test() ->
+    % Ensure clean state
+    stop_notification_manager(),
+    timer:sleep(50),
+    
+    start_notification_manager(),
+    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ?assert(is_process_alive(ManagerPid)),
+    
+    % Scenario 1: Same template, same stream, different refs
+    Template1 = #{ <<"type">> => <<"scenario1">> },
+    Stream1 = spawn(fun() -> receive _ -> ok end end),
+    
+    ManagerPid ! {register_listener, Template1, Stream1, make_ref()},
+    ManagerPid ! {register_listener, Template1, Stream1, make_ref()},
+    timer:sleep(10),
+    
+    Listeners1 = [L || {T, P, _R} = L <- ets:tab2list(notification_listeners), T =:= Template1, P =:= Stream1],
+    ?event(debug, {scenario1_duplicates, {count, length(Listeners1)}}),
+    % Same template/stream should only be registered once
+    ?assertEqual(1, length(Listeners1), "Same template/stream should only be registered once"),
+    
+    % Scenario 2: Same template, different streams (should be allowed)
+    Template2 = #{ <<"type">> => <<"scenario2">> },
+    Stream2A = spawn(fun() -> receive _ -> ok end end),
+    Stream2B = spawn(fun() -> receive _ -> ok end end),
+    
+    ManagerPid ! {register_listener, Template2, Stream2A, make_ref()},
+    ManagerPid ! {register_listener, Template2, Stream2B, make_ref()},
+    timer:sleep(10),
+    
+    Listeners2 = [L || {T, _P, _R} = L <- ets:tab2list(notification_listeners), T =:= Template2],
+    ?event(debug, {scenario2_different_streams, {count, length(Listeners2)}}),
+    ?assertEqual(2, length(Listeners2), "Different streams with same template should be allowed"),
+    
+    % Scenario 3: Different templates, same stream (should be allowed)
+    Template3A = #{ <<"type">> => <<"scenario3a">> },
+    Template3B = #{ <<"type">> => <<"scenario3b">> },
+    Stream3 = spawn(fun() -> receive _ -> ok end end),
+    
+    ManagerPid ! {register_listener, Template3A, Stream3, make_ref()},
+    ManagerPid ! {register_listener, Template3B, Stream3, make_ref()},
+    timer:sleep(10),
+    
+    Listeners3 = [L || {_T, P, _R} = L <- ets:tab2list(notification_listeners), P =:= Stream3],
+    ?event(debug, {scenario3_different_templates, {count, length(Listeners3)}}),
+    ?assertEqual(2, length(Listeners3), "Same stream with different templates should be allowed"),
+    
+    stop_notification_manager().
+
+%% @doc Test event duplication with multiple registrations
+event_duplication_test() ->
+    % Ensure clean state
+    stop_notification_manager(),
+    timer:sleep(50),
+    
+    start_notification_manager(),
+    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ?assert(is_process_alive(ManagerPid)),
+    
+    % Create counting process
+    TestPid = self(),
+    CounterPid = spawn(fun() ->
+        event_duplication_counter(0, TestPid)
+    end),
+    
+    % Register the same listener 3 times (showing the bug)
+    Template = #{ <<"event">> => <<"duplication-test">> },
+    ManagerPid ! {register_listener, Template, CounterPid, make_ref()},
+    ManagerPid ! {register_listener, Template, CounterPid, make_ref()},
+    ManagerPid ! {register_listener, Template, CounterPid, make_ref()},
+    timer:sleep(20),
+    
+    % Dispatch one event
+    Event = #{ <<"event">> => <<"duplication-test">>, <<"data">> => <<"single event">> },
+    ?event(debug, {dispatching_single_event, Event}),
+    ManagerPid ! {dispatch_event, Event, #{}},
+    timer:sleep(50),
+    
+    % Check how many times the event was received
+    CounterPid ! {report_count, TestPid},
+    receive
+        {duplicate_count, ReceivedCount} ->
+            ?event(debug, {event_received_count, ReceivedCount}),
+            % Event should be received only once, not duplicated
+            ?assertEqual(1, ReceivedCount, "Event should be received only once, not duplicated")
+    after 500 ->
+        ?assert(false, "Should have received count report")
+    end,
+    
+    stop_notification_manager().
+
+%% Helper for event duplication test
+event_duplication_counter(Count, TestPid) ->
+    receive
+        {notify_event, Event} ->
+            ?event(debug, {duplication_counter_event, {count, Count + 1}, {event, Event}}),
+            event_duplication_counter(Count + 1, TestPid);
+        {report_count, ReplyPid} ->
+            ReplyPid ! {duplicate_count, Count},
+            event_duplication_counter(Count, TestPid)
+    after 1000 ->
+        TestPid ! {final_duplicate_count, Count}
     end. 
