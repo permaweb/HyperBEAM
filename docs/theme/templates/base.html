@@ -44,10 +44,10 @@
 		{% endif %}
 	  {% endblock %}
 	  {% block styles %}
-		<link rel="stylesheet" href="{{ 'MAIN.CSS' | url }}">
+		<link rel="stylesheet" href="{{ 'assets/stylesheets/main.min.css' | url }}">
 		{% if config.theme.palette %}
 		  {% set palette = config.theme.palette %}
-		  <link rel="stylesheet" href="{{ 'MAIN_PALETTE.CSS' | url }}">
+		  <link rel="stylesheet" href="{{ 'assets/stylesheets/palette.min.css' | url }}">
 		{% endif %}
 		{% include "partials/icons.html" %}
 	  {% endblock %}
@@ -267,6 +267,30 @@
                                 <div
                                     class="hero-button-cards-container fade-in hero-text"
                                 >
+                                <a
+                                        href="/build/quick-start.html"
+                                    >
+                                        <button class="hero-button-card">
+                                            <div class="hero-button-header">
+                                                <svg
+                                                    xmlns="http://www.w3.org/2000/svg"
+                                                    width="16"
+                                                    height="16"
+                                                    viewBox="0 0 10 10"
+                                                    fill="none"
+                                                >
+                                                    <path
+                                                        d="M8.74228e-07 -8.74228e-07L10 0L10 10L0 10L8.74228e-07 -8.74228e-07ZM9 1L5 1L9 9L9 1ZM2.5 4C3.32843 4 4 3.32843 4 2.5C4 1.67157 3.32843 0.999999 2.5 0.999999C1.67157 0.999999 1 1.67157 1 2.5C1 3.32843 1.67157 4 2.5 4ZM4 6L1 6L1 9L4 9L4 6Z"
+                                                        fill="white"
+                                                    />
+                                                </svg>
+                                                <h2>Build</h2>
+                                            </div>
+                                            <p>
+                                                Build a new generation of apps and services for cyberspace. Fully trustless. Onchain. 
+                                            </p>
+                                        </button>
+                                    </a>
                                     <a
                                         href="/run/running-a-hyperbeam-node.html"
                                     >
@@ -306,30 +330,7 @@
                                             </p>
                                         </button>
                                     </a>
-                                    <a
-                                        href="/build/quick-start.html"
-                                    >
-                                        <button class="hero-button-card">
-                                            <div class="hero-button-header">
-                                                <svg
-                                                    xmlns="http://www.w3.org/2000/svg"
-                                                    width="16"
-                                                    height="16"
-                                                    viewBox="0 0 10 10"
-                                                    fill="none"
-                                                >
-                                                    <path
-                                                        d="M8.74228e-07 -8.74228e-07L10 0L10 10L0 10L8.74228e-07 -8.74228e-07ZM9 1L5 1L9 9L9 1ZM2.5 4C3.32843 4 4 3.32843 4 2.5C4 1.67157 3.32843 0.999999 2.5 0.999999C1.67157 0.999999 1 1.67157 1 2.5C1 3.32843 1.67157 4 2.5 4ZM4 6L1 6L1 9L4 9L4 6Z"
-                                                        fill="white"
-                                                    />
-                                                </svg>
-                                                <h2>Build</h2>
-                                            </div>
-                                            <p>
-                                                Build a new generation of apps and services for cyberspace. Fully trustless. Onchain. 
-                                            </p>
-                                        </button>
-                                    </a>
+                                    
                                 </div>
                             </div>
                         </div>

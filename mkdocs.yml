@@ -1,6 +1,6 @@
-site_name: 'HyperBEAM - Documentation'
+site_name: "HyperBEAM - Documentation"
 repo_url: https://github.com/permaweb/HyperBEAM
-repo_name: 'permaweb/HyperBEAM'
+repo_name: "permaweb/HyperBEAM"
 site_url: http://[::]:8000/
 
 docs_dir: docs
@@ -16,27 +16,27 @@ nav:
   #     - Pathing in HyperBEAM: 'introduction/pathing-in-hyperbeam.md'
   - Build on HyperBEAM:
       - Quick Start:
-        - Quick Start: 'build/quick-start.md'
-        - Migrating from Legacynet: 'build/migrating-from-legacynet.md'
-        - AO Connect: 'build/ao-connect.md'
-        - Extending HyperBEAM with Devices: 'build/building-devices.md'
+          - Quick Start: "build/quick-start.md"
+          - Migrating from Legacynet: "build/migrating-from-legacynet.md"
+          - AO Connect: "build/ao-connect.md"
+          - Extending HyperBEAM with Devices: "build/building-devices.md"
       - Devices:
-          - 'What are HyperBEAM Devices?': 'devices/what-are-devices.md'
-          - '~meta@1.0': 'devices/meta-at-1-0.md'
-          - '~process@1.0': 'devices/process-at-1-0.md'
-          - '~message@1.0': 'devices/message-at-1-0.md'
-          - '~wasm64@1.0': 'devices/wasm64-at-1-0.md'
-          - '~lua@5.3a': 'devices/lua-at-5-3a.md'
-          - '~json@1.0': 'devices/json-at-1-0.md'
-          - '~scheduler@1.0': 'devices/scheduler-at-1-0.md'
-          - '~relay@1.0': 'devices/relay-at-1-0.md'
-          - Source Code: 'https://github.com/permaweb/HyperBEAM'
+          - "What are HyperBEAM Devices?": "devices/what-are-devices.md"
+          - "~meta@1.0": "devices/meta-at-1-0.md"
+          - "~process@1.0": "devices/process-at-1-0.md"
+          - "~message@1.0": "devices/message-at-1-0.md"
+          - "~wasm64@1.0": "devices/wasm64-at-1-0.md"
+          - "~lua@5.3a": "devices/lua-at-5-3a.md"
+          - "~json@1.0": "devices/json-at-1-0.md"
+          - "~scheduler@1.0": "devices/scheduler-at-1-0.md"
+          - "~relay@1.0": "devices/relay-at-1-0.md"
+          - Source Code: "https://github.com/permaweb/HyperBEAM"
 
   - Run a Node:
-      - Running a HyperBEAM Node: 'run/running-a-hyperbeam-node.md'
-      - Configuring Your Machine: 'run/configuring-your-machine.md'
-      - TEE Nodes: 'run/tee-nodes.md'
-      - Joining/Running a Router: 'run/joining-running-a-router.md'
+      - Running a HyperBEAM Node: "run/running-a-hyperbeam-node.md"
+      - Configuring Your Machine: "run/configuring-your-machine.md"
+      - TEE Nodes: "run/tee-nodes.md"
+      - Joining/Running a Router: "run/joining-running-a-router.md"
 
   # - Resources:
   #     # - Troubleshooting: 'resources/reference/troubleshooting.md'
@@ -147,12 +147,12 @@ nav:
   #       - hb_volume: 'resources/source-code/hb_volume.md'
   #       - hb: 'resources/source-code/hb.md'
   #       - rsa_pss: 'resources/source-code/rsa_pss.md'
-  # - Fuel Your LLM: 'resources/llms.md' 
-      # - Overview: 
+  # - Fuel Your LLM: 'resources/llms.md'
+  # - Overview:
   # - Community:
   #   - Contribute Overview: 'community/guidelines.md'
-    # - Development Setup: 'community/setup.md'
-    # - Contributing Documentation: 'community/contributing-docs.md'
+  # - Development Setup: 'community/setup.md'
+  # - Contributing Documentation: 'community/contributing-docs.md'
 
 markdown_extensions:
   - attr_list
@@ -182,14 +182,14 @@ markdown_extensions:
       toc_depth: 2
       permalink: true
 
-theme: 
+theme:
   name: material
   custom_dir: docs/theme/templates
   language: en
   logo: https://arweave.net/Ggr1cz-jbiDS2gAVFHxkoKzmNQQD4WcMTfipWyuEmgY
   favicon: https://arweave.net/rBcLwnVU2fWNEKUW8PY0TzEAPuCHMj2Vp6z6CedHJf0
   icon:
-    repo: fontawesome/brands/github 
+    repo: fontawesome/brands/github
   features:
     # - navigation.instant
     - navigation.instant.progress
@@ -212,7 +212,7 @@ theme:
     # Palette toggle for light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      code: 
+      code:
         highlight_theme: dracula
       primary: white
       accent: blue
@@ -232,14 +232,13 @@ theme:
   nav_style: default
   highlightjs: true
 
-
 plugins:
   - search
   - git-revision-date-localized
 
 extra_css:
-  - assets/style.css
- 
+  - assets/stylesheets/style.css
+
 extra_javascript:
   - js/utc-time.js
   - js/custom-header.js
@@ -256,4 +255,3 @@ extra:
       link: https://github.com/permaweb/hyperBEAM
       name: GitHub
   generator: false
-

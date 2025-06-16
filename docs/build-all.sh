@@ -315,7 +315,7 @@ EOL
 # Loop through each documentation directory
 for DOC_DIR in "${DOC_DIRS[@]}"; do
     SECTION_NAME=$(basename "$DOC_DIR")
-    SECTION_HEADING=$(echo "$SECTION_NAME" | sed 's/\b\(.\)/\u\1/g')
+    SECTION_HEADING=$(perl -pe 's/\b(\w)/\u$1/g' <<< "$SECTION_NAME")
 
     echo "" >> "$LLM_SUMMARY_FILE"
     echo "### $SECTION_HEADING" >> "$LLM_SUMMARY_FILE"
