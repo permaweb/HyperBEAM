@@ -15,21 +15,21 @@ nav:
   #     - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
   #     - Pathing in HyperBEAM: 'introduction/pathing-in-hyperbeam.md'
   - Build on HyperBEAM:
-      - Quick Start:
-          - Quick Start: "build/quick-start.md"
-          - Migrating from Legacynet: "build/migrating-from-legacynet.md"
-          - AO Connect: "build/ao-connect.md"
-          - Extending HyperBEAM with Devices: "build/building-devices.md"
+      - Quick Start: "build/quick-start.md"
+      - Migrating from Legacynet: "build/migrating-from-legacynet.md"
+      - AO Connect: "build/ao-connect.md"
+      - Extending HyperBEAM with Devices: "build/building-devices.md"
       - Devices:
-          - "What are HyperBEAM Devices?": "devices/what-are-devices.md"
-          - "~meta@1.0": "devices/meta-at-1-0.md"
-          - "~process@1.0": "devices/process-at-1-0.md"
-          - "~message@1.0": "devices/message-at-1-0.md"
-          - "~wasm64@1.0": "devices/wasm64-at-1-0.md"
-          - "~lua@5.3a": "devices/lua-at-5-3a.md"
-          - "~json@1.0": "devices/json-at-1-0.md"
-          - "~scheduler@1.0": "devices/scheduler-at-1-0.md"
-          - "~relay@1.0": "devices/relay-at-1-0.md"
+          - "What are HyperBEAM Devices?": "build/devices/what-are-devices.md"
+          - Starter Devices:
+              - ~meta@1.0: "build/devices/meta-at-1-0.md"
+              - ~process@1.0: "build/devices/process-at-1-0.md"
+              - ~message@1.0: "build/devices/message-at-1-0.md"
+              - ~wasm64@1.0: "build/devices/wasm64-at-1-0.md"
+              - ~lua@5.3a: "build/devices/lua-at-5-3a.md"
+              - ~json@1.0: "build/devices/json-at-1-0.md"
+              - ~scheduler@1.0: "build/devices/scheduler-at-1-0.md"
+              - ~relay@1.0: "build/devices/relay-at-1-0.md"
           - Source Code: "https://github.com/permaweb/HyperBEAM"
 
   - Run a Node:
@@ -202,12 +202,12 @@ theme:
     - navigation.tabs.sticky
     - navigation.indexes
     - navigation.prune
-    - toc.integrate
+    # - toc.integrate
     - content.tooltips
     - content.code.copy
     - content.code.select
     - content.code.annotate
-    - navigation.footer
+    # - navigation.footer
   palette:
     # Palette toggle for light mode
     - media: "(prefers-color-scheme: light)"
