@@ -35,37 +35,64 @@ info(_Msg1, _Msg2, _Opts) ->
     },
     {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
-%% @doc Register a new event listener
+%% @doc Register a new event listener with template/spec support
 register(StateMsg, InputMsg, Opts) ->
     ?event(notify, {register_listener, InputMsg}),
-    case hb_ao:get(<<"pattern">>, InputMsg, Opts) of
+    
+    % Extract template specification (supports both map and regex templates)
+    TemplateResult = case hb_ao:get(<<"template">>, InputMsg, Opts) of
         not_found ->
-            {error, <<"No pattern specified for event registration">>};
-        Pattern ->
+            % Fallback to legacy pattern field for compatibility
+            case hb_ao:get(<<"pattern">>, InputMsg, Opts) of
+                not_found -> {error, <<"No template or pattern specified">>};
+                Pattern -> {ok, Pattern}
+            end;
+        TemplateSpec -> {ok, TemplateSpec}
+    end,
+    
+    case TemplateResult of
+        {error, Reason} -> {error, Reason};
+        {ok, ExtractedTemplate} ->
             case hb_ao:get(<<"stream">>, InputMsg, Opts) of
                 not_found ->
                     {error, <<"No stream specified for event registration">>};
                 Stream ->
-                    % Register the pattern and stream in the state
-                    NewState = maps:put(
-                        {pattern, Pattern},
-                        Stream,
-                        maps:get(<<"listeners">>, StateMsg, #{})
-                    ),
-                    {ok, StateMsg#{<<"listeners">> => NewState}}
+                    % Validate template specification
+                    case validate_template(ExtractedTemplate, Opts) of
+                        {ok, ValidatedTemplate} ->
+                            % Register the template and stream in the state
+                            NewState = maps:put(
+                                {template, ValidatedTemplate},
+                                Stream,
+                                maps:get(<<"listeners">>, StateMsg, #{})
+                            ),
+                            {ok, StateMsg#{<<"listeners">> => NewState}};
+                        {error, ValidationError} ->
+                            {error, ValidationError}
+                    end
             end
     end.
 
-%% @doc Unregister an event listener
+%% @doc Unregister an event listener (supports both template and legacy pattern)
 unregister(StateMsg, InputMsg, Opts) ->
     ?event(notify, {unregister_listener, InputMsg}),
-    case hb_ao:get(<<"pattern">>, InputMsg, Opts) of
+    
+    % Extract template or pattern for removal
+    TemplateResult = case hb_ao:get(<<"template">>, InputMsg, Opts) of
         not_found ->
-            {error, <<"No pattern specified for event unregistration">>};
-        Pattern ->
-            % Remove the pattern from the state
+            case hb_ao:get(<<"pattern">>, InputMsg, Opts) of
+                not_found -> {error, <<"No template or pattern specified">>};
+                Pattern -> {ok, Pattern}
+            end;
+        TemplateSpec -> {ok, TemplateSpec}
+    end,
+    
+    case TemplateResult of
+        {error, Reason} -> {error, Reason};
+        {ok, ExtractedTemplate} ->
+            % Remove the template from the state
             Listeners = maps:get(<<"listeners">>, StateMsg, #{}),
-            NewState = maps:remove({pattern, Pattern}, Listeners),
+            NewState = maps:remove({template, ExtractedTemplate}, Listeners),
             {ok, StateMsg#{<<"listeners">> => NewState}}
     end.
 
@@ -91,8 +118,13 @@ dispatch(_StateMsg, InputMsg, Opts) ->
 stream(_StateMsg, InputMsg, Opts) ->
     ?event(notify, {start_stream, InputMsg}),
     
-    % Extract pattern for filtering events
-    Pattern = hb_ao:get(<<"pattern">>, InputMsg, <<"*">>, Opts),
+    % Extract template for filtering events (supports both map and regex templates)
+    Template = case hb_ao:get(<<"template">>, InputMsg, Opts) of
+        not_found ->
+            % Fallback to pattern field for legacy compatibility
+            hb_ao:get(<<"pattern">>, InputMsg, <<".*">>, Opts); % Default regex matches all
+        TemplateSpec -> TemplateSpec
+    end,
     
     % Create streaming response headers
     Headers = #{
@@ -103,7 +135,7 @@ stream(_StateMsg, InputMsg, Opts) ->
     },
     
     % Start the streaming response
-    StreamingBody = create_streaming_body(Pattern, Opts),
+    StreamingBody = create_streaming_body(Template, Opts),
     
     {ok, #{
         <<"status">> => 200,
@@ -113,7 +145,7 @@ stream(_StateMsg, InputMsg, Opts) ->
     }}.
 
 %% @doc Create a streaming body function that keeps the connection open
-create_streaming_body(Pattern, Opts) ->
+create_streaming_body(Template, Opts) ->
     fun(Req) ->
         % Initialize streaming response
         Req2 = cowboy_req:stream_reply(200, #{
@@ -123,27 +155,39 @@ create_streaming_body(Pattern, Opts) ->
             <<"access-control-allow-origin">> => <<"*">>
         }, Req),
         
-        % Register this stream for notifications
-        StreamId = make_ref(),
-        register_stream(StreamId, Pattern, Req2, Opts),
-        
-        % Send initial connection message
-        InitialMessage = hb_util:encode(#{
-            <<"type">> => <<"connection">>,
-            <<"message">> => <<"Connected to notification stream">>,
-            <<"pattern">> => Pattern,
-            <<"timestamp">> => erlang:system_time(millisecond)
-        }),
-        cowboy_req:stream_body([<<"data: ">>, InitialMessage, <<"\n\n">>], nofin, Req2),
-        
-        % Keep connection alive and handle cleanup
-        stream_loop(StreamId, Req2, Opts),
+        % Validate template before registering
+        case validate_template(Template, Opts) of
+            {ok, ValidatedTemplate} ->
+                % Register this stream for notifications
+                StreamId = make_ref(),
+                register_stream(StreamId, ValidatedTemplate, Req2, Opts),
+                
+                % Send initial connection message
+                InitialMessage = hb_util:encode(#{
+                    <<"type">> => <<"connection">>,
+                    <<"message">> => <<"Connected to notification stream">>,
+                    <<"template">> => ValidatedTemplate,
+                    <<"timestamp">> => erlang:system_time(millisecond)
+                }),
+                cowboy_req:stream_body([<<"data: ">>, InitialMessage, <<"\n\n">>], nofin, Req2),
+                
+                % Keep connection alive and handle cleanup
+                stream_loop(StreamId, Req2, Opts);
+            {error, ValidationError} ->
+                % Send error message and close stream
+                ErrorMessage = hb_util:encode(#{
+                    <<"type">> => <<"error">>,
+                    <<"message">> => ValidationError,
+                    <<"timestamp">> => erlang:system_time(millisecond)
+                }),
+                cowboy_req:stream_body([<<"data: ">>, ErrorMessage, <<"\n\n">>], fin, Req2)
+        end,
         
         {ok, Req2}
     end.
 
 %% @doc Register a streaming connection for receiving notifications
-register_stream(StreamId, Pattern, _Req, _Opts) ->
+register_stream(StreamId, Template, _Req, _Opts) ->
     % Ensure notification manager is running
     start_notification_manager(),
     
@@ -153,8 +197,8 @@ register_stream(StreamId, Pattern, _Req, _Opts) ->
             ?event(notify, {manager_not_available, {stream_id, StreamId}});
         ManagerPid ->
             StreamPid = self(),
-            ManagerPid ! {register_listener, Pattern, StreamPid, StreamId},
-            ?event(notify, {stream_registered_with_manager, {stream_id, StreamId}, {pattern, Pattern}})
+            ManagerPid ! {register_listener, Template, StreamPid, StreamId},
+            ?event(notify, {stream_registered_with_manager, {stream_id, StreamId}, {template, Template}})
     end.
 
 %% @doc Keep the streaming connection alive and handle events
@@ -191,6 +235,57 @@ unregister_stream(StreamId) ->
             ManagerPid ! {unregister_listener, StreamId},
             ?event(notify, {stream_unregistered_from_manager, {stream_id, StreamId}})
     end.
+
+%% ============================================================================
+%% Template Validation and Matching
+%% ============================================================================
+
+%% @doc Validate a template specification (map template or regex pattern)
+validate_template(Template, _Opts) when is_map(Template) ->
+    % Map templates are used for message structure matching
+    % Validate that it's a proper map with at least one key
+    case maps:size(Template) of
+        0 -> {error, <<"Template cannot be empty">>};
+        _ -> {ok, Template}
+    end;
+validate_template(Template, _Opts) when is_binary(Template) ->
+    % Binary templates are treated as regex patterns for path matching
+    try 
+        % Test if the regex compiles properly
+        case re:compile(Template) of
+            {ok, _} -> {ok, Template};
+            {error, Reason} -> {error, iolist_to_binary(io_lib:format("Invalid regex: ~p", [Reason]))}
+        end
+    catch
+        _:_ -> {error, <<"Invalid regex template">>}
+    end;
+validate_template(Template, _Opts) ->
+    {error, iolist_to_binary(io_lib:format("Template must be a map or binary, got: ~p", [Template]))}.
+
+%% @doc Enhanced template matching using router's template system
+template_matches(Event, Template, _Opts) when is_map(Template) ->
+    % Use message structure matching (similar to dev_router:template_matches)
+    case hb_message:match(Template, Event, primary) of
+        {value_mismatch, _Key, _Val1, _Val2} -> false;
+        true -> true;
+        _Other -> false
+    end;
+template_matches(Event, Template, Opts) when is_binary(Template) ->
+    % Use regex path matching
+    EventPath = case hb_ao:get(<<"path">>, Event, Opts) of
+        not_found -> <<"/">>;
+        Path -> Path
+    end,
+    try 
+        case re:run(EventPath, Template) of
+            nomatch -> false;
+            _ -> true
+        end
+    catch
+        _:_ -> false
+    end;
+template_matches(_Event, _Template, _Opts) ->
+    false.
 
 %% ============================================================================
 %% Notification Manager Process
@@ -241,10 +336,10 @@ notification_manager_loop(State) ->
             handle_event_dispatch(Event, Opts),
             notification_manager_loop(State);
             
-        {register_listener, Pattern, StreamPid, Ref} ->
-            % Register a new listener
-            ets:insert(notification_listeners, {Pattern, StreamPid, Ref}),
-            ?event(notify, {listener_registered, {pattern, Pattern}, {stream, StreamPid}, {ref, Ref}}),
+        {register_listener, Template, StreamPid, Ref} ->
+            % Register a new listener with template
+            ets:insert(notification_listeners, {Template, StreamPid, Ref}),
+            ?event(notify, {listener_registered, {template, Template}, {stream, StreamPid}, {ref, Ref}}),
             notification_manager_loop(State);
             
         {unregister_listener, Ref} ->
@@ -279,18 +374,18 @@ handle_event_dispatch(Event, Opts) ->
     
     % Spawn short-lived worker processes for actual dispatching
     % This keeps the manager process responsive
-    lists:foreach(fun({Pattern, StreamPid, Ref}) ->
+    lists:foreach(fun({Template, StreamPid, Ref}) ->
         spawn(fun() -> 
-            try_dispatch_to_listener(Pattern, StreamPid, Ref, Event, Opts)
+            try_dispatch_to_listener(Template, StreamPid, Ref, Event, Opts)
         end)
     end, AllListeners).
 
-%% @doc Try to dispatch an event to a specific listener if pattern matches
-try_dispatch_to_listener(Pattern, StreamPid, Ref, Event, _Opts) ->
+%% @doc Try to dispatch an event to a specific listener if template matches
+try_dispatch_to_listener(Template, StreamPid, Ref, Event, Opts) ->
     try
-        case hb_message:match(Event, Pattern) of
+        case template_matches(Event, Template, Opts) of
             true ->
-                ?event(notify, {matched_pattern, {pattern, Pattern}, {ref, Ref}}),
+                ?event(notify, {matched_template, {template, Template}, {ref, Ref}}),
                 % Send event to the stream process
                 case is_process_alive(StreamPid) of
                     true ->
@@ -302,10 +397,53 @@ try_dispatch_to_listener(Pattern, StreamPid, Ref, Event, _Opts) ->
                         ?event(notify, {dead_stream_cleaned, {stream, StreamPid}})
                 end;
             false ->
-                % Pattern didn't match, no action needed
+                % Template didn't match, no action needed
                 ok
         end
     catch
         Class:Reason ->
-            ?event(notify, {dispatch_error, {class, Class}, {reason, Reason}, {pattern, Pattern}})
-    end. 
+            ?event(notify, {dispatch_error, {class, Class}, {reason, Reason}, {template, Template}})
+    end.
+
+%% ============================================================================
+%% Tests
+%% ============================================================================
+
+%% @doc Test template validation
+template_validation_test() ->
+    % Valid map template
+    ?assertEqual({ok, #{ <<"device">> => <<"test">> }}, 
+                 validate_template(#{ <<"device">> => <<"test">> }, #{})),
+    
+    % Valid regex template  
+    ?assertEqual({ok, <<"/.*/test">>}, 
+                 validate_template(<<"/.*/test">>, #{})),
+    
+    % Invalid empty map
+    ?assertMatch({error, _}, validate_template(#{}, #{})),
+    
+    % Invalid regex
+    ?assertMatch({error, _}, validate_template(<<"[invalid">>, #{})),
+    
+    % Invalid type
+    ?assertMatch({error, _}, validate_template(123, #{})).
+
+%% @doc Test template matching
+template_matching_test() ->
+    % Map template matching
+    MapTemplate = #{ <<"device">> => <<"process@1.0">> },
+    
+    Event1 = #{ <<"device">> => <<"process@1.0">>, <<"path">> => <<"/compute">> },
+    ?assertEqual(true, template_matches(Event1, MapTemplate, #{})),
+    
+    Event2 = #{ <<"device">> => <<"message@1.0">>, <<"path">> => <<"/compute">> },
+    ?assertEqual(false, template_matches(Event2, MapTemplate, #{})),
+    
+    % Regex template matching
+    RegexTemplate = <<"/.*process.*/.*">>,
+    
+    Event3 = #{ <<"path">> => <<"/test/process@1.0/compute">> },
+    ?assertEqual(true, template_matches(Event3, RegexTemplate, #{})),
+    
+    Event4 = #{ <<"path">> => <<"/test/message@1.0/compute">> },
+    ?assertEqual(false, template_matches(Event4, RegexTemplate, #{})). 
