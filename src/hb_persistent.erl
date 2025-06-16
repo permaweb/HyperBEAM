@@ -10,7 +10,7 @@
 
 -module(hb_persistent).
 -export([start_monitor/0, start_monitor/1, stop_monitor/1]).
--export([find_or_register/3, unregister_notify/4, await/4, notify/4]).
+-export([find_or_register/3, unregister_notify/4, await/4, notify/4, dispatch_to_notify_device/4]).
 -export([group/3, start_worker/3, start_worker/2, forward_work/2]).
 -export([default_grouper/3, default_worker/3, default_await/5]).
 -include("include/hb.hrl").
@@ -210,6 +210,8 @@ notify(GroupName, Msg2, Msg3, Opts) ->
         false ->
             ok
     end,
+    % Call notification dispatch for external listeners (non-blocking)
+    dispatch_to_notify_device(GroupName, Msg2, Msg3, Opts),
     receive
         {resolve, Listener, GroupName, Msg2, _ListenerOpts} ->
             ?event({notifying_listener, {listener, Listener}, {group, GroupName}}),
@@ -218,6 +220,36 @@ notify(GroupName, Msg2, Msg3, Opts) ->
     after 0 ->
         ?event(finished_notify),
         ok
+    end.
+
+%% @doc Dispatch notification events to the notify device if one is configured.
+%% This is done asynchronously to avoid blocking the main resolution process.
+dispatch_to_notify_device(GroupName, Msg2, Msg3, Opts) ->
+    case hb_opts:get(notify_device, undefined, Opts) of
+        undefined -> 
+            ok; % No notify device configured
+        NotifyDeviceSpec ->
+            % Spawn async process to handle notification dispatch
+            % This ensures we don't block the main resolution loop
+            spawn(fun() -> 
+                try
+                    NotifyMsg = #{
+                        <<"device">> => NotifyDeviceSpec,
+                        <<"listeners">> => #{}  % Will be populated by the device
+                    },
+                    EventMsg = #{
+                        <<"group">> => GroupName,
+                        <<"request">> => Msg2,
+                        <<"result">> => Msg3,
+                        <<"timestamp">> => erlang:system_time(millisecond)
+                    },
+                    % Call the notify device's dispatch function
+                    hb_ao:resolve(NotifyMsg, #{<<"path">> => <<"dispatch">>, <<"event">> => EventMsg}, Opts)
+                catch
+                    Class:Reason ->
+                        ?event({notify_dispatch_error, {class, Class}, {reason, Reason}})
+                end
+            end)
     end.
 
 %% @doc Forward requests to a newly delegated execution process.

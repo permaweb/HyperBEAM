@@ -93,7 +93,8 @@ default_message() ->
 			#{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
-            #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
+            #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois},
+            #{<<"name">> => <<"notify@1.0">>, <<"module">> => dev_notify}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
@@ -145,6 +146,9 @@ default_message() ->
             initrd, append,
             vmm_type, guest_features
         ],
+        %% Notification device specification for real-time event streaming
+        %% Set to undefined to disable, or specify a device like <<"notify@1.0">>
+        notify_device => undefined,
         routes => [
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
