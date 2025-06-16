@@ -263,21 +263,6 @@ else
   mkdocs build > /dev/null 2>&1 || { log_error "mkdocs build failed"; exit 1; }
 fi
 
-# Find the latest CSS files with their hashes
-MAIN_CSS=$(find ./mkdocs-site/assets/stylesheets -name "main.*.min.css" | sort | tail -n 1)
-PALETTE_CSS=$(find ./mkdocs-site/assets/stylesheets -name "palette.*.min.css" | sort | tail -n 1)
-
-# Extract just the filenames from the paths
-MAIN_CSS_FILE=$(basename "$MAIN_CSS")
-PALETTE_CSS_FILE=$(basename "$PALETTE_CSS")
-
-# Find all HTML files and replace the CSS references in each one
-log_info "Updating CSS references in HTML files"
-find ./mkdocs-site -type f -name "*.html" | while read -r html_file; do
-    sed -i'' -e "s|MAIN\.CSS|assets/stylesheets/$MAIN_CSS_FILE|g" "$html_file"
-    sed -i'' -e "s|MAIN_PALETTE\.CSS|assets/stylesheets/$PALETTE_CSS_FILE|g" "$html_file"
-done
-
 # Remove .html-e files
 find ./mkdocs-site -type f -name "*.html-e" -delete
 
