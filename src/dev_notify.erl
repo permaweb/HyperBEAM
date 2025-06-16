@@ -118,6 +118,15 @@ find_matching_key(TargetTemplate, [_OtherKey | Rest]) ->
 %% @doc Check if two templates are equivalent
 templates_match(Template1, Template2) when is_binary(Template1), is_binary(Template2) ->
     Template1 =:= Template2;
+templates_match({compiled_regex, _CompiledRegex1, OriginalPattern1}, {compiled_regex, _CompiledRegex2, OriginalPattern2}) ->
+    % Compare original patterns for compiled regex templates
+    OriginalPattern1 =:= OriginalPattern2;
+templates_match({compiled_regex, _CompiledRegex, OriginalPattern}, Template) when is_binary(Template) ->
+    % Compare compiled regex with binary template
+    OriginalPattern =:= Template;
+templates_match(Template, {compiled_regex, _CompiledRegex, OriginalPattern}) when is_binary(Template) ->
+    % Compare binary template with compiled regex
+    Template =:= OriginalPattern;
 templates_match(Template1, Template2) when is_map(Template1), is_map(Template2) ->
     % For map templates, we need to compare the core fields, ignoring metadata
     % Extract the essential template fields
@@ -283,10 +292,10 @@ validate_template(Template, _Opts) when is_map(Template) ->
     end;
 validate_template(Template, _Opts) when is_binary(Template) ->
     % Binary templates are treated as regex patterns for path matching
+    % Compile the regex once for efficiency
     try 
-        % Test if the regex compiles properly
         case re:compile(Template) of
-            {ok, _} -> {ok, Template};
+            {ok, CompiledRegex} -> {ok, {compiled_regex, CompiledRegex, Template}};
             {error, Reason} -> {error, iolist_to_binary(io_lib:format("Invalid regex: ~p", [Reason]))}
         end
     catch
@@ -303,8 +312,22 @@ template_matches(Event, Template, _Opts) when is_map(Template) ->
         true -> true;
         _Other -> false
     end;
+template_matches(Event, {compiled_regex, CompiledRegex, _OriginalPattern}, Opts) ->
+    % Use pre-compiled regex for efficient path matching
+    EventPath = case hb_ao:get(<<"path">>, Event, Opts) of
+        not_found -> <<"/">>;
+        Path -> Path
+    end,
+    try 
+        case re:run(EventPath, CompiledRegex) of
+            nomatch -> false;
+            _ -> true
+        end
+    catch
+        _:_ -> false
+    end;
 template_matches(Event, Template, Opts) when is_binary(Template) ->
-    % Use regex path matching
+    % Fallback for legacy binary templates (compile on-the-fly)
     EventPath = case hb_ao:get(<<"path">>, Event, Opts) of
         not_found -> <<"/">>;
         Path -> Path
@@ -498,7 +521,7 @@ template_validation_test() ->
     RegexTemplate = <<"/.*/test">>,
     RegexResult = validate_template(RegexTemplate, #{}),
     ?event(debug, {regex_template_validation, {input, RegexTemplate}, {result, RegexResult}}),
-    ?assertEqual({ok, <<"/.*/test">>}, RegexResult),
+    ?assertMatch({ok, {compiled_regex, _, <<"/.*/test">>}}, RegexResult),
     
     % Invalid empty map
     EmptyResult = validate_template(#{}, #{}),
@@ -943,7 +966,7 @@ template_validation_edge_cases_test() ->
     
     % Test complex regex patterns
     ComplexRegex = <<"^/(test|prod)/process@[0-9]+\\.[0-9]+/.+$">>,
-    ?assertEqual({ok, ComplexRegex}, validate_template(ComplexRegex, #{})),
+    ?assertMatch({ok, {compiled_regex, _, ComplexRegex}}, validate_template(ComplexRegex, #{})),
     
     % Test unicode in templates
     UnicodeTemplate = #{ <<"message">> => <<"Hello 世界">> },
@@ -951,7 +974,7 @@ template_validation_edge_cases_test() ->
     
     % Test very long regex
     LongRegex = iolist_to_binary(lists:duplicate(1000, "a")),
-    ?assertEqual({ok, LongRegex}, validate_template(LongRegex, #{})).
+    ?assertMatch({ok, {compiled_regex, _, LongRegex}}, validate_template(LongRegex, #{})).
 
 %% @doc Test message matching edge cases
 message_matching_edge_cases_test() ->
