@@ -9,39 +9,44 @@
 -export([message_to_request/2, reply/4, accept_to_codec/2]).
 -export([req_to_tabm_singleton/3]).
 -include("include/hb.hrl").
+
 -include_lib("eunit/include/eunit.hrl").
+
 
 start() ->
     httpc:set_options([{max_keep_alive_length, 0}]),
     ok.
 
+
 %% @doc Gets a URL via HTTP and returns the resulting message in deserialized
 %% form.
 get(Node, Opts) -> get(Node, <<"/">>, Opts).
+
+
 get(Node, PathBin, Opts) when is_binary(PathBin) ->
-    get(Node, #{ <<"path">> => PathBin }, Opts);
+    get(Node, #{<<"path">> => PathBin}, Opts);
 get(Node, Message, Opts) ->
     request(
-        <<"GET">>,
-        Node,
-        hb_ao:get(<<"path">>, Message, <<"/">>, Opts),
-        Message,
-        Opts
-    ).
+      <<"GET">>,
+      Node,
+      hb_ao:get(<<"path">>, Message, <<"/">>, Opts),
+      Message,
+      Opts).
+
 
 %% @doc Posts a message to a URL on a remote peer via HTTP. Returns the
 %% resulting message in deserialized form.
 post(Node, Message, Opts) ->
     post(Node,
-        hb_ao:get(
-            <<"path">>,
-            Message,
-            <<"/">>,
-            Opts#{ topic => ao_internal }
-        ),
-        Message,
-        Opts
-    ).
+         hb_ao:get(
+           <<"path">>,
+           Message,
+           <<"/">>,
+           Opts#{topic => ao_internal}),
+         Message,
+         Opts).
+
+
 post(Node, Path, Message, Opts) ->
     case request(<<"POST">>, Node, Path, Message, Opts) of
         {ok, Res} ->
@@ -49,6 +54,7 @@ post(Node, Path, Message, Opts) ->
             {ok, Res};
         Error -> Error
     end.
+
 
 %% @doc Posts a binary to a URL on a remote peer via HTTP, returning the raw
 %% binary body.
@@ -58,13 +64,17 @@ request(Message, Opts) ->
     {ok, Method, Peer, Path, MessageToSend, NewOpts} =
         message_to_request(Message, Opts),
     request(Method, Peer, Path, MessageToSend, NewOpts).
+
+
 request(Method, Peer, Path, Opts) ->
     request(Method, Peer, Path, #{}, Opts).
-request(Method, Config = #{ <<"nodes">> := Nodes }, Path, Message, Opts) when is_list(Nodes) ->
+
+
+request(Method, Config = #{<<"nodes">> := Nodes}, Path, Message, Opts) when is_list(Nodes) ->
     % The request has a `route' (see `dev_router' for more details), so we use the
     % `multirequest' functionality, rather than a single request.
     multirequest(Config, Method, Path, Message, Opts);
-request(Method, #{ <<"opts">> := NodeOpts, <<"uri">> := URI }, _Path, Message, Opts) ->
+request(Method, #{<<"opts">> := NodeOpts, <<"uri">> := URI}, _Path, Message, Opts) ->
     % The request has a set of additional options, so we apply them to the
     % request.
     MergedOpts = hb_maps:merge(Opts, NodeOpts, Opts),
@@ -73,49 +83,41 @@ request(Method, #{ <<"opts">> := NodeOpts, <<"uri">> := URI }, _Path, Message, O
     % over that.
     {ok, NewMethod, Node, NewPath, NewMsg, NewOpts} =
         message_to_request(
-            Message#{ <<"path">> => URI, <<"method">> => Method },
-            MergedOpts
-        ),
+          Message#{<<"path">> => URI, <<"method">> => Method},
+          MergedOpts),
     request(NewMethod, Node, NewPath, NewMsg, NewOpts);
 request(Method, Peer, Path, RawMessage, Opts) ->
     ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {message, RawMessage}}),
     Req =
         prepare_request(
-            hb_ao:get(
-                <<"codec-device">>,
-                RawMessage,
-                <<"httpsig@1.0">>,
-                Opts
-            ),
-            Method,
-            Peer,
-            Path,
+          hb_ao:get(
+            <<"codec-device">>,
             RawMessage,
-            Opts
-        ),
+            <<"httpsig@1.0">>,
+            Opts),
+          Method,
+          Peer,
+          Path,
+          RawMessage,
+          Opts),
     StartTime = os:system_time(millisecond),
     {_ErlStatus, Status, Headers, Body} = hb_http_client:req(Req, Opts),
     EndTime = os:system_time(millisecond),
     ?event(http_outbound,
-        {
-            http_response,
+           {http_response,
             {req, Req},
             {response,
-                #{
-                    status => Status,
-                    headers => Headers,
-                    body => Body
-                }
-            }
-        },
-        Opts
-    ),
+             #{
+               status => Status,
+               headers => Headers,
+               body => Body
+              }}},
+           Opts),
     HeaderMap = hb_maps:from_list(Headers),
     NormHeaderMap = hb_ao:normalize_keys(HeaderMap, Opts),
     ?event(http_outbound,
-        {normalized_response_headers, {norm_header_map, NormHeaderMap}},
-        Opts
-    ),
+           {normalized_response_headers, {norm_header_map, NormHeaderMap}},
+           Opts),
     BaseStatus =
         case Status of
             201 -> created;
@@ -124,14 +126,13 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             _ -> failure
         end,
     ?event(http_short,
-        {received,
+           {received,
             {status, Status},
             {duration, EndTime - StartTime},
             {method, Method},
             {peer, Peer},
             {path, {string, Path}},
-            {body_size, byte_size(Body)}
-        }),
+            {body_size, byte_size(Body)}}),
     ReturnAOResult =
         hb_opts:get(http_only_result, true, Opts) andalso
         hb_maps:get(<<"ao-result">>, NormHeaderMap, false, Opts),
@@ -142,59 +143,51 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             case hb_maps:get(Key, Msg, undefined, Opts) of
                 undefined ->
                     {failure,
-                        <<
-                            "Result key '",
-                            Key/binary,
-                            "' not found in response from '",
-                            Peer/binary,
-                            "' for path '",
-                            Path/binary,
-                            "': ",
-                            Body/binary
-                        >>
-                    };
+                     <<"Result key '",
+                       Key/binary,
+                       "' not found in response from '",
+                       Peer/binary,
+                       "' for path '",
+                       Path/binary,
+                       "': ",
+                       Body/binary>>};
                 Value -> {BaseStatus, Value}
             end;
         false ->
             case hb_maps:get(<<"codec-device">>, NormHeaderMap, <<"httpsig@1.0">>, Opts) of
                 <<"httpsig@1.0">> ->
                     ?event(http_outbound, {result_is_httpsig, {body, Body}}, Opts),
-                    {
-                        BaseStatus,
-                        http_response_to_httpsig(Status, NormHeaderMap, Body, Opts)
-                    };
+                    {BaseStatus,
+                     http_response_to_httpsig(Status, NormHeaderMap, Body, Opts)};
                 <<"ans104@1.0">> ->
                     ?event(http_outbound, {result_is_ans104, {body, Body}}, Opts),
                     Deserialized = ar_bundles:deserialize(Body),
                     % We don't need to add the status to the message, because
                     % it is already present in the encoded ANS-104 message.
-                    {
-                        BaseStatus,
-                        hb_message:convert(
-                            Deserialized,
-                            <<"structured@1.0">>,
-                            <<"ans104@1.0">>,
-                            Opts
-                        )
-                    }
+                    {BaseStatus,
+                     hb_message:convert(
+                       Deserialized,
+                       <<"structured@1.0">>,
+                       <<"ans104@1.0">>,
+                       Opts)}
             end
     end.
+
 
 %% @doc Convert a HTTP response to a httpsig message.
 http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
     (hb_message:convert(
-        hb_maps:merge(
-            HeaderMap#{ <<"status">> => hb_util:bin(Status) },
-            case Body of
-                <<>> -> #{};
-                _ -> #{ <<"body">> => Body }
-            end,
-			Opts
-        ),
-        #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-        <<"httpsig@1.0">>,
-        Opts
-    ))#{ <<"status">> => hb_util:int(Status) }.
+       hb_maps:merge(
+         HeaderMap#{<<"status">> => hb_util:bin(Status)},
+         case Body of
+             <<>> -> #{};
+             _ -> #{<<"body">> => Body}
+         end,
+         Opts),
+       #{<<"device">> => <<"structured@1.0">>, <<"bundle">> => true},
+       <<"httpsig@1.0">>,
+       Opts))#{<<"status">> => hb_util:int(Status)}.
+
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
@@ -203,11 +196,12 @@ message_to_request(M, Opts) ->
     ?event(debug_http, {route_res, {route_res, RouteRes}, {full_res, Res}, {msg, M}}),
     Res.
 
+
 %% @doc Parse a `dev_router:route' response and return a tuple of request
 %% parameters.
 route_to_request(M, {ok, URI}, Opts) when is_binary(URI) ->
-    route_to_request(M, {ok, #{ <<"uri">> => URI, <<"opts">> => #{} }}, Opts);
-route_to_request(M, {ok, #{ <<"uri">> := XPath, <<"opts">> := ReqOpts}}, Opts) ->
+    route_to_request(M, {ok, #{<<"uri">> => URI, <<"opts">> => #{}}}, Opts);
+route_to_request(M, {ok, #{<<"uri">> := XPath, <<"opts">> := ReqOpts}}, Opts) ->
     % The request is a direct HTTP URL, so we need to split the path into a
     % host and path.
     URI = uri_string:parse(XPath),
@@ -230,7 +224,7 @@ route_to_request(M, {ok, #{ <<"uri">> := XPath, <<"opts">> := ReqOpts}}, Opts) -
         end,
     Protocol = hb_maps:get(scheme, URI, <<"https">>, Opts),
     Host = hb_maps:get(host, URI, <<"localhost">>, Opts),
-    Node = << Protocol/binary, "://", Host/binary, ":", Port/binary  >>,
+    Node = <<Protocol/binary, "://", Host/binary, ":", Port/binary>>,
     PathParts = [hb_maps:get(path, URI, <<"/">>, Opts)] ++
         case hb_maps:get(query, URI, <<>>, Opts) of
             <<>> -> [];
@@ -252,6 +246,7 @@ route_to_request(M, {ok, Routes}, Opts) ->
 route_to_request(M, {error, Reason}, _Opts) ->
     {error, {no_viable_route, {reason, Reason}, {message, M}}}.
 
+
 %% @doc Turn a set of request arguments into a request message, formatted in the
 %% preferred format. This function honors the `accept-bundle' option, if it is
 %% already present in the message, and sets it to `true' if it is not.
@@ -259,28 +254,27 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     Message = hb_ao:normalize_keys(RawMessage, Opts),
     WithAcceptBundle =
         case hb_ao:get(<<"accept-bundle">>, Message, Opts) of
-            not_found -> Message#{ <<"accept-bundle">> => true };
+            not_found -> Message#{<<"accept-bundle">> => true};
             _ -> Message
         end,
     BinPeer = if is_binary(Peer) -> Peer; true -> list_to_binary(Peer) end,
     BinPath = hb_path:normalize(hb_path:to_binary(Path)),
-    ReqBase = #{ peer => BinPeer, path => BinPath, method => Method },
+    ReqBase = #{peer => BinPeer, path => BinPath, method => Method},
     case Format of
         <<"httpsig@1.0">> ->
             FullEncoding =
                 hb_message:convert(
-                    WithAcceptBundle,
-                    #{
-                        <<"device">> => <<"httpsig@1.0">>,
-                        <<"bundle">> => true
-                    },
-                    Opts
-                ),
+                  WithAcceptBundle,
+                  #{
+                    <<"device">> => <<"httpsig@1.0">>,
+                    <<"bundle">> => true
+                   },
+                  Opts),
             Body = hb_maps:get(<<"body">>, FullEncoding, <<>>, Opts),
             Headers = hb_maps:without([<<"body">>], FullEncoding, Opts),
-			?event(http, {request_headers, {explicit, {headers, Headers}}}),
-			?event(http, {request_body, {explicit, {body, Body}}}),
-            hb_maps:merge(ReqBase, #{ headers => Headers, body => Body }, Opts);
+            ?event(http, {request_headers, {explicit, {headers, Headers}}}),
+            ?event(http, {request_body, {explicit, {body, Body}}}),
+            hb_maps:merge(ReqBase, #{headers => Headers, body => Body}, Opts);
         <<"ans104@1.0">> ->
             ?event(debug_accept, {request_message, {message, Message}}),
             {ok, FilteredMessage} =
@@ -290,38 +284,35 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                         hb_message:with_only_committed(Message, Opts)
                 end,
             ReqBase#{
-                headers =>
-                    #{
-                        <<"codec-device">> => <<"ans104@1.0">>,
-                        <<"content-type">> => <<"application/ans104">>,
-                        <<"accept-bundle">> =>
-                            hb_util:bin(
-                                hb_ao:get(
-                                    <<"accept-bundle">>,
-                                    Message,
-                                    true,
-                                    Opts
-                                )
-                            )
-                    },
-                body =>
-                    ar_bundles:serialize(
-                        hb_message:convert(
-                            FilteredMessage,
-                            #{
-                                <<"device">> => <<"ans104@1.0">>,
-                                <<"bundle">> => true
-                            },
-                            Opts
-                        )
-                    )
-            };
+              headers =>
+                  #{
+                    <<"codec-device">> => <<"ans104@1.0">>,
+                    <<"content-type">> => <<"application/ans104">>,
+                    <<"accept-bundle">> =>
+                        hb_util:bin(
+                          hb_ao:get(
+                            <<"accept-bundle">>,
+                            Message,
+                            true,
+                            Opts))
+                   },
+              body =>
+                  ar_bundles:serialize(
+                    hb_message:convert(
+                      FilteredMessage,
+                      #{
+                        <<"device">> => <<"ans104@1.0">>,
+                        <<"bundle">> => true
+                       },
+                      Opts))
+             };
         _ ->
             ReqBase#{
-                headers => maps:without([<<"body">>], Message),
-                body => maps:get(<<"body">>, Message, <<>>)
-            }
+              headers => maps:without([<<"body">>], Message),
+              body => maps:get(<<"body">>, Message, <<>>)
+             }
     end.
+
 
 %% @doc Dispatch the same HTTP request to many nodes. Can be configured to
 %% await responses from all nodes or just one, and to halt all requests after
@@ -336,24 +327,24 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
 %%      /Parallel: Should we run the requests in parallel?
 multirequest(Config, Method, Path, Message, Opts) ->
     #{
-        nodes := Nodes,
-        responses := Responses,
-        stop_after := StopAfter,
-        accept_status := Statuses,
-        parallel := Parallel
-    } = multirequest_opts(Config, Message, Opts),
+      nodes := Nodes,
+      responses := Responses,
+      stop_after := StopAfter,
+      accept_status := Statuses,
+      parallel := Parallel
+     } = multirequest_opts(Config, Message, Opts),
     ?event(http,
-        {multirequest_opts_parsed,
+           {multirequest_opts_parsed,
             {config, Config},
-            {message, Message}
-        }),
+            {message, Message}}),
     AllResults =
-        if Parallel ->
-            parallel_multirequest(
-                Nodes, Responses, StopAfter, Method, Path, Message, Statuses, Opts);
-        true ->
-            serial_multirequest(
-                Nodes, Responses, Method, Path, Message, Statuses, Opts)
+        if
+            Parallel ->
+                parallel_multirequest(
+                  Nodes, Responses, StopAfter, Method, Path, Message, Statuses, Opts);
+            true ->
+                serial_multirequest(
+                  Nodes, Responses, Method, Path, Message, Statuses, Opts)
         end,
     ?event(http, {multirequest_results, {results, AllResults}}),
     case AllResults of
@@ -361,76 +352,75 @@ multirequest(Config, Method, Path, Message, Opts) ->
         Results -> if Responses == 1 -> hd(Results); true -> Results end
     end.
 
-%% @doc Get the multirequest options from the config or message. The options in 
+
+%% @doc Get the multirequest options from the config or message. The options in
 %% the message take precidence over the options in the config.
 multirequest_opts(Config, Message, Opts) ->
     Opts#{
-        nodes =>
-            multirequest_opt(<<"nodes">>, Config, Message, #{}, Opts),
-        responses =>
-            multirequest_opt(<<"responses">>, Config, Message, 1, Opts),
-        stop_after =>
-            multirequest_opt(<<"stop-after">>, Config, Message, true, Opts),
-        accept_status =>
-            multirequest_opt(<<"accept-status">>, Config, Message, <<"All">>, Opts),
-        parallel =>
-            multirequest_opt(<<"parallel">>, Config, Message, false, Opts)
-    }.
+      nodes =>
+          multirequest_opt(<<"nodes">>, Config, Message, #{}, Opts),
+      responses =>
+          multirequest_opt(<<"responses">>, Config, Message, 1, Opts),
+      stop_after =>
+          multirequest_opt(<<"stop-after">>, Config, Message, true, Opts),
+      accept_status =>
+          multirequest_opt(<<"accept-status">>, Config, Message, <<"All">>, Opts),
+      parallel =>
+          multirequest_opt(<<"parallel">>, Config, Message, false, Opts)
+     }.
+
 
 %% @doc Get a value for a multirequest option from the config or message.
 multirequest_opt(Key, Config, Message, Default, Opts) ->
     hb_ao:get_first(
-        [
-            {Message, <<"multirequest-", Key/binary>>},
-            {Config, Key}
-        ],
-        Default,
-        Opts#{ hashpath => ignore }
-    ).
+      [{Message, <<"multirequest-", Key/binary>>},
+       {Config, Key}],
+      Default,
+      Opts#{hashpath => ignore}).
+
 
 %% @doc Serially request a message, collecting responses until the required
 %% number of responses have been gathered. Ensure that the statuses are
 %% allowed, according to the configuration.
 serial_multirequest(_Nodes, 0, _Method, _Path, _Message, _Statuses, _Opts) -> [];
 serial_multirequest([], _, _Method, _Path, _Message, _Statuses, _Opts) -> [];
-serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Statuses, Opts) ->
+serial_multirequest([Node | Nodes], Remaining, Method, Path, Message, Statuses, Opts) ->
     {ErlStatus, Res} = request(Method, Node, Path, Message, Opts),
     BaseStatus = hb_ao:get(<<"status">>, Res, Opts),
     case (ErlStatus == ok) andalso allowed_status(BaseStatus, Statuses) of
         true ->
             ?event(http, {admissible_status, {response, Res}}),
-            [
-                {ErlStatus, Res}
-            |
-                serial_multirequest(Nodes, Remaining - 1, Method, Path, Message, Statuses, Opts)
-            ];
+            [{ErlStatus, Res} | serial_multirequest(Nodes, Remaining - 1, Method, Path, Message, Statuses, Opts)];
         false ->
             ?event(http, {inadmissible_status, {response, Res}}),
             serial_multirequest(Nodes, Remaining, Method, Path, Message, Statuses, Opts)
     end.
+
 
 %% @doc Dispatch the same HTTP request to many nodes in parallel.
 parallel_multirequest(Nodes, Responses, StopAfter, Method, Path, Message, Statuses, Opts) ->
     Ref = make_ref(),
     Parent = self(),
     Procs = lists:map(
-        fun(Node) ->
-            spawn(
-                fun() ->
-                    Res = request(Method, Node, Path, Message, Opts),
-                    receive no_reply -> stopping
-                    after 0 -> Parent ! {Ref, self(), Res}
-                    end
-                end
-            )
-        end,
-        Nodes
-    ),
+              fun(Node) ->
+                      spawn(
+                        fun() ->
+                                Res = request(Method, Node, Path, Message, Opts),
+                                receive
+                                    no_reply -> stopping
+                                after
+                                    0 ->
+                                        Parent ! {Ref, self(), Res}
+                                end
+                        end)
+              end,
+              Nodes),
     parallel_responses([], Procs, Ref, Responses, StopAfter, Statuses, Opts).
+
 
 %% @doc Check if a status is allowed, according to the configuration.
 allowed_status(_, <<"All">>) -> true;
-allowed_status(_ResponseMsg = #{ <<"status">> := Status }, Statuses) ->
+allowed_status(_ResponseMsg = #{<<"status">> := Status}, Statuses) ->
     allowed_status(Status, Statuses);
 allowed_status(Status, Statuses) when is_integer(Statuses) ->
     allowed_status(Status, [Statuses]);
@@ -439,11 +429,11 @@ allowed_status(Status, Statuses) when is_binary(Status) ->
 allowed_status(Status, Statuses) when is_binary(Statuses) ->
     % Convert the statuses to a list of integers.
     allowed_status(
-        Status,
-        lists:map(fun binary_to_integer/1, binary:split(Statuses, <<",">>))
-    );
+      Status,
+      lists:map(fun binary_to_integer/1, binary:split(Statuses, <<",">>)));
 allowed_status(Status, Statuses) when is_list(Statuses) ->
     lists:member(Status, Statuses).
+
 
 %% @doc Collect the necessary number of responses, and stop workers if
 %% configured to do so.
@@ -461,40 +451,42 @@ parallel_responses(Res, Procs, Ref, Awaiting, StopAfter, Statuses, Opts) ->
             case allowed_status(Status, Statuses) of
                 true ->
                     parallel_responses(
-                        [NewRes | Res],
-                        lists:delete(Pid, Procs),
-                        Ref,
-                        Awaiting - 1,
-                        StopAfter,
-                        Statuses,
-                        Opts
-                    );
+                      [NewRes | Res],
+                      lists:delete(Pid, Procs),
+                      Ref,
+                      Awaiting - 1,
+                      StopAfter,
+                      Statuses,
+                      Opts);
                 false ->
                     parallel_responses(
-                        Res,
-                        lists:delete(Pid, Procs),
-                        Ref,
-                        Awaiting,
-                        StopAfter,
-                        Statuses,
-                        Opts
-                    )
+                      Res,
+                      lists:delete(Pid, Procs),
+                      Ref,
+                      Awaiting,
+                      StopAfter,
+                      Statuses,
+                      Opts)
             end
     end.
+
 
 %% @doc Empty the inbox of the current process for all messages with the given
 %% reference.
 empty_inbox(Ref) ->
     receive {Ref, _} -> empty_inbox(Ref) after 0 -> ok end.
 
+
 %% @doc Reply to the client's HTTP request with a message.
 reply(Req, TABMReq, Message, Opts) ->
     Status =
         case hb_ao:get(<<"status">>, Message, Opts) of
             not_found -> 200;
-            S-> S
+            S -> S
         end,
     reply(Req, TABMReq, Status, Message, Opts).
+
+
 reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
     reply(Req, TABMReq, binary_to_integer(BinStatus), RawMessage, Opts);
 reply(Req, TABMReq, Status, RawMessage, Opts) ->
@@ -505,64 +497,60 @@ reply(Req, TABMReq, Status, RawMessage, Opts) ->
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
     EncodedHeaders = hb_private:reset(HeadersWithCors),
     ?event(http,
-        {http_replying,
+           {http_replying,
             {status, {explicit, Status}},
             {path, hb_maps:get(<<"path">>, Req, undefined_path, Opts)},
             {raw_message, RawMessage},
             {enc_headers, {explicit, EncodedHeaders}},
-            {enc_body, EncodedBody}
-        }
-    ),
+            {enc_body, EncodedBody}}),
     % Cowboy handles cookies in headers separately, so we need to manipulate
     % the request to set the cookies such that they will be sent over the wire
     % unmodified.
     SetCookiesReq =
         case hb_maps:get(<<"set-cookie">>, EncodedHeaders, undefined, Opts) of
-            undefined -> Req#{ resp_headers => EncodedHeaders };
+            undefined -> Req#{resp_headers => EncodedHeaders};
             Cookies ->
                 Req#{
-                    resp_headers => EncodedHeaders,
-                    resp_cookies => #{ <<"__HB_SET_COOKIE">> => Cookies }
-                }
+                  resp_headers => EncodedHeaders,
+                  resp_cookies => #{<<"__HB_SET_COOKIE">> => Cookies}
+                 }
         end,
     Req2 = cowboy_req:stream_reply(Status, #{}, SetCookiesReq),
     cowboy_req:stream_body(EncodedBody, nofin, Req2),
     EndTime = os:system_time(millisecond),
     ?event(http, {reply_headers, {explicit, {ok, Req2, no_state}}}),
     ?event(http_short,
-        {sent,
+           {sent,
             {status, Status},
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
             {method, cowboy_req:method(Req)},
             {path,
-                {string,
-                    uri_string:percent_decode(
-                        hb_ao:get(<<"path">>, TABMReq, <<"[NO PATH]">>, Opts)
-                    )
-                }
-            },
-            {body_size, byte_size(EncodedBody)}
-        }
-    ),
+             {string,
+              uri_string:percent_decode(
+                hb_ao:get(<<"path">>, TABMReq, <<"[NO PATH]">>, Opts))}},
+            {body_size, byte_size(EncodedBody)}}),
     {ok, Req2, no_state}.
+
 
 %% @doc Add permissive CORS headers to a message, if the message has not already
 %% specified CORS headers.
 add_cors_headers(Msg, ReqHdr, Opts) ->
     CorHeaders = #{
-        <<"access-control-allow-origin">> => <<"*">>,
-        <<"access-control-allow-methods">> => <<"GET, POST, PUT, DELETE, OPTIONS">>,
-        <<"access-control-expose-headers">> => <<"*">>
-    },
-     WithAllowHeaders = case ReqHdr of
-        <<>> -> CorHeaders;
-        _ -> CorHeaders#{
-             <<"access-control-allow-headers">> => ReqHdr
-        }
-    end,
-    % Keys in the given message will overwrite the defaults listed below if 
+                   <<"access-control-allow-origin">> => <<"*">>,
+                   <<"access-control-allow-methods">> => <<"GET, POST, PUT, DELETE, OPTIONS">>,
+                   <<"access-control-expose-headers">> => <<"*">>
+                  },
+    WithAllowHeaders = case ReqHdr of
+                           <<>> -> CorHeaders;
+                           _ ->
+                               CorHeaders#{
+                                 <<"access-control-allow-headers">> => ReqHdr
+                                }
+                       end,
+    % Keys in the given message will overwrite the defaults listed below if
     % included, due to `hb_maps:merge''s precidence order.
     hb_maps:merge(WithAllowHeaders, Msg, Opts).
+
 
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, Message, Opts) ->
@@ -570,24 +558,21 @@ encode_reply(Status, TABMReq, Message, Opts) ->
     ?event(http, {encoding_reply, {codec, Codec}, {message, Message}}),
     BaseHdrs =
         hb_maps:merge(
-            #{
-                <<"codec-device">> => Codec
-            },
-            case codec_to_content_type(Codec, Opts) of
-                    undefined -> #{};
-                    CT -> #{ <<"content-type">> => CT }
-            end,
-			Opts
-        ),
+          #{
+            <<"codec-device">> => Codec
+           },
+          case codec_to_content_type(Codec, Opts) of
+              undefined -> #{};
+              CT -> #{<<"content-type">> => CT}
+          end,
+          Opts),
     AcceptBundle =
         hb_util:atom(
-            hb_ao:get(
-                <<"accept-bundle">>,
-                {as, <<"message@1.0">>, TABMReq},
-                false,
-                Opts
-            )
-        ),
+          hb_ao:get(
+            <<"accept-bundle">>,
+            {as, <<"message@1.0">>, TABMReq},
+            false,
+            Opts)),
     % Codecs generally do not need to specify headers outside of the content-type,
     % aside the default `httpsig@1.0' codec, which expresses its form in HTTP
     % documents, and subsequently must set its own headers.
@@ -595,13 +580,11 @@ encode_reply(Status, TABMReq, Message, Opts) ->
         {404, <<"httpsig@1.0">>, false} ->
             {ok, ErrMsg} =
                 dev_hyperbuddy:return_file(
-                    <<"hyperbuddy@1.0">>,
-                    <<"404.html">>
-                ),
+                  <<"hyperbuddy@1.0">>,
+                  <<"404.html">>),
             {ok,
-                maps:without([<<"body">>], ErrMsg),
-                maps:get(<<"body">>, ErrMsg, <<>>)
-            };
+             maps:without([<<"body">>], ErrMsg),
+             maps:get(<<"body">>, ErrMsg, <<>>)};
         % {500, <<"httpsig@1.0">>, false} ->
         %     {ok, ErrMsg} =
         %         dev_hyperbuddy:return_file(
@@ -616,78 +599,66 @@ encode_reply(Status, TABMReq, Message, Opts) ->
         {_, <<"httpsig@1.0">>, _} ->
             TABM =
                 hb_message:convert(
-                    Message,
-                    tabm,
-                    <<"structured@1.0">>,
-                    Opts#{ topic => ao_internal }
-                ),
+                  Message,
+                  tabm,
+                  <<"structured@1.0">>,
+                  Opts#{topic => ao_internal}),
             {ok, EncMessage} =
                 dev_codec_httpsig:to(
-                    TABM,
-                    case AcceptBundle of
-                        true ->
-                            #{
-                                <<"bundle">> => true
-                            };
-                        false ->
-                            #{
-                                <<"index">> =>
-                                    hb_opts:get(generate_index, true, Opts)
-                            }
-                    end,
-                    Opts
-                ),
-            {
-                ok,
-                hb_maps:without([<<"body">>], EncMessage, Opts),
-                hb_maps:get(<<"body">>, EncMessage, <<>>, Opts)
-            };
+                  TABM,
+                  case AcceptBundle of
+                      true ->
+                          #{
+                            <<"bundle">> => true
+                           };
+                      false ->
+                          #{
+                            <<"index">> =>
+                                hb_opts:get(generate_index, true, Opts)
+                           }
+                  end,
+                  Opts),
+            {ok,
+             hb_maps:without([<<"body">>], EncMessage, Opts),
+             hb_maps:get(<<"body">>, EncMessage, <<>>, Opts)};
         {_, <<"ans104@1.0">>, _} ->
             % The `ans104@1.0' codec is a binary format, so we must serialize
             % the message to a binary before sending it.
-            {
-                ok,
-                BaseHdrs,
-                ar_bundles:serialize(
-                    hb_message:convert(
-                        hb_message:with_only_committers(
-                            Message,
-                            hb_message:signers(Message, Opts),
-							Opts
-                        ),
-                        #{
-                            <<"device">> => <<"ans104@1.0">>,
-                            <<"bundle">> =>
-                                hb_util:atom(
-                                    hb_ao:get(
-                                        <<"accept-bundle">>,
-                                        {as, <<"message@1.0">>, TABMReq},
-                                        true,
-                                        Opts
-                                    )
-                                )
-                        },
-                        <<"structured@1.0">>,
-                        Opts#{ topic => ao_internal }
-                    )
-                )
-            };
+            {ok,
+             BaseHdrs,
+             ar_bundles:serialize(
+               hb_message:convert(
+                 hb_message:with_only_committers(
+                   Message,
+                   hb_message:signers(Message, Opts),
+                   Opts),
+                 #{
+                   <<"device">> => <<"ans104@1.0">>,
+                   <<"bundle">> =>
+                       hb_util:atom(
+                         hb_ao:get(
+                           <<"accept-bundle">>,
+                           {as, <<"message@1.0">>, TABMReq},
+                           true,
+                           Opts))
+                  },
+                 <<"structured@1.0">>,
+                 Opts#{topic => ao_internal}))};
         _ ->
             % Other codecs are already in binary format, so we can just convert
-            % the message to the codec. We also include all of the top-level 
+            % the message to the codec. We also include all of the top-level
             % fields in the message and return them as headers.
             ExtraHdrs = hb_maps:filter(fun(_, V) -> not is_map(V) end, Message, Opts),
             ?event({extra_headers, {headers, {explicit, ExtraHdrs}}, {message, Message}}),
             {ok,
-                hb_maps:merge(BaseHdrs, ExtraHdrs, Opts),
-                hb_message:convert(
-                    Message,
-                    Codec,
-                    <<"structured@1.0">>,
-                    Opts#{ topic => ao_internal }
-                )
-            }
+             hb_maps:merge(BaseHdrs, ExtraHdrs, Opts),
+             hb_message:convert(
+               Message,
+               Codec,
+               <<"structured@1.0">>,
+               Opts#{topic => ao_internal})}
     end.
+
 
 %% @doc Calculate the codec name to use for a reply given its initiating Cowboy
 %% request, the parsed TABM request, and the response message. The precidence
@@ -700,11 +671,10 @@ encode_reply(Status, TABMReq, Message, Opts) ->
 accept_to_codec(TABMReq, Opts) ->
     AcceptCodec =
         hb_maps:get(
-            <<"accept-codec">>,
-            TABMReq,
-            mime_to_codec(hb_maps:get(<<"accept">>, TABMReq, <<"*/*">>), Opts),
-			Opts
-        ),
+          <<"accept-codec">>,
+          TABMReq,
+          mime_to_codec(hb_maps:get(<<"accept">>, TABMReq, <<"*/*">>), Opts),
+          Opts),
     case AcceptCodec of
         not_specified ->
             % We hold off until confirming that the codec is not directly in the
@@ -714,65 +684,68 @@ accept_to_codec(TABMReq, Opts) ->
         _ -> AcceptCodec
     end.
 
+
 %% @doc Find a codec name from a mime-type.
 mime_to_codec(<<"application/", Mime/binary>>, Opts) ->
     Name =
         case binary:match(Mime, <<"@">>) of
-            nomatch -> << Mime/binary, "@1.0" >>;
+            nomatch -> <<Mime/binary, "@1.0">>;
             _ -> Mime
         end,
-    try hb_ao:message_to_device(#{ <<"device">> => Name }, Opts)
-    catch _:Error ->
-        ?event(http, {accept_to_codec_error, {name, Name}, {error, Error}}),
-        default_codec(Opts)
+    try
+        hb_ao:message_to_device(#{<<"device">> => Name}, Opts)
+    catch
+        _:Error ->
+            ?event(http, {accept_to_codec_error, {name, Name}, {error, Error}}),
+            default_codec(Opts)
     end;
 mime_to_codec(<<"device/", Name/binary>>, _Opts) -> Name;
 mime_to_codec(_, _Opts) -> not_specified.
 
+
 %% @doc Return the default codec for the given options.
 default_codec(Opts) ->
     hb_opts:get(default_codec, <<"httpsig@1.0">>, Opts).
+
 
 %% @doc Call the `content-type' key on a message with the given codec, using
 %% a fast-path for options that are not needed for this one-time lookup.
 codec_to_content_type(Codec, Opts) ->
     FastOpts =
         Opts#{
-            hashpath => ignore,
-            cache_control => [<<"no-cache">>, <<"no-store">>],
-            cache_lookup_hueristics => false,
-            load_remote_devices => false,
-            error_strategy => continue
-        },
-    case hb_ao:get(<<"content-type">>, #{ <<"device">> => Codec }, FastOpts) of
+          hashpath => ignore,
+          cache_control => [<<"no-cache">>, <<"no-store">>],
+          cache_lookup_hueristics => false,
+          load_remote_devices => false,
+          error_strategy => continue
+         },
+    case hb_ao:get(<<"content-type">>, #{<<"device">> => Codec}, FastOpts) of
         not_found -> undefined;
         CT -> CT
     end.
+
 
 %% @doc Convert a cowboy request to a normalized message.
 req_to_tabm_singleton(Req, Body, Opts) ->
     case cowboy_req:header(<<"codec-device">>, Req, <<"httpsig@1.0">>) of
         <<"httpsig@1.0">> ->
-			?event({req_to_tabm_singleton, {request, {explicit, Req}, {body, {string, Body}}}}),
+            ?event({req_to_tabm_singleton, {request, {explicit, Req}, {body, {string, Body}}}}),
             httpsig_to_tabm_singleton(Req, Body, Opts);
         <<"ans104@1.0">> ->
             Item = ar_bundles:deserialize(Body),
             ?event(debug_accept,
-                {deserialized_ans104,
+                   {deserialized_ans104,
                     {item, Item},
-                    {exact, {explicit, Item}}
-                }
-            ),
+                    {exact, {explicit, Item}}}),
             case ar_bundles:verify_item(Item) of
                 true ->
                     ?event(ans104, {valid_ans104_signature, Item}),
                     ANS104 =
                         hb_message:convert(
-                            Item,
-                            <<"structured@1.0">>,
-                            <<"ans104@1.0">>,
-                            Opts
-                        ),
+                          Item,
+                          <<"structured@1.0">>,
+                          <<"ans104@1.0">>,
+                          Opts),
                     normalize_unsigned(Req, ANS104, Opts);
                 false ->
                     throw({invalid_ans104_signature, Item})
@@ -781,17 +754,14 @@ req_to_tabm_singleton(Req, Body, Opts) ->
             % Assume that the codec stores the encoded message in the `body' field.
             Decoded =
                 hb_message:convert(
-                    Body,
-                    <<"structured@1.0">>,
-                    Codec,
-                    Opts
-                ),
+                  Body,
+                  <<"structured@1.0">>,
+                  Codec,
+                  Opts),
             ?event(
-                {verifying_encoded_message,
-                    {body, {string, Body}},
-                    {decoded, Decoded}
-                }
-            ),
+              {verifying_encoded_message,
+               {body, {string, Body}},
+               {decoded, Decoded}}),
             case hb_message:verify(Decoded, all) of
                 true ->
                     normalize_unsigned(Req, Decoded, Opts);
@@ -800,22 +770,21 @@ req_to_tabm_singleton(Req, Body, Opts) ->
             end
     end.
 
+
 %% @doc HTTPSig messages are inherently mixed into the transport layer, so they
 %% require special handling in order to be converted to a normalized message.
-%% In particular, the signatures are verified if present and required by the 
+%% In particular, the signatures are verified if present and required by the
 %% node configuration. Additionally, non-committed fields are removed from the
 %% message if it is signed, with the exception of the `path' and `method' fields.
-httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
+httpsig_to_tabm_singleton(Req = #{headers := RawHeaders}, Body, Opts) ->
     {ok, SignedMsg} =
         hb_message:with_only_committed(
-            hb_message:convert(
-                RawHeaders#{ <<"body">> => Body },
-                <<"structured@1.0">>,
-                <<"httpsig@1.0">>,
-                Opts
-            ),
-            Opts
-        ),
+          hb_message:convert(
+            RawHeaders#{<<"body">> => Body},
+            <<"structured@1.0">>,
+            <<"httpsig@1.0">>,
+            Opts),
+          Opts),
     ForceSignedRequests = hb_opts:get(force_signed_requests, false, Opts),
     case (not ForceSignedRequests) orelse hb_message:verify(SignedMsg, all, Opts) of
         true ->
@@ -826,28 +795,26 @@ httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
                     ?event(http_verify, {storing_signed_from_wire, SignedMsg}),
                     {ok, _} =
                         hb_cache:write(SignedMsg,
-                            Opts#{
-                                store =>
-                                    #{
-                                        <<"store-module">> => hb_store_fs,
-                                        <<"name">> => <<"cache-http">>
-                                    }
-                            }
-                        );
+                                       Opts#{
+                                         store =>
+                                             #{
+                                               <<"store-module">> => hb_store_fs,
+                                               <<"name">> => <<"cache-http">>
+                                              }
+                                        });
                 false ->
                     do_nothing
             end,
             normalize_unsigned(Req, SignedMsg, Opts);
         false ->
             ?event(http_verify,
-                {invalid_signature,
+                   {invalid_signature,
                     {raw, RawHeaders},
                     {signed, SignedMsg},
-                    {force, ForceSignedRequests}
-                }
-            ),
+                    {force, ForceSignedRequests}}),
             throw({invalid_signature, SignedMsg})
     end.
+
 
 %% @doc Add the method and path to a message, if they are not already present.
 %% Remove browser-added fields that are unhelpful during processing (for example,
@@ -855,39 +822,35 @@ httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
 %% The precidence order for finding the path is:
 %% 1. The path in the message
 %% 2. The path in the request URI
-normalize_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
+normalize_unsigned(Req = #{headers := RawHeaders}, Msg, Opts) ->
     ?event({adding_method_and_path_from_request, {explicit, Req}}),
     Method = cowboy_req:method(Req),
     MsgPath =
         hb_ao:get(
+          <<"path">>,
+          Msg,
+          maps:get(
             <<"path">>,
-            Msg,
-            maps:get(
-                <<"path">>, 
-                RawHeaders,
-                iolist_to_binary(
-                    cowboy_req:uri(
-                        Req,
-                        #{
-                            host => undefined,
-                            port => undefined,
-                            scheme => undefined
-                        }
-                    )
-                )
-            ),
-            Opts
-        ),
+            RawHeaders,
+            iolist_to_binary(
+              cowboy_req:uri(
+                Req,
+                #{
+                  host => undefined,
+                  port => undefined,
+                  scheme => undefined
+                 }))),
+          Opts),
     (remove_unless_signed([<<"content-length">>], Msg, Opts))#{
-        <<"method">> => Method,
-        <<"path">> => MsgPath,
-        <<"accept-bundle">> =>
-            maps:get(
-                <<"accept-bundle">>,
-                Msg,
-                maps:get(<<"accept-bundle">>, RawHeaders, false)
-            )
-    }.
+      <<"method">> => Method,
+      <<"path">> => MsgPath,
+      <<"accept-bundle">> =>
+          maps:get(
+            <<"accept-bundle">>,
+            Msg,
+            maps:get(<<"accept-bundle">>, RawHeaders, false))
+     }.
+
 
 %% @doc Remove all keys from the message unless they are signed.
 remove_unless_signed(Key, Msg, Opts) when not is_list(Key) ->
@@ -895,60 +858,68 @@ remove_unless_signed(Key, Msg, Opts) when not is_list(Key) ->
 remove_unless_signed(Keys, Msg, Opts) ->
     SignedKeys = hb_message:committed(Msg, all, Opts),
     maps:without(
-        lists:filter(fun(K) -> not lists:member(K, SignedKeys) end, Keys),
-        Msg
-    ).
+      lists:filter(fun(K) -> not lists:member(K, SignedKeys) end, Keys),
+      Msg).
+
 
 %%% Tests
 
+
 simple_ao_resolve_unsigned_test() ->
     URL = hb_http_server:start_node(),
-    TestMsg = #{ <<"path">> => <<"/key1">>, <<"key1">> => <<"Value1">> },
+    TestMsg = #{<<"path">> => <<"/key1">>, <<"key1">> => <<"Value1">>},
     ?assertEqual({ok, <<"Value1">>}, post(URL, TestMsg, #{})).
+
 
 simple_ao_resolve_signed_test() ->
     URL = hb_http_server:start_node(),
-    TestMsg = #{ <<"path">> => <<"/key1">>, <<"key1">> => <<"Value1">> },
+    TestMsg = #{<<"path">> => <<"/key1">>, <<"key1">> => <<"Value1">>},
     Wallet = hb:wallet(),
     {ok, Res} =
         post(
-            URL,
-            hb_message:commit(TestMsg, Wallet),
-            #{}
-        ),
+          URL,
+          hb_message:commit(TestMsg, Wallet),
+          #{}),
     ?assertEqual(<<"Value1">>, Res).
+
 
 nested_ao_resolve_test() ->
     URL = hb_http_server:start_node(),
     Wallet = hb:wallet(),
     {ok, Res} =
         post(
-            URL,
-            hb_message:commit(#{
-                <<"path">> => <<"/key1/key2/key3">>,
-                <<"key1">> =>
-                    #{<<"key2">> =>
-                        #{
-                            <<"key3">> => <<"Value2">>
-                        }
-                    }
-            }, Wallet),
-            #{}
-        ),
+          URL,
+          hb_message:commit(#{
+                              <<"path">> => <<"/key1/key2/key3">>,
+                              <<"key1">> =>
+                                  #{
+                                    <<"key2">> =>
+                                        #{
+                                          <<"key3">> => <<"Value2">>
+                                         }
+                                   }
+                             },
+                            Wallet),
+          #{}),
     ?assertEqual(<<"Value2">>, Res).
+
 
 wasm_compute_request(ImageFile, Func, Params) ->
     wasm_compute_request(ImageFile, Func, Params, <<"">>).
+
+
 wasm_compute_request(ImageFile, Func, Params, ResultPath) ->
     {ok, Bin} = file:read_file(ImageFile),
     Wallet = hb:wallet(),
     hb_message:commit(#{
-        <<"path">> => <<"/init/compute/results", ResultPath/binary>>,
-        <<"device">> => <<"WASM-64@1.0">>,
-        <<"function">> => Func,
-        <<"parameters">> => Params,
-        <<"body">> => Bin
-    }, Wallet).
+                        <<"path">> => <<"/init/compute/results", ResultPath/binary>>,
+                        <<"device">> => <<"WASM-64@1.0">>,
+                        <<"function">> => Func,
+                        <<"parameters">> => Params,
+                        <<"body">> => Bin
+                       },
+                      Wallet).
+
 
 run_wasm_unsigned_test() ->
     Node = hb_http_server:start_node(#{force_signed => false}),
@@ -957,12 +928,14 @@ run_wasm_unsigned_test() ->
     ?event({res, Res}),
     ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, #{})).
 
+
 run_wasm_signed_test() ->
-    Opts = #{ priv_wallet => hb:wallet() },
+    Opts = #{priv_wallet => hb:wallet()},
     URL = hb_http_server:start_node(#{force_signed => true}),
     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>),
     {ok, Res} = post(URL, hb_message:commit(Msg, Opts), Opts),
     ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, #{})).
+
 
 get_deep_unsigned_wasm_state_test() ->
     URL = hb_http_server:start_node(#{force_signed => false}),
@@ -970,52 +943,56 @@ get_deep_unsigned_wasm_state_test() ->
     {ok, Res} = post(URL, Msg, #{}),
     ?assertEqual(6.0, hb_ao:get(<<"/output/1">>, Res, #{})).
 
+
 get_deep_signed_wasm_state_test() ->
     URL = hb_http_server:start_node(#{force_signed => true}),
     Msg =
         wasm_compute_request(
-            <<"test/test-64.wasm">>,
-            <<"fac">>,
-            [3.0],
-            <<"/output">>
-        ),
+          <<"test/test-64.wasm">>,
+          <<"fac">>,
+          [3.0],
+          <<"/output">>),
     {ok, Res} = post(URL, Msg, #{}),
     ?assertEqual(6.0, hb_ao:get(<<"1">>, Res, #{})).
+
 
 cors_get_test() ->
     URL = hb_http_server:start_node(),
     {ok, Res} = get(URL, <<"/~meta@1.0/info">>, #{}),
     ?assertEqual(
-        <<"*">>,
-        hb_ao:get(<<"access-control-allow-origin">>, Res, #{})
-    ).
+      <<"*">>,
+      hb_ao:get(<<"access-control-allow-origin">>, Res, #{})).
+
 
 ans104_wasm_test() ->
     URL = hb_http_server:start_node(#{force_signed => true}),
     {ok, Bin} = file:read_file(<<"test/test-64.wasm">>),
     Wallet = hb:wallet(),
     Msg = hb_message:commit(#{
-        <<"accept-codec">> => <<"ans104@1.0">>,
-        <<"codec-device">> => <<"ans104@1.0">>,
-        <<"device">> => <<"WASM-64@1.0">>,
-        <<"function">> => <<"fac">>,
-        <<"parameters">> => [3.0],
-        <<"body">> => Bin
-    }, Wallet, #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }),
+                              <<"accept-codec">> => <<"ans104@1.0">>,
+                              <<"codec-device">> => <<"ans104@1.0">>,
+                              <<"device">> => <<"WASM-64@1.0">>,
+                              <<"function">> => <<"fac">>,
+                              <<"parameters">> => [3.0],
+                              <<"body">> => Bin
+                             },
+                            Wallet,
+                            #{<<"device">> => <<"ans104@1.0">>, <<"bundle">> => true}),
     ?assert(hb_message:verify(Msg, all, #{})),
     ?event({msg, Msg}),
-    {ok, Res} = post(URL, Msg#{ <<"path">> => <<"/init/compute/results">> }, #{}),
+    {ok, Res} = post(URL, Msg#{<<"path">> => <<"/init/compute/results">>}, #{}),
     ?event({res, Res}),
     ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, #{})).
 
+
 send_large_signed_request_test() ->
-    % Note: If the signature scheme ever changes, we will need to run the 
+    % Note: If the signature scheme ever changes, we will need to run the
     % following to get a freshly signed request.
     %    file:write_file(
     %        "test/large-message.eterm",
     %        hb_util:bin(
     %            io_lib:format(
-    %               "~p.", 
+    %               "~p.",
     %                [
     %                    hb_cache:ensure_all_loaded(hb_message:commit(
     %                        hb_message:uncommitted(hd(hb_util:ok(
@@ -1029,39 +1006,37 @@ send_large_signed_request_test() ->
     %    ).
     {ok, [Req]} = file:consult(<<"test/large-message.eterm">>),
     % Get the short trace length from the node message in the large, stored
-    % request. 
+    % request.
     ?assertMatch(
-        {ok, 5},
-        post(
-            hb_http_server:start_node(),
-            <<"/node-message/short_trace_len">>,
-            Req,
-            #{ http_client => httpc }
-        )
-    ).
+      {ok, 5},
+      post(
+        hb_http_server:start_node(),
+        <<"/node-message/short_trace_len">>,
+        Req,
+        #{http_client => httpc})).
+
 
 index_test() ->
     NodeURL = hb_http_server:start_node(),
     {ok, Res} =
         get(
-            NodeURL,
-            #{
-                <<"path">> => <<"/~test-device@1.0/load">>,
-                <<"accept-bundle">> => false
-            },
-            #{}
-        ),
+          NodeURL,
+          #{
+            <<"path">> => <<"/~test-device@1.0/load">>,
+            <<"accept-bundle">> => false
+           },
+          #{}),
     ?assertEqual(<<"i like turtles!">>, hb_ao:get(<<"body">>, Res, #{})).
+
 
 index_request_test() ->
     URL = hb_http_server:start_node(),
     {ok, Res} =
         get(
-            URL,
-            #{
-                <<"path">> => <<"/~test-device@1.0/load?name=dogs">>,
-                <<"accept-bundle">> => false
-            },
-            #{}
-        ),
+          URL,
+          #{
+            <<"path">> => <<"/~test-device@1.0/load?name=dogs">>,
+            <<"accept-bundle">> => false
+           },
+          #{}),
     ?assertEqual(<<"i like dogs!">>, hb_ao:get(<<"body">>, Res, #{})).

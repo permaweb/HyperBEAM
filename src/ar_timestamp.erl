@@ -6,6 +6,7 @@
 %%% A simple Erlang server that caches the current Arweave timestamp and
 %%% refreshes it periodically.
 
+
 %% @doc Check if the server is already running, and if not, start it.
 start() ->
     ?event(starting_ar_timestamp_server),
@@ -18,6 +19,7 @@ start() ->
             end
     end.
 
+
 %% @doc Spawn a new server and its refresher.
 spawn_server() ->
     TSServer =
@@ -25,6 +27,7 @@ spawn_server() ->
     spawn(fun() -> refresher(TSServer) end),
     register(?MODULE, TSServer),
     TSServer.
+
 
 %% @doc Get the current timestamp from the server, starting the server if it
 %% isn't already running.
@@ -40,6 +43,7 @@ get() ->
             Timestamp
     end.
 
+
 %% @doc Cache the current timestamp from Arweave.
 cache(Current) ->
     ?event(cache_waiting),
@@ -54,12 +58,13 @@ cache(Current) ->
             cache(New)
     end.
 
+
 %% @doc Refresh the timestamp cache periodically.
 refresher(TSServer) ->
     timer:sleep(?TIMEOUT),
     TS =
         case hb_opts:get(mode) of
-            debug -> { 0, 0, << 0:256 >> };
+            debug -> {0, 0, <<0:256>>};
             prod -> hb_client:arweave_timestamp()
         end,
     TSServer ! {refresh, TS},

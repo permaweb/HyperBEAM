@@ -6,8 +6,10 @@
 -module(hb_name).
 -export([start/0, register/1, register/2, unregister/1, lookup/1, all/0]).
 -include("include/hb.hrl").
+
 -include_lib("eunit/include/eunit.hrl").
 -define(NAME_TABLE, hb_name_registry).
+
 
 %% Initialize ETS table for non-atom registrations
 start() ->
@@ -18,16 +20,17 @@ start() ->
         error:badarg -> start_ets()
     end.
 
+
 %% Start the ETS table.
 start_ets() ->
-    ets:new(?NAME_TABLE, [
-        named_table,
-        public,
-        {keypos, 1},
-        {write_concurrency, true}, % Safe as key-writes are atomic.
-        {read_concurrency, true}
-    ]),
+    ets:new(?NAME_TABLE,
+            [named_table,
+             public,
+             {keypos, 1},
+             {write_concurrency, true},  % Safe as key-writes are atomic.
+             {read_concurrency, true}]),
     ok.
+
 
 %%% @doc Register a name. If the name is already registered, the registration
 %%% will fail. The name can be any Erlang term.
@@ -35,11 +38,12 @@ register(Name) ->
     start(),
     ?MODULE:register(Name, self()).
 
+
 register(Name, Pid) when is_atom(Name) ->
     try erlang:register(Name, Pid) of
         true -> ok
     catch
-        error:badarg -> error % Name already registered
+        error:badarg -> error  % Name already registered
     end;
 register(Name, Pid) ->
     start(),
@@ -47,6 +51,7 @@ register(Name, Pid) ->
         true -> ok;
         false -> error
     end.
+
 
 %%% @doc Unregister a name.
 unregister(Name) when is_atom(Name) ->
@@ -57,6 +62,7 @@ unregister(Name) ->
     start(),
     ets:delete(?NAME_TABLE, Name),
     ok.
+
 
 %%% @doc Lookup a name -> PID.
 lookup(Name) when is_atom(Name) ->
@@ -71,39 +77,41 @@ lookup(Name) ->
     start(),
     ets_lookup(Name).
 
+
 ets_lookup(Name) ->
     case ets:lookup(?NAME_TABLE, Name) of
-        [{Name, Pid}] -> 
+        [{Name, Pid}] ->
             case is_process_alive(Pid) of
                 true -> Pid;
-                false -> 
+                false ->
                     ets:delete(?NAME_TABLE, Name),
                     undefined
             end;
         [] -> undefined
     end.
 
+
 %% @doc List the names in the registry.
 all() ->
-    Registered = 
+    Registered =
         ets:tab2list(?NAME_TABLE) ++
-            lists:filtermap(
-                fun(Name) ->
-                    case whereis(Name) of
-                        undefined -> false;
-                        Pid -> {true, {Name, Pid}}
-                    end
-                end,
-                erlang:registered()
-            ),
+        lists:filtermap(
+          fun(Name) ->
+                  case whereis(Name) of
+                      undefined -> false;
+                      Pid -> {true, {Name, Pid}}
+                  end
+          end,
+          erlang:registered()),
     lists:filter(
-        fun({_, Pid}) -> is_process_alive(Pid) end,
-        Registered
-    ).
+      fun({_, Pid}) -> is_process_alive(Pid) end,
+      Registered).
+
 
 %%% Tests
 
 -define(CONCURRENT_REGISTRATIONS, 10).
+
 
 basic_test(Term) ->
     ?assertEqual(ok, hb_name:register(Term)),
@@ -112,15 +120,18 @@ basic_test(Term) ->
     hb_name:unregister(Term),
     ?assertEqual(undefined, hb_name:lookup(Term)).
 
+
 atom_test() ->
     basic_test(atom).
+
 
 term_test() ->
     basic_test({term, os:timestamp()}).
 
+
 concurrency_test() ->
     Name = {concurrent_test, os:timestamp()},
-    SuccessCount = length([R || R <- spawn_test_workers(Name), R =:= ok]),
+    SuccessCount = length([ R || R <- spawn_test_workers(Name), R =:= ok ]),
     ?assertEqual(1, SuccessCount),
     ?assert(is_pid(hb_name:lookup(Name))),
     hb_name:unregister(Name).
@@ -129,32 +140,23 @@ concurrency_test() ->
 spawn_test_workers(Name) ->
     Self = self(),
     Names =
-        [
-            case Name of
-                random -> {random_name, rand:uniform(1000000)};
-                _ -> Name
-            end
-        ||
-            _ <- lists:seq(1, ?CONCURRENT_REGISTRATIONS)
-        ],
+        [ case Name of
+              random -> {random_name, rand:uniform(1000000)};
+              _ -> Name
+          end
+          || _ <- lists:seq(1, ?CONCURRENT_REGISTRATIONS) ],
     Pids =
-        [
-            spawn(
-                fun() ->
+        [ spawn(
+            fun() ->
                     Result = hb_name:register(ProcName),
                     Self ! {result, self(), Result},
                     % Stay alive to prevent cleanup for a period.
                     timer:sleep(500)
-                end
-            )
-        ||
-            ProcName <- Names
-        ],
-    [
-        receive {result, Pid, Res} -> Res after 100 -> timeout end
-    ||
-        Pid <- Pids
-    ].
+            end)
+          || ProcName <- Names ],
+    [ receive {result, Pid, Res} -> Res after 100 -> timeout end
+      || Pid <- Pids ].
+
 
 dead_process_test() ->
     Name = {dead_process_test, os:timestamp()},
@@ -162,26 +164,27 @@ dead_process_test() ->
     receive {'DOWN', Ref, process, Pid, _} -> ok end,
     ?assertEqual(undefined, hb_name:lookup(Name)).
 
+
 cleanup_test() ->
     {setup,
-        fun() ->
-            Name = {cleanup_test, os:timestamp()},
-            {Pid, Ref} = spawn_monitor(fun() -> timer:sleep(1000) end),
-            ?assertEqual(ok, hb_name:register(Name, Pid)),
-            {Name, Pid, Ref}
-        end,
-        fun({Name, _, _}) ->
-            hb_name:unregister(Name)
-        end,
-        fun({Name, Pid, Ref}) ->
-            {"Auto-cleanup on process death",
-            fun() ->
-                exit(Pid, kill),
-                receive {'DOWN', Ref, process, Pid, _} -> ok end,
-                ?assertEqual(undefined, wait_for_cleanup(Name, 10))
-            end}
-        end
-    }.
+     fun() ->
+             Name = {cleanup_test, os:timestamp()},
+             {Pid, Ref} = spawn_monitor(fun() -> timer:sleep(1000) end),
+             ?assertEqual(ok, hb_name:register(Name, Pid)),
+             {Name, Pid, Ref}
+     end,
+     fun({Name, _, _}) ->
+             hb_name:unregister(Name)
+     end,
+     fun({Name, Pid, Ref}) ->
+             {"Auto-cleanup on process death",
+              fun() ->
+                      exit(Pid, kill),
+                      receive {'DOWN', Ref, process, Pid, _} -> ok end,
+                      ?assertEqual(undefined, wait_for_cleanup(Name, 10))
+              end}
+     end}.
+
 
 wait_for_cleanup(Name, Retries) ->
     case Retries > 0 of
@@ -194,6 +197,7 @@ wait_for_cleanup(Name, Retries) ->
             end;
         false -> undefined
     end.
+
 
 all_test() ->
     hb_name:register(test_name, self()),

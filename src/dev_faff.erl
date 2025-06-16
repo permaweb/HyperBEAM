@@ -1,9 +1,9 @@
 %%% @doc A module that implements a 'friends and family' pricing policy.
 %%% It will allow users to process requests only if their addresses are
 %%% in the allow-list for the node.
-%%% 
+%%%
 %%% Fundamentally against the spirit of permissionlessness, but it is useful if
-%%% you are running a node for your own purposes and would not like to allow 
+%%% you are running a node for your own purposes and would not like to allow
 %%% others to make use of it -- even for a fee. It also serves as a useful
 %%% example of how to implement a custom pricing policy, as it implements stubs
 %%% for both the pricing and ledger P4 APIs.
@@ -20,6 +20,7 @@
 -export([charge/3]).
 -include("include/hb.hrl").
 
+
 %% @doc Decide whether or not to service a request from a given address.
 estimate(_, Msg, NodeMsg) ->
     ?event(payment, {estimate, {msg, Msg}}),
@@ -29,6 +30,7 @@ estimate(_, Msg, NodeMsg) ->
         false -> {ok, <<"infinity">>}
     end.
 
+
 %% @doc Check whether all of the signers of the request are in the allow-list.
 is_admissible(Msg, NodeMsg) ->
     AllowList = hb_opts:get(faff_allow_list, [], NodeMsg),
@@ -36,9 +38,9 @@ is_admissible(Msg, NodeMsg) ->
     Signers = hb_message:signers(Req, NodeMsg),
     ?event(payment, {is_admissible, {signers, Signers}, {allow_list, AllowList}}),
     lists:all(
-        fun(Signer) -> lists:member(Signer, AllowList) end,
-        Signers
-    ).
+      fun(Signer) -> lists:member(Signer, AllowList) end,
+      Signers).
+
 
 %% @doc Charge the user's account if the request is allowed.
 charge(_, Req, _NodeMsg) ->

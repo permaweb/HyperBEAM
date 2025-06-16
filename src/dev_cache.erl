@@ -5,13 +5,15 @@
 -module(dev_cache).
 -export([read/3, write/3, link/3]).
 -include("include/hb.hrl").
+
 -include_lib("eunit/include/eunit.hrl").
+
 
 %% @doc Read data from the cache.
 %% Retrieves data corresponding to a key from a local store.
 %% The key is extracted from the incoming message under &lt;&lt;"target"&gt;&gt;.
 %% The options map may include store configuration.
-%% If the "accept" header is set to &lt;&lt;"application/aos-2"&gt;&gt;, the result is 
+%% If the "accept" header is set to &lt;&lt;"application/aos-2"&gt;&gt;, the result is
 %% converted to a JSON structure and encoded.
 %%
 %% @param M1 Ignored parameter.
@@ -30,19 +32,16 @@ read(_M1, M2, Opts) ->
             ?event({read, {cache_result, ok, Res}}),
             case hb_ao:get(<<"accept">>, M2, Opts) of
                 <<"application/aos-2">> ->
-                    ?event(dev_cache, 
-						{read, 
-							{accept_header, <<"application/aos-2">>}
-						}
-					),
+                    ?event(dev_cache,
+                           {read,
+                            {accept_header, <<"application/aos-2">>}}),
                     JSONMsg = dev_json_iface:message_to_json_struct(Res, Opts),
                     ?event(dev_cache, {read, {json_message, JSONMsg}}),
                     {ok,
-                        #{
-                            <<"body">> => hb_json:encode(JSONMsg),
-                            <<"content-type">> => <<"application/aos-2">>
-                        }
-					};
+                     #{
+                       <<"body">> => hb_json:encode(JSONMsg),
+                       <<"content-type">> => <<"application/aos-2">>
+                      }};
                 _ ->
                     {ok, Res}
             end;
@@ -54,6 +53,7 @@ read(_M1, M2, Opts) ->
             ?event(dev_cache, {read, {location, Location}, {store, Store}}),
             hb_store:read(Store, Location)
     end.
+
 
 %% @doc Write data to the cache.
 %% Processes a write request by first verifying that the request comes from a
@@ -80,31 +80,29 @@ write(_M1, M2, Opts) ->
                 <<"batch">> ->
                     ?event(dev_cache, {write, {write_batch_called}}),
                     hb_maps:map(
-                        fun(_, Value) ->
-                            ?event(dev_cache, {write, {batch_item, Value}}),
-                            write_single(Value, Opts)
-                        end,
-                        hb_ao:get(<<"body">>, M2, Opts),
-                        Opts
-                    );
+                      fun(_, Value) ->
+                              ?event(dev_cache, {write, {batch_item, Value}}),
+                              write_single(Value, Opts)
+                      end,
+                      hb_ao:get(<<"body">>, M2, Opts),
+                      Opts);
                 _ ->
                     ?event(dev_cache, {write, {invalid_write_type, Type}}),
                     {error,
-                        #{
-                            <<"status">> => 400,
-                            <<"body">> => <<"Invalid write type.">>
-                        }
-                    }
+                     #{
+                       <<"status">> => 400,
+                       <<"body">> => <<"Invalid write type.">>
+                      }}
             end;
         false ->
             ?event(dev_cache, {write, {trusted_writer, false}}),
             {error,
-                #{
-                    <<"status">> => 403,
-                    <<"body">> => <<"Not authorized to write to the cache.">>
-                }
-            }
+             #{
+               <<"status">> => 403,
+               <<"body">> => <<"Not authorized to write to the cache.">>
+              }}
     end.
+
 
 %% @doc Link a source to a destination in the cache.
 link(_Base, Req, Opts) ->
@@ -113,13 +111,15 @@ link(_Base, Req, Opts) ->
             Source = hb_ao:get(<<"source">>, Req, Opts),
             Destination = hb_ao:get(<<"destination">>, Req, Opts),
             write_single(#{
-                <<"operation">> => <<"link">>,
-                <<"source">> => Source,
-                <<"destination">> => Destination
-            }, Opts);
+                           <<"operation">> => <<"link">>,
+                           <<"source">> => Source,
+                           <<"destination">> => Destination
+                          },
+                         Opts);
         false ->
             {error, not_authorized}
     end.
+
 
 %% @doc Helper function to write a single data item to the cache.
 %% Extracts the body, location, and operation from the message.
@@ -141,43 +141,38 @@ write_single(Msg, Opts) ->
         {<<"write">>, not_found, _} ->
             ?event(dev_cache, {write_single, {error, "No body to write"}}),
             {error,
-                #{
-                    <<"status">> => 400,
-                    <<"body">> => <<"No body to write.">>
-                }
-            };
+             #{
+               <<"status">> => 400,
+               <<"body">> => <<"No body to write.">>
+              }};
         {<<"write">>, Binary, not_found} when is_binary(Binary) ->
             % When asked to write only a binary, we do not calculate any
             % alternative IDs.
-            ?event(dev_cache, 
-				{write_single, 
-					{processing_binary, Binary, Location}
-				}
-			),
+            ?event(dev_cache,
+                   {write_single,
+                    {processing_binary, Binary, Location}}),
             {ok, Path} = hb_cache:write(Binary, Opts),
             ?event(dev_cache, {write_single, {binary_written, Path}}),
-            {ok, #{ <<"status">> => 200, <<"path">> => Path }};
+            {ok, #{<<"status">> => 200, <<"path">> => Path}};
         {<<"link">>, _, _} ->
             ?event(dev_cache, {write_single, {processing_link}}),
             Source = hb_ao:get(<<"source">>, Msg, Opts),
             Destination = hb_ao:get(<<"destination">>, Msg, Opts),
-            ?event(dev_cache, 
-				{write_single, 
-					{link_params, Source, Destination}
-				}
-			),
+            ?event(dev_cache,
+                   {write_single,
+                    {link_params, Source, Destination}}),
             ok = hb_cache:link(Source, Destination, Opts),
             ?event(dev_cache, {write_single, {link_success}}),
-            {ok, #{ <<"status">> => 200 }};
+            {ok, #{<<"status">> => 200}};
         _ ->
             ?event(dev_cache, {write_single, {error, <<"Invalid write type">>}}),
             {error,
-                #{
-                    <<"status">> => 400,
-                    <<"body">> => <<"Invalid write type.">>
-                }
-            }
+             #{
+               <<"status">> => 400,
+               <<"body">> => <<"Invalid write type.">>
+              }}
     end.
+
 
 %% @doc Verify that the request originates from a trusted writer.
 %% Checks that the single signer of the request is present in the list
@@ -202,9 +197,11 @@ is_trusted_writer(Req, Opts) ->
             false
     end.
 
+
 %%%--------------------------------------------------------------------
 %%% Test Helpers
 %%%--------------------------------------------------------------------
+
 
 %% @doc Create a test environment with a local store and node.
 %% Ensures that the required application is started, configures a local
@@ -220,36 +217,33 @@ setup_test_env() ->
     ?event(dev_cache, {setup_test_env, {start, StorePrefix}}),
     application:ensure_all_started(hb),
     ?event(dev_cache, {setup_test_env, {hb_started}}),
-    LocalStore = 
-		#{ <<"store-module">> => hb_store_fs, <<"name">> => StorePrefix },
+    LocalStore =
+        #{<<"store-module">> => hb_store_fs, <<"name">> => StorePrefix},
     ?event(dev_cache, {setup_test_env, {local_store_configured, LocalStore}}),
     hb_store:reset(LocalStore),
     ?event(dev_cache, {setup_test_env, {store_reset}}),
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     ?event(dev_cache, {setup_test_env, {address, Address}}),
-    Node = hb_http_server:start_node(#{ 
-        cache_control => [<<"no-cache">>, <<"no-store">>],
-        store => LocalStore,
-        cache_writers => [
-			Address,
-			hb_util:human_id(ar_wallet:to_address(hb:wallet()))
-		],
-        store_all_signed => false
-    }),
+    Node = hb_http_server:start_node(#{
+                                       cache_control => [<<"no-cache">>, <<"no-store">>],
+                                       store => LocalStore,
+                                       cache_writers => [Address,
+                                                         hb_util:human_id(ar_wallet:to_address(hb:wallet()))],
+                                       store_all_signed => false
+                                      }),
     ?event(dev_cache, {setup_test_env, {node_started, Node}}),
     TestOpts = #{
-        cache_control => [<<"no-cache">>, <<"no-store">>],
-        store_all_signed => false,
-        store => [
-            #{
-                <<"store-module">> => hb_store_remote_node,
-                <<"node">> => Node,
-                priv_wallet => Wallet
-            }
-	    ]
-    },
+                 cache_control => [<<"no-cache">>, <<"no-store">>],
+                 store_all_signed => false,
+                 store => [#{
+                             <<"store-module">> => hb_store_remote_node,
+                             <<"node">> => Node,
+                             priv_wallet => Wallet
+                            }]
+                },
     {ok, TestOpts, [LocalStore, Wallet, Address, Node]}.
+
 
 %% @doc Write data to the cache via HTTP.
 %% Constructs a write request message with the provided data, signs it with the
@@ -263,10 +257,10 @@ setup_test_env() ->
 write_to_cache(Node, Data, Wallet) ->
     ?event(dev_cache, {write_to_cache, {start, Node}}),
     WriteMsg = #{
-        <<"path">> => <<"/~cache@1.0/write">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> => Data
-    },
+                 <<"path">> => <<"/~cache@1.0/write">>,
+                 <<"method">> => <<"POST">>,
+                 <<"body">> => Data
+                },
     ?event(dev_cache, {write_to_cache, {message_created, WriteMsg}}),
     SignedMsg = hb_message:commit(WriteMsg, Wallet),
     ?event(dev_cache, {write_to_cache, {message_signed}}),
@@ -281,6 +275,7 @@ write_to_cache(Node, Data, Wallet) ->
     ?event(dev_cache, {write_to_cache, {write_success, Path}}),
     {WriteResponse, Path}.
 
+
 %% @doc Read data from the cache via HTTP.
 %% Constructs a GET request using the provided path, sends it to the node,
 %% and returns the response.
@@ -292,21 +287,19 @@ write_to_cache(Node, Data, Wallet) ->
 read_from_cache(Node, Path) ->
     ?event(dev_cache, {read_from_cache, {start, Node, Path}}),
     ReadMsg = #{
-        <<"path">> => <<"/~cache@1.0/read">>,
-        <<"method">> => <<"GET">>,
-        <<"target">> => Path
-    },
+                <<"path">> => <<"/~cache@1.0/read">>,
+                <<"method">> => <<"GET">>,
+                <<"target">> => Path
+               },
     ?event(dev_cache, {read_from_cache, {request_created, ReadMsg}}),
     ?event({test_read, request, ReadMsg}),
     ReadResult = hb_http:get(Node, ReadMsg, #{}),
     ?event(dev_cache, {read_from_cache, {http_get, ReadResult}}),
     case ReadResult of
         ReadResponse when is_binary(ReadResponse) ->
-            ?event(dev_cache, 
-				{read_from_cache, 
-					{response_binary, ReadResponse}
-				}
-			),
+            ?event(dev_cache,
+                   {read_from_cache,
+                    {response_binary, ReadResponse}}),
             ReadResponse;
         {ok, ReadResponse} ->
             ?event(dev_cache, {read_from_cache, {response_ok, ReadResponse}}),
@@ -316,9 +309,11 @@ read_from_cache(Node, Path) ->
             {error, Reason}
     end.
 
+
 %%%--------------------------------------------------------------------
 %%% Tests
 %%%--------------------------------------------------------------------
+
 
 %% @doc Test that the cache can be written to and read from using the hb_cache
 %% API.
@@ -326,8 +321,8 @@ cache_write_message_test() ->
     ?event(dev_cache, {cache_api_test, {start}}),
     {ok, Opts, _} = setup_test_env(),
     TestData = #{
-        <<"test_key">> => <<"test_value">>
-    },
+                 <<"test_key">> => <<"test_value">>
+                },
     ?event(dev_cache, {cache_api_test, {opts, Opts}}),
     {ok, Path} = hb_cache:write(TestData, Opts),
     ?event(dev_cache, {cache_api_test, {data_written, Path}}),
@@ -336,6 +331,7 @@ cache_write_message_test() ->
     ?assert(hb_message:match(TestData, ReadData, only_present, Opts)),
     ?event(dev_cache, {cache_api_test}),
     ok.
+
 
 %% @doc Ensure that we can write direct binaries to the cache.
 cache_write_binary_test() ->

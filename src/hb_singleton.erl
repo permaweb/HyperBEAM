@@ -34,11 +34,13 @@
 -module(hb_singleton).
 -export([from/2, to/1]).
 -include("include/hb.hrl").
+
 -include_lib("eunit/include/eunit.hrl").
 -define(MAX_SEGMENT_LENGTH, 512).
 
 -type ao_message() :: map() | binary().
 -type tabm_message() :: map().
+
 
 %% @doc Convert a list of AO-Core message into TABM message.
 -spec to(list(ao_message())) -> tabm_message().
@@ -48,89 +50,85 @@ to(Messages) ->
     % that allows to scope keys to the given stage.
     {TABMMessage, _FinalIndex, Scopes} =
         lists:foldl(
-            fun
-                % Special case when AO-Core message is ID
-                (Message, {Acc, Index, ScopedModifications}) when ?IS_ID(Message) ->
-                    {append_path(Message, Acc), Index + 1, ScopedModifications};
+          fun
+             % Special case when AO-Core message is ID
+             (Message, {Acc, Index, ScopedModifications}) when ?IS_ID(Message) ->
+                  {append_path(Message, Acc), Index + 1, ScopedModifications};
 
-                % Special case when AO-Core message contains resolve command
-                ({resolve, SubMessages0}, {Acc, Index, ScopedModifications}) ->
-                    SubMessages1 = hb_maps:get(<<"path">>, to(SubMessages0)),
-                    <<"/", SubMessages2/binary>> = SubMessages1,
-                    SubMessages = <<"(", SubMessages2/binary, ")">>,
-                    {append_path(SubMessages, Acc), Index + 1, ScopedModifications};
+             % Special case when AO-Core message contains resolve command
+             ({resolve, SubMessages0}, {Acc, Index, ScopedModifications}) ->
+                  SubMessages1 = hb_maps:get(<<"path">>, to(SubMessages0)),
+                  <<"/", SubMessages2/binary>> = SubMessages1,
+                  SubMessages = <<"(", SubMessages2/binary, ")">>,
+                  {append_path(SubMessages, Acc), Index + 1, ScopedModifications};
 
-                % Regular case when message is a map
-                (Message, {Acc, Index, ScopedModifications}) ->
-                    {NewMessage, NewScopedModifications} =
-                        hb_maps:fold(
-                            fun
-                                (<<"path">>, PathPart, {AccIn, Scoped}) ->
-                                    {append_path(PathPart, AccIn), Scoped};
-                                % Specifically ignore method field from scope modifications
-                                (<<"method">>, Value, {AccIn, Scoped}) ->
-                                    {hb_maps:put(<<"method">>, Value, AccIn), Scoped};
-                                (Key, {resolve, SubMessages}, {AccIn, Scoped}) ->
-                                    NewKey = <<Key/binary, "+resolve">>,
-                                    NewSubMessages = hb_maps:get(<<"path">>, to(SubMessages)),
-                                    {
-                                        hb_maps:put(NewKey, NewSubMessages, AccIn),
-                                        hb_maps:update_with(
-                                            NewKey,
-                                            fun(Indexes) -> [Index | Indexes] end,
-                                            [Index],
-                                            Scoped
-                                        )
-                                    };
-                                (Key, Value, {AccIn, Scoped}) ->
-                                    {
-                                        hb_maps:put(Key, Value, AccIn),
-                                        hb_maps:update_with(
-                                            Key,
-                                            fun(Indexes) -> [Index | Indexes] end,
-                                            [Index],
-                                            Scoped
-                                        )
-                                    }
-                            end,
-                            {Acc, ScopedModifications},
-                            Message),
+             % Regular case when message is a map
+             (Message, {Acc, Index, ScopedModifications}) ->
+                  {NewMessage, NewScopedModifications} =
+                      hb_maps:fold(
+                        fun(<<"path">>, PathPart, {AccIn, Scoped}) ->
+                                {append_path(PathPart, AccIn), Scoped};
+                           % Specifically ignore method field from scope modifications
+                           (<<"method">>, Value, {AccIn, Scoped}) ->
+                                {hb_maps:put(<<"method">>, Value, AccIn), Scoped};
+                           (Key, {resolve, SubMessages}, {AccIn, Scoped}) ->
+                                NewKey = <<Key/binary, "+resolve">>,
+                                NewSubMessages = hb_maps:get(<<"path">>, to(SubMessages)),
+                                {hb_maps:put(NewKey, NewSubMessages, AccIn),
+                                 hb_maps:update_with(
+                                   NewKey,
+                                   fun(Indexes) -> [Index | Indexes] end,
+                                   [Index],
+                                   Scoped)};
+                           (Key, Value, {AccIn, Scoped}) ->
+                                {hb_maps:put(Key, Value, AccIn),
+                                 hb_maps:update_with(
+                                   Key,
+                                   fun(Indexes) -> [Index | Indexes] end,
+                                   [Index],
+                                   Scoped)}
+                        end,
+                        {Acc, ScopedModifications},
+                        Message),
 
-                        {NewMessage, Index + 1, NewScopedModifications}
+                  {NewMessage, Index + 1, NewScopedModifications}
 
-            end,
-            {#{}, 0, #{}},
-            Messages),
+          end,
+          {#{}, 0, #{}},
+          Messages),
     MessageWithTypeAndScopes =
         hb_maps:fold(
-            fun
-                % For the case when a given Key appeared only once in scopes
-                (Key, [SingleIndexScope], AccIn) ->
-                    Index = integer_to_binary(SingleIndexScope),
-                    {Value, NewAccIn} = hb_maps:take(Key, AccIn),
-                    {NewKey, NewValue} =
-                        case type(Value) of
-                            integer ->
-                                K = <<Index/binary, ".", Key/binary, "+integer">>,
-                                V = integer_to_binary(Value),
-                                {K, V};
-                            _ -> {<<Index/binary, ".", Key/binary>>, Value}
-                        end,
-                    hb_maps:put(NewKey, NewValue, NewAccIn);
-                (_Key, _Value, AccIn) -> AccIn
-            end,
-            TABMMessage,
-            Scopes),
+          fun
+             % For the case when a given Key appeared only once in scopes
+             (Key, [SingleIndexScope], AccIn) ->
+                  Index = integer_to_binary(SingleIndexScope),
+                  {Value, NewAccIn} = hb_maps:take(Key, AccIn),
+                  {NewKey, NewValue} =
+                      case type(Value) of
+                          integer ->
+                              K = <<Index/binary, ".", Key/binary, "+integer">>,
+                              V = integer_to_binary(Value),
+                              {K, V};
+                          _ -> {<<Index/binary, ".", Key/binary>>, Value}
+                      end,
+                  hb_maps:put(NewKey, NewValue, NewAccIn);
+             (_Key, _Value, AccIn) -> AccIn
+          end,
+          TABMMessage,
+          Scopes),
     MessageWithTypeAndScopes.
+
 
 append_path(PathPart, #{<<"path">> := Path} = Message) ->
     hb_maps:put(<<"path">>, <<Path/binary, "/", PathPart/binary>>, Message);
 append_path(PathPart, Message) ->
     hb_maps:put(<<"path">>, <<"/", PathPart/binary>>, Message).
 
+
 type(Value) when is_binary(Value) -> binary;
 type(Value) when is_integer(Value) -> integer;
 type(_Value) -> unknown.
+
 
 %% @doc Normalize a singleton TABM message into a list of executable AO-Core
 %% messages.
@@ -140,17 +138,14 @@ from(RawMsg, Opts) ->
     {ok, Path, Query} = parse_full_path(RawPath),
     ?event(parsing, {parsed_path, Path, Query}),
     MsgWithoutBasePath = hb_maps:merge(
-        hb_maps:remove(<<"path">>, RawMsg),
-        Query
-    ),
+                           hb_maps:remove(<<"path">>, RawMsg),
+                           Query),
     % 2. Decode, split, and sanitize path segments. Each yields one step message.
     RawMsgs =
         lists:flatten(
-            lists:map(
-                fun(Msg) -> path_messages(Msg, Opts) end,
-                Path
-            )
-        ),
+          lists:map(
+            fun(Msg) -> path_messages(Msg, Opts) end,
+            Path)),
     ?event(parsing, {raw_messages, RawMsgs}),
     Msgs = normalize_base(RawMsgs),
     ?event(parsing, {normalized_messages, Msgs}),
@@ -165,6 +160,7 @@ from(RawMsg, Opts) ->
     ?event(parsing, {result, Result}),
     Result.
 
+
 %% @doc Parse the relative reference into path, query, and fragment.
 parse_full_path(RelativeRef) ->
     %?event(parsing, {raw_relative_ref, RawRelativeRef}),
@@ -172,14 +168,13 @@ parse_full_path(RelativeRef) ->
     ?event(parsing, {parsed_relative_ref, RelativeRef}),
     {Path, QKVList} =
         case binary:split(RelativeRef, <<"?">>) of
-            [P, QStr] -> {P, cowboy_req:parse_qs(#{ qs => QStr })};
+            [P, QStr] -> {P, cowboy_req:parse_qs(#{qs => QStr})};
             [P] -> {P, []}
         end,
-    {
-        ok,
-        lists:map(fun(Part) -> decode_string(Part) end, path_parts($/, Path)),
-        hb_maps:from_list(QKVList)
-    }.
+    {ok,
+     lists:map(fun(Part) -> decode_string(Part) end, path_parts($/, Path)),
+     hb_maps:from_list(QKVList)}.
+
 
 %% @doc Step 2: Decode, split and sanitize the path. Split by `/' but avoid
 %% subpath components, such that their own path parts are not dissociated from
@@ -187,34 +182,37 @@ parse_full_path(RelativeRef) ->
 path_messages(RawBin, Opts) when is_binary(RawBin) ->
     lists:map(fun(Part) -> parse_part(Part, Opts) end, path_parts([$/], decode_string(RawBin))).
 
+
 %% @doc Normalize the base path.
 normalize_base([]) -> [];
-normalize_base([First|Rest]) when ?IS_ID(First) -> [First|Rest];
-normalize_base([{as, DevID, First}|Rest]) -> [{as, DevID, First}|Rest];
-normalize_base([Subres = {resolve, _}|Rest]) -> [Subres|Rest];
-normalize_base(Rest) -> [#{}|Rest].
+normalize_base([First | Rest]) when ?IS_ID(First) -> [First | Rest];
+normalize_base([{as, DevID, First} | Rest]) -> [{as, DevID, First} | Rest];
+normalize_base([Subres = {resolve, _} | Rest]) -> [Subres | Rest];
+normalize_base(Rest) -> [#{} | Rest].
+
 
 %% @doc Split the path into segments, filtering out empty segments and
 %% segments that are too long.
 path_parts(Sep, PathBin) when is_binary(PathBin) ->
     Res = lists:filtermap(
-        fun(Part) ->
-            case byte_size(Part) of
-                0 -> false;
-                TooLong when TooLong > ?MAX_SEGMENT_LENGTH ->
-                    throw({error, segment_too_long, Part});
-                _ -> {true, Part}
-            end
-        end,
-        all_path_parts(Sep, PathBin)
-    ),
+            fun(Part) ->
+                    case byte_size(Part) of
+                        0 -> false;
+                        TooLong when TooLong > ?MAX_SEGMENT_LENGTH ->
+                            throw({error, segment_too_long, Part});
+                        _ -> {true, Part}
+                    end
+            end,
+            all_path_parts(Sep, PathBin)),
     Res.
+
 
 %% @doc Extract all of the parts from the binary, given (a list of) separators.
 all_path_parts(_Sep, <<>>) -> [];
 all_path_parts(Sep, Bin) ->
     {_MatchedSep, Part, Rest} = part(Sep, Bin),
     [Part | all_path_parts(Sep, Rest)].
+
 
 %% @doc Extract the characters from the binary until a separator is found.
 %% The first argument of the function is an explicit separator character, or
@@ -224,54 +222,54 @@ part(Sep, Bin) when not is_list(Sep) ->
     part([Sep], Bin);
 part(Seps, Bin) ->
     part(Seps, Bin, 0, <<>>).
+
+
 part(_Seps, <<>>, _Depth, CurrAcc) -> {no_match, CurrAcc, <<>>};
-part(Seps, << $\(, Rest/binary>>, Depth, CurrAcc) ->
+part(Seps, <<$\(, Rest/binary>>, Depth, CurrAcc) ->
     %% Increase depth
-    part(Seps, Rest, Depth + 1, << CurrAcc/binary, "(" >>);
-part(Seps, << $\), Rest/binary>>, Depth, CurrAcc) when Depth > 0 ->
+    part(Seps, Rest, Depth + 1, <<CurrAcc/binary, "(">>);
+part(Seps, <<$\), Rest/binary>>, Depth, CurrAcc) when Depth > 0 ->
     %% Decrease depth
-    part(Seps, Rest, Depth - 1, << CurrAcc/binary, ")">>);
+    part(Seps, Rest, Depth - 1, <<CurrAcc/binary, ")">>);
 part(Seps, <<C:8/integer, Rest/binary>>, Depth, CurrAcc) ->
     case Depth == 0 andalso lists:member(C, Seps) of
         true -> {C, CurrAcc, Rest};
         false ->
-            part(Seps, Rest, Depth, << CurrAcc/binary, C:8/integer >>)
+            part(Seps, Rest, Depth, <<CurrAcc/binary, C:8/integer>>)
     end.
+
 
 %% @doc Step 3: Apply types to values and remove specifiers.
 apply_types(Msg, Opts) ->
     hb_maps:fold(
-        fun(Key, Val, Acc) ->
-            {_, K, V} = maybe_typed(Key, Val, Opts),
-            hb_maps:put(K, V, Acc, Opts)
-        end,
-        #{},
-        Msg,
-        Opts
-    ).
+      fun(Key, Val, Acc) ->
+              {_, K, V} = maybe_typed(Key, Val, Opts),
+              hb_maps:put(K, V, Acc, Opts)
+      end,
+      #{},
+      Msg,
+      Opts).
+
 
 %% @doc Step 4: Group headers/query by N-scope.
 %% `N.Key' => applies to Nth step. Otherwise => `global'
 group_scoped(Map, Msgs) ->
     {NScope, Global} =
         hb_maps:fold(
-            fun(KeyBin, Val, {Ns, Gs}) ->
-                case parse_scope(KeyBin) of
-                    {OkN, RealKey} when OkN > 0 ->
-                        Curr = hb_maps:get(OkN, Ns, #{}),
-                        Ns2 = hb_maps:put(OkN, hb_maps:put(RealKey, Val, Curr), Ns),
-                        {Ns2, Gs};
-                    global -> {Ns, hb_maps:put(KeyBin, Val, Gs)}
-                end
+          fun(KeyBin, Val, {Ns, Gs}) ->
+                  case parse_scope(KeyBin) of
+                      {OkN, RealKey} when OkN > 0 ->
+                          Curr = hb_maps:get(OkN, Ns, #{}),
+                          Ns2 = hb_maps:put(OkN, hb_maps:put(RealKey, Val, Curr), Ns),
+                          {Ns2, Gs};
+                      global -> {Ns, hb_maps:put(KeyBin, Val, Gs)}
+                  end
           end,
           {#{}, #{}},
-          Map
-        ),
-    [
-        hb_maps:merge(Global, hb_maps:get(N, NScope, #{}))
-    ||
-        N <- lists:seq(1, length(Msgs))
-    ].
+          Map),
+    [ hb_maps:merge(Global, hb_maps:get(N, NScope, #{}))
+      || N <- lists:seq(1, length(Msgs)) ].
+
 
 %% @doc Get the scope of a key. Adds 1 to account for the base message.
 parse_scope(KeyBin) ->
@@ -284,31 +282,32 @@ parse_scope(KeyBin) ->
         _ -> global
     end.
 
+
 %% @doc Step 5: Merge the base message with the scoped messages.
 build_messages(Msgs, ScopedModifications, Opts) ->
     do_build(1, Msgs, ScopedModifications, Opts).
 
+
 do_build(_, [], _ScopedKeys, _Opts) -> [];
-do_build(I, [{as, DevID, Msg = #{ <<"path">> := <<"">> }}|Rest], ScopedKeys, Opts) ->
+do_build(I, [{as, DevID, Msg = #{<<"path">> := <<"">>}} | Rest], ScopedKeys, Opts) ->
     ScopedKey = lists:nth(I, ScopedKeys),
     StepMsg = hb_message:convert(
-        Merged = hb_maps:merge(Msg, ScopedKey),
-        <<"structured@1.0">>,
-		Opts#{ topic => ao_internal }
-    ),
+                Merged = hb_maps:merge(Msg, ScopedKey),
+                <<"structured@1.0">>,
+                Opts#{topic => ao_internal}),
     ?event({merged, {dev, DevID}, {input, Msg}, {merged, Merged}, {output, StepMsg}}),
     [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, Opts)];
-do_build(I, [Msg|Rest], ScopedKeys, Opts) when not is_map(Msg) ->
+do_build(I, [Msg | Rest], ScopedKeys, Opts) when not is_map(Msg) ->
     [Msg | do_build(I + 1, Rest, ScopedKeys, Opts)];
 do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
     ScopedKey = lists:nth(I, ScopedKeys),
     StepMsg =
         hb_message:convert(
-            hb_maps:merge(Msg, ScopedKey),
-            <<"structured@1.0">>,
-            Opts#{ topic => ao_internal }
-        ),
+          hb_maps:merge(Msg, ScopedKey),
+          <<"structured@1.0">>,
+          Opts#{topic => ao_internal}),
     [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
+
 
 %% @doc Parse a path part into a message or an ID.
 %% Applies the syntax rules outlined in the module doc, in the following order:
@@ -323,15 +322,15 @@ parse_part(Part, Opts) ->
         Part ->
             case part([$&, $~, $+, $ ], Part) of
                 {no_match, PartKey, <<>>} ->
-                    #{ <<"path">> => PartKey };
+                    #{<<"path">> => PartKey};
                 {Sep, PartKey, PartModBin} ->
                     parse_part_mods(
-                        << Sep:8/integer, PartModBin/binary >>,
-                        #{ <<"path">> => PartKey },
-						Opts
-                    )
+                      <<Sep:8/integer, PartModBin/binary>>,
+                      #{<<"path">> => PartKey},
+                      Opts)
             end
     end.
+
 
 %% @doc Parse part modifiers:
 %% 1. `~Device' => `{as, Device, Msg}'
@@ -342,22 +341,22 @@ parse_part_mods(<<"~", PartMods/binary>>, Msg, Opts) ->
     % Get the string until the end of the device specifier or end of string.
     {_, DeviceBin, InlinedMsgBin} = part([$&], PartMods),
     % Calculate the inlined keys
-    MsgWithInlines = parse_part_mods(<<"&", InlinedMsgBin/binary >>, Msg, Opts),
+    MsgWithInlines = parse_part_mods(<<"&", InlinedMsgBin/binary>>, Msg, Opts),
     % Apply the device specifier
     {as, maybe_subpath(DeviceBin, Opts), MsgWithInlines};
-parse_part_mods(<< "&", InlinedMsgBin/binary >>, Msg, Opts) ->
+parse_part_mods(<<"&", InlinedMsgBin/binary>>, Msg, Opts) ->
     InlinedKeys = path_parts($&, InlinedMsgBin),
     MsgWithInlined =
         lists:foldl(
-            fun(InlinedKey, Acc) ->
-                {Key, Val} = parse_inlined_key_val(InlinedKey, Opts),
-                ?event({inlined_key, {explicit, Key}, {explicit, Val}}),
-                hb_maps:put(Key, Val, Acc)
-            end,
-            Msg,
-            InlinedKeys
-        ),
+          fun(InlinedKey, Acc) ->
+                  {Key, Val} = parse_inlined_key_val(InlinedKey, Opts),
+                  ?event({inlined_key, {explicit, Key}, {explicit, Val}}),
+                  hb_maps:put(Key, Val, Acc)
+          end,
+          Msg,
+          InlinedKeys),
     MsgWithInlined.
+
 
 %% @doc Extrapolate the inlined key-value pair from a path segment. If the
 %% key has a value, it may provide a type (as with typical keys), but if a
@@ -370,6 +369,7 @@ parse_inlined_key_val(Bin, Opts) ->
             {Key, Val}
     end.
 
+
 %% @doc Attempt Cowboy URL decode, then sanitize the result.
 decode_string(B) ->
     case catch uri_string:unquote(B) of
@@ -377,16 +377,18 @@ decode_string(B) ->
         _ -> throw({error, cannot_decode, B})
     end.
 
+
 %% @doc Check if the string is a subpath, returning it in parsed form,
 %% or the original string with a specifier.
 maybe_subpath(Str, Opts) when byte_size(Str) >= 2 ->
     case {binary:first(Str), binary:last(Str)} of
         {$(, $)} ->
             Inside = binary:part(Str, 1, byte_size(Str) - 2),
-            {resolve, from(#{ <<"path">> => Inside }, Opts)};
+            {resolve, from(#{<<"path">> => Inside}, Opts)};
         _ -> Str
     end;
 maybe_subpath(Other, _Opts) -> Other.
+
 
 %% @doc Parse a key's type (applying it to the value) and device name if present.
 %% We allow ` ` characters as type indicators because some URL-string encoders
@@ -403,13 +405,13 @@ maybe_typed(Key, Value, Opts) ->
                     % For example:
                     % `/a/b&k+Int=(/x/y/z) => /a/b&k=(/x/y/z/body&Type=Int+Codec)'
                     {typed,
-                        OnlyKey,
-                        {resolve, from(#{ <<"path">> => Subpath }, Opts)}
-                    };
+                     OnlyKey,
+                     {resolve, from(#{<<"path">> => Subpath}, Opts)}};
                 {_T, Bin} when is_binary(Bin) ->
                     {typed, OnlyKey, dev_codec_structured:decode_value(Type, Bin)}
             end
     end.
+
 
 %% @doc Join a list of items with a separator, or return the first item if there
 %% is only one item. If there are no items, return an empty binary.
@@ -420,226 +422,212 @@ maybe_join(Items, Sep) ->
         _ -> iolist_to_binary(lists:join(Sep, Items))
     end.
 
+
 %%% Tests
+
 
 parse_explicit_message_test() ->
     Singleton1 = #{
-        <<"path">> => <<"/a">>,
-        <<"a">> => <<"b">>
-    },
+                   <<"path">> => <<"/a">>,
+                   <<"a">> => <<"b">>
+                  },
     ?assertEqual(
-        [
-            #{ <<"a">> => <<"b">>},
-            #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }
-        ],
-        from(Singleton1, #{})
-    ),
+      [#{<<"a">> => <<"b">>},
+       #{<<"path">> => <<"a">>, <<"a">> => <<"b">>}],
+      from(Singleton1, #{})),
     DummyID = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Singleton2 = #{
-        <<"path">> => <<"/", DummyID/binary, "/a">>
-    },
-    ?assertEqual([DummyID, #{ <<"path">> => <<"a">> }], from(Singleton2, #{})),
+                   <<"path">> => <<"/", DummyID/binary, "/a">>
+                  },
+    ?assertEqual([DummyID, #{<<"path">> => <<"a">>}], from(Singleton2, #{})),
     Singleton3 = #{
-        <<"path">> => <<"/", DummyID/binary, "/a">>,
-        <<"a">> => <<"b">>
-    },
+                   <<"path">> => <<"/", DummyID/binary, "/a">>,
+                   <<"a">> => <<"b">>
+                  },
     ?assertEqual(
-        [DummyID, #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }],
-        from(Singleton3, #{})
-    ).
+      [DummyID, #{<<"path">> => <<"a">>, <<"a">> => <<"b">>}],
+      from(Singleton3, #{})).
+
 
 %%% `to/1' function tests
 to_suite_test_() ->
-    [
-        fun simple_to_test/0,
-        fun multiple_messages_to_test/0,
-        fun basic_hashpath_to_test/0,
-        fun scoped_key_to_test/0,
-        fun typed_key_to_test/0,
-        fun subpath_in_key_to_test/0,
-        fun subpath_in_path_to_test/0,
-        fun inlined_keys_to_test/0,
-        fun multiple_inlined_keys_to_test/0,
-        fun subpath_in_inlined_to_test/0
-    ].
+    [fun simple_to_test/0,
+     fun multiple_messages_to_test/0,
+     fun basic_hashpath_to_test/0,
+     fun scoped_key_to_test/0,
+     fun typed_key_to_test/0,
+     fun subpath_in_key_to_test/0,
+     fun subpath_in_path_to_test/0,
+     fun inlined_keys_to_test/0,
+     fun multiple_inlined_keys_to_test/0,
+     fun subpath_in_inlined_to_test/0].
+
 
 simple_to_test() ->
-    Messages = [
-        #{<<"test-key">> => <<"test-value">>},
-        #{<<"path">> => <<"a">>, <<"test-key">> => <<"test-value">>}
-    ],
+    Messages = [#{<<"test-key">> => <<"test-value">>},
+                #{<<"path">> => <<"a">>, <<"test-key">> => <<"test-value">>}],
     Expected = #{<<"path">> => <<"/a">>, <<"test-key">> => <<"test-value">>},
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
 
+
 multiple_messages_to_test() ->
     Messages =
-        [
-            #{<<"test-key">> => <<"test-value">>},
-            #{<<"path">> => <<"a">>, <<"test-key">> => <<"test-value">>},
-            #{<<"path">> => <<"b">>, <<"test-key">> => <<"test-value">>},
-            #{<<"path">> => <<"c">>, <<"test-key">> => <<"test-value">>}
-        ],
+        [#{<<"test-key">> => <<"test-value">>},
+         #{<<"path">> => <<"a">>, <<"test-key">> => <<"test-value">>},
+         #{<<"path">> => <<"b">>, <<"test-key">> => <<"test-value">>},
+         #{<<"path">> => <<"c">>, <<"test-key">> => <<"test-value">>}],
     Expected = #{
-        <<"path">> => <<"/a/b/c">>,
-        <<"test-key">> => <<"test-value">>
-    },
+                 <<"path">> => <<"/a/b/c">>,
+                 <<"test-key">> => <<"test-value">>
+                },
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
+
 
 basic_hashpath_to_test() ->
-    Messages = [
-        <<"e5ohB7TgMYRoc0BLllkmAqkqLy1SrliEkOPJlNPXBQ8">>,
-        #{<<"method">> => <<"GET">>, <<"path">> => <<"some-other">>}
-    ],
+    Messages = [<<"e5ohB7TgMYRoc0BLllkmAqkqLy1SrliEkOPJlNPXBQ8">>,
+                #{<<"method">> => <<"GET">>, <<"path">> => <<"some-other">>}],
     Expected = #{
-        <<"path">> => <<"/e5ohB7TgMYRoc0BLllkmAqkqLy1SrliEkOPJlNPXBQ8/some-other">>,
-        <<"method">> => <<"GET">>
-    },
+                 <<"path">> => <<"/e5ohB7TgMYRoc0BLllkmAqkqLy1SrliEkOPJlNPXBQ8/some-other">>,
+                 <<"method">> => <<"GET">>
+                },
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
 
+
 scoped_key_to_test() ->
-    Messages = [
-        #{},
-        #{<<"path">> => <<"a">>},
-        #{<<"path">> => <<"b">>, <<"test-key">> => <<"test-value">>},
-        #{<<"path">> => <<"c">>}
-    ],
+    Messages = [#{},
+                #{<<"path">> => <<"a">>},
+                #{<<"path">> => <<"b">>, <<"test-key">> => <<"test-value">>},
+                #{<<"path">> => <<"c">>}],
     Expected = #{<<"2.test-key">> => <<"test-value">>, <<"path">> => <<"/a/b/c">>},
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
 
+
 typed_key_to_test() ->
     Messages =
-        [
-            #{},
-            #{<<"path">> => <<"a">>},
-            #{<<"path">> => <<"b">>, <<"test-key">> => 123},
-            #{<<"path">> => <<"c">>}
-        ],
+        [#{},
+         #{<<"path">> => <<"a">>},
+         #{<<"path">> => <<"b">>, <<"test-key">> => 123},
+         #{<<"path">> => <<"c">>}],
     Expected = #{<<"2.test-key+integer">> => <<"123">>, <<"path">> => <<"/a/b/c">>},
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
 
+
 subpath_in_key_to_test() ->
-    Messages = [
-        #{},
-        #{<<"path">> => <<"a">>},
-        #{
-            <<"path">> => <<"b">>,
-            <<"test-key">> =>
-                {resolve,
-                    [
-                        #{},
+    Messages = [#{},
+                #{<<"path">> => <<"a">>},
+                #{
+                  <<"path">> => <<"b">>,
+                  <<"test-key">> =>
+                      {resolve,
+                       [#{},
                         #{<<"path">> => <<"x">>},
                         #{<<"path">> => <<"y">>},
-                        #{<<"path">> => <<"z">>}
-                    ]
-                }
-        },
-        #{<<"path">> => <<"c">>}
-    ],
+                        #{<<"path">> => <<"z">>}]}
+                 },
+                #{<<"path">> => <<"c">>}],
     Expected = #{<<"2.test-key+resolve">> => <<"/x/y/z">>, <<"path">> => <<"/a/b/c">>},
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
 
+
 subpath_in_path_to_test() ->
-    Messages = [
-        #{},
-        #{<<"path">> => <<"a">>},
-        {resolve,
-            [
-                #{},
-                #{<<"path">> => <<"x">>},
-                #{<<"path">> => <<"y">>},
-                #{<<"path">> => <<"z">>}
-            ]
-        },
-        #{<<"path">> => <<"z">>}
-    ],
+    Messages = [#{},
+                #{<<"path">> => <<"a">>},
+                {resolve,
+                 [#{},
+                  #{<<"path">> => <<"x">>},
+                  #{<<"path">> => <<"y">>},
+                  #{<<"path">> => <<"z">>}]},
+                #{<<"path">> => <<"z">>}],
     Expected = #{
-        <<"path">> => <<"/a/(x/y/z)/z">>
-    },
+                 <<"path">> => <<"/a/(x/y/z)/z">>
+                },
     ?assertEqual(Expected, to(Messages)),
     ?assertEqual(Messages, from(to(Messages), #{})).
 
+
 inlined_keys_to_test() ->
     Messages =
-        [
-            #{<<"method">> => <<"POST">>},
-            #{
-                <<"method">> => <<"POST">>,
-                <<"path">> => <<"a">>
-            },
-            #{
-                <<"k1">> => <<"v1">>,
-                <<"method">> => <<"POST">>,
-                <<"path">> => <<"b">>
-            },
-            #{
-                <<"k2">> => <<"v2">>,
-                <<"method">> => <<"POST">>,
-                <<"path">> => <<"c">>
-            }
-        ],
+        [#{<<"method">> => <<"POST">>},
+         #{
+           <<"method">> => <<"POST">>,
+           <<"path">> => <<"a">>
+          },
+         #{
+           <<"k1">> => <<"v1">>,
+           <<"method">> => <<"POST">>,
+           <<"path">> => <<"b">>
+          },
+         #{
+           <<"k2">> => <<"v2">>,
+           <<"method">> => <<"POST">>,
+           <<"path">> => <<"c">>
+          }],
     % NOTE: The implementation above does not convert the given list of messages
     % into the original format, however it assures that the `to/1' and `from/1'
     % operations are idempotent.
     ?assertEqual(Messages, from(to(Messages), #{})).
+
 
 multiple_inlined_keys_to_test() ->
-    Messages = [
-        #{<<"method">> => <<"POST">>},
-            #{<<"method">> => <<"POST">>, <<"path">> => <<"a">>},
-            #{
-                <<"k1">> => <<"v1">>,
-                <<"k2">> => <<"v2">>,
-                <<"method">> => <<"POST">>,
-                <<"path">> => <<"b">>
-            }
-        ],
+    Messages = [#{<<"method">> => <<"POST">>},
+                #{<<"method">> => <<"POST">>, <<"path">> => <<"a">>},
+                #{
+                  <<"k1">> => <<"v1">>,
+                  <<"k2">> => <<"v2">>,
+                  <<"method">> => <<"POST">>,
+                  <<"path">> => <<"b">>
+                 }],
     % NOTE: The implementation above does not convert the given list of messages
     % into the original format, however it assures that the `to/1' and `from/1'
     % operations are idempotent.
     ?assertEqual(Messages, from(to(Messages), #{})).
 
+
 subpath_in_inlined_to_test() ->
-    Messages = [
-        #{},
-        #{<<"path">> => <<"part1">>},
-        #{<<"b">> =>
-                {resolve,
-                    [#{},
-                     #{<<"path">> => <<"x">>},
-                     #{<<"path">> => <<"y">>}]},
-                    <<"path">> => <<"part2">>,
-                    <<"test">> => <<"1">>},
-        #{<<"path">> => <<"part3">>}],
+    Messages = [#{},
+                #{<<"path">> => <<"part1">>},
+                #{
+                  <<"b">> =>
+                      {resolve,
+                       [#{},
+                        #{<<"path">> => <<"x">>},
+                        #{<<"path">> => <<"y">>}]},
+                  <<"path">> => <<"part2">>,
+                  <<"test">> => <<"1">>
+                 },
+                #{<<"path">> => <<"part3">>}],
     % NOTE: The implementation above does not convert the given list of messages
     % into the original format, however it assures that the `to/1' and `from/1'
     % operations are idempotent.
     ?assertEqual(Messages, from(to(Messages), #{})).
+
 
 %%% `from/1' function tests
 single_message_test() ->
     % This is a singleton TABM message
     Req = #{
-        <<"path">> => <<"/a">>,
-        <<"test-key">> => <<"test-value">>
-    },
+            <<"path">> => <<"/a">>,
+            <<"test-key">> => <<"test-value">>
+           },
     Msgs = from(Req, #{}),
     ?assertEqual(2, length(Msgs)),
     ?assert(is_map(hd(Msgs))),
     ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, hd(Msgs))).
 
+
 basic_hashpath_test() ->
     Hashpath = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Path = <<"/", Hashpath/binary, "/some-other">>,
     Req = #{
-        <<"path">> => Path,
-        <<"method">> => <<"GET">>
-    },
+            <<"path">> => Path,
+            <<"method">> => <<"GET">>
+           },
     Msgs = from(Req, #{}),
     ?assertEqual(2, length(Msgs)),
     [Base, Msg2] = Msgs,
@@ -647,11 +635,12 @@ basic_hashpath_test() ->
     ?assertEqual(<<"GET">>, hb_maps:get(<<"method">>, Msg2)),
     ?assertEqual(<<"some-other">>, hb_maps:get(<<"path">>, Msg2)).
 
+
 multiple_messages_test() ->
     Req = #{
-        <<"path">> => <<"/a/b/c">>,
-        <<"test-key">> => <<"test-value">>
-    },
+            <<"path">> => <<"/a/b/c">>,
+            <<"test-key">> => <<"test-value">>
+           },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
     [_Base, Msg1, Msg2, Msg3] = Msgs,
@@ -660,13 +649,15 @@ multiple_messages_test() ->
     ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg2)),
     ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg3)).
 
+
 %%% Advanced key syntax tests
+
 
 scoped_key_test() ->
     Req = #{
-        <<"path">> => <<"/a/b/c">>,
-        <<"2.test-key">> => <<"test-value">>
-    },
+            <<"path">> => <<"/a/b/c">>,
+            <<"2.test-key">> => <<"test-value">>
+           },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
     [_, Msg1, Msg2, Msg3] = Msgs,
@@ -674,11 +665,12 @@ scoped_key_test() ->
     ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg2, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg3, not_found)).
 
+
 typed_key_test() ->
     Req = #{
-        <<"path">> => <<"/a/b/c">>,
-        <<"2.test-key+integer">> => <<"123">>
-    },
+            <<"path">> => <<"/a/b/c">>,
+            <<"2.test-key+integer">> => <<"123">>
+           },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
     [_, Msg1, Msg2, Msg3] = Msgs,
@@ -686,56 +678,52 @@ typed_key_test() ->
     ?assertEqual(123, hb_maps:get(<<"test-key">>, Msg2, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg3, not_found)).
 
+
 subpath_in_key_test() ->
     Req = #{
-        <<"path">> => <<"/a/b/c">>,
-        <<"2.test-key+resolve">> => <<"/x/y/z">>
-    },
+            <<"path">> => <<"/a/b/c">>,
+            <<"2.test-key+resolve">> => <<"/x/y/z">>
+           },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
     [_, Msg1, Msg2, Msg3] = Msgs,
     ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg1, not_found)),
     ?assertEqual(
-        {resolve,
-            [
-                #{},
-                #{ <<"path">> => <<"x">> },
-                #{ <<"path">> => <<"y">> },
-                #{ <<"path">> => <<"z">> }
-            ]
-        },
-        hb_maps:get(<<"test-key">>, Msg2, not_found)
-    ),
+      {resolve,
+       [#{},
+        #{<<"path">> => <<"x">>},
+        #{<<"path">> => <<"y">>},
+        #{<<"path">> => <<"z">>}]},
+      hb_maps:get(<<"test-key">>, Msg2, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg3, not_found)).
+
 
 %%% Advanced path syntax tests
 
+
 subpath_in_path_test() ->
     Req = #{
-        <<"path">> => <<"/a/(x/y/z)/z">>
-    },
+            <<"path">> => <<"/a/(x/y/z)/z">>
+           },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
     [_, Msg1, Msg2, Msg3] = Msgs,
     ?assertEqual(<<"a">>, hb_maps:get(<<"path">>, Msg1)),
     ?assertEqual(
-        {resolve,
-            [
-                #{},
-                #{ <<"path">> => <<"x">> },
-                #{ <<"path">> => <<"y">> },
-                #{ <<"path">> => <<"z">> }
-            ]
-        },
-        Msg2
-    ),
+      {resolve,
+       [#{},
+        #{<<"path">> => <<"x">>},
+        #{<<"path">> => <<"y">>},
+        #{<<"path">> => <<"z">>}]},
+      Msg2),
     ?assertEqual(<<"z">>, hb_maps:get(<<"path">>, Msg3)).
+
 
 inlined_keys_test() ->
     Req = #{
-        <<"method">> => <<"POST">>,
-        <<"path">> => <<"/a/b&k1=v1/c&k2=v2">>
-    },
+            <<"method">> => <<"POST">>,
+            <<"path">> => <<"/a/b&k1=v1/c&k2=v2">>
+           },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
     [_, Msg1, Msg2, Msg3] = Msgs,
@@ -744,12 +732,13 @@ inlined_keys_test() ->
     ?assertEqual(not_found, hb_maps:get(<<"k1">>, Msg1, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"k2">>, Msg2, not_found)).
 
+
 multiple_inlined_keys_test() ->
     Path = <<"/a/b&k1=v1&k2=v2">>,
     Req = #{
-        <<"method">> => <<"POST">>,
-        <<"path">> => Path
-    },
+            <<"method">> => <<"POST">>,
+            <<"path">> => Path
+           },
     Msgs = from(Req, #{}),
     ?assertEqual(3, length(Msgs)),
     [_, Msg1, Msg2] = Msgs,
@@ -758,41 +747,36 @@ multiple_inlined_keys_test() ->
     ?assertEqual(<<"v1">>, hb_maps:get(<<"k1">>, Msg2, not_found)),
     ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Msg2, not_found)).
 
+
 subpath_in_inlined_test() ->
     Path = <<"/part1/part2&test=1&b=(/x/y)/part3">>,
     Req = #{
-        <<"path">> => Path
-    },
+            <<"path">> => Path
+           },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
     [_, First, Second, Third] = Msgs,
     ?assertEqual(<<"part1">>, hb_maps:get(<<"path">>, First)),
     ?assertEqual(<<"part3">>, hb_maps:get(<<"path">>, Third)),
     ?assertEqual(
-        {resolve, [#{}, #{ <<"path">> => <<"x">> }, #{ <<"path">> => <<"y">> }] },
-        hb_maps:get(<<"b">>, Second)
-    ).
+      {resolve, [#{}, #{<<"path">> => <<"x">>}, #{<<"path">> => <<"y">>}]},
+      hb_maps:get(<<"b">>, Second)).
+
 
 path_parts_test() ->
     ?assertEqual(
-        [<<"a">>, <<"b&c=(/d/e)">>, <<"f">>],
-        path_parts($/, <<"/a/b&c=(/d/e)/f">>)
-    ),
+      [<<"a">>, <<"b&c=(/d/e)">>, <<"f">>],
+      path_parts($/, <<"/a/b&c=(/d/e)/f">>)),
     ?assertEqual([<<"a">>], path_parts($/, <<"/a">>)),
     ?assertEqual([<<"a">>, <<"b">>, <<"c">>], path_parts($/, <<"/a/b/c">>)),
     ?assertEqual(
-        [
-            <<"IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q">>,
-            <<"msg2">>
-        ],
-        path_parts($/, <<"/IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q/msg2">>)
-    ),
+      [<<"IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q">>,
+       <<"msg2">>],
+      path_parts($/, <<"/IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q/msg2">>)),
     ?assertEqual(
-        [<<"a">>, <<"b&K1=V1">>, <<"c&K2=V2">>],
-        path_parts($/, <<"/a/b&K1=V1/c&K2=V2">>)
-    ),
+      [<<"a">>, <<"b&K1=V1">>, <<"c&K2=V2">>],
+      path_parts($/, <<"/a/b&K1=V1/c&K2=V2">>)),
     ?assertEqual(
-        [<<"a">>, <<"(x/y/z)">>, <<"c">>],
-        path_parts($/, <<"/a/(x/y/z)/c">>)
-    ),
+      [<<"a">>, <<"(x/y/z)">>, <<"c">>],
+      path_parts($/, <<"/a/(x/y/z)/c">>)),
     ok.

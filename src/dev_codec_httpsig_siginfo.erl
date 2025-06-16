@@ -9,17 +9,17 @@
 
 %%% A list of components that are `derived' in the context of RFC-9421 from the
 %%% request message.
--define(DERIVED_COMPONENTS, [
-    <<"method">>,
-    <<"target-uri">>,
-    <<"authority">>,
-    <<"scheme">>,
-    <<"request-target">>,
-    <<"path">>,
-    <<"query">>,
-    <<"query-param">>
-    % <<"status">> % Some libraries does not support it
-]).
+-define(DERIVED_COMPONENTS, [<<"method">>,
+                             <<"target-uri">>,
+                             <<"authority">>,
+                             <<"scheme">>,
+                             <<"request-target">>,
+                             <<"path">>,
+                             <<"query">>,
+                             <<"query-param">>
+         % <<"status">> % Some libraries does not support it
+        ]).
+
 
 %% @doc Generate a `signature' and `signature-input' key pair from a commitment
 %% map.
@@ -29,24 +29,22 @@ commitments_to_siginfo(Msg, Comms, Opts) ->
     % Generate a SF item for each commitment's signature and signature-input.
     {Sigs, SigInputs} =
         maps:fold(
-            fun(_CommID, Commitment, {Sigs, SigInputs}) ->
-                {ok, SigNameRaw, SFSig, SFSigInput} =
-                    commitment_to_sf_siginfo(Msg, Commitment, Opts),
-                SigName = <<"sig-", SigNameRaw/binary>>,
-                {
-                    Sigs#{ SigName => SFSig },
-                    SigInputs#{ SigName => SFSigInput }
-                }
-            end,
-            {#{}, #{}},
-            Comms
-        ),
+          fun(_CommID, Commitment, {Sigs, SigInputs}) ->
+                  {ok, SigNameRaw, SFSig, SFSigInput} =
+                      commitment_to_sf_siginfo(Msg, Commitment, Opts),
+                  SigName = <<"sig-", SigNameRaw/binary>>,
+                  {Sigs#{SigName => SFSig},
+                   SigInputs#{SigName => SFSigInput}}
+          end,
+          {#{}, #{}},
+          Comms),
     #{
-        <<"signature">> =>
-            hb_util:bin(hb_structured_fields:dictionary(Sigs)),
-        <<"signature-input">> =>
-            hb_util:bin(hb_structured_fields:dictionary(SigInputs))
-    }.
+      <<"signature">> =>
+          hb_util:bin(hb_structured_fields:dictionary(Sigs)),
+      <<"signature-input">> =>
+          hb_util:bin(hb_structured_fields:dictionary(SigInputs))
+     }.
+
 
 %% @doc Generate a `signature' and `signature-input' key pair from a given
 %% commitment.
@@ -69,129 +67,111 @@ commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
     Expires = maps:get(<<"expires">>, Commitment, undefined),
     % Generate the name of the signature.
     SigName = hb_util:to_lower(hb_util:human_id(crypto:hash(sha256, Signature))),
-    % Generate the signature input and signature structured-fields. These can 
+    % Generate the signature input and signature structured-fields. These can
     % then be placed into a dictionary with other commitments and transformed
     % into their binary representations.
     SFSig = {item, {binary, Signature}, []},
     AdditionalParams = get_additional_params(Commitment),
-    Params = 
+    Params =
         lists:filter(
-            fun({_Key, undefined}) ->
-                false;
-               ({_Key, {_, Val}}) ->
-                Val =/= undefined
-            end,
-            [
-                {<<"alg">>, {string, Alg}},
-                {<<"keyid">>, {string, KeyID}},
-                {<<"tag">>, {string, Tag}},
-                {<<"created">>, Created},
-                {<<"expires">>, Expires},
-                {<<"nonce">>, {string, Nonce}}
-            ] ++ AdditionalParams
-        ),
+          fun({_Key, undefined}) ->
+                  false;
+             ({_Key, {_, Val}}) ->
+                  Val =/= undefined
+          end,
+          [{<<"alg">>, {string, Alg}},
+           {<<"keyid">>, {string, KeyID}},
+           {<<"tag">>, {string, Tag}},
+           {<<"created">>, Created},
+           {<<"expires">>, Expires},
+           {<<"nonce">>, {string, Nonce}}] ++ AdditionalParams),
     SFSigInput =
         {list,
-            [
-                {item, {string, Key}, []}
-            ||
-                Key <- CommittedKeys
-            ],
-            Params
-        },
+         [ {item, {string, Key}, []}
+           || Key <- CommittedKeys ],
+         Params},
     ?event(
-        {sig_input,
-            {string,
-                hb_util:bin(
-                    hb_structured_fields:dictionary(
-                        #{ <<"sig">> => SFSigInput }
-                    )
-                )
-            }
-        }
-    ),
+      {sig_input,
+       {string,
+        hb_util:bin(
+          hb_structured_fields:dictionary(
+            #{<<"sig">> => SFSigInput}))}}),
     {ok, SigName, SFSig, SFSigInput}.
+
 
 get_additional_params(Commitment) ->
     AdditionalParams =
         sets:to_list(
-            sets:subtract(
-                sets:from_list(maps:keys(Commitment)), 
-                sets:from_list(
-                    [
-                        <<"alg">>,
-                        <<"keyid">>,
-                        <<"tag">>,
-                        <<"created">>,
-                        <<"expires">>,
-                        <<"nonce">>,
-                        <<"committed">>,
-                        <<"signature">>,
-                        <<"type">>,
-                        <<"commitment-device">>,
-                        <<"committer">>
-                    ]
-                )
-            )
-        ),
+          sets:subtract(
+            sets:from_list(maps:keys(Commitment)),
+            sets:from_list(
+              [<<"alg">>,
+               <<"keyid">>,
+               <<"tag">>,
+               <<"created">>,
+               <<"expires">>,
+               <<"nonce">>,
+               <<"committed">>,
+               <<"signature">>,
+               <<"type">>,
+               <<"commitment-device">>,
+               <<"committer">>]))),
     lists:map(fun(Param) ->
-        ParamValue = maps:get(Param, Commitment),
-        case ParamValue of
-            Val when is_binary(Val) ->
-                {Param, {string, Val}};
-            Val when is_list(Val) ->
-                {Param, {string, list_to_binary(lists:join(<<", ">>, Val))}};
-            Val when is_map(Val) ->
-                Map = nested_map_to_string(Val),
-                {Param, {string, list_to_binary(lists:join(<<", ">>, Map))} }
-        end
-    end, AdditionalParams).
+                      ParamValue = maps:get(Param, Commitment),
+                      case ParamValue of
+                          Val when is_binary(Val) ->
+                              {Param, {string, Val}};
+                          Val when is_list(Val) ->
+                              {Param, {string, list_to_binary(lists:join(<<", ">>, Val))}};
+                          Val when is_map(Val) ->
+                              Map = nested_map_to_string(Val),
+                              {Param, {string, list_to_binary(lists:join(<<", ">>, Map))}}
+                      end
+              end,
+              AdditionalParams).
+
 
 nested_map_to_string(Map) ->
     lists:map(fun(I) ->
-        case maps:get(I, Map) of
-            Val when is_map(Val) ->
-                Name = maps:get(<<"name">>, Val),
-                Value = maps:get(<<"value">>, Val),
-                <<I/binary, ":", Name/binary, ":", Value/binary>>;
-            Val ->
-                Val
-        end
-    end, maps:keys(Map)).
+                      case maps:get(I, Map) of
+                          Val when is_map(Val) ->
+                              Name = maps:get(<<"name">>, Val),
+                              Value = maps:get(<<"value">>, Val),
+                              <<I/binary, ":", Name/binary, ":", Value/binary>>;
+                          Val ->
+                              Val
+                      end
+              end,
+              maps:keys(Map)).
+
 
 %% @doc Take a message with a `signature' and `signature-input' key pair and
 %% return a map of commitments.
-siginfo_to_commitments(
-        Msg = #{ <<"signature">> := <<"sig-", SFSigBin/binary>>, <<"signature-input">> := <<"sig-", SFSigInputBin/binary>> },
-        BodyKeys,
-        Opts) ->
+siginfo_to_commitments(Msg = #{<<"signature">> := <<"sig-", SFSigBin/binary>>, <<"signature-input">> := <<"sig-", SFSigInputBin/binary>>},
+                       BodyKeys,
+                       Opts) ->
     % Parse the signature and signature-input structured-fields.
     SFSigs = hb_structured_fields:parse_dictionary(SFSigBin),
     SFSigsInputs = hb_structured_fields:parse_dictionary(SFSigInputBin),
     % Group parsed signature inputs and signatures into tuple pairs by their
     % name.
     CommitmentSFs =
-        [
-            {SFSig, element(2, lists:keyfind(SFSigName, 1, SFSigsInputs))}
-        ||
-            {SFSigName, SFSig} <- SFSigs
-        ],
+        [ {SFSig, element(2, lists:keyfind(SFSigName, 1, SFSigsInputs))}
+          || {SFSigName, SFSig} <- SFSigs ],
     % Convert each tuple into a commitment and its ID.
     CommitmentMessages =
         lists:map(
-            fun ({SFSig, SFSigInput}) ->
-                {ok, ID, Commitment} =
-                    sf_siginfo_to_commitment(
+          fun({SFSig, SFSigInput}) ->
+                  {ok, ID, Commitment} =
+                      sf_siginfo_to_commitment(
                         Msg,
                         BodyKeys,
                         SFSig,
                         SFSigInput,
-                        Opts
-                    ),
-                {ID, Commitment}
-            end,
-            CommitmentSFs
-        ),
+                        Opts),
+                  {ID, Commitment}
+          end,
+          CommitmentSFs),
     % Convert the list of commitments into a map.
     maps:from_list(CommitmentMessages);
 siginfo_to_commitments(_Msg, _BodyKeys, _Opts) ->
@@ -199,7 +179,8 @@ siginfo_to_commitments(_Msg, _BodyKeys, _Opts) ->
     % we return an empty map.
     #{}.
 
-%% @doc Take a signature and signature-input as parsed structured-fields and 
+
+%% @doc Take a signature and signature-input as parsed structured-fields and
 %% return a commitment.
 sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
     % Extract the signature and signature-input from the structured-fields.
@@ -208,9 +189,9 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
     % Generate a commitment message from the signature-input parameters.
     Commitment1 =
         maps:from_list(
-            lists:map(
-                fun ({Key, {binary, Bin}}) -> {Key, hb_util:encode(Bin)};
-                    ({Key, BareItem}) ->
+          lists:map(
+            fun({Key, {binary, Bin}}) -> {Key, hb_util:encode(Bin)};
+               ({Key, BareItem}) ->
                     Item =
                         case hb_structured_fields:from_bare_item(BareItem) of
                             Res when is_binary(Res) ->
@@ -219,10 +200,8 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
                                 Res
                         end,
                     {Key, Item}
-                end,
-                ParamsKV
-            )
-        ),
+            end,
+            ParamsKV)),
     % Generate the `commitment-device' key and optionally, its `type' key from
     % the `alg' key.
     CommitmentDeviceKeys = commitment_to_device_specifiers(Commitment1, Opts),
@@ -230,16 +209,12 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
     % `alg' key.
     Commitment2 =
         maps:merge(
-            CommitmentDeviceKeys,
-            maps:remove(<<"alg">>, Commitment1)
-        ),
+          CommitmentDeviceKeys,
+          maps:remove(<<"alg">>, Commitment1)),
     % Generate the committed keys by parsing the signature-input list.
     RawCommittedKeys =
-        [
-            Key
-        ||
-            {item, {string, Key}, []} <- SigInput
-        ],
+        [ Key
+          || {item, {string, Key}, []} <- SigInput ],
     CommittedKeys = from_siginfo_keys(Msg, BodyKeys, RawCommittedKeys),
     % Merge and cleanup the output.
     % 1. Decode the `keyid` (typically a public key) to its raw byte form.
@@ -252,50 +227,51 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
     %    the `committer' to its hash.
     Commitment3 =
         Commitment2#{
-            <<"signature">> => hb_util:encode(Sig),
-            <<"committed">> => CommittedKeys
-        },
+          <<"signature">> => hb_util:encode(Sig),
+          <<"committed">> => CommittedKeys
+         },
     Commitment5 =
         case maps:get(<<"keyid">>, Commitment3) of
             DecKeyID when byte_size(DecKeyID) =< 43 ->
                 Commitment3;
             DecPubKey ->
                 Commitment3#{
-                    <<"committer">> =>
-                        hb_util:human_id(
-                            crypto:hash(sha256, hb_util:decode(DecPubKey))
-                        )
-                }
+                  <<"committer">> =>
+                      hb_util:human_id(
+                        crypto:hash(sha256, hb_util:decode(DecPubKey)))
+                 }
         end,
     ID =
-        if byte_size(Sig) == 32 -> hb_util:human_id(Sig);
-        true -> hb_util:human_id(crypto:hash(sha256, Sig))
+        if
+            byte_size(Sig) == 32 -> hb_util:human_id(Sig);
+            true -> hb_util:human_id(crypto:hash(sha256, Sig))
         end,
     % Return the commitment and calculated ID.
     {ok, ID, Commitment5}.
 
+
 decoding_nested_map_binary(Bin) ->
     MapBinary =
         lists:foldl(
-            fun (X, Acc) ->
-                case binary:split(X, <<":">>, [global]) of
-                    [ID, Key, Value] ->
-                        Acc#{
-                            ID => #{ <<"name">> => Key, <<"value">> => Value }
-                        };
-                    _ ->
-                        X
-                end
-            end,
-            #{},
-            binary:split(Bin, <<", ">>, [global])
-        ),
+          fun(X, Acc) ->
+                  case binary:split(X, <<":">>, [global]) of
+                      [ID, Key, Value] ->
+                          Acc#{
+                            ID => #{<<"name">> => Key, <<"value">> => Value}
+                           };
+                      _ ->
+                          X
+                  end
+          end,
+          #{},
+          binary:split(Bin, <<", ">>, [global])),
     case MapBinary of
         Res when is_map(Res) ->
             Res;
         Res ->
             Res
     end.
+
 
 %% @doc Normalize a list of AO-Core keys to their equivalents in `httpsig@1.0'
 %% format. This involves:
@@ -309,6 +285,7 @@ to_siginfo_keys(Msg, Commitment, Opts) ->
     {ok, _EncMsg, EncComm, _} =
         dev_codec_httpsig:normalize_for_encoding(Msg, Commitment, Opts),
     maps:get(<<"committed">>, EncComm).
+
 
 %% @doc Normalize a list of `httpsig@1.0' keys to their equivalents in AO-Core
 %% format. There are three stages:
@@ -327,24 +304,20 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
     % 3. Replace the `body' key again with the value of the `ao-body-key' key,
     %    if present.
     ?event(
-        {from_siginfo_keys,
-            {body_keys, BodyKeys},
-            {raw_committed, SigInfoCommitted},
-            {with_body, {explicit, WithBody}}
-        }
-    ),
+      {from_siginfo_keys,
+       {body_keys, BodyKeys},
+       {raw_committed, SigInfoCommitted},
+       {with_body, {explicit, WithBody}}}),
     ListWithoutBodyKey =
         case lists:member(<<"ao-body-key">>, WithBody) of
             true ->
                 WithOrigBodyKey =
                     hb_util:list_replace(
-                        WithBody,
-                        <<"body">>,
-                        maps:get(<<"ao-body-key">>, HTTPEncMsg)
-                    ),
+                      WithBody,
+                      <<"body">>,
+                      maps:get(<<"ao-body-key">>, HTTPEncMsg)),
                 ?event(
-                    {with_orig_body_key, WithOrigBodyKey}
-                ),
+                  {with_orig_body_key, WithOrigBodyKey}),
                 WithOrigBodyKey -- [<<"ao-body-key">>];
             false ->
                 WithBody
@@ -359,13 +332,12 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
         end,
     Final =
         hb_ao:normalize_keys(
-            lists:map(
-                fun hb_link:remove_link_specifier/1,
-                ListWithoutContentType
-            )
-        ),
+          lists:map(
+            fun hb_link:remove_link_specifier/1,
+            ListWithoutContentType)),
     ?event({from_siginfo_keys, {list, Final}}),
     Final.
+
 
 %% @doc Convert committed keys to their siginfo format. This involves removing
 %% the `body' key from the committed keys, if present, and replacing it with
@@ -378,10 +350,11 @@ committed_keys_to_siginfo([<<"body">> | Rest]) ->
 committed_keys_to_siginfo([Key | Rest]) ->
     [Key | committed_keys_to_siginfo(Rest)].
 
+
 %% @doc Convert an `alg` to a commitment device. If the `alg' has the form of
-%% a device specifier (`x@y.z...[/type]'), return the device. Otherwise, we 
+%% a device specifier (`x@y.z...[/type]'), return the device. Otherwise, we
 %% assume that the `alg' is a `type' of the `httpsig@1.0' algorithm.
-%% `type' is an optional key that allows for subtyping of the algorithm. When 
+%% `type' is an optional key that allows for subtyping of the algorithm. When
 %% provided, in the `alg' it is parsed and returned as the `type' key in the
 %% commitment message.
 commitment_to_device_specifiers(Commitment, Opts) when is_map(Commitment) ->
@@ -392,9 +365,9 @@ commitment_to_device_specifiers(Alg, _Opts) ->
             % The `alg' is not a device specifier, so we assume that it is a
             % type of the `httpsig@1.0' algorithm.
             #{
-                <<"commitment-device">> => <<"httpsig@1.0">>,
-                <<"type">> => Type
-            };
+              <<"commitment-device">> => <<"httpsig@1.0">>,
+              <<"type">> => Type
+             };
         [DevName, Specifiers] ->
             % The `alg' is a device specifier. We determine if a type is present
             % by splitting on the `/` character.
@@ -402,21 +375,22 @@ commitment_to_device_specifiers(Alg, _Opts) ->
                 [_Version] ->
                     % The `alg' is a device specifier without a type.
                     #{
-                        <<"commitment-device">> => Alg
-                    };
+                      <<"commitment-device">> => Alg
+                     };
                 [Version, Type] ->
                     % The `alg' is a device specifier with a type.
                     #{
-                        <<"commitment-device">> =>
-                            <<DevName/binary, "@", Version/binary>>,
-                        <<"type">> => Type
-                    }
+                      <<"commitment-device">> =>
+                          <<DevName/binary, "@", Version/binary>>,
+                      <<"type">> => Type
+                     }
             end
     end.
 
-%% @doc Calculate an `alg' string from a commitment message, using its 
+
+%% @doc Calculate an `alg' string from a commitment message, using its
 %% `commitment-device' and optionally, its `type' key.
-commitment_to_alg(#{ <<"commitment-device">> := <<"httpsig@1.0">>, <<"type">> := Type }, _Opts) ->
+commitment_to_alg(#{<<"commitment-device">> := <<"httpsig@1.0">>, <<"type">> := Type}, _Opts) ->
     Type;
 commitment_to_alg(Commitment, _Opts) ->
     Type =
@@ -427,6 +401,7 @@ commitment_to_alg(Commitment, _Opts) ->
     CommitmentDevice = maps:get(<<"commitment-device">>, Commitment),
     <<CommitmentDevice/binary, Type/binary>>.
 
+
 %% @doc Generate a signature name from a commitment. The commitment message is
 %% not expected to be complete: Only the `commitment-device`, and the
 %% `committer' or `keyid' keys are required.
@@ -435,21 +410,17 @@ commitment_to_sig_name(Commitment) ->
         case maps:get(<<"committer">>, Commitment, undefined) of
             undefined -> maps:get(<<"keyid">>, Commitment);
             Committer ->
-                <<
-                    (hb_util:to_hex(binary:part(hb_util:native_id(Committer), 1, 8)))
-                        /binary
-                >>
+                <<(hb_util:to_hex(binary:part(hb_util:native_id(Committer), 1, 8)))/binary>>
         end,
     DeviceStr =
         binary:replace(
-            maps:get(
-                <<"commitment-device">>,
-                Commitment
-            ),
-            <<"@">>,
-            <<"-">>
-        ),
+          maps:get(
+            <<"commitment-device">>,
+            Commitment),
+          <<"@">>,
+          <<"-">>),
     <<DeviceStr/binary, ".", BaseStr/binary>>.
+
 
 %% @doc Normalize key parameters to ensure their names are correct for inclusion
 %% in the `signature-input' and associated keys.
@@ -457,29 +428,26 @@ add_derived_specifiers(ComponentIdentifiers) ->
     % Remove the @ prefix from the component identifiers, if present.
     Stripped =
         lists:map(
-            fun(<<"@", Key/binary>>) -> Key; (Key) -> Key end,
-            ComponentIdentifiers
-        ),
+          fun(<<"@", Key/binary>>) -> Key; (Key) -> Key end,
+          ComponentIdentifiers),
     % Add the @ prefix to the component identifiers, if they are derived.
     lists:flatten(
-        lists:map(
-            fun(Key) ->
+      lists:map(
+        fun(Key) ->
                 case lists:member(Key, ?DERIVED_COMPONENTS) of
-                    true -> << "@", Key/binary >>;
+                    true -> <<"@", Key/binary>>;
                     false -> Key
                 end
-            end,
-            Stripped
-        )
-    ).
+        end,
+        Stripped)).
+
 
 %% @doc Remove derived specifiers from a list of component identifiers.
 remove_derived_specifiers(ComponentIdentifiers) ->
     lists:map(
-        fun(<<"@", Key/binary>>) ->
-            Key;
-        (Key) ->
-            Key
-        end,
-        ComponentIdentifiers
-    ).
+      fun(<<"@", Key/binary>>) ->
+              Key;
+         (Key) ->
+              Key
+      end,
+      ComponentIdentifiers).

@@ -27,11 +27,19 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
+
 %% @doc Necessary hooks for compliance with the `execution-device' standard.
 init(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
+
+
 normalize(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
+
+
 snapshot(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
+
+
 compute(Msg1, Msg2, Opts) -> patches(Msg1, Msg2, Opts).
+
 
 %% @doc Get the value found at the `patch-from' key of the message, or the
 %% `from' key if the former is not present. Remove it from the message and set
@@ -39,11 +47,13 @@ compute(Msg1, Msg2, Opts) -> patches(Msg1, Msg2, Opts).
 all(Msg1, Msg2, Opts) ->
     move(all, Msg1, Msg2, Opts).
 
+
 %% @doc Find relevant `PATCH' messages in the given source key of the execution
 %% and request messages, and apply them to the given destination key of the
 %% request.
 patches(Msg1, Msg2, Opts) ->
     move(patches, Msg1, Msg2, Opts).
+
 
 %% @doc Unified executor for the `all' and `patches' modes.
 move(Mode, Msg1, Msg2, Opts) ->
@@ -54,23 +64,20 @@ move(Mode, Msg1, Msg2, Opts) ->
         % always relative to the request.
         RawPatchFrom =
             hb_ao:get_first(
-                [
-                    {Msg2, <<"patch-from">>},
-                    {Msg1, <<"patch-from">>},
-                    {Msg2, <<"from">>},
-                    {Msg1, <<"from">>}
-                ],
-                <<"/">>,
-                Opts
-            ),
+              [{Msg2, <<"patch-from">>},
+               {Msg1, <<"patch-from">>},
+               {Msg2, <<"from">>},
+               {Msg1, <<"from">>}],
+              <<"/">>,
+              Opts),
         {FromMsg, PatchFromParts} =
             case hb_path:term_to_path_parts(RawPatchFrom) of
-                [BinKey|RestKeys] ->
+                [BinKey | RestKeys] ->
                     case binary:split(BinKey, <<":">>) of
                         [<<"base">>, RestKey] ->
-                            {Msg1, [RestKey|RestKeys]};
+                            {Msg1, [RestKey | RestKeys]};
                         [<<"req">>, RestKey] ->
-                            {Msg2, [RestKey|RestKeys]};
+                            {Msg2, [RestKey | RestKeys]};
                         _ ->
                             {Msg1, RawPatchFrom}
                     end;
@@ -86,15 +93,12 @@ move(Mode, Msg1, Msg2, Opts) ->
         ?event({patch_from, PatchFrom}),
         PatchTo =
             hb_ao:get_first(
-                [
-                    {Msg2, <<"patch-to">>},
-                    {Msg1, <<"patch-to">>},
-                    {Msg2, <<"to">>},
-                    {Msg1, <<"to">>}
-                ],
-                <<"/">>,
-                Opts
-            ),
+              [{Msg2, <<"patch-to">>},
+               {Msg1, <<"patch-to">>},
+               {Msg2, <<"to">>},
+               {Msg1, <<"to">>}],
+              <<"/">>,
+              Opts),
         ?event({patch_from, PatchFrom}),
         ?event({patch_to, PatchTo}),
         % Get the source of the patches from the message. Makes the `maybe'
@@ -105,20 +109,20 @@ move(Mode, Msg1, Msg2, Opts) ->
             case Mode of
                 patches ->
                     maps:fold(
-                        fun(Key, Msg, {PatchAcc, NewSourceAcc}) ->
-                            Method = hb_ao:get(<<"method">>, Msg, Opts)
-                                == <<"PATCH">>,
-                            Device = hb_ao:get(<<"device">>, Msg, Opts)
-                                == <<"patch@1.0">>,
-                            if Method orelse Device ->
-                                {PatchAcc#{Key => Msg}, NewSourceAcc};
-                            true ->
-                                {PatchAcc, NewSourceAcc#{ Key => Msg }}
-                            end
-                        end,
-                        {#{}, #{}},
-                        Source
-                    );
+                      fun(Key, Msg, {PatchAcc, NewSourceAcc}) ->
+                              Method = hb_ao:get(<<"method">>, Msg, Opts) ==
+                                  <<"PATCH">>,
+                              Device = hb_ao:get(<<"device">>, Msg, Opts) ==
+                                  <<"patch@1.0">>,
+                              if
+                                  Method orelse Device ->
+                                      {PatchAcc#{Key => Msg}, NewSourceAcc};
+                                  true ->
+                                      {PatchAcc, NewSourceAcc#{Key => Msg}}
+                              end
+                      end,
+                      {#{}, #{}},
+                      Source);
                 all ->
                     {Source, unset}
             end,
@@ -127,17 +131,15 @@ move(Mode, Msg1, Msg2, Opts) ->
         % Remove the source from the message and set the new source.
         FromMsgWithoutSource =
             hb_ao:set(
-                FromMsg,
-                PatchFrom,
-                <<"patch-error">>,
-                Opts
-            ),
+              FromMsg,
+              PatchFrom,
+              <<"patch-error">>,
+              Opts),
         FromMsgWithNewSource =
             hb_ao:set(
-                FromMsgWithoutSource,
-                #{ PatchFrom => NewSourceValue },
-                Opts
-            ),
+              FromMsgWithoutSource,
+              #{PatchFrom => NewSourceValue},
+              Opts),
         % If the `mode` is `patches`, we need to remove the `method` key from
         % them, if present.
         ToWriteMod =
@@ -145,200 +147,189 @@ move(Mode, Msg1, Msg2, Opts) ->
                 all -> ToWrite;
                 patches ->
                     maps:fold(
-                        fun(_, Patch, MsgN) ->
-                            ?event({patching, {patch, Patch}, {before, MsgN}}),
-                            Res =
-                                hb_ao:set(
+                      fun(_, Patch, MsgN) ->
+                              ?event({patching, {patch, Patch}, {before, MsgN}}),
+                              Res =
+                                  hb_ao:set(
                                     MsgN,
                                     maps:without([<<"method">>], Patch),
-                                    Opts
-                                ),
-                            ?event({patched, {'after', Res}}),
-                            Res
-                        end,
-                        #{},
-                        ToWrite
-                    )
+                                    Opts),
+                              ?event({patched, {'after', Res}}),
+                              Res
+                      end,
+                      #{},
+                      ToWrite)
             end,
         % Find the target to apply the patches to, and apply them.
         PatchedResult =
             hb_ao:set(
-                FromMsgWithNewSource,
-                PatchTo,
-                ToWriteMod,
-                Opts
-            ),
+              FromMsgWithNewSource,
+              PatchTo,
+              ToWriteMod,
+              Opts),
         % Return the patched message and the source, less the patches.
         ?event({patch_result, PatchedResult}),
         {ok, PatchedResult}
     end.
 
+
 %%% Tests
+
 
 uninitialized_patch_test() ->
     InitState = #{
-        <<"device">> => <<"patch@1.0">>,
-        <<"results">> => #{
-            <<"outbox">> => #{
-                <<"1">> => #{
-                    <<"method">> => <<"PATCH">>,
-                    <<"prices">> => #{
-                        <<"apple">> => 100,
-                        <<"banana">> => 200
-                    }
-                },
-                <<"2">> => #{
-                    <<"method">> => <<"GET">>,
-                    <<"prices">> => #{
-                        <<"apple">> => 1000
-                    }
-                }
-            }
-        },
-        <<"other-message">> => <<"other-value">>,
-        <<"patch-to">> => <<"/">>,
-        <<"patch-from">> => <<"/results/outbox">>
-    },
+                  <<"device">> => <<"patch@1.0">>,
+                  <<"results">> => #{
+                                     <<"outbox">> => #{
+                                                       <<"1">> => #{
+                                                                    <<"method">> => <<"PATCH">>,
+                                                                    <<"prices">> => #{
+                                                                                      <<"apple">> => 100,
+                                                                                      <<"banana">> => 200
+                                                                                     }
+                                                                   },
+                                                       <<"2">> => #{
+                                                                    <<"method">> => <<"GET">>,
+                                                                    <<"prices">> => #{
+                                                                                      <<"apple">> => 1000
+                                                                                     }
+                                                                   }
+                                                      }
+                                    },
+                  <<"other-message">> => <<"other-value">>,
+                  <<"patch-to">> => <<"/">>,
+                  <<"patch-from">> => <<"/results/outbox">>
+                 },
     {ok, ResolvedState} =
         hb_ao:resolve(
-            InitState,
-            <<"compute">>,
-            #{}
-        ),
+          InitState,
+          <<"compute">>,
+          #{}),
     ?event({resolved_state, ResolvedState}),
     ?assertEqual(
-        100,
-        hb_ao:get(<<"prices/apple">>, ResolvedState, #{})
-    ),
+      100,
+      hb_ao:get(<<"prices/apple">>, ResolvedState, #{})),
     ?assertMatch(
-        not_found,
-        hb_ao:get(<<"results/outbox/1">>, ResolvedState, #{})
-    ).
+      not_found,
+      hb_ao:get(<<"results/outbox/1">>, ResolvedState, #{})).
+
 
 patch_to_submessage_test() ->
     InitState = #{
-        <<"device">> => <<"patch@1.0">>,
-        <<"results">> => #{
-            <<"outbox">> => #{
-                <<"1">> =>
-                    hb_message:commit(#{
-                        <<"method">> => <<"PATCH">>,
-                        <<"prices">> => #{
-                            <<"apple">> => 100,
-                            <<"banana">> => 200
-                        }
-                    },
-                    hb:wallet()
-                )
-            }
-        },
-        <<"state">> => #{
-            <<"prices">> => #{
-                <<"apple">> => 1000
-            }
-        },
-        <<"other-message">> => <<"other-value">>,
-        <<"patch-to">> => <<"/state">>,
-        <<"patch-from">> => <<"/results/outbox">>
-    },
+                  <<"device">> => <<"patch@1.0">>,
+                  <<"results">> => #{
+                                     <<"outbox">> => #{
+                                                       <<"1">> =>
+                                                           hb_message:commit(#{
+                                                                               <<"method">> => <<"PATCH">>,
+                                                                               <<"prices">> => #{
+                                                                                                 <<"apple">> => 100,
+                                                                                                 <<"banana">> => 200
+                                                                                                }
+                                                                              },
+                                                                             hb:wallet())
+                                                      }
+                                    },
+                  <<"state">> => #{
+                                   <<"prices">> => #{
+                                                     <<"apple">> => 1000
+                                                    }
+                                  },
+                  <<"other-message">> => <<"other-value">>,
+                  <<"patch-to">> => <<"/state">>,
+                  <<"patch-from">> => <<"/results/outbox">>
+                 },
     {ok, ResolvedState} =
         hb_ao:resolve(
-            InitState,
-            <<"compute">>,
-            #{}
-        ),
+          InitState,
+          <<"compute">>,
+          #{}),
     ?event({resolved_state, ResolvedState}),
     ?assertEqual(
-        100,
-        hb_ao:get(<<"state/prices/apple">>, ResolvedState, #{})
-    ).
+      100,
+      hb_ao:get(<<"state/prices/apple">>, ResolvedState, #{})).
+
 
 all_mode_test() ->
     InitState = #{
-        <<"device">> => <<"patch@1.0">>,
-        <<"input">> => #{
-            <<"zones">> => #{
-                <<"1">> => #{
-                    <<"method">> => <<"PATCH">>,
-                    <<"prices">> => #{
-                        <<"apple">> => 100,
-                        <<"banana">> => 200
-                    }
-                },
-                <<"2">> => #{
-                    <<"method">> => <<"GET">>,
-                    <<"prices">> => #{
-                        <<"orange">> => 300
-                    }
-                }
-            }
-        },
-        <<"state">> => #{
-            <<"prices">> => #{
-                <<"apple">> => 1000
-            }
-        }
-    },
+                  <<"device">> => <<"patch@1.0">>,
+                  <<"input">> => #{
+                                   <<"zones">> => #{
+                                                    <<"1">> => #{
+                                                                 <<"method">> => <<"PATCH">>,
+                                                                 <<"prices">> => #{
+                                                                                   <<"apple">> => 100,
+                                                                                   <<"banana">> => 200
+                                                                                  }
+                                                                },
+                                                    <<"2">> => #{
+                                                                 <<"method">> => <<"GET">>,
+                                                                 <<"prices">> => #{
+                                                                                   <<"orange">> => 300
+                                                                                  }
+                                                                }
+                                                   }
+                                  },
+                  <<"state">> => #{
+                                   <<"prices">> => #{
+                                                     <<"apple">> => 1000
+                                                    }
+                                  }
+                 },
     {ok, ResolvedState} =
         hb_ao:resolve(
-            InitState,
-            #{
-                <<"path">> => <<"all">>,
-                <<"patch-to">> => <<"/state">>,
-                <<"patch-from">> => <<"/input/zones">>
-            },
-            #{}
-        ),
+          InitState,
+          #{
+            <<"path">> => <<"all">>,
+            <<"patch-to">> => <<"/state">>,
+            <<"patch-from">> => <<"/input/zones">>
+           },
+          #{}),
     ?event({resolved_state, ResolvedState}),
     ?assertEqual(
-        100,
-        hb_ao:get(<<"state/1/prices/apple">>, ResolvedState, #{})
-    ),
+      100,
+      hb_ao:get(<<"state/1/prices/apple">>, ResolvedState, #{})),
     ?assertEqual(
-        300,
-        hb_ao:get(<<"state/2/prices/orange">>, ResolvedState, #{})
-    ),
+      300,
+      hb_ao:get(<<"state/2/prices/orange">>, ResolvedState, #{})),
     ?assertEqual(
-        not_found,
-        hb_ao:get(<<"input/zones">>, ResolvedState, #{})
-    ).
+      not_found,
+      hb_ao:get(<<"input/zones">>, ResolvedState, #{})).
+
 
 req_prefix_test() ->
     BaseMsg = #{
-        <<"device">> => <<"patch@1.0">>,
-        <<"state">> => #{
-            <<"prices">> => #{
-                <<"apple">> => 1000
-            }
-        }
-    },
+                <<"device">> => <<"patch@1.0">>,
+                <<"state">> => #{
+                                 <<"prices">> => #{
+                                                   <<"apple">> => 1000
+                                                  }
+                                }
+               },
     ReqMsg = #{
-        <<"path">> => <<"all">>,
-        <<"patch-from">> => <<"req:/results/outbox/1">>,
-        <<"patch-to">> => <<"/state">>,
-        <<"results">> => #{
-            <<"outbox">> => #{
-                <<"1">> => #{
-                    <<"method">> => <<"PATCH">>,
-                    <<"prices">> => #{
-                        <<"apple">> => 100,
-                        <<"banana">> => 200
-                    }
-                }
-            }
-        }
-    },
+               <<"path">> => <<"all">>,
+               <<"patch-from">> => <<"req:/results/outbox/1">>,
+               <<"patch-to">> => <<"/state">>,
+               <<"results">> => #{
+                                  <<"outbox">> => #{
+                                                    <<"1">> => #{
+                                                                 <<"method">> => <<"PATCH">>,
+                                                                 <<"prices">> => #{
+                                                                                   <<"apple">> => 100,
+                                                                                   <<"banana">> => 200
+                                                                                  }
+                                                                }
+                                                   }
+                                 }
+              },
     {ok, ResolvedState} = hb_ao:resolve(BaseMsg, ReqMsg, #{}),
     ?event({resolved_state, ResolvedState}),
     ?assertEqual(
-        100,
-        hb_ao:get(<<"state/prices/apple">>, ResolvedState, #{})
-    ),
+      100,
+      hb_ao:get(<<"state/prices/apple">>, ResolvedState, #{})),
     ?assertEqual(
-        200,
-        hb_ao:get(<<"state/prices/banana">>, ResolvedState, #{})
-    ),
+      200,
+      hb_ao:get(<<"state/prices/banana">>, ResolvedState, #{})),
     ?assertEqual(
-        not_found,
-        hb_ao:get(<<"results/outbox/1">>, ResolvedState, #{})
-    ).
+      not_found,
+      hb_ao:get(<<"results/outbox/1">>, ResolvedState, #{})).
