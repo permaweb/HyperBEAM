@@ -11,16 +11,18 @@ use_directory_urls: false
 nav:
   # - Introduction:
   #     - What is HyperBEAM?: 'introduction/what-is-hyperbeam.md'
-  #     - What is AO-Core?: 'introduction/what-is-ao-core.md'
   #     - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
   #     - Pathing in HyperBEAM: 'introduction/pathing-in-hyperbeam.md'
+
   - Build on HyperBEAM:
-      - Introduction: "build/what-is-hyperbeam.md"
-      - Quick Start: "build/quick-start.md"
-      - Migration: "build/migrating-from-legacynet.md"
-      - AO Connect: "build/ao-connect.md"
-      - Pathing: "build/pathing-in-hyperbeam.md"
-      - Building Devices: "build/building-devices.md"
+      - Intro to AO-Core: "build/introduction/what-is-ao-core.md"
+      - Intro to HyperBEAM: "build/introduction/what-is-hyperbeam.md"
+      - Serverless Compute: "build/introduction/serverless-decentralized-compute.md"
+      - Getting Started:
+          - Quick Start: "build/quick-start.md"
+          - Migration: "build/migrating-from-legacynet.md"
+          - AO Connect: "build/ao-connect.md"
+          - Pathing: "build/pathing-in-hyperbeam.md"
       - Devices:
           - "Overview": "build/devices/hyperbeam-devices.md"
           - "Core Devices":
@@ -32,7 +34,7 @@ nav:
               - ~json@1.0: "build/devices/json-at-1-0.md"
               - ~scheduler@1.0: "build/devices/scheduler-at-1-0.md"
               - ~relay@1.0: "build/devices/relay-at-1-0.md"
-          - "Source Code": "https://github.com/permaweb/HyperBEAM"
+          - Building Devices: "build/building-devices.md"
       - Reference:
           - FAQ: "build/reference/faq.md"
           - Glossary: "build/reference/glossary.md"

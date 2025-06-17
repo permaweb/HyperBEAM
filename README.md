@@ -79,7 +79,7 @@ rebar3 shell
 ```
 
 The default configuration uses settings from `hb_opts.erl`, which preloads 
-all devices and sets up default stores on port 10000.
+all devices and sets up default stores on port 8734.
 
 ### Optional Build Profiles
 
@@ -116,7 +116,7 @@ Note: Profiles modify compile-time options that get baked into the release. Choo
 To verify that your HyperBEAM node is running correctly, check:
 
 ```bash
-curl http://localhost:10000/~meta@1.0/info
+curl http://localhost:8734/~meta@1.0/info
 ```
 
 If you receive a response with node information, your HyperBEAM
@@ -135,7 +135,7 @@ The simplest way to configure HyperBEAM is using the `config.flat` file:
 2. Update to include your configuration values:
 
 ```
-port: 10000
+port: 8734
 priv_key_location: /path/to/wallet.json
 ```
 

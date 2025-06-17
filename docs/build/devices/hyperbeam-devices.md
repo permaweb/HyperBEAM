@@ -1,6 +1,6 @@
 # HyperBEAM Devices
 
-In AO-Core and its implementation HyperBEAM, **Devices** are modular components responsible for processing and interpreting [Messages](./what-is-ao-core.md#core-concepts). They define the specific logic for how computations are performed, data is handled, or interactions occur within the AO ecosystem.
+In AO-Core and its implementation HyperBEAM, **Devices** are modular components responsible for processing and interpreting [Messages](../introduction/what-is-ao-core.md#core-concepts). They define the specific logic for how computations are performed, data is handled, or interactions occur within the AO ecosystem.
 
 Think of Devices as specialized engines or services that can be plugged into the AO framework. This modularity is key to AO's flexibility and extensibility.
 
