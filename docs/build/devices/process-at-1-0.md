@@ -2,15 +2,15 @@
 
 ## Overview
 
-The [`~process@1.0`](./source-code/dev_process.html) device represents a persistent, shared execution environment within HyperBEAM, analogous to a process or actor in other systems. It allows for stateful computation and interaction over time.
+The [`~process@1.0`](./source-code/dev_process.md) device represents a persistent, shared execution environment within HyperBEAM, analogous to a process or actor in other systems. It allows for stateful computation and interaction over time.
 
 ## Core Concept: Orchestration
 
 A message tagged with `Device: process@1.0` (the "Process Definition Message") doesn't typically perform computation itself. Instead, it defines *which other devices* should be used for key aspects of its lifecycle:
 
-*   **Scheduler Device:** Determines the order of incoming messages (assignments) to be processed. (Defaults to [`~scheduler@1.0`](./source-code/dev_scheduler.html)).
-*   **Execution Device:** Executes the actual computation based on the current state and the scheduled message. Often configured as [`dev_stack`](./source-code/dev_stack.html) to allow multiple computational steps (e.g., running WASM, applying cron jobs, handling proofs).
-*   **Push Device:** Handles the injection of new messages into the process's schedule. (Defaults to [`~push@1.0`](./source-code/dev_push.html)).
+*   **Scheduler Device:** Determines the order of incoming messages (assignments) to be processed. (Defaults to [`~scheduler@1.0`](./source-code/dev_scheduler.md)).
+*   **Execution Device:** Executes the actual computation based on the current state and the scheduled message. Often configured as [`dev_stack`](./source-code/dev_stack.md) to allow multiple computational steps (e.g., running WASM, applying cron jobs, handling proofs).
+*   **Push Device:** Handles the injection of new messages into the process's schedule. (Defaults to [`~push@1.0`](./source-code/dev_push.md)).
 
 The `~process@1.0` device acts as a router, intercepting requests and delegating them to the appropriate configured device (scheduler, executor, etc.) by temporarily swapping the device tag on the message before resolving.
 
@@ -28,7 +28,7 @@ These keys are accessed via an HTTP path relative to the Process Definition Mess
 *   **`GET /<ProcessID>~process@1.0/compute/<TargetSlotOrMsgID>`**
     *   **Action:** Computes the process state up to a specific point identified by `<TargetSlotOrMsgID>` (either a slot number or a message ID within the schedule). It retrieves assignments from the Scheduler Device and applies them sequentially using the configured Execution Device.
     *   **Response:** The process state message after executing up to the target slot/message.
-    *   **Caching:** Results are cached aggressively (see [`dev_process_cache`](./source-code/dev_process_cache.html)) to avoid recomputation.
+    *   **Caching:** Results are cached aggressively (see [`dev_process_cache`](./source-code/dev_process_cache.md)) to avoid recomputation.
 *   **`GET /<ProcessID>~process@1.0/now`**
     *   **Action:** Computes and returns the `Results` key from the *latest* known state of the process. This typically involves computing all pending assignments.
     *   **Response:** The value of the `Results` key from the final state.
@@ -45,13 +45,13 @@ A typical process definition message might look like this (represented conceptua
 
 ```text
 Device: process@1.0
-Scheduler-Device: [`scheduler@1.0`](./source-code/dev_scheduler.html)
-Execution-Device: [`stack@1.0`](./source-code/dev_stack.html)
-Execution-Stack: "[`scheduler@1.0`](./source-code/dev_scheduler.md)", "[`cron@1.0`](./source-code/dev_cron.md)", "[`wasm64@1.0`](./source-code/dev_wasm.html)", "[`PoDA@1.0`](./source-code/dev_poda.html)"
+Scheduler-Device: [`scheduler@1.0`](./source-code/dev_scheduler.md)
+Execution-Device: [`stack@1.0`](./source-code/dev_stack.md)
+Execution-Stack: "[`scheduler@1.0`](./source-code/dev_scheduler.md)", "[`cron@1.0`](./source-code/dev_cron.md)", "[`wasm64@1.0`](./source-code/dev_wasm.md)", "[`PoDA@1.0`](./source-code/dev_poda.md)"
 Cron-Frequency: 10-Minutes
 WASM-Image: <WASMImageTxID>
 PoDA:
-    Device: [`PoDA/1.0`](./source-code/dev_poda.html)
+    Device: [`PoDA/1.0`](./source-code/dev_poda.md)
     Authority: <AddressA>
     Authority: <AddressB>
     Quorum: 2
@@ -63,10 +63,10 @@ This defines a process that uses:
 
 ## State Management & Caching
 
-`~process@1.0` relies heavily on caching ([`dev_process_cache`](./source-code/dev_process_cache.html)) to optimize performance. Full state snapshots and intermediate results are cached periodically (configurable via `Cache-Frequency` and `Cache-Keys` options) to avoid recomputing the entire history for every request.
+`~process@1.0` relies heavily on caching ([`dev_process_cache`](./source-code/dev_process_cache.md)) to optimize performance. Full state snapshots and intermediate results are cached periodically (configurable via `Cache-Frequency` and `Cache-Keys` options) to avoid recomputing the entire history for every request.
 
 ## Initialization (`init`)
 
 Processes often require an initialization step before they can process messages. This is typically triggered by calling the `init` key on the configured Execution Device via the process path (`/<ProcessID>~process@1.0/init`). This allows components within the execution stack (like WASM modules) to set up their initial state.
 
-[process module](./source-code/dev_process.html)
+[process module](./source-code/dev_process.md)

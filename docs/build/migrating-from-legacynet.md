@@ -14,7 +14,7 @@ The process of migration involves updating your process to take advantage of the
 
 ## Exposing Process State with the Patch Device
 
-The [`~patch@1.0`](../build/devices/source-code/dev_patch.html) device provides a mechanism for AO processes to expose parts of their internal state, making it readable via direct HTTP GET requests.
+The [`~patch@1.0`](./devices/source-code/dev_patch.md) device provides a mechanism for AO processes to expose parts of their internal state, making it readable via direct HTTP GET requests.
 
 ### Why Use the Patch Device?
 
@@ -30,7 +30,7 @@ This is particularly useful for:
 
 ### How it Works
 
-1.  **Process Logic:** Inside your AO process code (e.g., in Lua or WASM), when you want to expose data, you construct an *outbound message* targeted at the [`~patch@1.0`](../build/devices/source-code/dev_patch.html) device.
+1.  **Process Logic:** Inside your AO process code (e.g., in Lua or WASM), when you want to expose data, you construct an *outbound message* targeted at the [`~patch@1.0`](./devices/source-code/dev_patch.md) device.
 2.  **Patch Message Format:** This outbound message typically includes tags that specify:
     *   `device = 'patch@1.0'`
     *   A `cache` tag containing a table. The **keys** within this table become the final segments in the HTTP path used to access the data, and the **values** are the data itself.

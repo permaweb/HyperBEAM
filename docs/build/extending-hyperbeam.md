@@ -74,7 +74,7 @@ While `dev_router` provides basic strategies (round-robin, etc.), you could pote
 
 ## Getting Started
 
-1.  **Familiarize Yourself:** Deeply understand Erlang/OTP and the HyperBEAM codebase (`src/` directory), especially [`hb_ao.erl`](../build/devices/source-code/hb_ao.html), [`hb_message.erl`](../build/devices/source-code/hb_message.html), and existing `dev_*.erl` modules relevant to your idea.
+1.  **Familiarize Yourself:** Deeply understand Erlang/OTP and the HyperBEAM codebase (`src/` directory), especially [`hb_ao.erl`](./devices/source-code/hb_ao.md), [`hb_message.erl`](./devices/source-code/hb_message.md), and existing `dev_*.erl` modules relevant to your idea.
 2.  **Study Examples:** Look at simple devices like `dev_patch.erl` or more complex ones like `dev_process.erl` to understand patterns.
 3.  **Start Small:** Implement a minimal version of your idea first.
 4.  **Test Rigorously:** Use `rebar3 eunit` extensively.

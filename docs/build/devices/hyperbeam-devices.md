@@ -1,4 +1,4 @@
-# AO Devices
+# HyperBEAM Devices
 
 In AO-Core and its implementation HyperBEAM, **Devices** are modular components responsible for processing and interpreting [Messages](./what-is-ao-core.md#core-concepts). They define the specific logic for how computations are performed, data is handled, or interactions occur within the AO ecosystem.
 
@@ -35,9 +35,9 @@ HyperBEAM includes many preloaded devices that provide core functionality. Some 
 
 Devices aren't limited to just computation or state management. They can represent more abstract concepts:
 
-*   **Security Devices** ([`~snp@1.0`](./source-code/dev_snp.html), [`dev_codec_httpsig`](./source-code/dev_codec_httpsig.html)): Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
-*   **Payment/Access Control Devices** ([`~p4@1.0`](./source-code/dev_p4.html), [`~faff@1.0`](./source-code/dev_faff.html)): Manage metering, billing, or access control for node services.
-*   **Workflow/Utility Devices** ([`dev_cron`](./source-code/dev_cron.md), [`dev_stack`](./source-code/dev_stack.html), [`dev_monitor`](./source-code/dev_monitor.html)): Coordinate complex execution flows, schedule tasks, or monitor process activity.
+*   **Security Devices** ([`~snp@1.0`](./source-code/dev_snp.md), [`dev_codec_httpsig`](./source-code/dev_codec_httpsig.md)): Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
+*   **Payment/Access Control Devices** ([`~p4@1.0`](./source-code/dev_p4.md), [`~faff@1.0`](./source-code/dev_faff.md)): Manage metering, billing, or access control for node services.
+*   **Workflow/Utility Devices** ([`dev_cron`](./source-code/dev_cron.md), [`dev_stack`](./source-code/dev_stack.md), [`dev_monitor`](./source-code/dev_monitor.md)): Coordinate complex execution flows, schedule tasks, or monitor process activity.
 
 ## Using Devices
 
