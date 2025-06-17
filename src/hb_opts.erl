@@ -133,7 +133,7 @@ default_message() ->
         short_trace_len => 20,
         debug_metadata => true,
         debug_ids => true,
-        debug_committers => false,
+        debug_committers => true,
         debug_show_priv => if_present,
         debug_resolve_links => false,
 		trusted => #{},

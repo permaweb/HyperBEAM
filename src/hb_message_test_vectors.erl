@@ -11,8 +11,8 @@
 % %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    signed_non_bundle_is_bundlable_test(
-        #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
+    normalize_commitments_test(
+        <<"structured@1.0">>,
         test_opts(normal)
     ).
 
@@ -103,6 +103,8 @@ test_suite() ->
             fun encode_small_balance_table_test/2},
         {<<"Encode large balance table">>,
             fun encode_large_balance_table_test/2},
+        {<<"Normalize commitments">>,
+            fun normalize_commitments_test/2},
         % Signed messages
         {<<"Signed message to message and back">>,
             fun signed_message_encode_decode_verify_test/2},
@@ -1034,6 +1036,32 @@ hashpath_sign_verify_test(Codec, Opts) ->
             Decoded,
             strict,
             Opts
+        )
+    ).
+
+normalize_commitments_test(Codec, Opts) ->
+    Msg = #{
+        <<"a">> => #{
+            <<"b">> => #{
+                <<"c">> => 1,
+                <<"d">> => #{
+                    <<"e">> => 2
+                },
+                <<"f">> => 3
+            },
+            <<"g">> => 4
+        },
+        <<"h">> => 5
+    },
+    NormMsg = hb_message:normalize_commitments(Msg, Opts),
+    ?event({norm_msg, NormMsg}),
+    ?assert(hb_message:verify(NormMsg, all, Opts)),
+    ?assert(maps:is_key(<<"commitments">>, NormMsg)),
+    ?assert(maps:is_key(<<"commitments">>, maps:get(<<"a">>, NormMsg))),
+    ?assert(
+        maps:is_key(
+            <<"commitments">>,
+            maps:get(<<"b">>, maps:get(<<"a">>, NormMsg))
         )
     ).
 

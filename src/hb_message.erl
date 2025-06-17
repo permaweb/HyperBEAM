@@ -61,7 +61,7 @@
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
 -export([verify/1, verify/2, verify/3, commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([commitment/2, commitment/3, with_only_committed/2, is_signed_key/3]).
--export([with_commitments/3, without_commitments/3]).
+-export([with_commitments/3, without_commitments/3, normalize_commitments/2]).
 -export([match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
 -export([default_tx_list/0, default_tx_keys/0, filter_default_keys/1]).
@@ -195,6 +195,35 @@ id(Msg, RawCommitters, Opts) ->
             Opts
         ),
     hb_util:human_id(ID).
+
+%% @doc Normalize the IDs in a message, ensuring that there is at least one
+%% unsigned ID present. By forcing this work to occur in strategically positioned
+%% places, we avoid the need to recalculate the IDs for every `hb_message:id`
+%% call.
+normalize_commitments(Msg, Opts) when is_map(Msg) ->
+    NormMsg = 
+        maps:map(
+            fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
+                Val;
+               (_Key, Val) -> normalize_commitments(Val, Opts)
+            end,
+            Msg
+        ),
+    case hb_maps:get(<<"commitments">>, NormMsg, not_found, Opts) of
+        not_found ->
+            {ok, #{ <<"commitments">> := Commitments }} =
+                dev_message:commit(
+                    NormMsg,
+                    #{ <<"type">> => <<"unsigned">> },
+                    Opts
+                ),
+            NormMsg#{ <<"commitments">> => Commitments };
+        _ -> NormMsg
+    end;
+normalize_commitments(Msg, Opts) when is_list(Msg) ->
+    lists:map(fun(X) -> normalize_commitments(X, Opts) end, Msg);
+normalize_commitments(Msg, _Opts) ->
+    Msg.
 
 %% @doc Return a message with only the committed keys. If no commitments are
 %% present, the message is returned unchanged. This means that you need to

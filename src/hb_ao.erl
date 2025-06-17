@@ -621,12 +621,13 @@ resolve_stage(9, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) when is_map(Msg3) ->
     resolve_stage(10, Msg1, Msg2,
         case hb_opts:get(hashpath, update, Opts#{ only => local }) of
             update ->
-                Priv = hb_private:from_message(Msg3),
+                NormMsg3 = Msg3,
+                Priv = hb_private:from_message(NormMsg3),
                 HP = hb_path:hashpath(Msg1, Msg2, Opts),
                 if not is_binary(HP) or not is_map(Priv) ->
-                    throw({invalid_hashpath, {hp, HP}, {msg3, Msg3}});
+                    throw({invalid_hashpath, {hp, HP}, {msg3, NormMsg3}});
                 true ->
-                    {ok, Msg3#{ <<"priv">> => Priv#{ <<"hashpath">> => HP } }}
+                    {ok, NormMsg3#{ <<"priv">> => Priv#{ <<"hashpath">> => HP } }}
                 end;
             reset ->
                 Priv = hb_private:from_message(Msg3),

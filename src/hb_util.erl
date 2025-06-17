@@ -338,7 +338,7 @@ message_to_ordered_list(List, _Opts) when is_list(List) ->
     List;
 message_to_ordered_list(Message, Opts) ->
     NormMessage = hb_ao:normalize_keys(Message, Opts),
-    Keys = hb_maps:keys(NormMessage, Opts) -- [<<"priv">>],
+    Keys = hb_maps:keys(NormMessage, Opts) -- [<<"priv">>, <<"commitments">>],
     SortedKeys =
         lists:map(
             fun hb_ao:normalize_key/1,
