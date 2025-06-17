@@ -890,3 +890,59 @@ hyper_ao_ensure_id_test() ->
     ?event(jack, {results, Results}),
     % ?assertEqual(Address, Id),
     ok.
+
+create_modules(Modules) ->
+    Template = #{
+        <<"content-type">> => <<"application/lua">>,
+        <<"body">> => undefined
+    },
+    lists:map(fun(Binary) ->
+        maps:map(fun(Key, _Value) ->
+            case Key of
+                <<"content-type">> -> <<"application/lua">>;
+                <<"body">> -> Binary
+            end
+        end, Template)
+    end, Modules).
+
+generate_hyper_aos_modular_process(Codes, Wallet) ->
+    hb_message:commit(
+        #{
+            <<"device">> => <<"process@1.0">>,
+            <<"type">> => <<"Process">>,
+            <<"method">> => <<"POST">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"execution-device">> => <<"lua@5.3a">>,
+            <<"module">> => create_modules(Codes),
+            <<"authority">> => [ 
+                hb:address(), 
+                <<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
+            ], 
+            <<"scheduler-location">> => hb:address(),
+            <<"test-random-seed">> => rand:uniform(1337)
+         },
+        Wallet
+    ).
+
+hyper_aos_stringify_test() ->
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, Stringify} = file:read_file("scripts/aos-stringify.lua"),
+    Code = <<
+"""
+local stringify = require('.stringify')
+
+function compute(base, req)
+  local x = stringify.format({ hello = "World"})
+  local y = stringify.format({ hello = "World"})
+  base.results = tostring(x == y)
+  return base 
+end
+"""
+    >>,
+    Process = generate_hyper_aos_modular_process([Stringify, Code], Wallet),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual(<<"true">>, Result).
