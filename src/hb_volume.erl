@@ -407,22 +407,29 @@ update_store_config(#{<<"store-module">> := Module} = StoreConfig, NewPath)
     % Handle various store module types differently
     case Module of
         hb_store_fs ->
-            % For filesystem store, replace prefix with the new path
-            StoreConfig#{<<"name">> => NewPath};
+            % For filesystem store, prefix the existing path with the new path
+            ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
+            NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
+            ?event(debug_volume, {update_store_config, fs, StoreConfig, NewPath, NewName}),
+            StoreConfig#{<<"name">> => NewName};
+        hb_store_lmdb ->
+            % For LMDB store, prefix the existing path with the new path
+            ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
+            NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
+            ?event(debug_volume, {update_store_config, lmdb, StoreConfig, NewPath, NewName}),
+            StoreConfig#{<<"name">> => NewName};
         hb_store_rocksdb ->
-            % For RocksDB store, replace prefix with the new path
-            % StoreConfig#{<<"name">> => NewPath};
             StoreConfig;
         hb_store_gateway ->
             % For gateway store, recursively update nested store configurations
-            % NestedStore = maps:get(<<"store">>, StoreConfig, []),
-            % StoreConfig#{
-            %     <<"store">> => update_store_config(NestedStore, NewPath)
-            % };
-            StoreConfig;
+            NestedStore = maps:get(<<"store">>, StoreConfig, []),
+            StoreConfig#{
+                <<"store">> => update_store_config(NestedStore, NewPath)
+            };
         _ ->
             % For any other store type, update the prefix
             % StoreConfig#{<<"name">> => NewPath}
+            ?event(debug_volume, {update_store_config, other, StoreConfig, NewPath}),
             StoreConfig
     end;
 update_store_config({Type, _OldPath, Opts}, NewPath) ->

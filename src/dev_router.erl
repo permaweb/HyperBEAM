@@ -58,10 +58,12 @@ info(_Msg1, _Msg2, _Opts) ->
             },
             <<"register">> => #{
                 <<"description">> => <<"Register a route with a remote router node">>,
-                    <<"peer_location">> => <<"Location of the router peer">>,
+                <<"router_registration_opts">> => [#{
+                    <<"registration-peer">> => <<"Location of the router peer">>,
                     <<"prefix">> => <<"Prefix for the route">>,
                     <<"price">> => <<"Price for the route">>,
                     <<"template">> => <<"Template to match the route">>
+                }]
             },
             <<"preprocess">> => #{
                 <<"description">> => <<"Preprocess a request to check if it should be relayed">>
@@ -74,46 +76,50 @@ info(_Msg1, _Msg2, _Opts) ->
 %% a new route with a remote router node. This function should also be idempotent.
 %% so that it can be called only once.
 register(_M1, M2, Opts) ->
-    maybe
-        %% Extract all required parameters from options
-        %% These values will be used to construct the registration message
-        RouterRegOpts = hb_opts:get(router_registration_opts, #{}, Opts),
-        RouterNode =
-            hb_ao:get(
-                <<"registration-peer">>,
-                RouterRegOpts,
-                not_found,
-                Opts
-            ),
-        {ok, SigOpts} =
-            case hb_ao:get(<<"as">>, M2, not_found, Opts) of
-                not_found -> {ok, Opts};
-                AsID -> hb_opts:as(AsID, Opts)
-            end,
-        ?event({sig_opts, SigOpts}),
-        %% Post registration request to the router node
-        %% The message includes our route details and attestation for verification
-        {ok, Res} =
-            hb_http:post(
-                RouterNode,
-                <<"/router~node-process@1.0/schedule">>,
-                hb_message:commit(
-                    #{
-                        <<"subject">> => <<"self">>,
-                        <<"action">> => <<"register">>,
-                        <<"route">> => RouterRegOpts
-                    },
-                    SigOpts
+    %% Extract all required parameters from options
+    %% These values will be used to construct the registration message
+    RouterRegMsgs =
+        case hb_opts:get(router_registration_opts, #{}, Opts) of
+            RegList when is_list(RegList) -> RegList;
+            RegMsg when is_map(RegMsg) -> [RegMsg]
+        end,
+    lists:foreach(
+        fun(RegMsg) ->
+            RouterNode =
+                hb_ao:get(
+                    <<"registration-peer">>,
+                    RegMsg,
+                    not_found,
+                    Opts
                 ),
-                Opts
-            ),
-        ?event({registered, {msg, M2}, {res, Res}}),
-        {ok, <<"Route registered.">>}
-    else
-        %% Handle any other errors from the registration process
-        %% This includes parameter validation errors and HTTP errors
-        {error, Reason} -> {error, Reason}
-    end.
+            {ok, SigOpts} =
+                case hb_ao:get(<<"as">>, M2, not_found, Opts) of
+                    not_found -> {ok, Opts};
+                    AsID -> hb_opts:as(AsID, Opts)
+                end,
+            % Post registration request to the router node
+            % The message includes our route details and attestation
+            % for verification
+            {ok, Res} =
+                hb_http:post(
+                    RouterNode,
+                    <<"/router~node-process@1.0/schedule">>,
+                    hb_message:commit(
+                        #{
+                            <<"subject">> => <<"self">>,
+                            <<"action">> => <<"register">>,
+                            <<"route">> => RegMsg
+                        },
+                        SigOpts
+                    ),
+                    Opts
+                ),
+            ?event({registered, {msg, M2}, {res, Res}}),
+            {ok, <<"Route registered.">>}
+        end,
+        RouterRegMsgs
+    ),
+    {ok, <<"Routes registered.">>}.
 
 %% @doc Device function that returns all known routes.
 routes(M1, M2, Opts) ->

@@ -137,6 +137,11 @@ default_message() ->
         debug_show_priv => if_present,
         debug_resolve_links => false,
 		trusted => #{},
+        snp_enforced_keys => [
+            firmware, kernel, 
+            initrd, append,
+            vmm_type, guest_features
+        ],
         routes => [
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
@@ -535,62 +540,32 @@ ensure_node_history(Opts, RequiredOpts) ->
         ),
         % Get the first item (complete opts) and remaining items (differences)
         [FirstItem | RemainingItems] = NormalizedNodeHistory,
-        
-        % Step 1: Validate first item has all required keys
-        FirstItemKeysPresent = lists:all(
-            fun(Key) ->
-                maps:is_key(Key, FirstItem)
-            end,
-            maps:keys(NormalizedRequiredOpts)
-        ),
-        true ?= FirstItemKeysPresent orelse {error, keys_missing},
-        
         % Step 2: Validate first item values match requirements
-        FirstItemValuesMatch = hb_message:match(FirstItem, NormalizedRequiredOpts, only_present),
+        FirstItemValuesMatch = hb_message:match(NormalizedRequiredOpts, FirstItem, primary),
         true ?= (FirstItemValuesMatch == true) orelse {error, values_invalid},
         % Step 3: Check that remaining items don't modify required keys
         NoRequiredKeysModified = lists:all(
             fun(HistoryItem) ->
                 % For each required key, if it exists in this history item,
                 % it must match the value from the first item
-                lists:all(
-                    fun(RequiredKey) ->
-                        case maps:find(RequiredKey, HistoryItem) of
-                            {ok, Value} ->
-                                % Key exists in history item, check it matches first item
-                                case maps:find(RequiredKey, FirstItem) of
-                                    {ok, Value} -> true; % Values match
-                                    {ok, _DifferentValue} -> false; % Values differ
-                                    error -> false % Key missing from first item (shouldn't happen)
-                                end;
-                            error ->
-                                % Key doesn't exist in this history item, which is fine
-                                true
-                        end
-                    end,
-                    maps:keys(NormalizedRequiredOpts)
-                )
+                hb_message:match(RequiredOpts, HistoryItem, only_present)
             end,
             RemainingItems
         ),
         true ?= NoRequiredKeysModified orelse {error, required_key_modified},
-        
         % If we've made it this far, everything is valid
         ?event({validate_node_history_items, all_items_valid}),
-        {ok, <<"valid">>}
+        {ok, valid}
     else
-        {error, keys_missing} ->
-            ?event({validate_node_history_items, validation_failed, missing_keys}),
-            {error, <<"missing_keys">>};
         {error, values_invalid} ->
             ?event({validate_node_history_items, validation_failed, invalid_values}),
-            {error, <<"invalid_values">>};
+            {error, invalid_values};
         {error, required_key_modified} ->
             ?event({validate_node_history_items, validation_failed, required_key_modified}),
-            {error, <<"modified_required_key">>};
+            {error, modified_required_key};
         _ ->
             ?event({validate_node_history_items, validation_failed, unknown}),
-            {error, <<"validation_failed">>}
+            {error, validation_failed}
     end.
 
 %%% Tests
@@ -729,7 +704,7 @@ ensure_node_history_test() ->
             }
         ]
     },
-    ?assertEqual({ok, <<"valid">>}, ensure_node_history(ValidOpts, RequiredOpts)),
+    ?assertEqual({ok, valid}, ensure_node_history(ValidOpts, RequiredOpts)),
     ?event({valid_items, ValidOpts}),
     % Test Missing items
     MissingItems = 
@@ -751,8 +726,7 @@ ensure_node_history_test() ->
             }
         ]
     },
-
-    ?assertEqual({error, <<"missing_keys">>}, ensure_node_history(MissingItems, RequiredOpts)),
+    ?assertEqual({error, invalid_values}, ensure_node_history(MissingItems, RequiredOpts)),
     ?event({missing_items, MissingItems}),
     % Test Invalid items
     InvalidItems =
@@ -775,5 +749,5 @@ ensure_node_history_test() ->
                     }
                 ]
         },
-    ?assertEqual({error, <<"invalid_values">>}, ensure_node_history(InvalidItems, RequiredOpts)).
+    ?assertEqual({error, invalid_values}, ensure_node_history(InvalidItems, RequiredOpts)).
 -endif.

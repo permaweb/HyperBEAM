@@ -5,6 +5,25 @@
 
 -define(MAX_TAG_NAME_SIZE, 3072).
 -define(MAX_TAG_VALUE_SIZE, 3072).
+
+
+
+%% The hashing algorithm used to calculate wallet addresses.
+-define(HASH_ALG, sha256).
+
+-define(RSA_SIGN_ALG, rsa).
+-define(RSA_PRIV_KEY_SZ, 4096).
+-define(RSA_KEY_TYPE, {?RSA_SIGN_ALG, 65537}).
+
+-define(ECDSA_SIGN_ALG, ecdsa).
+-define(ECDSA_TYPE_BYTE, <<2>>).
+
+-define(EDDSA_SIGN_ALG, eddsa).
+-define(EDDSA_TYPE_BYTE, <<3>>).
+
+%% The default key type used by transactions that do not specify a signature type.
+-define(DEFAULT_KEY_TYPE, ?RSA_KEY_TYPE).
+
 %% @doc A transaction.
 -record(tx, {
     %% 1 or 2 or ans104.
@@ -61,20 +80,6 @@
 
     %% The type of signature this transaction was signed with. A system field,
     %% not used by the protocol yet.
-    signature_type = {rsa, 65537}
+    signature_type = ?DEFAULT_KEY_TYPE
 }).
 
-%% The hashing algorithm used to calculate wallet addresses.
--define(HASH_ALG, sha256).
-
--define(RSA_SIGN_ALG, rsa).
--define(RSA_PRIV_KEY_SZ, 4096).
-
--define(ECDSA_SIGN_ALG, ecdsa).
--define(ECDSA_TYPE_BYTE, <<2>>).
-
--define(EDDSA_SIGN_ALG, eddsa).
--define(EDDSA_TYPE_BYTE, <<3>>).
-
-%% The default key type used by transactions that do not specify a signature type.
--define(DEFAULT_KEY_TYPE, {?RSA_SIGN_ALG, 65537}).

@@ -8,7 +8,7 @@
 -include("include/hb.hrl").
 
 %% @doc Test invocation function, making it easier to run a specific test.
-%% Disable/enable as needed.
+% %% Disable/enable as needed.
 run_test() ->
     hb:init(),
     signed_non_bundle_is_bundlable_test(
@@ -25,7 +25,7 @@ test_codecs() ->
         #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
-        %#{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         <<"json@1.0">>
     ].
 
@@ -557,9 +557,9 @@ simple_nested_message_test(Codec, Opts) ->
         <<"c">> => <<"3">>
     },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    ?event({encoded, Encoded}),
+    ?event({encoded, {explicit, Encoded}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    ?event({matching, {input, Msg}, {output, Decoded}}),
+    ?event({matching, {input, {explicit, Msg}}, {output, {explicit, Decoded}}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 simple_signed_nested_message_test(Codec, Opts) ->
@@ -644,7 +644,7 @@ nested_message_with_large_content_test(Codec, Opts) ->
     },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    ?event({matching, {input, Msg}, {output, Decoded}}),
+    ?event({matching, {input, {explicit, Msg}, {output, {explicit, Decoded}}}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 %% @doc Test that we can convert a 3 layer nested message into a tx record and back.
@@ -887,7 +887,7 @@ deep_typed_message_id_test(Codec, Opts) ->
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     DecodedID = hb_message:id(Decoded, none, Opts),
     ?event({decoded_id, DecodedID}),
-    ?event({stages, {init, Msg}, {encoded, Encoded}, {decoded, Decoded}}),
+    ?event({stages, {init, {explicit, Msg}}, {encoded, {explicit, Encoded}}, {decoded, {explicit, Decoded}}}),
     ?assertEqual(
         InitID,
         DecodedID
@@ -975,7 +975,9 @@ unsigned_id_test(Codec, Opts) ->
 message_with_simple_embedded_list_test(Codec, Opts) ->
     Msg = #{ <<"list">> => [<<"value-1">>, <<"value-2">>, <<"value-3">>] },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
+    ?event({encoded, {explicit, Encoded}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
+    ?event({decoded, {explicit, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 empty_string_in_nested_tag_test(Codec, Opts) ->
@@ -1345,10 +1347,11 @@ encode_balance_table(Size, Codec, Opts) ->
         ||
             _ <- lists:seq(1, Size)
         },
+    ?event({msg, {explicit, Msg}}),
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    ?event({encoded, {explicit, Encoded}}),
+    % ?event({encoded, {explicit, Encoded}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    ?event({decoded, Decoded}),
+    ?event({decoded, {explicit, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 encode_small_balance_table_test(Codec, Opts) ->
@@ -1371,6 +1374,8 @@ sign_links_test(Codec, Opts) ->
     ?event(debug, {signed, Signed}),
     ?assert(hb_message:verify(Signed, all, Opts)).
 
+bundled_and_unbundled_ids_differ_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
+    skip;
 bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     Msg = #{
         <<"immediate-key">> => <<"immediate-value">>,
@@ -1521,6 +1526,8 @@ find_multiple_commitments_test_disabled() ->
 
 %% @doc Ensure that a httpsig@1.0 message which is bundled and requests an 
 %% invalid ordering of keys is normalized to a valid ordering.
+bundled_ordering_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
+    skip;
 bundled_ordering_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     % Opts = (test_opts(normal))#{
     %     store => [
