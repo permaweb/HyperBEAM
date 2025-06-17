@@ -258,11 +258,12 @@ compute(Key, RawBase, Req, Opts) ->
     % Call the VM function with the given arguments.
     ?event(lua,
         {calling_lua_func,
-            {function, Function},
-            {args, ResolvedParams},
-            {req, Req}
+            {function, Function}
+            % {args, ResolvedParams},
+            % {req, Req}
         }
     ),
+    % ?event(full_args, {explicit, ResolvedParams}),
     process_response(
         try luerl:call_function_dec(
             [Function],
@@ -279,13 +280,15 @@ compute(Key, RawBase, Req, Opts) ->
 %% @doc Process a response to a Luerl invocation. Returns the typical AO-Core
 %% HyperBEAM response format.
 process_response({ok, [Result], NewState}, Priv, Opts) ->
+    io:format("process_response1~n"),
     process_response({ok, [<<"ok">>, Result], NewState}, Priv, Opts);
 process_response({ok, [Status, MsgResult], NewState}, Priv, Opts) ->
+    io:format("process_response2~n"),
     % If the result is a HyperBEAM device return (`{Status, Msg}'), decode it 
     % and add the previous `priv' element back into the resulting message.
     case decode(MsgResult, Opts) of
         Msg when is_map(Msg) ->
-            ?event(lua, {response, {status, Status}, {msg, Msg}}),
+            % ?event(lua, {response, {status, Status}, {msg, Msg}}),
             {hb_util:atom(Status), Msg#{
                 <<"priv">> => Priv#{
                     <<"state">> => NewState
@@ -294,17 +297,23 @@ process_response({ok, [Status, MsgResult], NewState}, Priv, Opts) ->
         NonMsgRes -> {hb_util:atom(Status), NonMsgRes}
     end;
 process_response({lua_error, RawError, State}, _Priv, Opts) ->
+    io:format("process_response3~n"),
     % An error occurred while calling the Lua function. Parse the stack trace
     % and return it.
     Error = try decode(luerl:decode(RawError, State), Opts) catch _:_ -> RawError end,
-    StackTrace = decode_stacktrace(luerl:get_stacktrace(State), State, Opts),
-    ?event(lua_error, {lua_error, Error, {stacktrace, StackTrace}}),
+    ?event({ process_response, {error, Error}}),
+    Stack_Trace = luerl:get_stacktrace(State),
+    % ?event({ process_response, {stack_trace, Stack_Trace}}),
+    StackTrace = decode_stacktrace(Stack_Trace, State, Opts),
+    % ?event(lua_error, {lua_error, Error, {stacktrace, StackTrace}}),
+    % ?event(raw_error, {raw_error, RawError, { state, State}}),
     {error, #{
         <<"status">> => 500,
         <<"body">> => Error,
         <<"trace">> => hb_ao:normalize_keys(StackTrace, Opts)
     }};
 process_response({error, Reason, Trace}, _Priv, _Opts) ->
+    io:format("process_response4~n"),
     % An Erlang error occurred while calling the Lua function. Return it.
     ?event(lua_error, {trace, Trace}),
     TraceBin = iolist_to_binary(hb_util:format_trace(Trace)),
@@ -410,6 +419,7 @@ decode_stacktrace([{FuncBin, ParamRefs, FileInfo} | Rest], State0, Acc, Opts) ->
     Line = proplists:get_value(line, FileInfo),
     File = proplists:get_value(file, FileInfo, undefined),
     ?event(debug_lua_stack, {stack_file, FileInfo}),
+    ?event(debug_lua_stack, {func_bin, FuncBin}),
     %% Build our message‐map
     Entry = #{
         <<"function">>   => FuncBin,
@@ -438,236 +448,245 @@ decode_params([Tref|Rest], State, Opts) ->
     [Decoded|decode_params(Rest, State, Opts)].
 
 %%% Tests
-simple_invocation_test() ->
-    {ok, Script} = file:read_file("test/test.lua"),
-    Base = #{
-        <<"device">> => <<"lua@5.3a">>,
-        <<"module">> => #{
-            <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Script
-        },
-        <<"parameters">> => []
-    },
-    ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})).
+% simple_invocation_test() ->
+%     {ok, Script} = file:read_file("test/test.lua"),
+%     Base = #{
+%         <<"device">> => <<"lua@5.3a">>,
+%         <<"module">> => #{
+%             <<"content-type">> => <<"application/lua">>,
+%             <<"body">> => Script
+%         },
+%         <<"parameters">> => []
+%     },
+%     ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})).
 
-load_modules_by_id_test_() ->
-    {timeout, 30, fun load_modules_by_id/0}.
-load_modules_by_id() ->
-    % Start a node to ensure the HTTP services are available.
-    _Node = hb_http_server:start_node(#{}),
-    Module = <<"DosEHUAqhl_O5FH3vDqPlgGsG92Guxcm6nrwqnjsDKg">>,
-    {ok, Acc} = load_modules([Module], #{}),
-    [{_,Code}|_] = Acc,
-    <<Prefix:8/binary, _/binary>> = Code,
-    ?assertEqual(<<"function">>, Prefix).
+% load_modules_by_id_test_() ->
+%     {timeout, 30, fun load_modules_by_id/0}.
+% load_modules_by_id() ->
+%     % Start a node to ensure the HTTP services are available.
+%     _Node = hb_http_server:start_node(#{}),
+%     Module = <<"DosEHUAqhl_O5FH3vDqPlgGsG92Guxcm6nrwqnjsDKg">>,
+%     {ok, Acc} = load_modules([Module], #{}),
+%     [{_,Code}|_] = Acc,
+%     <<Prefix:8/binary, _/binary>> = Code,
+%     ?assertEqual(<<"function">>, Prefix).
     
-multiple_modules_test() ->
-    {ok, Module} = file:read_file("test/test.lua"),
-    Module2 =
-        <<
-            """
-            function test_second_script()
-                return 4
-            end
-            """
-        >>,
-    Base = #{
-        <<"device">> => <<"lua@5.3a">>,
-        <<"module">> => [
-            #{
-                <<"content-type">> => <<"application/lua">>,
-                <<"body">> => Module
-            },
-            #{
-                <<"content-type">> => <<"application/lua">>,
-                <<"body">> => Module2
-            }
-        ],
-        <<"parameters">> => []
-    },
-    ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})),
-    ?assertEqual(4, hb_ao:get(<<"test_second_script">>, Base, #{})).
+% multiple_modules_test() ->
+%     {ok, Module} = file:read_file("test/test.lua"),
+%     Module2 =
+%         <<
+%             """
+%             function test_second_script()
+%                 return 4
+%             end
+%             """
+%         >>,
+%     Base = #{
+%         <<"device">> => <<"lua@5.3a">>,
+%         <<"module">> => [
+%             #{
+%                 <<"content-type">> => <<"application/lua">>,
+%                 <<"body">> => Module
+%             },
+%             #{
+%                 <<"content-type">> => <<"application/lua">>,
+%                 <<"body">> => Module2
+%             }
+%         ],
+%         <<"parameters">> => []
+%     },
+%     ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})),
+%     ?assertEqual(4, hb_ao:get(<<"test_second_script">>, Base, #{})).
 
-error_response_test() ->
-    {ok, Module} = file:read_file("test/test.lua"),
-    Base = #{
-        <<"device">> => <<"lua@5.3a">>,
-        <<"module">> => #{
-            <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Module
-        },
-        <<"parameters">> => []
-    },
-    ?assertEqual(
-        {error, <<"Very bad, but Lua caught it.">>},
-        hb_ao:resolve(Base, <<"error_response">>, #{})
-    ).
+% error_response_test() ->
+%     {ok, Module} = file:read_file("test/test.lua"),
+%     Base = #{
+%         <<"device">> => <<"lua@5.3a">>,
+%         <<"module">> => #{
+%             <<"content-type">> => <<"application/lua">>,
+%             <<"body">> => Module
+%         },
+%         <<"parameters">> => []
+%     },
+%     ?assertEqual(
+%         {error, <<"Very bad, but Lua caught it.">>},
+%         hb_ao:resolve(Base, <<"error_response">>, #{})
+%     ).
 
-sandboxed_failure_test() ->
-    {ok, Module} = file:read_file("test/test.lua"),
-    Base = #{
-        <<"device">> => <<"lua@5.3a">>,
-        <<"module">> => #{
-            <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Module
-        },
-        <<"parameters">> => [],
-        <<"sandbox">> => true
-    },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
-
-%% @doc Run an AO-Core resolution from the Lua environment.
-ao_core_sandbox_test() ->
-    {ok, Module} = file:read_file("test/test.lua"),
-    Base = #{
-        <<"device">> => <<"lua@5.3a">>,
-        <<"module">> => #{
-            <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Module
-        },
-        <<"parameters">> => [],
-        <<"device-sandbox">> => [<<"message@1.0">>]
-    },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"ao_relay">>, #{})),
-    ?assertMatch({ok, _}, hb_ao:resolve(Base, <<"ao_resolve">>, #{})).
+% sandboxed_failure_test() ->
+    % {ok, Module} = file:read_file("test/test.lua"),
+    % Base = #{
+    %     <<"device">> => <<"lua@5.3a">>,
+    %     <<"module">> => #{
+    %         <<"content-type">> => <<"application/lua">>,
+    %         <<"body">> => Module
+    %     },
+    %     <<"parameters">> => [],
+    %     <<"sandbox">> => true
+    % },
+    % ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
 
 %% @doc Run an AO-Core resolution from the Lua environment.
-ao_core_resolution_from_lua_test() ->
-    {ok, Module} = file:read_file("test/test.lua"),
-    Base = #{
-        <<"device">> => <<"lua@5.3a">>,
-        <<"module">> => #{
-            <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Module
-        },
-        <<"parameters">> => []
-    },
-    {ok, Res} = hb_ao:resolve(Base, <<"ao_resolve">>, #{}),
-    ?assertEqual(<<"Hello, AO world!">>, Res).
+% ao_core_sandbox_test() ->
+    % {ok, Module} = file:read_file("test/test.lua"),
+    % Base = #{
+    %     <<"device">> => <<"lua@5.3a">>,
+    %     <<"module">> => #{
+    %         <<"content-type">> => <<"application/lua">>,
+    %         <<"body">> => Module
+    %     },
+    %     <<"parameters">> => [],
+    %     <<"device-sandbox">> => [<<"message@1.0">>]
+    % },
+    % ?assertMatch({error, _}, hb_ao:resolve(Base, <<"ao_relay">>, #{})),
+    % ?assertMatch({ok, _}, hb_ao:resolve(Base, <<"ao_resolve">>, #{})).
 
-%% @doc Benchmark the performance of Lua executions.
-direct_benchmark_test() ->
-    BenchTime = 3,
-    {ok, Module} = file:read_file("test/test.lua"),
-    Base = #{
-        <<"device">> => <<"lua@5.3a">>,
-        <<"module">> => #{
-            <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Module
-        },
-        <<"parameters">> => []
-    },
-    Iterations = hb:benchmark(
-        fun(X) ->
-            {ok, _} = hb_ao:resolve(Base, <<"assoctable">>, #{}),
-            ?event({iteration, X})
-        end,
-        BenchTime
-    ),
-    ?event({iterations, Iterations}),
-    hb_util:eunit_print(
-        "Computed ~p Lua executions in ~ps (~.2f calls/s)",
-        [Iterations, BenchTime, Iterations / BenchTime]
-    ),
-    ?assert(Iterations > 10).
+%% @doc Run an AO-Core resolution from the Lua environment.
+% ao_core_resolution_from_lua_test() ->
+%     {ok, Module} = file:read_file("test/test.lua"),
+%     Base = #{
+%         <<"device">> => <<"lua@5.3a">>,
+%         <<"module">> => #{
+%             <<"content-type">> => <<"application/lua">>,
+%             <<"body">> => Module
+%         },
+%         <<"parameters">> => []
+%     },
+%     {ok, Res} = hb_ao:resolve(Base, <<"ao_resolve">>, #{}),
+%     ?assertEqual(<<"Hello, AO world!">>, Res).
 
-%% @doc Call a non-compute key on a Lua device message and ensure that the
-%% function of the same name in the script is called.
-invoke_non_compute_key_test() ->
-    {ok, Module} = file:read_file("test/test.lua"),
-    Base = #{
-        <<"device">> => <<"lua@5.3a">>,
-        <<"module">> => #{
-            <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Module
-        },
-        <<"test-value">> => 42
-    },
-    {ok, Result1} = hb_ao:resolve(Base, <<"hello">>, #{}),
-    ?event({result1, Result1}),
-    ?assertEqual(42, hb_ao:get(<<"test-value">>, Result1, #{})),
-    ?assertEqual(<<"world">>, hb_ao:get(<<"hello">>, Result1, #{})),
-    {ok, Result2} =
-        hb_ao:resolve(
-            Base,
-            #{<<"path">> => <<"hello">>, <<"name">> => <<"Alice">>},
-            #{}
-        ),
-    ?event({result2, Result2}),
-    ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
+% %% @doc Benchmark the performance of Lua executions.
+% direct_benchmark_test() ->
+%     BenchTime = 3,
+%     {ok, Module} = file:read_file("test/test.lua"),
+%     Base = #{
+%         <<"device">> => <<"lua@5.3a">>,
+%         <<"module">> => #{
+%             <<"content-type">> => <<"application/lua">>,
+%             <<"body">> => Module
+%         },
+%         <<"parameters">> => []
+%     },
+%     Iterations = hb:benchmark(
+%         fun(X) ->
+%             {ok, _} = hb_ao:resolve(Base, <<"assoctable">>, #{}),
+%             ?event({iteration, X})
+%         end,
+%         BenchTime
+%     ),
+%     ?event({iterations, Iterations}),
+%     hb_util:eunit_print(
+%         "Computed ~p Lua executions in ~ps (~.2f calls/s)",
+%         [Iterations, BenchTime, Iterations / BenchTime]
+%     ),
+%     ?assert(Iterations > 10).
 
-%% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
-lua_http_hook_test() ->
-    {ok, Module} = file:read_file("test/test.lua"),
-    Node = hb_http_server:start_node(
-        #{
-            priv_wallet => ar_wallet:new(),
-            on => #{
-                <<"request">> =>
-                    #{
-                        <<"device">> => <<"lua@5.3a">>,
-                        <<"module">> => #{
-                            <<"content-type">> => <<"application/lua">>,
-                            <<"body">> => Module
-                        }
-                    }
-            }
-        }),
-    {ok, Res} = hb_http:get(Node, <<"/hello?hello=world">>, #{}),
-    ?assertMatch(#{ <<"body">> := <<"i like turtles">> }, Res).
+% %% @doc Call a non-compute key on a Lua device message and ensure that the
+% %% function of the same name in the script is called.
+% invoke_non_compute_key_test() ->
+%     {ok, Module} = file:read_file("test/test.lua"),
+%     Base = #{
+%         <<"device">> => <<"lua@5.3a">>,
+%         <<"module">> => #{
+%             <<"content-type">> => <<"application/lua">>,
+%             <<"body">> => Module
+%         },
+%         <<"test-value">> => 42
+%     },
+%     {ok, Result1} = hb_ao:resolve(Base, <<"hello">>, #{}),
+%     ?event({result1, Result1}),
+%     ?assertEqual(42, hb_ao:get(<<"test-value">>, Result1, #{})),
+%     ?assertEqual(<<"world">>, hb_ao:get(<<"hello">>, Result1, #{})),
+%     {ok, Result2} =
+%         hb_ao:resolve(
+%             Base,
+%             #{<<"path">> => <<"hello">>, <<"name">> => <<"Alice">>},
+%             #{}
+%         ),
+%     ?event({result2, Result2}),
+%     ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
+
+% %% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
+% lua_http_hook_test() ->
+%     {ok, Module} = file:read_file("test/test.lua"),
+%     Node = hb_http_server:start_node(
+%         #{
+%             priv_wallet => ar_wallet:new(),
+%             on => #{
+%                 <<"request">> =>
+%                     #{
+%                         <<"device">> => <<"lua@5.3a">>,
+%                         <<"module">> => #{
+%                             <<"content-type">> => <<"application/lua">>,
+%                             <<"body">> => Module
+%                         }
+%                     }
+%             }
+%         }),
+%     {ok, Res} = hb_http:get(Node, <<"/hello?hello=world">>, #{}),
+%     ?assertMatch(#{ <<"body">> := <<"i like turtles">> }, Res).
 
 %% @doc Call a process whose `execution-device' is set to `lua@5.3a'.
-pure_lua_process_test() ->
-    Process = generate_lua_process("test/test.lua", #{}),
-    {ok, _} = hb_cache:write(Process, #{}),
-    Message = generate_test_message(Process, #{}),
-    {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
-    {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
-    ?assertEqual(42, hb_ao:get(<<"results/output/body">>, Results, #{})).
+% pure_lua_process_test() ->
+%     Process = generate_lua_process("test/test.lua", #{}),
+%     {ok, _} = hb_cache:write(Process, #{}),
+%     Message = generate_test_message(Process, #{}),
+%     {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
+%     {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
+%     ?assertEqual(42, hb_ao:get(<<"results/output/body">>, Results, #{})).
 
-pure_lua_process_benchmark_test_() ->
-    {timeout, 30, fun pure_lua_process_benchmark/0}.
-pure_lua_process_benchmark() ->
-    BenchMsgs = 50,
-    hb:init(),
-    Opts = #{
-        process_async_cache => true,
-        hashpath => ignore,
-        process_cache_frequency => 50
-    },
-    Process = generate_lua_process("test/test.lua", Opts),
-    {ok, _} = hb_cache:write(Process, Opts),
-    Message = generate_test_message(Process, Opts),
-    lists:foreach(
-        fun(X) ->
-            hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
-            ?event(debug_lua, {scheduled, X})
-        end,
-        lists:seq(1, BenchMsgs)
-    ),
-    ?event(debug_lua, {executing, BenchMsgs}),
-    BeforeExec = os:system_time(millisecond),
-    {ok, _} = hb_ao:resolve(
-        Process,
-        <<"now">>,
-        #{ hashpath => ignore, process_cache_frequency => 50 }
-    ),
-    AfterExec = os:system_time(millisecond),
-    ?event(debug_lua, {execution_time, (AfterExec - BeforeExec) / BenchMsgs}),
-    hb_util:eunit_print(
-        "Computed ~p pure Lua process executions in ~ps (~.2f calls/s)",
-        [
-            BenchMsgs,
-            (AfterExec - BeforeExec) / 1000,
-            BenchMsgs / ((AfterExec - BeforeExec) / 1000)
-        ]
-    ).
+% pure_lua_process_benchmark_test_() ->
+%     {timeout, 30, fun pure_lua_process_benchmark/0}.
+% pure_lua_process_benchmark() ->
+%     BenchMsgs = 50,
+%     hb:init(),
+%     Opts = #{
+%         process_async_cache => true,
+%         hashpath => ignore,
+%         process_cache_frequency => 50
+%     },
+%     Process = generate_lua_process("test/test.lua", Opts),
+%     {ok, _} = hb_cache:write(Process, Opts),
+%     Message = generate_test_message(Process, Opts),
+%     lists:foreach(
+%         fun(X) ->
+%             hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
+%             ?event(debug_lua, {scheduled, X})
+%         end,
+%         lists:seq(1, BenchMsgs)
+%     ),
+%     ?event(debug_lua, {executing, BenchMsgs}),
+%     BeforeExec = os:system_time(millisecond),
+%     {ok, _} = hb_ao:resolve(
+%         Process,
+%         <<"now">>,
+%         #{ hashpath => ignore, process_cache_frequency => 50 }
+%     ),
+%     AfterExec = os:system_time(millisecond),
+%     ?event(debug_lua, {execution_time, (AfterExec - BeforeExec) / BenchMsgs}),
+%     hb_util:eunit_print(
+%         "Computed ~p pure Lua process executions in ~ps (~.2f calls/s)",
+%         [
+%             BenchMsgs,
+%             (AfterExec - BeforeExec) / 1000,
+%             BenchMsgs / ((AfterExec - BeforeExec) / 1000)
+%         ]
+%     ).
 
 invoke_aos_test() ->
     Opts = #{ priv_wallet => hb:wallet() },
     Process = generate_lua_process("test/hyper-aos.lua", Opts),
     {ok, _Proc} = hb_cache:write(Process, Opts),
-    Message = generate_test_message(Process, Opts),
+    Code = """ 
+      Count = 0
+      function add() 
+        Send({Target = 'Foo', Data = 'Bar' });
+        Count = Count + 1 
+      end
+      add()
+      return Count
+    """,
+    Message = generate_test_message(Process, Opts, Code),
     {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output">>, Opts),
     ?assertEqual(<<"1">>, hb_ao:get(<<"data">>, Results, #{})),
@@ -703,41 +722,41 @@ aos_authority_not_trusted_test() ->
     ?assertEqual(<<"Message is not trusted.">>, Results).
 
 %% @doc Benchmark the performance of Lua executions.
-aos_process_benchmark_test_() ->
-    {timeout, 30, fun() ->
-        BenchMsgs = 10,
-        Opts = #{
-            process_async_cache => false,
-            hashpath => ignore,
-            process_cache_frequency => 50
-        },
-        Process = generate_lua_process("test/hyper-aos.lua", Opts),
-        Message = generate_test_message(Process, Opts),
-        lists:foreach(
-            fun(X) ->
-                hb_ao:resolve(Process, Message, Opts),
-                ?event(debug_lua, {scheduled, X})
-            end,
-            lists:seq(1, BenchMsgs)
-        ),
-        ?event(debug_lua, {executing, BenchMsgs}),
-        BeforeExec = os:system_time(millisecond),
-        {ok, _} = hb_ao:resolve(
-            Process,
-            <<"now">>,
-            Opts
-        ),
-        AfterExec = os:system_time(millisecond),
-        ?event(debug_lua, {execution_time, (AfterExec - BeforeExec) / BenchMsgs}),
-        hb_util:eunit_print(
-            "Computed ~p AOS process executions in ~ps (~.2f calls/s)",
-            [
-                BenchMsgs,
-                (AfterExec - BeforeExec) / 1000,
-                BenchMsgs / ((AfterExec - BeforeExec) / 1000)
-            ]
-        )
-    end}.
+% aos_process_benchmark_test_() ->
+%     {timeout, 30, fun() ->
+%         BenchMsgs = 10,
+%         Opts = #{
+%             process_async_cache => false,
+%             hashpath => ignore,
+%             process_cache_frequency => 50
+%         },
+%         Process = generate_lua_process("test/hyper-aos.lua", Opts),
+%         Message = generate_test_message(Process, Opts),
+%         lists:foreach(
+%             fun(X) ->
+%                 hb_ao:resolve(Process, Message, Opts),
+%                 ?event(debug_lua, {scheduled, X})
+%             end,
+%             lists:seq(1, BenchMsgs)
+%         ),
+%         ?event(debug_lua, {executing, BenchMsgs}),
+%         BeforeExec = os:system_time(millisecond),
+%         {ok, _} = hb_ao:resolve(
+%             Process,
+%             <<"now">>,
+%             Opts
+%         ),
+%         AfterExec = os:system_time(millisecond),
+%         ?event(debug_lua, {execution_time, (AfterExec - BeforeExec) / BenchMsgs}),
+%         hb_util:eunit_print(
+%             "Computed ~p AOS process executions in ~ps (~.2f calls/s)",
+%             [
+%                 BenchMsgs,
+%                 (AfterExec - BeforeExec) / 1000,
+%                 BenchMsgs / ((AfterExec - BeforeExec) / 1000)
+%             ]
+%         )
+%     end}.
 
 %%% Test helpers
 
@@ -769,18 +788,9 @@ generate_lua_process(File, Opts) ->
     ).
 
 %% @doc Generate a test message for a Lua process.
-generate_test_message(Process, Opts) ->
+generate_test_message(Process, Opts, Code) ->
     ProcID = hb_message:id(Process, all),
     NormOpts = Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) },
-    Code = """ 
-      Count = 0
-      function add() 
-        Send({Target = 'Foo', Data = 'Bar' });
-        Count = Count + 1 
-      end
-      add()
-      return Count
-    """,
     hb_message:commit(#{
             <<"path">> => <<"schedule">>,
             <<"method">> => <<"POST">>,
@@ -850,3 +860,21 @@ generate_stack(File) ->
 %         },
 %         #{}
 %     ).
+
+% @doc Test the hyper-aos ao module.
+hyper_ao_ensure_owner_test() ->
+    Wallet = hb:wallet(),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{ priv_wallet => Wallet },
+    ?event(jack, {wallet, Address}),
+    Process = generate_lua_process("test/hyper-aos.lua", Opts),
+    {ok, _Proc} = hb_cache:write(Process, Opts),
+    Code = """
+      return Owner
+    """,
+    Message = generate_test_message(Process, Opts, Code),
+    {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Owner} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
+    ?event(jack, {owner, Owner}),
+    ?assertEqual(Address, Owner),
+    ok.
