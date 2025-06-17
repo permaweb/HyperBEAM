@@ -29,7 +29,7 @@ HyperBEAM includes many preloaded devices that provide core functionality. Some 
 *   [`~relay@1.0`](./relay-at-1-0.md): Forwards messages between AO nodes or to external HTTP endpoints.
 *   [`~json@1.0`](./json-at-1-0.md): Provides access to JSON data structures.
 *   [`~message@1.0`](./message-at-1-0.md): Manages message state and processing.
-*   [`~patch@1.0`](../guides/exposing-process-state.md): Applies state updates directly to a process, often used for migrating or managing process data.
+*   [`~patch@1.0`](https://cookbook_ao.arweave.net/guides/migrating-to-hyperbeam/exposing-process-state.html): Applies state updates directly to a process, often used for migrating or managing process data.
 
 ## Beyond the Basics
 

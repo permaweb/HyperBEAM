@@ -15,14 +15,12 @@ nav:
   #     - Pathing in HyperBEAM: 'introduction/pathing-in-hyperbeam.md'
 
   - Build on HyperBEAM:
-      - Intro to AO-Core: "build/introduction/what-is-ao-core.md"
       - Intro to HyperBEAM: "build/introduction/what-is-hyperbeam.md"
-      - Serverless Compute: "build/introduction/serverless-decentralized-compute.md"
+      - Intro to AO-Core: "build/introduction/what-is-ao-core.md"
       - Getting Started:
-          - Quick Start: "build/quick-start.md"
-          - Migration: "build/migrating-from-legacynet.md"
-          - AO Connect: "build/ao-connect.md"
-          - Pathing: "build/pathing-in-hyperbeam.md"
+          - "Core Capabilities": "build/hyperbeam-capabilities.md"
+          - Building ao Processes: "build/building-on-ao.md"
+          - Pathing in HyperBEAM: "build/pathing-in-hyperbeam.md"
       - Devices:
           - "Overview": "build/devices/hyperbeam-devices.md"
           - "Core Devices":
