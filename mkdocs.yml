@@ -11,17 +11,19 @@ use_directory_urls: false
 nav:
   # - Introduction:
   #     - What is HyperBEAM?: 'introduction/what-is-hyperbeam.md'
-  #     - What is AO-Core?: 'introduction/what-is-ao-core.md'
   #     - HyperBEAM Devices: 'introduction/hyperbeam-devices.md'
   #     - Pathing in HyperBEAM: 'introduction/pathing-in-hyperbeam.md'
+
   - Build on HyperBEAM:
-      - Quick Start: "build/quick-start.md"
-      - Migrating from Legacynet: "build/migrating-from-legacynet.md"
-      - AO Connect: "build/ao-connect.md"
-      - Extending HyperBEAM with Devices: "build/building-devices.md"
+      - Intro to HyperBEAM: "build/introduction/what-is-hyperbeam.md"
+      - Intro to AO-Core: "build/introduction/what-is-ao-core.md"
+      - Getting Started:
+          - "Core Capabilities": "build/hyperbeam-capabilities.md"
+          - Building ao Processes: "build/building-on-ao.md"
+          - Pathing in HyperBEAM: "build/pathing-in-hyperbeam.md"
       - Devices:
-          - "What are HyperBEAM Devices?": "build/devices/what-are-devices.md"
-          - Starter Devices:
+          - "Overview": "build/devices/hyperbeam-devices.md"
+          - "Core Devices":
               - ~meta@1.0: "build/devices/meta-at-1-0.md"
               - ~process@1.0: "build/devices/process-at-1-0.md"
               - ~message@1.0: "build/devices/message-at-1-0.md"
@@ -30,13 +32,21 @@ nav:
               - ~json@1.0: "build/devices/json-at-1-0.md"
               - ~scheduler@1.0: "build/devices/scheduler-at-1-0.md"
               - ~relay@1.0: "build/devices/relay-at-1-0.md"
-          - Source Code: "https://github.com/permaweb/HyperBEAM"
+          - Building Devices: "build/building-devices.md"
+      - Reference:
+          - FAQ: "build/reference/faq.md"
+          - Glossary: "build/reference/glossary.md"
+          - Troubleshooting: "build/reference/troubleshooting.md"
 
   - Run a Node:
       - Running a HyperBEAM Node: "run/running-a-hyperbeam-node.md"
       - Configuring Your Machine: "run/configuring-your-machine.md"
       - TEE Nodes: "run/tee-nodes.md"
       - Joining/Running a Router: "run/joining-running-a-router.md"
+      - Reference:
+          - FAQ: "run/reference/faq.md"
+          - Glossary: "run/reference/glossary.md"
+          - Troubleshooting: "run/reference/troubleshooting.md"
 
   # - Resources:
   #     # - Troubleshooting: 'resources/reference/troubleshooting.md'
