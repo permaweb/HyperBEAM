@@ -156,4 +156,4 @@ You've successfully created a handler, loaded it into your AO process, triggered
 
 ## Next Steps
 
-To dive deeper into AOS and AO, check out the [AO Processes Cookbook](https://cookbook_ao.arweave.net/).
+To dive deeper into AOS and creating AO Processes, check out the [AO Processes Cookbook](https://cookbook_ao.arweave.net/).
