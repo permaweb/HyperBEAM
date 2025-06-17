@@ -43,7 +43,7 @@ typedef struct async_ctx {
     int             final_result;   // result of Wasm call (set by worker)
 } async_ctx_t;
 
-static async_ctx_t *g_async_ctx = NULL; // global for the native import handler
+static async_ctx_t* g_async_ctx = NULL; // global for the native import handler
 
 /* ------------------------------------------------------------------------- */
 /* Utility: Fibonacci (for demo; may be used to compute xor_val)              */
@@ -57,11 +57,11 @@ static int fib(int n) {
 /* ------------------------------------------------------------------------- */
 /* Native import: give_host_control                                           */
 /* ------------------------------------------------------------------------- */
-static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t *args) {
+static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t* args) {
     unsigned int index_from_wasm = (unsigned int)args[0];
 
     // Grab shared async context.
-    async_ctx_t *actx = g_async_ctx;
+    async_ctx_t* actx = g_async_ctx;
     if (!actx) { LOG("[ERROR] async context is NULL"); return; }
 
     // ------------------------------------------------------------------
@@ -90,7 +90,7 @@ static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t *args) {
         LOG("[ERROR] wasm_runtime_get_module_inst returned NULL");
         return;
     }
-    hb_beamr_lib_context_t *lib_ctx = (hb_beamr_lib_context_t *)
+    hb_beamr_lib_context_t* lib_ctx = (hb_beamr_lib_context_t*)
         wasm_runtime_get_custom_data(module_inst);
     if (!lib_ctx) {
         LOG("[ERROR] custom_data (lib_ctx) is NULL");
@@ -98,15 +98,15 @@ static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t *args) {
     }
 
     wasm_val_t call_args[2];
-    call_args[0].kind   = WASM_I32;
+    call_args[0].kind = WASM_I32;
     call_args[0].of.i32 = index_from_wasm;
-    call_args[1].kind   = WASM_I32;
+    call_args[1].kind = WASM_I32;
     call_args[1].of.i32 = xor_val;
 
     hb_beamr_lib_rc_t rc = hb_beamr_lib_call_export(lib_ctx,
-                                                    "xor_memory",
-                                                    2, call_args,
-                                                    0, NULL);
+        "xor_memory",
+        2, call_args,
+        0, NULL);
     if (rc != HB_BEAMR_LIB_SUCCESS) {
         LOG("[ERROR] call to xor_memory failed: %d – %s", rc,
             hb_beamr_lib_get_last_error(lib_ctx));
@@ -116,33 +116,33 @@ static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t *args) {
 /* ------------------------------------------------------------------------- */
 /* Worker thread: loads module, instantiates, invokes call_host_and_read      */
 /* ------------------------------------------------------------------------- */
-static void *worker_thread(void *arg) {
-    async_ctx_t *actx = (async_ctx_t *)arg;
+static void* worker_thread(void* arg) {
+    async_ctx_t* actx = (async_ctx_t*)arg;
 
     // Each WAMR thread must initialise its own environment.
     wasm_runtime_init_thread_env();
 
-    hb_beamr_lib_context_t *ctx = hb_beamr_lib_create_context();
+    hb_beamr_lib_context_t* ctx = hb_beamr_lib_create_context();
 
     // Load Wasm binary (AOT).
     uint32_t wasm_size = 0;
-    uint8_t *wasm_bytes = read_file_to_buffer("import_nested.aot", &wasm_size);
+    uint8_t* wasm_bytes = read_file_to_buffer("import_nested.aot", &wasm_size);
     assert(wasm_bytes != NULL);
     assert(hb_beamr_lib_load_wasm_module(ctx, wasm_bytes, wasm_size) ==
-           HB_BEAMR_LIB_SUCCESS);
+        HB_BEAMR_LIB_SUCCESS);
 
     // Instantiate.
     assert(hb_beamr_lib_instantiate(ctx, 128 * 1024, 0, NULL) == HB_BEAMR_LIB_SUCCESS);
 
     // call_host_and_read(index = 0, init_val = 100)
     wasm_val_t args[2];
-    args[0].kind   = WASM_I32; args[0].of.i32 = 0;   // index
-    args[1].kind   = WASM_I32; args[1].of.i32 = 100; // init_val
+    args[0].kind = WASM_I32; args[0].of.i32 = 0;   // index
+    args[1].kind = WASM_I32; args[1].of.i32 = 100; // init_val
     wasm_val_t res[1];
 
     hb_beamr_lib_rc_t rc_call = hb_beamr_lib_call_export(ctx,
-                                                         "call_host_and_read",
-                                                         2, args, 1, res);
+        "call_host_and_read",
+        2, args, 1, res);
     assert(rc_call == HB_BEAMR_LIB_SUCCESS);
 
     // Store result for the main thread.
@@ -176,19 +176,19 @@ int main(void) {
     // Register native give_host_control.
     // ------------------------------------------------------------------
     const hb_beamr_native_symbol_t sym_arr[] = {
-        {"env", "give_host_control", (void *)native_give_host_control, "(i)", NULL}
+        {"env", "give_host_control", (void*)native_give_host_control, "(i)", NULL}
     };
     hb_beamr_native_symbol_group_t group_env = {
-        .module_name  = "env",
-        .symbols      = sym_arr,
-        .num_symbols  = 1
+        .module_name = "env",
+        .symbols = sym_arr,
+        .num_symbols = 1
     };
     hb_beamr_native_symbols_structured_t symbols_struct = {
-        .groups      = &group_env,
-        .num_groups  = 1
+        .groups = &group_env,
+        .num_groups = 1
     };
     assert(hb_beamr_lib_register_global_natives(&symbols_struct) ==
-           HB_BEAMR_LIB_SUCCESS);
+        HB_BEAMR_LIB_SUCCESS);
 
     // ------------------------------------------------------------------
     // Spawn worker thread running the Wasm module.
@@ -217,7 +217,7 @@ int main(void) {
     LOG("Main thread: providing xor_val = %d", xor_val);
 
     pthread_mutex_lock(&actx.mutex);
-    actx.xor_val      = xor_val;
+    actx.xor_val = xor_val;
     actx.has_response = 1;
     pthread_cond_signal(&actx.cond_response);
     pthread_mutex_unlock(&actx.mutex);

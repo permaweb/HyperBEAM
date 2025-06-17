@@ -2,17 +2,11 @@
 #define HB_BEAMR_LIB_H
 
 #ifndef HB_BEAMR_LIB_API
-  #if defined(_WIN32) || defined(__CYGWIN__)
-    #ifdef HB_BEAMR_LIB_COMPILING_DLL // Define this when building the DLL
-      #define HB_BEAMR_LIB_API __declspec(dllexport)
-    #else
-      #define HB_BEAMR_LIB_API __declspec(dllimport)
-    #endif
-  #elif __GNUC__ >= 4 // Or __clang__
-    #define HB_BEAMR_LIB_API __attribute__((visibility("default")))
-  #else
-    #define HB_BEAMR_LIB_API // Default to empty for other compilers/static linking
-  #endif
+#if __GNUC__ >= 4 // Or __clang__
+#define HB_BEAMR_LIB_API __attribute__((visibility("default")))
+#else
+#define HB_BEAMR_LIB_API // Default to empty for other compilers/static linking
+#endif
 #endif
 
 #include <stdint.h>
@@ -41,7 +35,7 @@ typedef enum {
     HB_BEAMR_LIB_ERROR_INSTANCE_NOT_CREATED,
     HB_BEAMR_LIB_ERROR_NATIVE_LINKING_FAILED,
     HB_BEAMR_LIB_ERROR_SIGNATURE_PARSE_FAILED,
-    HB_BEAMR_LIB_ERROR_INVALID_ARGS,            
+    HB_BEAMR_LIB_ERROR_INVALID_ARGS,
     HB_BEAMR_LIB_ERROR_MEMORY_ACCESS_OUT_OF_BOUNDS,
     HB_BEAMR_LIB_ERROR_NOT_FOUND,
 } hb_beamr_lib_rc_t;
@@ -56,7 +50,7 @@ typedef enum {
  *                  If NULL, default initialization arguments will be used.
  * @return HB_BEAMR_LIB_SUCCESS on success, or an error code on failure.
  */
-hb_beamr_lib_rc_t hb_beamr_lib_init_runtime_global(RuntimeInitArgs *init_args);
+hb_beamr_lib_rc_t hb_beamr_lib_init_runtime_global(RuntimeInitArgs* init_args);
 
 /**
  * @brief Destroys the global WAMR runtime.
@@ -79,45 +73,45 @@ WASM_RUNTIME_API_EXTERN wasm_module_inst_t hb_beamr_lib_get_module_instance(hb_b
 // This structure mirrors WAMR's NativeSymbol but allows for easier construction
 // by the port driver. The void* user_function is the C function in the port driver.
 typedef struct {
-    const char *module_name; // Import module name (e.g., "env")
-    const char *function_name; // Import function name
-    void       *user_function; // Pointer to the C function in hb_beamr.so
-    const char *signature;     // WAMR signature string, e.g., "(ii)i"
-    void       *attachment;     // Optional attachment for the native function
+    const char* module_name; // Import module name (e.g., "env")
+    const char* function_name; // Import function name
+    void* user_function; // Pointer to the C function in hb_beamr.so
+    const char* signature;     // WAMR signature string, e.g., "(ii)i"
+    void* attachment;     // Optional attachment for the native function
 } hb_beamr_native_symbol_t;
 
 // Module and Instance Lifecycle
 hb_beamr_lib_rc_t hb_beamr_lib_load_aot_module(hb_beamr_lib_context_t* ctx,
-                                               uint8_t* aot_binary_buf,
-                                               uint32_t aot_binary_size);
+    uint8_t* aot_binary_buf,
+    uint32_t aot_binary_size);
 
 hb_beamr_lib_rc_t hb_beamr_lib_instantiate(hb_beamr_lib_context_t* ctx,
-                                           uint32_t stack_size, 
-                                           uint32_t heap_size,
-                                           void* user_data_override);
+    uint32_t stack_size,
+    uint32_t heap_size,
+    void* user_data_override);
 
 // argv
-uint32_t hb_beamr_lib_convert_wasm_vals_to_argv(uint32_t num_wasm_args, const wasm_val_t wasm_args[], 
-                                          uint32_t max_argv_cells, uint32_t argv[], 
-                                          const wasm_valkind_t param_kinds[]);
-uint32_t hb_beamr_lib_convert_argv_to_wasm_vals(uint32_t num_wasm_results, const wasm_valkind_t result_kinds[], 
-                                      const uint32_t argv[], wasm_val_t wasm_results[]);
+uint32_t hb_beamr_lib_convert_wasm_vals_to_argv(uint32_t num_wasm_args, const wasm_val_t wasm_args[],
+    uint32_t max_argv_cells, uint32_t argv[],
+    const wasm_valkind_t param_kinds[]);
+uint32_t hb_beamr_lib_convert_argv_to_wasm_vals(uint32_t num_wasm_results, const wasm_valkind_t result_kinds[],
+    const uint32_t argv[], wasm_val_t wasm_results[]);
 
 hb_beamr_lib_rc_t hb_beamr_lib_convert_raw_args_to_wasm_vals(uint64_t args[], wasm_valkind_t val_types[], uint32_t val_count, wasm_val_t** out_vals);
 hb_beamr_lib_rc_t hb_beamr_lib_convert_wasm_vals_to_raw_args(wasm_val_t* vals, uint32_t val_count, uint64_t* out_args);
 
 // Function Execution
 hb_beamr_lib_rc_t hb_beamr_lib_call_export(hb_beamr_lib_context_t* ctx,
-                                           const char* func_name,
-                                           uint32_t num_args,
-                                           wasm_val_t args[],
-                                           uint32_t num_results,
-                                           wasm_val_t results[]);
+    const char* func_name,
+    uint32_t num_args,
+    wasm_val_t args[],
+    uint32_t num_results,
+    wasm_val_t results[]);
 
 // Import Handling (called by port driver after Erlang responds to an import call)
 hb_beamr_lib_rc_t hb_beamr_lib_resolve_import(hb_beamr_lib_context_t* ctx,
-                                              uint32_t num_results,
-                                              wasm_val_t results[]);
+    uint32_t num_results,
+    wasm_val_t results[]);
 
 // Memory Access (Wrappers around WAMR APIs) - Placeholders for now
 // bool hb_beamr_lib_validate_app_addr(hb_beamr_lib_context_t* ctx, uint64_t app_offset, uint64_t size);
@@ -179,13 +173,13 @@ HB_BEAMR_LIB_API hb_beamr_lib_rc_t hb_beamr_lib_call_indirect(
 #include "wasm_export.h" // for NativeSymbol
 
 typedef struct {
-    const char          *module_name;  // Owned pointer inside the struct (malloc'd)
-    const hb_beamr_native_symbol_t *symbols;      // Array of symbols for this module
+    const char* module_name;  // Owned pointer inside the struct (malloc'd)
+    const hb_beamr_native_symbol_t* symbols;      // Array of symbols for this module
     uint32_t             num_symbols;
 } hb_beamr_native_symbol_group_t;
 
 typedef struct {
-    hb_beamr_native_symbol_group_t *groups;  // Array of groups
+    hb_beamr_native_symbol_group_t* groups;  // Array of groups
     uint32_t                        num_groups;
 } hb_beamr_native_symbols_structured_t;
 
@@ -197,15 +191,15 @@ typedef struct {
 // Function-specific metadata (used when kind==FUNC)
 typedef struct {
     uint32_t         param_count;
-    wasm_valkind_t  *param_types;   // owned array of size param_count
+    wasm_valkind_t* param_types;   // owned array of size param_count
     uint32_t         result_count;
-    wasm_valkind_t  *result_types;  // owned array of size result_count
-    char            *signature;     // WAMR signature string, e.g., "(ii)i" (owned)
+    wasm_valkind_t* result_types;  // owned array of size result_count
+    char* signature;     // WAMR signature string, e.g., "(ii)i" (owned)
 } hb_beamr_meta_func_t;
 
 typedef struct {
-    char                     *module_name;   // e.g. "env" (owned string)
-    char                     *field_name;    // import name (owned string)
+    char* module_name;   // e.g. "env" (owned string)
+    char* field_name;    // import name (owned string)
     wasm_import_export_kind_t kind;          // func/table/memory/global
 
     /* Populated only if kind == FUNC */
@@ -213,7 +207,7 @@ typedef struct {
 } hb_beamr_meta_import_t;
 
 typedef struct {
-    char                     *name;          // export name (owned string)
+    char* name;          // export name (owned string)
     wasm_import_export_kind_t kind;          // func/table/memory/global
 
     /* Populated only if kind == FUNC */
@@ -221,34 +215,34 @@ typedef struct {
 } hb_beamr_meta_export_t;
 
 typedef struct {
-    hb_beamr_meta_import_t *imports;       // Array of imports (owned)
+    hb_beamr_meta_import_t* imports;       // Array of imports (owned)
     uint32_t                import_count;
-    hb_beamr_meta_export_t *exports;       // Array of exports (owned)
+    hb_beamr_meta_export_t* exports;       // Array of exports (owned)
     uint32_t                export_count;
 } hb_beamr_meta_module_t;
 // -----------------------------------------------------------------------------
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
 hb_beamr_lib_meta_module(wasm_module_t module,
-                         hb_beamr_meta_module_t *out_meta);
+    hb_beamr_meta_module_t* out_meta);
 
 HB_BEAMR_LIB_API void
-hb_beamr_lib_free_meta_module(hb_beamr_meta_module_t *meta);
+hb_beamr_lib_free_meta_module(hb_beamr_meta_module_t* meta);
 
 // Generate structured native symbols from module metadata, mapping every
 // imported function to the same C stub (user_function).
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
-hb_beamr_lib_generate_natives(const hb_beamr_meta_module_t *meta,
-                                         void *user_function,
-                                         hb_beamr_native_symbols_structured_t *out_struct);
+hb_beamr_lib_generate_natives(const hb_beamr_meta_module_t* meta,
+    void* user_function,
+    hb_beamr_native_symbols_structured_t* out_struct);
 
 HB_BEAMR_LIB_API void
-hb_beamr_lib_free_natives(hb_beamr_native_symbols_structured_t *structured);
+hb_beamr_lib_free_natives(hb_beamr_native_symbols_structured_t* structured);
 
 // Register all groups with the runtime.
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
-hb_beamr_lib_register_global_natives(const hb_beamr_native_symbols_structured_t *structured);
+hb_beamr_lib_register_global_natives(const hb_beamr_native_symbols_structured_t* structured);
 // -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
@@ -256,16 +250,16 @@ hb_beamr_lib_register_global_natives(const hb_beamr_native_symbols_structured_t 
 
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
-hb_beamr_lib_meta_export_func(hb_beamr_meta_module_t *meta, const char* func_name, hb_beamr_meta_func_t **out_func_meta);
+hb_beamr_lib_meta_export_func(hb_beamr_meta_module_t* meta, const char* func_name, hb_beamr_meta_func_t** out_func_meta);
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
-hb_beamr_lib_meta_import_func(hb_beamr_meta_module_t *meta, const char* module_name, const char* field_name, hb_beamr_meta_func_t **out_func_meta);
+hb_beamr_lib_meta_import_func(hb_beamr_meta_module_t* meta, const char* module_name, const char* field_name, hb_beamr_meta_func_t** out_func_meta);
 
 HB_BEAMR_LIB_API hb_beamr_lib_rc_t
-hb_beamr_lib_meta_indirect_func(hb_beamr_lib_context_t* ctx, const char* table_name, int index, hb_beamr_meta_func_t **out_func_meta);
+hb_beamr_lib_meta_indirect_func(hb_beamr_lib_context_t* ctx, const char* table_name, int index, hb_beamr_meta_func_t** out_func_meta);
 
 HB_BEAMR_LIB_API void
-hb_beamr_lib_meta_indirect_func_free(hb_beamr_meta_func_t *func_meta);
+hb_beamr_lib_meta_indirect_func_free(hb_beamr_meta_func_t* func_meta);
 
 // -----------------------------------------------------------------------------
 

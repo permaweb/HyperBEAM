@@ -72,7 +72,7 @@ int main() {
 
     // Test loading without imports first
     hb_beamr_lib_rc_t load_rc = hb_beamr_lib_load_aot_module(ctx, aot_file_buffer, aot_file_size);
-    
+
     if (load_rc != HB_BEAMR_LIB_SUCCESS) {
         fprintf(stderr, "Test FAILED: hb_beamr_lib_load_aot_module (no imports) failed. Error: %s\n", hb_beamr_lib_get_last_error(ctx));
         free(aot_file_buffer);

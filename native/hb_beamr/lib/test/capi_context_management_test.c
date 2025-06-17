@@ -20,7 +20,7 @@ int main(int argc, char* argv[]) {
     wasm_config_t* user_config_for_init = wasm_config_new();
     assert(user_config_for_init != NULL);
 
-    rc = hb_beamr_capi_lib_init_runtime_global(user_config_for_init); 
+    rc = hb_beamr_capi_lib_init_runtime_global(user_config_for_init);
     // If successful, init_runtime_global (via wasm_engine_new_with_config) consumes user_config_for_init.
     // If it fails, we must delete it.
     if (rc != HB_BEAMR_CAPI_LIB_SUCCESS) {
@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
 
     printf("Destroying context...\n");
     hb_beamr_capi_lib_destroy_context(ctx);
-    ctx = NULL; 
+    ctx = NULL;
     printf("Context destroyed.\n");
 
     error_msg = hb_beamr_capi_lib_get_last_error(NULL);
@@ -49,7 +49,7 @@ int main(int argc, char* argv[]) {
     printf("Error from NULL context: '%s'\n", error_msg);
 
     printf("Destroying runtime...\n");
-    hb_beamr_capi_lib_destroy_runtime_global(); 
+    hb_beamr_capi_lib_destroy_runtime_global();
     printf("Runtime destroyed successfully.\n");
 
     printf("Attempting context creation after runtime destroy...\n");

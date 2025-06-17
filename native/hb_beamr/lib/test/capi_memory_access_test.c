@@ -21,15 +21,15 @@ const char* default_memory_export_name = "memory";
 void test_get_memory_info_success(hb_beamr_capi_lib_context_t* ctx) {
     printf("--- Test: Get Memory Info (Success) ---\n");
     uint8_t* data_ptr = NULL;
-    size_t data_size_bytes = 0; 
+    size_t data_size_bytes = 0;
     void* internal_memory_handle = NULL; // Using void* for the WAMR internal handle
 
     hb_beamr_capi_lib_rc_t rc = hb_beamr_capi_lib_get_export_memory_info(ctx, default_memory_export_name, &data_ptr, &data_size_bytes, &internal_memory_handle);
-    
+
     assert_rc_custom(rc, HB_BEAMR_CAPI_LIB_SUCCESS, ctx, "hb_beamr_capi_lib_get_export_memory_info_wamr_internal (success)");
     assert(data_ptr != NULL && "Data pointer should not be NULL after successful get_export_memory_info_wamr_internal");
     assert(internal_memory_handle != NULL && "Internal memory handle should not be NULL after successful get_export_memory_info_wamr_internal");
-    
+
     size_t expected_initial_size_bytes = 65536; // Wasm module memory_test_module.c initializes with 1 page (64KiB)
     assert(data_size_bytes == expected_initial_size_bytes && "Initial memory size mismatch");
     printf("Got memory (WAMR internal): data_ptr=%p, size=%zu bytes, internal_handle=%p\n", (void*)data_ptr, data_size_bytes, internal_memory_handle);
@@ -56,16 +56,16 @@ void test_read_write_memory_success(hb_beamr_capi_lib_context_t* ctx) {
     rc = hb_beamr_capi_lib_get_export_memory_info_wamr_internal(ctx, default_memory_export_name, &data_ptr_internal, &data_size_bytes_internal, &memory_handle_internal);
     if (rc == HB_BEAMR_CAPI_LIB_SUCCESS && data_ptr_internal != NULL) {
         printf("Read/Write Test: Successfully got memory info via WAMR internal API (data_ptr_internal=%p, size=%zu)\n", (void*)data_ptr_internal, data_size_bytes_internal);
-        
+
         uint8_t write_buf[10];
         for (int i = 0; i < 10; ++i) write_buf[i] = (uint8_t)(i + 100);
-        size_t offset = 16; 
+        size_t offset = 16;
 
         if (offset + sizeof(write_buf) <= data_size_bytes_internal) {
             printf("Writing 10 bytes at offset %zu using data_ptr_internal\n", offset);
             memcpy(data_ptr_internal + offset, write_buf, sizeof(write_buf));
 
-            uint8_t read_buf[10] = {0};
+            uint8_t read_buf[10] = { 0 };
             printf("Reading 10 bytes from offset %zu using data_ptr_internal\n", offset);
             memcpy(read_buf, data_ptr_internal + offset, sizeof(read_buf));
 
@@ -75,11 +75,13 @@ void test_read_write_memory_success(hb_beamr_capi_lib_context_t* ctx) {
             printf("Read content matches written content (using data_ptr_internal).\n");
             printf("Test PASSED (using WAMR internal for get, direct memcpy for R/W)\n");
             return; // Test finished successfully using internal path
-        } else {
+        }
+        else {
             printf("Read/Write Test: Offset out of bounds for internal data_ptr. This shouldn't happen with correct size.\n");
             // Fall through to C-API path if something is wrong, or assert an error
         }
-    } else {
+    }
+    else {
         printf("Read/Write Test: Failed to get memory info via WAMR internal API (rc=%d, data_ptr_internal=%p). Error: %s\n", rc, (void*)data_ptr_internal, hb_beamr_capi_lib_get_last_error(ctx));
         printf("Read/Write Test: Falling back to C-API path for get_export_memory_info.\n");
     }
@@ -100,7 +102,7 @@ void test_read_write_memory_success(hb_beamr_capi_lib_context_t* ctx) {
     rc = hb_beamr_capi_lib_write_memory(ctx, memory_ptr_capi, offset_capi, write_buf_capi, sizeof(write_buf_capi));
     assert_rc_custom(rc, HB_BEAMR_CAPI_LIB_SUCCESS, ctx, "hb_beamr_capi_lib_write_memory (C-API path)");
 
-    uint8_t read_buf_capi[10] = {0};
+    uint8_t read_buf_capi[10] = { 0 };
     printf("Reading 10 bytes from offset %zu (C-API path)\n", offset_capi);
     rc = hb_beamr_capi_lib_read_memory(ctx, memory_ptr_capi, offset_capi, read_buf_capi, sizeof(read_buf_capi));
     assert_rc_custom(rc, HB_BEAMR_CAPI_LIB_SUCCESS, ctx, "hb_beamr_capi_lib_read_memory (C-API path)");
@@ -120,7 +122,7 @@ void test_read_write_out_of_bounds(hb_beamr_capi_lib_context_t* ctx) {
     hb_beamr_capi_lib_rc_t rc_internal;
 
     rc_internal = hb_beamr_capi_lib_get_export_memory_info_wamr_internal(ctx, default_memory_export_name, &data_ptr_internal, &data_size_bytes_internal, &memory_handle_internal);
-    
+
     if (rc_internal == HB_BEAMR_CAPI_LIB_SUCCESS && data_ptr_internal != NULL) {
         printf("OOB Test: Successfully got memory info via WAMR internal API (data_ptr_internal=%p, size=%zu)\n", (void*)data_ptr_internal, data_size_bytes_internal);
         uint8_t buf_internal[10];
@@ -134,13 +136,16 @@ void test_read_write_out_of_bounds(hb_beamr_capi_lib_context_t* ctx) {
             // For this test, we are checking our library's ability to prevent hb_beamr_capi_lib_write_memory from doing this.
             // So, this direct path isn't testing the library function but the raw pointer behavior.
             // Instead, we should rely on the C-API path for testing the library's OOB checks.
-        } else if (data_size_bytes_internal == 0) {
+        }
+        else if (data_size_bytes_internal == 0) {
             printf("OOB Test: WAMR internal API reported 0 size, cannot perform OOB test meaningfully with direct memcpy.\n");
-        } else {
+        }
+        else {
             printf("OOB Test: WAMR internal path conditions for OOB write not met (offset %zu, length %zu, size %zu). Skipping direct write OOB.\n", large_offset_internal, large_length_internal, data_size_bytes_internal);
         }
-    } else {
-         printf("OOB Test: Failed to get memory info via WAMR internal API (rc=%d, data_ptr_internal=%p). Error: %s\n", rc_internal, (void*)data_ptr_internal, hb_beamr_capi_lib_get_last_error(ctx));
+    }
+    else {
+        printf("OOB Test: Failed to get memory info via WAMR internal API (rc=%d, data_ptr_internal=%p). Error: %s\n", rc_internal, (void*)data_ptr_internal, hb_beamr_capi_lib_get_last_error(ctx));
     }
 
     // Always run OOB tests against the C-API versions of read/write memory which have bounds checks.
@@ -163,16 +168,16 @@ void test_read_write_out_of_bounds(hb_beamr_capi_lib_context_t* ctx) {
     // We need a valid memory_ptr_capi to test the C-API read/write functions' OOB logic.
     // And data_size_bytes_capi needs to be sensible for the test.
     if (memory_ptr_capi == NULL || data_size_bytes_capi == 0) {
-         fprintf(stderr, "OOB Test: C-API memory_ptr is NULL or data_size_bytes_capi is 0. Cannot perform C-API OOB test. Error: %s\n", hb_beamr_capi_lib_get_last_error(ctx));
-         printf("Test SKIPPED (OOB C-API path due to NULL memory_ptr or zero size)\n");
-         return; // Cannot proceed with C-API OOB test
+        fprintf(stderr, "OOB Test: C-API memory_ptr is NULL or data_size_bytes_capi is 0. Cannot perform C-API OOB test. Error: %s\n", hb_beamr_capi_lib_get_last_error(ctx));
+        printf("Test SKIPPED (OOB C-API path due to NULL memory_ptr or zero size)\n");
+        return; // Cannot proceed with C-API OOB test
     }
 
 
     uint8_t buf_capi[10];
     // Use data_size_bytes_capi from the C-API get_export_memory_info call
-    size_t large_offset_capi = data_size_bytes_capi > 5 ? data_size_bytes_capi - 5 : 0; 
-    size_t large_length_capi = 10;         
+    size_t large_offset_capi = data_size_bytes_capi > 5 ? data_size_bytes_capi - 5 : 0;
+    size_t large_length_capi = 10;
 
     printf("Attempting to write out of bounds (C-API path: offset %zu, length %zu, size %zu)\n", large_offset_capi, large_length_capi, data_size_bytes_capi);
     rc_capi = hb_beamr_capi_lib_write_memory(ctx, memory_ptr_capi, large_offset_capi, buf_capi, large_length_capi);
@@ -192,7 +197,7 @@ int main() {
     fflush(stdout);
 
     wasm_config_t* config = wasm_config_new();
-    hb_beamr_capi_lib_rc_t rc = hb_beamr_capi_lib_init_runtime_global(config); 
+    hb_beamr_capi_lib_rc_t rc = hb_beamr_capi_lib_init_runtime_global(config);
     assert_rc_custom(rc, HB_BEAMR_CAPI_LIB_SUCCESS, NULL, "hb_beamr_capi_lib_init_runtime_global");
     printf("Runtime initialized.\n");
     fflush(stdout);
@@ -204,7 +209,7 @@ int main() {
     assert(ctx != NULL && "hb_beamr_capi_lib_create_context returned NULL");
     if (!ctx) {
         fprintf(stderr, "Context creation failed, cannot proceed.\n");
-        hb_beamr_capi_lib_destroy_runtime_global(); 
+        hb_beamr_capi_lib_destroy_runtime_global();
         return 1;
     }
     printf("Context created successfully and asserted non-NULL.\n");
@@ -222,7 +227,7 @@ int main() {
     printf("Loading Wasm module: %s (%u bytes)\n", wasm_file, file_size);
     fflush(stdout);
     rc = hb_beamr_capi_lib_load_wasm_module(ctx, wasm_binary, file_size);
-    free_buffer(wasm_binary); 
+    free_buffer(wasm_binary);
     assert_rc_custom(rc, HB_BEAMR_CAPI_LIB_SUCCESS, ctx, "hb_beamr_capi_lib_load_wasm_module");
     printf("Module loaded successfully.\n");
     fflush(stdout);
@@ -242,7 +247,8 @@ int main() {
     hb_beamr_capi_lib_rc_t call_rc = hb_beamr_capi_lib_call_export(ctx, "write_byte_wat", 2, args_dummy, 0, NULL);
     if (call_rc == HB_BEAMR_CAPI_LIB_SUCCESS) {
         printf("write_byte_wat(0, 123) called successfully.\n");
-    } else {
+    }
+    else {
         printf("Call to write_byte_wat(0, 123) failed: %s\n", hb_beamr_capi_lib_get_last_error(ctx));
         // Don't fail the test here, just observe.
     }

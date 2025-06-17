@@ -17,7 +17,7 @@
 // The `env` here will be the `hb_beamr_capi_lib_context_t*` passed to `HostFuncEnv`.
 static wasm_trap_t* my_give_host_control_impl(
     void* user_env, // This is hb_beamr_capi_lib_context_t*
-    const wasm_val_vec_t* args, 
+    const wasm_val_vec_t* args,
     wasm_val_vec_t* results
 ) {
     hb_beamr_capi_lib_context_t* ctx = (hb_beamr_capi_lib_context_t*)user_env;
@@ -25,18 +25,18 @@ static wasm_trap_t* my_give_host_control_impl(
 
     // give_host_control(unsigned int current_index) in Wasm (import_nested.c) now takes 1 I32 argument.
     if (args->size != 1 || args->data[0].kind != WASM_I32) {
-        fprintf(stderr, "[Host DEBUG] ERROR: my_give_host_control_impl called with wrong args. Expected 1 (I32), Got %zu. Arg 0 kind (if any): %d\n", 
-                args->size, (args->size > 0 ? args->data[0].kind : -1));
+        fprintf(stderr, "[Host DEBUG] ERROR: my_give_host_control_impl called with wrong args. Expected 1 (I32), Got %zu. Arg 0 kind (if any): %d\n",
+            args->size, (args->size > 0 ? args->data[0].kind : -1));
         // ... (trap generation code, if desired) ...
         results->num_elems = 0;
-        return NULL; 
+        return NULL;
     }
 
     uint32_t index_from_wasm = args->data[0].of.i32;
     fprintf(stderr, "[Host DEBUG] give_host_control() received index %u from Wasm.\n", index_from_wasm);
     fprintf(stderr, "[Host DEBUG] Now, host (my_give_host_control_impl) will call Wasm export 'xor_memory' on this index.\n");
 
-    uint32_t xor_val_from_host = 0xABCDEFFF; 
+    uint32_t xor_val_from_host = 0xABCDEFFF;
     fprintf(stderr, "[Host DEBUG] Calling Wasm's xor_memory with index %u and xor_val 0x%X\n", index_from_wasm, xor_val_from_host);
 
     wasm_val_t xor_call_args[2];
@@ -49,12 +49,13 @@ static wasm_trap_t* my_give_host_control_impl(
 
     if (rc_xor != HB_BEAMR_CAPI_LIB_SUCCESS) {
         fprintf(stderr, "[Host DEBUG] ERROR: Call from host to Wasm export 'xor_memory' failed: %d. Error: %s\n", rc_xor, hb_beamr_capi_lib_get_last_error(ctx));
-    } else {
+    }
+    else {
         fprintf(stderr, "[Host DEBUG] Successfully called Wasm export 'xor_memory' from host on index %u.\n", index_from_wasm);
     }
 
     results->num_elems = 0; // give_host_control() is void
-    return NULL; 
+    return NULL;
 }
 
 int main() {
@@ -133,9 +134,9 @@ int main() {
     printf("'get_data_ptr' returned offset: %u\n", data_ptr_offset);
 
     // Define the index to use for operations within global_data_buffer by main
-    uint32_t target_index_main = 0; 
+    uint32_t target_index_main = 0;
     // Define the initial value to be set by Wasm's call_host_and_read
-    uint32_t initial_value_for_wasm = 77; 
+    uint32_t initial_value_for_wasm = 77;
     printf("Using index %u and initial_value %u for Wasm's call_host_and_read.\n", target_index_main, initial_value_for_wasm);
 
     // 2. Call `call_host_and_read` which internally calls the host function
@@ -174,7 +175,7 @@ int main() {
     //   is still initial_value_for_wasm.
     // - call_host_and_read returns global_data_buffer[target_index_main].
     uint32_t expected_result_val = initial_value_for_wasm ^ 0xABCDEFFF; // Host XORs the value at target_index_main
-    assert(result_val == expected_result_val); 
+    assert(result_val == expected_result_val);
     printf("SUCCESS: 'call_host_and_read' returned the expected value (%u) after host interaction which modified the same index.\n", expected_result_val);
 
     hb_beamr_capi_lib_destroy_context(ctx);

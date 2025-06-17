@@ -37,7 +37,7 @@
 #define NUM_INSTANCES   1  /* instances per module       */
 #define NESTED_DEPTH    2  /* depth of import recursion   */
 
-static const char *g_module_paths[NUM_MODULES] = {
+static const char* g_module_paths[NUM_MODULES] = {
     // "import_nested.aot",       /* built from Emscripten C */
     "import_nested_wat.aot"    /* built from a WAT source (identical binary
                                    is copied by CMake if WAT compiler absent) */
@@ -60,7 +60,7 @@ typedef struct stress_instance_ctx stress_instance_ctx_t;
 /* user_data payload stored in each ExecEnv so that the import handler can
    retrieve both depth and owning instance */
 typedef struct {
-    stress_instance_ctx_t *inst_ctx;
+    stress_instance_ctx_t* inst_ctx;
     int                    depth; /* 0 .. NESTED_DEPTH-1 */
 } execenv_tag_t;
 
@@ -83,7 +83,7 @@ struct stress_instance_ctx {
 
     /* WAMR bits */
     wasm_module_inst_t module_inst;
-    hb_beamr_lib_context_t *instance_lib_ctx; /* For memory validation & xor_memory calls */
+    hb_beamr_lib_context_t* instance_lib_ctx; /* For memory validation & xor_memory calls */
     wasm_function_inst_t fn_call_host_and_read;
     wasm_exec_env_t exec_env_depth[NESTED_DEPTH];
     execenv_tag_t   ee_tag[NESTED_DEPTH];
@@ -95,9 +95,9 @@ struct stress_instance_ctx {
 /* ------------------------------------------------------------------------- */
 /* Native import handler                                                     */
 /* ------------------------------------------------------------------------- */
-static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t *args) {
-    execenv_tag_t *tag = (execenv_tag_t *)wasm_runtime_get_user_data(exec_env);
-    stress_instance_ctx_t *ictx = tag->inst_ctx;
+static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t* args) {
+    execenv_tag_t* tag = (execenv_tag_t*)wasm_runtime_get_user_data(exec_env);
+    stress_instance_ctx_t* ictx = tag->inst_ctx;
     int depth = tag->depth;
     unsigned int idx = (unsigned int)args[0];
 
@@ -113,9 +113,9 @@ static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t *args) {
     uint32_t mem_word_pre = 0;
     uint32_t byte_off = ictx->data_base_offset + idx * sizeof(uint32_t);
     hb_beamr_lib_rc_t rc_pre = hb_beamr_lib_direct_read_memory(ictx->instance_lib_ctx,
-                                                               byte_off,
-                                                               (uint8_t *)&mem_word_pre,
-                                                               sizeof(uint32_t));
+        byte_off,
+        (uint8_t*)&mem_word_pre,
+        sizeof(uint32_t));
     assert(rc_pre == HB_BEAMR_LIB_SUCCESS && "direct_read_memory failed (pre-lock)");
     assert(mem_word_pre == expected_seed && "unexpected memory contents before coordinator handshake");
 
@@ -133,9 +133,9 @@ static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t *args) {
     /* ---------------- Post-unlock validations ---------------- */
     uint32_t mem_word_post = 0;
     hb_beamr_lib_rc_t rc_post = hb_beamr_lib_direct_read_memory(ictx->instance_lib_ctx,
-                                                                byte_off,
-                                                                (uint8_t *)&mem_word_post,
-                                                                sizeof(uint32_t));
+        byte_off,
+        (uint8_t*)&mem_word_post,
+        sizeof(uint32_t));
     assert(rc_post == HB_BEAMR_LIB_SUCCESS && "direct_read_memory failed (post-lock)");
     assert(mem_word_post == expected_seed && "unexpected memory contents after coordinator resume");
 
@@ -149,16 +149,16 @@ static void native_give_host_control(wasm_exec_env_t exec_env, uint64_t *args) {
 /* Worker thread per depth                                                   */
 /* ------------------------------------------------------------------------- */
 typedef struct {
-    stress_instance_ctx_t *ictx;
+    stress_instance_ctx_t* ictx;
     int depth;
-    hb_beamr_lib_context_t *lib_ctx; /* For direct memory validation */
+    hb_beamr_lib_context_t* lib_ctx; /* For direct memory validation */
 } depth_thread_arg_t;
 
-static void *depth_worker(void *arg) {
-    depth_thread_arg_t *dt = (depth_thread_arg_t *)arg;
-    stress_instance_ctx_t *ictx = dt->ictx;
+static void* depth_worker(void* arg) {
+    depth_thread_arg_t* dt = (depth_thread_arg_t*)arg;
+    stress_instance_ctx_t* ictx = dt->ictx;
     int d = dt->depth;
-    hb_beamr_lib_context_t *lib_ctx_for_mem = dt->lib_ctx;
+    hb_beamr_lib_context_t* lib_ctx_for_mem = dt->lib_ctx;
     free(dt);
 
     LOG("ENTER m%d i%d d%d", ictx->module_id, ictx->instance_id, d);
@@ -174,28 +174,29 @@ static void *depth_worker(void *arg) {
 
     LOG("m%d i%d d%d: calling call_host_and_read(idx=%d, seed=%d)", ictx->module_id, ictx->instance_id, d, d, seed);
     bool ok = wasm_runtime_call_wasm_a(ee, ictx->fn_call_host_and_read,
-                                       1, res, 2, args);
+        1, res, 2, args);
     assert(ok && "wasm_runtime_call_wasm_a failed");
 
     // Direct memory read for logging, but primary assertion is in handle_depth
     uint32_t mem_word_after_wasm = 0;
     uint32_t offset_bytes = ictx->data_base_offset + (uint32_t)(d * sizeof(uint32_t));
     hb_beamr_lib_rc_t rc_mem_after = hb_beamr_lib_direct_read_memory(lib_ctx_for_mem,
-                                                                     offset_bytes,
-                                                                     (uint8_t *)&mem_word_after_wasm,
-                                                                     sizeof(uint32_t));
-    
+        offset_bytes,
+        (uint8_t*)&mem_word_after_wasm,
+        sizeof(uint32_t));
+
     if (rc_mem_after != HB_BEAMR_LIB_SUCCESS) {
         LOG("m%d i%d d%d: hb_beamr_lib_direct_read_memory FAILED with %d", ictx->module_id, ictx->instance_id, d, rc_mem_after);
         // Do not assert false here, let handle_depth catch logical errors if any
-    } else {
-        LOG("m%d i%d d%d: Wasm returned val %d. Direct C read after Wasm call saw mem_word %u. (This may differ due to WAMR exec_env memory model)", 
+    }
+    else {
+        LOG("m%d i%d d%d: Wasm returned val %d. Direct C read after Wasm call saw mem_word %u. (This may differ due to WAMR exec_env memory model)",
             ictx->module_id, ictx->instance_id, d, res[0].of.i32, mem_word_after_wasm);
     }
     // assert(mem_word_after_wasm == (uint32_t)res[0].of.i32 && "Wasm return vs C direct read mismatch"); // Temporarily removed
 
     pthread_mutex_lock(&ictx->mutex);
-    ictx->result_val[d]   = res[0].of.i32;
+    ictx->result_val[d] = res[0].of.i32;
     ictx->result_ready[d] = 1;
     LOG("m%d i%d d%d: result_val=%d set for handle_depth, signaling cond_result", ictx->module_id, ictx->instance_id, d, res[0].of.i32);
     pthread_cond_signal(&ictx->cond_result[d]);
@@ -210,7 +211,7 @@ static void *depth_worker(void *arg) {
 /* ------------------------------------------------------------------------- */
 /* Recursive coordinator (runs inside per-instance master thread)            */
 /* ------------------------------------------------------------------------- */
-static void handle_depth(stress_instance_ctx_t *ictx, int depth) {
+static void handle_depth(stress_instance_ctx_t* ictx, int depth) {
     /* Wait import entry */
     pthread_mutex_lock(&ictx->mutex);
     while (!ictx->request_flag[depth]) {
@@ -221,14 +222,14 @@ static void handle_depth(stress_instance_ctx_t *ictx, int depth) {
 
     if (depth < NESTED_DEPTH - 1) {
         /* Spawn deeper worker and fully process it first */
-        depth_thread_arg_t *dt = malloc(sizeof *dt);
+        depth_thread_arg_t* dt = malloc(sizeof * dt);
         dt->ictx = ictx; dt->depth = depth + 1; dt->lib_ctx = ictx->instance_lib_ctx;
         pthread_t tid;
         pthread_create(&tid, NULL, depth_worker, dt);
 
-        LOG("m%d i%d d%d: spawned depth_worker for d+1=%d, now handle_depth(%d)", ictx->module_id, ictx->instance_id, depth, depth+1, depth+1);
+        LOG("m%d i%d d%d: spawned depth_worker for d+1=%d, now handle_depth(%d)", ictx->module_id, ictx->instance_id, depth, depth + 1, depth + 1);
         handle_depth(ictx, depth + 1);
-        LOG("m%d i%d d%d: handle_depth for d+1=%d returned, joining tid", ictx->module_id, ictx->instance_id, depth, depth+1);
+        LOG("m%d i%d d%d: handle_depth for d+1=%d returned, joining tid", ictx->module_id, ictx->instance_id, depth, depth + 1);
         pthread_join(tid, NULL);
     }
 
@@ -260,8 +261,8 @@ static void handle_depth(stress_instance_ctx_t *ictx, int depth) {
 /* ------------------------------------------------------------------------- */
 /* Per-instance master                                                       */
 /* ------------------------------------------------------------------------- */
-static void *instance_master(void *arg) {
-    stress_instance_ctx_t *ictx = (stress_instance_ctx_t *)arg;
+static void* instance_master(void* arg) {
+    stress_instance_ctx_t* ictx = (stress_instance_ctx_t*)arg;
 
     LOG("ENTER m%d i%d", ictx->module_id, ictx->instance_id);
     wasm_runtime_init_thread_env();
@@ -269,10 +270,10 @@ static void *instance_master(void *arg) {
     /* Load module */
     uint32_t wasm_sz = 0;
     LOG("m%d i%d: loading module %s", ictx->module_id, ictx->instance_id, g_module_paths[ictx->module_id]);
-    uint8_t *wasm_buf = read_file_to_buffer(g_module_paths[ictx->module_id], &wasm_sz);
+    uint8_t* wasm_buf = read_file_to_buffer(g_module_paths[ictx->module_id], &wasm_sz);
     assert(wasm_buf);
 
-    hb_beamr_lib_context_t *loader_ctx = hb_beamr_lib_create_context();
+    hb_beamr_lib_context_t* loader_ctx = hb_beamr_lib_create_context();
     assert(hb_beamr_lib_load_wasm_module(loader_ctx, wasm_buf, wasm_sz) == HB_BEAMR_LIB_SUCCESS);
     assert(hb_beamr_lib_instantiate(loader_ctx, 128 * 1024, 0, NULL) == HB_BEAMR_LIB_SUCCESS);
 
@@ -280,7 +281,7 @@ static void *instance_master(void *arg) {
 
     ictx->module_inst = hb_beamr_lib_get_module_instance(loader_ctx);
     ictx->fn_call_host_and_read = wasm_runtime_lookup_function(ictx->module_inst,
-                                                               "call_host_and_read");
+        "call_host_and_read");
     assert(ictx->fn_call_host_and_read);
 
     /* Obtain base offset of global_data_buffer via get_data_ptr() */
@@ -312,7 +313,7 @@ static void *instance_master(void *arg) {
     }
 
     /* Spawn outermost depth worker */
-    depth_thread_arg_t *dt0 = malloc(sizeof *dt0);
+    depth_thread_arg_t* dt0 = malloc(sizeof * dt0);
     dt0->ictx = ictx; dt0->depth = 0; dt0->lib_ctx = ictx->instance_lib_ctx;
     LOG("m%d i%d: spawning depth_worker for d=0", ictx->module_id, ictx->instance_id);
     pthread_t tid0;
@@ -341,10 +342,10 @@ static void register_natives_once(void) {
     static int registered = 0;
     if (registered) return;
     const hb_beamr_native_symbol_t sym[] = {
-        {"env", "give_host_control", (void *)native_give_host_control, "(i)", NULL}
+        {"env", "give_host_control", (void*)native_give_host_control, "(i)", NULL}
     };
-    hb_beamr_native_symbol_group_t grp = {"env", sym, 1};
-    hb_beamr_native_symbols_structured_t structured = {&grp, 1};
+    hb_beamr_native_symbol_group_t grp = { "env", sym, 1 };
+    hb_beamr_native_symbols_structured_t structured = { &grp, 1 };
     assert(hb_beamr_lib_register_global_natives(&structured) == HB_BEAMR_LIB_SUCCESS);
     registered = 1;
 }
@@ -358,14 +359,14 @@ int main(void) {
     register_natives_once();
 
     pthread_t masters[NUM_MODULES][NUM_INSTANCES];
-    stress_instance_ctx_t *contexts[NUM_MODULES][NUM_INSTANCES];
+    stress_instance_ctx_t* contexts[NUM_MODULES][NUM_INSTANCES];
 
     /* Allocate contexts & spawn masters */
     for (int mid = 0; mid < NUM_MODULES; ++mid) {
         for (int iid = 0; iid < NUM_INSTANCES; ++iid) {
-            stress_instance_ctx_t *ctx = calloc(1, sizeof *ctx);
+            stress_instance_ctx_t* ctx = calloc(1, sizeof * ctx);
             contexts[mid][iid] = ctx;
-            ctx->module_id   = mid;
+            ctx->module_id = mid;
             ctx->instance_id = iid;
             pthread_mutex_init(&ctx->mutex, NULL);
             for (int d = 0; d < NESTED_DEPTH; ++d) {
@@ -383,7 +384,7 @@ int main(void) {
         for (int iid = 0; iid < NUM_INSTANCES; ++iid) {
             pthread_join(masters[mid][iid], NULL);
             /* Cleanup pthread primitives */
-            stress_instance_ctx_t *ctx = contexts[mid][iid];
+            stress_instance_ctx_t* ctx = contexts[mid][iid];
             for (int d = 0; d < NESTED_DEPTH; ++d) {
                 pthread_cond_destroy(&ctx->cond_request[d]);
                 pthread_cond_destroy(&ctx->cond_resume[d]);
