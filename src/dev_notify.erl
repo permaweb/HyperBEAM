@@ -351,17 +351,16 @@ template_matches(_Event, _Template, _Opts) ->
 start_notification_manager() ->
     case whereis(?NOTIFICATION_MANAGER) of
         undefined ->
-            % Initialize ETS table for fast listener lookups
-            case ets:info(notification_listeners) of
-                undefined ->
-                    ets:new(notification_listeners, [named_table, public, set, {read_concurrency, true}]);
-                _ -> ok
-            end,
-            
             % Start the manager process
             ManagerPid = spawn_link(fun() -> 
                 try register(?NOTIFICATION_MANAGER, self()) of
                     true ->
+                        % Initialize ETS table for fast listener lookups
+                        case ets:info(notification_listeners) of
+                            undefined ->
+                                ets:new(notification_listeners, [named_table, public, set, {read_concurrency, true}]);
+                            _ -> ok
+                        end,
                         ?event(notify, {notification_manager_started, self()}),
                         notification_manager_loop(#{})
                 catch
@@ -1493,4 +1492,239 @@ event_duplication_counter(Count, TestPid) ->
             event_duplication_counter(Count, TestPid)
     after 1000 ->
         TestPid ! {final_duplicate_count, Count}
-    end. 
+    end.
+
+%% @doc Test manual notification manager startup
+notification_manager_manual_start_test() ->
+    % Ensure clean state
+    stop_notification_manager(),
+    timer:sleep(100),
+    
+    % Verify no manager is running
+    ?assertEqual(undefined, whereis(?NOTIFICATION_MANAGER)),
+    
+    % Start manager manually
+    {ok, ManagerPid} = start_notification_manager(),
+    
+    % Verify manager started successfully
+    ?assertNotEqual(undefined, ManagerPid),
+    ?assert(is_process_alive(ManagerPid)),
+    ?assertEqual(ManagerPid, whereis(?NOTIFICATION_MANAGER)),
+    
+    ?event(debug, {manual_start_test_completed, {manager_pid, ManagerPid}}),
+    
+    stop_notification_manager().
+
+%% @doc Test multiple start attempts return already_started
+notification_manager_multiple_start_test() ->
+    % Clean state
+    stop_notification_manager(),
+    timer:sleep(50),
+    
+    % Manually start manager first
+    {ok, ManualPid} = start_notification_manager(),
+    ?assert(is_process_alive(ManualPid)),
+    
+    % Try to start again (should return already_started)
+    StartResult = start_notification_manager(),
+    ?assertEqual({already_started, ManualPid}, StartResult),
+    
+    % Should still be the same process
+    CurrentPid = whereis(?NOTIFICATION_MANAGER),
+    ?assertEqual(ManualPid, CurrentPid),
+    ?assert(is_process_alive(CurrentPid)),
+    
+    stop_notification_manager().
+
+%% @doc Test manual start handles conflicts gracefully
+notification_manager_manual_start_conflict_test() ->
+    % Clean state thoroughly
+    stop_notification_manager(),
+    timer:sleep(100),
+    
+    % Ensure no process is registered
+    ?assertEqual(undefined, whereis(?NOTIFICATION_MANAGER)),
+    
+    % Create a conflicting process with the same name
+    TestPid = self(),
+    ConflictPid = spawn(fun() ->
+        try register(?NOTIFICATION_MANAGER, self()) of
+            true ->
+                TestPid ! {conflict_registered, self()},
+                receive stop -> ok after 10000 -> ok end
+        catch
+            error:badarg ->
+                TestPid ! {conflict_failed, self()}
+        end
+    end),
+    
+    % Wait for registration result
+    receive
+        {conflict_registered, ConflictPid} ->
+            % Verify the conflict process is registered
+            ?assertEqual(ConflictPid, whereis(?NOTIFICATION_MANAGER)),
+            
+            % Try manual start (should return already_started)
+            StartResult = start_notification_manager(),
+            ?assertEqual({already_started, ConflictPid}, StartResult),
+            
+            % The original conflict process should still be there
+            ?assertEqual(ConflictPid, whereis(?NOTIFICATION_MANAGER)),
+            
+            % Clean up
+            ConflictPid ! stop,
+            timer:sleep(50);
+        {conflict_failed, ConflictPid} ->
+            % Name was already taken, just start normally
+            {ok, _} = start_notification_manager()
+    after 1000 ->
+        ?assert(false, "Conflict process failed to register")
+    end,
+    
+    % Ensure clean state
+    stop_notification_manager(),
+    
+    % Now start should work
+    {ok, _NewPid} = start_notification_manager(),
+    stop_notification_manager().
+
+%% @doc Test manager restart after stop/start cycle
+notification_manager_manager_restart_test() ->
+    % Test simulates stopping and restarting the manager
+    stop_notification_manager(),
+    timer:sleep(50),
+    
+    % Verify clean state
+    ?assertEqual(undefined, whereis(?NOTIFICATION_MANAGER)),
+    
+    % Start the manager manually
+    {ok, FirstPid} = start_notification_manager(),
+    timer:sleep(50),
+    
+    % Verify manager started
+    ?assertEqual(FirstPid, whereis(?NOTIFICATION_MANAGER)),
+    ?assertNotEqual(undefined, FirstPid),
+    ?assert(is_process_alive(FirstPid)),
+    
+    % Register a test listener to verify functionality
+    TestTemplate = #{ <<"test">> => <<"restart">> },
+    TestStreamPid = spawn(fun() -> receive _ -> ok end end),
+    TestRef = make_ref(),
+    
+    FirstPid ! {register_listener, TestTemplate, TestStreamPid, TestRef},
+    timer:sleep(10),
+    
+    % Verify listener is registered
+    Listeners = ets:tab2list(notification_listeners),
+    ?assert(lists:member({{TestTemplate, TestStreamPid}, TestRef}, Listeners)),
+    
+    % Stop manager and restart
+    stop_notification_manager(),
+    timer:sleep(50),
+    
+    % Start again 
+    {ok, SecondPid} = start_notification_manager(),
+    timer:sleep(50),
+    
+    % Verify new manager started (should be different PID)
+    ?assertEqual(SecondPid, whereis(?NOTIFICATION_MANAGER)),
+    ?assertNotEqual(undefined, SecondPid),
+    ?assert(is_process_alive(SecondPid)),
+    ?assertNotEqual(FirstPid, SecondPid),
+    
+    % ETS table should be recreated (empty)
+    NewListeners = ets:tab2list(notification_listeners),
+    ?assertEqual([], NewListeners),
+    
+    stop_notification_manager().
+
+%% @doc Test ETS table initialization and ownership
+notification_manager_ets_initialization_test() ->
+    % Ensure clean state
+    stop_notification_manager(),
+    timer:sleep(50),
+    
+    % Start manager manually
+    {ok, ManagerPid} = start_notification_manager(),
+    timer:sleep(50),
+    
+    ?assertNotEqual(undefined, ManagerPid),
+    ?assert(is_process_alive(ManagerPid)),
+    
+    % Verify ETS table exists and has correct properties
+    TableInfo = ets:info(notification_listeners),
+    ?assertNotEqual(undefined, TableInfo),
+    
+    % Verify table properties
+    ?assertEqual(set, ets:info(notification_listeners, type)),
+    ?assertEqual(true, ets:info(notification_listeners, named_table)),
+    
+    % Most importantly: verify the ETS table is owned by the manager process
+    % This is the critical fix - table should be owned by manager, not caller
+    ETSOwner = ets:info(notification_listeners, owner),
+    ?assertEqual(ManagerPid, ETSOwner),
+    
+    % Test basic ETS operations work
+    InitialSize = ets:info(notification_listeners, size),
+    TestKey = {{test_template, test_pid}, test_ref},
+    ets:insert(notification_listeners, TestKey),
+    ?assertEqual(InitialSize + 1, ets:info(notification_listeners, size)),
+    ?assert(ets:member(notification_listeners, element(1, TestKey))),
+    
+    % Clean up test data
+    ets:delete(notification_listeners, element(1, TestKey)),
+    ?assertEqual(InitialSize, ets:info(notification_listeners, size)).
+
+%% @doc Test concurrent manager start attempts
+notification_manager_concurrent_start_test() ->
+    % Clean state
+    stop_notification_manager(),
+    timer:sleep(50),
+    
+    TestPid = self(),
+    NumConcurrentCalls = 5,
+    
+    % Spawn multiple processes that all try to start the manager
+    ConcurrentPids = lists:map(fun(N) ->
+        spawn(fun() ->
+            % Random small delay to increase chance of race conditions
+            timer:sleep(rand:uniform(50)),
+            Result = start_notification_manager(),
+            ManagerPid = whereis(?NOTIFICATION_MANAGER),
+            TestPid ! {concurrent_result, N, Result, ManagerPid}
+        end)
+    end, lists:seq(1, NumConcurrentCalls)),
+    
+    % Collect all results
+    Results = lists:map(fun(_) ->
+        receive
+            {concurrent_result, N, Result, ManagerPid} ->
+                {N, Result, ManagerPid}
+        after 5000 ->
+            {timeout, timeout, undefined}
+        end
+    end, ConcurrentPids),
+    
+    ?event(debug, {concurrent_start_results, Results}),
+    
+    % Should get one {ok, Pid} and rest {already_started, Pid}
+    OkResults = [R || {_N, R, _Pid} <- Results, element(1, R) =:= ok],
+    AlreadyStartedResults = [R || {_N, R, _Pid} <- Results, element(1, R) =:= already_started],
+    
+    % Should have exactly one ok result and rest already_started
+    ?assertEqual(1, length(OkResults)),
+    ?assertEqual(NumConcurrentCalls - 1, length(AlreadyStartedResults)),
+    
+    % All should see the same manager PID
+    ManagerPids = [Pid || {_N, _Result, Pid} <- Results, Pid =/= undefined],
+    case ManagerPids of
+        [] ->
+            ?assert(false, "No manager PIDs found");
+        [FirstPid | Rest] ->
+            % All should be the same PID
+            lists:foreach(fun(Pid) ->
+                ?assertEqual(FirstPid, Pid)
+            end, Rest)
+    end,
+    
+    stop_notification_manager().
