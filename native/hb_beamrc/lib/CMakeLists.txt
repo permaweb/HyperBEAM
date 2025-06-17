@@ -8,8 +8,8 @@ include(${CMAKE_CURRENT_LIST_DIR}/../../common/wamr/cmake/wamr-src.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/wamr/cmake/wamr-llvm.cmake)
 
 # Fetch WAMR sources
-set(WAMR_GIT_REPOSITORY "https://github.com/permaweb/wasm-micro-runtime.git" CACHE STRING "Git repository URL for WAMR")
-set(WAMR_GIT_TAG "2.2.0-nan-canon-2" CACHE STRING "Git tag or branch for WAMR")
+set(WAMR_GIT_REPOSITORY "https://github.com/elliotsayes/wasm-micro-runtime.git" CACHE STRING "Git repository URL for WAMR")
+set(WAMR_GIT_TAG "2.3.1-nan-canon" CACHE STRING "Git tag or branch for WAMR")
 set(WAMR_SRC_DIR "${CMAKE_BINARY_DIR}/wamr-src" CACHE PATH "Directory for WAMR sources")
 fetch_wamr_source()
 
@@ -366,7 +366,7 @@ endif()
 
 # message ("-- CMAKE_C_FLAGS: ${CMAKE_C_FLAGS}")
 
-add_library (vmlib
+add_library (vmlib_c
              ${PLATFORM_SHARED_SOURCE}
              ${MEM_ALLOC_SHARED_SOURCE}
              ${UTILS_SHARED_SOURCE}
@@ -395,7 +395,7 @@ else()
 endif()
 
 if (NOT MSVC)
-  target_link_libraries (hb_beamrc_lib aotclib vmlib ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
+  target_link_libraries (hb_beamrc_lib aotclib vmlib_c ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
                          -lm -lpthread ${lib_lldb} ${UV_A_LIBS})
   if (MINGW)
       target_link_libraries (hb_beamrc_lib ssp.a ws2_32)
@@ -403,7 +403,7 @@ if (NOT MSVC)
       target_link_libraries (hb_beamrc_lib -ldl)
   endif()
 else()
-  target_link_libraries (hb_beamrc_lib aotclib vmlib  ${lib_lldb} ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
+  target_link_libraries (hb_beamrc_lib aotclib vmlib_c  ${lib_lldb} ${WAMRC_LINK_LLVM_LIBS} ${lib_ubsan}
                          ${UV_A_LIBS})
 endif()
 

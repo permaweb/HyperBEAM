@@ -91,18 +91,20 @@ init(M1, M2, Opts) ->
         end,
     Mode =
         case hb_ao:get(<<"Mode">>, M1, Opts) of
-            not_found -> wasm;
+            not_found -> aot;
             <<"WASM">> -> wasm;
-            <<"AOT">> ->
-                case hb_opts:get(wasm_allow_aot, false, Opts) of
-                    true -> aot;
-                    false -> wasm
-                end
+            <<"AOT">> -> aot
         end,
+    ?event({wasm_mode, Mode}),
     % Start the WASM executor.
-    {ok, _Imports, _Exports, AotBin} = hb_beamrc:compile(ImageBin),
-    {ok, Instance} = hb_beamr:start(AotBin, aot),
-    % {ok, Instance} = hb_beamr:start(ImageBin, aot),
+    case Mode of
+        wasm ->
+            ?no_prod("WAMR interp mode may be non-deterministic"),
+            {ok, Instance} = hb_beamr:start(ImageBin, wasm);
+        aot ->
+            {ok, _Imports, _Exports, AotBin} = hb_beamrc:compile(ImageBin),
+            {ok, Instance} = hb_beamr:start(AotBin, aot)
+    end,
     % Set the WASM Instance, handler, and standard library invokation function.
     ?event({setting_wasm_instance, Instance, {prefix, Prefix}}),
     {ok,

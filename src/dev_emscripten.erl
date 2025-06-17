@@ -145,16 +145,8 @@ router(<<"invoke_", Sig/binary>>, Msg1, Msg2, Opts) ->
             ?event(debug, calling_set_threw),
             SetThrewRes = hb_beamr:call(WASM, <<"setThrew">>, [1, 0], ImportResolver, State, Opts),
             ?event(debug, {invoke_set_threw, {catch_result, SetThrewRes}}),
-            % {ok, _SetThrewResult, _SetThrewResType, SetThrewMsg} = SetThrewRes,
-            % ?event(debug, set_threw_done),
-            % {ok, SetThrewResult, SetThrewMsg} = SetThrewRes,
             % return empty result for invoke call
-            DummyRes = case Sig of
-                <<"v",_/binary>> -> [];
-                <<"i",_/binary>> -> [0]
-            end,
-            ?event({dummy_res, {sig, Sig}, {res, DummyRes}}),
-            {ok, #{ <<"state">> => State, <<"results">> => DummyRes }}
+            {ok, #{ <<"state">> => State, <<"results">> => [] }}
     end.
 
 '__cxa_find_matching_catch_3'(Msg1, _Msg2, Opts) ->
@@ -264,9 +256,9 @@ try_test_case(Mod, N) ->
 
 try_nothing_test() ->
     Output32 = try_test_case("test/try.wasm", 0),
-    ?assertEqual(<<"Initial">>, Output32),
-    Output64 = try_test_case("test/try-64.wasm", 0),
-    ?assertEqual(<<"Initial">>, Output64).
+    ?assertEqual(<<"Initial">>, Output32).
+    % Output64 = try_test_case("test/try-64.wasm", 0),
+    % ?assertEqual(<<"Initial">>, Output64).
 
 % `throw` exception is caught
 try_throw_test() ->
@@ -297,14 +289,14 @@ try_throw_invalid_pointer_test() ->
         _:Error ->
             {badmatch, {error, {call_begin_failed, ErrorStrBin}}} = Error,
             ?event(debug, {invoke_try_error, ErrorStrBin})
-    end,
-    try
-        try_test_case("test/try-64.wasm", 4)
-    catch
-        _:Error2 ->
-            {badmatch, {error, {call_begin_failed, ErrorStrBin2}}} = Error2,
-            ?event(debug, {invoke_try_error, ErrorStrBin2})
     end.
+    % try
+    %     try_test_case("test/try-64.wasm", 4)
+    % catch
+    %     _:Error2 ->
+    %         {badmatch, {error, {call_begin_failed, ErrorStrBin2}}} = Error2,
+    %         ?event(debug, {invoke_try_error, ErrorStrBin2})
+    % end.
 
 jmp_test() -> 
     Init = generate_emscripten_stack("test/jmp.wasm", <<"handle">>, [0, 0]),

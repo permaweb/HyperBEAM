@@ -14,8 +14,8 @@ option(BUILD_TESTING "Build the tests" OFF)
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/wamr/cmake/wamr-src.cmake)
 
 # Fetch WAMR sources
-set(WAMR_GIT_REPOSITORY "https://github.com/permaweb/wasm-micro-runtime.git" CACHE STRING "Git repository URL for WAMR")
-set(WAMR_GIT_TAG "2.2.0-nan-canon-2" CACHE STRING "Git tag or branch for WAMR")
+set(WAMR_GIT_REPOSITORY "https://github.com/elliotsayes/wasm-micro-runtime.git" CACHE STRING "Git repository URL for WAMR")
+set(WAMR_GIT_TAG "2.3.1-nan-canon" CACHE STRING "Git tag or branch for WAMR")
 set(WAMR_SRC_DIR "${CMAKE_BINARY_DIR}/wamr-src" CACHE PATH "Directory for WAMR sources")
 fetch_wamr_source()
 
@@ -139,16 +139,21 @@ set(WAMR_BUILD_LIBC_UVWASI 0)
 set(WAMR_BUILD_SHARED_MEMORY 0)
 set(WAMR_BUILD_LIB_WASI_THREADS 0)
 
+# More settings
+set(WAMR_BUILD_AOT_VALIDATOR 1)
+set(WAMR_BUILD_INSTRUCTION_METERING 1)
+
 # -- End WAMR build options --
 
 # Use WAMR runtime lib directly
 set(WAMR_ROOT_DIR ${WAMR_SRC_DIR})
 include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
 
-# Build vmlib as a static library directly
-add_library(vmlib STATIC ${WAMR_RUNTIME_LIB_SOURCE})
-target_include_directories(vmlib PUBLIC ${WAMR_ROOT_DIR}/core/iwasm/include)
-target_link_libraries(vmlib ${WAMR_RUNTIME_LIB_DEPS})
+# Build vmlib_r as a static library directly
+add_library(vmlib_r STATIC ${WAMR_RUNTIME_LIB_SOURCE})
+
+target_include_directories(vmlib_r PUBLIC ${WAMR_ROOT_DIR}/core/iwasm/include)
+target_link_libraries(vmlib_r ${WAMR_RUNTIME_LIB_DEPS})
 
 # =============================================================================
 # --- hb_beamr_lib Target ---
@@ -209,8 +214,8 @@ target_include_directories(hb_beamr_lib PUBLIC
     ${ERLANG_EI_INCLUDE_DIR}                     # Erlang ei.h
 )
 
-# Link against vmlib and export it
-target_link_libraries(hb_beamr_lib PUBLIC vmlib ${ERLANG_EI_LIBRARY})
+# Link against vmlib_r and export it
+target_link_libraries(hb_beamr_lib PUBLIC vmlib_r ${ERLANG_EI_LIBRARY})
 
 # =============================================================================
 # --- hb_beamr_capi_lib Target --- 
@@ -227,9 +232,9 @@ target_include_directories(hb_beamr_capi_lib PUBLIC
     ${ERLANG_EI_INCLUDE_DIR}                          # Erlang ei.h
 )
 
-# Link CAPI lib against vmlib (for WAMR specific calls if any, and transitively for runtime components)
+# Link CAPI lib against vmlib_r (for WAMR specific calls if any, and transitively for runtime components)
 # and export it so tests or other consumers can link to it.
-target_link_libraries(hb_beamr_capi_lib PUBLIC vmlib ${ERLANG_EI_LIBRARY})
+target_link_libraries(hb_beamr_capi_lib PUBLIC vmlib_r ${ERLANG_EI_LIBRARY})
 
 # Conditionally add the test subdirectory and enable testing
 if(BUILD_TESTING)

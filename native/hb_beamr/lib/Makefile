@@ -1,4 +1,4 @@
-# Simple Makefile to drive the CMake build for hb_beamr_wasm
+# Simple Makefile to drive the CMake build for hb_beamr_lib
 
 CMAKE_BUILD_DIR ?= _build
 CMAKE_INSTALL_PREFIX ?= $(CMAKE_BUILD_DIR)/install
@@ -8,45 +8,45 @@ CMAKE_INSTALL_PREFIX ?= $(CMAKE_BUILD_DIR)/install
 all: build install
 
 configure:
-	@echo "+++ Configuring hb_beamr_wasm +++"
+	@echo "+++ Configuring hb_beamr_lib +++"
 	cmake -S . -B $(CMAKE_BUILD_DIR) -DCMAKE_INSTALL_PREFIX=$(CMAKE_INSTALL_PREFIX)
 
 # Build depends on configure implicitly via dependency or workflow
 build: configure
-	@echo "+++ Building hb_beamr_wasm +++"
+	@echo "+++ Building hb_beamr_lib +++"
 	cmake --build $(CMAKE_BUILD_DIR)
 
 # Install depends on build
 install: build
-	@echo "+++ Installing hb_beamr_wasm +++"
+	@echo "+++ Installing hb_beamr_lib +++"
 	cmake --install $(CMAKE_BUILD_DIR)
 
 # Target to configure and build tests
 test-build:
-	@echo "+++ Configuring hb_beamr_wasm (with tests) +++"
+	@echo "+++ Configuring hb_beamr_lib (with tests) +++"
 	cmake -S . -B $(CMAKE_BUILD_DIR) -DCMAKE_INSTALL_PREFIX=$(CMAKE_INSTALL_PREFIX) -DBUILD_TESTING=ON
-	@echo "+++ Building hb_beamr_wasm (with tests) +++"
+	@echo "+++ Building hb_beamr_lib (with tests) +++"
 	cmake --build $(CMAKE_BUILD_DIR)
 
 # Target to run tests (depends on test-build)
 test: test-build
-	@echo "+++ Running hb_beamr_wasm tests +++"
+	@echo "+++ Running hb_beamr_lib tests +++"
 	cd $(CMAKE_BUILD_DIR) && ctest --output-on-failure
 
 # Target to run tests (depends on test-build)
 test-verbose: test-build
-	@echo "+++ Running hb_beamr_wasm tests +++"
+	@echo "+++ Running hb_beamr_lib tests +++"
 	cd $(CMAKE_BUILD_DIR) && ctest -V
 
 # Full clean: Removes the entire build directory, including dependencies
 clean-all:
-	@echo "+++ Cleaning hb_beamr_wasm (full) +++"
+	@echo "+++ Cleaning hb_beamr_lib (full) +++"
 	rm -rf $(CMAKE_BUILD_DIR)
 
 # Local clean: Removes only CMake generated files and local library artifacts,
 # preserving downloaded/built dependencies (_deps).
 clean:
-	@echo "+++ Cleaning hb_beamr_wasm (skip deps) +++"
+	@echo "+++ Cleaning hb_beamr_lib (skip deps) +++"
 	@echo "Run 'make clean-all' to delete the entire build directory, however it will take a long time to rebuild."
 	-@rm -f $(CMAKE_BUILD_DIR)/CMakeCache.txt
 	-@rm -rf $(CMAKE_BUILD_DIR)/CMakeFiles
