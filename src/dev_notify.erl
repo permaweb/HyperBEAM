@@ -712,33 +712,6 @@ event_dispatch_test() ->
 
     stop_notification_manager().
 
-%% @doc Test integration with hb_persistent notification
-integration_test() ->
-    % Ensure clean state
-    stop_notification_manager(),
-    timer:sleep(50),
-
-    % Test the integration point with hb_persistent
-    GroupName = <<"test-group">>,
-    Msg2 = #{<<"path">> => <<"/test">>, <<"data">> => <<"request">>},
-    Msg3 =
-        #{<<"result">> => <<"success">>, <<"timestamp">> => erlang:system_time(millisecond)},
-    Opts = #{notify_device => <<"notify@1.0">>},
-
-    % Start notification manager
-    start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
-    ?assert(is_process_alive(ManagerPid)),
-
-    % This should call our dispatch function
-    hb_persistent:dispatch_to_notify_device(GroupName, Msg2, Msg3, Opts),
-    timer:sleep(50),
-
-    % Manager should still be running (no crashes)
-    ?assert(is_process_alive(ManagerPid)),
-
-    stop_notification_manager().
-
 %% @doc Test device registration and unregistration functions
 device_registration_test() ->
     StateMsg = #{<<"listeners">> => #{}},

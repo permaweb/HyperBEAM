@@ -10,7 +10,7 @@
 
 -module(hb_persistent).
 -export([start_monitor/0, start_monitor/1, stop_monitor/1]).
--export([find_or_register/3, unregister_notify/4, await/4, notify/4, dispatch_to_notify_device/4]).
+-export([find_or_register/3, unregister_notify/4, await/4, notify/4]).
 -export([group/3, start_worker/3, start_worker/2, forward_work/2]).
 -export([default_grouper/3, default_worker/3, default_await/5]).
 -include("include/hb.hrl").
