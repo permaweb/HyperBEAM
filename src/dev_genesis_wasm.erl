@@ -246,3 +246,6 @@ log_server_events([Remaining]) -> Remaining;
 log_server_events([Line | Rest]) ->
     ?event(genesis_wasm_server, {server_logged, Line}),
     log_server_events(Rest).
+
+devices() ->
+  [<<"genesis-wasm@1.0">>].
