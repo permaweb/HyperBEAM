@@ -311,7 +311,7 @@ add_custom_command(TARGET capi_memory_access_test POST_BUILD
 # Test for WAMR-native hb_beamr_lib memory access
 add_executable(WAMRMemoryAccessTest wamr_memory_access_test.c utils.c)
 # Link against hb_beamr_lib (WAMR-native) and WAMR's iwasm library
-target_link_libraries(WAMRMemoryAccessTest PRIVATE hb_beamr_lib iwasm_static)
+target_link_libraries(WAMRMemoryAccessTest PRIVATE hb_beamr_lib vmlib)
 # Copy the necessary wasm file to the build directory for the test
 add_dependencies(WAMRMemoryAccessTest simple_memory_aot_file_target)
 add_custom_command(TARGET WAMRMemoryAccessTest POST_BUILD
@@ -363,7 +363,7 @@ endif()
 
 # Test for indirect function calls using simple_indirect.wasm
 add_executable(IndirectCallTest indirect_call_test.c utils.c)
-target_link_libraries(IndirectCallTest PRIVATE hb_beamr_lib iwasm_static)
+target_link_libraries(IndirectCallTest PRIVATE hb_beamr_lib vmlib)
 # Make IndirectCallTest depend on the target that creates simple_indirect.aot
 add_dependencies(IndirectCallTest simple_indirect_aot_file_target)
 
@@ -377,7 +377,7 @@ add_test(NAME IndirectCallTest COMMAND IndirectCallTest)
 
 # Test for WAMR-native hb_beamr_lib import/export/callback behavior
 add_executable(WAMRImportCallExportTest wamr_import_call_export_test.c utils.c)
-target_link_libraries(WAMRImportCallExportTest PRIVATE hb_beamr_lib iwasm_static)
+target_link_libraries(WAMRImportCallExportTest PRIVATE hb_beamr_lib vmlib)
 
 # Depends on nested_import_wasm_file_target (produces import_nested.wasm from import_nested.c)
 # This target should already be defined from the C-API tests section.
@@ -437,7 +437,7 @@ endif()
 
 # Test for C++ exception handling in Wasm with hb_beamr_lib
 add_executable(TryCatchTest try_catch_test.c utils.c)
-target_link_libraries(TryCatchTest PRIVATE hb_beamr_lib iwasm_static)
+target_link_libraries(TryCatchTest PRIVATE hb_beamr_lib vmlib)
 add_dependencies(TryCatchTest try_catch_aot_file_target) # Depends on the try_catch.aot fixture
 # Copy the necessary wasm file to the build directory for the test
 add_custom_command(TARGET TryCatchTest POST_BUILD
@@ -485,7 +485,7 @@ endif()
 # --- Test: LongJmpTest (hb_beamr_lib with setjmp/longjmp) ---
 add_executable(LongJmpTest long_jmp_test.c utils.c)
 # Link against hb_beamr_lib and WAMR static library similar to other tests
-target_link_libraries(LongJmpTest PRIVATE hb_beamr_lib iwasm_static)
+target_link_libraries(LongJmpTest PRIVATE hb_beamr_lib vmlib)
 add_dependencies(LongJmpTest jmp_aot_file_target)
 add_custom_command(TARGET LongJmpTest POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -501,7 +501,7 @@ add_executable(MultithreadStressTest multithread_stress_test.c utils.c)
 find_package(Threads REQUIRED)
 
 # Link against hb_beamr_lib, iwasm, pthread
-target_link_libraries(MultithreadStressTest PRIVATE hb_beamr_lib iwasm_static Threads::Threads)
+target_link_libraries(MultithreadStressTest PRIVATE hb_beamr_lib vmlib Threads::Threads)
 
 # Depend on wasm fixtures
 add_dependencies(MultithreadStressTest fib_wasm_file_target import_test_wasm_file_target)
@@ -521,7 +521,7 @@ add_test(NAME MultithreadStressTest COMMAND MultithreadStressTest)
 add_executable(MultithreadStressFSMTest multithread_stress_fsm_test.c utils.c)
 find_package(Threads REQUIRED)
 
-target_link_libraries(MultithreadStressFSMTest PRIVATE hb_beamr_lib iwasm_static Threads::Threads)
+target_link_libraries(MultithreadStressFSMTest PRIVATE hb_beamr_lib vmlib Threads::Threads)
 add_dependencies(MultithreadStressFSMTest fib_wasm_file_target import_test_wasm_file_target)
 add_custom_command(TARGET MultithreadStressFSMTest POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -534,7 +534,7 @@ add_custom_command(TARGET MultithreadStressFSMTest POST_BUILD
 add_test(NAME MultithreadStressFSMTest COMMAND MultithreadStressFSMTest)
 
 add_executable(asynchronous_comms_test asynchronous_comms_test.c utils.c async_queue.c)
-target_link_libraries(asynchronous_comms_test PRIVATE hb_beamr_lib iwasm_static Threads::Threads)
+target_link_libraries(asynchronous_comms_test PRIVATE hb_beamr_lib vmlib Threads::Threads)
 add_dependencies(asynchronous_comms_test fib_wasm_file_target)
 add_dependencies(asynchronous_comms_test import_test_wasm_file_target) # For import_test_module.wasm
 add_dependencies(asynchronous_comms_test nested_import_wasm_file_target) # For import_nested.wasm
@@ -564,7 +564,7 @@ add_test(NAME FSMTest COMMAND fsm_test)
 
 # FSM nested import test
 add_executable(FSMNestedImportTest fsm_nested_import_test.c utils.c)
-target_link_libraries(FSMNestedImportTest PRIVATE hb_beamr_lib iwasm_static)
+target_link_libraries(FSMNestedImportTest PRIVATE hb_beamr_lib vmlib)
 add_dependencies(FSMNestedImportTest nested_import_wasm_file_target)
 add_custom_command(TARGET FSMNestedImportTest POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -575,7 +575,7 @@ add_test(NAME FSMNestedImportTest COMMAND FSMNestedImportTest)
 
 # generate natives test
 add_executable(GenerateNativesTest generate_natives_test.c utils.c)
-target_link_libraries(GenerateNativesTest PRIVATE hb_beamr_lib iwasm_static)
+target_link_libraries(GenerateNativesTest PRIVATE hb_beamr_lib vmlib)
 add_dependencies(GenerateNativesTest import_test_wasm_file_target nested_import_wasm_file_target)
 add_custom_command(TARGET GenerateNativesTest POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -592,7 +592,7 @@ add_executable(async_import_test async_import_test.c utils.c)
 find_package(Threads REQUIRED)
 
 # Link against hb_beamr_lib, WAMR static lib and pthread
-target_link_libraries(async_import_test PRIVATE hb_beamr_lib iwasm_static Threads::Threads)
+target_link_libraries(async_import_test PRIVATE hb_beamr_lib vmlib Threads::Threads)
 
 # Depends on the AOT fixture for import_nested
 add_dependencies(async_import_test nested_import_aot_file_target)
@@ -694,7 +694,7 @@ add_custom_command(TARGET async_import_stress_test POST_BUILD
 
 # --- Test: Minimal Indirect Call Segfault Test ---
 add_executable(MinimalIndirectCallTest minimal_indirect_call_test.c utils.c)
-target_link_libraries(MinimalIndirectCallTest PRIVATE hb_beamr_lib iwasm_static)
+target_link_libraries(MinimalIndirectCallTest PRIVATE hb_beamr_lib vmlib)
 # Depend on the target that creates simple_indirect.aot
 add_dependencies(MinimalIndirectCallTest simple_indirect_aot_file_target)
 
@@ -755,7 +755,7 @@ endif()
 # This test will now use minimal_host_call.aot
 add_executable(MinimalEmscriptenNestedIndirectTest minimal_emscripten_nested_indirect_test.c utils.c)
 
-target_link_libraries(MinimalEmscriptenNestedIndirectTest PRIVATE hb_beamr_lib iwasm_static)
+target_link_libraries(MinimalEmscriptenNestedIndirectTest PRIVATE hb_beamr_lib vmlib)
 
 # MODIFIED: Depends on the target that creates minimal_host_call.aot
 add_dependencies(MinimalEmscriptenNestedIndirectTest minimal_host_call_aot_file_target)
