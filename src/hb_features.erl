@@ -20,7 +20,7 @@ all() ->
             end,
             ?MODULE:module_info(exports)
         ),
-    maps:from_list(
+    hb_maps:from_list(
         lists:map(
             fun(Name) ->
                 {Name, ?MODULE:Name()}
@@ -31,7 +31,7 @@ all() ->
 
 %% @doc Returns true if the feature flag is enabled.
 enabled(Feature) ->
-    maps:get(Feature, all(), false).
+    hb_maps:get(Feature, all(), false).
 
 %%% Individual feature flags.
 %%% These functions use the `-ifdef' macro to conditionally return a boolean

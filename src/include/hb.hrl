@@ -1,12 +1,14 @@
 -include("include/ar.hrl").
 
--define(HYPERBEAM_VERSION, 0.8).
+-define(HYPERBEAM_VERSION, 0.9).
 
 %% @doc Macro for checking if a message is empty, ignoring its hashpath.
 -define(IS_EMPTY_MESSAGE(Msg), (map_size(Msg) == 0) orelse (map_size(Msg) == 1 andalso (is_map_key(priv, Msg) orelse is_map_key(<<"priv">>, Msg)))).
 %% @doc Macro usable in guards that validates whether a term is a
 %% human-readable ID encoding.
 -define(IS_ID(X), (is_binary(X) andalso (byte_size(X) == 42 orelse byte_size(X) == 43 orelse byte_size(X) == 32))).
+%% @doc Macro for checking a term is a link.
+-define(IS_LINK(X), (is_tuple(X) andalso element(1, X) == link)).
 %% @doc List of special keys that are used in the AO-Core protocol.
 -define(AO_CORE_KEYS, [<<"path">>, <<"hashpath">>, <<"priv">>]).
 %% @doc Keys that can be regenerated losslessly.
@@ -44,3 +46,4 @@
 -define(trace_short(), hb_util:trace_macro_helper(fun hb_util:print_trace_short/4, catch error(test), ?MODULE, ?FUNCTION_NAME, ?LINE)).
 %% @doc Draw a horizontal line in the logs.
 -define(hr(), io:format(standard_error, "--------------------------------------------------------------------------------~n", [])).
+-define(hr(Str), io:format(standard_error, iolist_to_binary(["---------------------------------------- ", Str, " ----------------------------------------~n"]), [])).

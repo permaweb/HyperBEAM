@@ -46,7 +46,13 @@ spawn_register(Name, Opts) ->
             % We have found the base process definition. Augment it with the 
             % node's address as necessary, then commit to the result.
             ?event(node_process, {registering, {name, Name}, {base_def, BaseDef}}),
-            Signed = hb_message:commit(augment_definition(BaseDef, Opts), Opts),
+            Signed =
+                hb_message:commit(
+                    augment_definition(BaseDef, Opts),
+                    Opts,
+                    hb_opts:get(node_process_spawn_codec, <<"httpsig@1.0">>, Opts)
+                ),
+            ?event(node_process, {signed, {name, Name}, {signed, Signed}}),
             ID = hb_message:id(Signed, signed, Opts),
             ?event(node_process, {spawned, {name, Name}, {process, Signed}}),
             % `POST' to the schedule device for the process to start its sequence.
@@ -91,11 +97,24 @@ augment_definition(BaseDef, Opts) ->
                 hb_opts:get(priv_wallet, no_viable_wallet, Opts)
             )
         ),
+    SchedulersFromBase =
+        hb_util:binary_to_addresses(
+            hb_ao:get(<<"scheduler">>, BaseDef, <<>>, Opts)
+        ),
+    AuthoritiesFromBase =
+        hb_util:binary_to_addresses(
+            hb_ao:get(<<"authority">>, BaseDef, <<>>, Opts)
+        ),
+    Schedulers = (SchedulersFromBase -- [Address]) ++ [Address],
+    Authorities = (AuthoritiesFromBase -- [Address]) ++ [Address],
+    % Normalize the scheduler and authority lists to binary strings.
     hb_ao:set(
-        BaseDef,
         #{
-            <<"scheduler">> => Address
-        }
+            <<"scheduler">> => Schedulers,
+            <<"authority">> => Authorities
+        },
+        BaseDef,
+        Opts
     ).
 
 %%% Tests
@@ -119,17 +138,6 @@ generate_test_opts() ->
     }).
 generate_test_opts(Defs) ->
     #{
-        store =>
-            [
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"prefix">> =>
-                        <<
-                            "cache-TEST-",
-                            (integer_to_binary(os:system_time(millisecond)))/binary
-                        >>
-                }
-            ],
         node_processes => Defs,
         priv_wallet => ar_wallet:new()
     }.
@@ -158,7 +166,10 @@ lookup_spawn_test() ->
         ?TEST_NAME,
         Opts
     ),
-    ?assertEqual(Process1, Process2).
+    ?assertEqual(
+        hb_cache:ensure_all_loaded(Process1, Opts),
+        hb_cache:ensure_all_loaded(Process2, Opts)
+    ).
 
 %% @doc Test that a process can be spawned, executed upon, and its result retrieved.
 lookup_execute_test() ->

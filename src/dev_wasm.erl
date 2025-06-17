@@ -226,7 +226,8 @@ compute(RawM1, M2, Opts) ->
                             #{
                                 <<"results/", Prefix/binary, "/type">> => ResType,
                                 <<"results/", Prefix/binary, "/output">> => Res
-                            }
+                            },
+                            Opts
                         )
                     }
             end;
@@ -368,7 +369,8 @@ undefined_import_stub(Msg1, Msg2, Opts) ->
                         X -> X
                     end
                 ]
-        }
+        },
+        Opts
     ),
     {ok, #{ state => Msg3, results => [0] }}.
 
@@ -472,15 +474,13 @@ benchmark_test() ->
     Msg0 = cache_wasm_image("test/test-64.wasm"),
     {ok, Msg1} = hb_ao:resolve(Msg0, <<"init">>, #{}),
     Msg2 =
-        maps:merge(
+        hb_maps:merge(
             Msg1,
-            hb_ao:set(
-                #{
-                    <<"function">> => <<"fac">>,
-                    <<"parameters">> => [5.0]
-                },
-                #{ hashpath => ignore }
-            )
+            #{
+                <<"function">> => <<"fac">>,
+                <<"parameters">> => [5.0]
+            },
+			#{}
         ),
     Iterations =
         hb:benchmark(
@@ -504,7 +504,7 @@ state_export_and_restore_test() ->
     Msg0 = cache_wasm_image("test/pow_calculator.wasm"),
     {ok, Msg1} = hb_ao:resolve(Msg0, <<"init">>, #{}),
     Msg2 =
-        maps:merge(
+        hb_maps:merge(
             Msg1,
             Extras = #{
                 <<"function">> => <<"pow">>,
@@ -514,7 +514,8 @@ state_export_and_restore_test() ->
                         <<"my_lib">> =>
                             #{ <<"device">> => <<"Test-Device@1.0">> }
                     }
-            }
+            },
+			#{}
         ),
     ?event({after_setup, Msg2}),
     % Compute a computation and export the state.
@@ -523,7 +524,7 @@ state_export_and_restore_test() ->
     {ok, State} = hb_ao:resolve(Msg3a, <<"snapshot">>, #{}),
     ?event({state_res, State}),
     % Restore the state without calling Init.
-    NewMsg1 = maps:merge(Msg0, Extras#{ <<"snapshot">> => State }),
+    NewMsg1 = hb_maps:merge(Msg0, Extras#{ <<"snapshot">> => State }, #{}),
     ?assertEqual(
         {ok, [4]},
         hb_ao:resolve(NewMsg1, <<"compute/results/output">>, #{})
@@ -548,7 +549,7 @@ test_run_wasm(File, Func, Params, AdditionalMsg) ->
     {ok, Msg1} = hb_ao:resolve(Msg0, <<"init">>, #{}),
     ?event({after_init, Msg1}),
     Msg2 =
-        maps:merge(
+        hb_maps:merge(
             Msg1,
             hb_ao:set(
                 #{
@@ -557,7 +558,8 @@ test_run_wasm(File, Func, Params, AdditionalMsg) ->
                 },
                 AdditionalMsg,
                 #{ hashpath => ignore }
-            )
+            ),
+			#{}
         ),
     ?event({after_setup, Msg2}),
     {ok, StateRes} = hb_ao:resolve(Msg2, <<"compute">>, #{}),

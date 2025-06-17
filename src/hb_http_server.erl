@@ -10,8 +10,9 @@
 %%% such that changing it on start of the router server allows for
 %%% the execution parameters of all downstream requests to be controlled.
 -module(hb_http_server).
--export([start/0, start/1, allowed_methods/2, init/2, set_opts/1, set_opts/2, get_opts/1]).
--export([start_node/0, start_node/1, set_default_opts/1]).
+-export([start/0, start/1, allowed_methods/2, init/2]).
+-export([set_opts/1, set_opts/2, get_opts/0, get_opts/1, set_default_opts/1, set_proc_server_id/1]).
+-export([start_node/0, start_node/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -32,7 +33,7 @@ start() ->
                 #{}
         end,
     MergedConfig =
-        maps:merge(
+        hb_maps:merge(
             hb_opts:default_message(),
             Loaded
         ),
@@ -117,7 +118,7 @@ start(Opts) ->
 %% expects the node message to be in the `body' key.
 new_server(RawNodeMsg) ->
     RawNodeMsgWithDefaults =
-        maps:merge(
+        hb_maps:merge(
             hb_opts:default_message(),
             RawNodeMsg#{ only => local }
         ),
@@ -151,7 +152,7 @@ new_server(RawNodeMsg) ->
         ),
     % Put server ID into node message so it's possible to update current server
     % params
-    NodeMsgWithID = maps:put(http_server, ServerID, NodeMsg),
+    NodeMsgWithID = hb_maps:put(http_server, ServerID, NodeMsg),
     Dispatcher = cowboy_router:compile([{'_', [{'_', ?MODULE, ServerID}]}]),
     ProtoOpts = #{
         env => #{dispatch => Dispatcher, node_msg => NodeMsgWithID},
@@ -235,7 +236,7 @@ start_http3(ServerID, ProtoOpts, _NodeMsg) ->
                 ServerID,
                 1024,
                 ranch:normalize_opts(
-                    maps:to_list(TransOpts#{ port => GivenPort })
+                    hb_maps:to_list(TransOpts#{ port => GivenPort })
                 ),
                 ProtoOpts,
                 []
@@ -312,6 +313,7 @@ handle_request(RawReq, Body, ServerID) ->
     StartTime = os:system_time(millisecond),
     Req = RawReq#{ start_time => StartTime },
     NodeMsg = get_opts(#{ http_server => ServerID }),
+    put(server_id, ServerID),
     case {cowboy_req:path(RawReq), cowboy_req:qs(RawReq)} of
         {<<"/">>, <<>>} ->
             % If the request is for the root path, serve a redirect to the default 
@@ -321,8 +323,8 @@ handle_request(RawReq, Body, ServerID) ->
                 #{
                     <<"location">> =>
                         hb_opts:get(
-                            default_req,
-                            <<"/~hyperbuddy@1.0/index">>,
+                            default_request,
+                            <<"/~hyperbuddy@1.0/dashboard">>,
                             NodeMsg
                         )
                 },
@@ -357,22 +359,33 @@ handle_request(RawReq, Body, ServerID) ->
             catch
                 Type:Details:Stacktrace ->
                     Trace = hb_tracer:get_trace(TracePID),
-                    TraceString = hb_tracer:format_error_trace(Trace),
+                    FormattedError =
+                        hb_util:bin(hb_message:format(
+                            #{
+                                <<"type">> => Type,
+                                <<"details">> => Details,
+                                <<"stacktrace">> => Stacktrace
+                            }
+                        )),
+                    {ok, ErrorPage} = dev_hyperbuddy:return_error(FormattedError),
                     ?event(
                         http_error,
                         {http_error,
-                            {type, Type},
-                            {details, Details},
-                            {stacktrace, Stacktrace}
+                            {details,
+                                {explicit,
+                                    #{
+                                        type => Type,
+                                        details => Details,
+                                        stacktrace => Stacktrace
+                                    }
+                                }
+                            }
                         }
                     ),
                     hb_http:reply(
                         Req,
                         #{},
-                        #{
-                            <<"status">> => 500,
-                            <<"body">> => TraceString
-                        },
+                        ErrorPage#{ <<"status">> => 500 },
                         NodeMsg
                     )
             end
@@ -398,24 +411,41 @@ set_opts(Opts) ->
             ok = cowboy:set_env(ServerRef, node_msg, Opts)
     end.
 set_opts(Request, Opts) ->
+    PerparedOpts = hb_opts:mimic_default_types(
+        Opts,
+        new_atoms,
+        Opts
+    ),
+    PreparedRequest = hb_opts:mimic_default_types(
+        hb_message:uncommitted(Request),
+        new_atoms,
+        Opts
+    ),
     MergedOpts =
         maps:merge(
-            Opts,
-            hb_opts:mimic_default_types(
-                hb_message:uncommitted(Request),
-                new_atoms
-            )
+            PerparedOpts,
+            PreparedRequest
         ),
+    ?event(set_opts, {merged_opts, {explicit, MergedOpts}}),
+    History = hb_opts:get(node_history, [], Opts) ++ [ hb_private:reset(maps:without([node_history], PreparedRequest)) ],
     FinalOpts = MergedOpts#{
         http_server => hb_opts:get(http_server, no_server, Opts),
-        node_history => [Request | hb_opts:get(node_history, [], Opts)]
+        node_history => History
     },
     {set_opts(FinalOpts), FinalOpts}.
 
+%% @doc Get the node message for the current process.
+get_opts() ->
+    get_opts(#{ http_server => get(server_id) }).
 get_opts(NodeMsg) ->
     ServerRef = hb_opts:get(http_server, no_server_ref, NodeMsg),
     cowboy:get_env(ServerRef, node_msg, no_node_msg).
 
+%% @doc Initialize the server ID for the current process.
+set_proc_server_id(ServerID) ->
+    put(server_id, ServerID).
+
+%% @doc Apply the default node message to the given opts map.
 set_default_opts(Opts) ->
     % Create a temporary opts map that does not include the defaults.
     TempOpts = Opts#{ only => local },
@@ -438,7 +468,7 @@ set_default_opts(Opts) ->
             no_store ->
                 TestDir = <<"cache-TEST/run-fs-", (integer_to_binary(Port))/binary>>,
                 filelib:ensure_dir(binary_to_list(TestDir)),
-                #{ <<"store-module">> => hb_store_fs, <<"prefix">> => TestDir };
+                #{ <<"store-module">> => hb_store_fs, <<"name">> => TestDir };
             PassedStore -> PassedStore
         end,
     ?event({set_default_opts,
@@ -504,3 +534,45 @@ set_node_opts_test() ->
         }),
     {ok, LiveOpts} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
     ?assert(hb_ao:get(<<"test-success">>, LiveOpts, false, #{})).
+
+%% @doc Test the set_opts/2 function that merges request with options,
+%% manages node history, and updates server state.
+set_opts_test() ->
+    DefaultOpts = hb_opts:default_message(),
+    start_node(DefaultOpts#{ 
+        priv_wallet => Wallet = ar_wallet:new(), 
+        port => rand:uniform(10000) + 10000 
+    }),
+    Opts = ?MODULE:get_opts(#{ 
+        http_server => hb_util:human_id(ar_wallet:to_address(Wallet))
+    }),
+    NodeHistory = hb_opts:get(node_history, [], Opts),
+    ?event(debug_node_history, {node_history_length, length(NodeHistory)}),
+    ?assert(length(NodeHistory) == 0),
+    % Test case 1: Empty node_history case
+    Request1 = #{
+        <<"hello">> => <<"world">>
+    },             
+    {ok, UpdatedOpts1} = set_opts(Request1, Opts),
+    NodeHistory1 = hb_opts:get(node_history, not_found, UpdatedOpts1),
+    Key1 = hb_opts:get(<<"hello">>, not_found, UpdatedOpts1),
+    ?event(debug_node_history, {node_history_length, length(NodeHistory1)}),
+    ?assert(length(NodeHistory1) == 1),
+    ?assert(Key1 == <<"world">>),
+    % Test case 2: Non-empty node_history case
+    Request2 = #{
+        <<"hello2">> => <<"world2">>
+    },
+    {ok, UpdatedOpts2} = set_opts(Request2, UpdatedOpts1),
+    NodeHistory2 = hb_opts:get(node_history, not_found, UpdatedOpts2),
+    Key2 = hb_opts:get(<<"hello2">>, not_found, UpdatedOpts2),
+    ?event(debug_node_history, {node_history_length, length(NodeHistory2)}),
+    ?assert(length(NodeHistory2) == 2),
+    ?assert(Key2 == <<"world2">>),
+    % Test case 3: Non-empty node_history case
+    {ok, UpdatedOpts3} = set_opts(#{}, UpdatedOpts2#{ <<"hello3">> => <<"world3">> }),
+    NodeHistory3 = hb_opts:get(node_history, not_found, UpdatedOpts3),
+    Key3 = hb_opts:get(<<"hello3">>, not_found, UpdatedOpts3),
+    ?event(debug_node_history, {node_history_length, length(NodeHistory3)}),
+    ?assert(length(NodeHistory3) == 3),
+    ?assert(Key3 == <<"world3">>).

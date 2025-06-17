@@ -1,5 +1,5 @@
 import { showTab, copyToClipboard, initTabListeners } from '/~hyperbuddy@1.0/utils.js';
-import { fetchInfo, addConsole } from '/~hyperbuddy@1.0/devices.js';
+import { fetchInfo, addConsole, addGraph } from '/~hyperbuddy@1.0/devices.js';
 import { startFetchingMetrics } from '/~hyperbuddy@1.0/metrics.js';
 
 /**
@@ -20,6 +20,9 @@ function init() {
   
   // Add console iframe
   addConsole();
+  
+  // Add graph iframe
+  addGraph();
 }
 
 // Initialize when DOM is fully loaded

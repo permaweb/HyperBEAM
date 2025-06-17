@@ -52,22 +52,19 @@ register(_, Req, Opts) ->
 direct_register(Req, Opts) ->
     case hb_cache:write(hb_ao:get(<<"value">>, Req, Opts), Opts) of
         {ok, MsgPath} ->
+            NormKey = hb_ao:normalize_key(hb_ao:get(<<"key">>, Req, Opts)),
             hb_cache:link(
                 MsgPath,
-                LinkPath =
-                    [
-                        ?DEV_CACHE,
-                        Name = hb_ao:get(<<"key">>, Req, Opts)
-                    ],
+                LinkPath = << ?DEV_CACHE/binary, "/", NormKey/binary >>,
                 Opts
             ),
             load_names(Opts),
             ?event(
                 local_name,
                 {registered,
-                    Name,
-                    {link, LinkPath},
-                    {msg, MsgPath}
+                    {key, NormKey},
+                    {msg, MsgPath},
+                    {path, LinkPath}
                 }
             ),
             {ok, <<"Registered.">>};
@@ -90,11 +87,13 @@ load_names(Opts) ->
     LocalNames =
         maps:from_list(lists:map(
             fun(Key) ->
-                ?event(local_name, {loading, Key}),
-                case hb_cache:read([?DEV_CACHE, Key], Opts) of
+                NormKey = hb_ao:normalize_key(Key),
+                Path = << ?DEV_CACHE/binary, "/", NormKey/binary >>,
+                ?event(local_name, {loading, Path}),
+                case hb_cache:read(Path, Opts) of
                     {ok, Value} ->
                         {Key, Value};
-                    {error, _} ->
+                    _ ->
                         {Key, not_found}
                 end
             end,
@@ -114,13 +113,6 @@ update_names(LocalNames, Opts) ->
 
 generate_test_opts() ->
     Opts = #{
-        store =>
-            [
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"prefix">> => "cache-TEST/"
-                }
-            ],
         priv_wallet => ar_wallet:new()
     },
     Opts.

@@ -233,9 +233,9 @@ result_to_message(ExpectedID, Item, Opts) ->
         },
     ?event({raw_ans104, TX}),
     ?event({ans104_form_response, TX}),
-    TABM = dev_codec_ans104:from(TX),
+    TABM = hb_util:ok(dev_codec_ans104:from(TX, #{}, Opts)),
     ?event({decoded_tabm, TABM}),
-    Structured = dev_codec_structured:to(TABM),
+    Structured = hb_util:ok(dev_codec_structured:to(TABM, #{}, Opts)),
     % Some graphql nodes do not grant the `anchor' or `last_tx' fields, so we
     % verify the data item and optionally add the explicit keys as committed
     % fields _if_ the node desires it.
@@ -255,9 +255,9 @@ result_to_message(ExpectedID, Item, Opts) ->
                         % The node trusts the GraphQL API, so we add the explicit
                         % keys as committed fields.
                         ?event(warning, {gql_verify_failed, adding_trusted_fields, {tags, Tags}}),
-                        Comms = maps:get(<<"commitments">>, Structured),
-                        AttName = hd(maps:keys(Comms)),
-                        Comm = maps:get(AttName, Comms),
+                        Comms = hb_maps:get(<<"commitments">>, Structured, #{}, Opts),
+                        AttName = hd(hb_maps:keys(Comms, Opts)),
+                        Comm = hb_maps:get(AttName, Comms, not_found, Opts),
                         Structured#{
                             <<"commitments">> => #{
                                 AttName =>
@@ -267,10 +267,12 @@ result_to_message(ExpectedID, Item, Opts) ->
                                                     hb_ao:normalize_key(Name)
                                                 ||
                                                     #{ <<"name">> := Name } <-
-                                                        maps:values(
-                                                            hb_ao:normalize_keys(Tags)
+                                                        hb_maps:values(
+                                                            hb_ao:normalize_keys(Tags, Opts),
+                                                            Opts
                                                         )
-                                                ]
+                                                ],
+												Opts
                                             )
                                     }
                             }
@@ -321,14 +323,18 @@ ans104_no_data_item_test() ->
     _Node = hb_http_server:start_node(#{}),
     {ok, Res} = read(<<"0Tb9mULcx8MjYVgXleWMVvqo1_jaw_P6AO_CJMTj0XE">>, #{}),
     ?event(gateway, {get_ans104_test, Res}),
-    ?event(gateway, {signer, hb_message:signers(Res)}),
+    ?event(gateway, {signer, hb_message:signers(Res, #{})}),
     ?assert(true).
 
 %% @doc Test that we can get the scheduler location.
 scheduler_location_test() ->
     % Start a random node so that all of the services come up.
     _Node = hb_http_server:start_node(#{}),
-    {ok, Res} = scheduler_location(<<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>, #{}),
+    {ok, Res} =
+        scheduler_location(
+            <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>,
+            #{}
+        ),
     ?event(gateway, {get_scheduler_location_test, Res}),
     ?assertEqual(<<"Scheduler-Location">>, hb_ao:get(<<"Type">>, Res, #{})),
     ?event(gateway, {scheduler_location, {explicit, hb_ao:get(<<"url">>, Res, #{})}}),
