@@ -15,10 +15,9 @@ nav:
   #     - Pathing in HyperBEAM: 'introduction/pathing-in-hyperbeam.md'
 
   - Build on HyperBEAM:
-      - Introduction:
-          - Intro to AO-Core: "build/introduction/what-is-ao-core.md"
-          - Intro to HyperBEAM: "build/introduction/what-is-hyperbeam.md"
-          - Serverless Compute: "build/introduction/serverless-decentralized-compute.md"
+      - Intro to AO-Core: "build/introduction/what-is-ao-core.md"
+      - Intro to HyperBEAM: "build/introduction/what-is-hyperbeam.md"
+      - Serverless Compute: "build/introduction/serverless-decentralized-compute.md"
       - Getting Started:
           - Quick Start: "build/quick-start.md"
           - Migration: "build/migrating-from-legacynet.md"
