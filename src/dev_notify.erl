@@ -1,52 +1,53 @@
 %%% @doc A device that provides real-time notifications for AO process events.
 %%% It integrates with the existing event system (hb_event) and allows clients
 %%% to subscribe to specific events using HTTP/3 streams.
-%%% 
+%%%
 %%% Uses a long-running notification manager process to handle high-frequency
 %%% message matching and dispatching efficiently.
 -module(dev_notify).
+
 -export([info/1, info/3, dispatch/3, register/3, unregister/3, stream/3]).
 -export([start_notification_manager/0, stop_notification_manager/0]).
--export([notification_manager_loop/1]).
+
 -include("include/hb.hrl").
+
 -include_lib("eunit/include/eunit.hrl").
 
 -define(NOTIFICATION_MANAGER, hb_notification_manager).
 
 %% @doc Device API information
 info(_) ->
-    #{
-        exports => [info, dispatch, register, unregister, stream],
-        variant => <<"Notify/1.0">>
-    }.
+    #{exports => [info, dispatch, register, unregister, stream], variant => <<"Notify/1.0">>}.
 
 %% @doc HTTP info response providing information about this device
 info(_Msg1, _Msg2, _Opts) ->
-    InfoBody = #{
-        <<"description">> => <<"Notification device for real-time event streaming">>,
-        <<"version">> => <<"1.0">>,
-        <<"paths">> => #{
-            <<"info">> => <<"Get device info">>,
-            <<"dispatch">> => <<"Dispatch an event to registered listeners">>,
-            <<"register">> => <<"Register a new event listener">>,
-            <<"unregister">> => <<"Unregister an event listener">>,
-            <<"stream">> => <<"Start a streaming connection for real-time events">>
-        }
-    },
+    InfoBody =
+        #{<<"description">> => <<"Notification device for real-time event streaming">>,
+          <<"version">> => <<"1.0">>,
+          <<"paths">> =>
+              #{<<"info">> => <<"Get device info">>,
+                <<"dispatch">> => <<"Dispatch an event to registered listeners">>,
+                <<"register">> => <<"Register a new event listener">>,
+                <<"unregister">> => <<"Unregister an event listener">>,
+                <<"stream">> => <<"Start a streaming connection for real-time events">>}},
     {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Register a new event listener with template/spec support
 register(StateMsg, InputMsg, Opts) ->
     ?event(notify, {register_listener, InputMsg}),
-    
+
     % Extract template specification (supports both map and regex templates)
-    TemplateResult = case hb_ao:get(<<"template">>, InputMsg, Opts) of
-        not_found -> {error, <<"No template specified">>};
-        TemplateSpec -> {ok, TemplateSpec}
-    end,
-    
+    TemplateResult =
+        case hb_ao:get(<<"template">>, InputMsg, Opts) of
+            not_found ->
+                {error, <<"No template specified">>};
+            TemplateSpec ->
+                {ok, TemplateSpec}
+        end,
+
     case TemplateResult of
-        {error, Reason} -> {error, Reason};
+        {error, Reason} ->
+            {error, Reason};
         {ok, ExtractedTemplate} ->
             case hb_ao:get(<<"stream">>, InputMsg, Opts) of
                 not_found ->
@@ -56,11 +57,10 @@ register(StateMsg, InputMsg, Opts) ->
                     case validate_template(ExtractedTemplate, Opts) of
                         {ok, ValidatedTemplate} ->
                             % Register the template and stream in the state
-                            NewState = maps:put(
-                                {template, ValidatedTemplate},
-                                Stream,
-                                maps:get(<<"listeners">>, StateMsg, #{})
-                            ),
+                            NewState =
+                                maps:put({template, ValidatedTemplate},
+                                         Stream,
+                                         maps:get(<<"listeners">>, StateMsg, #{})),
                             {ok, StateMsg#{<<"listeners">> => NewState}};
                         {error, ValidationError} ->
                             {error, ValidationError}
@@ -71,15 +71,19 @@ register(StateMsg, InputMsg, Opts) ->
 %% @doc Unregister an event listener (supports both template and legacy pattern)
 unregister(StateMsg, InputMsg, Opts) ->
     ?event(notify, {unregister_listener, InputMsg}),
-    
+
     % Extract template for removal
-    TemplateResult = case hb_ao:get(<<"template">>, InputMsg, Opts) of
-        not_found -> {error, <<"No template specified">>};
-        TemplateSpec -> {ok, TemplateSpec}
-    end,
-    
+    TemplateResult =
+        case hb_ao:get(<<"template">>, InputMsg, Opts) of
+            not_found ->
+                {error, <<"No template specified">>};
+            TemplateSpec ->
+                {ok, TemplateSpec}
+        end,
+
     case TemplateResult of
-        {error, Reason} -> {error, Reason};
+        {error, Reason} ->
+            {error, Reason};
         {ok, ExtractedTemplate} ->
             % Validate template to get the same format as register function
             case validate_template(ExtractedTemplate, Opts) of
@@ -109,8 +113,10 @@ find_matching_key(_TargetTemplate, []) ->
     not_found;
 find_matching_key(TargetTemplate, [{template, StoredTemplate} | Rest]) ->
     case templates_match(TargetTemplate, StoredTemplate) of
-        true -> {template, StoredTemplate};
-        false -> find_matching_key(TargetTemplate, Rest)
+        true ->
+            {template, StoredTemplate};
+        false ->
+            find_matching_key(TargetTemplate, Rest)
     end;
 find_matching_key(TargetTemplate, [_OtherKey | Rest]) ->
     find_matching_key(TargetTemplate, Rest).
@@ -118,13 +124,16 @@ find_matching_key(TargetTemplate, [_OtherKey | Rest]) ->
 %% @doc Check if two templates are equivalent
 templates_match(Template1, Template2) when is_binary(Template1), is_binary(Template2) ->
     Template1 =:= Template2;
-templates_match({compiled_regex, _CompiledRegex1, OriginalPattern1}, {compiled_regex, _CompiledRegex2, OriginalPattern2}) ->
+templates_match({compiled_regex, _CompiledRegex1, OriginalPattern1},
+                {compiled_regex, _CompiledRegex2, OriginalPattern2}) ->
     % Compare original patterns for compiled regex templates
     OriginalPattern1 =:= OriginalPattern2;
-templates_match({compiled_regex, _CompiledRegex, OriginalPattern}, Template) when is_binary(Template) ->
+templates_match({compiled_regex, _CompiledRegex, OriginalPattern}, Template)
+    when is_binary(Template) ->
     % Compare compiled regex with binary template
     OriginalPattern =:= Template;
-templates_match(Template, {compiled_regex, _CompiledRegex, OriginalPattern}) when is_binary(Template) ->
+templates_match(Template, {compiled_regex, _CompiledRegex, OriginalPattern})
+    when is_binary(Template) ->
     % Compare binary template with compiled regex
     Template =:= OriginalPattern;
 templates_match(Template1, Template2) when is_map(Template1), is_map(Template2) ->
@@ -146,7 +155,7 @@ extract_essential_template(Template) ->
 %% @doc Dispatch an event to registered listeners via the notification manager
 dispatch(_StateMsg, InputMsg, Opts) ->
     ?event(notify, {dispatch_event, InputMsg}),
-    
+
     % Send event to the long-running notification manager process
     case whereis(?NOTIFICATION_MANAGER) of
         undefined ->
@@ -164,75 +173,72 @@ dispatch(_StateMsg, InputMsg, Opts) ->
 %% @doc Start a streaming connection for real-time event notifications
 stream(_StateMsg, InputMsg, Opts) ->
     ?event(notify, {start_stream, InputMsg}),
-    
+
     % Extract template for filtering events (supports both map and regex templates)
     Template = hb_ao:get(<<"template">>, InputMsg, <<".*">>, Opts),
-    
+
     % Create streaming response headers
-    Headers = #{
-        <<"content-type">> => <<"application/json">>,
-        <<"cache-control">> => <<"no-cache">>,
-        <<"connection">> => <<"keep-alive">>,
-        <<"access-control-allow-origin">> => <<"*">>
-    },
-    
+    Headers =
+        #{<<"content-type">> => <<"application/json">>,
+          <<"cache-control">> => <<"no-cache">>,
+          <<"connection">> => <<"keep-alive">>,
+          <<"access-control-allow-origin">> => <<"*">>},
+
     % Start the streaming response
     StreamingBody = create_streaming_body(Template, Opts),
-    
-    {ok, #{
-        <<"status">> => 200,
-        <<"headers">> => Headers,
-        <<"body">> => StreamingBody,
-        <<"streaming">> => true
-    }}.
+
+    {ok,
+     #{<<"status">> => 200,
+       <<"headers">> => Headers,
+       <<"body">> => StreamingBody,
+       <<"streaming">> => true}}.
 
 %% @doc Create a streaming body function that keeps the connection open
 create_streaming_body(Template, Opts) ->
     fun(Req) ->
-        % Initialize streaming response
-        Req2 = cowboy_req:stream_reply(200, #{
-            <<"content-type">> => <<"text/event-stream">>,
-            <<"cache-control">> => <<"no-cache">>,
-            <<"connection">> => <<"keep-alive">>,
-            <<"access-control-allow-origin">> => <<"*">>
-        }, Req),
-        
-        % Validate template before registering
-        case validate_template(Template, Opts) of
-            {ok, ValidatedTemplate} ->
-                % Register this stream for notifications
-                StreamId = make_ref(),
-                register_stream(StreamId, ValidatedTemplate, Req2, Opts),
-                
-                % Send initial connection message
-                InitialMessage = hb_util:encode(#{
-                    <<"type">> => <<"connection">>,
-                    <<"message">> => <<"Connected to notification stream">>,
-                    <<"template">> => ValidatedTemplate,
-                    <<"timestamp">> => erlang:system_time(millisecond)
-                }),
-                cowboy_req:stream_body([<<"data: ">>, InitialMessage, <<"\n\n">>], nofin, Req2),
-                
-                % Keep connection alive and handle cleanup
-                stream_loop(StreamId, Req2, Opts);
-            {error, ValidationError} ->
-                % Send error message and close stream
-                ErrorMessage = hb_util:encode(#{
-                    <<"type">> => <<"error">>,
-                    <<"message">> => ValidationError,
-                    <<"timestamp">> => erlang:system_time(millisecond)
-                }),
-                cowboy_req:stream_body([<<"data: ">>, ErrorMessage, <<"\n\n">>], fin, Req2)
-        end,
-        
-        {ok, Req2}
+       % Initialize streaming response
+       Req2 =
+           cowboy_req:stream_reply(200,
+                                   #{<<"content-type">> => <<"text/event-stream">>,
+                                     <<"cache-control">> => <<"no-cache">>,
+                                     <<"connection">> => <<"keep-alive">>,
+                                     <<"access-control-allow-origin">> => <<"*">>},
+                                   Req),
+
+       % Validate template before registering
+       case validate_template(Template, Opts) of
+           {ok, ValidatedTemplate} ->
+               % Register this stream for notifications
+               StreamId = make_ref(),
+               register_stream(StreamId, ValidatedTemplate, Req2, Opts),
+
+               % Send initial connection message
+               InitialMessage =
+                   hb_util:encode(#{<<"type">> => <<"connection">>,
+                                    <<"message">> => <<"Connected to notification stream">>,
+                                    <<"template">> => ValidatedTemplate,
+                                    <<"timestamp">> => erlang:system_time(millisecond)}),
+               cowboy_req:stream_body([<<"data: ">>, InitialMessage, <<"\n\n">>], nofin, Req2),
+
+               % Keep connection alive and handle cleanup
+               stream_loop(StreamId, Req2, Opts);
+           {error, ValidationError} ->
+               % Send error message and close stream
+               ErrorMessage =
+                   hb_util:encode(#{<<"type">> => <<"error">>,
+                                    <<"message">> => ValidationError,
+                                    <<"timestamp">> => erlang:system_time(millisecond)}),
+               cowboy_req:stream_body([<<"data: ">>, ErrorMessage, <<"\n\n">>], fin, Req2)
+       end,
+
+       {ok, Req2}
     end.
 
 %% @doc Register a streaming connection for receiving notifications
 register_stream(StreamId, Template, _Req, _Opts) ->
     % Ensure notification manager is running
     start_notification_manager(),
-    
+
     % Register with the notification manager
     case whereis(?NOTIFICATION_MANAGER) of
         undefined ->
@@ -240,7 +246,8 @@ register_stream(StreamId, Template, _Req, _Opts) ->
         ManagerPid ->
             StreamPid = self(),
             ManagerPid ! {register_listener, Template, StreamPid, StreamId},
-            ?event(notify, {stream_registered_with_manager, {stream_id, StreamId}, {template, Template}})
+            ?event(notify,
+                   {stream_registered_with_manager, {stream_id, StreamId}, {template, Template}})
     end.
 
 %% @doc Keep the streaming connection alive and handle events
@@ -259,10 +266,9 @@ stream_loop(StreamId, Req, Opts) ->
             stream_loop(StreamId, Req, Opts)
     after 30000 -> % 30 second keepalive
         % Send keepalive message
-        KeepaliveMsg = hb_util:encode(#{
-            <<"type">> => <<"keepalive">>,
-            <<"timestamp">> => erlang:system_time(millisecond)
-        }),
+        KeepaliveMsg =
+            hb_util:encode(#{<<"type">> => <<"keepalive">>,
+                             <<"timestamp">> => erlang:system_time(millisecond)}),
         cowboy_req:stream_body([<<"data: ">>, KeepaliveMsg, <<"\n\n">>], nofin, Req),
         stream_loop(StreamId, Req, Opts)
     end.
@@ -287,58 +293,79 @@ validate_template(Template, _Opts) when is_map(Template) ->
     % Map templates are used for message structure matching
     % Validate that it's a proper map with at least one key
     case maps:size(Template) of
-        0 -> {error, <<"Template cannot be empty">>};
-        _ -> {ok, Template}
+        0 ->
+            {error, <<"Template cannot be empty">>};
+        _ ->
+            {ok, Template}
     end;
 validate_template(Template, _Opts) when is_binary(Template) ->
     % Binary templates are treated as regex patterns for path matching
     % Compile the regex once for efficiency
-    try 
+    try
         case re:compile(Template) of
-            {ok, CompiledRegex} -> {ok, {compiled_regex, CompiledRegex, Template}};
-            {error, Reason} -> {error, iolist_to_binary(io_lib:format("Invalid regex: ~p", [Reason]))}
+            {ok, CompiledRegex} ->
+                {ok, {compiled_regex, CompiledRegex, Template}};
+            {error, Reason} ->
+                {error, iolist_to_binary(io_lib:format("Invalid regex: ~p", [Reason]))}
         end
     catch
-        _:_ -> {error, <<"Invalid regex template">>}
+        _:_ ->
+            {error, <<"Invalid regex template">>}
     end;
 validate_template(Template, _Opts) ->
-    {error, iolist_to_binary(io_lib:format("Template must be a map or binary, got: ~p", [Template]))}.
+    {error,
+     iolist_to_binary(io_lib:format("Template must be a map or binary, got: ~p", [Template]))}.
 
 %% @doc Enhanced template matching using router's template system
 template_matches(Event, Template, _Opts) when is_map(Template) ->
     % Use message structure matching (similar to dev_router:template_matches)
     case hb_message:match(Template, Event, primary) of
-        {value_mismatch, _Key, _Val1, _Val2} -> false;
-        true -> true;
-        _Other -> false
+        {value_mismatch, _Key, _Val1, _Val2} ->
+            false;
+        true ->
+            true;
+        _Other ->
+            false
     end;
 template_matches(Event, {compiled_regex, CompiledRegex, _OriginalPattern}, Opts) ->
     % Use pre-compiled regex for efficient path matching
-    EventPath = case hb_ao:get(<<"path">>, Event, Opts) of
-        not_found -> <<"/">>;
-        Path -> Path
-    end,
-    try 
+    EventPath =
+        case hb_ao:get(<<"path">>, Event, Opts) of
+            not_found ->
+                <<"/">>;
+            Path ->
+                Path
+        end,
+    try
         case re:run(EventPath, CompiledRegex) of
-            nomatch -> false;
-            _ -> true
+            nomatch ->
+                false;
+            _ ->
+                true
         end
     catch
-        _:_ -> false
+        _:_ ->
+            false
     end;
 template_matches(Event, Template, Opts) when is_binary(Template) ->
     % Fallback for legacy binary templates (compile on-the-fly)
-    EventPath = case hb_ao:get(<<"path">>, Event, Opts) of
-        not_found -> <<"/">>;
-        Path -> Path
-    end,
-    try 
+    EventPath =
+        case hb_ao:get(<<"path">>, Event, Opts) of
+            not_found ->
+                <<"/">>;
+            Path ->
+                Path
+        end,
+    try
         case re:run(EventPath, Template) of
-            nomatch -> false;
-            _ -> true
+            nomatch ->
+                false;
+            _ ->
+                true
         end
     catch
-        _:_ -> false
+        _:_ ->
+            false
     end;
 template_matches(_Event, _Template, _Opts) ->
     false.
@@ -352,30 +379,38 @@ start_notification_manager() ->
     case whereis(?NOTIFICATION_MANAGER) of
         undefined ->
             % Start the manager process
-            ManagerPid = spawn_link(fun() -> 
-                try register(?NOTIFICATION_MANAGER, self()) of
-                    true ->
-                        % Initialize ETS table for fast listener lookups
-                        case ets:info(notification_listeners) of
-                            undefined ->
-                                ets:new(notification_listeners, [named_table, public, set, {read_concurrency, true}]);
-                            _ -> ok
-                        end,
-                        ?event(notify, {notification_manager_started, self()}),
-                        notification_manager_loop(#{})
-                catch
-                    error:badarg ->
-                        % Someone else registered already, exit quietly
-                        exit(already_registered)
-                end
-            end),
+            ManagerPid =
+                spawn_link(fun() ->
+                              try register(?NOTIFICATION_MANAGER, self()) of
+                                  true ->
+                                      % Initialize ETS table for fast listener lookups
+                                      case ets:info(notification_listeners) of
+                                          undefined ->
+                                              ets:new(notification_listeners,
+                                                      [named_table,
+                                                       public,
+                                                       set,
+                                                       {read_concurrency, true}]);
+                                          _ -> ok
+                                      end,
+                                      ?event(notify, {notification_manager_started, self()}),
+                                      notification_manager_loop(#{})
+                              catch
+                                  error:badarg ->
+                                      % Someone else registered already, exit quietly
+                                      exit(already_registered)
+                              end
+                           end),
             % Give the process a moment to register
             timer:sleep(10),
             % Check if it actually got registered
             case whereis(?NOTIFICATION_MANAGER) of
-                ManagerPid -> {ok, ManagerPid};
-                OtherPid when is_pid(OtherPid) -> {already_started, OtherPid};
-                undefined -> {error, registration_failed}
+                ManagerPid ->
+                    {ok, ManagerPid};
+                OtherPid when is_pid(OtherPid) ->
+                    {already_started, OtherPid};
+                undefined ->
+                    {error, registration_failed}
             end;
         Pid ->
             {already_started, Pid}
@@ -384,29 +419,45 @@ start_notification_manager() ->
 %% @doc Stop the notification manager process
 stop_notification_manager() ->
     case whereis(?NOTIFICATION_MANAGER) of
-        undefined -> ok;
+        undefined ->
+            ok;
         Pid ->
             % First unregister to prevent new registrations
-            try unregister(?NOTIFICATION_MANAGER) catch _:_ -> ok end,
-            
+            try
+                unregister(?NOTIFICATION_MANAGER)
+            catch
+                _:_ ->
+                    ok
+            end,
+
             % Send stop signal
             Pid ! stop,
-            
+
             % Wait for process to die with timeout
             Ref = monitor(process, Pid),
             receive
-                {'DOWN', Ref, process, Pid, _Reason} -> ok
+                {'DOWN', Ref, process, Pid, _Reason} ->
+                    ok
             after 100 ->
                 exit(Pid, kill),
-                receive {'DOWN', Ref, process, Pid, _} -> ok after 50 -> ok end
+                receive
+                    {'DOWN', Ref, process, Pid, _} ->
+                        ok
+                after 50 ->
+                    ok
+                end
             end,
-            
+
             % Clean up ETS table if it still exists
             case ets:info(notification_listeners) of
-                undefined -> ok;
-                _ -> 
-                    try ets:delete(notification_listeners)
-                    catch _:_ -> ok
+                undefined ->
+                    ok;
+                _ ->
+                    try
+                        ets:delete(notification_listeners)
+                    catch
+                        _:_ ->
+                            ok
                     end
             end,
             ok
@@ -420,42 +471,42 @@ notification_manager_loop(State) ->
             % This keeps the work minimal to avoid blocking
             handle_event_dispatch(Event, Opts),
             notification_manager_loop(State);
-            
         {register_listener, Template, StreamPid, Ref} ->
             % Register a new listener with template using new key structure
             % Key is {{Template, StreamPid}, Ref} to ensure deduplication by {Template, StreamPid}
             ets:insert(notification_listeners, {{Template, StreamPid}, Ref}),
-            ?event(notify, {listener_registered, {template, Template}, {stream, StreamPid}, {ref, Ref}}),
+            ?event(notify,
+                   {listener_registered, {template, Template}, {stream, StreamPid}, {ref, Ref}}),
             notification_manager_loop(State);
-            
         {unregister_listener, Ref} ->
             % Remove listener by reference using new key structure
-            ets:match_delete(notification_listeners, {'_', Ref}),
+            % Key structure is {{Template, StreamPid}, Ref}
+            ets:match_delete(notification_listeners, {{'_', '_'}, Ref}),
             ?event(notify, {listener_unregistered, {ref, Ref}}),
             notification_manager_loop(State);
-            
         {get_stats} ->
             % Return statistics about registered listeners
-            Stats = #{
-                total_listeners => ets:info(notification_listeners, size),
-                manager_pid => self(),
-                state => State
-            },
+            Stats =
+                #{total_listeners => ets:info(notification_listeners, size),
+                  manager_pid => self(),
+                  state => State},
             ?event(notify, {manager_stats, Stats}),
             notification_manager_loop(State);
-            
         stop ->
             ?event(notify, {notification_manager_stopping, self()}),
             % Clean up ETS table before exiting
             case ets:info(notification_listeners) of
-                undefined -> ok;
-                _ -> 
-                    try ets:delete(notification_listeners)
-                    catch _:_ -> ok
+                undefined ->
+                    ok;
+                _ ->
+                    try
+                        ets:delete(notification_listeners)
+                    catch
+                        _:_ ->
+                            ok
                     end
             end,
             ok;
-            
         Msg ->
             ?event(notify, {unexpected_message, Msg}),
             notification_manager_loop(State)
@@ -467,13 +518,14 @@ handle_event_dispatch(Event, Opts) ->
         % Use ets:foldl instead of tab2list to avoid copying entire table
         % This eliminates memory allocation overhead for large listener tables
         ets:foldl(fun({{Template, StreamPid}, Ref}, Acc) ->
-            % Spawn short-lived worker processes for actual dispatching
-            % This keeps the manager process responsive
-            spawn(fun() -> 
-                try_dispatch_to_listener(Template, StreamPid, Ref, Event, Opts)
-            end),
-            Acc
-        end, ok, notification_listeners)
+                     % Spawn short-lived worker processes for actual dispatching
+                     % This keeps the manager process responsive
+                     spawn(fun() -> try_dispatch_to_listener(Template, StreamPid, Ref, Event, Opts)
+                           end),
+                     Acc
+                  end,
+                  ok,
+                  notification_listeners)
     catch
         _:_ ->
             % Table might not exist, ignore
@@ -512,27 +564,27 @@ try_dispatch_to_listener(Template, StreamPid, Ref, Event, Opts) ->
 %% @doc Test template validation
 template_validation_test() ->
     % Valid map template
-    MapTemplate = #{ <<"device">> => <<"test">> },
+    MapTemplate = #{<<"device">> => <<"test">>},
     MapResult = validate_template(MapTemplate, #{}),
     ?event(debug, {map_template_validation, {input, MapTemplate}, {result, MapResult}}),
-    ?assertEqual({ok, #{ <<"device">> => <<"test">> }}, MapResult),
-    
-    % Valid regex template  
+    ?assertEqual({ok, #{<<"device">> => <<"test">>}}, MapResult),
+
+    % Valid regex template
     RegexTemplate = <<"/.*/test">>,
     RegexResult = validate_template(RegexTemplate, #{}),
     ?event(debug, {regex_template_validation, {input, RegexTemplate}, {result, RegexResult}}),
     ?assertMatch({ok, {compiled_regex, _, <<"/.*/test">>}}, RegexResult),
-    
+
     % Invalid empty map
     EmptyResult = validate_template(#{}, #{}),
     ?event(debug, {empty_map_validation, {result, EmptyResult}}),
     ?assertMatch({error, _}, EmptyResult),
-    
+
     % Invalid regex
     InvalidRegexResult = validate_template(<<"[invalid">>, #{}),
     ?event(debug, {invalid_regex_validation, {result, InvalidRegexResult}}),
     ?assertMatch({error, _}, InvalidRegexResult),
-    
+
     % Invalid type
     InvalidTypeResult = validate_template(123, #{}),
     ?event(debug, {invalid_type_validation, {result, InvalidTypeResult}}),
@@ -541,29 +593,33 @@ template_validation_test() ->
 %% @doc Test template matching
 template_matching_test() ->
     % Map template matching
-    MapTemplate = #{ <<"device">> => <<"process@1.0">> },
-    
-    Event1 = #{ <<"device">> => <<"process@1.0">>, <<"path">> => <<"/compute">> },
+    MapTemplate = #{<<"device">> => <<"process@1.0">>},
+
+    Event1 = #{<<"device">> => <<"process@1.0">>, <<"path">> => <<"/compute">>},
     Match1 = template_matches(Event1, MapTemplate, #{}),
-    ?event(debug, {map_template_match, {template, MapTemplate}, {event, Event1}, {result, Match1}}),
+    ?event(debug,
+           {map_template_match, {template, MapTemplate}, {event, Event1}, {result, Match1}}),
     ?assertEqual(true, Match1),
-    
-    Event2 = #{ <<"device">> => <<"message@1.0">>, <<"path">> => <<"/compute">> },
+
+    Event2 = #{<<"device">> => <<"message@1.0">>, <<"path">> => <<"/compute">>},
     Match2 = template_matches(Event2, MapTemplate, #{}),
-    ?event(debug, {map_template_no_match, {template, MapTemplate}, {event, Event2}, {result, Match2}}),
+    ?event(debug,
+           {map_template_no_match, {template, MapTemplate}, {event, Event2}, {result, Match2}}),
     ?assertEqual(false, Match2),
-    
+
     % Regex template matching
     RegexTemplate = <<"/.*process.*/.*">>,
-    
-    Event3 = #{ <<"path">> => <<"/test/process@1.0/compute">> },
+
+    Event3 = #{<<"path">> => <<"/test/process@1.0/compute">>},
     Match3 = template_matches(Event3, RegexTemplate, #{}),
-    ?event(debug, {regex_template_match, {template, RegexTemplate}, {event, Event3}, {result, Match3}}),
+    ?event(debug,
+           {regex_template_match, {template, RegexTemplate}, {event, Event3}, {result, Match3}}),
     ?assertEqual(true, Match3),
-    
-    Event4 = #{ <<"path">> => <<"/test/message@1.0/compute">> },
+
+    Event4 = #{<<"path">> => <<"/test/message@1.0/compute">>},
     Match4 = template_matches(Event4, RegexTemplate, #{}),
-    ?event(debug, {regex_template_no_match, {template, RegexTemplate}, {event, Event4}, {result, Match4}}),
+    ?event(debug,
+           {regex_template_no_match, {template, RegexTemplate}, {event, Event4}, {result, Match4}}),
     ?assertEqual(false, Match4).
 
 %% @doc Test notification manager process lifecycle
@@ -573,7 +629,7 @@ notification_manager_test() ->
     ?event(debug, {manager_initial_state, InitialState}),
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     % Start manager
     StartResult = start_notification_manager(),
     ?event(debug, {manager_start_result, StartResult}),
@@ -581,7 +637,7 @@ notification_manager_test() ->
     ?assert(is_process_alive(ManagerPid)),
     ?assertEqual(ManagerPid, whereis(?NOTIFICATION_MANAGER)),
     ?event(debug, {manager_started_successfully, {pid, ManagerPid}}),
-    
+
     % Stop manager
     ?event(debug, {stopping_manager}),
     stop_notification_manager(),
@@ -596,42 +652,40 @@ event_dispatch_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Create a test stream process
     TestPid = self(),
-    StreamPid = spawn(fun() ->
-        receive 
-            {notify_event, Event} -> TestPid ! {received_event, Event}
-        after 1000 -> TestPid ! timeout
-        end
-    end),
-    
+    StreamPid =
+        spawn(fun() ->
+                 receive
+                     {notify_event, Event} -> TestPid ! {received_event, Event}
+                 after 1000 -> TestPid ! timeout
+                 end
+              end),
+
     % Register listener with map template
-    MapTemplate = #{ <<"device">> => <<"process@1.0">> },
+    MapTemplate = #{<<"device">> => <<"process@1.0">>},
     Ref1 = make_ref(),
-    ?event(debug, {registering_listener, {template, MapTemplate}, {stream_pid, StreamPid}, {ref, Ref1}}),
+    ?event(debug,
+           {registering_listener, {template, MapTemplate}, {stream_pid, StreamPid}, {ref, Ref1}}),
     ManagerPid ! {register_listener, MapTemplate, StreamPid, Ref1},
-    
+
     % Create test events
-    MatchingEvent = #{
-        <<"device">> => <<"process@1.0">>,
-        <<"action">> => <<"compute">>,
-        <<"data">> => <<"test">>
-    },
-    
-    NonMatchingEvent = #{
-        <<"device">> => <<"message@1.0">>,
-        <<"action">> => <<"compute">>
-    },
-    
+    MatchingEvent =
+        #{<<"device">> => <<"process@1.0">>,
+          <<"action">> => <<"compute">>,
+          <<"data">> => <<"test">>},
+
+    NonMatchingEvent = #{<<"device">> => <<"message@1.0">>, <<"action">> => <<"compute">>},
+
     % Dispatch matching event
     ?event(debug, {dispatching_matching_event, MatchingEvent}),
     ManagerPid ! {dispatch_event, MatchingEvent, #{}},
-    
+
     % Should receive the event
     receive
         {received_event, ReceivedEvent} ->
@@ -641,11 +695,11 @@ event_dispatch_test() ->
         ?event(debug, {timeout_on_matching_event}),
         ?assert(false, "Should have received matching event")
     end,
-    
+
     % Dispatch non-matching event
     ?event(debug, {dispatching_non_matching_event, NonMatchingEvent}),
     ManagerPid ! {dispatch_event, NonMatchingEvent, #{}},
-    
+
     % Should not receive anything (timeout expected)
     receive
         {received_event, UnexpectedEvent} ->
@@ -655,7 +709,7 @@ event_dispatch_test() ->
         ?event(debug, {expected_timeout_on_non_matching_event}),
         ok % Expected timeout
     end,
-    
+
     stop_notification_manager().
 
 %% @doc Test integration with hb_persistent notification
@@ -663,69 +717,72 @@ integration_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     % Test the integration point with hb_persistent
     GroupName = <<"test-group">>,
-    Msg2 = #{ <<"path">> => <<"/test">>, <<"data">> => <<"request">> },
-    Msg3 = #{ <<"result">> => <<"success">>, <<"timestamp">> => erlang:system_time(millisecond) },
-    Opts = #{ notify_device => <<"notify@1.0">> },
-    
+    Msg2 = #{<<"path">> => <<"/test">>, <<"data">> => <<"request">>},
+    Msg3 =
+        #{<<"result">> => <<"success">>, <<"timestamp">> => erlang:system_time(millisecond)},
+    Opts = #{notify_device => <<"notify@1.0">>},
+
     % Start notification manager
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % This should call our dispatch function
     hb_persistent:dispatch_to_notify_device(GroupName, Msg2, Msg3, Opts),
     timer:sleep(50),
-    
+
     % Manager should still be running (no crashes)
     ?assert(is_process_alive(ManagerPid)),
-    
+
     stop_notification_manager().
 
 %% @doc Test device registration and unregistration functions
 device_registration_test() ->
     StateMsg = #{<<"listeners">> => #{}},
     ?event(debug, {initial_state, StateMsg}),
-    
+
     % Test successful registration with map template
-    InputMsg1 = #{
-        <<"template">> => #{ <<"device">> => <<"test@1.0">> },
-        <<"stream">> => <<"test-stream">>
-    },
+    InputMsg1 =
+        #{<<"template">> => #{<<"device">> => <<"test@1.0">>}, <<"stream">> => <<"test-stream">>},
     ?event(debug, {registering_map_template, InputMsg1}),
-    
+
     {ok, NewState1} = register(StateMsg, InputMsg1, #{}),
     Listeners1 = maps:get(<<"listeners">>, NewState1),
-    ?event(debug, {after_map_registration, {listeners_count, maps:size(Listeners1)}, {keys, maps:keys(Listeners1)}}),
+    ?event(debug,
+           {after_map_registration,
+            {listeners_count, maps:size(Listeners1)},
+            {keys, maps:keys(Listeners1)}}),
     ?assertEqual(1, maps:size(Listeners1)),
-    
+
     % Test registration with regex template
-    InputMsg2 = #{
-        <<"template">> => <<"/.*test.*/.*">>,
-        <<"stream">> => <<"test-stream-2">>
-    },
-    
+    InputMsg2 = #{<<"template">> => <<"/.*test.*/.*">>, <<"stream">> => <<"test-stream-2">>},
+
     {ok, NewState2} = register(NewState1, InputMsg2, #{}),
     Listeners2 = maps:get(<<"listeners">>, NewState2),
     ?assertEqual(2, maps:size(Listeners2)),
-    
-    
+
     % Test unregistration - unregister the first template we added
-    UnregMsg = #{
-        <<"template">> => #{ <<"device">> => <<"test@1.0">> }
-    },
-    
-    ?event(debug, {before_unregister, {listeners_count, maps:size(maps:get(<<"listeners">>, NewState2))}}),
+    UnregMsg = #{<<"template">> => #{<<"device">> => <<"test@1.0">>}},
+
+    ?event(debug,
+           {before_unregister,
+            {listeners_count,
+             maps:size(
+                 maps:get(<<"listeners">>, NewState2))}}),
     {ok, NewState3} = unregister(NewState2, UnregMsg, #{}),
     Listeners3 = maps:get(<<"listeners">>, NewState3),
-    ?event(debug, {after_unregister, {listeners_count, maps:size(Listeners3)}, {keys, maps:keys(Listeners3)}}),
+    ?event(debug,
+           {after_unregister,
+            {listeners_count, maps:size(Listeners3)},
+            {keys, maps:keys(Listeners3)}}),
     ?assertEqual(1, maps:size(Listeners3)), % Should have 1 left (regex)
-    
+
     % Verify the correct template was removed
-    ?assertNot(maps:is_key({template, #{ <<"device">> => <<"test@1.0">> }}, Listeners3)),
-    
+    ?assertNot(maps:is_key({template, #{<<"device">> => <<"test@1.0">>}}, Listeners3)),
+
     % Test error cases
     ?assertMatch({error, _}, register(StateMsg, #{}, #{})),
     ?assertMatch({error, _}, register(StateMsg, #{<<"template">> => #{}}, #{})),
@@ -736,32 +793,32 @@ listener_registration_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     % Start manager
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Register a listener
-    Template = #{ <<"device">> => <<"message@1.0">> },
+    Template = #{<<"device">> => <<"message@1.0">>},
     StreamPid = spawn(fun() -> receive _ -> ok end end),
     Ref = make_ref(),
-    
+
     ManagerPid ! {register_listener, Template, StreamPid, Ref},
     timer:sleep(10), % Allow registration to process
-    
+
     % Check listener is registered
     AllListeners = ets:tab2list(notification_listeners),
     ?assert(lists:member({{Template, StreamPid}, Ref}, AllListeners)),
-    
+
     % Unregister listener
     ManagerPid ! {unregister_listener, Ref},
     timer:sleep(10), % Allow unregistration to process
-    
+
     % Check listener is removed
     AllListeners2 = ets:tab2list(notification_listeners),
     ?assertNot(lists:member({{Template, StreamPid}, Ref}, AllListeners2)),
-    
+
     stop_notification_manager().
 
 %% @doc Test regex template matching in event dispatch
@@ -769,47 +826,48 @@ regex_dispatch_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Create test stream process
     TestPid = self(),
-    StreamPid = spawn(fun() ->
-        receive 
-            {notify_event, Event} -> TestPid ! {received_event, Event}
-        after 1000 -> TestPid ! timeout
-        end
-    end),
-    
+    StreamPid =
+        spawn(fun() ->
+                 receive
+                     {notify_event, Event} -> TestPid ! {received_event, Event}
+                 after 1000 -> TestPid ! timeout
+                 end
+              end),
+
     % Register listener with regex template
     RegexTemplate = <<"/.*process.*/.*">>,
     Ref = make_ref(),
     ManagerPid ! {register_listener, RegexTemplate, StreamPid, Ref},
-    
+
     % Test matching path
-    MatchingEvent = #{ <<"path">> => <<"/test/process@1.0/compute">> },
+    MatchingEvent = #{<<"path">> => <<"/test/process@1.0/compute">>},
     ManagerPid ! {dispatch_event, MatchingEvent, #{}},
-    
+
     receive
         {received_event, ReceivedEvent} ->
             ?assertEqual(MatchingEvent, ReceivedEvent)
     after 500 ->
         ?assert(false, "Should have received matching event")
     end,
-    
+
     % Test non-matching path
-    NonMatchingEvent = #{ <<"path">> => <<"/test/message@1.0/compute">> },
+    NonMatchingEvent = #{<<"path">> => <<"/test/message@1.0/compute">>},
     ManagerPid ! {dispatch_event, NonMatchingEvent, #{}},
-    
+
     receive
         {received_event, _} ->
             ?assert(false, "Should not have received non-matching event")
     after 100 ->
         ok % Expected timeout
     end,
-    
+
     stop_notification_manager().
 
 %% @doc Test dispatch function
@@ -817,83 +875,83 @@ dispatch_function_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     % Start manager for testing
     start_notification_manager(),
-    
+
     % Test dispatch with valid input
-    InputMsg = #{
-        <<"event">> => #{ <<"test">> => <<"data">> },
-        <<"timestamp">> => erlang:system_time(millisecond)
-    },
-    
+    InputMsg =
+        #{<<"event">> => #{<<"test">> => <<"data">>},
+          <<"timestamp">> => erlang:system_time(millisecond)},
+
     Result = dispatch(#{}, InputMsg, #{}),
     ?assertEqual({ok, <<"OK">>}, Result),
-    
+
     stop_notification_manager().
 
 %% @doc Test stream function
 stream_function_test() ->
     % Test stream creation with valid template
-    InputMsg1 = #{
-        <<"template">> => #{ <<"device">> => <<"test@1.0">> }
-    },
-    
+    InputMsg1 = #{<<"template">> => #{<<"device">> => <<"test@1.0">>}},
+
     {ok, Result1} = stream(#{}, InputMsg1, #{}),
     ?assertEqual(200, maps:get(<<"status">>, Result1)),
     ?assertEqual(true, maps:get(<<"streaming">>, Result1)),
     ?assert(maps:is_key(<<"headers">>, Result1)),
     ?assert(maps:is_key(<<"body">>, Result1)),
-    
+
     % Test with regex template
-    InputMsg2 = #{
-        <<"template">> => <<"/.*test.*/.*">>
-    },
-    
+    InputMsg2 = #{<<"template">> => <<"/.*test.*/.*">>},
+
     {ok, Result2} = stream(#{}, InputMsg2, #{}),
     ?assertEqual(200, maps:get(<<"status">>, Result2)).
-    
 
 %% @doc Test dead process cleanup
 dead_process_cleanup_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Create and register a process, then kill it
     DeadPid = spawn(fun() -> ok end),
     timer:sleep(10), % Ensure process dies
     ?assertNot(is_process_alive(DeadPid)),
     ?event(debug, {created_dead_process, {pid, DeadPid}, {alive, is_process_alive(DeadPid)}}),
-    
-    Template = #{ <<"device">> => <<"message@1.0">> },
+
+    Template = #{<<"device">> => <<"message@1.0">>},
     Ref = make_ref(),
-    
+
     % Register the dead process
     ?event(debug, {registering_dead_process, {template, Template}, {dead_pid, DeadPid}}),
     ManagerPid ! {register_listener, Template, DeadPid, Ref},
     timer:sleep(10),
-    
+
     % Verify it's in the table
     AllListeners = ets:tab2list(notification_listeners),
-    ?event(debug, {listeners_before_cleanup, {count, length(AllListeners)}, {has_dead_process, lists:member({{Template, DeadPid}, Ref}, AllListeners)}}),
+    ?event(debug,
+           {listeners_before_cleanup,
+            {count, length(AllListeners)},
+            {has_dead_process, lists:member({{Template, DeadPid}, Ref}, AllListeners)}}),
     ?assert(lists:member({{Template, DeadPid}, Ref}, AllListeners)),
-    
+
     % Dispatch an event that matches
-    Event = #{ <<"device">> => <<"message@1.0">> },
+    Event = #{<<"device">> => <<"message@1.0">>},
     ?event(debug, {dispatching_to_dead_process, Event}),
     ManagerPid ! {dispatch_event, Event, #{}},
     timer:sleep(50), % Allow cleanup to happen
-    
+
     % Dead process should be cleaned up
     AllListeners2 = ets:tab2list(notification_listeners),
-    ?event(debug, {listeners_after_cleanup, {count, length(AllListeners2)}, {dead_process_removed, not lists:member({{Template, DeadPid}, Ref}, AllListeners2)}}),
+    ?event(debug,
+           {listeners_after_cleanup,
+            {count, length(AllListeners2)},
+            {dead_process_removed, not lists:member({{Template, DeadPid}, Ref}, AllListeners2)}}),
     ?assertNot(lists:member({{Template, DeadPid}, Ref}, AllListeners2)),
-    
+
     stop_notification_manager().
 
 %% @doc Test concurrent dispatching
@@ -901,46 +959,49 @@ concurrent_dispatch_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Create multiple test processes
     TestPid = self(),
     NumStreams = 5,
-    
-    StreamPids = lists:map(fun(N) ->
-        spawn(fun() ->
-            receive 
-                {notify_event, Event} -> 
-                    TestPid ! {received_event, N, Event}
-            after 1000 -> 
-                TestPid ! {timeout, N}
-            end
-        end)
-    end, lists:seq(1, NumStreams)),
-    
+
+    StreamPids =
+        lists:map(fun(N) ->
+                     spawn(fun() ->
+                              receive
+                                  {notify_event, Event} -> TestPid ! {received_event, N, Event}
+                              after 1000 -> TestPid ! {timeout, N}
+                              end
+                           end)
+                  end,
+                  lists:seq(1, NumStreams)),
+
     % Register all with the same template
-    Template = #{ <<"type">> => <<"broadcast">> },
+    Template = #{<<"type">> => <<"broadcast">>},
     lists:foreach(fun({_N, Pid}) ->
-        ManagerPid ! {register_listener, Template, Pid, make_ref()}
-    end, lists:zip(lists:seq(1, NumStreams), StreamPids)),
-    
+                     ManagerPid ! {register_listener, Template, Pid, make_ref()}
+                  end,
+                  lists:zip(
+                      lists:seq(1, NumStreams), StreamPids)),
+
     timer:sleep(20), % Allow registrations to process
-    
+
     % Dispatch one event
-    Event = #{ <<"type">> => <<"broadcast">>, <<"message">> => <<"hello">> },
+    Event = #{<<"type">> => <<"broadcast">>, <<"message">> => <<"hello">>},
     ManagerPid ! {dispatch_event, Event, #{}},
-    
+
     % All streams should receive the event
     ReceivedCount = receive_events(NumStreams, 0),
     ?assertEqual(NumStreams, ReceivedCount),
-    
+
     stop_notification_manager().
 
 %% Helper function for concurrent test
-receive_events(0, Count) -> Count;
+receive_events(0, Count) ->
+    Count;
 receive_events(Remaining, Count) ->
     receive
         {received_event, _N, _Event} ->
@@ -954,24 +1015,20 @@ receive_events(Remaining, Count) ->
 %% @doc Test template validation edge cases
 template_validation_edge_cases_test() ->
     % Test deeply nested map template
-    NestedTemplate = #{
-        <<"device">> => <<"test@1.0">>,
-        <<"data">> => #{
-            <<"nested">> => #{
-                <<"value">> => <<"deep">>
-            }
-        }
-    },
+    NestedTemplate =
+        #{<<"device">> => <<"test@1.0">>,
+          <<"data">> => #{<<"nested">> => #{<<"value">> => <<"deep">>}}},
     ?assertEqual({ok, NestedTemplate}, validate_template(NestedTemplate, #{})),
-    
+
     % Test complex regex patterns
     ComplexRegex = <<"^/(test|prod)/process@[0-9]+\\.[0-9]+/.+$">>,
-    ?assertMatch({ok, {compiled_regex, _, ComplexRegex}}, validate_template(ComplexRegex, #{})),
-    
+    ?assertMatch({ok, {compiled_regex, _, ComplexRegex}},
+                 validate_template(ComplexRegex, #{})),
+
     % Test unicode in templates
-    UnicodeTemplate = #{ <<"message">> => <<"Hello 世界">> },
+    UnicodeTemplate = #{<<"message">> => <<"Hello 世界">>},
     ?assertEqual({ok, UnicodeTemplate}, validate_template(UnicodeTemplate, #{})),
-    
+
     % Test very long regex
     LongRegex = iolist_to_binary(lists:duplicate(1000, "a")),
     ?assertMatch({ok, {compiled_regex, _, LongRegex}}, validate_template(LongRegex, #{})).
@@ -979,26 +1036,25 @@ template_validation_edge_cases_test() ->
 %% @doc Test message matching edge cases
 message_matching_edge_cases_test() ->
     % Test partial map matching
-    Template = #{ <<"device">> => <<"message@1.0">> },
-    Event = #{
-        <<"device">> => <<"message@1.0">>,
-        <<"extra">> => <<"field">>,
-        <<"more">> => #{ <<"nested">> => <<"data">> }
-    },
+    Template = #{<<"device">> => <<"message@1.0">>},
+    Event =
+        #{<<"device">> => <<"message@1.0">>,
+          <<"extra">> => <<"field">>,
+          <<"more">> => #{<<"nested">> => <<"data">>}},
     ?assertEqual(true, template_matches(Event, Template, #{})),
-    
+
     % Test case sensitivity
-    CaseTemplate = #{ <<"Device">> => <<"Message@1.0">> },
-    CaseEvent = #{ <<"device">> => <<"message@1.0">> },
+    CaseTemplate = #{<<"Device">> => <<"Message@1.0">>},
+    CaseEvent = #{<<"device">> => <<"message@1.0">>},
     ?assertEqual(false, template_matches(CaseEvent, CaseTemplate, #{})),
-    
+
     % Test missing path in regex matching
     RegexTemplate = <<"/test.*">>,
-    EventWithoutPath = #{ <<"device">> => <<"message@1.0">> },
+    EventWithoutPath = #{<<"device">> => <<"message@1.0">>},
     ?assertEqual(false, template_matches(EventWithoutPath, RegexTemplate, #{})),
-    
+
     % Test empty path
-    EventWithEmptyPath = #{ <<"path">> => <<"">> },
+    EventWithEmptyPath = #{<<"path">> => <<"">>},
     ?assertEqual(false, template_matches(EventWithEmptyPath, RegexTemplate, #{})).
 
 %% @doc Test error handling and recovery
@@ -1006,27 +1062,27 @@ error_handling_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Test invalid template in dispatch (should not crash manager)
     InvalidTemplate = invalid_template_atom,
     TestPid = spawn(fun() -> receive _ -> ok end end),
     Ref = make_ref(),
-    
+
     % Register invalid template (insert directly to bypass validation)
     ets:insert(notification_listeners, {{InvalidTemplate, TestPid}, Ref}),
-    
+
     % Dispatch event - should handle error gracefully
-    Event = #{ <<"test">> => <<"data">> },
+    Event = #{<<"test">> => <<"data">>},
     ManagerPid ! {dispatch_event, Event, #{}},
     timer:sleep(50),
-    
+
     % Manager should still be alive
     ?assert(is_process_alive(ManagerPid)),
-    
+
     stop_notification_manager().
 
 %% @doc Performance test for high-frequency events
@@ -1034,190 +1090,191 @@ performance_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Register a listener
-    Template = #{ <<"type">> => <<"perf-test">> },
-    TestPid = spawn(fun() ->
-        receive_loop(0)
-    end),
+    Template = #{<<"type">> => <<"perf-test">>},
+    TestPid = spawn(fun() -> receive_loop(0) end),
     Ref = make_ref(),
     ManagerPid ! {register_listener, Template, TestPid, Ref},
     timer:sleep(10),
-    
+
     % Send many events quickly
     NumEvents = 100,
     StartTime = erlang:system_time(microsecond),
-    
+
     lists:foreach(fun(N) ->
-        Event = #{
-            <<"type">> => <<"perf-test">>,
-            <<"sequence">> => N,
-            <<"timestamp">> => erlang:system_time(millisecond)
-        },
-        ManagerPid ! {dispatch_event, Event, #{}}
-    end, lists:seq(1, NumEvents)),
-    
+                     Event =
+                         #{<<"type">> => <<"perf-test">>,
+                           <<"sequence">> => N,
+                           <<"timestamp">> => erlang:system_time(millisecond)},
+                     ManagerPid ! {dispatch_event, Event, #{}}
+                  end,
+                  lists:seq(1, NumEvents)),
+
     EndTime = erlang:system_time(microsecond),
     Duration = EndTime - StartTime,
-    
+
     ?event(notify, {performance_test, {events, NumEvents}, {duration_us, Duration}}),
-    
+
     % Should handle 100 events quickly (< 100ms)
     ?assert(Duration < 100000, "Performance test took too long"),
-    
-    stop_notification_manager().
 
+    stop_notification_manager().
 
 %% @doc Benchmark test to measure handle_event_dispatch performance directly
 handle_event_dispatch_benchmark_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Register many listeners to create realistic load
     NumListeners = 10000,
-    TestEvent = #{
-        <<"service">> => <<"benchmark">>,
-        <<"action">> => <<"test">>,
-        <<"data">> => <<"benchmark_payload">>
-    },
-    
+    TestEvent =
+        #{<<"service">> => <<"benchmark">>,
+          <<"action">> => <<"test">>,
+          <<"data">> => <<"benchmark_payload">>},
+
     % Create listeners with different templates for realistic scenario
     lists:foreach(fun(N) ->
-        Template = case N rem 4 of
-            0 -> #{ <<"service">> => <<"benchmark">> };  % Will match
-            1 -> #{ <<"service">> => <<"other">> };      % Won't match
-            2 -> #{ <<"action">> => <<"test">> };        % Will match  
-            3 -> #{ <<"type">> => <<"different">> }      % Won't match
-        end,
-        StreamPid = spawn(fun() -> 
-            receive stop -> ok after 10000 -> ok end 
-        end),
-        Ref = make_ref(),
-        ManagerPid ! {register_listener, Template, StreamPid, Ref}
-    end, lists:seq(1, NumListeners)),
-    
+                     Template =
+                         case N rem 4 of
+                             0 -> #{<<"service">> => <<"benchmark">>};  % Will match
+                             1 -> #{<<"service">> => <<"other">>};      % Won't match
+                             2 -> #{<<"action">> => <<"test">>};        % Will match
+                             3 -> #{<<"type">> => <<"different">>}      % Won't match
+                         end,
+                     StreamPid = spawn(fun() -> receive stop -> ok after 10000 -> ok end end),
+                     Ref = make_ref(),
+                     ManagerPid ! {register_listener, Template, StreamPid, Ref}
+                  end,
+                  lists:seq(1, NumListeners)),
+
     timer:sleep(100), % Allow registrations to process
-    
+
     % Verify listeners are registered
     ListenerCount = ets:info(notification_listeners, size),
     ?event(notify, {benchmark_setup, {listeners_registered, ListenerCount}}),
     ?assertEqual(NumListeners, ListenerCount),
-    
+
     % Benchmark current handle_event_dispatch implementation
     NumIterations = 100,
-    Times = lists:map(fun(_) ->
-        StartTime = erlang:system_time(microsecond),
-        
-        % Call handle_event_dispatch directly (this is what we're optimizing)
-        handle_event_dispatch(TestEvent, #{}),
-        
-        EndTime = erlang:system_time(microsecond),
-        EndTime - StartTime
-    end, lists:seq(1, NumIterations)),
-    
+    Times =
+        lists:map(fun(_) ->
+                     StartTime = erlang:system_time(microsecond),
+
+                     % Call handle_event_dispatch directly (this is what we're optimizing)
+                     handle_event_dispatch(TestEvent, #{}),
+
+                     EndTime = erlang:system_time(microsecond),
+                     EndTime - StartTime
+                  end,
+                  lists:seq(1, NumIterations)),
+
     % Calculate statistics
     TotalTime = lists:sum(Times),
     MinTime = lists:min(Times),
     MaxTime = lists:max(Times),
     AvgTime = TotalTime div NumIterations,
-    
+
     % Calculate how many processes were spawned per call
     % (This will be listeners that match × 1 since we spawn one process per match)
     MatchingListeners = NumListeners div 2, % Roughly half should match our test event
     ProcessesPerCall = MatchingListeners,
     TotalProcessesSpawned = ProcessesPerCall * NumIterations,
-    
-    ?event(notify_benchmark, {handle_event_dispatch_benchmark, 
-        {listeners, NumListeners},
-        {matching_listeners_estimate, MatchingListeners},
-        {iterations, NumIterations},
-        {total_time_us, TotalTime},
-        {avg_time_us, AvgTime},
-        {min_time_us, MinTime},
-        {max_time_us, MaxTime},
-        {processes_spawned_per_call, ProcessesPerCall},
-        {total_processes_spawned, TotalProcessesSpawned},
-        {calls_per_second, (NumIterations * 1000000) div TotalTime}
-    }),
-    
+
+    ?event(notify_benchmark,
+           {handle_event_dispatch_benchmark,
+            {listeners, NumListeners},
+            {matching_listeners_estimate, MatchingListeners},
+            {iterations, NumIterations},
+            {total_time_us, TotalTime},
+            {avg_time_us, AvgTime},
+            {min_time_us, MinTime},
+            {max_time_us, MaxTime},
+            {processes_spawned_per_call, ProcessesPerCall},
+            {total_processes_spawned, TotalProcessesSpawned},
+            {calls_per_second, NumIterations * 1000000 div TotalTime}}),
+
     % Performance assertions
     ?assert(AvgTime > 0, "Benchmark should take measurable time"),
     ?assert(TotalProcessesSpawned > 0, "Should spawn processes for matching listeners"),
-    
+
     % Log current performance baseline for comparison with foldl implementation
-    EventsPerSecond = (NumIterations * 1000000) div TotalTime,
+    EventsPerSecond = NumIterations * 1000000 div TotalTime,
     MicrosecondsPerEvent = AvgTime,
-    
-    ?event(notify_benchmark, {current_tab2list_baseline,
-        {events_per_second, EventsPerSecond},
-        {microseconds_per_event, MicrosecondsPerEvent},
-        {microseconds_per_listener, AvgTime div NumListeners},
-        {table_copying_overhead, "tab2list_copies_entire_table"}
-    }),
-    
+
+    ?event(notify_benchmark,
+           {current_tab2list_baseline,
+            {events_per_second, EventsPerSecond},
+            {microseconds_per_event, MicrosecondsPerEvent},
+            {microseconds_per_listener, AvgTime div NumListeners},
+            {table_copying_overhead, "tab2list_copies_entire_table"}}),
+
     stop_notification_manager().
 
 %% @doc Test handle_event_dispatch performance under different listener loads
 scaling_benchmark_test() ->
     % Test how performance degrades as listener count increases
     ListenerCounts = [100, 500, 1000, 2000, 10000],
-    Results = lists:map(fun(NumListeners) ->
-        benchmark_with_listener_count(NumListeners)
-    end, ListenerCounts),
-    
+    Results =
+        lists:map(fun(NumListeners) -> benchmark_with_listener_count(NumListeners) end,
+                  ListenerCounts),
+
     ?event(notify_benchmark, {scaling_benchmark_results, Results}),
-    
+
     % Performance should degrade linearly (or better) with listener count
     % If it degrades quadratically, that's a bad sign
     lists:foreach(fun({ListenerCount, AvgTimeUs}) ->
-        % Very rough check - average time should be reasonable
-        ReasonableTimeUs = ListenerCount * 10, % 10us per listener is reasonable
-        ?assert(AvgTimeUs < ReasonableTimeUs * 2, 
-            io_lib:format("Performance too slow for ~p listeners: ~pus", [ListenerCount, AvgTimeUs]))
-    end, Results).
+                     % Very rough check - average time should be reasonable
+                     ReasonableTimeUs = ListenerCount * 10, % 10us per listener is reasonable
+                     ?assert(AvgTimeUs < ReasonableTimeUs * 2,
+                             io_lib:format("Performance too slow for ~p listeners: ~pus",
+                                           [ListenerCount, AvgTimeUs]))
+                  end,
+                  Results).
 
 %% Helper function for scaling benchmark
 benchmark_with_listener_count(NumListeners) ->
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
-    
+
     % Register listeners
     lists:foreach(fun(N) ->
-        Template = #{ <<"test">> => <<"scaling">>, <<"id">> => integer_to_binary(N rem 10) },
-        StreamPid = spawn(fun() -> receive stop -> ok after 5000 -> ok end end),
-        Ref = make_ref(),
-        ManagerPid ! {register_listener, Template, StreamPid, Ref}
-    end, lists:seq(1, NumListeners)),
-    
+                     Template =
+                         #{<<"test">> => <<"scaling">>, <<"id">> => integer_to_binary(N rem 10)},
+                     StreamPid = spawn(fun() -> receive stop -> ok after 5000 -> ok end end),
+                     Ref = make_ref(),
+                     ManagerPid ! {register_listener, Template, StreamPid, Ref}
+                  end,
+                  lists:seq(1, NumListeners)),
+
     timer:sleep(50),
-    
+
     % Benchmark handle_event_dispatch
-    TestEvent = #{ <<"test">> => <<"scaling">>, <<"data">> => <<"test">> },
+    TestEvent = #{<<"test">> => <<"scaling">>, <<"data">> => <<"test">>},
     NumIterations = 50,
-    
+
     StartTime = erlang:system_time(microsecond),
-    lists:foreach(fun(_) ->
-        handle_event_dispatch(TestEvent, #{})
-    end, lists:seq(1, NumIterations)),
+    lists:foreach(fun(_) -> handle_event_dispatch(TestEvent, #{}) end,
+                  lists:seq(1, NumIterations)),
     EndTime = erlang:system_time(microsecond),
-    
+
     TotalTime = EndTime - StartTime,
     AvgTime = TotalTime div NumIterations,
-    
+
     stop_notification_manager(),
-    
+
     {NumListeners, AvgTime}.
 
 %% @doc Test memory pressure with large listener counts
@@ -1234,83 +1291,87 @@ memory_pressure_test_impl() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Register many listeners
     NumListeners = 5000,  % Large number to stress memory
-    
+
     ?event(notify_benchmark, {memory_test_start, {registering_listeners, NumListeners}}),
-    
+
     lists:foreach(fun(N) ->
-        Template = #{ 
-            <<"service">> => <<"memory-test">>,
-            <<"instance">> => integer_to_binary(N rem 100), % Some variety
-            <<"id">> => integer_to_binary(N)
-        },
-        StreamPid = spawn(fun() -> 
-            receive stop -> ok after 30000 -> ok end 
-        end),
-        Ref = make_ref(),
-        ManagerPid ! {register_listener, Template, StreamPid, Ref},
-        
-        % Add small delay every 100 registrations to avoid overwhelming
-        case N rem 100 of
-            0 -> timer:sleep(1);
-            _ -> ok
-        end
-    end, lists:seq(1, NumListeners)),
-    
+                     Template =
+                         #{<<"service">> => <<"memory-test">>,
+                           <<"instance">> => integer_to_binary(N rem 100), % Some variety
+                           <<"id">> => integer_to_binary(N)},
+                     StreamPid = spawn(fun() -> receive stop -> ok after 30000 -> ok end end),
+                     Ref = make_ref(),
+                     ManagerPid ! {register_listener, Template, StreamPid, Ref},
+
+                     % Add small delay every 100 registrations to avoid overwhelming
+                     case N rem 100 of
+                         0 -> timer:sleep(1);
+                         _ -> ok
+                     end
+                  end,
+                  lists:seq(1, NumListeners)),
+
     timer:sleep(200), % Allow registrations to process
-    
+
     % Get memory stats before test
     MemBefore = erlang:memory(total),
     ProcessCountBefore = erlang:system_info(process_count),
-    
+
     % Send events that will trigger many process spawns
     NumEvents = 5,
     StartTime = erlang:system_time(microsecond),
-    
+
     lists:foreach(fun(N) ->
-        Event = #{
-            <<"service">> => <<"memory-test">>,
-            <<"event_id">> => N,
-            <<"data">> => <<"large_event_payload_to_increase_memory_pressure">>
-        },
-        ManagerPid ! {dispatch_event, Event, #{}}
-    end, lists:seq(1, NumEvents)),
-    
+                     Event =
+                         #{<<"service">> => <<"memory-test">>,
+                           <<"event_id">> => N,
+                           <<"data">> => <<"large_event_payload_to_increase_memory_pressure">>},
+                     ManagerPid ! {dispatch_event, Event, #{}}
+                  end,
+                  lists:seq(1, NumEvents)),
+
     % Wait for processing (increased to allow process spawns to complete)
     timer:sleep(1000),
-    
+
     EndTime = erlang:system_time(microsecond),
     Duration = EndTime - StartTime,
-    
+
     % Get memory stats after test
     MemAfter = erlang:memory(total),
     ProcessCountAfter = erlang:system_info(process_count),
-    
+
     % Calculate metrics
     ExpectedProcessSpawns = NumListeners * NumEvents,
     MemoryIncrease = MemAfter - MemBefore,
     ProcessIncrease = ProcessCountAfter - ProcessCountBefore,
-    
-    ?event(notify_benchmark, {memory_pressure_results,
-        {listeners, NumListeners},
-        {events, NumEvents},
-        {duration_us, Duration},
-        {expected_process_spawns, ExpectedProcessSpawns},
-        {memory_increase_bytes, MemoryIncrease},
-        {process_count_increase, ProcessIncrease},
-        {memory_per_spawn_bytes, case ExpectedProcessSpawns of 0 -> 0; _ -> MemoryIncrease div ExpectedProcessSpawns end}
-    }),
-    
+
+    ?event(notify_benchmark,
+           {memory_pressure_results,
+            {listeners, NumListeners},
+            {events, NumEvents},
+            {duration_us, Duration},
+            {expected_process_spawns, ExpectedProcessSpawns},
+            {memory_increase_bytes, MemoryIncrease},
+            {process_count_increase, ProcessIncrease},
+            {memory_per_spawn_bytes,
+             case ExpectedProcessSpawns of
+                 0 ->
+                     0;
+                 _ ->
+                     MemoryIncrease div ExpectedProcessSpawns
+             end}}),
+
     % Performance should not be terrible even with many listeners
     MaxReasonableTime = 5000000, % 5 seconds
     ?assert(Duration < MaxReasonableTime, "Memory pressure test took too long"),
-    
+
     stop_notification_manager().
 
 receive_loop(Count) ->
@@ -1326,43 +1387,48 @@ duplicate_listener_registration_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Create test stream process that counts events
     TestPid = self(),
-    StreamPid = spawn(fun() ->
-        duplicate_event_counter(0)
-    end),
-    
+    StreamPid = spawn(fun() -> duplicate_event_counter(0) end),
+
     % Register the same template and stream multiple times
-    Template = #{ <<"device">> => <<"duplicate-test@1.0">> },
+    Template = #{<<"device">> => <<"duplicate-test@1.0">>},
     Ref1 = make_ref(),
     Ref2 = make_ref(),
     Ref3 = make_ref(),
-    
-    ?event(debug, {registering_duplicate_listeners, {template, Template}, {stream_pid, StreamPid}}),
+
+    ?event(debug,
+           {registering_duplicate_listeners, {template, Template}, {stream_pid, StreamPid}}),
     ManagerPid ! {register_listener, Template, StreamPid, Ref1},
     ManagerPid ! {register_listener, Template, StreamPid, Ref2},
     ManagerPid ! {register_listener, Template, StreamPid, Ref3},
     timer:sleep(20), % Allow registrations to process
-    
+
     % Check how many entries are in the ETS table
     AllListeners = ets:tab2list(notification_listeners),
-    MatchingListeners = [L || {{T, P}, _R} = L <- AllListeners, T =:= Template, P =:= StreamPid],
-    ?event(debug, {duplicate_registrations_found, {count, length(MatchingListeners)}, {entries, MatchingListeners}}),
-    
+    MatchingListeners =
+        [L || {{T, P}, _R} = L <- AllListeners, T =:= Template, P =:= StreamPid],
+    ?event(debug,
+           {duplicate_registrations_found,
+            {count, length(MatchingListeners)},
+            {entries, MatchingListeners}}),
+
     % This test will FAIL with current implementation - showing the bug
     % The same {Template, StreamPid} should only be registered once
-    ?assertEqual(1, length(MatchingListeners), "Same template/stream should only be registered once"),
-    
+    ?assertEqual(1,
+                 length(MatchingListeners),
+                 "Same template/stream should only be registered once"),
+
     % Dispatch one event
-    Event = #{ <<"device">> => <<"duplicate-test@1.0">>, <<"message">> => <<"test">> },
+    Event = #{<<"device">> => <<"duplicate-test@1.0">>, <<"message">> => <<"test">>},
     ManagerPid ! {dispatch_event, Event, #{}},
     timer:sleep(50),
-    
+
     % Stream should receive the event only once
     StreamPid ! {get_count, TestPid},
     receive
@@ -1372,7 +1438,7 @@ duplicate_listener_registration_test() ->
     after 500 ->
         ?assert(false, "Should have received event count")
     end,
-    
+
     stop_notification_manager().
 
 %% Helper process that counts duplicate events
@@ -1393,50 +1459,62 @@ multiple_registration_scenarios_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Scenario 1: Same template, same stream, different refs
-    Template1 = #{ <<"type">> => <<"scenario1">> },
+    Template1 = #{<<"type">> => <<"scenario1">>},
     Stream1 = spawn(fun() -> receive _ -> ok end end),
-    
+
     ManagerPid ! {register_listener, Template1, Stream1, make_ref()},
     ManagerPid ! {register_listener, Template1, Stream1, make_ref()},
     timer:sleep(10),
-    
-    Listeners1 = [L || {{T, P}, _R} = L <- ets:tab2list(notification_listeners), T =:= Template1, P =:= Stream1],
+
+    Listeners1 =
+        [L
+         || {{T, P}, _R} = L <- ets:tab2list(notification_listeners),
+            T =:= Template1,
+            P =:= Stream1],
     ?event(debug, {scenario1_duplicates, {count, length(Listeners1)}}),
     % Same template/stream should only be registered once
-    ?assertEqual(1, length(Listeners1), "Same template/stream should only be registered once"),
-    
+    ?assertEqual(1,
+                 length(Listeners1),
+                 "Same template/stream should only be registered once"),
+
     % Scenario 2: Same template, different streams (should be allowed)
-    Template2 = #{ <<"type">> => <<"scenario2">> },
+    Template2 = #{<<"type">> => <<"scenario2">>},
     Stream2A = spawn(fun() -> receive _ -> ok end end),
     Stream2B = spawn(fun() -> receive _ -> ok end end),
-    
+
     ManagerPid ! {register_listener, Template2, Stream2A, make_ref()},
     ManagerPid ! {register_listener, Template2, Stream2B, make_ref()},
     timer:sleep(10),
-    
-    Listeners2 = [L || {{T, _P}, _R} = L <- ets:tab2list(notification_listeners), T =:= Template2],
+
+    Listeners2 =
+        [L || {{T, _P}, _R} = L <- ets:tab2list(notification_listeners), T =:= Template2],
     ?event(debug, {scenario2_different_streams, {count, length(Listeners2)}}),
-    ?assertEqual(2, length(Listeners2), "Different streams with same template should be allowed"),
-    
+    ?assertEqual(2,
+                 length(Listeners2),
+                 "Different streams with same template should be allowed"),
+
     % Scenario 3: Different templates, same stream (should be allowed)
-    Template3A = #{ <<"type">> => <<"scenario3a">> },
-    Template3B = #{ <<"type">> => <<"scenario3b">> },
+    Template3A = #{<<"type">> => <<"scenario3a">>},
+    Template3B = #{<<"type">> => <<"scenario3b">>},
     Stream3 = spawn(fun() -> receive _ -> ok end end),
-    
+
     ManagerPid ! {register_listener, Template3A, Stream3, make_ref()},
     ManagerPid ! {register_listener, Template3B, Stream3, make_ref()},
     timer:sleep(10),
-    
-    Listeners3 = [L || {{_T, P}, _R} = L <- ets:tab2list(notification_listeners), P =:= Stream3],
+
+    Listeners3 =
+        [L || {{_T, P}, _R} = L <- ets:tab2list(notification_listeners), P =:= Stream3],
     ?event(debug, {scenario3_different_templates, {count, length(Listeners3)}}),
-    ?assertEqual(2, length(Listeners3), "Same stream with different templates should be allowed"),
-    
+    ?assertEqual(2,
+                 length(Listeners3),
+                 "Same stream with different templates should be allowed"),
+
     stop_notification_manager().
 
 %% @doc Test event duplication with multiple registrations
@@ -1444,30 +1522,28 @@ event_duplication_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     start_notification_manager(),
     ManagerPid = whereis(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Create counting process
     TestPid = self(),
-    CounterPid = spawn(fun() ->
-        event_duplication_counter(0, TestPid)
-    end),
-    
+    CounterPid = spawn(fun() -> event_duplication_counter(0, TestPid) end),
+
     % Register the same listener 3 times (showing the bug)
-    Template = #{ <<"event">> => <<"duplication-test">> },
+    Template = #{<<"event">> => <<"duplication-test">>},
     ManagerPid ! {register_listener, Template, CounterPid, make_ref()},
     ManagerPid ! {register_listener, Template, CounterPid, make_ref()},
     ManagerPid ! {register_listener, Template, CounterPid, make_ref()},
     timer:sleep(20),
-    
+
     % Dispatch one event
-    Event = #{ <<"event">> => <<"duplication-test">>, <<"data">> => <<"single event">> },
+    Event = #{<<"event">> => <<"duplication-test">>, <<"data">> => <<"single event">>},
     ?event(debug, {dispatching_single_event, Event}),
     ManagerPid ! {dispatch_event, Event, #{}},
     timer:sleep(50),
-    
+
     % Check how many times the event was received
     CounterPid ! {report_count, TestPid},
     receive
@@ -1478,7 +1554,7 @@ event_duplication_test() ->
     after 500 ->
         ?assert(false, "Should have received count report")
     end,
-    
+
     stop_notification_manager().
 
 %% Helper for event duplication test
@@ -1499,20 +1575,20 @@ notification_manager_manual_start_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(100),
-    
+
     % Verify no manager is running
     ?assertEqual(undefined, whereis(?NOTIFICATION_MANAGER)),
-    
+
     % Start manager manually
     {ok, ManagerPid} = start_notification_manager(),
-    
+
     % Verify manager started successfully
     ?assertNotEqual(undefined, ManagerPid),
     ?assert(is_process_alive(ManagerPid)),
     ?assertEqual(ManagerPid, whereis(?NOTIFICATION_MANAGER)),
-    
+
     ?event(debug, {manual_start_test_completed, {manager_pid, ManagerPid}}),
-    
+
     stop_notification_manager().
 
 %% @doc Test multiple start attempts return already_started
@@ -1520,20 +1596,20 @@ notification_manager_multiple_start_test() ->
     % Clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     % Manually start manager first
     {ok, ManualPid} = start_notification_manager(),
     ?assert(is_process_alive(ManualPid)),
-    
+
     % Try to start again (should return already_started)
     StartResult = start_notification_manager(),
     ?assertEqual({already_started, ManualPid}, StartResult),
-    
+
     % Should still be the same process
     CurrentPid = whereis(?NOTIFICATION_MANAGER),
     ?assertEqual(ManualPid, CurrentPid),
     ?assert(is_process_alive(CurrentPid)),
-    
+
     stop_notification_manager().
 
 %% @doc Test manual start handles conflicts gracefully
@@ -1541,36 +1617,36 @@ notification_manager_manual_start_conflict_test() ->
     % Clean state thoroughly
     stop_notification_manager(),
     timer:sleep(100),
-    
+
     % Ensure no process is registered
     ?assertEqual(undefined, whereis(?NOTIFICATION_MANAGER)),
-    
+
     % Create a conflicting process with the same name
     TestPid = self(),
-    ConflictPid = spawn(fun() ->
-        try register(?NOTIFICATION_MANAGER, self()) of
-            true ->
-                TestPid ! {conflict_registered, self()},
-                receive stop -> ok after 10000 -> ok end
-        catch
-            error:badarg ->
-                TestPid ! {conflict_failed, self()}
-        end
-    end),
-    
+    ConflictPid =
+        spawn(fun() ->
+                 try register(?NOTIFICATION_MANAGER, self()) of
+                     true ->
+                         TestPid ! {conflict_registered, self()},
+                         receive stop -> ok after 10000 -> ok end
+                 catch
+                     error:badarg -> TestPid ! {conflict_failed, self()}
+                 end
+              end),
+
     % Wait for registration result
     receive
         {conflict_registered, ConflictPid} ->
             % Verify the conflict process is registered
             ?assertEqual(ConflictPid, whereis(?NOTIFICATION_MANAGER)),
-            
+
             % Try manual start (should return already_started)
             StartResult = start_notification_manager(),
             ?assertEqual({already_started, ConflictPid}, StartResult),
-            
+
             % The original conflict process should still be there
             ?assertEqual(ConflictPid, whereis(?NOTIFICATION_MANAGER)),
-            
+
             % Clean up
             ConflictPid ! stop,
             timer:sleep(50);
@@ -1580,10 +1656,10 @@ notification_manager_manual_start_conflict_test() ->
     after 1000 ->
         ?assert(false, "Conflict process failed to register")
     end,
-    
+
     % Ensure clean state
     stop_notification_manager(),
-    
+
     % Now start should work
     {ok, _NewPid} = start_notification_manager(),
     stop_notification_manager().
@@ -1593,49 +1669,49 @@ notification_manager_manager_restart_test() ->
     % Test simulates stopping and restarting the manager
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     % Verify clean state
     ?assertEqual(undefined, whereis(?NOTIFICATION_MANAGER)),
-    
+
     % Start the manager manually
     {ok, FirstPid} = start_notification_manager(),
     timer:sleep(50),
-    
+
     % Verify manager started
     ?assertEqual(FirstPid, whereis(?NOTIFICATION_MANAGER)),
     ?assertNotEqual(undefined, FirstPid),
     ?assert(is_process_alive(FirstPid)),
-    
+
     % Register a test listener to verify functionality
-    TestTemplate = #{ <<"test">> => <<"restart">> },
+    TestTemplate = #{<<"test">> => <<"restart">>},
     TestStreamPid = spawn(fun() -> receive _ -> ok end end),
     TestRef = make_ref(),
-    
+
     FirstPid ! {register_listener, TestTemplate, TestStreamPid, TestRef},
     timer:sleep(10),
-    
+
     % Verify listener is registered
     Listeners = ets:tab2list(notification_listeners),
     ?assert(lists:member({{TestTemplate, TestStreamPid}, TestRef}, Listeners)),
-    
+
     % Stop manager and restart
     stop_notification_manager(),
     timer:sleep(50),
-    
-    % Start again 
+
+    % Start again
     {ok, SecondPid} = start_notification_manager(),
     timer:sleep(50),
-    
+
     % Verify new manager started (should be different PID)
     ?assertEqual(SecondPid, whereis(?NOTIFICATION_MANAGER)),
     ?assertNotEqual(undefined, SecondPid),
     ?assert(is_process_alive(SecondPid)),
     ?assertNotEqual(FirstPid, SecondPid),
-    
+
     % ETS table should be recreated (empty)
     NewListeners = ets:tab2list(notification_listeners),
     ?assertEqual([], NewListeners),
-    
+
     stop_notification_manager().
 
 %% @doc Test ETS table initialization and ownership
@@ -1643,34 +1719,34 @@ notification_manager_ets_initialization_test() ->
     % Ensure clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     % Start manager manually
     {ok, ManagerPid} = start_notification_manager(),
     timer:sleep(50),
-    
+
     ?assertNotEqual(undefined, ManagerPid),
     ?assert(is_process_alive(ManagerPid)),
-    
+
     % Verify ETS table exists and has correct properties
     TableInfo = ets:info(notification_listeners),
     ?assertNotEqual(undefined, TableInfo),
-    
+
     % Verify table properties
     ?assertEqual(set, ets:info(notification_listeners, type)),
     ?assertEqual(true, ets:info(notification_listeners, named_table)),
-    
+
     % Most importantly: verify the ETS table is owned by the manager process
     % This is the critical fix - table should be owned by manager, not caller
     ETSOwner = ets:info(notification_listeners, owner),
     ?assertEqual(ManagerPid, ETSOwner),
-    
+
     % Test basic ETS operations work
     InitialSize = ets:info(notification_listeners, size),
     TestKey = {{test_template, test_pid}, test_ref},
     ets:insert(notification_listeners, TestKey),
     ?assertEqual(InitialSize + 1, ets:info(notification_listeners, size)),
     ?assert(ets:member(notification_listeners, element(1, TestKey))),
-    
+
     % Clean up test data
     ets:delete(notification_listeners, element(1, TestKey)),
     ?assertEqual(InitialSize, ets:info(notification_listeners, size)).
@@ -1680,41 +1756,45 @@ notification_manager_concurrent_start_test() ->
     % Clean state
     stop_notification_manager(),
     timer:sleep(50),
-    
+
     TestPid = self(),
     NumConcurrentCalls = 5,
-    
+
     % Spawn multiple processes that all try to start the manager
-    ConcurrentPids = lists:map(fun(N) ->
-        spawn(fun() ->
-            % Random small delay to increase chance of race conditions
-            timer:sleep(rand:uniform(50)),
-            Result = start_notification_manager(),
-            ManagerPid = whereis(?NOTIFICATION_MANAGER),
-            TestPid ! {concurrent_result, N, Result, ManagerPid}
-        end)
-    end, lists:seq(1, NumConcurrentCalls)),
-    
+    ConcurrentPids =
+        lists:map(fun(N) ->
+                     spawn(fun() ->
+                              % Random small delay to increase chance of race conditions
+                              timer:sleep(
+                                  rand:uniform(50)),
+                              Result = start_notification_manager(),
+                              ManagerPid = whereis(?NOTIFICATION_MANAGER),
+                              TestPid ! {concurrent_result, N, Result, ManagerPid}
+                           end)
+                  end,
+                  lists:seq(1, NumConcurrentCalls)),
+
     % Collect all results
-    Results = lists:map(fun(_) ->
-        receive
-            {concurrent_result, N, Result, ManagerPid} ->
-                {N, Result, ManagerPid}
-        after 5000 ->
-            {timeout, timeout, undefined}
-        end
-    end, ConcurrentPids),
-    
+    Results =
+        lists:map(fun(_) ->
+                     receive
+                         {concurrent_result, N, Result, ManagerPid} -> {N, Result, ManagerPid}
+                     after 5000 -> {timeout, timeout, undefined}
+                     end
+                  end,
+                  ConcurrentPids),
+
     ?event(debug, {concurrent_start_results, Results}),
-    
+
     % Should get one {ok, Pid} and rest {already_started, Pid}
     OkResults = [R || {_N, R, _Pid} <- Results, element(1, R) =:= ok],
-    AlreadyStartedResults = [R || {_N, R, _Pid} <- Results, element(1, R) =:= already_started],
-    
+    AlreadyStartedResults =
+        [R || {_N, R, _Pid} <- Results, element(1, R) =:= already_started],
+
     % Should have exactly one ok result and rest already_started
     ?assertEqual(1, length(OkResults)),
     ?assertEqual(NumConcurrentCalls - 1, length(AlreadyStartedResults)),
-    
+
     % All should see the same manager PID
     ManagerPids = [Pid || {_N, _Result, Pid} <- Results, Pid =/= undefined],
     case ManagerPids of
@@ -1722,9 +1802,7 @@ notification_manager_concurrent_start_test() ->
             ?assert(false, "No manager PIDs found");
         [FirstPid | Rest] ->
             % All should be the same PID
-            lists:foreach(fun(Pid) ->
-                ?assertEqual(FirstPid, Pid)
-            end, Rest)
+            lists:foreach(fun(Pid) -> ?assertEqual(FirstPid, Pid) end, Rest)
     end,
-    
+
     stop_notification_manager().
