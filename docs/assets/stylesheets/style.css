@@ -1,19 +1,19 @@
 /* General Text Styles */
 h1 {
-    font-size: clamp(1.5rem, 1.5vw, 1.6rem) !important;
+    font-size: clamp(1.2rem, 1.5vw, 1.3rem) !important;
     color: rgba(60, 60, 67) !important;
     font-weight: 600 !important;
 }
 
 h2 {
-    font-size: clamp(0.8rem, 1.5vw, 1rem) !important;
+    font-size: clamp(0.8rem, 1.5vw, 0.9rem) !important;
     color: rgba(60, 60, 67);
     margin-top: 8px;
     /* Semi-transparent black */
 }
 
 p {
-    font-size: clamp(0.6rem, 1.5vw, 0.7rem);
+    font-size: clamp(0.6rem, 1.5vw, 0.65rem);
     line-height: 1.75;
 }
 
@@ -36,7 +36,7 @@ input {
 }
 
 body {
-    --docs-max-width: 90rem;
+    --docs-max-width: 60rem;
     --homepage-max-width: 90rem;
     --sections-max-width: 80rem;
     --parallax-perspective: 2rem;
@@ -174,7 +174,7 @@ h6 {
 /* Navigation Styles */
 .md-nav__title,
 .md-nav__item {
-    font-size: clamp(0.6rem, 1.5vw, 0.65rem) !important;
+    font-size: clamp(0.55rem, 1.5vw, 0.6rem) !important;
     box-shadow: none !important;
 }
 
@@ -244,7 +244,7 @@ h6 {
 
 
 .md-tabs__link {
-    font-size: clamp(0.65rem, 1.5vw, 0.65rem) !important;
+    font-size: clamp(0.55rem, 1.5vw, 0.6rem) !important;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -624,7 +624,7 @@ h6 {
 }
 
 .section-inner-content h1 {
-    font-size: clamp(1.2rem, 1.5vw, 1.6rem) !important;
+    font-size: clamp(1.2rem, 1.5vw, 1.4rem) !important;
     margin: 0 !important;
     font-weight: 500 !important;
 }
@@ -1413,46 +1413,20 @@ kbd {
     opacity: 95%;
 }
 
-.grid-docs {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 3rem;
-}
-
-.grid-docs-card {
+.core-concepts-flex {
     display: flex;
-    flex-direction: column;
+    gap: 2rem;
 }
 
-.grid-docs-card p {
-    margin: 15px 0 10px 0;
-}
-
-.grid-docs-card-fig {
-    display: flex;
+.core-concepts-flex p {
     width: 100%;
-    aspect-ratio: 1/1;
-    border: 1px solid #E6E6E6;
-    border-radius: 4px;
-    justify-content: center;
-    align-items: center;
-
 }
 
-.grid-docs-card-fig svg {
-    width: 33.33%;
+.core-concepts-fig {
+    width: 25%
 }
 
 @media (max-width: 700px) {
-    .grid-docs {
-        grid-template-columns: repeat(1, 1fr);
-        gap: 0.5rem;
-
-    }
-
-    .grid-docs-card-fig {
-        max-width: 200px;
-    }
 
     .hero-inner-content-bottom {
         flex-direction: column;
