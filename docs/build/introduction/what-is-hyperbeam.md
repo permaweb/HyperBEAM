@@ -1,37 +1,22 @@
 # What is HyperBEAM?
 
-<img src="https://arweave.net/S3qpd4CF_VSPD9DfVaWD4McFQy6XAUto2FLidcjofpM" alt="hb-flag" width="48" />
 
-HyperBEAM is the primary, production-ready implementation of the [AO-Core protocol](./what-is-ao-core.md), built on the robust Erlang/OTP framework. It serves as a decentralized operating system, powering the [AO Computer](https://ao.arweave.net)—a scalable, trust-minimized, distributed supercomputer built on permanent storage of [Arweave](https://arweave.org). HyperBEAM provides the runtime environment and essential services to execute AO-Core computations across a network of distributed nodes.
 
-## Why HyperBEAM Matters
+HyperBEAM is the primary, production-ready implementation of the [AO-Core protocol](./what-is-ao-core.md), built on the robust Erlang/OTP framework. It serves as a decentralized operating system, powering the [AO Computer](https://ao.arweave.net)—a scalable, trust-minimized, distributed supercomputer built on permanent storage of [Arweave](https://arweave.org).
 
-HyperBEAM transforms the abstract concepts of AO-Core—such as Messages, Devices, and Paths—into a concrete, operational system. Here's why it's pivotal to the AO ecosystem:
+## **Implementing AO-Core**
 
-- **Modularity via Devices:** HyperBEAM introduces a uniquely modular architecture centered around [Devices](../devices/hyperbeam-devices.md). These pluggable components define specific computational logic—like running WASM, managing state, or relaying data—allowing for unprecedented flexibility. Users can extend the system by creating custom Devices to fit their specific computational needs.
-- **Decentralized OS:** It equips nodes with the infrastructure to join the AO network, manage resources, execute computations, and communicate seamlessly.
+HyperBEAM transforms the abstract concepts of AO-Core—Messages, Devices, and Paths—into a concrete, operational system. It provides the runtime environment and essential services to execute these computations across a network of distributed nodes.
 
-Built on the Erlang/OTP framework, HyperBEAM provides a robust and secure foundation that leverages the BEAM virtual machine for exceptional concurrency, fault tolerance, and scalability. This abstracts away underlying hardware, allowing diverse nodes to contribute resources without compatibility issues. The system governs how nodes coordinate and interact.
+### Messages: Modular Data Packets
+In HyperBEAM, every interaction within the AO Computer is handled as a **message**. These cryptographically-linked data units are the foundation for communication, allowing processes to trigger computations, query state, and transfer value. HyperBEAM nodes are responsible for routing and processing these messages according to the rules of the AO-Core protocol.
 
-In essence, HyperBEAM is the engine that drives the AO Computer, enabling a vision of decentralized, verifiable computing at scale.
+### Devices: Extensible Execution Engines
+HyperBEAM introduces a uniquely modular architecture centered around **[Devices](../devices/hyperbeam-devices.md)**. These pluggable components are Erlang modules that define specific computational logic—like running WASM, managing state, or relaying data—allowing for unprecedented flexibility. This design allows developers to extend the system by creating custom Devices to fit their specific computational needs.
 
-## Core Components & Features
+### Paths: Composable Pipelines
+HyperBEAM exposes a powerful HTTP API that uses structured URL patterns to interact with processes and data. This **[pathing mechanism](../pathing-in-hyperbeam.md)** allows developers to create verifiable data pipelines, composing functionality from multiple devices into a single, atomic request. The URL bar effectively becomes a command-line interface for AO's trustless compute environment.
 
-- **Modular Devices:** The heart of HyperBEAM's extensibility. It includes essential built-in devices like [`~meta`](../devices/meta-at-1-0.md), [`~relay`](../devices/relay-at-1-0.md), [`~process`](../devices/process-at-1-0.md), [`~scheduler`](../devices/scheduler-at-1-0.md), and [`~wasm64`](../devices/wasm64-at-1-0.md) for core functionality, but the system is designed for easy addition of new custom devices.
-- **Message System:** Everything in HyperBEAM is a "Message" — a map of named functions or binary data that can be processed, transformed, and cryptographically verified.
-- **HTTP Interface:** Nodes expose an HTTP server for interaction via standard web requests, structured URLs that represent computation paths (effectively a sequence of state transformations for messages).
+## A Robust and Scalable Foundation
 
-## Architecture
-
-*   **Initialization Flow:** When a HyperBEAM node starts, it initializes the name service, scheduler registry, timestamp server, and HTTP server, establishing core services for process management, timing, communication, and storage.
-*   **Compute Model:** Computation follows the pattern `Message1(Message2) => Message3`, where messages are resolved through their [devices](../devices/hyperbeam-devices.md) and [paths](../pathing-in-hyperbeam.md). The integrity and history of these computations are ensured by **hashpaths**, which serves as a cryptographic audit trail.
-*   **Scheduler System:** The scheduler component manages execution order using [slots](../devices/scheduler-at-1-0.md#slot-system) — sequential positions that guarantee deterministic computation.
-*   **Process Slots:** Each process has numbered slots starting from 0 that track message execution order, ensuring consistent computation even across distributed nodes.
-
-## HTTP API and Pathing
-
-HyperBEAM exposes a powerful HTTP API that allows for interacting with processes and accessing data through structured URL patterns. The URL bar effectively functions as a command-line interface for AO's trustless and verifiable compute.
-
-For a comprehensive guide on constructing and interpreting paths in HyperBEAM, including detailed examples and best practices, see [Pathing in HyperBEAM](../pathing-in-hyperbeam.md).
-
-In essence, HyperBEAM is the engine that powers the AO Computer, enabling the vision of a scalable, trust-minimized, decentralized supercomputer built on permanent storage.
+Built on the Erlang/OTP framework, HyperBEAM provides a robust and secure foundation that leverages the BEAM virtual machine for exceptional concurrency, fault tolerance, and scalability. This abstracts away underlying hardware, allowing diverse nodes to contribute resources without compatibility issues. The system governs how nodes coordinate and interact, forming a decentralized network that is resilient and permissionless.

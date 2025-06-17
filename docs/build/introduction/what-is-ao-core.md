@@ -1,6 +1,8 @@
 # What is AO-Core?
 
-AO-Core is the foundational protocol underpinning the [AO Computer](https://ao.arweave.net). It defines a minimal, generalized model for decentralized computation built around standard web technologies like HTTP. Think of it as a way to interpret the [Arweave permaweb](https://arweave.org) not just as static storage, but as a dynamic, programmable, and infinitely scalable computing environment.
+AO-Core is a protocol and standard for distributed computation that forms the foundation of the [AO Computer](https://ao.arweave.net). Inspired by and built upon concepts from the Erlang language, AO-Core embraces the actor model for concurrent, distributed systems. It defines a minimal, generalized model for decentralized computation built around standard web technologies like HTTP.
+
+Think of it as a way to interpret the [Arweave permaweb](https://arweave.org) not just as static storage, but as a dynamic, programmable, and infinitely scalable computing environment. Unlike traditional blockchain systems, AO-Core defines a flexible, powerful computation protocol that enables a wide range of applications beyond just running Lua programs.
 
 ## Core Concepts
 
@@ -35,7 +37,7 @@ AO-Core revolves around three fundamental components:
 </svg>
 </div>
 <div>
-<p>Modules responsible for interpreting and processing messages. </p> <p>Each device defines specific logic for how messages are handled (e.g., executing WASM, storing data, relaying information). </p><p>This modular design allows nodes to specialize, making the system highly flexible and extensible.</p>
+<p>Modules responsible for interpreting and processing messages. </p> <p>Each device defines specific logic for how messages are handled (e.g., executing WASM, storing data, relaying information). </p><p>This modular design enables composable development and allows nodes to specialize, making the system highly flexible and extensible.</p>
 </div>
 </div>
 
@@ -57,18 +59,22 @@ AO-Core revolves around three fundamental components:
 
 </div>
 
-## The Core Protocol for Builders
+## Key Features
 
-The AO-Core protocol can be understood through four main concepts that are essential for builders.
+1. AO-Core is inherently **resilient**, running across a global network of machines that eliminates any single point of failure. 
+2. Its computations are **permanent**, immutably stored on Arweave so they can be recalled—or continued—at any time. 
+3. The protocol remains **permissionless**, meaning anyone can participate. 
+4. And it is **trustless**, with every state mathematically verifiable so no central authority is required.
 
-1.  **Everything is a [message](../devices/message-at-1-0.md).** You can compute on any message by calling its keys by name. The [`device`](../devices/hyperbeam-devices.md) specified in the message determines how these keys are resolved. The default device, `message@1.0`, resolves keys to their literal values within the message.
+## The Actor Model in AO
 
-2.  **[Paths](../pathing-in-hyperbeam.md) are pipelines of messages.** A path defines a sequence of 'request' messages to be executed. You can set a key in a message directly within the path using the `&key=value` syntax. Headers and parameters added after a `?` are applied to all messages in the pipeline.
+Inspired by Erlang, AO-Core implements the actor model to provide a foundation for inherently concurrent, distributed, and scalable systems. In this model, computation is performed by independent **actors** (or processes). These actors communicate exclusively by passing **messages** to one another, and each can make local decisions, send more messages, and create new actors.
 
-3.  **Device-specific requests with [`~x@y`](../pathing-in-hyperbeam.md).** The `~x@y` syntax allows you to apply a request as if the base message had a different `device`. This provides a powerful way to execute messages using specific compute or storage logic defined by a device.
+## Beyond Processes
 
-4.  **Signed responses over HTTP.** The final message in a pipeline is returned as an HTTP response. This response is signed against the [`hashpath`](../pathing-in-hyperbeam.md) that generated it, ensuring the integrity and verifiability of the computation.
+While AO Processes (smart contracts built using the AO-Core protocol) are a powerful application, AO-Core itself enables a much broader range of computational patterns:
 
-AO-Core transforms the permanent data storage of Arweave into a global, shared computation space, enabling the creation of complex, autonomous, and scalable decentralized applications.
-
-*See also: [The AO-Core Protocol Specification (Draft)](../../misc/ao-core-protocol.md)*
+- Serverless functions with trustless guarantees
+- Hybrid applications combining smart contracts and serverless functionality
+- Custom execution environments through new devices
+- Composable systems using the path language

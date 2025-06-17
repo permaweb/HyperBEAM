@@ -1,4 +1,4 @@
-Generated: 2025-06-16T19:00:28Z
+Generated: 2025-06-17T19:36:23Z
 
 ## HyperBEAM Documentation Summary
 
@@ -22,9 +22,9 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 
 ### Build
 
-* [HyperBEAM from AO Connect](./build/ao-connect.html)
-* [Extending HyperBEAM with Devices](./build/building-devices.html)
-* [AO Devices](./build/devices/hyperbeam-devices.html)
+* [Building on HyperBEAM with `ao`](./build/building-on-ao.html)
+* [Extending HyperBEAM with Devices](./build/devices/building-devices.html)
+* [HyperBEAM Devices](./build/devices/hyperbeam-devices.html)
 * [Device: ~json@1.0](./build/devices/json-at-1-0.html)
 * [Device: ~lua@5.3a](./build/devices/lua-at-5-3a.html)
 * [Device: ~message@1.0](./build/devices/message-at-1-0.html)
@@ -148,20 +148,18 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [Source Code Documentation](./build/devices/source-code/index.html)
 * [[Module rsa_pss.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/rsa_pss.erl)](./build/devices/source-code/rsa_pss.html)
 * [Device: ~wasm64@1.0](./build/devices/wasm64-at-1-0.html)
-* [Extending HyperBEAM](./build/extending-hyperbeam.html)
-* [Migrating from `legacynet` to HyperBEAM](./build/migrating-from-legacynet.html)
+* [HyperBEAM: Your Decentralized Development Toolkit](./build/hyperbeam-capabilities.html)
+* [What is AO-Core?](./build/introduction/what-is-ao-core.html)
+* [What is HyperBEAM?](./build/introduction/what-is-hyperbeam.html)
 * [Pathing in HyperBEAM](./build/pathing-in-hyperbeam.html)
-* [Quick Start with HyperBEAM](./build/quick-start.html)
 * [Developer FAQ](./build/reference/faq.html)
 * [Developer Glossary](./build/reference/glossary.html)
 * [Developer Troubleshooting Guide](./build/reference/troubleshooting.html)
-* [Serverless Decentralized Compute on AO](./build/serverless-decentralized-compute.html)
-* [What is AO-Core?](./build/what-is-ao-core.html)
-* [What is HyperBEAM?](./build/what-is-hyperbeam.html)
 
 ### Devices
 
-* [AO Devices](./build/devices/hyperbeam-devices.html)
+* [Extending HyperBEAM with Devices](./build/devices/building-devices.html)
+* [HyperBEAM Devices](./build/devices/hyperbeam-devices.html)
 * [Device: ~json@1.0](./build/devices/json-at-1-0.html)
 * [Device: ~lua@5.3a](./build/devices/lua-at-5-3a.html)
 * [Device: ~message@1.0](./build/devices/message-at-1-0.html)
