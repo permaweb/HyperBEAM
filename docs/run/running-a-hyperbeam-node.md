@@ -47,18 +47,18 @@ To successfully build and run a HyperBEAM node, your system needs several softwa
 
 ### Erlang/OTP
 
-HyperBEAM is built on Erlang/OTP. You need a compatible version installed (check the `rebar.config` or project documentation for specific version requirements, **typically OTP 27**).
+HyperBEAM is built on Erlang/OTP. You need version OTP 27 installed (check the `rebar.config` or project documentation for specific version requirements, **typically OTP 27**).
 
 Installation methods:
 
 === "macOS (brew)"
     ```bash
-    brew install erlang
+    brew install erlang@27
     ```
 
 === "Linux (apt)"
     ```bash
-    sudo apt install erlang
+    sudo apt install erlang=1:27.*
     ```
 <!-- 
 === "asdf (Recommended)"
@@ -96,7 +96,7 @@ Installation methods:
 
 ### Node.js
 
-Node.js might be required for certain JavaScript-related tools or dependencies.
+Node.js might be required for certain JavaScript-related tools or dependencies. Node version 22+ is required.
 
 Installation methods:
 

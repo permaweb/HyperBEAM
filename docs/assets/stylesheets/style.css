@@ -1,15 +1,51 @@
-/* General Text Styles */
-h1 {
-    font-size: clamp(1.2rem, 1.5vw, 1.3rem) !important;
-    color: rgba(60, 60, 67) !important;
-    font-weight: 600 !important;
+/* Logo */
+[data-md-color-scheme=slate] {
+    #logo_light_mode {
+        display: none;
+    }
+    #logo_dark_mode {
+        display: block;
+    }
+}
+[data-md-color-scheme=default] {
+    #logo_dark_mode {
+        display: none;
+    }
+    #logo_light_mode {
+        display: block;
+    }
 }
 
-h2 {
-    font-size: clamp(0.8rem, 1.5vw, 0.9rem) !important;
-    color: rgba(60, 60, 67);
+
+
+
+/* General Text Styles */
+
+[data-md-color-scheme=default] {
+    --md-default-fg-color--light: rgba(60, 60, 67) !important;
+}
+
+[data-md-color-scheme=default] .md-nav__title,
+[data-md-color-scheme=default] .md-nav__item--section>.md-nav__link  {
+    color: #000000 !important;
+}
+
+[data-md-color-scheme=default] .md-tabs__item--active {
+    background: rgb(239, 239, 239);
+}
+
+.md-typeset h1 {
+    font-size: clamp(1.2rem, 1.5vw, 1.3rem);
+    font-weight: 600;
+}
+
+.md-typeset h2 {
+    font-size: clamp(0.8rem, 1.5vw, 0.9rem);
     margin-top: 8px;
-    /* Semi-transparent black */
+}
+
+.md-nav__item--section>.md-nav__link {
+    margin-bottom: 8px;
 }
 
 p {
@@ -48,10 +84,7 @@ video {
     pointer-events: none;
 }
 
-.md-nav__item--section>.md-nav__link {
-    color: black !important;
-    margin-bottom: 8px;
-}
+
 
 /* 
 h1, h2, h3, h4, h5, h6 {
@@ -114,8 +147,9 @@ h6 {
 }
 
 [data-md-toggle=drawer]:checked~.md-container .md-sidebar--primary {
-    transform: translateX(12rem) !important;
-    z-index: 50 !important;
+    transform: translateX(15rem) !important;
+    z-index: 10000 !important;
+    position: fixed;
 }
 
 .md-overlay {
@@ -178,9 +212,7 @@ h6 {
     box-shadow: none !important;
 }
 
-.md-nav__title {
-    color: #000000 !important;
-}
+
 
 .md-nav__link {
     padding: 4px 16px;
@@ -189,9 +221,7 @@ h6 {
     margin-top: 4px;
 }
 
-.md-tabs__item--active {
-    background: rgb(239, 239, 239);
-}
+
 
 .md-tabs__item--active .md-tabs__link {
     position: relative;

@@ -31,7 +31,12 @@
 		  <link rel="alternate" type="application/rss+xml" title="{{ lang.t('rss.created') }}" href="{{ 'feed_rss_created.xml' | url }}">
 		  <link rel="alternate" type="application/rss+xml" title="{{ lang.t('rss.updated') }}" href="{{ 'feed_rss_updated.xml' | url }}">
 		{% endif %}
+        <!-- Default favicon (fallback for unsupported browsers) -->
 		<link rel="icon" href="{{ config.theme.favicon | url }}">
+        <!-- Favicon for light mode -->
+        <link rel="icon" href="{{ config.theme.favicon_light | url }}" media="(prefers-color-scheme: light)">
+        <!-- Favicon for dark mode -->
+        <link rel="icon" href="{{ config.theme.favicon_dark | url }}" media="(prefers-color-scheme: dark)">
 		<meta name="generator" content="mkdocs-{{ mkdocs_version }}, mkdocs-material-9.6.12">
 	  {% endblock %}
 	  {% block htmltitle %}
@@ -89,12 +94,26 @@
 		{% set palette = palette | first %}
 	  {% endif %}
 	  {% set scheme  = palette.scheme  | d("default", true) %}
-	  {% set primary = palette.primary | d("indigo", true) %}
-	  {% set accent  = palette.accent  | d("indigo", true) %}
-	  <body dir="{{ direction }}" data-md-color-scheme="{{ scheme | replace(' ', '-') }}" data-md-color-primary="{{ primary | replace(' ', '-') }}" data-md-color-accent="{{ accent | replace(' ', '-') }}">
+	  {% set primary = palette.primary | d("black", true) %}
+	  {% set accent  = palette.accent  | d("blue", true) %}
+	  <body dir="{{ direction }}" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="{{ scheme | replace(' ', '-') }}" data-md-color-primary="{{ primary | replace(' ', '-') }}" data-md-color-accent="{{ accent | replace(' ', '-') }}">
+	  <script>
+		// Override body attributes if localStorage values exist to prevent flashing
+		(function() {
+		  const colorScheme = localStorage.getItem("mdColorScheme");
+		  const colorPrimary = localStorage.getItem("mdColorPrimary");
+		  
+		  if (colorScheme) {
+			const scheme = colorScheme;
+			const primary = colorPrimary || (colorScheme === "default" ? "white" : "black");
+			
+			document.body.setAttribute('data-md-color-scheme', scheme);
+			document.body.setAttribute('data-md-color-primary', primary);
+		  }
+		})();
+	  </script>
 	{% else %}
 	  <body dir="{{ direction }}">
-
 	{% endif %}
 	  {% set features = config.theme.features or [] %}
 	  <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
@@ -681,7 +700,7 @@ All while earning <a class="hyper-link" href="https://coinmarketcap.com/currenci
                                                 type="video/mp4"
                                             >
 
-                                            Sorry, your browser doesn’t support embedded video. 
+                                            Sorry, your browser doesn't support embedded video. 
                                         </video>
                                
                                     </div>
@@ -743,7 +762,7 @@ All while earning <a class="hyper-link" href="https://coinmarketcap.com/currenci
                                                 type="video/mp4"
                                             >
 
-                                            Sorry, your browser doesn’t support embedded video. 
+                                            Sorry, your browser doesn't support embedded video. 
                                         </video>
                                     </div>
 

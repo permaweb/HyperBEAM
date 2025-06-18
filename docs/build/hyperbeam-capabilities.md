@@ -8,7 +8,7 @@ Designed to be **modular**, **composable**, and **extensible**, HyperBEAM lets y
 
 While [AO-Core](./introduction/what-is-ao-core.md) establishes the foundational concepts of Messages, Devices, and Paths, building on HyperBEAM can be simplified to four key principles:
 
-1.  **Everything is a [message](./devices/message-at-1-0.md).** You can compute on any message by calling its keys by name. The [`device`](./devices/hyperbeam-devices.md) specified in the message determines how these keys are resolved. The default device, `message@1.0`, resolves keys to their literal values within the message.
+1.  **Everything is a [message](./introduction/what-is-hyperbeam.html#messages-modular-data-packets).** You can compute on any message by calling its keys by name. The [`device`](./devices/hyperbeam-devices.md) specified in the message determines how these keys are resolved. The default device, `message@1.0`, resolves keys to their literal values within the message.
 
 2.  **[Paths](./pathing-in-hyperbeam.md) are pipelines of messages.** A path defines a sequence of 'request' messages to be executed. You can set a key in a message directly within the path using the `&key=value` syntax. Headers and parameters added after a `?` are applied to all messages in the pipeline.
 
@@ -34,8 +34,8 @@ HyperBEAM's modular devices become even more powerful when combined. Its **pathi
 
 **Use Case:** Suppose you have a token process and want to calculate the total circulating supply without making the client download and compute all balances. You can construct a single URL that:
 
-1.  Reads the token's balance list from the process state.
-2.  Pipes the list to a Lua script that sums the balances.
+1.  Reads the latest state of the AO process.
+2.  Pipes the state to a Lua script and calls the sum function, which sums the balances from the state.
 3.  Formats the final result as a JSON object.
 
 The request would look something like this:
@@ -43,6 +43,8 @@ The request would look something like this:
 `/{process-id}~process@1.0/now/~lua@5.3a&module={module-id}/sum/serialize~json@1.0`
 
 This path chains together the operations, returning just the computed supply in a single, efficient request.
+
+> Find the full example in the [AO Process Cookbook](https://cookbook_ao.arweave.net/guides/migrating-to-hyperbeam/reading-dynamic-state.html#example-calculating-circulating-supply)
 
 > Learn more about [Pathing in HyperBEAM](./pathing-in-hyperbeam.md).
 

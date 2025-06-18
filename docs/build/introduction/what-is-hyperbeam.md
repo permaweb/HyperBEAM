@@ -9,7 +9,7 @@ HyperBEAM is the primary, production-ready implementation of the [AO-Core protoc
 HyperBEAM transforms the abstract concepts of AO-Core—Messages, Devices, and Paths—into a concrete, operational system. It provides the runtime environment and essential services to execute these computations across a network of distributed nodes.
 
 ### Messages: Modular Data Packets
-In HyperBEAM, every interaction within the AO Computer is handled as a **message**. These cryptographically-linked data units are the foundation for communication, allowing processes to trigger computations, query state, and transfer value. HyperBEAM nodes are responsible for routing and processing these messages according to the rules of the AO-Core protocol.
+In HyperBEAM, every interaction within the AO Computer is handled as a **message**. A message is a binary item or a map of functions. These cryptographically-linked data units are the foundation for communication, allowing processes to trigger computations, query state, and transfer value. HyperBEAM nodes are responsible for routing and processing these messages according to the rules of the AO-Core protocol.
 
 ### Devices: Extensible Execution Engines
 HyperBEAM introduces a uniquely modular architecture centered around **[Devices](../devices/hyperbeam-devices.md)**. These pluggable components are Erlang modules that define specific computational logic—like running WASM, managing state, or relaying data—allowing for unprecedented flexibility. This design allows developers to extend the system by creating custom Devices to fit their specific computational needs.
