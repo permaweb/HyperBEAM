@@ -1,3 +1,24 @@
+/* Logo */
+[data-md-color-scheme=slate] {
+    #logo_light_mode {
+        display: none;
+    }
+    #logo_dark_mode {
+        display: block;
+    }
+}
+[data-md-color-scheme=default] {
+    #logo_dark_mode {
+        display: none;
+    }
+    #logo_light_mode {
+        display: block;
+    }
+}
+
+
+
+
 /* General Text Styles */
 
 [data-md-color-scheme=default] {
