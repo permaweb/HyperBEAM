@@ -25,9 +25,9 @@ AO-Core revolves around three fundamental components:
 <svg class='core-concepts-fig' width="85" height="68" viewBox="0 0 85 68" fill="none" xmlns="http://www.w3.org/2000/svg">
 <path d="M54 26H72V50" stroke="#000" stroke-width="1" stroke-linejoin="round" stroke-dasharray="1 1"/>
 <path d="M25 1H43V25" stroke="#000" stroke-width="1" stroke-linejoin="round" stroke-dasharray="1 1"/>
-<rect x="0.238661" y="0.625025" width="25.4567" height="18.2528" rx="1.0" fill="white" stroke="#000" stroke-width="1"/>
-<rect x="29.8775" y="25.0153" width="25.4567" height="18.2528" rx="1.0" fill="white" stroke="#000" stroke-width="1"/>
-<rect x="59.2387" y="49.2387" width="25.4567" height="18.2528" rx="1.0" fill="white" stroke="#000" stroke-width="1"/>
+<rect x="0.238661" y="0.625025" width="25.4567" height="18.2528" rx="1.0" stroke="#000" stroke-width="1"/>
+<rect x="29.8775" y="25.0153" width="25.4567" height="18.2528" rx="1.0" stroke="#000" stroke-width="1"/>
+<rect x="59.2387" y="49.2387" width="25.4567" height="18.2528" rx="1.0" stroke="#000" stroke-width="1"/>
 </svg>
 <p>Modules responsible for interpreting and processing messages. Each device defines specific logic for how messages are handled (e.g., executing WASM, storing data, relaying information). This modular design enables composable development and allows nodes to specialize, making the system highly flexible and extensible.</p>
 </div>
@@ -38,10 +38,10 @@ AO-Core revolves around three fundamental components:
 <path d="M15 31H28" stroke="#000" stroke-width="1" stroke-dasharray="1 1"/>
 <path d="M35 51V38" stroke="#000" stroke-width="1" stroke-dasharray="1 1"/>
 <path d="M42 24.1924L51.1924 15" stroke="#000" stroke-width="1" stroke-dasharray="1 1"/>
-<rect x="0.8" y="23.8" width="14.4" height="14.4" fill="white" stroke="#000" stroke-width="1"/>
-<rect x="27.8" y="23.8" width="14.4" height="14.4" fill="white" stroke="#000" stroke-width="1"/>
-<rect x="27.8" y="50.8" width="14.4" height="14.4" fill="white" stroke="#000" stroke-width="1"/>
-<rect x="50.8" y="0.8" width="14.4" height="14.4" fill="white" stroke="#000" stroke-width="1"/>
+<rect x="0.8" y="23.8" width="14.4" height="14.4" stroke="#000" stroke-width="1"/>
+<rect x="27.8" y="23.8" width="14.4" height="14.4" stroke="#000" stroke-width="1"/>
+<rect x="27.8" y="50.8" width="14.4" height="14.4" stroke="#000" stroke-width="1"/>
+<rect x="50.8" y="0.8" width="14.4" height="14.4" stroke="#000" stroke-width="1"/>
 </svg>
 <p>Structures that link messages over time, creating a verifiable history of computations. Paths allow users to navigate the computation graph and access specific states or results. They leverage <code>HashPaths</code>, cryptographic fingerprints representing the sequence of operations leading to a specific message state, ensuring traceability and integrity.</p>
 </div>
