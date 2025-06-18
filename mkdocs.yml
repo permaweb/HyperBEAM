@@ -32,7 +32,7 @@ nav:
               - ~json@1.0: "build/devices/json-at-1-0.md"
               - ~scheduler@1.0: "build/devices/scheduler-at-1-0.md"
               - ~relay@1.0: "build/devices/relay-at-1-0.md"
-          - Building Devices: "build/building-devices.md"
+          - Building Devices: "build/devices/building-devices.md"
       - Reference:
           - FAQ: "build/reference/faq.md"
           - Glossary: "build/reference/glossary.md"
