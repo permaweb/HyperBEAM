@@ -1,14 +1,14 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([list/3, once/3, every/3, stop/3, info/1, info/3]).
+-export([list/3, once/3, every/3, stop/3, clear/3, info/1, info/3]).
 -export([normalize/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
 info(_) -> 
-	#{ exports => [info, once, every, stop, add, list, normalize] }.
+	#{ exports => [info, clear, once, every, stop, list, normalize] }.
 
 %% @doc Exported function for granting a description of the device.
 info(_Msg1, _Msg2, _Opts) ->
@@ -21,7 +21,8 @@ info(_Msg1, _Msg2, _Opts) ->
 			<<"every">> => <<"Schedule a recurring message">>,
 			<<"stop">> => <<"Stop a scheduled task {task}">>,
 			<<"list">> => <<"List all registered cron tasks">>,
-			<<"normalize">> => <<"Boostrap cron jobs from cache">>
+			<<"normalize">> => <<"Boostrap cron jobs from cache">>,
+			<<"clear">> => <<"Clear cache">>
 		}
 	},
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
@@ -104,33 +105,32 @@ extract_job_details(Job) ->
     AugmentedData = maps:get(<<"data">>, Body, #{}),
     Type = maps:get(<<"type">>, AugmentedData, undefined),
     Interval = maps:get(<<"interval">>, AugmentedData, undefined),
+    CronPath = maps:get(<<"cron_path">>, AugmentedData, undefined),
     WorkerMsg = maps:get(<<"worker_msg">>, AugmentedData, #{}),
-    if TaskId == undefined orelse Type == undefined orelse not is_map(WorkerMsg) orelse WorkerMsg == #{} ->
+    if TaskId == undefined orelse Type == undefined orelse CronPath == undefined orelse not is_map(WorkerMsg) orelse WorkerMsg == #{} ->
         ?event({normalize_skipping_invalid_job, {reason, invalid_structure}, {raw_job, Job}}),
         {error, {unknown_task_id, invalid_job_structure}};
        true ->
-            {ok, #{ task_id => TaskId, type => Type, interval => Interval, worker_msg => WorkerMsg }}
+            {ok, #{ task_id => TaskId, type => Type, interval => Interval, cron_path => CronPath, worker_msg => WorkerMsg }}
     end.
 
 %% Helper function to reconstruct the original message for once/every from cached details
 reconstruct_original_msg(DetailsMap) ->
-    #{ task_id := TaskId, type := Type, interval := Interval, worker_msg := WorkerMsg } = DetailsMap,
-    TargetPath = maps:get(<<"path">>, WorkerMsg, undefined),
-    if TargetPath == undefined ->
-        ?event({normalize_skipping_no_target_path, {task_id, TaskId}, {worker_msg, WorkerMsg}}),
-        {error, no_target_path};
-       true ->
-            OtherParams = maps:remove(<<"path">>, WorkerMsg),
-            OriginalMsg0 = maps:put(<<"cron-path">>, TargetPath, OtherParams),
-            OriginalMsg1 = case Type of
-                               <<"every">> when Interval =/= null andalso Interval =/= undefined -> 
-                                   maps:put(<<"interval">>, Interval, OriginalMsg0);
-                               _ -> OriginalMsg0
-                           end,
-            OriginalMsgPath = <<"/~cron@1.0/", Type/binary>>,
-            OriginalMsg = maps:put(<<"path">>, OriginalMsgPath, OriginalMsg1),
-            {ok, OriginalMsg}
-    end.
+    #{ task_id := TaskId, type := Type, interval := Interval, cron_path := CronPath, worker_msg := WorkerMsg } = DetailsMap,
+    OtherParams = maps:remove(<<"path">>, WorkerMsg),
+    OriginalMsg0 = maps:put(<<"cron-path">>, CronPath, OtherParams),
+    OriginalMsg1 =
+        (case Type of
+             <<"every">> when Interval =/= null andalso Interval =/= undefined ->
+                 maps:put(<<"interval">>, Interval, OriginalMsg0);
+             _ -> OriginalMsg0
+         end),
+    % Carry the original task_id so that every/3 can reuse it verbatim and
+    % avoid generating a new one during normalisation.
+    OriginalMsg2 = maps:put(<<"task_id">>, TaskId, OriginalMsg1),
+    OriginalMsgPath = <<"/~cron@1.0/", Type/binary>>,
+    OriginalMsg = maps:put(<<"path">>, OriginalMsgPath, OriginalMsg2),
+    {ok, OriginalMsg}.
 
 %% Helper function to attempt the restart of a single job
 attempt_job_restart(DetailsMap, OriginalMsg, Msg1, CronOpts) ->
@@ -180,11 +180,19 @@ list(_, _, Opts) ->
 
 %% @doc Exported function for scheduling a one-time message.
 once(_Msg1, Msg2, Opts) ->
+	% Allow callers (e.g. normalisation) to pin the TaskId explicitly so that
+	% we do not re-hash the message and end up with a *different* id after a
+	% reboot.  If the caller passes `task_id` we MUST reuse it verbatim.
+	PinnedId = hb_ao:get(<<"task_id">>, Msg2, undefined, Opts),
 	case hb_ao:get(<<"cron-path">>, Msg2, Opts) of
 		not_found ->
 			{error, <<"No cron path found in message.">>};
 		CronPath ->
-			ReqMsgID = hb_message:id(Msg2, all),
+			ReqMsgID =
+				case PinnedId of
+					undefined -> hb_message:id(Msg2, all);
+					Id when is_binary(Id) -> Id
+				end,
 			% make the path specific for the end device to be used
 			ModifiedMsg2 =
                 maps:remove(
@@ -204,14 +212,15 @@ once(_Msg1, Msg2, Opts) ->
 					% Define the data structure for the cache
 					MinimalAugmentedData = #{ 
 						<<"type">> => <<"once">>,
-						<<"interval">> => null, % No interval for 'once'
-						<<"worker_msg">> => ModifiedMsg2 
+                        % No interval for 'once'
+						<<"interval">> => null, 
+						<<"worker_msg">> => ModifiedMsg2,
+                        % Persist the real target path
+						<<"cron_path">> => CronPath               
 					},
 					% Cache the augmented task data
 					{ok, PutResult} = cache_put(ReqMsgID, MinimalAugmentedData, cron_opts(Opts)),
 					?event({once_cache_put_result, {result, PutResult}}),
-					% {ok, Crons} = cache_list(cron_opts(Opts)),
-					% ?event({once_cron_cache_load_test_crons, {crons, Crons}}),
 					{ok, ReqMsgID}
 			end
 	end.
@@ -240,6 +249,10 @@ once_worker(Path, Req, Opts) ->
 
 %% @doc Exported function for scheduling a recurring message.
 every(_Msg1, Msg2, Opts) ->
+	% Allow callers (e.g. normalisation) to pin the TaskId explicitly so that
+	% we do not re-hash the message and end up with a *different* id after a
+	% reboot.  If the caller passes `task_id` we MUST reuse it verbatim.
+	PinnedId = hb_ao:get(<<"task_id">>, Msg2, undefined, Opts),
 	case {
 		hb_ao:get(<<"cron-path">>, Msg2, Opts),
 		hb_ao:get(<<"interval">>, Msg2, Opts)
@@ -256,7 +269,11 @@ every(_Msg1, Msg2, Opts) ->
 				true ->
 					ok
 				end,
-				ReqMsgID = hb_message:id(Msg2, all),
+				ReqMsgID =
+					case PinnedId of
+						undefined -> hb_message:id(Msg2, all);
+						Id when is_binary(Id) -> Id
+					end,
 				ModifiedMsg2 =
                     maps:remove(
                         <<"cron-path">>,
@@ -287,8 +304,16 @@ every(_Msg1, Msg2, Opts) ->
 						MinimalAugmentedData = #{ 
 							<<"type">> => <<"every">>,
 							<<"interval">> => IntervalString,
-							<<"worker_msg">> => ModifiedMsg2 
+							<<"worker_msg">> => ModifiedMsg2,
+							<<"cron_path">> => CronPath               % Persist the real target path
 						},
+                        % First check if the task ID already exists in the cache
+                        % if it does, we need to remove it first
+                        case cache_get(ReqMsgID, cron_opts(Opts)) of
+                            {ok, _} ->
+                                cache_remove(ReqMsgID, cron_opts(Opts));
+                            _ -> ok
+                        end,
 						% Cache the augmented task data
 						{ok, PutResult} = cache_put(ReqMsgID, MinimalAugmentedData, cron_opts(Opts)),
 						?event({every_cache_put_result, {result, PutResult}}),
@@ -324,7 +349,7 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
                     {error, Class, Reason, Stacktrace}
                 }
             ),
-			every_worker_loop(CronPath, Req, Opts, IntervalMillis)
+            exit(Class, Reason)
 	end,
 	timer:sleep(IntervalMillis),
 	every_worker_loop(CronPath, Req, Opts, IntervalMillis).
@@ -440,15 +465,20 @@ cache_list(Opts) ->
 		<<"cron">>,
 		#{ 
 			<<"path">> => <<"now/crons">>, 
-			<<"method">> => <<"GET">> 
+			<<"method">> => <<"GET">>,
+            <<"spawn">> => true
 		}
 	],
 	{ok, Result} = hb_ao:resolve_many(SampleMsg, Opts),
 	CronData = hb_ao:get(<<"crons">>, Result, #{}),
 	?event({cache_list_cron_data, {cron_data, CronData}}),
-    case is_list(CronData) of
-        true -> {ok, CronData};
-        false -> {error, CronData}
+    case CronData of
+        % for when there are no jobs yet
+        not_found -> {ok, []};
+        % for when there are jobs
+        List when is_list(List) -> {ok, List};
+        % for when there is an error
+        Other -> {error, Other}
     end.
 
 %% @doc Clear all values from the cache
@@ -458,6 +488,10 @@ cache_clear(Opts) ->
     {ok, cleared}.
 
 %% @doc Helper function to find a job by task ID in a list of jobs
+%% Handle “no crons”
+find_job_by_task_id(not_found, _TaskId) ->
+    {error, not_found};
+
 find_job_by_task_id([], _) ->
     {error, not_found};
 
@@ -980,3 +1014,48 @@ start_hook_normalize_test() ->
 	% verify we can find the once job in the crons list after node start
 	?assertMatch({ok, _}, find_job_by_task_id(Crons, _OnceTaskId)),
 	?event({start_hook_normalize_test, test_end}).
+
+%% @doc Clear all cron tasks.
+clear(_Msg1, _Msg2, Opts) ->
+    CronOpts = cron_opts(Opts),
+    case cache_clear(CronOpts) of
+        {ok, cleared} ->
+            {ok, #{
+                <<"status">> => 200,
+                <<"body">> => #{ <<"message">> => <<"All cron tasks cleared">> }
+            }};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% @doc Test that normalize doesn't create duplicate cron jobs
+normalize_no_duplicates_test() ->
+    Opts = generate_test_opts(),
+    Node = hb_http_server:start_node(Opts),
+    % Setup test worker
+    PID = spawn(fun test_worker/0),
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    hb_name:register({<<"test">>, ID}, PID),
+    % Create cron jobs
+    OnceUrlPath = <<"/~cron@1.0/once?test-id=", ID/binary,
+                   "&cron-path=/~test-device@1.0/update_state">>,
+    {ok, _OnceTaskId} = hb_http:get(Node, OnceUrlPath, #{}),
+    EveryUrlPath = <<"/~cron@1.0/every?test-id=", ID/binary,
+                    "&interval=1000-milliseconds",
+                    "&cron-path=/~test-device@1.0/increment_counter">>,
+    {ok, _EveryTaskId} = hb_http:get(Node, EveryUrlPath, #{}),
+    timer:sleep(100),
+    % Get initial count
+    {ok, InitialCrons} = cache_list(Opts),
+    InitialCount = length(InitialCrons),
+    ?event({'normalize_no_duplicates_test_initial', {count, InitialCount}}),
+    % Call normalize (simulates restart)
+    NormalizeUrlPath = <<"/~cron@1.0/normalize">>,
+    {ok, _NormalizeResult} = hb_http:get(Node, NormalizeUrlPath, #{}),
+    timer:sleep(100),
+    % Verify count unchanged (no duplicates)
+    {ok, FinalCrons} = cache_list(Opts),
+    FinalCount = length(FinalCrons),
+    ?event({'normalize_no_duplicates_test_final', {count, FinalCount}}),
+    ?assertEqual(InitialCount, FinalCount, "Normalize should not create duplicates"),
+    ?event({'normalize_no_duplicates_test_done'}).

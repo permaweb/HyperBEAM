@@ -212,7 +212,15 @@ default_message() ->
         % Should the node store all signed messages?
         store_all_signed => true,
         % Should the node use persistent processes?
-        process_workers => false
+        process_workers => false,
+        % Ensure that cron device normalizes by default on node restart.
+        on => #{
+            <<"start">> => #{
+                <<"device">> => <<"cron@1.0">>,
+                <<"path">> => <<"normalize">>,
+                <<"hook">> => #{ <<"result">> => <<"ignore">> }
+            }
+        }
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,

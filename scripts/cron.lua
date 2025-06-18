@@ -1,4 +1,35 @@
 -- Command handlers
+local function extract_task_id(msg_body)
+    if not msg_body then return nil end
+
+    -- Case 1: Direct access when task_id sits under .body (format from handle_put_command)
+    if msg_body.body and msg_body.body.task_id then
+        return msg_body.body.task_id
+    end
+
+    -- Case 2: Nested access for stored format (body.body.task_id)  
+    if msg_body.body and msg_body.body.body and msg_body.body.body.task_id then
+        return msg_body.body.body.task_id
+    end
+
+    if msg_body.task_id then
+        return msg_body.task_id
+    end
+
+    return nil
+end
+
+-- Helper function to find job index by task_id
+local function find_job_index(process, task_id)
+    for i, job in ipairs(process.crons) do
+        local existing_id = extract_task_id(job)
+        if existing_id == task_id then
+            return i
+        end
+    end
+    return nil
+end
+
 local handle_put_command = function(process, message)
     -- Validate the task_id for put
     if not message.body.body.task_id or type(message.body.body.task_id) ~= "string" then
@@ -12,7 +43,20 @@ local handle_put_command = function(process, message)
     end
 
     ao.event("debug_cron", { "adding task", message.body.body.task_id })
-    table.insert(process.crons, message.body)
+    
+    local incoming_id = message.body.body.task_id
+    -- If a cron with the same task_id already exists we
+    -- simply replace it and return, avoiding duplicates when the node is
+    -- normalised after a reboot.
+    local idx_to_replace = find_job_index(process, incoming_id)
+    
+    -- If we found a replacement index, replace the job. 
+    -- Otherwise, insert as new.
+    if idx_to_replace then
+        process.crons[idx_to_replace] = message.body
+    else
+        table.insert(process.crons, message.body)
+    end
     return process
 end
 
@@ -27,15 +71,7 @@ local handle_remove_command = function(process, message)
     ao.event("debug_cron", { "removing task", task_id_to_remove, "crons_count_before", #process.crons })
 
     -- Find the index of the task to remove.
-    local idx_to_remove = nil
-    -- process.crons is a list of maps, each with a "body" key
-    -- the task_id is stored in the "body" map
-    for i, job in ipairs(process.crons) do
-        if job.body and job.body.task_id == task_id_to_remove then
-            idx_to_remove = i
-            break
-        end
-    end
+    local idx_to_remove = find_job_index(process, task_id_to_remove)
     
     -- If an index is found, remove the task. Otherwise, log a warning.
     if idx_to_remove then
