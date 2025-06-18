@@ -604,12 +604,12 @@ local function load_json()
   local json = require('.json')
   --- The eval function.
   -- Handler for executing and evaluating Lua expressions.
-  -- After execution, the result is stringified and placed in ao.outbox.Output.
+  -- After execution, the result is stringified and placed in aos.outbox.Output.
   -- @function eval
-  -- @tparam {table} ao The ao environment object
+  -- @tparam {table} aos The aos environment object
   -- @treturn {function} The handler function, which takes a message as an argument.
   -- @see stringify
-  return function (ao)
+  return function (aos)
     return function (req)
       local msg = req.body
       -- exec expression
@@ -623,11 +623,11 @@ local function load_json()
       if func then
         output, e = func()
       else
-        ao.outbox.Error = err
+        aos.outbox.Error = err
         return
       end
       if e then
-        ao.outbox.Error = e
+        aos.outbox.Error = e
         return
       end
       if HandlerPrintLogs and output then
@@ -639,7 +639,7 @@ local function load_json()
         -- print(stringify.format(HandlerPrintLogs))
       -- else
       --   -- set result in outbox.Output (Left for backwards compatibility)
-      --   ao.outbox.Output = {
+      --   aos.outbox.Output = {
       --     data = type(output) == "table" 
       --       and stringify.format(output) or tostring(output),
       --     prompt = Prompt()
@@ -1978,10 +1978,10 @@ local function load_json()
   -- If the message has an On-Boot tag with the value 'Data', then evaluate the message.
   -- If the message has an On-Boot tag with a tx id, then download and evaluate the tx data.
   -- @function boot
-  -- @param ao The ao environment object
+  -- @param aos The aos environment object
   -- @see eval
-  return function (ao)
-    local eval = require(".eval")(ao)
+  return function (aos)
+    local eval = require(".eval")(aos)
     return function (msg)
       if #Inbox == 0 then
         table.insert(Inbox, msg)
@@ -2038,17 +2038,17 @@ local function load_json()
   local function load_ao() 
     Handlers = Handlers or require('.handlers')
   
-  local oldao = ao or {}
+  local oldaos = aos or {}
   
   local utils = require('.utils')
   
-  local ao = {
+  local aos = {
       _version = "0.0.6",
-      id = oldao.id or "",
-      _module = oldao._module or "",
-      authorities = oldao.authorities or {},
-      reference = oldao.reference or 0,
-      outbox = oldao.outbox or
+      id = oldaos.id or "",
+      _module = oldaos._module or "",
+      authorities = oldaos.authorities or {},
+      reference = oldaos.reference or 0,
+      outbox = oldaos.outbox or
           {Output = {}, Messages = {}, Spawns = {}, Assignments = {}},
       nonExtractableTags = {
           'data-protocol', 'variant', 'from-process', 'from-module', 'type',
@@ -2064,17 +2064,17 @@ local function load_json()
       Nonce = nil
   }
   
-  function ao.clearOutbox()
-    ao.outbox = { Output = {}, Messages = {}, Spawns = {}, Assignments = {}}
+  function aos.clearOutbox()
+    aos.outbox = { Output = {}, Messages = {}, Spawns = {}, Assignments = {}}
   end
   
   local function getId(m)
     local id = ""
     utils.map(function (k)
       local c = m.commitments[k]
-      if c.alg == "rsa-pss-sha512" then
+      if c.alg == "rsa-pss-sha512" or c.type == "rsa-pss-sha512" then
         id = k
-      elseif c.alg == "signed" and c['commitment-device'] == "ans104" then
+      elseif (c.alg == "signed" or c.type == "signed") and c['commitment-device'] == "ans104" then
         id = k
       end
     end, utils.keys(m.commitments)
@@ -2100,41 +2100,41 @@ local function load_json()
   end
   
   
-  function ao.init(env)
-    if ao.id == "" then ao.id = getId(env.process) end
+  function aos.init(env)
+    if aos.id == "" then aos.id = getId(env.process) end
   
-    -- if ao._module == "" then
-    --   ao._module = env.Module.Id
+    -- if aos._module == "" then
+    --   aos._module = env.Module.Id
     -- end
     -- TODO: need to deal with assignables
-    if #ao.authorities < 1 then
+    if #aos.authorities < 1 then
         if type(env.process.authority) == 'string' then
-          ao.authorities = {}
+          aos.authorities = {}
           for part in splitOnComma(env.process.authority) do
-            if part ~= "" and part ~= nil and not utils.includes(part, ao.authorities) then
-              table.insert(ao.authorities, part)
+            if part ~= "" and part ~= nil and not utils.includes(part, aos.authorities) then
+              table.insert(aos.authorities, part)
             end
           end
         else
-          ao.authorities = env.process.authority
+          aos.authorities = env.process.authority
         end
     end
   
-    ao.outbox = {Output = {}, Messages = {}, Spawns = {}, Assignments = {}}
-    ao.env = env
+    aos.outbox = {Output = {}, Messages = {}, Spawns = {}, Assignments = {}}
+    aos.env = env
   
   end
   
-  function ao.send(msg)
+  function aos.send(msg)
     assert(type(msg) == 'table', 'msg should be a table')
   
-    ao.reference = ao.reference + 1
-    local referenceString = tostring(ao.reference)
+    aos.reference = aos.reference + 1
+    local referenceString = tostring(aos.reference)
     -- set kv
     msg.reference = referenceString
   
     -- clone message info and add to outbox
-    table.insert(ao.outbox.Messages, utils.reduce(
+    table.insert(aos.outbox.Messages, utils.reduce(
       function (acc, key)
         acc[key] = msg[key]
         return acc
@@ -2162,18 +2162,18 @@ local function load_json()
     return msg
   end
   
-  function ao.spawn(module, msg)
+  function aos.spawn(module, msg)
     assert(type(module) == "string", "Module source id is required!")
     assert(type(msg) == "table", "Message must be a table.")
   
-    ao.reference = ao.reference + 1
+    aos.reference = aos.reference + 1
   
-    local spawnRef = tostring(ao.reference)
+    local spawnRef = tostring(aos.reference)
   
     msg["reference"] = spawnRef
   
     -- clone message info and add to outbox
-    table.insert(ao.outbox.Spawns, utils.reduce(
+    table.insert(aos.outbox.Spawns, utils.reduce(
       function (acc, key)
         acc[key] = msg[key]
         return acc
@@ -2185,7 +2185,7 @@ local function load_json()
     msg.onReply = function(cb)
       Handlers.once({
         action = "Spawned",
-        from = ao.id,
+        from = aos.id,
         ["x-reference"] = spawnRef
       }, cb)
     end
@@ -2196,7 +2196,7 @@ local function load_json()
   
   -- registerHint
   --
-  function ao.registerHint(msg)
+  function aos.registerHint(msg)
     -- check if From-Process tag exists
     local fromProcess = nil
     local hint = nil
@@ -2235,22 +2235,22 @@ local function load_json()
   
     -- if we found a hint, store it in the registry
     if hint then
-        if not ao._hints then
-            ao._hints = {}
+        if not aos._hints then
+            aos._hints = {}
         end
-        ao._hints[fromProcess] = {
+        aos._hints[fromProcess] = {
             hint = hint,
             ttl = hintTTL
         }
     end
     -- enforce bounded registry of 1000 keys
-    if ao._hints then
+    if aos._hints then
         local count = 0
         local oldest = nil
         local oldestKey = nil
   
         -- count keys and find oldest entry
-        for k, v in pairs(ao._hints) do
+        for k, v in pairs(aos._hints) do
             count = count + 1
             if not oldest or v.ttl < oldest then
                 oldest = v.ttl
@@ -2260,28 +2260,28 @@ local function load_json()
   
         -- if over 1000 entries, remove oldest
         if count > 1000 and oldestKey then
-            ao._hints[oldestKey] = nil
+            aos._hints[oldestKey] = nil
         end
     end
   end
   
-  function ao.result(result)
-    if ao.outbox.Error or result.Error then
-      return { Error = result.Error or ao.outbox.Error }
+  function aos.result(result)
+    if aos.outbox.Error or result.Error then
+      return { Error = result.Error or aos.outbox.Error }
     end
     return {
-      Output = result.Output or ao.output.Output,
-      Messages = ao.outbox.Messages,
-      Spawns = ao.outbox.Spawns,
-      Assignments = ao.outbox.Assignments
+      Output = result.Output or aos.output.Output,
+      Messages = aos.outbox.Messages,
+      Spawns = aos.outbox.Spawns,
+      Assignments = aos.outbox.Assignments
     }
   end
   
   -- set global Send and Spawn
-  Send = Send or ao.send
-  Spawn = Spawn or ao.spawn
+  Send = Send or aos.send
+  Spawn = Spawn or aos.spawn
   
-  return ao
+  return aos
   
   end
   _G.package.loaded[".ao"] = load_ao()
@@ -2498,7 +2498,7 @@ local function load_json()
   
   
   local function load_state() 
-    ao = ao or require('.ao')
+    aos = aos or require('.ao')
   local state = {}
   local stringify = require('.stringify')
   local utils = require('.utils')
@@ -2617,24 +2617,24 @@ local function load_json()
     if req.body['from-process'] then
       _trusted = utils.includes(
         req.body['from-process'],
-        ao.authorities
+        aos.authorities
       )
     end
   
     if not _trusted then
       _trusted = utils.includes(
-        getOwner(req.body), ao.authorities
+        getOwner(req.body), aos.authorities
       )
     end
     return _trusted
   end
   
-  function state.checkSlot(req, ao)
+  function state.checkSlot(req, aos)
     -- slot check
-    if not ao.slot then
-      ao.slot = tonumber(req.slot)
+    if not aos.slot then
+      aos.slot = tonumber(req.slot)
     else
-      if tonumber(req.slot) ~= (ao.slot + 1) then
+      if tonumber(req.slot) ~= (aos.slot + 1) then
         print(table.concat({
         Colors.red,
         "WARNING: Slot did not match, may be due to an error generated by process",
@@ -2660,7 +2660,7 @@ local function load_json()
   
   
   local function load_process() 
-    ao = ao or require('.ao')
+    aos = aos or require('.ao')
   Handlers = require('.handlers')
   Utils = require('.utils')
   Dump = require('.dump')
@@ -2679,7 +2679,7 @@ local function load_json()
     HandlerPrintLogs = state.reset(HandlerPrintLogs)
     os.time = function () return tonumber(req['block-timestamp']) end
   
-    ao.init(base)
+    aos.init(base)
     -- initialize state
     state.init(req, base)
   
@@ -2691,10 +2691,10 @@ local function load_json()
   
     Errors = Errors or {}
     -- clear outbox
-    ao.clearOutbox()
+    aos.clearOutbox()
   
     if not state.isTrusted(req) then
-      return ao.result({
+      return aos.result({
         Output = {
           data = "Message is not trusted."
         }
@@ -2706,7 +2706,7 @@ local function load_json()
       _reply.target = _reply.target and _reply.target or _from
       _reply['x-reference'] = req.body.reference or nil
       _reply['x-origin'] = req.body['x-origin'] or nil
-      return ao.send(_reply)
+      return aos.send(_reply)
     end
   
   
@@ -2726,7 +2726,7 @@ local function load_json()
         return from
       end
       return _req.body.action == "Eval" and Owner == getMsgFrom(_req.body)
-    end, eval(ao))
+    end, eval(aos))
   
     Handlers.add("_default",
       function () return true end,
@@ -2755,7 +2755,7 @@ local function load_json()
       print(Colors.red .. "Error" .. Colors.gray .. " handling message " .. Colors.reset)
       print(Colors.green .. error .. Colors.reset)
       -- print("\n" .. Colors.gray .. debug.traceback() .. Colors.reset)
-      return ao.result({
+      return aos.result({
         Output = {
           data = printData .. '\n\n' .. Colors.red .. 'error:\n' .. Colors.reset .. error
         },
@@ -2768,14 +2768,14 @@ local function load_json()
     local response = {}
   
     if req.body.action == "Eval" then
-      response = ao.result({
+      response = aos.result({
         Output = {
           data = printData,
           prompt = Prompt()
         }
       })
     else
-      response = ao.result({
+      response = aos.result({
         Output = {
           data = printData,
           prompt = Prompt(),
@@ -2785,7 +2785,7 @@ local function load_json()
     end
   
     HandlerPrintLogs = state.reset(HandlerPrintLogs) -- clear logs
-    -- ao.Slot = msg.Slot
+    -- aos.Slot = msg.Slot
     return response
   end
   

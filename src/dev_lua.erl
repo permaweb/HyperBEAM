@@ -258,8 +258,8 @@ compute(Key, RawBase, Req, Opts) ->
     % Call the VM function with the given arguments.
     ?event(lua,
         {calling_lua_func,
-            {function, Function}
-            % {args, ResolvedParams},
+            {function, Function},
+            {args, ResolvedParams}
             % {req, Req}
         }
     ),
@@ -881,14 +881,14 @@ hyper_ao_ensure_id_test() ->
     Process = generate_lua_process("test/hyper-aos.lua", Opts),
     {ok, _Proc} = hb_cache:write(Process, Opts),
     Code = """
-      print('a')
-      return aos
+    return aos.id
     """,
     Message = generate_test_message(Process, Opts, Code),
     {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
-    {ok, Results} = hb_ao:resolve(Process, <<"now/results">>, Opts),
-    ?event(jack, {results, Results}),
-    % ?assertEqual(Address, Id),
+    {ok, AosId} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
+    {ok, Committers} = hb_ao:resolve(Process, <<"commitments">>, Opts),
+    ProcessId = find_key_with_type_rsa_pss_sha512(Committers),
+    ?assertEqual(AosId, ProcessId),
     ok.
 
 create_modules(Modules) ->
@@ -970,3 +970,14 @@ end
     hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
     {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
     ?assertEqual(<<"true">>, Result).
+
+find_key_with_type_rsa_pss_sha512(Map) when is_map(Map) ->
+    lists:foldl(
+        fun({Key, #{<<"type">> := <<"rsa-pss-sha512">>}}, Acc) when Acc =:= undefined ->
+                Key;
+            (_, Acc) ->
+                Acc
+        end,
+        undefined,
+        maps:to_list(Map)
+    ).
