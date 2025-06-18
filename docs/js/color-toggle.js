@@ -128,8 +128,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Initialize from localStorage
   const colorScheme = localStorage.getItem("mdColorScheme");
-  const colorPrimary = localStorage.getItem("mdColorPrimary");
-  
+
   if (colorScheme) {
     const isDark = colorScheme !== "default";
     toggleButtonToDark(isDark);
