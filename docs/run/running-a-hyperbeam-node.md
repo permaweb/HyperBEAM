@@ -115,8 +115,8 @@ Installation methods:
     `asdf-vm` with the `asdf-nodejs` plugin is recommended.
     ```bash
     asdf plugin add nodejs https://github.com/asdf-vm/asdf-nodejs.git
-    asdf install nodejs <version> # e.g., lts
-    asdf global nodejs <version>
+    asdf install nodejs latest  # ensures you get the latest version (22+)
+    asdf global nodejs latest
     ```
 
 ### Rust
