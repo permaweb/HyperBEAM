@@ -32,7 +32,7 @@ nav:
               - ~json@1.0: "build/devices/json-at-1-0.md"
               - ~scheduler@1.0: "build/devices/scheduler-at-1-0.md"
               - ~relay@1.0: "build/devices/relay-at-1-0.md"
-          - Building Devices: "build/building-devices.md"
+          - Building Devices: "build/devices/building-devices.md"
       - Reference:
           - FAQ: "build/reference/faq.md"
           - Glossary: "build/reference/glossary.md"
@@ -219,24 +219,17 @@ theme:
     - content.code.annotate
     # - navigation.footer
   palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      scheme: slate
     # Palette toggle for light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
       code:
         highlight_theme: dracula
-      primary: white
-      accent: blue
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
     # Palette toggle for dark mode
     - media: "(prefers-color-scheme: dark)"
-      scheme: default
-      primary: white
-      accent: blue
-      toggle:
-        icon: material/brightness-7
-        name: Switch to light mode
+      scheme: slate
   font:
     text: DM Sans
   nav_style: default
@@ -250,6 +243,7 @@ extra_css:
   - assets/stylesheets/style.css
 
 extra_javascript:
+  - js/color-toggle.js
   - js/utc-time.js
   - js/custom-header.js
   - js/parallax.js

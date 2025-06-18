@@ -16,6 +16,6 @@ window.addEventListener("DOMContentLoaded", () => {
 
   const headerOptions = document.querySelector(".md-header__option");
   if (headerOptions) {
-    headerOptions.replaceWith(timeDiv); // Replace existing element
+    headerOptions.appendChild(timeDiv); // Replace existing element
   }
 });

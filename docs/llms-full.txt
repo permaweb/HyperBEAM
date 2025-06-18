@@ -1,4 +1,4 @@
-Generated: 2025-06-17T19:36:23Z
+Generated: 2025-06-18T10:21:32Z
 
 --- START OF FILE: docs/build/building-on-ao.md ---
 # Building on HyperBEAM with `ao`
@@ -46428,7 +46428,7 @@ Designed to be **modular**, **composable**, and **extensible**, HyperBEAM lets y
 
 While [AO-Core](./introduction/what-is-ao-core.md) establishes the foundational concepts of Messages, Devices, and Paths, building on HyperBEAM can be simplified to four key principles:
 
-1.  **Everything is a [message](./devices/message-at-1-0.md).** You can compute on any message by calling its keys by name. The [`device`](./devices/hyperbeam-devices.md) specified in the message determines how these keys are resolved. The default device, `message@1.0`, resolves keys to their literal values within the message.
+1.  **Everything is a [message](./introduction/what-is-hyperbeam.html#messages-modular-data-packets).** You can compute on any message by calling its keys by name. The [`device`](./devices/hyperbeam-devices.md) specified in the message determines how these keys are resolved. The default device, `message@1.0`, resolves keys to their literal values within the message.
 
 2.  **[Paths](./pathing-in-hyperbeam.md) are pipelines of messages.** A path defines a sequence of 'request' messages to be executed. You can set a key in a message directly within the path using the `&key=value` syntax. Headers and parameters added after a `?` are applied to all messages in the pipeline.
 
@@ -46454,8 +46454,8 @@ HyperBEAM's modular devices become even more powerful when combined. Its **pathi
 
 **Use Case:** Suppose you have a token process and want to calculate the total circulating supply without making the client download and compute all balances. You can construct a single URL that:
 
-1.  Reads the token's balance list from the process state.
-2.  Pipes the list to a Lua script that sums the balances.
+1.  Reads the latest state of the AO process.
+2.  Pipes the state to a Lua script and calls the sum function, which sums the balances from the state.
 3.  Formats the final result as a JSON object.
 
 The request would look something like this:
@@ -46463,6 +46463,8 @@ The request would look something like this:
 `/{process-id}~process@1.0/now/~lua@5.3a&module={module-id}/sum/serialize~json@1.0`
 
 This path chains together the operations, returning just the computed supply in a single, efficient request.
+
+> Find the full example in the [AO Process Cookbook](https://cookbook_ao.arweave.net/guides/migrating-to-hyperbeam/reading-dynamic-state.html#example-calculating-circulating-supply)
 
 > Learn more about [Pathing in HyperBEAM](./pathing-in-hyperbeam.md).
 
@@ -46494,55 +46496,42 @@ Think of it as a way to interpret the [Arweave permaweb](https://arweave.org) no
 
 AO-Core revolves around three fundamental components:
 
-<div class="grid-docs">
-
-<div class="grid-docs-card">
-<p><strong>Messages</strong></p>
-<div class="grid-docs-card-fig">
-<svg width="73" height="26" viewBox="0 0 73 26" fill="none" xmlns="http://www.w3.org/2000/svg">
-<line x1="0.5" x2="0.5" y2="26" stroke="#5F5F5F"/>
-<line x1="72.5" x2="72.5" y2="26" stroke="#5F5F5F"/>
-<path d="M9 13H21.0416" stroke="#5F5F5F" stroke-width="2" stroke-linecap="square"/>
-<path d="M31.0416 13H43.0832" stroke="#5F5F5F" stroke-width="2" stroke-linecap="square"/>
-<path d="M53.0832 13H65.1248" stroke="#5F5F5F" stroke-width="2" stroke-linecap="square"/>
+<b>Messages</b>
+<div class='core-concepts-flex'>
+<svg class='core-concepts-fig' width="146" height="40" viewBox="0 0 73 26" fill="none" xmlns="http://www.w3.org/2000/svg">
+<line x1="0.5" x2="0.5" y2="26" stroke="#000"/>
+<line x1="72.5" x2="72.5" y2="26" stroke="#000"/>
+<path d="M9 13H21.0416" stroke="#000" stroke-width="1" stroke-linecap="square"/>
+<path d="M31.0416 13H43.0832" stroke="#000" stroke-width="1" stroke-linecap="square"/>
+<path d="M53.0832 13H65.1248" stroke="#000" stroke-width="1" stroke-linecap="square"/>
 </svg>
-</div>
-<p>The smallest units of data and computation. Messages can be simple data blobs or maps of named functions.</p> <p>They are the primary means of communication and triggering execution within the system, processed independently or combined to build complex logic.</p><p>Messages are cryptographically linked, forming a verifiable computation graph.</p>
+<p>Messages are cryptographically linked, forming a verifiable computation graph. </p>
 </div>
 
-<div class="grid-docs-card">
-<p><strong>Devices</strong></p>
-
-<div class="grid-docs-card-fig">
-<svg width="85" height="68" viewBox="0 0 85 68" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M54 26H72V50" stroke="#6F6F6F" stroke-width="1" stroke-linejoin="round" stroke-dasharray="1 1"/>
-<path d="M25 1H43V25" stroke="#6F6F6F" stroke-width="1" stroke-linejoin="round" stroke-dasharray="1 1"/>
-<rect x="0.238661" y="0.625025" width="25.4567" height="18.2528" rx="0.954642" fill="white" stroke="#6F6F6F" stroke-width="1"/>
-<rect x="29.8775" y="25.0153" width="25.4567" height="18.2528" rx="0.954642" fill="white" stroke="#6F6F6F" stroke-width="1"/>
-<rect x="59.2387" y="49.2387" width="25.4567" height="18.2528" rx="0.954642" fill="white" stroke="#6F6F6F" stroke-width="1"/>
+<b>Devices</b>
+<div class='core-concepts-flex'>
+<svg class='core-concepts-fig' width="85" height="68" viewBox="0 0 85 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M54 26H72V50" stroke="#000" stroke-width="1" stroke-linejoin="round" stroke-dasharray="1 1"/>
+<path d="M25 1H43V25" stroke="#000" stroke-width="1" stroke-linejoin="round" stroke-dasharray="1 1"/>
+<rect x="0.238661" y="0.625025" width="25.4567" height="18.2528" rx="1.0" fill="white" stroke="#000" stroke-width="1"/>
+<rect x="29.8775" y="25.0153" width="25.4567" height="18.2528" rx="1.0" fill="white" stroke="#000" stroke-width="1"/>
+<rect x="59.2387" y="49.2387" width="25.4567" height="18.2528" rx="1.0" fill="white" stroke="#000" stroke-width="1"/>
 </svg>
-</div>
-<div>
-<p>Modules responsible for interpreting and processing messages. </p> <p>Each device defines specific logic for how messages are handled (e.g., executing WASM, storing data, relaying information). </p><p>This modular design enables composable development and allows nodes to specialize, making the system highly flexible and extensible.</p>
-</div>
+<p>Modules responsible for interpreting and processing messages. Each device defines specific logic for how messages are handled (e.g., executing WASM, storing data, relaying information). This modular design enables composable development and allows nodes to specialize, making the system highly flexible and extensible.</p>
 </div>
 
-<div class="grid-docs-card">
-<p><strong>Paths</strong></p>
-<div class="grid-docs-card-fig">
-<svg width="66" height="66" viewBox="0 0 66 66" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M15 31H28" stroke="#5F5F5F" stroke-width="1" stroke-dasharray="1 1"/>
-<path d="M35 51V38" stroke="#5F5F5F" stroke-width="1" stroke-dasharray="1 1"/>
-<path d="M42 24.1924L51.1924 15" stroke="#5F5F5F" stroke-width="1" stroke-dasharray="1 1"/>
-<rect x="0.8" y="23.8" width="14.4" height="14.4" fill="white" stroke="#5F5F5F" stroke-width="1"/>
-<rect x="27.8" y="23.8" width="14.4" height="14.4" fill="white" stroke="#5F5F5F" stroke-width="1"/>
-<rect x="27.8" y="50.8" width="14.4" height="14.4" fill="white" stroke="#5F5F5F" stroke-width="1"/>
-<rect x="50.8" y="0.8" width="14.4" height="14.4" fill="white" stroke="#5F5F5F" stroke-width="1"/>
+<b>Paths</b>
+<div class='core-concepts-flex'>
+<svg class='core-concepts-fig' width="66" height="66" viewBox="0 0 66 66" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M15 31H28" stroke="#000" stroke-width="1" stroke-dasharray="1 1"/>
+<path d="M35 51V38" stroke="#000" stroke-width="1" stroke-dasharray="1 1"/>
+<path d="M42 24.1924L51.1924 15" stroke="#000" stroke-width="1" stroke-dasharray="1 1"/>
+<rect x="0.8" y="23.8" width="14.4" height="14.4" fill="white" stroke="#000" stroke-width="1"/>
+<rect x="27.8" y="23.8" width="14.4" height="14.4" fill="white" stroke="#000" stroke-width="1"/>
+<rect x="27.8" y="50.8" width="14.4" height="14.4" fill="white" stroke="#000" stroke-width="1"/>
+<rect x="50.8" y="0.8" width="14.4" height="14.4" fill="white" stroke="#000" stroke-width="1"/>
 </svg>
-</div>
-<p>Structures that link messages over time, creating a verifiable history of computations. </p> <p>Paths allow users to navigate the computation graph and access specific states or results. </p> <p>They leverage <code>HashPaths</code>, cryptographic fingerprints representing the sequence of operations leading to a specific message state, ensuring traceability and integrity.</p>
-</div>
-
+<p>Structures that link messages over time, creating a verifiable history of computations. Paths allow users to navigate the computation graph and access specific states or results. They leverage <code>HashPaths</code>, cryptographic fingerprints representing the sequence of operations leading to a specific message state, ensuring traceability and integrity.</p>
 </div>
 
 ## Key Features
@@ -46578,7 +46567,7 @@ HyperBEAM is the primary, production-ready implementation of the [AO-Core protoc
 HyperBEAM transforms the abstract concepts of AO-Core—Messages, Devices, and Paths—into a concrete, operational system. It provides the runtime environment and essential services to execute these computations across a network of distributed nodes.
 
 ### Messages: Modular Data Packets
-In HyperBEAM, every interaction within the AO Computer is handled as a **message**. These cryptographically-linked data units are the foundation for communication, allowing processes to trigger computations, query state, and transfer value. HyperBEAM nodes are responsible for routing and processing these messages according to the rules of the AO-Core protocol.
+In HyperBEAM, every interaction within the AO Computer is handled as a **message**. A message is a binary item or a map of functions. These cryptographically-linked data units are the foundation for communication, allowing processes to trigger computations, query state, and transfer value. HyperBEAM nodes are responsible for routing and processing these messages according to the rules of the AO-Core protocol.
 
 ### Devices: Extensible Execution Engines
 HyperBEAM introduces a uniquely modular architecture centered around **[Devices](../devices/hyperbeam-devices.md)**. These pluggable components are Erlang modules that define specific computational logic—like running WASM, managing state, or relaying data—allowing for unprecedented flexibility. This design allows developers to extend the system by creating custom Devices to fit their specific computational needs.
