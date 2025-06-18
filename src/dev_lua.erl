@@ -946,3 +946,27 @@ end
     hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
     {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
     ?assertEqual(<<"true">>, Result).
+
+hyper_aos_json_test() ->
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, Json} = file:read_file("scripts/aos-json.lua"),
+    Code = <<
+"""
+local json = require('json')
+
+function compute(base, req)
+  local data = { hello = [[World]]}
+  local json_data = json.encode(data)
+  local new_data = json.decode(json_data)
+  base.results = tostring(data.hello == new_data.hello)
+  return base
+end
+"""
+    >>,
+    Process = generate_hyper_aos_modular_process([Json, Code], Wallet),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual(<<"true">>, Result).
