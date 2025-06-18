@@ -112,7 +112,7 @@ jobs:
 
   # Build and deploy the artifacts to Arweave via ArDrive
   deploy:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dpshade/docs-content-styling'
+    if: github.ref == 'refs/heads/docs/deploy' || github.ref == 'refs/heads/docs/deploy-test'
     runs-on: ubuntu-22.04
     # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
     # However, do NOT cancel in-progress runs as we want to allow these deployments to complete.
@@ -215,10 +215,20 @@ jobs:
       - name: 💾 Publish to Arweave
         id: publish_artifacts
         run: |
-          npx permaweb-deploy \
-            --arns-name=hyperbeam \
-            --ant-process=${{ secrets.ANT_PROCESS }} \
-            --deploy-folder=${ARTIFACTS_OUTPUT_DIR}
+          if [[ "${{ github.ref }}" == "refs/heads/docs/deploy" ]]; then
+            echo "Deploying to production ArNS"
+            npx permaweb-deploy \
+              --arns-name=hyperbeam \
+              --ant-process=${{ secrets.ANT_PROCESS }} \
+              --deploy-folder=${ARTIFACTS_OUTPUT_DIR}
+          elif [[ "${{ github.ref }}" == "refs/heads/docs/deploy-test" ]]; then
+            echo "Deploying to preview ArNS undername"
+            npx permaweb-deploy \
+              --arns-name=hyperbeam \
+              --undername=preview \
+              --ant-process=${{ secrets.ANT_PROCESS }} \
+              --deploy-folder=${ARTIFACTS_OUTPUT_DIR}
+          fi
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
           ARTIFACTS_OUTPUT_DIR: ${{ steps.build_artifacts.outputs.artifacts_output_dir }}
