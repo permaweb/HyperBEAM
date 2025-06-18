@@ -14,7 +14,7 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--define(NOTIFICATION_MANAGER, hb_notification_manager).
+-define(NOTIFICATION_MANAGER, {dev_notify, notification_manager}).
 
 %% @doc Device API information
 info(_) ->
@@ -31,15 +31,12 @@ info(_Msg1, _Msg2, _Opts) ->
                 <<"stream">> => <<"Start a streaming connection for real-time events">>}},
     {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
-
-
-
 %% @doc Dispatch an event to registered listeners via the notification manager
 dispatch(_StateMsg, InputMsg, Opts) ->
     ?event(notify, {dispatch_event, InputMsg}),
 
     % Send event to the long-running notification manager process
-    case whereis(?NOTIFICATION_MANAGER) of
+    case hb_name:lookup(?NOTIFICATION_MANAGER) of
         undefined ->
             ?event(notify, {manager_not_started, starting_manager}),
             start_notification_manager(),
@@ -122,7 +119,7 @@ register_stream(StreamId, Template, _Req, _Opts) ->
     start_notification_manager(),
 
     % Register with the notification manager
-    case whereis(?NOTIFICATION_MANAGER) of
+    case hb_name:lookup(?NOTIFICATION_MANAGER) of
         undefined ->
             ?event(notify, {manager_not_available, {stream_id, StreamId}});
         ManagerPid ->
@@ -158,7 +155,7 @@ stream_loop(StreamId, Req, Opts) ->
 %% @doc Unregister a streaming connection
 unregister_stream(StreamId) ->
     % Unregister with the notification manager
-    case whereis(?NOTIFICATION_MANAGER) of
+    case hb_name:lookup(?NOTIFICATION_MANAGER) of
         undefined ->
             ?event(notify, {manager_not_available_for_unregister, {stream_id, StreamId}});
         ManagerPid ->
@@ -258,27 +255,19 @@ template_matches(_Event, _Template, _Opts) ->
 
 %% @doc Start the long-running notification manager process
 start_notification_manager() ->
-    case whereis(?NOTIFICATION_MANAGER) of
+    case hb_name:lookup(?NOTIFICATION_MANAGER) of
         undefined ->
             % Start the manager process
             ManagerPid =
                 spawn_link(fun() ->
-                              try register(?NOTIFICATION_MANAGER, self()) of
-                                  true ->
+                              case hb_name:register(?NOTIFICATION_MANAGER) of
+                                  ok ->
                                       % Initialize ETS table for fast listener lookups
-                                      case ets:info(notification_listeners) of
-                                          undefined ->
-                                              ets:new(notification_listeners,
-                                                      [named_table,
-                                                       public,
-                                                       set,
-                                                       {read_concurrency, true}]);
-                                          _ -> ok
-                                      end,
+                                      ets:new(notification_listeners,
+                                              [named_table, public, set, {read_concurrency, true}]),
                                       ?event(notify, {notification_manager_started, self()}),
-                                      notification_manager_loop(#{})
-                              catch
-                                  error:badarg ->
+                                      notification_manager_loop(#{});
+                                  error ->
                                       % Someone else registered already, exit quietly
                                       exit(already_registered)
                               end
@@ -286,7 +275,7 @@ start_notification_manager() ->
             % Give the process a moment to register
             timer:sleep(10),
             % Check if it actually got registered
-            case whereis(?NOTIFICATION_MANAGER) of
+            case hb_name:lookup(?NOTIFICATION_MANAGER) of
                 ManagerPid ->
                     {ok, ManagerPid};
                 OtherPid when is_pid(OtherPid) ->
@@ -300,48 +289,12 @@ start_notification_manager() ->
 
 %% @doc Stop the notification manager process
 stop_notification_manager() ->
-    case whereis(?NOTIFICATION_MANAGER) of
+    case hb_name:lookup(?NOTIFICATION_MANAGER) of
         undefined ->
             ok;
         Pid ->
-            % First unregister to prevent new registrations
-            try
-                unregister(?NOTIFICATION_MANAGER)
-            catch
-                _:_ ->
-                    ok
-            end,
-
             % Send stop signal
             Pid ! stop,
-
-            % Wait for process to die with timeout
-            Ref = monitor(process, Pid),
-            receive
-                {'DOWN', Ref, process, Pid, _Reason} ->
-                    ok
-            after 100 ->
-                exit(Pid, kill),
-                receive
-                    {'DOWN', Ref, process, Pid, _} ->
-                        ok
-                after 50 ->
-                    ok
-                end
-            end,
-
-            % Clean up ETS table if it still exists
-            case ets:info(notification_listeners) of
-                undefined ->
-                    ok;
-                _ ->
-                    try
-                        ets:delete(notification_listeners)
-                    catch
-                        _:_ ->
-                            ok
-                    end
-            end,
             ok
     end.
 
@@ -376,18 +329,6 @@ notification_manager_loop(State) ->
             notification_manager_loop(State);
         stop ->
             ?event(notify, {notification_manager_stopping, self()}),
-            % Clean up ETS table before exiting
-            case ets:info(notification_listeners) of
-                undefined ->
-                    ok;
-                _ ->
-                    try
-                        ets:delete(notification_listeners)
-                    catch
-                        _:_ ->
-                            ok
-                    end
-            end,
             ok;
         Msg ->
             ?event(notify, {unexpected_message, Msg}),
@@ -507,7 +448,7 @@ template_matching_test() ->
 %% @doc Test notification manager process lifecycle
 notification_manager_test() ->
     % Ensure clean state
-    InitialState = whereis(?NOTIFICATION_MANAGER),
+    InitialState = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?event(debug, {manager_initial_state, InitialState}),
     stop_notification_manager(),
     timer:sleep(50),
@@ -517,7 +458,7 @@ notification_manager_test() ->
     ?event(debug, {manager_start_result, StartResult}),
     {ok, ManagerPid} = StartResult,
     ?assert(is_process_alive(ManagerPid)),
-    ?assertEqual(ManagerPid, whereis(?NOTIFICATION_MANAGER)),
+    ?assertEqual(ManagerPid, hb_name:lookup(?NOTIFICATION_MANAGER)),
     ?event(debug, {manager_started_successfully, {pid, ManagerPid}}),
 
     % Stop manager
@@ -525,7 +466,7 @@ notification_manager_test() ->
     stop_notification_manager(),
     % Wait a bit for cleanup
     timer:sleep(100),
-    FinalState = whereis(?NOTIFICATION_MANAGER),
+    FinalState = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?event(debug, {manager_final_state, FinalState}),
     ?assertEqual(undefined, FinalState).
 
@@ -536,7 +477,7 @@ event_dispatch_test() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Create a test stream process
@@ -594,7 +535,6 @@ event_dispatch_test() ->
 
     stop_notification_manager().
 
-
 %% @doc Test listener registration and unregistration
 listener_registration_test() ->
     % Ensure clean state
@@ -603,7 +543,7 @@ listener_registration_test() ->
 
     % Start manager
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Register a listener
@@ -635,7 +575,7 @@ regex_dispatch_test() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Create test stream process
@@ -720,7 +660,7 @@ dead_process_cleanup_test() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Create and register a process, then kill it
@@ -768,7 +708,7 @@ concurrent_dispatch_test() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Create multiple test processes
@@ -871,7 +811,7 @@ error_handling_test() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Test invalid template in dispatch (should not crash manager)
@@ -899,7 +839,7 @@ performance_test() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Register a listener
@@ -939,7 +879,7 @@ handle_event_dispatch_benchmark_test() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Register many listeners to create realistic load
@@ -1054,7 +994,7 @@ benchmark_with_listener_count(NumListeners) ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
 
     % Register listeners
     lists:foreach(fun(N) ->
@@ -1100,7 +1040,7 @@ memory_pressure_test_impl() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Register many listeners
@@ -1196,7 +1136,7 @@ duplicate_listener_registration_test() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Create test stream process that counts events
@@ -1268,7 +1208,7 @@ multiple_registration_scenarios_test() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Scenario 1: Same template, same stream, different refs
@@ -1331,7 +1271,7 @@ event_duplication_test() ->
     timer:sleep(50),
 
     start_notification_manager(),
-    ManagerPid = whereis(?NOTIFICATION_MANAGER),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assert(is_process_alive(ManagerPid)),
 
     % Create counting process
@@ -1384,7 +1324,7 @@ notification_manager_manual_start_test() ->
     timer:sleep(100),
 
     % Verify no manager is running
-    ?assertEqual(undefined, whereis(?NOTIFICATION_MANAGER)),
+    ?assertEqual(undefined, hb_name:lookup(?NOTIFICATION_MANAGER)),
 
     % Start manager manually
     {ok, ManagerPid} = start_notification_manager(),
@@ -1392,7 +1332,7 @@ notification_manager_manual_start_test() ->
     % Verify manager started successfully
     ?assertNotEqual(undefined, ManagerPid),
     ?assert(is_process_alive(ManagerPid)),
-    ?assertEqual(ManagerPid, whereis(?NOTIFICATION_MANAGER)),
+    ?assertEqual(ManagerPid, hb_name:lookup(?NOTIFICATION_MANAGER)),
 
     ?event(debug, {manual_start_test_completed, {manager_pid, ManagerPid}}),
 
@@ -1413,7 +1353,7 @@ notification_manager_multiple_start_test() ->
     ?assertEqual({already_started, ManualPid}, StartResult),
 
     % Should still be the same process
-    CurrentPid = whereis(?NOTIFICATION_MANAGER),
+    CurrentPid = hb_name:lookup(?NOTIFICATION_MANAGER),
     ?assertEqual(ManualPid, CurrentPid),
     ?assert(is_process_alive(CurrentPid)),
 
@@ -1426,18 +1366,17 @@ notification_manager_manual_start_conflict_test() ->
     timer:sleep(100),
 
     % Ensure no process is registered
-    ?assertEqual(undefined, whereis(?NOTIFICATION_MANAGER)),
+    ?assertEqual(undefined, hb_name:lookup(?NOTIFICATION_MANAGER)),
 
     % Create a conflicting process with the same name
     TestPid = self(),
     ConflictPid =
         spawn(fun() ->
-                 try register(?NOTIFICATION_MANAGER, self()) of
-                     true ->
+                 case hb_name:register(?NOTIFICATION_MANAGER) of
+                     ok ->
                          TestPid ! {conflict_registered, self()},
-                         receive stop -> ok after 10000 -> ok end
-                 catch
-                     error:badarg -> TestPid ! {conflict_failed, self()}
+                         receive stop -> ok after 10000 -> ok end;
+                     error -> TestPid ! {conflict_failed, self()}
                  end
               end),
 
@@ -1445,14 +1384,14 @@ notification_manager_manual_start_conflict_test() ->
     receive
         {conflict_registered, ConflictPid} ->
             % Verify the conflict process is registered
-            ?assertEqual(ConflictPid, whereis(?NOTIFICATION_MANAGER)),
+            ?assertEqual(ConflictPid, hb_name:lookup(?NOTIFICATION_MANAGER)),
 
             % Try manual start (should return already_started)
             StartResult = start_notification_manager(),
             ?assertEqual({already_started, ConflictPid}, StartResult),
 
             % The original conflict process should still be there
-            ?assertEqual(ConflictPid, whereis(?NOTIFICATION_MANAGER)),
+            ?assertEqual(ConflictPid, hb_name:lookup(?NOTIFICATION_MANAGER)),
 
             % Clean up
             ConflictPid ! stop,
@@ -1478,14 +1417,14 @@ notification_manager_manager_restart_test() ->
     timer:sleep(50),
 
     % Verify clean state
-    ?assertEqual(undefined, whereis(?NOTIFICATION_MANAGER)),
+    ?assertEqual(undefined, hb_name:lookup(?NOTIFICATION_MANAGER)),
 
     % Start the manager manually
     {ok, FirstPid} = start_notification_manager(),
     timer:sleep(50),
 
     % Verify manager started
-    ?assertEqual(FirstPid, whereis(?NOTIFICATION_MANAGER)),
+    ?assertEqual(FirstPid, hb_name:lookup(?NOTIFICATION_MANAGER)),
     ?assertNotEqual(undefined, FirstPid),
     ?assert(is_process_alive(FirstPid)),
 
@@ -1510,7 +1449,7 @@ notification_manager_manager_restart_test() ->
     timer:sleep(50),
 
     % Verify new manager started (should be different PID)
-    ?assertEqual(SecondPid, whereis(?NOTIFICATION_MANAGER)),
+    ?assertEqual(SecondPid, hb_name:lookup(?NOTIFICATION_MANAGER)),
     ?assertNotEqual(undefined, SecondPid),
     ?assert(is_process_alive(SecondPid)),
     ?assertNotEqual(FirstPid, SecondPid),
@@ -1575,7 +1514,7 @@ notification_manager_concurrent_start_test() ->
                               timer:sleep(
                                   rand:uniform(50)),
                               Result = start_notification_manager(),
-                              ManagerPid = whereis(?NOTIFICATION_MANAGER),
+                              ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
                               TestPid ! {concurrent_result, N, Result, ManagerPid}
                            end)
                   end,
