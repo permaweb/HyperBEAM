@@ -32,10 +32,10 @@ Provides information about the notification device capabilities and endpoints.
 
 ### `stream` (Primary API)
 
-Creates a real-time HTTP/3 streaming connection for receiving events. **This is the main method for most use cases.**
+Creates a real-time HTTP/3 streaming connection for receiving events. **This is the main method for event subscriptions.**
 
 *   **`GET /~notify@1.0/stream`**
-    *   **Action:** Establishes a Server-Sent Events (SSE) connection for real-time event delivery. Automatically registers the listener when the connection is established.
+    *   **Action:** Establishes a Server-Sent Events (SSE) connection for real-time event delivery. The connection automatically registers itself as a listener when established.
     *   **Query Parameters:** 
         *   `template`: Event matching pattern (map or regex)
     *   **Response:** HTTP/3 stream with `Content-Type: text/event-stream`
@@ -60,37 +60,6 @@ GET /~notify@1.0/stream?template={"device":"process@1.0","action":"compute"}
 ```json
 GET /~notify@1.0/stream?template="/.*process.*/.*/.*"
 ```
-
-### `register` (For Persistent Use Cases)
-
-Registers a new event listener with a specific template for event matching. **Use this for persistent subscriptions that need to survive across multiple stream connections or for programmatic subscription management.**
-
-*   **`POST /~notify@1.0/register`**
-    *   **Action:** Creates a persistent event subscription using the provided template and stream identifier.
-    *   **Request Body:** Must contain `template` (event pattern) and `stream` (stream identifier) fields.
-    *   **Response:** Success confirmation or error message.
-    *   **Use Cases:** Pre-registration, batch registration, persistent subscriptions, programmatic management
-
-**Registration Example:**
-```json
-{
-  "template": {
-    "device": "process@1.0",
-    "action": "compute"
-  },
-  "stream": "persistent-stream-001"
-}
-```
-
-### `unregister` (For Persistent Use Cases)
-
-Removes an existing persistent event listener registration.
-
-*   **`POST /~notify@1.0/unregister`**
-    *   **Action:** Removes the persistent listener associated with the specified template.
-    *   **Request Body:** Must contain the `template` field matching the original registration.
-    *   **Response:** Success confirmation or error message.
-    *   **Use Cases:** Cleanup of persistent subscriptions, programmatic subscription management
 
 ### `dispatch`
 
@@ -138,7 +107,7 @@ Template = <<"/processes/.*/compute/.*">>
 
 ## Event Flow
 
-1. **Registration**: Client registers listener with template via `/register` endpoint
+1. **Stream Connection**: Client establishes streaming connection via `/stream` endpoint with template
 2. **Template Storage**: Template is validated and stored in ETS table with stream process ID
 3. **Event Trigger**: AO process completes operation, triggering `hb_persistent:notify/4`
 4. **Event Dispatch**: Notification manager receives event and checks against all templates

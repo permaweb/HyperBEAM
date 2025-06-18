@@ -1,12 +1,13 @@
 %%% @doc A device that provides real-time notifications for AO process events.
 %%% It integrates with the existing event system (hb_event) and allows clients
-%%% to subscribe to specific events using HTTP/3 streams.
+%%% to subscribe to specific events using HTTP/3 streams. Registration happens
+%%% automatically when clients establish streaming connections.
 %%%
 %%% Uses a long-running notification manager process to handle high-frequency
 %%% message matching and dispatching efficiently.
 -module(dev_notify).
 
--export([info/1, info/3, dispatch/3, register/3, unregister/3, stream/3]).
+-export([info/1, info/3, dispatch/3, stream/3]).
 -export([start_notification_manager/0, stop_notification_manager/0]).
 
 -include("include/hb.hrl").
@@ -17,7 +18,7 @@
 
 %% @doc Device API information
 info(_) ->
-    #{exports => [info, dispatch, register, unregister, stream], variant => <<"Notify/1.0">>}.
+    #{exports => [info, dispatch, stream], variant => <<"Notify/1.0">>}.
 
 %% @doc HTTP info response providing information about this device
 info(_Msg1, _Msg2, _Opts) ->
@@ -27,130 +28,11 @@ info(_Msg1, _Msg2, _Opts) ->
           <<"paths">> =>
               #{<<"info">> => <<"Get device info">>,
                 <<"dispatch">> => <<"Dispatch an event to registered listeners">>,
-                <<"register">> => <<"Register a new event listener">>,
-                <<"unregister">> => <<"Unregister an event listener">>,
                 <<"stream">> => <<"Start a streaming connection for real-time events">>}},
     {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
-%% @doc Register a new event listener with template/spec support
-register(StateMsg, InputMsg, Opts) ->
-    ?event(notify, {register_listener, InputMsg}),
 
-    % Extract template specification (supports both map and regex templates)
-    TemplateResult =
-        case hb_ao:get(<<"template">>, InputMsg, Opts) of
-            not_found ->
-                {error, <<"No template specified">>};
-            TemplateSpec ->
-                {ok, TemplateSpec}
-        end,
 
-    case TemplateResult of
-        {error, Reason} ->
-            {error, Reason};
-        {ok, ExtractedTemplate} ->
-            case hb_ao:get(<<"stream">>, InputMsg, Opts) of
-                not_found ->
-                    {error, <<"No stream specified for event registration">>};
-                Stream ->
-                    % Validate template specification
-                    case validate_template(ExtractedTemplate, Opts) of
-                        {ok, ValidatedTemplate} ->
-                            % Register the template and stream in the state
-                            NewState =
-                                maps:put({template, ValidatedTemplate},
-                                         Stream,
-                                         maps:get(<<"listeners">>, StateMsg, #{})),
-                            {ok, StateMsg#{<<"listeners">> => NewState}};
-                        {error, ValidationError} ->
-                            {error, ValidationError}
-                    end
-            end
-    end.
-
-%% @doc Unregister an event listener (supports both template and legacy pattern)
-unregister(StateMsg, InputMsg, Opts) ->
-    ?event(notify, {unregister_listener, InputMsg}),
-
-    % Extract template for removal
-    TemplateResult =
-        case hb_ao:get(<<"template">>, InputMsg, Opts) of
-            not_found ->
-                {error, <<"No template specified">>};
-            TemplateSpec ->
-                {ok, TemplateSpec}
-        end,
-
-    case TemplateResult of
-        {error, Reason} ->
-            {error, Reason};
-        {ok, ExtractedTemplate} ->
-            % Validate template to get the same format as register function
-            case validate_template(ExtractedTemplate, Opts) of
-                {ok, ValidatedTemplate} ->
-                    % Find and remove the matching template from state
-                    Listeners = maps:get(<<"listeners">>, StateMsg, #{}),
-                    % We need to find the key that matches our template, accounting for message processing
-                    MatchingKey = find_matching_template_key(ValidatedTemplate, Listeners),
-                    case MatchingKey of
-                        not_found ->
-                            {error, <<"Template not found in listeners">>};
-                        Key ->
-                            NewState = maps:remove(Key, Listeners),
-                            {ok, StateMsg#{<<"listeners">> => NewState}}
-                    end;
-                {error, ValidationError} ->
-                    {error, ValidationError}
-            end
-    end.
-
-%% @doc Find the template key that matches our target template
-find_matching_template_key(TargetTemplate, Listeners) ->
-    Keys = maps:keys(Listeners),
-    find_matching_key(TargetTemplate, Keys).
-
-find_matching_key(_TargetTemplate, []) ->
-    not_found;
-find_matching_key(TargetTemplate, [{template, StoredTemplate} | Rest]) ->
-    case templates_match(TargetTemplate, StoredTemplate) of
-        true ->
-            {template, StoredTemplate};
-        false ->
-            find_matching_key(TargetTemplate, Rest)
-    end;
-find_matching_key(TargetTemplate, [_OtherKey | Rest]) ->
-    find_matching_key(TargetTemplate, Rest).
-
-%% @doc Check if two templates are equivalent
-templates_match(Template1, Template2) when is_binary(Template1), is_binary(Template2) ->
-    Template1 =:= Template2;
-templates_match({compiled_regex, _CompiledRegex1, OriginalPattern1},
-                {compiled_regex, _CompiledRegex2, OriginalPattern2}) ->
-    % Compare original patterns for compiled regex templates
-    OriginalPattern1 =:= OriginalPattern2;
-templates_match({compiled_regex, _CompiledRegex, OriginalPattern}, Template)
-    when is_binary(Template) ->
-    % Compare compiled regex with binary template
-    OriginalPattern =:= Template;
-templates_match(Template, {compiled_regex, _CompiledRegex, OriginalPattern})
-    when is_binary(Template) ->
-    % Compare binary template with compiled regex
-    Template =:= OriginalPattern;
-templates_match(Template1, Template2) when is_map(Template1), is_map(Template2) ->
-    % For map templates, we need to compare the core fields, ignoring metadata
-    % Extract the essential template fields
-    Essential1 = extract_essential_template(Template1),
-    Essential2 = extract_essential_template(Template2),
-    Essential1 =:= Essential2;
-templates_match(_Template1, _Template2) ->
-    false.
-
-%% @doc Extract essential template fields, removing HyperBEAM metadata
-extract_essential_template(Template) when is_map(Template) ->
-    % Remove priv and other metadata keys, keep only the core template fields
-    maps:without([<<"priv">>, <<"id">>, <<"unsigned_id">>, <<"hashpath">>], Template);
-extract_essential_template(Template) ->
-    Template.
 
 %% @doc Dispatch an event to registered listeners via the notification manager
 dispatch(_StateMsg, InputMsg, Opts) ->
@@ -712,54 +594,6 @@ event_dispatch_test() ->
 
     stop_notification_manager().
 
-%% @doc Test device registration and unregistration functions
-device_registration_test() ->
-    StateMsg = #{<<"listeners">> => #{}},
-    ?event(debug, {initial_state, StateMsg}),
-
-    % Test successful registration with map template
-    InputMsg1 =
-        #{<<"template">> => #{<<"device">> => <<"test@1.0">>}, <<"stream">> => <<"test-stream">>},
-    ?event(debug, {registering_map_template, InputMsg1}),
-
-    {ok, NewState1} = register(StateMsg, InputMsg1, #{}),
-    Listeners1 = maps:get(<<"listeners">>, NewState1),
-    ?event(debug,
-           {after_map_registration,
-            {listeners_count, maps:size(Listeners1)},
-            {keys, maps:keys(Listeners1)}}),
-    ?assertEqual(1, maps:size(Listeners1)),
-
-    % Test registration with regex template
-    InputMsg2 = #{<<"template">> => <<"/.*test.*/.*">>, <<"stream">> => <<"test-stream-2">>},
-
-    {ok, NewState2} = register(NewState1, InputMsg2, #{}),
-    Listeners2 = maps:get(<<"listeners">>, NewState2),
-    ?assertEqual(2, maps:size(Listeners2)),
-
-    % Test unregistration - unregister the first template we added
-    UnregMsg = #{<<"template">> => #{<<"device">> => <<"test@1.0">>}},
-
-    ?event(debug,
-           {before_unregister,
-            {listeners_count,
-             maps:size(
-                 maps:get(<<"listeners">>, NewState2))}}),
-    {ok, NewState3} = unregister(NewState2, UnregMsg, #{}),
-    Listeners3 = maps:get(<<"listeners">>, NewState3),
-    ?event(debug,
-           {after_unregister,
-            {listeners_count, maps:size(Listeners3)},
-            {keys, maps:keys(Listeners3)}}),
-    ?assertEqual(1, maps:size(Listeners3)), % Should have 1 left (regex)
-
-    % Verify the correct template was removed
-    ?assertNot(maps:is_key({template, #{<<"device">> => <<"test@1.0">>}}, Listeners3)),
-
-    % Test error cases
-    ?assertMatch({error, _}, register(StateMsg, #{}, #{})),
-    ?assertMatch({error, _}, register(StateMsg, #{<<"template">> => #{}}, #{})),
-    ?assertMatch({error, _}, unregister(StateMsg, #{}, #{})).
 
 %% @doc Test listener registration and unregistration
 listener_registration_test() ->
