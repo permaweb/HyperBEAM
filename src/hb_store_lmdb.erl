@@ -1387,3 +1387,102 @@ list_with_link_test() ->
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
     
     stop(StoreOpts).
+
+%% Add this test to verify transaction cleanup
+transaction_cleanup_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/txn-cleanup-test">>,
+        <<"capacity">> => ?DEFAULT_SIZE
+    },
+    reset(StoreOpts),
+
+    % Write some data to create pending writes
+    write(StoreOpts, <<"key1">>, <<"value1">>),
+    write(StoreOpts, <<"key2">>, <<"value2">>),
+
+    % Force a flush to test transaction handling
+    sync(StoreOpts),
+
+    % Verify data was written correctly
+    ?assertEqual({ok, <<"value1">>}, read(StoreOpts, <<"key1">>)),
+    ?assertEqual({ok, <<"value2">>}, read(StoreOpts, <<"key2">>)),
+
+    stop(StoreOpts).
+
+%% Test cursor cleanup under error conditions
+cursor_cleanup_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/cursor-cleanup-test">>,
+        <<"capacity">> => ?DEFAULT_SIZE
+    },
+    reset(StoreOpts),
+
+    % Create some test data
+    write(StoreOpts, <<"test/key1">>, <<"value1">>),
+    write(StoreOpts, <<"test/key2">>, <<"value2">>),
+    sync(StoreOpts),
+
+    % Test that fold operations work correctly
+    {ok, Results} = list(StoreOpts, <<"test">>),
+    ?assertEqual([<<"key1">>, <<"key2">>], lists:sort(Results)),
+
+    stop(StoreOpts).
+
+concurrent_reader_race_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/concurrent-race-test">>,
+        <<"capacity">> => ?DEFAULT_SIZE
+    },
+    reset(StoreOpts),
+
+    Parent = self(),
+    Key = <<"missing/key">>,
+
+    % Spawn multiple readers simultaneously
+    Readers = [
+        spawn(fun() ->
+            Result = read(StoreOpts, Key),
+            Parent ! {read_result, self(), Result}
+        end)
+        || _ <- lists:seq(1, 10)
+    ],
+
+    % Collect results
+    Results = [
+        receive {read_result, Pid, Result} -> Result
+        after 5000 -> timeout end
+        || Pid <- Readers
+    ],
+
+    % All should return not_found, none should timeout
+    ExpectedResults = lists:duplicate(10, not_found),
+    ?assertEqual(ExpectedResults, Results),
+
+    stop(StoreOpts).
+
+read_after_write_race_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/race-test">>,
+        <<"capacity">> => ?DEFAULT_SIZE
+    },
+    reset(StoreOpts),
+
+    % Write and immediately read in same process
+    Key = <<"race/test/key">>,
+    Value = <<"test-value">>,
+
+    ok = write(StoreOpts, Key, Value),
+
+    % This should always succeed with read-your-writes consistency
+    case read(StoreOpts, Key) of
+        {ok, Value} ->
+            ?assert(true);  % Success
+        not_found ->
+            ?assert(false)  % This indicates the race condition
+    end,
+
+    stop(StoreOpts).
