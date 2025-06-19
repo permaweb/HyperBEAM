@@ -86,7 +86,7 @@ window.addEventListener("DOMContentLoaded", () => {
   button.appendChild(check);
 
   // if isDark is true, toggle to dark, otherwise toggle to light
-  const toggleButtonToDark = (isDark) => {
+  const toggleButtonToDark = (isDark, saveToLocalStorage = true) => {
     button.ariaChecked = isDark.toString();
     button.title = isDark ? "Switch to light theme" : "Switch to dark theme";
 
@@ -107,8 +107,10 @@ window.addEventListener("DOMContentLoaded", () => {
     const primary = isDark ? "black" : "white";
 
     // Store in localStorage
-    localStorage.setItem("mdColorScheme", scheme);
-    localStorage.setItem("mdColorPrimary", primary);
+    if (saveToLocalStorage) {
+      localStorage.setItem("mdColorScheme", scheme);
+      localStorage.setItem("mdColorPrimary", primary);
+    }
 
     // Set data attributes
     document.body.dataset.mdColorScheme = scheme;
@@ -138,9 +140,16 @@ window.addEventListener("DOMContentLoaded", () => {
     document.body.dataset.mdColorPrimary = "white";
   }
 
-  // Insert into DOM
-  const headerOptions = document.querySelector(".md-header__source");
-  if (headerOptions) {
-    headerOptions.parentNode.insertBefore(button, headerOptions);
+  // do not show the button on the landing page and ensure it is in light mode
+  const isLandingPage = window.location.pathname === "/";
+  if (isLandingPage) {
+    // toggle to light mode and do not save this preference to localStorage
+    toggleButtonToDark(false, false);
+  } else {
+    // Insert into DOM
+    const headerOptions = document.querySelector(".md-header__source");
+    if (headerOptions) {
+      headerOptions.parentNode.insertBefore(button, headerOptions);
+    }
   }
 });
