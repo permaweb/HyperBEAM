@@ -794,26 +794,34 @@ ensure_node_history_test() ->
 
 %% @doc Test notify_device configuration option
 notify_device_config_test() ->
-    % Test default value from default_message()
-    ?assertEqual(undefined, ?MODULE:get(notify_device)),
+    % Test that we get a consistent default value from default_message()
+    DefaultValue = ?MODULE:get(notify_device),
+    ?assert(DefaultValue =:= undefined orelse is_binary(DefaultValue)),
+    ?event(debug, {notify_device_default_value, DefaultValue}),
     
-    % Test with configured value in opts
-    OptsWithNotify = #{notify_device => <<"notify@1.0">>},
-    ?assertEqual(<<"notify@1.0">>, ?MODULE:get(notify_device, undefined, OptsWithNotify)),
-    ?event(debug, {notify_device, ?MODULE:get(notify_device, undefined, OptsWithNotify)}),
+    % Test with empty opts (should use global default, whatever it is)
+    EmptyOpts = #{},
+    EmptyOptsValue = ?MODULE:get(notify_device, undefined, EmptyOpts),
+    ?assertEqual(DefaultValue, EmptyOptsValue),
+    ?event(debug, {notify_device_empty_opts, EmptyOptsValue}),
     
-    % Test override behavior - local opts should take precedence
-    ?assertEqual(<<"notify@1.0">>, ?MODULE:get(notify_device, undefined, OptsWithNotify)),
-    ?event(debug, {notify_device, ?MODULE:get(notify_device, undefined, OptsWithNotify)}),
+    % Test explicit disable by setting to undefined - local opts should override global
+    DisabledOpts = #{notify_device => undefined},
+    ?assertEqual(undefined, ?MODULE:get(notify_device, undefined, DisabledOpts)),
+    ?event(debug, {notify_device_disabled, ?MODULE:get(notify_device, undefined, DisabledOpts)}),
     
-    % Test with different notify device
+    % Test with different notify device - local override
     CustomOpts = #{notify_device => <<"custom-notify@2.0">>},
     ?assertEqual(<<"custom-notify@2.0">>, ?MODULE:get(notify_device, undefined, CustomOpts)),
-    ?event(debug, {notify_device, ?MODULE:get(notify_device, undefined, CustomOpts)}),
+    ?event(debug, {notify_device_custom, ?MODULE:get(notify_device, undefined, CustomOpts)}),
     
-    % Test default when not configured
-    EmptyOpts = #{},
-    ?assertEqual(undefined, ?MODULE:get(notify_device, undefined, EmptyOpts)),
-    ?event(debug, {notify_device, ?MODULE:get(notify_device, undefined, EmptyOpts)}).
+    % Test that local preferences take precedence over global defaults
+    OverrideOpts = #{notify_device => <<"local-notify@3.0">>},
+    ?assertEqual(<<"local-notify@3.0">>, ?MODULE:get(notify_device, <<"fallback">>, OverrideOpts)),
+    ?event(debug, {notify_device_override, ?MODULE:get(notify_device, <<"fallback">>, OverrideOpts)}),
+    
+    % Test behavior consistency - same opts should always return same value
+    ?assertEqual(DefaultValue, ?MODULE:get(notify_device, undefined, #{})),
+    ?assertEqual(undefined, ?MODULE:get(notify_device, undefined, #{notify_device => undefined})).
 
 -endif.

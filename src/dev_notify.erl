@@ -71,22 +71,8 @@ dispatch(_StateMsg, InputMsg, Opts) ->
             % Send event to the long-running notification manager process
             case hb_name:lookup(?NOTIFICATION_MANAGER) of
                 undefined ->
-                    % Manager not started, try to start it via the device
-                    spawn(fun() ->
-                             try
-                                 start_notification_manager(),
-                                 case hb_name:lookup(?NOTIFICATION_MANAGER) of
-                                     undefined -> ?event({notify_manager_start_failed, InputMsg});
-                                     ManagerPid -> ManagerPid ! {dispatch_event, InputMsg, Opts}
-                                 end
-                             catch
-                                 Class:Reason ->
-                                     ?event({notify_dispatch_error,
-                                             {class, Class},
-                                             {reason, Reason}})
-                             end
-                          end),
-                    {ok, <<"Starting notification manager">>};
+                    % Manager not started, return error instead of trying to start
+                    {error, <<"Notification manager not available">>};
                 ManagerPid ->
                     % Send directly to manager process (minimal overhead)
                     ManagerPid ! {dispatch_event, InputMsg, Opts},
@@ -163,10 +149,7 @@ create_streaming_body(Template, Opts) ->
 
 %% @doc Register a streaming connection for receiving notifications
 register_stream(StreamId, Template, _Req, _Opts) ->
-    % Ensure notification manager is running
-    start_notification_manager(),
-
-    % Register with the notification manager
+    % Register with the notification manager (no longer automatically starts)
     case hb_name:lookup(?NOTIFICATION_MANAGER) of
         undefined ->
             ?event(notify, {manager_not_available, {stream_id, StreamId}});
@@ -671,22 +654,25 @@ dispatch_function_test() ->
     stop_notification_manager(),
     timer:sleep(50),
 
-    % Start manager for testing
-    start_notification_manager(),
-
     % Test dispatch with valid input
     InputMsg =
         #{<<"event">> => #{<<"test">> => <<"data">>},
           <<"timestamp">> => erlang:system_time(millisecond)},
 
     % Test with no notify device configured (should return appropriate message)
-    Result1 = dispatch(#{}, InputMsg, #{}),
+    OptsWithoutNotify = #{notify_device => undefined},
+    Result1 = dispatch(#{}, InputMsg, OptsWithoutNotify),
     ?assertEqual({ok, <<"No notify device configured">>}, Result1),
 
-    % Test with notify device configured
+    % Test with notify device configured but no manager running (should return error)
     OptsWithNotify = #{notify_device => <<"notify@1.0">>},
     Result2 = dispatch(#{}, InputMsg, OptsWithNotify),
-    ?assertEqual({ok, <<"OK">>}, Result2),
+    ?assertEqual({error, <<"Notification manager not available">>}, Result2),
+
+    % Start manager and test successful dispatch
+    start_notification_manager(),
+    Result3 = dispatch(#{}, InputMsg, OptsWithNotify),
+    ?assertEqual({ok, <<"OK">>}, Result3),
 
     stop_notification_manager().
 
@@ -1350,6 +1336,40 @@ notification_manager_concurrent_start_test() ->
 
     stop_notification_manager().
 
+%% @doc Test that the start_manager hook function works correctly
+start_manager_hook_test() ->
+    % Ensure clean state
+    stop_notification_manager(),
+    timer:sleep(50),
+
+    % Verify manager is not running
+    ?assertEqual(undefined, hb_name:lookup(?NOTIFICATION_MANAGER)),
+
+    % Test with notify_device undefined (should not start manager)
+    HookMsg1 = #{<<"body">> => #{notify_device => undefined}},
+    {ok, HookMsg1} = start_manager(#{}, HookMsg1, #{}),
+    ?assertEqual(undefined, hb_name:lookup(?NOTIFICATION_MANAGER)),
+
+    % Test with notify_device configured (should start manager)
+    HookMsg2 = #{<<"body">> => #{notify_device => <<"notify@1.0">>}},
+    {ok, UpdatedHookMsg} = start_manager(#{}, HookMsg2, #{}),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
+    ?assertNotEqual(undefined, ManagerPid),
+    ?assert(is_process_alive(ManagerPid)),
+    
+    % Verify that the hook message was updated with on-notify registration
+    UpdatedBody = maps:get(<<"body">>, UpdatedHookMsg),
+    OnHooks = maps:get(on, UpdatedBody),
+    ?assert(maps:is_key(<<"on-notify">>, OnHooks)),
+
+    % Test idempotent behavior (calling again should not create new manager)
+    {ok, _UpdatedHookMsg2} = start_manager(#{}, UpdatedHookMsg, #{}),
+    ManagerPid2 = hb_name:lookup(?NOTIFICATION_MANAGER),
+    ?assertEqual(ManagerPid, ManagerPid2), % Same PID
+
+    stop_notification_manager().
+
+
 %% @doc Benchmark test to measure handle_event_dispatch performance directly
 handle_event_dispatch_benchmark_test() ->
     % Ensure clean state
@@ -1606,32 +1626,3 @@ receive_loop(Count) ->
     after 10 ->
         exit({received_count, Count})
     end.
-
-%% @doc Test that the start_manager hook function works correctly
-start_manager_hook_test() ->
-    % Ensure clean state
-    stop_notification_manager(),
-    timer:sleep(50),
-
-    % Verify manager is not running
-    ?assertEqual(undefined, hb_name:lookup(?NOTIFICATION_MANAGER)),
-
-    % Test with notify_device undefined (should not start manager)
-    HookMsg1 = #{<<"body">> => #{notify_device => undefined}},
-    {ok, HookMsg1} = start_manager(#{}, HookMsg1, #{}),
-    ?assertEqual(undefined, hb_name:lookup(?NOTIFICATION_MANAGER)),
-
-    % Test with notify_device configured (should start manager)
-    HookMsg2 = #{<<"body">> => #{notify_device => <<"notify@1.0">>}},
-    {ok, HookMsg2} = start_manager(#{}, HookMsg2, #{}),
-    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
-    ?assertNotEqual(undefined, ManagerPid),
-    ?assert(is_process_alive(ManagerPid)),
-
-    % Test idempotent behavior (calling again should not create new manager)
-    {ok, HookMsg2} = start_manager(#{}, HookMsg2, #{}),
-    ManagerPid2 = hb_name:lookup(?NOTIFICATION_MANAGER),
-    ?assertEqual(ManagerPid, ManagerPid2), % Same PID
-
-    stop_notification_manager().
-
