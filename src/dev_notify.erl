@@ -7,7 +7,7 @@
 %%% message matching and dispatching efficiently.
 -module(dev_notify).
 
--export([info/1, info/3, dispatch/3, stream/3]).
+-export([info/1, info/3, dispatch/3, stream/3, start_manager/3]).
 -export([start_notification_manager/0, stop_notification_manager/0]).
 
 -include("include/hb.hrl").
@@ -18,7 +18,7 @@
 
 %% @doc Device API information
 info(_) ->
-    #{exports => [info, dispatch, stream], variant => <<"Notify/1.0">>}.
+    #{exports => [info, dispatch, stream, start_manager], variant => <<"Notify/1.0">>}.
 
 %% @doc HTTP info response providing information about this device
 info(_Msg1, _Msg2, _Opts) ->
@@ -28,22 +28,70 @@ info(_Msg1, _Msg2, _Opts) ->
           <<"paths">> =>
               #{<<"info">> => <<"Get device info">>,
                 <<"dispatch">> => <<"Dispatch an event to registered listeners">>,
-                <<"stream">> => <<"Start a streaming connection for real-time events">>}},
+                <<"stream">> => <<"Start a streaming connection for real-time events">>,
+                <<"start_manager">> => <<"Start notification manager via hook (internal)">>}},
     {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
+
+%% @doc Start notification manager if notify_device is configured (called via start hook)
+start_manager(_StateMsg, HookMsg, _Opts) ->
+    % Extract the body from hook message (contains node configuration)
+    NodeConfig = maps:get(<<"body">>, HookMsg, #{}),
+
+    % Check if notify device is configured
+    case hb_opts:get(notify_device, undefined, NodeConfig) of
+        undefined ->
+            {ok, HookMsg}; % No notify device configured, return unchanged
+        _NotifyDeviceSpec ->
+            start_notification_manager(),
+            
+            % Register the on-notify hook dynamically
+            CurrentHooks = hb_opts:get(on, #{}, NodeConfig),
+            UpdatedHooks = CurrentHooks#{
+                <<"on-notify">> => #{
+                    <<"device">> => #{
+                        <<"on-notify">> => fun dev_notify:dispatch/3
+                    }
+                }
+            },
+            UpdatedNodeConfig = NodeConfig#{on => UpdatedHooks},
+            UpdatedHookMsg = HookMsg#{<<"body">> => UpdatedNodeConfig},
+            
+            {ok, UpdatedHookMsg}
+    end.
 
 %% @doc Dispatch an event to registered listeners via the notification manager
 dispatch(_StateMsg, InputMsg, Opts) ->
     ?event(notify, {dispatch_event, InputMsg}),
 
-    % Send event to the long-running notification manager process
-    case hb_name:lookup(?NOTIFICATION_MANAGER) of
+    % Check if notify device is configured
+    case hb_opts:get(notify_device, undefined, Opts) of
         undefined ->
-            ?event(notify, {manager_not_started, starting_manager}),
-            start_notification_manager(),
-            dispatch(_StateMsg, InputMsg, Opts);
-        ManagerPid ->
-            ManagerPid ! {dispatch_event, InputMsg, Opts},
-            {ok, <<"OK">>}
+            {ok, <<"No notify device configured">>}; % No notify device configured
+        _NotifyDeviceSpec ->
+            % Send event to the long-running notification manager process
+            case hb_name:lookup(?NOTIFICATION_MANAGER) of
+                undefined ->
+                    % Manager not started, try to start it via the device
+                    spawn(fun() ->
+                             try
+                                 start_notification_manager(),
+                                 case hb_name:lookup(?NOTIFICATION_MANAGER) of
+                                     undefined -> ?event({notify_manager_start_failed, InputMsg});
+                                     ManagerPid -> ManagerPid ! {dispatch_event, InputMsg, Opts}
+                                 end
+                             catch
+                                 Class:Reason ->
+                                     ?event({notify_dispatch_error,
+                                             {class, Class},
+                                             {reason, Reason}})
+                             end
+                          end),
+                    {ok, <<"Starting notification manager">>};
+                ManagerPid ->
+                    % Send directly to manager process (minimal overhead)
+                    ManagerPid ! {dispatch_event, InputMsg, Opts},
+                    {ok, <<"OK">>}
+            end
     end.
 
 %% Note: dispatch_to_listeners and push_event functions are now handled
@@ -631,8 +679,14 @@ dispatch_function_test() ->
         #{<<"event">> => #{<<"test">> => <<"data">>},
           <<"timestamp">> => erlang:system_time(millisecond)},
 
-    Result = dispatch(#{}, InputMsg, #{}),
-    ?assertEqual({ok, <<"OK">>}, Result),
+    % Test with no notify device configured (should return appropriate message)
+    Result1 = dispatch(#{}, InputMsg, #{}),
+    ?assertEqual({ok, <<"No notify device configured">>}, Result1),
+
+    % Test with notify device configured
+    OptsWithNotify = #{notify_device => <<"notify@1.0">>},
+    Result2 = dispatch(#{}, InputMsg, OptsWithNotify),
+    ?assertEqual({ok, <<"OK">>}, Result2),
 
     stop_notification_manager().
 
@@ -871,263 +925,6 @@ performance_test() ->
     ?assert(Duration < 100000, "Performance test took too long"),
 
     stop_notification_manager().
-
-%% @doc Benchmark test to measure handle_event_dispatch performance directly
-handle_event_dispatch_benchmark_test() ->
-    % Ensure clean state
-    stop_notification_manager(),
-    timer:sleep(50),
-
-    start_notification_manager(),
-    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
-    ?assert(is_process_alive(ManagerPid)),
-
-    % Register many listeners to create realistic load
-    NumListeners = 10000,
-    TestEvent =
-        #{<<"service">> => <<"benchmark">>,
-          <<"action">> => <<"test">>,
-          <<"data">> => <<"benchmark_payload">>},
-
-    % Create listeners with different templates for realistic scenario
-    lists:foreach(fun(N) ->
-                     Template =
-                         case N rem 4 of
-                             0 -> #{<<"service">> => <<"benchmark">>};  % Will match
-                             1 -> #{<<"service">> => <<"other">>};      % Won't match
-                             2 -> #{<<"action">> => <<"test">>};        % Will match
-                             3 -> #{<<"type">> => <<"different">>}      % Won't match
-                         end,
-                     StreamPid = spawn(fun() -> receive stop -> ok after 10000 -> ok end end),
-                     Ref = make_ref(),
-                     ManagerPid ! {register_listener, Template, StreamPid, Ref}
-                  end,
-                  lists:seq(1, NumListeners)),
-
-    timer:sleep(100), % Allow registrations to process
-
-    % Verify listeners are registered
-    ListenerCount = ets:info(notification_listeners, size),
-    ?event(notify, {benchmark_setup, {listeners_registered, ListenerCount}}),
-    ?assertEqual(NumListeners, ListenerCount),
-
-    % Benchmark current handle_event_dispatch implementation
-    NumIterations = 100,
-    Times =
-        lists:map(fun(_) ->
-                     StartTime = erlang:system_time(microsecond),
-
-                     % Call handle_event_dispatch directly (this is what we're optimizing)
-                     handle_event_dispatch(TestEvent, #{}),
-
-                     EndTime = erlang:system_time(microsecond),
-                     EndTime - StartTime
-                  end,
-                  lists:seq(1, NumIterations)),
-
-    % Calculate statistics
-    TotalTime = lists:sum(Times),
-    MinTime = lists:min(Times),
-    MaxTime = lists:max(Times),
-    AvgTime = TotalTime div NumIterations,
-
-    % Calculate how many processes were spawned per call
-    % (This will be listeners that match × 1 since we spawn one process per match)
-    MatchingListeners = NumListeners div 2, % Roughly half should match our test event
-    ProcessesPerCall = MatchingListeners,
-    TotalProcessesSpawned = ProcessesPerCall * NumIterations,
-
-    ?event(notify_benchmark,
-           {handle_event_dispatch_benchmark,
-            {listeners, NumListeners},
-            {matching_listeners_estimate, MatchingListeners},
-            {iterations, NumIterations},
-            {total_time_us, TotalTime},
-            {avg_time_us, AvgTime},
-            {min_time_us, MinTime},
-            {max_time_us, MaxTime},
-            {processes_spawned_per_call, ProcessesPerCall},
-            {total_processes_spawned, TotalProcessesSpawned},
-            {calls_per_second, NumIterations * 1000000 div TotalTime}}),
-
-    % Performance assertions
-    ?assert(AvgTime > 0, "Benchmark should take measurable time"),
-    ?assert(TotalProcessesSpawned > 0, "Should spawn processes for matching listeners"),
-
-    % Log current performance baseline for comparison with foldl implementation
-    EventsPerSecond = NumIterations * 1000000 div TotalTime,
-    MicrosecondsPerEvent = AvgTime,
-
-    ?event(notify_benchmark,
-           {current_tab2list_baseline,
-            {events_per_second, EventsPerSecond},
-            {microseconds_per_event, MicrosecondsPerEvent},
-            {microseconds_per_listener, AvgTime div NumListeners},
-            {table_copying_overhead, "tab2list_copies_entire_table"}}),
-
-    stop_notification_manager().
-
-%% @doc Test handle_event_dispatch performance under different listener loads
-scaling_benchmark_test() ->
-    % Test how performance degrades as listener count increases
-    ListenerCounts = [100, 500, 1000, 2000, 10000],
-    Results =
-        lists:map(fun(NumListeners) -> benchmark_with_listener_count(NumListeners) end,
-                  ListenerCounts),
-
-    ?event(notify_benchmark, {scaling_benchmark_results, Results}),
-
-    % Performance should degrade linearly (or better) with listener count
-    % If it degrades quadratically, that's a bad sign
-    lists:foreach(fun({ListenerCount, AvgTimeUs}) ->
-                     % Very rough check - average time should be reasonable
-                     ReasonableTimeUs = ListenerCount * 10, % 10us per listener is reasonable
-                     ?assert(AvgTimeUs < ReasonableTimeUs * 2,
-                             io_lib:format("Performance too slow for ~p listeners: ~pus",
-                                           [ListenerCount, AvgTimeUs]))
-                  end,
-                  Results).
-
-%% Helper function for scaling benchmark
-benchmark_with_listener_count(NumListeners) ->
-    stop_notification_manager(),
-    timer:sleep(50),
-
-    start_notification_manager(),
-    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
-
-    % Register listeners
-    lists:foreach(fun(N) ->
-                     Template =
-                         #{<<"test">> => <<"scaling">>, <<"id">> => integer_to_binary(N rem 10)},
-                     StreamPid = spawn(fun() -> receive stop -> ok after 5000 -> ok end end),
-                     Ref = make_ref(),
-                     ManagerPid ! {register_listener, Template, StreamPid, Ref}
-                  end,
-                  lists:seq(1, NumListeners)),
-
-    timer:sleep(50),
-
-    % Benchmark handle_event_dispatch
-    TestEvent = #{<<"test">> => <<"scaling">>, <<"data">> => <<"test">>},
-    NumIterations = 50,
-
-    StartTime = erlang:system_time(microsecond),
-    lists:foreach(fun(_) -> handle_event_dispatch(TestEvent, #{}) end,
-                  lists:seq(1, NumIterations)),
-    EndTime = erlang:system_time(microsecond),
-
-    TotalTime = EndTime - StartTime,
-    AvgTime = TotalTime div NumIterations,
-
-    stop_notification_manager(),
-
-    {NumListeners, AvgTime}.
-
-%% @doc Test memory pressure with large listener counts
-memory_pressure_test() ->
-    % Only run this test if we have sufficient memory/time
-    case erlang:system_info(schedulers) of
-        N when N >= 4 ->
-            memory_pressure_test_impl();
-        _ ->
-            ?event(notify_benchmark, {memory_pressure_test_skipped, insufficient_schedulers})
-    end.
-
-memory_pressure_test_impl() ->
-    % Ensure clean state
-    stop_notification_manager(),
-    timer:sleep(50),
-
-    start_notification_manager(),
-    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
-    ?assert(is_process_alive(ManagerPid)),
-
-    % Register many listeners
-    NumListeners = 5000,  % Large number to stress memory
-
-    ?event(notify_benchmark, {memory_test_start, {registering_listeners, NumListeners}}),
-
-    lists:foreach(fun(N) ->
-                     Template =
-                         #{<<"service">> => <<"memory-test">>,
-                           <<"instance">> => integer_to_binary(N rem 100), % Some variety
-                           <<"id">> => integer_to_binary(N)},
-                     StreamPid = spawn(fun() -> receive stop -> ok after 30000 -> ok end end),
-                     Ref = make_ref(),
-                     ManagerPid ! {register_listener, Template, StreamPid, Ref},
-
-                     % Add small delay every 100 registrations to avoid overwhelming
-                     case N rem 100 of
-                         0 -> timer:sleep(1);
-                         _ -> ok
-                     end
-                  end,
-                  lists:seq(1, NumListeners)),
-
-    timer:sleep(200), % Allow registrations to process
-
-    % Get memory stats before test
-    MemBefore = erlang:memory(total),
-    ProcessCountBefore = erlang:system_info(process_count),
-
-    % Send events that will trigger many process spawns
-    NumEvents = 5,
-    StartTime = erlang:system_time(microsecond),
-
-    lists:foreach(fun(N) ->
-                     Event =
-                         #{<<"service">> => <<"memory-test">>,
-                           <<"event_id">> => N,
-                           <<"data">> => <<"large_event_payload_to_increase_memory_pressure">>},
-                     ManagerPid ! {dispatch_event, Event, #{}}
-                  end,
-                  lists:seq(1, NumEvents)),
-
-    % Wait for processing (increased to allow process spawns to complete)
-    timer:sleep(1000),
-
-    EndTime = erlang:system_time(microsecond),
-    Duration = EndTime - StartTime,
-
-    % Get memory stats after test
-    MemAfter = erlang:memory(total),
-    ProcessCountAfter = erlang:system_info(process_count),
-
-    % Calculate metrics
-    ExpectedProcessSpawns = NumListeners * NumEvents,
-    MemoryIncrease = MemAfter - MemBefore,
-    ProcessIncrease = ProcessCountAfter - ProcessCountBefore,
-
-    ?event(notify_benchmark,
-           {memory_pressure_results,
-            {listeners, NumListeners},
-            {events, NumEvents},
-            {duration_us, Duration},
-            {expected_process_spawns, ExpectedProcessSpawns},
-            {memory_increase_bytes, MemoryIncrease},
-            {process_count_increase, ProcessIncrease},
-            {memory_per_spawn_bytes,
-             case ExpectedProcessSpawns of
-                 0 ->
-                     0;
-                 _ ->
-                     MemoryIncrease div ExpectedProcessSpawns
-             end}}),
-
-    % Performance should not be terrible even with many listeners
-    MaxReasonableTime = 5000000, % 5 seconds
-    ?assert(Duration < MaxReasonableTime, "Memory pressure test took too long"),
-
-    stop_notification_manager().
-
-receive_loop(Count) ->
-    receive
-        {notify_event, _Event} ->
-            receive_loop(Count + 1)
-    after 10 ->
-        exit({received_count, Count})
-    end.
 
 %% @doc Test duplicate listener registration bug
 duplicate_listener_registration_test() ->
@@ -1552,3 +1349,289 @@ notification_manager_concurrent_start_test() ->
     end,
 
     stop_notification_manager().
+
+%% @doc Benchmark test to measure handle_event_dispatch performance directly
+handle_event_dispatch_benchmark_test() ->
+    % Ensure clean state
+    stop_notification_manager(),
+    timer:sleep(50),
+
+    start_notification_manager(),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
+    ?assert(is_process_alive(ManagerPid)),
+
+    % Register many listeners to create realistic load
+    NumListeners = 10000,
+    TestEvent =
+        #{<<"service">> => <<"benchmark">>,
+          <<"action">> => <<"test">>,
+          <<"data">> => <<"benchmark_payload">>},
+
+    % Create listeners with different templates for realistic scenario
+    lists:foreach(fun(N) ->
+                     Template =
+                         case N rem 4 of
+                             0 -> #{<<"service">> => <<"benchmark">>};  % Will match
+                             1 -> #{<<"service">> => <<"other">>};      % Won't match
+                             2 -> #{<<"action">> => <<"test">>};        % Will match
+                             3 -> #{<<"type">> => <<"different">>}      % Won't match
+                         end,
+                     StreamPid = spawn(fun() -> receive stop -> ok after 10000 -> ok end end),
+                     Ref = make_ref(),
+                     ManagerPid ! {register_listener, Template, StreamPid, Ref}
+                  end,
+                  lists:seq(1, NumListeners)),
+
+    timer:sleep(100), % Allow registrations to process
+
+    % Verify listeners are registered
+    ListenerCount = ets:info(notification_listeners, size),
+    ?event(notify, {benchmark_setup, {listeners_registered, ListenerCount}}),
+    ?assertEqual(NumListeners, ListenerCount),
+
+    % Benchmark current handle_event_dispatch implementation
+    NumIterations = 100,
+    Times =
+        lists:map(fun(_) ->
+                     StartTime = erlang:system_time(microsecond),
+
+                     % Call handle_event_dispatch directly (this is what we're optimizing)
+                     handle_event_dispatch(TestEvent, #{}),
+
+                     EndTime = erlang:system_time(microsecond),
+                     EndTime - StartTime
+                  end,
+                  lists:seq(1, NumIterations)),
+
+    % Calculate statistics
+    TotalTime = lists:sum(Times),
+    MinTime = lists:min(Times),
+    MaxTime = lists:max(Times),
+    AvgTime = TotalTime div NumIterations,
+
+    % Calculate how many processes were spawned per call
+    % (This will be listeners that match × 1 since we spawn one process per match)
+    MatchingListeners = NumListeners div 2, % Roughly half should match our test event
+    ProcessesPerCall = MatchingListeners,
+    TotalProcessesSpawned = ProcessesPerCall * NumIterations,
+
+    ?event(notify_benchmark,
+           {handle_event_dispatch_benchmark,
+            {listeners, NumListeners},
+            {matching_listeners_estimate, MatchingListeners},
+            {iterations, NumIterations},
+            {total_time_us, TotalTime},
+            {avg_time_us, AvgTime},
+            {min_time_us, MinTime},
+            {max_time_us, MaxTime},
+            {processes_spawned_per_call, ProcessesPerCall},
+            {total_processes_spawned, TotalProcessesSpawned},
+            {calls_per_second, NumIterations * 1000000 div TotalTime}}),
+
+    % Performance assertions
+    ?assert(AvgTime > 0, "Benchmark should take measurable time"),
+    ?assert(TotalProcessesSpawned > 0, "Should spawn processes for matching listeners"),
+
+    % Log current performance baseline for comparison with foldl implementation
+    EventsPerSecond = NumIterations * 1000000 div TotalTime,
+    MicrosecondsPerEvent = AvgTime,
+
+    ?event(notify_benchmark,
+           {current_tab2list_baseline,
+            {events_per_second, EventsPerSecond},
+            {microseconds_per_event, MicrosecondsPerEvent},
+            {microseconds_per_listener, AvgTime div NumListeners},
+            {table_copying_overhead, "tab2list_copies_entire_table"}}),
+
+    stop_notification_manager().
+
+%% @doc Test handle_event_dispatch performance under different listener loads
+scaling_benchmark_test() ->
+    % Test how performance degrades as listener count increases
+    ListenerCounts = [100, 500, 1000, 2000, 10000],
+    Results =
+        lists:map(fun(NumListeners) -> benchmark_with_listener_count(NumListeners) end,
+                  ListenerCounts),
+
+    ?event(notify_benchmark, {scaling_benchmark_results, Results}),
+
+    % Performance should degrade linearly (or better) with listener count
+    % If it degrades quadratically, that's a bad sign
+    lists:foreach(fun({ListenerCount, AvgTimeUs}) ->
+                     % Very rough check - average time should be reasonable
+                     ReasonableTimeUs = ListenerCount * 10, % 10us per listener is reasonable
+                     ?assert(AvgTimeUs < ReasonableTimeUs * 2,
+                             io_lib:format("Performance too slow for ~p listeners: ~pus",
+                                           [ListenerCount, AvgTimeUs]))
+                  end,
+                  Results).
+
+%% Helper function for scaling benchmark
+benchmark_with_listener_count(NumListeners) ->
+    stop_notification_manager(),
+    timer:sleep(50),
+
+    start_notification_manager(),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
+
+    % Register listeners
+    lists:foreach(fun(N) ->
+                     Template =
+                         #{<<"test">> => <<"scaling">>, <<"id">> => integer_to_binary(N rem 10)},
+                     StreamPid = spawn(fun() -> receive stop -> ok after 5000 -> ok end end),
+                     Ref = make_ref(),
+                     ManagerPid ! {register_listener, Template, StreamPid, Ref}
+                  end,
+                  lists:seq(1, NumListeners)),
+
+    timer:sleep(50),
+
+    % Benchmark handle_event_dispatch
+    TestEvent = #{<<"test">> => <<"scaling">>, <<"data">> => <<"test">>},
+    NumIterations = 50,
+
+    StartTime = erlang:system_time(microsecond),
+    lists:foreach(fun(_) -> handle_event_dispatch(TestEvent, #{}) end,
+                  lists:seq(1, NumIterations)),
+    EndTime = erlang:system_time(microsecond),
+
+    TotalTime = EndTime - StartTime,
+    AvgTime = TotalTime div NumIterations,
+
+    stop_notification_manager(),
+
+    {NumListeners, AvgTime}.
+
+%% @doc Test memory pressure with large listener counts
+memory_pressure_test() ->
+    % Only run this test if we have sufficient memory/time
+    case erlang:system_info(schedulers) of
+        N when N >= 4 ->
+            memory_pressure_test_impl();
+        _ ->
+            ?event(notify_benchmark, {memory_pressure_test_skipped, insufficient_schedulers})
+    end.
+
+memory_pressure_test_impl() ->
+    % Ensure clean state
+    stop_notification_manager(),
+    timer:sleep(50),
+
+    start_notification_manager(),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
+    ?assert(is_process_alive(ManagerPid)),
+
+    % Register many listeners
+    NumListeners = 5000,  % Large number to stress memory
+
+    ?event(notify_benchmark, {memory_test_start, {registering_listeners, NumListeners}}),
+
+    lists:foreach(fun(N) ->
+                     Template =
+                         #{<<"service">> => <<"memory-test">>,
+                           <<"instance">> => integer_to_binary(N rem 100), % Some variety
+                           <<"id">> => integer_to_binary(N)},
+                     StreamPid = spawn(fun() -> receive stop -> ok after 30000 -> ok end end),
+                     Ref = make_ref(),
+                     ManagerPid ! {register_listener, Template, StreamPid, Ref},
+
+                     % Add small delay every 100 registrations to avoid overwhelming
+                     case N rem 100 of
+                         0 -> timer:sleep(1);
+                         _ -> ok
+                     end
+                  end,
+                  lists:seq(1, NumListeners)),
+
+    timer:sleep(200), % Allow registrations to process
+
+    % Get memory stats before test
+    MemBefore = erlang:memory(total),
+    ProcessCountBefore = erlang:system_info(process_count),
+
+    % Send events that will trigger many process spawns
+    NumEvents = 5,
+    StartTime = erlang:system_time(microsecond),
+
+    lists:foreach(fun(N) ->
+                     Event =
+                         #{<<"service">> => <<"memory-test">>,
+                           <<"event_id">> => N,
+                           <<"data">> => <<"large_event_payload_to_increase_memory_pressure">>},
+                     ManagerPid ! {dispatch_event, Event, #{}}
+                  end,
+                  lists:seq(1, NumEvents)),
+
+    % Wait for processing (increased to allow process spawns to complete)
+    timer:sleep(1000),
+
+    EndTime = erlang:system_time(microsecond),
+    Duration = EndTime - StartTime,
+
+    % Get memory stats after test
+    MemAfter = erlang:memory(total),
+    ProcessCountAfter = erlang:system_info(process_count),
+
+    % Calculate metrics
+    ExpectedProcessSpawns = NumListeners * NumEvents,
+    MemoryIncrease = MemAfter - MemBefore,
+    ProcessIncrease = ProcessCountAfter - ProcessCountBefore,
+
+    ?event(notify_benchmark,
+           {memory_pressure_results,
+            {listeners, NumListeners},
+            {events, NumEvents},
+            {duration_us, Duration},
+            {expected_process_spawns, ExpectedProcessSpawns},
+            {memory_increase_bytes, MemoryIncrease},
+            {process_count_increase, ProcessIncrease},
+            {memory_per_spawn_bytes,
+             case ExpectedProcessSpawns of
+                 0 ->
+                     0;
+                 _ ->
+                     MemoryIncrease div ExpectedProcessSpawns
+             end}}),
+
+    % Performance should not be terrible even with many listeners
+    MaxReasonableTime = 5000000, % 5 seconds
+    ?assert(Duration < MaxReasonableTime, "Memory pressure test took too long"),
+
+    stop_notification_manager().
+
+receive_loop(Count) ->
+    receive
+        {notify_event, _Event} ->
+            receive_loop(Count + 1)
+    after 10 ->
+        exit({received_count, Count})
+    end.
+
+%% @doc Test that the start_manager hook function works correctly
+start_manager_hook_test() ->
+    % Ensure clean state
+    stop_notification_manager(),
+    timer:sleep(50),
+
+    % Verify manager is not running
+    ?assertEqual(undefined, hb_name:lookup(?NOTIFICATION_MANAGER)),
+
+    % Test with notify_device undefined (should not start manager)
+    HookMsg1 = #{<<"body">> => #{notify_device => undefined}},
+    {ok, HookMsg1} = start_manager(#{}, HookMsg1, #{}),
+    ?assertEqual(undefined, hb_name:lookup(?NOTIFICATION_MANAGER)),
+
+    % Test with notify_device configured (should start manager)
+    HookMsg2 = #{<<"body">> => #{notify_device => <<"notify@1.0">>}},
+    {ok, HookMsg2} = start_manager(#{}, HookMsg2, #{}),
+    ManagerPid = hb_name:lookup(?NOTIFICATION_MANAGER),
+    ?assertNotEqual(undefined, ManagerPid),
+    ?assert(is_process_alive(ManagerPid)),
+
+    % Test idempotent behavior (calling again should not create new manager)
+    {ok, HookMsg2} = start_manager(#{}, HookMsg2, #{}),
+    ManagerPid2 = hb_name:lookup(?NOTIFICATION_MANAGER),
+    ?assertEqual(ManagerPid, ManagerPid2), % Same PID
+
+    stop_notification_manager().
+

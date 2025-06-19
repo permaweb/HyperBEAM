@@ -16,11 +16,6 @@ start(_StartType, _StartArgs) ->
     hb_sup:start_link(),
     ok = dev_scheduler_registry:start(),
     _TimestampServer = ar_timestamp:start(),
-    % Start notification manager if notify_device is configured
-    case hb_opts:get(notify_device, undefined, #{}) of
-        undefined -> ok;
-        _ -> dev_notify:start_notification_manager()
-    end,
     {ok, _} = hb_http_server:start().
 
 stop(_State) ->

@@ -148,7 +148,15 @@ default_message() ->
         ],
         %% Notification device specification for real-time event streaming
         %% Set to undefined to disable, or specify a device like <<"notify@1.0">>
-        notify_device => undefined,
+        notify_device => <<"notify@1.0">>,
+        %% Default hook handlers
+        on => #{
+            <<"start">> => #{
+                <<"device">> => #{
+                    <<"start">> => fun dev_notify:start_manager/3
+                }
+            }
+        },
         routes => [
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.

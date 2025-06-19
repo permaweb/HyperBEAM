@@ -211,7 +211,12 @@ notify(GroupName, Msg2, Msg3, Opts) ->
             ok
     end,
     % Call notification dispatch for external listeners (non-blocking)
-    dispatch_to_notify_device(GroupName, Msg2, Msg3, Opts),
+    dev_hook:on(<<"on-notify">>, #{
+        <<"group">> => GroupName,
+        <<"request">> => Msg2,
+        <<"result">> => Msg3,
+        <<"timestamp">> => erlang:system_time(millisecond)
+    }, Opts),
     receive
         {resolve, Listener, GroupName, Msg2, _ListenerOpts} ->
             ?event({notifying_listener, {listener, Listener}, {group, GroupName}}),
@@ -222,45 +227,6 @@ notify(GroupName, Msg2, Msg3, Opts) ->
         ok
     end.
 
-%% @doc Dispatch notification events to the notify device if one is configured.
-%% This sends events directly to the notification manager process for efficient handling.
-dispatch_to_notify_device(GroupName, Msg2, Msg3, Opts) ->
-    case hb_opts:get(notify_device, undefined, Opts) of
-        undefined -> 
-            ok; % No notify device configured
-        _NotifyDeviceSpec ->
-            % Create event message for dispatching
-            EventMsg = #{
-                <<"group">> => GroupName,
-                <<"request">> => Msg2,
-                <<"result">> => Msg3,
-                <<"timestamp">> => erlang:system_time(millisecond)
-            },
-            
-            % Send directly to notification manager if available
-            % This is much more efficient than spawning and calling hb_ao:resolve
-            case whereis(hb_notification_manager) of
-                undefined ->
-                    % Manager not started, try to start it via the device
-                    spawn(fun() -> 
-                        try
-                            dev_notify:start_notification_manager(),
-                            case whereis(hb_notification_manager) of
-                                undefined -> 
-                                    ?event({notify_manager_start_failed, GroupName});
-                                ManagerPid ->
-                                    ManagerPid ! {dispatch_event, EventMsg, Opts}
-                            end
-                        catch
-                            Class:Reason ->
-                                ?event({notify_dispatch_error, {class, Class}, {reason, Reason}})
-                        end
-                    end);
-                ManagerPid ->
-                    % Send directly to manager process (minimal overhead)
-                    ManagerPid ! {dispatch_event, EventMsg, Opts}
-            end
-    end.
 
 %% @doc Forward requests to a newly delegated execution process.
 forward_work(NewPID, Opts) ->
@@ -531,7 +497,12 @@ notification_dispatch_test() ->
     
     % Test with notify_device disabled
     Opts1 = #{},
-    dispatch_to_notify_device(<<"test-group">>, #{}, #{}, Opts1),
+    dev_hook:on(<<"on-notify">>, #{
+        <<"group">> => <<"test-group">>,
+        <<"request">> => #{},
+        <<"result">> => #{},
+        <<"timestamp">> => erlang:system_time(millisecond)
+    }, Opts1),
     % Should complete without error
     
     % Test with notify_device enabled but manager not started
@@ -541,15 +512,26 @@ notification_dispatch_test() ->
     Msg3 = #{ <<"result">> => <<"success">> },
     
     % Should not crash even if manager not available
-    dispatch_to_notify_device(GroupName, Msg2, Msg3, Opts2),
+    dev_hook:on(<<"on-notify">>, #{
+        <<"group">> => GroupName,
+        <<"request">> => Msg2,
+        <<"result">> => Msg3,
+        <<"timestamp">> => erlang:system_time(millisecond)
+    }, Opts2),
     
     % Test with manager running
     dev_notify:start_notification_manager(),
-    dispatch_to_notify_device(GroupName, Msg2, Msg3, Opts2),
+    dev_hook:on(<<"on-notify">>, #{
+        <<"group">> => GroupName,
+        <<"request">> => Msg2,
+        <<"result">> => Msg3,
+        <<"timestamp">> => erlang:system_time(millisecond)
+    }, Opts2),
     timer:sleep(10), % Allow dispatch to process
     
     % Manager should still be alive
-    ManagerPid = whereis(hb_notification_manager),
+    ManagerPid = hb_name:lookup({dev_notify, notification_manager}),
+    ?assert(ManagerPid =/= undefined),
     ?assert(is_process_alive(ManagerPid)),
     
     dev_notify:stop_notification_manager().
