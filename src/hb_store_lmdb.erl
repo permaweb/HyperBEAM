@@ -37,6 +37,14 @@
 -define(MAX_REDIRECTS, 1000).                     % Only resolve 1000 links to data
 -define(MAX_PENDING_WRITES, 400).                 % Maximum number of pending writes before flushing
 
+process_log(Event) ->
+    Current =
+        case get(process_log) of
+            undefined -> [];
+            C -> C
+        end,
+    put(process_log, [Event | Current]).
+
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
 %% This function initializes or connects to an existing LMDB database instance.
@@ -93,6 +101,7 @@ start(_) ->
 %% @returns 'composite' for group entries, 'simple' for regular values
 -spec type(map(), binary()) -> composite | simple | not_found.
 type(Opts, Key) ->
+    process_log({type, Key}),
     case read_with_retry(Opts, Key) of
         {ok, Value} ->
             case is_link(Value) of
@@ -133,6 +142,7 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
     PathBin = to_path(PathParts),
     write(Opts, PathBin, Value);
 write(Opts, Path, Value) ->
+    process_log({write, Path, Value}),
     PID = find_pid(Opts),
     PID ! {write, Path, Value},
     ok.
@@ -207,6 +217,7 @@ to_path(PathParts) ->
 %% Returns {ok, Value}, not_found, or performs flush and retries.
 read_with_retry(Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
+    process_log({read_with_retry, Path}),
     case elmdb:get(DBInstance, Path) of
         {ok, Value} ->
             {ok, Value};
@@ -258,6 +269,8 @@ resolve_path_links(Opts, Path, Depth) ->
 resolve_path_links_acc(_Opts, [], AccPath, _Depth) ->
     % No more segments to process
     {ok, lists:reverse(AccPath)};
+resolve_path_links_acc(_, FullPath = [<<"data">>|_], [], _Depth) ->
+    {ok, FullPath};
 resolve_path_links_acc(Opts, [Head | Tail], AccPath, Depth) ->
     % Build the accumulated path so far
     CurrentPath = lists:reverse([Head | AccPath]),
@@ -324,6 +337,7 @@ scope(_) -> scope().
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
 -spec list(map(), binary()) -> {ok, [binary()]} | {error, term()}.
 list(Opts, Path) when is_map(Opts), is_binary(Path) ->
+    process_log({list, Path}),
     % Check if Path is a link and resolve it if necessary
     ResolvedPath =
         case read_with_retry(Opts, Path) of
@@ -547,6 +561,7 @@ add_path(Opts, Path1, Path2) when is_binary(Path1), is_list(Path2) ->
 %% @returns {ok, Value} if the value is found, not_found if not found,
 -spec sync_read(map(), binary()) -> {ok, binary()} | {error, term()}.
 sync_read(Opts, Path) ->
+    process_log({sync_read, Path}),
     PID = find_pid(Opts),
     PID ! {read, self(), Path},
     receive

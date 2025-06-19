@@ -1,6 +1,7 @@
 %%% @doc A device that renders a REPL-like interface for AO-Core via HTML.
 -module(dev_hyperbuddy).
 -export([info/0, format/3, metrics/3, events/3, return_file/2, return_error/1]).
+-export([log/3]).
 -export([throw/3]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -57,6 +58,17 @@ metrics(_, Req, Opts) ->
         false ->
             {ok, #{ <<"body">> => <<"Prometheus metrics disabled.">> }}
     end.
+
+%% @doc Return the value of the process execution log as a text string.
+log(_, _Req, _Opts) ->
+    Log = case get(process_log) of undefined -> []; Current -> Current end,
+    Strings = lists:map(fun(Event) -> hb_util:bin(io_lib:format("~p", [Event])) end, Log),
+    {ok,
+        #{
+            <<"content-type">> => <<"text/plain">>,
+            <<"body">> => hb_util:bin(lists:join("\n", Strings))
+        }
+    }.
 
 %% @doc Return the current event counters as a message.
 events(_, _Req, _Opts) ->
