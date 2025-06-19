@@ -741,47 +741,68 @@ server_flush(RawState) ->
     PendingWrites = maps:get(<<"pending-writes">>, RawState, #{}),
     case maps:size(PendingWrites) of
         0 ->
-            % No pending writes, nothing to flush
             RawState;
         _ ->
-            % We have pending writes, create transaction and commit them
-            case {maps:get(<<"env">>, RawState, undefined), 
-                  maps:get(<<"db">>, RawState, undefined)} of
+            case {maps:get(<<"env">>, RawState, undefined),
+                maps:get(<<"db">>, RawState, undefined)} of
                 {undefined, _} ->
-                    % Environment missing, clear pending writes and return
                     ?event(error, {flush_failed_no_env}),
                     RawState#{<<"pending-writes">> => #{}};
                 {_, undefined} ->
-                    % Database instance missing, clear pending writes and return
                     ?event(error, {flush_failed_no_db_instance}),
                     RawState#{<<"pending-writes">> => #{}};
                 {Env, Dbi} ->
-                    % Create a fresh transaction for this batch of writes
-                    try
-                        {ok, Txn} = elmdb:txn_begin(Env),
-                        % Write all pending writes to the transaction in a single batch
-                        maps:map(
-                            fun(Key, Value) ->
-                                elmdb:txn_put(Txn, Dbi, Key, Value)
-                            end,
-                            PendingWrites
-                        ),
-                        % Commit the transaction with all writes
-                        elmdb:txn_commit(Txn),
-                        notify_flush(RawState),
-                        % Clear pending writes after successful commit
-                        RawState#{
-                            <<"pending-writes">> => #{}
-                        }
-                    catch
-                        Class:Reason:Stacktrace ->
-                            ?event(error, {txn_commit_failed, Class, Reason, Stacktrace}),
-                            % Even if commit fails, clean up state and notify
-                            notify_flush(RawState),
-                            RawState#{
-                                <<"pending-writes">> => #{}
-                            }
-                    end
+                    % Create transaction with proper cleanup
+                    TxnResult =
+                        case elmdb:txn_begin(Env) of
+                            {ok, Txn} ->
+                                try
+                                    % Write all pending writes to the transaction
+                                    maps:map(
+                                        fun(Key, Value) ->
+                                            elmdb:txn_put(Txn, Dbi, Key, Value)
+                                        end,
+                                        PendingWrites
+                                    ),
+                                    % Commit the transaction
+                                    case elmdb:txn_commit(Txn) of
+                                        ok ->
+                                            ?event(debug, {txn_committed_successfully, maps:size(PendingWrites)}),
+                                            ok;
+                                        {error, CommitError} ->
+                                            ?event(error, {txn_commit_error, CommitError}),
+                                            {error, CommitError}
+                                    end
+                                catch
+                                    Class:Reason:Stacktrace ->
+                                        % CRITICAL FIX: Always abort transaction on any error
+                                        ?event(error, {txn_operation_failed, Class, Reason}),
+                                        try
+                                            elmdb:txn_abort(Txn)
+                                        catch
+                                            _:AbortError ->
+                                                ?event(error, {txn_abort_failed, AbortError})
+                                        end,
+                                        {error, {Class, Reason, Stacktrace}}
+                                end;
+                            {error, TxnBeginError} ->
+                                ?event(error, {txn_begin_failed, TxnBeginError}),
+                                {error, TxnBeginError}
+                        end,
+
+                    % Always notify flush and clear pending writes, regardless of outcome
+                    notify_flush(RawState),
+                    NewState = RawState#{<<"pending-writes">> => #{}},
+
+                    % Log the result for monitoring
+                    case TxnResult of
+                        ok ->
+                            ?event(info, {flush_completed, {writes_count, maps:size(PendingWrites)}});
+                        {error, Error} ->
+                            ?event(error, {flush_failed, Error, {lost_writes, maps:size(PendingWrites)}})
+                    end,
+
+                    NewState
             end
     end.
 
