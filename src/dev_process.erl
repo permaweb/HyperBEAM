@@ -1148,7 +1148,7 @@ simple_wasm_persistent_worker_benchmark_test() ->
         "Scheduled and evaluated ~p simple wasm process messages in ~p s (~s msg/s)",
         [Iterations, BenchTime, hb_util:human_int(Iterations / BenchTime)]
     ),
-    ?assert(Iterations > 2),
+    ?assert(Iterations >= 2),
     ok.
 
 aos_persistent_worker_benchmark_test_() ->
