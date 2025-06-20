@@ -65,8 +65,7 @@ start(Opts = #{ <<"name">> := DataDir }) ->
         elmdb:env_open(
             hb_util:list(DataDir),
             [
-                {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
-                no_mem_init, no_read_ahead
+                {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)}
             ]
         ),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
@@ -216,13 +215,13 @@ to_path(PathParts) ->
 %% @doc Unified read function that handles LMDB reads with retry logic.
 %% Returns {ok, Value}, not_found, or performs flush and retries.
 read_with_retry(Opts, Path) ->
-    #{ <<"db">> := DBInstance } = find_env(Opts),
     process_log({read_with_retry, Path}),
-    case elmdb:get(DBInstance, Path) of
+    case sync_read(Opts, Path) of
         {ok, Value} ->
             {ok, Value};
         not_found ->
-            sync_read(Opts, Path)
+            #{ <<"db">> := DBInstance } = find_env(Opts),
+            elmdb:get(DBInstance, Path)
     end.
 
 %% @doc Read a value directly from the database with link resolution.
