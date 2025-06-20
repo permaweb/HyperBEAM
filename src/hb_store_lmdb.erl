@@ -776,11 +776,10 @@ server(State) ->
             PendingWrites = maps:get(<<"pending-writes">>, State, #{}),
             From ! {pending_writes, PendingWrites, Ref},
             server(State);
-        {flush, From, Ref} when IsFlushing == false ->
-            % Explicit flush request. Spawn a worker to write the current keys 
-            % in the `pending-writes`. We continue executing with the prior 
-            % keys until we receive a `flushed_keys` message.
-            NewState = trigger_flush(From, Ref, State),
+        {flush, From, Ref} ->
+            % Explicit flush request, commit transaction and notify requester
+            NewState = server_flush(State),
+            From ! {flushed, Ref},
             server(NewState);
         {flushed_keys, WrittenKeys} ->
             % The async flusher has written a set of keys to the database. We 
