@@ -30,12 +30,12 @@
 -include("include/hb.hrl").
 
 %% Configuration constants with reasonable defaults
--define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024).  % 16GB default database size
--define(CONNECT_TIMEOUT, 6000).                   % 3 second timeout for server communication
--define(DEFAULT_IDLE_FLUSH_TIME, 5).              % 5ms idle time before auto-flush
--define(DEFAULT_MAX_FLUSH_TIME, 50).              % 50ms maximum time between flushes
--define(MAX_REDIRECTS, 1000).                     % Only resolve 1000 links to data
--define(MAX_PENDING_WRITES, 400).                 % Maximum number of pending writes before flushing
+-define(DEFAULT_SIZE, 16 * 1024 * 1024 * 1024). % 16GB default database size
+-define(CONNECT_TIMEOUT, 6000).                 % Timeout for server communication
+-define(DEFAULT_IDLE_FLUSH_TIME, 5).            % Idle server time before auto-flush
+-define(DEFAULT_MAX_FLUSH_TIME, 50).            % Maximum time between flushes
+-define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
+-define(MAX_PENDING_WRITES, 400).               % Force flush after x pending
 
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
@@ -45,8 +45,8 @@
 %% environment and coordinates all database operations.
 %%
 %% The StoreOpts map must contain a "prefix" key specifying the
-%% database directory path. Also the required configuration includes "capacity" for
-%% the maximum database size and flush timing parameters.
+%% database directory path. Also the required configuration includes "capacity"
+%% for the maximum database size and flush timing parameters.
 %%
 %% @param StoreOpts A map containing database configuration options
 %% @returns {ok, ServerPid} on success, {error, Reason} on failure
@@ -198,7 +198,15 @@ read(Opts, Path) ->
                 end
             catch
                 Class:Reason:Stacktrace ->
-                    ?event(error, {resolve_path_links_failed, Class, Reason, Stacktrace}),
+                    ?event(error,
+                        {
+                            resolve_path_links_failed, 
+                            {class, Class},
+                            {reason, Reason},
+                            {stacktrace, Stacktrace},
+                            {path, Path}
+                        }
+                    ),
                     % If link resolution fails, return not_found
                     not_found
             end
@@ -210,7 +218,12 @@ is_link(Value) ->
     case byte_size(Value) > LinkPrefixSize andalso
         binary:part(Value, 0, LinkPrefixSize) =:= <<"link:">> of
         true -> 
-            Link = binary:part(Value, LinkPrefixSize, byte_size(Value) - LinkPrefixSize),
+            Link =
+                binary:part(
+                    Value,
+                    LinkPrefixSize,
+                    byte_size(Value) - LinkPrefixSize
+                ),
             {true, Link};
         false ->
             false
@@ -338,19 +351,15 @@ scope(_) -> scope().
 %% and providing tree-like navigation interfaces in applications.
 %% 
 %% Supports three modes of operation for handling the write queue:
-%% - `paranoid`: always flush the write queue before reading any data. This
-%%   ensures that all of the keys sent for writing at the time of the call will
-%%   have settled by the time the read is performed. The downside is that it
-%%   introduces a delay before the result is returned.
-%% - `moderate`: flush the write queue if no results are found, but return the
-%%   result as-is if not. This opens the door to a race condition where
-%%   potentially only some of the keys have been written and there are more
-%%   in the queue.
-%% - `extreme`: no flushing, just return the result as-is without writing on
-%%   the write queue. This is the fastest mode and should not cause issues
-%%   _as long as the write queue never grows_. If it does, however, this
-%%   mode creates systemic risk. You have been warned by both this documentation
-%%   and the name of the mode. Do not complain.
+%% - `moderate`: (Default) Read the keys from the database and the pending writes.
+%%   Does not flush the write queue.
+%% - `paranoid`: always flush the write queue before reading any data. If read
+%%   fails, flush _again_ and try again in `extreme` mode.
+%% - `yolo`: no flushing, just return the result as-is without checking the
+%%   write queue. This is the fastest mode and should not cause issues _as long
+%%   as the write queue never grows_. If it does, however, this mode creates
+%%   systemic risk. You have been warned by both this documentation and the name
+%%   of the mode. Do not complain.
 %%
 %% @param StoreOpts Database configuration map
 %% @param Path Binary prefix to search for
@@ -360,14 +369,10 @@ list(Opts, Path) when is_map(Opts), is_binary(Path) ->
     list(
         Opts,
         Path,
-        case hb_util:bin(maps:get(<<"list-mode">>, Opts, <<"paranoid">>)) of
-            <<"extreme">> -> extreme;
-            <<"moderate">> -> moderate;
-            <<"paranoid">> -> paranoid
-        end
+        hb_util:atom(maps:get(<<"list-mode">>, Opts, moderate))
     ).
 list(Opts, Path, FlushMode) ->
-    % Flush the write queue if we are in `paranoid` mode.
+    % Flush the write queue before reading if we are in `paranoid` mode.
     if FlushMode == paranoid -> flush(Opts);
     true -> ok
     end,
@@ -390,57 +395,82 @@ list(Opts, Path, FlushMode) ->
             <<>> -> <<"">>;  % Root path
             _ -> <<ResolvedPath/binary, "/">>
         end,
-    SearchPathSize = byte_size(SearchPath),
-    Res = 
-        fold_after(Opts,
-            SearchPath,
-            fun(Key, _Value, Acc) ->
-                % Match keys that start with our search path (like dir listing)
-                case byte_size(Key) > SearchPathSize andalso 
-                    binary:part(Key, 0, SearchPathSize) =:= SearchPath of
-                    true -> 
-                        % Get the part after our search path
-                        Remainder = 
-                            binary:part(
-                                Key,
-                                SearchPathSize, 
-                                byte_size(Key) - SearchPathSize
-                            ),
-                        % Extract only the first path segment (immediate child)
-                        [ImmediateChild | _] = binary:split(Remainder, <<"/">>),
-                        % Add to results if not empty and not already present
-                        case ImmediateChild of
-                            <<>> -> Acc;  % Skip empty children
-                            _ ->
-                                case lists:member(ImmediateChild, Acc) of
-                                    true -> Acc;
-                                    false -> [ImmediateChild | Acc]
-                                end
-                        end;
-                    false -> Acc
-                end
-            end,
-        []
-    ),
-    case Res of
-        {ok, []} ->
-            % No children, use the flush mode to determine what to do.
-            % Once the write queue has been flushed for `paranoid` and `moderate`
-            % modes, we recurse using the `extreme` mode to see if the path
-            % exists after without causing further flushes.
+    % Find the keys that match the search path in the database and in the
+    % pending writes. We check the pending writes first, to avoid a race if the
+    % keys are flushed from the server between the two calls. With this ordering
+    % the keys are guaranteed to be found in either the pending set or the DB,
+    % with the potential for duplicates. Duplicates are filtered out later.
+    PendingKeys =
+        case FlushMode of
+            yolo -> [];
+            _ -> matching_pending_keys(SearchPath, Opts)
+        end,
+    DBKeys =
+        case matching_db_keys(SearchPath, Opts) of
+            {ok, Keys} -> Keys;
+            not_found -> []
+        end,
+    % Merge the keys and remove duplicates.
+    case hb_util:unique(DBKeys ++ PendingKeys) of
+        [] ->
+            % No children found, use the flush mode to determine what to do.
+            % Once the write queue has been flushed for `paranoid` we recurse
+            % again but in `yolo` mode, for other modes we return `not_found`.
             case FlushMode of
-                extreme -> not_found;
-                paranoid ->
-                    list(Opts, Path, extreme);
-                moderate ->
-                    flush(Opts),
-                    list(Opts, Path, extreme)
+                paranoid -> list(Opts, Path, yolo);
+                _ -> not_found
             end;
-        _ ->
-            Res
-    end;
-list(_, _, _) ->
-    {error, {badarg, <<"StoreOpts must be a map and Path must be an binary">>}}.
+        UniqueKeys ->
+            {ok, UniqueKeys}
+    end.
+
+%% @doc Determine if a key matches a path prefix. Returns `{true, Child}'
+%% if the key matches the prefix, and `false' if it does not.
+match_path(Prefix, Path) when byte_size(Prefix) > byte_size(Path) ->
+    false;
+match_path(Prefix, Path) ->
+    PathPrefix = binary:part(Path, 0, byte_size(Prefix)),
+    case PathPrefix of
+        Prefix ->
+            % Return the part of the path after the prefix.
+            {
+                true,
+                hd(
+                    binary:split(
+                        binary:part(
+                            Path,
+                            byte_size(Prefix),
+                            byte_size(Path) - byte_size(Prefix)
+                        ),
+                        <<"/">>
+                    )
+                )
+            };
+        _ -> false
+    end.
+
+%% @doc Find all keys that match the given path prefix from the LMDB database.
+matching_db_keys(Prefix, Opts) ->
+    fold_after(
+        Opts,
+        Prefix,
+        fun(Key, _Value, Acc) ->
+            % Match keys that start with our search path (like dir listing)
+            case match_path(Prefix, Key) of
+                {true, Child} -> [Child | Acc];
+                false -> Acc
+            end
+        end,
+        []
+    ).
+
+%% @doc Find all keys that match the given path prefix from the pending writes.
+matching_pending_keys(Prefix, Opts) ->
+    {ok, PendingWrites} = pending_writes(Opts),
+    lists:filtermap(
+        fun(Key) -> match_path(Prefix, Key) end,
+        maps:keys(PendingWrites)
+    ).
 
 %% @doc Fold over a database after a given path. The `Fun` is called with
 %% the key and value, and the accumulator.
@@ -598,6 +628,17 @@ read_in_progress(Opts, Path) ->
     after ?CONNECT_TIMEOUT -> not_found
     end.
 
+%% @doc Read the pending writes map from the server.
+%%
+%% @param StoreOpts Database configuration map
+%% @returns {ok, PendingWrites}
+pending_writes(Opts) ->
+    PID = find_pid(Opts),
+    PID ! {pending_writes, self(), Ref = make_ref()},
+    receive {pending_writes, PendingWrites, Ref} -> {ok, PendingWrites}
+    after ?CONNECT_TIMEOUT -> {error, timeout}
+    end.
+
 %% @doc Force the caller to wait for the current in-memory pending writes to
 %% be flushed to the database.
 %%
@@ -606,8 +647,7 @@ read_in_progress(Opts, Path) ->
 flush(Opts) ->
     PID = find_pid(Opts),
     PID ! {flush, self(), Ref = make_ref()},
-    receive
-        {flushed, Ref} -> ok
+    receive {flushed, Ref} -> ok
     after ?CONNECT_TIMEOUT -> ok
     end.
 
@@ -657,8 +697,7 @@ find_pid(StoreOpts) ->
 stop(StoreOpts) when is_map(StoreOpts) ->
     PID = find_pid(StoreOpts),
     PID ! {stop, self(), Ref = make_ref()},
-    receive
-        {stopped, Ref} -> ok
+    receive {stopped, Ref} -> ok
     after ?CONNECT_TIMEOUT -> ok
     end;
 stop(_) ->
@@ -731,6 +770,11 @@ server(State) ->
                 ),
             ?event(warning, {read, Path, Res}),
             From ! {read, Path, Res},
+            server(State);
+        {pending_writes, From, Ref} ->
+            % Return the pending writes map
+            PendingWrites = maps:get(<<"pending-writes">>, State, #{}),
+            From ! {pending_writes, PendingWrites, Ref},
             server(State);
         {flush, From, Ref} ->
             % Explicit flush request, commit transaction and notify requester
