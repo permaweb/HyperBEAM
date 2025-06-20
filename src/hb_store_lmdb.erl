@@ -884,8 +884,10 @@ list_test() ->
     % Create other top-level directories
     write(StoreOpts, <<"foo/bar">>, <<"baz">>),
     write(StoreOpts, <<"beep/boop">>, <<"bam">>),
-    
     read(StoreOpts, <<"colors">>), 
+    % waits til flush then reads lmdb
+    timer:sleep(50),
+
     % Test listing colors/ - should return immediate children only
     {ok, ListResult} = list(StoreOpts, <<"colors">>),
     ?event({list_result, ListResult}),
@@ -1184,7 +1186,8 @@ nested_map_cache_test() ->
     
     % Verify the root is a composite
     ?assertEqual(composite, type(StoreOpts, <<"root">>)),
-    
+    % wait for pending writes flush
+    timer:sleep(50),
     % List the root contents
     {ok, RootKeys} = list(StoreOpts, <<"root">>),
     ?event({root_keys, RootKeys}),
@@ -1261,7 +1264,9 @@ cache_debug_test() ->
     ?event(debug_cache_test, {step, check_message_type}),
     MsgType = type(StoreOpts, MessageID),
     ?event(debug_cache_test, {message_type, MsgType}),
-    
+
+    % wait for pending writes to flush
+    timer:sleep(50),     
     ?event(debug_cache_test, {step, list_message_contents}),
     {ok, Subkeys} = list(StoreOpts, MessageID),
     ?event(debug_cache_test, {message_subkeys, Subkeys}),
@@ -1346,6 +1351,9 @@ list_with_link_test() ->
     
     % Create a link to the group
     make_link(StoreOpts, <<"real-group">>, <<"link-to-group">>),
+
+    % wait for pending writes to flush
+    timer:sleep(50),
     
     % List the real group to verify expected children
     {ok, RealGroupChildren} = list(StoreOpts, <<"real-group">>),
