@@ -69,7 +69,6 @@ start(Opts = #{ <<"name">> := DataDir }) ->
             <<"db">> => DBInstance
         },
     % Spawn the flush process.
-    ?event(creating_flusher),
     Flusher = spawn(fun() -> flush_server(BaseServerOpts) end),
     % Create the main server options
     ServerOpts = BaseServerOpts#{ <<"flusher">> => Flusher },
@@ -792,7 +791,12 @@ server(State) ->
                     WrittenKeys,
                     maps:get(<<"pending-writes">>, State, #{})
                 ),
-            State#{ <<"pending-writes">> => StillPending, <<"flushing">> => false };
+            server(
+                State#{
+                    <<"pending-writes">> => StillPending,
+                    <<"flushing">> => false
+                }
+            );
         {stop, From, Ref} when IsFlushing == false ->
             % Shutdown request, flush final data and terminate
             trigger_flush(State#{ <<"async-flush">> => false }),
@@ -854,7 +858,6 @@ trigger_flush(Caller, Ref, S = #{ <<"flusher">> := Flusher }) ->
     % Return the state with the `flushing` key set to the reference of the 
     % request.
     Pending = maps:get(<<"pending-writes">>, S),
-    ?event({triggering_flush, {flusher, Flusher}, {keys, maps:size(Pending)}}),
     Flusher ! {flush_map, self(), Caller, Ref, Pending},
     case maps:get(<<"async-flush">>, S, true) of
         true -> S#{ <<"flushing">> => true };
@@ -873,23 +876,18 @@ remove_flushed(State, Keys) ->
 %% @doc A process that performs writes to the database while the main process
 %% continues to respond to reads.
 flush_server(State) ->
-    ?event({flush_server_waiting, State}),
     receive
         {flush_map, Server, FlushCaller, Ref, Map} ->
             % Create a fresh transaction for this batch of writes
             Env = maps:get(<<"env">>, State),
             Dbi = maps:get(<<"db">>, State),
-            ?event(opening_flush_tx),
             {ok, Txn} = elmdb:txn_begin(Env),
-            ?event(opened_flush_tx),
             maps:map(
                 fun(Key, Value) -> ok = elmdb:txn_put(Txn, Dbi, Key, Value) end,
                 Map
             ),
             % Commit the transaction with all writes
-            ?event(closing_flush_tx),
             ok = elmdb:txn_commit(Txn),
-            ?event(closed_flush_tx),
             Server ! {flushed_keys, maps:keys(Map)},
             notify_flush_caller(FlushCaller, Ref),
             flush_server(State);
