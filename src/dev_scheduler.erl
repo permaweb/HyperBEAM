@@ -204,7 +204,13 @@ find_next_assignment(_Msg1, _Msg2, Schedule = [_Next|_], _LastSlot, _Opts) ->
     {ok, Schedule, undefined};
 find_next_assignment(Msg1, Msg2, _Schedule, LastSlot, Opts) ->
     ProcID = dev_process:process_id(Msg1, Msg2, Opts),
-    case check_lookahead_and_local_cache(Msg1, ProcID, LastSlot + 1, Opts) of
+    LocalCacheRes =
+        case hb_opts:get(scheduler_ignore_local_cache, false, Opts) of
+            true -> not_found;
+            false ->
+                check_lookahead_and_local_cache(Msg1, ProcID, LastSlot + 1, Opts)
+        end,
+    case LocalCacheRes of
         {ok, Worker, Assignment} ->
             ?event(next_debug,
                 {in_cache,
