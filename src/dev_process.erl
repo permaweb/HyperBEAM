@@ -473,7 +473,12 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                             normalize,
                             Opts#{ hashpath => ignore }
                         ),
-                    NormalizedWithoutSnapshot = hb_maps:remove(<<"snapshot">>, Normalized, Opts),
+                    NormalizedWithoutSnapshot =
+                        hb_maps:remove(
+                            <<"snapshot">>,
+                            Normalized,
+                            Opts
+                        ),
                     ?event({loaded_state_checkpoint_result,
                         {proc_id, ProcID},
                         {slot, LoadedSlot},
