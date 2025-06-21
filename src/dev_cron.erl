@@ -229,9 +229,8 @@ once(_Msg1, Msg2, Opts) ->
 once_worker(Path, Req, Opts) ->
     % Directly call the meta device on the newly constructed 'singleton', just
     % as hb_http_server does.
-    TracePID = hb_tracer:start_trace(),
     try
-        dev_meta:handle(Opts#{ trace => TracePID }, Req#{ <<"path">> => Path})
+        dev_meta:handle(Opts, Req#{ <<"path">> => Path})
     catch
         %% Cowboy / Ranch listener is gone (node stopped) – exit quietly
         error:badarg ->
@@ -279,7 +278,6 @@ every(_Msg1, Msg2, Opts) ->
                         <<"cron-path">>,
                         maps:remove(<<"interval">>, Msg2)
                     ),
-				TracePID = hb_tracer:start_trace(),
 				Name = {<<"cron@1.0">>, ReqMsgID},
 				case hb_name:lookup(Name) of
 					Pid when is_pid(Pid) ->
@@ -294,7 +292,7 @@ every(_Msg1, Msg2, Opts) ->
 		                            every_worker_loop(
 		                                CronPath,
 		                                ModifiedMsg2,
-		                                Opts#{ trace => TracePID },
+		                                Opts,
 		                                IntervalMillis
 		                            )
 		                        end
