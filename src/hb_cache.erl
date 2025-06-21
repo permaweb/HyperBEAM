@@ -810,4 +810,4 @@ run_test() ->
                 <<"name">> => <<"cache-TEST/lmdb">>
             }
         ],
-    test_store_simple_signed_message(Store).
+        test_deeply_nested_complex_message(Store).

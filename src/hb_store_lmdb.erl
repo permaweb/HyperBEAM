@@ -63,21 +63,26 @@ start(Opts = #{ <<"name">> := DataDir }) ->
         ),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
     % Prepare server state with environment handle
-    ServerOpts =
+    BaseServerOpts =
         Opts#{
             <<"env">> => Env,
             <<"db">> => DBInstance
         },
+    % Spawn the flush process.
+    ?event(creating_flusher),
+    Flusher = spawn(fun() -> flush_server(BaseServerOpts) end),
+    % Create the main server options
+    ServerOpts = BaseServerOpts#{ <<"flusher">> => Flusher },
     % Spawn the main server process with linked commit manager
     Server = 
         spawn(
             fun() ->
                 ServerPID = self(),
-                spawn_link(fun() -> commit_manager(ServerOpts, ServerPID) end),
+                spawn_link(fun() -> commit_manager(BaseServerOpts, ServerPID) end),
                 server(ServerOpts)
             end
         ),
-    hb_name:register(<<"lmdb-server">>, Server),
+    hb_name:register({lmdb, DataDir}, Server),
     {
         ok,
         #{
@@ -751,14 +756,11 @@ reset(_) ->
 %% @param State Map containing server configuration and runtime state
 %% @returns 'ok' when the server terminates, otherwise recurses indefinitely
 server(State) ->
+    IsFlushing = maps:get(<<"flushing">>, State, false),
     receive
-        {get_env, From, Ref} ->
-            % Reader requesting environment handle for direct access
-            From ! {env, maps:get(<<"env">>, State), Ref},
-            server(State);
         {write, Key, Value} ->
             % Write request, accumulate in pending writes (deduplicating by key)
-            server(server_write_dedup(State, Key, Value));
+            server(server_write(State, Key, Value));
         {read, From, Path} ->
             % Read request: Lookup the path in the `pending-writes` map and 
             % return the value if it exists.
@@ -768,7 +770,6 @@ server(State) ->
                     maps:get(<<"pending-writes">>, State, #{}),
                     not_found
                 ),
-            ?event(warning, {read, Path, Res}),
             From ! {read, Path, Res},
             server(State);
         {pending_writes, From, Ref} ->
@@ -776,23 +777,33 @@ server(State) ->
             PendingWrites = maps:get(<<"pending-writes">>, State, #{}),
             From ! {pending_writes, PendingWrites, Ref},
             server(State);
-        {flush, From, Ref} ->
-            % Explicit flush request, commit transaction and notify requester
-            NewState = server_flush(State),
-            From ! {flushed, Ref},
+        {flush, From, Ref} when IsFlushing == false ->
+            % Explicit flush request. Spawn a worker to write the current keys 
+            % in the `pending-writes`. We continue executing with the prior 
+            % keys until we receive a `flushed_keys` message.
+            NewState = trigger_flush(From, Ref, State),
             server(NewState);
-        {stop, From, Ref} ->
+        {flushed_keys, WrittenKeys} ->
+            % The async flusher has written a set of keys to the database. We 
+            % can now remove them from our `pending-writes`, as the user could
+            % find them from the DB itself.
+            StillPending =
+                maps:without(
+                    WrittenKeys,
+                    maps:get(<<"pending-writes">>, State, #{})
+                ),
+            State#{ <<"pending-writes">> => StillPending, <<"flushing">> => false };
+        {stop, From, Ref} when IsFlushing == false ->
             % Shutdown request, flush final data and terminate
-            server_flush(State),
-            elmdb:env_close(maps:get(<<"env">>, State)),
-            From ! {stopped, Ref},
+            trigger_flush(State#{ <<"async-flush">> => false }),
+            Flusher = maps:get(<<"flusher">>, State),
+            Flusher ! {stop, From, Ref},
             ok
     after
         % Auto-flush after idle timeout to ensure data safety
         maps:get(<<"idle-flush-time">>, State, ?DEFAULT_IDLE_FLUSH_TIME) ->
-        server(server_flush(State))
+        server(trigger_flush(State))
     end.
-
 
 %% @doc Add a key-value pair to pending writes, deduplicating by key.
 %%
@@ -805,16 +816,16 @@ server(State) ->
 %% @param Key Binary key to write
 %% @param Value Binary value to store
 %% @returns Updated server state with the write added to pending writes
-server_write_dedup(RawState, Key, Value) ->
+server_write(RawState, Key, Value) ->
     PendingWrites = maps:get(<<"pending-writes">>, RawState, #{}),
-    UpdatedPendingWrites = PendingWrites#{Key => Value},
-    NewState = RawState#{<<"pending-writes">> => UpdatedPendingWrites},
+    UpdatedPendingWrites = PendingWrites#{ Key => Value },
+    NewState = RawState#{ <<"pending-writes">> => UpdatedPendingWrites },
     case maps:size(UpdatedPendingWrites) of
-        ?MAX_PENDING_WRITES ->
+        0 -> NewState;
+        Divisible when (Divisible rem ?MAX_PENDING_WRITES == 0) ->
             % If we have too many pending writes, flush the transaction.
-            raw_server_flush(NewState);
-        _ ->
-            NewState
+            trigger_flush(NewState);
+        _ -> NewState
     end.
 
 %% @doc Commit the current transaction to disk and clean up state.
@@ -832,59 +843,68 @@ server_write_dedup(RawState, Key, Value) ->
 %%
 %% @param RawState Current server state map  
 %% @returns Updated server state with transaction cleared
-server_flush(RawState) ->
-    raw_server_flush(RawState).
-    % {MicroSec, NewState} = timer:tc(fun() -> raw_server_flush(RawState) end),
-    % ?event({flush_time, MicroSec}),
-    % NewState.
-
-raw_server_flush(RawState) ->
-    PendingWrites = maps:get(<<"pending-writes">>, RawState, #{}),
-    case maps:size(PendingWrites) of
-        0 ->
-            % No pending writes, nothing to flush
-            RawState;
-        _ ->
-            % We have pending writes, create transaction and commit them
-            case {maps:get(<<"env">>, RawState, undefined), 
-                  maps:get(<<"db">>, RawState, undefined)} of
-                {undefined, _} ->
-                    % Environment missing, clear pending writes and return
-                    ?event(error, {flush_failed_no_env}),
-                    RawState#{<<"pending-writes">> => #{}};
-                {_, undefined} ->
-                    % Database instance missing, clear pending writes and return
-                    ?event(error, {flush_failed_no_db_instance}),
-                    RawState#{<<"pending-writes">> => #{}};
-                {Env, Dbi} ->
-                    % Create a fresh transaction for this batch of writes
-                    Parent = self(),
-                    Ref = make_ref(),
-                    % Write all pending writes to the transaction in a
-                    % single batch managed by a separate process.
-                    spawn(fun() ->
-                        {ok, Txn} = elmdb:txn_begin(Env),
-                        maps:map(
-                            fun(Key, Value) ->
-                                elmdb:txn_put(Txn, Dbi, Key, Value)
-                            end,
-                            PendingWrites
-                        ),
-                        % Commit the transaction with all writes
-                        elmdb:txn_commit(Txn),
-                        Parent ! {write_complete, Ref}
-                    end),
-                    receive
-                        {write_complete, Ref} ->
-                            RawState#{<<"pending-writes">> => #{}}
-                    after ?CONNECT_TIMEOUT ->
-                        ?event(error, txn_commit_timeout),
-                        RawState#{
-                            <<"pending-writes">> => #{}
-                        }
-                    end
-            end
+trigger_flush(State) -> trigger_flush(undefined, undefined, State).
+trigger_flush(Caller, Ref, S) when not is_map_key(<<"pending-writes">>, S) ->
+    trigger_flush(Caller, Ref, S#{ <<"pending-writes">> => #{}});
+trigger_flush(Caller, Ref, S = #{ <<"pending-writes">> := Empty })
+        when map_size(Empty) == 0 ->
+    notify_flush_caller(Caller, Ref),
+    S;
+trigger_flush(Caller, Ref, S = #{ <<"flusher">> := Flusher }) ->
+    % Return the state with the `flushing` key set to the reference of the 
+    % request.
+    Pending = maps:get(<<"pending-writes">>, S),
+    ?event({triggering_flush, {flusher, Flusher}, {keys, maps:size(Pending)}}),
+    Flusher ! {flush_map, self(), Caller, Ref, Pending},
+    case maps:get(<<"async-flush">>, S, true) of
+        true -> S#{ <<"flushing">> => true };
+        false ->
+            receive {flushed_keys, Keys} -> remove_flushed(S, Keys) end
     end.
+
+%% @doc Remove the flushed keys from the pending writes.
+remove_flushed(State, Keys) ->
+    State#{
+        <<"pending-writes">> =>
+            maps:without(Keys, maps:get(<<"pending-writes">>, State, #{})),
+        <<"flushing">> => false
+    }.
+
+%% @doc A process that performs writes to the database while the main process
+%% continues to respond to reads.
+flush_server(State) ->
+    ?event({flush_server_waiting, State}),
+    receive
+        {flush_map, Server, FlushCaller, Ref, Map} ->
+            % Create a fresh transaction for this batch of writes
+            Env = maps:get(<<"env">>, State),
+            Dbi = maps:get(<<"db">>, State),
+            ?event(opening_flush_tx),
+            {ok, Txn} = elmdb:txn_begin(Env),
+            ?event(opened_flush_tx),
+            maps:map(
+                fun(Key, Value) -> ok = elmdb:txn_put(Txn, Dbi, Key, Value) end,
+                Map
+            ),
+            % Commit the transaction with all writes
+            ?event(closing_flush_tx),
+            ok = elmdb:txn_commit(Txn),
+            ?event(closed_flush_tx),
+            Server ! {flushed_keys, maps:keys(Map)},
+            notify_flush_caller(FlushCaller, Ref),
+            flush_server(State);
+        {stop, From, Ref} ->
+            % The flusher is shutting down, close the environment.
+            elmdb:env_close(maps:get(<<"env">>, State)),
+            From ! {stopped, Ref},
+            ok
+    end.
+
+%% @doc Helper to notify those the initiator (if any) of the flush.
+notify_flush_caller(undefined, _Ref) -> ok;
+notify_flush_caller(Caller, Ref) ->
+    Caller ! {flushed, Ref},
+    ok.
 
 %% @doc Background process that enforces maximum flush intervals.
 %%
@@ -916,7 +936,6 @@ commit_manager(Opts, Server) ->
         end,
         commit_manager(Opts, Server)
     end.
-
 
 %% @doc Test suite demonstrating basic store operations.
 %%
