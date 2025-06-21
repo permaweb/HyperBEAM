@@ -238,7 +238,9 @@ default_message() ->
         % Options for the router device
         <<"router@1.0">> => #{
             routes => []
-        }
+        },
+        % Should the scheduler ignore the local cache?
+        scheduler_ignore_local_cache => true
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,
