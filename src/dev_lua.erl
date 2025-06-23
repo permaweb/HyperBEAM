@@ -745,6 +745,229 @@ aos_process_benchmark_test_() ->
         )
     end}.
 
+% @doc Test the hyper-aos ao module.
+hyper_aos_ensure_owner_test() ->
+    Wallet = hb:wallet(),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{ priv_wallet => Wallet },
+    Process = generate_lua_process("test/hyper-aos.lua", Opts),
+    {ok, _Proc} = hb_cache:write(Process, Opts),
+    Code = """
+      return Owner
+    """,
+    Message = generate_test_message(Process, Opts, Code),
+    {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Owner} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
+    ?assertEqual(Address, Owner),
+    ok.
+
+hyper_aos_ensure_id_test() ->
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    Process = generate_lua_process("test/hyper-aos.lua", Opts),
+    {ok, _Proc} = hb_cache:write(Process, Opts),
+    Code = """
+    return aos.id
+    """,
+    Message = generate_test_message(Process, Opts, Code),
+    {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, AosId} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
+    {ok, Committers} = hb_ao:resolve(Process, <<"commitments">>, Opts),
+    ProcessId = find_key_with_type_rsa_pss_sha512(Committers),
+    ?assertEqual(AosId, ProcessId),
+    ok.
+
+hyper_aos_stringify_test() ->
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, Stringify} = file:read_file("scripts/aos-stringify.lua"),
+    Code = <<
+"""
+local stringify = require('.stringify')
+
+function compute(base, req)
+  local x = stringify.format({ hello = "World"})
+  local y = stringify.format({ hello = "World"})
+  base.results = tostring(x == y)
+  return base 
+end
+"""
+    >>,
+    Process = generate_hyper_aos_modular_process([Stringify, Code], Wallet),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual(<<"true">>, Result).
+
+hyper_aos_json_test() ->
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, Json} = file:read_file("scripts/aos-json.lua"),
+    Code = <<
+"""
+local json = require('json')
+
+function compute(base, req)
+  local data = { hello = [[World]]}
+  local json_data = json.encode(data)
+  local new_data = json.decode(json_data)
+  base.results = tostring(data.hello == new_data.hello)
+  return base
+end
+"""
+    >>,
+    Process = generate_hyper_aos_modular_process([Json, Code], Wallet),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual(<<"true">>, Result).
+
+hyper_aos_handlers_utils_has_matching_tag_test() ->
+    Code = <<
+"""
+local handlers = {
+  utils = require('.handlers-utils')
+}
+
+function compute(base, req)
+  local hasMatchingTag = handlers.utils.hasMatchingTag('Action', 'Eval')
+  base.results = { 
+    tostring(hasMatchingTag({ Tags = { Action = 'Eval' } })),
+    tostring(hasMatchingTag({ Tags = { Action = 'Foo' } })),
+    tostring(hasMatchingTag({ Action = 'Eval', Tags = {} }))
+  }
+  return base
+end
+"""
+>>, 
+    {ok, Process, Opts} = 
+        generate_hyper_aos_modular_handlers_utils_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"true">>, <<"false">>, <<"false">>], Result).
+
+hyper_aos_handlers_utils_has_matching_tag_of_test() ->
+    Code = <<
+"""
+local handlers = {
+  utils = require('.handlers-utils')
+}
+
+function compute(base, req)
+  local hasMatchingTagOf = 
+    handlers.utils.hasMatchingTagOf('Action', { 'Eval', 'Foo' })
+  base.results = { 
+    tostring(hasMatchingTagOf({ Tags = { Action = 'Eval' } })),
+    tostring(hasMatchingTagOf({ Action = 'Eval', Tags = {} })),
+    tostring(hasMatchingTagOf({ Tags = { Data = 'None', Action = 'Foo' } })),
+    tostring(hasMatchingTagOf({ Tags = { Action = 'Bar' } })),
+    tostring(hasMatchingTagOf({ Tags = { Action = 'foo' } })) 
+  }
+  return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_utils_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"true">>,
+        <<"0">>,
+        <<"true">>,
+        <<"0">>,
+        <<"0">>
+    ], Result).
+
+hyper_aos_handlers_utils_has_matching_data_test() ->
+    Code = <<
+"""
+local handlers = {
+    utils = require('.handlers-utils')
+}
+
+function compute(base, req)
+    local hasMatchingData = handlers.utils.hasMatchingData('Foo')
+    base.results = { 
+        tostring(hasMatchingData({ Tags = { Action = 'Eval' }, Data = 'Foo' })),
+        tostring(hasMatchingData({ Tags = { Data = 'Foo', Action = 'Foo' } })),
+        tostring(hasMatchingData({ Tags = { Action = 'Bar' }, Data = 'Bar' })),
+        tostring(hasMatchingData({ data = 'Foo' }))
+    }
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_utils_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"true">>, <<"false">>, <<"false">>, <<"false">>], Result).
+    
+hyper_aos_handlers_utils_reply_test() ->
+    Code = <<
+"""
+local handlers = {
+    utils = require('.handlers-utils')
+}
+
+function compute(base, req)
+    base.results = {}
+    local replyStr = handlers.utils.reply('Foo')
+    local replyTable =
+        handlers.utils.reply({ Tags = { Action = 'Foo' }, Data = 'Bar' })
+    local msgReply = function(data)
+        table.insert(base.results, data)
+    end
+    
+    replyStr({ reply = msgReply })
+    replyStr({ reply = msgReply, Tags = { Action = 'Eval' } })
+    replyTable({ reply = msgReply })
+    replyTable({ reply = msgReply, Tags = { Action = 'Eval' } })
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_utils_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        #{ <<"Data">> => <<"Foo">> },
+        #{ <<"Data">> => <<"Foo">> },
+        #{ 
+            <<"Tags">> => #{ <<"Action">> => <<"Foo">> },
+            <<"Data">> => <<"Bar">> 
+        },
+        #{ 
+            <<"Tags">> => #{ <<"Action">> => <<"Foo">> },
+            <<"Data">> => <<"Bar">> 
+        }
+    ], Result).
+
+   
+hyper_aos_handlers_utils_continue_test() ->
+        Code = <<
+    """
+    local handlers = {
+        utils = require('.handlers-utils')
+    }
+
+
+    function compute(base, req)
+        local continue = handlers.utils.continue({ Action = 'Eval' })
+        base.results = {
+            tostring(continue({ Action = 'Eval' })),
+            tostring(continue({ Action = 'Foo' }))
+        }
+        return base
+    end
+    """
+    >>,
+        {ok, Process, Opts} =
+            generate_hyper_aos_modular_handlers_utils_process(Code),
+        {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+        io:format("Result ~p~n", [Result]),
+        ?assertEqual([<<"1">>, <<"false">>], Result).
+    
 %%% Test helpers
 
 %% @doc Generate a Lua process message.
@@ -859,38 +1082,6 @@ execute_aos_call(Base, Req) ->
         #{}
     ).
 
-% @doc Test the hyper-aos ao module.
-hyper_ao_ensure_owner_test() ->
-    Wallet = hb:wallet(),
-    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Opts = #{ priv_wallet => Wallet },
-    Process = generate_lua_process("test/hyper-aos.lua", Opts),
-    {ok, _Proc} = hb_cache:write(Process, Opts),
-    Code = """
-      return Owner
-    """,
-    Message = generate_test_message(Process, Opts, Code),
-    {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
-    {ok, Owner} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
-    ?assertEqual(Address, Owner),
-    ok.
-
-hyper_ao_ensure_id_test() ->
-    Wallet = hb:wallet(),
-    Opts = #{ priv_wallet => Wallet },
-    Process = generate_lua_process("test/hyper-aos.lua", Opts),
-    {ok, _Proc} = hb_cache:write(Process, Opts),
-    Code = """
-    return aos.id
-    """,
-    Message = generate_test_message(Process, Opts, Code),
-    {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
-    {ok, AosId} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
-    {ok, Committers} = hb_ao:resolve(Process, <<"commitments">>, Opts),
-    ProcessId = find_key_with_type_rsa_pss_sha512(Committers),
-    ?assertEqual(AosId, ProcessId),
-    ok.
-
 create_modules(Modules) ->
     Template = #{
         <<"content-type">> => <<"application/lua">>,
@@ -920,57 +1111,20 @@ generate_hyper_aos_modular_process(Codes, Wallet) ->
             ], 
             <<"scheduler-location">> => hb:address(),
             <<"test-random-seed">> => rand:uniform(1337)
-         },
+            },
         Wallet
     ).
-
-hyper_aos_stringify_test() ->
+generate_hyper_aos_modular_handlers_utils_process(Code) -> 
     Wallet = hb:wallet(),
     Opts = #{ priv_wallet => Wallet },
-    {ok, Stringify} = file:read_file("scripts/aos-stringify.lua"),
-    Code = <<
-"""
-local stringify = require('.stringify')
-
-function compute(base, req)
-  local x = stringify.format({ hello = "World"})
-  local y = stringify.format({ hello = "World"})
-  base.results = tostring(x == y)
-  return base 
-end
-"""
-    >>,
-    Process = generate_hyper_aos_modular_process([Stringify, Code], Wallet),
+    {ok, UtilsJson} = file:read_file("scripts/aos-utils.lua"),
+    {ok, HandlersUtilsJson} = file:read_file("scripts/aos-handlers-utils.lua"),
+    {ok, HandlersJson} = file:read_file("scripts/aos-handlers.lua"),
+    Process = generate_hyper_aos_modular_process([UtilsJson, HandlersUtilsJson, HandlersJson, Code], Wallet),
     Message = generate_test_message(Process, Opts, <<"">>),
     hb_cache:write(Process, Opts),
     hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
-    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
-    ?assertEqual(<<"true">>, Result).
-
-hyper_aos_json_test() ->
-    Wallet = hb:wallet(),
-    Opts = #{ priv_wallet => Wallet },
-    {ok, Json} = file:read_file("scripts/aos-json.lua"),
-    Code = <<
-"""
-local json = require('json')
-
-function compute(base, req)
-  local data = { hello = [[World]]}
-  local json_data = json.encode(data)
-  local new_data = json.decode(json_data)
-  base.results = tostring(data.hello == new_data.hello)
-  return base
-end
-"""
-    >>,
-    Process = generate_hyper_aos_modular_process([Json, Code], Wallet),
-    Message = generate_test_message(Process, Opts, <<"">>),
-    hb_cache:write(Process, Opts),
-    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
-    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
-    ?assertEqual(<<"true">>, Result).
-
+    {ok, Process, Opts}.
 find_key_with_type_rsa_pss_sha512(Map) when is_map(Map) ->
     lists:foldl(
         fun({Key, #{<<"type">> := <<"rsa-pss-sha512">>}}, Acc) when Acc =:= undefined ->
