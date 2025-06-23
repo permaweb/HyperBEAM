@@ -106,7 +106,7 @@ function utils.matchesSpec(msg, spec)
   if type(spec) == 'string' and msg.action and msg.action == spec then
     return true
   end
-  if type(spec) == 'string' and msg.body.action and msg.body.action == spec then
+  if type(spec) == 'string' and msg.body and msg.body.action and msg.body.action == spec then
     return true
   end
   return false

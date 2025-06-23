@@ -824,6 +824,7 @@ end
     {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
     ?assertEqual(<<"true">>, Result).
 
+%% @doc Test the hyper-aos handlers utils module.
 hyper_aos_handlers_utils_has_matching_tag_test() ->
     Code = <<
 """
@@ -967,7 +968,391 @@ hyper_aos_handlers_utils_continue_test() ->
         {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
         io:format("Result ~p~n", [Result]),
         ?assertEqual([<<"1">>, <<"false">>], Result).
+       
+%% @doc Test the hyper-aos handlers module.
+
+%% @doc Test the hyper-aos handlers add function.
+hyper_aos_handlers_add_test() ->
+    Code = <<
+"""
+local handlers = require('.handlers')
+
+function compute(base, req)
+    -- Test adding a handler with 2 arguments
+    handlers.add('test-handler-1', function(msg) end)
     
+    -- Test adding a handler with 3 arguments
+    handlers.add('test-handler-2', function(msg) return true end, function(msg) end)
+    
+    -- Test adding a handler with 4 arguments (including maxRuns)
+    handlers.add('test-handler-3', function(msg) return true end, function(msg) end, 5)
+
+    -- Update existing handler
+    handlers.add('test-handler-1', function(msg) return true end, function(msg) end, 10)
+    
+    base.results = {
+        tostring(#handlers.list),
+        tostring(handlers.list[1].name),
+        tostring(handlers.list[2].name),
+        tostring(handlers.list[3].name),
+        tostring(handlers.list[3].maxRuns),
+        tostring(handlers.list[1].maxRuns)
+    }
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"3">>,
+        <<"test-handler-1">>,
+        <<"test-handler-2">>,
+        <<"test-handler-3">>,
+        <<"5">>,
+        <<"10">>
+    ], Result).
+
+% @doc Test the hyper-aos handlers append function.
+hyper_aos_handlers_append_test() ->
+    Code = <<
+"""
+local handlers = require('.handlers')
+
+function compute(base, req)
+    -- Add initial handler
+    handlers.add('first-handler', function(msg) return true end, function(msg) end)
+    
+    -- Append a second handler
+    handlers.append('second-handler', function(msg) return true end, function(msg) end)
+    
+    base.results = {
+        tostring(#handlers.list),
+        tostring(handlers.list[1].name),
+        tostring(handlers.list[2].name)
+    }
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"2">>, <<"first-handler">>, <<"second-handler">>], Result).
+
+%% @doc Test the hyper-aos handlers prepend function.
+hyper_aos_handlers_prepend_test() ->
+    Code = <<
+"""
+local handlers = require('.handlers')
+
+function compute(base, req)
+    -- Add initial handler
+    handlers.add('first-handler', function(msg) return true end, function(msg) end)
+    
+    -- Prepend a handler (should be first in list)
+    handlers.prepend('second-handler', function(msg) return true end, function(msg) end)
+    
+    base.results = {
+        tostring(#handlers.list),
+        tostring(handlers.list[1].name),
+        tostring(handlers.list[2].name)
+    }
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"2">>, <<"second-handler">>, <<"first-handler">>], Result).
+
+%% @doc Test the hyper-aos handlers remove function.
+hyper_aos_handlers_remove_test() ->
+    Code = <<
+"""
+local handlers = require('.handlers')
+
+function compute(base, req)
+    -- Add multiple handlers
+    handlers.add('first-handler', function(msg) return true end, function(msg) end)
+    handlers.add('second-handler', function(msg) return true end, function(msg) end)
+    handlers.add('third-handler', function(msg) return true end, function(msg) end)
+    
+    local beforeRemove = handlers.list[2]
+    
+    -- Remove middle handler
+    handlers.remove('second-handler')
+    
+    base.results = {
+        tostring(beforeRemove.name),
+        tostring(#handlers.list),
+        tostring(handlers.list[1].name),
+        tostring(handlers.list[2].name)
+    }
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"second-handler">>,  
+        <<"2">>,
+        <<"first-handler">>,
+        <<"third-handler">>
+    ], Result).
+
+%% @doc Test the hyper-aos handlers once function.
+hyper_aos_handlers_once_test() ->
+    Code = <<
+"""
+local handlers = require('.handlers')
+
+function compute(base, req)
+    -- Test once with named handler
+    handlers.once(
+        'once-handler', 
+        function(msg) return msg.Tags['Action'] == 'Eval' end, 
+        function(msg) table.insert(base.results, 'ran once-handler') end
+    )
+    
+    -- Test once with generated name
+    handlers.once(
+        function(msg) return msg.Tags['Action'] == 'Eval2' end, 
+        function(msg) end
+    )
+    
+    base.results = {
+        tostring(#handlers.list),
+        tostring(handlers.list[1].name),
+        tostring(handlers.list[1].maxRuns),
+        tostring(handlers.list[2].name),
+        tostring(handlers.list[2].maxRuns)
+    }
+
+    handlers.evaluate({ Tags = { Action = 'Eval' } }, {})
+    table.insert(base.results, tostring(#handlers.list))
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"2">>,
+        <<"_once_0">>,
+        <<"1">>,
+        <<"once-handler">>,
+        <<"1">>,
+        <<"ran once-handler">>,
+        <<"1">>
+    ], Result).
+
+%% @doc Test the hyper-aos handlers before function.
+hyper_aos_handlers_before_test() ->
+    Code = <<
+"""
+local handlers = require('.handlers')
+
+function compute(base, req)
+    -- Add initial handlers
+    handlers.add('first-handler', function(msg) return true end, function(msg) end)
+    handlers.add('third-handler', function(msg) return true end, function(msg) end)
+    
+    -- Insert handler before 'third-handler'
+    handlers.before('third-handler').add('second-handler', function(msg) return true end, function(msg) end)
+    
+    base.results = {
+        tostring(#handlers.list),
+        tostring(handlers.list[1].name),
+        tostring(handlers.list[2].name),
+        tostring(handlers.list[3].name)
+    }
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"3">>, 
+        <<"first-handler">>,
+        <<"second-handler">>,
+        <<"third-handler">>
+    ], Result).
+
+%% @doc Test the hyper-aos handlers after function.
+hyper_aos_handlers_after_test() ->
+    Code = <<
+"""
+local handlers = require('.handlers')
+
+function compute(base, req)
+    -- Add initial handlers
+    handlers.add('first-handler', function(msg) return true end, function(msg) end)
+    handlers.add('third-handler', function(msg) return true end, function(msg) end)
+    
+    -- Insert handler after 'first-handler'
+    handlers.after('first-handler').add('second-handler', function(msg) return true end, function(msg) end)
+    
+    base.results = {
+        tostring(#handlers.list),
+        tostring(handlers.list[1].name),
+        tostring(handlers.list[2].name),
+        tostring(handlers.list[3].name)
+    }
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"3">>, <<"first-handler">>, <<"second-handler">>, <<"third-handler">>], Result).
+
+%% @doc Test the hyper-aos handlers evaluate function with pattern matching.
+hyper_aos_handlers_evaluate_test() ->
+    Code = <<
+"""
+local handlers = require('.handlers')
+
+function compute(base, req)
+    local callResults = {}
+    
+    -- Add default handler
+    handlers.add('_default', function(msg) return true end, function(msg) end)
+
+    -- Add handlers with different patterns
+    handlers.add('action-eval', function(msg) 
+        return msg.Tags and msg.Tags.Action == 'Eval' 
+    end, function(msg) 
+        table.insert(callResults, 'eval-called')
+    end)
+    
+    handlers.add('action-test', function(msg) 
+        return msg.Tags and msg.Tags.Action == 'Test'
+    end, function(msg) 
+        table.insert(callResults, 'test-called')
+    end)
+    
+    -- Test with Eval action
+    local msg1 = { Tags = { Action = 'Eval' } }
+    handlers.evaluate(msg1, {})
+    
+    -- Test with Test action
+    local msg2 = { Tags = { Action = 'Test' } }
+    handlers.evaluate(msg2, {})
+    
+    -- Test with no matching action
+    local msg3 = { Tags = { Action = 'Other' } }
+    handlers.evaluate(msg3, {})
+    
+    base.results = callResults
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"eval-called">>, <<"test-called">>], Result).
+
+%% @doc Test the hyper-aos handlers evaluate function with maxRuns limit.
+hyper_aos_handlers_evaluate_maxruns_test() ->
+    Code = <<
+"""
+local handlers = require('.handlers')
+
+function compute(base, req)
+    local callCount = 0
+    
+    -- Add default handler
+    handlers.add('_default', function(msg) return true end, function(msg) end)
+
+    -- Add handler with maxRuns = 2
+    handlers.add('limited-handler', function(msg) return true end, function(msg) 
+        callCount = callCount + 1
+    end, 2)
+    
+    local msg = { Tags = { Action = 'Test' } }
+    
+    -- Call evaluate 3 times
+    handlers.evaluate(msg, {})
+    handlers.evaluate(msg, {})
+    handlers.evaluate(msg, {})
+    
+    -- Check if handler was removed after maxRuns
+    local handlerExists = false
+    for _, h in ipairs(handlers.list) do
+        if h.name == 'limited-handler' then
+            handlerExists = true
+            break
+        end
+    end
+    
+    base.results = {
+        tostring(callCount),
+        tostring(handlerExists)
+    }
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"2">>, <<"false">>], Result).
+
+%% @doc Test the hyper-aos handlers generateResolver function.
+hyper_aos_handlers_generate_resolver_test() ->
+    Code = <<
+"""
+local handlers = require('.handlers')
+
+function compute(base, req)
+    -- Test with function resolver
+    local funcResolver = handlers.generateResolver(function(msg) 
+        return 'function-result' 
+    end)
+    
+    -- Test with table resolver
+    local tableResolver = handlers.generateResolver({
+        ['pattern1'] = function(msg) return 'pattern1-result' end,
+        ['pattern2'] = function(msg) return 'pattern2-result' end
+    })
+    
+    
+    local funcResult = funcResolver({})
+    local tableResult1 = tableResolver({ action = 'pattern1' })
+    print('tableResult1')
+    print(tableResult1)
+
+    local tableResult2 = tableResolver({ action = 'pattern2' })
+    -- print('tableResult2')
+    -- print(tableResult2)
+    base.results = {
+        tostring(funcResult),
+        tostring(tableResult1),
+        tostring(tableResult2)
+    }
+    return base
+end
+"""
+>>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_handlers_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"function-result">>,
+        <<"pattern1-result">>,
+        <<"pattern2-result">>
+    ], Result).
+
 %%% Test helpers
 
 %% @doc Generate a Lua process message.
@@ -1119,8 +1504,36 @@ generate_hyper_aos_modular_handlers_utils_process(Code) ->
     Opts = #{ priv_wallet => Wallet },
     {ok, UtilsJson} = file:read_file("scripts/aos-utils.lua"),
     {ok, HandlersUtilsJson} = file:read_file("scripts/aos-handlers-utils.lua"),
+    Process = generate_hyper_aos_modular_process(
+        [UtilsJson, HandlersUtilsJson, Code],
+        Wallet
+    ),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Process, Opts}.
+generate_hyper_aos_modular_handlers_process(Code) -> 
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, UtilsJson} = file:read_file("scripts/aos-utils.lua"),
+    {ok, HandlersUtilsJson} = file:read_file("scripts/aos-handlers-utils.lua"),
     {ok, HandlersJson} = file:read_file("scripts/aos-handlers.lua"),
-    Process = generate_hyper_aos_modular_process([UtilsJson, HandlersUtilsJson, HandlersJson, Code], Wallet),
+    Process = generate_hyper_aos_modular_process(
+        [UtilsJson, HandlersUtilsJson, HandlersJson, Code],
+        Wallet
+    ),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Process, Opts}.
+generate_hyper_aos_modular_utils_process(Code) -> 
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, UtilsJson} = file:read_file("scripts/aos-utils.lua"),
+    Process = generate_hyper_aos_modular_process(
+        [UtilsJson, Code],
+        Wallet
+    ),
     Message = generate_test_message(Process, Opts, <<"">>),
     hb_cache:write(Process, Opts),
     hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
