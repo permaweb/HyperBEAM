@@ -201,24 +201,30 @@ id(RawMsg, RawCommitters, Opts) ->
 %% unsigned ID present. By forcing this work to occur in strategically positioned
 %% places, we avoid the need to recalculate the IDs for every `hb_message:id`
 %% call.
-normalize_commitments(Msg, Opts) when is_map(Msg) ->
+normalize_commitments(Msg, Opts) when is_map(Msg), map_size(Msg) > 0 ->
     NormMsg = 
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
                 Val;
-               (_Key, Val) -> normalize_commitments(Val, Opts)
+               (Key, Val) -> 
+                    ?event(x, {key, Key, Val}),
+                    normalize_commitments(Val, Opts)
             end,
             Msg
         ),
     case hb_maps:get(<<"commitments">>, NormMsg, not_found, Opts) of
         not_found ->
-            {ok, #{ <<"commitments">> := Commitments }} =
-                dev_message:commit(
-                    NormMsg,
-                    #{ <<"type">> => <<"unsigned">> },
-                    Opts
-                ),
-            NormMsg#{ <<"commitments">> => Commitments };
+            case maps:get(<<"ao-types">>, NormMsg, not_found) of
+                not_found ->
+                    {ok, #{ <<"commitments">> := Commitments }} =
+                        dev_message:commit(
+                            NormMsg,
+                            #{ <<"type">> => <<"unsigned">> },
+                            Opts
+                        ),
+                        NormMsg#{ <<"commitments">> => Commitments };
+                _ -> NormMsg
+            end;
         _ -> NormMsg
     end;
 normalize_commitments(Msg, Opts) when is_list(Msg) ->
