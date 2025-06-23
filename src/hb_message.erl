@@ -177,7 +177,8 @@ conversion_spec_to_req(Spec, Opts) ->
 id(Msg) -> id(Msg, uncommitted).
 id(Msg, Opts) when is_map(Opts) -> id(Msg, uncommitted, Opts);
 id(Msg, Committers) -> id(Msg, Committers, #{}).
-id(Msg, RawCommitters, Opts) ->
+id(RawMsg, RawCommitters, Opts) ->
+    Msg = normalize_commitments(RawMsg, Opts),
     CommSpec =
         case RawCommitters of
             none -> #{ <<"committers">> => <<"none">> };
