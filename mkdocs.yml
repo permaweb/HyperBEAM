@@ -246,6 +246,7 @@ extra_css:
   - assets/stylesheets/style.css
 
 extra_javascript:
+  - js/doc-selector.js
   - js/color-toggle.js
   - js/utc-time.js
   - js/custom-header.js

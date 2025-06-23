@@ -1,4 +1,4 @@
-Generated: 2025-06-18T10:21:32Z
+Generated: 2025-06-23T19:55:58Z
 
 --- START OF FILE: docs/build/building-on-ao.md ---
 # Building on HyperBEAM with `ao`
@@ -47611,18 +47611,18 @@ To successfully build and run a HyperBEAM node, your system needs several softwa
 
 ### Erlang/OTP
 
-HyperBEAM is built on Erlang/OTP. You need a compatible version installed (check the `rebar.config` or project documentation for specific version requirements, **typically OTP 27**).
+HyperBEAM is built on Erlang/OTP. You need version OTP 27 installed (check the `rebar.config` or project documentation for specific version requirements, **typically OTP 27**).
 
 Installation methods:
 
 === "macOS (brew)"
     ```bash
-    brew install erlang
+    brew install erlang@27
     ```
 
 === "Linux (apt)"
     ```bash
-    sudo apt install erlang
+    sudo apt install erlang=1:27.*
     ```
 <!-- 
 === "asdf (Recommended)"
@@ -47660,7 +47660,7 @@ Installation methods:
 
 ### Node.js
 
-Node.js might be required for certain JavaScript-related tools or dependencies.
+Node.js might be required for certain JavaScript-related tools or dependencies. Node version 22+ is required.
 
 Installation methods:
 
@@ -47679,8 +47679,8 @@ Installation methods:
     `asdf-vm` with the `asdf-nodejs` plugin is recommended.
     ```bash
     asdf plugin add nodejs https://github.com/asdf-vm/asdf-nodejs.git
-    asdf install nodejs <version> # e.g., lts
-    asdf global nodejs <version>
+    asdf install nodejs latest  # ensures you get the latest version (22+)
+    asdf global nodejs latest
     ```
 
 ### Rust
