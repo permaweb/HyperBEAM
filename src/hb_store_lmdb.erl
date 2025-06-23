@@ -360,7 +360,7 @@ list(Opts, Path) when is_map(Opts), is_binary(Path) ->
     list(
         Opts,
         Path,
-        case hb_util:bin(maps:get(<<"list-mode">>, Opts, <<"moderate">>)) of
+        case hb_util:bin(maps:get(<<"list-mode">>, Opts, <<"paranoid">>)) of
             <<"extreme">> -> extreme;
             <<"moderate">> -> moderate;
             <<"paranoid">> -> paranoid
