@@ -205,7 +205,7 @@ find_next_assignment(_Msg1, _Msg2, Schedule = [_Next|_], _LastSlot, _Opts) ->
 find_next_assignment(Msg1, Msg2, _Schedule, LastSlot, Opts) ->
     ProcID = dev_process:process_id(Msg1, Msg2, Opts),
     LocalCacheRes =
-        case hb_opts:get(<<"scheduler_ignore_local_cache">>, false, Opts) of
+        case hb_util:atom(hb_opts:get(<<"scheduler_ignore_local_cache">>, false, Opts)) of
             true -> not_found;
             false ->
                 check_lookahead_and_local_cache(Msg1, ProcID, LastSlot + 1, Opts)
