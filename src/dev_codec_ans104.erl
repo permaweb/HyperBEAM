@@ -587,7 +587,11 @@ set_tx_value_or_throw(Field, TX, DefaultValue, NewValue) ->
 
 flatten_commitments(TABM, Opts) ->
     Commitments = hb_maps:get(<<"commitments">>, TABM, #{}, Opts),
-    case hb_maps:keys(Commitments, Opts) of
+    FilteredCommitments = hb_maps:filter(
+        fun(_, #{ <<"type">> := Type }) -> Type /= <<"hmac-sha256">> end,
+        Commitments,
+        Opts),
+    case hb_maps:keys(FilteredCommitments, Opts) of
         [] ->
             {#{}, []};
         [ID] ->
