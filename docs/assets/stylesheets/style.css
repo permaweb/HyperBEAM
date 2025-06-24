@@ -2047,3 +2047,191 @@ kbd {
 [data-md-color-scheme="slate"] .core-concepts-fig rect {
     stroke: #fff !important;
 }
+
+/* ===== DARK MODE CODE COMPATIBILITY ===== */
+
+/* --- Code Blocks in Dark Mode --- */
+[data-md-color-scheme="slate"] pre {
+    background-color: #1a1a1a !important;
+    border: 1px solid #333333 !important;
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] pre code {
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .highlight pre {
+    background-color: #1a1a1a !important;
+    color: #ffffff !important;
+    border: 1px solid #333333 !important;
+}
+
+[data-md-color-scheme="slate"] .highlight pre code {
+    color: #ffffff !important;
+}
+
+/* --- Material Theme Code Blocks in Dark Mode --- */
+[data-md-color-scheme="slate"] .md-typeset .codehilite {
+    background-color: #1a1a1a !important;
+    color: #ffffff !important;
+    border: 1px solid #333333 !important;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .codehilite::before {
+    background-color: #333333 !important;
+    color: #cccccc !important;
+}
+
+/* --- Syntax Highlighting in Dark Mode --- */
+[data-md-color-scheme="slate"] .highlight .k {
+    color: #ff6b6b !important;
+}
+
+[data-md-color-scheme="slate"] .highlight .s,
+[data-md-color-scheme="slate"] .highlight .s1,
+[data-md-color-scheme="slate"] .highlight .s2 {
+    color: #51cf66 !important;
+}
+
+[data-md-color-scheme="slate"] .highlight .nb,
+[data-md-color-scheme="slate"] .highlight .no,
+[data-md-color-scheme="slate"] .highlight .mi,
+[data-md-color-scheme="slate"] .highlight .mf {
+    color: #74c0fc !important;
+}
+
+[data-md-color-scheme="slate"] .highlight .nf,
+[data-md-color-scheme="slate"] .highlight .nc,
+[data-md-color-scheme="slate"] .highlight .nn,
+[data-md-color-scheme="slate"] .highlight .na {
+    color: #d0bfff !important;
+}
+
+[data-md-color-scheme="slate"] .highlight .c,
+[data-md-color-scheme="slate"] .highlight .c1,
+[data-md-color-scheme="slate"] .highlight .cm {
+    color: #868e96 !important;
+}
+
+[data-md-color-scheme="slate"] .highlight .o {
+    color: #ff6b6b !important;
+}
+
+[data-md-color-scheme="slate"] .highlight .p {
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .highlight .nt {
+    color: #51cf66 !important;
+}
+
+[data-md-color-scheme="slate"] .highlight .nv {
+    color: #ffffff !important;
+}
+
+/* --- Language-Specific Dark Mode Syntax Highlighting --- */
+
+/* Bash/Shell in Dark Mode */
+[data-md-color-scheme="slate"] .language-bash pre,
+[data-md-color-scheme="slate"] .language-shell pre,
+[data-md-color-scheme="slate"] .language-console pre,
+[data-md-color-scheme="slate"] .language-terminal pre {
+    background-color: #1a1a1a !important;
+    color: #ffffff !important;
+    border: 1px solid #333333 !important;
+}
+
+[data-md-color-scheme="slate"] .language-bash code,
+[data-md-color-scheme="slate"] .language-shell code,
+[data-md-color-scheme="slate"] .language-console code,
+[data-md-color-scheme="slate"] .language-terminal code {
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .language-bash .highlight .nb,
+[data-md-color-scheme="slate"] .language-shell .highlight .nb {
+    color: #74c0fc !important;
+}
+
+[data-md-color-scheme="slate"] .language-bash .highlight .nv,
+[data-md-color-scheme="slate"] .language-shell .highlight .nv {
+    color: #ffd43b !important;
+}
+
+[data-md-color-scheme="slate"] .language-bash .highlight .s,
+[data-md-color-scheme="slate"] .language-bash .highlight .s1,
+[data-md-color-scheme="slate"] .language-bash .highlight .s2,
+[data-md-color-scheme="slate"] .language-shell .highlight .s,
+[data-md-color-scheme="slate"] .language-shell .highlight .s1,
+[data-md-color-scheme="slate"] .language-shell .highlight .s2 {
+    color: #51cf66 !important;
+}
+
+[data-md-color-scheme="slate"] .language-bash .highlight .c,
+[data-md-color-scheme="slate"] .language-bash .highlight .c1,
+[data-md-color-scheme="slate"] .language-shell .highlight .c,
+[data-md-color-scheme="slate"] .language-shell .highlight .c1 {
+    color: #868e96 !important;
+}
+
+[data-md-color-scheme="slate"] .language-bash .highlight .o,
+[data-md-color-scheme="slate"] .language-bash .highlight .k,
+[data-md-color-scheme="slate"] .language-bash .highlight .kd,
+[data-md-color-scheme="slate"] .language-shell .highlight .o,
+[data-md-color-scheme="slate"] .language-shell .highlight .k,
+[data-md-color-scheme="slate"] .language-shell .highlight .kd {
+    color: #ff6b6b !important;
+}
+
+[data-md-color-scheme="slate"] .language-bash .highlight .p,
+[data-md-color-scheme="slate"] .language-shell .highlight .p {
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .language-bash .highlight .mi,
+[data-md-color-scheme="slate"] .language-bash .highlight .mf,
+[data-md-color-scheme="slate"] .language-shell .highlight .mi,
+[data-md-color-scheme="slate"] .language-shell .highlight .mf {
+    color: #74c0fc !important;
+}
+
+/* JSON in Dark Mode */
+[data-md-color-scheme="slate"] .language-json .highlight .s2 {
+    color: #51cf66 !important;
+}
+
+[data-md-color-scheme="slate"] .language-json .highlight .kc {
+    color: #74c0fc !important;
+}
+
+/* JavaScript/TypeScript in Dark Mode */
+[data-md-color-scheme="slate"] .language-javascript .highlight .kd,
+[data-md-color-scheme="slate"] .language-typescript .highlight .kd {
+    color: #ff6b6b !important;
+}
+
+/* Python in Dark Mode */
+[data-md-color-scheme="slate"] .language-python .highlight .k {
+    color: #ff6b6b !important;
+}
+
+[data-md-color-scheme="slate"] .language-python .highlight .bp {
+    color: #74c0fc !important;
+}
+
+/* --- Inline Code in Dark Mode --- */
+[data-md-color-scheme="slate"] code {
+    background-color: #1a1a1a !important;
+    color: #ffffff !important;
+    border: none !important;
+}
+
+/* --- Keyboard Shortcuts in Dark Mode --- */
+[data-md-color-scheme="slate"] kbd {
+    background-color: #1a1a1a !important;
+    border: 1px solid #333333 !important;
+    border-bottom-color: #666666 !important;
+    box-shadow: inset 0 -1px 0 #666666 !important;
+    color: #ffffff !important;
+}
