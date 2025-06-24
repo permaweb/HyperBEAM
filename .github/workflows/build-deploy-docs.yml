@@ -12,7 +12,8 @@ on:
       - ".github/workflows/build-deploy-docs.yml"
   push:
     branches:
-      - main
+      - docs/deploy
+      - docs/deploy-test
     paths:
       # Trigger on changes to docs, mkdocs config, or the workflow itself
       - "docs/**"
