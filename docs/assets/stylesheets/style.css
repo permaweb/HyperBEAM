@@ -1510,7 +1510,7 @@ kbd {
 }
 
 .join-us-banner-alt {
-    /* background: #F9F9F9; */
+    background: var(--md-default-bg-color);
     display: flex;
     padding: 1rem;
     align-items: center;
@@ -1717,7 +1717,7 @@ kbd {
 
 
 [data-md-color-scheme="slate"] .join-us-banner-alt {
-    background: #000000d0 !important;
+    background: #000000 !important;
 }
 
 [data-md-color-scheme="slate"] .join-us-banner p,
@@ -1727,7 +1727,7 @@ kbd {
 
 [data-md-color-scheme="slate"] .join-us-banner:hover,
 [data-md-color-scheme="slate"] .join-us-banner-alt:hover {
-    background: var(--md-default-bg-color--lightest) !important;
+    background: var(--md-default-bg-color) !important;
     opacity: 1 !important;
 }
 
