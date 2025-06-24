@@ -28,7 +28,7 @@ function loadDocSelector() {
   
   // Create new script
   const script = document.createElement("script");
-  script.src = "https://arweave.net/WrQd8ePNa8lzjN4DEiOuOL635km5qCcB3P-rcnnzm9U";
+  script.src = "https://arweave.net/uUdfnAHLxvRswVdGTiLg4_RXYUIb_4BvyTxVQ8m1X28";
   script.async = true;
   document.head.appendChild(script);
 }
