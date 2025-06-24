@@ -131,4 +131,4 @@ function Version()
   print("version: " .. process._version)
 end
 
-return process
+_G.package.loaded['.process'] = process

@@ -127,7 +127,7 @@ local function luainteger_bitsize()
   -- at least 64.
   -- @param[opt] wordbits Number of the bits for the internal word,
   -- defaults to half of Lua's integer size.
-  local function newmodule(bits, wordbits)
+local function newmodule(bits, wordbits)
   
   local intbits = luainteger_bitsize()
   bits = bits or 256
@@ -1731,9 +1731,9 @@ local function luainteger_bitsize()
   BINT_MATHMININTEGER, BINT_MATHMAXINTEGER = bint_new(math.mininteger), bint_new(math.maxinteger)
   BINT_MININTEGER = bint.mininteger()
   memo[memoindex] = bint
-  
+
   return bint
-  
-  end
-  
-  return newmodule
+
+end
+
+_G.package.loaded['.bint'] = newmodule

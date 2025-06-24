@@ -156,7 +156,7 @@ function base64.decode( b64, decoder, usecaching )
 	return concat( t )
 end
 
-return base64
+_G.package.loaded['.base64'] = base64
 
 --[[
 ------------------------------------------------------------------------------

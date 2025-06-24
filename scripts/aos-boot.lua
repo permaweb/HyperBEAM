@@ -28,7 +28,7 @@ end
 -- @function boot
 -- @param aos The aos environment object
 -- @see eval
-return function (aos)
+BootFn = function (aos)
   local eval = require(".eval")(aos)
   return function (msg)
     if #Inbox == 0 then
@@ -45,3 +45,5 @@ return function (aos)
     end
   end
 end
+
+_G.package.loaded['.boot'] = BootFn

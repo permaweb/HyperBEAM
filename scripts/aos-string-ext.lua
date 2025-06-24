@@ -161,4 +161,4 @@
   -- Auto-install string extensions when module is loaded
   string_ext.install()
 
-  return string_ext
+  _G.package.loaded['.string-ext'] = string_ext

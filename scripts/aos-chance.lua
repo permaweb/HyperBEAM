@@ -102,4 +102,4 @@ function Random.integer(min, max)
     return math.floor(Random.random() * (max - min + 1) + min)
 end
 
-return Random
+_G.package.loaded['.chance'] = Random

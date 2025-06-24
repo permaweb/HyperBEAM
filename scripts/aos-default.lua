@@ -1,6 +1,6 @@
 local json = require('.json')
 -- default handler for aos
-return function (insertInbox)
+DefaultFn = function (insertInbox)
   return function (msg)
     -- Add Message to Inbox
     insertInbox(msg)
@@ -22,3 +22,5 @@ return function (insertInbox)
   end
 
 end
+
+_G.package.loaded['.default'] = DefaultFn

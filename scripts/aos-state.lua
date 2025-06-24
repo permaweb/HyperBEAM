@@ -151,4 +151,4 @@ function state.reset(tbl)
   return {}
 end
 
-return state
+_G.package.loaded['.state'] = state

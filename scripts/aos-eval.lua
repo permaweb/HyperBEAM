@@ -10,7 +10,7 @@ local json = require('.json')
 -- @tparam {table} aos The aos environment object
 -- @treturn {function} The handler function, which takes a message as an argument.
 -- @see stringify
-return function (aos)
+EvalFn = function (aos)
   return function (req)
     local msg = req.body
     -- exec expression
@@ -49,3 +49,5 @@ return function (aos)
     end
   end
 end
+
+_G.package.loaded['.eval'] = EvalFn

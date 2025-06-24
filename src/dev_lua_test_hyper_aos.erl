@@ -79,38 +79,7 @@ aos_process_benchmark_test_() ->
         )
     end}.
 
-% @doc Test the hyper-aos ao module.
-hyper_aos_ensure_owner_test() ->
-    Wallet = hb:wallet(),
-    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Opts = #{ priv_wallet => Wallet },
-    Process = generate_lua_process("test/hyper-aos.lua", Opts),
-    {ok, _Proc} = hb_cache:write(Process, Opts),
-    Code = """
-      return Owner
-    """,
-    Message = generate_test_message(Process, Opts, Code),
-    {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
-    {ok, Owner} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
-    ?assertEqual(Address, Owner),
-    ok.
-
-hyper_aos_ensure_id_test() ->
-    Wallet = hb:wallet(),
-    Opts = #{ priv_wallet => Wallet },
-    Process = generate_lua_process("test/hyper-aos.lua", Opts),
-    {ok, _Proc} = hb_cache:write(Process, Opts),
-    Code = """
-    return aos.id
-    """,
-    Message = generate_test_message(Process, Opts, Code),
-    {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
-    {ok, AosId} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
-    {ok, Committers} = hb_ao:resolve(Process, <<"commitments">>, Opts),
-    ProcessId = find_key_with_type_rsa_pss_sha512(Committers),
-    ?assertEqual(AosId, ProcessId),
-    ok.
-
+%% @doc Test the hyper-aos stringify module.
 hyper_aos_stringify_test() ->
     Wallet = hb:wallet(),
     Opts = #{ priv_wallet => Wallet },
@@ -134,6 +103,7 @@ end
     {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
     ?assertEqual(<<"true">>, Result).
 
+%% @doc Test the hyper-aos json module.
 hyper_aos_json_test() ->
     Wallet = hb:wallet(),
     Opts = #{ priv_wallet => Wallet },
@@ -1114,6 +1084,517 @@ end
     {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
     ?assertEqual([<<"Eval">>, <<"Process-123">>, <<"User-456">>], Result).
 
+%% @doc Test the hyper-aos ao module.
+
+hyper_aos_ensure_owner_test() ->
+    Wallet = hb:wallet(),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{ priv_wallet => Wallet },
+    Process = generate_lua_process("test/hyper-aos.lua", Opts),
+    {ok, _Proc} = hb_cache:write(Process, Opts),
+    Code = """
+      return Owner
+    """,
+    Message = generate_test_message(Process, Opts, Code),
+    {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Owner} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
+    ?assertEqual(Address, Owner),
+    ok.
+
+hyper_aos_ensure_id_test() ->
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    Process = generate_lua_process("test/hyper-aos.lua", Opts),
+    {ok, _Proc} = hb_cache:write(Process, Opts),
+    Code = """
+    return aos.id
+    """,
+    Message = generate_test_message(Process, Opts, Code),
+    {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, AosId} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
+    {ok, Committers} = hb_ao:resolve(Process, <<"commitments">>, Opts),
+    ProcessId = find_key_with_type_rsa_pss_sha512(Committers),
+    ?assertEqual(AosId, ProcessId).
+
+%% @doc Test the hyper-aos ao module clearOutbox function
+hyper_aos_ao_clear_outbox_test() ->
+    Code = <<
+"""
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Add some data to outbox
+    ao.outbox.Messages = {{target = 'test', data = 'hello'}}
+    ao.outbox.Spawns = {{module = 'test'}}
+    ao.outbox.Assignments = {{process = 'test'}}
+    ao.outbox.Output = {data = 'output'}
+    
+    -- Clear outbox
+    ao.clearOutbox()
+    
+    base.results = {
+        tostring(#ao.outbox.Messages),
+        tostring(#ao.outbox.Spawns), 
+        tostring(#ao.outbox.Assignments),
+        tostring(ao.outbox.Output.data or 'nil')
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_ao_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"0">>, <<"0">>, <<"0">>, <<"nil">>], Result).
+
+%% @doc Test the hyper-aos ao module send function
+hyper_aos_ao_send_test() ->
+    Code = <<
+"""
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Test basic send
+    local msg1 = ao.send({target = 'process1', data = 'hello'})
+    local msg2 = ao.send({target = 'process2', data = 'world'})
+    
+    base.results = {
+        tostring(#ao.outbox.Messages),
+        tostring(ao.outbox.Messages[1].target),
+        tostring(ao.outbox.Messages[1].data),
+        tostring(ao.outbox.Messages[1].reference),
+        tostring(ao.outbox.Messages[2].target),
+        tostring(msg1.reference),
+        tostring(msg2.reference),
+        tostring(type(msg1.onReply))
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_ao_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"2">>,
+        <<"process1">>,
+        <<"hello">>,
+        <<"1">>,
+        <<"process2">>,
+        <<"1">>,
+        <<"2">>,
+        <<"function">>
+    ], Result).
+
+%% @doc Test the hyper-aos ao module spawn function
+hyper_aos_ao_spawn_test() ->
+    Code = <<
+"""
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Test spawn
+    local spawn1 = ao.spawn('module1', {data = 'init data'})
+    local spawn2 = ao.spawn('module2', {tags = {action = 'start'}})
+    
+    base.results = {
+        tostring(#ao.outbox.Spawns),
+        tostring(ao.outbox.Spawns[1].data),
+        tostring(ao.outbox.Spawns[1].reference),
+        tostring(ao.outbox.Spawns[2].tags.action),
+        tostring(spawn1.reference),
+        tostring(spawn2.reference),
+        tostring(type(spawn1.onReply))
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_ao_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"2">>,
+        <<"init data">>,
+        <<"1">>,
+        <<"start">>,
+        <<"1">>,
+        <<"2">>,
+        <<"function">>
+    ], Result).
+
+%% @doc Test the hyper-aos ao module registerHint function
+hyper_aos_ao_register_hint_test() ->
+    Code = <<
+"""
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Test registerHint with From-Process tag
+    local msg1 = {
+        Tags = {
+            ['From-Process'] = 'process123&hint=hint1&ttl=3600'
+        }
+    }
+    local msg2 = {
+        Tags = {
+            ['From-Process'] = 'process456&hint=hint2&ttl=7200'
+        }
+    }
+    
+    ao.registerHint(msg1)
+    ao.registerHint(msg2)
+    
+    base.results = {
+        tostring(ao._hints['process123'].hint),
+        tostring(ao._hints['process123'].ttl),
+        tostring(ao._hints['process456'].hint),
+        tostring(ao._hints['process456'].ttl)
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_ao_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"hint1">>,
+        <<"3600">>,
+        <<"hint2">>,
+        <<"7200">>
+    ], Result).
+
+%% @doc Test the hyper-aos ao module result function
+hyper_aos_ao_result_test() ->
+    Code = <<
+"""
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Add some messages to outbox
+    ao.send({target = 'test1', data = 'msg1'})
+    ao.spawn('module1', {data = 'spawn1'})
+    
+    -- Test result with normal output
+    local result1 = ao.result({Output = 'success'})
+    
+    -- Test result with error
+    local result2 = ao.result({Error = 'error'})
+    
+    base.results = {
+        tostring(result1.Output),
+        tostring(#result1.Messages),
+        tostring(#result1.Spawns),
+        tostring(result2.Error)
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_ao_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"success">>,
+        <<"1">>,
+        <<"1">>,
+        <<"error">>
+    ], Result).
+
+%% @doc Test the hyper-aos ao module initialization
+hyper_aos_ao_init_test() ->
+    Code = <<
+"""
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Test ao object properties after init
+    ao.init({
+        process = {
+            id = 'process123',
+            authority = 'authority123,authority456',
+            commitments = {
+                ['key1'] = {
+                    type = 'rsa-pss-sha512',
+                    commitment = 'commitment123'
+                },
+                ['key2'] = {
+                    type = 'hmac-sha256',
+                    commitment = 'commitment456'
+                }
+            }
+        }
+    })
+    base.results = {
+        tostring(ao._version),
+        tostring(type(ao.id)),
+        tostring(ao.id),
+        tostring(type(ao.authorities)),
+        tostring(#ao.authorities),    
+        tostring(ao.reference),
+        tostring(type(ao.outbox)),
+        tostring(type(ao.send)),
+        tostring(type(ao.spawn))
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_ao_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"0.0.6">>,
+        <<"string">>,
+        <<"key1">>,
+        <<"table">>,
+        <<"2">>,
+        <<"0">>,
+        <<"table">>,
+        <<"function">>,
+        <<"function">>
+    ], Result).
+%%% @doc Test the hyper-aos assignment module
+
+%% @doc Test the hyper-aos addAssignable function
+hyper_aos_assignment_add_assignable_test() ->
+    Code = <<
+"""
+local assignment = require('.assignment')
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Initialize assignment module
+    assignment.init(ao)
+    
+    -- Test adding assignable with name and matchSpec
+    ao.addAssignable('test-assignable', {Action = 'Test'})
+    
+    -- Test adding assignable with just matchSpec (no name)
+    ao.addAssignable({Action = 'NoName'})
+    
+    -- Test updating existing assignable
+    ao.addAssignable('test-assignable', {Action = 'Updated'})
+    
+    base.results = {
+        tostring(#ao.assignables),
+        tostring(ao.assignables[1].name),
+        tostring(ao.assignables[1].pattern.Action),
+        tostring(ao.assignables[2].name or 'nil'),
+        tostring(ao.assignables[2].pattern.Action)
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_assignment_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"2">>,
+        <<"test-assignable">>,
+        <<"Updated">>,
+        <<"nil">>,
+        <<"NoName">>
+    ], Result).
+
+%% @doc Test the hyper-aos assignment module removeAssignable function
+hyper_aos_assignment_remove_assignable_test() ->
+    Code = <<
+"""
+local assignment = require('.assignment')
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Initialize assignment module
+    assignment.init(ao)
+    
+    -- Add multiple assignables
+    ao.addAssignable('first', {Action = 'First'})
+    ao.addAssignable('second', {Action = 'Second'})
+    ao.addAssignable('third', {Action = 'Third'})
+    
+    local beforeRemove = #ao.assignables
+    
+    -- Remove by name
+    ao.removeAssignable('second')
+    
+    local afterNameRemove = #ao.assignables
+    
+    -- Remove by index
+    ao.removeAssignable(1)
+    
+    base.results = {
+        tostring(beforeRemove),
+        tostring(afterNameRemove),
+        tostring(#ao.assignables),
+        tostring(ao.assignables[1].name),
+        tostring(ao.assignables[1].pattern.Action)
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_assignment_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"3">>,
+        <<"2">>,
+        <<"1">>,
+        <<"third">>,
+        <<"Third">>
+    ], Result).
+
+%% @doc Test the hyper-aos assignment module isAssignment function
+hyper_aos_assignment_is_assignment_test() ->
+    Code = <<
+"""
+local assignment = require('.assignment')
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Initialize assignment module
+    assignment.init(ao)
+    
+    -- Set ao.id for testing
+    ao.id = 'process123'
+    
+    -- Test messages
+    local msg1 = {Target = 'process123'}  -- Same as ao.id
+    local msg2 = {Target = 'other-process'}  -- Different from ao.id
+    local msg3 = {}  -- No target
+    
+    base.results = {
+        tostring(ao.isAssignment(msg1)),
+        tostring(ao.isAssignment(msg2)),
+        tostring(ao.isAssignment(msg3))
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_assignment_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"false">>,
+        <<"true">>,
+        <<"true">>
+    ], Result).
+
+%% @doc Test the hyper-aos assignment module isAssignable function
+hyper_aos_assignment_is_assignable_test() ->
+    Code = <<
+"""
+local assignment = require('.assignment')
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Initialize assignment module
+    assignment.init(ao)
+    
+    -- Add assignables
+    ao.addAssignable('eval-assignable', {Action = 'Eval'})
+    ao.addAssignable('data-assignable', {Data = 'test'})
+    
+    -- Test messages
+    local msg1 = {Action = 'Eval'}  -- Should match first assignable
+    local msg2 = {Data = 'test'}    -- Should match second assignable
+    local msg3 = {Action = 'Other'} -- Should not match any
+    local msg4 = {}                 -- Should not match any
+    
+    base.results = {
+        tostring(ao.isAssignable(msg1)),
+        tostring(ao.isAssignable(msg2)),
+        tostring(ao.isAssignable(msg3)),
+        tostring(ao.isAssignable(msg4))
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_assignment_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"true">>,
+        <<"true">>,
+        <<"false">>,
+        <<"false">>
+    ], Result).
+
+%% @doc Test the hyper-aos assignment module with empty assignables
+hyper_aos_assignment_empty_assignables_test() ->
+    Code = <<
+"""
+local assignment = require('.assignment')
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Initialize assignment module
+    assignment.init(ao)
+    
+    -- Test with empty assignables (default behavior)
+    local msg = {Action = 'Test'}
+    
+    base.results = {
+        tostring(#ao.assignables),
+        tostring(ao.isAssignable(msg))
+    }
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_assignment_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"0">>,
+        <<"false">>
+    ], Result).
+
+%% @doc Test the hyper-aos assignment module initialization
+hyper_aos_assignment_init_test() ->
+    Code = <<
+"""
+local assignment = require('.assignment')
+local ao = require('.ao')
+
+function compute(base, req)
+    -- Test module properties
+    base.results = {
+        tostring(assignment._version),
+        tostring(type(assignment.init))
+    }
+    
+    -- Initialize and test aos properties
+    assignment.init(ao)
+    
+    table.insert(base.results, tostring(type(ao.assignables)))
+    table.insert(base.results, tostring(type(ao.addAssignable)))
+    table.insert(base.results, tostring(type(ao.removeAssignable)))
+    table.insert(base.results, tostring(type(ao.isAssignment)))
+    table.insert(base.results, tostring(type(ao.isAssignable)))
+    
+    return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =
+        generate_hyper_aos_modular_assignment_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([
+        <<"0.1.0">>,
+        <<"function">>,
+        <<"table">>,
+        <<"function">>,
+        <<"function">>,
+        <<"function">>,
+        <<"function">>
+    ], Result).
+
 %%% Test helpers
 %% @doc Generate a Lua process message.
 generate_lua_process(File, Opts) ->
@@ -1273,6 +1754,40 @@ generate_hyper_aos_modular_utils_process(Code) ->
     {ok, UtilsJson} = file:read_file("scripts/aos-utils.lua"),
     Process = generate_hyper_aos_modular_process(
         [UtilsJson, Code],
+        Wallet
+    ),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Process, Opts}.
+
+generate_hyper_aos_modular_ao_process(Code) -> 
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, StringExtJson} = file:read_file("scripts/aos-string-ext.lua"),
+    {ok, UtilsJson} = file:read_file("scripts/aos-utils.lua"),
+    {ok, HandlersUtilsJson} = file:read_file("scripts/aos-handlers-utils.lua"),
+    {ok, HandlersJson} = file:read_file("scripts/aos-handlers.lua"),
+    {ok, AoJson} = file:read_file("scripts/aos-ao.lua"),
+    Process = generate_hyper_aos_modular_process(
+        [StringExtJson, UtilsJson, HandlersUtilsJson, HandlersJson, AoJson, Code],
+        Wallet
+    ),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Process, Opts}.
+
+generate_hyper_aos_modular_assignment_process(Code) -> 
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, UtilsJson} = file:read_file("scripts/aos-utils.lua"),
+    {ok, HandlersUtilsJson} = file:read_file("scripts/aos-handlers-utils.lua"),
+    {ok, HandlersJson} = file:read_file("scripts/aos-handlers.lua"),
+    {ok, AoJson} = file:read_file("scripts/aos-ao.lua"),
+    {ok, AssignmentJson} = file:read_file("scripts/aos-assignment.lua"),
+    Process = generate_hyper_aos_modular_process(
+        [UtilsJson, HandlersUtilsJson, HandlersJson, AoJson, AssignmentJson, Code],
         Wallet
     ),
     Message = generate_test_message(Process, Opts, <<"">>),

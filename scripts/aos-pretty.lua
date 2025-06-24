@@ -17,4 +17,4 @@ pretty.tprint = function (tbl, indent)
   return output
 end
 
-return pretty
+_G.package.loaded['.pretty'] = pretty

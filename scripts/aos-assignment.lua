@@ -76,7 +76,17 @@ function Assignment.init (aos)
   aos.isAssignment = aos.isAssignment or function (msg) return msg.Target ~= aos.id end
 
   aos.isAssignable = aos.isAssignable or function (msg)
+    print("Message:")
+    for k, v in pairs(msg) do
+      print(k)
+      print(v)
+    end
     for _, assignable in pairs(aos.assignables) do
+      print("Assignable:")
+      for k, v in pairs(assignable.pattern) do
+        print(k)
+        print(v)
+      end
       if utils.matchesSpec(msg, assignable.pattern) then return true end
     end
 
@@ -88,4 +98,4 @@ function Assignment.init (aos)
   end
 end
 
-return Assignment
+_G.package.loaded['.assignment'] = Assignment
