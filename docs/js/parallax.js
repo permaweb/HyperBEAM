@@ -1,5 +1,5 @@
 document.addEventListener("DOMContentLoaded", () => {
-  // 1) Verify we’re on the homepage
+  // 1) Verify we're on the homepage
   const isHomepage =
     window.location.pathname === "/" ||
     window.location.pathname === "/index.html";
@@ -87,34 +87,51 @@ document.addEventListener("DOMContentLoaded", () => {
   requestAnimationFrame(updateHeaderFade);
 });
 
-// (Optional) Keep your “fade-in” logic for landing-page elements as-is
+// (Optional) Keep your "fade-in" logic for landing-page elements as-is
 window.addEventListener("DOMContentLoaded", () => {
   const isHomepage =
     window.location.pathname === "/" ||
     window.location.pathname === "/index.html";
 
-  if (isHomepage) {
-    const preloaderHTML = `<div id="preloader">Loading<span></span></div>`;
-    document.body.insertAdjacentHTML("afterbegin", preloaderHTML);
+  if (!isHomepage) return;
+
+  // Insert lightweight preloader markup
+  const preloaderHTML = `<div id="preloader">Loading<span></span></div>`;
+  document.body.insertAdjacentHTML("afterbegin", preloaderHTML);
+
+  // Utility to fade out and remove the preloader
+  function hidePreloader() {
+    const preloader = document.getElementById("preloader");
+    if (!preloader || preloader.dataset.hidden) return;
+    preloader.dataset.hidden = "true";
+    preloader.style.transition = "opacity 0.3s ease-out";
+    preloader.style.opacity = "0";
+    setTimeout(() => preloader.remove(), 300);
+
+    // Kick-off content fade-ins once preloader starts disappearing
+    startFadeIn();
   }
 
-  window.addEventListener("load", () => {
-    if (!isHomepage) return;
-
-    const preloader = document.getElementById("preloader");
-    if (preloader) {
-      preloader.style.transition = "opacity 0.5s ease-out";
-      preloader.style.opacity = "0";
-      setTimeout(() => (preloader.style.display = "none"), 500);
-    }
-
+  // Start staggered fade-ins for elements marked with .fade-in
+  function startFadeIn() {
     document.querySelectorAll(".fade-in").forEach((el, index) => {
       const delay = el.classList.contains("nav")
-        ? 2000
+        ? 50
         : el.classList.contains("hero-text")
-        ? 1500
-        : 500 + index * 100;
+        ? 25
+        : 10 + index * 15;
       setTimeout(() => el.classList.add("visible"), delay);
     });
-  });
+  }
+
+  // Prefer `document.fonts.ready` if available, otherwise fallback
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => hidePreloader());
+  } else {
+    // Minimal fallback delay to allow layout
+    setTimeout(hidePreloader, 100);
+  }
+
+  // Absolute fallback once the full page finishes loading
+  window.addEventListener("load", hidePreloader);
 });
