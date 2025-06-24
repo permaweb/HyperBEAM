@@ -1,44 +1,62 @@
 /*
  * DocSelector Component Loader
- * Loads the standalone DocSelector component from Arweave
- * Configure for each cookbook by updating the currentCookbook and links below.
+ * Minimal implementation for loading DocSelector with theme detection
  */
 
-// Configuration for the DocSelector component
+// Simple MkDocs Material theme detection
+function detectTheme() {
+  const scheme = document.body?.getAttribute('data-md-color-scheme');
+  return scheme === 'slate' ? 'dark' : 'light';
+}
+
+// Configuration
 window.DocSelectorConfig = {
-  currentCookbook: "HYPERBEAM", // AO, HYPERBEAM, ARWEAVE
+  currentCookbook: "HYPERBEAM",
   links: {
     AO: "https://cookbook_ao.arweave.net/welcome/ao-core-introduction.html",
     HYPERBEAM: "https://hyperbeam.arweave.net/build/introduction/what-is-hyperbeam.html",
     ARWEAVE: "https://cookbook.arweave.net/getting-started/index.html",
-},
+  },
+  theme: detectTheme()
 };
 
-// Load the DocSelector component from Arweave
-(function loadDocSelector() {
-  // Check if we're on the homepage/landing page
-  const isHomepage = window.location.pathname === '/' || 
-                     window.location.pathname === '/index.html' ||
-                     document.body.querySelector('.custom-homepage-main') !== null;
+// Load DocSelector script
+function loadDocSelector() {
+  // Remove existing script and component
+  document.querySelector('script[src*="localhost:8081/doc-selector.js"]')?.remove();
+  document.querySelector('[data-doc-selector="true"]')?.remove();
   
-  // Only load DocSelector if not on homepage
-  if (isHomepage) {
-    console.log("DocSelector hidden on homepage");
+  // Create new script
+  const script = document.createElement("script");
+  script.src = "http://localhost:8081/doc-selector.js";
+  script.async = true;
+  document.head.appendChild(script);
+}
+
+// Update theme and reload component
+function updateTheme() {
+  const newTheme = detectTheme();
+  if (newTheme !== window.DocSelectorConfig.theme) {
+    window.DocSelectorConfig.theme = newTheme;
+    loadDocSelector();
+  }
+}
+
+// Initialize
+(function() {
+  // Skip on homepage
+  if (window.location.pathname === '/' || window.location.pathname === '/index.html') {
     return;
   }
-
-  // Create and inject the script tag
-  const script = document.createElement("script");
-  script.src =
-    "https://arweave.net/WauaqtQwCTnyEzxpr-lF6N5_0UOlLkz7GosdoHWfBqI";
-  script.async = true;
-  script.onload = () => {
-    console.log("DocSelector component loaded successfully from Arweave");
-  };
-  script.onerror = () => {
-    console.error("Failed to load DocSelector component from Arweave");
-  };
-
-  // Add the script to the document head
-  document.head.appendChild(script);
+  
+  // Load initial component
+  loadDocSelector();
+  
+  // Watch for theme changes
+  if (document.body) {
+    new MutationObserver(() => updateTheme()).observe(document.body, {
+      attributes: true,
+      attributeFilter: ['data-md-color-scheme']
+    });
+  }
 })(); 
