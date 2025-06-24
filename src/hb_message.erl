@@ -206,9 +206,7 @@ normalize_commitments(Msg, Opts) when is_map(Msg), map_size(Msg) > 0 ->
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
                 Val;
-               (Key, Val) -> 
-                    ?event(x, {key, Key, Val}),
-                    normalize_commitments(Val, Opts)
+            (_Key, Val) -> normalize_commitments(Val, Opts)
             end,
             Msg
         ),
