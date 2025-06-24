@@ -92,12 +92,16 @@ body {
 
 /* --- Headings --- */
 .md-typeset h1 {
-    font-size: clamp(1.2rem, 1.5vw, 1.3rem);
+    font-size: clamp(1.1rem, 1.5vw, 1.2rem);
     font-weight: 600;
 }
 
-.md-typeset h2 {
-    font-size: clamp(0.8rem, 1.5vw, 0.9rem);
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4,
+.md-typeset h5,
+.md-typeset h6 {
+    font-size: clamp(0.7rem, 1.5vw, 0.8rem);
     margin-top: 8px;
 }
 
