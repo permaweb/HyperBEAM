@@ -3,7 +3,7 @@
 <div style="width: 100%; max-width: 100vw; margin-bottom: 2em;">
   <video
     class="theme-invert-video"
-    src="https://arweave.net/CAMmkYu41bEAmxpd8H7hhjj8WbH_Uxi_s4NGgE5DauE"
+    src="https://arweave.net/pc73dj9tZtj7AOeIKBGiiOm5ta13FYXzgsqWSePAxiM"
     style="width: 100%; height: auto; display: block;"
     autoplay
     muted

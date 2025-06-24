@@ -2042,12 +2042,6 @@ kbd {
     border-top: 1px solid var(--border-color-dark) !important;
 }
 
-[data-md-color-scheme="slate"] svg path,
-[data-md-color-scheme="slate"] svg line,
-[data-md-color-scheme="slate"] svg rect {
-    stroke: #fff !important;
-}
-
 [data-md-color-scheme="slate"] .core-concepts-fig path,
 [data-md-color-scheme="slate"] .core-concepts-fig line,
 [data-md-color-scheme="slate"] .core-concepts-fig rect {
