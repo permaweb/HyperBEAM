@@ -181,7 +181,11 @@ to(InputTABM, Req, Opts) when is_map(InputTABM) ->
     % 5. Set the data items on the #tx record.
     TXWithData = set_tx_data_or_throw(TXWithoutData, DataItems, Req, Opts),
 
-    TXResult = ar_bundles:reset_ids(ar_bundles:normalize(TXWithData)),
+    % 6. Set the unsigned ID on the #tx record.
+    ID = hb_message:id(InputTABM),
+    TXResult = ar_bundles:normalize(TXWithData#tx {
+        unsigned_id = ID
+    }),
     ?event({to, {result, TXResult}}),
     {ok, TXResult};
 to(_Other, _Req, _Opts) ->
