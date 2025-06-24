@@ -7,6 +7,52 @@
         display: block;
     }
 }
+
+/* Darker background for slate theme */
+[data-md-color-scheme=slate] {
+    /* Main background colors - making them much darker */
+    --md-default-bg-color: #000000;
+    --md-default-bg-color--light: #0a0a0a;
+    --md-default-bg-color--lighter: #111111;
+    --md-default-bg-color--lightest: #1a1a1a;
+    
+    /* Code block backgrounds - very dark */
+    --md-code-bg-color: #000000;
+    --md-code-bg-color--light: #050505;
+    
+    /* Header/Primary colors - override indigo */
+    --md-primary-fg-color: #ffffff;
+    --md-primary-fg-color--light: #cccccc;
+    --md-primary-fg-color--dark: #ffffff;
+    --md-primary-bg-color: #000000;
+    --md-primary-bg-color--light: #0a0a0a;
+    
+    /* Navigation and sidebar backgrounds */
+    --md-nav-bg-color: #000000;
+    --md-nav-fg-color: #ffffff;
+    --md-nav-fg-color--light: #cccccc;
+    
+    /* Content area backgrounds */
+    --md-content-bg-color: #000000;
+    --md-footer-bg-color: #000000;
+    --md-footer-bg-color--dark: #000000;
+    
+    /* Search and form backgrounds */
+    --md-form-bg-color: #0a0a0a;
+    --md-form-bg-color--light: #111111;
+    
+    /* Text colors for better visibility */
+    --md-default-fg-color: #ffffff;
+    --md-default-fg-color--light: #cccccc;
+    --md-default-fg-color--lighter: #999999;
+    --md-default-fg-color--lightest: #666666;
+    
+    /* Accent colors for better contrast */
+    --md-accent-bg-color: #0d0d0d;
+    --md-accent-bg-color--light: #1a1a1a;
+    --md-accent-fg-color: #ffffff;
+    --md-accent-fg-color--transparent: rgba(255, 255, 255, 0.1);
+}
 [data-md-color-scheme=default] {
     #logo_dark_mode {
         display: none;
@@ -251,6 +297,102 @@ h6 {
     background: rgb(237, 237, 237);
 }
 
+[data-md-color-scheme="slate"] .md-nav__link--active {
+    color: #ffffff !important;
+    background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Search component dark theme adaptations */
+[data-md-color-scheme="slate"] .md-search__form {
+    background-color: #111111 !important;
+    background-image: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%) !important;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3) !important;
+    transition: all 0.2s ease !important;
+}
+
+[data-md-color-scheme="slate"] .md-search__form:focus-within {
+    background-color: #1a1a1a !important;
+    background-image: linear-gradient(135deg, #111111 0%, #222222 100%) !important;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 0 2px rgba(255, 255, 255, 0.1) !important;
+}
+
+[data-md-color-scheme="slate"] .md-search__input {
+    background-color: transparent !important;
+    color: #ffffff !important;
+    border: none !important;
+    outline: none !important;
+}
+
+[data-md-color-scheme="slate"] .md-search__input::placeholder {
+    color: #999999 !important;
+}
+
+[data-md-color-scheme="slate"] .md-search__output {
+    background-color: #000000 !important;
+}
+
+[data-md-color-scheme="slate"] .md-search-result__meta {
+    color: #cccccc !important;
+    background-color: #000000 !important;
+}
+
+[data-md-color-scheme="slate"] .md-search-result__list {
+    background-color: #000000 !important;
+}
+
+[data-md-color-scheme="slate"] .md-search-result__item {
+    background-color: #000000 !important;
+    border-bottom: 1px solid #333333 !important;
+}
+
+[data-md-color-scheme="slate"] .md-search-result__item:hover {
+    background-color: #1a1a1a !important;
+}
+
+[data-md-color-scheme="slate"] .md-search__icon svg {
+    fill: #cccccc !important;
+}
+
+/* GitHub source component dark theme adaptations */
+[data-md-color-scheme="slate"] .md-header__source {
+    background-color: #000000 !important;
+}
+
+[data-md-color-scheme="slate"] .md-source {
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .md-source__repository {
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .md-source__fact {
+    color: #cccccc !important;
+}
+
+[data-md-color-scheme="slate"] .md-source__icon svg {
+    fill: #cccccc !important;
+}
+
+/* Color palette toggle and UTC time dark theme adaptations */
+[data-md-color-scheme="slate"] .md-header__option {
+    background-color: transparent !important;
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .md-option {
+    accent-color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] #utc-time {
+    color: #cccccc !important;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    padding: 4px 8px !important;
+    border-radius: 4px !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    backdrop-filter: blur(10px) !important;
+}
+
 
 
 .md-sidebar {
@@ -348,6 +490,7 @@ h6 {
 .md-header__source {
     width: 10rem;
     padding: 0.6rem;
+    margin-left: 0 !important;
 }
 
 .md-source {
@@ -378,6 +521,63 @@ h6 {
     color: #AAA;
 }
 
+/* Header customization for darker theme */
+[data-md-color-scheme="slate"] .md-header {
+    background-color: #000000 !important;
+    border-bottom: 1px solid #333333;
+}
+
+[data-md-color-scheme="slate"] .md-header__title {
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .md-tabs {
+    background-color: #000000 !important;
+}
+
+[data-md-color-scheme="slate"] .md-tabs__link {
+    color: #cccccc !important;
+}
+
+[data-md-color-scheme="slate"] .md-tabs__link--active {
+    color: #ffffff !important;
+}
+
+/* Navigation sidebar for darker theme */
+[data-md-color-scheme="slate"] .md-sidebar {
+    background-color: #000000 !important;
+}
+
+[data-md-color-scheme="slate"] .md-nav__title {
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .md-nav__link {
+    color: #cccccc !important;
+}
+
+[data-md-color-scheme="slate"] .md-nav__link--active {
+    color: #ffffff !important;
+}
+
+/* Content text colors */
+[data-md-color-scheme="slate"] .md-content {
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .md-typeset h1,
+[data-md-color-scheme="slate"] .md-typeset h2,
+[data-md-color-scheme="slate"] .md-typeset h3,
+[data-md-color-scheme="slate"] .md-typeset h4,
+[data-md-color-scheme="slate"] .md-typeset h5,
+[data-md-color-scheme="slate"] .md-typeset h6 {
+    color: #ffffff !important;
+}
+
+[data-md-color-scheme="slate"] .md-typeset p {
+    color: #cccccc !important;
+}
+
 /* Hero Customization */
 .custom-homepage-main {
     perspective: var(--parallax-perspective);
@@ -385,6 +585,12 @@ h6 {
     scroll-behavior: smooth;
     height: 100vh;
     width: 100vw;
+}
+
+/* Hide theme toggle on homepage */
+.custom-homepage-main [data-md-component="main"],
+main:has(.custom-homepage-main) [data-md-component="main"] {
+    display: none !important;
 }
 
 .hero-container {
