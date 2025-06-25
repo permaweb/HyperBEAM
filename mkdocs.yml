@@ -37,6 +37,7 @@ nav:
           - FAQ: "build/reference/faq.md"
           - Glossary: "build/reference/glossary.md"
           - Troubleshooting: "build/reference/troubleshooting.md"
+          - Fuel Your LLM: "llms.md"
 
   - Run a Node:
       - Running a HyperBEAM Node: "run/running-a-hyperbeam-node.md"
@@ -47,6 +48,7 @@ nav:
           - FAQ: "run/reference/faq.md"
           - Glossary: "run/reference/glossary.md"
           - Troubleshooting: "run/reference/troubleshooting.md"
+          - Fuel Your LLM: "llms.md"
 
   # - Resources:
   #     # - Troubleshooting: 'resources/reference/troubleshooting.md'

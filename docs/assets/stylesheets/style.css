@@ -418,6 +418,7 @@ main:has(.custom-homepage-main) [data-md-component="main"] {
     z-index: 20 !important;
     background: linear-gradient(0deg, rgba(255, 255, 255, 0) 0%, #ffffff 100%);
     border-bottom: 0px solid;
+    /* background and filter controlled by parallax.js */
 }
 
 .custom-homepage-header .md-grid {
@@ -429,9 +430,7 @@ main:has(.custom-homepage-main) [data-md-component="main"] {
     border-bottom: 0;
 }
 
-.custom-homepage-header .md-logo {
-    opacity: 0;
-}
+/* Logo opacity controlled by parallax.js */
 
 /* Hide VPSwitch theme toggle button on homepage */
 .custom-homepage-header .VPSwitch {
