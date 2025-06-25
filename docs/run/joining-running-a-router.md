@@ -119,7 +119,7 @@ hb:start_mainnet(#{
 <details>
 <summary>Advanced users can set up HyperBEAM manually (click to expand)</summary>
 
-### Direct Installation
+**Direct Installation**
 
 ```bash
 # Clone HyperBEAM
@@ -140,7 +140,7 @@ EOF
 rebar3 shell --eval "hb:start_mainnet()."
 ```
 
-### Environment Variables
+**Environment Variables**
 
 ```bash
 # Alternative: use environment variables

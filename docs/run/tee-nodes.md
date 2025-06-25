@@ -8,6 +8,7 @@
 HyperBEAM supports Trusted Execution Environments (TEEs) through the `~snp@1.0` device, enabling secure, verifiable computation on remote machines. TEEs provide hardware-level isolation and cryptographic attestation that allows users to verify their code is running in a protected environment exactly as intended, even on untrusted hardware.
 
 The `~snp@1.0` device generates and validates attestation reports that prove:
+
 - Code is running inside a genuine AMD SEV-SNP TEE
 - The execution environment hasn't been tampered with
 - Specific software components (firmware, kernel, initramfs) match trusted hashes
@@ -19,10 +20,10 @@ The `~snp@1.0` device generates and validates attestation reports that prove:
 
 - AMD EPYC processor with SEV-SNP support (Milan generation or newer)
 - Host system with SEV-SNP enabled in BIOS:
-  - `Secure Nested Paging` enabled
-  - `Secure Memory Encryption` enabled
-  - `SNP Memory Coverage` enabled
-  - `Minimum SEV non-ES ASID` > 1
+    - `Secure Nested Paging` enabled
+    - `Secure Memory Encryption` enabled
+    - `SNP Memory Coverage` enabled
+    - `Minimum SEV non-ES ASID` > 1
 
 ### Setup TEE Node
 
@@ -48,6 +49,7 @@ curl https://your-tee-node.com/~snp@1.0/generate
 ```
 
 Returns a signed attestation report containing:
+
 - **Nonce**: Unique identifier preventing replay attacks
 - **Address**: Node's ephemeral public key (only exists inside TEE)
 - **Measurement**: Cryptographic hash of the execution environment
@@ -158,6 +160,4 @@ ao.send({
 
 ## Further Reading
 
-- [AMD SEV-SNP Specification](https://www.amd.com/content/dam/amd/en/documents/epyc-technical-docs/specifications/56860.pdf)
 - [HyperBEAM OS Repository](https://github.com/permaweb/hb-os)
-- [SEV-SNP Linux Kernel Documentation](https://docs.kernel.org/x86/amd_memory_encryption.html) 
