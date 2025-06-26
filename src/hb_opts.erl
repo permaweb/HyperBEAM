@@ -237,7 +237,7 @@ default_message() ->
         % Should the node use persistent processes?
         process_workers => false,
         % Options for the router device
-        <<"router@1.0">> => #{
+        <<"router_opts">> => #{
             routes => []
         }
         % Should the node track and expose prometheus metrics?
