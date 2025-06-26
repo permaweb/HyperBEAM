@@ -45,6 +45,21 @@
     ]
 ).
 
+%% List of fields that should be forced into the tag list, rather than being
+%% encoded as fields in the TX record.
+-define(FORCED_TAG_FIELDS,
+    [
+        <<"quantity">>,
+        <<"manifest">>,
+        <<"data_size">>,
+        <<"data_tree">>,
+        <<"data_root">>,
+        <<"reward">>,
+        <<"denomination">>,
+        <<"signature_type">>
+    ]
+).
+
 %% @doc Return the address of the signer of an item, if it is signed.
 signer(#tx { owner = ?DEFAULT_OWNER }) -> undefined;
 signer(Item) -> crypto:hash(sha256, Item#tx.owner).
@@ -578,9 +593,13 @@ apply_tabm_to_tx(TX, InputTABM, Req,  Opts) ->
     % 2. Commitments
     % 3. The data field
     
+    % Extract forced tag fields - these should never be applied to TX record
+    ForcedTagFields = hb_maps:with(?FORCED_TAG_FIELDS, InputTABM),
+    TABMWithoutForcedTags = hb_maps:without(?FORCED_TAG_FIELDS, InputTABM, Opts),
+    
     % 1. Convert simple TABM fields to their native type, and apply to the #tx record.
-    %    Simple fields are: the default #tx fields *excluding* data.
-    DefaultTXTABM= hb_maps:with(hb_message:default_tx_keys(), InputTABM),
+    %    Simple fields are: the default #tx fields *excluding* data and forced tag fields.
+    DefaultTXTABM= hb_maps:with(hb_message:default_tx_keys(), TABMWithoutForcedTags),
     SimpleTABM = hb_maps:without([<<"data">>], DefaultTXTABM),
     Structured = hb_message:convert(
         SimpleTABM,
@@ -590,14 +609,14 @@ apply_tabm_to_tx(TX, InputTABM, Req,  Opts) ->
     {AppliedSimpleFields, TX1} = apply_to_tx(TX, Structured),
     
     % 2. Flatten the commitments into the 'signature' and 'owner' keys, and then apply those.
-    {SignatureMap, OriginalTags} = flatten_commitments(InputTABM, Opts),
+    {SignatureMap, OriginalTags} = flatten_commitments(TABMWithoutForcedTags, Opts),
     {_, TX2} = apply_to_tx(TX1, SignatureMap),
 
     % 3. If the data field is a map, we recursively turn it into messages.
     %    Notably, we do not simply call message_to_tx/1 on the inner map
     %    because that would lead to adding an extra layer of nesting to the
     %    data. Apply the result.
-    RawData = hb_maps:get(<<"data">>, InputTABM, ?DEFAULT_DATA, Opts),
+    RawData = hb_maps:get(<<"data">>, TABMWithoutForcedTags, ?DEFAULT_DATA, Opts),
     Data = case RawData of
         _ when is_map(RawData) -> hb_util:ok(dev_codec_ans104:to(RawData, Req, Opts));
         _ -> RawData
@@ -605,22 +624,29 @@ apply_tabm_to_tx(TX, InputTABM, Req,  Opts) ->
     {AppliedDataField, TX3} = apply_to_tx(TX2, #{ <<"data">> => Data }),
 
     % Return any remaining TABM keys that were not applied. These will be processed later.
-    InputAOTypes = hb_ao:get(<<"ao-types">>, InputTABM, <<>>, Opts),
-    DecodedAOTypes = dev_codec_structured:decode_ao_types(InputAOTypes, Opts),
-    UnappliedAOTypes = hb_maps:without(AppliedSimpleFields, DecodedAOTypes),
-    UnappliedTABM0 = hb_maps:without(
-        AppliedSimpleFields ++ AppliedDataField ++ [<<"commitments">>, <<"ao-types">>],
-        InputTABM
+    % Include forced tag fields in the unapplied TABM so they become tags.
+    UnappliedTABMWithoutForcedTags = hb_maps:without(
+        AppliedSimpleFields ++ AppliedDataField ++ [<<"commitments">>],
+        TABMWithoutForcedTags
     ),
-    UnappliedTABM = case UnappliedAOTypes of
-        _ when map_size(UnappliedAOTypes) =:= 0 ->
-            UnappliedTABM0;
-        _ ->
-            UnappliedTABM0#{
-                <<"ao-types">> => dev_codec_structured:encode_ao_types(UnappliedAOTypes, Opts)
-            }
-    end,
+    % TODO: Add back in the ao-types field?
+    % InputAOTypes = hb_ao:get(<<"ao-types">>, InputTABM, <<>>, Opts),
+    % DecodedAOTypes = dev_codec_structured:decode_ao_types(InputAOTypes, Opts),
+    % UnappliedAOTypes = hb_maps:without(AppliedSimpleFields, DecodedAOTypes),
+    % UnappliedTABM0 = hb_maps:without(
+    %     AppliedSimpleFields ++ AppliedDataField ++ [<<"commitments">>, <<"ao-types">>],
+    %     InputTABM
+    % ),
+    % UnappliedTABM = case UnappliedAOTypes of
+    %     _ when map_size(UnappliedAOTypes) =:= 0 ->
+    %         UnappliedTABM0;
+    %     _ ->
+    %         UnappliedTABM0#{
+    %             <<"ao-types">> => dev_codec_structured:encode_ao_types(UnappliedAOTypes, Opts)
+    %         }
+    % end,
 
+    UnappliedTABM = hb_maps:merge(UnappliedTABMWithoutForcedTags, ForcedTagFields, Opts),
     {TX3, UnappliedTABM, OriginalTags}.
 
 apply_to_tx(TX, Structured) ->
