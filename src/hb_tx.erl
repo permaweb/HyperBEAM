@@ -629,24 +629,26 @@ apply_tabm_to_tx(TX, InputTABM, Req,  Opts) ->
         AppliedSimpleFields ++ AppliedDataField ++ [<<"commitments">>],
         TABMWithoutForcedTags
     ),
-    % TODO: Add back in the ao-types field?
-    % InputAOTypes = hb_ao:get(<<"ao-types">>, InputTABM, <<>>, Opts),
-    % DecodedAOTypes = dev_codec_structured:decode_ao_types(InputAOTypes, Opts),
-    % UnappliedAOTypes = hb_maps:without(AppliedSimpleFields, DecodedAOTypes),
-    % UnappliedTABM0 = hb_maps:without(
-    %     AppliedSimpleFields ++ AppliedDataField ++ [<<"commitments">>, <<"ao-types">>],
-    %     InputTABM
-    % ),
-    % UnappliedTABM = case UnappliedAOTypes of
-    %     _ when map_size(UnappliedAOTypes) =:= 0 ->
-    %         UnappliedTABM0;
-    %     _ ->
-    %         UnappliedTABM0#{
-    %             <<"ao-types">> => dev_codec_structured:encode_ao_types(UnappliedAOTypes, Opts)
-    %         }
-    % end,
-
-    UnappliedTABM = hb_maps:merge(UnappliedTABMWithoutForcedTags, ForcedTagFields, Opts),
+    
+    % Process ao-types to preserve type information for unapplied fields
+    InputAOTypes = hb_ao:get(<<"ao-types">>, InputTABM, <<>>, Opts),
+    DecodedAOTypes = dev_codec_structured:decode_ao_types(InputAOTypes, Opts),
+    % Keep type information for fields that weren't applied to TX record
+    % This includes both regular unapplied fields AND forced tag fields
+    AllUnappliedFields = hb_maps:keys(UnappliedTABMWithoutForcedTags, Opts) ++ 
+                        hb_maps:keys(ForcedTagFields, Opts),
+    UnappliedAOTypes = hb_maps:with(AllUnappliedFields, DecodedAOTypes),
+    
+    % Create base unapplied TABM and merge with forced tag fields
+    UnappliedTABMBase = hb_maps:merge(UnappliedTABMWithoutForcedTags, ForcedTagFields, Opts),
+    
+    % Add ao-types back if there are any unapplied types
+    UnappliedTABM = case hb_maps:size(UnappliedAOTypes, Opts) of
+        0 -> UnappliedTABMBase;
+        _ -> UnappliedTABMBase#{
+            <<"ao-types">> => dev_codec_structured:encode_ao_types(UnappliedAOTypes, Opts)
+        }
+    end,
     {TX3, UnappliedTABM, OriginalTags}.
 
 apply_to_tx(TX, Structured) ->
