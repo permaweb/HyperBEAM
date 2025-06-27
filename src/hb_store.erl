@@ -57,6 +57,9 @@
 %% @doc The number of write and read operations to perform in the benchmark.
 -define(STORE_BENCH_WRITE_OPS, 100_000).
 -define(STORE_BENCH_READ_OPS, 100_000).
+-define(STORE_BENCH_LIST_KEYS, 500_000).
+-define(STORE_BENCH_LIST_GROUP_SIZE, 10).
+-define(STORE_BENCH_LIST_OPS, 100_000).
 -define(BENCH_MSG_WRITE_OPS, 250).
 -define(BENCH_MSG_READ_OPS, 250).
 -define(BENCH_MSG_DATA_SIZE, 1024).
@@ -419,6 +422,7 @@ store_suite_test_() ->
 benchmark_suite_test_() ->
     generate_test_suite([
         {"benchmark key read write", fun benchmark_key_read_write/1},
+        {"benchmark list", fun benchmark_list/1},
         {"benchmark message read write", fun benchmark_message_read_write/1}
     ]).
 
@@ -500,6 +504,146 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
         ]
     ),
     ?assertEqual(0, NotFoundCount, "Written keys not found in store.").
+
+benchmark_list(Store) ->
+    benchmark_list(
+        Store,
+        ?STORE_BENCH_LIST_KEYS,
+        ?STORE_BENCH_LIST_OPS,
+        ?STORE_BENCH_LIST_GROUP_SIZE
+    ).
+benchmark_list(Store, WriteOps, ListOps, GroupSize) ->
+    start(Store),
+    timer:sleep(100),
+    ?event(
+        {benchmarking,
+            {store, Store},
+            {keys, hb_util:human_int(WriteOps)},
+            {groups, hb_util:human_int(WriteOps div GroupSize)},
+            {lists, hb_util:human_int(ListOps)}
+        }
+    ),
+    % Generate a random message to write and the keys to read ahead of time.
+    Groups =
+        lists:map(
+            fun(_) ->
+                GroupID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+                {
+                    GroupID,
+                    lists:map(
+                        fun(M) ->
+                            {
+                                <<"key-", (integer_to_binary(M))/binary >>,
+                                <<"value-", (integer_to_binary(M))/binary >>
+                            }
+                        end,
+                        lists:seq(1, GroupSize)
+                    )
+                }
+            end,
+            lists:seq(1, GroupCount = WriteOps div GroupSize)
+        ),
+    hb_util:eunit_print(
+        "Generated ~s groups of ~s keys",
+        [
+            hb_util:human_int(GroupCount),
+            hb_util:human_int(GroupSize)
+        ]
+    ),
+    {WriteTime, _} =
+        timer:tc(
+            fun() ->
+                lists:map(
+                    fun({GroupID, KeyPairs}) ->
+                        ok = make_group(Store, GroupID),
+                        lists:foreach(
+                            fun({Key, Value}) ->
+                                ok =
+                                    write(
+                                        Store,
+                                        <<GroupID/binary, "/", Key/binary >>,
+                                        Value
+                                    )
+                            end,
+                            KeyPairs
+                        )
+                    end,
+                    Groups
+                ),
+                % Perform one list operation to ensure that the write queue is
+                % flushed.
+                {LastGroupID, _} = lists:last(Groups),
+                list(Store, LastGroupID)
+            end
+        ),
+    % Print the results. Our write time is in microseconds, so we normalize it
+    % to seconds.
+    hb_test_utils:benchmark_print(
+        <<"Wrote and flushed">>,
+        <<"keys">>,
+        WriteOps,
+        WriteTime / 1_000_000
+    ),
+    % Generate groups to read ahead of time.
+    ReadGroups =
+        lists:map(
+            fun(_) ->
+                lists:nth(rand:uniform(GroupCount), Groups)
+            end,
+            lists:seq(1, ListOps)
+        ),
+    % Time random reads.
+    {ReadTime, NotFoundCount} =
+        timer:tc(
+            fun() ->
+                lists:foldl(
+                    fun({GroupID, GroupKeyValues}, Count) ->
+                        ExpectedKeys =
+                            [ KeyInGroup || {KeyInGroup, _} <- GroupKeyValues ],
+                        case list(Store, GroupID) of
+                            {ok, ListedKeys} ->
+                                Res =
+                                    lists:all(
+                                        fun({KeyInGroup, _ExpectedValue}) ->
+                                            lists:member(KeyInGroup, ListedKeys)
+                                        end,
+                                        GroupKeyValues
+                                    ),
+                                case Res of
+                                    true -> Count;
+                                    _ ->
+                                        ?event(
+                                            {list_group_not_found,
+                                                {group, GroupID},
+                                                {received_keys, ListedKeys},
+                                                {expected_keys, ExpectedKeys}
+                                            }
+                                        ),
+                                        Count + 1
+                                end;
+                            _ ->
+                                ?event(
+                                    {list_group_not_found,
+                                        {group, GroupID},
+                                        {expected_keys, ExpectedKeys}
+                                    }
+                                ),
+                                Count + 1
+                        end
+                    end,
+                    0,
+                    ReadGroups
+                )
+            end
+        ),
+    % Print the results.
+    hb_test_utils:benchmark_print(
+        <<"Listed">>,
+        <<"groups">>,
+        ListOps,
+        ReadTime / 1_000_000
+    ),
+    ?assertEqual(0, NotFoundCount, "Groups listed in correctly.").
 
 benchmark_message_read_write(Store) ->
     benchmark_message_read_write(Store, ?BENCH_MSG_WRITE_OPS, ?BENCH_MSG_READ_OPS).
