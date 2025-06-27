@@ -5,6 +5,8 @@
 --- node message key.
 --- 
 --- The configuration options are as follows:
+--- /default-priority = The default priority of routes registerable at run-time
+---                 (not those found in the initial state). Default = 10.
 --- /is-admissible = A message to call with the registration request's body. Should
 ---                return a boolean indicating whether the peer is admissible.
 --- /sampling-rate = The frequency at which random sampling of registered nodes
@@ -25,6 +27,7 @@
 ---                the routing table. Default = 1000.
 local function ensure_defaults(state)
     state.routes = state.routes or {}
+    state["default-priority"] = state["default-priority"] or 10
     state["is-admissible"] =
         state["is-admissible"] or {
 			path = "/default",
@@ -34,14 +37,15 @@ local function ensure_defaults(state)
     state["pricing-weight"] = state["pricing-weight"] or 1
     state["performance-weight"] = state["performance-weight"] or 1
     state["score-preference"] = state["score-preference"] or 1
-    state["recalculate-every"] = state["recalculate-every"] or 1000
+    state["recalculate-every"] = state["recalculate-every"] or 10
     state["performance-period"] = state["performance-period"] or 1000
     state["initial-performance"] = state["initial-performance"] or 30000
     return state
 end
 
 -- Find the current route message for a template.
-local function current_route(routes, template, opts)
+local function current_route(state, template, opts)
+    local routes = state.routes
     -- Find the existing route that matches the template, if it exists.
     local status, res =
         ao.resolve({
@@ -60,7 +64,8 @@ local function current_route(routes, template, opts)
             strategy = "By-Weight",
             template = template,
             nodes = {},
-            reference = "routes/" .. tostring(#routes + 1)
+            reference = "routes/" .. tostring(#routes + 1),
+            priority = state["default-priority"]
         }
     end
 end
@@ -173,7 +178,7 @@ local function recalculate_scores(state, route, opts)
 end
 
 local function add_node(state, req, opts)
-    local route = current_route(state.routes, req.route.template, opts)
+    local route = current_route(state, req.route.template, opts)
     local reference = route.reference .. "/nodes/" .. tostring(#route.nodes + 1)
     table.insert(route.nodes, {
         prefix = req.route.prefix,
@@ -185,6 +190,17 @@ local function add_node(state, req, opts)
     })
 
     local new_state = ao.set(state, route.reference, route)
+
+    -- Sort the routes in the state by their priority.
+    table.sort(
+        state.routes,
+        function(a, b)
+            local a_priority = (type(a.priority) == "number") and a.priority or 0
+            local b_priority = (type(b.priority) == "number") and b.priority or 0
+            return a_priority < b_priority
+        end
+    )
+
     return new_state
 end
 
