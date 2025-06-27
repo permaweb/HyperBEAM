@@ -304,4 +304,4 @@ function json.decode(str)
     return res
 end
 
-_G.package.loaded['json'] = json
+_G.package.loaded['.json'] = json

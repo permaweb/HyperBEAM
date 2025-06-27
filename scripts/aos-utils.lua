@@ -76,8 +76,8 @@ end
 -- @param spec The spec to check for in the message
 -- @treturn {boolean} Whether there is a spec match
 function utils.matchesSpec(msg, spec)
-    print("matchesSpec")
-    print(type(spec))
+    -- print("matchesSpec")
+    -- print(type(spec))
 
   if type(spec) == 'function' then
     return spec(msg)
@@ -94,14 +94,14 @@ function utils.matchesSpec(msg, spec)
       -- The key can either be in the top level of the 'msg' object  
       -- or in the body table of the msg
       local msgValue = msg[key] or (msg.body and msg.body[key])
-      print("msgValue")
-      print(msgValue)
+      -- print("msgValue")
+      -- print(msgValue)
       if not msgValue then
         return false
       end
       local matchesMsgValue = utils.matchesPattern(pattern, msgValue, msg)
-      print("matchesMsgValue")
-      print(matchesMsgValue)
+      -- print("matchesMsgValue")
+      -- print(matchesMsgValue)
       if not matchesMsgValue then
         return false
       end
