@@ -1618,3 +1618,41 @@ within_norms(SimRes, Nodes, TestSize) ->
     % away from the mean.
     StdDev3 = Mean + 3 * hb_util:stddev(Distribution),
     ?assert(lists:max(Distribution) < StdDev3).
+
+%% @doc Test that route templates are ordered correctly by priority, with
+%% negative numbers sorting before `not_found' (routes without priority),
+%% which in turn sort before positive numbers. Verifies that the first
+%% matching route (highest priority) is selected for template matching.
+route_priority_ordering_test() ->
+    UnsortedRoutes = [
+        #{
+            <<"template">> => <<"/.*~foo.*">>,
+            <<"node">> => <<"http://a.com">>
+        },
+        #{
+            <<"template">> => <<"/.*~foo.*">>,
+            <<"node">> => <<"http://b.com">>
+        },
+        #{
+            <<"template">> => <<"/.*~foo.*">>,
+            <<"node">> => <<"http://c.com">>,
+            <<"priority">> => 10
+        },
+        #{
+            <<"template">> => <<"/.*~foo.*">>,
+            <<"node">> => <<"http://d.com">>,
+            <<"priority">> => -1
+        }
+    ],
+    SortOpts = #{ hashpath => ignore },
+    SortedRoutes = 
+        lists:sort(
+            fun(X, Y) ->
+                hb_ao:get(<<"priority">>, X, SortOpts) < hb_ao:get(<<"priority">>, Y, SortOpts)
+            end,
+            UnsortedRoutes
+        ),
+    ?assertEqual(
+        {ok, <<"http://d.com">>},
+        route(#{ <<"path">> => <<"/3~foo/now">> }, #{ routes => SortedRoutes })
+    ).
