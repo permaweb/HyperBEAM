@@ -30,7 +30,7 @@ Edit `resources/hyperbeam/config.flat` to set your worker node registration:
 ```flat
 port: 10000
 operator: your-wallet-address
-router-peer-location: https://router-1.forward.computer
+router-peer-location: https://forward.computer
 router-prefix: /my-unique-node~
 router-template: /my-unique-node~process@1.0/.*
 router-price: 100
@@ -45,13 +45,13 @@ router-price: 100
 Your node will automatically register with the specified router network and begin receiving work.
 
 !!! note "Using Routers as a Client"
-    Make requests to any router URL: `https://router-1.forward.computer/<process_id>~<device>/<key>...`
+    Make requests to any router URL: `https://forward.computer/<process_id>~<device>/<key>...`
 
 ### Configuration Options
 
 Your worker node can be customized with these key parameters in `config.flat`:
 
-- **`router-peer-location`**: Target router to register with (e.g., `https://router-1.forward.computer`)
+- **`router-peer-location`**: Target router to register with (e.g., `https://forward.computer`)
 - **`router-prefix`**: Unique identifier for your node (e.g., `/my-node~`)
 - **`router-template`**: Path pattern to handle (e.g., `/my-node~process@1.0/.*`)
 - **`router-price`**: Cost per computation unit (competitive pricing recommended)
@@ -130,7 +130,7 @@ rebar3 compile
 cat > config.flat << EOF
 port: 10000
 operator: your-wallet-address
-router-peer-location: https://router-1.forward.computer
+router-peer-location: https://forward.computer
 router-prefix: /my-node~
 router-template: /my-node~process@1.0/.*
 router-price: 100
@@ -144,7 +144,7 @@ rebar3 shell --eval "hb:start_mainnet()."
 
 ```bash
 # Alternative: use environment variables
-export ROUTER_PEER_LOCATION="https://router-1.forward.computer"
+export ROUTER_PEER_LOCATION="https://forward.computer"
 export ROUTER_PREFIX="/my-prefix~"
 export ROUTER_TEMPLATE="/my-prefix~process@1.0/.*"
 export ROUTER_PRICE=100

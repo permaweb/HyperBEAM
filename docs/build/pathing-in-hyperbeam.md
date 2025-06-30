@@ -9,12 +9,12 @@ Understanding how to construct and interpret paths in AO-Core is fundamental to 
 Let's examine a typical HyperBEAM endpoint piece-by-piece:
 
 ```bash
-https://router-1.forward.computer/<procId>~process@1.0/now
+https://forward.computer/<procId>~process@1.0/now
 ```
 
-### Node URL (`router-1.forward.computer`)
+### Node URL (`forward.computer`)
 
-The HTTP response from this node includes a signature from the host's key. By accessing the `~snp@1.0` device, you can verify that the node is running in a genuine Trusted Execution Environment (TEE), ensuring computation integrity. You can replace `router-1.forward.computer` with any HyperBEAM TEE node operated by any party while maintaining trustless guarantees.
+The HTTP response from this node includes a signature from the host's key. By accessing the `~snp@1.0` device, you can verify that the node is running in a genuine Trusted Execution Environment (TEE), ensuring computation integrity. You can replace `forward.computer` with any HyperBEAM TEE node operated by any party while maintaining trustless guarantees.
 
 ### Process Path (`/<procId>~process@1.0`)
 

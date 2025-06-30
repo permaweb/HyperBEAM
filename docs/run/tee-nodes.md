@@ -136,7 +136,7 @@ HyperBEAM OS includes several attestation utilities:
 ```erlang
 % Register a TEE-protected router node
 hb:start_mainnet(#{
-    router_peer_location => "https://router-1.forward.computer",
+    router_peer_location => "https://forward.computer",
     router_prefix => <<"/tee-node~">>,
     router_template => <<"/tee-node~process@1.0/.*">>,
     router_price => 150,  % Premium for TEE security
