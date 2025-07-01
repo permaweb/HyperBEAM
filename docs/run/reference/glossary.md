@@ -72,7 +72,7 @@ For a more comprehensive glossary of terms used in the permaweb, try the [Permaw
      height="400"  
 	 frameborder="0" 
 	 scrolling="no"
-     src="https://glossary.arweave.net/?hide-header=true&bg-color=%231F2129&text-color=%23e0e0e0&heading-color=%23ffffff&border-color=%23444444&hover-bg=%23222222&button-text=%23ffffff&section-bg=%23333333&section-color=%23ffffff&category-bg=%23333333&category-text=%23ffffff&tag-text=%23ffffff&secondary-text=%23a0a0a0&result-bg=%231e1e1e&result-hover=%23333333"
+     src="https://glossary.arweave.net/?hide-header=true&bg-color=%23000000&text-color=%23e0e0e0&heading-color=%23ffffff&border-color=%23444444&hover-bg=%23222222&button-text=%23ffffff&section-bg=%23333333&section-color=%23ffffff&category-bg=%23333333&category-text=%23ffffff&tag-text=%23ffffff&secondary-text=%23a0a0a0&result-bg=%231e1e1e&result-hover=%23333333"
      >
     </iframe>
   </div>

@@ -16,3 +16,45 @@ This section provides access to specially formatted files intended for consumpti
     *   `docs/run`
     *   `docs/build`
     
+
+    
+
+---
+
+# Permaweb LLMs.txt
+
+An interactive tool for selecting and curating Permaweb documentation into `llms.txt` format for feeding to LLMs.
+
+<style>
+.llms-builder-dark { display: none; }
+.llms-builder-light { display: block; }
+[data-md-color-scheme="slate"] .llms-builder-light { display: none; }
+[data-md-color-scheme="slate"] .llms-builder-dark { display: block; }
+[data-md-color-scheme="default"] .llms-builder-dark { display: none; }
+[data-md-color-scheme="default"] .llms-builder-light { display: block; }
+</style>
+
+<div class="mt-6">
+  <div class="llms-builder-light">
+    <iframe
+      id="llms-builder-frame-light"
+      src="https://permaweb-llms-builder.vercel.app/?minimal=true&theme=light"
+      width="100%"
+      height="250"
+      frameborder="0"
+      scrolling="yes">
+    </iframe>
+  </div>
+  <div class="llms-builder-dark">
+    <iframe
+      id="llms-builder-frame-dark"
+      src="https://permaweb-llms-builder.vercel.app/?minimal=true&bg-color=%23000000"
+      width="100%"
+      height="250"
+      frameborder="0"
+      scrolling="yes">
+    </iframe>
+  </div>
+</div>
+
+    
