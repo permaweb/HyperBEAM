@@ -216,18 +216,20 @@ new_server(RawNodeMsg) ->
     ),
     {ok, Listener, Port}.
 
-start_http3(ServerID, ProtoOpts, _NodeMsg) ->
+start_http3(ServerID, ProtoOpts, NodeMsg) ->
     ?event(http, {start_http3, ServerID}),
     Parent = self(),
     ServerPID =
         spawn(fun() ->
             application:ensure_all_started(quicer),
+            Port = hb_opts:get(port, 8734, NodeMsg),
             {ok, Listener} = cowboy:start_quic(
                 ServerID, 
                 TransOpts = #{
                     socket_opts => [
-                        {certfile, "test/test-tls.pem"},
-                        {keyfile, "test/test-tls.key"}
+                        {port, Port},
+                        {certfile, "certs/server.pem"},
+                        {keyfile, "certs/server.key"}
                     ]
                 },
                 ProtoOpts
