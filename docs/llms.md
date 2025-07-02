@@ -38,7 +38,7 @@ An interactive tool for selecting and curating Permaweb documentation into `llms
   <div class="llms-builder-light">
     <iframe
       id="llms-builder-frame-light"
-      src="https://permaweb-llms-builder.arweave.net/?minimal=true&theme=light"
+      src="https://fuel_permawebllms.arweave.net/?minimal=true&theme=light"
       width="100%"
       height="250"
       frameborder="0"
@@ -48,7 +48,7 @@ An interactive tool for selecting and curating Permaweb documentation into `llms
   <div class="llms-builder-dark">
     <iframe
       id="llms-builder-frame-dark"
-      src="https://permaweb-llms-builder.arweave.net/?minimal=true&bg-color=%23000000"
+      src="https://fuel_permawebllms.arweave.net/?minimal=true&bg-color=%23000000"
       width="100%"
       height="250"
       frameborder="0"
