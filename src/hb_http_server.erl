@@ -218,46 +218,54 @@ new_server(RawNodeMsg) ->
 
 start_http3(ServerID, ProtoOpts, NodeMsg) ->
     ?event(http, {start_http3, ServerID}),
-    Parent = self(),
-    ServerPID =
-        spawn(fun() ->
-            application:ensure_all_started(quicer),
-            Port = hb_opts:get(port, 8734, NodeMsg),
-            {ok, Listener} = cowboy:start_quic(
-                ServerID, 
-                TransOpts = #{
-                    socket_opts => [
-                        {port, Port},
-                        {certfile, "certs/server.pem"},
-                        {keyfile, "certs/server.key"}
-                    ]
-                },
-                ProtoOpts
-            ),
-            {ok, {_, GivenPort}} = quicer:sockname(Listener),
-            ranch_server:set_new_listener_opts(
-                ServerID,
-                1024,
-                ranch:normalize_opts(
-                    hb_maps:to_list(TransOpts#{ port => GivenPort })
-                ),
-                ProtoOpts,
-                []
-            ),
-            ranch_server:set_addr(ServerID, {<<"localhost">>, GivenPort}),
-            % Bypass ranch's requirement to have a connection supervisor define
-            % to support updating protocol opts.
-            % Quicer doesn't use a connection supervisor, so we just spawn one
-            % that does nothing.
-            ConnSup = spawn(fun() -> http3_conn_sup_loop() end),
-            ranch_server:set_connections_sup(ServerID, ConnSup),
-            Parent ! {ok, GivenPort},
-            receive stop -> stopped end
-        end),
-    receive {ok, GivenPort} -> {ok, GivenPort, ServerPID}
-    after 2000 ->
-        {error, {timeout, staring_http3_server, ServerID}}
+    CertFile = "certs/server.pem",
+    KeyFile = "certs/server.key",
+    case {filelib:is_regular(CertFile), filelib:is_regular(KeyFile)} of
+        {true, true} ->
+            Parent = self(),
+            ServerPID = spawn(fun() -> start_http3_listener(Parent, ServerID, ProtoOpts, NodeMsg, CertFile, KeyFile) end),
+            receive
+                {ok, GivenPort} -> {ok, GivenPort, ServerPID}
+            after 2000 ->
+                {error, {timeout, ServerID}}
+            end;
+        {false, _} -> {error, {missing_certificate, CertFile}};
+        {_, false} -> {error, {missing_key, KeyFile}}
     end.
+
+start_http3_listener(Parent, ServerID, ProtoOpts, NodeMsg, CertFile, KeyFile) ->
+    application:ensure_all_started(quicer),
+    Port = hb_opts:get(port, 8734, NodeMsg),
+    {ok, Listener} = cowboy:start_quic(
+        ServerID, 
+        TransOpts = #{
+            socket_opts => [
+                {port, Port},
+                {certfile, CertFile},
+                {keyfile, KeyFile}
+            ]
+        },
+        ProtoOpts
+    ),
+    {ok, {_, GivenPort}} = quicer:sockname(Listener),
+    ranch_server:set_new_listener_opts(
+        ServerID,
+        1024,
+        ranch:normalize_opts(
+            hb_maps:to_list(TransOpts#{ port => GivenPort })
+        ),
+        ProtoOpts,
+        []
+    ),
+    ranch_server:set_addr(ServerID, {<<"localhost">>, GivenPort}),
+    % Bypass ranch's requirement to have a connection supervisor define
+    % to support updating protocol opts.
+    % Quicer doesn't use a connection supervisor, so we just spawn one
+    % that does nothing.
+    ConnSup = spawn(fun() -> http3_conn_sup_loop() end),
+    ranch_server:set_connections_sup(ServerID, ConnSup),
+    Parent ! {ok, GivenPort},
+    receive stop -> stopped end.
 
 http3_conn_sup_loop() ->
     receive
@@ -617,3 +625,35 @@ restart_server_test() ->
         {ok, <<"server-2">>},
         hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{})
     ).
+
+http3_certificate_validation_test() ->
+    ServerID = test_server,
+    ProtoOpts = #{},
+    NodeMsg = #{},
+    
+    % Test missing certificate file
+    {error, {missing_certificate, "certs/server.pem"}} = start_http3(ServerID, ProtoOpts, NodeMsg),
+    
+    % Create temporary certificate files for testing
+    ok = filelib:ensure_dir("certs/"),
+    ok = file:write_file("certs/server.pem", <<"dummy cert content">>),
+    
+    % Test missing key file
+    {error, {missing_key, "certs/server.key"}} = start_http3(ServerID, ProtoOpts, NodeMsg),
+    
+    % Create key file
+    ok = file:write_file("certs/server.key", <<"dummy key content">>),
+    
+    % Test with both files present - should attempt to start but fail due to invalid certs
+    % We expect either a timeout or cowboy/quicer error, not missing file errors
+    Result = start_http3(ServerID, ProtoOpts, NodeMsg),
+    case Result of
+        {error, {missing_certificate, _}} -> ?assert(false);
+        {error, {missing_key, _}} -> ?assert(false);
+        _ -> ?assert(true) % Any other error (timeout, invalid cert, etc.) is expected
+    end,
+    
+    % Clean up
+    file:delete("certs/server.pem"),
+    file:delete("certs/server.key"),
+    file:del_dir("certs/").
