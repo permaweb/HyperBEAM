@@ -1,4 +1,4 @@
-Generated: 2025-07-03T18:42:52Z
+Generated: 2025-07-03T19:35:09Z
 
 ## HyperBEAM Documentation Summary
 
@@ -13,7 +13,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 ### Run
 
 * [Configuring Your HyperBEAM Node](./run/configuring-your-machine.html)
-* [Router Networks: Joining vs Running](./run/joining-running-a-router.html)
+* [Joining or Running a Router Node](./run/joining-running-a-router.html)
 * [Node Operator FAQ](./run/reference/faq.html)
 * [Node Operator Glossary](./run/reference/glossary.html)
 * [Node Operator Troubleshooting Guide](./run/reference/troubleshooting.html)
