@@ -1,4 +1,4 @@
-Generated: 2025-07-01T16:12:04Z
+Generated: 2025-07-03T18:42:52Z
 
 ## HyperBEAM Documentation Summary
 

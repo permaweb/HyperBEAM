@@ -23,7 +23,7 @@ This section provides access to specially formatted files intended for consumpti
 
 # Permaweb LLMs.txt
 
-An interactive tool for selecting and curating Permaweb documentation into `llms.txt` format for feeding to LLMs.
+An [interactive tool](https://fuel_permawebllms.arweave.net) for selecting and curating Permaweb documentation into `llms.txt` format for feeding to LLMs.
 
 <style>
 .llms-builder-dark { display: none; }
