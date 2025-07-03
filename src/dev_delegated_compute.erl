@@ -3,7 +3,7 @@
 %%% bring trusted results into the local node, or as the `Execution-Device' of
 %%% an AO process.
 -module(dev_delegated_compute).
--export([init/3, compute/3, normalize/3, snapshot/3]).
+-export([init/3, compute/3, normalize/3, snapshot/3, dryrun/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -95,6 +95,84 @@ do_compute(ProcID, Msg2, Opts) ->
             JSONRes = hb_ao:get(<<"body">>, Response, Opts),
             ?event({
                 delegated_compute_res_metadata,
+                {req, hb_maps:without([<<"body">>], Response, Opts)}
+            }),
+            {ok, JSONRes};
+        {Err, Error} when Err == error; Err == failure ->
+            {error, Error}
+    end.
+    
+dryrun(Msg1, Msg2, Opts) ->
+    RawProcessID = dev_process:process_id(Msg1, #{}, Opts),
+    OutputPrefix = dev_stack:prefix(Msg1, Msg2, Opts),
+    ProcessID =
+        case RawProcessID of
+            not_found -> hb_ao:get(<<"process-id">>, Msg2, Opts);
+            ProcID -> ProcID
+        end,
+    Res = do_dryrun(ProcessID, Msg2, Opts),
+    % io:format("Res: ~p~n", [Res]),
+    case Res of
+        {ok, JSONRes} ->
+            ?event(
+                {dryrun_compute_res,
+                    {process_id, ProcessID},
+                    {json_res, {string, JSONRes}},
+                    {req, Msg2}
+                }
+            ),
+            {ok, Msg} = dev_json_iface:json_to_message(JSONRes, Opts),
+            {ok,
+                hb_ao:set(
+                    Msg1,
+                    #{
+                        <<OutputPrefix/binary, "/results">> => Msg,
+                        <<OutputPrefix/binary, "/results/json">> =>
+                            #{
+                                <<"content-type">> => <<"application/json">>,
+                                <<"body">> => JSONRes
+                            }
+                    },
+                    Opts
+                )
+            };
+        {error, Error} ->
+            {error, Error}
+    end.
+
+%% @doc Execute dry-run computation on a remote machine via relay and the JSON-Iface.
+do_dryrun(ProcID, Msg2, Opts) ->
+    ?event({do_dryrun_msg, {req, Msg2}}),
+    Body = hb_json:encode(dev_json_iface:message_to_json_struct(Msg2, Opts)),
+    ?event({do_dryrun_msg, {aos2, {string, Body}}}),
+    Res = 
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"relay@1.0">>,
+                <<"content-type">> => <<"application/json">>
+            },
+            #{
+                <<"path">> => <<"call">>,
+                <<"relay-method">> => <<"POST">>,
+                <<"relay-body">> => Body,
+                <<"relay-path">> =>
+                    <<
+                        "/dry-run",
+                        "?process-id=",
+                        ProcID/binary
+                    >>,
+                <<"content-type">> => <<"application/json">>
+            },
+            Opts#{
+                hashpath => ignore,
+                cache_control => [<<"no-store">>, <<"no-cache">>]
+            }
+        ),
+    case Res of
+        {ok, Response} ->
+            JSONRes = hb_ao:get(<<"body">>, Response, Opts),
+            ?event({
+                delegated_dryrun_res_metadata,
                 {req, hb_maps:without([<<"body">>], Response, Opts)}
             }),
             {ok, JSONRes};

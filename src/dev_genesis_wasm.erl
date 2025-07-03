@@ -2,7 +2,7 @@
 %%% processes, using HyperBEAM infrastructure. This allows existing `legacynet'
 %%% AO process definitions to be used in HyperBEAM.
 -module(dev_genesis_wasm).
--export([init/3, compute/3, normalize/3, snapshot/3]).
+-export([init/3, compute/3, dryrun/3, normalize/3, snapshot/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -41,6 +41,33 @@ compute(Msg, Msg2, Opts) ->
                         ),
                     % Return the patched message.
                     {ok, Msg4};
+                {error, Error} ->
+                    % Return the error.
+                    {error, Error}
+            end;
+        false ->
+            % Return an error if the genesis-wasm feature is disabled.
+            {error, #{
+                <<"status">> => 500,
+                <<"message">> =>
+                    <<"HyperBEAM was not compiled with genesis-wasm@1.0 on "
+                        "this node.">>
+            }}
+    end.
+
+dryrun(Msg, Msg2, Opts) ->
+    % Validate whether the genesis-wasm feature is enabled.
+    case ensure_started(Opts) of
+        true ->
+            % Resolve the `delegated-compute@1.0' device for dry-run.
+            case hb_ao:resolve(
+                Msg,
+                {as, <<"delegated-compute@1.0">>, Msg2},
+                Opts
+            ) of
+                {ok, Msg3} ->
+                    % Return the message, no patch is needed.
+                    {ok, Msg3};
                 {error, Error} ->
                     % Return the error.
                     {error, Error}

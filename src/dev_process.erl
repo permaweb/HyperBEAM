@@ -167,6 +167,34 @@ init(Msg1, Msg2, Opts) ->
 %% @doc Compute the result of an assignment applied to the process state, if it 
 %% is the next message.
 compute(Msg1, Msg2, Opts) ->
+    Method =
+        hb_ao:get(<<"method">>, {as, <<"message@1.0">>, Msg2}, <<"GET">>, Opts),
+    case Method of
+        <<"POST">> -> post_compute(
+            Msg1,
+            Msg2#{ <<"path">> => <<"dryrun">> },
+            Opts
+        );
+        <<"GET">> -> get_compute(Msg1, Msg2, Opts)
+    end.
+
+post_compute(Msg1, Msg2, Opts) ->
+    ProcBase = ensure_process_key(Msg1, Opts),
+    {ok, Loaded} = ensure_loaded(ProcBase, Msg2, Opts),
+    % Prepare the input message for dry-run computation
+    InputMsg =
+        case hb_path:from_message(request, Msg2, Opts) of
+            undefined -> Msg2#{ <<"path">> => <<"dryrun">> };
+            _ -> Msg2
+        end,
+    
+    % Unset the previous results from the state
+    UnsetResults = hb_ao:set(Loaded, #{ <<"results">> => unset }, Opts),
+    
+    % Execute dry-run computation via delegated compute
+    run_as(<<"execution">>, UnsetResults, InputMsg, Opts).
+
+get_compute(Msg1, Msg2, Opts) ->
     % If we do not have a live state, restore or initialize one.
     ProcBase = ensure_process_key(Msg1, Opts),
     ProcID = process_id(ProcBase, #{}, Opts),
@@ -189,6 +217,7 @@ compute(Msg1, Msg2, Opts) ->
                     ),
                     {ok, Result};
                 not_found ->
+                    io:format("======== SLOT ~p NOT FOUND, NOT IN CACHE ========= ~n", [Slot]),
                     {ok, Loaded} = ensure_loaded(ProcBase, Msg2, Opts),
                     ?event(compute,
                         {computing, {process_id, ProcID},
