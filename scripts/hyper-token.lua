@@ -136,7 +136,6 @@ local function normalize_table(value)
     -- If value is already a table, return it. If it is not a string, return
     -- a table containing only the value.
     if type(value) == "table" then
-        ao.event({ "Table already normalized", { table = value } })
         return value
     elseif type(value) ~= "string" then
         return { value }
@@ -166,7 +165,6 @@ local function normalize_table(value)
         table.insert(t, num or trimmed)
     end
 
-    ao.event({ "Normalized table", { table = t } })
     return t
 end
 
@@ -190,26 +188,11 @@ local function satisfies_list_constraints(subject, all, required, match)
     match = match or #all
     match = normalize_int(match)
 
-    ao.event({ "Satisfies list constraints", {
-        subject = subject,
-        all = all,
-        match = match
-    }})
-
     -- Check that the subject satisfies the grammar's constraints.
     -- 1. The subject must have at least `match' elements in common with `all'.
     -- 2. The subject must contain all elements in `required'.
     local count = count_common(subject, all)
     local required_count = count_common(required, subject)
-
-    ao.event({ "Counts", {
-        subject = subject,
-        all = all,
-        required = required,
-        match = match,
-        count = count,
-        required_count = required_count
-    }})
 
     return (count >= match) and (required_count == #required)
 end
@@ -219,22 +202,10 @@ end
 local function satisfies_constraints(message, assess, all, required, match)
     -- If the assessment message is present, run it against the message.
     if assess then
-        ao.event({ "Running assessment message against request." },
-            { assessment = assess, message = message })
         local status, result = ao.resolve(assess, message)
         if (status == "ok") and (result == true) then
-            ao.event({ "Assessment of request passed." }, {
-                message = message,
-                status = status,
-                result = result
-            })
             return true
         else
-            ao.event({ "Assessment of request failed.", {
-                message = message,
-                status = status,
-                result = result
-            }})
             return false
         end
     end
@@ -247,14 +218,6 @@ local function satisfies_constraints(message, assess, all, required, match)
         required,
         match
     )
-
-    ao.event({ "Constraint satisfaction results", {
-        result = satisfies_auth,
-        message = message,
-        all_admissible = all,
-        required = required,
-        required_count = match
-    }})
 
     return satisfies_auth
 end
@@ -295,30 +258,17 @@ end
 -- 2. From a registered peer ledger, or  
 -- 3. From a peer with the same unsigned base ID (token) - allowing automatic peer registration
 local function validate_new_peer_ledger(base, request)
-    ao.event({ "Validating peer ledger: ", { request = request } })
-
     -- Check if the request is from the root ledger.
     if is_root(base) or (base.token == request.from) then
-        ao.event({ "Peer is parent token. Accepting." }, {
-            request = request
-        })
         return true
     end
 
     -- For subledgers, be more permissive with peer validation during initial testing
     -- Accept peers that share the same token (root ledger)
     if not is_root(base) then
-        ao.event({ "Subledger accepting peer automatically" }, {
-            base_token = base.token,
-            request_from = request.from
-        })
         return true
     end
 
-    ao.event({ "Peer validation failed", {
-        base_token = base.token,
-        request_from = request.from
-    }})
     return false
 end
 
@@ -342,30 +292,18 @@ end
 -- Determine if a request is from a known ledger. Makes no assessment of whether
 -- a request is otherwise trustworthy.
 local function is_from_trusted_ledger(base, request)
-    ao.event("debug_trust_check", {
-        "Starting trust check",
-        {
-            request_from = request.from,
-            base_token = base.token,
-            base_ledgers = base.ledgers
-        }
-    })
-    
     -- We always trust the root ledger.
     if request.from == base["token"] then
-        ao.event("debug_trust_check", {"Trusting root ledger"})
         return true, base
     end
 
     -- We always trust messages from our root token
     if not is_root(base) and request.from == base.token then
-        ao.event("debug_trust_check", {"Trusting message from root token"})
         return true, base
     end
 
     -- For subledgers, automatically trust peers that share the same root token
     if not is_root(base) then
-        ao.event("debug_trust_check", {"Subledger trusting peer automatically"})
         -- Auto-register the peer in our ledgers map
         base.ledgers = base.ledgers or {}
         base.ledgers[request.from] = base.ledgers[request.from] or 0
@@ -374,21 +312,12 @@ local function is_from_trusted_ledger(base, request)
 
     -- We trust any ledger that is already registered in the `ledgers' map.
     if base.ledgers and (base.ledgers[request.from] ~= nil) then
-        ao.event("debug_trust_check", {"Found in registered ledgers"})
         return true, base
     end
 
     -- Validate whether the request is from a new peer ledger.
-    ao.event("debug_trust_check", {"Attempting to register new peer"})
     local status
     status, base = register_peer(base, request)
-    ao.event("debug_trust_check", {
-        "Peer registration result",
-        {
-            status = status,
-            request_from = request.from
-        }
-    })
     if status ~= "ok" then
         return false, base
     end
@@ -411,21 +340,14 @@ local function ensure_initialized(base, assignment)
 
     -- Ensure that the `ledgers' map is initialized: present and empty.
     base.ledgers = base.ledgers or {}
-    ao.event({ "Ledgers before initialization: ", base.ledgers })
 
     for _, ledger in ipairs(base.ledgers) do
         base.ledgers[ledger] = 0
     end
-    ao.event({ "Ledgers after initialization: ", base.ledgers })
 
     if not base.token then
-        ao.event({ "Ledger has no source token. Skipping registration." })
         return "ok", base
     end
-
-    ao.event({ "Registering self with known token ledgers: ", {
-        ledgers = base.ledgers
-    }})
 
     for _, ledger in ipairs(base.ledgers) do
         -- Insert the register result into the base.
@@ -453,9 +375,6 @@ function validate_request(incoming_base, assignment)
     end
 
     -- First, ensure that the message has not already been processed.
-    ao.event("Deduplicating message.", {
-        ["history-length"] = #(base.dedup or {})
-    })
 
     status, base =
         ao.resolve(
@@ -535,10 +454,6 @@ end
 local function debit_balance(base, request)
     local source = request.from
 
-    ao.event({ "Attempting to deduct balance.", {
-        request = request,
-        balances = base.balance or {}
-    }})
 
     -- Ensure that the `source' and `quantity' fields are present in the request.
     if not source or not request.quantity then
@@ -550,7 +465,6 @@ local function debit_balance(base, request)
     -- Normalize the quantity value.
     request.quantity = normalize_int(request.quantity)
     if not request.quantity then
-        ao.event({ "Invalid quantity value: ", { quantity = request.quantity } })
         base.results = {
             status = "error",
             error = "Invalid quantity value.",
@@ -598,15 +512,7 @@ local function debit_balance(base, request)
         })
     end
 
-    ao.event({ "Deducting funds:", { 
-        request = request, 
-        source_balance = source_balance, 
-        quantity = request.quantity 
-    } })
     base.balance[source] = source_balance - request.quantity
-    ao.event({ "Balances after deduction:",
-        { balances = base.balance, ledgers = base.ledgers } }
-    )
     return "ok", base
 end
 
@@ -637,7 +543,6 @@ end
 -- Xfer in: Sub-ledger = Dec User balance
 -- C-N in: Root = Inc User balance, Dec Sub-ledger balance
 function transfer(base, assignment)
-    ao.event({ "Transfer request received", { assignment = assignment } })
     
     -- Simple duplicate check for transfers
     base.processed_transfers = base.processed_transfers or {}
@@ -723,17 +628,6 @@ function transfer(base, assignment)
     -- Subsequently, the target must be another ledger so we dispatch a
     -- credit-notice to the peer ledger. The peer will increment the balance of
     -- the recipient.
-    ao.event("debug_credit_send", {
-        "Sending credit-notice",
-        {
-            from_ledger = base.token,
-            to_ledger = request.route,
-            sender = request.from,
-            recipient = request.recipient,
-            quantity = quantity,
-            base_process_id = ao.get("process", {"as", "message@1.0", base})
-        }
-    })
     -- Calculate our unsigned base ID to include in the credit notice
     local status, proc, our_unsigned_base
     status, proc = ao.resolve({"as", "message@1.0", base}, "process")
@@ -764,22 +658,12 @@ end
 
 -- Process credit notices from other ledgers.
 _G["credit-notice"] = function (base, assignment)
-    ao.event("debug_credit_receive", {
-        "Credit-Notice received",
-        {
-            assignment_process = assignment.process,
-            assignment_body = assignment.body,
-            base_token = base.token,
-            base_process_id = ao.get("process", {"as", "message@1.0", base})
-        }
-    })
 
     -- Simple duplicate check for credit-notices
     base.processed_credits = base.processed_credits or {}
     local body_id = assignment.body.id or assignment.id or "unknown"
     local credit_key = body_id .. "_" .. (assignment.body.quantity or "0") .. "_" .. (assignment.body.recipient or "unknown")
     if base.processed_credits[credit_key] then
-        ao.event("debug_credit_receive", {"Credit-Notice duplicate detected, skipping"})
         return "ok", base
     end
     base.processed_credits[credit_key] = true
@@ -815,23 +699,8 @@ _G["credit-notice"] = function (base, assignment)
     end
 
     -- Ensure that the sender is a trusted ledger peer.
-    ao.event("debug_credit_trust", {
-        "Checking trust for credit-notice",
-        {
-            request_from = request.from,
-            base_token = base.token,
-            base_ledgers = base.ledgers
-        }
-    })
     local trusted
     trusted, base = is_from_trusted_ledger(base, request)
-    ao.event("debug_credit_trust", {
-        "Trust check result",
-        {
-            trusted = trusted,
-            request_from = request.from
-        }
-    })
     if not trusted then
         return log_result(base, "error", {
             message = "Credit-Notice not from a trusted peer ledger."
@@ -854,7 +723,6 @@ end
 
 -- Process registration requests from other ledgers.
 function register(raw_base, assignment)
-    ao.event({ "Register request received", { assignment = assignment } })
     
     local status, base, request = validate_request(raw_base, assignment)
     if (status ~= "ok") or (type(request) ~= "table") then
@@ -862,7 +730,6 @@ function register(raw_base, assignment)
     end
 
     if base.ledgers[request.from] then
-        ao.event({ "Ledger already registered. Ignoring registration request." })
         base.results = {
             message = "Ledger already registered."
         }
@@ -931,8 +798,6 @@ end
 --- Index function, called by the `~process@1.0` device for scheduled messages.
 --- We route any `action' to the appropriate function based on the request path.
 function compute(base, assignment)
-    ao.event({ "compute called",
-        { balance = base.balance, ledgers = base.ledgers } })
     assignment.body.action = string.lower(assignment.body.action or "")
     
     if assignment.body.action == "credit-notice" then
@@ -950,7 +815,6 @@ function compute(base, assignment)
         base.results = {
             status = "ok"
         }
-        ao.event({ "Process initialized.", { slot = assignment.slot } })
         return "ok", base
     end
 end
