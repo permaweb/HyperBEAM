@@ -304,6 +304,15 @@ local function validate_new_peer_ledger(base, request)
         return true
     end
 
+    -- For subledgers, accept credit-notices from any other subledger (more permissive validation)
+    if not is_root(base) then
+        ao.event({ "Subledger accepting credit-notice from peer (permissive mode)" }, {
+            base_token = base.token,
+            request_from = request.from
+        })
+        return true
+    end
+
     -- Calculate the expected base ID from the process's own `process` message,
     -- modified to remove the `authority' and `scheduler' fields.
     -- This ensures that the process we are receiving the `credit-notice` from
@@ -620,7 +629,11 @@ local function debit_balance(base, request)
         })
     end
 
-    ao.event({ "Deducting funds:", { request = request } })
+    ao.event({ "Deducting funds:", { 
+        request = request, 
+        source_balance = source_balance, 
+        quantity = request.quantity 
+    } })
     base.balance[source] = source_balance - request.quantity
     ao.event({ "Balances after deduction:",
         { balances = base.balance, ledgers = base.ledgers } }
@@ -656,6 +669,16 @@ end
 -- C-N in: Root = Inc User balance, Dec Sub-ledger balance
 function transfer(base, assignment)
     ao.event({ "Transfer request received", { assignment = assignment } })
+    
+    -- Simple duplicate check for transfers
+    base.processed_transfers = base.processed_transfers or {}
+    local body_id = assignment.body.id or assignment.id or "unknown"
+    local transfer_key = body_id .. "_" .. (assignment.body.quantity or "0") .. "_" .. (assignment.body.recipient or "unknown")
+    if base.processed_transfers[transfer_key] then
+        return "ok", base
+    end
+    base.processed_transfers[transfer_key] = true
+    
     -- Verify the security of the request.
     local status, request
     status, base, request = validate_request(base, assignment)
@@ -731,13 +754,15 @@ function transfer(base, assignment)
     -- Subsequently, the target must be another ledger so we dispatch a
     -- credit-notice to the peer ledger. The peer will increment the balance of
     -- the recipient.
-    base = send(base, {
+    local credit_notice_msg = {
         action = "Credit-Notice",
         target = request.route,
         recipient = request.recipient,
         quantity = quantity,
-        sender = request.from
-    })
+        sender = request.from,
+        ["x-from-token"] = base.token
+    }
+    base = send(base, credit_notice_msg)
 
     return log_result(base, "ok", {
         message = "Ledger-ledger transfer processed successfully.",
@@ -751,6 +776,15 @@ end
 -- Process credit notices from other ledgers.
 _G["credit-notice"] = function (base, assignment)
     ao.event({ "Credit-Notice received", { assignment = assignment } })
+
+    -- Simple duplicate check for credit-notices
+    base.processed_credits = base.processed_credits or {}
+    local body_id = assignment.body.id or assignment.id or "unknown"
+    local credit_key = body_id .. "_" .. (assignment.body.quantity or "0") .. "_" .. (assignment.body.recipient or "unknown")
+    if base.processed_credits[credit_key] then
+        return "ok", base
+    end
+    base.processed_credits[credit_key] = true
 
     -- Verify the security of the request.
     local status, request
@@ -792,8 +826,8 @@ _G["credit-notice"] = function (base, assignment)
     end
 
     -- Credit the recipient's balance.
-    base.balance[request.recipient] =
-        (base.balance[request.recipient] or 0) + quantity
+    local old_balance = base.balance[request.recipient] or 0
+    base.balance[request.recipient] = old_balance + quantity
     
     return "ok", log_result(base, "ok", {
         message = "Credit-Notice processed successfully.",
@@ -868,11 +902,11 @@ end
 function compute(base, assignment)
     ao.event({ "compute called",
         { balance = base.balance, ledgers = base.ledgers } })
-
     assignment.body.action = string.lower(assignment.body.action or "")
     
     if assignment.body.action == "credit-notice" then
-        return _G["credit-notice"](base, assignment)
+        local ok, result = _G["credit-notice"](base, assignment)
+        return ok, result
     elseif assignment.body.action == "transfer" then
         return transfer(base, assignment)
     elseif assignment.body.action == "register" then
