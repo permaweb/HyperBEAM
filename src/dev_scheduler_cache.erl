@@ -21,6 +21,7 @@ write(Assignment, Opts) ->
         {ok, RootPath} ->
             % Create symlinks from the message on the process and the 
             % slot on the process to the underlying data.
+            % Always use signed ID for storage
             hb_store:make_link(
                 Store,
                 RootPath,
@@ -44,17 +45,13 @@ read(ProcID, Slot, Opts) when is_integer(Slot) ->
     read(ProcID, integer_to_list(Slot), Opts);
 read(ProcID, Slot, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    ResolvedPath =
-        P2 = hb_store:resolve(
-            Store,
-            P1 = hb_store:path(Store, [
-                "assignments",
-                hb_util:human_id(ProcID),
-                Slot
-            ])
-        ),
-    ?event({resolved_path, {p1, P1}, {p2, P2}, {resolved, ResolvedPath}}),
-    case hb_cache:read(ResolvedPath, Opts) of
+    % Always use signed ID for storage
+    AssignmentPath = hb_store:path(Store, [
+        "assignments",
+        hb_util:human_id(ProcID),
+        Slot
+    ]),
+    case hb_cache:read(AssignmentPath, Opts) of
         {ok, Assignment} ->
             % If the slot key is not present, the format of the assignment is
             % AOS2, so we need to convert it to the canonical format.
@@ -72,8 +69,10 @@ read(ProcID, Slot, Opts) ->
 
 %% @doc Get the assignments for a process.
 list(ProcID, Opts) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    % Always use signed ID for storage
     hb_cache:list_numbered(
-        hb_store:path(hb_opts:get(store, no_viable_store, Opts), [
+        hb_store:path(Store, [
             "assignments",
             hb_util:human_id(ProcID)
         ]),

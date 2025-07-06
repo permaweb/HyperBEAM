@@ -215,31 +215,36 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     ?event(debug_cache, {writing_message, Msg}),
     % Calculate the IDs of the message.
     UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
-    AltIDs = calculate_all_ids(Msg, Opts) -- [UncommittedID],
+    AllIDs = calculate_all_ids(Msg, Opts),
+    % Use signed ID as primary storage key if available, otherwise fall back to unsigned
+    PrimaryID = case AllIDs -- [UncommittedID] of
+        [SignedID|_] -> SignedID;  % Use first signed ID as primary
+        [] -> UncommittedID        % Fall back to unsigned if no signed ID
+    end,
+    AltIDs = AllIDs -- [PrimaryID],
     MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
-    ?event(debug_cache, {writing_message, {id, UncommittedID}, {alt_ids, AltIDs}, {original, Msg}}),
-    % Write all of the keys of the message into the store.
-    hb_store:make_group(Store, UncommittedID),
+    ?event(debug_cache, {writing_message, {primary_id, PrimaryID}, {alt_ids, AltIDs}, {unsigned_id, UncommittedID}, {original, Msg}}),
+    % Write all of the keys of the message into the store using signed ID as primary.
+    hb_store:make_group(Store, PrimaryID),
     maps:map(
         fun(Key, Value) ->
-            write_key(UncommittedID, Key, MsgHashpathAlg, Value, Store, Opts)
+            write_key(PrimaryID, Key, MsgHashpathAlg, Value, Store, Opts)
         end,
         maps:without([<<"priv">>], Msg)
     ),
-    % Write the commitments to the store, linking each commitment ID to the
-    % uncommitted message.
+    % Write links from all other IDs to the primary storage location.
     lists:map(
         fun(AltID) ->
             ?event(debug_cache,
-                {linking_commitment,
-                    {uncommitted_id, UncommittedID},
-                    {committed_id, AltID}
+                {linking_id_to_primary,
+                    {primary_id, PrimaryID},
+                    {alt_id, AltID}
             }),
-            hb_store:make_link(Store, UncommittedID, AltID)
+            hb_store:make_link(Store, PrimaryID, AltID)
         end,
         AltIDs
     ),
-    {ok, UncommittedID}.
+    {ok, PrimaryID}.
 
 %% @doc Write a single key for a message into the store.
 write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->

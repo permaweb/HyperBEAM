@@ -137,8 +137,10 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                         <<"source">> => RawMsgToPush
                                     }
                             end,
+                        ?event(debug_push_target, {target_lookup, {target, Target}, {raw_msg, RawMsgToPush}}),
                         case hb_cache:read(Target, Opts) of
                             {ok, DownstreamProcess} ->
+                                ?event(debug_push_target, {target_found, {target, Target}}),
                                 push_result_message(
                                     DownstreamProcess,
                                     MsgToPush,
@@ -165,6 +167,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                     Opts
                                 );
                             not_found ->
+                                ?event(debug_push_target, {target_not_found, {target, Target}}),
                                 #{
                                     <<"response">> => <<"error">>,
                                     <<"status">> => 404,

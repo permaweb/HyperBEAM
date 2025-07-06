@@ -165,7 +165,7 @@ do_assign(State, Message, ReplyPID) ->
                             end,
                         <<"data-protocol">> => <<"ao">>,
                         <<"variant">> => <<"ao.N.1">>,
-                        <<"process">> => hb_util:id(maps:get(id, State)),
+                        <<"process">> => hb_util:human_id(maps:get(id, State)),
                         <<"epoch">> => <<"0">>,
                         <<"slot">> => NextSlot,
                         <<"block-height">> => Height,

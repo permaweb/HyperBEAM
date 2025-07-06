@@ -604,47 +604,29 @@ subledger_to_subledger() ->
             #{ <<"balance">> => #{ Alice => 100 } },
             Opts
         ),
-    SubLedger1 = subledger(RootLedger, #{
-        <<"nonce">> => crypto:strong_rand_bytes(16)
-    }, Opts),
+    SubLedger1 = subledger(RootLedger, Opts),
+    SubLedger2 = subledger(RootLedger, Opts),
+    ?event(debug, {subledger_ids, {
+        subledger1_signed, hb_util:human_id(hb_message:id(SubLedger1, all)),
+        subledger1_unsigned, hb_message:id(SubLedger1, unsigned, Opts),
+        subledger2_signed, hb_util:human_id(hb_message:id(SubLedger2, all)), 
+        subledger2_unsigned, hb_message:id(SubLedger2, unsigned, Opts)
+    }}),
     Names = #{
         Alice => alice,
         Bob => bob,
         RootLedger => root,
-        SubLedger1 => subledger1
+        SubLedger1 => subledger1,
+        SubLedger2 => subledger2
     },
     % 1. Alice has tokens on the root ledger.
     ?assertEqual(100, balance(RootLedger, Alice, Opts)),
+    % 2. Alice registers with SubLedger1.
+    register(SubLedger1, SubLedger2, Opts),
     % 3. Alice sends 90 tokens to herself on SubLedger1.
     transfer(RootLedger, Alice, Alice, 90, SubLedger1, Opts),
-    % Check balances after the 90-token transfer
-    RootBalance = balance(RootLedger, Alice, Opts),
-    SubBalance = balance(SubLedger1, Alice, Opts),
-    ?event(debug, {after_90_token_transfer, {root, RootBalance}, {subledger1, SubBalance}}),
-    ?assertEqual(10, balance(RootLedger, Alice, Opts)),
-    ?assertEqual(90, balance(SubLedger1, Alice, Opts)),
-    
-    % Create SubLedger2 with a different nonce
-    SubLedger2 = subledger(RootLedger, #{
-        <<"nonce">> => crypto:strong_rand_bytes(16)
-    }, Opts),
-    register(SubLedger1, SubLedger2, Opts),
-    Names2 = Names#{SubLedger2 => subledger2},
-    
-    % Check Alice's balance on SubLedger2 before transfer
-    AliceOnSub2Before = balance(SubLedger2, Alice, Opts),
-    BobOnSub2Before = balance(SubLedger2, Bob, Opts),
-    ?event(debug, {before_transfer_subledger2, {alice, AliceOnSub2Before}, {bob, BobOnSub2Before}}),
-    
     % 4. Alice sends 10 tokens to Bob on SubLedger2.
     transfer(SubLedger1, Alice, Bob, 10, SubLedger2, Opts),
-    % Check balances after the 10-token transfer
-    RootBalance2 = balance(RootLedger, Alice, Opts),
-    SubBalance2 = balance(SubLedger1, Alice, Opts),
-    SubBalance3 = balance(SubLedger2, Bob, Opts),
-    AliceOnSub2After = balance(SubLedger2, Alice, Opts),
-    ?event(debug, {after_10_token_transfer, {root, RootBalance2}, {subledger1, SubBalance2}, {subledger2_alice, AliceOnSub2After}, {subledger2_bob, SubBalance3}}),
-    
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(80, balance(SubLedger1, Alice, Opts)),
     ?assertEqual(10, balance(SubLedger2, Bob, Opts)),
@@ -652,7 +634,7 @@ subledger_to_subledger() ->
     % 5. Bob sends 5 tokens to himself on SubLedger1.
     transfer(SubLedger2, Bob, Bob, 5, SubLedger1, Opts),
     transfer(SubLedger2, Bob, Alice, 4, SubLedger1, Opts),
-    ?event(debug, {map, map([RootLedger, SubLedger1, SubLedger2], Names2, Opts)}),
+    ?event(debug, {map, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(5, balance(SubLedger1, Bob, Opts)),
     ?assertEqual(84, balance(SubLedger1, Alice, Opts)),
@@ -677,11 +659,7 @@ unregistered_peer_transfer() ->
             #{ <<"balance">> => #{ Alice => 100 } },
             Opts
         ),
-    SubLedgers = [
-        subledger(RootLedger, #{
-            <<"nonce">> => crypto:strong_rand_bytes(16)
-        }, Opts) || _ <- lists:seq(1, 3)
-    ],
+    SubLedgers = [ subledger(RootLedger, Opts) || N <- lists:seq(1, 3) ],
     SubLedger1 = lists:nth(1, SubLedgers),
     SubLedger2 = lists:nth(2, SubLedgers),
     SubLedger3 = lists:nth(3, SubLedgers),

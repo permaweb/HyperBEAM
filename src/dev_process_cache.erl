@@ -12,8 +12,11 @@ read(ProcID, Opts) ->
     hb_util:ok(latest(ProcID, Opts)).
 read(ProcID, SlotRef, Opts) ->
     ?event({reading_computed_result, ProcID, SlotRef}),
-    Path = path(ProcID, SlotRef, Opts),
-    hb_cache:read(Path, Opts).
+    % Always use signed ID for storage
+    case hb_cache:read(path(ProcID, SlotRef, Opts), Opts) of
+        {ok, Result} -> {ok, Result};
+        not_found -> not_found
+    end.
 
 %% @doc Write a process computation result to the cache.
 write(ProcID, Slot, Msg, Opts) ->
@@ -46,6 +49,7 @@ path(ProcID, Ref, Opts) ->
     path(ProcID, Ref, [], Opts).
 path(ProcID, Ref, PathSuffix, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
+    % Always use signed ID for storage
     hb_store:path(
         Store,
         [
@@ -80,8 +84,8 @@ latest(ProcID, RawRequiredPath, Limit, Opts) ->
                 )
         end,
     ?event({required_path_converted, {proc_id, ProcID}, {required_path, RequiredPath}}),
-    Path = path(ProcID, slot_root, Opts),
-    AllSlots = hb_cache:list_numbered(Path, Opts),
+    % Always use signed ID for storage
+    AllSlots = list_slots(ProcID, Opts),
     ?event({all_slots, {proc_id, ProcID}, {slots, AllSlots}}),
     CappedSlots =
         case Limit of
@@ -92,7 +96,6 @@ latest(ProcID, RawRequiredPath, Limit, Opts) ->
         {finding_latest_slot,
             {proc_id, hb_util:human_id(ProcID)},
             {limit, Limit},
-            {path, Path},
             {slots_in_range, CappedSlots}
         }
     ),
@@ -134,6 +137,27 @@ first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
             first_with_path(ProcID, RequiredPath, Rest, Opts, Store);
         _ ->
             Slot
+    end.
+
+%% @doc List all slot numbers for a process
+list_slots(ProcID, Opts) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    SlotPath = hb_store:path(Store, [<<"computed">>, hb_util:human_id(ProcID), "slot"]),
+    case hb_store:list(Store, SlotPath) of
+        {ok, SlotStrings} ->
+            % Convert slot strings to integers
+            lists:map(fun(SlotStr) -> 
+                SlotBin = if 
+                    is_list(SlotStr) -> list_to_binary(SlotStr);
+                    is_binary(SlotStr) -> SlotStr;
+                    true -> SlotStr
+                end,
+                binary_to_integer(SlotBin)
+            end, SlotStrings);
+        {error, _} ->
+            [];
+        not_found ->
+            []
     end.
 
 %%% Tests
