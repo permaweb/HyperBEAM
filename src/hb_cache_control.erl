@@ -24,7 +24,13 @@
 maybe_store(Msg1, Msg2, Msg3, Opts) ->
     case derive_cache_settings([Msg3, Msg2], Opts) of
         #{ <<"store">> := true } ->
-            ?event(caching, {caching_result, {msg1, Msg1}, {msg2, Msg2}, {msg3, Msg3}}),
+            ?event(caching,
+                {caching_result,
+                    {base, Msg1},
+                    {req, Msg2},
+                    {res, Msg3}
+                }
+            ),
             dispatch_cache_write(Msg1, Msg2, Msg3, Opts);
         _ -> 
             not_caching
@@ -178,8 +184,7 @@ necessary_messages_not_found_error(Msg1, Msg2, Opts) ->
     {error,
         #{
             <<"status">> => 404,
-            <<"body">> =>
-                <<"Necessary messages not found in cache.">>
+            <<"body">> => <<"Necessary messages not found in cache.">>
         }
     }.
 
