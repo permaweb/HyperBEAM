@@ -432,7 +432,6 @@ ensure_loaded(Msg1, Msg2, Opts) ->
     % Get the nonce we are currently on and the inbound nonce.
     TargetSlot = hb_ao:get(<<"slot">>, Msg2, undefined, Opts),
     ProcID = process_id(Msg1, #{}, Opts),
-
     ?event({ensure_loaded, {msg1, Msg1}, {msg2, Msg2}, {opts, Opts}}),
     case hb_ao:get(<<"initialized">>, Msg1, Opts) of
         <<"true">> ->
@@ -485,7 +484,7 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                                       Opts),
                     LoadedSnapshotMsg2 = LoadedSnapshotMsg#{ <<"process">> => UpdateProcess },
                     LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
-                    ?event(debug, {found_state_checkpoint, ProcID, LoadedSnapshotMsg2}),
+                    ?event(compute, {found_state_checkpoint, ProcID, LoadedSnapshotMsg2}),
                     {ok, Normalized} =
                         run_as(
                             <<"execution">>,
