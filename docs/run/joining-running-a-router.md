@@ -13,22 +13,15 @@ Router networks in HyperBEAM have two distinct roles that are often confused:
 | **TEE Node (SNP)**      |   Recommended | Secure, attested computation (hardware isolation)    |
 | **Router Registration** |   Optional    | Registering/joining a router (TEE not required)      |
 
-- **You can join or run a router without HB-OS.**
-- **If you want to run a TEE node, HB-OS or an equivalent TEE setup is recommended for convenience and security.**
+- *You can join or run a router without HB-OS.*
+- *If you want to run a TEE node, HB-OS or an equivalent TEE setup is recommended for convenience and security.*
 
 ## Configuration Files: config.json vs config.flat
 
 Configuration can be set in either `config.json` (JSON syntax) or `config.flat` (flat syntax). The examples below use JSON for clarity, but you can use either format depending on your deployment. The syntax differs:
 
 - **config.json** uses standard JSON structure (see examples below)
-- **config.flat** uses key-value pairs, e.g.:
-
-```flat
-operator: trustless
-initialized: permanent
-snp_trusted: []
-# ...and so on
-```
+- **config.flat** uses key-value pairs
 
 ## Joining a Router Network (Worker Node)
 
@@ -40,55 +33,89 @@ Most users want to **join** an existing router to offer computational services. 
 
 Use the following configuration as a template for your worker node:
 
-```json
+```jsonc
 {
-  "operator": "trustless",
-  "initialized": "permanent",
-  "snp_trusted": [],
-  "on": {
-    "request": {
-      "device": "p4@1.0",
-      "ledger-device": "lua@5.3a",
-      "pricing-device": "simple-pay@1.0",
-      "ledger-path": "/ledger~node-process@1.0",
-      "module": ""
+    // ─── Initial Configuration ─────────────────────────────────────────────────
+    // Lock this configuration so it cannot be changed again
+    "operator": "trustless",
+    "initialized": "permanent",
+
+    // ─── SNP-Based TEE Attestation Parameters ──────────────────────────────────
+    // These values let the TEE verify its own environment—and any other VM
+    // instantiated from the same image—before granting access.
+    "snp_trusted": [],
+
+    // ─── Request/Response Processing Configuration ─────────────────────────────
+    // Defines how requests and responses are processed through the p4 device
+    "on": {
+        "request": {
+            "device": "p4@1.0",
+            "ledger-device": "lua@5.3a",
+            "pricing-device": "simple-pay@1.0",
+            "ledger-path": "/ledger~node-process@1.0",
+            "module": ""        // Automatically injected
+        },
+        "response": {
+            "device": "p4@1.0",
+            "ledger-device": "lua@5.3a",
+            "pricing-device": "simple-pay@1.0",
+            "ledger-path": "/ledger~node-process@1.0",
+            "module": ""        // Automatically injected
+        }
     },
-    "response": {
-      "device": "p4@1.0",
-      "ledger-device": "lua@5.3a",
-      "pricing-device": "simple-pay@1.0",
-      "ledger-path": "/ledger~node-process@1.0",
-      "module": ""
-    }
-  },
-  "p4_non_chargable_routes": [
-    {"template": "/.*~node-process@1.0/.*"},
-    {"template": "/.*~greenzone@1.0/.*"},
-    {"template": "/.*~router@1.0/.*"},
-    {"template": "/.*~meta@1.0/.*"},
-    {"template": "/schedule"},
-    {"template": "/push"},
-    {"template": "/~hyperbuddy@1.0/.*"}
-  ],
-  "node_process_spawn_codec": "ans104@1.0",
-  "node_processes": {
-    "ledger": {
-      "device": "process@1.0",
-      "execution-device": "lua@5.3a",
-      "scheduler-device": "scheduler@1.0",
-      "authority-match": 1,
-      "admin": "",
-      "token": "",
-      "module": "",
-      "authority": ""
-    }
-  },
-  "router_opts": {
-    "offered": [ /* ... */ ]
-  },
-  "green_zone_peer_location": "",
-  "green_zone_peer_id": "",
-  "p4_recipient": ""
+
+    // ─── Non-Chargeable Routes Configuration ──────────────────────────────────
+    // Routes that should not incur charges when accessed through p4
+    "p4_non_chargable_routes": [
+        { "template": "/.*~node-process@1.0/.*" },
+        { "template": "/.*~greenzone@1.0/.*" },
+        { "template": "/.*~router@1.0/.*" },
+        { "template": "/.*~meta@1.0/.*" },
+        { "template": "/schedule" },
+        { "template": "/push" },
+        { "template": "/~hyperbuddy@1.0/.*" }
+    ],
+
+    // ─── Node Process Spawn Configuration ─────────────────────────────────────
+    // Codec used for spawning new node processes
+    "node_process_spawn_codec": "ans104@1.0",
+
+    // ─── Node Process Definitions ─────────────────────────────────────────────
+    // Configuration for individual node processes
+    "node_processes": {
+        "ledger": {
+            "device": "process@1.0",
+            "execution-device": "lua@5.3a",
+            "scheduler-device": "scheduler@1.0",
+            "authority-match": 1,
+            "admin": "",                   // Automatically injected
+            "token": "",                   // Automatically injected
+            "module": "",                  // Automatically injected
+            "authority": ""                // Automatically injected
+        }
+    },
+
+    // ─── Router Registration Options ──────────────────────────────────────────
+    // Configuration for how processes register with the router
+    "router_opts": {
+        "offered": [
+            // {
+            //     "registration-peer": {},            // Automatically injected
+            //     "template": "/*~process@1.0/*",   // The routes that the node will register with
+            //     "prefix": "",                       // Automatically injected
+            //     "price": 4500000                    // Registration fee in smallest units
+            // }
+        ]
+    },
+
+    // ─── Greenzone Registration Options ────────────────────────────────────────
+    // Configuration for how processes register with the greenzone
+    "green_zone_peer_location": "",         // Automatically injected
+    "green_zone_peer_id": "",               // Automatically injected
+
+    // ─── P4 Recipient ──────────────────────────────────────────────────────────
+    // The Address of the node that will receive the P4 messages
+    "p4_recipient": ""                      // Automatically injected
 }
 ```
 
@@ -101,12 +128,12 @@ Perform the following API calls in order:
   - Example:
     ```javascript
     const response = await fetch(`${nodeUrl}/~meta@1.0/info`, {
-      method: 'POST',
-      headers: {
-        'codec-device': 'json@1.0',
-        'accept-bundle': true
-      },
-      body: JSON.stringify(configContent)
+        method: 'POST',
+        headers: {
+            'codec-device': 'json@1.0',
+            'accept-bundle': true
+        },
+        body: JSON.stringify(configContent)
     });
     ```
 
@@ -145,45 +172,57 @@ If you want to **operate a router** that manages other worker nodes:
 
 ### Example Router Configuration (config.json example)
 
-```json
+```jsonc
 {
-  "on": {
-    "request": {
-      "device": "router@1.0",
-      "path": "preprocess",
-      "commit-request": true
-    }
-  },
-  "router_opts": {
-    "provider": {
-      "path": "/router~node-process@1.0/compute/routes~message@1.0"
+    // ─── Router Node Preprocessing Settings ───────────────────────────────────
+    // Defines the router process and how it preprocesses incoming requests
+    "on": {
+        "request": {
+            "device": "router@1.0",
+            "path": "preprocess",
+            "commit-request": true         // Enable request commitment for routing
+        }
     },
-    "registrar": {
-      "path": "/router~node-process@1.0"
+
+    // ─── Route Provider Configuration ─────────────────────────────────────────
+    // Specifies where to get routing information from the router node process
+    "router_opts": {
+        "provider": {
+            "path": "/router~node-process@1.0/compute/routes~message@1.0"
+        },
+        "registrar": {
+            "path": "/router~node-process@1.0"
+        },
+        "registrar-path": "schedule"
     },
-    "registrar-path": "schedule"
-  },
-  "relay_allow_commit_request": true,
-  "node_processes": {
-    "router": {
-      "type": "Process",
-      "device": "process@1.0",
-      "execution-device": "lua@5.3a",
-      "scheduler-device": "scheduler@1.0",
-      "pricing-weight": 9,
-      "performance-weight": 1,
-      "score-preference": 4,
-      "performance-period": 2,
-      "initial-performance": 1000,
-      "is-admissible": {
-        "path": "default",
-        "default": "false"
-      },
-      "module": "",
-      "trusted-peer": "",
-      "trusted": ""
+
+    // ─── Relay Configuration ──────────────────────────────────────────────────
+    // Allow the relay to commit requests when forwarding
+    "relay_allow_commit_request": true,
+
+    // ─── Router Node Process Configuration ────────────────────────────────────
+    // Specifies the Lua-based router logic, weights for scoring, and admission check
+    "node_processes": {
+        "router": {
+            "type": "Process",
+            "device": "process@1.0",
+            "execution-device": "lua@5.3a",
+            "scheduler-device": "scheduler@1.0",
+            "pricing-weight": 9,           // Weight for pricing in routing decisions
+            "performance-weight": 1,       // Weight for performance in routing decisions
+            "score-preference": 4,         // Preference scoring for route selection
+            "performance-period": 2,       // Period for performance measurement
+            "initial-performance": 1000,   // Initial performance score
+            // Default admission policy (currently set to false)
+            "is-admissible": {
+                "path": "default",
+                "default": "false"
+            },
+            "module": "",                  // Automatically injected
+            "trusted-peer": "",            // Automatically injected
+            "trusted": ""                  // Automatically injected
+        }
     }
-  }
 }
 ```
 
