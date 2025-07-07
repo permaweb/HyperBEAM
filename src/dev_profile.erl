@@ -144,6 +144,7 @@ validate_signer(Req, Opts) ->
 %% @doc Return the profiling function for the given engine.
 engine(<<"eflame">>) -> {ok, fun eflame_profile/3};
 engine(<<"eprof">>) -> {ok, fun eprof_profile/3};
+engine(<<"ecg">>) -> {ok, fun ecg_profile/3};
 engine(default) -> {ok, default()};
 engine(Unknown) -> {unknown_engine, Unknown}.
 
@@ -202,39 +203,80 @@ eflame_profile(Fun, Req, Opts) ->
         }
     ),
     file:delete(File),
-    case return_mode(Req, Opts) of
-        <<"open">> ->
-            % We cannot return a text version of the flame graph, so we open it
-            % on the local machine.
-            file:write_file(
-                SVG = filename:absname(temp_file(<<"svg">>)),
-                Flame
-            ),
-            ?event(debug_profile, {svg, SVG}),
-            case hb_opts:get(profiler_allow_open, true, Opts) of
-                true ->
-                    OpenCmd = hb_opts:get(profiler_open_cmd, "open", Opts),
-                    CmdRes = os:cmd(OpenCmd ++ " " ++ hb_util:list(SVG)),
-                    timer:sleep(hb_opts:get(profiler_open_delay, 500, Opts)),
-                    ?event(debug_profile, {open_command_result, CmdRes}),
-                    file:delete(SVG),
-                    {ok, Res};
-                _ ->
-                    {SVG, Res}
-            end;
-        <<"message">> ->
-            % We can return the flame graph as an SVG image suitable for output
-            % to a browser.
-            {ok,
-                #{
-                    <<"content-type">> => <<"image/svg+xml">>,
-                    <<"body">> => Flame
-                }
-            }
-    end.
+    return_svg(Res, Flame, Req, Opts).
 -else.
 eflame_profile(_Fun, _Req, _Opts) ->
     {error, <<"eflame is not enabled.">>}.
+-endif.
+
+-ifdef(ENABLE_ECG).
+
+-define(ECG_MAX_RETRIES, 3).
+-define(ECG_RETRY_DELAY, 3000).
+-define(ECG_PARSE_DELAY, 3000).
+
+%% @doc The ECG mechanism is extremely brittle. As a consequence, we attempt to 
+%% execute a given request a number of times in case of failure. This means that
+%% profiled functions may be executed multiple times and should subsequently be
+%% side-effect free.
+ecg_profile(Fun, Req, Opts) -> ecg_profile(Fun, Req, Opts, ?ECG_MAX_RETRIES).
+ecg_profile(Fun, Req, Opts, Retries) ->
+    % Start the `hb` application to ensure modules are loaded.
+    application:start(hb),
+    case do_ecg_profile(Fun, Req, Opts) of
+        {error, _} when Retries > 0 ->
+            timer:sleep(?ECG_RETRY_DELAY),
+            ecg_profile(Fun, Req, Opts, Retries - 1);
+        {error, Err} ->
+            {error, Err};
+        Res ->
+            Res
+    end.
+
+%% @doc Attempt to execute the ECG profiling mechanism once.
+do_ecg_profile(Fun, Req, Opts) ->
+    try
+        {ok, _} = hb_ao:resolve(#{ <<"path">> => <<"/~meta@1.0/build">> }, #{}),
+        % Create the temporary files for the trace and output.
+        Mods = hb_util:all_hb_modules(),
+        ?event(debug_profile, {ecg_modules, {list, Mods}}),
+        TraceBinFilename = temp_file(),
+        TraceFilename = <<(temp_file())/binary, "-readable">>,
+        file:write_file(TraceFilename, <<>>),
+        file:write_file(TraceBinFilename, <<>>),
+        % Trace the function, and attempt to profile it. If the function fails, we
+        % return an error.
+        ?event(debug_profile, {ecg_trace_file, {string, TraceFilename}}),
+        dbg:stop(),
+        dbg:start(),
+        ecg:trace(hb_util:list(TraceBinFilename), hb_util:all_hb_modules(), local),
+        Res = Fun(),
+        ecg:stop(),
+        % Analyze the trace and write the output to a file.
+        dbg:flush_trace_port(),
+        timer:sleep(?ECG_PARSE_DELAY),
+        {ok, Fd} = file:open(TraceFilename, [write]),
+        timer:sleep(1000),
+        dbg:trace_client(file, TraceBinFilename, {fun ecg:parse/2, Fd}),
+        file:sync(Fd),
+        file:close(Fd),
+        % Leave some time for the parser to run. Unfortunately, it is async.
+        timer:sleep(?ECG_PARSE_DELAY),
+        % Run the `dot` file generator.
+        ecg_draw:render(hb_util:list(TraceFilename)),
+        % Try to execute graphviz.
+        SVGString = os:cmd("dot -Tsvg " ++ hb_util:list(TraceFilename) ++ ".dot"),
+        % Clean up the temporary files.
+        file:delete(TraceBinFilename),
+        file:delete(TraceFilename),
+        file:delete(<<TraceFilename/binary, ".dot">>),
+        return_svg(Res, SVGString, Req, Opts)
+    catch
+        _:_ -> {error, <<"Execution of ECG profiling failed.">>}
+    end.
+-else.
+ecg_profile(_Fun, _Req, _Opts) ->
+    {error, <<"`ecg` is not enabled.">>}.
 -endif.
 
 %% @doc Profile a function using the `eprof' tool.
@@ -293,6 +335,42 @@ temp_file(Ext) ->
         Ext/binary
     >>.
 
+%% @doc General utility function for returning an SVG, in accordance with the
+%% `return-mode' option.
+return_svg(Res, SVGString, Req, Opts) when is_list(SVGString) ->
+    return_svg(Res, hb_util:bin(SVGString), Req, Opts);
+return_svg(Res, SVGString, Req, Opts) ->
+    case return_mode(Req, Opts) of
+        <<"open">> ->
+            % We cannot return a text version of the flame graph, so we open it
+            % on the local machine.
+            file:write_file(
+                SVG = filename:absname(temp_file(<<"svg">>)),
+                SVGString
+            ),
+            ?event(debug_profile, {svg, SVG}),
+            case hb_opts:get(profiler_allow_open, true, Opts) of
+                true ->
+                    OpenCmd = hb_opts:get(profiler_open_cmd, "open", Opts),
+                    CmdRes = os:cmd(OpenCmd ++ " " ++ hb_util:list(SVG)),
+                    timer:sleep(hb_opts:get(profiler_open_delay, 500, Opts)),
+                    ?event(debug_profile, {open_command_result, CmdRes}),
+                    file:delete(SVG),
+                    {ok, Res};
+                _ ->
+                    {SVG, Res}
+            end;
+        <<"message">> ->
+            % We can return the flame graph as an SVG image suitable for output
+            % to a browser.
+            {ok,
+                #{
+                    <<"content-type">> => <<"image/svg+xml">>,
+                    <<"body">> => SVGString
+                }
+            }
+    end.
+
 %%% Tests.
 
 eprof_fun_test() -> test_engine(function, <<"eprof">>).
@@ -301,6 +379,13 @@ eprof_resolution_test() -> test_engine(resolution, <<"eprof">>).
 -ifdef(ENABLE_EFLAME).
 eflame_fun_test() -> test_engine(function, <<"eflame">>).
 eflame_resolution_test() -> test_engine(resolution, <<"eflame">>).
+-endif.
+
+-ifdef(ENABLE_ECG).
+ecg_fun_test_() ->
+    {timeout, 30, fun() -> test_engine(function, <<"ecg">>) end}.
+ecg_resolution_test_() ->
+    {timeout, 30, fun() -> test_engine(resolution, <<"ecg">>) end}.
 -endif.
 
 %%% Test utilities.
@@ -314,7 +399,7 @@ test_engine(Type, Engine) ->
 %% simulate some basic compute that is performant.
 test_profiler_exec(function, Engine) ->
     eval(
-        fun() -> dev_meta:build(#{}, #{}, #{}) end,
+        fun() -> hb_ao:resolve(#{ <<"path">> => <<"/~meta@1.0/build">> }, #{}) end,
         #{ <<"engine">> => Engine, <<"return-mode">> => <<"message">> },
         #{}
     );
@@ -337,7 +422,9 @@ validate_profiler_output(<<"eprof">>, Res) ->
         } when byte_size(Body) > 100,
         Res
     );
-validate_profiler_output(<<"eflame">>, Res) ->
+validate_profiler_output(SVGOutputType, Res)
+        when SVGOutputType == <<"eflame">>
+        orelse SVGOutputType == <<"ecg">> ->
     ?assertMatch(
         {ok,
             #{
