@@ -604,7 +604,10 @@ single_subledger_to_subledger() ->
         ),
     SubLedger1 = subledger(RootLedger, Opts),
     SL1ID = hb_message:id(SubLedger1, signed, Opts),
-    SubLedger2 = hb_message:without_commitments(SL1ID, subledger(RootLedger, Opts), Opts),
+    ?event(debug, {sl1ID, SL1ID}),
+    SubLedger2 = subledger(RootLedger, Opts),
+    SL2ID = hb_message:id(SubLedger2, signed, Opts),
+    ?event(debug, {sl2ID, SL2ID}),
     Names = #{
         Alice => alice,
         Bob => bob,
@@ -612,11 +615,16 @@ single_subledger_to_subledger() ->
         SubLedger1 => subledger1,
         SubLedger2 => subledger2
     },
+    ?event(debug, {root_ledger, RootLedger}),
+    ?event(debug, {sl1, SubLedger1}),
+    ?event(debug, {sl2, SubLedger2}),
     ?assertEqual(100, balance(RootLedger, Alice, Opts)),
     % 2. Alice sends 90 tokens to herself on SubLedger1.
+    ?event(debug, {transfer_1}),
     transfer(RootLedger, Alice, Alice, 90, SubLedger1, Opts),
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(90, balance(SubLedger1, Alice, Opts)),
+    ?event(debug, {transfer_2}),
     PushRes = transfer(SubLedger1, Alice, Alice, 80, SubLedger2, Opts),
     ?event(debug, {push_res, PushRes}),
     ?event(debug, {map, map([RootLedger, SubLedger1, SubLedger2], Opts)}),

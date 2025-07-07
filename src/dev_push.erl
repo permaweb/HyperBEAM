@@ -108,6 +108,17 @@ do_push(PrimaryProcess, Assignment, Opts) ->
         #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
         Opts#{ hashpath => ignore }
     ),
+    % Handle the case where compute/results fails for uninitialized processes
+    {FinalStatus, FinalResult} = 
+        case {Status, Result} of
+            {ok, ComputeResult} -> {ok, ComputeResult};
+            {error, _} ->
+                % If compute/results fails, provide empty result with empty outbox
+                % This allows message delivery to processes that haven't been executed yet
+                ?event(push, {process_not_executed_providing_empty_outbox, {process, ID}, {slot, Slot}}),
+                ?event(debug, {process_not_executed_providing_empty_outbox, {process, ID}, {slot, Slot}}),
+                {ok, #{<<"outbox">> => #{}}}
+        end,
     % Determine if we should include the full compute result in our response.
     IncludeDepth = hb_ao:get(<<"result-depth">>, Assignment, 1, Opts),
     AdditionalRes =

@@ -222,6 +222,7 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
             % here. Depending on the type of process, 'rewinding' may require
             % re-computing from a significantly earlier checkpoint, so for now
             % we throw an error.
+            ?event(compute, {error_already_calculated_slot,  {target, TargetSlot}, {current, CurrentSlot}}),
             throw(
                 {error,
                     {already_calculated_slot,
@@ -242,6 +243,7 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                 {error, Res} ->
                     % If the scheduler device cannot provide a next message,
                     % we return its error details, along with the current slot.
+                    ?event(compute, {error_getting_schedule, {error, Res}, {phase, <<"get-schedule">>}, {attempted_slot, NextSlot}}),
                     {error, Res#{
                         <<"phase">> => <<"get-schedule">>,
                         <<"attempted-slot">> => NextSlot
@@ -267,6 +269,7 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                                     Error;
                                 true -> #{ <<"error">> => Error }
                                 end,
+                            ?event(compute, {error_computing_slot, {error, ErrMsg}, {phase, <<"compute">>}, {attempted_slot, NextSlot}}),
                             {error,
                                 ErrMsg#{
                                     <<"phase">> => <<"compute">>,
@@ -288,7 +291,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
             undefined -> RawInputMsg#{ <<"path">> => <<"compute">> };
             _ -> RawInputMsg
         end,
-    ?event({input_msg, InputMsg}),
+    ?event(compute,{input_msg, InputMsg}),
     ?event(compute, {executing, {proc_id, ProcID}, {slot, NextSlot}}, Opts),
     % Unset the previous results.
     UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
@@ -428,7 +431,21 @@ push(Msg1, Msg2, Opts) ->
 ensure_loaded(Msg1, Msg2, Opts) ->
     % Get the nonce we are currently on and the inbound nonce.
     TargetSlot = hb_ao:get(<<"slot">>, Msg2, undefined, Opts),
-    ProcID = process_id(Msg1, #{}, Opts),
+
+    ProcID = case Msg1 of
+        {link, Link, _} ->
+           Authority = hd(binary:split(Link, <<"/">>, [global, trim_all])),
+           ?event(x, {authority, Authority}),
+           P = hb_message:with_commitments(Authority, Msg1, Opts),
+           ?event(debug, {process_with_comm_loaded, P}),
+           process_id(P, #{}, Opts);
+        _ ->
+          ?event(debug, {no_authority_link_process_loaded, Msg1}),
+          process_id(Msg1, #{}, Opts)
+        end,
+    
+
+
     ?event({ensure_loaded, {msg1, Msg1}, {msg2, Msg2}, {opts, Opts}}),
     case hb_ao:get(<<"initialized">>, Msg1, Opts) of
         <<"true">> ->

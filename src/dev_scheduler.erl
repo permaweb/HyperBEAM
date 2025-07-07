@@ -645,6 +645,7 @@ do_post_schedule(ProcID, PID, Msg2, Opts) ->
             false -> true
         end,
     ?event({verified, Verified}),
+    ?event(debug, {scheduling_message, {msg2, Msg2}, {proc_id, ProcID}, {pid, PID}}),
     % Handle scheduling of the message if the message is valid.
     case {Verified, hb_ao:get(<<"type">>, Msg2, Opts)} of
         {false, _} ->
