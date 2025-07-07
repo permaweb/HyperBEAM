@@ -431,20 +431,7 @@ push(Msg1, Msg2, Opts) ->
 ensure_loaded(Msg1, Msg2, Opts) ->
     % Get the nonce we are currently on and the inbound nonce.
     TargetSlot = hb_ao:get(<<"slot">>, Msg2, undefined, Opts),
-
-    ProcID = case Msg1 of
-        {link, Link, _} ->
-           Authority = hd(binary:split(Link, <<"/">>, [global, trim_all])),
-           ?event(x, {authority, Authority}),
-           P = hb_message:with_commitments(Authority, Msg1, Opts),
-           ?event(debug, {process_with_comm_loaded, P}),
-           process_id(P, #{}, Opts);
-        _ ->
-          ?event(debug, {no_authority_link_process_loaded, Msg1}),
-          process_id(Msg1, #{}, Opts)
-        end,
-    
-
+    ProcID = process_id(Msg1, #{}, Opts),
 
     ?event({ensure_loaded, {msg1, Msg1}, {msg2, Msg2}, {opts, Opts}}),
     case hb_ao:get(<<"initialized">>, Msg1, Opts) of
@@ -481,12 +468,28 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                             MaybeLoadedSnapshotMsg,
                             Opts
                         ),
+                    Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
+                    #{ <<"commitments">> := HmacCommit} =
+                        hb_message:with_commitments(
+                          #{ <<"type">> => <<"hmac-sha256">>},
+                          Process,
+                          Opts),
+                    #{ <<"commitments">> := SignCommit } =
+                        hb_message:with_commitments(ProcID,
+                                                    Process,
+                                                    Opts),
+                    UpdateProcess = hb_maps:put(
+                                      <<"commitments">>,
+                                      hb_maps:merge(HmacCommit, SignCommit),
+                                      Process,
+                                      Opts),
+                    LoadedSnapshotMsg2 = LoadedSnapshotMsg#{ <<"process">> => UpdateProcess },
                     LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
-                    ?event(compute, {found_state_checkpoint, ProcID, LoadedSnapshotMsg}),
+                    ?event(debug, {found_state_checkpoint, ProcID, LoadedSnapshotMsg2}),
                     {ok, Normalized} =
                         run_as(
                             <<"execution">>,
-                            LoadedSnapshotMsg,
+                            LoadedSnapshotMsg2,
                             normalize,
                             Opts#{ hashpath => ignore }
                         ),

@@ -74,19 +74,7 @@ is_async(Process, Req, Opts) ->
 %% @doc Push a message or slot number, including its downstream results.
 do_push(PrimaryProcess, Assignment, Opts) ->
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
-    Process = hb_ao:get(<<"process">>, PrimaryProcess, Opts),
-    AuthorityLink = maps:get(<<"authority">>, Process),
-    ID = case AuthorityLink of
-        {link, Link, _} ->
-           Authority = hd(binary:split(Link, <<"/">>, [global, trim_all])),
-           ?event(x, {authority, Authority}),
-           P = hb_message:with_commitments(Authority, Process, Opts),
-           ?event(x, {process_with_comm, P}),
-           dev_process:process_id(P, #{}, Opts);
-        _ ->
-          ?event(x, {no_authority_link, PrimaryProcess}),
-          dev_process:process_id(PrimaryProcess, #{}, Opts)
-    end,
+    ID = dev_process:process_id(PrimaryProcess, #{}, Opts),
     ?event(x, {process_signed_id, ID}),
     UncommittedID =
         dev_process:process_id(
