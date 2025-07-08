@@ -195,5 +195,9 @@ event([Group, Event], ExecState, Opts) ->
             {event, Event}
         }
     ),
+    case is_binary(Group) of
+        true -> ?event(binary_to_atom(Group, utf8), {event, Event});
+        false -> ok
+    end,
     ?event(Group, Event),
     {[<<"ok">>], ExecState}.
