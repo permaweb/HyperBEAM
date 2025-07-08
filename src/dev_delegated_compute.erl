@@ -14,6 +14,8 @@ init(Msg1, _Msg2, _Opts) ->
 normalize(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
 snapshot(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
 
+%% @doc Normal compute execution through external CU.
+%% This function handles standard process execution that permanently modifies state.
 compute(Msg1, Msg2, Opts) ->
     RawProcessID = dev_process:process_id(Msg1, #{}, Opts),
     OutputPrefix = dev_stack:prefix(Msg1, Msg2, Opts),
@@ -66,6 +68,7 @@ do_compute(ProcID, Msg2, Opts) ->
             Opts
         ),
     ?event({do_compute_msg, {aos2, {string, Body}}}),
+    % Send to external CU via relay using /result endpoint
     Res = 
         hb_ao:resolve(
             #{
@@ -102,7 +105,10 @@ do_compute(ProcID, Msg2, Opts) ->
             {error, Error}
     end.
     
+%% @doc Dryrun execution handler
+%% This function is called when the "dryrun" path is set by dev_genesis_wasm.
 dryrun(Msg1, Msg2, Opts) ->
+    % Extract the process ID - this identifies which process to run dryrun against
     RawProcessID = dev_process:process_id(Msg1, #{}, Opts),
     OutputPrefix = dev_stack:prefix(Msg1, Msg2, Opts),
     ProcessID =
@@ -110,8 +116,8 @@ dryrun(Msg1, Msg2, Opts) ->
             not_found -> hb_ao:get(<<"process-id">>, Msg2, Opts);
             ProcID -> ProcID
         end,
+    % Execute the dryrun via external CU
     Res = do_dryrun(ProcessID, Msg2, Opts),
-    % io:format("Res: ~p~n", [Res]),
     case Res of
         {ok, JSONRes} ->
             ?event(
@@ -121,7 +127,9 @@ dryrun(Msg1, Msg2, Opts) ->
                     {req, Msg2}
                 }
             ),
+            % Convert the JSON response back to HyperBEAM message format
             {ok, Msg} = dev_json_iface:json_to_message(JSONRes, Opts),
+            % Store both the parsed message and raw JSON response.
             {ok,
                 hb_ao:set(
                     Msg1,
@@ -144,7 +152,8 @@ dryrun(Msg1, Msg2, Opts) ->
 do_dryrun(ProcID, Msg2, Opts) ->
     ?event({do_dryrun_msg, {req, Msg2}}),
     Body = hb_json:encode(dev_json_iface:message_to_json_struct(Msg2, Opts)),
-    ?event({do_dryrun_msg, {aos2, {string, Body}}}),
+    ?event({do_dryrun_body, {string, Body}}),
+    % Send to external CU via relay using /dry-run endpoint
     Res = 
         hb_ao:resolve(
             #{
@@ -170,6 +179,7 @@ do_dryrun(ProcID, Msg2, Opts) ->
         ),
     case Res of
         {ok, Response} ->
+            % Extract JSON response from CU.
             JSONRes = hb_ao:get(<<"body">>, Response, Opts),
             ?event({
                 delegated_dryrun_res_metadata,

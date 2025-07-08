@@ -164,36 +164,48 @@ init(Msg1, Msg2, Opts) ->
         )
     }.
 
-%% @doc Compute the result of an assignment applied to the process state, if it 
-%% is the next message.
+%% @doc Compute the result of an assignment applied to the process state.
+%% This function serves as the main entry point for compute operations and routes
+%% between two distinct execution paths:
+%% 
+%% - GET method: Normal compute execution that applies messages to process state
+%%   and advances the state permanently. Used for regular process execution.
+%% 
+%% - POST method: Dryrun compute execution that simulates message processing
+%%   without permanently modifying process state. Used for testing message 
+%%   handlers and previewing results. The POST method is the key entry point
+%%   for the dryrun functionality that allows external clients to test
+%%   message processing without side effects.
 compute(Msg1, Msg2, Opts) ->
     Method =
         hb_ao:get(<<"method">>, {as, <<"message@1.0">>, Msg2}, <<"GET">>, Opts),
     case Method of
         <<"POST">> -> post_compute(
             Msg1,
-            Msg2#{ <<"path">> => <<"dryrun">> },
+            Msg2,
             Opts
         );
         <<"GET">> -> get_compute(Msg1, Msg2, Opts)
     end.
 
+%% @doc Handle POST method compute requests - this is the core dryrun functionality.
+%% POST compute allows external clients to test message processing without permanent
+%% state changes. Essentially allows backwards compatibility with the old AO-Core
+%% dryrun functionality.
 post_compute(Msg1, Msg2, Opts) ->
+    % Ensure the process key is available - this contains process metadata
+    % like device configuration, scheduler info, etc.
     ProcBase = ensure_process_key(Msg1, Opts),
+    % Load the current process state from cache or initialize if needed.
+    % This gives us the most recent state to run the dryrun against.
     {ok, Loaded} = ensure_loaded(ProcBase, Msg2, Opts),
-    % Prepare the input message for dry-run computation
-    InputMsg =
-        case hb_path:from_message(request, Msg2, Opts) of
-            undefined -> Msg2#{ <<"path">> => <<"dryrun">> };
-            _ -> Msg2
-        end,
-    
-    % Unset the previous results from the state
+    % Clear any previous results from the state to ensure clean execution.
+    % This prevents old results from interfering with the dryrun.
     UnsetResults = hb_ao:set(Loaded, #{ <<"results">> => unset }, Opts),
-    
-    % Execute dry-run computation via delegated compute
-    run_as(<<"execution">>, UnsetResults, InputMsg, Opts).
-
+    % Execute dry-run computation via the execution device.
+    % This delegates to the configured execution device (typically genesis-wasm@1.0)
+    % which will handle the actual message processing in dryrun mode.
+    run_as(<<"execution">>, UnsetResults, Msg2, Opts).
 get_compute(Msg1, Msg2, Opts) ->
     % If we do not have a live state, restore or initialize one.
     ProcBase = ensure_process_key(Msg1, Opts),
@@ -217,7 +229,6 @@ get_compute(Msg1, Msg2, Opts) ->
                     ),
                     {ok, Result};
                 not_found ->
-                    io:format("======== SLOT ~p NOT FOUND, NOT IN CACHE ========= ~n", [Slot]),
                     {ok, Loaded} = ensure_loaded(ProcBase, Msg2, Opts),
                     ?event(compute,
                         {computing, {process_id, ProcID},
@@ -526,8 +537,12 @@ ensure_loaded(Msg1, Msg2, Opts) ->
 %% the device found at `Key'. After execution, the device is swapped back
 %% to the original device if the device is the same as we left it.
 run_as(Key, Msg1, Msg2, Opts) ->
+    % Store the original device so we can restore it after execution
     BaseDevice = hb_maps:get(<<"device">>, Msg1, not_found, Opts),
     ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
+    
+    % Prepare the message with the specialized device configuration.
+    % This sets up the device context for the specific operation type.
     PreparedMsg =
         hb_util:deep_merge(
             ensure_process_key(Msg1, Opts),
@@ -540,11 +555,13 @@ run_as(Key, Msg1, Msg2, Opts) ->
                             default_device(Msg1, Key, Opts),
                             Opts
                         ),
+                % Configure input prefix for proper message routing within the device
                 <<"input-prefix">> =>
                     case hb_maps:get(<<"input-prefix">>, Msg1, not_found, Opts) of
                         not_found -> <<"process">>;
                         Prefix -> Prefix
                     end,
+                % Configure output prefixes for result organization
                 <<"output-prefixes">> =>
                     hb_maps:get(
                         <<Key/binary, "-output-prefixes">>,
@@ -558,12 +575,15 @@ run_as(Key, Msg1, Msg2, Opts) ->
     ?event(debug_prefix,
         {input_prefix, hb_maps:get(<<"output-prefixes">>, PreparedMsg, not_found, Opts)
     }),
+    % Execute the message through the specialized device.
     {Status, BaseResult} =
         hb_ao:resolve(
             PreparedMsg,
             Msg2,
             Opts
         ),
+    % Restore the original device context after execution.
+    % This ensures the process maintains its identity after device delegation.
     case {Status, BaseResult} of
         {ok, #{ <<"device">> := DeviceSet }} ->
             {ok, hb_ao:set(BaseResult, #{ <<"device">> => BaseDevice }, Opts)};
