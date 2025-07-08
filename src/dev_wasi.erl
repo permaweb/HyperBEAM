@@ -48,7 +48,7 @@ init(M1, _M2, Opts) ->
             M1,
             #{
                 <<"wasm/stdlib/wasi_snapshot_preview1">> =>
-                    #{ <<"device">> => <<"WASI@1.0">>}
+                    #{ <<"device">> => <<"wasi@1.0">>}
             },
             Opts
         ),
@@ -233,7 +233,7 @@ generate_wasi_stack(File, Func, Params) ->
     Msg0 = dev_wasm:cache_wasm_image(File),
     Msg1 = Msg0#{
         <<"device">> => <<"stack@1.0">>,
-        <<"device-stack">> => [<<"WASI@1.0">>, <<"WASM-64@1.0">>],
+        <<"device-stack">> => [<<"wasi@1.0">>, <<"wasm-64@1.0">>],
         <<"output-prefixes">> => [<<"wasm">>, <<"wasm">>],
         <<"stack-keys">> => [<<"init">>, <<"compute">>],
         <<"function">> => Func,

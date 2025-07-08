@@ -627,7 +627,7 @@ test_wasm_process(WASMImage, Opts) ->
             hb_message:uncommitted(test_base_process(Opts), Opts),
             #{
                 <<"execution-device">> => <<"stack@1.0">>,
-                <<"device-stack">> => [<<"WASM-64@1.0">>],
+                <<"device-stack">> => [<<"wasm-64@1.0">>],
                 <<"image">> => WASMImageID
             },
 			Opts
@@ -641,10 +641,10 @@ test_aos_process() ->
     test_aos_process(#{}).
 test_aos_process(Opts) ->
     test_aos_process(Opts, [
-        <<"WASI@1.0">>,
-        <<"JSON-Iface@1.0">>,
-        <<"WASM-64@1.0">>,
-        <<"Multipass@1.0">>
+        <<"wasi@1.0">>,
+        <<"json-iface@1.0">>,
+        <<"wasm-64@1.0">>,
+        <<"multipass@1.0">>
     ]).
 test_aos_process(Opts, Stack) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
@@ -759,11 +759,11 @@ schedule_on_process_test_() ->
 			}, #{}),
 		?assertMatch(
 			<<"TEST TEXT 1">>,
-			hb_ao:get(<<"assignments/0/body/Test-Label">>, SchedulerRes)
+			hb_ao:get(<<"assignments/0/body/test-label">>, SchedulerRes)
 		),
 		?assertMatch(
 			<<"TEST TEXT 2">>,
-			hb_ao:get(<<"assignments/1/body/Test-Label">>, SchedulerRes)
+			hb_ao:get(<<"assignments/1/body/test-label">>, SchedulerRes)
 		)
 	end}.
 
@@ -922,14 +922,14 @@ aos_browsable_state_test_() ->
         init(),
         Msg1 = test_aos_process(),
         schedule_aos_call(Msg1,
-            <<"table.insert(ao.outbox.Messages, { Target = ao.id, ",
-                "Action = \"State\", ",
-                "Data = { Deep = 4, Bool = true } })">>
+            <<"table.insert(ao.outbox.Messages, { target = ao.id, ",
+                "action = \"State\", ",
+                "data = { deep = 4, bool = true } })">>
         ),
         Msg2 = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
         {ok, Msg3} =
             hb_ao:resolve_many(
-                [Msg1, Msg2, <<"results">>, <<"outbox">>, 1, <<"data">>, <<"Deep">>],
+                [Msg1, Msg2, <<"results">>, <<"outbox">>, 1, <<"data">>, <<"deep">>],
                 #{ cache_control => <<"always">> }
             ),
         ID = hb_message:id(Msg1),
@@ -960,8 +960,8 @@ aos_state_access_via_http_test_() ->
             <<"type">> => <<"Message">>,
             <<"action">> => <<"Eval">>,
             <<"data">> =>
-                <<"table.insert(ao.outbox.Messages, { Target = ao.id,",
-                    " Action = \"State\", Data = { ",
+                <<"table.insert(ao.outbox.Messages, { target = ao.id,",
+                    " action = \"State\", data = { ",
                         "[\"content-type\"] = \"text/html\", ",
                         "[\"body\"] = \"<h1>Hello, world!</h1>\"",
                     "}})">>,
@@ -1000,11 +1000,11 @@ aos_state_patch_test_() ->
         Wallet = hb:wallet(),
         init(),
         Msg1Raw = test_aos_process(#{}, [
-            <<"WASI@1.0">>,
-            <<"JSON-Iface@1.0">>,
-            <<"WASM-64@1.0">>,
+            <<"wasi@1.0">>,
+            <<"json-iface@1.0">>,
+            <<"wasm-64@1.0">>,
             <<"patch@1.0">>,
-            <<"Multipass@1.0">>
+            <<"multipass@1.0">>
         ]),
         {ok, Msg1} = hb_message:with_only_committed(Msg1Raw, #{}),
         ProcID = hb_message:id(Msg1, all),

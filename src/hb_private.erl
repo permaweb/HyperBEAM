@@ -71,7 +71,7 @@ set_priv(Msg, PrivMap) ->
 
 %% @doc Check if a key is private.
 is_private(Key) ->
-	try hb_ao:normalize_key(Key) of
+	try hb_util:bin(Key) of
 		<<"priv", _/binary>> -> true;
 		_ -> false
     catch _:_ -> false

@@ -678,7 +678,7 @@ device_exports_test(Opts) ->
         info =>
             fun() ->
                 #{
-                    exports => [test1, <<"Test2">>],
+                    exports => [test1, <<"test2">>],
                     handler =>
                         fun() ->
                             {ok, <<"Handler-Value">>}
@@ -686,14 +686,14 @@ device_exports_test(Opts) ->
                 }
             end
     },
-    Msg3 = #{ <<"device">> => Dev2, <<"Test1">> => <<"BAD1">>, <<"test3">> => <<"GOOD3">> },
+    Msg3 = #{ <<"device">> => Dev2, <<"test1">> => <<"BAD1">>, <<"test3">> => <<"GOOD3">> },
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test1">>, Msg3, Opts)),
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test2">>, Msg3, Opts)),
     ?assertEqual(<<"GOOD3">>, hb_ao:get(<<"test3">>, Msg3, Opts)),
     ?assertEqual(<<"GOOD4">>,
         hb_ao:get(
-            <<"Test4">>,
-            hb_ao:set(Msg3, <<"Test4">>, <<"GOOD4">>, Opts)
+            <<"test4">>,
+            hb_ao:set(Msg3, <<"test4">>, <<"GOOD4">>, Opts)
         )
     ),
     ?assertEqual(not_found, hb_ao:get(<<"test5">>, Msg3, Opts)).
@@ -719,7 +719,7 @@ device_excludes_test(Opts) ->
         hb_ao:set(Msg, <<"test-key2">>, <<"2">>, Opts)).
 
 denormalized_device_key_test(Opts) ->
-	Msg = #{ <<"Device">> => dev_test },
+	Msg = #{ <<"device">> => dev_test },
 	?assertEqual(dev_test, hb_ao:get(device, Msg, Opts)),
 	?assertEqual(dev_test, hb_ao:get(<<"device">>, Msg, Opts)),
 	?assertEqual({module, dev_test},

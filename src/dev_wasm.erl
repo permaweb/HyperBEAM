@@ -380,7 +380,7 @@ input_prefix_test() ->
     #{ <<"image">> := ImageID } = cache_wasm_image("test/test.wasm"),
     Msg1 =
         #{
-            <<"device">> => <<"WASM-64@1.0">>,
+            <<"device">> => <<"wasm-64@1.0">>,
             <<"input-prefix">> => <<"test-in">>,
             <<"test-in">> => #{ <<"image">> => ImageID }
         },
@@ -403,7 +403,7 @@ process_prefixes_test() ->
     init(),
     Msg1 =
         #{
-            <<"device">> => <<"WASM-64@1.0">>,
+            <<"device">> => <<"wasm-64@1.0">>,
             <<"output-prefix">> => <<"wasm">>,
             <<"input-prefix">> => <<"process">>,
             <<"process">> => cache_wasm_image("test/test.wasm")
@@ -457,7 +457,7 @@ imported_function_test() ->
             [2, 5],
             #{
                 <<"stdlib/my_lib">> =>
-                    #{ <<"device">> => <<"Test-Device@1.0">> }
+                    #{ <<"device">> => <<"test-device@1.0">> }
             }
         )
     ).
@@ -508,7 +508,7 @@ state_export_and_restore_test() ->
                 <<"stdlib">> =>
                     #{
                         <<"my_lib">> =>
-                            #{ <<"device">> => <<"Test-Device@1.0">> }
+                            #{ <<"device">> => <<"test-device@1.0">> }
                     }
             },
 			#{}
@@ -535,7 +535,7 @@ cache_wasm_image(Image, Opts) ->
     Msg = #{ <<"body">> => Bin },
     {ok, ID} = hb_cache:write(Msg, Opts),
     #{
-        <<"device">> => <<"WASM-64@1.0">>,
+        <<"device">> => <<"wasm-64@1.0">>,
         <<"image">> => ID
     }.
 

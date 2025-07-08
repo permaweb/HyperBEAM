@@ -9,7 +9,7 @@
 %%% A simple test device for AO-Core, so that we can test the functionality that
 %%% depends on using Erlang's module system.
 %%% 
-%%% NOTE: This device is labelled `Test-Device/1.0' to avoid conflicts with
+%%% NOTE: This device is labelled `test-device/1.0' to avoid conflicts with
 %%% other testing functionality -- care should equally be taken to avoid
 %%% using the `test' key in other settings.
 
@@ -191,7 +191,7 @@ delay(Msg1, Req, Opts) ->
 device_with_function_key_module_test() ->
 	Msg =
 		#{
-			<<"device">> => <<"Test-Device@1.0">>
+			<<"device">> => <<"test-device@1.0">>
 		},
 	?assertEqual(
 		{ok, <<"GOOD_FUNCTION">>},
@@ -199,7 +199,7 @@ device_with_function_key_module_test() ->
 	).
 
 compute_test() ->
-    Msg0 = #{ <<"device">> => <<"Test-Device@1.0">> },
+    Msg0 = #{ <<"device">> => <<"test-device@1.0">> },
     {ok, Msg1} = hb_ao:resolve(Msg0, init, #{}),
     Msg2 =
         hb_ao:set(
@@ -226,6 +226,6 @@ compute_test() ->
     ?assertEqual([2, 1], hb_ao:get(<<"already-seen">>, Msg5, #{})).
 
 restore_test() ->
-    Msg1 = #{ <<"device">> => <<"Test-Device@1.0">>, <<"already-seen">> => [1] },
+    Msg1 = #{ <<"device">> => <<"test-device@1.0">>, <<"already-seen">> => [1] },
     {ok, Msg3} = hb_ao:resolve(Msg1, <<"restore">>, #{}),
     ?assertEqual([1], hb_private:get(<<"test-key/started-state">>, Msg3, #{})).
