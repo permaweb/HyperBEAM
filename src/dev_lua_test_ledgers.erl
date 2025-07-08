@@ -674,6 +674,48 @@ subledger_to_subledger() ->
     ?assertEqual(1, balance(SubLedger2, Bob, Opts)),
     verify_net(RootLedger, [SubLedger1, SubLedger2], Opts).
 
+subledger_to_rootledger_test_() -> {timeout, 30, fun subledger_to_rootledger/0}.
+subledger_to_rootledger() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    RootLedger =
+        ledger(
+            <<"scripts/hyper-token.lua">>,
+            #{ <<"balance">> => #{ Alice => 100 } },
+            Opts
+        ),
+    SubLedger1 = subledger(RootLedger, Opts),
+    SubLedger2 = subledger(RootLedger, Opts),
+    Names = #{
+        Alice => alice,
+        Bob => bob,
+        RootLedger => root,
+        SubLedger1 => subledger1,
+        SubLedger2 => subledger2
+    },
+    % 1. Alice has tokens on the root ledger.
+    ?assertEqual(100, balance(RootLedger, Alice, Opts)),
+    % 2. Alice sends 90 tokens to herself on SubLedger1.
+    transfer(RootLedger, Alice, Alice, 90, SubLedger1, Opts),
+    % 3. Alice sends 50 tokens to Bob on SubLedger2.
+    transfer(SubLedger1, Alice, Bob, 50, SubLedger2, Opts),
+    ?event(testing, {map, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
+    ?assertEqual(10, balance(RootLedger, Alice, Opts)),
+    ?assertEqual(40, balance(SubLedger1, Alice, Opts)),
+    ?assertEqual(50, balance(SubLedger2, Bob, Opts)),
+    verify_net(RootLedger, [SubLedger1, SubLedger2], Opts),
+    % 4. Alice sends 15 tokens to Bob on RootLedger from SubLedger1.
+    transfer(SubLedger1, Alice, Bob, 15, RootLedger, Opts),
+    ?assertEqual(15, balance(RootLedger, Bob, Opts)),
+    ?assertEqual(25, balance(SubLedger1, Alice, Opts)),
+    % 4. Bob sends 15 tokens to Alice on RootLedger from SubLedger2.
+    transfer(SubLedger2, Bob, Alice, 15, RootLedger, Opts),
+    ?event(testing, {map, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
+    ?assertEqual(35, balance(SubLedger2, Bob, Opts)),
+    ?assertEqual(25, balance(RootLedger, Alice, Opts)),
+    verify_net(RootLedger, [SubLedger1, SubLedger2], Opts).
+
 %% @doc Verify that a ledger can send tokens to a peer ledger that is not
 %% registered with it yet. Each peer ledger must have precisely the same process
 %% base message, granting transitive security properties: If a peer trusts its
