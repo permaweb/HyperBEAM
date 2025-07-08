@@ -616,6 +616,8 @@ validate_peer_opts(Req, Opts) ->
     PeerOpts =
         hb_ao:normalize_keys(
             hb_ao:get(<<"node-message">>, Req, undefined, Opts)),
+    ?event(green_zone_init, {peer_opts, PeerOpts}),
+    ?event(green_zone_init, {required_config, RequiredConfig}),
     % Validate each item in node_history has required options
     Result = try
         case hb_opts:ensure_node_history(PeerOpts, RequiredConfig) of
