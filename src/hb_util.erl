@@ -26,6 +26,7 @@
 -export([unique/1]).
 -export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -export([all_atoms/0, binary_is_atom/1]).
+-export([lower_case_key_map/2]).
 -include("include/hb.hrl").
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
@@ -1019,3 +1020,11 @@ atom_from_int(Int) ->
 %% @doc Check if a given binary is already an atom.
 binary_is_atom(X) ->
     lists:member(X, lists:map(fun hb_util:bin/1, all_atoms())).
+
+lower_case_key_map(Map, Opts) ->
+    hb_maps:fold(fun
+        (K, V, Acc) when is_map(V) ->
+            maps:put(hb_util:to_lower(K), lower_case_key_map(V, Opts), Acc);
+        (K, V, Acc) ->
+            maps:put(hb_util:to_lower(K), V, Acc)
+    end, #{}, Map, Opts).

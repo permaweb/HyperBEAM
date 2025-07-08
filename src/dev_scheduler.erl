@@ -1583,7 +1583,7 @@ test_process(#{ priv_wallet := Wallet})  ->
 test_process(Address) ->
     #{
         <<"device">> => <<"scheduler@1.0">>,
-        <<"device-stack">> => [<<"Cron@1.0">>, <<"WASM-64@1.0">>, <<"PODA@1.0">>],
+        <<"device-stack">> => [<<"cron@1.0">>, <<"wasm-64@1.0">>, <<"poda@1.0">>],
         <<"image">> => <<"wasm-image-id">>,
         <<"type">> => <<"Process">>,
         <<"scheduler-location">> => Address,

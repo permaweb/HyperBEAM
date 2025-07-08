@@ -30,7 +30,7 @@ handle(_Key, M1, _M2, Opts) ->
 basic_multipass_test() ->
     Msg1 =
         #{
-            <<"device">> => <<"Multipass@1.0">>,
+            <<"device">> => <<"multipass@1.0">>,
             <<"passes">> => 2,
             <<"pass">> => 1
         },
