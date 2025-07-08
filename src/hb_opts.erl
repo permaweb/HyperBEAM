@@ -570,6 +570,8 @@ ensure_node_history(Opts, RequiredOpts) ->
         % Get the first item (complete opts) and remaining items (differences)
         [FirstItem | RemainingItems] = NormalizedNodeHistory,
         % Step 2: Validate first item values match requirements
+        ?event(validate_history_items, {normalized_required_opts, RequiredOpts}),
+        ?event(validate_history_items, {first_item, FirstItem}),
         FirstItemValuesMatch = hb_message:match(NormalizedRequiredOpts, FirstItem, primary),
         true ?= (FirstItemValuesMatch == true) orelse {error, values_invalid},
         % Step 3: Check that remaining items don't modify required keys
