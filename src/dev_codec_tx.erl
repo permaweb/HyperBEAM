@@ -21,21 +21,6 @@
     ]
 ).
 
-%%% The list of keys that should be forced into the tag list, rather than being
-%%% encoded as fields in the TX record.
--define(BASE_INVALID_FIELDS,
-    [
-        <<"id">>,
-        <<"unsigned_id">>,
-        <<"owner">>,
-        <<"owner_address">>,
-        <<"tags">>,
-        <<"data_tree">>,
-        <<"signature">>,
-        <<"signature_type">>
-    ]
-).
-
 %% Default #tx format to use if no format is provided. Limited to formats that are valid
 %% for Arweave L1 transcations (1 and 2 as of June 2025)
 -define(DEFAULT_FORMAT, 2).
@@ -111,7 +96,7 @@ make_expected_tabm(TX, TestOpts, ExpectedFields) ->
                 <<"committed">> => hb_ao:normalize_keys(
                     hb_util:unique(
                         committed_tags(TX)
-                            ++ [ hb_ao:normalize_key(Tag) || {Tag, _} <- TX#tx.tags ]
+                            ++ [hb_util:to_lower(hb_ao:normalize_key(Tag)) || {Tag, _} <- TX#tx.tags ]
                             ++ hb_util:to_sorted_keys(ExpectedFields)
                     )
                 ),
@@ -177,11 +162,13 @@ test_from_happy() ->
     NonDefaultTX = BaseTX#tx{
         last_tx = crypto:strong_rand_bytes(32),
         target = crypto:strong_rand_bytes(32),
-        quantity = ?AR(5),
         data = <<"test-data">>,
         data_size = byte_size(<<"test-data">>),
         data_root = ar_tx:data_root(<<"test-data">>),
-        reward = ?AR(10)
+        tags = [
+            {<<"quantity">>, integer_to_binary(?AR(5))},
+            {<<"reward">>, integer_to_binary(?AR(10))}
+        ]
     },
 
     TestCases = [
@@ -194,12 +181,11 @@ test_from_happy() ->
             NonDefaultTX,
             #{ include_original_tags => false },
             #{
-                <<"ao-types">> => <<"quantity=\"integer\", reward=\"integer\"">>,
                 <<"last_tx">> => NonDefaultTX#tx.last_tx,
                 <<"target">> => NonDefaultTX#tx.target,
-                <<"quantity">> => integer_to_binary(NonDefaultTX#tx.quantity),
+                <<"quantity">> => integer_to_binary(?AR(5)),
                 <<"data">> => NonDefaultTX#tx.data,
-                <<"reward">> => integer_to_binary(NonDefaultTX#tx.reward)
+                <<"reward">> => integer_to_binary(?AR(10))
             }
         },
         {single_tag,

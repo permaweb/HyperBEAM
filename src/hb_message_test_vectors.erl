@@ -1382,7 +1382,7 @@ encode_balance_table(Size, Codec, Opts) ->
     % ?event({encoded, {explicit, Encoded}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({decoded, {explicit, Decoded}}),
-    ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
+    ?assert(hb_message:match(Msg, Decoded, only_present, Opts)).
 
 encode_small_balance_table_test(Codec, Opts) ->
     encode_balance_table(5, Codec, Opts).

@@ -17,7 +17,6 @@
     ]
 ).
 
-
 %% The list of tags that a user is explicitly committing to when they sign an
 %% ANS-104 message.
 -define(BASE_COMMITTED_TAGS, ?TX_KEYS ++ [<<"data">>]).
@@ -405,3 +404,14 @@ do_signed_roundtrip(UnsignedStructured, UnsignedTX) ->
     ?assert(hb_message:match(TABM0, UnsignedTABM0)),
     ?assertEqual(SignedTX, DataItem),
     ok.
+
+codec_insensitive_get_test() ->
+    TX = ar_bundles:sign_item(
+        #tx {
+            tags = [{<<"Hello">>, <<"World">>}]
+        },
+        ar_wallet:new()
+    ),
+    Structured = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ?assertEqual(hb_ao:get(<<"Hello">>, Structured, #{}), <<"World">>),
+    ?assertEqual(hb_ao:get(<<"hello">>, Structured, #{}), <<"World">>).

@@ -54,7 +54,8 @@ aos2_message_lookup_test() ->
             #{ <<"target">> => ID, <<"accept">> => <<"application/aos-2">> },
             #{}
         ),
-    Decoded = hb_json:decode(hb_ao:get(<<"body">>, RetrievedMsg, #{})),
+    
+    {ok, Decoded} = dev_json_iface:json_to_message(hb_ao:get(<<"body">>, RetrievedMsg, #{}), #{}),
     ?assertEqual(<<"test-data">>, hb_ao:get(<<"data">>, Decoded, #{})).
 
 http_lookup_test() ->
@@ -73,5 +74,5 @@ http_lookup_test() ->
         <<"accept">> => <<"application/aos-2">>
     }, Wallet),
     {ok, Res} = hb_http:post(Node, Req, Opts),
-    Decoded = hb_json:decode(hb_ao:get(<<"body">>, Res, Opts)),
-    ?assertEqual(<<"test-data">>, hb_ao:get(<<"data">>, Decoded, Opts)).
+    {ok, Decoded} = dev_json_iface:json_to_message(hb_ao:get(<<"body">>, Res, Opts), Opts),
+    ?assertEqual(<<"test-data">>, hb_ao:get(<<"Data">>, Decoded, Opts)).
