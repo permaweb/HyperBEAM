@@ -589,7 +589,10 @@ find_env(Opts) -> hb_store:find(Opts).
 %% Shutdown LMDB environment and cleanup resources
 stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir }) ->
     StoreKey = {lmdb, ?MODULE, DataDir},
-    close_environment(StoreKey, DataDir);
+    close_environment(StoreKey, DataDir),
+    % Wait 3 seconds to ensure the environment is closed
+    timer:sleep(5000),
+    ok;
 stop(_InvalidStoreOpts) ->
     ok.
 
