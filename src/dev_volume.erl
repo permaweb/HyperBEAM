@@ -489,6 +489,7 @@ mount_formatted_partition(
                     {result, RetryMountResult}
                 }
             ),
+            %% TODO: Stop the LMDB store ( STOP DOING IN `hb_volume:change_node_store` )
             update_store_path(StorePath, Opts);
         {error, RetryMountError} ->
             ?event(debug_volume, 
@@ -566,6 +567,7 @@ update_node_config(StorePath, NewStore, Opts) ->
                 genesis_wasm_db_dir => FullGenesisPath
             }
         ),
+    %% TODO: Start the LMDB store ( STOP DOING IN `hb_volume:change_node_store` )
     ?event(debug_volume, 
         {update_node_config, config_updated, success}
     ),
