@@ -439,17 +439,19 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
             {ok, Report} = dev_snp:generate(#{}, #{}, InitOpts),
             WalletPub = element(2, Wallet),
             ?event(green_zone, {remove_uncommitted, Report}),
-            MergedReq = hb_ao:set(
+            MergedReq = hb_ao:set( % Maybe this is the problem?
                 Report, 
                 <<"public_key">>,
                 base64:encode(term_to_binary(WalletPub)),
                 InitOpts
             ),
+            ?event(debug_validate, {merged_req0004, {explicit, MergedReq}}),
             % Create an committed join request using the wallet.
             Req = hb_cache:ensure_all_loaded(
-                hb_message:commit(MergedReq, Wallet),
+                hb_message:commit(MergedReq, Wallet),  % Maybe this is the problem?
                 InitOpts
             ),
+            ?event(debug_validate, {req0005, {explicit, Req}}),
             ?event({join_req, {explicit, Req}}),
             ?event({verify_res, hb_message:verify(Req)}),
             % Log that the commitment report is being sent to the peer.

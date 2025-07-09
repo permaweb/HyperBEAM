@@ -128,7 +128,10 @@ generate(_M1, _M2, Opts) ->
             end,
         % Generate address and node message components
         Address = hb_util:human_id(ar_wallet:to_address(ValidWallet)),
+        ?event(debug_validate, {opts0001, {explicit, Opts}}),
+        ?event(debug_validate, {loaded_opts0002, {explicit, LoadedOpts}}),
         NodeMsg = hb_private:reset(LoadedOpts),
+        ?event(debug_validate, {node_msg0003, {explicit, NodeMsg}}),
         {ok, PublicNodeMsgID} ?= dev_message:id(
             NodeMsg,
             #{ <<"committers">> => <<"none">> },
@@ -168,9 +171,10 @@ generate(_M1, _M2, Opts) ->
             <<"local-hashes">> => ValidLocalHashes,
             <<"nonce">> => hb_util:encode(ReportData),
             <<"address">> => Address,
-            <<"node-message">> => NodeMsg,
+            <<"node-message">> => NodeMsg, % Maybe normalize this?
             <<"report">> => ReportJSON
         },
+        ?event(debug_validate, {report_msg00032, {explicit, ReportMsg}}),
         ?event({snp_report_msg, ReportMsg}),
         {ok, ReportMsg}
     else
