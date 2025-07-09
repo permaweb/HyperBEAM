@@ -456,6 +456,7 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
             ?event(green_zone, {join, sending_commitment, PeerLocation, PeerID, Req}),
             ?event(green_zone_init, {init_opts, InitOpts}),
             ?event(green_zone_init, {req, Req}),
+            ?event(debug_validate, {peer_opts, {explicit, InitOpts}}),
             case hb_http:post(PeerLocation, <<"/~greenzone@1.0/join">>, Req, InitOpts) of
                 {ok, Resp} ->
                     % Log the response received from the peer.
@@ -617,7 +618,6 @@ validate_peer_opts(Req, Opts) ->
     PeerOpts =
         hb_ao:normalize_keys(
             hb_ao:get(<<"node-message">>, Req, undefined, Opts)),
-    ?event(debug_validate, {peer_opts, {explicit, PeerOpts}}),
     ?event(green_zone_init, {peer_opts, PeerOpts}),
     ?event(green_zone_init, {required_config, RequiredConfig}),
     % Validate each item in node_history has required options
