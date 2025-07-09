@@ -616,7 +616,14 @@ validate_peer_opts(Req, Opts) ->
     RequiredConfig =
         hb_ao:normalize_keys(
             hb_opts:get(green_zone_required_opts, #{}, Opts)),
-    ?event(green_zone, {validate_peer_opts, required_config, RequiredConfig}),
+    ConvertedRequiredConfig = 
+        hb_message:uncommitted(
+            hb_cache:ensure_all_loaded(
+                hb_message:commit(RequiredConfig, Opts),
+                Opts
+            )
+        ),
+    ?event(green_zone, {validate_peer_opts, required_config, ConvertedRequiredConfig}),
     PeerOpts =
         hb_ao:normalize_keys(
             hb_ao:get(<<"node-message">>, Req, undefined, Opts)),
@@ -625,7 +632,7 @@ validate_peer_opts(Req, Opts) ->
     ?event(green_zone_init, {required_config, RequiredConfig}),
     % Validate each item in node_history has required options
     Result = try
-        case hb_opts:ensure_node_history(PeerOpts, RequiredConfig) of
+        case hb_opts:ensure_node_history(PeerOpts, ConvertedRequiredConfig) of
             {ok, _} -> 
                 ?event(green_zone, {validate_peer_opts, history_items_check, valid}),
                 true;
@@ -789,7 +796,8 @@ rsa_wallet_integration_test() ->
 
 %% hb_opts:get vs maps:get vs hb_maps:get test
 get_test() ->
-    Opts = #{
+    application:ensure_all_started(hb),
+    Data = #{
         <<"node-message">> => #{
             routes => [
                 #{
@@ -824,10 +832,20 @@ get_test() ->
             ]
         }
     },
-    NormalizedOpts = hb_ao:normalize_keys(
-        hb_ao:get(<<"node-message">>, Opts, undefined, Opts)
+    Opts = hb_http_server:get_opts(#{ 
+        http_server => hb_util:human_id(ar_wallet:to_address(hb:wallet()))
+    }),
+    NewOpts = Opts#{priv_wallet => hb:wallet()},
+    ConvertedOpts = hb_message:uncommitted(
+        hb_cache:ensure_all_loaded(
+            hb_message:commit(Data, Opts),
+            Opts
+        )
     ),
-    ?event(get_test, {normalized_opts, {explicit, NormalizedOpts}}),
+    % ?event(get_test, {node_msg, {explicit, NodeMsg}}),
+    % ?event(get_test, {commited_req, {explicit, CommitedReq}}),
+    % ?event(get_test, {ensured_req, {explicit, EnsuredReq}}),
+    ?event(get_test, {normalized_opts, {explicit, ConvertedOpts}}),
     % MapGet = maps:get(routes, Opts),
     % ?event(get_test, {map_get, {explicit, MapGet}}),
     % HbOptsGet = hb_opts:get(<<"routes">>, Opts),
