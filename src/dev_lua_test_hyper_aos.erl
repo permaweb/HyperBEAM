@@ -110,7 +110,7 @@ hyper_aos_json_test() ->
     {ok, Json} = file:read_file("scripts/aos-json.lua"),
     Code = <<
 """
-local json = require('json')
+local json = require('.json')
 
 function compute(base, req)
   local data = { hello = [[World]]}
@@ -128,7 +128,7 @@ end
     {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
     ?assertEqual(<<"true">>, Result).
 
-%% @doc Test the hyper-aos handlers utils module.
+%% @doc Test the hyper-aos handlers utils module matchesPattern function
 hyper_aos_handlers_utils_has_matching_tag_test() ->
     Code = <<
 """
@@ -1595,7 +1595,261 @@ end
         <<"function">>
     ], Result).
 
-%%% Test helpers
+
+% Test for aos-process.lua
+hyper_aos_process_test() ->
+    Code = <<
+"""
+local process  = require('.process')
+local state    = require('.state')
+local json     = require('.json')
+
+local function make_req(action, data)
+  return {
+    ['block-timestamp'] = 0,
+    body = {
+      ['Content-Type'] = 'application/json',
+      action           = action,
+      data             = json.encode(data)
+    },
+    Tags = {}
+  }
+end
+
+local base_ctx = {
+  process = {
+    authority   = 'owner',
+    commitments = { key1 = { alg = 'rsa-pss-sha512', committer = 'owner' } }
+  }
+}
+
+-- run process.handle in both untrusted and trusted branches
+state.isTrusted = function(_) return false end
+local untrusted = process.handle(make_req('Eval', '1+1'), base_ctx)
+
+state.isTrusted = function(_) return true end
+_G.Owner = 'owner'
+local trusted   = process.handle(make_req('Ping', 'hello'), base_ctx)
+
+function compute(base, _req)
+  base.results = {
+    tostring(Prompt()),                   
+    tostring(process._version),           
+    tostring(untrusted.Output.data),      
+    tostring(trusted.Output.prompt),      
+    tostring(type(trusted.Output.data)),  
+    tostring(#trusted.Messages),          
+    tostring(#trusted.Spawns),            
+    tostring(type(trusted.Assignments)),  
+    tostring(trusted.Outbox == nil),      
+    tostring(type(untrusted.Output) == 'table'),
+    tostring(type(trusted.Output) == 'table') 
+  }
+  return base
+end
+"""
+    >>,
+    {ok, Process, Opts} =generate_hyper_aos_modular_process_to_test_main_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual(
+        [
+            <<"aos> ">>,                      
+            <<"2.0.7">>,                      
+            <<"Message is not trusted.">>,    
+            <<"aos> ">>,                      
+            <<"string">>,                     
+            <<"0">>, <<"0">>,                 
+            <<"table">>,                      
+            <<"true">>, 
+            <<"true">>, 
+            <<"true">>
+        ],
+        Result
+    ).
+
+
+%% aos-process: trusted Eval success
+hyper_aos_process_eval_success_test() ->
+    Code = <<
+"""
+local process = require('.process')
+local state   = require('.state')
+
+local function make_req(code)
+  return {
+    ['block-timestamp'] = 0,
+    body = {
+      ['Content-Type'] = 'text/plain',
+      action           = 'Eval',
+      data             = code,
+      commitments      = { key1 = { alg = 'rsa-pss-sha512', committer = 'owner' } }
+    },
+    Tags = {}
+  }
+end
+
+local base_ctx = {
+  process = {
+    authority   = 'owner',
+    commitments = { key1 = { alg = 'rsa-pss-sha512', committer = 'owner' } }
+  }
+}
+
+state.isTrusted = function(_) return true end
+_G.Owner = 'owner'
+local res = process.handle(make_req('return 2+2'), base_ctx)
+
+function compute(base, _req)
+  local str = tostring(res.Output.data)
+  base.results = { str }
+  return base
+end
+""" >>,
+    {ok, Process, Opts} = generate_hyper_aos_modular_process_to_test_main_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?event(aos_process_eval_success_test_result, Result),
+    ?assertEqual([<<"4">>], Result).
+
+%% aos-process: Eval error path returns Error
+hyper_aos_process_eval_error_test() ->
+    Code = <<
+"""
+local process = require('.process')
+local state   = require('.state')
+
+local function make_req(code)
+  return {
+    ['block-timestamp'] = 0,
+    body = {
+      ['Content-Type'] = 'text/plain',
+      action           = 'Eval',
+      data             = code,
+      commitments      = { key1 = { alg = 'rsa-pss-sha512', committer = 'owner' } }
+    },
+    Tags = {}
+  }
+end
+
+local base_ctx = {
+  process = {
+    authority   = 'owner',
+    commitments = { key1 = { alg = 'rsa-pss-sha512', committer = 'owner' } }
+  }
+}
+
+state.isTrusted = function(_) return true end
+_G.Owner = 'owner'
+local res = process.handle(make_req('return invalid+'), base_ctx)
+
+function compute(base, _req)
+  base.results = { tostring(res.Error ~= nil) }
+  return base
+end
+""" >>,
+    {ok, Process, Opts} = generate_hyper_aos_modular_process_to_test_main_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"true">>], Result).
+
+
+%% aos-string-ext.lua unit-test
+hyper_aos_string_ext_gmatch_test() ->
+    Code = <<
+"""
+local string_ext = require('.string-ext')
+function compute(base, req)
+    local s = "a,b,c"
+    local t = {}
+    for m in string.gmatch(s, "[^,]+") do
+        table.insert(t, m)
+    end
+    base.results = {
+        tostring(#t), -- 3 
+        tostring(t[1]), -- a
+        tostring(t[2]), -- b
+        tostring(t[3]) -- c
+    }
+    return base
+end
+""" >>,
+    {ok, Process, Opts} = generate_hyper_aos_modular_string_ext_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    %?event(aos_string_ext_gmatch_test_result, Result),
+    ?assertEqual([<<"3">>, <<"a">>, <<"b">>, <<"c">>], Result).
+
+hyper_aos_string_ext_captures_test() ->
+    Code = <<
+"""
+local string_ext = require('.string-ext')
+function compute(base, req)
+    local out = {}
+    for user, domain in string.gmatch(
+        "user.name+tag@example-domain.org",
+        "([^@]+)@([^@]+)"
+    ) do
+        table.insert(out, user)
+        table.insert(out, domain)
+    end
+    base.results = {
+        tostring(out[1]),
+        tostring(out[2])
+    }
+    return base
+end
+""" >>,
+    {ok, Process, Opts} = generate_hyper_aos_modular_string_ext_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    %?event(aos_string_ext_captures_test_result, Result),
+    ?assertEqual([
+        <<"user.name+tag">>, 
+        <<"example-domain.org">>
+    ], Result).
+
+%% aos-state: insertInbox & reset test
+hyper_aos_state_insert_reset_test() ->
+    Code = <<
+"""
+local state = require('.state')
+function compute(base, _req)
+    Inbox = {}
+    state.insertInbox({id=1})
+    state.insertInbox({id=2})
+    state.insertInbox({id=3})
+    local count_before = #Inbox
+    Inbox = state.reset(Inbox)
+    local count_after = #Inbox
+    base.results = { tostring(count_before), tostring(count_after) }
+    return base
+end
+""" >>,
+    {ok, Process, Opts} = generate_hyper_aos_modular_state_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"3">>, <<"0">>], Result).
+
+%% aos-state: getFrom & isTrusted test
+hyper_aos_state_getfrom_trusted_test() ->
+    Code = <<
+"""
+local state = require('.state')
+local aos   = require('.ao')
+function compute(base, _req)
+    aos.authorities = { 'alice' }
+    local req = {
+        body = {
+            ['from-process'] = 'alice',
+            commitments = {}
+        }
+    }
+    local from    = state.getFrom(req)
+    local trusted = state.isTrusted(req)
+    base.results = { tostring(from), tostring(trusted) }
+    return base
+end
+""" >>,
+    {ok, Process, Opts} = generate_hyper_aos_modular_state_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"alice">>, <<"true">>], Result).
+    
+% Test helpers
 %% @doc Generate a Lua process message.
 generate_lua_process(File, Opts) ->
     NormOpts = Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) },
@@ -1794,7 +2048,48 @@ generate_hyper_aos_modular_assignment_process(Code) ->
     hb_cache:write(Process, Opts),
     hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
     {ok, Process, Opts}.
-    
+
+%% Utilize aos-process.lua to generate a process that can be used to test the main process
+generate_hyper_aos_modular_process_to_test_main_process(Code) ->
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, StringExtJson} = file:read_file("scripts/aos-string-ext.lua"),
+    {ok, JsonJson} = file:read_file("scripts/aos-json.lua"),
+    {ok, StringifyJson} = file:read_file("scripts/aos-stringify.lua"),
+    {ok, EvalJson} = file:read_file("scripts/aos-eval.lua"),
+    {ok, AssignmentJson} = file:read_file("scripts/aos-assignment.lua"),
+    {ok, StateJson} = file:read_file("scripts/aos-state.lua"),
+    {ok, DumpJson} = file:read_file("scripts/aos-dump.lua"),
+    {ok, DefaultJson} = file:read_file("scripts/aos-default.lua"),
+    {ok, UtilsJson} = file:read_file("scripts/aos-utils.lua"),
+    {ok, HandlersUtilsJson} = file:read_file("scripts/aos-handlers-utils.lua"),
+    {ok, HandlersJson} = file:read_file("scripts/aos-handlers.lua"),
+    {ok, ProcessJson} = file:read_file("scripts/aos-process.lua"),
+    {ok, AoJson} = file:read_file("scripts/aos-ao.lua"),
+    Process = generate_hyper_aos_modular_process(
+        [
+            JsonJson,          % .json     – foundation
+            UtilsJson,         % .utils    – foundation
+            HandlersUtilsJson, % .handlers-utils (needs .utils)
+            HandlersJson,      % .handlers (needs .utils + .handlers-utils)
+            AoJson,            % .ao       (needs .utils + .handlers)
+            StringExtJson,     % .string-ext (optional utility)
+            StringifyJson,     % .stringify (needs .utils)
+            DumpJson,          % .dump
+            DefaultJson,       % .default  (needs .json)
+            EvalJson,          % .eval     (needs .stringify + .json)
+            StateJson,         % .state    (needs .utils + .stringify + .ao)
+            AssignmentJson,    % .assignment (needs .utils)
+            ProcessJson,       % .process  (needs .ao + many of the above)
+            Code               % test code
+        ],
+        Wallet
+    ),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Process, Opts}.
+
 find_key_with_type_rsa_pss_sha512(Map) when is_map(Map) ->
     lists:foldl(
         fun({Key, #{<<"type">> := <<"rsa-pss-sha512">>}}, Acc) when Acc =:= undefined ->
@@ -1805,3 +2100,184 @@ find_key_with_type_rsa_pss_sha512(Map) when is_map(Map) ->
         undefined,
         maps:to_list(Map)
     ).
+
+
+%% aos-string-ext process
+generate_hyper_aos_modular_string_ext_process(Code) ->
+    Wallet = hb:wallet(),
+    Opts   = #{ priv_wallet => Wallet },
+    {ok, StringExtJson} = file:read_file("scripts/aos-string-ext.lua"),
+    Process = generate_hyper_aos_modular_process([
+        StringExtJson,
+        Code
+    ], Wallet),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Process, Opts}.
+
+
+%% aos-state process
+generate_hyper_aos_modular_state_process(Code) ->
+    Wallet = hb:wallet(),
+    Opts   = #{ priv_wallet => Wallet },
+    {ok, JsonJson}        = file:read_file("scripts/aos-json.lua"),
+    {ok, UtilsJson}       = file:read_file("scripts/aos-utils.lua"),
+    {ok, StringifyJson}   = file:read_file("scripts/aos-stringify.lua"),
+    {ok, HandlersUtils}   = file:read_file("scripts/aos-handlers-utils.lua"),
+    {ok, HandlersJson}    = file:read_file("scripts/aos-handlers.lua"),
+    {ok, AoJson}          = file:read_file("scripts/aos-ao.lua"),
+    {ok, StateJson}       = file:read_file("scripts/aos-state.lua"),
+    Process = generate_hyper_aos_modular_process([
+        JsonJson,
+        UtilsJson,
+        StringifyJson,
+        HandlersUtils,
+        HandlersJson,
+        AoJson,
+        StateJson,
+        Code
+    ], Wallet),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Process, Opts}.
+
+%% aos-boot process generator
+generate_hyper_aos_modular_boot_process(Code) ->
+    Wallet = hb:wallet(),
+    Opts = #{ priv_wallet => Wallet },
+    {ok, JsonJson}        = file:read_file("scripts/aos-json.lua"),
+    {ok, UtilsJson}       = file:read_file("scripts/aos-utils.lua"),
+    {ok, StringifyJson}   = file:read_file("scripts/aos-stringify.lua"),
+    {ok, HandlersUtils}   = file:read_file("scripts/aos-handlers-utils.lua"),
+    {ok, HandlersJson}    = file:read_file("scripts/aos-handlers.lua"),
+    {ok, AoJson}          = file:read_file("scripts/aos-ao.lua"),
+    {ok, EvalJson}        = file:read_file("scripts/aos-eval.lua"),
+    {ok, BootJson}        = file:read_file("scripts/aos-boot.lua"),
+    Process = generate_hyper_aos_modular_process([
+        JsonJson,
+        UtilsJson,
+        StringifyJson,
+        HandlersUtils,
+        HandlersJson,
+        AoJson,
+        EvalJson,
+        BootJson,
+        Code
+    ], Wallet),
+    Message = generate_test_message(Process, Opts, <<"">>),
+    hb_cache:write(Process, Opts),
+    hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Process, Opts}.
+
+%% -------------------------------------------------------------------
+%% aos-boot: No On-Boot tag
+%% -------------------------------------------------------------------
+hyper_aos_boot_no_onboot_test() ->
+    Code = <<
+"""
+package.loaded['.eval'] = function(_)
+  return function(arg)
+    eval_calls = (eval_calls or 0) + 1
+    last_arg = arg
+  end
+end
+
+Inbox = {}
+eval_calls = 0
+last_arg = nil
+
+local boot = require('.boot')
+local aos  = require('.ao')
+local handler = boot(aos)
+
+function compute(base, _req)
+  local msg = { Tags = {} }
+  handler(msg)
+  base.results = { tostring(#Inbox), tostring(eval_calls) }
+  return base
+end
+""" >>,
+    {ok, Process, Opts} = generate_hyper_aos_modular_boot_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"1">>, <<"0">>], Result).
+
+%% -------------------------------------------------------------------
+%% aos-boot: On-Boot == 'Data'
+%% -------------------------------------------------------------------
+hyper_aos_boot_onboot_data_test() ->
+    Code = <<
+"""
+package.loaded['.eval'] = function(_)
+  return function(arg)
+    eval_calls = (eval_calls or 0) + 1
+    last_arg = arg
+  end
+end
+
+Inbox = {}
+eval_calls = 0
+last_arg = nil
+
+local boot = require('.boot')
+local aos  = require('.ao')
+local handler = boot(aos)
+
+function compute(base, _req)
+  local msg = {
+    Tags = { ['On-Boot'] = 'Data' },
+    Data = 'return 2+2'
+  }
+  handler(msg)
+  base.results = { tostring(eval_calls), tostring(last_arg.Data) }
+  return base
+end
+""" >>,
+    {ok, Process, Opts} = generate_hyper_aos_modular_boot_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"1">>, <<"return 2+2">>], Result).
+
+%% -------------------------------------------------------------------
+%% aos-boot: On-Boot == txid path
+%% -------------------------------------------------------------------
+hyper_aos_boot_onboot_txid_test() ->
+    Code = <<
+"""
+package.loaded['.eval'] = function(_)
+  return function(arg)
+    eval_calls = (eval_calls or 0) + 1
+    last_arg = arg
+  end
+end
+
+-- stub io.open to return our fake file content
+ios_open_orig = io.open
+io.open = function(_path)
+  return {
+    seek = function(_, _) return 0 end,
+    read = function(_, _) return 'return 6*7' end,
+    close = function() end
+  }
+end
+
+Inbox = {}
+eval_calls = 0
+last_arg = nil
+
+local boot = require('.boot')
+local aos  = require('.ao')
+local handler = boot(aos)
+
+function compute(base, _req)
+  local msg = {
+    Tags = { ['On-Boot'] = 'ABC' }
+  }
+  handler(msg)
+  base.results = { tostring(eval_calls), tostring(last_arg.Data) }
+  return base
+end
+""" >>,
+    {ok, Process, Opts} = generate_hyper_aos_modular_boot_process(Code),
+    {ok, Result} = hb_ao:resolve(Process, <<"now/results">>, Opts),
+    ?assertEqual([<<"1">>, <<"return 6*7">>], Result).

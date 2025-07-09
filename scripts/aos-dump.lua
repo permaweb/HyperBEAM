@@ -294,4 +294,4 @@ local function dump(val, indent, padding, filter, udata)
     return strformat('%q', tostring(v))
 end
 
-return dump
+_G.package.loaded['.dump'] = dump
