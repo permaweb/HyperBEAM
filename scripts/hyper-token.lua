@@ -95,10 +95,11 @@ local function normalize_int(value)
             return nil
         end
         -- Convert to number
-        num = tonumber(value)
-        if not num then
+        float = tonumber(value)
+        if not float then
             return nil
         end
+        num = math.floor(float)
     elseif type(value) == "number" then
         num = value
         -- Check if it's an integer
