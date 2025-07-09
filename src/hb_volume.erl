@@ -648,14 +648,7 @@ update_store_config(
             ?event(debug_volume, {fs, StoreConfig, NewPath, NewName}),
             StoreConfig#{<<"name">> => NewName};
         hb_store_lmdb ->
-            ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
-            NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
-            ?event(debug_volume, {migrate_start, ExistingPath, NewName}),
-            safe_stop_lmdb_store(StoreConfig),
-            ?event(debug_volume, {using_existing_store, NewName}),
-            FinalConfig = StoreConfig#{<<"name">> => NewName},
-            safe_start_lmdb_store(FinalConfig),
-            FinalConfig;
+            update_lmdb_store_config(StoreConfig, NewPath);
         hb_store_rocksdb ->
             StoreConfig;
         hb_store_gateway ->
@@ -718,6 +711,175 @@ check_for_device(Device) ->
         }
     ),
     DeviceExists.
+
+%% Handle LMDB store migration to new encrypted mount location
+update_lmdb_store_config(StoreConfig, NewPath) ->
+    ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
+    NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
+    ?event(debug_volume, {migrate_start, ExistingPath, NewName}),
+    safe_stop_lmdb_store(StoreConfig),
+    FinalConfig = handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath),
+    safe_start_lmdb_store(FinalConfig),
+    FinalConfig.
+
+%% Handle migration destination logic
+handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath) ->
+    Cwd = list_to_binary(element(2, file:get_cwd())),
+    CurrentWallet = <<Cwd/binary, "/hyperbeam-key.json">>,
+    CachedWallet = <<NewPath/binary, "/hyperbeam-key.json">>,
+    case check_lmdb_exists(NewName) of
+        true ->
+            ?event(debug_volume, {using_existing_store, NewName}),
+            Result = use_existing_lmdb_store(StoreConfig, NewName),
+            ?event(debug_volume, {use_existing_store_result, Result}),
+            file:copy(CachedWallet, CurrentWallet),
+            Result;
+        false ->
+            ?event(debug_volume, {copying_store, ExistingPath, NewName}),
+            Result = copy_lmdb_store_data(StoreConfig, ExistingPath, NewName),
+            ?event(debug_volume, {copy_result, Result}),
+            file:copy(CurrentWallet, CachedWallet),
+            Result
+    end.
+
+%% Use existing LMDB store at new location
+use_existing_lmdb_store(StoreConfig, NewName) ->
+    ?event(debug_volume, {using_existing_store, NewName}),
+    StoreConfig#{<<"name">> => NewName}.
+
+%% Copy LMDB store data to new location with fallback
+copy_lmdb_store_data(StoreConfig, ExistingPath, NewName) ->
+    ?event(debug_volume, {copying_store, ExistingPath, NewName}),
+    case copy_lmdb_store(ExistingPath, NewName) of
+        ok ->
+            ?event(debug_volume, {copy_success, NewName}),
+            StoreConfig#{<<"name">> => NewName};
+        {error, Reason} ->
+            ?event(debug_volume, {copy_error, Reason}),
+            ?event(debug_volume, {fallback_to_original, ExistingPath}),
+            StoreConfig
+    end.
+
+%% @doc Check if an LMDB database exists at the given path.
+%%
+%% LMDB databases consist of at least a data.mdb file and optionally a 
+%% lock.mdb file. This function checks for the presence of these files to 
+%% determine if a valid LMDB database exists at the specified location.
+%%
+%% @param Path Binary path to check for LMDB database
+%% @returns true if LMDB database exists, false otherwise
+-spec check_lmdb_exists(Path :: binary()) -> boolean().
+check_lmdb_exists(Path) ->
+    ?event(debug_volume, {check_lmdb_exists, entry, {path, Path}}),
+    PathStr = binary_to_list(Path),
+    DataFile = PathStr ++ "/data.mdb",    
+    % Check if the directory exists first
+    ?event(debug_volume, {check_lmdb_exists, checking_directory, PathStr}),
+    case filelib:is_dir(PathStr) of
+        false -> 
+            ?event(debug_volume, {check_lmdb_exists, directory_not_found, 
+                   false}),
+            false;
+        true ->
+            ?event(debug_volume, {check_lmdb_exists, directory_found, 
+                   checking_data_file}),
+            % Check if data.mdb exists (required for LMDB)
+            % lock.mdb is optional and might not exist when DB is not in use
+            DataExists = filelib:is_regular(DataFile),
+            ?event(debug_volume, {check_lmdb_exists, result, 
+                   {path, Path, data_file_exists, DataExists}}),
+            DataExists
+    end.
+
+%% @doc Copy an LMDB database from source to destination.
+%%
+%% This function performs a safe copy of an LMDB database by copying all
+%% the database files (data.mdb, lock.mdb if present) from the source
+%% directory to the destination directory. It ensures the destination
+%% directory exists before copying.
+%%
+%% @param SourcePath Binary path to source LMDB database
+%% @param DestPath Binary path to destination location
+%% @returns ok on success, {error, Reason} on failure
+-spec copy_lmdb_store(
+    SourcePath :: binary(), 
+    DestPath :: binary()
+) -> ok | {error, term()}.
+copy_lmdb_store(SourcePath, DestPath) ->
+    ?event(debug_volume, {copy_lmdb_store, entry, 
+           {source, SourcePath, dest, DestPath}}),
+    SourceStr = binary_to_list(SourcePath),
+    DestStr = binary_to_list(DestPath),
+    ?event(debug_volume, {copy_lmdb_store, paths_converted, 
+           {source_str, SourceStr, dest_str, DestStr}}),
+    % Check if source LMDB database exists
+    ?event(debug_volume, {copy_lmdb_store, checking_source, SourcePath}),
+    case check_lmdb_exists(SourcePath) of
+        false ->
+            ?event(debug_volume, {copy_lmdb_store, source_not_found, 
+                   SourcePath}),
+            {error, <<"Source LMDB database not found">>};
+        true ->
+            ?event(debug_volume, {copy_lmdb_store, source_found, 
+                   ensuring_dest_dir}),
+            % Ensure destination directory exists
+            ok = filelib:ensure_dir(DestStr ++ "/"),
+            % Copy the LMDB database files
+            ?event(debug_volume, {copy_lmdb_store, copying_files, starting}),
+            case copy_lmdb_files(SourceStr, DestStr) of
+                ok ->
+                    ?event(debug_volume, {copy_lmdb_store, copy_success, 
+                           completed}),
+                    ok;
+                {error, Reason} ->
+                    ?event(debug_volume, {copy_lmdb_store, copy_error, 
+                           Reason}),
+                    {error, Reason}
+            end
+    end.
+
+%% @doc Helper function to copy LMDB database files.
+%%
+%% This function copies the actual LMDB files (data.mdb and lock.mdb if 
+%% present) from source to destination using system commands for reliability.
+%%
+%% @param SourceDir String path to source directory
+%% @param DestDir String path to destination directory
+%% @returns ok on success, {error, Reason} on failure
+-spec copy_lmdb_files(
+    SourceDir :: string(), 
+    DestDir :: string()
+) -> ok | {error, term()}.
+copy_lmdb_files(SourceDir, DestDir) ->
+    ?event(debug_volume, {copy_lmdb_files, entry, 
+           {source_dir, SourceDir, dest_dir, DestDir}}),
+    % Use rsync for reliable copying of LMDB files
+    % --archive preserves permissions and timestamps
+    % --sparse handles sparse files efficiently
+    CopyCommand = io_lib:format(
+        "rsync -av --sparse '~s/' '~s/'", 
+        [SourceDir, DestDir]
+    ),
+    ?event(debug_volume, {copy_lmdb_files, executing_rsync, command}),
+    case os:cmd(CopyCommand) of
+        Result ->
+            ?event(debug_volume, {copy_lmdb_files, rsync_completed, 
+                   checking_errors}),
+            % Check if rsync completed successfully by looking for error indicators
+            case {
+                    string:find(Result, "rsync error"), 
+                    string:find(Result, "failed")
+                } of
+                {nomatch, nomatch} ->
+                    ?event(debug_volume, {copy_lmdb_files, rsync_success, 
+                           no_errors}),
+                    ok;
+                _ ->
+                    ?event(debug_volume, {copy_lmdb_files, rsync_error, 
+                           Result}),
+                    {error, list_to_binary(Result)}
+            end
+    end.
 
 %%% Unit Tests
 %% Test helper function error checking
@@ -851,3 +1013,27 @@ safe_exec_mock_test() ->
             ["Error", "failed"]
         ),
     ?assertEqual(error, TestResult2). 
+
+%% Test LMDB existence checking
+check_lmdb_exists_test() ->
+    % Create temporary test directories
+    TestDir = "/tmp/hb_volume_test_" ++ 
+               integer_to_list(erlang:system_time()),
+    TestDirBin = list_to_binary(TestDir),
+    % Clean up function
+    Cleanup = fun() -> os:cmd("rm -rf " ++ TestDir) end,
+    try
+        % Test non-existent directory
+        ?assertEqual(false, check_lmdb_exists(TestDirBin)),
+        % Create directory but no LMDB files
+        ok = filelib:ensure_dir(TestDir ++ "/"),
+        ?assertEqual(false, check_lmdb_exists(TestDirBin)),
+        % Create data.mdb file
+        DataFile = TestDir ++ "/data.mdb",
+        file:write_file(DataFile, <<"test data">>, [raw]),
+        ?assertEqual(true, check_lmdb_exists(TestDirBin)),
+        % Clean up
+        Cleanup()
+    after
+        Cleanup()
+    end.
