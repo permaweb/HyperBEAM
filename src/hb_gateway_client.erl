@@ -176,17 +176,21 @@ query(Query, Opts) ->
 %% @doc Takes a GraphQL item node, matches it with the appropriate data from a
 %% gateway, then returns `{ok, ParsedMsg}'.
 result_to_message(Item, Opts) ->
-    case hb_ao:get(<<"id">>, Item, Opts) of
+    case hb_maps:get(<<"id">>, Item, not_found, Opts) of
         ExpectedID when is_binary(ExpectedID) ->
             result_to_message(ExpectedID, Item, Opts);
         _ ->
             result_to_message(undefined, Item, Opts)
     end.
 result_to_message(ExpectedID, Item, Opts) ->
-    GQLOpts = Opts#{ hashpath => ignore },
+    GQLOpts =
+        Opts#{
+            hashpath => ignore,
+            cache_control => [<<"no-cache">>, <<"no-store">>]
+        },
     % We have the headers, so we can get the data.
     Data =
-        case hb_ao:get(<<"data">>, Item, GQLOpts) of
+        case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
             BinData when is_binary(BinData) -> BinData;
             _ ->
                 {ok, Bytes} = data(ExpectedID, Opts),
@@ -195,18 +199,22 @@ result_to_message(ExpectedID, Item, Opts) ->
     DataSize = byte_size(Data),
     ?event(gateway, {data, {id, ExpectedID}, {data, Data}, {item, Item}}, Opts),
     % Convert the response to an ANS-104 message.
-    Tags = hb_ao:get(<<"tags">>, Item, GQLOpts),
-	Signature = hb_util:decode(hb_ao:get(<<"signature">>, Item, GQLOpts)),
-	SignatureType = case byte_size(Signature) of
-		65 -> {ecdsa, 256};
-		512 -> {rsa, 65537};
-		_ -> unsupported_tx_signature_type
-	end,
+    Tags = hb_maps:get(<<"tags">>, Item, tags_not_found, GQLOpts),
+	Signature =
+        hb_util:decode(
+            hb_maps:get(<<"signature">>, Item, not_found, GQLOpts)
+        ),
+	SignatureType =
+        case byte_size(Signature) of
+            65 -> {ecdsa, 256};
+            512 -> {rsa, 65537};
+            _ -> unsupported_tx_signature_type
+        end,
     TX =
         #tx {
             format = ans104,
-            id = hb_util:decode(ExpectedID),
-            last_tx = normalize_null(hb_ao:get(<<"anchor">>, Item, GQLOpts)),
+            last_tx =
+                normalize_null(hb_maps:get(<<"anchor">>, Item, not_found, GQLOpts)),
             signature = Signature,
             signature_type = SignatureType,
             target =
@@ -220,8 +228,9 @@ result_to_message(ExpectedID, Item, Opts) ->
                     )
                 ),
             owner =
-                hb_util:decode(hb_ao:get(<<"owner/key">>,
-                    Item, GQLOpts)),
+                hb_util:decode(
+                    hb_util:deep_get(<<"owner/key">>, Item, GQLOpts)
+                ),
             tags =
                 [
                     {Name, Value}
@@ -249,12 +258,20 @@ result_to_message(ExpectedID, Item, Opts) ->
                 % to trust the GraphQL API anyway?
                 case hb_opts:get(ans104_trust_gql, false, Opts) of
                     false ->
-                        ?event(warning, {gql_verify_failed, returning_unverifiable_tx}),
+                        ?event(
+                            warning,
+                            {gql_verify_failed, returning_unverifiable_tx}
+                        ),
                         Structured;
                     true ->
                         % The node trusts the GraphQL API, so we add the explicit
                         % keys as committed fields.
-                        ?event(warning, {gql_verify_failed, adding_trusted_fields, {tags, Tags}}),
+                        ?event(warning,
+                            {gql_verify_failed,
+                                adding_trusted_fields,
+                                {tags, Tags}
+                            }
+                        ),
                         Comms = hb_maps:get(<<"commitments">>, Structured, #{}, Opts),
                         AttName = hd(hb_maps:keys(Comms, Opts)),
                         Comm = hb_maps:get(AttName, Comms, not_found, Opts),
@@ -263,12 +280,16 @@ result_to_message(ExpectedID, Item, Opts) ->
                                 AttName =>
                                     Comm#{
                                         <<"trusted-keys">> =>
-                                            hb_ao:normalize_keys([
+                                            hb_ao:normalize_keys(
+                                                [
                                                     hb_ao:normalize_key(Name)
                                                 ||
                                                     #{ <<"name">> := Name } <-
                                                         hb_maps:values(
-                                                            hb_ao:normalize_keys(Tags, Opts),
+                                                            hb_ao:normalize_keys(
+                                                                Tags,
+                                                                Opts
+                                                            ),
                                                             Opts
                                                         )
                                                 ],
@@ -321,7 +342,7 @@ subindex_to_tags(Subindex) ->
 ans104_no_data_item_test() ->
     % Start a random node so that all of the services come up.
     _Node = hb_http_server:start_node(#{}),
-    {ok, Res} = read(<<"0Tb9mULcx8MjYVgXleWMVvqo1_jaw_P6AO_CJMTj0XE">>, #{}),
+    {ok, Res} = read(<<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>, #{}),
     ?event(gateway, {get_ans104_test, Res}),
     ?event(gateway, {signer, hb_message:signers(Res, #{})}),
     ?assert(true).

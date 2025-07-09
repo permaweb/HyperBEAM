@@ -121,11 +121,11 @@ execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
             execute_handlers(HookName, Rest, NewReq, Opts);
         {error, _} = Error ->
             % If status is error, halt execution and return the error
-            ?event({handler_error, HookName, Error}),
+            ?event(hook_error, {handler_error, HookName, Error}),
             Error;
         Other ->
             % If status is unknown, convert to error and halt execution
-            ?event({unexpected_handler_result, HookName, Other}),
+            ?event(hook_error, {unexpected_handler_result, HookName, Other}),
             {failure,
                 <<
                     "Handler for hook `",

@@ -297,7 +297,7 @@ new_proc_test() ->
 %     ),
 %     dev_scheduler_registry:find(ID = hb_ao:get(id, SignedItem), true),
 %     ?event({benchmark_start, ?MODULE}),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(X) ->
 %             MsgX = #{
 %                 path => <<"Schedule">>,

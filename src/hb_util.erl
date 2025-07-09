@@ -1,13 +1,16 @@
 %% @doc A collection of utility functions for building with HyperBEAM.
 -module(hb_util).
 -export([int/1, float/1, atom/1, bin/1, list/1]).
+-export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, short_id/1, human_int/1, to_hex/1]).
 -export([key_to_atom/2, binary_to_addresses/1]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
 -export([find_value/2, find_value/3]).
--export([deep_merge/3, number/1, list_to_numbered_message/1, list_replace/3]).
+-export([deep_merge/3, deep_set/4, deep_get/3, deep_get/4]).
+-export([number/1, list_to_numbered_message/1]).
+-export([find_target_path/2, template_matches/3]).
 -export([is_ordered_list/2, message_to_ordered_list/1, message_to_ordered_list/2]).
--export([is_string_list/1]).
+-export([is_string_list/1, list_replace/3]).
 -export([to_sorted_list/1, to_sorted_list/2, to_sorted_keys/1, to_sorted_keys/2]).
 -export([hd/1, hd/2, hd/3]).
 -export([remove_common/2, to_lower/1]).
@@ -15,12 +18,15 @@
 -export([format_indented/2, format_indented/3, format_indented/4, format_binary/1]).
 -export([format_maybe_multiline/3, remove_trailing_noise/2]).
 -export([debug_print/4, debug_fmt/1, debug_fmt/2, debug_fmt/3, eunit_print/2]).
--export([print_trace/4, trace_macro_helper/5, print_trace_short/4]).
--export([format_trace/1, format_trace_short/1]).
+-export([get_trace/0, print_trace/4, trace_macro_helper/5, print_trace_short/4]).
+-export([format_trace/1, trace_to_list/1, format_trace_short/0, format_trace_short/1]).
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, until/1, until/2, until/3]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
 -export([unique/1]).
+-export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
+-export([all_atoms/0, binary_is_atom/1]).
+-export([lower_case_key_map/2]).
 -include("include/hb.hrl").
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
@@ -71,6 +77,16 @@ list(Value) when is_binary(Value) ->
 list(Value) when is_list(Value) -> Value;
 list(Value) when is_atom(Value) -> atom_to_list(Value).
 
+%% @doc: rounds IntValue up to the nearest multiple of Nearest.
+%% Rounds up even if IntValue is already a multiple of Nearest.
+ceil_int(IntValue, Nearest) ->
+	IntValue - (IntValue rem Nearest) + Nearest.
+
+%% @doc: rounds IntValue down to the nearest multiple of Nearest.
+%% Doesn't change IntValue if it's already a multiple of Nearest.
+floor_int(IntValue, Nearest) ->
+	IntValue - (IntValue rem Nearest).
+
 %% @doc Unwrap a tuple of the form `{ok, Value}', or throw/return, depending on
 %% the value of the `error_strategy' option.
 ok(Value) -> ok(Value, #{}).
@@ -105,7 +121,7 @@ until(Condition, Fun, Count) ->
 %% a message explicitly, raw encoded ID, or an Erlang Arweave `tx' record.
 id(Item) -> id(Item, unsigned).
 id(TX, Type) when is_record(TX, tx) ->
-    encode(ar_bundles:id(TX, Type));
+    encode(hb_tx:id(TX, Type));
 id(Map, Type) when is_map(Map) ->
     hb_message:id(Map, Type);
 id(Bin, _) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
@@ -247,20 +263,78 @@ to_hex(Bin) when is_binary(Bin) ->
 deep_merge(Map1, Map2, Opts) when is_map(Map1), is_map(Map2) ->
     hb_maps:fold(
         fun(Key, Value2, AccMap) ->
-            case hb_maps:find(Key, AccMap, Opts) of
-                {ok, Value1} when is_map(Value1), is_map(Value2) ->
+            case deep_get(Key, AccMap, Opts) of
+                Value1 when is_map(Value1), is_map(Value2) ->
                     % Both values are maps, recursively merge them
-                    AccMap#{Key => deep_merge(Value1, Value2, Opts)};
+                    deep_set(Key, deep_merge(Value1, Value2, Opts), AccMap, Opts);
                 _ ->
                     % Either the key doesn't exist in Map1 or at least one of 
                     % the values isn't a map. Simply use the value from Map2
-                    AccMap#{ Key => Value2 }
+                    deep_set(Key, Value2, AccMap, Opts)
             end
         end,
         Map1,
         Map2,
 		Opts
     ).
+
+%% @doc Set a deep value in a message by its path, _assuming all messages are
+%% `device: message@1.0`_.
+deep_set(_Path, undefined, Msg, _Opts) -> Msg;
+deep_set(Path, Value, Msg, Opts) when not is_list(Path) ->
+    deep_set(hb_path:term_to_path_parts(Path, Opts), Value, Msg, Opts);
+deep_set([Key], unset, Msg, Opts) ->
+    hb_maps:remove(Key, Msg, Opts);
+deep_set([Key], Value, Msg, Opts) ->
+    case hb_maps:get(Key, Msg, not_found, Opts) of
+        ExistingMap when is_map(ExistingMap) andalso is_map(Value) ->
+            % If both are maps, merge them
+            Msg#{ Key => hb_maps:merge(ExistingMap, Value, Opts) };
+        _ ->
+            Msg#{ Key => Value }
+    end;
+deep_set([Key|Rest], Value, Map, Opts) ->
+    SubMap = hb_maps:get(Key, Map, #{}, Opts),
+    hb_maps:put(Key, deep_set(Rest, Value, SubMap, Opts), Map, Opts).
+
+%% @doc Get a deep value from a message.
+deep_get(Path, Msg, Opts) -> deep_get(Path, Msg, not_found, Opts).
+deep_get(Path, Msg, Default, Opts) when not is_list(Path) ->
+    deep_get(hb_path:term_to_path_parts(Path, Opts), Msg, Default, Opts);
+deep_get([Key], Msg, Default, Opts) ->
+    case hb_maps:find(Key, Msg, Opts) of
+        {ok, Value} -> Value;
+        error -> Default
+    end;
+deep_get([Key|Rest], Msg, Default, Opts) ->
+    case hb_maps:find(Key, Msg, Opts) of
+        {ok, DeepMsg} when is_map(DeepMsg) ->
+            deep_get(Rest, DeepMsg, Default, Opts);
+        error -> Default
+    end.
+
+%% @doc Find the target path to route for a request message.
+find_target_path(Msg, Opts) ->
+    case hb_ao:get(<<"route-path">>, Msg, not_found, Opts) of
+        not_found ->
+            ?event({find_target_path, {msg, Msg}, not_found}),
+            hb_ao:get(<<"path">>, Msg, no_path, Opts);
+        RoutePath -> RoutePath
+    end.
+
+%% @doc Check if a message matches a given template.
+%% Templates can be either:
+%% - A map: Uses structural matching against the message
+%% - A binary regex: Matches against the message's target path
+%% Returns true/false for map templates, or regex match result for binary templates.
+template_matches(ToMatch, Template, _Opts) when is_map(Template) ->
+    case hb_message:match(Template, ToMatch, primary) of
+        {value_mismatch, _Key, _Val1, _Val2} -> false;
+        Match -> Match
+    end;
+template_matches(ToMatch, Regex, Opts) when is_binary(Regex) ->
+    MsgPath = find_target_path(ToMatch, Opts),
+    hb_path:regex_matches(MsgPath, Regex).
 
 %% @doc Label a list of elements with a number.
 number(List) ->
@@ -338,7 +412,7 @@ message_to_ordered_list(List, _Opts) when is_list(List) ->
     List;
 message_to_ordered_list(Message, Opts) ->
     NormMessage = hb_ao:normalize_keys(Message, Opts),
-    Keys = hb_maps:keys(NormMessage, Opts) -- [<<"priv">>],
+    Keys = hb_maps:keys(NormMessage, Opts) -- [<<"priv">>, <<"commitments">>],
     SortedKeys =
         lists:map(
             fun hb_ao:normalize_key/1,
@@ -475,13 +549,9 @@ debug_fmt(X, Opts) -> debug_fmt(X, Opts, 0).
 debug_fmt(X, Opts, Indent) ->
     try do_debug_fmt(X, Opts, Indent)
     catch A:B:C ->
-        eunit_print(
-            "~p:~p:~p",
-            [A, B, C]
-        ),
-        case hb_opts:get(mode, prod) of
-            prod ->
-                format_indented("[!PRINT FAIL!]", Opts, Indent);
+        case hb_opts:get(debug_print_fail_mode, quiet) of
+            quiet ->
+                format_indented("[!Format failed!] ~p", [X], Opts, Indent);
             _ ->
                 format_indented(
                     "[PRINT FAIL:] ~80p~n===== PRINT ERROR WAS ~p:~p =====~n~s",
@@ -520,7 +590,7 @@ do_debug_fmt({X, Y}, Opts, Indent) when is_atom(X) and is_atom(Y) ->
     format_indented("~p: ~p", [X, Y], Opts, Indent);
 do_debug_fmt({X, Y}, Opts, Indent) when is_record(Y, tx) ->
     format_indented("~p: [TX item]~n~s",
-        [X, ar_bundles:format(Y, Opts, Indent + 1)],
+        [X, hb_tx:format(Y, Indent + 1)],
         Opts,
         Indent
     );
@@ -767,16 +837,21 @@ print_trace_short(Trace, Mod, Func, Line) ->
         ]
     ).
 
+%% @doc Return a list of calling modules and lines from a trace.
+trace_to_list(Trace) ->
+    lists:reverse(format_trace_short(
+        hb_opts:get(short_trace_len, 6, #{}),
+        false,
+        Trace,
+        hb_opts:get(stack_print_prefixes, [], #{})
+    )).
+
 %% @doc Format a trace to a short string.
+format_trace_short() -> format_trace_short(get_trace()).
 format_trace_short(Trace) -> 
     lists:join(
         " / ",
-        lists:reverse(format_trace_short(
-            hb_opts:get(short_trace_len, 6, #{}),
-            false,
-            Trace,
-            hb_opts:get(stack_print_prefixes, [], #{})
-        ))
+        trace_to_list(Trace)
     ).
 format_trace_short(_Max, _Latch, [], _Prefixes) -> [];
 format_trace_short(0, _Latch, _Trace, _Prefixes) -> [];
@@ -899,3 +974,57 @@ binary_to_addresses(List) when is_binary(List) ->
                 error({cannot_parse_list, List})
         end
     end.
+
+%% @doc Force that a binary is either empty or the given number of bytes.
+check_size(Bin, {range, Start, End}) ->
+    check_type(Bin, binary)
+        andalso byte_size(Bin) >= Start
+        andalso byte_size(Bin) =< End;
+check_size(Bin, Sizes) ->
+    check_type(Bin, binary)
+        andalso lists:member(byte_size(Bin), Sizes).
+
+check_value(Value, ExpectedValues) ->
+    lists:member(Value, ExpectedValues).
+
+%% @doc Ensure that a value is of the given type.
+check_type(Value, binary) -> is_binary(Value);
+check_type(Value, integer) -> is_integer(Value);
+check_type(Value, list) -> is_list(Value);
+check_type(Value, map) -> is_map(Value);
+check_type(Value, tx) -> is_record(Value, tx);
+check_type(Value, message) ->
+    is_record(Value, tx) or is_map(Value) or is_list(Value);
+check_type(_Value, _) -> false.
+
+%% @doc Throw an error if the given value is not ok.
+ok_or_throw(_, true, _) -> true;
+ok_or_throw(_TX, false, Error) ->
+    throw(Error).
+
+%% @doc List the loaded atoms in the Erlang VM.
+all_atoms() -> all_atoms(0).
+all_atoms(N) ->
+    case atom_from_int(N) of
+        not_found -> [];
+        A -> [A | all_atoms(N+1)]
+    end.
+
+%% @doc Find the atom with the given integer reference.
+atom_from_int(Int) ->
+    case catch binary_to_term(<<131,75,Int:24>>) of
+        A -> A;
+        _ -> not_found
+    end.
+
+%% @doc Check if a given binary is already an atom.
+binary_is_atom(X) ->
+    lists:member(X, lists:map(fun hb_util:bin/1, all_atoms())).
+
+lower_case_key_map(Map, Opts) ->
+    hb_maps:fold(fun
+        (K, V, Acc) when is_map(V) ->
+            maps:put(hb_util:to_lower(K), lower_case_key_map(V, Opts), Acc);
+        (K, V, Acc) ->
+            maps:put(hb_util:to_lower(K), V, Acc)
+    end, #{}, Map, Opts).

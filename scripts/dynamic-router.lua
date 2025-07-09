@@ -1,7 +1,7 @@
 --- A dynamic route generator in an AO `~process@1.0'.
 --- This generator grants a routing table, found at `/now/routes', that is 
 --- compatible with the `~router@1.0' interface. Subsequently, it can be
---- used for routing by HyperBEAM nodes' via setting the `route-provider'
+--- used for routing by HyperBEAM nodes' via setting the `router@1.0/provider'
 --- node message key.
 --- 
 --- The configuration options are as follows:

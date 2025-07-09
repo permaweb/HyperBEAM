@@ -65,7 +65,7 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                         ?event(debug_linkify, {link_normalized, Key, UnderlyingID}),
                         {<< NormKey/binary, "+link">>, UnderlyingID};
                     ({Key, V}) when is_map(V) or is_list(V) ->
-                        ?event(debug_linkify, {case2, Key}),
+                        ?event(debug_linkify, {linkifying_submessage, Key}),
                         % The value is a submessage that we have in local memory.
                         % We must offload it such that it is cached, and
                         % referenced by a link.
@@ -85,7 +85,7 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                                 % storage and availability.
                                 hb_cache:write(NormChild, Opts)
                         end,
-                        ?event(debug_linkify, {generated_id, {key, Key}, {id, ID}}),
+                        ?event(debug_linkify, {generated_link, {key, Key}, {id, ID}}),
                         {<<NormKey/binary, "+link">>, ID};
                     ({Key, V}) when ?IS_LINK(V) ->
                         % The link is not a submap. We load it such that it is

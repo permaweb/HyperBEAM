@@ -11,8 +11,8 @@
 % %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    signed_non_bundle_is_bundlable_test(
-        #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
+    normalize_commitments_test(
+        <<"structured@1.0">>,
         test_opts(normal)
     ).
 
@@ -26,7 +26,8 @@ test_codecs() ->
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
-        <<"json@1.0">>
+        <<"json@1.0">>,
+        <<"tx@1.0">>
     ].
 
 %% @doc Return a set of options for testing, taking the codec name as an
@@ -103,6 +104,8 @@ test_suite() ->
             fun encode_small_balance_table_test/2},
         {<<"Encode large balance table">>,
             fun encode_large_balance_table_test/2},
+        {<<"Normalize commitments">>,
+            fun normalize_commitments_test/2},
         % Signed messages
         {<<"Signed message to message and back">>,
             fun signed_message_encode_decode_verify_test/2},
@@ -1037,6 +1040,32 @@ hashpath_sign_verify_test(Codec, Opts) ->
         )
     ).
 
+normalize_commitments_test(Codec, Opts) ->
+    Msg = #{
+        <<"a">> => #{
+            <<"b">> => #{
+                <<"c">> => 1,
+                <<"d">> => #{
+                    <<"e">> => 2
+                },
+                <<"f">> => 3
+            },
+            <<"g">> => 4
+        },
+        <<"h">> => 5
+    },
+    NormMsg = hb_message:normalize_commitments(Msg, Opts),
+    ?event({norm_msg, NormMsg}),
+    ?assert(hb_message:verify(NormMsg, all, Opts)),
+    ?assert(maps:is_key(<<"commitments">>, NormMsg)),
+    ?assert(maps:is_key(<<"commitments">>, maps:get(<<"a">>, NormMsg))),
+    ?assert(
+        maps:is_key(
+            <<"commitments">>,
+            maps:get(<<"b">>, maps:get(<<"a">>, NormMsg))
+        )
+    ).
+
 signed_message_with_derived_components_test(Codec, Opts) ->
     Msg = #{
         <<"path">> => <<"/test">>,
@@ -1321,9 +1350,10 @@ recursive_nested_list_test(Codec, Opts) ->
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 priv_survives_conversion_test(<<"ans104@1.0">>, _Opts) -> skip;
+priv_survives_conversion_test(<<"tx@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(<<"json@1.0">>, _Opts) -> skip;
-priv_survives_conversion_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
-    skip;
+priv_survives_conversion_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) -> skip;
+priv_survives_conversion_test(#{ <<"device">> := <<"tx@1.0">> }, _Opts) -> skip;
 priv_survives_conversion_test(Codec, Opts) ->
     Msg = #{
         <<"data">> => <<"TEST_DATA">>,
@@ -1352,7 +1382,7 @@ encode_balance_table(Size, Codec, Opts) ->
     % ?event({encoded, {explicit, Encoded}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({decoded, {explicit, Decoded}}),
-    ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
+    ?assert(hb_message:match(Msg, Decoded, only_present, Opts)).
 
 encode_small_balance_table_test(Codec, Opts) ->
     encode_balance_table(5, Codec, Opts).

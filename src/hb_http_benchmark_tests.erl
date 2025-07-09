@@ -11,7 +11,7 @@
 % unsigned_resolve_benchmark_test() ->
 %     BenchTime = 1,
 %     URL = hb_http_server:start_node(#{force_signed => false}),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun() ->
 %             hb_http:post(URL,
 %                 #{
@@ -33,7 +33,7 @@
 %     BenchTime = 1,
 %     BenchWorkers = 16,
 %     URL = hb_http_server:start_node(#{force_signed => false}),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(_Count) ->
 %             hb_http:post(
 %                 URL,
@@ -67,7 +67,7 @@
 %     BenchTime = 1,
 %     URL = hb_http_server:start_node(#{force_signed => false}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(_) ->
 %             case hb_http:post(URL, Msg, #{}) of
 %                 {ok, _} -> 1;
@@ -87,7 +87,7 @@
 %     BenchTime = 1,
 %     URL = hb_http_server:start_node(#{force_signed => true}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(_) ->
 %             case hb_http:post(URL, Msg, #{}) of
 %                 {ok, _} -> 1;
@@ -107,7 +107,7 @@
 %     BenchWorkers = 16,
 %     URL = hb_http_server:start_node(#{force_signed => false}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(X) ->
 %             ?event({post_start, X}),
 %             case hb_http:post(URL, Msg, #{}) of
@@ -130,7 +130,7 @@
 %     BenchWorkers = 16,
 %     URL = hb_http_server:start_node(#{force_signed => true}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
-%     Iterations = hb:benchmark(
+%     Iterations = hb_test_utils:benchmark(
 %         fun(_) ->
 %             case hb_http:post(URL, Msg, #{}) of
 %                 {ok, _ResMsg} ->
@@ -156,7 +156,7 @@
 % %     Proc = hb_ao:get(process, Msg1, #{ hashpath => ignore }),
 % %     ProcID = hb_util:id(Proc),
 % %     ?event({benchmark_start, ?MODULE}),
-% %     Iterations = hb:benchmark(
+% %     Iterations = hb_test_utils:benchmark(
 % %         fun(X) ->
 % %             MsgX = #{
 % %                 <<"device">> => <<"Scheduler@1.0">>,

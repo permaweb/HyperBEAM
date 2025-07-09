@@ -61,8 +61,8 @@
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
 -export([verify/1, verify/2, verify/3, commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([commitment/2, commitment/3, with_only_committed/2, is_signed_key/3]).
--export([with_commitments/3, without_commitments/3]).
--export([match/2, match/3, match/4, find_target/3]).
+-export([with_commitments/3, without_commitments/3, normalize_commitments/2]).
+-export([diff/3, match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
 -export([default_tx_list/0, default_tx_keys/0, filter_default_keys/1]).
 %%% Debugging tools:
@@ -195,6 +195,35 @@ id(Msg, RawCommitters, Opts) ->
             Opts
         ),
     hb_util:human_id(ID).
+
+%% @doc Normalize the IDs in a message, ensuring that there is at least one
+%% unsigned ID present. By forcing this work to occur in strategically positioned
+%% places, we avoid the need to recalculate the IDs for every `hb_message:id`
+%% call.
+normalize_commitments(Msg, Opts) when is_map(Msg) ->
+    NormMsg = 
+        maps:map(
+            fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
+                Val;
+               (_Key, Val) -> normalize_commitments(Val, Opts)
+            end,
+            Msg
+        ),
+    case hb_maps:get(<<"commitments">>, NormMsg, not_found, Opts) of
+        not_found ->
+            {ok, #{ <<"commitments">> := Commitments }} =
+                dev_message:commit(
+                    NormMsg,
+                    #{ <<"type">> => <<"unsigned">> },
+                    Opts
+                ),
+            NormMsg#{ <<"commitments">> => Commitments };
+        _ -> NormMsg
+    end;
+normalize_commitments(Msg, Opts) when is_list(Msg) ->
+    lists:map(fun(X) -> normalize_commitments(X, Opts) end, Msg);
+normalize_commitments(Msg, _Opts) ->
+    Msg.
 
 %% @doc Return a message with only the committed keys. If no commitments are
 %% present, the message is returned unchanged. This means that you need to
@@ -483,9 +512,19 @@ format(Map, Opts, Indent) when is_map(Map) ->
             {_, Priv} -> [{<<"!Private!">>, Priv}]
         end,
     % Concatenate the path and device rows with the rest of the key values.
+    UnsortedGeneralKeyVals =
+        maps:to_list(
+            maps:without(
+                [<<"path">>, <<"device">>],
+                Map
+            )
+        ),
     KeyVals =
         FilterUndef(PriorityKeys) ++
-        maps:to_list(maps:without([<<"path">>, <<"device">>], Map)) ++
+        lists:sort(
+            fun({K1, _}, {K2, _}) -> K1 < K2 end,
+            UnsortedGeneralKeyVals
+        ) ++
         FooterKeys,
     % Format the remaining 'normal' keys and values.
     Res = lists:map(
@@ -566,20 +605,22 @@ match(Map1, Map2, Mode, Opts) ->
     catch _:Details -> Details
     end.
 
+
+
 unsafe_match(Map1, Map2, Mode, Path, Opts) ->
-     Keys1 =
+    Keys1 =
         hb_maps:keys(
-            NormMap1 = minimize(
+            NormMap1 = hb_util:lower_case_key_map(minimize(
                 normalize(hb_ao:normalize_keys(Map1, Opts), Opts),
                 [<<"content-type">>, <<"ao-body-key">>]
-            )
+            ), Opts)
         ),
     Keys2 =
         hb_maps:keys(
-            NormMap2 = minimize(
+            NormMap2 = hb_util:lower_case_key_map(minimize(
                 normalize(hb_ao:normalize_keys(Map2, Opts), Opts),
                 [<<"content-type">>, <<"ao-body-key">>]
-            )
+            ), Opts)
         ),
     PrimaryKeysPresent =
         (Mode == primary) andalso
@@ -644,6 +685,39 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
 	
 matchable_keys(Map) ->
     lists:sort(lists:map(fun hb_ao:normalize_key/1, hb_maps:keys(Map))).
+
+%% @doc Return the numeric differences between two messages, matching deeply
+%% across nested messages. If the values are non-numeric, the new value is 
+%% returned if the values are different. Keys found only in the first message
+%% are dropped, as they have 'changed' to absence.
+diff(Msg1, Msg2, Opts) when is_map(Msg1) andalso is_map(Msg2) ->
+    maps:filtermap(
+        fun(Key, Val2) ->
+            case hb_maps:get(Key, Msg1, not_found, Opts) of
+                Val2 ->
+                    % The key is present in both maps, and the values match.
+                    false;
+                not_found ->
+                    % The key is net-new in Map2.
+                    {true, Val2};
+                Val1 when is_number(Val1) andalso is_number(Val2) ->
+                    % The key is present in both maps, and the values are numbers;
+                    % return the difference.
+                    {true, Val2 - Val1};
+                Val1 when is_map(Val1) andalso is_map(Val2) ->
+                    % The key is present in both maps, and the values are maps;
+                    % return the difference.
+                    {true, diff(Val1, Val2, Opts)};
+                _ ->
+                    % The key is present in both maps, and the values do not 
+                    % match. Return the new value.
+                    {true, Val2}
+            end
+        end,
+        Msg2
+    );
+diff(_Val1, _Val2, _Opts) ->
+    not_found.
 
 %% @doc Filter messages that do not match the 'spec' given. The underlying match
 %% is performed in the `only_present' mode, such that match specifications only

@@ -3,8 +3,10 @@
 -export([info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
 -export([encode/2, decode/2]).
+-export([pure_lua_process_benchmark/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
 %%% The set of functions that will be sandboxed by default if `sandbox' is set 
 %%% to only `true'. Setting `sandbox' to a map allows the invoker to specify
 %%% which functions should be sandboxed and what to return instead. Providing
@@ -342,7 +344,7 @@ normalize(Base, _Req, RawOpts) ->
                     not_found -> [];
                     Key -> [Key]
                 end,
-            ?event(
+            ?event(snapshot,
                 {attempting_to_restore_lua_state,
                     {msg1, Base}, {device_key, DeviceKey}
                 }
@@ -358,10 +360,11 @@ normalize(Base, _Req, RawOpts) ->
                 State ->
                     ExternalizedState = binary_to_term(State),
                     InternalizedState = luerl:internalize(ExternalizedState),
+                    ?event(snapshot, loaded_state_from_snapshot),
                     {ok, hb_private:set(Base, <<"state">>, InternalizedState, Opts)}
             end;
         _ ->
-            ?event(state_already_initialized),
+            ?event(snapshot, state_already_initialized),
             {ok, Base}
     end.
 
@@ -557,7 +560,7 @@ direct_benchmark_test() ->
         },
         <<"parameters">> => []
     },
-    Iterations = hb:benchmark(
+    Iterations = hb_test_utils:benchmark(
         fun(X) ->
             {ok, _} = hb_ao:resolve(Base, <<"assoctable">>, #{}),
             ?event({iteration, X})
@@ -565,9 +568,11 @@ direct_benchmark_test() ->
         BenchTime
     ),
     ?event({iterations, Iterations}),
-    hb_util:eunit_print(
-        "Computed ~p Lua executions in ~ps (~.2f calls/s)",
-        [Iterations, BenchTime, Iterations / BenchTime]
+    hb_test_utils:benchmark_print(
+        <<"Direct Lua:">>,
+        <<"executions">>,
+        Iterations,
+        BenchTime
     ),
     ?assert(Iterations > 10).
 
@@ -625,42 +630,53 @@ pure_lua_process_test() ->
     {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
     ?assertEqual(42, hb_ao:get(<<"results/output/body">>, Results, #{})).
 
+%% @doc Call a process whose `execution-device' is set to `lua@5.3a'.
+pure_lua_restore_test() ->
+    Opts = #{ process_cache_frequency => 1 },
+    Process = generate_lua_process("test/test.lua", Opts),
+    {ok, _} = hb_cache:write(Process, Opts),
+    Message = generate_test_message(Process, Opts, #{ <<"path">> => <<"inc">>}),
+    {ok, _} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, Count1} = hb_ao:resolve(Process, <<"now/count">>, Opts),
+    ?assertEqual(1, Count1),
+    hb_ao:resolve(
+        Process,
+        generate_test_message(Process, #{}, #{ <<"path">> => <<"inc">>}),
+        Opts
+    ),
+    {ok, Count2} = hb_ao:resolve(Process, <<"now/count">>, Opts),
+    ?assertEqual(2, Count2).
+
 pure_lua_process_benchmark_test_() ->
-    {timeout, 30, fun pure_lua_process_benchmark/0}.
-pure_lua_process_benchmark() ->
+    {timeout,
+        30,
+        fun() ->
+            pure_lua_process_benchmark(#{
+                process_cache_frequency => 50
+            })
+    end}.
+pure_lua_process_benchmark(Opts) ->
     BenchMsgs = 50,
     hb:init(),
-    Opts = #{
-        process_async_cache => true,
-        hashpath => ignore,
-        process_cache_frequency => 50
-    },
     Process = generate_lua_process("test/test.lua", Opts),
     {ok, _} = hb_cache:write(Process, Opts),
     Message = generate_test_message(Process, Opts),
     lists:foreach(
         fun(X) ->
-            hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
+            hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
             ?event(debug_lua, {scheduled, X})
         end,
         lists:seq(1, BenchMsgs)
     ),
     ?event(debug_lua, {executing, BenchMsgs}),
     BeforeExec = os:system_time(millisecond),
-    {ok, _} = hb_ao:resolve(
-        Process,
-        <<"now">>,
-        #{ hashpath => ignore, process_cache_frequency => 50 }
-    ),
+    {ok, _} = hb_ao:resolve(Process, <<"now">>, Opts),
     AfterExec = os:system_time(millisecond),
-    ?event(debug_lua, {execution_time, (AfterExec - BeforeExec) / BenchMsgs}),
-    hb_util:eunit_print(
-        "Computed ~p pure Lua process executions in ~ps (~.2f calls/s)",
-        [
-            BenchMsgs,
-            (AfterExec - BeforeExec) / 1000,
-            BenchMsgs / ((AfterExec - BeforeExec) / 1000)
-        ]
+    hb_test_utils:benchmark_print(
+        <<"Pure Lua process: Computed">>,
+        <<"slots">>,
+        BenchMsgs,
+        (AfterExec - BeforeExec) / 1000
     ).
 
 invoke_aos_test() ->
@@ -707,7 +723,7 @@ aos_process_benchmark_test_() ->
     {timeout, 30, fun() ->
         BenchMsgs = 10,
         Opts = #{
-            process_async_cache => false,
+            process_async_cache => true,
             hashpath => ignore,
             process_cache_frequency => 50
         },
@@ -728,14 +744,11 @@ aos_process_benchmark_test_() ->
             Opts
         ),
         AfterExec = os:system_time(millisecond),
-        ?event(debug_lua, {execution_time, (AfterExec - BeforeExec) / BenchMsgs}),
-        hb_util:eunit_print(
-            "Computed ~p AOS process executions in ~ps (~.2f calls/s)",
-            [
-                BenchMsgs,
-                (AfterExec - BeforeExec) / 1000,
-                BenchMsgs / ((AfterExec - BeforeExec) / 1000)
-            ]
+        hb_test_utils:benchmark_print(
+            <<"HyperAOS process: Computed">>,
+            <<"slots">>,
+            BenchMsgs,
+            (AfterExec - BeforeExec) / 1000
         )
     end}.
 
@@ -770,31 +783,43 @@ generate_lua_process(File, Opts) ->
 
 %% @doc Generate a test message for a Lua process.
 generate_test_message(Process, Opts) ->
+    generate_test_message(
+        Process,
+        Opts,
+        <<""" 
+        Count = 0
+        function add() 
+            Send({Target = 'Foo', Data = 'Bar' });
+            Count = Count + 1 
+        end
+        add()
+        return Count
+        """>>
+    ).
+generate_test_message(Process, Opts, ToEval) when is_binary(ToEval) ->
+    generate_test_message(
+        Process,
+        Opts,
+        #{
+            <<"action">> => <<"Eval">>,
+            <<"body">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => hb_util:bin(ToEval) 
+            }
+        }
+    );
+generate_test_message(Process, Opts, MsgBase) ->
     ProcID = hb_message:id(Process, all),
     NormOpts = Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) },
-    Code = """ 
-      Count = 0
-      function add() 
-        Send({Target = 'Foo', Data = 'Bar' });
-        Count = Count + 1 
-      end
-      add()
-      return Count
-    """,
     hb_message:commit(#{
             <<"path">> => <<"schedule">>,
             <<"method">> => <<"POST">>,
             <<"body">> =>
                 hb_message:commit(
-                    #{
+                    MsgBase#{
                         <<"target">> => ProcID,
                         <<"type">> => <<"Message">>,
-                        <<"body">> => #{
-                            <<"content-type">> => <<"application/lua">>,
-                            <<"body">> => hb_util:bin(Code) 
-                        },
-                        <<"random-seed">> => rand:uniform(1337),
-                        <<"action">> => <<"Eval">>
+                        <<"random-seed">> => rand:uniform(1337)
                     },
                     NormOpts
                 )
@@ -807,7 +832,7 @@ generate_stack(File) ->
     Wallet = hb:wallet(),
     {ok, Module} = file:read_file(File),
     Msg1 = #{
-        <<"device">> => <<"Stack@1.0">>,
+        <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> =>
             [
                 <<"json-iface@1.0">>,

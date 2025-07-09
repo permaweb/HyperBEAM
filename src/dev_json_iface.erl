@@ -104,7 +104,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             tabm,
             Opts
         ),
-    TABM = dev_codec_ans104:normalize_data(DeNormTABM),
+    TABM = hb_tx:normalize_data_field(DeNormTABM),
     MsgWithoutCommitments = hb_maps:without([<<"commitments">>], TABM, Opts),
     ID = hb_message:id(RawMsg, all),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
@@ -349,7 +349,7 @@ normalize_results(#{ <<"Error">> := Error }) ->
 normalize_results(Msg) ->
     try
         Output = maps:get(<<"Output">>, Msg, #{}),
-        Data = maps:get(<<"data">>, Output, <<>>),
+        Data = maps:get(<<"data">>, Output, maps:get(<<"Data">>, Msg, <<>>)),
         {ok,
             Data,
             maps:get(<<"Messages">>, Msg, []),
@@ -386,7 +386,9 @@ preprocess_results(Msg, Opts) ->
 
 %% @doc Convert a message with tags into a map of their key-value pairs.
 tags_to_map(Msg, Opts) ->
-    NormMsg = hb_ao:normalize_keys(Msg, Opts),
+    NormMsg = hb_util:lower_case_key_map(
+        hb_ao:normalize_keys(Msg, Opts), 
+    Opts),
     RawTags = hb_maps:get(<<"tags">>, NormMsg, [], Opts),
     TagList =
         [
@@ -425,13 +427,13 @@ generate_stack(File, _Mode) ->
     Msg0 = dev_wasm:cache_wasm_image(File),
     Image = hb_ao:get(<<"image">>, Msg0, #{}),
     Msg1 = Msg0#{
-        <<"device">> => <<"Stack@1.0">>,
+        <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> =>
             [
-                <<"WASI@1.0">>,
-                <<"JSON-Iface@1.0">>,
-                <<"WASM-64@1.0">>,
-                <<"Multipass@1.0">>
+                <<"wasi@1.0">>,
+                <<"json-iface@1.0">>,
+                <<"wasm-64@1.0">>,
+                <<"multipass@1.0">>
             ],
         <<"input-prefix">> => <<"process">>,
         <<"output-prefix">> => <<"wasm">>,
@@ -454,9 +456,9 @@ generate_aos_msg(ProcID, Code) ->
         <<"path">> => <<"compute">>,
         <<"body">> => 
             hb_message:commit(#{
-                <<"Action">> => <<"Eval">>,
-                <<"Data">> => Code,
-                <<"Target">> => ProcID
+                <<"action">> => <<"Eval">>,
+                <<"data">> => Code,
+                <<"target">> => ProcID
             }, Wallet),
         <<"block-height">> => 1
     }, Wallet).
@@ -491,13 +493,15 @@ aos_stack_benchmark_test_() ->
         ),
         Msg = generate_aos_msg(ProcID, <<"return 1+1">>),
         Iterations =
-            hb:benchmark(
+            hb_test_utils:benchmark(
                 fun() -> hb_ao:resolve(Initialized, Msg, #{}) end,
                 BenchTime
             ),
-        hb_util:eunit_print(
-            "Evaluated ~p AOS messages (minimal stack) in ~p sec (~.2f msg/s)",
-            [Iterations, BenchTime, Iterations / BenchTime]
+        hb_test_utils:benchmark_print(
+            <<"(Minimal AOS stack:) Evaluated">>,
+            <<"messages">>,
+            Iterations,
+            BenchTime
         ),
         ?assert(Iterations >= 10),
         ok

@@ -30,7 +30,7 @@ from(Map, Req, Opts) when is_map(Map) ->
                     _ ->
                         ok
                 end,
-                inject_at_path(
+                hb_util:deep_set(
                     hb_path:term_to_path_parts(Path, Opts),
                     hb_util:ok(from(Value, Req, Opts)),
                     Acc,
@@ -41,33 +41,6 @@ from(Map, Req, Opts) when is_map(Map) ->
             Map
         )
     }.
-
-%% Helper function to inject a value at a specific path in a nested map
-inject_at_path([Key], Value, Map) ->
-    inject_at_path([Key], Value, Map, #{});
-
-inject_at_path([Key|Rest], Value, Map) ->
-    inject_at_path([Key|Rest], Value, Map, #{}).
-
-inject_at_path([Key], Value, Map, Opts) ->
-    case maps:get(Key, Map, not_found) of
-        not_found ->
-            Map#{ Key => Value };
-        ExistingMap when is_map(ExistingMap) andalso is_map(Value) ->
-            % If both are maps, merge them
-            Map#{ Key => hb_maps:merge(ExistingMap, Value, Opts) };
-        OldValue ->
-            % Otherwise, alert the user and fail
-            throw({path_collision,
-                {key, Key},
-                {existing, OldValue},
-                {value, Value}
-            })
-    end;
-
-inject_at_path([Key|Rest], Value, Map, Opts) ->
-    SubMap = hb_maps:get(Key, Map, #{}, Opts),
-    hb_maps:put(Key, inject_at_path(Rest, Value, SubMap, Opts), Map, Opts).
 
 %% @doc Convert a TABM to a flat map.
 to(Bin, _, _Opts) when is_binary(Bin) -> {ok, Bin};

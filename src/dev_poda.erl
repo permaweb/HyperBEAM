@@ -58,7 +58,7 @@ execute(Outer = #tx { data = #{ <<"body">> := Msg } }, S = #{ <<"pass">> := 1 },
                     VFS1 =
                         lists:foldl(
                             fun({_, Commitment}, Acc) ->
-                                Id = ar_bundles:signer(Commitment),
+                                Id = hb_tx:signer(Commitment),
                                 Encoded = hb_util:encode(Id),
                                 hb_maps:put(
                                     <<"/commitments/", Encoded/binary>>,
@@ -130,19 +130,19 @@ validate_stage(3, Content, Commitments, Opts = #{ <<"quorum">> := Quorum }) ->
     end.
 
 validate_commitment(Msg, Comm, Opts) ->
-    MsgID = hb_util:encode(ar_bundles:id(Msg, unsigned)),
-    AttSigner = hb_util:encode(ar_bundles:signer(Comm)),
+    MsgID = hb_util:encode(hb_tx:id(Msg, unsigned)),
+    AttSigner = hb_util:encode(hb_tx:signer(Comm)),
     ?event({poda_commitment, {signer, AttSigner, hb_maps:get(authorities, Opts, undefined, Opts)}, {msg_id, MsgID}}),
     ValidSigner = lists:member(AttSigner, hb_maps:get(authorities, Opts, undefined, Opts)),
     ValidSignature = ar_bundles:verify_item(Comm),
-    RelevantMsg = ar_bundles:id(Comm, unsigned) == MsgID orelse
+    RelevantMsg = hb_tx:id(Comm, unsigned) == MsgID orelse
         (lists:keyfind(<<"commitment-for">>, 1, Comm#tx.tags)
             == {<<"commitment-for">>, MsgID}) orelse
-        ar_bundles:member(ar_bundles:id(Msg, unsigned), Comm),
+        ar_bundles:member(hb_tx:id(Msg, unsigned), Comm),
     case ValidSigner and ValidSignature and RelevantMsg of
         false ->
             ?event({poda_commitment_invalid,
-                    {commitment, ar_bundles:id(Comm, signed)},
+                    {commitment, hb_tx:id(Comm, signed)},
                     {signer, AttSigner},
                     {valid_signer, ValidSigner},
                     {valid_signature, ValidSignature},
@@ -218,17 +218,17 @@ add_commitments(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _S
             ?event({poda_push, InitAuthorities, Quorum}),
             % Aggregate validations from other nodes.
             % TODO: Filter out commitments from the current node.
-            MsgID = hb_util:encode(ar_bundles:id(NewMsg, unsigned)),
+            MsgID = hb_util:encode(hb_tx:id(NewMsg, unsigned)),
             ?event({poda_add_commitments_from, InitAuthorities, {self,hb:address()}}),
             Commitments = pfiltermap(
                 fun(Address) ->
-                    case hb_router:find(compute, ar_bundles:id(Process, unsigned), Address, Opts) of
+                    case hb_router:find(compute, hb_tx:id(Process, unsigned), Address, Opts) of
                         {ok, ComputeNode} ->
                             ?event({poda_asking_peer_for_commitment, ComputeNode, <<"commit-to">>, MsgID}),
                             Res = hb_client:resolve(
                                 ComputeNode,
-                                ar_bundles:id(Process, signed),
-                                ar_bundles:id(Assignment, signed),
+                                hb_tx:id(Process, signed),
+                                hb_tx:id(Assignment, signed),
                                 #{ <<"commit-to">> => MsgID }
                             ),
                             case Res of
@@ -248,7 +248,7 @@ add_commitments(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _S
             ),
             CompleteCommitments =
                 ar_bundles:sign_item(
-                    ar_bundles:normalize(
+                    hb_tx:normalize(
                         #tx {
                             data = 
                                 hb_maps:from_list(
@@ -263,7 +263,7 @@ add_commitments(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _S
                     Wallet
                 ),
             CommitmentBundle = ar_bundles:sign_item(
-                ar_bundles:normalize(
+                hb_tx:normalize(
                     #tx{
                         target = NewMsg#tx.target,
                         data = #{

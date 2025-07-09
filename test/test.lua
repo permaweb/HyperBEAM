@@ -98,11 +98,11 @@ function sandboxed_fail()
     return os.getenv("PWD")
 end
 
---- @function route_provider
+--- @function provider
 --- @tparam table base
 --- @tparam table request
 --- @return table a static set of routes for testing purposes.
-function route_provider(base, req, opts)
+function provider(base, req, opts)
     return {
         {
             node = base.node
@@ -148,5 +148,11 @@ function compute_routes(base, req, opts)
             body = "Route added."
         }
     end
+    return base
+end
+
+function inc(base, req, opts)
+    base.count = base.count or 0
+    base.count = base.count + 1
     return base
 end

@@ -308,7 +308,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
     ?event({inputs, {list, Inputs}}),
     % Filter the message down to only the requested keys, then encode it.
     MsgWithOnlyInputs = maps:with(Inputs, Msg),
-    ?event(find_lru, {msg_with_only_inputs, maps:without([<<"commitments">>], MsgWithOnlyInputs)}),
+    ?event({msg_with_only_inputs, maps:without([<<"commitments">>], MsgWithOnlyInputs)}),
     {ok, EncodedWithSigInfo} =
         to(
             maps:without([<<"commitments">>], MsgWithOnlyInputs),

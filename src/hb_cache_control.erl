@@ -105,27 +105,49 @@ lookup(Msg1, Msg2, Opts) ->
 %% @doc Dispatch the cache write to a worker process if requested.
 %% Invoke the appropriate cache write function based on the type of the message.
 dispatch_cache_write(Msg1, Msg2, Msg3, Opts) ->
-    Dispatch =
-        fun() ->
-            hb_cache:write(Msg1, Opts),
-            hb_cache:write(Msg2, Opts),
-            case Msg3 of
-                <<_/binary>> ->
-                    hb_cache:write_binary(
-                        hb_path:hashpath(Msg1, Msg2, Opts),
-                        Msg3,
-                        Opts
-                    );
-                Map when is_map(Map) ->
-                    hb_cache:write(Msg3, Opts);
-                _ ->
-                    ?event({cannot_write_result, Msg3}),
-                    skip_caching
-            end
-        end,
     case hb_opts:get(async_cache, false, Opts) of
-        true -> spawn(Dispatch);
-        false -> Dispatch()
+        true ->
+            find_or_spawn_async_writer(Opts) ! {write, Msg1, Msg2, Msg3, Opts},
+            ok;
+        false ->
+            perform_cache_write(Msg1, Msg2, Msg3, Opts)
+    end.
+
+%% @doc Find our async cacher process, or spawn one if none exists.
+find_or_spawn_async_writer(_Opts) ->
+    case erlang:get({hb_cache_control, async_writer}) of
+        undefined ->
+            PID = spawn(fun() -> async_writer() end),
+            erlang:put({hb_cache_control, async_writer}, PID),
+            PID;
+        PID ->
+            PID
+    end.
+
+%% @doc Optional worker process to write messages to the cache.
+async_writer() ->
+    receive
+        {write, Msg1, Msg2, Msg3, Opts} ->
+            perform_cache_write(Msg1, Msg2, Msg3, Opts);
+        stop -> ok
+    end.
+
+%% @doc Internal function to write a compute result to the cache.
+perform_cache_write(Msg1, Msg2, Msg3, Opts) ->
+    hb_cache:write(Msg1, Opts),
+    hb_cache:write(Msg2, Opts),
+    case Msg3 of
+        <<_/binary>> ->
+            hb_cache:write_binary(
+                hb_path:hashpath(Msg1, Msg2, Opts),
+                Msg3,
+                Opts
+            );
+        Map when is_map(Map) ->
+            hb_cache:write(Msg3, Opts);
+        _ ->
+            ?event({cannot_write_result, Msg3}),
+            skip_caching
     end.
 
 %% @doc Generate a message to return when `only_if_cached' was specified, and
@@ -163,6 +185,8 @@ necessary_messages_not_found_error(Msg1, Msg2, Opts) ->
 
 %% @doc Determine whether we are likely to be faster looking up the result in
 %% our cache (hoping we have it), or executing it directly.
+exec_likely_faster_heuristic(M1, _M2, _) when (not ?IS_ID(M1)) ->
+    true;
 exec_likely_faster_heuristic({as, _, Msg1}, Msg2, Opts) ->
     exec_likely_faster_heuristic(Msg1, Msg2, Opts);
 exec_likely_faster_heuristic(Msg1, Msg2, Opts) ->

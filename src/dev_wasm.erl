@@ -290,7 +290,7 @@ terminate(M1, M2, Opts) ->
     hb_beamr:stop(Instance),
     {ok, hb_private:set(M1,
         #{
-            <<Prefix/binary, "/Instance">> => unset
+            <<Prefix/binary, "/instance">> => unset
         },
         Opts
     )}.
@@ -323,13 +323,7 @@ import(Msg1, Msg2, Opts) ->
             "/",
             FuncName/binary
         >>,
-    StatePath =
-        <<
-            Prefix/binary,
-            "/stdlib/",
-            ModName/binary,
-            "/state"
-        >>,
+    StatePath = << Prefix/binary, "/stdlib/", ModName/binary, "/state" >>,
     AdjustedMsg2 = Msg2#{ <<"path">> => AdjustedPath },
     % 2. Add the current state to the message at the stdlib path.
     AdjustedMsg1 =
@@ -386,7 +380,7 @@ input_prefix_test() ->
     #{ <<"image">> := ImageID } = cache_wasm_image("test/test.wasm"),
     Msg1 =
         #{
-            <<"device">> => <<"WASM-64@1.0">>,
+            <<"device">> => <<"wasm-64@1.0">>,
             <<"input-prefix">> => <<"test-in">>,
             <<"test-in">> => #{ <<"image">> => ImageID }
         },
@@ -409,7 +403,7 @@ process_prefixes_test() ->
     init(),
     Msg1 =
         #{
-            <<"device">> => <<"WASM-64@1.0">>,
+            <<"device">> => <<"wasm-64@1.0">>,
             <<"output-prefix">> => <<"wasm">>,
             <<"input-prefix">> => <<"process">>,
             <<"process">> => cache_wasm_image("test/test.wasm")
@@ -463,7 +457,7 @@ imported_function_test() ->
             [2, 5],
             #{
                 <<"stdlib/my_lib">> =>
-                    #{ <<"device">> => <<"Test-Device@1.0">> }
+                    #{ <<"device">> => <<"test-device@1.0">> }
             }
         )
     ).
@@ -483,16 +477,18 @@ benchmark_test() ->
 			#{}
         ),
     Iterations =
-        hb:benchmark(
+        hb_test_utils:benchmark(
             fun() ->
                 hb_ao:resolve(Msg2, <<"compute">>, #{})
             end,
             BenchTime
         ),
     ?event(benchmark, {scheduled, Iterations}),
-    hb_util:eunit_print(
-        "Evaluated ~p WASM messages through AO-Core in ~p seconds (~.2f msg/s)",
-        [Iterations, BenchTime, Iterations / BenchTime]
+    hb_test_utils:benchmark_print(
+        <<"Through AO-Core:">>,
+        <<"resolutions">>,
+        Iterations,
+        BenchTime
     ),
     ?assert(Iterations > 5),
     ok.
@@ -512,7 +508,7 @@ state_export_and_restore_test() ->
                 <<"stdlib">> =>
                     #{
                         <<"my_lib">> =>
-                            #{ <<"device">> => <<"Test-Device@1.0">> }
+                            #{ <<"device">> => <<"test-device@1.0">> }
                     }
             },
 			#{}
@@ -539,7 +535,7 @@ cache_wasm_image(Image, Opts) ->
     Msg = #{ <<"body">> => Bin },
     {ok, ID} = hb_cache:write(Msg, Opts),
     #{
-        <<"device">> => <<"WASM-64@1.0">>,
+        <<"device">> => <<"wasm-64@1.0">>,
         <<"image">> => ID
     }.
 

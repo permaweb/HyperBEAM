@@ -35,32 +35,30 @@ from_message(_NonMapMessage) -> #{}.
 get(Key, Msg, Opts) ->
     get(Key, Msg, not_found, Opts).
 get(InputPath, Msg, Default, Opts) ->
-    Path = hb_path:term_to_path_parts(remove_private_specifier(InputPath, Opts), Opts),
-    ?event({get_private, {in, InputPath}, {out, Path}}),
     % Resolve the path against the private element of the message.
-    Resolve =
-        hb_ao:resolve(
+    Resolved =
+        hb_util:deep_get(
+            remove_private_specifier(InputPath, Opts),
             from_message(Msg),
-            #{ <<"path">> => Path },
             priv_ao_opts(Opts)
         ),
-    case Resolve of
-        {error, _} -> Default;
-        {ok, Value} -> Value
+    case Resolved of
+        not_found -> Default;
+        Value -> Value
     end.
 
 %% @doc Helper function for setting a key in the private element of a message.
 set(Msg, InputPath, Value, Opts) ->
     Path = remove_private_specifier(InputPath, Opts),
     Priv = from_message(Msg),
-    ?event({set_private, {in, InputPath}, {out, Path}, {value, Value}, {opts, Opts}}),
-    NewPriv = hb_ao:set(Priv, Path, Value, priv_ao_opts(Opts)),
+    ?event({set_private, {in, Path}, {out, Path}, {value, Value}, {opts, Opts}}),
+    NewPriv = hb_util:deep_set(Path, Value, Priv, priv_ao_opts(Opts)),
     ?event({set_private_res, {out, NewPriv}}),
     set_priv(Msg, NewPriv).
 set(Msg, PrivMap, Opts) ->
     CurrentPriv = from_message(Msg),
     ?event({set_private, {in, PrivMap}, {opts, Opts}}),
-    NewPriv = hb_ao:set(CurrentPriv, PrivMap, priv_ao_opts(Opts)),
+    NewPriv = hb_util:deep_merge(CurrentPriv, PrivMap, priv_ao_opts(Opts)),
     ?event({set_private_res, {out, NewPriv}}),
     set_priv(Msg, NewPriv).
 
@@ -73,7 +71,7 @@ set_priv(Msg, PrivMap) ->
 
 %% @doc Check if a key is private.
 is_private(Key) ->
-	try hb_ao:normalize_key(Key) of
+	try hb_util:bin(Key) of
 		<<"priv", _/binary>> -> true;
 		_ -> false
     catch _:_ -> false
@@ -127,7 +125,7 @@ set_private_test() ->
     ?assertEqual(#{<<"a">> => 1, <<"priv">> => #{<<"a">> => 1}}, Res),
     ?assertEqual(
         #{<<"a">> => 1, <<"priv">> => #{<<"a">> => 1}},
-        set(Res, a, 1, #{})
+        set(Res, <<"a">>, 1, #{})
     ).
 
 get_private_key_test() ->
@@ -137,3 +135,8 @@ get_private_key_test() ->
     ?assertEqual(2, get(<<"b">>, M1, #{})),
     {error, _} = hb_ao:resolve(M1, <<"priv/a">>, #{}),
     {error, _} = hb_ao:resolve(M1, <<"priv">>, #{}).
+
+
+get_deep_key_test() ->
+    M1 = #{<<"a">> => 1, <<"priv">> => #{<<"b">> => #{<<"c">> => 3}}},
+    ?assertEqual(3, get(<<"b/c">>, M1, #{})).

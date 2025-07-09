@@ -4,16 +4,38 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
+%% The time to run the benchmarks for in seconds.
+-define(BENCHMARK_TIME, 0.25).
+%% The number of iterations to run each benchmark for.
+-define(BENCHMARK_ITERATIONS, 1_000).
+
 %% Easy hook to make a test executable via the command line:
 %% `rebar3 eunit --test hb_ao_test_vectors:run_test'
 %% Comment/uncomment out as necessary.
-run_test() ->
-    hb_test_utils:run(step_hook, normal, test_suite(), test_opts()).
+% run_test_() ->
+%     {timeout, 10, fun() ->
+%         hb_test_utils:compare_events(
+%             fun dev_lua:pure_lua_process_benchmark/1,
+%             #{
+%                 process_cache_frequency => 50,
+%                 hashpath => ignore
+%             },
+%             #{
+%                 process_cache_frequency => 50
+%             }
+%             % normal,
+%             % without_hashpath,
+%             % test_opts()
+%         )
+%     end}.
 
 %% @doc Run each test in the file with each set of options. Start and reset
 %% the store for each test.
-run_all_test_() ->
+suite_test_() ->
     hb_test_utils:suite_with_opts(test_suite(), test_opts()).
+
+benchmark_test_() ->
+    hb_test_utils:suite_with_opts(benchmark_suite(), test_opts()).
 
 test_suite() ->
     [
@@ -78,8 +100,38 @@ test_suite() ->
             fun step_hook_test/1}
     ].
 
+benchmark_suite() ->
+    [
+        {benchmark_simple, "simple resolution benchmark",
+            fun benchmark_simple_test/1},
+        {benchmark_multistep, "multistep resolution benchmark",
+            fun benchmark_multistep_test/1},
+        {benchmark_get, "get benchmark",
+            fun benchmark_get_test/1},
+        {benchmark_set, "single value set benchmark",
+            fun benchmark_set_test/1},
+        {benchmark_set_multiple, "set two keys benchmark",
+            fun benchmark_set_multiple_test/1},
+        {benchmark_set_multiple_deep, "set two keys deep benchmark",
+            fun benchmark_set_multiple_deep_test/1}
+    ].
+
 test_opts() ->
     [
+        #{
+            name => normal,
+            desc => "Default opts",
+            opts => #{},
+            skip => []
+        },
+        #{
+            name => without_hashpath,
+            desc => "Default without hashpath",
+            opts => #{
+                hashpath => ignore
+            },
+            skip => []
+        },
         #{
             name => no_cache,
             desc => "No cache read or write",
@@ -138,14 +190,6 @@ test_opts() ->
                 % Skip tests that call hb_ao utils (which have their own 
                 % cache settings).
             ]
-        },
-        #{
-            name => normal,
-            desc => "Default opts",
-            opts => #{
-                cache_lookup_hueristics => false
-            },
-            skip => []
         }
     ].
 
@@ -634,7 +678,7 @@ device_exports_test(Opts) ->
         info =>
             fun() ->
                 #{
-                    exports => [test1, <<"Test2">>],
+                    exports => [test1, <<"test2">>],
                     handler =>
                         fun() ->
                             {ok, <<"Handler-Value">>}
@@ -642,14 +686,14 @@ device_exports_test(Opts) ->
                 }
             end
     },
-    Msg3 = #{ <<"device">> => Dev2, <<"Test1">> => <<"BAD1">>, <<"test3">> => <<"GOOD3">> },
+    Msg3 = #{ <<"device">> => Dev2, <<"test1">> => <<"BAD1">>, <<"test3">> => <<"GOOD3">> },
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test1">>, Msg3, Opts)),
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test2">>, Msg3, Opts)),
     ?assertEqual(<<"GOOD3">>, hb_ao:get(<<"test3">>, Msg3, Opts)),
     ?assertEqual(<<"GOOD4">>,
         hb_ao:get(
-            <<"Test4">>,
-            hb_ao:set(Msg3, <<"Test4">>, <<"GOOD4">>, Opts)
+            <<"test4">>,
+            hb_ao:set(Msg3, <<"test4">>, <<"GOOD4">>, Opts)
         )
     ),
     ?assertEqual(not_found, hb_ao:get(<<"test5">>, Msg3, Opts)).
@@ -675,7 +719,7 @@ device_excludes_test(Opts) ->
         hb_ao:set(Msg, <<"test-key2">>, <<"2">>, Opts)).
 
 denormalized_device_key_test(Opts) ->
-	Msg = #{ <<"Device">> => dev_test },
+	Msg = #{ <<"device">> => dev_test },
 	?assertEqual(dev_test, hb_ao:get(device, Msg, Opts)),
 	?assertEqual(dev_test, hb_ao:get(<<"device">>, Msg, Opts)),
 	?assertEqual({module, dev_test},
@@ -822,3 +866,113 @@ step_hook_test(InitOpts) ->
     ),
     % Test that the step hook was called.
     ?assert(receive {step, Ref} -> true after 100 -> false end).
+
+%%% Benchmark tests
+benchmark_simple_test(Opts) ->
+    Time =
+        hb_test_utils:benchmark_iterations(
+            fun(I) -> hb_ao:resolve(#{ <<"a">> => I }, <<"a">>, Opts) end,
+            ?BENCHMARK_ITERATIONS
+        ),
+    hb_test_utils:benchmark_print(
+        <<"Single-step resolutions:">>,
+        ?BENCHMARK_ITERATIONS,
+        Time
+    ).
+
+benchmark_multistep_test(Opts) ->
+    Time =
+        hb_test_utils:benchmark_iterations(
+            fun(I) ->
+                hb_ao:resolve(
+                    #{
+                        <<"iteration">> => I,
+                        <<"a">> => #{
+                            <<"b">> => #{ <<"return">> => I }
+                        }
+                    },
+                    <<"a/b/return">>,
+                    Opts
+                )
+            end,
+            ?BENCHMARK_ITERATIONS
+        ),
+    hb_test_utils:benchmark_print(
+        <<"Multistep resolutions:">>,
+        ?BENCHMARK_ITERATIONS,
+        Time
+    ).
+
+benchmark_get_test(Opts) ->
+    Time =
+        hb_test_utils:benchmark_iterations(
+            fun(I) ->
+                hb_ao:get(
+                    <<"a">>,
+                    #{ <<"a">> => <<"1">>, <<"iteration">> => I },
+                    Opts
+                )
+            end,
+            ?BENCHMARK_ITERATIONS
+        ),
+    hb_test_utils:benchmark_print(
+        <<"Get operations:">>,
+        ?BENCHMARK_ITERATIONS,
+        Time
+    ).
+
+benchmark_set_test(Opts) ->
+    Time =
+        hb_test_utils:benchmark_iterations(
+            fun(I) ->
+                hb_ao:set(
+                    #{ <<"a">> => <<"1">>, <<"iteration">> => I },
+                    <<"a">>,
+                    <<"2">>,
+                    Opts
+                )
+            end,
+            ?BENCHMARK_ITERATIONS
+        ),
+    hb_test_utils:benchmark_print(
+        <<"Single value set operations:">>,
+        ?BENCHMARK_ITERATIONS,
+        Time
+    ).
+
+benchmark_set_multiple_test(Opts) ->
+    Time =
+        hb_test_utils:benchmark_iterations(
+            fun(I) ->
+                hb_ao:set(
+                    #{ <<"a">> => <<"1">>, <<"iteration">> => I },
+                    #{ <<"a">> => <<"1a">>, <<"b">> => <<"2">> },
+                    Opts
+                )
+            end,
+            ?BENCHMARK_ITERATIONS
+        ),
+    hb_test_utils:benchmark_print(
+        <<"Set two keys operations:">>,
+        ?BENCHMARK_ITERATIONS,
+        Time
+    ).
+
+
+benchmark_set_multiple_deep_test(Opts) ->
+    Time =
+        hb_test_utils:benchmark_iterations(
+            fun(I) ->
+                hb_ao:set(
+                    #{ <<"a">> => #{ <<"b">> => <<"1">> } },
+                    #{ <<"a">> => #{ <<"b">> => <<"2">>, <<"c">> => I } },
+                    Opts
+                )
+            end,
+            ?BENCHMARK_ITERATIONS
+        ),
+    hb_test_utils:benchmark_print(
+        <<"Set two keys operations:">>,
+        ?BENCHMARK_ITERATIONS,
+        Time
+    ).

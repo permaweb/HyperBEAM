@@ -1,6 +1,7 @@
 %%% @doc A device that renders a REPL-like interface for AO-Core via HTML.
 -module(dev_hyperbuddy).
--export([info/0, format/3, metrics/3, events/3, return_file/2, return_error/1]).
+-export([info/0, format/3, return_file/2, return_error/1]).
+-export([metrics/3, events/3]).
 -export([throw/3]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

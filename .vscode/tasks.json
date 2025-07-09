@@ -14,7 +14,37 @@
     {
       "label": "Stop HyperBEAM",
       "type": "shell",
-      "command": "lsof -i tcp:10000 | tail -n 1 | awk '{print $2}' | xargs kill -9"
+      "command": "lsof -i tcp:8734 | tail -n 1 | awk '{print $2}' | xargs kill -9"
+    },
+    {
+      "label": "Generate a flame graph for a function.",
+      "type": "shell",
+      "command": "rebar3 as eflame shell --eval \"hb_debugger:profile_and_stop(fun() -> ${input:moduleName}:${input:functionName}(${input:funcArgs}) end).\"",
+      "group": "test",
+      "problemMatcher": "$erlang",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "new"
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "moduleName",
+      "type": "promptString",
+      "description": "Enter module:"
+    },
+    {
+      "id": "functionName", 
+      "type": "promptString",
+      "description": "Enter an exported function name:"
+    },
+    {
+      "id": "funcArgs",
+      "type": "promptString",
+      "description": "(Optional) Pass arguments to the function:"
     }
   ]
 }

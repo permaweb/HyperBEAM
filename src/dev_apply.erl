@@ -15,7 +15,7 @@
 %%% retrieved. If no such prefix is present, the `Request' message is checked
 %%% first, and the `Base' message is checked second.
 -module(dev_apply).
--export([info/1, pair/3]).
+-export([info/1, pair/3, default/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -31,8 +31,9 @@ info(_) ->
 %% the given request, then the `pair' function is called. Otherwise, the `eval'
 %% key is used to resolve the request.
 default(Key, Base, Request, Opts) ->
-    FoundBase = hb_ao:get(<<"base">>, {as, <<"message@1.0">>, Request}, Opts),
-    FoundRequest = hb_ao:get(<<"request">>, {as, <<"message@1.0">>, Request}, Opts),
+    ?event(debug_apply, {req, {key, Key}, {base, Base}, {request, Request}}),
+    FoundBase = hb_maps:get(<<"base">>, Request, not_found, Opts),
+    FoundRequest = hb_maps:get(<<"request">>, Request, not_found, Opts),
     case {FoundBase, FoundRequest} of
         {B, R} when B =/= not_found andalso R =/= not_found ->
             pair(Key, Base, Request, Opts);

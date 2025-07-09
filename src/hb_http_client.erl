@@ -40,7 +40,7 @@ httpc_req(Args, _, Opts) ->
         443 -> "https";
         _ -> "http"
     end,
-    ?event(http, {httpc_req, Args}),
+    ?event(http_client, {httpc_req, {explicit, Args}}),
     URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
     FilteredHeaders = hb_maps:remove(<<"content-type">>, Headers, Opts),
     HeaderKV =
@@ -62,7 +62,7 @@ httpc_req(Args, _, Opts) ->
                     Body
                 }
         end,
-    ?event(http, {httpc_req, Method, URL, Request}),
+    ?event({http_client_outbound, Method, URL, Request}),
     HTTPCOpts = [{full_result, true}, {body_format, binary}],
 	StartTime = os:system_time(millisecond),
     case httpc:request(Method, Request, [], HTTPCOpts) of
@@ -74,7 +74,7 @@ httpc_req(Args, _, Opts) ->
                 ||
                     {Key, Value} <- RawRespHeaders
                 ],
-            ?event(http, {httpc_resp, Status, RespHeaders, RespBody}),
+            ?event(http_client, {httpc_resp, Status, RespHeaders, RespBody}),
             record_duration(#{
                     <<"request-method">> => method_to_bin(Method),
                     <<"request-path">> => hb_util:bin(Path),
@@ -85,7 +85,7 @@ httpc_req(Args, _, Opts) ->
             ),
             {ok, Status, RespHeaders, RespBody};
         {error, Reason} ->
-            ?event(http, {httpc_error, Reason}),
+            ?event(http_client, {httpc_error, Reason}),
             {error, Reason}
     end.
 
@@ -232,6 +232,7 @@ init(Opts) ->
     end.
 
 init_prometheus(Opts) ->
+    application:ensure_all_started([prometheus, prometheus_cowboy]),
 	prometheus_counter:new([
 		{name, gun_requests_total},
 		{labels, [http_method, route, status_class]},
@@ -443,7 +444,12 @@ terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
 inc_prometheus_gauge(Name) ->
     case application:get_application(prometheus) of
         undefined -> ok;
-        _ -> prometheus_gauge:inc(Name)
+        _ ->
+            try prometheus_gauge:inc(Name)
+            catch _:_ ->
+                init_prometheus(#{}),
+                prometheus_gauge:inc(Name)
+            end
     end.
 
 %% @doc Safe wrapper for prometheus_gauge:dec/2.
@@ -462,8 +468,6 @@ inc_prometheus_counter(Name, Labels, Value) ->
 open_connection(#{ peer := Peer }, Opts) ->
     {Host, Port} = parse_peer(Peer, Opts),
     ?event(http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
-	ConnectTimeout =
-		hb_opts:get(http_connect_timeout, no_connect_timeout, Opts),
     BaseGunOpts =
         #{
             http_opts =>
@@ -476,7 +480,12 @@ open_connection(#{ peer := Peer }, Opts) ->
                         )
                 },
             retry => 0,
-            connect_timeout => ConnectTimeout
+            connect_timeout =>
+                hb_opts:get(
+                    http_connect_timeout,
+                    no_connect_timeout,
+                    Opts
+                )
         },
     Transport =
         case Port of
@@ -570,7 +579,16 @@ request(PID, Args, Opts) ->
 	Path = hb_maps:get(path, Args, undefined, Opts),
 	Headers = hb_maps:get(headers, Args, [], Opts),
 	Body = hb_maps:get(body, Args, <<>>, Opts),
-    ?event(http, {gun_request, {method, Method}, {path, Path}, {headers, Headers}, {body, Body}}),
+    ?event(
+        http_client,
+        {gun_request,
+            {method, Method},
+            {path, Path},
+            {headers, {explicit, Headers}},
+            {body, {explicit, {body, Body}}}
+        },
+        Opts
+    ),
 	Ref = gun:request(PID, Method, Path, Headers, Body),
 	ResponseArgs =
         #{
