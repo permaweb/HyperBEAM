@@ -456,7 +456,7 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
             ?event(green_zone, {join, sending_commitment, PeerLocation, PeerID, Req}),
             ?event(green_zone_init, {init_opts, InitOpts}),
             ?event(green_zone_init, {req, Req}),
-            ?event(debug_validate, {peer_opts, {explicit, InitOpts}}),
+            ?event(debug_validate, {peer_req, {explicit, Req}}),
             case hb_http:post(PeerLocation, <<"/~greenzone@1.0/join">>, Req, InitOpts) of
                 {ok, Resp} ->
                     % Log the response received from the peer.
