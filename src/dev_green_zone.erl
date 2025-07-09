@@ -541,7 +541,7 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
 -spec validate_join(M1 :: term(), Req :: map(), Opts :: map()) ->
         {ok, map()} | {error, binary()}.
 validate_join(M1, Req, Opts) ->
-    ?event(debug_validate, {opts, {explicit, Opts}}),
+    ?event(debug_validate, {req, {explicit, Req}}),
     case validate_peer_opts(Req, Opts) of
         true -> do_nothing;
         false -> throw(invalid_join_request)
@@ -618,6 +618,7 @@ validate_peer_opts(Req, Opts) ->
     PeerOpts =
         hb_ao:normalize_keys(
             hb_ao:get(<<"node-message">>, Req, undefined, Opts)),
+    ?event(debug_validate, {peer_opts, {explicit, PeerOpts}}),
     ?event(green_zone_init, {peer_opts, PeerOpts}),
     ?event(green_zone_init, {required_config, RequiredConfig}),
     % Validate each item in node_history has required options
@@ -783,3 +784,53 @@ rsa_wallet_integration_test() ->
     ?assertEqual(PlainText, Decrypted),
     % Verify wallet structure
     ?assertEqual(KeyType, {rsa, 65537}).
+
+%% hb_opts:get vs maps:get vs hb_maps:get test
+get_test() ->
+    Opts = #{
+        <<"node-message">> => #{
+            routes => [
+                #{
+                    % Routes for the genesis-wasm device to use a local CU, if requested.
+                    <<"template">> => <<"/result/.*">>,
+                    <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
+                },
+                #{
+                    % Routes for GraphQL requests to use a remote GraphQL API.
+                    <<"template">> => <<"/graphql">>,
+                    <<"nodes">> =>
+                        [
+                            #{
+                                <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
+                                <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            },
+                            #{
+                                <<"prefix">> => <<"https://arweave.net">>,
+                                <<"opts">> => #{ http_client => gun, protocol => http2 }
+                            }
+                        ]
+                },
+                #{
+                    % Routes for raw data requests to use a remote gateway.
+                    <<"template">> => <<"/raw">>,
+                    <<"node">> =>
+                        #{
+                            <<"prefix">> => <<"https://arweave.net">>,
+                            <<"opts">> => #{ http_client => gun, protocol => http2 }
+                        }
+                }
+            ]
+        }
+    },
+    NormalizedOpts = hb_ao:normalize_keys(
+        hb_ao:get(<<"node-message">>, Opts, undefined, Opts)
+    ),
+    ?event(get_test, {normalized_opts, {explicit, NormalizedOpts}}),
+    % MapGet = maps:get(routes, Opts),
+    % ?event(get_test, {map_get, {explicit, MapGet}}),
+    % HbOptsGet = hb_opts:get(<<"routes">>, Opts),
+    % ?event(get_test, {hb_opts_get, {explicit, HbOptsGet}}),
+    % HbMapsGet = hb_maps:get(routes, Opts),
+    % ?event(get_test, {hb_maps_get, {explicit, HbMapsGet}}),
+    ?assertEqual(true, true).
+
