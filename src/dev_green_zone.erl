@@ -540,6 +540,7 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
 -spec validate_join(M1 :: term(), Req :: map(), Opts :: map()) ->
         {ok, map()} | {error, binary()}.
 validate_join(M1, Req, Opts) ->
+    ?event(debug_validate, {opts, {explicit, Opts}}),
     case validate_peer_opts(Req, Opts) of
         true -> do_nothing;
         false -> throw(invalid_join_request)
@@ -616,6 +617,7 @@ validate_peer_opts(Req, Opts) ->
     PeerOpts =
         hb_ao:normalize_keys(
             hb_ao:get(<<"node-message">>, Req, undefined, Opts)),
+    ?event(debug_validate, {peer_opts, {explicit, PeerOpts}}),
     ?event(green_zone_init, {peer_opts, PeerOpts}),
     ?event(green_zone_init, {required_config, RequiredConfig}),
     % Validate each item in node_history has required options
