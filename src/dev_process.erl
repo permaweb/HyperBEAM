@@ -222,6 +222,7 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
             % here. Depending on the type of process, 'rewinding' may require
             % re-computing from a significantly earlier checkpoint, so for now
             % we throw an error.
+            ?event(compute, {error_already_calculated_slot,  {target, TargetSlot}, {current, CurrentSlot}}),
             throw(
                 {error,
                     {already_calculated_slot,
@@ -242,6 +243,7 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                 {error, Res} ->
                     % If the scheduler device cannot provide a next message,
                     % we return its error details, along with the current slot.
+                    ?event(compute, {error_getting_schedule, {error, Res}, {phase, <<"get-schedule">>}, {attempted_slot, NextSlot}}),
                     {error, Res#{
                         <<"phase">> => <<"get-schedule">>,
                         <<"attempted-slot">> => NextSlot
@@ -267,6 +269,7 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                                     Error;
                                 true -> #{ <<"error">> => Error }
                                 end,
+                            ?event(compute, {error_computing_slot, {error, ErrMsg}, {phase, <<"compute">>}, {attempted_slot, NextSlot}}),
                             {error,
                                 ErrMsg#{
                                     <<"phase">> => <<"compute">>,
@@ -288,7 +291,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
             undefined -> RawInputMsg#{ <<"path">> => <<"compute">> };
             _ -> RawInputMsg
         end,
-    ?event({input_msg, InputMsg}),
+    ?event(compute,{input_msg, InputMsg}),
     ?event(compute, {executing, {proc_id, ProcID}, {slot, NextSlot}}, Opts),
     % Unset the previous results.
     UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
@@ -464,12 +467,27 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                             MaybeLoadedSnapshotMsg,
                             Opts
                         ),
+                    Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
+                    #{ <<"commitments">> := HmacCommits} =
+                        hb_message:with_commitments(
+                            #{ <<"type">> => <<"hmac-sha256">>},
+                            Process,
+                            Opts),
+                    #{ <<"commitments">> := SignCommits } =
+                        hb_message:with_commitments(ProcID, Process, Opts),
+                    UpdateProcess = hb_maps:put(
+                        <<"commitments">>,
+                        hb_maps:merge(HmacCommits, SignCommits),
+                        Process,
+                        Opts
+                    ),
+                    LoadedSnapshotMsg2 = LoadedSnapshotMsg#{ <<"process">> => UpdateProcess },
                     LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
-                    ?event(compute, {found_state_checkpoint, ProcID, LoadedSnapshotMsg}),
+                    ?event(compute, {found_state_checkpoint, ProcID, LoadedSnapshotMsg2}),
                     {ok, Normalized} =
                         run_as(
                             <<"execution">>,
-                            LoadedSnapshotMsg,
+                            LoadedSnapshotMsg2,
                             normalize,
                             Opts#{ hashpath => ignore }
                         ),

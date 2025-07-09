@@ -722,14 +722,18 @@ diff(_Val1, _Val2, _Opts) ->
 %% @doc Filter messages that do not match the 'spec' given. The underlying match
 %% is performed in the `only_present' mode, such that match specifications only
 %% need to specify the keys that must be present.
+with_commitments(ID, Msg, Opts) when ?IS_ID(ID) ->
+    with_commitments([ID], Msg, Opts);
 with_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
     ?event({with_commitments, {spec, Spec}, {commitments, Commitments}}),
     FilteredCommitments =
         hb_maps:filter(
-            fun(_, CommMsg) ->
-                Res = match(Spec, CommMsg, primary, Opts) == true,
-                ?event({with_commitments, {commitments, CommMsg}, {spec, Spec}, {match, Res}}),
-                Res
+            fun(ID, CommMsg) ->
+                if is_list(Spec) ->
+                    lists:member(ID, Spec);
+                is_map(Spec) ->
+                    match(Spec, CommMsg, primary, Opts) == true
+                end
             end,
             Commitments,
             Opts
@@ -760,11 +764,22 @@ without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
 without_commitments(_Spec, Msg, _Opts) ->
     Msg.
 
-%% @doc Extract a commitment from a message given a `committer' ID, or a spec
-%% message to match against. Returns only the first matching commitment, or
-%% `not_found'.
-commitment(Committer, Msg) ->
-    commitment(Committer, Msg, #{}).
+%% @doc Extract a commitment from a message given a `committer' or `commitment'
+%% ID, or a spec message to match against. Returns only the first matching
+%% commitment, or `not_found'.
+commitment(ID, Msg) ->
+    commitment(ID, Msg, #{}).
+commitment(ID, Link, Opts) when ?IS_LINK(Link) ->
+    commitment(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
+commitment(ID, Msg, Opts)
+        when is_binary(ID),
+        map_get(ID, map_get(<<"commitments">>, Msg)) /= undefined ->
+    hb_maps:get(
+        ID,
+        hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+        not_found,
+        Opts
+    );
 commitment(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
     commitment(#{ <<"committer">> => CommitterID }, Msg, Opts);
 commitment(Spec, #{ <<"commitments">> := Commitments }, Opts) ->
