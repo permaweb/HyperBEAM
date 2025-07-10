@@ -87,8 +87,8 @@ start() ->
     ),
     ?event(http, {start_store, <<"cache-mainnet">>}),
     Store = hb_opts:get(store, no_store, #{}),
-    StoreWithCapacity = update_store_with_capacity(Store, MergedConfig),
-    hb_store:start(StoreWithCapacity),
+    StoreWithDefaults = apply_store_defaults(Store, MergedConfig),
+    hb_store:start(StoreWithDefaults),
     start(
         Loaded#{
             priv_wallet => PrivWallet,
@@ -497,8 +497,8 @@ set_default_opts(Opts) ->
                 filelib:ensure_dir(binary_to_list(TestDir)),
                 #{ <<"store-module">> => hb_store_fs, <<"name">> => TestDir };
             PassedStore -> 
-                % Check for default_lmdb_capacity and apply to LMDB stores
-                update_store_with_capacity(PassedStore, Opts)
+                % Apply store defaults based on store module type
+                apply_store_defaults(PassedStore, Opts)
         end,
     ?event({set_default_opts,
         {given, TempOpts},
@@ -514,38 +514,106 @@ set_default_opts(Opts) ->
         force_signed => true
     }.
 
-%% @doc Update store configuration with default_lmdb_capacity if set.
-%% This function checks if default_lmdb_capacity is configured and applies it
-%% to any store configurations with store-module set to hb_store_lmdb.
-update_store_with_capacity(Store, Opts) when is_list(Store) ->
-    DefaultCapacity = hb_opts:get(default_lmdb_capacity, not_found, Opts),
-    case DefaultCapacity of
-        not_found -> Store;
-        Capacity -> 
+%% @doc Apply store configuration defaults based on store module type.
+%% This function checks for default_<store_type>_<parameter> configurations and applies them
+%% to matching store configurations while preserving explicit settings.
+%%
+%% Supported patterns:
+%% - default_lmdb_capacity -> applies <<"capacity">> to hb_store_lmdb
+%% - default_rocksdb_block_cache_size -> applies <<"block_cache_size">> to hb_store_rocksdb
+%% - default_lru_max_entries -> applies <<"max_entries">> to hb_store_lru
+%% - default_fs_buffer_size -> applies <<"buffer_size">> to hb_store_fs
+apply_store_defaults(Store, Opts) when is_list(Store) ->
+    DefaultParams = extract_store_defaults(Opts),
+    case maps:size(DefaultParams) of
+        0 -> Store;
+        _ -> 
             lists:map(fun(StoreConfig) ->
-                update_single_store_with_capacity(StoreConfig, Capacity)
+                apply_store_defaults_to_config(StoreConfig, DefaultParams)
             end, Store)
     end;
-update_store_with_capacity(Store, Opts) when is_map(Store) ->
-    DefaultCapacity = hb_opts:get(default_lmdb_capacity, not_found, Opts),
-    case DefaultCapacity of
-        not_found -> Store;
-        Capacity -> update_single_store_with_capacity(Store, Capacity)
+apply_store_defaults(Store, Opts) when is_map(Store) ->
+    DefaultParams = extract_store_defaults(Opts),
+    case maps:size(DefaultParams) of
+        0 -> Store;
+        _ -> apply_store_defaults_to_config(Store, DefaultParams)
     end.
 
-%% @doc Helper function to update a single store configuration with capacity.
+%% @doc Extract default parameters for store modules from configuration options.
+%% Supports the pattern: default_<store_type>_<parameter_name>
+%% Returns a map of {StoreModule => #{ParameterName => Value}}
+extract_store_defaults(Opts) ->
+    % Map from store type strings to their actual module atoms
+    StoreTypeMap = #{
+        <<"lmdb">> => hb_store_lmdb,
+        <<"rocksdb">> => hb_store_rocksdb,
+        <<"lru">> => hb_store_lru,
+        <<"fs">> => hb_store_fs,
+        <<"gateway">> => hb_store_gateway
+    },
+    
+    % For backward compatibility, check the original key first
+    LegacyDefaults = case hb_opts:get(default_lmdb_capacity, not_found, Opts) of
+        not_found -> #{};
+        Capacity -> #{hb_store_lmdb => #{<<"capacity">> => Capacity}}
+    end,
+    
+    % Get all keys from opts and check for default_* pattern
+    AllKeys = get_all_opt_keys(Opts),
+    
+    GenericDefaults = lists:foldl(fun(Key, Acc) ->
+        case parse_default_key(Key) of
+            {ok, StoreType, ParamName} ->
+                case maps:get(StoreType, StoreTypeMap, undefined) of
+                    undefined -> Acc;
+                    StoreModule ->
+                        case hb_opts:get(Key, not_found, Opts) of
+                            not_found -> Acc;
+                            Value ->
+                                StoreDefaults = maps:get(StoreModule, Acc, #{}),
+                                UpdatedDefaults = StoreDefaults#{ParamName => Value},
+                                Acc#{StoreModule => UpdatedDefaults}
+                        end
+                end;
+            error -> Acc
+        end
+    end, LegacyDefaults, AllKeys),
+    
+    GenericDefaults.
+
+%% @doc Get all keys from the options map.
+get_all_opt_keys(Opts) when is_map(Opts) ->
+    maps:keys(Opts);
+get_all_opt_keys(_) ->
+    [].
+
+%% @doc Parse a configuration key to extract store type and parameter name.
+%% Expected format: default_<store_type>_<parameter_name>
+%% Returns: {ok, StoreType, ParameterName} | error
+parse_default_key(Key) when is_binary(Key) ->
+    case binary:split(Key, <<"_">>, [global]) of
+        [<<"default">>, StoreType | ParamParts] when length(ParamParts) > 0 ->
+            ParamName = iolist_to_binary(lists:join(<<"_">>, ParamParts)),
+            {ok, StoreType, ParamName};
+        _ -> error
+    end;
+parse_default_key(Key) when is_atom(Key) ->
+    parse_default_key(atom_to_binary(Key));
+parse_default_key(_) -> error.
+
+%% @doc Apply default parameters to a single store configuration recursively.
 %% This function recursively updates nested store configurations found in
 %% fields like 'store', 'persistent-store', and 'local-store'.
-update_single_store_with_capacity(StoreConfig, Capacity) ->
-    % First update the current store if it's LMDB
+apply_store_defaults_to_config(StoreConfig, DefaultParams) ->
+    % Apply defaults to current store based on its module type
     UpdatedConfig = case maps:get(<<"store-module">>, StoreConfig, undefined) of
-        hb_store_lmdb ->
-            % Only set capacity if it's not already explicitly set
-            case maps:get(<<"capacity">>, StoreConfig, not_found) of
-                not_found -> StoreConfig#{<<"capacity">> => Capacity};
-                _ -> StoreConfig  % Keep existing capacity
-            end;
-        _ -> StoreConfig  % Not an LMDB store, leave unchanged
+        undefined -> StoreConfig;
+        StoreModule ->
+            case maps:get(StoreModule, DefaultParams, #{}) of
+                Empty when map_size(Empty) == 0 -> StoreConfig;
+                StoreDefaults ->
+                    apply_defaults_to_store_config(StoreConfig, StoreDefaults)
+            end
     end,
     
     % Then recursively update nested stores
@@ -554,10 +622,27 @@ update_single_store_with_capacity(StoreConfig, Capacity) ->
         case maps:get(Field, Acc, not_found) of
             not_found -> Acc;
             NestedStore -> 
-                UpdatedNestedStore = update_store_with_capacity(NestedStore, #{default_lmdb_capacity => Capacity}),
+                UpdatedNestedStore = apply_store_defaults_recursive(NestedStore, DefaultParams),
                 Acc#{Field => UpdatedNestedStore}
         end
     end, UpdatedConfig, NestedStoreFields).
+
+%% @doc Apply default parameters to a store configuration without overriding existing values.
+apply_defaults_to_store_config(StoreConfig, Defaults) ->
+    maps:fold(fun(ParamKey, DefaultValue, Acc) ->
+        case maps:get(ParamKey, Acc, not_found) of
+            not_found -> Acc#{ParamKey => DefaultValue};
+            _ -> Acc  % Keep existing value
+        end
+    end, StoreConfig, Defaults).
+
+%% @doc Apply default parameters recursively to nested store configurations.
+apply_store_defaults_recursive(Store, DefaultParams) when is_list(Store) ->
+    lists:map(fun(StoreConfig) ->
+        apply_store_defaults_to_config(StoreConfig, DefaultParams)
+    end, Store);
+apply_store_defaults_recursive(Store, DefaultParams) when is_map(Store) ->
+    apply_store_defaults_to_config(Store, DefaultParams).
 
 %% @doc Test that we can start the server, send a message, and get a response.
 start_node() ->
@@ -664,7 +749,7 @@ restart_server_test() ->
         hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{})
     ).
 
-%% @doc Test the update_store_with_capacity/2 function to ensure it correctly
+%% @doc Test the apply_store_defaults/2 function to ensure it correctly
 %% applies default_lmdb_capacity to LMDB stores while leaving other stores unchanged.
 update_store_with_capacity_test() ->
     % Test with no default capacity configured
@@ -681,13 +766,13 @@ update_store_with_capacity_test() ->
     ],
     
     % Should return unchanged when no default capacity is set
-    ?assertEqual(StoreList, update_store_with_capacity(StoreList, OptsNoCapacity)),
+    ?assertEqual(StoreList, apply_store_defaults(StoreList, OptsNoCapacity)),
     
     % Test with default capacity configured
     DefaultCapacity = 1024 * 1024 * 1024,  % 1GB
     OptsWithCapacity = #{default_lmdb_capacity => DefaultCapacity},
     
-    UpdatedStoreList = update_store_with_capacity(StoreList, OptsWithCapacity),
+    UpdatedStoreList = apply_store_defaults(StoreList, OptsWithCapacity),
     [LMDBStore, FSStore] = UpdatedStoreList,
     
     % LMDB store should have capacity added
@@ -704,7 +789,7 @@ update_store_with_capacity_test() ->
         <<"store-module">> => hb_store_lmdb
     },
     
-    UpdatedSingleStore = update_store_with_capacity(SingleLMDBStore, OptsWithCapacity),
+    UpdatedSingleStore = apply_store_defaults(SingleLMDBStore, OptsWithCapacity),
     ?assertEqual(DefaultCapacity, maps:get(<<"capacity">>, UpdatedSingleStore)),
     
     % Test that explicit capacity takes precedence
@@ -714,7 +799,7 @@ update_store_with_capacity_test() ->
         <<"capacity">> => 2048
     },
     
-    UpdatedExplicitStore = update_store_with_capacity(StoreWithExplicitCapacity, OptsWithCapacity),
+    UpdatedExplicitStore = apply_store_defaults(StoreWithExplicitCapacity, OptsWithCapacity),
     ?assertEqual(2048, maps:get(<<"capacity">>, UpdatedExplicitStore)),
     
     % Test with non-LMDB store
@@ -723,7 +808,7 @@ update_store_with_capacity_test() ->
         <<"store-module">> => hb_store_fs
     },
     
-    UpdatedNonLMDBStore = update_store_with_capacity(NonLMDBStore, OptsWithCapacity),
+    UpdatedNonLMDBStore = apply_store_defaults(NonLMDBStore, OptsWithCapacity),
     ?assertEqual(NonLMDBStore, UpdatedNonLMDBStore),
     
     % Test nested store configurations
@@ -742,7 +827,7 @@ update_store_with_capacity_test() ->
         ]
     },
     
-    UpdatedNestedStore = update_store_with_capacity(NestedStoreConfig, OptsWithCapacity),
+    UpdatedNestedStore = apply_store_defaults(NestedStoreConfig, OptsWithCapacity),
     NestedStoreList = maps:get(<<"store">>, UpdatedNestedStore),
     [NestedLMDB, NestedFS] = NestedStoreList,
     
@@ -764,7 +849,7 @@ update_store_with_capacity_test() ->
         }
     },
     
-    UpdatedLRUStore = update_store_with_capacity(LRUStoreConfig, OptsWithCapacity),
+    UpdatedLRUStore = apply_store_defaults(LRUStoreConfig, OptsWithCapacity),
     PersistentStore = maps:get(<<"persistent-store">>, UpdatedLRUStore),
     
     % Persistent LMDB store should have capacity added
@@ -783,7 +868,7 @@ update_store_with_capacity_test() ->
         ]
     },
     
-    UpdatedGatewayStore = update_store_with_capacity(GatewayStoreConfig, OptsWithCapacity),
+    UpdatedGatewayStore = apply_store_defaults(GatewayStoreConfig, OptsWithCapacity),
     LocalStoreList = maps:get(<<"local-store">>, UpdatedGatewayStore),
     [LocalLMDB] = LocalStoreList,
     
@@ -807,7 +892,7 @@ update_store_with_capacity_test() ->
         ]
     },
     
-    UpdatedDeeplyNested = update_store_with_capacity(DeeplyNestedConfig, OptsWithCapacity),
+    UpdatedDeeplyNested = apply_store_defaults(DeeplyNestedConfig, OptsWithCapacity),
     OuterStoreList = maps:get(<<"store">>, UpdatedDeeplyNested),
     [MiddleLRU] = OuterStoreList,
     DeepLMDB = maps:get(<<"persistent-store">>, MiddleLRU),
@@ -815,3 +900,135 @@ update_store_with_capacity_test() ->
     % Deep LMDB store should have capacity added
     ?assertEqual(DefaultCapacity, maps:get(<<"capacity">>, DeepLMDB)),
     ?assertEqual(hb_store_lmdb, maps:get(<<"store-module">>, DeepLMDB)).
+
+%% @doc Test the generic store defaults functionality with multiple store types.
+%% This test verifies that the new generic pattern works for different store modules
+%% and parameters while maintaining backward compatibility.
+generic_store_defaults_test() ->
+    % Test with generic configuration pattern
+    OptsWithGenericDefaults = #{
+        <<"default_lmdb_capacity">> => 1024 * 1024 * 1024,      % 1GB
+        <<"default_rocksdb_block_cache_size">> => 512 * 1024 * 1024, % 512MB
+        <<"default_lru_max_entries">> => 10000,                 % 10K entries
+        <<"default_fs_buffer_size">> => 65536                   % 64KB
+    },
+    
+    % Test store configurations for different modules
+    MultiStoreConfig = [
+        #{
+            <<"name">> => <<"cache-lmdb">>,
+            <<"store-module">> => hb_store_lmdb
+            % Should get capacity from default_lmdb_capacity
+        },
+        #{
+            <<"name">> => <<"cache-rocksdb">>,
+            <<"store-module">> => hb_store_rocksdb
+            % Should get block_cache_size from default_rocksdb_block_cache_size
+        },
+        #{
+            <<"name">> => <<"cache-lru">>,
+            <<"store-module">> => hb_store_lru
+            % Should get max_entries from default_lru_max_entries
+        },
+        #{
+            <<"name">> => <<"cache-fs">>,
+            <<"store-module">> => hb_store_fs
+            % Should get buffer_size from default_fs_buffer_size
+        },
+        #{
+            <<"name">> => <<"cache-gateway">>,
+            <<"store-module">> => hb_store_gateway
+            % Should remain unchanged (no defaults configured)
+        }
+    ],
+    
+    UpdatedMultiStore = apply_store_defaults(MultiStoreConfig, OptsWithGenericDefaults),
+    
+    % Extract each store for verification
+    [LMDBStore, RocksDBStore, LRUStore, FSStore, GatewayStore] = UpdatedMultiStore,
+    
+    % Verify LMDB store got capacity
+    ?assertEqual(1024 * 1024 * 1024, maps:get(<<"capacity">>, LMDBStore)),
+    ?assertEqual(hb_store_lmdb, maps:get(<<"store-module">>, LMDBStore)),
+    
+    % Verify RocksDB store got block_cache_size
+    ?assertEqual(512 * 1024 * 1024, maps:get(<<"block_cache_size">>, RocksDBStore)),
+    ?assertEqual(hb_store_rocksdb, maps:get(<<"store-module">>, RocksDBStore)),
+    
+    % Verify LRU store got max_entries
+    ?assertEqual(10000, maps:get(<<"max_entries">>, LRUStore)),
+    ?assertEqual(hb_store_lru, maps:get(<<"store-module">>, LRUStore)),
+    
+    % Verify FS store got buffer_size
+    ?assertEqual(65536, maps:get(<<"buffer_size">>, FSStore)),
+    ?assertEqual(hb_store_fs, maps:get(<<"store-module">>, FSStore)),
+    
+    % Verify Gateway store remained unchanged
+    ?assertEqual(hb_store_gateway, maps:get(<<"store-module">>, GatewayStore)),
+    ?assertEqual(false, maps:is_key(<<"capacity">>, GatewayStore)),
+    ?assertEqual(false, maps:is_key(<<"block_cache_size">>, GatewayStore)),
+    ?assertEqual(false, maps:is_key(<<"max_entries">>, GatewayStore)),
+    ?assertEqual(false, maps:is_key(<<"buffer_size">>, GatewayStore)),
+    
+    % Test backward compatibility - legacy default_lmdb_capacity should still work
+    LegacyOpts = #{default_lmdb_capacity => 2048},
+    LegacyStore = #{
+        <<"name">> => <<"legacy-lmdb">>,
+        <<"store-module">> => hb_store_lmdb
+    },
+    
+    UpdatedLegacyStore = apply_store_defaults(LegacyStore, LegacyOpts),
+    ?assertEqual(2048, maps:get(<<"capacity">>, UpdatedLegacyStore)),
+    
+    % Test that explicit values take precedence over defaults
+    StoreWithExplicitValues = #{
+        <<"name">> => <<"explicit-lmdb">>,
+        <<"store-module">> => hb_store_lmdb,
+        <<"capacity">> => 4096  % Explicit value should be preserved
+    },
+    
+    UpdatedExplicitStore = apply_store_defaults(StoreWithExplicitValues, OptsWithGenericDefaults),
+    ?assertEqual(4096, maps:get(<<"capacity">>, UpdatedExplicitStore)),
+    
+    % Test nested store configuration with generic defaults
+    NestedGenericConfig = #{
+        <<"store-module">> => hb_store_gateway,
+        <<"name">> => <<"nested-gateway">>,
+        <<"store">> => [
+            #{
+                <<"store-module">> => hb_store_lmdb,
+                <<"name">> => <<"nested-lmdb">>
+            },
+            #{
+                <<"store-module">> => hb_store_lru,
+                <<"name">> => <<"nested-lru">>,
+                <<"persistent-store">> => #{
+                    <<"store-module">> => hb_store_rocksdb,
+                    <<"name">> => <<"nested-rocksdb">>
+                }
+            }
+        ]
+    },
+    
+    UpdatedNestedGeneric = apply_store_defaults(NestedGenericConfig, OptsWithGenericDefaults),
+    NestedStoreList = maps:get(<<"store">>, UpdatedNestedGeneric),
+    [NestedLMDB, NestedLRU] = NestedStoreList,
+    NestedRocksDB = maps:get(<<"persistent-store">>, NestedLRU),
+    
+    % Verify nested stores got appropriate defaults
+    ?assertEqual(1024 * 1024 * 1024, maps:get(<<"capacity">>, NestedLMDB)),
+    ?assertEqual(10000, maps:get(<<"max_entries">>, NestedLRU)),
+    ?assertEqual(512 * 1024 * 1024, maps:get(<<"block_cache_size">>, NestedRocksDB)),
+    
+    % Test invalid store type is ignored
+    OptsWithInvalidDefaults = #{
+        <<"default_invalid_store_some_param">> => 123
+    },
+    
+    SimpleStore = #{
+        <<"name">> => <<"simple-store">>,
+        <<"store-module">> => hb_store_lmdb
+    },
+    
+    UpdatedSimpleStore = apply_store_defaults(SimpleStore, OptsWithInvalidDefaults),
+    ?assertEqual(SimpleStore, UpdatedSimpleStore).
