@@ -489,7 +489,7 @@ mount_formatted_partition(
                     {result, RetryMountResult}
                 }
             ),
-            %% TODO: Stop the LMDB store ( STOP DOING IN `hb_volume:change_node_store` )
+            stop_lmdb_store(Opts),
             update_store_path(StorePath, Opts);
         {error, RetryMountError} ->
             ?event(debug_volume, 
@@ -567,8 +567,98 @@ update_node_config(StorePath, NewStore, Opts) ->
                 genesis_wasm_db_dir => FullGenesisPath
             }
         ),
-    %% TODO: Start the LMDB store ( STOP DOING IN `hb_volume:change_node_store` )
+    start_lmdb_store(NewStore, Opts),
     ?event(debug_volume, 
         {update_node_config, config_updated, success}
     ),
     {ok, <<"Volume mounted and store updated successfully">>}.
+
+%% @doc Stop the LMDB store safely with error handling.
+%% @param Opts The options containing the current store configuration.
+%% @returns ok regardless of outcome to prevent blocking volume operations.
+-spec stop_lmdb_store(map()) -> ok.
+stop_lmdb_store(Opts) ->
+    ?event(debug_volume, {stop_lmdb_store, entry, starting}),
+    CurrentStore = hb_opts:get(store, [], Opts),
+    ?event(debug_volume, {stop_lmdb_store, current_store, CurrentStore}),
+    case find_lmdb_store_config(CurrentStore) of
+        {ok, LmdbConfig} ->
+            ?event(debug_volume, {stop_lmdb_store, found_lmdb_config, LmdbConfig}),
+            safe_stop_lmdb_store(LmdbConfig);
+        not_found ->
+            ?event(debug_volume, {stop_lmdb_store, no_lmdb_config, skipping})
+    end,
+    ok.
+
+%% @doc Start the LMDB store safely with error handling.
+%% @param NewStore The new store configuration.
+%% @param _Opts The options for context (unused).
+%% @returns ok regardless of outcome to prevent blocking volume operations.
+-spec start_lmdb_store(term(), map()) -> ok.
+start_lmdb_store(NewStore, _Opts) ->
+    ?event(debug_volume, {start_lmdb_store, entry, starting}),
+    ?event(debug_volume, {start_lmdb_store, new_store, NewStore}),
+    case find_lmdb_store_config(NewStore) of
+        {ok, LmdbConfig} ->
+            ?event(debug_volume, {start_lmdb_store, found_lmdb_config, LmdbConfig}),
+            safe_start_lmdb_store(LmdbConfig);
+        not_found ->
+            ?event(debug_volume, {start_lmdb_store, no_lmdb_config, skipping})
+    end,
+    ok.
+
+%% @doc Find LMDB store configuration in a nested store structure.
+%% @param Store The store configuration to search.
+%% @returns {ok, LmdbConfig} if found, not_found otherwise.
+-spec find_lmdb_store_config(term()) -> {ok, map()} | not_found.
+find_lmdb_store_config(Store) when is_list(Store) ->
+    find_lmdb_store_config_in_list(Store);
+find_lmdb_store_config(#{<<"store-module">> := hb_store_lmdb} = Store) ->
+    {ok, Store};
+find_lmdb_store_config(#{<<"store-module">> := hb_store_gateway, <<"store">> := NestedStore}) ->
+    find_lmdb_store_config(NestedStore);
+find_lmdb_store_config(_) ->
+    not_found.
+
+%% @doc Helper function to find LMDB config in a list of stores.
+%% @param StoreList List of store configurations.
+%% @returns {ok, LmdbConfig} if found, not_found otherwise.
+-spec find_lmdb_store_config_in_list(list()) -> {ok, map()} | not_found.
+find_lmdb_store_config_in_list([]) ->
+    not_found;
+find_lmdb_store_config_in_list([Store | Rest]) ->
+    case find_lmdb_store_config(Store) of
+        {ok, LmdbConfig} ->
+            {ok, LmdbConfig};
+        not_found ->
+            find_lmdb_store_config_in_list(Rest)
+    end.
+
+%% @doc Safely stop LMDB store with error handling.
+%% @param StoreConfig The LMDB store configuration.
+%% @returns ok regardless of outcome.
+-spec safe_stop_lmdb_store(map()) -> ok.
+safe_stop_lmdb_store(StoreConfig) ->
+    ?event(debug_volume, {stopping_current_store, StoreConfig}),
+    try 
+        hb_store_lmdb:stop(StoreConfig)
+    catch 
+        error:StopReason ->
+            ?event(debug_volume, {stop_error, StopReason})
+    end,
+    ok.
+
+%% @doc Safely start LMDB store with error handling.
+%% @param StoreConfig The LMDB store configuration.
+%% @returns ok regardless of outcome.
+-spec safe_start_lmdb_store(map()) -> ok.
+safe_start_lmdb_store(StoreConfig) ->
+    StoreName = maps:get(<<"name">>, StoreConfig, <<"unknown">>),
+    ?event(debug_volume, {starting_new_store, StoreName}),
+    try
+        hb_store_lmdb:start(StoreConfig)
+    catch
+        error:StartReason ->
+            ?event(debug_volume, {start_error, StartReason})
+    end,
+    ok.

@@ -673,21 +673,21 @@ update_store_config(StoreConfig, _NewPath) ->
     % Return unchanged for any other format
     StoreConfig.
 
-%% Safely stop LMDB store with error handling
-safe_stop_lmdb_store(StoreConfig) ->
-    ?event(debug_volume, {stopping_current_store, StoreConfig}),
-    try 
-        hb_store_lmdb:stop(StoreConfig)
-    catch 
-        error:StopReason ->
-            ?event(debug_volume, {stop_error, StopReason})
-    end.
+%% MOVED TO dev_volume.erl: Safely stop LMDB store with error handling
+%% safe_stop_lmdb_store(StoreConfig) ->
+%%     ?event(debug_volume, {stopping_current_store, StoreConfig}),
+%%     try 
+%%         hb_store_lmdb:stop(StoreConfig)
+%%     catch 
+%%         error:StopReason ->
+%%             ?event(debug_volume, {stop_error, StopReason})
+%%     end.
 
-%% Safely start LMDB store
-safe_start_lmdb_store(StoreConfig) ->
-    NewName = maps:get(<<"name">>, StoreConfig),
-    ?event(debug_volume, {starting_new_store, NewName}),
-    hb_store_lmdb:start(StoreConfig).
+%% MOVED TO dev_volume.erl: Safely start LMDB store
+%% safe_start_lmdb_store(StoreConfig) ->
+%%     NewName = maps:get(<<"name">>, StoreConfig),
+%%     ?event(debug_volume, {starting_new_store, NewName}),
+%%     hb_store_lmdb:start(StoreConfig).
 
 -doc """
 Check if a device exists on the system.
@@ -713,13 +713,14 @@ check_for_device(Device) ->
     DeviceExists.
 
 %% Handle LMDB store migration to new encrypted mount location
+%% NOTE: LMDB store lifecycle management moved to dev_volume.erl
 update_lmdb_store_config(StoreConfig, NewPath) ->
     ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
     NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
     ?event(debug_volume, {migrate_start, ExistingPath, NewName}),
-    safe_stop_lmdb_store(StoreConfig),
+    %% MOVED TO dev_volume.erl: safe_stop_lmdb_store(StoreConfig),
     FinalConfig = handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath),
-    safe_start_lmdb_store(FinalConfig),
+    %% MOVED TO dev_volume.erl: safe_start_lmdb_store(FinalConfig),
     FinalConfig.
 
 %% Handle migration destination logic
