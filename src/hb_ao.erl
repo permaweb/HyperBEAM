@@ -905,7 +905,9 @@ maybe_force_message({Status, Res}, Opts) ->
     case hb_opts:get(force_message, false, Opts) of
         true -> force_message({Status, Res}, Opts);
         false -> {Status, Res}
-    end.
+    end;
+maybe_force_message(Res, Opts) ->
+    maybe_force_message({ok, Res}, Opts).
 
 force_message({Status, Res}, Opts) when is_list(Res) ->
     force_message({Status, normalize_keys(Res, Opts)}, Opts);
