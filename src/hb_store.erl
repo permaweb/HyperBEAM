@@ -157,8 +157,16 @@ start([StoreOpts | Rest]) ->
     find(StoreOpts),
     start(Rest).
 
+%% @doc Stop the first viable store in the Modules list. If the store returns a 
+%% tuple of form `{unset, Store}`, we remove the associated store's instance
+%% from the process dictionary and persistent terms.
 stop(Modules) ->
-    call_function(Modules, stop, []).
+    case call_function(Modules, stop, []) of
+        {unset, Store} ->
+            set(Store, undefined),
+            ok;
+        Other -> Other
+    end.
 
 %% @doc Takes a store object and a filter function or match spec, returning a
 %% new store object with only the modules that match the filter. The filter
