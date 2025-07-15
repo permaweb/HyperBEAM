@@ -4,7 +4,7 @@ Module for managing physical disks and volumes, providing operations
 for partitioning, formatting, mounting, and managing encrypted volumes.
 """.
 -export([list_partitions/0, create_partition/2]).
--export([format_disk/2, mount_disk/4, change_node_store/2]).
+-export([format_disk/2, mount_disk/4, change_node_store/3]).
 -export([check_for_device/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -487,12 +487,13 @@ Change the node's data store location to the mounted encrypted disk.
          confirmation message, or {error, Reason} if the operation fails.
 """.
 -spec change_node_store(StorePath :: binary(), 
-                        CurrentStore :: list()) ->
+                        CurrentStore :: list(),
+                        Opts :: map()) ->
     {ok, map()} | {error, binary()}.
-change_node_store(undefined, _CurrentStore) ->
+change_node_store(undefined, _CurrentStore, Opts) ->
     ?event(debug_volume, {change_node_store, error, store_path_undefined}),
     {error, <<"Store path not specified">>};
-change_node_store(StorePath, CurrentStore) ->
+change_node_store(StorePath, CurrentStore, Opts) ->
     ?event(debug_volume, 
         {change_node_store, entry, 
            {store_path, StorePath, current_store, CurrentStore}
@@ -508,7 +509,7 @@ change_node_store(StorePath, CurrentStore) ->
            {current_store, CurrentStore}
         }
     ),
-    NewStore = update_store_config(CurrentStore, StorePath),
+    NewStore = update_store_config(CurrentStore, StorePath, Opts),
     % Return the result
     ?event(debug_volume,
         {change_node_store, success, {new_store_config, NewStore}}
@@ -631,13 +632,15 @@ with_secure_key_file(EncKey, Fun) ->
 
 % Update the store configuration with a new base path
 -spec update_store_config(StoreConfig :: term(), 
-    NewPath :: binary()) -> term().
-update_store_config(StoreConfig, NewPath) when is_list(StoreConfig) ->
+    NewPath :: binary(),
+    Opts :: map()) -> term().
+update_store_config(StoreConfig, NewPath, Opts) when is_list(StoreConfig) ->
     % For a list, update each element
-    [update_store_config(Item, NewPath) || Item <- StoreConfig];
+    [update_store_config(Item, NewPath, Opts) || Item <- StoreConfig];
 update_store_config(
     #{<<"store-module">> := Module} = StoreConfig, 
-    NewPath
+    NewPath,
+    Opts
 ) when is_map(StoreConfig) ->
     % Handle various store module types differently
     case Module of
@@ -648,14 +651,14 @@ update_store_config(
             ?event(debug_volume, {fs, StoreConfig, NewPath, NewName}),
             StoreConfig#{<<"name">> => NewName};
         hb_store_lmdb ->
-            update_lmdb_store_config(StoreConfig, NewPath);
+            update_lmdb_store_config(StoreConfig, NewPath, Opts);
         hb_store_rocksdb ->
             StoreConfig;
         hb_store_gateway ->
             % For gateway store, recursively update nested store configs
             NestedStore = maps:get(<<"store">>, StoreConfig, []),
             StoreConfig#{
-                <<"store">> => update_store_config(NestedStore, NewPath)
+                <<"store">> => update_store_config(NestedStore, NewPath, Opts)
             };
         _ ->
             % For any other store type, update the prefix
@@ -663,13 +666,13 @@ update_store_config(
             ?event(debug_volume, {other, StoreConfig, NewPath}),
             StoreConfig
     end;
-update_store_config({Type, _OldPath, Opts}, NewPath) ->
+update_store_config({Type, _OldPath, Opts}, NewPath, Opts) ->
     % For tuple format with options
     {Type, NewPath, Opts};
-update_store_config({Type, _OldPath}, NewPath) ->
+update_store_config({Type, _OldPath}, NewPath, Opts) ->
     % For tuple format without options
     {Type, NewPath};
-update_store_config(StoreConfig, _NewPath) ->
+update_store_config(StoreConfig, _NewPath, _Opts) ->
     % Return unchanged for any other format
     StoreConfig.
 
@@ -713,17 +716,17 @@ check_for_device(Device) ->
     DeviceExists.
 
 %% Handle LMDB store migration to new encrypted mount location
-update_lmdb_store_config(StoreConfig, NewPath) ->
+update_lmdb_store_config(StoreConfig, NewPath, Opts) ->
     ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
     NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
     ?event(debug_volume, {migrate_start, ExistingPath, NewName}),
     safe_stop_lmdb_store(StoreConfig),
-    FinalConfig = handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath),
+    FinalConfig = handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath, Opts),
     safe_start_lmdb_store(FinalConfig),
     FinalConfig.
 
 %% Handle migration destination logic
-handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath) ->
+handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath, Opts) ->
     Cwd = list_to_binary(element(2, file:get_cwd())),
     CurrentWallet = <<Cwd/binary, "/hyperbeam-key.json">>,
     CachedWallet = <<NewPath/binary, "/hyperbeam-key.json">>,
@@ -732,7 +735,8 @@ handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath) ->
             ?event(debug_volume, {using_existing_store, NewName}),
             Result = use_existing_lmdb_store(StoreConfig, NewName),
             ?event(debug_volume, {use_existing_store_result, Result}),
-            file:copy(CachedWallet, CurrentWallet),
+            Wallet = ar_wallet:load_keyfile(CachedWallet, Opts),
+            hb_http_server:set_opts(Opts#{ priv_wallet => Wallet}),
             Result;
         false ->
             ?event(debug_volume, {copying_store, ExistingPath, NewName}),
@@ -932,16 +936,16 @@ update_store_config_test() ->
         <<"name">> => <<"cache">>
     },
     NewPath = <<"/encrypted/mount">>,
-    Updated = update_store_config(FSStore, NewPath),
+    Updated = update_store_config(FSStore, NewPath, #{}),
     Expected = FSStore#{<<"name">> => <<"/encrypted/mount/cache">>},
     ?assertEqual(Expected, Updated),
     % Test list of stores
     StoreList = [FSStore, #{<<"store-module">> => hb_store_gateway}],
-    UpdatedList = update_store_config(StoreList, NewPath),
+    UpdatedList = update_store_config(StoreList, NewPath, #{}),
     ?assertEqual(2, length(UpdatedList)),
     % Test tuple format
     TupleStore = {fs, <<"old_path">>, []},
-    UpdatedTuple = update_store_config(TupleStore, NewPath),
+    UpdatedTuple = update_store_config(TupleStore, NewPath, #{}),
     ?assertEqual({fs, NewPath, []}, UpdatedTuple).
 
 %% Test secure key file management
