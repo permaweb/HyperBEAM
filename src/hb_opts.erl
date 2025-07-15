@@ -203,17 +203,17 @@ default_message() ->
                             <<"value">> => <<"ao">>
                         }
                     ],
-                    <<"store">> => 
-                    [
-                        #{
-                            <<"store-module">> => hb_store_lmdb,
-                            <<"name">> => <<"cache-mainnet/lmdb">>
-                        }
-                    ]
+                    <<"local-store">> => 
+                        [
+                            #{
+                                <<"store-module">> => hb_store_lmdb,
+                                <<"name">> => <<"cache-mainnet/lmdb">>
+                            }
+                        ]
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
-                    <<"store">> =>
+                    <<"local-store">> =>
                         [
                             #{
                                 <<"store-module">> => hb_store_lmdb,
