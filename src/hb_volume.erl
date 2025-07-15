@@ -632,14 +632,14 @@ with_secure_key_file(EncKey, Fun) ->
 
 % Update the store configuration with a new base path
 -spec update_store_config(StoreConfig :: term(), 
-    NewPath :: binary(),
+    NewPrefix :: binary(),
     Opts :: map()) -> term().
-update_store_config(StoreConfig, NewPath, Opts) when is_list(StoreConfig) ->
+update_store_config(StoreConfig, NewPrefix, Opts) when is_list(StoreConfig) ->
     % For a list, update each element
-    [update_store_config(Item, NewPath, Opts) || Item <- StoreConfig];
+    [update_store_config(Item, NewPrefix, Opts) || Item <- StoreConfig];
 update_store_config(
     #{<<"store-module">> := Module} = StoreConfig, 
-    NewPath,
+    NewPrefix,
     Opts
 ) when is_map(StoreConfig) ->
     % Handle various store module types differently
@@ -647,34 +647,34 @@ update_store_config(
         hb_store_fs ->
             % For filesystem store, prefix the existing path with the new path
             ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
-            NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
-            ?event(debug_volume, {fs, StoreConfig, NewPath, NewName}),
-            StoreConfig#{<<"name">> => NewName};
+            NewName = <<NewPrefix/binary, "/", ExistingPath/binary>>,
+            ?event(debug_volume, {fs, StoreConfig, NewPrefix, NewName}),
+            StoreConfig#{ <<"name">> => NewName };
         hb_store_lmdb ->
-            update_lmdb_store_config(StoreConfig, NewPath, Opts);
+            update_lmdb_store_config(StoreConfig, NewPrefix, Opts);
         hb_store_rocksdb ->
             StoreConfig;
         hb_store_gateway ->
             % For gateway store, recursively update nested store configs
-            NestedStore = maps:get(<<"store">>, StoreConfig, []),
-            StoreConfig#{
-                <<"store">> => update_store_config(NestedStore, NewPath, Opts)
-            };
+            case maps:get(<<"local-store">>, StoreConfig, false) of
+                false ->
+                    StoreConfig;
+                LocalStore ->
+                    StoreConfig#{
+                        <<"local-store">> =>
+                            update_store_config(
+                                LocalStore,
+                                NewPrefix,
+                                Opts
+                            )
+                    }
+            end;
         _ ->
             % For any other store type, update the prefix
             % StoreConfig#{<<"name">> => NewPath}
-            ?event(debug_volume, {other, StoreConfig, NewPath}),
+            ?event(debug_volume, {other, StoreConfig, NewPrefix}),
             StoreConfig
-    end;
-update_store_config({Type, _OldPath, Opts}, NewPath, Opts) ->
-    % For tuple format with options
-    {Type, NewPath, Opts};
-update_store_config({Type, _OldPath}, NewPath, Opts) ->
-    % For tuple format without options
-    {Type, NewPath};
-update_store_config(StoreConfig, _NewPath, _Opts) ->
-    % Return unchanged for any other format
-    StoreConfig.
+    end.
 
 %% Safely stop LMDB store with error handling
 safe_stop_lmdb_store(StoreConfig) ->
@@ -935,18 +935,22 @@ update_store_config_test() ->
         <<"store-module">> => hb_store_fs,
         <<"name">> => <<"cache">>
     },
+    Opts = #{ store => [FSStore] },
     NewPath = <<"/encrypted/mount">>,
-    Updated = update_store_config(FSStore, NewPath, #{}),
-    Expected = FSStore#{<<"name">> => <<"/encrypted/mount/cache">>},
+    Updated = update_store_config(FSStore, NewPath, Opts),
+    Expected = FSStore#{ <<"name">> => <<"/encrypted/mount/cache">> },
     ?assertEqual(Expected, Updated),
     % Test list of stores
-    StoreList = [FSStore, #{<<"store-module">> => hb_store_gateway}],
-    UpdatedList = update_store_config(StoreList, NewPath, #{}),
+    StoreList = [FSStore, #{ <<"store-module">> => hb_store_gateway }],
+    UpdatedList = update_store_config(StoreList, NewPath, Opts),
     ?assertEqual(2, length(UpdatedList)),
-    % Test tuple format
-    TupleStore = {fs, <<"old_path">>, []},
-    UpdatedTuple = update_store_config(TupleStore, NewPath, #{}),
-    ?assertEqual({fs, NewPath, []}, UpdatedTuple).
+    % Test nested store
+    NestedStore = #{
+        <<"store-module">> => hb_store_gateway,
+        <<"local-store">> => FSStore
+    },
+    UpdatedNested = update_store_config(NestedStore, NewPath, Opts),
+    ?assertEqual(NestedStore#{ <<"local-store">> => Expected }, UpdatedNested).
 
 %% Test secure key file management
 with_secure_key_file_test() ->
