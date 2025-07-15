@@ -558,7 +558,7 @@ post_location(Msg1, RawReq, RawOpts) ->
 %% @doc A router for choosing between getting the existing schedule, or
 %% scheduling a new message.
 schedule(Msg1, Msg2, Opts) ->
-    ?event({resolving_schedule_request, {msg2, Msg2}, {state_msg, Msg1}}),
+    ?event(x,{resolving_schedule_request, {msg2, Msg2}, {state_msg, Msg1}}),
     case hb_ao:get(<<"method">>, Msg2, <<"GET">>, Opts) of
         <<"POST">> -> post_schedule(Msg1, Msg2, Opts);
         <<"GET">> -> get_schedule(Msg1, Msg2, Opts)
@@ -571,7 +571,7 @@ post_schedule(Msg1, Msg2, Opts) ->
     ?event(scheduling_message),
     % Find the target message to schedule:
     ToSched = find_message_to_schedule(Msg1, Msg2, Opts),
-    ?event({to_sched, ToSched}),
+    ?event(verify,{to_sched, ToSched, msg1, Msg1, msg2,Msg2}),
     % Find the ProcessID of the target message:
     % - If it is a Process, use the ID of the message.
     % - If not, use the target as the ProcessID.
@@ -588,10 +588,11 @@ post_schedule(Msg1, Msg2, Opts) ->
     % Filter all unsigned keys from the source message.
     case hb_message:with_only_committed(ToSched, Opts) of
         {ok, OnlyCommitted} ->
-            ?event(
+            ?event(verify,
                 {post_schedule,
                     {schedule_id, ProcID},
-                    {message, ToSched}
+                    {message, ToSched},
+                    {only_committed, OnlyCommitted}
                 }
             ),
             % Find the relevant scheduler server for the given process and
@@ -640,14 +641,15 @@ do_post_schedule(ProcID, PID, Msg2, Opts) ->
     Verified =
         case hb_opts:get(verify_assignments, true, Opts) of
             true ->
-                ?event({verifying_message_before_scheduling, Msg2}),
+                ?event(verify, {verifying_message_before_scheduling, Msg2}),
                 hb_message:verify(Msg2, signers, Opts);
             false -> true
         end,
     ?event({verified, Verified}),
     % Handle scheduling of the message if the message is valid.
     case {Verified, hb_ao:get(<<"type">>, Msg2, Opts)} of
-        {false, _} ->
+        {false, _} -> 
+            ?event(debug, {verifying_message_before_scheduling_failed, {msg2, Msg2}, {proc_id, ProcID}, {pid, PID}}),
             {error,
                 #{
                     <<"status">> => 400,

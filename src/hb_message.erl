@@ -234,8 +234,9 @@ normalize_commitments(Msg, _Opts) ->
 %% is such that expensive operations like signature verification are not
 %% performed unless necessary.
 with_only_committed(Msg, Opts) when is_map(Msg) ->
-    ?event({with_only_committed, {msg, Msg}, {opts, Opts}}),
+    ?event(verify, {with_only_committed, {msg, Msg}}),
     Comms = hb_maps:get(<<"commitments">>, Msg, not_found, Opts),
+    ?event(verify, {got_commitments, {commitments, Comms}}),
     case is_map(Msg) andalso Comms /= not_found of
         true ->
             try
@@ -247,12 +248,14 @@ with_only_committed(Msg, Opts) when is_map(Msg) ->
                     ),
                 % Add the ao-body-key to the committed list if it is not
                 % already present.
-                ?event(debug_bundle, {committed_keys, CommittedKeys, {msg, Msg}}),
-                {ok, hb_maps:with(
+                ?event(debug, {committed_keys, CommittedKeys, {msg, Msg}}),
+                FinalMsg = hb_maps:with(
                     CommittedKeys ++ [<<"commitments">>],
                     Msg,
 					Opts
-                )}
+                ),
+                ?event(verify, {final_committed, {msg, FinalMsg}}),
+                {ok, FinalMsg}
             catch Class:Reason:St ->
                 {error,
                     {could_not_normalize,
@@ -263,9 +266,12 @@ with_only_committed(Msg, Opts) when is_map(Msg) ->
                     }
                 }
             end;
-        false -> {ok, Msg}
+        false -> 
+            ?event(verify, {no_commitments_msg, {msg, Msg}}),
+            {ok, Msg}
     end;
 with_only_committed(Msg, _) ->
+    ?event(verify, {no_commitments_map_msg, {msg, Msg}}),
     % If the message is not a map, it cannot be signed.
     {ok, Msg}.
 
@@ -358,8 +364,11 @@ verify(Msg, Committers) ->
 verify(Msg, all, Opts) ->
     verify(Msg, <<"all">>, Opts);
 verify(Msg, signers, Opts) ->
-    verify(Msg, hb_message:signers(Msg, Opts), Opts);
+    Signers = hb_message:signers(Msg, Opts),
+    ?event(verify, {verifying_signers, {signers, Signers}}),
+    verify(Msg, Signers, Opts);
 verify(Msg, Committers, Opts) ->
+    ?event(verify, {verifying_msg, {msg, Msg}}),
     {ok, Res} =
         dev_message:verify(
             Msg,

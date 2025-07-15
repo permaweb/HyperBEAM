@@ -108,7 +108,7 @@ test_suite() ->
             fun normalize_commitments_test/2},
         % Signed messages
         {<<"Signed message to message and back">>,
-            fun signed_message_encode_decode_verify_test/2},
+            fun signed_message_encode_decode_verify_test/0},
         {<<"Specific order signed message">>,
             fun specific_order_signed_message_test/2},
         {<<"Specific order deeply nested signed message">>,
@@ -713,7 +713,9 @@ nested_message_with_large_keys_test(Codec, Opts) ->
     ?event({matching, {input, Msg}, {output, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
-signed_message_encode_decode_verify_test(Codec, Opts) ->
+signed_message_encode_decode_verify_test() ->
+    Codec = <<"httpsig@1.0">>,
+    Opts = test_opts(normal),
     Msg = #{
         <<"test-1">> => <<"TEST VALUE 1">>,
         <<"test-2">> => <<"TEST VALUE 2">>,
@@ -727,12 +729,12 @@ signed_message_encode_decode_verify_test(Codec, Opts) ->
             Opts,
             Codec
         ),
-    ?event({signed_msg, SignedMsg}),
+    ?event(x,{signed_msg, SignedMsg}),
     ?assertEqual(true, hb_message:verify(SignedMsg, all, Opts)),
     Encoded = hb_message:convert(SignedMsg, Codec, <<"structured@1.0">>, Opts),
-    ?event({msg_encoded_as_codec, Encoded}),
+    ?event(x,{msg_encoded_as_codec, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    ?event({decoded, Decoded}),
+    ?event(x,{decoded, Decoded}),
     ?assertEqual(true, hb_message:verify(Decoded, all, Opts)),
     ?event({matching, {input, SignedMsg}, {encoded, Encoded}, {decoded, Decoded}}),
     ?event({http, {string, dev_codec_httpsig_conv:encode_http_msg(SignedMsg, Opts)}}),

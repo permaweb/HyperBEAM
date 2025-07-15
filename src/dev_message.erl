@@ -275,7 +275,9 @@ commit(Self, Req, Opts) ->
 %% commitments can be specified using the `commitments' key.
 verify(Self, Req, Opts) ->
     % Get the target message of the verification request.
+    ?event(verify, {verifying_dev_message, {self, Self}, {req, Req}}),
     {ok, RawBase} = hb_message:find_target(Self, Req, Opts),
+    ?event(verify, {verify_base, {raw_base, RawBase}}),
     Base =
         hb_message:convert(
             ensure_commitments_loaded(
@@ -289,6 +291,7 @@ verify(Self, Req, Opts) ->
     Commitments = maps:get(<<"commitments">>, Base, #{}),
     IDsToVerify = commitment_ids_from_request(Base, Req, Opts),
     % Verify the commitments. Stop execution if any fail.
+    ?event(verify, {verifying_commitments, {commitments, Commitments}, {ids, IDsToVerify}}),
     Res =
         lists:all(
             fun(CommitmentID) ->

@@ -68,12 +68,13 @@ from(HTTP, _Req, Opts) ->
             OrderedBodyKeys,
             Opts
         ),
+    ?event(http,{commitments_from_siginfo, Commitments}),
     MsgWithSigs =
         case ?IS_EMPTY_MESSAGE(Commitments) of
             false -> MsgWithoutSigs#{ <<"commitments">> => Commitments };
             true -> MsgWithoutSigs
         end,
-    ?event({message_with_commitments, MsgWithSigs}),
+    ?event(http,{message_with_commitments, MsgWithSigs}),
     Res =
         hb_maps:without(
             Removed =

@@ -774,11 +774,11 @@ codec_to_content_type(Codec, Opts) ->
 req_to_tabm_singleton(Req, Body, Opts) ->
     case cowboy_req:header(<<"codec-device">>, Req, <<"httpsig@1.0">>) of
         <<"httpsig@1.0">> ->
-			?event({req_to_tabm_singleton, {request, {explicit, Req}, {body, {string, Body}}}}),
+			?event(http, {req_to_tabm_singleton, {request, {explicit, Req}, {body, {string, Body}}}}),
             httpsig_to_tabm_singleton(Req, Body, Opts);
         <<"ans104@1.0">> ->
             Item = ar_bundles:deserialize(Body),
-            ?event(debug_accept,
+            ?event(debug,
                 {deserialized_ans104,
                     {item, Item},
                     {exact, {explicit, Item}}
@@ -794,6 +794,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                             <<"ans104@1.0">>,
                             Opts
                         ),
+                    ?event(http, {valid_ans104_signature, ANS104}),
                     normalize_unsigned(Req, ANS104, Opts);
                 false ->
                     throw({invalid_ans104_signature, Item})
@@ -827,16 +828,19 @@ req_to_tabm_singleton(Req, Body, Opts) ->
 %% node configuration. Additionally, non-committed fields are removed from the
 %% message if it is signed, with the exception of the `path' and `method' fields.
 httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
+    Converted = hb_message:convert(
+        RawHeaders#{ <<"body">> => Body },
+        <<"structured@1.0">>,
+        <<"httpsig@1.0">>,
+        Opts
+    ),
+    ?event(verify, {verifying_httpsig_converted, {msg, Converted}}),
     {ok, SignedMsg} =
         hb_message:with_only_committed(
-            hb_message:convert(
-                RawHeaders#{ <<"body">> => Body },
-                <<"structured@1.0">>,
-                <<"httpsig@1.0">>,
-                Opts
-            ),
+            Converted,
             Opts
         ),
+    ?event(verify, {verifying_httpsig, {msg, SignedMsg}}),
     ForceSignedRequests = hb_opts:get(force_signed_requests, false, Opts),
     case (not ForceSignedRequests) orelse hb_message:verify(SignedMsg, all, Opts) of
         true ->

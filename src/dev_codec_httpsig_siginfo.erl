@@ -30,9 +30,8 @@ commitments_to_siginfo(Msg, Comms, Opts) ->
     {Sigs, SigInputs} =
         maps:fold(
             fun(_CommID, Commitment, {Sigs, SigInputs}) ->
-                {ok, SigNameRaw, SFSig, SFSigInput} =
+                {ok, SigName, SFSig, SFSigInput} =
                     commitment_to_sf_siginfo(Msg, Commitment, Opts),
-                SigName = <<"sig-", SigNameRaw/binary>>,
                 {
                     Sigs#{ SigName => SFSig },
                     SigInputs#{ SigName => SFSigInput }
@@ -162,7 +161,8 @@ nested_map_to_string(Map) ->
 %% @doc Take a message with a `signature' and `signature-input' key pair and
 %% return a map of commitments.
 siginfo_to_commitments(
-        Msg = #{ <<"signature">> := <<"sig-", SFSigBin/binary>>, <<"signature-input">> := <<"sig-", SFSigInputBin/binary>> },
+        % Msg = #{ <<"signature">> := <<"sig-", SFSigBin/binary>>, <<"signature-input">> := <<"sig-", SFSigInputBin/binary>> },
+        Msg = #{ <<"signature">> := SFSigBin, <<"signature-input">> := SFSigInputBin },
         BodyKeys,
         Opts) ->
     % Parse the signature and signature-input structured-fields.

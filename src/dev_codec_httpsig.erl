@@ -64,9 +64,10 @@ verify(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, EncMsg, EncComm, _} = normalize_for_encoding(Base, Req, Opts),
     SigBase = signature_base(EncMsg, EncComm, Opts),
-    ?event({signature_base_verify, {string, SigBase}}),
+    ?event(x, {signature_base_verify, {string, SigBase}}),
     KeyID = maps:get(<<"keyid">>, Req),
     RawSignature = hb_util:decode(Signature = maps:get(<<"signature">>, Req)),
+    ?event(x, {raw_sig, {string, RawSignature}, {type, maps:get(<<"type">>, Req) }}),
     case maps:get(<<"type">>, Req) of
         <<"rsa-pss-sha512">> ->
             ?event(httpsig_verify, {verify, {rsa_pss_sha512, {sig_base, SigBase}}}),
