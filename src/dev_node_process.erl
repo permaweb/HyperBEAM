@@ -161,11 +161,12 @@ lookup_spawn_test() ->
         {ok, #{ <<"device">> := <<"process@1.0">> }},
         Res1
     ),
-    {ok, Process2} = hb_ao:resolve(
-        #{ <<"device">> => <<"node-process@1.0">> },
-        ?TEST_NAME,
-        Opts
-    ),
+    {ok, Process2} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"node-process@1.0">> },
+            ?TEST_NAME,
+            Opts
+        ),
     ?assertEqual(
         hb_cache:ensure_all_loaded(Process1, Opts),
         hb_cache:ensure_all_loaded(Process2, Opts)
