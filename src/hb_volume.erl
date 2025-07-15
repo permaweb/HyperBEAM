@@ -523,7 +523,8 @@ change_node_store(StorePath, CurrentStore, Opts) ->
     }}.
 
 %%% Helper functions
-%% Execute system command with error checking
+
+%% @doc Execute system command with error checking
 safe_exec(Command) ->
     safe_exec(Command, ["Error", "failed", "bad", "error"]).
 
@@ -534,7 +535,7 @@ safe_exec(Command, ErrorKeywords) ->
         error -> {error, list_to_binary(Result)}
     end.
 
-%% Check if command result contains error indicators
+%% @doc Check if command result contains error indicators
 check_command_errors(Result, Keywords) ->
     case lists:any(fun(Keyword) -> 
         string:find(Result, Keyword) =/= nomatch 
@@ -543,7 +544,7 @@ check_command_errors(Result, Keywords) ->
         false -> ok
     end.
 
-%% Secure key file management with automatic cleanup
+%% @doc Secure key file management with automatic cleanup
 with_secure_key_file(EncKey, Fun) ->
     ?event(debug_volume, {with_secure_key_file, entry, creating_temp_file}),
     os:cmd("sudo mkdir -p /root/tmp"),
@@ -630,7 +631,7 @@ with_secure_key_file(EncKey, Fun) ->
             erlang:raise(Class, Reason, Stacktrace)
     end.
 
-% Update the store configuration with a new base path
+%% @doc Update the store configuration with a new base path
 -spec update_store_config(StoreConfig :: term(), 
     NewPrefix :: binary(),
     Opts :: map()) -> term().
@@ -676,21 +677,15 @@ update_store_config(
             StoreConfig
     end.
 
-%% Safely stop LMDB store with error handling
+%% @doc Safely stop LMDB store with error handling
 safe_stop_lmdb_store(StoreConfig) ->
     ?event(debug_volume, {stopping_current_store, StoreConfig}),
     try 
-        hb_store_lmdb:stop(StoreConfig)
+        hb_store:stop(StoreConfig)
     catch 
         error:StopReason ->
             ?event(debug_volume, {stop_error, StopReason})
     end.
-
-%% Safely start LMDB store
-safe_start_lmdb_store(StoreConfig) ->
-    NewName = maps:get(<<"name">>, StoreConfig),
-    ?event(debug_volume, {starting_new_store, NewName}),
-    hb_store_lmdb:start(StoreConfig).
 
 -doc """
 Check if a device exists on the system.
@@ -715,19 +710,25 @@ check_for_device(Device) ->
     ),
     DeviceExists.
 
-%% Handle LMDB store migration to new encrypted mount location
+%% @doc Handle LMDB store migration to new encrypted mount location
 update_lmdb_store_config(StoreConfig, NewPath, Opts) ->
     ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
     NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
     ?event(debug_volume, {migrate_start, ExistingPath, NewName}),
     safe_stop_lmdb_store(StoreConfig),
-    FinalConfig = handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath, Opts),
-    safe_start_lmdb_store(FinalConfig),
+    FinalConfig =
+        handle_lmdb_migration(
+            StoreConfig,
+            ExistingPath,
+            NewName,
+            NewPath,
+            Opts
+        ),
     FinalConfig.
 
-%% Handle migration destination logic
+%% @doc Handle migration destination logic
 handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath, Opts) ->
-    Cwd = list_to_binary(element(2, file:get_cwd())),
+    Cwd = list_to_binary(hb_util:ok(file:get_cwd())),
     CurrentWallet = <<Cwd/binary, "/hyperbeam-key.json">>,
     CachedWallet = <<NewPath/binary, "/hyperbeam-key.json">>,
     case check_lmdb_exists(NewName) of
@@ -746,12 +747,12 @@ handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath, Opts) ->
             Result
     end.
 
-%% Use existing LMDB store at new location
+%% @doc Use existing LMDB store at new location
 use_existing_lmdb_store(StoreConfig, NewName) ->
     ?event(debug_volume, {using_existing_store, NewName}),
     StoreConfig#{<<"name">> => NewName}.
 
-%% Copy LMDB store data to new location with fallback
+%% @doc Copy LMDB store data to new location with fallback
 copy_lmdb_store_data(StoreConfig, ExistingPath, NewName) ->
     ?event(debug_volume, {copying_store, ExistingPath, NewName}),
     case copy_lmdb_store(ExistingPath, NewName) of
