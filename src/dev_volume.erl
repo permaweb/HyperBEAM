@@ -514,7 +514,7 @@ update_store_path(StorePath, Opts) ->
     ?event(debug_volume, 
         {update_store_path, current_store, CurrentStore}
     ),
-    case hb_volume:change_node_store(StorePath, CurrentStore) of
+    case hb_volume:change_node_store(StorePath, CurrentStore, Opts) of
         {ok, #{<<"store">> := NewStore} = StoreResult} ->
             ?event(debug_volume, 
                 {update_store_path, store_change_success, 
@@ -559,9 +559,10 @@ update_node_config(StorePath, NewStore, Opts) ->
     ?event(debug_volume, 
         {update_node_config, full_path_created, FullGenesisPath}
     ),
+    CurrentOpts = hb_http_server:get_opts(Opts),
     ok = 
         hb_http_server:set_opts(
-            Opts#{
+            CurrentOpts#{
                 store => NewStore, 
                 genesis_wasm_db_dir => FullGenesisPath
             }
