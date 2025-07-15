@@ -64,8 +64,6 @@ start(Opts = #{ <<"name">> := DataDir }) ->
         ),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
     % Store the environment handle in persistent_term for later cleanup
-    StoreKey = {lmdb, ?MODULE, DataDir},
-    persistent_term:put(StoreKey, {Env, DataDir}),
     {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
 start(_) ->
     {error, {badarg, <<"StoreOpts must be a map">>}}.
@@ -587,55 +585,15 @@ resolve(_,_) -> not_found.
 %% @doc Retrieve or create the LMDB environment handle for a database.
 find_env(Opts) -> hb_store:find(Opts).
 
-%% Shutdown LMDB environment and cleanup resources
-stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir }) ->
-    StoreKey = {lmdb, ?MODULE, DataDir},
-    close_environment(StoreKey, DataDir);
+%% @doc Shutdown LMDB environment and cleanup resources
+stop(Store = #{ <<"store-module">> := ?MODULE }) ->
+    #{ <<"env">> := Env } = find_env(Store),
+    try elmdb:env_close(Env) of
+        ok -> {unset, Store}
+    catch error:Reason -> {error, Reason}
+    end;
 stop(_InvalidStoreOpts) ->
     ok.
-
-%% Close environment using persistent_term lookup with fallback
-close_environment(StoreKey, DataDir) ->
-    case safe_get_persistent_term(StoreKey) of
-        {ok, Env} ->
-            close_and_cleanup(Env, StoreKey, DataDir);
-        not_found ->
-            ?event(debug, {lmdb_stop_not_found_in_persistent_term, DataDir}),
-            safe_close_by_name(DataDir)
-    end,
-    ok.
-
-%% Get environment from persistent_term without exceptions
-safe_get_persistent_term(Key) ->
-    case persistent_term:get(Key, undefined) of
-        {Env, _DataDir} -> {ok, Env};
-        _ -> not_found
-    end.
-
-%% Close environment and cleanup persistent_term entry
-close_and_cleanup(Env, StoreKey, DataDir) ->
-    CloseResult = safe_close_env(Env),
-    persistent_term:erase(StoreKey),
-    case CloseResult of
-        ok -> ?event(debug, {lmdb_stop_success, DataDir});
-        {error, Reason} -> ?event(debug, {lmdb_stop_error, Reason})
-    end.
-
-%% Close environment handle with error capture
-safe_close_env(Env) ->
-    try
-        elmdb:env_close(Env)
-    catch
-        error:Reason -> {error, Reason}
-    end.
-
-%% Fallback close by name with error suppression
-safe_close_by_name(DataDir) ->
-    try
-        elmdb:env_close_by_name(binary_to_list(DataDir))
-    catch
-        error:_ -> ok
-    end.
 
 %% @doc Completely delete the database directory and all its contents.
 %%
@@ -684,7 +642,7 @@ basic_test() ->
     ?assertEqual(ok, Res),
     {ok, Value} = read(StoreOpts, <<"Hello">>),
     ?assertEqual(Value, <<"World2">>),
-    ok = stop(StoreOpts).
+    {unset, _} = stop(StoreOpts).
 
 %% @doc List test - verifies prefix-based key listing functionality.
 %%
@@ -698,46 +656,38 @@ list_test() ->
         <<"capacity">> => ?DEFAULT_SIZE
     },
     reset(StoreOpts),
-    
     % Create immediate children under colors/
     write(StoreOpts, <<"colors/red">>, <<"1">>),
     write(StoreOpts, <<"colors/blue">>, <<"2">>),
     write(StoreOpts, <<"colors/green">>, <<"3">>),
-    
     % Create nested directories under colors/ - these should show up as immediate children
     write(StoreOpts, <<"colors/multi/foo">>, <<"4">>),
     write(StoreOpts, <<"colors/multi/bar">>, <<"5">>),
     write(StoreOpts, <<"colors/primary/red">>, <<"6">>),
     write(StoreOpts, <<"colors/primary/blue">>, <<"7">>),
     write(StoreOpts, <<"colors/nested/deep/value">>, <<"8">>),
-    
     % Create other top-level directories
     write(StoreOpts, <<"foo/bar">>, <<"baz">>),
     write(StoreOpts, <<"beep/boop">>, <<"bam">>),
-    
     read(StoreOpts, <<"colors">>), 
     % Test listing colors/ - should return immediate children only
     {ok, ListResult} = list(StoreOpts, <<"colors">>),
     ?event({list_result, ListResult}),
-    
     % Expected: red, blue, green (files) + multi, primary, nested (directories)
     % Should NOT include deeply nested items like foo, bar, deep, value
     ExpectedChildren = [<<"blue">>, <<"green">>, <<"multi">>, <<"nested">>, <<"primary">>, <<"red">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedChildren) end, ListResult)),
-    
     % Test listing a nested directory - should only show immediate children
     {ok, NestedListResult} = list(StoreOpts, <<"colors/multi">>),
     ?event({nested_list_result, NestedListResult}),
     ExpectedNestedChildren = [<<"bar">>, <<"foo">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedNestedChildren) end, NestedListResult)),
-    
     % Test listing a deeper nested directory
     {ok, DeepListResult} = list(StoreOpts, <<"colors/nested">>),
     ?event({deep_list_result, DeepListResult}),
     ExpectedDeepChildren = [<<"deep">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedDeepChildren) end, DeepListResult)),
-    
-    ok = stop(StoreOpts).
+    {unset, _} = stop(StoreOpts).
 
 %% @doc Group test - verifies group creation and type detection.
 %%
@@ -861,7 +811,7 @@ path_traversal_link_test() ->
     {ok, Result} = read(StoreOpts, [<<"link">>, <<"key">>]),
     ?event({path_traversal_result, Result}),
     ?assertEqual(<<"target-value">>, Result),
-    ok = stop(StoreOpts).
+    {unset, _} = stop(StoreOpts).
 
 %% @doc Test that matches the exact hb_store hierarchical test pattern
 exact_hb_store_test() ->
@@ -899,7 +849,7 @@ exact_hb_store_test() ->
     Result = read(StoreOpts, [<<"test-link">>, <<"test-file">>]),
     ?event(debug, {final_result, Result}),
     ?assertEqual({ok, <<"test-data">>}, Result),
-    ok = stop(StoreOpts).
+    {unset, _} = stop(StoreOpts).
 
 %% @doc Test cache-style usage through hb_store interface
 cache_style_test() ->
@@ -912,16 +862,13 @@ cache_style_test() ->
     reset(StoreOpts),
     % Start the store
     hb_store:start(StoreOpts),
-    
-    % Test writing through hb_store interface  
+    % Test writing through hb_store interface
     ok = hb_store:write(StoreOpts, <<"test-key">>, <<"test-value">>),
-    
     % Test reading through hb_store interface
     Result = hb_store:read(StoreOpts, <<"test-key">>),
     ?event({cache_style_read_result, Result}),
     ?assertEqual({ok, <<"test-value">>}, Result),
-    
-    hb_store:stop(StoreOpts).
+    ok = hb_store:stop(StoreOpts).
 
 %% @doc Test nested map storage with cache-like linking behavior
 %%
@@ -1036,7 +983,7 @@ nested_map_cache_test() ->
     
     % Verify the reconstructed map matches the original structure
     ?assert(hb_message:match(OriginalMap, ReconstructedMap)),
-    stop(StoreOpts).
+    {unset, _} = stop(StoreOpts).
 
 %% Helper function to recursively reconstruct a map from the store
 reconstruct_map(StoreOpts, Path) ->
@@ -1105,7 +1052,7 @@ cache_debug_test() ->
     PathAsListResult = read(StoreOpts, PathAsList),
     ?event(debug_cache_test, {path_as_list_result, PathAsListResult}),
     
-    stop(StoreOpts).
+    {unset, _} = stop(StoreOpts).
 
 %% @doc Isolated test focusing on the exact cache issue
 isolated_type_debug_test() ->
