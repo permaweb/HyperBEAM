@@ -148,7 +148,8 @@ cache_read_message_test() ->
     WriteOpts = #{
         store =>
             [
-                #{ <<"store-module">> => hb_store_gateway,
+                #{
+                    <<"store-module">> => hb_store_gateway,
                     <<"local-store">> => [Local]
                 }
             ]
