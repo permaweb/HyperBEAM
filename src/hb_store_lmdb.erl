@@ -53,6 +53,7 @@
 %% @returns {ok, ServerPid} on success, {error, Reason} on failure
 start(Opts = #{ <<"name">> := DataDir }) ->
     % Create the LMDB environment with specified size limit
+    filelib:ensure_dir(<< (hb_util:bin(DataDir))/binary, "/data.mdb">>),
     {ok, Env} =
         elmdb:env_open(
             hb_util:list(DataDir),
