@@ -775,7 +775,9 @@ req_to_tabm_singleton(Req, Body, Opts) ->
     case cowboy_req:header(<<"codec-device">>, Req, <<"httpsig@1.0">>) of
         <<"httpsig@1.0">> ->
 			?event(http, {req_to_tabm_singleton, {request, {explicit, Req}, {body, {string, Body}}}}),
-            httpsig_to_tabm_singleton(Req, Body, Opts);
+            TabM = httpsig_to_tabm_singleton(Req, Body, Opts),
+            ?event(http, {tabm_message, {explicit, TabM}}),
+            TabM;
         <<"ans104@1.0">> ->
             Item = ar_bundles:deserialize(Body),
             ?event(debug,
@@ -795,7 +797,9 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                             Opts
                         ),
                     ?event(http, {valid_ans104_signature, ANS104}),
-                    normalize_unsigned(Req, ANS104, Opts);
+                    TabM = normalize_unsigned(Req, ANS104, Opts),
+                    ?event(http, {tabm_message, {explicit, TabM}}),
+                    TabM;
                 false ->
                     throw({invalid_ans104_signature, Item})
             end;
@@ -834,7 +838,7 @@ httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
         <<"httpsig@1.0">>,
         Opts
     ),
-    ?event(verify, {verifying_httpsig_converted, {msg, Converted}}),
+    % remove codec-device header
     {ok, SignedMsg} =
         hb_message:with_only_committed(
             Converted,

@@ -64,17 +64,19 @@ verify(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, EncMsg, EncComm, _} = normalize_for_encoding(Base, Req, Opts),
     SigBase = signature_base(EncMsg, EncComm, Opts),
-    ?event(x, {signature_base_verify, {string, SigBase}}),
     KeyID = maps:get(<<"keyid">>, Req),
+    ?event(x, {signature_base_verify, {string, SigBase, key, KeyID}}),
     RawSignature = hb_util:decode(Signature = maps:get(<<"signature">>, Req)),
     ?event(x, {raw_sig, {string, RawSignature}, {type, maps:get(<<"type">>, Req) }}),
+    Base64DecodedKeyID = base64:decode(KeyID, #{mode => urlsafe, padding => false}),
+    ?event(x, {base64_decoded_key_id, {string, Base64DecodedKeyID}}),
     case maps:get(<<"type">>, Req) of
         <<"rsa-pss-sha512">> ->
             ?event(httpsig_verify, {verify, {rsa_pss_sha512, {sig_base, SigBase}}}),
             {
                 ok,
                 ar_wallet:verify(
-                    {{rsa, 65537}, base64:decode(KeyID)},
+                    {{rsa, 65537}, Base64DecodedKeyID},
                     SigBase,
                     RawSignature,
                     sha512

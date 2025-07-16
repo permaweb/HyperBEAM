@@ -498,7 +498,11 @@ ensure_loaded(Msg1, Msg2, Opts) ->
 %% to the original device if the device is the same as we left it.
 run_as(Key, Msg1, Msg2, Opts) ->
     BaseDevice = hb_maps:get(<<"device">>, Msg1, not_found, Opts),
-    ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
+    ?event(debug, {running_as, {key, {explicit, Key}}, {req, Msg2}}),
+    % Verified = hb_message:verify(Msg1, signers, Opts),
+    % ?event(debug, {verified_msg1, {verified, Verified}}),
+    % Verified2 = hb_message:verify(Msg2, signers, Opts),
+    % ?event(debug, {verified_msg2, {verified, Verified2}}),
     PreparedMsg =
         hb_util:deep_merge(
             ensure_process_key(Msg1, Opts),

@@ -367,6 +367,7 @@ handle_request(RawReq, Body, ServerID) ->
                         {accept_codec, CommitmentCodec}},
                     #{trace => TracePID}
                 ),
+                hb_message:verify(ReqSingleton, signers, NodeMsg),
                 % hb_tracer:record_step(TracePID, request_parsing),
                 % Invoke the meta@1.0 device to handle the request.
                 {ok, Res} =
