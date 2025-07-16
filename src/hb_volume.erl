@@ -4,8 +4,8 @@ Module for managing physical disks and volumes, providing operations
 for partitioning, formatting, mounting, and managing encrypted volumes.
 """.
 -export([list_partitions/0, create_partition/2]).
--export([format_disk/2, mount_disk/4, change_node_store/3]).
--export([check_for_device/1]).
+-export([format_disk/2, mount_disk/4, change_node_store/2]).
+-export([check_for_device/1, copy_wallet_to_volume/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -487,13 +487,12 @@ Change the node's data store location to the mounted encrypted disk.
          confirmation message, or {error, Reason} if the operation fails.
 """.
 -spec change_node_store(StorePath :: binary(), 
-                        CurrentStore :: list(),
-                        Opts :: map()) ->
+                        CurrentStore :: list()) ->
     {ok, map()} | {error, binary()}.
-change_node_store(undefined, _CurrentStore, Opts) ->
+change_node_store(undefined, _CurrentStore) ->
     ?event(debug_volume, {change_node_store, error, store_path_undefined}),
     {error, <<"Store path not specified">>};
-change_node_store(StorePath, CurrentStore, Opts) ->
+change_node_store(StorePath, CurrentStore) ->
     ?event(debug_volume, 
         {change_node_store, entry, 
            {store_path, StorePath, current_store, CurrentStore}
@@ -509,7 +508,7 @@ change_node_store(StorePath, CurrentStore, Opts) ->
            {current_store, CurrentStore}
         }
     ),
-    NewStore = update_store_config(CurrentStore, StorePath, Opts),
+    NewStore = update_store_config(CurrentStore, StorePath),
     % Return the result
     ?event(debug_volume,
         {change_node_store, success, {new_store_config, NewStore}}
@@ -631,60 +630,130 @@ with_secure_key_file(EncKey, Fun) ->
             erlang:raise(Class, Reason, Stacktrace)
     end.
 
-%% @doc Update the store configuration with a new base path
+%% @doc Update the store configuration with a new base path and copy existing data
 -spec update_store_config(StoreConfig :: term(), 
-    NewPrefix :: binary(),
-    Opts :: map()) -> term().
-update_store_config(StoreConfig, NewPrefix, Opts) when is_list(StoreConfig) ->
+    NewPrefix :: binary()) -> term().
+update_store_config(StoreConfig, NewPrefix) when is_list(StoreConfig) ->
     % For a list, update each element
-    [update_store_config(Item, NewPrefix, Opts) || Item <- StoreConfig];
+    [update_store_config(Item, NewPrefix) || Item <- StoreConfig];
 update_store_config(
     #{<<"store-module">> := Module} = StoreConfig, 
-    NewPrefix,
-    Opts
+    NewPrefix
 ) when is_map(StoreConfig) ->
-    % Handle various store module types differently
-    case Module of
-        hb_store_fs ->
-            % For filesystem store, prefix the existing path with the new path
-            ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
-            NewName = <<NewPrefix/binary, "/", ExistingPath/binary>>,
-            ?event(debug_volume, {fs, StoreConfig, NewPrefix, NewName}),
-            StoreConfig#{ <<"name">> => NewName };
-        hb_store_lmdb ->
-            update_lmdb_store_config(StoreConfig, NewPrefix, Opts);
-        hb_store_rocksdb ->
-            StoreConfig;
+    % Get the existing path
+    ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
+    NewName = <<NewPrefix/binary, "/", ExistingPath/binary>>,
+    ?event(debug_volume, 
+        {update_store_config, 
+            module, Module, 
+            existing_path, ExistingPath, 
+            new_name, NewName
+        }
+    ),
+    % Always stop the store first for safe copying
+    ?event(debug_volume, {copy_store_data, stopping_store, {module, Module}}),
+    stop_store_safely(StoreConfig),
+    % Copy existing data to new location
+    copy_store_data(ExistingPath, NewName, Module),
+    % Handle special cases for nested stores
+    UpdatedConfig = case Module of
         hb_store_gateway ->
             % For gateway store, recursively update nested store configs
             case maps:get(<<"local-store">>, StoreConfig, false) of
                 false ->
-                    StoreConfig;
+                    StoreConfig#{<<"name">> => NewName};
                 LocalStore ->
                     StoreConfig#{
+                        <<"name">> => NewName,
                         <<"local-store">> =>
-                            update_store_config(
-                                LocalStore,
-                                NewPrefix,
-                                Opts
-                            )
+                            update_store_config(LocalStore, NewPrefix)
                     }
             end;
         _ ->
-            % For any other store type, update the prefix
-            % StoreConfig#{<<"name">> => NewPath}
-            ?event(debug_volume, {other, StoreConfig, NewPrefix}),
-            StoreConfig
-    end.
+            % For all other store types, just update the name
+            StoreConfig#{<<"name">> => NewName}
+    end,
+    ?event(debug_volume, {update_store_config, updated_config, UpdatedConfig}),
+    UpdatedConfig.
 
-%% @doc Safely stop LMDB store with error handling
-safe_stop_lmdb_store(StoreConfig) ->
+%% @doc Safely stop any store type with error handling
+stop_store_safely(StoreConfig) ->
     ?event(debug_volume, {stopping_current_store, StoreConfig}),
     try 
         hb_store:stop(StoreConfig)
     catch 
         error:StopReason ->
             ?event(debug_volume, {stop_error, StopReason})
+    end.
+
+%% @doc Copy store data from source to destination for any store type
+-spec copy_store_data(binary(), binary(), atom()) -> ok.
+copy_store_data(SourcePath, DestPath, Module) ->
+    ?event(debug_volume, {copy_store_data, 
+        entry, {source, SourcePath, dest, DestPath, module, Module}
+        }
+    ),
+    % Check if destination already exists
+    DestStr = binary_to_list(DestPath),
+    case filelib:is_dir(DestStr) of
+        true ->
+            ?event(debug_volume, {copy_store_data, dest_exists, skipping_copy}),
+            ok; % Destination already exists, no need to copy
+        false ->
+            % Check if source exists
+            SourceStr = binary_to_list(SourcePath),
+            case filelib:is_dir(SourceStr) of
+                false ->
+                    ?event(debug_volume, 
+                        {copy_store_data, source_not_found, SourcePath}
+                    ),
+                    ok; % Nothing to copy
+                true ->
+                    ?event(debug_volume, 
+                        {copy_store_data, source_found, copying}
+                    ),
+                    copy_directory_contents(SourcePath, DestPath)
+            end
+    end.
+
+%% @doc Generic directory copying function that works for all store types
+-spec copy_directory_contents(binary(), binary()) -> ok.
+copy_directory_contents(SourcePath, DestPath) ->
+    ?event(debug_volume, 
+        {copy_directory_contents, entry, {source, SourcePath, dest, DestPath}}
+    ),
+    SourceStr = binary_to_list(SourcePath),
+    DestStr = binary_to_list(DestPath),
+    % Ensure destination directory exists
+    ok = filelib:ensure_dir(DestStr ++ "/"),
+    % Use rsync for reliable copying of all file types
+    CopyCommand = io_lib:format(
+        "rsync -av --sparse '~s/' '~s/'", 
+        [SourceStr, DestStr]
+    ),
+    ?event(debug_volume, 
+        {copy_directory_contents, executing_rsync, command}
+    ),
+    case os:cmd(CopyCommand) of
+        Result ->
+            ?event(debug_volume, 
+                {copy_directory_contents, rsync_completed, checking_errors}
+            ),
+            case {
+                string:find(Result, "rsync error"), 
+                string:find(Result, "failed")
+            } of
+                {nomatch, nomatch} ->
+                    ?event(debug_volume, 
+                        {copy_directory_contents, rsync_success, no_errors}
+                ),
+                    ok;
+                _ ->
+                    ?event(debug_volume, 
+                        {copy_directory_contents, rsync_error, Result}
+                    ),
+                    ok % Don't fail the entire operation if copy fails
+            end
     end.
 
 -doc """
@@ -710,180 +779,65 @@ check_for_device(Device) ->
     ),
     DeviceExists.
 
-%% @doc Handle LMDB store migration to new encrypted mount location
-update_lmdb_store_config(StoreConfig, NewPath, Opts) ->
-    ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
-    NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
-    ?event(debug_volume, {migrate_start, ExistingPath, NewName}),
-    safe_stop_lmdb_store(StoreConfig),
-    FinalConfig =
-        handle_lmdb_migration(
-            StoreConfig,
-            ExistingPath,
-            NewName,
-            NewPath,
-            Opts
+%% @doc Copy wallet to the mounted volume for all store types.
+%% @param StorePath The path to the mounted volume.
+%% @param Opts The current options.
+%% @returns The wallet if found/loaded, undefined otherwise.
+-spec copy_wallet_to_volume(binary(), map()) -> term() | undefined.
+copy_wallet_to_volume(StorePath, Opts) ->
+    ?event(debug_volume, {copy_wallet_to_volume, entry, {store_path, StorePath}}),
+    try
+        WalletName = 
+            hb_opts:get(
+                priv_key_location, 
+                <<"hyperbeam-key.json">>, 
+                Opts
+            ),
+        Cwd = list_to_binary(hb_util:ok(file:get_cwd())),
+        CurrentWallet = <<Cwd/binary, "/", WalletName/binary>>,
+        CachedWallet = <<StorePath/binary, "/", WalletName/binary>>,
+        ?event(debug_volume, 
+            {copy_wallet_to_volume, checking_cached_wallet, CachedWallet}
         ),
-    FinalConfig.
-
-%% @doc Handle migration destination logic
-handle_lmdb_migration(StoreConfig, ExistingPath, NewName, NewPath, Opts) ->
-    Cwd = list_to_binary(hb_util:ok(file:get_cwd())),
-    CurrentWallet = <<Cwd/binary, "/hyperbeam-key.json">>,
-    CachedWallet = <<NewPath/binary, "/hyperbeam-key.json">>,
-    case check_lmdb_exists(NewName) of
-        true ->
-            ?event(debug_volume, {using_existing_store, NewName}),
-            Result = use_existing_lmdb_store(StoreConfig, NewName),
-            ?event(debug_volume, {use_existing_store_result, Result}),
-            Wallet = ar_wallet:load_keyfile(CachedWallet, Opts),
-            hb_http_server:set_opts(Opts#{ priv_wallet => Wallet}),
-            Result;
-        false ->
-            ?event(debug_volume, {copying_store, ExistingPath, NewName}),
-            Result = copy_lmdb_store_data(StoreConfig, ExistingPath, NewName),
-            ?event(debug_volume, {copy_result, Result}),
-            file:copy(CurrentWallet, CachedWallet),
-            Result
-    end.
-
-%% @doc Use existing LMDB store at new location
-use_existing_lmdb_store(StoreConfig, NewName) ->
-    ?event(debug_volume, {using_existing_store, NewName}),
-    StoreConfig#{<<"name">> => NewName}.
-
-%% @doc Copy LMDB store data to new location with fallback
-copy_lmdb_store_data(StoreConfig, ExistingPath, NewName) ->
-    ?event(debug_volume, {copying_store, ExistingPath, NewName}),
-    case copy_lmdb_store(ExistingPath, NewName) of
-        ok ->
-            ?event(debug_volume, {copy_success, NewName}),
-            StoreConfig#{<<"name">> => NewName};
-        {error, Reason} ->
-            ?event(debug_volume, {copy_error, Reason}),
-            ?event(debug_volume, {fallback_to_original, ExistingPath}),
-            StoreConfig
-    end.
-
-%% @doc Check if an LMDB database exists at the given path.
-%%
-%% LMDB databases consist of at least a data.mdb file and optionally a 
-%% lock.mdb file. This function checks for the presence of these files to 
-%% determine if a valid LMDB database exists at the specified location.
-%%
-%% @param Path Binary path to check for LMDB database
-%% @returns true if LMDB database exists, false otherwise
--spec check_lmdb_exists(Path :: binary()) -> boolean().
-check_lmdb_exists(Path) ->
-    ?event(debug_volume, {check_lmdb_exists, entry, {path, Path}}),
-    PathStr = binary_to_list(Path),
-    DataFile = PathStr ++ "/data.mdb",    
-    % Check if the directory exists first
-    ?event(debug_volume, {check_lmdb_exists, checking_directory, PathStr}),
-    case filelib:is_dir(PathStr) of
-        false -> 
-            ?event(debug_volume, {check_lmdb_exists, directory_not_found, 
-                   false}),
-            false;
-        true ->
-            ?event(debug_volume, {check_lmdb_exists, directory_found, 
-                   checking_data_file}),
-            % Check if data.mdb exists (required for LMDB)
-            % lock.mdb is optional and might not exist when DB is not in use
-            DataExists = filelib:is_regular(DataFile),
-            ?event(debug_volume, {check_lmdb_exists, result, 
-                   {path, Path, data_file_exists, DataExists}}),
-            DataExists
-    end.
-
-%% @doc Copy an LMDB database from source to destination.
-%%
-%% This function performs a safe copy of an LMDB database by copying all
-%% the database files (data.mdb, lock.mdb if present) from the source
-%% directory to the destination directory. It ensures the destination
-%% directory exists before copying.
-%%
-%% @param SourcePath Binary path to source LMDB database
-%% @param DestPath Binary path to destination location
-%% @returns ok on success, {error, Reason} on failure
--spec copy_lmdb_store(
-    SourcePath :: binary(), 
-    DestPath :: binary()
-) -> ok | {error, term()}.
-copy_lmdb_store(SourcePath, DestPath) ->
-    ?event(debug_volume, {copy_lmdb_store, entry, 
-           {source, SourcePath, dest, DestPath}}),
-    SourceStr = binary_to_list(SourcePath),
-    DestStr = binary_to_list(DestPath),
-    ?event(debug_volume, {copy_lmdb_store, paths_converted, 
-           {source_str, SourceStr, dest_str, DestStr}}),
-    % Check if source LMDB database exists
-    ?event(debug_volume, {copy_lmdb_store, checking_source, SourcePath}),
-    case check_lmdb_exists(SourcePath) of
-        false ->
-            ?event(debug_volume, {copy_lmdb_store, source_not_found, 
-                   SourcePath}),
-            {error, <<"Source LMDB database not found">>};
-        true ->
-            ?event(debug_volume, {copy_lmdb_store, source_found, 
-                   ensuring_dest_dir}),
-            % Ensure destination directory exists
-            ok = filelib:ensure_dir(DestStr ++ "/"),
-            % Copy the LMDB database files
-            ?event(debug_volume, {copy_lmdb_store, copying_files, starting}),
-            case copy_lmdb_files(SourceStr, DestStr) of
-                ok ->
-                    ?event(debug_volume, {copy_lmdb_store, copy_success, 
-                           completed}),
-                    ok;
-                {error, Reason} ->
-                    ?event(debug_volume, {copy_lmdb_store, copy_error, 
-                           Reason}),
-                    {error, Reason}
-            end
-    end.
-
-%% @doc Helper function to copy LMDB database files.
-%%
-%% This function copies the actual LMDB files (data.mdb and lock.mdb if 
-%% present) from source to destination using system commands for reliability.
-%%
-%% @param SourceDir String path to source directory
-%% @param DestDir String path to destination directory
-%% @returns ok on success, {error, Reason} on failure
--spec copy_lmdb_files(
-    SourceDir :: string(), 
-    DestDir :: string()
-) -> ok | {error, term()}.
-copy_lmdb_files(SourceDir, DestDir) ->
-    ?event(debug_volume, {copy_lmdb_files, entry, 
-           {source_dir, SourceDir, dest_dir, DestDir}}),
-    % Use rsync for reliable copying of LMDB files
-    % --archive preserves permissions and timestamps
-    % --sparse handles sparse files efficiently
-    CopyCommand = io_lib:format(
-        "rsync -av --sparse '~s/' '~s/'", 
-        [SourceDir, DestDir]
-    ),
-    ?event(debug_volume, {copy_lmdb_files, executing_rsync, command}),
-    case os:cmd(CopyCommand) of
-        Result ->
-            ?event(debug_volume, {copy_lmdb_files, rsync_completed, 
-                   checking_errors}),
-            % Check if rsync completed successfully by looking for error indicators
-            case {
-                    string:find(Result, "rsync error"), 
-                    string:find(Result, "failed")
-                } of
-                {nomatch, nomatch} ->
-                    ?event(debug_volume, {copy_lmdb_files, rsync_success, 
-                           no_errors}),
-                    ok;
-                _ ->
-                    ?event(debug_volume, {copy_lmdb_files, rsync_error, 
-                           Result}),
-                    {error, list_to_binary(Result)}
-            end
+        case filelib:is_regular(binary_to_list(CachedWallet)) of
+            true ->
+                % Use existing wallet from volume
+                ?event(debug_volume, 
+                    {copy_wallet_to_volume, using_cached_wallet, CachedWallet}
+                ),
+                ar_wallet:load_keyfile(CachedWallet, Opts);
+            false ->
+                % Copy current wallet to volume
+                ?event(debug_volume, 
+                    {copy_wallet_to_volume, 
+                        copying_wallet, {from, CurrentWallet, to, CachedWallet}
+                    }
+                ),
+                case filelib:is_regular(binary_to_list(CurrentWallet)) of
+                    true ->
+                        file:copy(CurrentWallet, CachedWallet),
+                        ?event(debug_volume, 
+                            {copy_wallet_to_volume, wallet_copied, success}
+                        ),
+                        % Return the current wallet from options if available
+                        hb_opts:get(priv_wallet, undefined, Opts);
+                    false ->
+                        ?event(debug_volume, 
+                            {copy_wallet_to_volume, 
+                                no_wallet_to_copy, CurrentWallet
+                            }
+                        ),
+                        undefined
+                end
+        end
+    catch
+        Class:Reason ->
+            ?event(debug_volume, 
+                {copy_wallet_to_volume, error, 
+                    {class, Class, reason, Reason}
+                }
+            ),
+            undefined
     end.
 
 %%% Unit Tests
@@ -936,21 +890,20 @@ update_store_config_test() ->
         <<"store-module">> => hb_store_fs,
         <<"name">> => <<"cache">>
     },
-    Opts = #{ store => [FSStore] },
     NewPath = <<"/encrypted/mount">>,
-    Updated = update_store_config(FSStore, NewPath, Opts),
+    Updated = update_store_config(FSStore, NewPath),
     Expected = FSStore#{ <<"name">> => <<"/encrypted/mount/cache">> },
     ?assertEqual(Expected, Updated),
     % Test list of stores
     StoreList = [FSStore, #{ <<"store-module">> => hb_store_gateway }],
-    UpdatedList = update_store_config(StoreList, NewPath, Opts),
+    UpdatedList = update_store_config(StoreList, NewPath),
     ?assertEqual(2, length(UpdatedList)),
     % Test nested store
     NestedStore = #{
         <<"store-module">> => hb_store_gateway,
         <<"local-store">> => FSStore
     },
-    UpdatedNested = update_store_config(NestedStore, NewPath, Opts),
+    UpdatedNested = update_store_config(NestedStore, NewPath),
     ?assertEqual(NestedStore#{ <<"local-store">> => Expected }, UpdatedNested).
 
 %% Test secure key file management
@@ -1022,27 +975,3 @@ safe_exec_mock_test() ->
             ["Error", "failed"]
         ),
     ?assertEqual(error, TestResult2). 
-
-%% Test LMDB existence checking
-check_lmdb_exists_test() ->
-    % Create temporary test directories
-    TestDir = "/tmp/hb_volume_test_" ++ 
-               integer_to_list(erlang:system_time()),
-    TestDirBin = list_to_binary(TestDir),
-    % Clean up function
-    Cleanup = fun() -> os:cmd("rm -rf " ++ TestDir) end,
-    try
-        % Test non-existent directory
-        ?assertEqual(false, check_lmdb_exists(TestDirBin)),
-        % Create directory but no LMDB files
-        ok = filelib:ensure_dir(TestDir ++ "/"),
-        ?assertEqual(false, check_lmdb_exists(TestDirBin)),
-        % Create data.mdb file
-        DataFile = TestDir ++ "/data.mdb",
-        file:write_file(DataFile, <<"test data">>, [raw]),
-        ?assertEqual(true, check_lmdb_exists(TestDirBin)),
-        % Clean up
-        Cleanup()
-    after
-        Cleanup()
-    end.
