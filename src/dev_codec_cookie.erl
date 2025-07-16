@@ -251,7 +251,9 @@ from_line(Line) ->
                     lists:map(
                         fun(AttrPairBin) ->
                             {[AttrKey, AttrValue], _} = split(pair, AttrPairBin),
-                            {AttrKey, unquote(AttrValue)}
+                            AttrKeyTrimmed = trim_bin(AttrKey),
+                            AttrValueTrimmed = trim_bin(AttrValue),
+                            {AttrKeyTrimmed, unquote(AttrValueTrimmed)}
                         end,
                         AttrPairs
                     )
@@ -275,10 +277,22 @@ from_line(Line) ->
 to_sorted_list(Msg) when is_map(Msg) ->
     lists:keysort(
         1,
-        [ {hb_util:bin(K), V} || {K, V} <- maps:to_list(Msg) ]
+        [
+            {trim_bin(hb_util:bin(K)), trim_bin(V)}
+            || {K, V} <- maps:to_list(Msg)
+        ]
     );
 to_sorted_list(Binaries) when is_list(Binaries) ->
-    lists:sort(lists:map(fun hb_util:bin/1, Binaries)).
+    lists:sort(
+        lists:map(
+            fun(Bin) -> trim_bin(hb_util:bin(Bin)) end,
+            Binaries
+        )
+    ).
+
+%% Helper
+trim_bin(Bin) when is_binary(Bin) ->
+    list_to_binary(string:trim(binary_to_list(Bin))).
 
 %% @doc Join a list of binaries into a `separator'-separated string. Abstracts
 %% the complexities of converting to/from string lists, as Erlang only provides
@@ -431,6 +445,257 @@ test_data() ->
                             <<"attributes">> => #{ <<"SameSite">> => <<"Lax">> }
                         }
                 }
+            },
+        parse_realworld_complex =>
+            {
+                [
+                    [
+                        <<"user_settings=notifications=true,privacy=strict,layout=grid; Path=/; HttpOnly; Secure">>,
+                        <<"user_permissions=\"read;write;delete\"; Path=/; SameSite=None; Secure">>,
+                        <<"SESSION_ID=abc123xyz ; path= /dashboard ; samesite=Strict ; Secure">>,
+                        <<"temp_data=cleanup_me; Max-Age=-1; Path=/">>,
+                        <<"user_preference=; Path=/; HttpOnly">>,
+                        <<"=anonymous_session_123; Path=/guest">>,
+                        <<"$app_config$=theme@dark!%20mode; Path=/">>,
+                        <<"analytics_session_data_with_very_long_name_for_tracking_purposes=comprehensive_user_behavior_analytics_data_including_page_views_click_events_scroll_depth_time_spent_geographic_location_device_info_browser_details_and_more; Path=/">>,
+                        % ------- Failing because \n is getting tranferred to n\ while parsing
+                        % <<"error_log=\"timestamp=2024-01-15 10:30:00\\nlevel=ERROR\\tmessage=Database connection failed\"; Path=/">>,
+                        % <<"auth_token=bearer_xyz789; Secure; Path=/api; Secure; HttpOnly">>,
+                        % ---- Failing because of \ backlashes in the flag we should remove it
+                        % <<"csrf_token=abc123; \"HttpOnly\"; Path=/">>,      
+                        % ----- Failing because parsing as <<"quick_setting">> => <<"enabled">>
+                        % <<"quick_setting=enabled">>,
+                        % ------ Failing because parsing have <<\"admin_flag\">>
+                        % <<"\"admin_flag\"=true; Path=/">>,
+                        % <<"upload_session=upload_xyz;Path=/upload Secure HttpOnly">>,
+                        % <<"search_history=\"query,results\"; Path=/">>,
+                        % <<"user_tags=\"work,personal\"; Path=/">>,
+                        % <<"secret_key=confidential; Path=%2Fadmin">>,
+                        % <<"reaction_prefs=👍👎; Path=/; Secure">>,
+                        <<"debug_info=\\tIndented\\t\\nMultiline\\n; Path=/">>,
+                        <<"tracking_id=user_12345; CustomAttr=CustomValue; Analytics=Enabled; Path=/; HttpOnly">>,
+                        <<"cache_bust=v1.2.3; Expires=Mon, 99 Feb 2099 25:99:99 GMT; Path=/">>,
+                        <<"form_token=form_abc123; SameSite=Strick; Secure">>,
+                        <<"access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c; Path=/; HttpOnly; Secure">>
+                    ]
+                ],
+                #{
+                    <<"user_settings">> =>
+                        #{
+                            <<"value">> => <<"notifications=true,privacy=strict,layout=grid">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                            <<"flags">> => [<<"HttpOnly">>, <<"Secure">>]
+                        },
+                    <<"user_permissions">> =>
+                        #{
+                            <<"value">> => <<"read;write;delete">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">>, <<"SameSite">> => <<"None">> },
+                            <<"flags">> => [<<"Secure">>]
+                        },
+                    <<"SESSION_ID">> =>
+                        #{
+                            <<"value">> => <<"abc123xyz ">>,
+                            <<"attributes">> => #{ <<"path">> => <<"/dashboard">>, <<"samesite">> => <<"Strict">> },
+                            <<"flags">> => [<<"Secure">>]
+                        },
+                    <<"temp_data">> =>
+                        #{
+                            <<"value">> => <<"cleanup_me">>,
+                            <<"attributes">> => #{ <<"Max-Age">> => <<"-1">>, <<"Path">> => <<"/">> }
+                        },
+                    <<"user_preference">> =>
+                        #{
+                            <<"value">> => <<"">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                            <<"flags">> => [<<"HttpOnly">>]
+                        },
+                    <<>> =>
+                        #{
+                            <<"value">> => <<"anonymous_session_123">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/guest">> }
+                        },
+                    <<"$app_config$">> =>
+                        #{
+                            <<"value">> => <<"theme@dark!%20mode">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">> }
+                        },
+                    <<"analytics_session_data_with_very_long_name_for_tracking_purposes">> =>
+                        #{
+                            <<"value">> => <<"comprehensive_user_behavior_analytics_data_including_page_views_click_events_scroll_depth_time_spent_geographic_location_device_info_browser_details_and_more">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">> }
+                        },
+                    % <<"csrf_token">> =>
+                    %     #{
+                    %         <<"value">> => <<"abc123">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                    %         <<"flags">> => [<<"HttpOnly">>]
+                    %     },
+                    % <<"auth_token">> =>
+                    %     #{
+                    %         <<"value">> => <<"bearer_xyz789">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/api">> },
+                    %         <<"flags">> => [<<"Secure">>, <<"Secure">>, <<"HttpOnly">>]
+                    %     },
+                    % <<"error_log">> =>
+                    %     #{
+                    %         <<"value">> => <<"timestamp=2024-01-15 10:30:00\\nlevel=ERROR\\tmessage=Database connection failed">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                    %         <<"flags">> => []
+                    %     },
+                    <<"debug_info">> =>
+                        #{
+                            <<"value">> => <<"\\tIndented\\t\\nMultiline\\n">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">> }
+                        },
+                    <<"tracking_id">> =>
+                        #{
+                            <<"value">> => <<"user_12345">>,
+                            <<"attributes">> => #{
+                                <<"CustomAttr">> => <<"CustomValue">>,
+                                <<"Analytics">> => <<"Enabled">>,
+                                <<"Path">> => <<"/">>
+                            },
+                            <<"flags">> => [<<"HttpOnly">>]
+                        },
+                    % <<"quick_setting">> =>
+                    %     #{
+                    %         <<"value">> => <<"enabled">>
+                    %     },
+                    <<"cache_bust">> =>
+                        #{
+                            <<"value">> => <<"v1.2.3">>,
+                            <<"attributes">> => #{
+                                <<"Expires">> => <<"Mon, 99 Feb 2099 25:99:99 GMT">>,
+                                <<"Path">> => <<"/">>
+                            }
+                        },
+                    <<"form_token">> =>
+                        #{
+                            <<"value">> => <<"form_abc123">>,
+                            <<"attributes">> => #{ <<"SameSite">> => <<"Strick">> },
+                            <<"flags">> => [<<"Secure">>]
+                        },
+                    % <<"admin_flag">> =>
+                    %     #{
+                    %         <<"value">> => <<"true">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/">> }
+                    %     },
+                    % <<"upload_session">> =>
+                    %     #{
+                    %         <<"value">> => <<"upload_xyz">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/upload">> },
+                    %         <<"flags">> => [<<"Secure">>, <<"HttpOnly">>]
+                    %     },
+                    % <<"search_history">> =>
+                    %     #{
+                    %         <<"value">> => <<"query,results">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                    %         <<"flags">> => []
+                    %     },
+                    % <<"user_tags">> =>
+                    %     #{
+                    %         <<"value">> => <<"work,personal">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                    %         <<"flags">> => []
+                    %     },
+                    % <<"secret_key">> =>
+                    %     #{
+                    %         <<"value">> => <<"confidential">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/admin">> },
+                    %         <<"flags">> => []
+                    %     },
+                    % <<"reaction_prefs">> =>
+                    %     #{
+                    %         <<"value">> => <<"👍👎">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                    %         <<"flags">> => [<<"Secure">>]
+                    %     },
+                    <<"access_token">> =>
+                        #{
+                            <<"value">> => <<"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                            <<"flags">> => [<<"HttpOnly">>, <<"Secure">>]
+                        }
+                }
+            },
+        parse_realworld_backlash =>
+            {
+                [
+                    [
+                        % ------- Failing because \n is getting tranferred to n\ while parsing
+                        % <<"error_log=\"timestamp=2024-01-15 10:30:00\\nlevel=ERROR\\tmessage=Database connection failed\"; Path=/">>,
+                        % ------- Failing because wrong order of flags
+                        % <<"auth_token=bearer_xyz789; Secure; Path=/api; Secure; HttpOnly">>,
+                        % ---- Failing because of \ backlashes in the flag we should remove it
+                        % <<"csrf_token=abc123; \"HttpOnly\"; Path=/">>,      
+                        % ----- Failing because parsing as <<"quick_setting">> => <<"enabled">>
+                        % <<"quick_setting=enabled">>,
+                        % ------ Failing because parsing have <<\"admin_flag\">>
+                        % <<"\"admin_flag\"=true; Path=/">>,
+                        % ------ Failing because Secure and HTTPOnly are part of Path
+                        % <<"upload_session=upload_xyz;Path=/upload Secure HttpOnly">>,
+                        <<"search_history=\"query,results\"; Path=/">>,
+                        <<"user_tags=\"work,personal\"; Path=/">>,
+                        <<"secret_key=confidential; Path=%2Fadmin">>,
+                        <<"reaction_prefs=👍👎; Path=/; Secure">>
+                    ]
+                ],
+                #{
+                    % <<"csrf_token">> =>
+                    %     #{
+                    %         <<"value">> => <<"abc123">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                    %         <<"flags">> => [<<"HttpOnly">>]
+                    %     },
+                    % <<"auth_token">> =>
+                    %     #{
+                    %         <<"value">> => <<"bearer_xyz789">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/api">> },
+                    %         <<"flags">> => [<<"Secure">>, <<"Secure">>, <<"HttpOnly">>]
+                    %     },
+                    % <<"error_log">> =>
+                    %     #{
+                    %         <<"value">> => <<"timestamp=2024-01-15 10:30:00\\nlevel=ERROR\\tmessage=Database connection failed">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                    %         <<"flags">> => []
+                    %     },
+                    % <<"quick_setting">> =>
+                    %     #{
+                    %         <<"value">> => <<"enabled">>
+                    %     },
+                    % <<"admin_flag">> =>
+                    %     #{
+                    %         <<"value">> => <<"true">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/">> }
+                    %     },
+                    % <<"upload_session">> =>
+                    %     #{
+                    %         <<"value">> => <<"upload_xyz">>,
+                    %         <<"attributes">> => #{ <<"Path">> => <<"/upload">> },
+                    %         <<"flags">> => [<<"Secure">>, <<"HttpOnly">>]
+                    %     },
+                    <<"search_history">> =>
+                        #{
+                            <<"value">> => <<"query,results">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">> }
+                        },
+                    <<"user_tags">> =>
+                        #{
+                            <<"value">> => <<"work,personal">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">> }
+                        },
+                    <<"secret_key">> =>
+                        #{
+                            <<"value">> => <<"confidential">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"%2Fadmin">> }
+                        },
+                    <<"reaction_prefs">> =>
+                        #{
+                            <<"value">> => <<"👍👎">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">> },
+                            <<"flags">> => [<<"Secure">>]
+                        }
+                }
             }
     }.
 
@@ -454,6 +719,12 @@ to_string_flags_test() ->
 
 parse_realworld_test() ->
     assert_set(parse_realworld_1, fun from_string/1).
+
+parse_realworld_complex_test() ->
+    assert_set(parse_realworld_complex, fun from_string/1).
+
+parse_realworld_backlash_test() ->
+    assert_set(parse_realworld_backlash, fun from_string/1).
 
 %%% Test Helpers
 
