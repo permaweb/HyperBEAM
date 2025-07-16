@@ -291,21 +291,19 @@ is_signed_key(Key, Msg, Opts) ->
     lists:member(Key, hb_message:committed(Msg, all, Opts)).
 
 %% @doc Sign a message with the given wallet.
-commit(Msg, WalletOrOpts) ->
+commit(Msg, Opts) ->
     commit(
         Msg,
-        WalletOrOpts,
+        Opts,
         hb_opts:get(
             commitment_device,
             no_viable_commitment_device,
-            case is_map(WalletOrOpts) of
-                true -> WalletOrOpts;
-                false -> #{ priv_wallet => WalletOrOpts }
-            end
+            Opts
         )
     ).
-commit(Msg, Wallet, Format) when not is_map(Wallet) ->
-    commit(Msg, #{ priv_wallet => Wallet }, Format);
+commit(Msg, NotOpts, CodecName) when not is_map(NotOpts) ->
+    ?event(error, {deprecated_commit_call, {msg, Msg}, {opts, NotOpts}, {codec, CodecName}}),
+    error({deprecated_commit_call, {arg_must_be_node_msg, NotOpts}});
 commit(Msg, Opts, CodecName) when is_binary(CodecName) ->
     commit(Msg, Opts, #{ <<"commitment-device">> => CodecName });
 commit(Msg, Opts, Spec) ->
@@ -318,13 +316,19 @@ commit(Msg, Opts, Spec) ->
                         none ->
                             case hb_maps:get(<<"device">>, Spec, none, Opts) of
                                 none ->
-                                    throw(
-                                        {
-                                            no_commitment_device_in_codec_spec,
-                                            Spec
-                                        }
-                                    );
-                                Device -> Device
+                                    FromOpts =
+                                        hb_opts:get(
+                                            commitment_device,
+                                            no_viable_commitment_device,
+                                            Opts
+                                        ),
+                                    case FromOpts of
+                                        no_viable_commitment_device ->
+                                            throw(
+                                                {unset_commitment_device, Spec}
+                                            );
+                                        Device -> Device
+                                    end
                             end;
                         CommitmentDevice -> CommitmentDevice
                     end
