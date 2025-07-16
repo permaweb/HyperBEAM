@@ -135,7 +135,7 @@ default_message() ->
         debug_print_trace => short, % `short` | `false`. Has performance impact.
         short_trace_len => 20,
         debug_metadata => true,
-        debug_ids => true,
+        debug_ids => false,
         debug_committers => true,
         debug_show_priv => if_present,
         debug_resolve_links => false,
@@ -235,7 +235,7 @@ default_message() ->
                 cache_control => [<<"always">>]
             },
         % Should the node store all signed messages?
-        store_all_signed => true,
+        store_all_signed => false,
         % Should the node use persistent processes?
         process_workers => false,
         % Options for the router device
