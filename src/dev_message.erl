@@ -108,8 +108,11 @@ id(RawBase, Req, NodeOpts) ->
     case hb_maps:keys(Commitments) of
         [] ->
             % If there are no commitments, we must (re)calculate the ID.
-            ?event(id, no_commitments_found_in_id_call),
+            ?event(id_result, no_commitments_found_in_id_call),
             calculate_id(hb_maps:without([<<"commitments">>], ModBase), Req, IDOpts);
+        [ID] ->
+            ?event(id_result, {single_commitment_found_in_id_call, {id, ID}}),
+            {ok, hb_util:human_id(ID)};
         IDs ->
             % Accumulate the relevant IDs into a single value. This is performed 
             % by module arithmetic of each of the IDs. The effect of this is that:
@@ -123,7 +126,7 @@ id(RawBase, Req, NodeOpts) ->
             % accumulation function starts with a buffer of zero encoded as a 
             % 256-bit binary. Subsequently, a single ID on its own 'accumulates' 
             % to itself.
-            ?event(id, {accumulating_existing_ids, IDs}),
+            ?event(id_result, {accumulating_existing_ids, IDs}),
             {ok,
                 hb_util:human_id(
                     hb_crypto:accumulate(
