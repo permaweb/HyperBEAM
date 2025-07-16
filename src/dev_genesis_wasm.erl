@@ -77,6 +77,7 @@ ensure_started(Opts) ->
     % of the registered name implies its availability.
     {ok, Cwd} = file:get_cwd(),
     ?event({ensure_started, cwd, Cwd}),
+    IsDevelopment = string:str(Cwd, "rel/hb"),
     % Determine path based on whether we're in a release or development
     GenesisWasmServerDir =
         case init:get_argument(mode) of
@@ -141,6 +142,14 @@ ensure_started(Opts) ->
                         DatabaseUrl = filename:absname(DBDir ++ "/genesis-wasm-db"),
                         filelib:ensure_path(DBDir),
 						filelib:ensure_path(CheckpointDir),
+                        GenesisWasmPort =
+                            integer_to_list(
+                                hb_opts:get(
+                                    genesis_wasm_port,
+                                    6363,
+                                    Opts
+                                )
+                            ),
                         Port =
                             open_port(
                                 {spawn_executable,
@@ -164,17 +173,9 @@ ensure_started(Opts) ->
                                         Env = [
                                             {"UNIT_MODE", "hbu"},
                                             {"HB_URL", NodeURL},
-                                            {"PORT",
-                                                integer_to_list(
-                                                    hb_opts:get(
-                                                        genesis_wasm_port,
-                                                        6363,
-                                                        Opts
-                                                    )
-                                                )
-                                            },
+                                            {"PORT", GenesisWasmPort},
                                             {"DB_URL", DatabaseUrl},
-                                            {"NODE_CONFIG_ENV", "production"},
+                                            {"NODE_CONFIG_ENV", NodeConfigEnv},
                                             {"DEFAULT_LOG_LEVEL",
                                                 hb_util:list(
                                                     hb_opts:get(
