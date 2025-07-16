@@ -61,8 +61,18 @@ ensure_started(Opts) ->
     % of the registered name implies its availability.
     {ok, Cwd} = file:get_cwd(),
     ?event({ensure_started, cwd, Cwd}),
+    IsDevelopment = string:str(Cwd, "rel/hb"),
     % Determine path based on whether we're in a release or development
-    GenesisWasmServerDir = filename:join([Cwd, "genesis-wasm-server"]),
+    case IsDevelopment of
+        0 ->
+            % Development
+            GenesisWasmServerDir = filename:join([Cwd, "_build", "genesis-wasm-server"]),
+            NodeConfigEnv = "development";
+        _ ->
+            % Release
+            GenesisWasmServerDir = filename:join([Cwd, "genesis-wasm-server"]),
+            NodeConfigEnv = "production"
+    end,
     ?event({ensure_started, genesis_wasm_server_dir, GenesisWasmServerDir}),
     ?event({ensure_started, genesis_wasm, self()}),
     IsRunning = is_genesis_wasm_server_running(Opts),
@@ -105,6 +115,14 @@ ensure_started(Opts) ->
                         DatabaseUrl = filename:absname(DBDir ++ "/genesis-wasm-db"),
                         filelib:ensure_path(DBDir),
 						filelib:ensure_path(CheckpointDir),
+                        GenesisWasmPort =
+                            integer_to_list(
+                                hb_opts:get(
+                                    genesis_wasm_port,
+                                    6363,
+                                    Opts
+                                )
+                            ),
                         Port =
                             open_port(
                                 {spawn_executable,
@@ -123,17 +141,9 @@ ensure_started(Opts) ->
                                         [
                                             {"UNIT_MODE", "hbu"},
                                             {"HB_URL", NodeURL},
-                                            {"PORT",
-                                                integer_to_list(
-                                                    hb_opts:get(
-                                                        genesis_wasm_port,
-                                                        6363,
-                                                        Opts
-                                                    )
-                                                )
-                                            },
+                                            {"PORT", GenesisWasmPort},
                                             {"DB_URL", DatabaseUrl},
-                                            {"NODE_CONFIG_ENV", "production"},
+                                            {"NODE_CONFIG_ENV", NodeConfigEnv},
                                             {"DEFAULT_LOG_LEVEL",
                                                 hb_util:list(
                                                     hb_opts:get(
