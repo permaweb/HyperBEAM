@@ -187,10 +187,10 @@ default_message() ->
                 %         <<"name">> => <<"cache-mainnet/lru">>
                 %     }
                 % },
-                %#{
-                %    <<"name">> => <<"cache-mainnet/lmdb">>,
-                %    <<"store-module">> => hb_store_fs
-                %},
+                #{
+                   <<"name">> => <<"cache-mainnet/lmdb">>,
+                   <<"store-module">> => hb_store_lmdb
+                },
                 #{
                     <<"store-module">> => hb_store_fs,
                     <<"name">> => <<"cache-mainnet">>
@@ -206,8 +206,8 @@ default_message() ->
                     <<"local-store">> => 
                         [
                             #{
-                                <<"store-module">> => hb_store_fs,
-                                <<"name">> => <<"cache-mainnet">>
+                                <<"store-module">> => hb_store_lmdb,
+                                <<"name">> => <<"cache-mainnet/lmdb">>
                             }
                         ]
                 },
@@ -216,8 +216,8 @@ default_message() ->
                     <<"local-store">> =>
                         [
                             #{
-                                <<"store-module">> => hb_store_fs,
-                                <<"name">> => <<"cache-mainnet">>
+                                <<"store-module">> => hb_store_lmdb,
+                                <<"name">> => <<"cache-mainnet/lmdb">>
                             }
                         ]
                 }
