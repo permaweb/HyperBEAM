@@ -514,7 +514,7 @@ update_store_path(StorePath, Opts) ->
     ?event(debug_volume, 
         {update_store_path, current_store, CurrentStore}
     ),
-    case hb_volume:change_node_store(StorePath, CurrentStore, Opts) of
+    case hb_volume:change_node_store(StorePath, CurrentStore) of
         {ok, #{<<"store">> := NewStore} = StoreResult} ->
             ?event(debug_volume, 
                 {update_store_path, store_change_success, 
@@ -544,6 +544,9 @@ update_node_config(StorePath, NewStore, Opts) ->
             {updating_config, StorePath, NewStore}
         }
     ),
+    % Handle wallet copying for all store types and get the wallet
+    Wallet = hb_volume:copy_wallet_to_volume(StorePath, Opts),
+    % Update genesis wasm db path
     GenesisWasmDBDir = 
         hb_opts:get(
             genesis_wasm_db_dir,
@@ -559,15 +562,18 @@ update_node_config(StorePath, NewStore, Opts) ->
     ?event(debug_volume, 
         {update_node_config, full_path_created, FullGenesisPath}
     ),
-    CurrentOpts = hb_http_server:get_opts(Opts),
-    ok = 
-        hb_http_server:set_opts(
-            CurrentOpts#{
-                store => NewStore, 
-                genesis_wasm_db_dir => FullGenesisPath
-            }
-        ),
+    UpdatedOpts = Opts#{
+        store => NewStore, 
+        genesis_wasm_db_dir => FullGenesisPath
+    },
+    % Set wallet if one was returned
+    FinalOpts = case Wallet of
+        undefined -> UpdatedOpts;
+        _ -> UpdatedOpts#{priv_wallet => Wallet}
+    end,
+    ok = hb_http_server:set_opts(FinalOpts),
     ?event(debug_volume, 
         {update_node_config, config_updated, success}
     ),
     {ok, <<"Volume mounted and store updated successfully">>}.
+
