@@ -76,6 +76,17 @@ behavior_info(callbacks) ->
 
 %%% Store named terms registry functions.
 
+%% @doc Return the name of a store, or list of names of the given stores.
+names(StoreOpts) when not is_list(StoreOpts) ->
+    names([StoreOpts]);
+names([]) -> [];
+names(Stores) ->
+    [
+        maps:get(<<"name">>, StoreOpts, maps:get(<<"store-module">>, StoreOpts))
+    ||
+        StoreOpts <- Stores
+    ].
+
 %% @doc Set the instance options for a given store module and name combination.
 set(StoreOpts, InstanceTerm) ->
     Mod = maps:get(<<"store-module">>, StoreOpts),
@@ -187,12 +198,20 @@ filter(Modules, Filter) ->
 %% @doc Limit the store scope to only a specific (set of) option(s).
 %% Takes either an Opts message or store, and either a single scope or a list
 %% of scopes.
+scope(Store = #{ <<"store-module">> := _ }, Scope) ->
+    % The given value is a single store message, so we wrap it in a list and
+    % call the scope function on it.
+    scope([Store], Scope);
 scope(Opts, Scope) when is_map(Opts) ->
+    % The argument is a node message as it is a map with no store-module key.
+    % Scope the store and return the new message.
     case hb_opts:get(store, no_viable_store, Opts) of
         no_viable_store -> Opts;
-        Store -> Opts#{ store => scope(Store, Scope) }
+        Store ->
+            Opts#{ store => scope(Store, Scope) }
     end;
-scope(Store, Scope) ->
+scope(Store, Scope) when is_list(Store) ->
+    % Filter the list of stores to only include those that match the given scope.
     filter(
         Store,
         fun(StoreScope, _) ->
@@ -293,6 +312,13 @@ list(Modules, Path) -> call_function(Modules, list, [Path]).
 %% counter.
 -ifdef(STORE_EVENTS).
 call_function(X, Function, Args) ->
+    ?event(verbose_store,
+        {call_function,
+            Function,
+                {store, names(X)},
+                {args, Args}
+            }
+        ),
     {Time, Result} = timer:tc(fun() -> do_call_function(X, Function, Args) end),
     hb_event:increment(<<"store_duration">>, hb_util:bin(Function), #{}, Time),
     hb_event:increment(<<"store">>, hb_util:bin(Function), #{}, 1),
