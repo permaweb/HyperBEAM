@@ -339,7 +339,7 @@ default_message() ->
                 cache_control => [<<"always">>]
             },
         % Should the node store all signed messages?
-        store_all_signed => true,
+        store_all_signed => false,
         % Should the node use persistent processes?
         process_workers => false,
         % Options for the router device
