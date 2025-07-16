@@ -116,7 +116,10 @@ charge(_, RawReq, NodeMsg) ->
                                 (hb_util:bin(NewBalance))/binary,
                             ".">>
                     }}
-            end
+            end;
+        MultipleSigners ->
+            ?event(payment, {charge, {error, <<"Multiple signers">>}}),
+            {error, <<"Multiple signers">>}
     end.
 
 %% @doc Get the balance of a user in the ledger.
@@ -241,13 +244,12 @@ get_balance_and_top_up_test() ->
     {ok, Res} =
         hb_http:get(
             Node,
-            Req = hb_message:commit(
+            hb_message:commit(
                 #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
                 Opts#{ priv_wallet => ClientWallet }
             ),
             Opts
         ),
-    ?event({req_signers, hb_message:signers(Req, Opts)}),
     % Balance is given during the request, before the charge is made, so we 
     % should expect to see the original balance.
     ?assertEqual(100, Res),

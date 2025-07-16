@@ -238,7 +238,7 @@ response(State, RawResponse, NodeMsg) ->
                                     end,
                                 <<"request">> => Request
                             },
-                            hb_opts:get(priv_wallet, no_viable_wallet, NodeMsg)
+                            NodeMsg
                         ),
                     ?event(payment,
                         {post_charge,
