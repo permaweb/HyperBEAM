@@ -19,11 +19,19 @@
 -export([check_required_opts/2]).
 -include("include/hb.hrl").
 
+-ifdef(TEST).
+-define(DEFAULT_PRINT_OPTS, [error, http_error]).
+-define(DEFAULT_CONFIG_LOCATION, <<"test-config.flat">>).
+-else.
+-define(DEFAULT_PRINT_OPTS, [error, http_error, http_short, compute_short, push_short]).
+-define(DEFAULT_CONFIG_LOCATION, <<"config.flat">>).
+-endif.
+
 %% @doc The default configuration options of the hyperbeam node.
 default_message() ->
     #{
         %%%%%%%% Functional options %%%%%%%%
-        hb_config_location => <<"config.flat">>,
+        hb_config_location => ?DEFAULT_CONFIG_LOCATION,
         initialized => true,
         %% What HTTP client should the node use?
         %% Options: gun, httpc
@@ -297,16 +305,10 @@ do_get(Key, Default, Opts) ->
     % No preference was set in Opts, so we default to local.
     do_get(Key, Default, Opts#{ prefer => local }).
 
--ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, [error, http_error]).
--else.
--define(DEFAULT_PRINT_OPTS, [error, http_error, http_short, compute_short, push_short]).
--endif.
-
 -define(ENV_KEYS,
     #{
         priv_key_location => {"HB_KEY", "hyperbeam-key.json"},
-        hb_config_location => {"HB_CONFIG", "config.flat"},
+        hb_config_location => {"HB_CONFIG", ?DEFAULT_CONFIG_LOCATION},
         port => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
         mode => {"HB_MODE", fun list_to_existing_atom/1},
         debug_print =>

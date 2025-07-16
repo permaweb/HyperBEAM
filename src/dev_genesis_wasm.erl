@@ -66,11 +66,19 @@ ensure_started(Opts) ->
     case IsDevelopment of
         0 ->
             % Development
-            GenesisWasmServerDir = filename:join([Cwd, "_build", "genesis-wasm-server"]),
+            GenesisWasmServerDir = filename:join([
+                Cwd,
+                "_build",
+                "genesis_wasm",
+                "genesis-wasm-server"
+            ]),
             NodeConfigEnv = "development";
         _ ->
             % Release
-            GenesisWasmServerDir = filename:join([Cwd, "genesis-wasm-server"]),
+            GenesisWasmServerDir = filename:join([
+                Cwd,
+                "genesis-wasm-server"
+            ]),
             NodeConfigEnv = "production"
     end,
     ?event({ensure_started, genesis_wasm_server_dir, GenesisWasmServerDir}),
