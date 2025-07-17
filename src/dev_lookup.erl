@@ -63,16 +63,15 @@ http_lookup_test() ->
         <<"store-module">> => hb_store_fs,
         <<"name">> => <<"cache-mainnet">>
     },
-    Opts = #{ store => [Store] },
+    Opts = #{ store => [Store], priv_wallet => hb:wallet() },
     Msg = #{ <<"test-key">> => <<"test-value">>, <<"data">> => <<"test-data">> },
     {ok, ID} = hb_cache:write(Msg, Opts),
     Node = hb_http_server:start_node(Opts),
-    Wallet = hb:wallet(),
     Req = hb_message:commit(#{
         <<"path">> => <<"/~lookup@1.0/read?target=", ID/binary>>,
         <<"device">> => <<"lookup@1.0">>,
         <<"accept">> => <<"application/aos-2">>
-    }, Wallet),
+    }, hb_util:get_wallet_opts()),
     {ok, Res} = hb_http:post(Node, Req, Opts),
     {ok, Decoded} = dev_json_iface:json_to_message(hb_ao:get(<<"body">>, Res, Opts), Opts),
     ?assertEqual(<<"test-data">>, hb_ao:get(<<"Data">>, Decoded, Opts)).

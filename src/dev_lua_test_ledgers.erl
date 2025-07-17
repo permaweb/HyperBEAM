@@ -113,7 +113,7 @@ subledger(Root, Extra, Opts) ->
                 },
                 Extra
             ),
-            hb_opts:get(priv_wallet, hb:wallet(), Opts)
+            #{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
         ),
     hb_cache:write(Proc, Opts),
     Proc.
@@ -142,10 +142,10 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
                         <<"recipient">> => hb_util:human_id(Recipient),
                         <<"quantity">> => Quantity
                     },
-                    Sender
+                    #{ priv_wallet => Sender }
                 )
             },
-            Sender
+            #{ priv_wallet => Sender }
         ),
     hb_ao:resolve(
         ProcMsg,

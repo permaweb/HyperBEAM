@@ -647,10 +647,10 @@ full_push_test_() ->
             store => [
                 #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
                 #{ <<"store-module">> => hb_store_gateway,
-                    <<"store">> => #{
+                    <<"local-store">> => [#{
                         <<"store-module">> => hb_store_fs,
                         <<"name">> => <<"cache-TEST">>
-                    }
+                    }]
                 }
             ]
         },
