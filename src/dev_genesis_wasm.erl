@@ -67,7 +67,15 @@ ensure_started(Opts) ->
     case IsDevelopment of
         0 ->
             % Development
-            GenesisWasmServerDir = filename:join([Cwd, "_build", "genesis_wasm", "genesis-wasm-server"]),
+            GenesisWasmServerDir =
+                filename:join(
+                    [
+                        Cwd,
+                        "_build",
+                        "genesis-wasm",
+                        "genesis-wasm-server"
+                    ]
+                ),
             NodeConfigEnv = "development";
         _ ->
             % Release
@@ -127,7 +135,12 @@ ensure_started(Opts) ->
                         Port =
                             open_port(
                                 {spawn_executable,
-                                    filename:join([GenesisWasmServerDir, "launch-monitored.sh"])
+                                    filename:join(
+                                        [
+                                            GenesisWasmServerDir,
+                                            "launch-monitored.sh"
+                                        ]
+                                    )
                                 },
                                 [
                                     binary, use_stdio, stderr_to_stdout,
@@ -165,8 +178,14 @@ ensure_started(Opts) ->
                                                     )
                                                 )
                                             },
-											{"DISABLE_PROCESS_FILE_CHECKPOINT_CREATION", "false"},
-											{"PROCESS_MEMORY_FILE_CHECKPOINTS_DIR", CheckpointDir}
+											{
+                                                "DISABLE_PROCESS_FILE_CHECKPOINT_CREATION",
+                                                "false"
+                                            },
+											{
+                                                "PROCESS_MEMORY_FILE_CHECKPOINTS_DIR",
+                                                CheckpointDir
+                                            }
                                         ]
                                     }
                                 ]

@@ -85,7 +85,7 @@ all devices and sets up default stores on port 10000.
 
 HyperBEAM supports several optional build profiles that enable additional features:
 
-- `genesis_wasm`: Enables Genesis WebAssembly support
+- `genesis-wasm`: Enables Genesis WebAssembly support
 - `rocksdb`: Enables RocksDB storage backend (adds RocksDB v1.8.0 dependency)
 - `http3`: Enables HTTP/3 support via QUIC protocol
 
@@ -99,14 +99,14 @@ To start a shell with profiles:
 rebar3 as rocksdb shell
 
 # Multiple profiles
-rebar3 as rocksdb, genesis_wasm shell
+rebar3 as rocksdb, genesis-wasm shell
 ```
 
 To create a release with profiles:
 
 ```bash
 # Create release with profiles
-rebar3 as rocksdb,genesis_wasm release
+rebar3 as rocksdb,genesis-wasm release
 ```
 
 Note: Profiles modify compile-time options that get baked into the release. Choose the profiles you need before starting HyperBEAM.
