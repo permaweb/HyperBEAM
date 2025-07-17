@@ -343,6 +343,7 @@ default_message() ->
                     }
             }
         }
+        lazy_loading => true
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,
