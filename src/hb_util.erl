@@ -27,6 +27,7 @@
 -export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -export([all_atoms/0, binary_is_atom/1]).
 -export([lower_case_key_map/2]).
+-export([get_wallet_opts/0, get_wallet_opts/1]).
 -include("include/hb.hrl").
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
@@ -1015,3 +1016,11 @@ lower_case_key_map(Map, Opts) ->
         (K, V, Acc) ->
             maps:put(hb_util:to_lower(K), V, Acc)
     end, #{}, Map, Opts).
+
+%% @doc Get the Opts for a wallet.
+get_wallet_opts() ->
+    get_wallet_opts(hb:wallet()).
+get_wallet_opts(Wallet) ->
+    hb_http_server:get_opts(#{
+        http_server => hb_util:human_id(ar_wallet:to_address(Wallet))
+    }).

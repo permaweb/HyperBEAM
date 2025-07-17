@@ -149,6 +149,7 @@ lookup_no_spawn_test() ->
         lookup(<<"name1">>, #{}, #{}, Opts)
     ).
 
+%% TODO: This test is failing due to double committing.
 lookup_spawn_test() ->
     Opts = generate_test_opts(),
     Res1 = {_, Process1} =

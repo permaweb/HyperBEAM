@@ -40,7 +40,7 @@ relay_with_payments_test() ->
     ClientMessage1 =
         hb_message:commit(
             #{<<"path">> => <<"/~relay@1.0/call?relay-path=https://www.google.com">>},
-            ClientWallet
+            #{ priv_wallet => ClientWallet }
         ),
     % Relay the message.
     Res = hb_http:get(HostNode, ClientMessage1, #{}),
@@ -54,7 +54,7 @@ relay_with_payments_test() ->
                 <<"recipient">> => ClientAddress,
                 <<"amount">> => 100
             },
-            HostWallet
+            #{ priv_wallet => HostWallet }
         ),
     ?assertMatch({ok, _}, hb_http:get(HostNode, TopupMessage, #{})),
     % Relay the message again.
@@ -121,7 +121,7 @@ paid_wasm() ->
     ClientMessage2 =
         hb_message:commit(
             #{<<"path">> => <<"/~p4@1.0/balance">>},
-            ClientWallet
+            #{ priv_wallet => ClientWallet }
         ),
     {ok, Res2} = hb_http:get(HostNode, ClientMessage2, Opts),
     ?assertMatch(60, Res2).

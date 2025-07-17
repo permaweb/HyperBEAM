@@ -335,7 +335,8 @@ commit(Msg, Opts, Spec) ->
                                                 {unset_commitment_device, Spec}
                                             );
                                         Device -> Device
-                                    end
+                                    end;
+                                Device -> Device
                             end;
                         CommitmentDevice -> CommitmentDevice
                     end
