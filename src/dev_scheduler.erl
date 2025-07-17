@@ -1499,7 +1499,10 @@ find_message_to_schedule(_Msg1, Msg2, Opts) ->
     case Subject of
         <<"self">> -> Msg2;
         not_found ->
-            hb_ao:get(<<"body">>, Msg2, Msg2, Opts#{ hashpath => ignore });
+            case hb_ao:get(<<"body">>, Msg2, Msg2, Opts#{ hashpath => ignore }) of
+                Msg when is_map(Msg) -> Msg;
+                Msg -> #{ <<"body">> => Msg}
+            end;
         Subject ->
             hb_ao:get(Subject, Msg2, Opts#{ hashpath => ignore })
     end.
