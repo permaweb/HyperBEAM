@@ -383,10 +383,6 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 read(Path, Opts) ->
     store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts).
 
-%% @doc Get the target from a path. Abstracted such that later we can handle
-%% pseudo-path references differently.
-target_from_path(Path) -> Path.
-
 %% @doc Load all of the commitments for a message into memory.
 read_all_commitments(Msg, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
@@ -430,6 +426,8 @@ read_all_commitments(Msg, Opts) ->
 
 %% @doc List all of the subpaths of a given path and return a map of keys and
 %% links to the subpaths, including their types.
+store_read(Path, Store, Opts) ->
+    store_read(Path, Path, Store, Opts).
 store_read(_Target, _Path, no_viable_store, _) ->
     not_found;
 store_read(Target, Path, Store, Opts) ->
@@ -502,28 +500,25 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
                                 ]
                             )
                         ),
-                    ?event(
-                        {reading_commitments,
+                    ?event(read_commitment,
+                        {reading_commitment,
+                            {target, Target},
                             {root_path, RootPath},
                             {commitments_path, CommPath}
                         }
                     ),
                     case read(CommPath, Opts) of
                         {ok, Commitment} ->
-                            ?event(
+                            LoadedCommitment = ensure_all_loaded(Commitment, Opts),
+                            ?event(read_commitment,
                                 {found_target_commitment,
                                     {path, CommPath},
-                                    {commitment, Commitment}
+                                    {commitment, LoadedCommitment}
                                 }
                             ),
                             {
                                 true,
-                                {
-                                    <<"commitments">>,
-                                    #{
-                                        Target => ensure_all_loaded(Commitment, Opts)
-                                    }
-                                }
+                                {<<"commitments">>, #{ Target => LoadedCommitment }}
                             };
                         _ ->
                             false
@@ -597,15 +592,10 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
         true ->
             hb_util:message_to_ordered_list(Merged, Opts);
         false ->
-            % % Ensure that the result has an unsigned commitment.
-            % WithUnsigned =
-            %     hb_message:commit(
-            %         Merged,
-            %         Opts,
-            %         #{ <<"type">> => <<"unsigned">> }
-            %     ),
-            % WithUnsigned
-            Merged
+            case hb_opts:get(lazy_loading, true, Opts) of
+                true -> Merged;
+                false -> ensure_all_loaded(Merged, Opts)
+            end
     end.
 
 %% @doc Read and parse the ao-types for a given path if it is in the supplied
@@ -846,9 +836,20 @@ test_store_simple_signed_message(Store) ->
     % ?assert(MatchRes),
     {ok, CommittedID} = dev_message:id(Item, #{ <<"committers">> => [Address] }, Opts),
     {ok, RetrievedItemSigned} = read(CommittedID, Opts),
-    ?event({retreived_signed_message, {expected, Item}, {got, RetrievedItemSigned}}),
-    MatchResSigned = hb_message:match(Item, RetrievedItemSigned, strict, Opts),
-    ?event({match_result_signed, MatchResSigned}),
+    ?event(debug_test,
+        {retreived_signed_message,
+            {expected, Item},
+            {got, RetrievedItemSigned}
+        }
+    ),
+    MatchResSigned =
+        hb_message:match(
+            Item,
+            hb_message:normalize_commitments(RetrievedItemSigned, Opts),
+            strict,
+            Opts
+        ),
+    ?event(debug_test, {match_result_signed, MatchResSigned}),
     ?assert(MatchResSigned),
     ok.
 
