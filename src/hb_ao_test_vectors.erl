@@ -196,7 +196,7 @@ test_opts() ->
 %% @doc Ensure that we can read a device from the cache then execute it. By 
 %% extension, this will also allow us to load a device from Arweave due to the
 %% remote store implementations.
-exec_dummy_device(SigningWallet, Opts) ->
+exec_dummy_device(Opts) ->
     % Compile the test device and store it in an accessible cache to the execution
     % environment.
     {ok, ModName, Bin} = compile:file("test/dev_dummy.erl", [binary]),
@@ -216,11 +216,17 @@ exec_dummy_device(SigningWallet, Opts) ->
             ),
             Opts
         ),
-    {ok, ID} = hb_cache:write(DevMsg, Opts),
+    {ok, _UnsignedID} = hb_cache:write(DevMsg, Opts),
+    ID = hb_message:id(DevMsg, signed, Opts),
     % Ensure that we can read the device message from the cache and that it matches
     % the original message.
-    {ok, ReadMsg} = hb_cache:read(ID, Opts),
-    ?assertEqual(DevMsg, hb_cache:ensure_all_loaded(ReadMsg, Opts)),
+    {ok, RawReadMsg} = hb_cache:read(ID, Opts),
+    ReadMsg =
+        hb_cache:ensure_all_loaded(
+            hb_cache:read_all_commitments(RawReadMsg, Opts),
+            Opts
+        ),
+    ?assertEqual(DevMsg, ReadMsg),
     % Create a base message with the device ID, then request a dummy path from
     % it.
     hb_ao:resolve(
@@ -242,7 +248,7 @@ load_device_test() ->
         priv_wallet => Wallet
     },
     hb_store:reset(Store),
-    ?assertEqual({ok, <<"example">>}, exec_dummy_device(Wallet, Opts)).
+    ?assertEqual({ok, <<"example">>}, exec_dummy_device(Opts)).
 
 untrusted_load_device_test() ->
     % Establish an execution environment which does not trust the device author.
@@ -260,7 +266,7 @@ untrusted_load_device_test() ->
     hb_store:reset(Store),
     ?assertThrow(
         {error, {device_not_loadable, _, device_signer_not_trusted}},
-        exec_dummy_device(UntrustedWallet, Opts)
+        exec_dummy_device(Opts)
     ).
 
 %%% Test vector suite
