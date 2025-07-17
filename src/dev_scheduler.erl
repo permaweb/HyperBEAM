@@ -1742,7 +1742,7 @@ schedule_message_and_get_slot_test() ->
             hb_message:commit(#{
                 <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"true">>
-            }, hb:wallet())
+            }, Opts)
     },
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
@@ -1805,7 +1805,7 @@ redirect_from_graphql() ->
                             <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>,
                         <<"test-key">> => <<"Test-Val">>
                     },
-                    hb:wallet()
+                    hb_util:get_wallet_opts()
                 )
             },
             #{
@@ -1824,7 +1824,7 @@ get_local_schedule_test() ->
             hb_message:commit(#{
                 <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"Test-Val">>
-            }, hb:wallet())
+            }, Opts)
     },
     Res = #{
         <<"path">> => <<"schedule">>,
@@ -1833,7 +1833,7 @@ get_local_schedule_test() ->
             hb_message:commit(#{
                 <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"Test-Val-2">>
-            }, hb:wallet())
+            }, Opts)
     },
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Res, #{})),
@@ -1898,11 +1898,12 @@ http_post_schedule_sign(Node, Msg, ProcessMsg, Wallet) ->
 http_get_slot(N, PMsg) ->
     ID = hb_message:id(PMsg, all),
     Wallet = hb:wallet(),
+    WalletOpts = hb_util:get_wallet_opts(Wallet),
     {ok, _} = hb_http:get(N, hb_message:commit(#{
         <<"path">> => <<"/~scheduler@1.0/slot">>,
         <<"method">> => <<"GET">>,
         <<"target">> => ID
-    }, Wallet), #{}).
+    }, WalletOpts), #{}).
 
 http_get_schedule(N, PMsg, From, To) ->
     http_get_schedule(N, PMsg, From, To, <<"application/http">>).
@@ -1910,6 +1911,7 @@ http_get_schedule(N, PMsg, From, To) ->
 http_get_schedule(N, PMsg, From, To, Format) ->
     ID = hb_message:id(PMsg, all),
     Wallet = hb:wallet(),
+    WalletOpts = hb_util:get_wallet_opts(Wallet),
     {ok, _} = hb_http:get(N, hb_message:commit(#{
         <<"path">> => <<"/~scheduler@1.0/schedule">>,
         <<"method">> => <<"GET">>,
@@ -1917,7 +1919,7 @@ http_get_schedule(N, PMsg, From, To, Format) ->
         <<"from">> => From,
         <<"to">> => To,
         <<"accept">> => Format
-    }, Wallet), #{}).
+    }, WalletOpts), #{}).
 
 http_get_schedule_redirect_test_() ->
     {timeout, 60, fun http_get_schedule_redirect/0}.

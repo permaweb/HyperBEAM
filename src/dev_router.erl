@@ -1507,7 +1507,7 @@ add_route_test() ->
                     <<"node">> => <<"new">>,
                     <<"priority">> => 15
                 },
-                Owner
+                #{ priv_wallet => Owner }
             ),
             #{}
         ),

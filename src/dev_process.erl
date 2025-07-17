@@ -804,7 +804,9 @@ init() ->
 %% @doc Generate a process message with a random number, and no 
 %% executor.
 test_base_process() ->
-    test_base_process(#{}).
+    Wallet = hb:wallet(),
+    WalletOpts = hb_util:get_wallet_opts(Wallet),
+    test_base_process(WalletOpts).
 test_base_process(Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
@@ -814,24 +816,30 @@ test_base_process(Opts) ->
         <<"scheduler-location">> => hb_opts:get(scheduler, Address, Opts),
         <<"type">> => <<"Process">>,
         <<"test-random-seed">> => rand:uniform(1337)
-    }, Wallet).
+    }, Opts).
 
 test_wasm_process(WASMImage) ->
     test_wasm_process(WASMImage, #{}).
 test_wasm_process(WASMImage, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    #{ <<"image">> := WASMImageID } = dev_wasm:cache_wasm_image(WASMImage, Opts),
+    WalletOpts = hb_util:get_wallet_opts(Wallet),
+    #{ <<"image">> := WASMImageID } = 
+        dev_wasm:cache_wasm_image(WASMImage, WalletOpts),
+    BaseProc = test_base_process(WalletOpts),
+    UncommittedBaseProc = hb_message:uncommitted(BaseProc, WalletOpts),
+    ?event({base_proc, BaseProc}),
+    Message = hb_maps:merge(
+        UncommittedBaseProc,
+        #{
+            <<"execution-device">> => <<"stack@1.0">>,
+            <<"device-stack">> => [<<"wasm-64@1.0">>],
+            <<"image">> => WASMImageID
+        },
+        WalletOpts
+    ),
     hb_message:commit(
-        hb_maps:merge(
-            hb_message:uncommitted(test_base_process(Opts), Opts),
-            #{
-                <<"execution-device">> => <<"stack@1.0">>,
-                <<"device-stack">> => [<<"wasm-64@1.0">>],
-                <<"image">> => WASMImageID
-            },
-			Opts
-        ),
-        Opts#{ priv_wallet => Wallet}
+        Message,
+        WalletOpts
     ).
 
 %% @doc Generate a process message with a random number, and the 
@@ -848,6 +856,7 @@ test_aos_process(Opts) ->
 test_aos_process(Opts, Stack) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    WalletOpts = hb_util:get_wallet_opts(Wallet),
     WASMProc = test_wasm_process(<<"test/aos-2-pure-xs.wasm">>, Opts),
     hb_message:commit(
         hb_maps:merge(
@@ -871,7 +880,7 @@ test_aos_process(Opts, Stack) ->
                 <<"authority">> =>
                     hb_opts:get(authority, Address, Opts)
             }, Opts),
-        Opts#{ priv_wallet => Wallet}
+        WalletOpts
     ).
 
 %% @doc Generate a device that has a stack of two `dev_test's for 
@@ -879,18 +888,20 @@ test_aos_process(Opts, Stack) ->
 %% `Already-Seen' elements for each assigned slot.
 dev_test_process() ->
     Wallet = hb:wallet(),
+    WalletOpts = hb_util:get_wallet_opts(Wallet),
     hb_message:commit(
-        hb_maps:merge(test_base_process(), #{
+        hb_maps:merge(test_base_process(WalletOpts), #{
             <<"execution-device">> => <<"stack@1.0">>,
             <<"device-stack">> => [<<"test-device@1.0">>, <<"test-device@1.0">>]
-        }, #{}),
-        Wallet
+        }, WalletOpts),
+        WalletOpts
     ).
 
 schedule_test_message(Base, Text, Opts) ->
     schedule_test_message(Base, Text, #{}, Opts).
 schedule_test_message(Base, Text, MsgBase, Opts) ->
     Wallet = hb:wallet(),
+    WalletOpts = hb_util:get_wallet_opts(Wallet),
     UncommittedBase = hb_message:uncommitted(MsgBase, Opts),
     Req =
         hb_message:commit(#{
@@ -902,10 +913,10 @@ schedule_test_message(Base, Text, MsgBase, Opts) ->
                             <<"type">> => <<"Message">>,
                             <<"test-label">> => Text
                         },
-                        Opts#{ priv_wallet => Wallet}
+                        WalletOpts
                     )
             },
-			Opts#{ priv_wallet => Wallet}
+			WalletOpts
         ),
     {ok, _} = hb_ao:resolve(Base, Req, Opts).
 
@@ -1081,7 +1092,7 @@ http_wasm_process_by_id_test() ->
             <<"function">> => <<"fac">>,
             <<"parameters">> => [5.0]
         },
-        Wallet
+        #{ priv_wallet => Wallet }
     ),
     {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, ExecMsg, #{}),
     ?event({schedule_msg_res, {res, Res}}),
@@ -1140,7 +1151,7 @@ aos_state_access_via_http_test_() ->
     {timeout, 60, fun() ->
         rand:seed(default),
         Wallet = ar_wallet:new(),
-        Node = hb_http_server:start_node(Opts = #{
+        Node = hb_http_server:start_node(#{
             port => 10000 + rand:uniform(10000),
             priv_wallet => Wallet,
             cache_control => <<"always">>,
@@ -1150,6 +1161,7 @@ aos_state_access_via_http_test_() ->
             },
             force_signed_requests => true
         }),
+        Opts = hb_util:get_wallet_opts(Wallet),
         Proc = test_aos_process(Opts),
         ProcID = hb_util:human_id(hb_message:id(Proc, all)),
         {ok, _InitRes} = hb_http:post(Node, <<"/schedule">>, Proc, Opts),
@@ -1165,9 +1177,9 @@ aos_state_access_via_http_test_() ->
                         "[\"body\"] = \"<h1>Hello, world!</h1>\"",
                     "}})">>,
             <<"target">> => ProcID
-        }, Wallet),
-        {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, Req, Opts),
-        ?event({schedule_msg_res, {res, Res}}),
+        }, Opts),
+        {ok, Msg3} = hb_http:post(Node, << ProcID/binary, "/schedule">>, Msg2, Opts),
+        ?event({schedule_msg_res, {msg3, Msg3}}),
         {ok, Msg4} =
             hb_http:get(
                 Node,
@@ -1196,7 +1208,6 @@ aos_state_access_via_http_test_() ->
 
 aos_state_patch_test_() ->
     {timeout, 30, fun() ->
-        Wallet = hb:wallet(),
         init(),
         BaseRaw = test_aos_process(#{}, [
             <<"wasi@1.0">>,

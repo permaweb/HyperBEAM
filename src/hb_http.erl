@@ -1046,20 +1046,18 @@ simple_ao_resolve_unsigned_test() ->
     ?assertEqual({ok, <<"Value1">>}, post(URL, TestMsg, #{})).
 
 simple_ao_resolve_signed_test() ->
-    URL = hb_http_server:start_node(),
+    URL = hb_http_server:start_node(#{ priv_wallet => hb:wallet() }),
     TestMsg = #{ <<"path">> => <<"/key1">>, <<"key1">> => <<"Value1">> },
-    Wallet = hb:wallet(),
     {ok, Res} =
         post(
             URL,
-            hb_message:commit(TestMsg, Wallet),
+            hb_message:commit(TestMsg, hb_util:get_wallet_opts()),
             #{}
         ),
     ?assertEqual(<<"Value1">>, Res).
 
 nested_ao_resolve_test() ->
-    URL = hb_http_server:start_node(),
-    Wallet = hb:wallet(),
+    URL = hb_http_server:start_node(#{ priv_wallet => hb:wallet() }),
     {ok, Res} =
         post(
             URL,
@@ -1071,7 +1069,7 @@ nested_ao_resolve_test() ->
                             <<"key3">> => <<"Value2">>
                         }
                     }
-            }, Wallet),
+            }, hb_util:get_wallet_opts()),
             #{}
         ),
     ?assertEqual(<<"Value2">>, Res).
@@ -1080,17 +1078,19 @@ wasm_compute_request(ImageFile, Func, Params) ->
     wasm_compute_request(ImageFile, Func, Params, <<"">>).
 wasm_compute_request(ImageFile, Func, Params, ResultPath) ->
     {ok, Bin} = file:read_file(ImageFile),
-    Wallet = hb:wallet(),
     hb_message:commit(#{
         <<"path">> => <<"/init/compute/results", ResultPath/binary>>,
         <<"device">> => <<"wasm-64@1.0">>,
         <<"function">> => Func,
         <<"parameters">> => Params,
         <<"body">> => Bin
-    }, Wallet).
+    }, hb_util:get_wallet_opts()).
 
 run_wasm_unsigned_test() ->
-    Node = hb_http_server:start_node(#{force_signed => false}),
+    Node = hb_http_server:start_node(#{
+        force_signed => false,
+        priv_wallet => hb:wallet()
+    }),
     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0]),
     {ok, Res} = post(Node, Msg, #{}),
     ?event({res, Res}),
@@ -1098,9 +1098,9 @@ run_wasm_unsigned_test() ->
 
 run_wasm_signed_test() ->
     Opts = #{ priv_wallet => hb:wallet() },
-    URL = hb_http_server:start_node(#{force_signed => true}),
+    URL = hb_http_server:start_node(Opts#{force_signed => true}),
     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>),
-    {ok, Res} = post(URL, hb_message:commit(Msg, Opts), Opts),
+    {ok, Res} = post(URL, hb_message:commit(Msg, hb_util:get_wallet_opts()), Opts),
     ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, #{})).
 
 get_deep_unsigned_wasm_state_test() ->
