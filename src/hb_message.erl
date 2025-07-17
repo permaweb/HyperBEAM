@@ -209,7 +209,7 @@ normalize_commitments(Msg, Opts) when is_map(Msg) ->
             end,
             Msg
         ),
-    case hb_maps:get(<<"commitments">>, NormMsg, not_found, Opts) of
+    case commitment(#{ <<"type">> => <<"unsigned">> }, NormMsg, Opts) of
         not_found ->
             {ok, #{ <<"commitments">> := Commitments }} =
                 dev_message:commit(
@@ -217,7 +217,14 @@ normalize_commitments(Msg, Opts) when is_map(Msg) ->
                     #{ <<"type">> => <<"unsigned">> },
                     Opts
                 ),
-            NormMsg#{ <<"commitments">> => Commitments };
+            NormMsg#{
+                <<"commitments">> =>
+                    hb_maps:merge(
+                        Commitments,
+                        hb_maps:get(<<"commitments">>, NormMsg, #{}, Opts),
+                        Opts
+                    )
+            };
         _ -> NormMsg
     end;
 normalize_commitments(Msg, Opts) when is_list(Msg) ->
@@ -608,8 +615,6 @@ match(Map1, Map2, Mode, Opts) ->
     try unsafe_match(Map1, Map2, Mode, [], Opts)
     catch _:Details -> Details
     end.
-
-
 
 unsafe_match(Map1, Map2, Mode, Path, Opts) ->
     Keys1 =

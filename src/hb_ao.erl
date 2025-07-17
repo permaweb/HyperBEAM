@@ -1395,7 +1395,8 @@ load_device(ID, Opts) when ?IS_ID(ID) ->
             {error, remote_devices_disabled};
 		true ->
             ?event(device_load, {loading_from_cache, {id, ID}}, Opts),
-			{ok, Msg} = hb_cache:read(ID, Opts),
+			{ok, RawMsg} = hb_cache:read(ID, Opts),
+            Msg = hb_cache:read_all_commitments(RawMsg, Opts),
             ?event(device_load, {received_device, {id, ID}, {msg, Msg}}, Opts),
             TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
 			Trusted =
