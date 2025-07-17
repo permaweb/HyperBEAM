@@ -61,12 +61,13 @@ ensure_started(Opts) ->
     % of the registered name implies its availability.
     {ok, Cwd} = file:get_cwd(),
     ?event({ensure_started, cwd, Cwd}),
-    IsDevelopment = string:str(Cwd, "rel/hb"),
+    BinDir = filename:join([Cwd, "bin"]),
+    IsDevelopment = not filelib:is_dir(BinDir),
     % Determine path based on whether we're in a release or development
     case IsDevelopment of
         0 ->
             % Development
-            GenesisWasmServerDir = filename:join([Cwd, "_build", "genesis-wasm-server"]),
+            GenesisWasmServerDir = filename:join([Cwd, "_build", "genesis_wasm", "genesis-wasm-server"]),
             NodeConfigEnv = "development";
         _ ->
             % Release

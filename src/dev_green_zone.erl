@@ -447,7 +447,7 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
             ),
             % Create an committed join request using the wallet.
             Req = hb_cache:ensure_all_loaded(
-                hb_message:commit(MergedReq, Wallet),
+                hb_message:commit(MergedReq, InitOpts),
                 InitOpts
             ),
             ?event({join_req, {explicit, Req}}),
