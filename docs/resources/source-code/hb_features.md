@@ -15,7 +15,7 @@ build system and the runtime execution environment.<a name="index"></a>
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#all-0">all/0</a></td><td>Returns a list of all feature flags that the node supports.</td></tr><tr><td valign="top"><a href="#enabled-1">enabled/1</a></td><td>Returns true if the feature flag is enabled.</td></tr><tr><td valign="top"><a href="#genesis_wasm-0">genesis_wasm/0</a></td><td></td></tr><tr><td valign="top"><a href="#http3-0">http3/0</a></td><td></td></tr><tr><td valign="top"><a href="#rocksdb-0">rocksdb/0</a></td><td></td></tr><tr><td valign="top"><a href="#test-0">test/0</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#all-0">all/0</a></td><td>Returns a list of all feature flags that the node supports.</td></tr><tr><td valign="top"><a href="#enabled-1">enabled/1</a></td><td>Returns true if the feature flag is enabled.</td></tr><tr><td valign="top"><a href="#genesis-wasm-0">genesis-wasm/0</a></td><td></td></tr><tr><td valign="top"><a href="#http3-0">http3/0</a></td><td></td></tr><tr><td valign="top"><a href="#rocksdb-0">rocksdb/0</a></td><td></td></tr><tr><td valign="top"><a href="#test-0">test/0</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -38,11 +38,11 @@ Returns a list of all feature flags that the node supports.
 
 Returns true if the feature flag is enabled.
 
-<a name="genesis_wasm-0"></a>
+<a name="genesis-wasm-0"></a>
 
-### genesis_wasm/0 ###
+### genesis-wasm/0 ###
 
-`genesis_wasm() -> any()`
+`genesis-wasm() -> any()`
 
 <a name="http3-0"></a>
 
