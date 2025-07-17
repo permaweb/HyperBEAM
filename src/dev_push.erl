@@ -975,6 +975,7 @@ nested_push_prompts_encoding_change_test_() ->
 nested_push_prompts_encoding_change() ->
     dev_process:init(),
     Opts = #{
+        port => hb_opts:get(port),
         priv_wallet => hb:wallet(),
         cache_control => <<"always">>,
         store => hb_opts:get(store)
