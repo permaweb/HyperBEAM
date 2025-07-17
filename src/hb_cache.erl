@@ -564,15 +564,11 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
         true ->
             hb_util:message_to_ordered_list(Merged, Opts);
         false ->
-            % % Ensure that the result has an unsigned commitment.
-            % WithUnsigned =
-            %     hb_message:commit(
-            %         Merged,
-            %         Opts,
-            %         #{ <<"type">> => <<"unsigned">> }
-            %     ),
-            % WithUnsigned
-            Merged
+            WithNormComms = hb_message:normalize_commitments(Merged, Opts),
+            case hb_opts:get(lazy_loading, true, Opts) of
+                true -> WithNormComms;
+                false -> ensure_all_loaded(WithNormComms, Opts)
+            end
     end.
 
 %% @doc Read and parse the ao-types for a given path if it is in the supplied
