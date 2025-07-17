@@ -197,8 +197,14 @@ ensure_started(Opts) ->
                                                     )
                                                 )
                                             },
-											{"DISABLE_PROCESS_FILE_CHECKPOINT_CREATION", "false"},
-											{"PROCESS_MEMORY_FILE_CHECKPOINTS_DIR", CheckpointDir}
+											{
+                                                "DISABLE_PROCESS_FILE_CHECKPOINT_CREATION",
+                                                "false"
+                                            },
+											{
+                                                "PROCESS_MEMORY_FILE_CHECKPOINTS_DIR",
+                                                CheckpointDir
+                                            }
                                         ]
                                     }
                                 ]

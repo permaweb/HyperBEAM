@@ -162,7 +162,7 @@ HyperBEAM uses build profiles to enable optional features, often requiring extra
 
 **Available Profiles (Examples):**
 
-*   `genesis_wasm`: Enables Genesis WebAssembly support.
+*   `genesis-wasm`: Enables Genesis WebAssembly support.
 *   `rocksdb`: Enables the RocksDB storage backend.
 *   `http3`: Enables HTTP/3 support.
 
@@ -173,7 +173,7 @@ HyperBEAM uses build profiles to enable optional features, often requiring extra
 rebar3 as rocksdb shell
 
 # Start with RocksDB and Genesis WASM profiles
-rebar3 as rocksdb, genesis_wasm shell
+rebar3 as rocksdb, genesis-wasm shell
 ```
 
 *Note: Choose profiles **before** starting the shell, as they affect compile-time options.*

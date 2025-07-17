@@ -76,7 +76,7 @@ HyperBEAM uses a `config.flat` file for configuration when running as a release.
 
 ### **b. Build the Release (with Optional Profiles)**
 
-You can build a standard release or include specific profiles for additional features (like `genesis_wasm`, `rocksdb`, `http3`).
+You can build a standard release or include specific profiles for additional features (like `genesis-wasm`, `rocksdb`, `http3`).
 
 To build a standard release:
 ```bash
