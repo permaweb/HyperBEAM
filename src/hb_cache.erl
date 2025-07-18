@@ -386,7 +386,13 @@ read_all_commitments(Msg, Opts) ->
                             ),
                         case ShouldLoad andalso read(ResolvedCommPath, Opts) of
                             {ok, Commitment} ->
-                                {true, {CommitmentID, Commitment}};
+                                {
+                                    true,
+                                    {
+                                        CommitmentID,
+                                        ensure_all_loaded(Commitment, Opts)
+                                    }
+                                };
                             _ ->
                                 false
                         end
