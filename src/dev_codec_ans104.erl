@@ -26,7 +26,8 @@ content_type(_) -> {ok, <<"application/ans104">>}.
 
 %% @doc Serialize a message or TX to a binary.
 serialize(Msg, Req, Opts) when is_map(Msg) ->
-    serialize(to(Msg, Req, Opts), Req, Opts);
+    {ok, TX} = to(Msg, Req, Opts),
+    serialize(TX, Req, Opts);
 serialize(TX, _Req, _Opts) when is_record(TX, tx) ->
     {ok, ar_bundles:serialize(TX)}.
 
@@ -74,17 +75,6 @@ to(_Other, _Req, _Opts) ->
 %%% ANS-104-specific testing cases.
 %%% ------------------------------------------------------------------------------------------
 
-normal_tags_test() ->
-    Msg = #{
-        <<"first-tag">> => <<"first-value">>,
-        <<"second-tag">> => <<"second-value">>
-    },
-    {ok, Encoded} = to(Msg, #{}, #{}),
-    ?event({encoded, Encoded}),
-    {ok, Decoded} = from(Encoded, #{}, #{}),
-    ?event({decoded, Decoded}),
-    ?assert(hb_message:match(Msg, Decoded)).
-
 from_maintains_tag_name_case_test() ->
     TX = #tx {
         tags = [
@@ -92,14 +82,23 @@ from_maintains_tag_name_case_test() ->
         ]
     },
     SignedTX = ar_bundles:sign_item(TX, hb:wallet()),
-    ?event({signed_tx, SignedTX}),
     ?assert(ar_bundles:verify_item(SignedTX)),
+
     TABM = hb_util:ok(from(SignedTX, #{}, #{})),
-    ?event({tabm, TABM}),
-    ConvertedTX = hb_util:ok(to(TABM, #{}, #{})),
-    ?event({converted_tx, ConvertedTX}),
-    ?assert(ar_bundles:verify_item(ConvertedTX)),
-    ?assertEqual(ConvertedTX, hb_tx:normalize(SignedTX)).
+
+    % Straight conversion
+    ConvertedTX0 = hb_util:ok(to(TABM, #{}, #{})),
+    ?assert(ar_bundles:verify_item(ConvertedTX0)),
+    ?assertEqual(ConvertedTX0, hb_tx:normalize(SignedTX)),
+
+    % Serialize/deserialize then convert
+    Binary = hb_util:ok(serialize(TABM, #{}, #{})),
+    DeserializedTABM = hb_util:ok(deserialize(Binary, #{}, #{})),
+    ConvertedTX1 = hb_util:ok(to(DeserializedTABM, #{}, #{})),
+    ?assert(ar_bundles:verify_item(ConvertedTX1)),
+    ?assertEqual(ConvertedTX1, hb_tx:normalize(SignedTX)),
+
+    ?assertEqual(ConvertedTX0, ConvertedTX1).
 
 restore_tag_name_case_from_cache_test() ->
     Opts = #{ store => hb_test_utils:test_store() },
@@ -118,55 +117,54 @@ restore_tag_name_case_from_cache_test() ->
             Opts
         ),
     SignedID = hb_message:id(SignedMsg, all),
-    ?event({signed_msg, SignedMsg}),
     OnlyCommitted = hb_message:with_only_committed(SignedMsg, Opts),
-    ?event({only_committed, OnlyCommitted}),
     {ok, ID} = hb_cache:write(SignedMsg, Opts),
-    ?event({id, ID}),
     {ok, ReadMsg} = hb_cache:read(SignedID, Opts),
-    ?event({restored_msg, {explicit, ReadMsg}}),
     {ok, ReadTX} = to(ReadMsg, #{}, Opts),
-    ?event({restored_tx, {explicit, ReadTX}}),
     ?assert(hb_message:match(ReadMsg, SignedMsg)),
     ?assert(ar_bundles:verify_item(ReadTX)).
 
 unsigned_duplicated_tag_name_test() ->
-    TX = hb_tx:reset_ids(hb_tx:normalize(#tx {
+    InputTX = hb_tx:reset_ids(hb_tx:normalize(#tx {
         tags = [
             {<<"Test-Tag">>, <<"test-value">>},
             {<<"test-tag">>, <<"test-value-2">>}
         ]
     })),
-    Msg = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
-    ?event({msg, Msg}),
-    TX2 = hb_message:convert(Msg, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
-    ?event({tx2, TX2}),
-    ?assertEqual(TX, TX2).
+
+    % ans104 -> structured -> ans104
+    Structured = hb_message:convert(InputTX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ConvertedTX0 = hb_message:convert(Structured, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
+    ?assertEqual(InputTX, ConvertedTX0),
+
+    % serialize/deserialize
+    TABM = hb_util:ok(from(InputTX, #{}, #{})),
+    Binary = hb_util:ok(serialize(TABM, #{}, #{})),
+    DeserializedTABM = hb_util:ok(deserialize(Binary, #{}, #{})),
+    ConvertedTX1 = hb_util:ok(to(DeserializedTABM, #{}, #{})),
+    ?assertEqual(InputTX, ConvertedTX1).
 
 signed_duplicated_tag_name_test() ->
-    TX = ar_bundles:sign_item(#tx {
+    InputTX = ar_bundles:sign_item(#tx {
         tags = [
             {<<"Test-Tag">>, <<"test-value">>},
             {<<"test-tag">>, <<"test-value-2">>}
         ]
     }, ar_wallet:new()),
-    Msg = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
-    ?event({msg, Msg}),
-    TX2 = hb_message:convert(Msg, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
-    ?event({tx2, TX2}),
-    ?assertEqual(TX, TX2),
-    ?assert(ar_bundles:verify_item(TX2)).
-    
-simple_to_conversion_test() ->
-    Msg = #{
-        <<"first-tag">> => <<"first-value">>,
-        <<"second-tag">> => <<"second-value">>
-    },
-    {ok, Encoded} = to(Msg, #{}, #{}),
-    ?event({encoded, Encoded}),
-    {ok, Decoded} = from(Encoded, #{}, #{}),
-    ?event({decoded, Decoded}),
-    ?assert(hb_message:match(Msg, hb_message:uncommitted(Decoded, #{}))).
+
+    % ans104 -> structured -> ans104
+    Structure = hb_message:convert(InputTX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ConvertedTX0 = hb_message:convert(Structure, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
+    ?assertEqual(InputTX, ConvertedTX0),
+    ?assert(ar_bundles:verify_item(ConvertedTX0)),
+
+    % serialize/deserialize
+    TABM = hb_util:ok(from(InputTX, #{}, #{})),
+    Binary = hb_util:ok(serialize(TABM, #{}, #{})),
+    DeserializedTABM = hb_util:ok(deserialize(Binary, #{}, #{})),
+    ConvertedTX1 = hb_util:ok(to(DeserializedTABM, #{}, #{})),
+    ?assertEqual(InputTX, ConvertedTX1),
+    ?assert(ar_bundles:verify_item(ConvertedTX1)).
 
 only_committed_maintains_target_test() ->
     TX = ar_bundles:sign_item(#tx {
@@ -177,14 +175,9 @@ only_committed_maintains_target_test() ->
         ],
         data = <<"test-data">>
     }, ar_wallet:new()),
-    ?event({tx, {explicit, TX}}),
     Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
-    ?event({decoded, {explicit, Decoded}}),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, #{}),
-    ?event({only_committed, {explicit, OnlyCommitted}}),
     Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
-    ?event({encoded, {explicit, Encoded}}),
-    ?event({tx, {explicit, TX}}),
     ?assertEqual(TX, Encoded).
 
 type_tag_test() ->
@@ -203,7 +196,7 @@ type_tag_test() ->
     ?assertEqual(TX, TX2).
 
 ao_data_key_test() ->
-    Msg =
+    InputStructured =
         hb_message:commit(
             #{
                 <<"other-key">> => <<"Normal value">>,
@@ -212,14 +205,25 @@ ao_data_key_test() ->
             #{ priv_wallet => hb:wallet() },
             <<"ans104@1.0">>
         ),
-    ?event({msg, Msg}),
-    Enc = hb_message:convert(Msg, <<"ans104@1.0">>, #{}),
-    ?event({enc, Enc}),
-    ?assertEqual(<<"Body value">>, Enc#tx.data),
-    Dec = hb_message:convert(Enc, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
-    ?event({dec, Dec}),
-    ?assert(hb_message:verify(Dec, all, #{})).
-        
+
+    % Straight conversion
+    ConvertedTX0 = hb_message:convert(InputStructured, <<"ans104@1.0">>, #{}),
+    ?assertEqual(<<"Body value">>, ConvertedTX0#tx.data),
+    Structured0 = hb_message:convert(ConvertedTX0, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ?assert(hb_message:verify(Structured0, all, #{})),
+    ?assertEqual(InputStructured, Structured0),
+
+    % Serialize/deserialize
+    TABM = hb_message:convert(InputStructured, tabm, <<"structured@1.0">>, #{}),
+    Binary = hb_util:ok(serialize(TABM, #{}, #{})),
+    DeserializedTABM = hb_util:ok(deserialize(Binary, #{}, #{})),
+    ConvertedTX1 = hb_util:ok(to(DeserializedTABM, #{}, #{})),
+    ?assertEqual(<<"Body value">>, ConvertedTX1#tx.data),
+    Structured1 = hb_message:convert(ConvertedTX1, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    ?assert(hb_message:verify(Structured1, all, #{})),
+    ?assertEqual(InputStructured, Structured1),
+    ?assertEqual(ConvertedTX0, ConvertedTX1).
+
 simple_signed_to_httpsig_test_disabled() ->
     TX =
         ar_bundles:sign_item(
@@ -248,81 +252,158 @@ simple_signed_to_httpsig_test_disabled() ->
     ?assert(hb_message:verify(HTTPSig2, all, #{})),
     ?assert(hb_message:match(HTTPSig, HTTPSig2)).
 
+roundtrip_test() ->
+    LastTX = hb_util:decode(<<"UJW0lZZV4F1HmAXz5uUyIGG4VCwBGsaBp9P5LX7NbnY">>),
+    Target = hb_util:decode(<<"YxU84G7_N29RNC2WvWs2xY1Felml35Pug8mglh21REc">>),
+    DataRoot = hb_util:decode(<<"EU5KVrF-Vm8WKIXyNGSH2VdXl9RelyTh9lck0AoknAA">>),
+    BinaryTag = hb_util:decode(<<"FxrvGdV-V0Quj1aAsnDUfO6nk8IaWHguRmjNEmka_ec">>),
+    Data = <<"test-data">>,
 
-% aotypes_test() ->
-%     Msg = #{
-%         <<"binary-tag">> => <<"binary-value">>,
-%         <<"atom-tag">> => atom_value,
-%         <<"integer-tag">> => 123,
-%         <<"float-tag">> => 123.456,
-%         <<"boolean-tag">> => true,
-%         <<"list-tag">> => [1, 2, 3],
-%         <<"map-tag">> => #{<<"key">> => <<"value">>}
-%     },
-%     TABM0 = hb_message:convert(Msg, tabm, <<"structured@1.0">>, #{}),
-%     Dataitem = hb_message:convert(TABM0, <<"ans104@1.0">>, tabm, #{}),
-%     TABM1 = hb_message:convert(Dataitem, tabm, <<"ans104@1.0">>, #{}),
-%     Structured = hb_message:convert(TABM1, <<"structured@1.0">>, tabm, #{}),
-%     ?event({tabm, {explicit, TABM0}}),
-%     ?event({dataitem, {explicit, Dataitem}}),
-%     ?event({tabm, {explicit, TABM1}}),
-%     ?event({structured, {explicit, Structured}}),
-%     ?event({id, {explicit, Dataitem#tx.unsigned_id}}),
-%     ExpectedTX = #tx{
-%         unsigned_id = hb_util:decode(<<"MSWJEQCbH_mCmyEuPT45liJ4JSXAXAltYj7ZFGtypPY">>),
-%         tags = [
-%             {<<"ao-types">>, <<"atom-tag=\"atom\", boolean-tag=\"atom\", float-tag=\"float\", integer-tag=\"integer\"">>},
-%             {<<"atom-tag">>, <<"atom_value">>},
-%             {<<"binary-tag">>, <<"binary-value">>},
-%             {<<"boolean-tag">>, <<"true">>},
-%             {<<"float-tag">>, <<"1.23456000000000003070e+02">>},
-%             {<<"integer-tag">>, <<"123">>},
-%             {<<"list-tag+link">>, <<"LJNSyAg3udG_pxDcNGB0fdNZJ1GT49t7cydlGTRmZLc">>},
-%             {<<"map-tag+link">>, <<"C2QtFNMLl1EqNMzRuenooVz-vpXuVDDOdCkiVjIiwSE">>}
-%         ]
-%     },
-%     ?assertEqual(ExpectedTX, Dataitem),
-%     ?assert(hb_message:match(Msg, Structured)),
-%     ?assert(hb_message:match(TABM0, TABM1)),
-%     ok.
-
-
-set_defaults_test() ->
-    UnsignedStructured = #{
-        <<"format">> => ans104,
-        <<"last_tx">> => <<>>,
-        <<"target">> => <<>>,
-        <<"quantity">> => 0,
-        <<"data">> => ?DEFAULT_DATA,
-        <<"manifest">> => undefined,
-        <<"data_root">> => <<>>,
-        <<"reward">> => 0,
-        <<"denomination">> => 0
-    },
-    UnsignedTX = #tx{
-        unsigned_id = hb_util:decode(<<"3eMto8z7IlnQgKPrHjmkrI2ohnrJhnCsss6wc4L86QQ">>),
-        tags = [
-            {<<"ao-types">>,
-                <<
-                    "denomination=\"integer\", ",
-                    "format=\"atom\", ",
-                    "manifest=\"atom\", ",
-                    "quantity=\"integer\", ",
-                    "reward=\"integer\""
-                >>},
-            {<<"data">>,?DEFAULT_DATA},
-            {<<"data_root">>, <<>>},
-            {<<"denomination">>,<<"0">>},
-            {<<"format">>,<<"ans104">>},
-            {<<"last_tx">>,<<>>},
-            {<<"manifest">>,<<"undefined">>},
-            {<<"quantity">>,<<"0">>},
-            {<<"reward">>,<<"0">>},
-            {<<"target">>,<<>>}
-        ]
-    },
-    do_unsigned_roundtrip(UnsignedStructured, UnsignedTX),
-    do_signed_roundtrip(UnsignedStructured, UnsignedTX).
+    TestCases = [
+        {defaults_typed,
+            #{
+                <<"format">> => ans104,
+                <<"last_tx">> => <<>>,
+                <<"target">> => <<>>,
+                <<"quantity">> => 0,
+                <<"data">> => ?DEFAULT_DATA,
+                <<"manifest">> => undefined,
+                <<"data_root">> => <<>>,
+                <<"reward">> => 0,
+                <<"denomination">> => 0,
+                <<"signature_type">> => ?RSA_KEY_TYPE
+            },
+            #tx{
+                unsigned_id = hb_util:decode(<<"3eMto8z7IlnQgKPrHjmkrI2ohnrJhnCsss6wc4L86QQ">>),
+                tags = [
+                    {<<"ao-types">>,
+                        <<
+                            "denomination=\"integer\", ",
+                            "format=\"atom\", ",
+                            "manifest=\"atom\", ",
+                            "quantity=\"integer\", ",
+                            "reward=\"integer\""
+                        >>},
+                    {<<"data">>,?DEFAULT_DATA},
+                    {<<"data_root">>, <<>>},
+                    {<<"denomination">>,<<"0">>},
+                    {<<"format">>,<<"ans104">>},
+                    {<<"last_tx">>,<<>>},
+                    {<<"manifest">>,<<"undefined">>},
+                    {<<"quantity">>,<<"0">>},
+                    {<<"reward">>,<<"0">>},
+                    {<<"target">>,<<>>}
+                ]
+            }
+        },
+        {defaults_binary,
+            #{
+                <<"format">> => <<"ans104">>,
+                <<"last_tx">> => <<>>,
+                <<"target">> => <<>>,
+                <<"quantity">> => <<"0">>,
+                <<"data">> => ?DEFAULT_DATA,
+                <<"manifest">> => <<"undefined">>,
+                <<"data_root">> => <<>>,
+                <<"reward">> => <<"0">>,
+                <<"denomination">> => <<"0">>
+            },
+            #tx{
+                unsigned_id = hb_util:decode(<<"EYZkeF9dbMD3mAkaNN2-oLgqwzsswq7_He6TLo6TtWU">>),
+                tags = [
+                    {<<"data">>,?DEFAULT_DATA},
+                    {<<"data_root">>, <<>>},
+                    {<<"denomination">>,<<"0">>},
+                    {<<"format">>,<<"ans104">>},
+                    {<<"last_tx">>,<<>>},
+                    {<<"manifest">>,<<"undefined">>},
+                    {<<"quantity">>,<<"0">>},
+                    {<<"reward">>,<<"0">>},
+                    {<<"target">>,<<>>}
+                ]
+            }
+        },
+        {non_defaults_typed,
+            #{
+                <<"first-tag">> => <<"First-Value">>,
+                <<"second-tag">> => <<"second-value">>,
+                <<"third-tag">> => 1,
+                <<"fourth-tag">> => BinaryTag,
+                <<"last_tx">> => LastTX,
+                <<"target">> => Target,
+                <<"quantity">> => 2,
+                <<"data">> => Data,
+                <<"manifest">> => <<"test-manifest">>,
+                <<"data_root">> => DataRoot,
+                <<"reward">> => 3,
+                <<"denomination">> => 4
+            },
+            #tx{
+                unsigned_id = hb_util:decode(<<"uL1YvOHq-7w-sLHqEyItW53BaKRWNx7yUcXI75inM-c">>),
+                target = Target,
+                last_tx = LastTX,
+                data = Data,
+                data_size = byte_size(Data),
+                tags = [
+                    {<<"ao-types">>, <<"denomination=\"integer\", quantity=\"integer\", reward=\"integer\", third-tag=\"integer\"">>},
+                    {<<"data_root">>, DataRoot},
+                    {<<"denomination">>,<<"4">>},
+                    {<<"first-tag">>,<<"First-Value">>},
+                    {<<"fourth-tag">>, BinaryTag},
+                    {<<"manifest">>,<<"test-manifest">>},
+                    {<<"quantity">>,<<"2">>},
+                    {<<"reward">>,<<"3">>},
+                    {<<"second-tag">>,<<"second-value">>},
+                    {<<"third-tag">>,<<"1">>}
+                ]
+            }
+        },
+        {non_defaults_binary,
+            #{
+                <<"first-tag">> => <<"First-Value">>,
+                <<"second-tag">> => <<"second-value">>,
+                <<"third-tag">> => <<"1">>,
+                <<"fourth-tag">> => BinaryTag,
+                <<"last_tx">> => LastTX,
+                <<"target">> => Target,
+                <<"quantity">> => <<"2">>,
+                <<"data">> => Data,
+                <<"manifest">> => <<"test-manifest">>,
+                <<"data_root">> => DataRoot,
+                <<"reward">> => <<"3">>,
+                <<"denomination">> => <<"4">>
+            },
+            #tx{
+                unsigned_id = hb_util:decode(<<"y_UCz2-eUvlSjV86Zb6w8lMj5sjOW8i4orWShbVGXig">>),
+                target = Target,
+                last_tx = LastTX,
+                data = Data,
+                data_size = byte_size(Data),
+                tags = [
+                    {<<"data_root">>, DataRoot},
+                    {<<"denomination">>,<<"4">>},
+                    {<<"first-tag">>,<<"First-Value">>},
+                    {<<"fourth-tag">>, BinaryTag},
+                    {<<"manifest">>,<<"test-manifest">>},
+                    {<<"quantity">>,<<"2">>},
+                    {<<"reward">>,<<"3">>},
+                    {<<"second-tag">>,<<"second-value">>},
+                    {<<"third-tag">>,<<"1">>}
+                ]
+            }
+        }
+    ],
+    lists:foreach(
+        fun({Label, UnsignedStructured, UnsignedTX}) ->
+            do_unsigned_roundtrip(
+                lists:flatten(io_lib:format("~p unsigned", [Label])),
+                UnsignedStructured, UnsignedTX),
+            do_signed_roundtrip(
+                lists:flatten(io_lib:format("~p signed", [Label])),
+                UnsignedStructured, UnsignedTX)
+        end,
+        TestCases
+    ).
 
 invalid_fields_test() ->
     TestCases = [
@@ -366,21 +447,32 @@ invalid_field_test() ->
     ).
 
 
-do_unsigned_roundtrip(UnsignedStructured, UnsignedTX) ->
+do_unsigned_roundtrip(Label, InputStructured, InputTX) ->
     StructuredCodec = #{<<"device">> => <<"structured@1.0">>, <<"bundle">> => true},
-    TABM0 = hb_message:convert(UnsignedStructured, tabm, StructuredCodec, #{}),
-    {ok, CommittedTABM0} =
-        dev_codec_ans104:commit(TABM0, #{ <<"type">> => <<"unsigned">> }, #{}),
+    InputTABM = hb_message:convert(InputStructured, tabm, StructuredCodec, #{}),
+    ?event(dev_codec_ans104_tests, {Label, input_tabm, {explicit, InputTABM}}),
+    {ok, CommittedTABM} =
+        dev_codec_ans104:commit(InputTABM, #{ <<"type">> => <<"unsigned">> }, #{}),
+    {ok, Binary} = serialize(InputTABM, #{}, #{}),
+    {ok, TABM0} = deserialize(Binary, #{}, #{}),
     {ok, DataItem} = dev_codec_ans104:to(TABM0, #{}, #{}),
     {ok, TABM1} = dev_codec_ans104:from(DataItem, #{}, #{}),
-    Structured = hb_message:convert(TABM1, StructuredCodec, tabm, #{}),
-    ?assertEqual(UnsignedTX, DataItem),
-    ?assert(hb_message:match(UnsignedStructured, Structured)),
-    ?assert(hb_message:match(TABM0, TABM1)),
-    ?assert(hb_message:match(TABM0, CommittedTABM0)),
+
+    OutputStructured = hb_message:convert(TABM1, StructuredCodec, tabm, #{}),
+
+    ?event(dev_codec_ans104_tests, {Label, dataitem, {explicit, DataItem}}),
+    ?event(dev_codec_ans104_tests, {Label, tabm0, {explicit, TABM0}}),
+    ?event(dev_codec_ans104_tests, {Label, id, {explicit, hb_util:encode(DataItem#tx.unsigned_id)}}),
+    ?event(dev_codec_ans104_tests, {Label, output_structured, {explicit, OutputStructured}}),
+
+    ?assertEqual(InputTX, DataItem, Label),
+    ?assert(hb_message:match(InputStructured, OutputStructured), Label),
+    ?assert(hb_message:match(InputTABM, TABM0), Label),
+    ?assert(hb_message:match(InputTABM, TABM1), Label),
+    ?assert(hb_message:match(InputTABM, CommittedTABM), Label),
     ok.
 
-do_signed_roundtrip(UnsignedStructured, UnsignedTX) ->
+do_signed_roundtrip(Label, UnsignedStructured, UnsignedTX) ->
     {_, {_, Owner}} = Wallet = ar_wallet:new(),
     Opts = #{ priv_wallet => Wallet },
     StructuredCodec = #{<<"device">> => <<"structured@1.0">>, <<"bundle">> => true},
@@ -388,21 +480,28 @@ do_signed_roundtrip(UnsignedStructured, UnsignedTX) ->
     TABM0 = hb_message:convert(UnsignedStructured, tabm, StructuredCodec, Opts),
     {ok, SignedTABM0} = 
         dev_codec_ans104:commit(TABM0, #{ <<"type">> => <<"signed">> }, Opts),
-    ?assert(hb_util:ok(dev_codec_ans104:verify(SignedTABM0, #{}, Opts))),
+    ?assert(hb_util:ok(dev_codec_ans104:verify(SignedTABM0, #{}, Opts)), Label),
+
     {ok, ID, Commitment} = hb_message:commitment(
         #{ <<"commitment-device">> => <<"ans104@1.0">> }, SignedTABM0, Opts),
     Signature = hb_util:decode(hb_ao:get(<<"signature">>, Commitment, <<>>, Opts)),
     SignedTX = UnsignedTX#tx{ id = hb_util:decode(ID), owner = Owner, signature = Signature },
-    ?event({signed_id, {explicit, ID}}),
-    {ok, DataItem} = dev_codec_ans104:to(SignedTABM0, #{}, Opts),
-    {ok, SignedTABM1} = dev_codec_ans104:from(DataItem, #{}, Opts),
+
+    ?event(dev_codec_ans104_tests, {Label, signed_id, {explicit, ID}}),
+
+    {ok, Binary} = serialize(SignedTABM0, #{}, #{}),
+    {ok, SignedTABM1} = deserialize(Binary, #{}, #{}),
+    
+    {ok, DataItem} = dev_codec_ans104:to(SignedTABM1, #{}, Opts),
+    {ok, SignedTABM2} = dev_codec_ans104:from(DataItem, #{}, Opts),
 
     {ok, UnsignedTABM0} =
         dev_codec_ans104:commit(SignedTABM0, #{ <<"type">> => <<"unsigned">> }, #{}),
 
-    ?assert(hb_message:match(SignedTABM0, SignedTABM1)),
-    ?assert(hb_message:match(TABM0, UnsignedTABM0)),
-    ?assertEqual(SignedTX, DataItem),
+    ?assert(hb_message:match(SignedTABM0, SignedTABM1), Label),
+    ?assert(hb_message:match(SignedTABM0, SignedTABM2), Label),
+    ?assert(hb_message:match(TABM0, UnsignedTABM0), Label),
+    ?assertEqual(SignedTX, DataItem, Label),
     ok.
 
 codec_insensitive_get_test() ->
