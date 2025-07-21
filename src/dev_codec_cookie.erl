@@ -613,9 +613,7 @@ test_data() ->
             {
                 [
                     [
-                        % ------- Failing because \n is getting tranferred to n\ while parsing
                         <<"error_log=\"timestamp=2024-01-15 10:30:00\\nlevel=ERROR\\tmessage=Database connection failed\"; Path=/">>,
-                        % ------- Failing because wrong order of flags
                         <<"auth_token=bearer_xyz789; Secure; Path=/api; Secure; HttpOnly">>
                     ]
                 ],
@@ -637,9 +635,7 @@ test_data() ->
             {
                 [
                     [
-                        % ---- Failing because of \ backlashes in the flag we should remove it
                         <<"csrf_token=abc123; \"HttpOnly\"; Path=/">>,
-                        % ----- Failing because parsing as <<"quick_setting">> => <<"enabled">>
                         <<"quick_setting=\"enabled\"">>
                     ]
                 ],
@@ -658,7 +654,6 @@ test_data() ->
                 [
                     [
                         <<"secret_key=confidential; Path=%2Fadmin">>,
-                        % ------ Failing because parsing have <<\"admin_flag\">>
                         <<"admin_flag=true; Path=/">>
                         
                     ]
