@@ -266,7 +266,9 @@ join(Path) -> hb_path:to_binary(Path).
 read(Modules, Key) -> call_function(Modules, read, [Key]).
 
 %% @doc Write a key with a value to the store.
-write(Modules, Key, Value) -> call_function(Modules, write, [Key, Value]).
+write(Modules, Key, Value) ->
+    ?event(debug_store_choice, {writing_key, {key, Key}, {value, Value}, {modules, Modules}}),
+    call_function(Modules, write, [Key, Value]).
 
 %% @doc Make a group in the store. A group can be seen as a namespace or
 %% 'directory' in a filesystem.

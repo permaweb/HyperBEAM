@@ -645,13 +645,16 @@ parse_redirect(Location, Opts) ->
 
 full_push_test_() ->
     {timeout, 30, fun() ->
-        dev_process:init(),
+        hb:init(),
         Opts = #{
             process_async_cache => false,
             priv_wallet => hb:wallet(),
             cache_control => <<"always">>,
             store => [
-                #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"name">> => <<"cache-TEST">>
+                },
                 #{ <<"store-module">> => hb_store_gateway,
                     <<"local-store">> => [#{
                         <<"store-module">> => hb_store_fs,
@@ -670,19 +673,20 @@ full_push_test_() ->
             },
             Opts
         ),
-        ?event({test_setup, {msg1, Msg1}, {sched_init, SchedInit}}),
+        ?event(debug_test, {test_setup, {msg1, Msg1}, {sched_init, SchedInit}}),
         Script = ping_pong_script(2),
-        ?event({script, Script}),
+        ?event(debug_test, {script, Script}),
         {ok, Msg2} = dev_process:schedule_aos_call(Msg1, Script, Opts),
-        ?event({msg_sched_result, Msg2}),
+        ?event(debug_test, {msg_sched_result, Msg2}),
         {ok, StartingMsgSlot} =
             hb_ao:resolve(Msg2, #{ <<"path">> => <<"slot">> }, Opts),
-        ?event({starting_msg_slot, StartingMsgSlot}),
+        ?event(debug_test, {starting_msg_slot, StartingMsgSlot}),
         Msg3 =
             #{
                 <<"path">> => <<"push">>,
                 <<"slot">> => StartingMsgSlot
             },
+        ?event(debug_test, {msg3, Msg3}),
         {ok, _} = hb_ao:resolve(Msg1, Msg3, Opts),
         ?assertEqual(
             {ok, <<"Done.">>},
