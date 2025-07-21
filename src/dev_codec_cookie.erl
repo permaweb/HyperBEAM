@@ -628,7 +628,7 @@ test_data() ->
                         #{
                             <<"value">> => <<"bearer_xyz789">>,
                             <<"attributes">> => #{ <<"Path">> => <<"/api">> },
-                            <<"flags">> => [<<"Secure">>, <<"Secure">>, <<"HttpOnly">>]
+                            <<"flags">> => [<<"HttpOnly">>,<<"Secure">>, <<"Secure">>]
                         }
                 }
             },
@@ -649,10 +649,7 @@ test_data() ->
                             <<"attributes">> => #{ <<"Path">> => <<"/">> },
                             <<"flags">> => [<<"HttpOnly">>]
                         },
-                    <<"quick_setting">> =>
-                        #{
-                            <<"value">> => <<"enabled">>
-                        }
+                    <<"quick_setting">> => <<"enabled">>
                 }
             },
         parse_admin_and_upload =>

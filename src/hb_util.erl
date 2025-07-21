@@ -1031,7 +1031,7 @@ split_escaped_single(Sep, Bin) ->
 split_escaped_single(_Sep, <<>>, Acc) ->
     {hb_util:bin(lists:reverse(Acc)), <<>>};
 split_escaped_single(Sep, <<"\\", Char:8/integer, Rest/binary>>, Acc) ->
-    split_escaped_single(Sep, Rest, [$\\, Char | Acc]);
+    split_escaped_single(Sep, Rest, [Char, $\\ | Acc]);
 split_escaped_single(Sep, <<Sep:8/integer, Rest/binary>>, Acc) ->
     {hb_util:bin(lists:reverse(Acc)), Rest};
 split_escaped_single(Sep, <<C:8/integer, Rest/binary>>, Acc) ->
