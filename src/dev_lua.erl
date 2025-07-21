@@ -222,7 +222,10 @@ sandbox(State, [Path | Rest], Opts) ->
 %% @doc Call the Lua script with the given arguments.
 compute(Key, RawBase, Req, Opts) ->
     ?event(debug_lua, compute_called),
-    {ok, Base} = ensure_initialized(RawBase, Req, Opts),
+    ?event(transfer_test, { req, Req }),
+    LoadedReq = hb_message:normalize_commitments(hb_cache:ensure_all_loaded(Req, Opts), Opts),
+    {ok, Base} = ensure_initialized(RawBase, LoadedReq, Opts),
+    ?event(transfer_test, { loaded_req, LoadedReq }),
     ?event(debug_lua, ensure_initialized_done),
     % Get the state from the base message's private element.
     OldPriv = #{ <<"state">> := State } = hb_private:from_message(Base),
@@ -232,8 +235,8 @@ compute(Key, RawBase, Req, Opts) ->
     Function =
         hb_ao:get_first(
             [
-                {Req, <<"body/function">>},
-                {Req, <<"function">>},
+                {LoadedReq, <<"body/function">>},
+                {LoadedReq, <<"function">>},
                 {{as, <<"message@1.0">>, Base}, <<"function">>}
             ],
             Key,
@@ -243,8 +246,8 @@ compute(Key, RawBase, Req, Opts) ->
     Params =
         hb_ao:get_first(
             [
-                {Req, <<"body/parameters">>},
-                {Req, <<"parameters">>},
+                {LoadedReq, <<"body/parameters">>},
+                {LoadedReq, <<"parameters">>},
                 {{as, <<"message@1.0">>, Base}, <<"parameters">>}
             ],
             [
@@ -254,6 +257,7 @@ compute(Key, RawBase, Req, Opts) ->
             ],
             Opts#{ hashpath => ignore }
         ),
+    ?event(transfer_test, {params, Params}),
     ?event(debug_lua, parameters_found),
     % Resolve all hyperstate links
     ResolvedParams = hb_cache:ensure_all_loaded(Params, Opts),
@@ -265,6 +269,7 @@ compute(Key, RawBase, Req, Opts) ->
             {req, Req}
         }
     ),
+    ?event(transfer_test, {function, Function}),
     process_response(
         try luerl:call_function_dec(
             [Function],

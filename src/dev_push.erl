@@ -21,6 +21,7 @@
 %%                    Default: `sync', pushing synchronously.
 push(Base, Req, Opts) ->
     Process = dev_process:as_process(Base, Opts),
+    ?event(transfer_test, {push_base, {base, Process}, {req, Req}}),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
     case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Req}, no_slot, Opts) of
         no_slot ->
@@ -73,16 +74,20 @@ is_async(Process, Req, Opts) ->
 
 %% @doc Push a message or slot number, including its downstream results.
 do_push(PrimaryProcess, Assignment, Opts) ->
+    ?event(transfer_test, {push_assignment, hb_cache:ensure_all_loaded(Assignment, Opts)}),
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
+    ?event(transfer_test, {push_slot, Slot}),
     ID = dev_process:process_id(PrimaryProcess, #{}, Opts),
+    ?event(transfer_test, {push_id, ID}),
     UncommittedID =
         dev_process:process_id(
             PrimaryProcess,
             #{ <<"commitments">> => <<"none">> },
             Opts
         ),
+    ?event(transfer_test, {{push_uncommitted_id, UncommittedID}, {assignment, hb_cache:ensure_all_loaded(Assignment, Opts)}}),
     BaseID = calculate_base_id(PrimaryProcess, Opts),
-    ?event(debug,
+    ?event(transfer_test,
         {push_computing_outbox,
             {process_id, ID},
             {base_id, BaseID},
@@ -206,6 +211,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
 %% the target to schedule the execution result upon is not confused with
 %% functional components of the evaluation.
 maybe_evaluate_message(Message, Opts) ->
+    ?event(transfer_test, {maybe_evaluate_message, {msg, Message}}),
     case hb_ao:get(<<"resolve">>, Message, Opts) of
         not_found -> 
             ?event(x, {not_found, {msg, Message}    }),

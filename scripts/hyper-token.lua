@@ -136,7 +136,7 @@ local function normalize_table(value)
     -- If value is already a table, return it. If it is not a string, return
     -- a table containing only the value.
     if type(value) == "table" then
-        ao.event({ "Table already normalized", { table = value } })
+        -- ao.event({ "Table already normalized", { table = value } })
         return value
     elseif type(value) ~= "string" then
         return { value }
@@ -166,7 +166,7 @@ local function normalize_table(value)
         table.insert(t, num or trimmed)
     end
 
-    ao.event({ "Normalized table", { table = t } })
+    -- ao.event({ "Normalized table", { table = t } })
     return t
 end
 
@@ -239,10 +239,21 @@ local function satisfies_constraints(message, assess, all, required, match)
         end
     end
 
+    ao.event({ "checking122", {
+        message = message
+    }})
+    committers = ao.get("committers", message)
+    ao.event({ "checking123", {
+        message = message,
+        committers = committers,
+        all = all,
+        required = required,
+        match = match
+    }})
     -- If the assessment message is not present, check the signatures against
     -- the requirements list and specifiers.
     local satisfies_auth = satisfies_list_constraints(
-        ao.get("committers", message),
+        committers,
         all,
         required,
         match
@@ -276,6 +287,10 @@ end
 -- process, or by checking the signature against the process's own scheduler
 -- address and those it explicitly trusts.
 local function is_trusted_assignment(base, assignment)
+    ao.event({ "is_trusted_assignment", {
+        base = base,
+        assignment = assignment
+    }})
     return satisfies_constraints(
         assignment,
         (base.assess or {})["scheduler"],
@@ -474,6 +489,10 @@ function validate_request(incoming_base, assignment)
         })
     end
 
+    ao.event({ "ensure_initialized", {
+        status = status,
+        base = base
+    }})
     -- First, ensure that the message has not already been processed.
     ao.event("Deduplicating message.", {
         ["history-length"] = #(base.dedup or {})
@@ -504,8 +523,16 @@ function validate_request(incoming_base, assignment)
         })
     end
 
+    ao.event({ "check trusted", {
+        assignment = assignment,
+        base = base
+    }})
     -- Next, ensure that the assignment is trusted.
     local trusted, details = is_trusted_assignment(base, assignment)
+    ao.event({ "Trusted test", {
+        trusted = trusted,
+        details = details
+    }})
     if not trusted then
         return "error", log_result(base, "error", {
             message = "Assignment is not trusted.",
@@ -655,10 +682,11 @@ end
 -- Xfer in: Sub-ledger = Dec User balance
 -- C-N in: Root = Inc User balance, Dec Sub-ledger balance
 function transfer(base, assignment)
-    ao.event({ "Transfer request received", { assignment = assignment } })
+    ao.event({ "Transfer request received", { base = base,assignment = assignment } })
     -- Verify the security of the request.
     local status, request
     status, base, request = validate_request(base, assignment)
+    ao.event({ "Transfer request validated", { status = status, request = request } })
     if status ~= "ok" or not request then
         return "ok", base
     end
@@ -866,8 +894,9 @@ end
 --- Index function, called by the `~process@1.0` device for scheduled messages.
 --- We route any `action' to the appropriate function based on the request path.
 function compute(base, assignment)
-    ao.event({ "compute called",
-        { balance = base.balance, ledgers = base.ledgers } })
+    ao.event({ "compute called", { assignment = assignment, base = base } })
+    -- ao.event({ "compute called",
+        -- { balance = base.balance, ledgers = base.ledgers } })
 
     assignment.body.action = string.lower(assignment.body.action or "")
     

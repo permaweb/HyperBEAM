@@ -132,24 +132,30 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
                         end
                 }
         end,
+    CommitTarget = hb_message:id(ProcMsg, all),
+    CommitRecipient = hb_util:human_id(Recipient),
+    CommittedTransfer = hb_message:commit(
+        MaybeRoute#{
+            <<"action">> => <<"Transfer">>,
+            <<"target">> => CommitTarget,
+            <<"recipient">> => CommitRecipient,
+            <<"quantity">> => Quantity
+        },
+        #{ priv_wallet => Sender }
+    ),
     Xfer =
-        hb_message:commit(#{
-            <<"path">> => <<"push">>,
-            <<"body">> =>
-                hb_message:commit(MaybeRoute#{
-                        <<"action">> => <<"Transfer">>,
-                        <<"target">> => hb_message:id(ProcMsg, all),
-                        <<"recipient">> => hb_util:human_id(Recipient),
-                        <<"quantity">> => Quantity
-                    },
-                    #{ priv_wallet => Sender }
-                )
+        hb_message:commit(
+            #{
+                <<"path">> => <<"push">>,
+                <<"body">> => CommittedTransfer
             },
             #{ priv_wallet => Sender }
         ),
+    NormalizedXfer = hb_message:normalize_commitments(hb_cache:ensure_all_loaded(Xfer, Opts), Opts),
+    ?event(transfer_test, {xfer, NormalizedXfer}),
     hb_ao:resolve(
         ProcMsg,
-        Xfer,
+        NormalizedXfer,
         Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
     ).
 
@@ -420,7 +426,9 @@ transfer_test_() -> {timeout, 30, fun transfer/0}.
 transfer() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
+    ?event(transfer_test, {alice, hb_util:human_id(ar_wallet:to_address(Alice))}),
     Bob = ar_wallet:new(),
+    ?event(transfer_test, {bob, hb_util:human_id(ar_wallet:to_address(Bob))}),
     Proc =
         ledger(
             <<"scripts/hyper-token.lua">>,
@@ -428,7 +436,8 @@ transfer() ->
             Opts
         ),
     ?assertEqual(100, supply(Proc, Opts)),
-    transfer(Proc, Alice, Bob, 1, Opts),
+    TransferRes = transfer(Proc, Alice, Bob, 1, Opts),
+    ?event(transfer_test, {transfer_res, TransferRes}),
     ?assertEqual(99, balance(Proc, Alice, Opts)),
     ?assertEqual(1, balance(Proc, Bob, Opts)),
     ?assertEqual(100, supply(Proc, Opts)).
