@@ -951,18 +951,18 @@ simple_ao_resolve_unsigned_test() ->
     ?assertEqual({ok, <<"Value1">>}, post(URL, TestMsg, #{})).
 
 simple_ao_resolve_signed_test() ->
-    URL = hb_http_server:start_node(#{ priv_wallet => hb:wallet() }),
+    URL = hb_http_server:start_node(Opts = #{ priv_wallet => hb:wallet() }),
     TestMsg = #{ <<"path">> => <<"/key1">>, <<"key1">> => <<"Value1">> },
     {ok, Res} =
         post(
             URL,
-            hb_message:commit(TestMsg, hb_util:get_wallet_opts()),
-            #{}
+            hb_message:commit(TestMsg, Opts),
+            Opts
         ),
     ?assertEqual(<<"Value1">>, Res).
 
 nested_ao_resolve_test() ->
-    URL = hb_http_server:start_node(#{ priv_wallet => hb:wallet() }),
+    URL = hb_http_server:start_node(Opts = #{ priv_wallet => hb:wallet() }),
     {ok, Res} =
         post(
             URL,
@@ -974,72 +974,76 @@ nested_ao_resolve_test() ->
                             <<"key3">> => <<"Value2">>
                         }
                     }
-            }, hb_util:get_wallet_opts()),
-            #{}
+            }, Opts),
+            Opts
         ),
     ?assertEqual(<<"Value2">>, Res).
 
-wasm_compute_request(ImageFile, Func, Params) ->
-    wasm_compute_request(ImageFile, Func, Params, <<"">>).
-wasm_compute_request(ImageFile, Func, Params, ResultPath) ->
+wasm_compute_request(ImageFile, Func, Params, Opts) ->
+    wasm_compute_request(ImageFile, Func, Params, <<"">>, Opts).
+wasm_compute_request(ImageFile, Func, Params, ResultPath, Opts) ->
     {ok, Bin} = file:read_file(ImageFile),
-    hb_message:commit(#{
-        <<"path">> => <<"/init/compute/results", ResultPath/binary>>,
-        <<"device">> => <<"wasm-64@1.0">>,
-        <<"function">> => Func,
-        <<"parameters">> => Params,
-        <<"body">> => Bin
-    }, hb_util:get_wallet_opts()).
+    hb_message:commit(
+        #{
+            <<"path">> => <<"/init/compute/results", ResultPath/binary>>,
+            <<"device">> => <<"wasm-64@1.0">>,
+            <<"function">> => Func,
+            <<"parameters">> => Params,
+            <<"body">> => Bin
+        },
+        Opts
+    ).
 
 run_wasm_unsigned_test() ->
-    Node = hb_http_server:start_node(#{
+    Node = hb_http_server:start_node(Opts = #{
         force_signed => false,
         priv_wallet => hb:wallet()
     }),
-    Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0]),
-    {ok, Res} = post(Node, Msg, #{}),
+    Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], Opts),
+    {ok, Res} = post(Node, Msg, Opts),
     ?event({res, Res}),
-    ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, #{})).
+    ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, Opts)).
 
 run_wasm_signed_test() ->
     Opts = #{ priv_wallet => hb:wallet() },
     URL = hb_http_server:start_node(Opts#{force_signed => true}),
-    Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>),
-    {ok, Res} = post(URL, hb_message:commit(Msg, hb_util:get_wallet_opts()), Opts),
-    ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, #{})).
+    Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>, Opts),
+    {ok, Res} = post(URL, hb_message:commit(Msg, Opts), Opts),
+    ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, Opts)).
 
 get_deep_unsigned_wasm_state_test() ->
-    URL = hb_http_server:start_node(#{force_signed => false}),
-    Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>),
-    {ok, Res} = post(URL, Msg, #{}),
-    ?assertEqual(6.0, hb_ao:get(<<"/output/1">>, Res, #{})).
+    Opts = #{ priv_wallet => hb:wallet() },
+    URL = hb_http_server:start_node(Opts#{force_signed => false}),
+    Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>, Opts),
+    {ok, Res} = post(URL, Msg, Opts),
+    ?assertEqual(6.0, hb_ao:get(<<"/output/1">>, Res, Opts)).
 
 get_deep_signed_wasm_state_test() ->
-    URL = hb_http_server:start_node(#{force_signed => true}),
+    Opts = #{ priv_wallet => hb:wallet() },
+    URL = hb_http_server:start_node(Opts#{force_signed => true}),
     Msg =
         wasm_compute_request(
             <<"test/test-64.wasm">>,
             <<"fac">>,
             [3.0],
-            <<"/output">>
+            <<"/output">>,
+            Opts
         ),
-    {ok, Res} = post(URL, Msg, #{}),
-    ?assertEqual(6.0, hb_ao:get(<<"1">>, Res, #{})).
+    {ok, Res} = post(URL, Msg, Opts),
+    ?assertEqual(6.0, hb_ao:get(<<"1">>, Res, Opts)).
 
 cors_get_test() ->
-    URL = hb_http_server:start_node(),
-    {ok, Res} = get(URL, <<"/~meta@1.0/info">>, #{}),
+    Opts = #{ priv_wallet => hb:wallet() },
+    URL = hb_http_server:start_node(Opts),
+    {ok, Res} = get(URL, <<"/~meta@1.0/info">>, Opts),
     ?assertEqual(
         <<"*">>,
-        hb_ao:get(<<"access-control-allow-origin">>, Res, #{})
+        hb_ao:get(<<"access-control-allow-origin">>, Res, Opts)
     ).
 
 ans104_wasm_test() ->
-    URL = hb_http_server:start_node(#{
-        force_signed => true,
-        priv_wallet => hb:wallet()
-    }),
-    Opts = hb_util:get_wallet_opts(),
+    Opts = #{ priv_wallet => hb:wallet() },
+    URL = hb_http_server:start_node(Opts#{force_signed => true}),
     {ok, Bin} = file:read_file(<<"test/test-64.wasm">>),
     Msg = hb_message:commit(
         #{
@@ -1055,9 +1059,9 @@ ans104_wasm_test() ->
     ),
     ?assert(hb_message:verify(Msg, all, Opts)),
     ?event({msg, {explicit, Msg}}),
-    {ok, Res} = post(URL, Msg#{ <<"path">> => <<"/init/compute/results">> }, #{}),
+    {ok, Res} = post(URL, Msg#{ <<"path">> => <<"/init/compute/results">> }, Opts),
     ?event({res, Res}),
-    ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, #{})),
+    ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, Opts)),
     ok.
 
 send_large_signed_request_test() ->
@@ -1080,20 +1084,22 @@ send_large_signed_request_test() ->
     %        )
     %    ).
     {ok, [Req]} = file:consult(<<"test/large-message.eterm">>),
+    Opts = #{ priv_wallet => hb:wallet() },
     % Get the short trace length from the node message in the large, stored
     % request. 
     ?assertMatch(
         {ok, 5},
         post(
-            hb_http_server:start_node(),
+            hb_http_server:start_node(Opts),
             <<"/node-message/short_trace_len">>,
             Req,
-            #{ http_client => httpc }
+            Opts#{ http_client => httpc }
         )
     ).
 
 index_test() ->
-    NodeURL = hb_http_server:start_node(),
+    Opts = #{ priv_wallet => hb:wallet() },
+    NodeURL = hb_http_server:start_node(Opts),
     {ok, Res} =
         get(
             NodeURL,
@@ -1101,12 +1107,13 @@ index_test() ->
                 <<"path">> => <<"/~test-device@1.0/load">>,
                 <<"accept-bundle">> => false
             },
-            #{}
+            Opts
         ),
-    ?assertEqual(<<"i like turtles!">>, hb_ao:get(<<"body">>, Res, #{})).
+    ?assertEqual(<<"i like turtles!">>, hb_ao:get(<<"body">>, Res, Opts)).
 
 index_request_test() ->
-    URL = hb_http_server:start_node(),
+    Opts = #{ priv_wallet => hb:wallet() },
+    URL = hb_http_server:start_node(Opts),
     {ok, Res} =
         get(
             URL,
@@ -1114,6 +1121,6 @@ index_request_test() ->
                 <<"path">> => <<"/~test-device@1.0/load?name=dogs">>,
                 <<"accept-bundle">> => false
             },
-            #{}
+            Opts
         ),
-    ?assertEqual(<<"i like dogs!">>, hb_ao:get(<<"body">>, Res, #{})).
+    ?assertEqual(<<"i like dogs!">>, hb_ao:get(<<"body">>, Res, Opts)).

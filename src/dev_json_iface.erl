@@ -423,8 +423,9 @@ generate_stack(File) ->
     generate_stack(File, <<"WASM">>).
 generate_stack(File, _Mode) ->
     test_init(),
+    Opts = #{ priv_wallet => hb:wallet() },
     Msg0 = dev_wasm:cache_wasm_image(File),
-    Image = hb_ao:get(<<"image">>, Msg0, #{}),
+    Image = hb_ao:get(<<"image">>, Msg0, Opts),
     Msg1 = Msg0#{
         <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> =>
@@ -444,12 +445,13 @@ generate_stack(File, _Mode) ->
                 <<"image">> => Image,
                 <<"scheduler">> => hb:address(),
                 <<"authority">> => hb:address()
-            }, hb_util:get_wallet_opts())
+            }, Opts)
     },
-    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, #{}),
+    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, Opts),
     Msg2.
 
 generate_aos_msg(ProcID, Code) ->
+    Opts = #{ priv_wallet => hb:wallet() },
     hb_message:commit(#{
         <<"path">> => <<"compute">>,
         <<"body">> => 
@@ -457,9 +459,9 @@ generate_aos_msg(ProcID, Code) ->
                 <<"action">> => <<"Eval">>,
                 <<"data">> => Code,
                 <<"target">> => ProcID
-            }, hb_util:get_wallet_opts()),
+            }, Opts),
         <<"block-height">> => 1
-    }, hb_util:get_wallet_opts()).
+    }, Opts).
 
 basic_aos_call_test_() ->
     {timeout, 20, fun() ->
