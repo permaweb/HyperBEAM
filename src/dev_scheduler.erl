@@ -79,6 +79,7 @@ router(_, Msg1, Msg2, Opts) ->
 %% a `Current-Slot' key. It stores a local cache of the schedule in the
 %% `priv/To-Process' key.
 next(Msg1, Msg2, Opts) ->
+    ?event(transfer_test, {scheduler_next_called, {msg1, hb_maps:without([<<"priv">>], Msg1)}, {msg2, Msg2}}),
     ?event(debug_next, {scheduler_next_called, {msg1, Msg1}, {msg2, Msg2}}),
     ?event(next, started_next),
     ?event(next_profiling, started_next),
@@ -92,8 +93,8 @@ next(Msg1, Msg2, Opts) ->
             )
         ),
     ?event(next_profiling, got_last_processed),
-    ?event(debug_next, {in_message_cache, {schedule, Schedule}}),
-    ?event(next, {last_processed, LastProcessed, {message_cache, length(Schedule)}}),
+    ?event(transfer_test, {in_message_cache, {schedule, Schedule}}),
+    ?event(transfer_test, {last_processed, LastProcessed, {message_cache, length(Schedule)}}),
     % Get the assignments from the message cache, local cache, or fetch from
     % the SU. Returns an ordered list of assignments.
     NextAssignment =
@@ -104,6 +105,7 @@ next(Msg1, Msg2, Opts) ->
             LastProcessed,
             Opts
         ),
+    ?event(transfer_test, {next_assignment, NextAssignment}),
     ?event(next_profiling, got_assignments),
     case NextAssignment of
         {error, Reason} ->
@@ -210,6 +212,7 @@ find_next_assignment(Msg1, Msg2, _Schedule, LastSlot, Opts) ->
             false ->
                 check_lookahead_and_local_cache(Msg1, ProcID, LastSlot + 1, Opts)
         end,
+    ?event(transfer_test, {local_cache_res, LocalCacheRes}),
     case LocalCacheRes of
         {ok, Worker, Assignment} ->
             ?event(next_debug,
@@ -221,6 +224,7 @@ find_next_assignment(Msg1, Msg2, _Schedule, LastSlot, Opts) ->
             ?event(next_profiling, read_assignment),
             {ok, [Assignment], Worker};
         not_found ->
+            ?event(transfer_test, {not_found, {msg1, Msg1}, {msg2, Msg2}}),
             {ok, RecvdAssignments} =
                 hb_ao:resolve(
                     Msg1,
@@ -323,8 +327,10 @@ check_lookahead_and_local_cache(Worker, ProcID, TargetSlot, Opts) when is_pid(Wo
 check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
     % The lookahead worker has not found an assignment for the target
     % slot yet, so we check our local cache.
-    ?event(next_lookahead, {reading_local_cache, {slot, TargetSlot}}),
-    case dev_scheduler_cache:read(ProcID, TargetSlot, Opts) of
+    ?event(transfer_test, {reading_local_cache, {slot, TargetSlot}}),
+    SchedulerCacheResult = dev_scheduler_cache:read(ProcID, TargetSlot, Opts),
+    ?event(transfer_test, {scheduler_cache_result, hb_cache:ensure_all_loaded(SchedulerCacheResult, Opts)}),
+    case SchedulerCacheResult of
         not_found -> not_found;
         {ok, Assignment} ->
             % We have an assignment in our local cache, so we return it.

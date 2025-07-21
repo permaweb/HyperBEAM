@@ -22,6 +22,7 @@ snapshot(Msg, _Msg2, _Opts) -> {ok, Msg}.
 %% the `patch@1.0' device, applying any state patches that the AO process may have
 %% requested.
 compute(Msg, Msg2, Opts) ->
+    ?event(transfer_test, {compute_msg, Msg}),
     % Validate whether the genesis-wasm feature is enabled.
     case ensure_started(Opts) of
         true ->
