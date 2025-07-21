@@ -608,25 +608,38 @@ test_data() ->
                         }
                 }
             },
-        parse_realworld_backlash =>
+        parse_error_log_and_auth_token =>
             {
                 [
                     [
                         % ------- Failing because \n is getting tranferred to n\ while parsing
                         <<"error_log=\"timestamp=2024-01-15 10:30:00\\nlevel=ERROR\\tmessage=Database connection failed\"; Path=/">>,
                         % ------- Failing because wrong order of flags
-                        <<"auth_token=bearer_xyz789; Secure; Path=/api; Secure; HttpOnly">>,
+                        <<"auth_token=bearer_xyz789; Secure; Path=/api; Secure; HttpOnly">>
+                    ]
+                ],
+                #{
+                    <<"error_log">> =>
+                        #{
+                            <<"value">> => <<"timestamp=2024-01-15 10:30:00\\nlevel=ERROR\\tmessage=Database connection failed">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/">> }
+                        },
+                    <<"auth_token">> =>
+                        #{
+                            <<"value">> => <<"bearer_xyz789">>,
+                            <<"attributes">> => #{ <<"Path">> => <<"/api">> },
+                            <<"flags">> => [<<"Secure">>, <<"Secure">>, <<"HttpOnly">>]
+                        }
+                }
+            },
+        parse_csrf_and_quick_setting =>
+            {
+                [
+                    [
                         % ---- Failing because of \ backlashes in the flag we should remove it
-                        <<"csrf_token=abc123; \"HttpOnly\"; Path=/">>,      
+                        <<"csrf_token=abc123; \"HttpOnly\"; Path=/">>,
                         % ----- Failing because parsing as <<"quick_setting">> => <<"enabled">>
-                        <<"quick_setting=enabled">>,
-                        % ------ Failing because parsing have <<\"admin_flag\">>
-                        <<"\"admin_flag\"=true; Path=/">>,
-                        % ------ Failing because Secure and HTTPOnly are part of Path
-                        <<"upload_session=upload_xyz;Path=/upload Secure HttpOnly">>,
-                        <<"search_history=\"query,results\"; Path=/">>,
-                        <<"user_tags=\"work,personal\"; Path=/">>,
-                        <<"secret_key=confidential; Path=%2Fadmin">>
+                        <<"quick_setting=enabled">>
                     ]
                 ],
                 #{
@@ -636,21 +649,23 @@ test_data() ->
                             <<"attributes">> => #{ <<"Path">> => <<"/">> },
                             <<"flags">> => [<<"HttpOnly">>]
                         },
-                    <<"auth_token">> =>
-                        #{
-                            <<"value">> => <<"bearer_xyz789">>,
-                            <<"attributes">> => #{ <<"Path">> => <<"/api">> },
-                            <<"flags">> => [<<"Secure">>, <<"Secure">>, <<"HttpOnly">>]
-                        },
-                    <<"error_log">> =>
-                        #{
-                            <<"value">> => <<"timestamp=2024-01-15 10:30:00\\nlevel=ERROR\\tmessage=Database connection failed">>,
-                            <<"attributes">> => #{ <<"Path">> => <<"/">> }
-                        },
                     <<"quick_setting">> =>
                         #{
                             <<"value">> => <<"enabled">>
-                        },
+                        }
+                }
+            },
+        parse_admin_and_upload =>
+            {
+                [
+                    [
+                        % ------ Failing because parsing have <<\"admin_flag\">>
+                        <<"\"admin_flag\"=true; Path=/">>,
+                        % ------ Failing because Secure and HTTPOnly are part of Path
+                        <<"upload_session=upload_xyz;Path=/upload Secure HttpOnly">>
+                    ]
+                ],
+                #{
                     <<"admin_flag">> =>
                         #{
                             <<"value">> => <<"true">>,
@@ -661,7 +676,18 @@ test_data() ->
                             <<"value">> => <<"upload_xyz">>,
                             <<"attributes">> => #{ <<"Path">> => <<"/upload">> },
                             <<"flags">> => [<<"Secure">>, <<"HttpOnly">>]
-                        },
+                        }
+                }
+            },
+        parse_search_and_tags =>
+            {
+                [
+                    [
+                        <<"search_history=\"query,results\"; Path=/">>,
+                        <<"user_tags=\"work,personal\"; Path=/">>
+                    ]
+                ],
+                #{
                     <<"search_history">> =>
                         #{
                             <<"value">> => <<"query,results">>,
@@ -671,7 +697,17 @@ test_data() ->
                         #{
                             <<"value">> => <<"work,personal">>,
                             <<"attributes">> => #{ <<"Path">> => <<"/">> }
-                        },
+                        }
+                }
+            },
+        parse_secret_key_solo =>
+            {
+                [
+                    [
+                        <<"secret_key=confidential; Path=%2Fadmin">>
+                    ]
+                ],
+                #{
                     <<"secret_key">> =>
                         #{
                             <<"value">> => <<"confidential">>,
@@ -723,8 +759,20 @@ parse_cache_and_form_token_test() ->
 parse_token_and_reactions_test() ->
     assert_set(parse_token_and_reactions, fun from_string/1).
 
-parse_realworld_backlash_test() ->
-    assert_set(parse_realworld_backlash, fun from_string/1).
+parse_error_log_and_auth_token_test() ->
+    assert_set(parse_error_log_and_auth_token, fun from_string/1).
+
+parse_csrf_and_quick_setting_test() ->
+    assert_set(parse_csrf_and_quick_setting, fun from_string/1).
+
+parse_admin_and_upload_test() ->
+    assert_set(parse_admin_and_upload, fun from_string/1).
+
+parse_search_and_tags_test() ->
+    assert_set(parse_search_and_tags, fun from_string/1).
+
+parse_secret_key_solo_test() ->
+    assert_set(parse_secret_key_solo, fun from_string/1).
 
 %%% Test Helpers
 
