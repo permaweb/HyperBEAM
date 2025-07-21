@@ -71,7 +71,7 @@ http_lookup_test() ->
         <<"path">> => <<"/~lookup@1.0/read?target=", ID/binary>>,
         <<"device">> => <<"lookup@1.0">>,
         <<"accept">> => <<"application/aos-2">>
-    }, hb_util:get_wallet_opts()),
+    }, Opts),
     {ok, Res} = hb_http:post(Node, Req, Opts),
     {ok, Decoded} = dev_json_iface:json_to_message(hb_ao:get(<<"body">>, Res, Opts), Opts),
     ?assertEqual(<<"test-data">>, hb_ao:get(<<"Data">>, Decoded, Opts)).

@@ -1693,7 +1693,7 @@ register_location_on_boot_test() ->
 
 schedule_message_and_get_slot_test() ->
     start(),
-    Opts = hb_util:get_wallet_opts(),
+    Opts = #{ priv_wallet => hb:wallet() },
     Msg1 = test_process(),
     Msg2 = #{
         <<"path">> => <<"schedule">>,
@@ -1744,11 +1744,19 @@ redirect_from_graphql_test_() ->
 redirect_from_graphql() ->
     start(),
     Opts =
-        #{ store =>
-            [
-                #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
-                #{ <<"store-module">> => hb_store_gateway, <<"store">> => false }
-            ]
+        #{
+            priv_wallet => hb:wallet(),
+            store =>
+                [
+                    #{
+                        <<"store-module">> => hb_store_fs,
+                        <<"name">> => <<"cache-mainnet">>
+                    },
+                    #{
+                        <<"store-module">> => hb_store_gateway,
+                        <<"store">> => false
+                    }
+                ]
         },
     {ok, Msg} = hb_cache:read(<<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>, Opts),
     ?assertMatch(
@@ -1765,10 +1773,10 @@ redirect_from_graphql() ->
                             <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>,
                         <<"test-key">> => <<"Test-Val">>
                     },
-                    hb_util:get_wallet_opts()
+                    Opts
                 )
             },
-            #{
+            Opts#{
                 scheduler_follow_redirects => false
             }
         )
@@ -1776,7 +1784,7 @@ redirect_from_graphql() ->
 
 get_local_schedule_test() ->
     start(),
-    Opts = hb_util:get_wallet_opts(),
+    Opts = #{ priv_wallet => hb:wallet() },
     Msg1 = test_process(),
     Msg2 = #{
         <<"path">> => <<"schedule">>,
@@ -1796,8 +1804,8 @@ get_local_schedule_test() ->
                 <<"test-key">> => <<"Test-Val-2">>
             }, Opts)
     },
-    ?assertMatch({ok, _}, hb_ao:resolve(Msg1, Msg2, #{})),
-    ?assertMatch({ok, _}, hb_ao:resolve(Msg1, Msg3, #{})),
+    ?assertMatch({ok, _}, hb_ao:resolve(Msg1, Msg2, Opts)),
+    ?assertMatch({ok, _}, hb_ao:resolve(Msg1, Msg3, Opts)),
     ?assertMatch(
         {ok, _},
         hb_ao:resolve(Msg1, #{
@@ -1805,7 +1813,7 @@ get_local_schedule_test() ->
             <<"path">> => <<"schedule">>,
             <<"target">> => hb_util:id(Msg1)
         },
-        #{})
+        Opts)
     ).
 
 %%% HTTP tests
@@ -1858,29 +1866,43 @@ http_post_schedule_sign(Node, Msg, ProcessMsg, Wallet) ->
 
 http_get_slot(N, PMsg) ->
     ID = hb_message:id(PMsg, all),
-    Wallet = hb:wallet(),
-    WalletOpts = hb_util:get_wallet_opts(Wallet),
-    {ok, _} = hb_http:get(N, hb_message:commit(#{
-        <<"path">> => <<"/~scheduler@1.0/slot">>,
-        <<"method">> => <<"GET">>,
-        <<"target">> => ID
-    }, WalletOpts), #{}).
+    Opts = #{ priv_wallet => hb:wallet() },
+    {ok, _} =
+        hb_http:get(
+            N,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~scheduler@1.0/slot">>,
+                    <<"method">> => <<"GET">>,
+                    <<"target">> => ID
+                },
+                Opts
+            ),
+            Opts
+        ).
 
 http_get_schedule(N, PMsg, From, To) ->
     http_get_schedule(N, PMsg, From, To, <<"application/http">>).
 
 http_get_schedule(N, PMsg, From, To, Format) ->
     ID = hb_message:id(PMsg, all),
-    Wallet = hb:wallet(),
-    WalletOpts = hb_util:get_wallet_opts(Wallet),
-    {ok, _} = hb_http:get(N, hb_message:commit(#{
-        <<"path">> => <<"/~scheduler@1.0/schedule">>,
-        <<"method">> => <<"GET">>,
-        <<"target">> => hb_util:human_id(ID),
-        <<"from">> => From,
-        <<"to">> => To,
-        <<"accept">> => Format
-    }, WalletOpts), #{}).
+    Opts = #{ priv_wallet => hb:wallet() },
+    {ok, _} =
+        hb_http:get(
+            N,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~scheduler@1.0/schedule">>,
+                    <<"method">> => <<"GET">>,
+                    <<"target">> => hb_util:human_id(ID),
+                    <<"from">> => From,
+                    <<"to">> => To,
+                    <<"accept">> => Format
+                },
+                Opts
+            ),
+            Opts
+        ).
 
 http_get_schedule_redirect_test_() ->
     {timeout, 60, fun http_get_schedule_redirect/0}.
