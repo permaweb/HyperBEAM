@@ -17,6 +17,7 @@
 #define TPM_MAX_QUOTE_SIZE 2048      // Max size for TPM quote/attestation data
 #define TPM_MAX_RANDOM_SIZE 64       // Max random bytes per TPM_GetRandom call
 #define TPM_MAX_DIGEST_SIZE 64       // Max digest size (SHA512 = 64 bytes)
+#define TPM_MAX_SIGN_DATA_SIZE 1024  // Max size for data to be signed directly
 
 /**
  * TPM context structure
@@ -51,9 +52,6 @@ int tpm_init_context(tpm_context_t *ctx);
  * @param ctx Pointer to TPM context to clean up
  */
 void tpm_cleanup_context(tpm_context_t *ctx);
-
-
-
 
 // === TPM Capability and Status Functions ===
 
@@ -98,8 +96,6 @@ int tpm_read_pcr(tpm_context_t *ctx, uint32_t pcr_index, uint8_t *pcr_value, siz
  * @return 0 on success, -1 on error
  */
 int tpm_get_random(tpm_context_t *ctx, size_t requested_bytes, uint8_t *random_data, size_t *actual_size);
-
-
 
 // === TPM Key Management Functions ===
 
@@ -161,26 +157,5 @@ int tpm_sign_data(tpm_context_t *ctx, ESYS_TR key_handle, const uint8_t *data, s
  */
 int tpm_read_clock(tpm_context_t *ctx, uint64_t *current_time, uint32_t *reset_count, 
                    uint32_t *restart_count, uint8_t *safe);
-
-// === Convenience Functions ===
-
-/**
- * Get a pointer to the global TPM context
- * 
- * Provides access to a shared TPM context for applications that don't
- * need multiple concurrent TPM sessions. The context is automatically
- * initialized on first use.
- * 
- * @return Pointer to global context, or NULL if TPM is unavailable
- */
-tpm_context_t* tpm_get_global_context(void);
-
-/**
- * Clean up the global TPM context
- * 
- * Should be called during application shutdown to properly release
- * TPM resources held by the global context.
- */
-void tpm_cleanup_global_context(void);
 
 #endif // TPM_ESAPI_H 

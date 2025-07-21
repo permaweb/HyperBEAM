@@ -77,24 +77,27 @@ static ERL_NIF_TERM nif_check_tpm_support(ErlNifEnv* env, int argc, const ERL_NI
  * - Create trust policies based on PCR values
  */
 static ERL_NIF_TERM nif_read_pcr(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
-    unsigned int pcr_index;
+    int pcr_index;  // Changed from unsigned int to int for proper negative validation
     uint8_t pcr_value[TPM_MAX_PCR_VALUE_SIZE];
     size_t pcr_size = sizeof(pcr_value);
     
     /*
      * Parameter validation and extraction
      * 
-     * Erlang integers are converted to C unsigned int. We validate that
-     * the PCR index is within the typical range supported by TPM devices.
+     * Use signed integer to properly detect negative values that would
+     * otherwise wrap around when using unsigned int.
      */
-    if (!enif_get_uint(env, argv[0], &pcr_index)) {
+    if (!enif_get_int(env, argv[0], &pcr_index)) {
         // Invalid argument type - expected integer
         return enif_make_badarg(env);
     }
     
-    if (pcr_index > 23) { 
+    // Validate PCR index range - must be between 0 and 23 inclusive
+    if (pcr_index < 0 || pcr_index > 23) { 
         // PCR index out of range - TPM typically supports PCRs 0-23
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "invalid_pcr"));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+                               enif_make_tuple2(env, enif_make_atom(env, "invalid_pcr_index"),
+                                              enif_make_int(env, pcr_index)));
     }
     
     /*
@@ -115,8 +118,8 @@ static ERL_NIF_TERM nif_read_pcr(ErlNifEnv* env, int argc, const ERL_NIF_TERM ar
         return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "tpm_init_failed"));
     }
     
-    // Perform the actual PCR read operation
-    int result = tpm_read_pcr(&ctx, pcr_index, pcr_value, &pcr_size);
+    // Perform the actual PCR read operation (safe to cast now that we've validated range)
+    int result = tpm_read_pcr(&ctx, (uint32_t)pcr_index, pcr_value, &pcr_size);
     
     // Always clean up the context to prevent resource leaks
     tpm_cleanup_context(&ctx);
@@ -164,24 +167,30 @@ static ERL_NIF_TERM nif_read_pcr(ErlNifEnv* env, int argc, const ERL_NIF_TERM ar
  * - Requires TPM hardware availability
  */
 static ERL_NIF_TERM nif_get_random(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
-    unsigned int requested_bytes;
+    int requested_bytes;  // Changed from unsigned int to int for proper negative validation
     uint8_t random_data[TPM_MAX_RANDOM_SIZE];
     size_t actual_size = sizeof(random_data);
     
     /*
      * Parameter validation
      * 
-     * We validate both the parameter type and the requested size to ensure
-     * it's within TPM hardware limits and reasonable bounds.
+     * Use signed integer to properly detect negative values that would
+     * otherwise wrap around when using unsigned int.
      */
-    if (!enif_get_uint(env, argv[0], &requested_bytes)) {
+    if (!enif_get_int(env, argv[0], &requested_bytes)) {
         // Invalid argument type - expected integer
         return enif_make_badarg(env);
     }
     
-    if (requested_bytes == 0 || requested_bytes > TPM_MAX_RANDOM_SIZE) {
+    // Validate requested bytes range - must be between 1 and TPM_MAX_RANDOM_SIZE inclusive
+    if (requested_bytes <= 0 || requested_bytes > TPM_MAX_RANDOM_SIZE) {
         // Request size out of valid range
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "invalid_size"));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+                               enif_make_tuple3(env, enif_make_atom(env, "invalid_size"),
+                                              enif_make_int(env, requested_bytes),
+                                              enif_make_tuple2(env, 
+                                                  enif_make_int(env, 1),
+                                                  enif_make_int(env, TPM_MAX_RANDOM_SIZE))));
     }
     
     // Create fresh TPM context for this operation
@@ -191,8 +200,8 @@ static ERL_NIF_TERM nif_get_random(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
         return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "tpm_init_failed"));
     }
     
-    // Generate random bytes using TPM hardware
-    int result = tpm_get_random(&ctx, requested_bytes, random_data, &actual_size);
+    // Generate random bytes using TPM hardware (safe to cast now that we've validated range)
+    int result = tpm_get_random(&ctx, (size_t)requested_bytes, random_data, &actual_size);
     
     // Clean up TPM context
     tpm_cleanup_context(&ctx);
@@ -318,19 +327,57 @@ static ERL_NIF_TERM nif_create_primary_key(ErlNifEnv* env, int argc, const ERL_N
  * - Signature format follows standard cryptographic conventions
  */
 static ERL_NIF_TERM nif_sign_data(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
-    unsigned int key_handle_uint;
+    int key_handle_int;  // Changed from unsigned int to int for proper negative validation
     ErlNifBinary data_bin;
     
     /*
      * Parameter extraction and validation
      * 
-     * We need both a key handle (referencing a TPM key) and the data
-     * to be signed. Both parameters are validated for type correctness.
+     * Validate both the key handle (must be positive) and the data
+     * to be signed (must be valid binary with reasonable size).
      */
-    if (!enif_get_uint(env, argv[0], &key_handle_uint) || 
-        !enif_inspect_binary(env, argv[1], &data_bin)) {
-        // Invalid argument types
+    
+    // Validate argument count
+    if (argc != 2) {
         return enif_make_badarg(env);
+    }
+    
+    // Validate key handle
+    if (!enif_get_int(env, argv[0], &key_handle_int)) {
+        // Invalid argument type - expected integer
+        return enif_make_badarg(env);
+    }
+    
+    if (key_handle_int <= 0) {
+        // Key handle must be positive
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+                               enif_make_tuple2(env, enif_make_atom(env, "invalid_key_handle"),
+                                              enif_make_int(env, key_handle_int)));
+    }
+    
+    // Validate binary data
+    if (!enif_inspect_binary(env, argv[1], &data_bin)) {
+        // Invalid argument type - expected binary
+        return enif_make_badarg(env);
+    }
+    
+    // Validate data size
+    if (data_bin.size == 0) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+                               enif_make_atom(env, "empty_data"));
+    }
+    
+    if (data_bin.size > TPM_MAX_SIGN_DATA_SIZE) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+                               enif_make_tuple3(env, enif_make_atom(env, "data_too_large"),
+                                              enif_make_uint(env, data_bin.size),
+                                              enif_make_uint(env, TPM_MAX_SIGN_DATA_SIZE)));
+    }
+    
+    // Validate data pointer (defensive programming)
+    if (!data_bin.data) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+                               enif_make_atom(env, "null_data"));
     }
     
     /*
@@ -338,9 +385,9 @@ static ERL_NIF_TERM nif_sign_data(ErlNifEnv* env, int argc, const ERL_NIF_TERM a
      * 
      * The key handle must reference a valid signing key that was previously
      * created or loaded in the TPM. We convert from the Erlang integer
-     * representation back to the TPM handle type.
+     * representation back to the TPM handle type (safe now that we've validated).
      */
-    ESYS_TR key_handle = (ESYS_TR)key_handle_uint;
+    ESYS_TR key_handle = (ESYS_TR)key_handle_int;
     uint8_t signature[512]; // Buffer for signature (RSA 2048 = ~256 bytes + overhead)
     size_t signature_size = sizeof(signature);
     
@@ -494,16 +541,28 @@ static ERL_NIF_TERM nif_read_clock(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
  * - Maintaining good TPM hygiene in long-running processes
  */
 static ERL_NIF_TERM nif_flush_key(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
-    unsigned int key_handle_uint;
+    int key_handle_int;  // Changed from unsigned int to int for proper negative validation
+    
+    // Validate argument count
+    if (argc != 1) {
+        return enif_make_badarg(env);
+    }
     
     // Parameter validation
-    if (!enif_get_uint(env, argv[0], &key_handle_uint)) {
+    if (!enif_get_int(env, argv[0], &key_handle_int)) {
         // Invalid argument type - expected integer
         return enif_make_badarg(env);
     }
     
-    // Convert handle back to TPM type
-    ESYS_TR key_handle = (ESYS_TR)key_handle_uint;
+    if (key_handle_int <= 0) {
+        // Key handle must be positive
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), 
+                               enif_make_tuple2(env, enif_make_atom(env, "invalid_key_handle"),
+                                              enif_make_int(env, key_handle_int)));
+    }
+    
+    // Convert handle back to TPM type (safe now that we've validated)
+    ESYS_TR key_handle = (ESYS_TR)key_handle_int;
     
     // Create fresh TPM context for flush operation
     tpm_context_t ctx = {0};
@@ -527,27 +586,6 @@ static ERL_NIF_TERM nif_flush_key(ErlNifEnv* env, int argc, const ERL_NIF_TERM a
     return enif_make_atom(env, "ok");
 }
 
-/*
- * ============================================================================
- * NIF Module Lifecycle Management
- * ============================================================================
- */
-
-/**
- * Module unload callback to cleanup TPM context
- * 
- * This function is called when the NIF module is unloaded (typically during
- * system shutdown or module reloading). It ensures that any global TPM
- * resources are properly cleaned up to prevent resource leaks.
- * 
- * Note: Since we use fresh contexts for each operation, this mainly serves
- * as a safety net for any global state that might be maintained by the
- * underlying TPM library.
- */
-static void tpm_nif_unload(ErlNifEnv* env, void* priv_data) {
-    // Clean up any global TPM context that might exist
-    tpm_cleanup_global_context();
-}
 
 /*
  * ============================================================================
@@ -560,16 +598,21 @@ static void tpm_nif_unload(ErlNifEnv* env, void* priv_data) {
  * - Function name as it appears in Erlang
  * - Arity (number of arguments)
  * - C function pointer
- * - Optional flags (none used in this implementation)
+ * - Flags: ERL_NIF_DIRTY_JOB_CPU_BOUND for TPM operations that may block
+ * 
+ * All TPM operations are marked as dirty NIFs because they:
+ * - Perform blocking I/O with TPM hardware/software
+ * - Can take 50-200ms per operation
+ * - Should not block the Erlang scheduler threads
  */
 static ErlNifFunc nif_funcs[] = {
-    {"check_tpm_support", 0, nif_check_tpm_support},   // check_tpm_support() -> {ok, boolean()}
-    {"read_pcr", 1, nif_read_pcr},                     // read_pcr(integer()) -> {ok, binary()} | {error, atom()}
-    {"get_random", 1, nif_get_random},                 // get_random(integer()) -> {ok, binary()} | {error, atom()}
-    {"create_primary_key", 0, nif_create_primary_key}, // create_primary_key() -> {ok, integer()} | {error, atom()}
-    {"sign_data", 2, nif_sign_data},                   // sign_data(integer(), binary()) -> {ok, binary()} | {error, atom()}
-    {"read_clock", 0, nif_read_clock},                  // read_clock() -> {ok, tuple()} | {error, atom()}
-    {"flush_key", 1, nif_flush_key}                    // flush_key(integer()) -> ok | {error, atom()}
+    {"check_tpm_support", 0, nif_check_tpm_support, ERL_NIF_DIRTY_JOB_CPU_BOUND},   // check_tpm_support() -> {ok, boolean()}
+    {"read_pcr_nif", 1, nif_read_pcr, ERL_NIF_DIRTY_JOB_CPU_BOUND},                 // read_pcr_nif(integer()) -> {ok, binary()} | {error, atom()}
+    {"get_random_nif", 1, nif_get_random, ERL_NIF_DIRTY_JOB_CPU_BOUND},             // get_random_nif(integer()) -> {ok, binary()} | {error, atom()}
+    {"create_primary_key", 0, nif_create_primary_key, ERL_NIF_DIRTY_JOB_CPU_BOUND}, // create_primary_key() -> {ok, integer()} | {error, atom()}
+    {"sign_data_nif", 2, nif_sign_data, ERL_NIF_DIRTY_JOB_CPU_BOUND},               // sign_data_nif(integer(), binary()) -> {ok, binary()} | {error, atom()}
+    {"read_clock", 0, nif_read_clock, ERL_NIF_DIRTY_JOB_CPU_BOUND},                 // read_clock() -> {ok, tuple()} | {error, atom()}
+    {"flush_key_nif", 1, nif_flush_key, ERL_NIF_DIRTY_JOB_CPU_BOUND}                // flush_key_nif(integer()) -> ok | {error, atom()}
 };
 
 /*
@@ -590,6 +633,6 @@ static ErlNifFunc nif_funcs[] = {
  * - NULL: Load callback (not used)
  * - NULL: Reload callback (not used)  
  * - NULL: Upgrade callback (not used)
- * - tpm_nif_unload: Unload callback for cleanup
+ * - NULL: Unload callback (no longer needed after global context removal)
  */
-ERL_NIF_INIT(tpm_nif, nif_funcs, NULL, NULL, NULL, tpm_nif_unload) 
+ERL_NIF_INIT(tpm_nif, nif_funcs, NULL, NULL, NULL, NULL) 

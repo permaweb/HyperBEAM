@@ -18,11 +18,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-// Global TPM context for convenience functions
-// Note: In production environments with multiple threads, consider using
-// thread-local storage or per-thread contexts to avoid race conditions
-static tpm_context_t g_tpm_ctx = {0};
-
 /**
  * Initialize a TPM context with automatic TCTI discovery
  * 
@@ -45,15 +40,7 @@ int tpm_init_context(tpm_context_t *ctx) {
     if (ctx->initialized) {
         return 0; // Already initialized - this is not an error
     }
-    
-    // Temporarily redirect stderr to suppress TCTI error messages during probing
-    // This prevents confusing error output when TPM devices are unavailable,
-    // which is a common and expected scenario in many environments
-    int stderr_fd = dup(STDERR_FILENO);
-    int devnull = open("/dev/null", O_WRONLY);
-    dup2(devnull, STDERR_FILENO);
-    close(devnull);
-    
+  
     /*
      * Initialize TCTI (TPM Command Transmission Interface)
      * 
@@ -79,10 +66,6 @@ int tpm_init_context(tpm_context_t *ctx) {
             break; // Successfully initialized TCTI
         }
     }
-    
-    // Restore stderr to normal operation
-    dup2(stderr_fd, STDERR_FILENO);
-    close(stderr_fd);
     
     if (rc != TSS2_RC_SUCCESS) {
         // No TPM device available - this is expected in many environments
@@ -374,15 +357,6 @@ int tpm_create_primary_key(tpm_context_t *ctx, ESYS_TR *primary_handle) {
     in_public.publicArea.parameters.rsaDetail.scheme.details.rsapss.hashAlg = TPM2_ALG_SHA256; // SHA256 for RSAPSS
     in_public.publicArea.parameters.rsaDetail.keyBits = 2048;                      // 2048-bit RSA key
     in_public.publicArea.parameters.rsaDetail.exponent = 0;                        // Default public exponent (65537)
-    
-    // Temporarily suppress stderr during key creation to avoid ESYS error messages
-    // Key creation can sometimes fail due to TPM resource limitations, authorization
-    // issues, or other transient conditions
-    int stderr_fd = dup(STDERR_FILENO);
-    int devnull = open("/dev/null", O_WRONLY);
-    dup2(devnull, STDERR_FILENO);
-    close(devnull);
-    
     /*
      * Create the primary key
      * 
@@ -396,10 +370,6 @@ int tpm_create_primary_key(tpm_context_t *ctx, ESYS_TR *primary_handle) {
                            ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,  // Authorization sessions
                            &in_sensitive_primary, &in_public, &outside_info, &creation_pcr,
                            primary_handle, &out_public, &creation_data, &creation_hash, &creation_ticket);
-    
-    // Restore stderr
-    dup2(stderr_fd, STDERR_FILENO);
-    close(stderr_fd);
     
     if (rc != TSS2_RC_SUCCESS) {
         return -1; // Key creation failed
@@ -599,45 +569,3 @@ int tpm_flush_key(tpm_context_t *ctx, ESYS_TR key_handle) {
     
     return 0; // Success
 }
-
-/**
- * Get a pointer to the global TPM context (convenience function)
- * 
- * This function provides access to a shared TPM context for applications
- * that don't need multiple concurrent TPM sessions. The context is
- * automatically initialized on first use.
- * 
- * Thread Safety: This implementation is NOT thread-safe. In multi-threaded
- * applications, consider using thread-local storage or per-thread contexts.
- */
-tpm_context_t* tpm_get_global_context(void) {
-    static int init_attempted = 0;
-    
-    // Initialize global context on first use
-    if (!g_tpm_ctx.initialized && !init_attempted) {
-        init_attempted = 1; // Prevent repeated initialization attempts
-        int result = tpm_init_context(&g_tpm_ctx);
-        if (result != 0) {
-            // Initialization failed - don't try again
-            return NULL;
-        }
-    }
-    
-    // Return context only if properly initialized
-    if (!g_tpm_ctx.initialized) {
-        return NULL; // TPM not available
-    }
-    
-    return &g_tpm_ctx;
-}
-
-/**
- * Clean up the global TPM context (convenience function)
- * 
- * This function should be called during application shutdown to properly
- * release TPM resources held by the global context. It's safe to call
- * multiple times.
- */
-void tpm_cleanup_global_context(void) {
-    tpm_cleanup_context(&g_tpm_ctx);
-} 

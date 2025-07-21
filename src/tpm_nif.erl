@@ -39,6 +39,11 @@
 %% NIF loading directive - automatically loads the shared library when module loads
 -on_load(init/0).
 
+%% Input validation constants for defense in depth
+-define(MAX_PCR_INDEX, 23).
+-define(MAX_RANDOM_BYTES, 64).
+-define(MAX_SIGN_DATA_SIZE, 1024).
+
 %%% ============================================================================
 %%% NIF Initialization and Loading
 %%% ============================================================================
@@ -117,14 +122,20 @@ check_tpm_support() ->
 %% - Unexpected PCR values may indicate tampering or configuration changes
 %% - PCR 23 is often used for application-specific measurements
 %%
+%% This function includes Erlang-side validation for defense in depth.
+%%
 %% @param PCRIndex Integer from 0-23 specifying which PCR to read
 %% @returns `{ok, PCRValue}` with a binary containing the PCR hash value,
 %% or `{error, Reason}` if the operation fails
 %% @throws badarg if PCRIndex is not an integer or is out of valid range
 -spec read_pcr(PCRIndex :: non_neg_integer()) -> 
     {ok, PCRValue :: binary()} | {error, atom()}.
-read_pcr(_PCRIndex) ->
-    erlang:nif_error(not_loaded).
+read_pcr(PCRIndex) when is_integer(PCRIndex), 
+                        PCRIndex >= 0, 
+                        PCRIndex =< ?MAX_PCR_INDEX ->
+    read_pcr_nif(PCRIndex);
+read_pcr(PCRIndex) ->
+    {error, {invalid_pcr_index, PCRIndex}}.
 
 %%% ============================================================================
 %%% Hardware Random Number Generation
@@ -155,14 +166,20 @@ read_pcr(_PCRIndex) ->
 %% - Seeding software pseudo-random number generators
 %% - High-security applications requiring hardware-backed entropy
 %%
+%% This function includes Erlang-side validation for defense in depth.
+%%
 %% @param NumBytes Integer specifying number of random bytes to generate (1-64)
 %% @returns `{ok, RandomBytes}` with a binary containing the random data,
 %% or `{error, Reason}` if the operation fails
 %% @throws badarg if NumBytes is not an integer or is out of valid range
 -spec get_random(NumBytes :: pos_integer()) -> 
     {ok, RandomBytes :: binary()} | {error, atom()}.
-get_random(_NumBytes) ->
-    erlang:nif_error(not_loaded).
+get_random(NumBytes) when is_integer(NumBytes),
+                         NumBytes > 0,
+                         NumBytes =< ?MAX_RANDOM_BYTES ->
+    get_random_nif(NumBytes);
+get_random(NumBytes) ->
+    {error, {invalid_byte_count, NumBytes}}.
 
 %%% ============================================================================
 %%% TPM Key Management Operations
@@ -237,6 +254,8 @@ create_primary_key() ->
 %% - Large data should be hashed externally before signing
 %% - Signature format follows standard cryptographic conventions
 %%
+%% This function includes Erlang-side validation for defense in depth.
+%%
 %% @param KeyHandle Integer handle to a signing key previously created or loaded
 %% in the TPM. Typically obtained from create_primary_key/0.
 %% @param Data Binary data to be digitally signed. Size limitations may apply
@@ -246,8 +265,14 @@ create_primary_key() ->
 %% @see create_primary_key/0 for creating keys suitable for signing
 -spec sign_data(KeyHandle :: pos_integer(), Data :: binary()) -> 
     {ok, Signature :: binary()} | {error, atom()}.
-sign_data(_KeyHandle, _Data) ->
-    erlang:nif_error(not_loaded).
+sign_data(KeyHandle, Data) when is_integer(KeyHandle),
+                                KeyHandle > 0,
+                                is_binary(Data),
+                                byte_size(Data) > 0,
+                                byte_size(Data) =< ?MAX_SIGN_DATA_SIZE ->
+    sign_data_nif(KeyHandle, Data);
+sign_data(KeyHandle, Data) ->
+    {error, {invalid_parameters, {KeyHandle, byte_size(Data)}}}.
 
 %%% ============================================================================
 %%% TPM Clock and Timing Operations
@@ -313,12 +338,16 @@ read_clock() ->
 %% - Preventing TPM resource exhaustion
 %% - Maintaining good TPM hygiene in long-running processes
 %%
+%% This function includes Erlang-side validation for defense in depth.
+%%
 %% @param KeyHandle Integer handle to the key to be flushed
 %% @returns `ok` if the key was successfully flushed,
 %% or `{error, Reason}` if the operation fails
 -spec flush_key(KeyHandle :: pos_integer()) -> ok | {error, atom()}.
-flush_key(_KeyHandle) ->
-    erlang:nif_error(not_loaded).
+flush_key(KeyHandle) when is_integer(KeyHandle), KeyHandle > 0 ->
+    flush_key_nif(KeyHandle);
+flush_key(KeyHandle) ->
+    {error, {invalid_key_handle, KeyHandle}}.
 
 %%% ============================================================================
 %%% Utility Functions for Common TPM Operations
@@ -390,6 +419,29 @@ read_pcrs(PCRList) when is_list(PCRList) ->
     Results.
 
 %%% ============================================================================
+%%% Internal NIF Functions (not exported)
+%%% ============================================================================
+
+%% These functions are the actual NIF implementations that are called after
+%% Erlang-side validation. They should not be called directly by user code.
+
+-spec read_pcr_nif(non_neg_integer()) -> {ok, binary()} | {error, atom()}.
+read_pcr_nif(_PCRIndex) ->
+    erlang:nif_error(not_loaded).
+
+-spec get_random_nif(pos_integer()) -> {ok, binary()} | {error, atom()}.
+get_random_nif(_NumBytes) ->
+    erlang:nif_error(not_loaded).
+
+-spec sign_data_nif(pos_integer(), binary()) -> {ok, binary()} | {error, atom()}.
+sign_data_nif(_KeyHandle, _Data) ->
+    erlang:nif_error(not_loaded).
+
+-spec flush_key_nif(pos_integer()) -> ok | {error, atom()}.
+flush_key_nif(_KeyHandle) ->
+    erlang:nif_error(not_loaded).
+
+%%% ============================================================================
 %%% Unit Tests for TPM NIF Functions
 %%% ============================================================================
 
@@ -402,23 +454,32 @@ check_tpm_support_test() ->
     ?assert(element(1, Result1) =:= ok),
     ?assert(is_atom(element(2, Result1))).
 
-%% @doc Test PCR reading functionality.
-%% Attempts to read PCR 2 and validates the result format.
+%% @doc Test PCR reading functionality with input validation.
+%% Attempts to read PCR 5 and validates the result format.
+%% Also tests input validation for invalid PCR indices.
 read_pcr_test() ->
+    % Test valid PCR index
     Result = tpm_nif:read_pcr(5),
     case Result of
         {ok, PCRValue} ->
             ?assert(is_binary(PCRValue)),
             ?assertEqual(32, byte_size(PCRValue)), % SHA256 hash size
-            ?event(tpm_debug, {pcr_2_value, hb_util:to_hex(PCRValue)});
+            ?event(tpm_debug, {pcr_5_value, hb_util:to_hex(PCRValue)});
         {error, Reason} ->
             ?event(tpm_debug, {pcr_read_failed, Reason}),
             ?assert(false, "PCR read failed: " ++ atom_to_list(Reason))
-    end.
+    end,
+    
+    % Test input validation
+    ?assertMatch({error, {invalid_pcr_index, -1}}, tpm_nif:read_pcr(-1)),
+    ?assertMatch({error, {invalid_pcr_index, 24}}, tpm_nif:read_pcr(24)),
+    ?assertMatch({error, {invalid_pcr_index, atom}}, tpm_nif:read_pcr(atom)).
 
-%% @doc Test hardware random number generation.
+%% @doc Test hardware random number generation with input validation.
 %% Generates 16 bytes of random data and validates format and size.
+%% Also tests input validation for invalid byte counts.
 get_random_test() ->
+    % Test valid random generation
     Result = tpm_nif:get_random(16),
     case Result of
         {ok, RandomBytes} ->
@@ -428,7 +489,12 @@ get_random_test() ->
         {error, Reason} ->
             ?event(tpm_debug, {random_generation_failed, Reason}),
             ?assert(false, "Random generation failed: " ++ atom_to_list(Reason))
-    end.
+    end,
+    % Test input validation
+    ?assertMatch({error, {invalid_byte_count, 0}}, tpm_nif:get_random(0)),
+    ?assertMatch({error, {invalid_byte_count, -1}}, tpm_nif:get_random(-1)),
+    ?assertMatch({error, {invalid_byte_count, 65}}, tpm_nif:get_random(65)),
+    ?assertMatch({error, {invalid_byte_count, "string"}}, tpm_nif:get_random("string")).
 
 %% @doc Test primary key creation.
 %% Creates a primary key and validates the returned handle.
@@ -473,4 +539,22 @@ read_clock_test() ->
         {error, Reason} ->
             ?event(tpm_debug, {read_clock_failed, Reason}),
             ?assert(false, "Clock read failed: " ++ atom_to_list(Reason))
-    end. 
+    end.
+
+%% @doc Test sign data input validation.
+%% Tests validation guards for sign_data function parameters.
+sign_data_validation_test() ->
+    % Test input validation
+    ?assertMatch({error, {invalid_parameters, _}}, tpm_nif:sign_data(0, <<>>)),
+    ?assertMatch({error, {invalid_parameters, _}}, tpm_nif:sign_data(-1, <<"data">>)),
+    ?assertMatch({error, {invalid_parameters, _}}, tpm_nif:sign_data(1, <<>>)),
+    LargeData = binary:copy(<<"x">>, 1025),
+    ?assertMatch({error, {invalid_parameters, _}}, tpm_nif:sign_data(1, LargeData)).
+
+%% @doc Test flush key input validation.
+%% Tests validation guards for flush_key function parameters.
+flush_key_validation_test() ->
+    % Test input validation
+    ?assertMatch({error, {invalid_key_handle, 0}}, tpm_nif:flush_key(0)),
+    ?assertMatch({error, {invalid_key_handle, -1}}, tpm_nif:flush_key(-1)),
+    ?assertMatch({error, {invalid_key_handle, atom}}, tpm_nif:flush_key(atom)). 
