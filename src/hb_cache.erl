@@ -94,7 +94,7 @@ ensure_loaded(Lk = {link, ID, LkOpts = #{ <<"type">> := <<"link">>, <<"lazy">> :
             end;
         not_found ->
             ?event(debug_cache, {lazy_link_not_found, {link, ID}, {link_opts, LkOpts}}),
-            throw({necessary_message_not_found, Lk})
+            throw({necessary_message_not_found, Lk, Store})
     end;
 ensure_loaded(Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
     % If the user provided their own options, we merge them and _overwrite_
