@@ -683,11 +683,11 @@ test_aos_process(Opts) ->
 test_aos_process(Opts, Stack) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    WalletOpts = #{ priv_wallet => Wallet },
-    WASMProc = test_wasm_process(<<"test/aos-2-pure-xs.wasm">>, Opts),
+    WalletOpts = Opts#{ priv_wallet => Wallet },
+    WASMProc = test_wasm_process(<<"test/aos-2-pure-xs.wasm">>, WalletOpts),
     hb_message:commit(
         hb_maps:merge(
-            hb_message:uncommitted(WASMProc, Opts),
+            hb_message:uncommitted(WASMProc, WalletOpts),
             #{
                 <<"device-stack">> => Stack,
                 <<"execution-device">> => <<"stack@1.0">>,
@@ -703,9 +703,9 @@ test_aos_process(Opts, Stack) ->
                         <<"normalize">>
                     ],
                 <<"scheduler">> =>
-                    hb_opts:get(scheduler, Address, Opts),
+                    hb_opts:get(scheduler, Address, WalletOpts),
                 <<"authority">> =>
-                    hb_opts:get(authority, Address, Opts)
+                    hb_opts:get(authority, Address, WalletOpts)
             },
             WalletOpts
         ),
