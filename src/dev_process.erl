@@ -806,7 +806,7 @@ init() ->
 %% executor.
 test_base_process() ->
     Wallet = hb:wallet(),
-    WalletOpts = hb_util:get_wallet_opts(Wallet),
+    WalletOpts = #{ priv_wallet => Wallet },
     test_base_process(WalletOpts).
 test_base_process(Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
@@ -823,7 +823,7 @@ test_wasm_process(WASMImage) ->
     test_wasm_process(WASMImage, #{}).
 test_wasm_process(WASMImage, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    WalletOpts = hb_util:get_wallet_opts(Wallet),
+    WalletOpts = Opts#{ priv_wallet => Wallet },
     #{ <<"image">> := WASMImageID } = 
         dev_wasm:cache_wasm_image(WASMImage, WalletOpts),
     BaseProc = test_base_process(WalletOpts),
@@ -857,7 +857,7 @@ test_aos_process(Opts) ->
 test_aos_process(Opts, Stack) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    WalletOpts = hb_util:get_wallet_opts(Wallet),
+    WalletOpts = #{ priv_wallet => Wallet },
     WASMProc = test_wasm_process(<<"test/aos-2-pure-xs.wasm">>, Opts),
     hb_message:commit(
         hb_maps:merge(
@@ -880,7 +880,9 @@ test_aos_process(Opts, Stack) ->
                     hb_opts:get(scheduler, Address, Opts),
                 <<"authority">> =>
                     hb_opts:get(authority, Address, Opts)
-            }, Opts),
+            },
+            WalletOpts
+        ),
         WalletOpts
     ).
 
@@ -889,7 +891,7 @@ test_aos_process(Opts, Stack) ->
 %% `Already-Seen' elements for each assigned slot.
 dev_test_process() ->
     Wallet = hb:wallet(),
-    WalletOpts = hb_util:get_wallet_opts(Wallet),
+    WalletOpts = #{ priv_wallet => Wallet },
     hb_message:commit(
         hb_maps:merge(test_base_process(WalletOpts), #{
             <<"execution-device">> => <<"stack@1.0">>,
@@ -901,8 +903,8 @@ dev_test_process() ->
 schedule_test_message(Base, Text, Opts) ->
     schedule_test_message(Base, Text, #{}, Opts).
 schedule_test_message(Base, Text, MsgBase, Opts) ->
-    Wallet = hb:wallet(),
-    WalletOpts = hb_util:get_wallet_opts(Wallet),
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    WalletOpts = Opts#{ priv_wallet => Wallet },
     UncommittedBase = hb_message:uncommitted(MsgBase, Opts),
     Req =
         hb_message:commit(#{
@@ -1151,10 +1153,9 @@ aos_browsable_state_test_() ->
 aos_state_access_via_http_test_() ->
     {timeout, 60, fun() ->
         rand:seed(default),
-        Wallet = ar_wallet:new(),
-        Node = hb_http_server:start_node(#{
+        Node = hb_http_server:start_node(Opts = #{
+            priv_wallet => ar_wallet:new(),
             port => 10000 + rand:uniform(10000),
-            priv_wallet => Wallet,
             cache_control => <<"always">>,
             store => #{
                 <<"store-module">> => hb_store_fs,
@@ -1162,9 +1163,8 @@ aos_state_access_via_http_test_() ->
             },
             force_signed_requests => true
         }),
-        Opts = hb_util:get_wallet_opts(Wallet),
         Proc = test_aos_process(Opts),
-        ProcID = hb_util:human_id(hb_message:id(Proc, all)),
+        ProcID = hb_util:human_id(hb_message:id(Proc, all, Opts)),
         {ok, _InitRes} = hb_http:post(Node, <<"/schedule">>, Proc, Opts),
         Req = hb_message:commit(#{
             <<"data-protocol">> => <<"ao">>,
@@ -1210,6 +1210,7 @@ aos_state_access_via_http_test_() ->
 aos_state_patch_test_() ->
     {timeout, 30, fun() ->
         init(),
+        Opts = #{ priv_wallet => hb:wallet() },
         BaseRaw = test_aos_process(#{}, [
             <<"wasi@1.0">>,
             <<"json-iface@1.0">>,
@@ -1236,6 +1237,7 @@ aos_state_patch_test_() ->
         {ok, Msg4} = hb_ao:resolve(Base, Res, #{}),
         ?event({computed_message, {res, Msg4}}),
         {ok, Data} = hb_ao:resolve(Msg4, <<"x">>, #{}),
+        {ok, Msg1} = hb_message:with_only_committed(Msg1Raw, Opts),
         ?event({computed_data, Data}),
         ?assertEqual(<<"banana">>, Data)
     end}.
