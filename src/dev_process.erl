@@ -332,6 +332,7 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                         <<"attempted-slot">> => NextSlot
                     }};
                 {ok, #{ <<"body">> := SlotMsg, <<"state">> := State }} ->
+                    ?event(transfer_test, {compute_to_slot_slotmsg, SlotMsg}),
                     % Compute the next single state transition.
                     case compute_slot(ProcID, State, SlotMsg, Req, Opts) of
                         {ok, NewState} ->

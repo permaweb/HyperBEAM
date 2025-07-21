@@ -271,9 +271,10 @@ commit(Self, Req, Opts) ->
             CommitOpts
         ),
     % Encode to a TABM
+    Converted = hb_message:convert(Base, tabm, CommitOpts),
     Loaded =
         ensure_commitments_loaded(
-            hb_message:convert(Base, tabm, CommitOpts),
+            Converted,
             Opts
         ),
     {ok, Committed} =
@@ -288,7 +289,8 @@ commit(Self, Req, Opts) ->
                 ]
             )
         ),
-    {ok, hb_message:convert(Committed, <<"structured@1.0">>, tabm, CommitOpts)}.
+    ConvertBack = hb_message:convert(Committed, <<"structured@1.0">>, tabm, CommitOpts),
+    {ok, ConvertBack}.
 
 %% @doc Verify a message. By default, all commitments are verified. The
 %% `committers' key in the request can be used to specify that only the 
