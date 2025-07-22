@@ -11,8 +11,8 @@
 % %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    normalize_commitments_test(
-        <<"structured@1.0">>,
+    verify_nested_complex_signed_test(
+        #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
         test_opts(normal)
     ).
 
@@ -207,7 +207,7 @@ codec_test_suite(Codecs) ->
 suite_name(CodecSpec) when is_binary(CodecSpec) -> CodecSpec;
 suite_name(CodecSpec) when is_map(CodecSpec) ->
     CodecName = maps:get(<<"device">>, CodecSpec, <<"[! NO CODEC !]">>),
-    case maps:get(<<"bundle">>, CodecSpec, false) of
+    case hb_maps:get(<<"bundle">>, CodecSpec, false) of
         false -> CodecName;
         true -> << CodecName/binary, " (bundle)">>
     end.
@@ -476,31 +476,31 @@ message_with_large_keys_test(Codec, Opts) ->
 %% tests a large portion of the complex type encodings that HyperBEAM uses
 %% together.
 verify_nested_complex_signed_test(Codec, Opts) ->
+    Inner = hb_message:commit(
+        #{
+            <<"type">> => <<"Message">>,
+            <<"function">> => <<"fac">>,
+            <<"parameters">> => #{
+                <<"a">> => 1
+            },
+            <<"test-content-type">> => <<"application/html">>,
+            <<"body">> =>
+                <<
+                    """
+                    <html>
+                    <h1>Hello, multiline message</h1>
+                    </html>
+                    """
+                >>
+        },
+        Opts,
+        Codec
+    ),
     Msg =
         hb_message:commit(#{
-            <<"path">> => <<"schedule">>,
-            <<"method">> => <<"POST">>,
-            <<"body">> =>
-                    Inner = hb_message:commit(
-                        #{
-                            <<"type">> => <<"Message">>,
-                            <<"function">> => <<"fac">>,
-                            <<"parameters">> => #{
-                                <<"a">> => 1
-                            },
-                            <<"content-type">> => <<"application/html">>,
-                            <<"body">> =>
-                                <<
-                                    """
-                                    <html>
-                                    <h1>Hello, multiline message</h1>
-                                    </html>
-                                    """
-                                >>
-                        },
-                        Opts,
-                        Codec
-                    )
+                <<"path">> => <<"schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> => Inner                    
             },
             Opts,
             Codec
@@ -522,13 +522,26 @@ verify_nested_complex_signed_test(Codec, Opts) ->
     MatchRes = hb_message:match(Msg, Decoded, strict, Opts),
     ?event({match_result, MatchRes}),
     ?assert(MatchRes),
+    ?event({verify,
+        {msg, hb_cache:ensure_all_loaded(Msg, Opts)},
+        {encoded, hb_cache:ensure_all_loaded(Encoded, Opts)},
+        {decoded, hb_cache:ensure_all_loaded(Decoded, Opts)}}),
     ?assert(hb_message:verify(Decoded, all, Opts)),
+    NormalizeOpts = case is_map(Codec) of
+        true -> hb_maps:merge(Opts, Codec);
+        _ -> Opts
+    end,
     % % Ensure that both of the messages can be verified (and retreived).
     FoundInner = hb_maps:get(<<"body">>, Msg, not_found, Opts),
+    NormalizedFoundInner = hb_message:normalize_commitments(FoundInner, NormalizeOpts),
     LoadedFoundInner = hb_cache:ensure_all_loaded(FoundInner, Opts),
     % Verify that the fully loaded version of the inner message, and the one
     % gained by applying `hb_maps:get` match and verify.
-    ?assert(hb_message:match(Inner, FoundInner, primary, Opts)),
+    ?event({matching,
+        {inner, Inner},
+        {normalized_found_inner, NormalizedFoundInner}
+    }),
+    ?assert(hb_message:match(Inner, NormalizedFoundInner, primary, Opts)),
     ?assert(hb_message:match(FoundInner, LoadedFoundInner, primary, Opts)),
     ?assert(hb_message:verify(Inner, all, Opts)),
     ?assert(hb_message:verify(LoadedFoundInner, all, Opts)),
@@ -600,8 +613,20 @@ signed_nested_message_with_child_test(Codec, Opts) ->
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
+    NormalizeOpts = case is_map(Codec) andalso maps:get(<<"bundle">>, Codec, false) == true of
+        true -> Opts#{ <<"bundle">> => <<"true">> };
+        _ -> Opts
+    end,
     ?event({matching, {input, Msg}, {output, Decoded}}),
-    MatchRes = hb_message:match(Msg, Decoded, primary, Opts),
+    MatchRes = hb_message:match(
+        hb_message:normalize_commitments(Msg, NormalizeOpts),
+        hb_message:normalize_commitments(
+            hb_cache:ensure_all_loaded(Decoded, Opts),
+            NormalizeOpts
+        ),
+        primary,
+        Opts
+    ),
     ?event({match_result, MatchRes}),
     ?assert(MatchRes),
     ?assert(hb_message:verify(Decoded, all, Opts)).
@@ -1225,10 +1250,14 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
         ),
     ?event({verify_inner, {original, InnerSigned}, {from_decoded, InnerFromDecoded}}),
     % 3. Verify the outer message after decode.
+    NormalizeOpts = case is_map(Codec) of
+        true -> hb_maps:merge(Opts, Codec);
+        _ -> Opts
+    end,
     MatchRes =
         hb_message:match(
             InnerSigned,
-            InnerFromDecoded,
+            hb_message:normalize_commitments(InnerFromDecoded, NormalizeOpts),
             primary,
             Opts
         ),

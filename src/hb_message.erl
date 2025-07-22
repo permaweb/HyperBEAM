@@ -214,7 +214,7 @@ normalize_commitments(Msg, Opts) when is_map(Msg) ->
             {ok, #{ <<"commitments">> := Commitments }} =
                 dev_message:commit(
                     NormMsg,
-                    #{ <<"type">> => <<"unsigned">> },
+                    #{ <<"type">> => <<"unsigned">>, <<"bundle">> => hb_maps:get(<<"bundle">>, Opts, false, Opts) },
                     Opts
                 ),
             NormMsg#{
@@ -613,7 +613,13 @@ match(Map1, Map2) ->
 match(Map1, Map2, Mode) ->
     match(Map1, Map2, Mode, #{}).
 match(Map1, Map2, Mode, Opts) ->
-    try unsafe_match(Map1, Map2, Mode, [], Opts)
+    try unsafe_match(
+        Map1,
+        Map2,
+        Mode,
+        [],
+        Opts
+    )
     catch _:Details -> Details
     end.
 
