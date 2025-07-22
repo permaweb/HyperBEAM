@@ -52,12 +52,23 @@
 %% @param StoreOpts A map containing database configuration options
 %% @returns {ok, ServerPid} on success, {error, Reason} on failure
 start(Opts = #{ <<"name">> := DataDir }) ->
+    % Determine the size of the store from the store opts, the global node message,
+    % or the macro default defined in this module.
+    Capacity =
+        case maps:get(<<"capacity">>, Opts, not_specified) of
+            not_specified ->
+                case hb_opts:get(<<"capacity">>, not_specified, Opts) of
+                    not_specified -> ?DEFAULT_SIZE;
+                    Cap -> Cap
+                end;
+            Cap -> Cap
+        end,
     % Create the LMDB environment with specified size limit
     {ok, Env} =
         elmdb:env_open(
             hb_util:list(DataDir),
             [
-                {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
+                {map_size, Capacity},
                 no_mem_init, no_sync
             ]
         ),
