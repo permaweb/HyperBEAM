@@ -629,7 +629,7 @@ group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
                     end;
                 _ ->
                     ?event({group_maps, {norm_key, NormKey}, {value, Value}}),
-                    case byte_size(Value) > ?MAX_HEADER_LENGTH of
+                    case byte_size(hb_util:bin(Value)) > ?MAX_HEADER_LENGTH of
                         % the value is too large to be encoded as a header
                         % within a part, so instead lift it to be a top level
                         % part

@@ -226,8 +226,8 @@ do_normalize_commitments(Msg, Opts, passive) ->
         not_found ->
             {ok, #{ <<"commitments">> := Commitments }} =
                 dev_message:commit(
-                    Msg,
-                    #{ <<"type">> => <<"unsigned">> },
+                    NormMsg,
+                    #{ <<"type">> => <<"unsigned">>, <<"bundle">> => hb_maps:get(<<"bundle">>, Opts, false, Opts) },
                     Opts
                 ),
             Msg#{ <<"commitments">> => Commitments };
