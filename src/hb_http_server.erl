@@ -21,9 +21,6 @@
 %% is used as the source for server configuration settings, as well as the
 %% `Opts' argument to use for all AO-Core resolution requests downstream.
 start() ->
-    ?event(http, {start_store, <<"cache-mainnet">>}),
-    Store = hb_opts:get(store, no_store, #{}),
-    hb_store:start(Store),
     Loaded =
         case hb_opts:load(Loc = hb_opts:get(hb_config_location, <<"config.flat">>)) of
             {ok, Conf} ->
@@ -38,6 +35,9 @@ start() ->
             hb_opts:default_message(),
             Loaded
         ),
+    Store = hb_opts:get(store, no_store, MergedConfig),
+    ?event(http, {start_store, Store}),
+    hb_store:start(Store),
     PrivWallet =
         hb:wallet(
             hb_opts:get(
