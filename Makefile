@@ -104,3 +104,17 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 	fi
 	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."
+
+CC_DIR = native/dev_sev_gpu
+# Set up dev_sev_gpu Python environment
+setup-cc: $(CC_DIR)
+	@echo "Setting up dev_sev_gpu Python environment..." && \
+	if ! command -v python3 > /dev/null; then \
+		echo "Error: Python 3 is not installed. Please install Python 3 before continuing."; \
+		echo "For Ubuntu/Debian, you can install it with:"; \
+		echo "  apt-get update && apt-get install -y python3 python3-pip"; \
+		exit 1; \
+	fi && \
+	echo "Installing Python dependencies..." && \
+	 pip3 install nv-attestation-sdk  && \
+	echo "Installed dev_sev_gpu Python environment successfully."
