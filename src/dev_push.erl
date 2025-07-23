@@ -747,12 +747,13 @@ push_as_identity_test_() ->
             hb_ao:resolve(Base, <<"now/results/data">>, Opts)
         ),
         % Validate that the scheduler's wallet was used to sign the message.
-        Committers =
+        Assignment =
             hb_ao:get(
-                <<"schedule/assignments/2/committers">>,
-                Base,
+                <<"schedule/assignments/2">>,
+                Msg1,
                 Opts
             ),
+        Committers = hb_ao:get(<<"committers">>, hb_cache:read_all_commitments(Assignment, Opts), Opts),
         ?assert(lists:member(SchedulingID, Committers)),
         ?assert(lists:member(ComputeID, Committers)),
         % Validate that the compute wallet was used to sign the message.
