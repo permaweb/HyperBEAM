@@ -29,7 +29,7 @@
 %%% All functions return either `{ok, Result}` on success or `{error, Reason}`
 %%% on failure. The module gracefully handles missing TPM hardware by returning
 %%% appropriate error codes rather than crashing.
--module(tpm_nif).
+-module(hb_tpm_nif).
 -export([check_tpm_support/0, read_pcr/1, get_random/1]).
 -export([create_primary_key/0, sign_data/2, read_clock/0]).
 -export([read_pcrs/1, generate_nonce/0, flush_key/1]).
@@ -56,7 +56,7 @@
 %%
 %% The loading process:
 %% 1. Determines the path to the application's priv directory
-%% 2. Constructs the full path to the tpm_nif shared library
+%% 2. Constructs the full path to the hb_tpm_nif shared library
 %% 3. Loads the library using erlang:load_nif/2
 %% 4. Replaces all NIF stub functions with their C implementations
 %%
@@ -64,7 +64,7 @@
 %% if the library cannot be found or loaded
 -spec init() -> ok.
 init() ->
-    SoName = filename:join([code:priv_dir(hb), "tpm_nif"]),
+    SoName = filename:join([code:priv_dir(hb), "hb_tpm_nif"]),
     erlang:load_nif(SoName, 0).
 
 %%% ============================================================================
@@ -313,10 +313,15 @@ sign_data(KeyHandle, Data) ->
 %% ResetCount and RestartCount are 32-bit unsigned integers, and Safe is a
 %% boolean atom (`true` or `false`), or `{error, Reason}` if the operation fails
 -spec read_clock() -> 
-    {ok, {CurrentTime :: non_neg_integer(), 
-          ResetCount :: non_neg_integer(), 
-          RestartCount :: non_neg_integer(), 
-          Safe :: boolean()}} | {error, atom()}.
+    {
+        ok, 
+        {
+            CurrentTime :: non_neg_integer(), 
+            ResetCount :: non_neg_integer(), 
+            RestartCount :: non_neg_integer(), 
+            Safe :: boolean()
+        }
+    } | {error, atom()}.
 read_clock() ->
     erlang:nif_error(not_loaded).
 
@@ -448,8 +453,8 @@ flush_key_nif(_KeyHandle) ->
 %% @doc Test TPM support detection functionality.
 %% Verifies that the support check function returns consistent boolean results.
 check_tpm_support_test() ->
-    Result1 = tpm_nif:check_tpm_support(),
-    Result2 = tpm_nif:check_tpm_support(),
+    Result1 = hb_tpm_nif:check_tpm_support(),
+    Result2 = hb_tpm_nif:check_tpm_support(),
     ?assertEqual(Result1, Result2),
     ?assert(element(1, Result1) =:= ok),
     ?assert(is_atom(element(2, Result1))).
@@ -459,7 +464,7 @@ check_tpm_support_test() ->
 %% Also tests input validation for invalid PCR indices.
 read_pcr_test() ->
     % Test valid PCR index
-    Result = tpm_nif:read_pcr(5),
+    Result = hb_tpm_nif:read_pcr(5),
     case Result of
         {ok, PCRValue} ->
             ?assert(is_binary(PCRValue)),
@@ -471,16 +476,16 @@ read_pcr_test() ->
     end,
     
     % Test input validation
-    ?assertMatch({error, {invalid_pcr_index, -1}}, tpm_nif:read_pcr(-1)),
-    ?assertMatch({error, {invalid_pcr_index, 24}}, tpm_nif:read_pcr(24)),
-    ?assertMatch({error, {invalid_pcr_index, atom}}, tpm_nif:read_pcr(atom)).
+    ?assertMatch({error, {invalid_pcr_index, -1}}, hb_tpm_nif:read_pcr(-1)),
+    ?assertMatch({error, {invalid_pcr_index, 24}}, hb_tpm_nif:read_pcr(24)),
+    ?assertMatch({error, {invalid_pcr_index, atom}}, hb_tpm_nif:read_pcr(atom)).
 
 %% @doc Test hardware random number generation with input validation.
 %% Generates 16 bytes of random data and validates format and size.
 %% Also tests input validation for invalid byte counts.
 get_random_test() ->
     % Test valid random generation
-    Result = tpm_nif:get_random(16),
+    Result = hb_tpm_nif:get_random(16),
     case Result of
         {ok, RandomBytes} ->
             ?assert(is_binary(RandomBytes)),
@@ -491,16 +496,28 @@ get_random_test() ->
             ?assert(false, "Random generation failed: " ++ atom_to_list(Reason))
     end,
     % Test input validation
-    ?assertMatch({error, {invalid_byte_count, 0}}, tpm_nif:get_random(0)),
-    ?assertMatch({error, {invalid_byte_count, -1}}, tpm_nif:get_random(-1)),
-    ?assertMatch({error, {invalid_byte_count, 65}}, tpm_nif:get_random(65)),
-    ?assertMatch({error, {invalid_byte_count, "string"}}, tpm_nif:get_random("string")).
+    ?assertMatch(
+        {error, {invalid_byte_count, 0}},
+        hb_tpm_nif:get_random(0)
+    ),
+    ?assertMatch(
+        {error, {invalid_byte_count, -1}},
+        hb_tpm_nif:get_random(-1)
+    ),
+    ?assertMatch(
+        {error, {invalid_byte_count, 65}},
+        hb_tpm_nif:get_random(65)
+    ),
+    ?assertMatch(
+        {error, {invalid_byte_count, "string"}}, 
+        hb_tpm_nif:get_random("string")
+    ).
 
 %% @doc Test primary key creation.
 %% Creates a primary key and validates the returned handle.
 %% Key cleanup is handled automatically to prevent TPM resource exhaustion.
 create_primary_key_test() ->
-    Result = tpm_nif:create_primary_key(),
+    Result = hb_tpm_nif:create_primary_key(),
     case Result of
         {ok, KeyHandle} ->
             ?assert(is_integer(KeyHandle)),
@@ -514,7 +531,7 @@ create_primary_key_test() ->
 %% @doc Test TPM clock reading.
 %% Reads clock information and validates the returned data structure.
 read_clock_test() ->
-    Result = tpm_nif:read_clock(),
+    Result = hb_tpm_nif:read_clock(),
     case Result of
         {ok, {CurrentTime, ResetCount, RestartCount, Safe}} ->
             ?assert(is_integer(CurrentTime)),
@@ -545,16 +562,37 @@ read_clock_test() ->
 %% Tests validation guards for sign_data function parameters.
 sign_data_validation_test() ->
     % Test input validation
-    ?assertMatch({error, {invalid_parameters, _}}, tpm_nif:sign_data(0, <<>>)),
-    ?assertMatch({error, {invalid_parameters, _}}, tpm_nif:sign_data(-1, <<"data">>)),
-    ?assertMatch({error, {invalid_parameters, _}}, tpm_nif:sign_data(1, <<>>)),
+    ?assertMatch(
+        {error, {invalid_parameters, _}}, 
+        hb_tpm_nif:sign_data(0, <<>>)
+    ),
+    ?assertMatch(
+        {error, {invalid_parameters, _}}, 
+        hb_tpm_nif:sign_data(-1, <<"data">>)
+    ),
+    ?assertMatch(
+        {error, {invalid_parameters, _}}, 
+        hb_tpm_nif:sign_data(1, <<>>)
+    ),
     LargeData = binary:copy(<<"x">>, 1025),
-    ?assertMatch({error, {invalid_parameters, _}}, tpm_nif:sign_data(1, LargeData)).
+    ?assertMatch(
+        {error, {invalid_parameters, _}}, 
+        hb_tpm_nif:sign_data(1, LargeData)
+    ).
 
 %% @doc Test flush key input validation.
 %% Tests validation guards for flush_key function parameters.
 flush_key_validation_test() ->
     % Test input validation
-    ?assertMatch({error, {invalid_key_handle, 0}}, tpm_nif:flush_key(0)),
-    ?assertMatch({error, {invalid_key_handle, -1}}, tpm_nif:flush_key(-1)),
-    ?assertMatch({error, {invalid_key_handle, atom}}, tpm_nif:flush_key(atom)). 
+    ?assertMatch(
+        {error, {invalid_key_handle, 0}}, 
+        hb_tpm_nif:flush_key(0)
+    ),
+    ?assertMatch(
+        {error, {invalid_key_handle, -1}}, 
+        hb_tpm_nif:flush_key(-1)
+    ),
+    ?assertMatch(
+        {error, {invalid_key_handle, atom}}, 
+        hb_tpm_nif:flush_key(atom)
+    ). 
