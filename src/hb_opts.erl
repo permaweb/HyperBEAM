@@ -93,6 +93,7 @@ default_message() ->
 			#{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
+            #{<<"name">> => <<"workflow@1.0">>, <<"module">> => dev_workflow},
             #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
         ],
         %% Default execution cache control options
