@@ -67,7 +67,7 @@ start(Opts = #{ <<"name">> := DataDir }) ->
     persistent_term:put(StoreKey, {Env, DataDir}),
     {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
 start(_) ->
-    {error, {badarg, <<"StoreOpts must be a map">>}}.
+    {error, {badarg, <<"StoreOpts must be a map with a name">>}}.
 
 %% @doc Determine whether a key represents a simple value or composite group.
 %%

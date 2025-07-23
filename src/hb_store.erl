@@ -125,8 +125,9 @@ do_find(StoreOpts = #{ <<"store-module">> := Mod }) ->
 
 %% @doc Create a new instance of a store and return its term.
 spawn_instance(StoreOpts = #{ <<"store-module">> := Mod }) ->
+    NodeStoreOpts = maybe_use_config_name(StoreOpts, Mod),
     Name = maps:get(<<"name">>, StoreOpts, Mod),
-    try Mod:start(StoreOpts) of
+    try Mod:start(NodeStoreOpts) of
         ok -> ok;
         {ok, InstanceMessage} ->
             set(Mod, Name, InstanceMessage),
@@ -356,6 +357,22 @@ call_all([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
             ok
     end,
     call_all(Rest, Function, Args).
+
+maybe_use_config_name(StoreOpts, Mod) ->
+    case maps:find(<<"name">>, StoreOpts) of
+        {ok, _Name} ->
+            StoreOpts;
+        error ->
+            NodeOptsStores = hb_opts:get(store, #{}),
+            MatchingStores = [maps:get(<<"name">>, S, Mod) || S <- NodeOptsStores,
+                is_map(S) andalso maps:find(<<"store-module">>, S) =:= {ok, Mod}],
+            case lists:uniq(MatchingStores) of
+                [Name] ->
+                    StoreOpts#{<<"name">> => Name};
+                [] ->
+                    StoreOpts % No name found, return as is.
+            end
+    end.
 
 %%% Test helpers
 
