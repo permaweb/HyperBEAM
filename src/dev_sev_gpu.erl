@@ -1,24 +1,36 @@
 %%% @doc NVIDIA GPU TEE Attestation Device
-%%%
 %%% This device provides GPU attestation token generation and verification
 %%% using NVIDIA GPU TEE (Trusted Execution Environment) technology.
 -module(dev_sev_gpu).
 -export([info/1, generate/3, verify/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
--hb_debug(print).
 %% Python script timeout (milliseconds)
 -define(PYTHON_TIMEOUT, 30000).
 
 %% Test constants
 -define(TEST_MOCK_NONCE, <<"da4a06c3604a5fac8aa0b4aaf5a6354cdd0dc7c193299bc3464f30b5cbfb931a">>).
 
-%% @doc Exported function for getting device info, controls which functions are
-%% exposed via the device API.
+%%--------------------------------------------------------------------
+%% API
+%%--------------------------------------------------------------------
+
+%% @doc Exported function for getting device info.
+%% Controls which functions are exposed via the device API.
+%%
+%% @param _ Ignored parameter.
+%% @returns Map of exported functions.
 info(_) -> 
     #{ exports => [info, generate, verify] }.
 
-%% @doc HTTP info response providing information about this device
+%% @doc HTTP info response providing information about this device.
+%% Returns metadata about the NVIDIA GPU TEE Attestation Device, including
+%% version and available API methods.
+%%
+%% @param _Msg1 Ignored.
+%% @param _Msg2 Ignored.
+%% @param _Opts Ignored.
+%% @returns {ok, InfoBody} with device metadata.
 info(_Msg1, _Msg2, _Opts) ->
     InfoBody = #{
         <<"description">> => <<"NVIDIA GPU TEE Attestation Device">>,
@@ -37,7 +49,16 @@ info(_Msg1, _Msg2, _Opts) ->
     },
     {ok, InfoBody}.
 
+%%--------------------------------------------------------------------
+%% NV Token Generation
+%%--------------------------------------------------------------------
+
 %% @doc Generate an NVIDIA GPU TEE attestation token.
+%%
+%% @param _M1 Ignored.
+%% @param M2 Map containing request parameters (may include nonce).
+%% @param Opts Options map.
+%% @returns {ok, TokenJSON} on success, {error, Reason} on failure.
 -spec generate(map(), map(), map()) -> {ok, binary()} | {error, term()}.
 generate(_M1, M2, Opts) ->
     maybe
@@ -58,7 +79,16 @@ generate(_M1, M2, Opts) ->
         Error -> {error, Error}
     end.
 
+%%--------------------------------------------------------------------
+%% NV Token Verification
+%%--------------------------------------------------------------------
+
 %% @doc Verify an NVIDIA GPU TEE attestation token.
+%%
+%% @param _M1 Ignored.
+%% @param M2 Map containing the token and nonce.
+%% @param NodeOpts Options map.
+%% @returns {ok, <<"true">>} if valid, {ok, <<"false">>} if invalid, or {error, Reason}.
 -spec verify(map(), map(), map()) -> {ok, binary()} | {error, term()}.
 verify(_M1, M2, NodeOpts) ->
     maybe
@@ -79,7 +109,13 @@ verify(_M1, M2, NodeOpts) ->
         {error, Reason} -> {error, Reason}
     end.
 
+%%--------------------------------------------------------------------
+%% Python Environment Helpers
+%%--------------------------------------------------------------------
+
 %% @doc Ensure Python environment and dependencies are ready.
+%%
+%% @returns {ok, true} if ready, {error, Reason} otherwise.
 -spec ensure_python_environment() -> {ok, true} | {error, term()}.
 ensure_python_environment() ->
     case get(python_env_checked) of
@@ -96,6 +132,7 @@ ensure_python_environment() ->
     end.
 
 %% @doc Check if Python environment and dependencies are available.
+%% @returns true if available, false otherwise.
 -spec check_python_environment() -> boolean().
 check_python_environment() ->
     TestCmd = "python3 -c \"import nv_attestation_sdk; print('OK')\"",
@@ -104,7 +141,15 @@ check_python_environment() ->
         _ -> false
     end.
 
+%%--------------------------------------------------------------------
+%% NV Token Extraction and Verification
+%%--------------------------------------------------------------------
+
 %% @doc Extract the token from the message.
+%%
+%% @param M2 Message map.
+%% @param NodeOpts Options map.
+%% @returns {ok, Token} or {error, Reason}.
 -spec extract_token_from_message(map(), map()) -> {ok, binary()} | {error, term()}.
 extract_token_from_message(M2, NodeOpts) ->
     try
@@ -115,6 +160,10 @@ extract_token_from_message(M2, NodeOpts) ->
     end.
 
 %% @doc Verify the GPU attestation token against policy.
+%%
+%% @param TokenJSON The attestation token (JSON).
+%% @param Nonce The nonce used for verification.
+%% @returns {ok, true} if valid, {ok, false} if invalid, or {error, Reason}.
 -spec verify_token(binary(), binary()) -> {ok, boolean()} | {error, term()}.
 verify_token(TokenJSON, Nonce) ->
     case call_python_attestation(verify, #{
@@ -139,7 +188,15 @@ verify_token(TokenJSON, Nonce) ->
             {error, Error}
     end.
 
+%%--------------------------------------------------------------------
+%% Python Script Invocation
+%%--------------------------------------------------------------------
+
 %% @doc Call Python attestation script via Port.
+%%
+%% @param Action Atom, either 'generate' or 'verify'.
+%% @param Data Map of data to send to Python.
+%% @returns {ok, Result} or {error, Reason}.
 -spec call_python_attestation(atom(), map()) -> {ok, binary()} | {error, term()}.
 call_python_attestation(Action, Data) ->
     try
@@ -192,7 +249,13 @@ call_python_attestation(Action, Data) ->
             {error, {python_call_failed, Reason}}
     end.
 
+%%--------------------------------------------------------------------
+%% Python Script Path Helpers
+%%--------------------------------------------------------------------
+
 %% @doc Get the path to the Python attestation script directory.
+%%
+%% @returns String path to the script directory.
 -spec get_python_script_dir() -> string().
 get_python_script_dir() ->
     case find_project_root() of
@@ -227,7 +290,9 @@ find_project_root(CurrentDir, MaxDepth) ->
             find_project_root(ParentDir, MaxDepth - 1)
     end.
 
-%% Unit tests
+%%--------------------------------------------------------------------
+%% Unit Tests
+%%--------------------------------------------------------------------
 
 %% @doc Test token generation with valid configuration.
 generate_test() ->
