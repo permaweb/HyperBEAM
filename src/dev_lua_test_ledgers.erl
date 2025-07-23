@@ -627,18 +627,24 @@ single_subledger_to_subledger() ->
     ?event(debug, {root_ledger, RootLedger}),
     ?event(debug, {sl1, SubLedger1}),
     ?event(debug, {sl2, SubLedger2}),
+    % 1. Alice starts with 100 tokens on root ledger.
     ?assertEqual(100, balance(RootLedger, Alice, Opts)),
-    % 2. Alice sends 90 tokens to herself on SubLedger1.
+    ?assertEqual(0, balance(SubLedger1, Alice, Opts)),
+    ?assertEqual(0, balance(SubLedger2, Alice, Opts)),
+
+    % 2. Alice sends 90 tokens to herself on SubLedger1 from the root ledger.
     ?event(debug, {transfer_1}),
     transfer(RootLedger, Alice, Alice, 90, SubLedger1, Opts),
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(90, balance(SubLedger1, Alice, Opts)),
+    ?assertEqual(0, balance(SubLedger2, Alice, Opts)),
     ?event(debug, {transfer_2}),
+
+    % 3. Alice sends 80 tokens to herself on SubLedger2 from SubLedger1.
     PushRes = transfer(SubLedger1, Alice, Alice, 80, SubLedger2, Opts),
-    ?event(debug, {push_res, PushRes}),
-    ?event(debug, {map, map([RootLedger, SubLedger1, SubLedger2], Opts)}),
-    ?assertEqual(80, balance(SubLedger2, Alice, Opts)),
-    ?assertEqual(10, balance(SubLedger1, Alice, Opts)).
+    ?assertEqual(10, balance(RootLedger, Alice, Opts)),
+    ?assertEqual(10, balance(SubLedger1, Alice, Opts)),
+    ?assertEqual(80, balance(SubLedger2, Alice, Opts)).
 
 %% @doc Verify that registered sub-ledgers are able to send tokens to each other
 %% without the need for messages on the root ledger.

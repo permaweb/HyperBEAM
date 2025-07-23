@@ -96,7 +96,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
     ),
     ?event(push, {push_computing_outbox, {process_id, ID}, {slot, Slot}}),
     {Status, Result} = hb_ao:resolve(
-        {as, <<"process@1.0">>, PrimaryProcess},
+        {as, <<"process@1.0">>, hb_message:normalize_commitments(PrimaryProcess, Opts)},
         #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
         Opts#{ hashpath => ignore }
     ),
