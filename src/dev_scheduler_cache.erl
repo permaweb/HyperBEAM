@@ -54,7 +54,6 @@ read(ProcID, Slot, Opts) ->
                 Slot
             ])
         ),
-    ?event(transfer_test, {resolved_path, {p1, P1}, {p2, P2}, {resolved, ResolvedPath}}),
     case hb_cache:read(ResolvedPath, Opts) of
         {ok, Assignment} ->
             % If the slot key is not present, the format of the assignment is

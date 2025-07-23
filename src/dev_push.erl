@@ -744,7 +744,7 @@ push_as_identity_test_() ->
         ?event({test_setup, {msg1, Msg1}, {sched_init, SchedInit}}),
         Script = ping_pong_script(2),
         ?event({script, Script}),
-        {ok, Msg2} = dev_process:schedule_aos_call(Msg1, Script),
+        {ok, Msg2} = dev_process:schedule_aos_call(Msg1, Script, Opts),
         ?event(push, {msg_sched_result, Msg2}),
         {ok, StartingMsgSlot} =
             hb_ao:resolve(Msg2, #{ <<"path">> => <<"slot">> }, Opts),
@@ -760,12 +760,13 @@ push_as_identity_test_() ->
             hb_ao:resolve(Msg1, <<"now/results/data">>, Opts)
         ),
         % Validate that the scheduler's wallet was used to sign the message.
-        Committers =
+        Assignment =
             hb_ao:get(
-                <<"schedule/assignments/2/committers">>,
+                <<"schedule/assignments/2">>,
                 Msg1,
                 Opts
             ),
+        Committers = hb_ao:get(<<"committers">>, hb_cache:read_all_commitments(Assignment, Opts), Opts),
         ?assert(lists:member(SchedulingID, Committers)),
         ?assert(lists:member(ComputeID, Committers)),
         % Validate that the compute wallet was used to sign the message.
