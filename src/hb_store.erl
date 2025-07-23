@@ -365,12 +365,12 @@ maybe_use_config_name(StoreOpts, Mod) ->
         error ->
             NodeOptsStores = hb_opts:get(store, #{}),
             MatchingStores = [maps:get(<<"name">>, S, Mod) || S <- NodeOptsStores,
-                is_map(S) andalso maps:find(<<"store-module">>, S) =:= {ok, Mod}],
+                maps:find(<<"store-module">>, S) =:= {ok, Mod}],
             case lists:uniq(MatchingStores) of
                 [Name] ->
                     StoreOpts#{<<"name">> => Name};
                 [] ->
-                    StoreOpts % No name found, return as is.
+                    StoreOpts
             end
     end.
 
