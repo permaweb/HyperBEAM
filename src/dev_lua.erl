@@ -225,10 +225,12 @@ sandbox(State, [Path | Rest], Opts) ->
 %% @doc Call the Lua script with the given arguments.
 compute(Key, RawBase, Req, Opts) ->
     ?event(debug_lua, compute_called),
-    ?event(transfer_test, { req, Req }),
-    LoadedReq = hb_message:normalize_commitments(hb_cache:ensure_all_loaded(Req, Opts), Opts),
+    LoadedReq = 
+        hb_cache:read_all_commitments(
+            hb_cache:ensure_all_loaded(Req, Opts),
+            Opts
+        ),
     {ok, Base} = ensure_initialized(RawBase, LoadedReq, Opts),
-    ?event(transfer_test, { loaded_req, LoadedReq }),
     ?event(debug_lua, ensure_initialized_done),
     % Get the state from the base message's private element.
     OldPriv = #{ <<"state">> := State } = hb_private:from_message(Base),
@@ -255,7 +257,7 @@ compute(Key, RawBase, Req, Opts) ->
             ],
             [
                 hb_private:reset(Base),
-                Req,
+                LoadedReq,
                 #{}
             ],
             Opts#{ hashpath => ignore }
@@ -269,7 +271,7 @@ compute(Key, RawBase, Req, Opts) ->
         {calling_lua_func,
             {function, Function},
             {args, ResolvedParams},
-            {req, Req}
+            {req, LoadedReq}
         }
     ),
     ?event(transfer_test, {function, Function}),
