@@ -79,13 +79,14 @@ do_push(PrimaryProcess, Assignment, Opts) ->
     ?event(transfer_test, {push_slot, Slot}),
     ID = dev_process:process_id(PrimaryProcess, #{}, Opts),
     ?event(transfer_test, {push_id, ID}),
+    NormalizedPrimaryProcess =
+        hb_message:normalize_commitments(PrimaryProcess, Opts),
     UncommittedID =
         dev_process:process_id(
             PrimaryProcess,
             #{ <<"commitments">> => <<"none">> },
             Opts
         ),
-    ?event(transfer_test, {{push_uncommitted_id, UncommittedID}, {assignment, hb_cache:ensure_all_loaded(Assignment, Opts)}}),
     BaseID = calculate_base_id(PrimaryProcess, Opts),
     ?event(transfer_test,
         {push_computing_outbox,
@@ -96,7 +97,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
     ),
     ?event(push, {push_computing_outbox, {process_id, ID}, {slot, Slot}}),
     {Status, Result} = hb_ao:resolve(
-        {as, <<"process@1.0">>, hb_message:normalize_commitments(PrimaryProcess, Opts)},
+        {as, <<"process@1.0">>, PrimaryProcess},
         #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
         Opts#{ hashpath => ignore }
     ),
@@ -113,7 +114,6 @@ do_push(PrimaryProcess, Assignment, Opts) ->
         {push_computed,
             {status, Status},
             {assignment, Assignment},
-            {request, hb_maps:get(<<"body">>, Assignment, Assignment)},
             {result,
                 if is_list(Result) ->
                     hb_ao:normalize_keys(Result);

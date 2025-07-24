@@ -306,6 +306,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     % Unset the previous results.
     UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
     Res = run_as(<<"execution">>, UnsetResults, InputMsg, Opts),
+    % hb_message:normalize_commitments(hb_cache:read_all_commitments(InputMsg, Opts), Opts), Opts),
     case Res of
         {ok, NewProcStateMsg} ->
             % We have now transformed slot n -> n + 1. Increment the current slot.
@@ -589,7 +590,9 @@ run_as(Key, Msg1, Msg2, Opts) ->
     ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
     PreparedMsg =
         hb_util:deep_merge(
-            ensure_process_key(Msg1, Opts),
+    % POINT OF FAILURE
+            ensure_process_key(hb_message:normalize_commitments(Msg1, Opts), Opts),
+            % ensure_process_key(Msg1, Opts),
             #{
                 <<"device">> =>
                     DeviceSet =

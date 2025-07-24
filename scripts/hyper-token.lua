@@ -190,11 +190,11 @@ local function satisfies_list_constraints(subject, all, required, match)
     match = match or #all
     match = normalize_int(match)
 
-    ao.event({ "Satisfies list constraints", {
-        subject = subject,
-        all = all,
-        match = match
-    }})
+    -- ao.event({ "Satisfies list constraints", {
+    --     subject = subject,
+    --     all = all,
+    --     match = match
+    -- }})
 
     -- Check that the subject satisfies the grammar's constraints.
     -- 1. The subject must have at least `match' elements in common with `all'.
@@ -202,14 +202,14 @@ local function satisfies_list_constraints(subject, all, required, match)
     local count = count_common(subject, all)
     local required_count = count_common(required, subject)
 
-    ao.event({ "Counts", {
-        subject = subject,
-        all = all,
-        required = required,
-        match = match,
-        count = count,
-        required_count = required_count
-    }})
+    -- ao.event({ "Counts", {
+    --     subject = subject,
+    --     all = all,
+    --     required = required,
+    --     match = match,
+    --     count = count,
+    --     required_count = required_count
+    -- }})
 
     return (count >= match) and (required_count == #required)
 end
@@ -239,33 +239,22 @@ local function satisfies_constraints(message, assess, all, required, match)
         end
     end
 
-    ao.event({ "checking122", {
-        message = message
-    }})
-    committers = ao.get("committers", message)
-    ao.event({ "checking123", {
-        message = message,
-        committers = committers,
-        all = all,
-        required = required,
-        match = match
-    }})
     -- If the assessment message is not present, check the signatures against
     -- the requirements list and specifiers.
     local satisfies_auth = satisfies_list_constraints(
-        committers,
+        ao.get("committers", message),
         all,
         required,
         match
     )
 
-    ao.event({ "Constraint satisfaction results", {
-        result = satisfies_auth,
-        message = message,
-        all_admissible = all,
-        required = required,
-        required_count = match
-    }})
+    -- ao.event({ "Constraint satisfaction results", {
+    --     result = satisfies_auth,
+    --     message = message,
+    --     all_admissible = all,
+    --     required = required,
+    --     required_count = match
+    -- }})
 
     return satisfies_auth
 end
@@ -287,10 +276,6 @@ end
 -- process, or by checking the signature against the process's own scheduler
 -- address and those it explicitly trusts.
 local function is_trusted_assignment(base, assignment)
-    ao.event({ "is_trusted_assignment", {
-        base = base,
-        assignment = assignment
-    }})
     return satisfies_constraints(
         assignment,
         (base.assess or {})["scheduler"],
@@ -309,7 +294,7 @@ end
 -- be from our own root ledger, or from a sub-ledger that is precisely the same
 -- as our own.
 local function validate_new_peer_ledger(base, request)
-    ao.event({ "Validating peer ledger: ", { request = request } })
+    ao.event({ "Validating peer ledger: ", { request = request, base = base } })
 
     -- Check if the request is from the root ledger.
     if is_root(base) or (base.token == request.from) then
@@ -323,7 +308,7 @@ local function validate_new_peer_ledger(base, request)
     -- modified to remove the `authority' and `scheduler' fields.
     -- This ensures that the process we are receiving the `credit-notice` from
     -- has the same structure as our own process.
-    ao.event({ "Calculating expected `base` from self", { base = base } })
+    ao.event({ "Calculating expected `base` from self" })
     local status, proc, expected
     status, proc = ao.resolve({"as", "message@1.0", base}, "process")
     -- Reset the `authority' and `scheduler' fields to nil, to ensure that the
@@ -335,12 +320,10 @@ local function validate_new_peer_ledger(base, request)
             proc,
             { path = "id", commitments = "none" }
         )
-    ao.event({ "Expected `from-base`", { status = status, expected = expected } })
+    -- ao.event("debug_base", { "Expected `from-base`", { status = status, expected = expected, proc = proc } })
     -- Check if the `from-base' field is present in the assignment.
     if not request["from-base"] then
-        ao.event({ "`from-base` field not found in message", {
-            request = request
-        }})
+        ao.event({ "`from-base` field not found in message" })
         return false
     end
 
@@ -351,8 +334,8 @@ local function validate_new_peer_ledger(base, request)
         ao.event("debug_base", { "Peer registration messages do not match", {
             expected_base = expected,
             received_base = request["from-base"],
-            process = proc,
-            request = request
+            -- process = proc,
+            -- request = request
         }})
         return false
     end
@@ -489,10 +472,10 @@ function validate_request(incoming_base, assignment)
         })
     end
 
-    ao.event({ "ensure_initialized", {
-        status = status,
-        base = base
-    }})
+    -- ao.event({ "ensure_initialized", {
+    --     status = status,
+    --     base = base
+    -- }})
     -- First, ensure that the message has not already been processed.
     ao.event("Deduplicating message.", {
         ["history-length"] = #(base.dedup or {})
@@ -523,13 +506,9 @@ function validate_request(incoming_base, assignment)
         })
     end
 
-    ao.event({ "check trusted", {
-        assignment = assignment,
-        base = base
-    }})
     -- Next, ensure that the assignment is trusted.
     local trusted, details = is_trusted_assignment(base, assignment)
-    ao.event({ "Trusted test", {
+    ao.event({ "Trusted assignment?", {
         trusted = trusted,
         details = details
     }})
@@ -625,7 +604,8 @@ local function debit_balance(base, request)
     if type(source_balance) ~= "number" then
         return "error", log_result(base, "error", {
             message = "Source balance is not a number.",
-            balance = source_balance
+            balance = source_balance,
+            type = type(source_balance)
         })
     end
 
@@ -778,7 +758,7 @@ end
 
 -- Process credit notices from other ledgers.
 _G["credit-notice"] = function (base, assignment)
-    ao.event({ "Credit-Notice received", { assignment = assignment } })
+    ao.event({ "Credit-Notice received" })
 
     -- Verify the security of the request.
     local status, request
