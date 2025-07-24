@@ -94,13 +94,13 @@ verify(_M1, M2, NodeOpts) ->
     maybe
         % Ensure Python environment is ready
         {ok, _} ?= ensure_python_environment(),
-        ?event(dev_sev_gpu, {verify, M2}),
-        {ok, TokenJSON} ?= extract_token_from_message(M2, NodeOpts),
+        TokenJSON = try maps:get(<<"body">>, M2) catch error:_ -> error(missing_token) end,
         % Extract nonce for verification
         Nonce = hb_ao:get(<<"nonce">>, M2, ?TEST_MOCK_NONCE, NodeOpts),
         ?event(dev_sev_gpu, {verify_token, TokenJSON, Nonce}),
         % Verify the GPU attestation token
         {ok, TokenResult} ?= verify_token(TokenJSON , Nonce),
+        ?event(dev_sev_gpu, {verify_TokenResult, TokenResult}),
         case TokenResult of
             true -> {ok, <<"true">>};
             false -> {ok, <<"false">>}
@@ -122,48 +122,16 @@ ensure_python_environment() ->
         true ->
             {ok, true};
         _ ->
-            case check_python_environment() of
-                true ->
+            TestCmd = "python3 -c \"import nv_attestation_sdk; print('OK')\"",
+            case os:cmd(TestCmd) of
+                "OK\n" ->
                     put(python_env_checked, true),
                     {ok, true};
-                false ->
+                _ ->
                     {error, python_env_not_available}
             end
     end.
 
-%% @doc Check if Python environment and dependencies are available.
-%% @returns true if available, false otherwise.
--spec check_python_environment() -> boolean().
-check_python_environment() ->
-    TestCmd = "python3 -c \"import nv_attestation_sdk; print('OK')\"",
-    case os:cmd(TestCmd) of
-        "OK\n" -> true;
-        _ -> false
-    end.
-
-%%--------------------------------------------------------------------
-%% NV Token Extraction and Verification
-%%--------------------------------------------------------------------
-
-%% @doc Extract the token from the message.
-%%
-%% @param M2 Message map.
-%% @param NodeOpts Options map.
-%% @returns {ok, Token} or {error, Reason}.
--spec extract_token_from_message(map(), map()) -> {ok, binary()} | {error, term()}.
-extract_token_from_message(M2, NodeOpts) ->
-    try
-        RawMsg = hb_ao:get(<<"body">>, M2, NodeOpts#{ hashpath => ignore }),
-        {ok, RawMsg}
-    catch
-        _Type:Reason -> {error, {extract_failed, Reason}}
-    end.
-
-%% @doc Verify the GPU attestation token against policy.
-%%
-%% @param TokenJSON The attestation token (JSON).
-%% @param Nonce The nonce used for verification.
-%% @returns {ok, true} if valid, {ok, false} if invalid, or {error, Reason}.
 -spec verify_token(binary(), binary()) -> {ok, boolean()} | {error, term()}.
 verify_token(TokenJSON, Nonce) ->
     case call_python_attestation(verify, #{
@@ -175,10 +143,8 @@ verify_token(TokenJSON, Nonce) ->
     }) of
         {ok, VerifyResult} ->
             case hb_json:decode(VerifyResult) of
-                #{<<"valid">> := true} ->
-                    {ok, true};
-                #{<<"valid">> := false} ->
-                    {ok, false};
+                #{<<"valid">> := Valid} when is_boolean(Valid) ->
+                    {ok, Valid};
                 _ ->
                     ?event(dev_sev_gpu, {invalid_verify_result, VerifyResult}),
                     {error, invalid_verify_result}
@@ -205,16 +171,16 @@ call_python_attestation(Action, Data) ->
             <<"data">> => Data
         },
         RequestJSON = hb_json:encode(Request),
-        ScriptPath = get_python_script_path(),
-        ScriptDir = get_python_script_dir(),
-        
+        % get cur path
+        {ok, CurrentDirectory} = file:get_cwd(),
+        ScriptDir =  filename:join([CurrentDirectory, "native", "dev_sev_gpu"]),
         % Create temporary file for JSON data
         TempFile = filename:join(ScriptDir, "dev_sev_gpu_" ++ integer_to_list(erlang:system_time()) ++ ".json"),
         ok = file:write_file(TempFile, RequestJSON),
         
         % Use shell command with temp file
         ShellCmd = lists:flatten(io_lib:format("cat ~s |  python3 ~s && rm ~s", 
-            [TempFile, ScriptPath, TempFile])),
+            [TempFile, filename:join(ScriptDir, "main.py"), TempFile])),
         
         Port = open_port({spawn, ShellCmd}, 
             [binary, use_stdio, stderr_to_stdout, {cd, ScriptDir}]),
@@ -249,46 +215,6 @@ call_python_attestation(Action, Data) ->
             {error, {python_call_failed, Reason}}
     end.
 
-%%--------------------------------------------------------------------
-%% Python Script Path Helpers
-%%--------------------------------------------------------------------
-
-%% @doc Get the path to the Python attestation script directory.
-%%
-%% @returns String path to the script directory.
--spec get_python_script_dir() -> string().
-get_python_script_dir() ->
-    case find_project_root() of
-        {ok, ProjectRoot} ->
-            filename:join([ProjectRoot, "native", "dev_sev_gpu"]);
-        {error, _} ->
-            % Final fallback to relative path
-            filename:join(["..", "native", "dev_sev_gpu"])
-    end.
-
-%% @doc Get the path to the Python attestation script.
--spec get_python_script_path() -> string().
-get_python_script_path() ->
-    filename:join([get_python_script_dir(), "main.py"]).
-
-%% @doc Find the project root directory by looking for rebar.config.
--spec find_project_root() -> {ok, string()} | {error, not_found}.
-find_project_root() ->
-    find_project_root(".", 5).
-
-%% @doc Find project root by walking up directories looking for rebar.config.
--spec find_project_root(string(), non_neg_integer()) -> {ok, string()} | {error, not_found}.
-find_project_root(_CurrentDir, 0) ->
-    {error, not_found};
-find_project_root(CurrentDir, MaxDepth) ->
-    RebarConfig = filename:join(CurrentDir, "rebar.config"),
-    case filelib:is_file(RebarConfig) of
-        true ->
-            {ok, filename:absname(CurrentDir)};
-        false ->
-            ParentDir = filename:join(CurrentDir, ".."),
-            find_project_root(ParentDir, MaxDepth - 1)
-    end.
 
 %%--------------------------------------------------------------------
 %% Unit Tests
