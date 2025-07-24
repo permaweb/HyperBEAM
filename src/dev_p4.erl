@@ -439,6 +439,12 @@ hyper_token_ledger() ->
             },
             <<"ledger-path">> => <<"/ledger~node-process@1.0">>
         },
+    StoreOpts = [
+        #{
+            <<"name">> => <<"cache-mainnet/lmdb">>,
+            <<"store-module">> => hb_store_lmdb
+        }
+    ],
     % Start the node with the processor and the `local-process' ledger 
     % (component 2) running the `hyper-token.lua' and `hyper-token-p4.lua'
     % scripts. `hyper-token.lua' implements the core token ledger, while
@@ -447,8 +453,8 @@ hyper_token_ledger() ->
     % with 100 tokens for Alice.
     Node =
         hb_http_server:start_node(
-            #{
-                store => [hb_test_utils:test_store()],
+            Opts = #{
+                store => StoreOpts,
                 priv_wallet => HostWallet,
                 p4_non_chargable_routes =>
                     [
@@ -492,11 +498,11 @@ hyper_token_ledger() ->
         <<"path">> => <<"/greeting">>,
         <<"greeting">> => <<"Hello, world!">>
     },
-    SignedReq = hb_message:commit(Req, #{ priv_wallet => BobWallet }),
-    Res = hb_http:get(Node, SignedReq, #{}),
+    SignedReq = hb_message:commit(Req, Opts#{ priv_wallet => BobWallet }),
+    Res = hb_http:get(Node, SignedReq, Opts),
     ?event({expected_failure, Res}),
     ?assertMatch({error, _}, Res),
-    % We then move 50 tokens from Alice to Bob.
+    % We then move 50 tokens from Alice to Bob,
     {ok, TopupRes} =
         hb_http:post(
             Node,
@@ -510,16 +516,16 @@ hyper_token_ledger() ->
                                 <<"quantity">> => 50,
                                 <<"recipient">> => BobAddress
                             },
-                            #{ priv_wallet => AliceWallet }
+                            #{ priv_wallet => AliceWallet, store => StoreOpts }
                         )
                 },
-                #{ priv_wallet => HostWallet }
+                Opts#{ priv_wallet => HostWallet, store => StoreOpts }
             ),
-            #{}
+            Opts#{ store => StoreOpts }
         ),
     % We now attempt Bob's request again, which should succeed.
     ?event({topup_res, TopupRes}),
-    ResAfterTopup = hb_http:get(Node, SignedReq, #{}),
+    ResAfterTopup = hb_http:get(Node, SignedReq, Opts#{ store => StoreOpts }),
     ?event({res_after_topup, ResAfterTopup}),
     ?assertMatch({ok, <<"Hello, world!">>}, ResAfterTopup),
     % We now check the balance of Bob. It should have been charged 2 tokens from
@@ -528,10 +534,13 @@ hyper_token_ledger() ->
         hb_http:get(
             Node,
             <<"/ledger~node-process@1.0/now/balance">>,
-            #{}
+            Opts#{ store => StoreOpts }
         ),
     ?event(debug_charge, {balances, Balances}),
-    ?assertMatch(48, hb_ao:get(BobAddress, Balances, #{})),
+    BobBalance = hb_ao:get(BobAddress, Balances, Opts),
+    BobMatchTo = hb_util:float(48),
+    ?assertMatch(BobMatchTo, BobBalance),
     % Finally, we check the balance of the operator. It should be 2 tokens,
     % the amount that was charged from Alice.
-    ?assertMatch(2, hb_ao:get(OperatorAddress, Balances, #{})).
+    OperatorBalance = hb_ao:get(OperatorAddress, Balances, Opts),
+    ?assertMatch(2, OperatorBalance).

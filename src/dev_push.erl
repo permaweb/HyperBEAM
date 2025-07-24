@@ -79,13 +79,14 @@ do_push(PrimaryProcess, Assignment, Opts) ->
     ?event(transfer_test, {push_slot, Slot}),
     ID = dev_process:process_id(PrimaryProcess, #{}, Opts),
     ?event(transfer_test, {push_id, ID}),
+    NormalizedPrimaryProcess =
+        hb_message:normalize_commitments(PrimaryProcess, Opts),
     UncommittedID =
         dev_process:process_id(
             PrimaryProcess,
             #{ <<"commitments">> => <<"none">> },
             Opts
         ),
-    ?event(transfer_test, {{push_uncommitted_id, UncommittedID}, {assignment, hb_cache:ensure_all_loaded(Assignment, Opts)}}),
     BaseID = calculate_base_id(PrimaryProcess, Opts),
     ?event(transfer_test,
         {push_computing_outbox,
