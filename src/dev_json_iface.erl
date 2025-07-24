@@ -106,7 +106,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         ),
     TABM = hb_tx:normalize_data_field(DeNormTABM),
     MsgWithoutCommitments = hb_maps:without([<<"commitments">>], TABM, Opts),
-    ID = hb_message:id(RawMsg, all),
+    ID = hb_message:id(RawMsg, all, Opts),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
     Last = hb_ao:get(<<"anchor">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
 	Owner =

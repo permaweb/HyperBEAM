@@ -1843,7 +1843,7 @@ register_scheduler_test() ->
     {ok, Res} = hb_http:post(Node, Msg1, #{}),
     ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res).
 
-http_post_schedule_sign(Node, Msg, ProcessMsg, Wallet) ->
+http_post_schedule_sign(Node, Msg, ProcessMsg, Opts) ->
     Msg1 = hb_message:commit(#{
         <<"path">> => <<"/~scheduler@1.0/schedule">>,
         <<"method">> => <<"POST">>,
@@ -1854,10 +1854,10 @@ http_post_schedule_sign(Node, Msg, ProcessMsg, Wallet) ->
                         hb_util:human_id(hb_message:id(ProcessMsg, all)),
                     <<"type">> => <<"Message">>
                 },
-                Wallet
+                Opts
             )
-    }, Wallet),
-    hb_http:post(Node, Msg1, #{}).
+    }, Opts),
+    hb_http:post(Node, Msg1, Opts).
 
 http_get_slot(N, PMsg) ->
     ID = hb_message:id(PMsg, all),
@@ -2088,9 +2088,11 @@ http_get_json_schedule_test_() ->
 			fun(_) -> {ok, _} = hb_http:post(Node, Msg2, Opts) end,
 			lists:seq(1, 10)
 		),
-		?assertMatch({ok, #{ <<"current">> := 10 }}, http_get_slot(Node, PMsg)),
+        ProcessSlot = http_get_slot(Node, PMsg),
+        ?event({process_slot, ProcessSlot}),
+		?assertMatch({ok, #{ <<"current">> := 10 }}, ProcessSlot),
 		{ok, Schedule} = http_get_schedule(Node, PMsg, 0, 10, <<"application/aos-2">>),
-		?event({schedule, Schedule}),
+		?event({full_schedule, Schedule}),
 		JSON = hb_ao:get(<<"body">>, Schedule, Opts),
 		Assignments = hb_json:decode(JSON),
 		?assertEqual(
