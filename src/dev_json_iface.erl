@@ -105,7 +105,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             Opts
         ),
     MsgWithoutCommitments = hb_maps:without([<<"commitments">>], TABM, Opts),
-    ID = hb_message:id(RawMsg, all),
+    ID = hb_message:id(RawMsg, all, Opts),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
 	{Owner, Signature, PublicKey} =
         case hb_message:signers(RawMsg, Opts) of
