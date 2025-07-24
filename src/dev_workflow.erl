@@ -1,5 +1,5 @@
 -module(dev_workflow).
--export([info/1, info/3, echo/3, create/3, prepare/3, run/3]).
+-export([info/1, info/3, echo/3, create/3, prepare_start/3, prepare_next/3, run/3]).
 % -define(STORE_OPTS, #{~"store-module" => hb_store_lmdb, ~"name" => ~"cache-mainnet/lmdb"}).
 -define(STORE_OPTS, #{~"store-module" => hb_store_lmdb}).
 -define(DEVICE_VSN, ~"workflow@1.0").
@@ -15,7 +15,7 @@
     commit,
     name,
     transitions,
-    wallet
+    wallet_address
 }).
 
 %% workflow step (graph vertex) is persisted separately for lazy loading
@@ -34,25 +34,25 @@
 -record(workflow_schedule, {
     id,
     device = ?DEVICE_VSN,
-    start_process,
-    start_message,
-    wallet,
-    workflow_id
+    step_process,
+    message,
+    step_id,
+    step_name,
+    wallet_address
 }).
 
 % tracking of workflow steps execution 
 -record(workflow_activity, {
     id,
     device = ?DEVICE_VSN,
-    step_process,
-    message,
     result,
-    next_process,
-    workflow_id
+    schedule_id,
+    step_name,
+    wallet_address
 }).
 
 info(_) ->
-	#{ exports => [info, echo, create, prepare, run] }.
+	#{ exports => [info, echo, create, prepare_start, prepare_next, run] }.
 
 % @doc device info endpoint
 info(_Msg1, _Msg2, _Opts) ->
@@ -63,7 +63,7 @@ info(_Msg1, _Msg2, _Opts) ->
             ~"info" => ~"Get device info",
             ~"echo" => ~"Simple echo world test",
             ~"create" => ~"Commits and saves a workflow",
-            ~"prepare" => ~"Creates initial process for workflow input",
+            ~"prepare" => ~"Schedules the process for a workflow step",
             ~"run" => ~"Runs the prepared workflow input"
         }
     },
@@ -84,32 +84,51 @@ create(_Msg1, Msg2, WalletOpts) ->
     end.
 
 %% @doc creates and commits initial process for workflow execution
-prepare(_Msg1, Msg2, WalletOpts) ->
+prepare_start(_Msg1, Msg2, WalletOpts) ->
     Wallet = maps:get(~"wallet", WalletOpts),
     maybe
         {ok, WorkflowId} ?= find_expected_field(~"workflow-id", Msg2),
         {ok, MsgBody} ?= find_expected_field(~"body", Msg2),
         {ok, Workflow} ?= load_workflow(WorkflowId, Wallet),
-        {ok, {PreparedId, Process, Schedule}} ?= prepare_run(Workflow, MsgBody),
+        {ok, {PreparedId, Process, Schedule}} ?= prepare_start_run(Workflow, MsgBody, Wallet),
         {ok, Slot} ?= hb_ao:resolve(Process, Schedule, #{ hashpath => ignore }),
         {ok, #{~"prepared-id" => PreparedId, ~"start-process" => Process, ~"schedule" => Schedule, ~"slot" => Slot}}
     end.
 
-%% @doc resolves the initial process and following ones on the workflow
+prepare_next(_Msg1, Msg2, WalletOpts) ->
+    Wallet = maps:get(~"wallet", WalletOpts),
+    maybe
+        {ok, WorkflowId} ?= find_expected_field(~"workflow-id", Msg2),
+        {ok, ActivityId} ?= find_expected_field(~"prev-activity-id", Msg2),
+        {ok, Workflow} ?= load_workflow(WorkflowId, Wallet),
+        {ok, PrevActivity} ?= load_activity(ActivityId),
+        {ok, {PreparedId, Process, Schedule}} ?= prepare_next_run(Workflow, PrevActivity, Wallet),
+        {ok, Slot} ?= hb_ao:resolve(Process, Schedule, #{ hashpath => ignore }),
+        {ok, #{~"prepared-id" => PreparedId, ~"start-process" => Process, ~"schedule" => Schedule, ~"slot" => Slot}}
+    end.
+
+%% @doc resolves the process from the prepared state to run a workflow step
 run(_Msg1, Msg2, WalletOpts) ->
     Wallet = maps:get(~"wallet", WalletOpts),
     maybe
-        {ok, WorkflowId} ?= find_expected_field(~"prepared-id", Msg2),
-        {ok, _Workflow} ?= load_workflow(WorkflowId, Wallet)
-        % {ok, WorkflowProv} = load_workflow_schedule(WorkflowId, ~"start"),
+        {ok, WorkflowId} ?= find_expected_field(~"workflow-id", Msg2),
+        {ok, PreparedId} ?= find_expected_field(~"prepared-id", Msg2),
+        {ok, _Workflow} ?= load_workflow(WorkflowId, Wallet),
+        {ok, WorkflowSchedule} ?= load_workflow_schedule(PreparedId),
+        {ok, #workflow_activity{id=ActivityId, result=Result}} ?= run_scheduled(WorkflowSchedule, Wallet),
+        {ok, #{~"activity-id" => ActivityId, ~"result" => Result}}
     end.
 
 %%
 %% Internals
 %%
+
+%
+% Commits to HyperBEAM
+% 
 commit_workflow(Wallet) ->
-    Address= hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Operator = hb_util:human_id(ar_wallet:to_address(hb:wallet())),
+    Address= wallet_address(Wallet),
+    Operator = wallet_address(hb:wallet()),
     hb_message:commit(#{
         ~"device" => ?DEVICE_VSN, 
         ~"type" => ~"Workflow", 
@@ -118,8 +137,8 @@ commit_workflow(Wallet) ->
         ~"scheduler-location" => Operator}, Wallet).
 
 commit_process(#workflow_step{execution_device = ExecDevice, action_code = StartAction}, Wallet) ->
-    Address= hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Operator = hb_util:human_id(ar_wallet:to_address(hb:wallet())),
+    Address= wallet_address(Wallet),
+    Operator = wallet_address(hb:wallet()),
     hb_message:commit(#{ 
         ~"device" => ~"process@1.0", 
         ~"type" => ~"Process", 
@@ -138,6 +157,9 @@ commit_message(MsgBody, Process, Wallet) ->
 commit_schedule(MsgCommit, Wallet) ->
     hb_message:commit(#{ path => ~"schedule", method => ~"POST", body => MsgCommit}, Wallet).
 
+%
+% Create Workflow
+%     
 validate_workflow(Msg2) ->
     maybe 
         {ok, WorkflowMap} ?= find_expected_field(~"workflow", Msg2),
@@ -155,45 +177,12 @@ create_workflow(#{<<"workflow">> := #{<<"name">> := WorkflowName, <<"steps">> :=
         name = WorkflowName,
         transitions = Transitions,
         commit = commit_workflow(Wallet),
-        wallet = Wallet
+        wallet_address = wallet_address(Wallet)
     },
     maybe
         ok ?= save(Workflow),
         ok ?= create_steps(WorkflowId, Steps),
         {ok, Workflow}
-    end.
-
-prepare_run(#workflow{id=WorkflowId, wallet=Wallet}, MsgBody) ->
-    {ok, WorkflowStep} = load_start_step(WorkflowId, ~"start"),
-    StartProcess = commit_process(WorkflowStep, Wallet),
-    MsgCommit = commit_message(MsgBody, StartProcess, Wallet),
-    ScheduleCommit = commit_schedule(MsgCommit, Wallet),
-    case create_execution(WorkflowStep, StartProcess, ScheduleCommit, Wallet) of
-        {ok, #workflow_schedule{id=PreparedId}} ->
-            {ok, {PreparedId, StartProcess, ScheduleCommit}};
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
-create_execution(#workflow_step{id=StepId, workflow_id=WorkflowId}, StartProcess, ScheduleCommit, Wallet) ->
-    Timestamp = integer_to_binary(os:system_time()),
-    ExecId = <<StepId/binary, ":", Timestamp/binary>>,
-    WorkflowProv = #workflow_schedule{
-        id = ExecId,
-        start_process = StartProcess,
-        start_message = ScheduleCommit,
-        wallet = Wallet,
-        workflow_id = WorkflowId
-    },
-    maybe
-        ok ?= save(WorkflowProv),
-        {ok, WorkflowProv}
-    end.
-
-find_expected_field(Field, Map) ->
-    maybe 
-        error ?= maps:find(Field, Map),
-        {error, <<"Missing mandatory field: ", Field/binary>>}
     end.
 
 create_steps(WorkflowId, Steps) ->
@@ -219,33 +208,6 @@ create_step(WorkflowId, StepName, #{
         workflow_id = WorkflowId
     },
     save(Step).
-
-save(#workflow{id=Id} = Workflow) -> save(~"w_", Id, Workflow);
-save(#workflow_step{id=Id} = Step) -> save(~"ws_", Id, Step);
-save(#workflow_schedule{id=Id} = Exec) -> save(~"we_", Id, Exec);
-save(#workflow_activity{id=Id} = Activity) -> save(~"wa_", Id, Activity).
-
-save(Prefix, Id, Record) when is_binary(Id), is_tuple(Record) ->
-    Key = <<Prefix/binary, Id/binary>>,
-    Value = term_to_binary(Record),
-    hb_store:write(?STORE_OPTS, Key, Value).
-
-load_workflow(WorkflowId, Wallet1) ->
-    Key = <<"w_", WorkflowId/binary>>,
-    maybe {ok, WorkflowBin} ?= hb_store:read(?STORE_OPTS, Key),
-        case binary_to_term(WorkflowBin) of
-            #workflow{wallet = Wallet2} = Workflow when Wallet1 =:= Wallet2 ->
-                {ok, Workflow};
-            #workflow{} ->
-                {error, <<"Wallet mismatch for workflow: ", WorkflowId/binary>>}
-        end
-    end.
-
-load_start_step(WorkflowId, StepName) ->
-    Key = <<"ws_", WorkflowId/binary, ":", StepName/binary>>,
-    maybe {ok, StepBin} ?= hb_store:read(?STORE_OPTS, Key),
-        {ok, binary_to_term(StepBin)}
-    end.
 
 %% Validate workflow structure
 validate_workflow(Steps, Transitions) ->
@@ -274,6 +236,135 @@ compare_visited_steps(Steps, VisitedList) ->
         {true, true} -> ok;
         _ -> {error, unreachable_steps}
     end.
+
+%
+% Prepare Workflow/Step for run
+% 
+prepare_start_run(#workflow{id=WorkflowId}, MsgBody, Wallet) ->
+    prepare_run(WorkflowId, ~"start", MsgBody, Wallet).
+
+prepare_next_run(#workflow{id=WorkflowId, transitions=Transitions}, #workflow_activity{step_name=StepName, result=PrevResult}, Wallet) ->
+    NextStepTransitions = maps:get(StepName, Transitions),
+    NextStepName = maps:get(~"true", NextStepTransitions),
+    prepare_run(WorkflowId, NextStepName, PrevResult, Wallet).
+
+prepare_run(WorkflowId, StepName, MsgBody, Wallet) ->
+    {ok, NextStep} = load_step(WorkflowId, StepName),
+    {Process, ScheduleCommit} = commit_for_prepare(NextStep, MsgBody, Wallet),
+    case schedule_run(NextStep, Process, ScheduleCommit, Wallet) of
+        {ok, #workflow_schedule{id=PreparedId}} ->
+            {ok, {PreparedId, Process, ScheduleCommit}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+commit_for_prepare(Step, MsgBody, Wallet) ->
+    Process = commit_process(Step, Wallet),
+    MsgCommit = commit_message(MsgBody, Process, Wallet),
+    ScheduleCommit = commit_schedule(MsgCommit, Wallet),
+    {Process, ScheduleCommit}.
+
+schedule_run(#workflow_step{id=StepId, name=StepName}, Process, ScheduleCommit, Wallet) ->
+    % TODO: Change to use random data from a commit
+    WorkflowSchedule = #workflow_schedule{
+        id = timestamp_id(StepId),
+        step_process = Process,
+        message = ScheduleCommit,
+        step_id = StepId,
+        step_name = StepName,
+        wallet_address = wallet_address(Wallet)
+    },
+    maybe
+        ok ?= save(WorkflowSchedule),
+        {ok, WorkflowSchedule}
+    end.
+
+%
+% Run Workflow
+% 
+run_scheduled(#workflow_schedule{step_process=Process} = Schedule, Wallet) ->
+    maybe 
+        {ok, Activity} ?= create_workflow_activity(Schedule, Wallet),
+        {ok, Result} ?= hb_ao:resolve(Process, ~"now/result", #{}),
+        update_workflow_activity(Activity, Result)
+    end.
+
+create_workflow_activity(#workflow_schedule{id=ScheduleId, step_name=StepName}, Wallet) ->
+    % Create a new workflow activity
+    Activity = #workflow_activity{
+        id = timestamp_id(ScheduleId),
+        schedule_id = ScheduleId,
+        step_name = StepName,
+        wallet_address = wallet_address(Wallet)
+    },
+    ok = save(Activity),
+    {ok, Activity}.
+
+update_workflow_activity(#workflow_activity{} = WorkflowActivity, Result) ->
+    UpdatedActivity = WorkflowActivity#workflow_activity{
+        result = Result
+    },
+    ok = save(UpdatedActivity),
+    {ok, UpdatedActivity}.
+
+%
+% Store and load model records on KV store
+%
+save(#workflow{id=Id} = Workflow) -> save(~"w_", Id, Workflow);
+save(#workflow_step{id=Id} = Step) -> save(~"ws_", Id, Step);
+save(#workflow_schedule{id=Id} = Exec) -> save(~"wp_", Id, Exec);
+save(#workflow_activity{id=Id} = Activity) -> save(~"wa_", Id, Activity).
+
+save(Prefix, Id, Record) when is_binary(Id), is_tuple(Record) ->
+    Key = <<Prefix/binary, Id/binary>>,
+    Value = term_to_binary(Record),
+    hb_store:write(?STORE_OPTS, Key, Value).
+
+load_workflow(WorkflowId, Wallet) ->
+    Address = wallet_address(Wallet),
+    Key = <<"w_", WorkflowId/binary>>,
+    maybe {ok, WorkflowBin} ?= hb_store:read(?STORE_OPTS, Key),
+        case binary_to_term(WorkflowBin) of
+            #workflow{wallet_address = PrevAddress} = Workflow when Address =:= PrevAddress ->
+                {ok, Workflow};
+            #workflow{} ->
+                {error, <<"Wallet mismatch for workflow: ", WorkflowId/binary>>}
+        end
+    end.
+
+load_workflow_schedule(PreparedId) ->
+    Key = <<"wp_", PreparedId/binary>>,
+    maybe {ok, ScheduleBin} ?= hb_store:read(?STORE_OPTS, Key),
+        {ok, binary_to_term(ScheduleBin)}
+    end.
+
+load_step(WorkflowId, StepName) ->
+    Key = <<"ws_", WorkflowId/binary, ":", StepName/binary>>,
+    maybe {ok, StepBin} ?= hb_store:read(?STORE_OPTS, Key),
+        {ok, binary_to_term(StepBin)}
+    end.
+
+load_activity(ActivityId) ->
+    Key = <<"wa_", ActivityId/binary>>,
+    maybe {ok, ActivityBin} ?= hb_store:read(?STORE_OPTS, Key),
+        {ok, binary_to_term(ActivityBin)}
+    end.
+
+%
+% Utils
+%
+wallet_address(Wallet) ->
+    hb_util:human_id(ar_wallet:to_address(Wallet)).
+
+find_expected_field(Field, Map) ->
+    maybe 
+        error ?= maps:find(Field, Map),
+        {error, <<"Missing mandatory field: ", Field/binary>>}
+    end.
+
+timestamp_id(Id) ->
+    Timestamp = integer_to_binary(os:system_time()),
+    <<Id/binary, ":", Timestamp/binary>>.
 
 %% Depth-first search with cycle detection
 dfs_traverse(Step, Transitions, Visited, Path) ->
@@ -310,5 +401,3 @@ dfs_all_steps([NextStep | RestSteps], Transitions, Visited, Path) ->
         {error, Reason} ->
             {error, Reason}
     end.
-
-
