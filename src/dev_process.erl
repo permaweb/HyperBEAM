@@ -590,9 +590,7 @@ run_as(Key, Msg1, Msg2, Opts) ->
     ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
     PreparedMsg =
         hb_util:deep_merge(
-    % POINT OF FAILURE
-            ensure_process_key(hb_message:normalize_commitments(Msg1, Opts), Opts),
-            % ensure_process_key(Msg1, Opts),
+            ensure_process_key(Msg1, Opts),
             #{
                 <<"device">> =>
                     DeviceSet =
