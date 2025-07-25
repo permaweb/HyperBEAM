@@ -32,7 +32,7 @@ commitments_to_siginfo(Msg, Comms, Opts) ->
             fun(_CommID, Commitment, {Sigs, SigInputs}) ->
                 {ok, SigNameRaw, SFSig, SFSigInput} =
                     commitment_to_sf_siginfo(Msg, Commitment, Opts),
-                SigName = <<"sig-", SigNameRaw/binary>>,
+                SigName = <<"comm-", SigNameRaw/binary>>,
                 {
                     Sigs#{ SigName => SFSig },
                     SigInputs#{ SigName => SFSigInput }
@@ -104,7 +104,7 @@ commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
             {string,
                 hb_util:bin(
                     hb_structured_fields:dictionary(
-                        #{ <<"sig">> => SFSigInput }
+                        #{ <<"comm">> => SFSigInput }
                     )
                 )
             }
@@ -162,7 +162,11 @@ nested_map_to_string(Map) ->
 %% @doc Take a message with a `signature' and `signature-input' key pair and
 %% return a map of commitments.
 siginfo_to_commitments(
-        Msg = #{ <<"signature">> := <<"sig-", SFSigBin/binary>>, <<"signature-input">> := <<"sig-", SFSigInputBin/binary>> },
+        Msg =
+            #{
+                <<"signature">> := <<"comm-", SFSigBin/binary>>,
+                <<"signature-input">> := <<"comm-", SFSigInputBin/binary>>
+            },
         BodyKeys,
         Opts) ->
     % Parse the signature and signature-input structured-fields.

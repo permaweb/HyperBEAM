@@ -213,8 +213,7 @@ path_parts(Sep, PathBin) when is_binary(PathBin) ->
 %% @doc Extract all of the parts from the binary, given (a list of) separators.
 all_path_parts(_Sep, <<>>) -> [];
 all_path_parts(Sep, Bin) ->
-    {_MatchedSep, Part, Rest} = part(Sep, Bin),
-    [Part | all_path_parts(Sep, Rest)].
+    hb_util:split_depth_string_aware(Sep, Bin).
 
 %% @doc Extract the characters from the binary until a separator is found.
 %% The first argument of the function is an explicit separator character, or
@@ -223,20 +222,7 @@ all_path_parts(Sep, Bin) ->
 part(Sep, Bin) when not is_list(Sep) ->
     part([Sep], Bin);
 part(Seps, Bin) ->
-    part(Seps, Bin, 0, <<>>).
-part(_Seps, <<>>, _Depth, CurrAcc) -> {no_match, CurrAcc, <<>>};
-part(Seps, << $\(, Rest/binary>>, Depth, CurrAcc) ->
-    %% Increase depth
-    part(Seps, Rest, Depth + 1, << CurrAcc/binary, "(" >>);
-part(Seps, << $\), Rest/binary>>, Depth, CurrAcc) when Depth > 0 ->
-    %% Decrease depth
-    part(Seps, Rest, Depth - 1, << CurrAcc/binary, ")">>);
-part(Seps, <<C:8/integer, Rest/binary>>, Depth, CurrAcc) ->
-    case Depth == 0 andalso lists:member(C, Seps) of
-        true -> {C, CurrAcc, Rest};
-        false ->
-            part(Seps, Rest, Depth, << CurrAcc/binary, C:8/integer >>)
-    end.
+    hb_util:split_depth_string_aware_single(Seps, Bin).
 
 %% @doc Step 3: Apply types to values and remove specifiers.
 apply_types(Msg, Opts) ->

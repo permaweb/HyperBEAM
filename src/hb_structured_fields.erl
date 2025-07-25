@@ -642,7 +642,8 @@ params(Params) ->
             {Key, true} -> [$;, Key];
             {Key, Value} -> [$;, Key, $=, bare_item(Value)]
         end
-    || Param <- Params
+    ||
+        Param <- Params
     ].
 
 %%% Tests

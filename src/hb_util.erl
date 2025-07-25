@@ -1,6 +1,6 @@
 %% @doc A collection of utility functions for building with HyperBEAM.
 -module(hb_util).
--export([int/1, float/1, atom/1, bin/1, list/1]).
+-export([int/1, float/1, atom/1, bin/1, list/1, map/1]).
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, short_id/1, human_int/1, to_hex/1]).
 -export([key_to_atom/2, binary_to_addresses/1]).
@@ -24,6 +24,8 @@
 -export([ok/1, ok/2, until/1, until/2, until/3]).
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
 -export([unique/1]).
+-export([split_depth_string_aware/2, split_depth_string_aware_single/2]).
+-export([split_escaped_single/2]).
 -export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -export([all_atoms/0, binary_is_atom/1]).
 -export([lower_case_key_map/2]).
@@ -71,11 +73,18 @@ bin(Value) when is_list(Value) ->
 bin(Value) when is_binary(Value) ->
     Value.
 
-%% @doc Coerce a value to a list.
+%% @doc Coerce a value to a string list.
 list(Value) when is_binary(Value) ->
     binary_to_list(Value);
 list(Value) when is_list(Value) -> Value;
 list(Value) when is_atom(Value) -> atom_to_list(Value).
+
+%% @doc Ensure that a value is a map. Only supports maps and lists of key-value
+%% pairs.
+map(Value) when is_list(Value) ->
+    maps:from_list(Value);
+map(Value) when is_map(Value) ->
+    Value.
 
 %% @doc: rounds IntValue up to the nearest multiple of Nearest.
 %% Rounds up even if IntValue is already a multiple of Nearest.
@@ -974,6 +983,59 @@ binary_to_addresses(List) when is_binary(List) ->
                 error({cannot_parse_list, List})
         end
     end.
+
+
+%% @doc Extract all of the parts from the binary, given (a list of) separators.
+split_depth_string_aware(_Sep, <<>>) -> [];
+split_depth_string_aware(Sep, Bin) ->
+    {_MatchedSep, Part, Rest} = split_depth_string_aware_single(Sep, Bin),
+    [Part | split_depth_string_aware(Sep, Rest)].
+
+%% @doc Parse a binary, extracting a part until a separator is found, while
+%% honoring nesting characters.
+split_depth_string_aware_single(Sep, Bin) when not is_list(Sep) ->
+    split_depth_string_aware_single([Sep], Bin);
+split_depth_string_aware_single(Seps, Bin) ->
+    split_depth_string_aware_single(Seps, Bin, 0, <<>>).
+split_depth_string_aware_single(_Seps, <<>>, _Depth, CurrAcc) ->
+    {no_match, CurrAcc, <<>>};
+split_depth_string_aware_single(Seps, << $\", Rest/binary>>, Depth, CurrAcc) ->
+    {QuotedStr, AfterStr} = split_escaped_single($\", Rest),
+    split_depth_string_aware_single(
+        Seps,
+        AfterStr,
+        Depth,
+        << CurrAcc/binary, "\"", QuotedStr/binary, "\"">>
+    );
+split_depth_string_aware_single(Seps, << $\(, Rest/binary>>, Depth, CurrAcc) ->
+    %% Increase depth
+    split_depth_string_aware_single(Seps, Rest, Depth + 1, << CurrAcc/binary, "(" >>);
+split_depth_string_aware_single(Seps, << $\), Rest/binary>>, Depth, Acc) when Depth > 0 ->
+    %% Decrease depth
+    split_depth_string_aware_single(Seps, Rest, Depth - 1, << Acc/binary, ")">>);
+split_depth_string_aware_single(Seps, <<C:8/integer, Rest/binary>>, Depth, CurrAcc) ->
+    case Depth == 0 andalso lists:member(C, Seps) of
+        true -> {C, CurrAcc, Rest};
+        false ->
+            split_depth_string_aware_single(
+                Seps,
+                Rest,
+                Depth,
+                << CurrAcc/binary, C:8/integer >>
+            )
+    end.
+
+%% @doc Read a binary until a separator is found without a preceding backslash.
+split_escaped_single(Sep, Bin) ->
+    split_escaped_single(Sep, Bin, []).
+split_escaped_single(_Sep, <<>>, Acc) ->
+    {hb_util:bin(lists:reverse(Acc)), <<>>};
+split_escaped_single(Sep, <<"\\", Char:8/integer, Rest/binary>>, Acc) ->
+    split_escaped_single(Sep, Rest, [Char, $\\ | Acc]);
+split_escaped_single(Sep, <<Sep:8/integer, Rest/binary>>, Acc) ->
+    {hb_util:bin(lists:reverse(Acc)), Rest};
+split_escaped_single(Sep, <<C:8/integer, Rest/binary>>, Acc) ->
+    split_escaped_single(Sep, Rest, [C | Acc]).
 
 %% @doc Force that a binary is either empty or the given number of bytes.
 check_size(Bin, {range, Start, End}) ->
