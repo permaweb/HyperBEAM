@@ -302,7 +302,7 @@ apply_tx_to_tabm(InputTABM, TX, Req, Opts) ->
         Structured2,
         tabm,
         <<"structured@1.0">>,
-        #{ linkify_mode => false }
+        Opts %% used to be #{ linkify_mode => false }
     ),
 
     ?event(xxx, {apply_tx_to_tabm, {input_tx, {explicit, TX}}}),
