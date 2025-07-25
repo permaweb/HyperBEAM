@@ -1,11 +1,15 @@
 -module(ar_bundles).
 -export([generate_id/2, type/1, map/1, hd/1, member/2, find/2]).
 -export([manifest/1, manifest_item/1, parse_manifest/1]).
--export([new_item/4, sign_item/2, verify_item/1]).
--export([encode_tags/1, decode_tags/1, add_list_tags/1]).
+-export([sign_item/2, verify_item/1]).
+-export([encode_tags/1, decode_tags/1, add_bundle_tags/1]).
 -export([serialize/1, serialize/2, deserialize/1, deserialize/2]).
 -export([data_item_signature_data/1]).
 -export([serialize_bundle_data/2]).
+
+%%% Test helpers
+-export([new_item/4]).
+
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -13,10 +17,6 @@
 -define(BUNDLE_TAGS, [
     {<<"bundle-format">>, <<"binary">>},
     {<<"bundle-version">>, <<"2.0.0">>}
-]).
-
--define(LIST_TAGS, [
-    {<<"map-format">>, <<"list">>}
 ]).
 
 %%%===================================================================
@@ -86,19 +86,6 @@ find(_Key, _) ->
 manifest_item(#tx { manifest = Manifest }) when is_record(Manifest, tx) ->
     Manifest;
 manifest_item(_Item) -> undefined.
-
-%% @doc Create a new data item. Should only be used for testing.
-new_item(Target, Anchor, Tags, Data) ->
-    hb_tx:reset_ids(
-        #tx{
-            format = ans104,
-            target = Target,
-            last_tx = Anchor,
-            tags = Tags,
-            data = Data,
-            data_size = byte_size(Data)
-        }
-    ).
 
 %% @doc Sign a data item.
 sign_item(_, undefined) -> throw(wallet_not_found);
@@ -288,9 +275,6 @@ enforce_valid_tx(TX) ->
 
 add_bundle_tags(Tags) -> ?BUNDLE_TAGS ++ (Tags -- ?BUNDLE_TAGS).
 
-add_list_tags(Tags) ->
-    (?BUNDLE_TAGS ++ (Tags -- ?BUNDLE_TAGS)) ++ ?LIST_TAGS.
-
 add_manifest_tags(Tags, ManifestID) ->
     lists:filter(
         fun
@@ -472,15 +456,7 @@ maybe_unbundle(Item) ->
     Version = lists:keyfind(<<"bundle-version">>, 1, Item#tx.tags),
     case {Format, Version} of
         {{<<"bundle-format">>, <<"binary">>}, {<<"bundle-version">>, <<"2.0.0">>}} ->
-            maybe_map_to_list(maybe_unbundle_map(Item));
-        _ ->
-            Item
-    end.
-
-maybe_map_to_list(Item) ->
-    case lists:keyfind(<<"map-format">>, 1, Item#tx.tags) of
-        {<<"map-format">>, <<"List">>} ->
-            unbundle_list(Item);
+            maybe_unbundle_map(Item);
         _ ->
             Item
     end.
@@ -628,6 +604,35 @@ decode_vint(<<Byte, Rest/binary>>, Result, Shift) ->
 %%% Tests
 %%%===================================================================
 
+
+%% @doc Create a new data item. Should only be used for testing.
+new_item(Target, Anchor, Tags, Data) ->
+    hb_tx:reset_ids(
+        #tx{
+            format = ans104,
+            target = Target,
+            last_tx = Anchor,
+            tags = Tags,
+            data = Data,
+            data_size = byte_size(Data)
+        }
+    ).
+
+new_bundle_list_two(Data1, Data2) ->
+    Item1 = new_item(
+        crypto:strong_rand_bytes(32),
+        crypto:strong_rand_bytes(32),
+        [],
+        Data1
+    ),
+    Item2 = new_item(
+        crypto:strong_rand_bytes(32),
+        crypto:strong_rand_bytes(32),
+        [{<<"tag1">>, <<"value1">>}, {<<"tag2">>, <<"value2">>}],
+        Data2
+    ),
+    [Item1, Item2].
+
 ar_bundles_test_() ->
     [
         {timeout, 30, fun test_no_tags/0},
@@ -751,7 +756,7 @@ assert_data_item(KeyType, Owner, Target, Anchor, Tags, Data, DataItem) ->
 test_empty_bundle() ->
     Bundle = serialize([]),
     BundleItem = deserialize(Bundle),
-    ?assertEqual(#{}, BundleItem#tx.data).
+    ?assertEqual([], BundleItem#tx.data).
 
 test_bundle_with_one_item() ->
     Item = new_item(
@@ -762,7 +767,7 @@ test_bundle_with_one_item() ->
     ),
     Bundle = serialize([Item]),
     BundleItem = deserialize(Bundle),
-    ?assertEqual(ItemData, (maps:get(<<"1">>, BundleItem#tx.data))#tx.data).
+    ?assertEqual([Item], BundleItem#tx.data).
 
 test_bundle_with_two_items() ->
     Item1 = new_item(
@@ -777,10 +782,10 @@ test_bundle_with_two_items() ->
         [{<<"tag1">>, <<"value1">>}, {<<"tag2">>, <<"value2">>}],
         ItemData2 = crypto:strong_rand_bytes(32)
     ),
-    Bundle = serialize([Item1, Item2]),
+    Items = [Item1, Item2],
+    Bundle = serialize(Items),
     BundleItem = deserialize(Bundle),
-    ?assertEqual(ItemData1, (maps:get(<<"1">>, BundleItem#tx.data))#tx.data),
-    ?assertEqual(ItemData2, (maps:get(<<"2">>, BundleItem#tx.data))#tx.data).
+    ?assertEqual([Item1, Item2], BundleItem#tx.data).
 
 test_recursive_bundle() ->
     W = ar_wallet:new(),
@@ -801,9 +806,9 @@ test_recursive_bundle() ->
     }, W),
     Bundle = serialize([Item3]),
     BundleItem = deserialize(Bundle),
-    #{<<"1">> := UnbundledItem3} = BundleItem#tx.data,
-    #{<<"1">> := UnbundledItem2} = UnbundledItem3#tx.data,
-    #{<<"1">> := UnbundledItem1} = UnbundledItem2#tx.data,
+    [UnbundledItem3] = BundleItem#tx.data,
+    [UnbundledItem2] = UnbundledItem3#tx.data,
+    [UnbundledItem1] = UnbundledItem2#tx.data,
     ?assert(verify_item(UnbundledItem1)),
     % TODO: Verify bundled lists...
     ?assertEqual(Item1#tx.data, UnbundledItem1#tx.data).

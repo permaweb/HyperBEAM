@@ -29,22 +29,6 @@
     ]
 ).
 
-
-%%% The list of keys that should be forced into the tag list, rather than being
-%%% encoded as fields in the TX record.
--define(BASE_INVALID_FIELDS,
-    [
-        <<"id">>,
-        <<"unsigned_id">>,
-        <<"owner">>,
-        <<"owner_address">>,
-        <<"tags">>,
-        <<"data_tree">>,
-        <<"signature">>,
-        <<"signature_type">>
-    ]
-).
-
 %% List of fields that should be forced into the tag list, rather than being
 %% encoded as fields in the TX record.
 -define(FORCED_TAG_FIELDS,
@@ -117,32 +101,14 @@ normalize_data(not_found) -> throw(not_found);
 normalize_data(Bundle) when is_list(Bundle); is_map(Bundle) ->
     ?event({normalize_data, bundle, Bundle}),
     normalize_data(#tx{ data = Bundle });
-normalize_data(Item = #tx { data = Data }) when is_list(Data) ->
-    ?event({normalize_data, list, Item}),
-    normalize_data(
-        Item#tx{
-            tags = ar_bundles:add_list_tags(Item#tx.tags),
-            data =
-                maps:from_list(
-                    lists:zipwith(
-                        fun(Index, MapItem) ->
-                            {
-                                integer_to_binary(Index),
-                                update_ids(normalize_data(MapItem))
-                            }
-                        end,
-                        lists:seq(1, length(Data)),
-                        Data
-                    )
-                )
-        }
-    );
 normalize_data(Item = #tx{data = Bin}) when is_binary(Bin) ->
     ?event({normalize_data, binary, Item}),
     normalize_data_size(Item);
 normalize_data(Item = #tx{data = Data}) ->
     ?event({normalize_data, map, Item}),
-    normalize_data_size(ar_bundles:serialize_bundle_data(Data, Item)).
+    normalize_data_size(ar_bundles:serialize_bundle_data(Data, Item));
+normalize_data(Item) ->
+    throw(invalid_tx_data_type).
 
 %% @doc Reset the data size of a data item. Assumes that the data is already normalized.
 normalize_data_size(Item = #tx{data = Bin, format = 2}) when is_binary(Bin) ->
@@ -239,49 +205,52 @@ tx_to_tabm2(RawTX, CommittedTags, Req, Opts) ->
         _ -> <<"tx@1.0">>
     end,
     % Ensure the TX is fully deserialized.
-    TX = ar_bundles:deserialize(normalize(RawTX)),
+    TX = ar_bundles:deserialize(RawTX),
+
     % Initialize message from the transaction tags
     RawTags = deduplicating_from_list(TX#tx.tags, Opts),
 
-    % 0. Add keys to the TABM for any non-default values in the #tx record.
-    TABM0 = apply_tx_to_tabm(RawTags, TX, Opts),
+    % 0. Add keys to the TABM for data and any non-default values in the #tx record.
+    TABM0 = apply_tx_to_tabm(RawTags, TX, Req, Opts),
 
     % 1. Strip out any fields that will be auto-computed
     TABM1 = maps:without(invalid_fields(RawTX), TABM0),
 
-    % 2. Set the data field, if it's a map, we need to recursively turn its children
-    %    into messages from their tx representations.
-    TABM2 = set_map_data_or_throw(TABM1, TX, Req, Opts),
-
     % 3. Add the commitments to the message if the TX has a signature.
-    TABM3 = add_commitments(TABM2, TX, Device, CommittedTags, Opts),
+    TABM2 = add_commitments(TABM1, TX, Device, CommittedTags, Opts),
 
-    Result = hb_maps:without(?FILTERED_TAGS, TABM3, Opts),
+    Result = hb_maps:without(?FILTERED_TAGS, TABM2, Opts),
     ?event({tx_to_tabm, {result, {explicit, Result}}}),
     Result.
 
 tabm_to_tx(BaseTX, InputTABM, Req, Opts) ->
     NormalizedTABM = hb_ao:normalize_keys(normalize_data_field(InputTABM), Opts),
-    ?event({tabm_to_tx, {input_tabm, {explicit, NormalizedTABM}}}),
+    ?event(xxx, {tabm_to_tx, {input_tabm, {explicit, NormalizedTABM}}}),
 
     TABM = maybe_bundle(NormalizedTABM, Req, Opts),
+    ?event(xxx, {tabm_to_tx, {maybe_bundle, {explicit, TABM}}}),
     
     % 1. Initialize the #tx record with the values from the TABM.
-    {TX, RemainingTABM, OriginalTags} = apply_tabm_to_tx(BaseTX, TABM, Req, Opts),
+    {TX0, RemainingTABM, OriginalTags} = apply_tabm_to_tx(BaseTX, TABM, Req, Opts),
+    ?event(xxx, {tabm_to_tx, {apply_tabm_to_tx, {explicit, {TX0, RemainingTABM, OriginalTags}}}}),
 
     % 2. Ensure any links are loaded.
     LoadedTABM = hb_cache:ensure_all_loaded(RemainingTABM),
 
     % 3. Extract tags and data items from the remaining TABM keys.
-    {Tags, DataItems} = to_data_items(LoadedTABM, Req, Opts),
+    {Tags, DataItems} = tags_to_data_items(LoadedTABM, Req, Opts),
 
     % 4. Set the tags on the #tx record.
-    TXWithoutData = set_tags(TX, Tags, OriginalTags, Opts),
+    TX1 = set_tags(TX0, Tags, OriginalTags, Opts),
     
     % 5. Set the data items on the #tx record.
-    TXWithData = set_tx_data_or_throw(TXWithoutData, DataItems, Req, Opts),
+    TX2 = merge_data_items(TX1, DataItems, Req, Opts),
     
-    TXFinal = normalize(TXWithData),
+    ?event(xxx, {tabm_to_tx, {tx2, {explicit, TX2}}}),
+
+    % OutputTX = reset_ids(TX2),
+    OutputTX = normalize(TX2),
+    
 
     % Check for invalid fields. We do this at the end once tx.format and tx.data have been
     % set.
@@ -293,8 +262,8 @@ tabm_to_tx(BaseTX, InputTABM, Req, Opts) ->
         _ -> throw({invalid_fields, HasInvalidFields})
     end,
 
-    ?event({tabm_to_tx, {result, {explicit, TXFinal}}}),
-    TXFinal.
+    ?event({tabm_to_tx, {result, {explicit, OutputTX}}}),
+    OutputTX.
 
 binary_to_tx(Binary) ->
     % ans104 and Arweave cannot serialize just a simple binary or get an ID for it, so
@@ -312,31 +281,41 @@ binary_to_tx(Binary) ->
 
 %% @doc Add keys to the TABM for any non-default values in the #tx record. Throws an error if
 %% there's a value clash between the input TABM and #tx values.
-apply_tx_to_tabm(InputTABM, TX, Opts) ->
+apply_tx_to_tabm(InputTABM, TX, Req, Opts) ->
     % We'll build up the output message first as a structured message, then we'll convert it
     % back to a TABM at the end. This is so that we can compare values to check for clashes - 
     % easier to do when the values are in their native form and not the aotypes/encoded form.
     Structured0 = hb_message:convert(
-        hb_maps:with(hb_message:default_tx_keys(), InputTABM),
+        InputTABM,
         <<"structured@1.0">>,
         Opts
     ),
 
     Structured1 = apply_to_structured(Structured0, TX),
 
+    % Set the data field, if it's a map or list, we need to recursively turn its children
+    % into messages from their tx representations.
+    Data = from_tx_data(TX#tx.data, Req, Opts),
+    Structured2 = set_data(Structured1, Data),
+
     OutputTABM = hb_message:convert(
-        Structured1,
+        Structured2,
         tabm,
         <<"structured@1.0">>,
-        Opts
+        #{ linkify_mode => false }
     ),
 
-    hb_maps:merge(
-        hb_maps:without(hb_message:default_tx_keys(), InputTABM, Opts),
-        OutputTABM, Opts).
+    ?event(xxx, {apply_tx_to_tabm, {input_tx, {explicit, TX}}}),
+    ?event(xxx, {apply_tx_to_tabm, {input_tabm, {explicit, InputTABM}}}),
+    ?event(xxx, {apply_tx_to_tabm, {structured0, {explicit, Structured0}}}),
+    ?event(xxx, {apply_tx_to_tabm, {structured1, {explicit, Structured1}}}),
+    ?event(xxx, {apply_tx_to_tabm, {structured2, {explicit, Structured2}}}),
+    ?event(xxx, {apply_tx_to_tabm, {output_tabm, {explicit, OutputTABM}}}),
+
+    OutputTABM.
 
 apply_to_structured(Structured, TX) ->
-    % Process each field in the default TX list, excluding auto-computed fields and data.
+    % Process each field in the default TX list, excluding auto-computed fields.
     SkipFields = [<<"data">> | invalid_fields(TX)],
     lists:foldl(
         fun ({Field, DefaultValue}, AccStructured) ->
@@ -454,40 +433,73 @@ set_map_value_or_throw(Key, NewValue, Map) ->
         _ -> maps:put(Key, NewValue, Map)
     end.
 
-set_map_data_or_throw(Map, TX, Req, Opts) ->
-    DataMap = case TX#tx.data of
-        Data when is_map(Data) ->
+from_tx_data(Data, Req, Opts) ->
+    case Data of
+        _ when is_map(Data) ->
             % If the data is a map, we need to recursively turn its children
             % into messages from their tx representations.
             hb_maps:fold(
-                fun(Key, InnerValue, Acc) ->
-                    case dev_codec_ans104:from(InnerValue, Req, Opts) of
-                        {ok, DecodedValue} ->
+                fun(Key, Value, Acc) ->
+                    case dev_codec_ans104:from(Value, Req, Opts) of
+                        {ok, ConvertedValue} ->
                             % throw if Key already exists in Map
-                            set_map_value_or_throw(Key, DecodedValue, Acc);
+                            set_map_value_or_throw(Key, ConvertedValue, Acc);
                         _ -> Acc
                     end
                 end,
-                Map,
+                #{},
                 Data
             );
-        Data when Data == ?DEFAULT_DATA -> Map;
-        Data when is_binary(Data) -> set_map_value_or_throw(<<"data">>, Data, Map);
-        Data ->
+        _ when is_list(Data) ->
+            % If the data is a list, we need to recursively turn its children
+            % into messages from their tx representations.
+            DataList = lists:foldl(
+                fun(Value, Acc) ->
+                    case dev_codec_ans104:from(Value, Req, Opts) of
+                        {ok, ConvertedValue} -> [ConvertedValue | Acc];
+                        _ -> Acc
+                    end
+                end,
+                [],
+                Data),
+            lists:reverse(DataList);
+        _ when Data == ?DEFAULT_DATA -> Data;
+        _ when is_binary(Data) -> Data;
+        _ ->
             ?event({unexpected_data_type, {explicit, Data}}),
-            ?event({was_processing, {explicit, TX}}),
             throw(invalid_tx)
-    end,
+    end.
+
+to_tx_data(Data, Req, Opts) ->
+    case Data of
+        _ when is_map(Data) -> hb_util:ok(dev_codec_ans104:to(Data, Req, Opts));
+        _ when is_list(Data) ->
+            % If the data is a list, we need to recursively turn its children
+            % into messages from their tx representations.
+            DataList = lists:foldl(
+                fun(Value, Acc) ->
+                    case dev_codec_ans104:to(Value, Req, Opts) of
+                        {ok, ConvertedValue} -> [ConvertedValue | Acc];
+                        _ -> Acc
+                    end
+                end,
+                [],
+                Data),
+            lists:reverse(DataList);
+        _ -> Data
+    end.
+
+set_data(Structured, ?DEFAULT_DATA) ->
+    Structured;
+set_data(Structured, Data) ->
     % Normalize the `data` field to the `ao-data-key's value, if set.
-    case maps:get(<<"ao-data-key">>, DataMap, undefined) of
-        undefined -> DataMap;
+    case maps:get(<<"ao-data-key">>, Structured, undefined) of
+        undefined -> Structured#{ <<"data">> => Data };
         DataKey ->
             % Remove the `data' and `ao-data-key' fields from the map, then
             % add the `data' field with the value of the `ao-data-key' field.
-            NoDataMap = maps:without([<<"data">>, <<"ao-data-key">>], DataMap),
-            NoDataMap#{
-                DataKey => maps:get(<<"data">>, DataMap, ?DEFAULT_DATA)
-            }
+            NoData = maps:without([<<"data">>, <<"ao-data-key">>], Structured),
+            NoData#{ DataKey => Data }
     end.
     
 
@@ -599,37 +611,45 @@ apply_tabm_to_tx(TX, InputTABM, Req,  Opts) ->
     % 1. Convert simple TABM fields to their native type, and apply to the #tx record.
     %    Simple fields are: the default #tx fields *excluding* data.
     DefaultTXTABM= hb_maps:with(hb_message:default_tx_keys(), InputTABM),
-    SimpleTABM = hb_maps:without([<<"data">> | ?FORCED_TAG_FIELDS], DefaultTXTABM),
-    Structured = hb_message:convert(
+    SimpleTABM = hb_maps:without(?FORCED_TAG_FIELDS, DefaultTXTABM),
+
+    Structured0 = hb_message:convert(
         SimpleTABM,
         <<"structured@1.0">>,
+        tabm,
         Opts
     ),
-    {AppliedSimpleFields, TX1} = apply_to_tx(TX, Structured),
+
+    RawData = hb_maps:get(<<"data">>, Structured0, ?DEFAULT_DATA, Opts),
+    Data = to_tx_data(RawData, Req, Opts),
+    Structured1 = set_data(Structured0, Data),
+
+    {AppliedFields, TX1} = apply_to_tx(TX, Structured1),
     
     % 2. Flatten the commitments into the 'signature' and 'owner' keys, and then apply those.
     {SignatureMap, OriginalTags} = flatten_commitments(InputTABM, Opts),
     {_, TX2} = apply_to_tx(TX1, SignatureMap),
 
-    % 3. If the data field is a map, we recursively turn it into messages.
-    %    Notably, we do not simply call message_to_tx/1 on the inner map
-    %    because that would lead to adding an extra layer of nesting to the
-    %    data. Apply the result.
-    RawData = hb_maps:get(<<"data">>, InputTABM, ?DEFAULT_DATA, Opts),
-    Data = case RawData of
-        _ when is_map(RawData) -> hb_util:ok(dev_codec_ans104:to(RawData, Req, Opts));
-        _ -> RawData
-    end,
-    {AppliedDataField, TX3} = apply_to_tx(TX2, #{ <<"data">> => Data }),
+    % % 3. If the data field is a map, we recursively turn it into messages.
+    % %    Notably, we do not simply call message_to_tx/1 on the inner map
+    % %    because that would lead to adding an extra layer of nesting to the
+    % %    data. Apply the result.
+    % RawData = hb_maps:get(<<"data">>, InputTABM, ?DEFAULT_DATA, Opts),
+    % Data = case RawData of
+    %     _ when is_map(RawData) -> hb_util:ok(dev_codec_ans104:to(RawData, Req, Opts));
+    %     _ -> RawData
+    % end,
+    % {AppliedDataField, TX3} = apply_to_tx(TX2, #{ <<"data">> => Data }),
+    TX3 = TX2,
 
     % Return any remaining TABM keys that were not applied. These will be processed later.
     InputAOTypes = hb_ao:get(<<"ao-types">>, InputTABM, <<>>, Opts),
     DecodedAOTypes = dev_codec_structured:decode_ao_types(InputAOTypes, Opts),
     UnappliedAOTypes = hb_maps:fold(fun(K, V, Acc) ->
         maps:put(hb_util:to_lower(K), V, Acc)
-    end, #{}, hb_maps:without(AppliedSimpleFields, DecodedAOTypes), Opts),
+    end, #{}, hb_maps:without(AppliedFields, DecodedAOTypes), Opts),
     UnappliedTABM0 = hb_maps:without(
-        AppliedSimpleFields ++ AppliedDataField ++ [<<"commitments">>, <<"ao-types">>],
+        AppliedFields ++ [<<"commitments">>, <<"ao-types">>],
         InputTABM
     ),
     
@@ -664,7 +684,7 @@ apply_to_tx(TX, Structured) ->
                         {ok, CoercedValue} ->
                             % Values are different, move to TX
                             {
-                                [ Field | AccAppliedFields ],
+                                AccAppliedFields ++ [Field],
                                 set_tx_value_or_throw(Field, AccTX, DefaultValue, CoercedValue)
                             };
                         error ->
@@ -680,9 +700,11 @@ apply_to_tx(TX, Structured) ->
     ),
     {AppliedFields, UpdatedTX}.
 
-set_tx_data_or_throw(TX, DataItems, Req, Opts) ->
+merge_data_items(TX, DataItems, Req, Opts) ->
+    ?event(xxx, {merge_data_items_tx, {explicit, TX#tx.data}}),
+    ?event(xxx, {merge_data_items_data_items, {explicit, DataItems}}),
     case {TX#tx.data, hb_maps:size(DataItems, Opts)} of
-        {Binary, 0} when is_binary(Binary) ->
+        {_, 0} ->
             TX;
         {?DEFAULT_DATA, _} ->
             TX#tx{ data = DataItems };
@@ -691,6 +713,7 @@ set_tx_data_or_throw(TX, DataItems, Req, Opts) ->
         {Data, _} when is_record(Data, tx) ->
             TX#tx{ data = DataItems#{ <<"data">> => Data } };
         {Data, _} when is_binary(Data) ->
+            ?event(xxx, {set_tx_data_or_throw, {data, Data}, {data_items, DataItems}}),
             DataItem = hb_util:ok(dev_codec_ans104:to(Data, Req, Opts)),
             TX#tx{
                 data = set_map_value_or_throw(<<"data">>, DataItem, DataItems)
@@ -749,7 +772,8 @@ tag_map_to_encoded_tags(TagMap) ->
         OrderedList
     ).
 
-to_data_items(Structured, Req, Opts) ->
+%% @doc Convert large tags into data items.
+tags_to_data_items(Structured, Req, Opts) ->
     % Process each key-value pair in Structured
     {Tags, DataItems} = maps:fold(
         fun(Key, Value, {AccTags, AccDataItems}) ->
@@ -759,6 +783,7 @@ to_data_items(Structured, Req, Opts) ->
                     {AccTags, AccDataItems};
                 % All other values are converted to data items
                 _ ->
+                    ?event(xxx, {tags_to_data_items, {key, Key}, {value, Value}}),
                     {
                         maps:remove(Key, AccTags),
                         [
@@ -808,15 +833,28 @@ set_tags(TX, Tags, OriginalTags, Opts) ->
 %%% Generic helpers
 %%% ------------------------------------------------------------------------------------------
 
+base_invalid_fields() ->
+    [
+        <<"id">>,
+        <<"unsigned_id">>,
+        <<"owner">>,
+        <<"owner_address">>,
+        <<"tags">>,
+        <<"data_tree">>,
+        <<"signature">>,
+        <<"signature_type">>
+    ].
+
 invalid_fields(#tx{ format = ans104 }) ->
-    ?BASE_INVALID_FIELDS ++ [<<"data_size">>];
+    base_invalid_fields() ++ [<<"data_size">>];
 invalid_fields(#tx{ format = 1 }) ->
-    ?BASE_INVALID_FIELDS ++ [<<"data_size">>];
+    base_invalid_fields() ++ [<<"data_size">>];
 invalid_fields(#tx{ format = 2 } = TX) ->
     case TX#tx.data of
-        ?DEFAULT_DATA -> ?BASE_INVALID_FIELDS;
-        _ -> ?BASE_INVALID_FIELDS ++ [<<"data_size">>, <<"data_root">>]
+        ?DEFAULT_DATA -> base_invalid_fields();
+        _ -> base_invalid_fields() ++ [<<"data_size">>, <<"data_root">>]
     end.
+
 
 %% @doc Deduplicate a list of key-value pairs by key, generating a list of
 %% values for each normalized key if there are duplicates.

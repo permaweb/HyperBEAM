@@ -252,13 +252,83 @@ simple_signed_to_httpsig_test_disabled() ->
     ?assert(hb_message:verify(HTTPSig2, all, #{})),
     ?assert(hb_message:match(HTTPSig, HTTPSig2)).
 
+bundle_list_test() ->
+    % The targets and anchors are just snapshots of random data so that the test data is
+    % consistent from run to run.
+    Item1 = ar_bundles:new_item(
+        Target1 = hb_util:decode(<<"2zgCyu_zlyfnygXm2kjiDUlFJ89FCy3mB2FeG02yE3w">>),
+        Anchor1 = hb_util:decode(<<"GduWy-O8vVnefm6ESMt3thz8jo8jGJpOZk92ek_Wi6A">>),
+        [],
+        Data1 = <<"test-data1">>
+    ),
+    Item2 = ar_bundles:new_item(
+        Target2 = hb_util:decode(<<"TZNaMfvTa86OAAamlrKzvyieg1W9gl6IlH0Hkc0272w">>),
+        Anchor2 = hb_util:decode(<<"mWJQNN6TBSoT8cc1sNIegxiv5HHA8bKT7rVphYL7NkY">>),
+        [{<<"tag1">>, <<"value1">>}, {<<"tag2">>, <<"value2">>}],
+        Data2 = <<"test-data2">>
+    ),
+    Items = [Item1, Item2],
+
+    ExpectedTABM = #{
+        <<"data">> => #{
+            <<"ao-types">> => <<".=\"list\"">>,
+            <<"1">> => #{
+                <<"data">> => Data1,
+                <<"target">> => Target1,
+                <<"last_tx">> => Anchor1
+            },
+            <<"2">> => #{
+                <<"data">> => Data2,
+                <<"target">> => Target2,
+                <<"last_tx">> => Anchor2,
+                <<"tag1">> => <<"value1">>,
+                <<"tag2">> => <<"value2">>
+            }
+        }
+    },
+
+    % :to will normalize the #tx
+    ExpectedTX = hb_tx:normalize(#tx{ data = Items }),
+    ExpectedDataHash = hb_util:decode(<<"N0yukFcLK7HFFWgftYgDcnmYcfGwt1ZvS3UBwJU6n0E">>),
+
+    Opts = #{},
+
+    % 1. Roundtrip with bundle as list
+    InputTX0 = hb_tx:reset_ids(#tx{ data = Items }),
+    {ok, TABM0} = dev_codec_ans104:from(InputTX0, #{}, Opts),
+    {ok, OutputTX0} = dev_codec_ans104:to(TABM0, #{}, Opts),
+
+    ?assertEqual(ExpectedTABM, TABM0),
+    ?assertEqual(ExpectedDataHash, crypto:hash(sha256, OutputTX0#tx.data)),
+    ?assertEqual(ExpectedTX, OutputTX0),    
+
+    % 2. Roundtrip with bundle as serialized list
+    TX1 = ar_bundles:serialize_bundle_data(Items, #tx{}),
+    {ok, TABM1} = dev_codec_ans104:from(TX1, #{}, Opts),
+    {ok, OutputTX1} = dev_codec_ans104:to(TABM1, #{}, Opts),
+
+    ?assertEqual(ExpectedTABM, TABM1),
+    ?assertEqual(ExpectedDataHash, crypto:hash(sha256, OutputTX1#tx.data)),
+    ?assertEqual(ExpectedTX, OutputTX1),    
+
+    % 3. Roundtrip with bundle as serialized list without bundle tags
+    TX2 = TX1#tx{ tags = [] },
+    {ok, TABM2} = dev_codec_ans104:from(TX2, #{}, Opts),
+    {ok, OutputTX2} = dev_codec_ans104:to(TABM2, #{}, Opts),
+
+    ?assertEqual(#{ <<"data">> => TX2#tx.data }, TABM2),
+    ?assertEqual(ExpectedDataHash, crypto:hash(sha256, OutputTX2#tx.data)),
+    ?assertEqual(hb_tx:normalize(TX2), OutputTX2),    
+    ok.
+
+% XXX test map as well as just a sing #tx as the data
+
 roundtrip_test() ->
     LastTX = hb_util:decode(<<"UJW0lZZV4F1HmAXz5uUyIGG4VCwBGsaBp9P5LX7NbnY">>),
     Target = hb_util:decode(<<"YxU84G7_N29RNC2WvWs2xY1Felml35Pug8mglh21REc">>),
     DataRoot = hb_util:decode(<<"EU5KVrF-Vm8WKIXyNGSH2VdXl9RelyTh9lck0AoknAA">>),
     BinaryTag = hb_util:decode(<<"FxrvGdV-V0Quj1aAsnDUfO6nk8IaWHguRmjNEmka_ec">>),
     Data = <<"test-data">>,
-
     TestCases = [
         {defaults_typed,
             #{
@@ -391,6 +461,17 @@ roundtrip_test() ->
                     {<<"third-tag">>,<<"1">>}
                 ]
             }
+        },
+        {body_key,
+            #{
+                <<"body">> => Data
+            },
+            #tx{
+                unsigned_id = hb_util:decode(<<"8LoJYC6Qh1SpE0LiY-9QrY0zQkv5DeOYKdiqk2dyW4Y">>),
+                data = Data,
+                data_size = byte_size(Data),
+                tags = [{<<"ao-data-key">>,<<"body">>}]
+            }
         }
     ],
     lists:foreach(
@@ -460,12 +541,16 @@ do_unsigned_roundtrip(Label, InputStructured, InputTX) ->
 
     OutputStructured = hb_message:convert(TABM1, StructuredCodec, tabm, #{}),
 
-    ?event(dev_codec_ans104_tests, {Label, dataitem, {explicit, DataItem}}),
     ?event(dev_codec_ans104_tests, {Label, tabm0, {explicit, TABM0}}),
     ?event(dev_codec_ans104_tests, {Label, id, {explicit, hb_util:encode(DataItem#tx.unsigned_id)}}),
     ?event(dev_codec_ans104_tests, {Label, output_structured, {explicit, OutputStructured}}),
 
+    ?event(dev_codec_ans104_tests, {Label, input_tx, {explicit, InputTX}}),
+    ?event(dev_codec_ans104_tests, {Label, dataitem, {explicit, DataItem}}),
     ?assertEqual(InputTX, DataItem, Label),
+
+    ?event(dev_codec_ans104_tests, {Label, input_structured, {explicit, InputStructured}}),
+    ?event(dev_codec_ans104_tests, {Label, output_structured, {explicit, OutputStructured}}),
     ?assert(hb_message:match(InputStructured, OutputStructured), Label),
     ?assert(hb_message:match(InputTABM, TABM0), Label),
     ?assert(hb_message:match(InputTABM, TABM1), Label),
