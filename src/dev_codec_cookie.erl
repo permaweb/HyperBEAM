@@ -66,7 +66,7 @@ get_cookie(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, ParsedBase} = from(Base, Req, Opts),
     Key = hb_maps:get(<<"key">>, Req, undefined, Opts),
-    Cookie = hb_maps:get(<<"cookie">>, ParsedBase, #{}, Opts),
+    Cookie = hb_private:get(<<"cookie">>, ParsedBase, #{}, Opts),
     case hb_maps:get(Key, Cookie, undefined, Opts) of
         undefined -> {error, not_found};
         Value -> {ok, Value}
@@ -93,14 +93,15 @@ set_cookie(Base, Req, RawOpts) ->
             fun(_, V) -> hb_escape:encode(V) end,
             RawTABM
         ),
-    Res = to(Base#{ <<"cookie">> => TABM }, Req, Opts),
+    MsgWithPrivCookie = hb_private:set(Base, #{ <<"cookie">> => TABM }, Opts),
+    Res = to(MsgWithPrivCookie, Req, Opts),
     ?event({set, {req, Req}, {res, Res}}),
     Res.
 
 %% @doc Remove the cookie from the given message.
 reset(Base, RawOpts) ->
     Opts = opts(RawOpts),
-    {ok, hb_ao:set(Base, #{ <<"cookie">> => unset }, Opts)}.
+    {ok, hb_private:set(Base, <<"cookie">>, unset, Opts)}.
 
 %% @doc Convert a set of cookie messages a cookie message. If the request
 %% message contains a `bundle: true' key, we return the cookie as a comma-
@@ -109,11 +110,11 @@ reset(Base, RawOpts) ->
 %% representation of the cookies as needed.
 to(Link, Req, Opts) when ?IS_LINK(Link) ->
     to(hb_cache:ensure_loaded(Link), Req, Opts);
-to(Msg = #{ <<"cookie">> := Cookie }, Req, Opts) ->
+to(Msg = #{ <<"priv">> := #{ <<"cookie">> := Cookie } }, Req, Opts) ->
     % If given a message containing a cookie, we encode just the cookie
     % component and return it as the `set-cookie' key -- ready for transmission
     % to a browser to set its values.
-    MsgWithoutCookie = hb_maps:without([<<"cookie">>], Msg, Opts),
+    {ok, MsgWithoutCookie} = reset(Msg, Opts),
     to(MsgWithoutCookie#{ <<"set-cookie">> => Cookie }, Req, Opts);
 to(Msg = #{ <<"set-cookie">> := SetCookie }, Req, Opts) ->
     {
@@ -195,10 +196,15 @@ from(CookiesMsg, Req, Opts) when is_binary(CookiesMsg) ->
     % We split it using a string-aware split function (which will not split
     % within quoted strings), then remove any preceding whitespace. Finally, we
     % recurse to convert the lines into `~cookie@1.0' messages.
+    ?event(x,{from, {from_is_binary, {explicit, CookiesMsg}}}),
     from(split(lines, CookiesMsg), Req, opts(Opts));
 from(CookiesMsg, _Req, _Opts) when is_list(CookiesMsg) ->
-    {ok, maps:from_list(lists:map(fun from_line/1, CookiesMsg))};
-from(#{ <<"cookie">> := Cookie }, Req, Opts) ->
+    ?event(x,{from, {from_is_list, {explicit, CookiesMsg}}}),
+    FromLines = lists:map(fun from_line/1, CookiesMsg),
+    ?event(x,{from, {from_lines, {explicit, FromLines}}}),
+    {ok, maps:from_list(FromLines)};
+from(#{ <<"priv">> := #{ <<"cookie">> := Cookie } }, Req, Opts) ->
+    ?event(x,{from, {from_priv_cookie, {explicit, Cookie}}}),
     from(Cookie, Req, Opts);
 from(CookiesMsg, _Req, _Opts) when is_map(CookiesMsg) ->
     % Cookie is already parsed to a message.
@@ -326,7 +332,7 @@ unquote(Bin) -> Bin.
 
 %% @doc Remove the cookie from the given message.
 without(Req, Opts) ->
-    hb_maps:without([<<"cookie">>], Req, Opts).
+    hb_private:set(Req, <<"cookie">>, unset, Opts).
 
 %%% Tests
 

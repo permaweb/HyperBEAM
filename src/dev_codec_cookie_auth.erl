@@ -174,4 +174,4 @@ directly_invoke_commit_verify_test() ->
 %% `Target' message.
 apply_cookie(NextReq, GenerateResponse, Opts) ->
     {ok, Cookie} = hb_maps:find(<<"set-cookie">>, GenerateResponse, Opts),
-    NextReq#{ <<"cookie">> => Cookie }.
+    hb_private:set(NextReq, <<"cookie">>, Cookie, Opts).

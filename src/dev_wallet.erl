@@ -469,11 +469,13 @@ verify_wallet(Base, WalletDetails, Opts) ->
 %% @doc Parse cookie from a message to extract wallets.
 wallets_from_cookie(Msg, Opts) ->
     % Parse the cookie as a Structured-Fields map.
+    ?event(x,{wallets_from_cookie, {msg, {explicit, Msg}}}),
     ParsedCookie =
         try dev_codec_cookie:from(Msg, #{}, Opts) of
             {ok, CookieMsg} -> CookieMsg
         catch _:_ -> {error, <<"Invalid cookie format.">>}
         end,
+    ?event({wallets_from_cookie, {parsed_cookie, ParsedCookie}, {msg, Msg}}),
     % Get the wallets that we should be able to access from the parsed cookie.
     % We determine their type from the `type-' prefix of the key.
     lists:flatten(lists:filtermap(
@@ -701,13 +703,13 @@ test_wallet_generate_and_verify(GeneratePath, ExpectedName, CommitParams) ->
             #{
                 <<"device">> => <<"wallet@1.0">>,
                 <<"path">> => <<"commit">>,
-                <<"cookie">> => AuthCookie,
                 <<"body">> => <<"Test message">>
             },
             CommitParams
         ),
-    ?event({signing_with_cookie, {test_message, TestMessage}}),
-    {ok, SignedMessage} = hb_http:post(Node, TestMessage, #{}),
+    TestMessageWithCookie = hb_private:set(TestMessage, <<"cookie">>, AuthCookie, #{}),
+    ?event({signing_with_cookie, {test_message, TestMessageWithCookie}}),
+    {ok, SignedMessage} = hb_http:post(Node, TestMessageWithCookie, #{}),
     % Should return signed message with correct signer
     ?assertMatch(#{ <<"body">> := <<"Test message">> }, SignedMessage),
     ?assert(hb_message:signers(SignedMessage, #{}) =:= [WalletAddr]).
@@ -791,20 +793,22 @@ commit_with_cookie_wallet_test() ->
     {ok, GenResponse} =
         hb_http:get(Node, <<"/~wallet@1.0/generate?persist=client">>, #{}),
     WalletName = maps:get(<<"body">>, GenResponse),
+    ?event(x, {gen_response, {generated_wallet_response, GenResponse}}),
     AuthCookie =
         maps:get(
             <<"set-cookie">>,
             GenResponse,
-            maps:get(<<"cookie">>, GenResponse, <<>>)
+            hb_private:get(<<"cookie">>, GenResponse, <<>>)
         ),
     % Use the cookie to sign a message (no wallet parameter needed).
     TestMessage = #{
         <<"device">> => <<"wallet@1.0">>,
         <<"path">> => <<"commit">>,
-        <<"cookie">> => AuthCookie,
         <<"body">> => <<"Test data">>
     },
-    {ok, SignedMessage} = hb_http:post(Node, TestMessage, #{}),
+    TestMessageWithCookie = hb_private:set(TestMessage, <<"cookie">>, AuthCookie, #{}),
+    ?event(x, {test_message, {post_test_message, TestMessageWithCookie}}),
+    {ok, SignedMessage} = hb_http:post(Node, TestMessageWithCookie, #{}),
     % Should return the signed message with signature attached.
     ?assert(hb_message:signers(SignedMessage, #{}) =:= [WalletName]).
 
@@ -826,7 +830,9 @@ export_wallet_test() ->
             Node,
             #{
                 <<"path">> => <<"/~wallet@1.0/export/1">>,
-                <<"cookie">> => AuthCookie
+                <<"priv">> => #{
+                    <<"cookie">> => AuthCookie
+                }
             },
             #{}
         ),
@@ -860,7 +866,9 @@ export_non_volatile_wallet_test() ->
                 #{
                     <<"device">> => <<"wallet@1.0">>,
                     <<"path">> => <<"export/1">>,
-                    <<"cookie">> => AuthCookie
+                    <<"priv">> => #{    
+                        <<"cookie">> => AuthCookie
+                    }
                 },
                 #{}
             ),

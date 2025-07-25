@@ -70,8 +70,8 @@ request(Method, #{ <<"opts">> := NodeOpts, <<"uri">> := URI }, _Path, Message, O
     % The request has a set of additional options, so we apply them to the
     % request.
     MergedOpts = hb_maps:merge(Opts, NodeOpts, Opts),
-    % We also recalculate the request. The order of precidence here is subtle:
-    % We favor the args given to the function, but the URI rules take precidence
+    % We also recalculate the request. The order of precedence here is subtle:
+    % We favor the args given to the function, but the URI rules take precedence
     % over that.
     {ok, NewMethod, Node, NewPath, NewMsg, NewOpts} =
         message_to_request(
@@ -284,10 +284,14 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     Message = hb_ao:normalize_keys(RawMessage, Opts),
     % Generate a `cookie' key for the message, if an unencoded cookie is
     % present.
+    ?event(x, {req_msg, {message, Message}}),
     {MaybeCookie, WithoutCookie} =
-        case hb_ao:get(<<"cookie">>, Message, Opts) of
-            not_found -> {#{}, Message};
+        case hb_private:get(<<"cookie">>, Message, Opts) of
+            not_found -> 
+                ?event(x, {cookie, {no_cookie_in_priv, Message}}),
+                {#{}, Message};
             Cookie ->
+                ?event(x, {cookie, {got_cookie_in_priv, Cookie}}),
                 {ok, CookieLines} =
                     dev_codec_cookie:to(
                         Cookie,
@@ -295,8 +299,10 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                         Opts
                     ),
                 ?event(http, {cookie_lines, CookieLines}),
-                {#{ <<"cookie">> => CookieLines }, Message}
+                MsgWithoutCookie = hb_private:set(Message, <<"cookie">>, unset, Opts),
+                {#{ <<"cookie">> => CookieLines }, MsgWithoutCookie}
         end,
+    ?event(x, {cookie, {req_msg_without_cookie, WithoutCookie}}),
     % Add the `accept-bundle: true' key to the message, if the caller has not
     % set an explicit preference.
     WithAcceptBundle =
@@ -902,6 +908,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
 %% node configuration. Additionally, non-committed fields are removed from the
 %% message if it is signed, with the exception of the `path' and `method' fields.
 httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
+    ?event(x, {httpsig_to_tabm_singleton, {raw_headers, RawHeaders}}),
     {ok, SignedMsg} =
         hb_message:with_only_committed(
             hb_message:convert(
@@ -912,6 +919,7 @@ httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
             ),
             Opts
         ),
+    ?event(x, {httpsig_to_tabm_singleton, {signed_msg, SignedMsg}}),
     ForceSignedRequests = hb_opts:get(force_signed_requests, false, Opts),
     case (not ForceSignedRequests) orelse hb_message:verify(SignedMsg, all, Opts) of
         true ->
@@ -948,11 +956,21 @@ httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
 %% @doc Add the method and path to a message, if they are not already present.
 %% Remove browser-added fields that are unhelpful during processing (for example,
 %% `content-length').
-%% The precidence order for finding the path is:
+%% The precedence order for finding the path is:
 %% 1. The path in the message
 %% 2. The path in the request URI
-normalize_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
-    ?event({adding_method_and_path_from_request, {explicit, Req}}),
+normalize_unsigned(Req = #{ headers := RawHeaders }, _Msg, Opts) ->
+    ?event(x, {adding_method_and_path_from_request, {explicit, Req}, {msg, {explicit,_Msg}}}),
+    % Move cookie key to priv
+    MaybeCookie = hb_maps:get(<<"cookie">>, _Msg, undefined, Opts),
+    Msg = case MaybeCookie of
+        undefined -> _Msg;
+        Cookie -> 
+            MsgWithPrivCookie = hb_private:set(_Msg, <<"cookie">>, Cookie, Opts),
+            hb_maps:without([<<"cookie">>], MsgWithPrivCookie, Opts)
+    end,
+    ?event(x, {adding_method_and_path_from_request, {msg, {explicit, Msg}}}),
+    
     Method = cowboy_req:method(Req),
     MsgPath =
         hb_ao:get(

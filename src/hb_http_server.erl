@@ -363,7 +363,7 @@ handle_request(RawReq, Body, ServerID) ->
                 CommitmentCodec = hb_http:accept_to_codec(ReqSingleton, NodeMsg),
                 ?event(http,
                     {parsed_singleton,
-                        {req_singleton, ReqSingleton},
+                        {req_singleton, {explicit, ReqSingleton}},
                         {accept_codec, CommitmentCodec}},
                     #{trace => TracePID}
                 ),
