@@ -92,12 +92,12 @@ from_maintains_tag_name_case_test() ->
         ]
     },
     SignedTX = ar_bundles:sign_item(TX, hb:wallet()),
-    ?event({signed_tx, SignedTX}),
+    ?event({signed_tx, {explicit, SignedTX}}),
     ?assert(ar_bundles:verify_item(SignedTX)),
     TABM = hb_util:ok(from(SignedTX, #{}, #{})),
-    ?event({tabm, TABM}),
+    ?event({tabm, {explicit, TABM}}),
     ConvertedTX = hb_util:ok(to(TABM, #{}, #{})),
-    ?event({converted_tx, ConvertedTX}),
+    ?event({converted_tx, {explicit, ConvertedTX}}),
     ?assert(ar_bundles:verify_item(ConvertedTX)),
     ?assertEqual(ConvertedTX, hb_tx:normalize(SignedTX)).
 
@@ -168,6 +168,192 @@ simple_to_conversion_test() ->
     ?event({decoded, Decoded}),
     ?assert(hb_message:match(Msg, hb_message:uncommitted(Decoded, #{}))).
 
+name_clash_test() ->
+    L1Target = <<"L1Target_L1Target_L1Target_L1Tar">>,
+    LowercaseTarget = <<"LowercaseTarget_LowercaseTarget_">>,
+    CamelcaseTarget = <<"CamelcaseTarget_CamelcaseTarget">>,
+    ReverseCaseTarget = <<"REVERSECASETARGET_REVERSECASETAR">>,
+
+    TestCases = [
+        {tag_clash_generic,
+            #tx{
+                tags = [
+                    {<<"Tag">>, <<"Tag-value">>},
+                    {<<"tag">>, <<"tag-value">>},
+                    {<<"tAG">>, <<"tAG-value">>}
+                ]
+            },
+            #{
+                <<"tag">> => <<"tag-value">>,
+                <<"commitments">> => #{
+                    <<"original-tags">> => #{
+                        <<"1">> => #{<<"name">> => <<"Tag">>, <<"value">> => <<"Tag-value">>},
+                        <<"2">> => #{<<"name">> => <<"tag">>, <<"value">> => <<"tag-value">>},
+                        <<"3">> => #{<<"name">> => <<"tAG">>, <<"value">> => <<"tAG-value">>}
+                    }
+                }
+            }
+        },
+        {tag_clash_target,
+            #tx{
+                tags = [
+                    {<<"target">>, LowercaseTarget},
+                    {<<"Target">>, CamelcaseTarget},
+                    {<<"tARGET">>, ReverseCaseTarget}
+                ]
+            },
+            #{
+                <<"target">> => LowercaseTarget,
+                <<"commitments">> => #{
+                    <<"original-tags">> => #{
+                        <<"1">> => #{<<"name">> => <<"target">>, <<"value">> => LowercaseTarget},
+                        <<"2">> => #{<<"name">> => <<"Target">>, <<"value">> => CamelcaseTarget},
+                        <<"3">> => #{<<"name">> => <<"tARGET">>, <<"value">> => ReverseCaseTarget}
+                    }
+                }
+            }
+        },
+        {l1_and_tag_clash_target_a,
+            #tx{
+                tags = [
+                    {<<"target">>, LowercaseTarget},
+                    {<<"Target">>, CamelcaseTarget},
+                    {<<"tARGET">>, ReverseCaseTarget}
+                ],
+                target = L1Target
+            },
+            #{
+                <<"target">> => LowercaseTarget,
+                <<"commitments">> => #{
+                    <<"original-target">> => L1Target,
+                    <<"original-tags">> => #{
+                        <<"1">> => #{<<"name">> => <<"target">>, <<"value">> => LowercaseTarget},
+                        <<"2">> => #{<<"name">> => <<"Target">>, <<"value">> => CamelcaseTarget},
+                        <<"3">> => #{<<"name">> => <<"tARGET">>, <<"value">> => ReverseCaseTarget}
+                    }
+                }
+            }
+        },
+        {l1_and_tag_clash_target_b,
+            #tx{
+                tags = [
+                    {<<"Target">>, CamelcaseTarget},
+                    {<<"tARGET">>, ReverseCaseTarget}
+                ],
+                target = L1Target
+            },
+            #{
+                <<"target">> => CamelcaseTarget,
+                <<"commitments">> => #{
+                    <<"original-target">> => L1Target,
+                    <<"original-tags">> => #{
+                        <<"1">> => #{<<"name">> => <<"Target">>, <<"value">> => CamelcaseTarget},
+                        <<"2">> => #{<<"name">> => <<"tARGET">>, <<"value">> => ReverseCaseTarget}
+                    }
+                }
+            }
+        },
+        {l1_and_tag_clash_target_c,
+            #tx{
+                tags = [
+                    {<<"tARGET">>, ReverseCaseTarget}
+                ],
+                target = L1Target
+            },
+            #{
+                <<"target">> => ReverseCaseTarget,
+                <<"commitments">> => #{
+                    <<"original-target">> => L1Target,
+                    <<"original-tags">> => #{
+                        <<"1">> => #{<<"name">> => <<"tARGET">>, <<"value">> => ReverseCaseTarget}
+                    }
+                }
+            }
+        },
+        {l1_and_tag_clash_target_d,
+            #tx{
+                tags = [
+                    {<<"target">>, LowercaseTarget}
+                ],
+                target = L1Target
+            },
+            #{
+                <<"target">> => LowercaseTarget,
+                <<"commitments">> => #{
+                    <<"original-target">> => L1Target,
+                    <<"original-tags">> => #{
+                        <<"1">> => #{<<"name">> => <<"target">>, <<"value">> => LowercaseTarget}
+                    }
+                }
+            }
+        },
+        {l1_and_tag_clash_target_e,
+            #tx{
+                tags = [
+                    {<<"target">>, L1Target}
+                ],
+                target = L1Target
+            },
+            #{
+                <<"target">> => L1Target,
+                <<"commitments">> => #{
+                    <<"original-target">> => L1Target,
+                    <<"original-tags">> => #{
+                        <<"1">> => #{<<"name">> => <<"target">>, <<"value">> => L1Target}
+                    }
+                }
+            }
+        },
+        {no_clash_just_l1,
+            #tx{
+                target = L1Target
+            },
+            #{
+                <<"target">> => L1Target,
+                <<"commitments">> => #{
+                    <<"original-target">> => L1Target
+                }
+            }
+        }
+    ],
+
+    %% XXX TODO: target tag has to be decoded before being set into #tx.target
+    %% XXX TODO: try with signing
+    %% XXX TODO: add tests for last_tx / anchor
+    %% XXX TODO: add tests with aotypes
+    %% XXX TODO: do we have to encode the original-target value?
+
+    lists:foreach(
+        fun({Label, InputTX, ExpectedTABM}) ->
+            do_name_clash_roundtrip(Label, InputTX, ExpectedTABM)
+        end,
+        TestCases
+    ).
+
+do_name_clash_roundtrip(Label, InputTX, ExpectedTABM0) ->
+    % Fix up the commitments in the ExpectedTABM
+    ResetTX = hb_tx:reset_ids(InputTX),
+    ExpectedCommitments0 = maps:get(<<"commitments">>, ExpectedTABM0, #{}),
+    ExpectedCommitments = ExpectedCommitments0#{
+        <<"commitment-device">> => <<"ans104@1.0">>,
+        <<"type">> => <<"unsigned-sha256">>
+    },
+    ExpectedTABM = ExpectedTABM0#{
+        <<"commitments">> => #{ 
+            hb_util:human_id(ResetTX#tx.unsigned_id) => ExpectedCommitments
+        }
+    },
+    
+    % Run the tests
+    {ok, TABM} = from(InputTX, #{}, #{}),
+    ?event({Label, {expected_tabm, {explicit, ExpectedTABM}}, {actual_tabm, {explicit, TABM}}}),
+    ?assert(hb_message:match(ExpectedTABM, TABM), Label),
+
+    {ok, OutputTX} = to(TABM, #{}, #{}),
+    ?event({Label, {input_tx, {explicit, ResetTX}}, {output_tx, {explicit, OutputTX}}}),
+    ?assertEqual(ResetTX, OutputTX, Label),
+    ok.
+
 only_committed_maintains_target_test() ->
     TX = ar_bundles:sign_item(#tx {
         target = crypto:strong_rand_bytes(32),
@@ -212,12 +398,12 @@ ao_data_key_test() ->
             #{ priv_wallet => hb:wallet() },
             <<"ans104@1.0">>
         ),
-    ?event({msg, Msg}),
+    ?event({msg, {explicit, Msg}}),
     Enc = hb_message:convert(Msg, <<"ans104@1.0">>, #{}),
-    ?event({enc, Enc}),
+    ?event({enc, {explicit, Enc}}),
     ?assertEqual(<<"Body value">>, Enc#tx.data),
     Dec = hb_message:convert(Enc, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
-    ?event({dec, Dec}),
+    ?event({dec, {explicit, Dec}}),
     ?assert(hb_message:verify(Dec, all, #{})).
         
 simple_signed_to_httpsig_test_disabled() ->
@@ -338,7 +524,8 @@ invalid_fields_test() ->
         { <<"owner_address">>, #{ <<"owner_address">> => hb_util:encode(crypto:strong_rand_bytes(32)) } },
         { <<"tags">>, #{ <<"tags">> => <<"tags">> } },
         { <<"data_size">>, #{ <<"data_size">> => <<"100">> } },
-        { <<"data_tree">>, #{ <<"data_tree">> => hb_util:encode(crypto:strong_rand_bytes(32)) } }
+        { <<"data_tree">>, #{ <<"data_tree">> => hb_util:encode(crypto:strong_rand_bytes(32)) } },
+        { <<"signature">>, #{ <<"signature">> => hb_util:encode(crypto:strong_rand_bytes(512)) } }
     ],
 
     lists:foreach(
@@ -353,25 +540,6 @@ invalid_fields_test() ->
         TestCases
     ).
 
-invalid_field_test() ->
-    Signature = hb_util:encode(crypto:strong_rand_bytes(512)),
-    TestCases = [
-        { <<"signature">>, #{ <<"signature">> => Signature }, {invalid_field, signature, Signature} }
-    ],
-
-    lists:foreach(
-        fun({InvalidField, TestCase, ExpectedError}) ->
-            hb_test_utils:assert_throws(
-                fun dev_codec_ans104:to/3,
-                [TestCase, #{}, #{}],
-                ExpectedError,
-                InvalidField
-            )
-        end,
-        TestCases
-    ).
-
-
 do_unsigned_roundtrip(UnsignedStructured, UnsignedTX) ->
     StructuredCodec = #{<<"device">> => <<"structured@1.0">>, <<"bundle">> => true},
     TABM0 = hb_message:convert(UnsignedStructured, tabm, StructuredCodec, #{}),
@@ -380,6 +548,14 @@ do_unsigned_roundtrip(UnsignedStructured, UnsignedTX) ->
     {ok, DataItem} = dev_codec_ans104:to(TABM0, #{}, #{}),
     {ok, TABM1} = dev_codec_ans104:from(DataItem, #{}, #{}),
     Structured = hb_message:convert(TABM1, StructuredCodec, tabm, #{}),
+
+    ?event({unsigned_tx, {explicit, UnsignedTX}}),
+    ?event({data_item, {explicit, DataItem}}),
+    ?event({tabm1, {explicit, TABM1}}),
+    ?event({structured, {explicit, Structured}}),
+    ?event({tabm0, {explicit, TABM0}}),
+    ?event({committed_tabm0, {explicit, CommittedTABM0}}),
+
     ?assertEqual(UnsignedTX, DataItem),
     ?assert(hb_message:match(UnsignedStructured, Structured)),
     ?assert(hb_message:match(TABM0, TABM1)),

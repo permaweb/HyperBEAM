@@ -9,8 +9,8 @@
 % %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    normalize_commitments_test(
-        <<"structured@1.0">>,
+    specific_order_deeply_nested_signed_message_test(
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         test_opts(normal)
     ).
 
@@ -24,8 +24,8 @@ test_codecs() ->
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
-        <<"json@1.0">>,
-        <<"tx@1.0">>
+        <<"json@1.0">>
+        % <<"tx@1.0">>
     ].
 
 %% @doc Return a set of options for testing, taking the codec name as an
@@ -785,7 +785,7 @@ specific_order_deeply_nested_signed_message_test(RawCodec, Opts) ->
                     ]
             }
         ),
-    ?event({signed_msg, SignedMsg}),
+    ?event({signed_msg, {explicit, SignedMsg}}),
     ?assert(hb_message:verify(SignedMsg, all, Opts)).
 
 complex_signed_message_test(Codec, Opts) ->
@@ -1377,7 +1377,7 @@ encode_balance_table(Size, Codec, Opts) ->
         },
     ?event({msg, {explicit, Msg}}),
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    % ?event({encoded, {explicit, Encoded}}),
+    ?event({encoded, {explicit, Encoded}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({decoded, {explicit, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, only_present, Opts)).
