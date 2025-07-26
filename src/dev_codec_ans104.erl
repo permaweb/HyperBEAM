@@ -168,6 +168,24 @@ simple_to_conversion_test() ->
     ?event({decoded, Decoded}),
     ?assert(hb_message:match(Msg, hb_message:uncommitted(Decoded, #{}))).
 
+simple_from_conversion_test() ->
+    InputTX = hb_tx:reset_ids(#tx{
+        tags = [
+            {<<"first-tag">>, <<"first-value">>},
+            {<<"second-tag">>, <<"second-value">>},
+            {<<"Target">>, hb_util:encode(crypto:strong_rand_bytes(32))}
+        ],
+        target = crypto:strong_rand_bytes(32),
+        data = <<"test-data">>,
+        data_size = byte_size(<<"test-data">>)
+    }),
+    {ok, TABM} = from(InputTX, #{}, #{}),
+    ?event({tabm, {explicit, TABM}}),
+    {ok, OutputTX} = to(TABM, #{}, #{}),
+    ?event({output_tx, {explicit, OutputTX}}),
+    ?assertEqual(InputTX, OutputTX),
+    ok.
+
 only_committed_maintains_target_test() ->
     TX = ar_bundles:sign_item(#tx {
         target = crypto:strong_rand_bytes(32),

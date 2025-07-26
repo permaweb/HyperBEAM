@@ -243,6 +243,9 @@ tx_to_tabm2(RawTX, CommittedTags, Req, Opts) ->
     % Initialize message from the transaction tags
     RawTags = deduplicating_from_list(TX#tx.tags, Opts),
 
+    ?event(xxx, {tx_to_tabm2, {tx, {explicit, TX}}}),
+    ?event(xxx, {tx_to_tabm2, {raw_tx, {explicit, RawTX}}}),
+
     % 0. Add keys to the TABM for any non-default values in the #tx record.
     TABM0 = apply_tx_to_tabm(RawTags, TX, Opts),
 
@@ -257,12 +260,12 @@ tx_to_tabm2(RawTX, CommittedTags, Req, Opts) ->
     TABM3 = add_commitments(TABM2, TX, Device, CommittedTags, Opts),
 
     Result = hb_maps:without(?FILTERED_TAGS, TABM3, Opts),
-    ?event({tx_to_tabm, {result, {explicit, Result}}}),
+    ?event(xxx, {tx_to_tabm, {result, {explicit, Result}}}),
     Result.
 
 tabm_to_tx(BaseTX, InputTABM, Req, Opts) ->
     NormalizedTABM = hb_ao:normalize_keys(normalize_data_field(InputTABM), Opts),
-    ?event({tabm_to_tx, {input_tabm, {explicit, NormalizedTABM}}}),
+    ?event(xxx, {tabm_to_tx, {input_tabm, {explicit, NormalizedTABM}}}),
 
     TABM = maybe_bundle(NormalizedTABM, Req, Opts),
     
@@ -293,7 +296,7 @@ tabm_to_tx(BaseTX, InputTABM, Req, Opts) ->
         _ -> throw({invalid_fields, HasInvalidFields})
     end,
 
-    ?event({tabm_to_tx, {result, {explicit, TXFinal}}}),
+    ?event(xxx, {tabm_to_tx, {result, {explicit, TXFinal}}}),
     TXFinal.
 
 binary_to_tx(Binary) ->
@@ -321,6 +324,8 @@ apply_tx_to_tabm(InputTABM, TX, Opts) ->
         <<"structured@1.0">>,
         Opts
     ),
+
+    ?event(xxx, {apply_tx_to_tabm, {structured0, {explicit, Structured0}}}),
 
     Structured1 = apply_to_structured(Structured0, TX),
 
