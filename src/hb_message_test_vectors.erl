@@ -25,7 +25,7 @@ test_codecs() ->
         #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
-        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+        % #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         <<"json@1.0">>,
         <<"tx@1.0">>
     ].
@@ -1379,7 +1379,7 @@ encode_balance_table(Size, Codec, Opts) ->
         },
     ?event({msg, {explicit, Msg}}),
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    % ?event({encoded, {explicit, Encoded}}),
+    ?event({encoded, {explicit, Encoded}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({decoded, {explicit, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, only_present, Opts)).

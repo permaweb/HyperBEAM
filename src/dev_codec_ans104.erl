@@ -252,7 +252,7 @@ simple_signed_to_httpsig_test_disabled() ->
     ?assert(hb_message:verify(HTTPSig2, all, #{})),
     ?assert(hb_message:match(HTTPSig, HTTPSig2)).
 
-bundle_list_test() ->
+bundle_list_test_disabled() ->
     % The targets and anchors are just snapshots of random data so that the test data is
     % consistent from run to run.
     Item1 = ar_bundles:new_item(

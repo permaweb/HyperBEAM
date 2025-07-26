@@ -491,6 +491,9 @@ to_tx_data(Data, Req, Opts) ->
 
 set_data(Structured, ?DEFAULT_DATA) ->
     Structured;
+set_data(Structured, Data) when is_map(Data) ->
+    %% XXX TODO: we may not want this
+    hb_maps:merge(Structured, Data, #{});
 set_data(Structured, Data) ->
     % Normalize the `data` field to the `ao-data-key's value, if set.
     case maps:get(<<"ao-data-key">>, Structured, undefined) of
