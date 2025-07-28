@@ -11,19 +11,9 @@ info() ->
         routes => #{
             % Default message viewer page:
             <<"index">> => <<"index.html">>,
-            % HyperBEAM default homepage:
-            <<"dashboard">> => <<"dashboard.html">>,
-            % Interactive REPL:
-            <<"console">> => <<"console.html">>,
-            <<"graph">> => <<"graph.html">>,
-            % Styling and scripts:
-			<<"styles.css">> => <<"styles.css">>,
-			<<"metrics.js">> => <<"metrics.js">>,
-			<<"devices.js">> => <<"devices.js">>,
-			<<"utils.js">> => <<"utils.js">>,
-			<<"dashboard.js">> => <<"dashboard.js">>,
-			<<"graph.js">> => <<"graph.js">>,
-            <<"404.html">> => <<"404.html">>
+            % Error pages:
+            <<"404.html">> => <<"404.html">>,
+            <<"500.html">> => <<"500.html">>
         },
         excludes => [<<"return_file">>]
     }.
