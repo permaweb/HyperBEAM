@@ -223,11 +223,15 @@ sandbox(State, [Path | Rest], Opts) ->
 compute(Key, RawBase, Req, Opts) ->
     ?event(debug_lua, compute_called),
     LoadedReq = 
-        hb_cache:read_all_commitments(
-            hb_cache:ensure_all_loaded(Req, Opts),
+        hb_message:normalize_commitments(
+            hb_cache:read_all_commitments(
+                hb_cache:ensure_all_loaded(Req, Opts),
+                Opts
+            ),
             Opts
         ),
     {ok, Base} = ensure_initialized(RawBase, LoadedReq, Opts),
+    ?event(debug_charge, {compute_called, {key, Key}, {base, Base}, {req, LoadedReq}}),
     ?event(debug_lua, ensure_initialized_done),
     % Get the state from the base message's private element.
     OldPriv = #{ <<"state">> := State } = hb_private:from_message(Base),
@@ -262,7 +266,7 @@ compute(Key, RawBase, Req, Opts) ->
     ?event(transfer_test, {params, Params}),
     ?event(debug_lua, parameters_found),
     % Resolve all hyperstate links
-    ResolvedParams = hb_cache:ensure_all_loaded(Params, Opts),
+    ResolvedParams = hb_message:normalize_commitments(hb_cache:ensure_all_loaded(Params, Opts), Opts),
     % Call the VM function with the given arguments.
     ?event(lua,
         {calling_lua_func,
@@ -271,7 +275,7 @@ compute(Key, RawBase, Req, Opts) ->
             {req, LoadedReq}
         }
     ),
-    ?event(transfer_test, {function, Function}),
+    ?event(debug_charge, {{function, Function}, {resolved_params, ResolvedParams}, {req, LoadedReq}}),
     process_response(
         try luerl:call_function_dec(
             [Function],
@@ -333,6 +337,7 @@ snapshot(Base, _Req, Opts) ->
         not_found ->
             {error, <<"Cannot snapshot Lua state: state not initialized.">>};
         State ->
+            ?event(debug_charge, {lua_snapshot_called}),
             {ok,
                 #{
                     <<"body">> =>

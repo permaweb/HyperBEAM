@@ -118,6 +118,7 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
     write(Opts, PathBin, Value);
 write(Opts, Path, Value) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
+    % ?event(debug_charge, {writing_to_db, {path, Path}, {value, Value}}),
     case elmdb:async_put(DBInstance, Path, Value) of
         ok -> ok;
         {error, Type, Description} ->
@@ -356,6 +357,7 @@ list(Opts, Path) ->
             <<"/">> -> <<"">>;
             _ -> <<ResolvedPath/binary, "/">>
         end,
+    % ?event(debug_charge, {lmdb_list_called, {path, Path}, {resolved_path, ResolvedPath}, {search_path, SearchPath}}),
     DBKeys =
         case matching_db_keys(SearchPath, Opts) of
             {ok, Keys} -> Keys;
@@ -394,6 +396,7 @@ matching_db_keys(Prefix, Opts) ->
         Opts,
         Prefix,
         fun(Key, _Value, Acc) ->
+            % ?event(debug_charge, {matching_db_keys, {key, Key}, {prefix, Prefix}}),
             % Match keys that start with our search path (like dir listing)
             case match_path(Prefix, Key) of
                 {true, Child} -> [Child | Acc];

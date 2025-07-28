@@ -161,6 +161,7 @@ ensure_all_loaded(Ref, Msg, Opts) ->
 %% @doc List all items in a directory, assuming they are numbered.
 list_numbered(Path, Opts) ->
     SlotDir = hb_store:path(hb_opts:get(store, no_viable_store, Opts), Path),
+    % ?event(debug_charge, {list_numbered, {path, Path}, {dir, SlotDir}, { list, list(SlotDir, Opts) }}),
     [ to_integer(Name) || Name <- list(SlotDir, Opts) ].
 
 %% @doc List all items under a given path.
@@ -172,6 +173,7 @@ list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) 
     end;
 list(Path, Store) ->
     ResolvedPath = hb_store:resolve(Store, Path),
+    % ?event(debug_charge, {getting_list, {path, Path}, {resolved_path, ResolvedPath}, {store, Store}}),
     case hb_store:list(Store, ResolvedPath) of
         {ok, Names} -> Names;
         {error, _} -> [];

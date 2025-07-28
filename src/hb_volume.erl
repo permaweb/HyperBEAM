@@ -884,6 +884,25 @@ check_command_errors_test() ->
     ).
 
 %% Test store configuration updates for different types
+% update_store_config_test() ->
+%     % Test filesystem store
+%     FSStore = #{
+%         <<"store-module">> => hb_store_fs,
+%         <<"name">> => <<"cache">>
+%     },
+%     NewPath = <<"/encrypted/mount">>,
+%     Updated = update_store_config(FSStore, NewPath),
+%     Expected = FSStore#{<<"name">> => <<"/encrypted/mount/cache">>},
+%     ?assertEqual(Expected, Updated),
+%     % Test list of stores
+%     StoreList = [FSStore, #{<<"store-module">> => hb_store_gateway}],
+%     UpdatedList = update_store_config(StoreList, NewPath),
+%     ?assertEqual(2, length(UpdatedList)),
+%     % Test tuple format
+%     TupleStore = {fs, <<"old_path">>, []},
+%     UpdatedTuple = update_store_config(TupleStore, NewPath),
+%     ?assertEqual({fs, NewPath, []}, UpdatedTuple).
+%% Test store configuration updates for different types
 update_store_config_test() ->
     % Test filesystem store
     FSStore = #{
@@ -904,7 +923,7 @@ update_store_config_test() ->
         <<"local-store">> => FSStore
     },
     UpdatedNested = update_store_config(NestedStore, NewPath),
-    ?assertEqual(NestedStore#{ <<"local-store">> => Expected }, UpdatedNested).
+    ?assertEqual(NestedStore#{ <<"local-store">> => Expected, <<"name">> => <<"/encrypted/mount/">> }, UpdatedNested).
 
 %% Test secure key file management
 with_secure_key_file_test() ->

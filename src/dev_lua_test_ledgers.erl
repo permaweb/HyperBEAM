@@ -213,9 +213,10 @@ balances(Mode, ProcMsg, Opts) when is_atom(Mode) ->
     balances(hb_util:bin(Mode), ProcMsg, Opts);
 balances(Prefix, ProcMsg, Opts) ->
     Balances = hb_ao:get(<<Prefix/binary, "/balance">>, ProcMsg, #{}, Opts),
+    LoadedBalances = hb_private:reset(hb_cache:ensure_all_loaded(Balances, Opts)),
     hb_maps:without(
         [<<"commitments">>],
-        hb_private:reset(hb_cache:ensure_all_loaded(Balances, Opts))
+        LoadedBalances
     ).
 
 %% @doc Get the supply of a ledger, either `now` or `initial`.
@@ -680,6 +681,13 @@ subledger_to_subledger() ->
         SubLedger1 => subledger1,
         SubLedger2 => subledger2
     },
+    ?event(debug, {names, 
+        {alice, hb_util:human_id(ar_wallet:to_address(Alice))},
+        {bob, hb_util:human_id(ar_wallet:to_address(Bob))},
+        {root, hb_message:id(RootLedger, signed, Opts)},
+        {subledger1, hb_message:id(SubLedger1, signed, Opts)},
+        {subledger2, hb_message:id(SubLedger2, signed, Opts)}
+    }),
     % 1. Alice starts with 100 tokens on the root ledger.
     ?assertEqual(100, balance(RootLedger, Alice, Opts)),
     ?event(debug_test, {map_1, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
@@ -689,15 +697,15 @@ subledger_to_subledger() ->
     % 3. Alice sends 10 tokens to Bob on SubLedger2 from SubLedger1.
     transfer(SubLedger1, Alice, Bob, 10, SubLedger2, Opts),
     ?event(debug_test, {map_3, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
-
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(80, balance(SubLedger1, Alice, Opts)),
     ?assertEqual(10, balance(SubLedger2, Bob, Opts)),
-    verify_net(RootLedger, [SubLedger1, SubLedger2], Opts),
-
     % 4. Bob sends 5 tokens to himself on SubLedger1 from SubLedger2.
     transfer(SubLedger2, Bob, Bob, 5, SubLedger1, Opts),
     ?event(debug_test, {map_4, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
+    ?assertEqual(5, balance(SubLedger1, Bob, Opts)),
+    ?assertEqual(5, balance(SubLedger2, Bob, Opts)),
+    verify_net(RootLedger, [SubLedger1, SubLedger2], Opts),
     % 5. Bob sends 4 tokens to Alice on SubLedger1 from SubLedger2.
     transfer(SubLedger2, Bob, Alice, 4, SubLedger1, Opts),
     ?event(debug_test, {map_5, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
