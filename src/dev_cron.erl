@@ -1,13 +1,13 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([once/3, every/3, stop/3, info/1, info/3]).
+-export([once/3, every/3, stop/3, list/3, info/1, info/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
 info(_) -> 
-	#{ exports => [info, once, every, stop] }.
+	#{ exports => [info, once, every, stop, list] }.
 
 info(_Msg1, _Msg2, _Opts) ->
 	InfoBody = #{
@@ -17,7 +17,8 @@ info(_Msg1, _Msg2, _Opts) ->
 			<<"info">> => <<"Get device info">>,
 			<<"once">> => <<"Schedule a one-time message">>,
 			<<"every">> => <<"Schedule a recurring message">>,
-			<<"stop">> => <<"Stop a scheduled task {task}">>
+			<<"stop">> => <<"Stop a scheduled task {task}">>,
+			<<"list">> => <<"List all active cron tasks">>
 		}
 	},
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
@@ -36,26 +37,33 @@ once(_Msg1, Msg2, Opts) ->
                     maps:put(<<"path">>, CronPath, Msg2)
                 ),
 			Name = {<<"cron@1.0">>, ReqMsgID},
-			Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts) end),
+			CreatedAt = erlang:system_time(millisecond),
+			Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts, CreatedAt) end),
 			hb_name:register(Name, Pid),
 			{ok, ReqMsgID}
 	end.
 
 %% @doc Internal function for scheduling a one-time message.
-once_worker(Path, Req, Opts) ->
-	% Directly call the meta device on the newly constructed 'singleton', just
-    % as hb_http_server does.
-    TracePID = hb_tracer:start_trace(),
+once_worker(Path, Req, Opts, CreatedAt) ->
+	% Store metadata in process dictionary for instant access
+	put(cron_metadata, #{
+		<<"type">> => <<"once">>,
+		<<"path">> => Path,
+		<<"created_at">> => CreatedAt
+	}),
+	
+	% Execute the task
+	TracePID = hb_tracer:start_trace(),
 	try
 		dev_meta:handle(Opts#{ trace => TracePID }, Req#{ <<"path">> => Path})
 	catch
 		Class:Reason:Stacktrace ->
 			?event(
-                {cron_every_worker_error,
-                    {path, Path},
-                    {error, Class, Reason, Stacktrace}
-                }
-            ),
+				{cron_once_worker_error,
+					{path, Path},
+					{error, Class, Reason, Stacktrace}
+				}
+			),
 			throw({error, Class, Reason, Stacktrace})
 	end.
 
@@ -85,6 +93,7 @@ every(_Msg1, Msg2, Opts) ->
                         maps:remove(<<"interval">>, Msg2)
                     ),
 				TracePID = hb_tracer:start_trace(),
+				CreatedAt = erlang:system_time(millisecond),
 				Pid =
                     spawn(
                         fun() ->
@@ -92,7 +101,9 @@ every(_Msg1, Msg2, Opts) ->
                                 CronPath,
                                 ModifiedMsg2,
                                 Opts#{ trace => TracePID },
-                                IntervalMillis
+                                IntervalMillis,
+                                CreatedAt,
+                                IntervalString
                             )
                         end
                     ),
@@ -137,7 +148,68 @@ stop(_Msg1, Msg2, Opts) ->
 			end
 	end.
 
-every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
+%% @doc List all active cron tasks.
+list(_Msg1, _Msg2, _Opts) ->
+	AllNames = hb_name:all(),
+	CronTasks = lists:filtermap(
+		fun
+			({{<<"cron@1.0">>, TaskID}, Pid}) when is_pid(Pid) ->
+				% Try to get metadata from process dictionary first (non-blocking)
+				Info = case erlang:process_info(Pid, dictionary) of
+					{dictionary, Dict} ->
+						case lists:keyfind(cron_metadata, 1, Dict) of
+							{cron_metadata, Metadata} ->
+								% Found metadata in process dictionary
+								Metadata#{
+									<<"task_id">> => TaskID,
+									<<"pid">> => list_to_binary(pid_to_list(Pid))
+								};
+							false ->
+								% No metadata in process dictionary, try messaging
+								Pid ! {info, self()},
+								receive
+									{cron_info, Metadata} ->
+										Metadata#{
+											<<"task_id">> => TaskID,
+											<<"pid">> => list_to_binary(pid_to_list(Pid))
+										}
+								after 50 ->
+									% Timeout - return basic info
+									#{
+										<<"task_id">> => TaskID,
+										<<"pid">> => list_to_binary(pid_to_list(Pid)),
+										<<"type">> => <<"unknown">>,
+										<<"path">> => <<"unknown">>
+									}
+								end
+						end;
+					undefined ->
+						% Process doesn't exist anymore
+						false
+				end,
+				case Info of
+					false -> false;
+					_ -> {true, Info}
+				end;
+			(_) ->
+				false
+		end,
+		AllNames
+	),
+	{ok, #{<<"status">> => 200, <<"body">> => CronTasks}}.
+
+
+every_worker_loop(CronPath, Req, Opts, IntervalMillis, CreatedAt, IntervalString) ->
+    % Store metadata in process dictionary for instant access
+    put(cron_metadata, #{
+        <<"type">> => <<"every">>,
+        <<"path">> => CronPath,
+        <<"interval">> => IntervalString,
+        <<"interval_ms">> => IntervalMillis,
+        <<"created_at">> => CreatedAt
+    }),
+    
+    % Execute the task
     Req1 = Req#{<<"path">> => CronPath},
     ?event(
         {cron_every_worker_executing,
@@ -154,8 +226,29 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
                     {path, CronPath},
                     {error, Class, Reason, Stack}})
     end,
-    timer:sleep(IntervalMillis),
-    every_worker_loop(CronPath, Req, Opts, IntervalMillis).
+    
+    % Wait for interval, checking for info requests
+    wait_with_info(IntervalMillis),
+    every_worker_loop(CronPath, Req, Opts, IntervalMillis, CreatedAt, IntervalString).
+
+%% @doc Wait for a given time while responding to info requests.
+wait_with_info(TimeLeft) when TimeLeft =< 0 ->
+    ok;
+wait_with_info(TimeLeft) ->
+    Start = erlang:monotonic_time(millisecond),
+    receive
+        {info, From} ->
+            % Get metadata from process dictionary
+            case get(cron_metadata) of
+                undefined -> From ! {cron_info, #{}};
+                Metadata -> From ! {cron_info, Metadata}
+            end,
+            % Calculate remaining time and continue waiting
+            Elapsed = erlang:monotonic_time(millisecond) - Start,
+            wait_with_info(TimeLeft - Elapsed)
+    after TimeLeft ->
+        ok
+    end.
 
 %% @doc Parse a time string into milliseconds.
 parse_time(BinString) ->
@@ -311,6 +404,68 @@ every_worker_loop_test() ->
 		?event({'cron:every:test:timeout', {pid, PID}, {lookup_result, FinalLookup}}),
 		throw({test_timeout_waiting_for_state, {id, ID}})
 	end.
+
+%% @doc Test the list functionality for cron tasks.
+list_tasks_test() ->
+	Node = hb_http_server:start_node(),
+	
+	% Clean up any existing cron tasks first
+	AllNames = hb_name:all(),
+	lists:foreach(
+		fun
+			({{<<"cron@1.0">>, TaskID}, Pid}) ->
+				exit(Pid, kill),
+				hb_name:unregister({<<"cron@1.0">>, TaskID});
+			(_) -> ok
+		end,
+		AllNames
+	),
+	
+	% Spawn and register a test worker
+	Pid = spawn(fun test_worker/0),
+	ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+	hb_name:register({<<"test">>, ID}, Pid),
+	
+	% Schedule a recurring cron task that will stay alive
+	UrlPath = <<"/~cron@1.0/every?test-id=", ID/binary,
+				"&interval=10-seconds",
+				"&cron-path=/~test-device@1.0/update_state">>,
+	{ok, TaskID} = hb_http:get(Node, UrlPath, #{}),
+	?assertEqual(true, is_binary(TaskID)),
+	
+	% Wait for task to be registered and ready
+	timer:sleep(1000),
+	
+	% Check if task is registered
+	TaskPid = hb_name:lookup({<<"cron@1.0">>, TaskID}),
+	?assert(is_pid(TaskPid)),
+	
+	% List tasks
+	{ok, Response} = hb_http:get(Node, <<"/~cron@1.0/list">>, #{}),
+	?assertEqual(true, is_map(Response)),
+	Body = maps:get(<<"body">>, Response, not_found),
+	
+	?assert(is_list(Body)),
+	
+	% Find the task and verify its metadata
+	TaskInfo = lists:filter(
+		fun(#{<<"task_id">> := TID}) -> TID =:= TaskID;
+		   (_) -> false
+		end, Body),
+	
+	?assertEqual(1, length(TaskInfo)),
+	[Task] = TaskInfo,
+	
+	% Verify the metadata fields
+	?assertEqual(<<"every">>, maps:get(<<"type">>, Task)),
+	?assertEqual(<<"/~test-device@1.0/update_state">>, maps:get(<<"path">>, Task)),
+	?assertEqual(<<"10-seconds">>, maps:get(<<"interval">>, Task)),
+	?assertEqual(10000, maps:get(<<"interval_ms">>, Task)),
+	?assert(is_integer(maps:get(<<"created_at">>, Task))),
+	
+	% Stop the task
+	exit(TaskPid, kill),
+	hb_name:unregister({<<"cron@1.0">>, TaskID}).
 	
 %% @doc This is a helper function that is used to test the cron device.
 %% It is used to increment a counter and update the state of the worker.
