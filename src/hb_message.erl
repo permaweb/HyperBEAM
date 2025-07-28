@@ -201,6 +201,7 @@ id(Msg, RawCommitters, Opts) ->
 %% places, we avoid the need to recalculate the IDs for every `hb_message:id`
 %% call.
 normalize_commitments(Msg, Opts) when is_map(Msg) ->
+    ?event(debug_charge, {normalize_commitments, {msg, hb_private:reset(Msg)}, {is_map, is_map(Msg)}}),
     NormMsg = 
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
@@ -228,6 +229,7 @@ normalize_commitments(Msg, Opts) when is_map(Msg) ->
         _ -> NormMsg
     end;
 normalize_commitments(Msg, Opts) when is_list(Msg) ->
+    ?event(debug_charge, {normalize_commitments_list, {msg, Msg}}),
     lists:map(fun(X) -> normalize_commitments(X, Opts) end, Msg);
 normalize_commitments(Msg, _Opts) ->
     Msg.
