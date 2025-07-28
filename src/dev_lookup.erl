@@ -13,10 +13,10 @@ read(_M1, M2, Opts) ->
         {ok, RawRes} ->
             % We are sending the result over the wire, so make sure it is
             % fully loaded, to save the recipient latency.
-            Res = hb_cache:ensure_all_loaded(RawRes),
-            ?event({lookup_result, Res}),
+            ?event({lookup_result, RawRes}),
             case hb_ao:get(<<"accept">>, M2, Opts) of
                 <<"application/aos-2">> ->
+                    Res = hb_cache:ensure_all_loaded(RawRes),
                     Struct = dev_json_iface:message_to_json_struct(Res, Opts),
                     {ok,
                         #{
@@ -24,7 +24,7 @@ read(_M1, M2, Opts) ->
                             <<"content-type">> => <<"application/aos-2">>
                         }};
                 _ ->
-                    {ok, Res}
+                    {ok, RawRes}
             end;
         not_found ->
             ?event({lookup_not_found, ID}),
@@ -43,7 +43,7 @@ message_lookup_test() ->
     Msg = #{ <<"test-key">> => <<"test-value">>, <<"data">> => <<"test-data">> },
     {ok, ID} = hb_cache:write(Msg, #{}),
     {ok, RetrievedMsg} = read(#{}, #{ <<"target">> => ID }, #{}),
-    ?assertEqual(Msg, RetrievedMsg).
+    ?assert(hb_message:match(Msg, RetrievedMsg)).
 
 aos2_message_lookup_test() ->
     Msg = #{ <<"test-key">> => <<"test-value">>, <<"data">> => <<"test-data">> },
@@ -54,7 +54,8 @@ aos2_message_lookup_test() ->
             #{ <<"target">> => ID, <<"accept">> => <<"application/aos-2">> },
             #{}
         ),
-    Decoded = hb_json:decode(hb_ao:get(<<"body">>, RetrievedMsg, #{})),
+    
+    {ok, Decoded} = dev_json_iface:json_to_message(hb_ao:get(<<"body">>, RetrievedMsg, #{}), #{}),
     ?assertEqual(<<"test-data">>, hb_ao:get(<<"data">>, Decoded, #{})).
 
 http_lookup_test() ->
@@ -73,5 +74,5 @@ http_lookup_test() ->
         <<"accept">> => <<"application/aos-2">>
     }, Wallet),
     {ok, Res} = hb_http:post(Node, Req, Opts),
-    Decoded = hb_json:decode(hb_ao:get(<<"body">>, Res, Opts)),
-    ?assertEqual(<<"test-data">>, hb_ao:get(<<"data">>, Decoded, Opts)).
+    {ok, Decoded} = dev_json_iface:json_to_message(hb_ao:get(<<"body">>, Res, Opts), Opts),
+    ?assertEqual(<<"test-data">>, hb_ao:get(<<"Data">>, Decoded, Opts)).

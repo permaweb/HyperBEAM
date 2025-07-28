@@ -97,20 +97,20 @@
 %%% In this example, the `device' key is mutated a number of times, but the
 %%% resulting HashPath remains correct and verifiable.
 -module(dev_stack).
--export([info/1, router/4, prefix/3, input_prefix/3, output_prefix/3]).
+-export([info/2, router/4, prefix/3, input_prefix/3, output_prefix/3]).
 %%% Test exports
 -export([generate_append_device/1]).
 -include_lib("eunit/include/eunit.hrl").
 
 -include("include/hb.hrl").
 
-info(Msg) ->
+info(Msg, Opts) ->
     hb_maps:merge(
         #{
             handler => fun router/4,
             excludes => [<<"set">>, <<"keys">>]
         },
-        case hb_maps:get(<<"stack-keys">>, Msg, not_found) of
+        case hb_maps:get(<<"stack-keys">>, Msg, not_found, Opts) of
             not_found -> #{};
             StackKeys -> #{ exports => StackKeys }
         end
@@ -166,7 +166,7 @@ router(Message1, Message2, Opts) ->
 %% 		keyInDevice executed on DeviceName against Msg1.
 transformer_message(Msg1, Opts) ->
 	?event({creating_transformer, {for, Msg1}}),
-    BaseInfo = info(Msg1),
+    BaseInfo = info(Msg1, Opts),
 	{ok, 
 		Msg1#{
 			<<"device">> => #{
@@ -415,15 +415,15 @@ transform_internal_call_device_test() ->
 	AppendDev = generate_append_device(<<"_">>),
 	Msg1 =
 		#{
-			<<"device">> => <<"Stack@1.0">>,
+			<<"device">> => <<"stack@1.0">>,
 			<<"device-stack">> =>
 				#{
 					<<"1">> => AppendDev,
-					<<"2">> => <<"Message@1.0">>
+					<<"2">> => <<"message@1.0">>
 				}
 		},
 	?assertMatch(
-		<<"Message@1.0">>,
+		<<"message@1.0">>,
 		hb_ao:get(
 			<<"device">>,
 			element(2, transform(Msg1, <<"2">>, #{}))
@@ -434,7 +434,7 @@ transform_internal_call_device_test() ->
 %% return a version of msg1 with only that device attached.
 transform_external_call_device_test() ->
 	Msg1 = #{
-		<<"device">> => <<"Stack@1.0">>,
+		<<"device">> => <<"stack@1.0">>,
 		<<"device-stack">> =>
 			#{
 				<<"make-cool">> =>
@@ -486,7 +486,7 @@ example_device_for_stack_test() ->
 
 simple_stack_execute_test() ->
 	Msg = #{
-		<<"device">> => <<"Stack@1.0">>,
+		<<"device">> => <<"stack@1.0">>,
 		<<"device-stack">> =>
 			#{
 				<<"1">> => generate_append_device(<<"!D1!">>),
@@ -502,7 +502,7 @@ simple_stack_execute_test() ->
 
 many_devices_test() ->
 	Msg = #{
-		<<"device">> => <<"Stack@1.0">>,
+		<<"device">> => <<"stack@1.0">>,
 		<<"device-stack">> =>
 			#{
 				<<"1">> => generate_append_device(<<"+D1">>),
@@ -529,7 +529,7 @@ many_devices_test() ->
 benchmark_test() ->
     BenchTime = 0.3,
 	Msg = #{
-		<<"device">> => <<"Stack@1.0">>,
+		<<"device">> => <<"stack@1.0">>,
 		<<"device-stack">> =>
 			#{
 				<<"1">> => generate_append_device(<<"+D1">>),
@@ -541,7 +541,7 @@ benchmark_test() ->
 		<<"result">> => <<"INIT">>
 	},
     Iterations =
-        hb:benchmark(
+        hb_test_utils:benchmark(
             fun() ->
                 hb_ao:resolve(Msg,
                     #{
@@ -554,9 +554,11 @@ benchmark_test() ->
             end,
             BenchTime
         ),
-    hb_util:eunit_print(
-        "Evaluated ~p stack messages in ~p seconds (~.2f msg/s)",
-        [Iterations, BenchTime, Iterations / BenchTime]
+    hb_test_utils:benchmark_print(
+        <<"Stack:">>,
+        <<"resolutions">>,
+        Iterations,
+        BenchTime
     ),
     ?assert(Iterations >= 10).
 
@@ -579,7 +581,7 @@ test_prefix_msg() ->
             end
     },
     #{
-        <<"device">> => <<"Stack@1.0">>,
+        <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> => #{ <<"1">> => Dev, <<"2">> => Dev }
     }.
 
@@ -653,7 +655,7 @@ input_output_prefixes_passthrough_test() ->
 
 reinvocation_test() ->
 	Msg = #{
-		<<"device">> => <<"Stack@1.0">>,
+		<<"device">> => <<"stack@1.0">>,
 		<<"device-stack">> =>
 			#{
 				<<"1">> => generate_append_device(<<"+D1">>),
@@ -675,7 +677,7 @@ reinvocation_test() ->
 
 skip_test() ->
 	Msg1 = #{
-		<<"device">> => <<"Stack@1.0">>,
+		<<"device">> => <<"stack@1.0">>,
 		<<"device-stack">> =>
 			#{
 				<<"1">> => generate_append_device(<<"+D1">>, skip),
@@ -697,7 +699,7 @@ pass_test() ->
     % recursively calls the device by forcing its response to be `pass'
     % until that happens.
 	Msg = #{
-		<<"device">> => <<"Stack@1.0">>,
+		<<"device">> => <<"stack@1.0">>,
 		<<"device-stack">> =>
 			#{
 				<<"1">> => generate_append_device(<<"+D1">>, pass)
@@ -712,7 +714,7 @@ pass_test() ->
 not_found_test() ->
     % Ensure that devices not exposing a key are safely skipped.
 	Msg = #{
-		<<"device">> => <<"Stack@1.0">>,
+		<<"device">> => <<"stack@1.0">>,
 		<<"device-stack">> =>
 			#{
 				<<"1">> => generate_append_device(<<"+D1">>),
@@ -736,7 +738,7 @@ not_found_test() ->
 
 simple_map_test() ->
     Msg = #{
-        <<"device">> => <<"Stack@1.0">>,
+        <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> =>
             #{
                 <<"1">> => generate_append_device(<<"+D1">>),

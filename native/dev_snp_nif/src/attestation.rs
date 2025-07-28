@@ -77,12 +77,12 @@ pub fn generate_attestation_report<'a>(
     };
 
     // Step 5: Log the serialized JSON for debugging purposes.
-    log_message(
-        "INFO",
-        file!(),
-        line!(),
-        &format!("Generated report JSON: {:?}", report_json),
-    );
+    // log_message(
+    //     "INFO",
+    //     file!(),
+    //     line!(),
+    //     &format!("Generated report JSON: {:?}", report_json),
+    // );
 
     // Step 6: Return the result as a tuple with the `ok` atom.
     Ok((ok(), report_json).encode(env))

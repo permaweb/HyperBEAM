@@ -8,7 +8,7 @@ WAMR_DIR = _build/wamr
 
 GENESIS_WASM_BRANCH = tillathehun0/cu-experimental
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
-GENESIS_WASM_SERVER_DIR = _build/genesis-wasm-server
+GENESIS_WASM_SERVER_DIR = _build/genesis_wasm/genesis-wasm-server
 
 HYPERBUDDY_UI_REPO = https://github.com/permaweb/hb-explorer
 HYPERBUDDY_UI_PACKAGE_JSON = https://raw.githubusercontent.com/permaweb/hb-explorer/main/package.json
@@ -103,7 +103,7 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 		echo "Error: Node.js is not installed. Please install Node.js before continuing."; \
 		echo "For Ubuntu/Debian, you can install it with:"; \
 		echo "  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && \\"; \
-		echo "  apt-get install -y nodejs && \\"; \
+		echo "  apt-get install -y nodejs=22.16.0-1nodesource1 --allow-downgrades && \\"; \
 		echo "  node -v && npm -v"; \
 		exit 1; \
 	fi

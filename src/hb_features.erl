@@ -6,7 +6,7 @@
 %%% Public API.
 -export([all/0, enabled/1]).
 %%% Individual feature flags.
--export([http3/0, rocksdb/0, test/0, genesis_wasm/0]).
+-export([http3/0, rocksdb/0, test/0, genesis_wasm/0, eflame/0]).
 
 %% @doc Returns a list of all feature flags that the node supports.
 all() ->
@@ -54,6 +54,12 @@ rocksdb() -> false.
 genesis_wasm() -> true.
 -else.
 genesis_wasm() -> false.
+-endif.
+
+-ifdef(ENABLE_EFLAME).
+eflame() -> true.
+-else.
+eflame() -> false.
 -endif.
 
 -ifdef(TEST).

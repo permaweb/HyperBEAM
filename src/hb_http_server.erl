@@ -11,7 +11,8 @@
 %%% the execution parameters of all downstream requests to be controlled.
 -module(hb_http_server).
 -export([start/0, start/1, allowed_methods/2, init/2]).
--export([set_opts/1, set_opts/2, get_opts/0, get_opts/1, set_default_opts/1, set_proc_server_id/1]).
+-export([set_opts/1, set_opts/2, get_opts/0, get_opts/1]).
+-export([set_default_opts/1, set_proc_server_id/1]).
 -export([start_node/0, start_node/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -21,10 +22,8 @@
 %% `Opts' argument to use for all AO-Core resolution requests downstream.
 start() ->
     ?event(http, {start_store, <<"cache-mainnet">>}),
-    Store = hb_opts:get(store, no_store, #{}),
-    hb_store:start(Store),
     Loaded =
-        case hb_opts:load(Loc = hb_opts:get(hb_config_location, <<"config.flat">>, #{})) of
+        case hb_opts:load(Loc = hb_opts:get(hb_config_location, <<"config.flat">>)) of
             {ok, Conf} ->
                 ?event(boot, {loaded_config, Loc, Conf}),
                 Conf;
@@ -37,6 +36,16 @@ start() ->
             hb_opts:default_message(),
             Loaded
         ),
+    %% Apply store defaults before starting store
+    StoreOpts = hb_opts:get(store, no_store, MergedConfig),
+    StoreDefaults = hb_opts:get(store_defaults, #{}, MergedConfig),
+    UpdatedStoreOpts = 
+        case StoreOpts of
+            no_store -> no_store;
+            _ when is_list(StoreOpts) -> hb_store_opts:apply(StoreOpts, StoreDefaults);
+            _ -> StoreOpts
+        end,
+    hb_store:start(UpdatedStoreOpts),
     PrivWallet =
         hb:wallet(
             hb_opts:get(
@@ -45,7 +54,7 @@ start() ->
                 Loaded
             )
         ),
-    FormattedConfig = hb_util:debug_fmt(MergedConfig, 2),
+    FormattedConfig = hb_util:debug_fmt(MergedConfig, MergedConfig, 2),
     io:format("~n"
         "===========================================================~n"
         "==    ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗           ==~n"
@@ -90,7 +99,7 @@ start() ->
     start(
         Loaded#{
             priv_wallet => PrivWallet,
-            store => Store,
+            store => UpdatedStoreOpts,
             port => hb_opts:get(port, 8734, Loaded),
             cache_writers => [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
         }
@@ -265,14 +274,30 @@ http3_conn_sup_loop() ->
 
 start_http2(ServerID, ProtoOpts, NodeMsg) ->
     ?event(http, {start_http2, ServerID}),
-    {ok, Listener} = cowboy:start_clear(
+    StartRes = cowboy:start_clear(
         ServerID,
         [
             {port, Port = hb_opts:get(port, 8734, NodeMsg)}
         ],
         ProtoOpts
     ),
-    {ok, Port, Listener}.
+    case StartRes of
+        {ok, Listener} ->
+            ?event(debug_router_info, {http2_started, {listener, Listener}, {port, Port}}),
+            {ok, Port, Listener};
+        {error, {already_started, Listener}} ->
+            ?event(http, {http2_already_started, {listener, Listener}}),
+            ?event(debug_router_info,
+                {restarting,
+                    {id, ServerID},
+                    {node_msg, NodeMsg}
+                }
+            ),
+            cowboy:set_env(ServerID, node_msg, #{}),
+            % {ok, Port, Listener}
+            cowboy:stop_listener(ServerID),
+            start_http2(ServerID, ProtoOpts, NodeMsg)
+    end.
 
 %% @doc Entrypoint for all HTTP requests. Receives the Cowboy request option and
 %% the server ID, which can be used to lookup the node message.
@@ -333,7 +358,12 @@ handle_request(RawReq, Body, ServerID) ->
         _ ->
             % The request is of normal AO-Core form, so we parse it and invoke
             % the meta@1.0 device to handle it.
-            ?event(http, {http_inbound, {cowboy_req, Req}, {body, {string, Body}}}),
+            ?event(http,
+                {
+                    http_inbound,
+                    {cowboy_req, {explicit, Req}, {body, {string, Body}}}
+                }
+            ),
             TracePID = hb_tracer:start_trace(),
             % Parse the HTTP request into HyerBEAM's message format.
             try 
@@ -361,11 +391,11 @@ handle_request(RawReq, Body, ServerID) ->
                     Trace = hb_tracer:get_trace(TracePID),
                     FormattedError =
                         hb_util:bin(hb_message:format(
-                            #{
+                            hb_private:reset(#{
                                 <<"type">> => Type,
                                 <<"details">> => Details,
                                 <<"stacktrace">> => Stacktrace
-                            }
+                            })
                         )),
                     {ok, ErrorPage} = dev_hyperbuddy:return_error(FormattedError),
                     ?event(
@@ -411,23 +441,27 @@ set_opts(Opts) ->
             ok = cowboy:set_env(ServerRef, node_msg, Opts)
     end.
 set_opts(Request, Opts) ->
-    PerparedOpts = hb_opts:mimic_default_types(
-        Opts,
-        new_atoms,
-        Opts
-    ),
-    PreparedRequest = hb_opts:mimic_default_types(
-        hb_message:uncommitted(Request),
-        new_atoms,
-        Opts
-    ),
+    PreparedOpts =
+        hb_opts:mimic_default_types(
+            Opts,
+            false,
+            Opts
+        ),
+    PreparedRequest =
+        hb_opts:mimic_default_types(
+            hb_message:uncommitted(Request),
+            false,
+            Opts
+        ),
     MergedOpts =
         maps:merge(
-            PerparedOpts,
+            PreparedOpts,
             PreparedRequest
         ),
     ?event(set_opts, {merged_opts, {explicit, MergedOpts}}),
-    History = hb_opts:get(node_history, [], Opts) ++ [ hb_private:reset(maps:without([node_history], PreparedRequest)) ],
+    History =
+        hb_opts:get(node_history, [], Opts)
+            ++ [ hb_private:reset(maps:without([node_history], PreparedRequest)) ],
     FinalOpts = MergedOpts#{
         http_server => hb_opts:get(http_server, no_server, Opts),
         node_history => History
@@ -576,3 +610,16 @@ set_opts_test() ->
     ?event(debug_node_history, {node_history_length, length(NodeHistory3)}),
     ?assert(length(NodeHistory3) == 3),
     ?assert(Key3 == <<"world3">>).
+
+restart_server_test() ->
+    Wallet = ar_wallet:new(),
+    BaseOpts = #{
+        <<"test-key">> => <<"server-1">>,
+        priv_wallet => Wallet
+    },
+    _ = start_node(BaseOpts),
+    N2 = start_node(BaseOpts#{ <<"test-key">> => <<"server-2">> }),
+    ?assertEqual(
+        {ok, <<"server-2">>},
+        hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{})
+    ).

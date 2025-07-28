@@ -31,7 +31,7 @@
 %%% The maximum number of assignments that we will query/return at a time.
 -define(MAX_ASSIGNMENT_QUERY_LEN, 1000).
 %%% The timeout for a lookahead worker.
--define(LOOKAHEAD_TIMEOUT, 200).
+-define(LOOKAHEAD_TIMEOUT, 1500).
 
 %% @doc Helper to ensure that the environment is started.
 start() ->
@@ -204,7 +204,13 @@ find_next_assignment(_Msg1, _Msg2, Schedule = [_Next|_], _LastSlot, _Opts) ->
     {ok, Schedule, undefined};
 find_next_assignment(Msg1, Msg2, _Schedule, LastSlot, Opts) ->
     ProcID = dev_process:process_id(Msg1, Msg2, Opts),
-    case check_lookahead_and_local_cache(Msg1, ProcID, LastSlot + 1, Opts) of
+    LocalCacheRes =
+        case hb_util:atom(hb_opts:get(scheduler_ignore_local_cache, false, Opts)) of
+            true -> not_found;
+            false ->
+                check_lookahead_and_local_cache(Msg1, ProcID, LastSlot + 1, Opts)
+        end,
+    case LocalCacheRes of
         {ok, Worker, Assignment} ->
             ?event(next_debug,
                 {in_cache,
@@ -267,7 +273,8 @@ spawn_lookahead_worker(ProcID, Slot, Opts) ->
             ),
             case dev_scheduler_cache:read(ProcID, Slot, Opts) of
                 {ok, Assignment} ->
-                    Caller ! {assignment, ProcID, Slot, Assignment};
+                    LoadedAssignment = hb_cache:ensure_all_loaded(Assignment, Opts),
+                    Caller ! {assignment, ProcID, Slot, LoadedAssignment};
                 not_found ->
                     fail
             end
@@ -309,14 +316,14 @@ check_lookahead_and_local_cache(Worker, ProcID, TargetSlot, Opts) when is_pid(Wo
             ),
             {ok, NewWorker, Assignment}
     after ?LOOKAHEAD_TIMEOUT ->
-        ?event(next_lookahead, {lookahead_worker_timed_out, {slot, TargetSlot}}),
+        ?event(next_lookahead, {lookahead_read_timeout, {slot, TargetSlot}}),
         erlang:exit(Worker, timeout),
         check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts)
     end;
 check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
     % The lookahead worker has not found an assignment for the target
     % slot yet, so we check our local cache.
-    ?event(next_lookahead, {no_lookahead_worker, {slot, TargetSlot}}),
+    ?event(next_lookahead, {reading_local_cache, {slot, TargetSlot}}),
     case dev_scheduler_cache:read(ProcID, TargetSlot, Opts) of
         not_found -> not_found;
         {ok, Assignment} ->
@@ -326,7 +333,7 @@ check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
             % if we have them locally, ahead of time.
             Worker =
                 case hb_opts:get(scheduler_lookahead, true, Opts) of
-                    false -> unset;
+                    false -> undefined;
                     true ->
                         % We found the assignment in our local cache, so
                         % optionally spawn a new Erlang process to fetch
@@ -334,7 +341,7 @@ check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
                         % ahead of time.
                         spawn_lookahead_worker(ProcID, TargetSlot + 1, Opts)
                 end,
-            {ok, Worker, Assignment}
+            {ok, Worker, hb_cache:ensure_all_loaded(Assignment, Opts)}
     end.
 
 %% @doc Returns information about the entire scheduler.
@@ -390,7 +397,12 @@ get_location(_Msg1, Req, Opts) ->
 
 %% @doc Generate a new scheduler location record and register it. We both send 
 %% the new scheduler-location to the given registry, and return it to the caller.
-post_location(Msg1, RawReq, Opts) ->
+post_location(Msg1, RawReq, RawOpts) ->
+    Opts =
+        case dev_whois:ensure_host(RawOpts) of
+            {ok, NewOpts} -> NewOpts;
+            _ -> RawOpts
+        end,
     % Ensure that the request is signed by the operator.
     Req =
         case hb_ao:get_first(
@@ -1571,7 +1583,7 @@ test_process(#{ priv_wallet := Wallet})  ->
 test_process(Address) ->
     #{
         <<"device">> => <<"scheduler@1.0">>,
-        <<"device-stack">> => [<<"Cron@1.0">>, <<"WASM-64@1.0">>, <<"PODA@1.0">>],
+        <<"device-stack">> => [<<"cron@1.0">>, <<"wasm-64@1.0">>, <<"poda@1.0">>],
         <<"image">> => <<"wasm-image-id">>,
         <<"type">> => <<"Process">>,
         <<"scheduler-location">> => Address,
@@ -2067,7 +2079,7 @@ single_resolution(Opts) ->
         <<"type">> => <<"Message">>,
         <<"test-key">> => <<"test-val">>
     }, Opts),
-    Iterations = hb:benchmark(
+    Iterations = hb_test_utils:benchmark(
         fun(_) ->
             MsgX = #{
                 <<"path">> => <<"schedule">>,
@@ -2088,9 +2100,11 @@ single_resolution(Opts) ->
             when CurrentSlot == Iterations - 1,
         hb_ao:resolve(Msg1, Msg3, Opts)),
     ?event(bench, {res, Iterations - 1}),
-    hb_util:eunit_print(
-        "Scheduled ~p messages through AO-Core in ~p seconds (~.2f msg/s)",
-        [Iterations, BenchTime, Iterations / BenchTime]
+    hb_test_utils:benchmark_print(
+        <<"Scheduled through AO-Core:">>,
+        <<"messages">>,
+        Iterations,
+        BenchTime
     ),
     ?assert(Iterations > 3).
 
@@ -2106,7 +2120,7 @@ many_clients(Opts) ->
         <<"body">> => hb_message:commit(#{ <<"inner">> => <<"test">> }, Opts)
     }, Opts),
     {ok, _} = hb_http:post(Node, Msg1, Opts),
-	    Iterations = hb:benchmark(
+	    Iterations = hb_test_utils:benchmark(
         fun(X) ->
             {ok, _} = hb_http:post(Node, Msg1, Opts),
             ?event(bench, {iteration, X, self()})

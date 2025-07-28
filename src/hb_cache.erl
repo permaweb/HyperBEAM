@@ -801,13 +801,3 @@ test_device_map_cannot_be_written_test() ->
     catch
         _:_:_ -> ?assert(true)
     end.
-
-run_test() ->
-    Store =
-        [
-            #{
-                <<"store-module">> => hb_store_lmdb,
-                <<"name">> => <<"cache-TEST/lmdb">>
-            }
-        ],
-    test_store_simple_signed_message(Store).

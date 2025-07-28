@@ -26,7 +26,12 @@ type(StoreOpts, Key) ->
             ?event({type, hb_private:reset(hb_message:uncommitted(Data, StoreOpts))}),
             IsFlat = lists:all(
                 fun({_, Value}) -> not is_map(Value) end,
-                hb_maps:to_list(hb_private:reset(hb_message:uncommitted(Data, StoreOpts)), StoreOpts)
+                hb_maps:to_list(
+                    hb_private:reset(
+                        hb_message:uncommitted(Data, StoreOpts)
+                    ),
+                    StoreOpts
+                )
             ),
             if
                 IsFlat -> simple;
@@ -44,7 +49,7 @@ read(StoreOpts, Key) ->
                 {error, _} -> not_found;
                 {ok, Message} ->
                     ?event(remote_read, {got_message_from_gateway, Message}),
-                    maybe_cache(StoreOpts, Message),
+                    try maybe_cache(StoreOpts, Message) catch _:_ -> ignored end,
                     {ok, Message}
             end;
         _ ->
@@ -57,20 +62,12 @@ read(StoreOpts, Key) ->
 %% cache.
 maybe_cache(StoreOpts, Data) ->
     ?event({maybe_cache, StoreOpts, Data}),
-    % Check for store in both the direct map and the legacy opts map
-    Store = case hb_maps:get(<<"store">>, StoreOpts, not_found, StoreOpts) of
-        not_found -> 
-            % Check in legacy opts format
-            NestedOpts = hb_maps:get(<<"opts">>, StoreOpts, #{}, StoreOpts),
-            hb_opts:get(store, false, NestedOpts);
-        FoundStore -> 
-            FoundStore
-    end,
-    case Store of
+    % Check if the local store is in our store options.
+    case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
         false -> do_nothing;
         Store ->
             ?event({writing_message_to_local_cache, Data}),
-            case hb_cache:write(Data, #{ store => Store}) of
+            case hb_cache:write(Data, #{ store => Store }) of
                 {ok, _} -> Data;
                 {error, Err} ->
                     ?event(warning, {error_writing_to_local_gateway_cache, Err}),
@@ -82,13 +79,14 @@ maybe_cache(StoreOpts, Data) ->
 
 %% @doc Store is accessible via the default options.
 graphql_as_store_test_() ->
+    hb_http_server:start_node(#{}),
 	{timeout, 10, fun() ->
 		hb_http_server:start_node(#{}),
 		?assertMatch(
-			{ok, #{ <<"type">> := <<"Assignment">> }},
+			{ok, #{ <<"app-name">> := <<"aos">> }},
 			hb_store:read(
-				[#{ <<"store-module">> => hb_store_gateway, <<"opts">> => #{} }],
-				<<"0Tb9mULcx8MjYVgXleWMVvqo1_jaw_P6AO_CJMTj0XE">>
+				[#{ <<"store-module">> => hb_store_gateway }],
+				<<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>
 			)
 		)
 	end}.
@@ -96,31 +94,45 @@ graphql_as_store_test_() ->
 %% @doc Stored messages are accessible via `hb_cache' accesses.
 graphql_from_cache_test() ->
     hb_http_server:start_node(#{}),
-    Opts = #{ store => [#{ <<"store-module">> => hb_store_gateway, <<"opts">> => #{} }] },
+    Opts =
+        #{
+            store =>
+                [
+                    #{
+                        <<"store-module">> => hb_store_gateway
+                    }
+                ]
+        },
     ?assertMatch(
-        {ok, #{ <<"type">> := <<"Assignment">> }},
+        {ok, #{ <<"app-name">> := <<"aos">> }},
         hb_cache:read(
-            <<"0Tb9mULcx8MjYVgXleWMVvqo1_jaw_P6AO_CJMTj0XE">>,
+            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
             Opts
         )
     ).
 
 manual_local_cache_test() ->
     hb_http_server:start_node(#{}),
-    Local = #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
+    Local = #{
+        <<"store-module">> => hb_store_fs,
+        <<"name">> => <<"cache-TEST/gw-local-cache">>
+    },
     hb_store:reset(Local),
-    Gateway = #{ <<"store-module">> => hb_store_gateway, <<"store">> => false },
+    Gateway = #{
+        <<"store-module">> => hb_store_gateway,
+        <<"local-store">> => Local
+    },
     {ok, FromRemote} =
         hb_cache:read(
-            <<"0Tb9mULcx8MjYVgXleWMVvqo1_jaw_P6AO_CJMTj0XE">>,
-            #{ store => Gateway }
+            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+            #{ store => [Gateway] }
         ),
     ?event({writing_recvd_to_local, FromRemote}),
-    {ok, _} = hb_cache:write(FromRemote, #{ store => Local }),
+    {ok, _} = hb_cache:write(FromRemote, #{ store => [Local] }),
     {ok, Read} =
         hb_cache:read(
-            <<"0Tb9mULcx8MjYVgXleWMVvqo1_jaw_P6AO_CJMTj0XE">>,
-            #{ store => Local }
+            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+            #{ store => [Local] }
         ),
     ?event({read_from_local, Read}),
     ?assert(hb_message:match(Read, FromRemote)).
@@ -128,23 +140,27 @@ manual_local_cache_test() ->
 %% @doc Ensure that saving to the gateway store works.
 cache_read_message_test() ->
     hb_http_server:start_node(#{}),
-    Local = #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
+    Local = #{
+        <<"store-module">> => hb_store_fs,
+        <<"name">> => <<"cache-TEST/1">>
+    },
     hb_store:reset(Local),
-    WriteOpts = #{ store =>
-        [
-            #{ <<"store-module">> => hb_store_gateway,
-                <<"store">> => [Local]
-            }
-        ]
+    WriteOpts = #{
+        store =>
+            [
+                #{ <<"store-module">> => hb_store_gateway,
+                    <<"local-store">> => [Local]
+                }
+            ]
     },
     {ok, Written} =
         hb_cache:read(
-            <<"0Tb9mULcx8MjYVgXleWMVvqo1_jaw_P6AO_CJMTj0XE">>,
+            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
             WriteOpts
         ),
     {ok, Read} =
         hb_cache:read(
-            <<"0Tb9mULcx8MjYVgXleWMVvqo1_jaw_P6AO_CJMTj0XE">>,
+            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
             #{ store => [Local] }
         ),
     ?assert(hb_message:match(Read, Written)).
@@ -168,7 +184,7 @@ specific_route_test() ->
     ?assertMatch(
         not_found,
         hb_cache:read(
-            <<"0Tb9mULcx8MjYVgXleWMVvqo1_jaw_P6AO_CJMTj0XE">>,
+            <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
             Opts
         )
     ).
@@ -180,8 +196,11 @@ external_http_access_test() ->
             cache_control => <<"cache">>,
             store =>
                 [
-                    #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
-                    #{ <<"store-module">> => hb_store_gateway, <<"store">> => false }
+                    #{
+                        <<"store-module">> => hb_store_fs,
+                        <<"name">> => <<"cache-TEST">>
+                    },
+                    #{ <<"store-module">> => hb_store_gateway }
                 ]
         }
     ),
@@ -246,9 +265,10 @@ store_opts_test() ->
                     <<"store-module">> => hb_store_fs,
                     <<"name">> => <<"cache-TEST">>
                 },
-                #{ <<"store-module">> => hb_store_gateway, 
-                        <<"store">> => false,
-                        <<"subindex">> => [
+                #{
+                    <<"store-module">> => hb_store_gateway, 
+                    <<"local-store">> => false,
+                    <<"subindex">> => [
                         #{
                             <<"name">> => <<"Data-Protocol">>,
                             <<"value">> => <<"ao">>
@@ -265,7 +285,7 @@ store_opts_test() ->
             #{}
         ),
     ?event(debug_gateway, {res, Res}),
-    ?assertEqual(<<"Hello World">>,hb_ao:get(<<"data">>, Res)).
+    ?assertEqual(<<"Hello World">>, hb_ao:get(<<"data">>, Res)).
 
 %% @doc Test that items retreived from the gateway store are verifiable.
 verifiability_test() ->
@@ -277,8 +297,7 @@ verifiability_test() ->
                 store =>
                     [
                         #{
-                            <<"store-module">> => hb_store_gateway,
-                            <<"store">> => false
+                            <<"store-module">> => hb_store_gateway
                         }
                     ]
             }

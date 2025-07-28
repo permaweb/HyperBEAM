@@ -89,7 +89,7 @@
 -export([start_mainnet/0, start_mainnet/1]).
 %%% Debugging tools:
 -export([no_prod/3]).
--export([read/1, read/2, debug_wait/4, profile/1, benchmark/2, benchmark/3]).
+-export([read/1, read/2, debug_wait/4]).
 %%% Node wallet and address management:
 -export([address/0, wallet/0, wallet/1]).
 -include("include/hb.hrl").
@@ -280,53 +280,8 @@ now() ->
 build() ->
     r3:do(compile, [{dir, "src"}]).
 
-%% @doc Utility function to start a profiling session and run a function,
-%% then analyze the results. Obviously -- do not use in production.
-profile(Fun) ->
-    eprof:start_profiling([self()]),
-    try
-        Fun()
-    after
-        eprof:stop_profiling()
-    end,
-    eprof:analyze(total).
-
 %% @doc Utility function to wait for a given amount of time, printing a debug
 %% message to the console first.
 debug_wait(T, Mod, Func, Line) ->
     ?event(wait, {debug_wait, {T, Mod, Func, Line}}),
     receive after T -> ok end.
-
-%% @doc Run a function as many times as possible in a given amount of time.
-benchmark(Fun, TLen) ->
-    T0 = erlang:system_time(millisecond),
-    hb_util:until(
-        fun() -> erlang:system_time(millisecond) - T0 > (TLen * 1000) end,
-        Fun,
-        0
-    ).
-
-%% @doc Run multiple instances of a function in parallel for a given amount of time.
-benchmark(Fun, TLen, Procs) ->
-    Parent = self(),
-    receive X -> ?event(benchmark, {start_benchmark_worker, X}) end,
-    StartWorker =
-        fun(_) ->
-            Ref = make_ref(),
-            ?event(benchmark, {start_benchmark_worker, Ref}),
-            spawn_link(fun() ->
-                Count = benchmark(Fun, TLen),
-                Parent ! {work_complete, Ref, Count}
-            end),
-            Ref
-        end,
-    CollectRes =
-        fun(R) ->
-            receive
-                {work_complete, R, Count} ->
-                    ?event(benchmark, {work_complete, R, Count}),
-                    Count
-            end
-        end,
-    Refs = lists:map(StartWorker, lists:seq(1, Procs)),
-    lists:sum(lists:map(CollectRes, Refs)).

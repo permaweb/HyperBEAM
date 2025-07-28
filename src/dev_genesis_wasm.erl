@@ -59,6 +59,23 @@ compute(Msg, Msg2, Opts) ->
 ensure_started(Opts) ->
     % Check if the `genesis-wasm@1.0' device is already running. The presence
     % of the registered name implies its availability.
+    {ok, Cwd} = file:get_cwd(),
+    ?event({ensure_started, cwd, Cwd}),
+    % Determine path based on whether we're in a release or development
+    GenesisWasmServerDir =
+        case init:get_argument(mode) of
+            {ok, [["embedded"]]} ->
+                % We're in release mode - genesis-wasm-server is in the release root
+                filename:join([Cwd, "genesis-wasm-server"]);
+            _ ->
+                % We're in development mode - look in the build directory
+                DevPath = filename:join([Cwd, "_build", "genesis_wasm", "genesis-wasm-server"]),
+                case filelib:is_dir(DevPath) of
+                    true -> DevPath;
+                    false -> filename:join([Cwd, "genesis-wasm-server"]) % Fallback
+                end
+        end,
+    ?event({ensure_started, genesis_wasm_server_dir, GenesisWasmServerDir}),
     ?event({ensure_started, genesis_wasm, self()}),
     IsRunning = is_genesis_wasm_server_running(Opts),
     IsCompiled = hb_features:genesis_wasm(),
@@ -77,22 +94,22 @@ ensure_started(Opts) ->
                         NodeURL =
                             "http://localhost:" ++
                             integer_to_list(hb_opts:get(port, no_port, Opts)),
-                        DBDir =
-                            filename:absname(
-                                hb_util:list(
-                                    hb_opts:get(
-                                        genesis_wasm_db_dir,
-                                        "cache-mainnet/genesis-wasm",
-                                        Opts
-                                    )
+                        RelativeDBDir =
+                            hb_util:list(
+                                hb_opts:get(
+                                    genesis_wasm_db_dir,
+                                    "cache-mainnet/genesis-wasm",
+                                    Opts
                                 )
                             ),
+                        DBDir =
+                            filename:absname(RelativeDBDir),
 						CheckpointDir =
                             filename:absname(
                                 hb_util:list(
                                     hb_opts:get(
                                         genesis_wasm_checkpoints_dir,
-                                        "cache-mainnet/genesis-wasm/checkpoints",
+                                        RelativeDBDir ++ "/checkpoints",
                                         Opts
                                     )
                                 )
@@ -103,16 +120,16 @@ ensure_started(Opts) ->
                         Port =
                             open_port(
                                 {spawn_executable,
-                                    "_build/genesis-wasm-server/launch-monitored.sh"
+                                    filename:join([GenesisWasmServerDir, "launch-monitored.sh"])
                                 },
                                 [
                                     binary, use_stdio, stderr_to_stdout,
                                     {args, [
                                         "npm",
                                         "--prefix",
-                                        "_build/genesis-wasm-server",
+                                        GenesisWasmServerDir,
                                         "run",
-                                        "dev"
+                                        "start"
                                     ]},
                                     {env,
                                         [
@@ -128,7 +145,7 @@ ensure_started(Opts) ->
                                                 )
                                             },
                                             {"DB_URL", DatabaseUrl},
-                                            {"NODE_CONFIG_ENV", "development"},
+                                            {"NODE_CONFIG_ENV", "production"},
                                             {"DEFAULT_LOG_LEVEL",
                                                 hb_util:list(
                                                     hb_opts:get(

@@ -12,7 +12,24 @@
 %%% Boot time is approximately 10 seconds.
 -module(hb_debugger).
 -export([start/0, start_and_break/2, start_and_break/3, start_and_break/4]).
+-export([profile_and_stop/1]).
 -export([await_breakpoint/0]).
+
+%% @doc Profile a function with eflame and stop the node.
+profile_and_stop(Fun) ->
+    {ok, F} = file:open("profiling-output", [write]),
+    group_leader(F, self()),
+    io:format("profiling-output: started.~n"),
+    io:format("Profiling function: ~p.~n", [Fun]),
+    Res =
+        dev_profile:eval(
+            Fun,
+            #{ <<"return-mode">> => <<"open">>, <<"engine">> => <<"eflame">> },
+            #{}
+        ),
+    io:format("Profiling complete. Res: ~p~n", [Res]),
+    init:stop(),
+    erlang:halt().
 
 %% Wait for another node (which we assume to be the debugger) to be attached,
 %% then return to the caller.

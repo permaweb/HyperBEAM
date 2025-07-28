@@ -61,12 +61,12 @@
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
 -export([verify/1, verify/2, verify/3, commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([commitment/2, commitment/3, with_only_committed/2, is_signed_key/3]).
--export([with_commitments/3, without_commitments/3]).
--export([match/2, match/3, match/4, find_target/3]).
+-export([with_commitments/3, without_commitments/3, normalize_commitments/2]).
+-export([diff/3, match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
--export([default_tx_list/0, filter_default_keys/1]).
+-export([default_tx_list/0, default_tx_keys/0, filter_default_keys/1]).
 %%% Debugging tools:
--export([print/1, format/1, format/2]).
+-export([print/1, format/1, format/2, format/3]).
 -include("include/hb.hrl").
 
 %% @doc Convert a message from one format to another. Taking a message in the
@@ -195,6 +195,35 @@ id(Msg, RawCommitters, Opts) ->
             Opts
         ),
     hb_util:human_id(ID).
+
+%% @doc Normalize the IDs in a message, ensuring that there is at least one
+%% unsigned ID present. By forcing this work to occur in strategically positioned
+%% places, we avoid the need to recalculate the IDs for every `hb_message:id`
+%% call.
+normalize_commitments(Msg, Opts) when is_map(Msg) ->
+    NormMsg = 
+        maps:map(
+            fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
+                Val;
+               (_Key, Val) -> normalize_commitments(Val, Opts)
+            end,
+            Msg
+        ),
+    case hb_maps:get(<<"commitments">>, NormMsg, not_found, Opts) of
+        not_found ->
+            {ok, #{ <<"commitments">> := Commitments }} =
+                dev_message:commit(
+                    NormMsg,
+                    #{ <<"type">> => <<"unsigned">> },
+                    Opts
+                ),
+            NormMsg#{ <<"commitments">> => Commitments };
+        _ -> NormMsg
+    end;
+normalize_commitments(Msg, Opts) when is_list(Msg) ->
+    lists:map(fun(X) -> normalize_commitments(X, Opts) end, Msg);
+normalize_commitments(Msg, _Opts) ->
+    Msg.
 
 %% @doc Return a message with only the committed keys. If no commitments are
 %% present, the message is returned unchanged. This means that you need to
@@ -359,19 +388,21 @@ signers(Msg, Opts) ->
 %% @doc Pretty-print a message.
 print(Msg) -> print(Msg, 0).
 print(Msg, Indent) ->
-    io:format(standard_error, "~s", [lists:flatten(format(Msg, Indent))]).
+    io:format(standard_error, "~s", [lists:flatten(format(Msg, #{}, Indent))]).
 
 %% @doc Format a message for printing, optionally taking an indentation level
 %% to start from.
-format(Item) -> format(Item, 0).
-format(Bin, Indent) when is_binary(Bin) ->
+format(Item) -> format(Item, #{}).
+format(Item, Opts) -> format(Item, Opts, 0).
+format(Bin, Opts, Indent) when is_binary(Bin) ->
     hb_util:format_indented(
         hb_util:format_binary(Bin),
+        Opts,
         Indent
     );
-format(List, Indent) when is_list(List) ->
-    format(lists:map(fun hb_ao:normalize_key/1, List), Indent);
-format(Map, Indent) when is_map(Map) ->
+format(List, Opts, Indent) when is_list(List) ->
+    format(lists:map(fun hb_ao:normalize_key/1, List), Opts, Indent);
+format(Map, Opts, Indent) when is_map(Map) ->
     % Define helper functions for formatting elements of the map.
     ValOrUndef =
         fun(<<"hashpath">>) ->
@@ -382,7 +413,7 @@ format(Map, Indent) when is_map(Map) ->
                     undefined
             end;
         (Key) ->
-            case dev_message:get(Key, Map, #{}) of
+            case dev_message:get(Key, Map, Opts) of
                 {ok, Val} ->
                     case hb_util:short_id(Val) of
                         undefined -> Val;
@@ -408,9 +439,9 @@ format(Map, Indent) when is_map(Map) ->
                     {<<"*S">>, ValOrUndef(<<"id">>)}
                 ];
             true ->
-                {ok, UID} = dev_message:id(Map, #{}, #{}),
+                {ok, UID} = dev_message:id(Map, #{}, Opts),
                 {ok, ID} =
-                    dev_message:id(Map, #{ <<"commitments">> => <<"all">> }, #{}),
+                    dev_message:id(Map, #{ <<"commitments">> => <<"all">> }, Opts),
                 [
                     {<<"#P">>, hb_util:short_id(ValOrUndef(<<"hashpath">>))},
                     {<<"*U">>, hb_util:short_id(UID)}
@@ -421,10 +452,10 @@ format(Map, Indent) when is_map(Map) ->
                 end
         end,
     CommitterMetadata =
-        case hb_opts:get(debug_committers, true, #{}) of
+        case hb_opts:get(debug_committers, true, Opts) of
             false -> [];
             true ->
-                case dev_message:committers(Map) of
+                case dev_message:committers(Map, #{}, Opts) of
                     {ok, []} -> [];
                     {ok, [Committer]} ->
                         [{<<"Comm.">>, hb_util:short_id(Committer)}];
@@ -461,6 +492,7 @@ format(Map, Indent) when is_map(Map) ->
                     ", "
                 )
             ],
+            Opts,
             Indent
         ),
     % Put the path and device rows into the output at the _top_ of the map.
@@ -474,20 +506,30 @@ format(Map, Indent) when is_map(Map) ->
     % 2. `if_present' -- show priv only if there are keys inside
     % 2. `always' -- always show priv
     FooterKeys =
-        case {hb_opts:get(debug_show_priv, false, #{}), hb_maps:get(<<"priv">>, Map, #{})} of
+        case {hb_opts:get(debug_show_priv, false, Opts), hb_maps:get(<<"priv">>, Map, #{}, Opts)} of
             {false, _} -> [];
             {if_present, #{}} -> [];
             {_, Priv} -> [{<<"!Private!">>, Priv}]
         end,
     % Concatenate the path and device rows with the rest of the key values.
+    UnsortedGeneralKeyVals =
+        maps:to_list(
+            maps:without(
+                [<<"path">>, <<"device">>],
+                Map
+            )
+        ),
     KeyVals =
         FilterUndef(PriorityKeys) ++
-        maps:to_list(maps:without([<<"path">>, <<"device">>], Map)) ++
+        lists:sort(
+            fun({K1, _}, {K2, _}) -> K1 < K2 end,
+            UnsortedGeneralKeyVals
+        ) ++
         FooterKeys,
     % Format the remaining 'normal' keys and values.
     Res = lists:map(
         fun({Key, Val}) ->
-            NormKey = hb_ao:normalize_key(Key, #{ error_strategy => ignore }),
+            NormKey = hb_ao:normalize_key(Key, Opts#{ error_strategy => ignore }),
             KeyStr = 
                 case NormKey of
                     undefined ->
@@ -501,7 +543,7 @@ format(Map, Indent) when is_map(Map) ->
                     lists:flatten([KeyStr]),
                     case Val of
                         NextMap when is_map(NextMap) ->
-                            hb_util:format_maybe_multiline(NextMap, Indent + 2);
+                            hb_util:format_maybe_multiline(NextMap, Opts, Indent + 2);
                         _ when (byte_size(Val) == 32) or (byte_size(Val) == 43) ->
                             Short = hb_util:short_id(Val),
                             io_lib:format("~s [*]", [Short]);
@@ -510,11 +552,12 @@ format(Map, Indent) when is_map(Map) ->
                         Bin when is_binary(Bin) ->
                             hb_util:format_binary(Bin);
                         Link when ?IS_LINK(Link) ->
-                            hb_link:format(Link);
+                            hb_link:format(Link, Opts);
                         Other ->
                             io_lib:format("~p", [Other])
                     end
                 ],
+                Opts,
                 Indent + 1
             )
         end,
@@ -527,9 +570,9 @@ format(Map, Indent) when is_map(Map) ->
                 Header ++ ["\n"] ++ Res ++ hb_util:format_indented("}", Indent)
             )
     end;
-format(Item, Indent) ->
+format(Item, Opts, Indent) ->
     % Whatever we have is not a message map.
-    hb_util:format_indented("~p", [Item], Indent).
+    hb_util:format_indented("~p", [Item], Opts, Indent).
 
 %% @doc Return the type of an encoded message.
 type(TX) when is_record(TX, tx) -> tx;
@@ -562,20 +605,22 @@ match(Map1, Map2, Mode, Opts) ->
     catch _:Details -> Details
     end.
 
+
+
 unsafe_match(Map1, Map2, Mode, Path, Opts) ->
-     Keys1 =
+    Keys1 =
         hb_maps:keys(
-            NormMap1 = minimize(
+            NormMap1 = hb_util:lower_case_key_map(minimize(
                 normalize(hb_ao:normalize_keys(Map1, Opts), Opts),
                 [<<"content-type">>, <<"ao-body-key">>]
-            )
+            ), Opts)
         ),
     Keys2 =
         hb_maps:keys(
-            NormMap2 = minimize(
+            NormMap2 = hb_util:lower_case_key_map(minimize(
                 normalize(hb_ao:normalize_keys(Map2, Opts), Opts),
                 [<<"content-type">>, <<"ao-body-key">>]
-            )
+            ), Opts)
         ),
     PrimaryKeysPresent =
         (Mode == primary) andalso
@@ -641,17 +686,54 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
 matchable_keys(Map) ->
     lists:sort(lists:map(fun hb_ao:normalize_key/1, hb_maps:keys(Map))).
 
+%% @doc Return the numeric differences between two messages, matching deeply
+%% across nested messages. If the values are non-numeric, the new value is 
+%% returned if the values are different. Keys found only in the first message
+%% are dropped, as they have 'changed' to absence.
+diff(Msg1, Msg2, Opts) when is_map(Msg1) andalso is_map(Msg2) ->
+    maps:filtermap(
+        fun(Key, Val2) ->
+            case hb_maps:get(Key, Msg1, not_found, Opts) of
+                Val2 ->
+                    % The key is present in both maps, and the values match.
+                    false;
+                not_found ->
+                    % The key is net-new in Map2.
+                    {true, Val2};
+                Val1 when is_number(Val1) andalso is_number(Val2) ->
+                    % The key is present in both maps, and the values are numbers;
+                    % return the difference.
+                    {true, Val2 - Val1};
+                Val1 when is_map(Val1) andalso is_map(Val2) ->
+                    % The key is present in both maps, and the values are maps;
+                    % return the difference.
+                    {true, diff(Val1, Val2, Opts)};
+                _ ->
+                    % The key is present in both maps, and the values do not 
+                    % match. Return the new value.
+                    {true, Val2}
+            end
+        end,
+        Msg2
+    );
+diff(_Val1, _Val2, _Opts) ->
+    not_found.
+
 %% @doc Filter messages that do not match the 'spec' given. The underlying match
 %% is performed in the `only_present' mode, such that match specifications only
 %% need to specify the keys that must be present.
+with_commitments(ID, Msg, Opts) when ?IS_ID(ID) ->
+    with_commitments([ID], Msg, Opts);
 with_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
     ?event({with_commitments, {spec, Spec}, {commitments, Commitments}}),
     FilteredCommitments =
         hb_maps:filter(
-            fun(_, CommMsg) ->
-                Res = match(Spec, CommMsg, primary, Opts) == true,
-                ?event({with_commitments, {commitments, CommMsg}, {spec, Spec}, {match, Res}}),
-                Res
+            fun(ID, CommMsg) ->
+                if is_list(Spec) ->
+                    lists:member(ID, Spec);
+                is_map(Spec) ->
+                    match(Spec, CommMsg, primary, Opts) == true
+                end
             end,
             Commitments,
             Opts
@@ -682,11 +764,22 @@ without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
 without_commitments(_Spec, Msg, _Opts) ->
     Msg.
 
-%% @doc Extract a commitment from a message given a `committer' ID, or a spec
-%% message to match against. Returns only the first matching commitment, or
-%% `not_found'.
-commitment(Committer, Msg) ->
-    commitment(Committer, Msg, #{}).
+%% @doc Extract a commitment from a message given a `committer' or `commitment'
+%% ID, or a spec message to match against. Returns only the first matching
+%% commitment, or `not_found'.
+commitment(ID, Msg) ->
+    commitment(ID, Msg, #{}).
+commitment(ID, Link, Opts) when ?IS_LINK(Link) ->
+    commitment(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
+commitment(ID, Msg, Opts)
+        when is_binary(ID),
+        map_get(ID, map_get(<<"commitments">>, Msg)) /= undefined ->
+    hb_maps:get(
+        ID,
+        hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+        not_found,
+        Opts
+    );
 commitment(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
     commitment(#{ <<"committer">> => CommitterID }, Msg, Opts);
 commitment(Spec, #{ <<"commitments">> := Commitments }, Opts) ->
@@ -734,13 +827,13 @@ find_target(Self, Req, Opts) ->
         cache_control => [<<"no-cache">>, <<"no-store">>]
     },
     {ok,
-        case hb_ao:get(<<"target">>, Req, <<"self">>, GetOpts) of
+        case hb_maps:get(<<"target">>, Req, <<"self">>, GetOpts) of
             <<"self">> -> Self;
             Key ->
-                hb_ao:get(
+                hb_maps:get(
                     Key,
                     Req,
-                    hb_ao:get(<<"body">>, Req, GetOpts),
+                    hb_maps:get(<<"body">>, Req, GetOpts),
                     GetOpts
                 )
         end
@@ -792,5 +885,8 @@ default_tx_message() ->
 %% @doc Get the ordered list of fields as AO-Core keys and default values of
 %% the tx record.
 default_tx_list() ->
-    Keys = lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)),
-    lists:zip(Keys, tl(tuple_to_list(#tx{}))).
+    lists:zip(default_tx_keys(), tl(tuple_to_list(#tx{}))).
+
+%% @doc Get the ordered list of tx record fields, normalized as AO-Core keys.
+default_tx_keys() ->
+    lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)).

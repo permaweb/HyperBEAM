@@ -527,9 +527,10 @@ resolve_stage(6, Func, Msg1, Msg2, ExecName, Opts) ->
     % Try to execute the function.
     Res = 
         try
+            TruncatedArgs = truncate_args(Func, Args),
             MsgRes =
                 maybe_force_message(
-                    apply(Func, truncate_args(Func, Args)),
+                    maybe_profiled_apply(Func, TruncatedArgs, Msg1, Msg2, Opts),
                     Opts
                 ),
             ?event(
@@ -621,12 +622,13 @@ resolve_stage(9, Msg1, Msg2, {ok, Msg3}, ExecName, Opts) when is_map(Msg3) ->
     resolve_stage(10, Msg1, Msg2,
         case hb_opts:get(hashpath, update, Opts#{ only => local }) of
             update ->
-                Priv = hb_private:from_message(Msg3),
+                NormMsg3 = Msg3,
+                Priv = hb_private:from_message(NormMsg3),
                 HP = hb_path:hashpath(Msg1, Msg2, Opts),
                 if not is_binary(HP) or not is_map(Priv) ->
-                    throw({invalid_hashpath, {hp, HP}, {msg3, Msg3}});
+                    throw({invalid_hashpath, {hp, HP}, {msg3, NormMsg3}});
                 true ->
-                    {ok, Msg3#{ <<"priv">> => Priv#{ <<"hashpath">> => HP } }}
+                    {ok, NormMsg3#{ <<"priv">> => Priv#{ <<"hashpath">> => HP } }}
                 end;
             reset ->
                 Priv = hb_private:from_message(Msg3),
@@ -737,6 +739,76 @@ subresolve(RawMsg1, DevID, Req, Opts) ->
             Res
     end.
 
+%% @doc If the `AO_PROFILING' macro is defined (set by building/launching with
+%% `rebar3 as ao_profiling') we record statistics about the execution of the
+%% function. This is a costly operation, so if it is not defined, we simply
+%% apply the function and return the result.
+-ifdef(AO_PROFILING).
+maybe_profiled_apply(Func, Args, Msg1, Msg2, Opts) ->
+    CallStack = erlang:get(ao_stack),
+    Key =
+        case hb_maps:get(<<"device">>, Msg1, undefined) of
+            Device when is_binary(Device) or is_atom(Device) ->
+                case hb_maps:get(<<"path">>, Msg2, undefined) of
+                    undefined ->
+                        hb_util:bin(erlang:fun_to_list(Func));
+                    Path ->
+                        MethodStr =
+                            case hb_maps:get(<<"method">>, Msg2, undefined) of
+                                undefined -> <<"">>;
+                                Method -> <<"[", Method/binary, "]">>
+                            end,
+                        << 
+                            (hb_util:bin(Device))/binary,
+                            "/",
+                            (hb_util:bin(Path))/binary,
+                            MethodStr/binary
+                        >>
+                end;
+            _ ->
+                hb_util:bin(erlang:fun_to_list(Func))
+        end,
+    put(
+        ao_stack,
+        case CallStack of
+            undefined -> [Key];
+            Stack -> [Key | Stack]
+        end
+    ),
+    {ExecMicroSecs, Res} = timer:tc(fun() -> apply(Func, Args) end),
+    put(ao_stack, CallStack),
+    hb_event:increment(<<"ao-call-counts">>, Key, Opts),
+    hb_event:increment(<<"ao-total-durations">>, Key, Opts, ExecMicroSecs),
+    case CallStack of
+        undefined -> ok;
+        [Caller|_] ->
+            hb_event:increment(
+                <<"ao-callers:", Key/binary>>,
+                hb_util:bin(
+                    [
+                        <<"duration:">>,
+                        Caller
+                    ]
+                ),
+                Opts,
+                ExecMicroSecs
+            ),
+            hb_event:increment(
+                <<"ao-callers:", Key/binary>>,
+                hb_util:bin(
+                    [
+                        <<"calls:">>,
+                        Caller
+                    ]),
+                Opts
+            )
+    end,
+    Res.
+-else.
+maybe_profiled_apply(Func, Args, _Msg1, _Msg2, _Opts) ->
+    apply(Func, Args).
+-endif.
+
 %% @doc Ensure that a message is loaded from the cache if it is an ID, or 
 %% a link, such that it is ready for execution.
 ensure_message_loaded(MsgID, Opts) when ?IS_ID(MsgID) ->
@@ -833,7 +905,9 @@ maybe_force_message({Status, Res}, Opts) ->
     case hb_opts:get(force_message, false, Opts) of
         true -> force_message({Status, Res}, Opts);
         false -> {Status, Res}
-    end.
+    end;
+maybe_force_message(Res, Opts) ->
+    maybe_force_message({ok, Res}, Opts).
 
 force_message({Status, Res}, Opts) when is_list(Res) ->
     force_message({Status, normalize_keys(Res, Opts)}, Opts);
@@ -1135,7 +1209,7 @@ message_to_fun(Msg, Key, Opts) ->
 							?event({found_default_handler, {mod, DefaultMod}}),
                             {Status, Func} =
                                 message_to_fun(
-                                    Msg#{ device => DefaultMod }, Key, Opts
+                                    Msg#{ <<"device">> => DefaultMod }, Key, Opts
                                 ),
                             {Status, Dev, Func};
 						_ ->
@@ -1160,7 +1234,7 @@ message_to_fun(Msg, Key, Opts) ->
                                             {dev, DefaultDev}
                                         }),
                                     message_to_fun(
-                                        Msg#{ device => DefaultDev },
+                                        Msg#{ <<"device">> => DefaultDev },
                                         Key,
                                         Opts
                                     )
@@ -1171,7 +1245,7 @@ message_to_fun(Msg, Key, Opts) ->
 
 %% @doc Extract the device module from a message.
 message_to_device(Msg, Opts) ->
-    case dev_message:get(device, Msg, Opts) of
+    case dev_message:get(<<"device">>, Msg, Opts) of
         {error, not_found} ->
             % The message does not specify a device, so we use the default device.
             default_module();
@@ -1195,7 +1269,7 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 					{ok, MsgWithoutDevice} =
 						dev_message:remove(Msg, #{ item => device }, Opts),
 					message_to_fun(
-						MsgWithoutDevice#{ device => default_module() },
+						MsgWithoutDevice#{ <<"device">> => default_module() },
 						Key,
 						Opts
 					);
@@ -1267,9 +1341,7 @@ is_exported(_Info, _Key, _Opts) -> true.
 
 %% @doc Convert a key to a binary in normalized form.
 normalize_key(Key) -> normalize_key(Key, #{}).
-normalize_key(Key, _Opts) when ?IS_ID(Key) -> Key;
-normalize_key(Key, _Opts) when is_binary(Key) ->
-    hb_util:to_lower(Key);
+normalize_key(Key, _Opts) when is_binary(Key) -> Key;
 normalize_key(Key, _Opts) when is_atom(Key) -> atom_to_binary(Key);
 normalize_key(Key, _Opts) when is_integer(Key) -> integer_to_binary(Key);
 normalize_key(Key, _Opts) when is_list(Key) ->
@@ -1459,7 +1531,7 @@ info(Msg, Opts) ->
     info(message_to_device(Msg, Opts), Msg, Opts).
 info(DevMod, Msg, Opts) ->
 	%?event({calculating_info, {dev, DevMod}, {msg, Msg}}),
-	case find_exported_function(Msg, DevMod, info, 1, Opts) of
+    case find_exported_function(Msg, DevMod, info, 2, Opts) of
 		{ok, Fun} ->
 			Res = apply(Fun, truncate_args(Fun, [Msg, Opts])),
 			% ?event({

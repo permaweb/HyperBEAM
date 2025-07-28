@@ -1808,8 +1808,18 @@ js-sha3/src/sha3.js:
    * @license MIT
    *)
 
+<<<<<<< HEAD
 safe-buffer/index.js:
   (*! safe-buffer. MIT License. Feross Aboukhadijeh <https://feross.org/opensource> *)
+=======
+                                        // Only render headers that have been signed
+                                        const toRender = sigInputRaw
+                                            ? filterSignedHeaders(
+                                                  parsed,
+                                                  sigInputRaw
+                                              )
+                                            : {};
+>>>>>>> 025f0d7c6cd1246777ced2aeecf967c5e557348c
 
 @noble/ed25519/lib/esm/index.js:
   (*! noble-ed25519 - MIT License (c) 2019 Paul Miller (paulmillr.com) *)
@@ -2795,6 +2805,7 @@ safe-buffer/index.js:
 	flex-direction: column;
 	gap: 15px;
 
+<<<<<<< HEAD
 	button {
 		border-radius: ${STYLING.dimensions.radius.alt2} !important;
 	}
@@ -2804,6 +2815,12 @@ safe-buffer/index.js:
 	height: 20px;
 	width: 1px;
 	border-right: 1px solid ${ut=>ut.theme.colors.border.primary};
+=======
+                // Only render headers that have been signed
+                const toRender = sigInputRaw
+                    ? filterSignedHeaders(parsed, sigInputRaw)
+                    : {};
+>>>>>>> 025f0d7c6cd1246777ced2aeecf967c5e557348c
 
 	@media (max-width: ${STYLING.cutoffs.initial}) {
 		display: none;

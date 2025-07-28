@@ -38,7 +38,6 @@ default_message() ->
         %% Options: aggressive, lazy
         compute_mode => lazy,
         %% Choice of remote nodes for tasks that are not local to hyperbeam.
-        host => <<"localhost">>,
         gateway => <<"https://arweave.net">>,
         bundler_ans104 => <<"https://up.arweave.net:443">>,
         %% Location of the wallet keyfile on disk that this node will use.
@@ -80,6 +79,7 @@ default_message() ->
             #{<<"name">> => <<"patch@1.0">>, <<"module">> => dev_patch},
             #{<<"name">> => <<"poda@1.0">>, <<"module">> => dev_poda},
             #{<<"name">> => <<"process@1.0">>, <<"module">> => dev_process},
+            #{<<"name">> => <<"profile@1.0">>, <<"module">> => dev_profile},
             #{<<"name">> => <<"push@1.0">>, <<"module">> => dev_push},
             #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
             #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
@@ -90,8 +90,10 @@ default_message() ->
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
+			#{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
-            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm}
+            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
+            #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
@@ -120,6 +122,7 @@ default_message() ->
         commitment_device => <<"httpsig@1.0">>,
         %% Dev options
         mode => debug,
+        profiling => true,
         % Every modification to `Opts' called directly by the node operator
         % should be recorded here.
         node_history => [],
@@ -133,10 +136,15 @@ default_message() ->
         short_trace_len => 20,
         debug_metadata => true,
         debug_ids => true,
-        debug_committers => false,
+        debug_committers => true,
         debug_show_priv => if_present,
         debug_resolve_links => false,
 		trusted => #{},
+        snp_enforced_keys => [
+            firmware, kernel, 
+            initrd, append,
+            vmm_type, guest_features
+        ],
         routes => [
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
@@ -231,7 +239,9 @@ default_message() ->
         % Should the node use persistent processes?
         process_workers => false,
         % Options for the router device
-        router_registration_opts => #{}
+        <<"router_opts">> => #{
+            routes => []
+        }
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,
@@ -251,44 +261,46 @@ get(Key) -> ?MODULE:get(Key, undefined).
 get(Key, Default) -> ?MODULE:get(Key, Default, #{}).
 get(Key, Default, Opts) when is_binary(Key) ->
     try binary_to_existing_atom(Key, utf8) of
-        AtomKey -> get(AtomKey, Default, Opts)
+        AtomKey -> do_get(AtomKey, Default, Opts)
     catch
-        error:badarg -> Default
+        error:badarg -> do_get(Key, Default, Opts)
     end;
-get(Key, Default, Opts = #{ <<"only">> := Only }) ->
-    get(Key, Default, maps:remove(<<"only">>, Opts#{ only => Only }));
-get(Key, Default, Opts = #{ <<"prefer">> := Prefer }) ->
-    get(Key, Default, maps:remove(<<"prefer">>, Opts#{ prefer => Prefer }));
-get(Key, Default, Opts = #{ only := local }) ->
+get(Key, Default, Opts) ->
+    do_get(Key, Default, Opts).
+do_get(Key, Default, Opts = #{ <<"only">> := Only }) ->
+    do_get(Key, Default, maps:remove(<<"only">>, Opts#{ only => Only }));
+do_get(Key, Default, Opts = #{ <<"prefer">> := Prefer }) ->
+    do_get(Key, Default, maps:remove(<<"prefer">>, Opts#{ prefer => Prefer }));
+do_get(Key, Default, Opts = #{ only := local }) ->
     case maps:find(Key, Opts) of
         {ok, Value} -> Value;
         error -> 
             Default
     end;
-get(Key, Default, Opts = #{ only := global }) ->
+do_get(Key, Default, Opts = #{ only := global }) ->
     case global_get(Key, hb_opts_not_found, Opts) of
         hb_opts_not_found -> Default;
         Value -> Value
     end;
-get(Key, Default, Opts = #{ prefer := global }) ->
-    case ?MODULE:get(Key, hb_opts_not_found, #{ only => global }) of
-        hb_opts_not_found -> ?MODULE:get(Key, Default, Opts#{ only => local });
+do_get(Key, Default, Opts = #{ prefer := global }) ->
+    case do_get(Key, hb_opts_not_found, #{ only => global }) of
+        hb_opts_not_found -> do_get(Key, Default, Opts#{ only => local });
         Value -> Value
     end;
-get(Key, Default, Opts = #{ prefer := local }) ->
-    case ?MODULE:get(Key, hb_opts_not_found, Opts#{ only => local }) of
+do_get(Key, Default, Opts = #{ prefer := local }) ->
+    case do_get(Key, hb_opts_not_found, Opts#{ only => local }) of
         hb_opts_not_found ->
-            ?MODULE:get(Key, Default, Opts#{ only => global });
+            do_get(Key, Default, Opts#{ only => global });
         Value -> Value
     end;
-get(Key, Default, Opts) ->
+do_get(Key, Default, Opts) ->
     % No preference was set in Opts, so we default to local.
-    ?MODULE:get(Key, Default, Opts#{ prefer => local }).
+    do_get(Key, Default, Opts#{ prefer => local }).
 
 -ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, "error,http_error").
+-define(DEFAULT_PRINT_OPTS, [error, http_error]).
 -else.
--define(DEFAULT_PRINT_OPTS, "error,http_error,http_short,compute_short,push_short").
+-define(DEFAULT_PRINT_OPTS, [error, http_error, http_short, compute_short, push_short]).
 -endif.
 
 -define(ENV_KEYS,
@@ -300,45 +312,67 @@ get(Key, Default, Opts) ->
         debug_print =>
             {"HB_PRINT",
                 fun
+                    ({preparsed, Parsed}) -> Parsed;
                     (Str) when Str == "1" -> true;
                     (Str) when Str == "true" -> true;
                     (Str) ->
-                        lists:map(fun hb_util:bin/1, string:tokens(Str, ","))
+                        lists:map(
+                            fun(Topic) -> list_to_atom(Topic) end,
+                            string:tokens(Str, ",")
+                        )
                 end,
-                ?DEFAULT_PRINT_OPTS
+                {preparsed, ?DEFAULT_PRINT_OPTS}
             },
         lua_scripts => {"LUA_SCRIPTS", "scripts"},
         lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests}
     }
 ).
 
-%% @doc Get an environment variable or configuration key.
+%% @doc Get an environment variable or configuration key. Depending on whether
+%% the value is derived from an environment variable, we may be able to cache
+%% the result in the process dictionary.
 global_get(Key, Default, Opts) ->
-    case maps:get(Key, ?ENV_KEYS, Default) of
-        Default -> config_lookup(Key, Default, Opts);
-        {EnvKey, ValParser, DefaultValue} when is_function(ValParser) ->
-            ValParser(cached_os_env(EnvKey, normalize_default(DefaultValue)));
-        {EnvKey, ValParser} when is_function(ValParser) ->
-            case cached_os_env(EnvKey, not_found) of
-                not_found -> config_lookup(Key, Default, Opts);
-                Value -> ValParser(Value)
-            end;
-        {EnvKey, DefaultValue} ->
-            cached_os_env(EnvKey, DefaultValue)
+    case erlang:get({processed_env, Key}) of
+        {cached, Value} -> Value;
+        undefined ->
+            % Thee value is not cached, so we need to process it.
+            {IsCachable, Value} =
+                case maps:get(Key, ?ENV_KEYS, Default) of
+                    Default -> {false, config_lookup(Key, Default, Opts)};
+                    {EnvKey, ValParser, DefaultValue} when is_function(ValParser) ->
+                        {true, ValParser(
+                            cached_os_env(
+                                EnvKey,
+                                normalize_default(DefaultValue)
+                            )
+                        )};
+                    {EnvKey, ValParser} when is_function(ValParser) ->
+                        case cached_os_env(EnvKey, not_found) of
+                            not_found -> {false, config_lookup(Key, Default, Opts)};
+                            V -> {true, ValParser(V)}
+                        end;
+                    {EnvKey, DefaultValue} ->
+                        {true, cached_os_env(EnvKey, DefaultValue)}
+                end,
+            % Cache the result if it is immutable and return.
+            if IsCachable -> erlang:put({processed_env, Key}, {cached, Value});
+            true -> ok
+            end,
+            Value
     end.
 
 %% @doc Cache the result of os:getenv/1 in the process dictionary, as it never
 %% changes during the lifetime of a node.
 cached_os_env(Key, DefaultValue) ->
     case erlang:get({os_env, Key}) of
+        {cached, false} -> DefaultValue;
+        {cached, Value} -> Value;
         undefined ->
-            case os:getenv(Key) of
-                false -> DefaultValue;
-                Value ->
-                    erlang:put({os_env, Key}, Value),
-                    Value
-            end;
-        Value -> Value
+            % The process dictionary returns `undefined' for a key that is not
+            % set, so we need to check the environment and store the result.
+            erlang:put({os_env, Key}, {cached, os:getenv(Key)}),
+            % We recurse to follow the normal path.
+            cached_os_env(Key, DefaultValue)
     end.
 
 %% @doc Get an option from environment variables, optionally consulting the
@@ -353,7 +387,7 @@ normalize_default(Default) -> Default.
 %% @doc An abstraction for looking up configuration variables. In the future,
 %% this is the function that we will want to change to support a more dynamic
 %% configuration system.
-config_lookup(Key, Default, Opts) -> hb_maps:get(Key, default_message(), Default, Opts).
+config_lookup(Key, Default, _Opts) -> maps:get(Key, default_message(), Default).
 
 %% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the 
 %% keys to those in the default message.
@@ -535,62 +569,32 @@ ensure_node_history(Opts, RequiredOpts) ->
         ),
         % Get the first item (complete opts) and remaining items (differences)
         [FirstItem | RemainingItems] = NormalizedNodeHistory,
-        
-        % Step 1: Validate first item has all required keys
-        FirstItemKeysPresent = lists:all(
-            fun(Key) ->
-                maps:is_key(Key, FirstItem)
-            end,
-            maps:keys(NormalizedRequiredOpts)
-        ),
-        true ?= FirstItemKeysPresent orelse {error, keys_missing},
-        
         % Step 2: Validate first item values match requirements
-        FirstItemValuesMatch = hb_message:match(FirstItem, NormalizedRequiredOpts, only_present),
+        FirstItemValuesMatch = hb_message:match(NormalizedRequiredOpts, FirstItem, primary),
         true ?= (FirstItemValuesMatch == true) orelse {error, values_invalid},
         % Step 3: Check that remaining items don't modify required keys
         NoRequiredKeysModified = lists:all(
             fun(HistoryItem) ->
                 % For each required key, if it exists in this history item,
                 % it must match the value from the first item
-                lists:all(
-                    fun(RequiredKey) ->
-                        case maps:find(RequiredKey, HistoryItem) of
-                            {ok, Value} ->
-                                % Key exists in history item, check it matches first item
-                                case maps:find(RequiredKey, FirstItem) of
-                                    {ok, Value} -> true; % Values match
-                                    {ok, _DifferentValue} -> false; % Values differ
-                                    error -> false % Key missing from first item (shouldn't happen)
-                                end;
-                            error ->
-                                % Key doesn't exist in this history item, which is fine
-                                true
-                        end
-                    end,
-                    maps:keys(NormalizedRequiredOpts)
-                )
+                hb_message:match(RequiredOpts, HistoryItem, only_present)
             end,
             RemainingItems
         ),
         true ?= NoRequiredKeysModified orelse {error, required_key_modified},
-        
         % If we've made it this far, everything is valid
         ?event({validate_node_history_items, all_items_valid}),
-        {ok, <<"valid">>}
+        {ok, valid}
     else
-        {error, keys_missing} ->
-            ?event({validate_node_history_items, validation_failed, missing_keys}),
-            {error, <<"missing_keys">>};
         {error, values_invalid} ->
             ?event({validate_node_history_items, validation_failed, invalid_values}),
-            {error, <<"invalid_values">>};
+            {error, invalid_values};
         {error, required_key_modified} ->
             ?event({validate_node_history_items, validation_failed, required_key_modified}),
-            {error, <<"modified_required_key">>};
+            {error, modified_required_key};
         _ ->
             ?event({validate_node_history_items, validation_failed, unknown}),
-            {error, <<"validation_failed">>}
+            {error, validation_failed}
     end.
 
 %%% Tests
@@ -729,7 +733,7 @@ ensure_node_history_test() ->
             }
         ]
     },
-    ?assertEqual({ok, <<"valid">>}, ensure_node_history(ValidOpts, RequiredOpts)),
+    ?assertEqual({ok, valid}, ensure_node_history(ValidOpts, RequiredOpts)),
     ?event({valid_items, ValidOpts}),
     % Test Missing items
     MissingItems = 
@@ -751,8 +755,7 @@ ensure_node_history_test() ->
             }
         ]
     },
-
-    ?assertEqual({error, <<"missing_keys">>}, ensure_node_history(MissingItems, RequiredOpts)),
+    ?assertEqual({error, invalid_values}, ensure_node_history(MissingItems, RequiredOpts)),
     ?event({missing_items, MissingItems}),
     % Test Invalid items
     InvalidItems =
@@ -775,5 +778,5 @@ ensure_node_history_test() ->
                     }
                 ]
         },
-    ?assertEqual({error, <<"invalid_values">>}, ensure_node_history(InvalidItems, RequiredOpts)).
+    ?assertEqual({error, invalid_values}, ensure_node_history(InvalidItems, RequiredOpts)).
 -endif.

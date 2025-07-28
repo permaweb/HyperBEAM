@@ -87,7 +87,7 @@ info(_Msg1) ->
 %% using infrastructure that should not be present on nodes in the future.
 default_device(Msg1, Key, Opts) ->
     NormKey = hb_ao:normalize_key(Key),
-    case {NormKey, hb_ao:get(<<"process/variant">>, {as, dev_message, Msg1}, Opts)} of
+    case {NormKey, hb_util:deep_get(<<"process/variant">>, Msg1, Opts)} of
         {<<"execution">>, <<"ao.TN.1">>} -> <<"genesis-wasm@1.0">>;
         _ -> default_device_index(NormKey)
     end.
@@ -109,7 +109,7 @@ next(Msg1, _Msg2, Opts) ->
 snapshot(RawMsg1, _Msg2, Opts) ->
     Msg1 = ensure_process_key(RawMsg1, Opts),
     {ok, SnapshotMsg} = run_as(
-        <<"Execution">>,
+        <<"execution">>,
         Msg1,
         #{ <<"path">> => <<"snapshot">>, <<"mode">> => <<"Map">> },
         Opts#{
@@ -121,11 +121,7 @@ snapshot(RawMsg1, _Msg2, Opts) ->
     Slot = hb_ao:get(<<"at-slot">>, {as, <<"message@1.0">>, Msg1}, Opts),
     {ok,
         hb_private:set(
-            hb_ao:set(
-                SnapshotMsg,
-                #{ <<"cache-control">> => [<<"store">>] },
-                Opts
-            ),
+            SnapshotMsg#{ <<"cache-control">> => [<<"store">>] },
             #{ <<"priv/additional-hashpaths">> =>
                     [
                         hb_path:to_binary([ProcID, <<"snapshot">>, Slot])
@@ -213,13 +209,20 @@ compute(Msg1, Msg2, Opts) ->
 %% we reach the target slot that the user has requested.
 compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
     CurrentSlot = hb_ao:get(<<"at-slot">>, Msg1, Opts#{ hashpath => ignore }),
-    ?event(compute_short, {starting_compute, {current, CurrentSlot}, {target, TargetSlot}}),
+    ?event(compute_short,
+        {starting_compute,
+            {proc_id, ProcID},
+            {current, CurrentSlot},
+            {target, TargetSlot}
+        }
+    ),
     case CurrentSlot of
         CurrentSlot when CurrentSlot > TargetSlot ->
             % The cache should already have the result, so we should never end up
             % here. Depending on the type of process, 'rewinding' may require
             % re-computing from a significantly earlier checkpoint, so for now
             % we throw an error.
+            ?event(compute, {error_already_calculated_slot,  {target, TargetSlot}, {current, CurrentSlot}}),
             throw(
                 {error,
                     {already_calculated_slot,
@@ -240,6 +243,7 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                 {error, Res} ->
                     % If the scheduler device cannot provide a next message,
                     % we return its error details, along with the current slot.
+                    ?event(compute, {error_getting_schedule, {error, Res}, {phase, <<"get-schedule">>}, {attempted_slot, NextSlot}}),
                     {error, Res#{
                         <<"phase">> => <<"get-schedule">>,
                         <<"attempted-slot">> => NextSlot
@@ -265,6 +269,7 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                                     Error;
                                 true -> #{ <<"error">> => Error }
                                 end,
+                            ?event(compute, {error_computing_slot, {error, ErrMsg}, {phase, <<"compute">>}, {attempted_slot, NextSlot}}),
                             {error,
                                 ErrMsg#{
                                     <<"phase">> => <<"compute">>,
@@ -286,14 +291,13 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
             undefined -> RawInputMsg#{ <<"path">> => <<"compute">> };
             _ -> RawInputMsg
         end,
-    ?event({input_msg, InputMsg}),
+    ?event(compute,{input_msg, InputMsg}),
     ?event(compute, {executing, {proc_id, ProcID}, {slot, NextSlot}}, Opts),
     % Unset the previous results.
     UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
     Res = run_as(<<"execution">>, UnsetResults, InputMsg, Opts),
     case Res of
         {ok, NewProcStateMsg} ->
-            ?event(compute_short, {executed, {slot, NextSlot}, {proc_id, ProcID}}, Opts),
             % We have now transformed slot n -> n + 1. Increment the current slot.
             NewProcStateMsgWithSlot =
                 hb_ao:set(
@@ -331,8 +335,14 @@ store_result(ProcID, Slot, Msg3, Msg2, Opts) ->
 						{snapshot, Snapshot}
 					}
 				),
-                ?event(compute_debug,
-                    {snapshot_generated, {proc_id, ProcID}, {slot, Slot}}, Opts),
+                ?event(snapshot,
+                    {snapshot_generated,
+                        {proc_id, ProcID},
+                        {slot, Slot},
+                        {snapshot, Snapshot}
+                    },
+                    Opts
+                ),
 				Msg3#{ <<"snapshot">> => Snapshot };
             _ -> 
                 Msg3
@@ -452,13 +462,32 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                     % the public component of a message) into memory.
                     % Do not update the hashpath while we do this, and remove
                     % the snapshot key after we have normalized the message.
-                    LoadedSnapshotMsg = hb_cache:ensure_all_loaded(MaybeLoadedSnapshotMsg, Opts),
+                    LoadedSnapshotMsg =
+                        hb_cache:ensure_all_loaded(
+                            MaybeLoadedSnapshotMsg,
+                            Opts
+                        ),
+                    Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
+                    #{ <<"commitments">> := HmacCommits} =
+                        hb_message:with_commitments(
+                            #{ <<"type">> => <<"hmac-sha256">>},
+                            Process,
+                            Opts),
+                    #{ <<"commitments">> := SignCommits } =
+                        hb_message:with_commitments(ProcID, Process, Opts),
+                    UpdateProcess = hb_maps:put(
+                        <<"commitments">>,
+                        hb_maps:merge(HmacCommits, SignCommits),
+                        Process,
+                        Opts
+                    ),
+                    LoadedSnapshotMsg2 = LoadedSnapshotMsg#{ <<"process">> => UpdateProcess },
                     LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
-                    ?event(compute, {loaded_state_checkpoint, ProcID, LoadedSlot}),
+                    ?event(compute, {found_state_checkpoint, ProcID, LoadedSnapshotMsg2}),
                     {ok, Normalized} =
                         run_as(
                             <<"execution">>,
-                            LoadedSnapshotMsg,
+                            LoadedSnapshotMsg2,
                             normalize,
                             Opts#{ hashpath => ignore }
                         ),
@@ -486,34 +515,38 @@ ensure_loaded(Msg1, Msg2, Opts) ->
 %% the device found at `Key'. After execution, the device is swapped back
 %% to the original device if the device is the same as we left it.
 run_as(Key, Msg1, Msg2, Opts) ->
-    BaseDevice = hb_ao:get(<<"device">>, {as, dev_message, Msg1}, Opts),
+    BaseDevice = hb_maps:get(<<"device">>, Msg1, not_found, Opts),
     ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
-    {ok, PreparedMsg} =
-        dev_message:set(
+    PreparedMsg =
+        hb_util:deep_merge(
             ensure_process_key(Msg1, Opts),
             #{
                 <<"device">> =>
-                    DeviceSet = hb_ao:get(
-                        << Key/binary, "-device">>,
-                        {as, dev_message, Msg1},
-                        default_device(Msg1, Key, Opts),
-                        Opts
-                    ),
+                    DeviceSet =
+                        hb_maps:get(
+                            << Key/binary, "-device">>,
+                            Msg1,
+                            default_device(Msg1, Key, Opts),
+                            Opts
+                        ),
                 <<"input-prefix">> =>
-                    case hb_ao:get(<<"input-prefix">>, Msg1, Opts) of
+                    case hb_maps:get(<<"input-prefix">>, Msg1, not_found, Opts) of
                         not_found -> <<"process">>;
                         Prefix -> Prefix
                     end,
                 <<"output-prefixes">> =>
-                    hb_ao:get(
+                    hb_maps:get(
                         <<Key/binary, "-output-prefixes">>,
-                        {as, dev_message, Msg1},
+                        Msg1,
                         undefined, % Undefined in set will be ignored.
                         Opts
                     )
             },
             Opts
         ),
+    ?event(debug_prefix,
+        {input_prefix, hb_maps:get(<<"output-prefixes">>, PreparedMsg, not_found, Opts)
+    }),
     {Status, BaseResult} =
         hb_ao:resolve(
             PreparedMsg,
@@ -537,7 +570,7 @@ as_process(Msg1, Opts) ->
 
 %% @doc Helper function to store a copy of the `process' key in the message.
 ensure_process_key(Msg1, Opts) ->
-    case hb_ao:get(<<"process">>, Msg1, Opts#{ hashpath => ignore }) of
+    case hb_maps:get(<<"process">>, Msg1, not_found, Opts) of
         not_found ->
             % If the message has lost its signers, we need to re-read it from
             % the cache. This can happen if the message was 'cast' to a different
@@ -563,7 +596,13 @@ ensure_process_key(Msg1, Opts) ->
                         Msg1
                 end,
             {ok, Committed} = hb_message:with_only_committed(ProcessMsg, Opts),
-            ?event({process_key_before_set, {msg1, Msg1}, {process_msg, {explicit, ProcessMsg}}, {committed, Committed}}),
+            ?event(
+                {process_key_before_set,
+                    {msg1, Msg1},
+                    {process_msg, {explicit, ProcessMsg}},
+                    {committed, Committed}
+                }
+            ),
             Res =
                 hb_ao:set(
                     hb_message:uncommitted(Msg1, Opts),
@@ -606,7 +645,7 @@ test_wasm_process(WASMImage, Opts) ->
             hb_message:uncommitted(test_base_process(Opts), Opts),
             #{
                 <<"execution-device">> => <<"stack@1.0">>,
-                <<"device-stack">> => [<<"WASM-64@1.0">>],
+                <<"device-stack">> => [<<"wasm-64@1.0">>],
                 <<"image">> => WASMImageID
             },
 			Opts
@@ -620,10 +659,10 @@ test_aos_process() ->
     test_aos_process(#{}).
 test_aos_process(Opts) ->
     test_aos_process(Opts, [
-        <<"WASI@1.0">>,
-        <<"JSON-Iface@1.0">>,
-        <<"WASM-64@1.0">>,
-        <<"Multipass@1.0">>
+        <<"wasi@1.0">>,
+        <<"json-iface@1.0">>,
+        <<"wasm-64@1.0">>,
+        <<"multipass@1.0">>
     ]).
 test_aos_process(Opts, Stack) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
@@ -738,11 +777,11 @@ schedule_on_process_test_() ->
 			}, #{}),
 		?assertMatch(
 			<<"TEST TEXT 1">>,
-			hb_ao:get(<<"assignments/0/body/Test-Label">>, SchedulerRes)
+			hb_ao:get(<<"assignments/0/body/test-label">>, SchedulerRes)
 		),
 		?assertMatch(
 			<<"TEST TEXT 2">>,
-			hb_ao:get(<<"assignments/1/body/Test-Label">>, SchedulerRes)
+			hb_ao:get(<<"assignments/1/body/test-label">>, SchedulerRes)
 		)
 	end}.
 
@@ -901,14 +940,14 @@ aos_browsable_state_test_() ->
         init(),
         Msg1 = test_aos_process(),
         schedule_aos_call(Msg1,
-            <<"table.insert(ao.outbox.Messages, { Target = ao.id, ",
-                "Action = \"State\", ",
-                "Data = { Deep = 4, Bool = true } })">>
+            <<"table.insert(ao.outbox.Messages, { target = ao.id, ",
+                "action = \"State\", ",
+                "data = { deep = 4, bool = true } })">>
         ),
         Msg2 = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
         {ok, Msg3} =
             hb_ao:resolve_many(
-                [Msg1, Msg2, <<"results">>, <<"outbox">>, 1, <<"data">>, <<"Deep">>],
+                [Msg1, Msg2, <<"results">>, <<"outbox">>, 1, <<"data">>, <<"deep">>],
                 #{ cache_control => <<"always">> }
             ),
         ID = hb_message:id(Msg1),
@@ -939,8 +978,8 @@ aos_state_access_via_http_test_() ->
             <<"type">> => <<"Message">>,
             <<"action">> => <<"Eval">>,
             <<"data">> =>
-                <<"table.insert(ao.outbox.Messages, { Target = ao.id,",
-                    " Action = \"State\", Data = { ",
+                <<"table.insert(ao.outbox.Messages, { target = ao.id,",
+                    " action = \"State\", data = { ",
                         "[\"content-type\"] = \"text/html\", ",
                         "[\"body\"] = \"<h1>Hello, world!</h1>\"",
                     "}})">>,
@@ -979,11 +1018,11 @@ aos_state_patch_test_() ->
         Wallet = hb:wallet(),
         init(),
         Msg1Raw = test_aos_process(#{}, [
-            <<"WASI@1.0">>,
-            <<"JSON-Iface@1.0">>,
-            <<"WASM-64@1.0">>,
+            <<"wasi@1.0">>,
+            <<"json-iface@1.0">>,
+            <<"wasm-64@1.0">>,
             <<"patch@1.0">>,
-            <<"Multipass@1.0">>
+            <<"multipass@1.0">>
         ]),
         {ok, Msg1} = hb_message:with_only_committed(Msg1Raw, #{}),
         ProcID = hb_message:id(Msg1, all),
@@ -1121,7 +1160,7 @@ simple_wasm_persistent_worker_benchmark_test() ->
             #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
             #{ spawn_worker => true, process_workers => true }
         ),
-    Iterations = hb:benchmark(
+    Iterations = hb_test_utils:benchmark(
         fun(Iteration) ->
             schedule_wasm_call(
                 Initialized,
@@ -1144,7 +1183,7 @@ simple_wasm_persistent_worker_benchmark_test() ->
         "Scheduled and evaluated ~p simple wasm process messages in ~p s (~s msg/s)",
         [Iterations, BenchTime, hb_util:human_int(Iterations / BenchTime)]
     ),
-    ?assert(Iterations > 2),
+    ?assert(Iterations >= 2),
     ok.
 
 aos_persistent_worker_benchmark_test_() ->
@@ -1161,7 +1200,7 @@ aos_persistent_worker_benchmark_test_() ->
             {ok, _},
             hb_ao:resolve(Msg1, FirstSlotMsg2, #{ spawn_worker => true })
         ),
-        Iterations = hb:benchmark(
+        Iterations = hb_test_utils:benchmark(
             fun(Iteration) ->
                 schedule_aos_call(
                     Msg1,

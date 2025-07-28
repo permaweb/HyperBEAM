@@ -22,20 +22,51 @@ estimate(_, EstimateReq, NodeMsg) ->
             ),
             {ok, 0};
         false ->
+            ?event(payment, {estimating_cost, {req, Req}}),
             Messages =
                 hb_singleton:from(
                     hb_ao:get(<<"request">>, EstimateReq, NodeMsg),
                     NodeMsg
                 ),
-            % Attempt to find the price from the router registration options,
-            % if it exists. If not, use the simple pay price.
-            RouterOpts = hb_opts:get(router_registration_opts, #{}, NodeMsg),
-            Price =
-                case hb_ao:get(<<"price">>, RouterOpts, not_found, NodeMsg) of
-                    not_found -> hb_opts:get(simple_pay_price, 1, NodeMsg);
-                    P -> P
+            % Get the user's request to match against router registration options
+            UserRequest = hb_maps:get(<<"user-request">>, Req, Req, NodeMsg),
+            % Get router registration options which may contain route-specific pricing
+            RouterOpts = hb_opts:get(<<"router_opts">>, #{}, NodeMsg),
+            Routes = hb_maps:get(<<"offered">>, RouterOpts, [], NodeMsg),
+            % Find the first matching route template and stop searching
+            ?event(payment, {executing_router_match, {routes, Routes}}),
+            Match =
+                dev_router:match(
+                    #{ <<"routes">> => Routes },
+                    UserRequest,
+                    NodeMsg
+                ),
+            % Use route-specific price if found, otherwise fall back to default
+            % price multiplied by the number of messages.
+            PriceFromRoute =
+                case Match of
+                    {ok, OfferedRoute} ->
+                        hb_maps:get(
+                            <<"price">>,
+                            OfferedRoute,
+                            default,
+                            NodeMsg
+                        );
+                    _ ->
+                        default
                 end,
-            {ok, length(Messages) * Price}
+            ?event(payment, {price_from_route, PriceFromRoute}),
+            case PriceFromRoute of
+                default ->
+                    Price =
+                        hb_util:int(hb_opts:get(simple_pay_price, 1, NodeMsg))
+                            * length(Messages),
+                    ?event(payment, {priced_from_default, Price}),
+                    {ok, Price};
+                _ ->
+                    ?event(payment, {price_from_route, PriceFromRoute}),
+                    {ok, PriceFromRoute}
+            end
     end.
 
 %% @doc Preprocess a request by checking the ledger and charging the user. We 
