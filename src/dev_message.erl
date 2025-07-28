@@ -96,6 +96,7 @@ id(RawBase, Req, NodeOpts) ->
             hb_message:convert(RawBase, tabm, IDOpts),
             NodeOpts
         ),
+    % ?event(debug_charge, {id_called_2, {base, hb_private:reset(Base)}}),
     % Remove the commitments from the base message if there are none, after
     % filtering for the committers specified in the request.
     ModBase = #{ <<"commitments">> := Commitments }
@@ -107,6 +108,7 @@ id(RawBase, Req, NodeOpts) ->
             {msg, Base}
         }
     ),
+    % ?event(debug_charge, {id_called_3, {commitments, Commitments}, {mod_base, hb_private:reset(ModBase)}}),
     case hb_maps:keys(Commitments) of
         [] ->
             % If there are no commitments, we must (re)calculate the ID.

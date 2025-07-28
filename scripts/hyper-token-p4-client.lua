@@ -3,6 +3,7 @@
 
 -- Find the user's balance in the current ledger state.
 function balance(base, request)
+    ao.event({ "client received balance request" })
     local status, res = ao.resolve({
         path =
             base["ledger-path"]

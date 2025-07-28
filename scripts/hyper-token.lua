@@ -294,7 +294,7 @@ end
 -- be from our own root ledger, or from a sub-ledger that is precisely the same
 -- as our own.
 local function validate_new_peer_ledger(base, request)
-    ao.event({ "Validating peer ledger: ", { request = request, base = base } })
+    ao.event({ "Validating peer ledger: ", { action = request.action, base = base, request = request } })
 
     -- Check if the request is from the root ledger.
     if is_root(base) or (base.token == request.from) then
@@ -627,7 +627,7 @@ local function debit_balance(base, request)
         })
     end
 
-    ao.event({ "Deducting funds:", { request = request } })
+    ao.event({ "Deducting funds" })
     base.balance[source] = source_balance - request.quantity
     ao.event({ "Balances after deduction:",
         { balances = base.balance, ledgers = base.ledgers } }
@@ -662,11 +662,21 @@ end
 -- Xfer in: Sub-ledger = Dec User balance
 -- C-N in: Root = Inc User balance, Dec Sub-ledger balance
 function transfer(base, assignment)
-    ao.event({ "Transfer request received", { base = base,assignment = assignment } })
+    ao.event({ "Transfer request received", {
+        balances = base.balance,
+        ledgers = base.ledgers,
+        path = assignment.path,
+        quantity = assignment.body.quantity,
+        recipient = assignment.body.recipient
+    } })
     -- Verify the security of the request.
     local status, request
     status, base, request = validate_request(base, assignment)
-    ao.event({ "Transfer request validated", { status = status, request = request } })
+    ao.event({ "Transfer request validated", {
+        status = status,
+        balances = base.balance,
+        ledgers = base.ledgers
+    } })
     if status ~= "ok" or not request then
         return "ok", base
     end
@@ -699,6 +709,7 @@ function transfer(base, assignment)
         -- another user. We credit the recipient's balance, or the sub-ledger's
         -- balance if the request has a `route' key.
         local direct_recipient = request.route or request.recipient
+        ao.event({ "Balances before credit", { balances = base.balance } })
         base.balance[direct_recipient] =
             (base.balance[direct_recipient] or 0) + quantity
         base = send(base, {
@@ -708,12 +719,14 @@ function transfer(base, assignment)
             quantity = quantity,
             sender = request.from
         })
+        ao.event({ "Balances after credit", { balances = base.balance } })
         return log_result(base, "ok", {
             message = "Direct or root transfer processed successfully.",
             from_user = request.from,
             to = direct_recipient,
             explicit_recipient = request.recipient,
-            quantity = quantity
+            quantity = quantity,
+            balances = base.balance
         })
     end
 
@@ -809,7 +822,8 @@ _G["credit-notice"] = function (base, assignment)
         to_ledger = request.sender,
         to_user = request.recipient,
         quantity = quantity,
-        balance = base.balance[request.recipient]
+        balance = base.balance[request.recipient],
+        balances = base.balance
     })
 end
 
@@ -895,6 +909,7 @@ function compute(base, assignment)
     elseif action == "register-remote" then
         return _G["register-remote"](base, assignment)
     else
+        ao.event({ "Unknown action received, initializing process." })
         -- Handle unknown `action' values.
         _, base = ensure_initialized(base, assignment)
         base.results = {

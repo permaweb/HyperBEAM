@@ -384,7 +384,9 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
     ?event(compute, {input_msg, InputMsg}),
     ?event(compute, {executing, {proc_id, ProcID}, {slot, NextSlot}}, Opts),
     % Unset the previous results.
+    % ?event(debug_charge, {results, hb_maps:without([<<"module">>], hb_private:reset(State))}),
     UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
+    % Res = run_as(<<"execution">>, hb_message:normalize_commitments(UnsetResults, Opts), InputMsg, Opts),
     Res = run_as(<<"execution">>, UnsetResults, InputMsg, Opts),
     % hb_message:normalize_commitments(hb_cache:read_all_commitments(InputMsg, Opts), Opts), Opts),
     case Res of
@@ -625,11 +627,13 @@ ensure_loaded(Base, Req, Opts) ->
                     % the public component of a message) into memory.
                     % Do not update the hashpath while we do this, and remove
                     % the snapshot key after we have normalized the message.
+                    ?event(debug_charge, {maybe_loaded_snapshot_msg, MaybeLoadedSnapshotMsg}),
                     LoadedSnapshotMsg =
                         hb_cache:ensure_all_loaded(
                             MaybeLoadedSnapshotMsg,
                             Opts
                         ),
+                    ?event(debug_charge, {loaded_snapshot_msg, hb_maps:without([<<"priv">>, <<"module">>], LoadedSnapshotMsg)}),
                     Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
                     #{ <<"commitments">> := HmacCommits} =
                         hb_message:with_commitments(
