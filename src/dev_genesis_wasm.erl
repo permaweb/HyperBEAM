@@ -177,7 +177,7 @@ ensure_started(Opts) ->
                                             {"HB_URL", NodeURL},
                                             {"PORT", GenesisWasmPort},
                                             {"DB_URL", DatabaseUrl},
-                                            {"NODE_CONFIG_ENV", NodeConfigEnv},
+                                            {"NODE_CONFIG_ENV", "production"},
                                             {"DEFAULT_LOG_LEVEL",
                                                 hb_util:list(
                                                     hb_opts:get(
