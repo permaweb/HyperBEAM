@@ -89,7 +89,6 @@ id(Base, _, NodeOpts) when is_binary(Base) ->
     % format of the message ID return.
     {ok, hb_util:human_id(hb_path:hashpath(Base, NodeOpts))};
 id(RawBase, Req, NodeOpts) ->
-    % ?event(debug_charge, {id_called, {req, Req}, {raw_base, hb_private:reset(RawBase)}}),
     % Ensure that the base message is a normalized before proceeding.
     IDOpts = NodeOpts#{ linkify_mode => discard },
     Base =
@@ -97,7 +96,6 @@ id(RawBase, Req, NodeOpts) ->
             hb_message:convert(RawBase, tabm, IDOpts),
             NodeOpts
         ),
-    % ?event(debug_charge, {id_called_2, {base, hb_private:reset(Base)}}),
     % Remove the commitments from the base message if there are none, after
     % filtering for the committers specified in the request.
     ModBase = #{ <<"commitments">> := Commitments }
@@ -109,7 +107,6 @@ id(RawBase, Req, NodeOpts) ->
             {msg, Base}
         }
     ),
-    % ?event(debug_charge, {id_called_3, {commitments, Commitments}, {mod_base, hb_private:reset(ModBase)}}),
     case hb_maps:keys(Commitments) of
         [] ->
             % If there are no commitments, we must (re)calculate the ID.
@@ -276,7 +273,8 @@ commit(Self, Req, Opts) ->
                 ]
             )
         ),
-    ConvertBack = hb_message:convert(Committed, <<"structured@1.0">>, tabm, CommitOpts),
+    ConvertBack =
+        hb_message:convert(Committed, <<"structured@1.0">>, tabm, CommitOpts),
     {ok, ConvertBack}.
 
 %% @doc Verify a message. By default, all commitments are verified. The

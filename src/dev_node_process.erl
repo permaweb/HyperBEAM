@@ -169,8 +169,15 @@ lookup_spawn_test() ->
             Opts
         ),
     ?event(t, {equal,
-        { p1, hb_private:reset(hb_cache:ensure_all_loaded(Process1, Opts)) },
-        { p2, hb_private:reset(hb_message:normalize_commitments(hb_cache:ensure_all_loaded(Process2, Opts), Opts)) }
+        { p1, hb_private:reset(
+            hb_cache:ensure_all_loaded(Process1, Opts)
+        ) },
+        { p2, hb_private:reset(
+                hb_message:normalize_commitments(
+                    hb_cache:ensure_all_loaded(Process2, Opts),
+                    Opts
+                )
+        ) }
     }),
     ?assertEqual(
         hb_message:normalize_commitments(

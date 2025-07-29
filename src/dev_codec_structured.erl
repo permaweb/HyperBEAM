@@ -40,7 +40,7 @@ from(List, Req, Opts) when is_list(List) ->
     };
 from(Msg, Req, Opts) when is_map(Msg) ->
     % Normalize the message, offloading links to the cache.
-    % ?event(debug_charge, {from_called, {msg, Msg}, {req, Req}}),
+    ?event(debug_charge, {from_called, {msg, Msg}, {req, Req}}),
     NormLinks = hb_link:normalize(Msg, linkify_mode(Req, Opts), Opts),
     NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
     FilteredKeys = lists:filter(

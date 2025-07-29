@@ -74,11 +74,8 @@ is_async(Process, Req, Opts) ->
 
 %% @doc Push a message or slot number, including its downstream results.
 do_push(PrimaryProcess, Assignment, Opts) ->
-    ?event(transfer_test, {push_assignment, hb_cache:ensure_all_loaded(Assignment, Opts)}),
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
-    ?event(transfer_test, {push_slot, Slot}),
     ID = dev_process:process_id(PrimaryProcess, #{}, Opts),
-    ?event(transfer_test, {push_id, ID}),
     NormalizedPrimaryProcess =
         hb_message:normalize_commitments(PrimaryProcess, Opts),
     UncommittedID =
@@ -88,7 +85,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             Opts
         ),
     BaseID = calculate_base_id(PrimaryProcess, Opts),
-    ?event(transfer_test,
+    ?event(
         {push_computing_outbox,
             {process_id, ID},
             {base_id, BaseID},
@@ -211,7 +208,6 @@ do_push(PrimaryProcess, Assignment, Opts) ->
 %% the target to schedule the execution result upon is not confused with
 %% functional components of the evaluation.
 maybe_evaluate_message(Message, Opts) ->
-    ?event(transfer_test, {maybe_evaluate_message, {msg, Message}}),
     case hb_ao:get(<<"resolve">>, Message, Opts) of
         not_found -> 
             ?event(x, {not_found, {msg, Message}    }),
@@ -766,7 +762,11 @@ push_as_identity_test_() ->
                 Msg1,
                 Opts
             ),
-        Committers = hb_ao:get(<<"committers">>, hb_cache:read_all_commitments(Assignment, Opts), Opts),
+        Committers = hb_ao:get(
+            <<"committers">>,
+            hb_cache:read_all_commitments(Assignment, Opts),
+            Opts
+        ),
         ?assert(lists:member(SchedulingID, Committers)),
         ?assert(lists:member(ComputeID, Committers)),
         % Validate that the compute wallet was used to sign the message.

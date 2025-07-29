@@ -9,8 +9,8 @@
 % %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    verify_nested_complex_signed_test(
-        #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
+    normalize_commitments_test(
+        <<"structured@1.0">>,
         test_opts(normal)
     ).
 
@@ -495,7 +495,8 @@ verify_nested_complex_signed_test(Codec, Opts) ->
         Codec
     ),
     Msg =
-        hb_message:commit(#{
+        hb_message:commit(
+            #{
                 <<"path">> => <<"schedule">>,
                 <<"method">> => <<"POST">>,
                 <<"body">> => Inner                    

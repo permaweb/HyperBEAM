@@ -136,7 +136,7 @@ local function normalize_table(value)
     -- If value is already a table, return it. If it is not a string, return
     -- a table containing only the value.
     if type(value) == "table" then
-        -- ao.event({ "Table already normalized", { table = value } })
+        ao.event({ "Table already normalized", { table = value } })
         return value
     elseif type(value) ~= "string" then
         return { value }
@@ -166,7 +166,7 @@ local function normalize_table(value)
         table.insert(t, num or trimmed)
     end
 
-    -- ao.event({ "Normalized table", { table = t } })
+    ao.event({ "Normalized table", { table = t } })
     return t
 end
 
@@ -190,11 +190,11 @@ local function satisfies_list_constraints(subject, all, required, match)
     match = match or #all
     match = normalize_int(match)
 
-    -- ao.event({ "Satisfies list constraints", {
-    --     subject = subject,
-    --     all = all,
-    --     match = match
-    -- }})
+    ao.event({ "Satisfies list constraints", {
+        subject = subject,
+        all = all,
+        match = match
+    }})
 
     -- Check that the subject satisfies the grammar's constraints.
     -- 1. The subject must have at least `match' elements in common with `all'.
@@ -202,14 +202,14 @@ local function satisfies_list_constraints(subject, all, required, match)
     local count = count_common(subject, all)
     local required_count = count_common(required, subject)
 
-    -- ao.event({ "Counts", {
-    --     subject = subject,
-    --     all = all,
-    --     required = required,
-    --     match = match,
-    --     count = count,
-    --     required_count = required_count
-    -- }})
+    ao.event({ "Counts", {
+        subject = subject,
+        all = all,
+        required = required,
+        match = match,
+        count = count,
+        required_count = required_count
+    }})
 
     return (count >= match) and (required_count == #required)
 end
@@ -248,13 +248,13 @@ local function satisfies_constraints(message, assess, all, required, match)
         match
     )
 
-    -- ao.event({ "Constraint satisfaction results", {
-    --     result = satisfies_auth,
-    --     message = message,
-    --     all_admissible = all,
-    --     required = required,
-    --     required_count = match
-    -- }})
+    ao.event({ "Constraint satisfaction results", {
+        result = satisfies_auth,
+        message = message,
+        all_admissible = all,
+        required = required,
+        required_count = match
+    }})
 
     return satisfies_auth
 end
@@ -294,7 +294,7 @@ end
 -- be from our own root ledger, or from a sub-ledger that is precisely the same
 -- as our own.
 local function validate_new_peer_ledger(base, request)
-    ao.event({ "Validating peer ledger: ", { action = request.action, base = base, request = request } })
+    ao.event({ "Validating peer ledger: ", { action = request.action } })
 
     -- Check if the request is from the root ledger.
     if is_root(base) or (base.token == request.from) then
@@ -320,7 +320,7 @@ local function validate_new_peer_ledger(base, request)
             proc,
             { path = "id", commitments = "none" }
         )
-    -- ao.event("debug_base", { "Expected `from-base`", { status = status, expected = expected, proc = proc } })
+    ao.event("debug_base", { "Expected `from-base`", { status = status, expected = expected, proc = proc } })
     -- Check if the `from-base' field is present in the assignment.
     if not request["from-base"] then
         ao.event({ "`from-base` field not found in message" })
@@ -334,8 +334,8 @@ local function validate_new_peer_ledger(base, request)
         ao.event("debug_base", { "Peer registration messages do not match", {
             expected_base = expected,
             received_base = request["from-base"],
-            -- process = proc,
-            -- request = request
+            process = proc,
+            request = request
         }})
         return false
     end
@@ -472,10 +472,10 @@ function validate_request(incoming_base, assignment)
         })
     end
 
-    -- ao.event({ "ensure_initialized", {
-    --     status = status,
-    --     base = base
-    -- }})
+    ao.event({ "ensure_initialized", {
+        status = status,
+        base = base
+    }})
     -- First, ensure that the message has not already been processed.
     ao.event("Deduplicating message.", {
         ["history-length"] = #(base.dedup or {})
@@ -508,10 +508,6 @@ function validate_request(incoming_base, assignment)
 
     -- Next, ensure that the assignment is trusted.
     local trusted, details = is_trusted_assignment(base, assignment)
-    ao.event({ "Trusted assignment?", {
-        trusted = trusted,
-        details = details
-    }})
     if not trusted then
         return "error", log_result(base, "error", {
             message = "Assignment is not trusted.",
@@ -666,8 +662,7 @@ function transfer(base, assignment)
         balances = base.balance,
         ledgers = base.ledgers,
         path = assignment.path,
-        quantity = assignment.body.quantity,
-        recipient = assignment.body.recipient
+        body = assignment.body
     } })
     -- Verify the security of the request.
     local status, request
@@ -888,7 +883,6 @@ end
 --- Index function, called by the `~process@1.0` device for scheduled messages.
 --- We route any `action' to the appropriate function based on the request path.
 function compute(base, assignment)
-    -- ao.event({ "compute called", { assignment = assignment, base = base } })
     ao.event({ "compute called",
         { balance = base.balance, ledgers = base.ledgers, action = assignment.body.action or "unknown" } })
 

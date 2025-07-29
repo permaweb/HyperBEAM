@@ -173,7 +173,6 @@ list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) 
     end;
 list(Path, Store) ->
     ResolvedPath = hb_store:resolve(Store, Path),
-    % ?event(debug_charge, {getting_list, {path, Path}, {resolved_path, ResolvedPath}, {store, Store}}),
     case hb_store:list(Store, ResolvedPath) of
         {ok, Names} -> Names;
         {error, _} -> [];

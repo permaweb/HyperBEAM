@@ -17,14 +17,8 @@ read(ProcID, SlotRef, Opts) ->
 
 %% @doc Write a process computation result to the cache.
 write(ProcID, Slot, Msg, Opts) ->
-    ?event(debug_charge, {writing_to_cache, 
-        {proc_id, ProcID},
-        {slot, Slot},
-        {msg, hb_maps:without([<<"priv">>, <<"module">>], Msg)}
-    }),
     % Write the item to the cache in the root of the store.
     {ok, Root} = hb_cache:write(Msg, Opts),
-    ?event(debug_charge, {wrote_to_cache, {root, Root}}),
     % Link the item to the path in the store by slot number.
     SlotNumPath = path(ProcID, Slot, Opts),
     hb_cache:link(Root, SlotNumPath, Opts),
@@ -35,14 +29,6 @@ write(ProcID, Slot, Msg, Opts) ->
             ID = hb_util:human_id(hb_ao:get(id, Msg, Opts)),
             Opts
         ),
-    ?event(debug_charge, {
-        linking_id,
-            {proc_id, ProcID},
-            {slot, Slot},
-            {id, ID},
-            {path, MsgIDPath}
-        }
-    ),
     hb_cache:link(Root, MsgIDPath, Opts),
     % Return the slot number path.
     {ok, SlotNumPath}.
@@ -98,14 +84,14 @@ latest(ProcID, RawRequiredPath, Limit, Opts) ->
             undefined -> AllSlots;
             _ -> lists:filter(fun(Slot) -> Slot =< Limit end, AllSlots)
         end,
-    ?event(debug_charge, {
+    ?event(
         {finding_latest_slot,
             {proc_id, hb_util:human_id(ProcID)},
             {limit, Limit},
             {path, Path},
             {slots_in_range, CappedSlots}
         }
-    }),
+    ),
     % Find the highest slot that has the necessary path.
     BestSlot =
         first_with_path(
@@ -119,7 +105,6 @@ latest(ProcID, RawRequiredPath, Limit, Opts) ->
             % No slot found with the necessary path was found.
             not_found;
         SlotNum ->
-            ?event(debug_charge, {found_latest_slot, {proc_id, ProcID}, {slot, SlotNum}}),
             % Found. Return the slot number and the message at that slot.
             {ok, Msg} = hb_cache:read(path(ProcID, SlotNum, Opts), Opts),
             {ok, SlotNum, Msg}
