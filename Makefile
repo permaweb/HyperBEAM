@@ -12,7 +12,7 @@ GENESIS_WASM_SERVER_DIR = _build/genesis_wasm/genesis-wasm-server
 
 HYPERBUDDY_UI_REPO = https://github.com/permaweb/hb-explorer
 HYPERBUDDY_UI_PACKAGE_JSON = https://raw.githubusercontent.com/permaweb/hb-explorer/main/package.json
-HYPERBUDDY_UI_TARGET = src/html/hyperbuddy@1.0/index.html
+HYPERBUDDY_UI_TARGET = src/html/hyperbuddy@1.0/bundle.js
 ARWEAVE_GATEWAY = https://arweave.net
 
 ifdef HB_DEBUG
@@ -121,7 +121,7 @@ update-hyperbuddy-ui:
 	echo "Found transaction ID: $$TX_ID" && \
 	if [ -f "$(HYPERBUDDY_UI_TARGET)" ]; then \
 		rm "$(HYPERBUDDY_UI_TARGET)" && \
-		echo "Removed existing index.html"; \
+		echo "Removed existing bundle.js"; \
 	fi && \
 	echo "Downloading source code from Arweave..." && \
 	curl -sL "$(ARWEAVE_GATEWAY)/$$TX_ID" -o "$(HYPERBUDDY_UI_TARGET)" && \
