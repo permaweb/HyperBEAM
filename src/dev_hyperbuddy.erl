@@ -13,6 +13,7 @@ info() ->
         routes => #{
             % Default message viewer page:
             <<"index">> => <<"index.html">>,
+            <<"bundle.js">> => <<"bundle.js">>,
             % Error pages:
             <<"404.html">> => <<"404.html">>,
             <<"500.html">> => <<"500.html">>
