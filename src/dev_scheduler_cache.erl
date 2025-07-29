@@ -44,7 +44,6 @@ read(ProcID, Slot, Opts) when is_integer(Slot) ->
     read(ProcID, integer_to_list(Slot), Opts);
 read(ProcID, Slot, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    ?event(transfer_test, {reading_assignment, {proc_id, {explicit, ProcID}}, {slot, Slot}, {store, Store}}),
     ResolvedPath =
         P2 = hb_store:resolve(
             Store,

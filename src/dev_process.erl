@@ -107,7 +107,6 @@ next(Msg1, _Msg2, Opts) ->
     run_as(<<"scheduler">>, Msg1, next, Opts).
 
 snapshot(RawMsg1, _Msg2, Opts) ->
-    % ?event(debug_charge, {snapshot_called}),
     Msg1 = ensure_process_key(RawMsg1, Opts),
     {ok, SnapshotMsg} = run_as(
         <<"execution">>,
@@ -118,11 +117,8 @@ snapshot(RawMsg1, _Msg2, Opts) ->
             hashpath => ignore
         }
     ),
-    % ?event(debug_charge, {snapshot_result, SnapshotMsg}),
     ProcID = hb_message:id(Msg1, all, Opts),
-    % ?event(debug_charge, {snapshot_proc_id, ProcID}),
     Slot = hb_ao:get(<<"at-slot">>, {as, <<"message@1.0">>, Msg1}, Opts),
-    % ?event(debug_charge, {snapshot_slot, Slot}),
     {ok,
         hb_private:set(
             SnapshotMsg#{ <<"cache-control">> => [<<"store">>] },
@@ -213,9 +209,6 @@ compute(Msg1, Msg2, Opts) ->
 %% we reach the target slot that the user has requested.
 compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
     CurrentSlot = hb_ao:get(<<"at-slot">>, Msg1, Opts#{ hashpath => ignore }),
-    ?event(transfer_test, {compute_to_slot, {proc_id, ProcID}, {current, CurrentSlot}, {target, TargetSlot}}),
-    ?event(transfer_test, {compute_to_slot_msg1, hb_maps:without([<<"priv">>], Msg1)}),
-    ?event(transfer_test, {compute_to_slot_msg2, Msg2}),
     ?event(compute_short,
         {starting_compute,
             {proc_id, ProcID},
@@ -256,7 +249,6 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                         <<"attempted-slot">> => NextSlot
                     }};
                 {ok, #{ <<"body">> := SlotMsg, <<"state">> := State }} ->
-                    ?event(transfer_test, {compute_to_slot_slotmsg, SlotMsg}),
                     % Compute the next single state transition.
                     case compute_slot(ProcID, State, SlotMsg, Msg2, Opts) of
                         {ok, NewState} ->
@@ -473,13 +465,11 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                     % the public component of a message) into memory.
                     % Do not update the hashpath while we do this, and remove
                     % the snapshot key after we have normalized the message.
-                    ?event(debug_charge, {maybe_loaded_snapshot_msg, MaybeLoadedSnapshotMsg}),
                     LoadedSnapshotMsg =
                         hb_cache:ensure_all_loaded(
                             MaybeLoadedSnapshotMsg,
                             Opts
                         ),
-                    ?event(debug_charge, {loaded_snapshot_msg, hb_maps:without([<<"priv">>, <<"module">>], LoadedSnapshotMsg)}),
                     Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
                     #{ <<"commitments">> := HmacCommits} =
                         hb_message:with_commitments(
@@ -528,7 +518,6 @@ ensure_loaded(Msg1, Msg2, Opts) ->
 %% the device found at `Key'. After execution, the device is swapped back
 %% to the original device if the device is the same as we left it.
 run_as(Key, Msg1, Msg2, Opts) ->
-    ?event(transfer_test, {run_as, {key, Key}, {msg1, hb_maps:without([<<"priv">>], Msg1)}, {msg2, Msg2}}),
     BaseDevice = hb_maps:get(<<"device">>, Msg1, not_found, Opts),
     ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
     PreparedMsg =
@@ -561,15 +550,12 @@ run_as(Key, Msg1, Msg2, Opts) ->
     ?event(debug_prefix,
         {input_prefix, hb_maps:get(<<"output-prefixes">>, PreparedMsg, not_found, Opts)
     }),
-    ?event(transfer_test, {run_as_msg2, Msg2}),
     {Status, BaseResult} =
         hb_ao:resolve(
             PreparedMsg,
             Msg2,
             Opts
         ),
-    ?event(transfer_test, {run_as_status, Status}),
-    ?event(transfer_test, {run_as_base_result, hb_maps:without([<<"priv">>, <<"state">>], BaseResult)}),
     case {Status, BaseResult} of
         {ok, #{ <<"device">> := DeviceSet }} ->
             {ok, hb_ao:set(BaseResult, #{ <<"device">> => BaseDevice }, Opts)};

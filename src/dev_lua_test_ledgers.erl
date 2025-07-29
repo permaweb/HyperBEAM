@@ -151,8 +151,10 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
             },
             #{ priv_wallet => Sender }
         ),
-    NormalizedXfer = hb_message:normalize_commitments(hb_cache:ensure_all_loaded(Xfer, Opts), Opts),
-    ?event(transfer_test, {xfer, NormalizedXfer}),
+    NormalizedXfer = hb_message:normalize_commitments(
+        hb_cache:ensure_all_loaded(Xfer, Opts),
+        Opts
+    ),
     hb_ao:resolve(
         ProcMsg,
         NormalizedXfer,
@@ -213,7 +215,9 @@ balances(Mode, ProcMsg, Opts) when is_atom(Mode) ->
     balances(hb_util:bin(Mode), ProcMsg, Opts);
 balances(Prefix, ProcMsg, Opts) ->
     Balances = hb_ao:get(<<Prefix/binary, "/balance">>, ProcMsg, #{}, Opts),
-    LoadedBalances = hb_private:reset(hb_cache:ensure_all_loaded(Balances, Opts)),
+    LoadedBalances = hb_private:reset(
+        hb_cache:ensure_all_loaded(Balances, Opts)
+    ),
     hb_maps:without(
         [<<"commitments">>],
         LoadedBalances
@@ -434,9 +438,7 @@ transfer_test_() -> {timeout, 30, fun transfer/0}.
 transfer() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
-    ?event(transfer_test, {alice, hb_util:human_id(ar_wallet:to_address(Alice))}),
     Bob = ar_wallet:new(),
-    ?event(transfer_test, {bob, hb_util:human_id(ar_wallet:to_address(Bob))}),
     Proc =
         ledger(
             <<"scripts/hyper-token.lua">>,
@@ -534,25 +536,21 @@ subledger_transfer() ->
     },
     % 1. Alice has 100 tokens on the root ledger.
     ?assertEqual(100, balance(RootLedger, Alice, Opts)),
-    ?event(token_log, {map1, {explicit, map([RootLedger, SubLedger], EnvNames, Opts)}}),
+    ?event(token_log, {map_1, map([RootLedger, SubLedger], EnvNames, Opts)}),
 
     % 2. Alice sends 10 tokens to the sub-ledger from the root ledger.
     transfer(RootLedger, Alice, Alice, 10, SubLedger, Opts),
-    ?event(token_log, {map2, {explicit, map([RootLedger, SubLedger], EnvNames, Opts)}}),
+    ?event(token_log, {map_2, map([RootLedger, SubLedger], EnvNames, Opts)}),
     ?assertEqual(90, balance(RootLedger, Alice, Opts)),
     ?assertEqual(10, balance(SubLedger, Alice, Opts)),
 
     % 3. Alice sends 8 tokens to Bob on the sub-ledger.
     transfer(SubLedger, Alice, Bob, 8, Opts),
-    ?event(token_log, 
-        {map3,
-            {names, map([RootLedger, SubLedger], EnvNames, Opts)}
-            % {ids, map([RootLedger, SubLedger], Opts)}
-        }),
+    ?event(token_log, {map_3, map([RootLedger, SubLedger], EnvNames, Opts)}),
 
     % 4. Bob sends 7 tokens to himself on the root ledger.
     transfer(SubLedger, Bob, Bob, 7, RootLedger, Opts),
-    ?event(token_log, {map4, map([RootLedger, SubLedger], EnvNames, Opts)}),
+    ?event(token_log, {map_4, map([RootLedger, SubLedger], EnvNames, Opts)}),
     % Validate the balances of the root and sub-ledgers.
     
     Map = map([RootLedger, SubLedger], EnvNames, Opts),
@@ -637,21 +635,16 @@ single_subledger_to_subledger() ->
         SubLedger1 => subledger1,
         SubLedger2 => subledger2
     },
-    ?event(debug, {root_ledger, RootLedger}),
-    ?event(debug, {sl1, SubLedger1}),
-    ?event(debug, {sl2, SubLedger2}),
     % 1. Alice starts with 100 tokens on root ledger.
     ?assertEqual(100, balance(RootLedger, Alice, Opts)),
     ?assertEqual(0, balance(SubLedger1, Alice, Opts)),
     ?assertEqual(0, balance(SubLedger2, Alice, Opts)),
 
     % 2. Alice sends 90 tokens to herself on SubLedger1 from the root ledger.
-    ?event(debug, {transfer_1}),
     transfer(RootLedger, Alice, Alice, 90, SubLedger1, Opts),
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(90, balance(SubLedger1, Alice, Opts)),
     ?assertEqual(0, balance(SubLedger2, Alice, Opts)),
-    ?event(debug, {transfer_2}),
 
     % 3. Alice sends 80 tokens to herself on SubLedger2 from SubLedger1.
     PushRes = transfer(SubLedger1, Alice, Alice, 80, SubLedger2, Opts),
@@ -684,31 +677,40 @@ subledger_to_subledger() ->
     ?event(debug, {names, 
         {alice, hb_util:human_id(ar_wallet:to_address(Alice))},
         {bob, hb_util:human_id(ar_wallet:to_address(Bob))},
-        {root, hb_message:id(RootLedger, signed, Opts)},
         {subledger1, hb_message:id(SubLedger1, signed, Opts)},
         {subledger2, hb_message:id(SubLedger2, signed, Opts)}
     }),
     % 1. Alice starts with 100 tokens on the root ledger.
     ?assertEqual(100, balance(RootLedger, Alice, Opts)),
-    ?event(debug_test, {map_1, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
+    ?event(token_log,
+        {map_1, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}
+    ),
     % 2. Alice sends 90 tokens to herself on SubLedger1 from the root ledger.
     transfer(RootLedger, Alice, Alice, 90, SubLedger1, Opts),
-    ?event(debug_test, {map_2, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
+    ?event(token_log,
+        {map_2, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}
+    ),
     % 3. Alice sends 10 tokens to Bob on SubLedger2 from SubLedger1.
     transfer(SubLedger1, Alice, Bob, 10, SubLedger2, Opts),
-    ?event(debug_test, {map_3, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
+    ?event(token_log,
+        {map_3, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}
+    ),
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(80, balance(SubLedger1, Alice, Opts)),
     ?assertEqual(10, balance(SubLedger2, Bob, Opts)),
     % 4. Bob sends 5 tokens to himself on SubLedger1 from SubLedger2.
     transfer(SubLedger2, Bob, Bob, 5, SubLedger1, Opts),
-    ?event(debug_test, {map_4, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
+    ?event(token_log, 
+        {map_4, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}
+    ),
     ?assertEqual(5, balance(SubLedger1, Bob, Opts)),
     ?assertEqual(5, balance(SubLedger2, Bob, Opts)),
     verify_net(RootLedger, [SubLedger1, SubLedger2], Opts),
     % 5. Bob sends 4 tokens to Alice on SubLedger1 from SubLedger2.
     transfer(SubLedger2, Bob, Alice, 4, SubLedger1, Opts),
-    ?event(debug_test, {map_5, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
+    ?event(token_log,
+        {map_5, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}
+    ),
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(5, balance(SubLedger1, Bob, Opts)),
     ?assertEqual(84, balance(SubLedger1, Alice, Opts)),

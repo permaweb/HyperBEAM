@@ -1007,14 +1007,26 @@ run_wasm_unsigned_test() ->
 run_wasm_signed_test() ->
     Opts = #{ priv_wallet => hb:wallet() },
     URL = hb_http_server:start_node(Opts#{force_signed => true}),
-    Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>, Opts),
+    Msg = wasm_compute_request(
+        <<"test/test-64.wasm">>,
+        <<"fac">>,
+        [3.0],
+        <<"">>,
+        Opts
+    ),
     {ok, Res} = post(URL, hb_message:commit(Msg, Opts), Opts),
     ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, Opts)).
 
 get_deep_unsigned_wasm_state_test() ->
     Opts = #{ priv_wallet => hb:wallet() },
     URL = hb_http_server:start_node(Opts#{force_signed => false}),
-    Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>, Opts),
+    Msg = wasm_compute_request(
+        <<"test/test-64.wasm">>,
+        <<"fac">>,
+        [3.0],
+        <<"">>,
+        Opts
+    ),
     {ok, Res} = post(URL, Msg, Opts),
     ?assertEqual(6.0, hb_ao:get(<<"/output/1">>, Res, Opts)).
 
@@ -1059,7 +1071,11 @@ ans104_wasm_test() ->
     ),
     ?assert(hb_message:verify(Msg, all, Opts)),
     ?event({msg, {explicit, Msg}}),
-    {ok, Res} = post(URL, Msg#{ <<"path">> => <<"/init/compute/results">> }, Opts),
+    {ok, Res} = post(
+        URL, 
+        Msg#{ <<"path">> => <<"/init/compute/results">> }, 
+        Opts
+    ),
     ?event({res, Res}),
     ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, Opts)),
     ok.

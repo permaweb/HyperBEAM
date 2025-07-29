@@ -793,7 +793,10 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
             fun() ->
                 lists:foldl(
                     fun({MsgID, Msg}, Count) -> 
-                        NormalizedMsg = hb_cache:ensure_all_loaded(hb_message:normalize_commitments(Msg, Opts), Opts),
+                        NormalizedMsg = hb_cache:ensure_all_loaded(
+                            hb_message:normalize_commitments(Msg, Opts),
+                            Opts
+                        ),
                         case hb_cache:read(MsgID, Opts) of
                             {ok, CacheMsg} ->
                                 NormalizedCacheMsg = 

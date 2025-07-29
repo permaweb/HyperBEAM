@@ -33,7 +33,6 @@ normalize(Msg, Opts) when is_map(Opts) ->
 normalize(Msg, false, _Opts) ->
     Msg;
 normalize(Msg, Mode, Opts) when is_map(Msg) ->
-    % ?event(debug_charge, {normalize_called}),
     maps:merge(
         maps:with([<<"commitments">>, <<"priv">>], Msg),
             maps:from_list(

@@ -94,7 +94,7 @@ ensure_loaded(Lk = {link, ID, LkOpts = #{ <<"type">> := <<"link">>, <<"lazy">> :
             end;
         not_found ->
             ?event(debug_cache, {lazy_link_not_found, {link, ID}, {link_opts, LkOpts}}),
-            throw({necessary_message_not_found, Lk, Store})
+            throw({necessary_message_not_found, Lk})
     end;
 ensure_loaded(Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
     % If the user provided their own options, we merge them and _overwrite_
@@ -153,7 +153,6 @@ list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) 
     end;
 list(Path, Store) ->
     ResolvedPath = hb_store:resolve(Store, Path),
-    % ?event(debug_charge, {getting_list, {path, Path}, {resolved_path, ResolvedPath}, {store, Store}}),
     case hb_store:list(Store, ResolvedPath) of
         {ok, Names} -> Names;
         {error, _} -> [];
