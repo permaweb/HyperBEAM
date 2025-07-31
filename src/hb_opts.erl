@@ -188,8 +188,8 @@ default_message() ->
                 %     }
                 % },
                 #{
-                    <<"name">> => <<"cache-mainnet/lmdb">>,
-                    <<"store-module">> => hb_store_lmdb
+                    <<"name">> => <<"cache-mainnet/rocker">>,
+                    <<"store-module">> => hb_store_rocker
                 },
                 #{
                     <<"store-module">> => hb_store_fs,
@@ -206,8 +206,8 @@ default_message() ->
                     <<"store">> => 
                     [
                         #{
-                            <<"store-module">> => hb_store_lmdb,
-                            <<"name">> => <<"cache-mainnet/lmdb">>
+                            <<"store-module">> => hb_store_rocker,
+                            <<"name">> => <<"cache-mainnet/rocker">>
                         }
                     ]
                 },
@@ -216,8 +216,8 @@ default_message() ->
                     <<"store">> =>
                         [
                             #{
-                                <<"store-module">> => hb_store_lmdb,
-                                <<"name">> => <<"cache-mainnet/lmdb">>
+                                <<"store-module">> => hb_store_rocker,
+                                <<"name">> => <<"cache-mainnet/rocker">>
                             }
                         ]
                 }

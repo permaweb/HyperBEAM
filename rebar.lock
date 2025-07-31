@@ -32,7 +32,11 @@
  {<<"ranch">>,
   {git,"https://github.com/ninenines/ranch",
        {ref,"a692f44567034dacf5efcaa24a24183788594eb7"}},
-  1}]}.
+  1},
+ {<<"rocker">>,
+  {git,"https://github.com/Vonmo/rocker.git",
+       {ref,"93221abc5421c318ea2fc295cf98fb514fe2355c"}},
+  0}]}.
 [
 {pkg_hash,[
  {<<"accept">>, <<"B33B127ABCA7CC948BBE6CAA4C263369ABF1347CFA9D8E699C6D214660F10CD1">>},
