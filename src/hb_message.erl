@@ -209,27 +209,40 @@ normalize_commitments(Msg, Opts) when is_map(Msg) ->
             end,
             Msg
         ),
-    case commitment(#{ <<"type">> => <<"unsigned">> }, NormMsg, Opts) of
-        not_found ->
-            {ok, #{ <<"commitments">> := Commitments }} =
-                dev_message:commit(
-                    NormMsg,
-                    #{ 
-                        <<"type">> => <<"unsigned">>,
-                        <<"bundle">> => hb_maps:get(<<"bundle">>, Opts, false, Opts) 
-                    },
-                    Opts
-                ),
-            NormMsg#{
-                <<"commitments">> =>
-                    hb_maps:merge(
-                        Commitments,
-                        hb_maps:get(<<"commitments">>, NormMsg, #{}, Opts),
+    NormalizedMessage = 
+        case commitment(#{ <<"type">> => <<"hmac-sha256">> }, NormMsg, Opts) of
+            not_found -> 
+                MessageWithoutHmac = 
+                    without_commitments(
+                        #{ <<"type">> => <<"hmac-sha256">> },
+                        NormMsg,
                         Opts
-                    )
-            };
-        _ -> NormMsg
-    end;
+                    ),
+                {ok, #{ <<"commitments">> := Commitments }} =
+                    dev_message:commit(
+                        MessageWithoutHmac,
+                        #{ 
+                            <<"type">> => <<"hmac-sha256">>,
+                            <<"bundle">> => hb_maps:get(<<"bundle">>, Opts, false, Opts) 
+                        },
+                        Opts
+                    ),
+                MessageWithoutHmac#{
+                    <<"commitments">> =>
+                        hb_maps:merge(
+                            Commitments,
+                            hb_maps:get(<<"commitments">>, MessageWithoutHmac, #{}, Opts),
+                            Opts
+                        )
+                };
+            _ -> NormMsg
+        end,
+    
+    ?event(debug_hbm, {hmac, 
+        {a_original_message, NormMsg},
+        {message_with_normalized_commitments, NormalizedMessage}
+    }),
+    NormalizedMessage;
 normalize_commitments(Msg, Opts) when is_list(Msg) ->
     lists:map(fun(X) -> normalize_commitments(X, Opts) end, Msg);
 normalize_commitments(Msg, _Opts) ->
@@ -786,19 +799,22 @@ with_commitments(_Spec, Msg, _Opts) ->
 %% @doc Filter messages that match the 'spec' given. Inverts the `with_commitments/2'
 %% function, such that only messages that do _not_ match the spec are returned.
 without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
+    CommitmentKeys =
+        hb_maps:keys(
+            hb_maps:get(
+                <<"commitments">>,
+                with_commitments(Spec, Msg, Opts),
+                #{},
+                Opts
+            )
+        ),
     ?event({without_commitments, {spec, Spec}, {msg, Msg}, {commitments, Commitments}}),
     FilteredCommitments =
         hb_maps:without(
-            hb_maps:keys(
-                hb_maps:get(
-                    <<"commitments">>,
-                    with_commitments(Spec, Msg, Opts),
-                    #{},
-                    Opts
-                )
-            ),
+            CommitmentKeys,
             Commitments
         ),
+    ?event(debug_hbm, {without_commitments, {commitment_keys, CommitmentKeys}, {filtered_commitments, FilteredCommitments}}),
     ?event({without_commitments, {filtered_commitments, FilteredCommitments}}),
     Msg#{ <<"commitments">> => FilteredCommitments };
 without_commitments(_Spec, Msg, _Opts) ->
