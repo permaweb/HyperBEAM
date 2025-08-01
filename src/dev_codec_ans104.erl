@@ -197,18 +197,27 @@ name_clash_test() ->
         {tag_clash_target,
             #tx{
                 tags = [
-                    {<<"target">>, LowercaseTarget},
-                    {<<"Target">>, CamelcaseTarget},
-                    {<<"tARGET">>, ReverseCaseTarget}
+                    {<<"target">>, hb_util:encode(LowercaseTarget)},
+                    {<<"Target">>, hb_util:encode(CamelcaseTarget)},
+                    {<<"tARGET">>, hb_util:encode(ReverseCaseTarget)}
                 ]
             },
             #{
-                <<"target">> => LowercaseTarget,
+                <<"target">> => hb_util:encode(LowercaseTarget),
                 <<"commitments">> => #{
                     <<"original-tags">> => #{
-                        <<"1">> => #{<<"name">> => <<"target">>, <<"value">> => LowercaseTarget},
-                        <<"2">> => #{<<"name">> => <<"Target">>, <<"value">> => CamelcaseTarget},
-                        <<"3">> => #{<<"name">> => <<"tARGET">>, <<"value">> => ReverseCaseTarget}
+                        <<"1">> => #{
+                            <<"name">> => <<"target">>,
+                            <<"value">> => hb_util:encode(LowercaseTarget)
+                        },
+                        <<"2">> => #{
+                            <<"name">> => <<"Target">>,
+                            <<"value">> => hb_util:encode(CamelcaseTarget)
+                        },
+                        <<"3">> => #{
+                            <<"name">> => <<"tARGET">>,
+                            <<"value">> => hb_util:encode(ReverseCaseTarget)
+                        }
                     }
                 }
             }
@@ -216,20 +225,29 @@ name_clash_test() ->
         {l1_and_tag_clash_target_a,
             #tx{
                 tags = [
-                    {<<"target">>, LowercaseTarget},
-                    {<<"Target">>, CamelcaseTarget},
-                    {<<"tARGET">>, ReverseCaseTarget}
+                    {<<"target">>, hb_util:encode(LowercaseTarget)},
+                    {<<"Target">>, hb_util:encode(CamelcaseTarget)},
+                    {<<"tARGET">>, hb_util:encode(ReverseCaseTarget)}
                 ],
                 target = L1Target
             },
             #{
-                <<"target">> => LowercaseTarget,
+                <<"target">> => hb_util:encode(LowercaseTarget),
                 <<"commitments">> => #{
-                    <<"original-target">> => L1Target,
+                    <<"original-target">> => hb_util:encode(L1Target),
                     <<"original-tags">> => #{
-                        <<"1">> => #{<<"name">> => <<"target">>, <<"value">> => LowercaseTarget},
-                        <<"2">> => #{<<"name">> => <<"Target">>, <<"value">> => CamelcaseTarget},
-                        <<"3">> => #{<<"name">> => <<"tARGET">>, <<"value">> => ReverseCaseTarget}
+                        <<"1">> => #{
+                            <<"name">> => <<"target">>,
+                            <<"value">> => hb_util:encode(LowercaseTarget)
+                        },
+                        <<"2">> => #{
+                            <<"name">> => <<"Target">>,
+                            <<"value">> => hb_util:encode(CamelcaseTarget)
+                        },
+                        <<"3">> => #{
+                            <<"name">> => <<"tARGET">>,
+                            <<"value">> => hb_util:encode(ReverseCaseTarget)
+                        }
                     }
                 }
             }
@@ -237,18 +255,24 @@ name_clash_test() ->
         {l1_and_tag_clash_target_b,
             #tx{
                 tags = [
-                    {<<"Target">>, CamelcaseTarget},
-                    {<<"tARGET">>, ReverseCaseTarget}
+                    {<<"Target">>, hb_util:encode(CamelcaseTarget)},
+                    {<<"tARGET">>, hb_util:encode(ReverseCaseTarget)}
                 ],
                 target = L1Target
             },
             #{
-                <<"target">> => CamelcaseTarget,
+                <<"target">> => hb_util:encode(CamelcaseTarget),
                 <<"commitments">> => #{
-                    <<"original-target">> => L1Target,
+                    <<"original-target">> => hb_util:encode(L1Target),
                     <<"original-tags">> => #{
-                        <<"1">> => #{<<"name">> => <<"Target">>, <<"value">> => CamelcaseTarget},
-                        <<"2">> => #{<<"name">> => <<"tARGET">>, <<"value">> => ReverseCaseTarget}
+                        <<"1">> => #{
+                            <<"name">> => <<"Target">>,
+                            <<"value">> => hb_util:encode(CamelcaseTarget)
+                        },
+                        <<"2">> => #{
+                            <<"name">> => <<"tARGET">>,
+                            <<"value">> => hb_util:encode(ReverseCaseTarget)
+                        }
                     }
                 }
             }
@@ -256,16 +280,19 @@ name_clash_test() ->
         {l1_and_tag_clash_target_c,
             #tx{
                 tags = [
-                    {<<"tARGET">>, ReverseCaseTarget}
+                    {<<"tARGET">>, hb_util:encode(ReverseCaseTarget)}
                 ],
                 target = L1Target
             },
             #{
-                <<"target">> => ReverseCaseTarget,
+                <<"target">> => hb_util:encode(ReverseCaseTarget),
                 <<"commitments">> => #{
-                    <<"original-target">> => L1Target,
+                    <<"original-target">> => hb_util:encode(L1Target),
                     <<"original-tags">> => #{
-                        <<"1">> => #{<<"name">> => <<"tARGET">>, <<"value">> => ReverseCaseTarget}
+                        <<"1">> => #{
+                            <<"name">> => <<"tARGET">>,
+                            <<"value">> => hb_util:encode(ReverseCaseTarget)
+                        }
                     }
                 }
             }
@@ -273,16 +300,19 @@ name_clash_test() ->
         {l1_and_tag_clash_target_d,
             #tx{
                 tags = [
-                    {<<"target">>, LowercaseTarget}
+                    {<<"target">>, hb_util:encode(LowercaseTarget)}
                 ],
                 target = L1Target
             },
             #{
-                <<"target">> => LowercaseTarget,
+                <<"target">> => hb_util:encode(LowercaseTarget),
                 <<"commitments">> => #{
-                    <<"original-target">> => L1Target,
+                    <<"original-target">> => hb_util:encode(L1Target),
                     <<"original-tags">> => #{
-                        <<"1">> => #{<<"name">> => <<"target">>, <<"value">> => LowercaseTarget}
+                        <<"1">> => #{
+                            <<"name">> => <<"target">>,
+                            <<"value">> => hb_util:encode(LowercaseTarget)
+                        }
                     }
                 }
             }
@@ -290,16 +320,19 @@ name_clash_test() ->
         {l1_and_tag_clash_target_e,
             #tx{
                 tags = [
-                    {<<"target">>, L1Target}
+                    {<<"target">>, hb_util:encode(L1Target)}
                 ],
                 target = L1Target
             },
             #{
-                <<"target">> => L1Target,
+                <<"target">> => hb_util:encode(L1Target),
                 <<"commitments">> => #{
-                    <<"original-target">> => L1Target,
+                    <<"original-target">> => hb_util:encode(L1Target),
                     <<"original-tags">> => #{
-                        <<"1">> => #{<<"name">> => <<"target">>, <<"value">> => L1Target}
+                        <<"1">> => #{
+                            <<"name">> => <<"target">>,
+                            <<"value">> => hb_util:encode(L1Target)
+                        }
                     }
                 }
             }
@@ -309,19 +342,16 @@ name_clash_test() ->
                 target = L1Target
             },
             #{
-                <<"target">> => L1Target,
+                <<"target">> => hb_util:encode(L1Target),
                 <<"commitments">> => #{
-                    <<"original-target">> => L1Target
+                    <<"original-target">> => hb_util:encode(L1Target)
                 }
             }
         }
     ],
 
-    %% XXX TODO: target tag has to be decoded before being set into #tx.target
     %% XXX TODO: try with signing
     %% XXX TODO: add tests for last_tx / anchor
-    %% XXX TODO: add tests with aotypes
-    %% XXX TODO: do we have to encode the original-target value?
 
     lists:foreach(
         fun({Label, InputTX, ExpectedTABM}) ->

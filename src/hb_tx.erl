@@ -341,7 +341,7 @@ process_original_fields(TX, Map, ActionFun) ->
 add_field_to_tabm(NormalizedKey, CurrentValue, TABM) ->
     % At this point the TABM stores a sorted list of {key, value} for each key, later
     % we will collapse this to a single value.
-    Value = {original_key(NormalizedKey), CurrentValue},
+    Value = {original_key(NormalizedKey), hb_util:encode(CurrentValue)},
     case maps:find(NormalizedKey, TABM) of
         {ok, Values} ->
             maps:put(NormalizedKey, Values ++ [Value], TABM);
@@ -351,7 +351,10 @@ add_field_to_tabm(NormalizedKey, CurrentValue, TABM) ->
 
 %% @doc Action function for add_original_fields - adds original-fieldname to commitment
 add_field_to_commitment(NormalizedKey, CurrentValue, Commitment) ->
-    maps:put(original_key(NormalizedKey), hb_util:bin(CurrentValue), Commitment).
+    maps:put(
+        original_key(NormalizedKey),
+        hb_util:encode(CurrentValue),
+        Commitment).
 
 original_key(<<"target">>) -> <<"original-target">>;
 original_key(<<"last_tx">>) -> <<"original-anchor">>.
@@ -643,7 +646,7 @@ tabm_to_tx_data(TX, TABM, Req, Opts) ->
     TABM0 = hb_maps:without([<<"data">>], TABM),
 
     % Extract any large tags from the TABM
-    {TABM1, LargeTagMap} = large_tags_to_data(TABM0, Req, Opts),
+    {TABM1, LargeTagMap} = tabm_to_tx_large_tags(TABM0, Req, Opts),
 
     MergedData = case {Data, hb_maps:size(LargeTagMap, Opts)} of
         {?DEFAULT_DATA, 0} ->
@@ -673,7 +676,7 @@ tabm_to_tx_data(TX, TABM, Req, Opts) ->
     end,
     {TX0, TABM2}.
 
-large_tags_to_data(TABM, Req, Opts) ->
+tabm_to_tx_large_tags(TABM, Req, Opts) ->
     % Process each key-value pair in Structured
     maps:fold(
         fun(Key, Value, {AccTABM, AccDataItems}) ->
@@ -699,9 +702,9 @@ large_tags_to_data(TABM, Req, Opts) ->
 
 tabm_to_tx_commitments(TX, TABM, Commitments, Opts) ->
     Commitment = get_commitment(Commitments),
-    TX0 = apply_signature(TX, Commitment),
-    {TX1, TABM1} = apply_original_fields(TX0, TABM, Commitment),
-    {TX2, TABM2} = apply_original_tags(TX1, TABM1, Commitment, Opts),
+    TX0 = tabm_to_tx_signature(TX, Commitment),
+    {TX1, TABM1} = tabm_to_tx_original_fields(TX0, TABM, Commitment),
+    {TX2, TABM2} = tabm_to_tx_original_tags(TX1, TABM1, Commitment, Opts),
     
     {TX2, hb_maps:without([<<"commitments">>], TABM2)}.
 
@@ -714,7 +717,7 @@ get_commitment(Commitments) ->
         _ -> throw({multisignatures_not_supported_by_ans104, Commitments})
     end.
 
-apply_signature(TX, Commitment) ->
+tabm_to_tx_signature(TX, Commitment) ->
     Signature = hb_util:decode(
         maps:get(<<"signature">>, Commitment,
             hb_util:encode(?DEFAULT_SIG)
@@ -729,7 +732,7 @@ apply_signature(TX, Commitment) ->
     TX1 = set_tx_value_or_throw(owner, TX0, ?DEFAULT_OWNER, Owner),
     TX1.
 
-apply_original_fields(TX, TABM, Commitment) ->
+tabm_to_tx_original_fields(TX, TABM, Commitment) ->
     FieldDefaults = hb_message:default_tx_list(),
     
     {TX0, TABM0} = lists:foldl(
@@ -765,7 +768,7 @@ apply_original_fields(TX, TABM, Commitment) ->
     ),
     {TX0, TABM0}.
 
-apply_original_tags(TX, TABM, Commitment, Opts) ->
+tabm_to_tx_original_tags(TX, TABM, Commitment, Opts) ->
     OriginalTags = hb_maps:get(<<"original-tags">>, Commitment, #{}),
     Tags = tag_map_to_encoded_tags(OriginalTags),
 
@@ -900,6 +903,8 @@ coerce_value(<<"format">>, Value, _DefaultValue) ->
         <<"2">> -> {ok, 2};
         _ -> {ok, Value}
     end;
+coerce_value(<<"target">>, Value, _DefaultValue) ->
+    {ok, hb_util:decode(Value)};
 coerce_value(_Field, Value, DefaultValue) ->
     case {Value, DefaultValue} of
         {V, D} when is_binary(V), ?IS_ID(V), is_binary(D) ->
