@@ -448,8 +448,7 @@ hyper_token_ledger() ->
     StoreOpts = [
         #{
             <<"name">> => <<"cache-mainnet">>,
-            % TODO: Fix this to use the LMDB store.
-            <<"store-module">> => hb_store_fs
+            <<"store-module">> => hb_store_lmdb
         }
     ],
     % Start the node with the processor and the `local-process' ledger 
@@ -504,9 +503,9 @@ hyper_token_ledger() ->
         <<"greeting">> => <<"Hello, world!">>
     },
     SignedReq = hb_message:commit(Req, Opts#{ priv_wallet => BobWallet }),
-    Res = hb_http:get(Node, SignedReq, Opts),
-    ?event({expected_failure, Res}),
-    ?assertMatch({error, _}, Res),
+    ErrorRes = hb_http:get(Node, SignedReq, Opts),
+    ?event(debug_token, {expected_failure, ErrorRes}),
+    ?assertMatch({error, _}, ErrorRes),
     % We then move 50 tokens from Alice to Bob,
     Xfer = hb_message:commit(
         #{
@@ -541,7 +540,11 @@ hyper_token_ledger() ->
     ?assertMatch(50, hb_ao:get(AliceAddress, BalancesAfterTopup, Opts)),
     ?assertMatch(50, hb_ao:get(BobAddress, BalancesAfterTopup, Opts)),
     % We now attempt Bob's request again, which should succeed.
-    ResAfterTopup = hb_http:get(Node, SignedReq, Opts#{ store => StoreOpts }),
+    Req2 = Req#{
+        <<"foo">> => <<"bar">>
+    },
+    SignedReq2 = hb_message:commit(Req2, Opts#{ priv_wallet => BobWallet }),
+    ResAfterTopup = hb_http:get(Node, SignedReq2, Opts#{ store => StoreOpts }),
     ?event(debug_token, {res_after_topup, ResAfterTopup}),
     ?assertMatch({ok, <<"Hello, world!">>}, ResAfterTopup),
     {ok, Balances} =
@@ -551,23 +554,18 @@ hyper_token_ledger() ->
             Opts
         ),
     ?event(debug_token, {balances_after_request, Balances}),
-    {ok, Balances2} =
-    hb_http:get(
-        Node,
-        <<"/ledger~node-process@1.0/now/balance">>,
-        Opts
-    ),
-    ?event(debug_token, {balances_after_request2, Balances2}),
-    ?event(debug_token, {balances_after_request, {explicit, Balances}}),
     % The new balances should be 50 (100 - 50) for Alice,
     % 48 (0 + 50 - 2) for Bob, and 2 (0 + 2) for the operator.
     % We now check the balance of Alice.
     AliceBalance = hb_ao:get(AliceAddress, Balances, Opts),
-    ?assertMatch(50, AliceBalance),
     % We now check the balance of Bob.
     BobBalance = hb_ao:get(BobAddress, Balances, Opts),
-    BobMatchTo = hb_util:float(48),
-    ?assertMatch(48, BobBalance),
     % Finally, we check the balance of the operator.
     OperatorBalance = hb_ao:get(OperatorAddress, Balances, Opts),
+    ?event(final_balances, {alice_balance, AliceBalance}),
+    ?event(final_balances, {bob_balance, BobBalance}),
+    ?event(final_balances, {operator_balance, OperatorBalance}),
+
+    ?assertMatch(50, AliceBalance),
+    ?assertMatch(48, BobBalance),
     ?assertMatch(2, OperatorBalance).

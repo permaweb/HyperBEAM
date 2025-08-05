@@ -16,7 +16,8 @@ read(ProcID, SlotRef, Opts) ->
     hb_cache:read(Path, Opts).
 
 %% @doc Write a process computation result to the cache.
-write(ProcID, Slot, Msg, Opts) ->
+write(ProcID, Slot, RawMsg, Opts) ->
+    Msg = hb_message:normalize_commitments(RawMsg, Opts),
     % Write the item to the cache in the root of the store.
     {ok, Root} = hb_cache:write(Msg, Opts),
     % Link the item to the path in the store by slot number.
