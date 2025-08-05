@@ -213,40 +213,29 @@ normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
             end,
             Msg
         ),
-    NormalizedMessage = 
-        case commitment(#{ <<"type">> => <<"hmac-sha256">> }, NormMsg, Opts) of
-            not_found -> 
-                MessageWithoutHmac = 
-                    without_commitments(
-                        #{ <<"type">> => <<"hmac-sha256">> },
-                        NormMsg,
-                        Opts
-                    ),
-                {ok, #{ <<"commitments">> := Commitments }} =
-                    dev_message:commit(
-                        MessageWithoutHmac,
-                        #{ 
-                            <<"type">> => <<"hmac-sha256">>,
-                            <<"bundle">> => hb_maps:get(<<"bundle">>, Opts, false, Opts) 
-                        },
-                        Opts
-                    ),
-                MessageWithoutHmac#{
-                    <<"commitments">> =>
-                        hb_maps:merge(
-                            Commitments,
-                            hb_maps:get(<<"commitments">>, MessageWithoutHmac, #{}, Opts),
-                            Opts
-                        )
-                };
-            _ -> NormMsg
-        end,
-    
-    ?event(debug_hbm, {hmac, 
-        {a_original_message, NormMsg},
-        {message_with_normalized_commitments, NormalizedMessage}
-    }),
-    NormalizedMessage;
+    MessageWithoutHmac = 
+        without_commitments(
+            #{ <<"type">> => <<"hmac-sha256">> },
+            NormMsg,
+            Opts
+        ),
+    {ok, #{ <<"commitments">> := Commitments }} =
+        dev_message:commit(
+            MessageWithoutHmac,
+            #{ 
+                <<"type">> => <<"hmac-sha256">>,
+                <<"bundle">> => hb_maps:get(<<"bundle">>, Opts, false, Opts) 
+            },
+            Opts
+        ),
+    MessageWithoutHmac#{
+        <<"commitments">> =>
+            hb_maps:merge(
+                Commitments,
+                hb_maps:get(<<"commitments">>, MessageWithoutHmac, #{}, Opts),
+                Opts
+            )
+    };
 normalize_commitments(Msg, Opts) when is_list(Msg) ->
     lists:map(fun(X) -> normalize_commitments(X, Opts) end, Msg);
 normalize_commitments(Msg, _Opts) ->

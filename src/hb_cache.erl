@@ -147,6 +147,12 @@ report_ensure_loaded_not_found(Ref, Lk, Opts) ->
 %% performance costs.
 ensure_all_loaded(Msg) ->
     ensure_all_loaded(Msg, #{}).
+ensure_all_loaded(Link, Opts) when ?IS_LINK(Link) ->
+    ensure_all_loaded(ensure_loaded(Link, Opts), Opts);
+ensure_all_loaded(Msg, Opts) when is_map(Msg) ->
+    maps:map(fun(_K, V) -> ensure_all_loaded(V, Opts) end, Msg);
+ensure_all_loaded(Msg, Opts) when is_list(Msg) ->
+    lists:map(fun(V) -> ensure_all_loaded(V, Opts) end, Msg);
 ensure_all_loaded(Msg, Opts) ->
     ensure_all_loaded([], Msg, Opts).
 ensure_all_loaded(Ref, Link, Opts) when ?IS_LINK(Link) ->
@@ -254,7 +260,7 @@ do_write_message(List, Store, Opts) when is_list(List) ->
         Opts
     );
 do_write_message(Msg, Store, Opts) when is_map(Msg) ->
-    ?event(debug_cache, {writing_message, Msg}),
+    % ?event(debug_commit, {writing_message, Msg}),
     % Calculate the IDs of the message.
     UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
     AltIDs = calculate_all_ids(Msg, Opts) -- [UncommittedID],
@@ -300,7 +306,6 @@ write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
     ),
     maps:map(
         fun(BaseCommID, Commitment) ->
-            ?event(debug_cache, {writing_commitment, {commitment, Commitment}}),
             {ok, CommMsgID} = do_write_message(Commitment, Store, Opts),
             hb_store:make_link(
                 Store,
@@ -329,12 +334,14 @@ write_key(Base, Key, HPAlg, Value, Store, Opts) ->
 %% separately, then write each to the store.
 prepare_commitments(RawCommitments, Opts) ->
     Commitments = ensure_all_loaded(RawCommitments, Opts),
-    maps:map(
-        fun(_, StructuredCommitment) ->
-            hb_message:convert(StructuredCommitment, tabm, Opts)
-        end,
-        Commitments
-    ).
+    PreparedCommitments = 
+        maps:map(
+            fun(_, StructuredCommitment) ->
+                hb_message:convert(StructuredCommitment, tabm, Opts)
+            end,
+            Commitments
+        ),
+    PreparedCommitments.
 
 %% @doc Generate the commitment path for a given base path.
 commitment_path(Base, Opts) ->

@@ -167,7 +167,7 @@ read(Opts, PathParts) when is_list(PathParts) ->
     read(Opts, to_path(PathParts));
 read(Opts, Path) ->
     % Try direct read first (fast path for non-link paths)
-    case read_with_links(Opts, Path) of
+    Result = case read_with_links(Opts, Path) of
         {ok, Value} -> 
             {ok, Value};
         not_found ->
@@ -194,7 +194,9 @@ read(Opts, Path) ->
                     % If link resolution fails, return not_found
                     not_found
             end
-    end.
+    end,
+    ?event(debug_lmdb, {reading_key, {path, Path}, {result, Result}}),
+    Result.
 
 %% @doc Helper function to check if a value is a link and extract the target.
 is_link(Value) ->

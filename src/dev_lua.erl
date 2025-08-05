@@ -267,10 +267,14 @@ compute(Key, RawBase, Req, Opts) ->
         ),
     ?event(debug_lua, parameters_found),
     % Resolve all hyperstate links
-    ResolvedParams = hb_message:normalize_commitments(
-        hb_cache:ensure_all_loaded(Params, Opts),
-        Opts
-    ),
+    ResolvedParams = 
+        hb_message:normalize_commitments(
+            hb_cache:ensure_all_loaded(
+                    Params,
+                    Opts
+                ),
+                Opts
+            ),
     % Call the VM function with the given arguments.
     ?event(lua,
         {calling_lua_func,
@@ -286,7 +290,14 @@ compute(Key, RawBase, Req, Opts) ->
             State
         )
         catch
-            _:Reason:Stacktrace -> {error, Reason, Stacktrace}
+            _:Reason:Stacktrace -> 
+                ?event(lua_error, 
+                    {error,
+                        {reason, Reason},
+                        {stacktrace, Stacktrace}
+                    }
+                ),
+                {error, Reason, Stacktrace}
         end,
         OldPriv,
 		Opts
