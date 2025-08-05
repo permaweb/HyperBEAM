@@ -55,20 +55,29 @@ start(Opts = #{ <<"name">> := DataDir }) ->
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
     ok = filelib:ensure_dir(filename:join(DataDirPath, "dummy")),
-    % Create the LMDB environment with specified size limit
-    {ok, Env} =
-        elmdb:env_open(
-            DataDirPath,
-            [
-                {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
-                no_mem_init, no_sync
-            ]
-        ),
-    {ok, DBInstance} = elmdb:db_open(Env, [create]),
-    % Store the environment handle in persistent_term for later cleanup
     StoreKey = {lmdb, ?MODULE, DataDir},
-    persistent_term:put(StoreKey, {Env, DataDir}),
-    {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
+    % Create the LMDB environment with specified size limit
+    case elmdb:env_open(
+        hb_util:list(DataDir),
+        [
+            {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
+            no_mem_init, no_sync
+        ]
+    ) of 
+        {ok, Env} -> 
+            {ok, DBInstance} = elmdb:db_open(Env, [create]),
+            % Keep the handle in persistent_term for closing and cleanup
+            persistent_term:put(StoreKey, {Env, DataDir, DBInstance}),
+            {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
+
+        {error, already_open} ->
+            {Env, _DataDir, DBInstance} = persistent_term:get(StoreKey),
+            {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
+
+        {error, Reason} ->
+            ?event(error, {lmdb_env_open_failed, Reason}),
+            {error, Reason}
+    end;
 start(_) ->
     {error, {badarg, <<"StoreOpts must be a map">>}}.
 
@@ -101,7 +110,7 @@ type(Opts, Key) ->
                             simple
                     end
             end;
-        not_found -> not_found
+        {error, not_found} -> not_found
     end.
 
 %% @doc Write a key-value pair to the database asynchronously.
@@ -170,7 +179,7 @@ read(Opts, Path) ->
     case read_with_links(Opts, Path) of
         {ok, Value} -> 
             {ok, Value};
-        not_found ->
+        {error, not_found} ->
             try
                 PathParts = binary:split(Path, <<"/">>, [global]),
                 case resolve_path_links(Opts, PathParts) of
@@ -220,7 +229,7 @@ to_path(PathParts) ->
 %% @doc Unified read function that handles LMDB reads with fallback to the 
 %% in-process pending writes, if necessary.
 %% 
-%% Returns {ok, Value} or not_found.
+%% Returns {ok, Value} or {error, not_found}.
 read_direct(Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     elmdb:get(DBInstance, Path).
@@ -243,7 +252,7 @@ read_with_links(Opts, Path) ->
                         _ -> {ok, Value}
                     end
             end;
-        not_found ->
+        {error, not_found} ->
             not_found
     end.
 
@@ -287,7 +296,7 @@ resolve_path_links_acc(Opts, [Head | Tail], AccPath, Depth) ->
                     % Not a link, continue accumulating
                     resolve_path_links_acc(Opts, Tail, [Head | AccPath], Depth)
             end;
-        not_found ->
+        {error, not_found} ->
             % Path doesn't exist as a complete link, continue accumulating
             resolve_path_links_acc(Opts, Tail, [Head | AccPath], Depth)
     end.
@@ -344,7 +353,7 @@ list(Opts, Path) ->
                         % Not a link; use original path
                         Path
                 end;
-            not_found ->
+            {error, not_found} ->
                 Path
         end,
     % Ensure path ends with / for elmdb:list API
@@ -526,7 +535,7 @@ close_environment(StoreKey, DataDir) ->
 %% Get environment from persistent_term without exceptions
 safe_get_persistent_term(Key) ->
     case persistent_term:get(Key, undefined) of
-        {Env, _DataDir} -> {ok, Env};
+        {Env, _DataDir, _DbHandle} -> {ok, Env};
         _ -> not_found
     end.
 
@@ -819,6 +828,29 @@ exact_hb_store_test() ->
     ?assertEqual({ok, <<"test-data">>}, Result),
     ok = stop(StoreOpts).
 
+%% @doc Test hb_store open idempotency 
+idempotent_start_test() ->
+    hb:init(),
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/idempotent-store">>,
+        <<"capacity">> => ?DEFAULT_SIZE
+    },
+    reset(StoreOpts),
+    % Start the store
+    Result = hb_store:start(StoreOpts),
+    ?assertEqual(ok, Result),
+    
+    % Test writing through hb_store interface  
+    ok = hb_store:write(StoreOpts, <<"test-key">>, <<"test-value">>),
+    
+    % Test reading through hb_store interface
+    Result = hb_store:read(StoreOpts, <<"test-key">>),
+    ?event({cache_style_read_result, Result}),
+    ?assertEqual({ok, <<"test-value">>}, Result),
+    
+    hb_store:stop(StoreOpts).
+    
 %% @doc Test cache-style usage through hb_store interface
 cache_style_test() ->
     hb:init(),
