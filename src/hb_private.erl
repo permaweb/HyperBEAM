@@ -20,6 +20,34 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+%% @doc The opts map that should be used when resolving paths against the
+%% private element of a message. We add the `priv_store' option if set, such that
+%% evaluations are not inadvertently persisted in public storage but this module
+%% can still access data from the normal stores. This mechanism requires that
+%% the priv_store is writable. We also ensure that no cache entries are
+%% generated from downstream AO-Core resolutions.
+opts(Opts) ->
+    PrivStore =
+        case hb_opts:get(priv_store, undefined, Opts) of
+            undefined -> [];
+            PrivateStores when is_list(PrivateStores) -> PrivateStores;
+            PrivateStore -> [PrivateStore]
+        end,
+    BaseStore =
+        case hb_opts:get(store, [], Opts) of
+            SingleStore when is_map(SingleStore) -> [SingleStore];
+            Stores when is_list(Stores) -> Stores
+        end,
+    Opts#{ store => PrivStore ++ BaseStore }.
+
+%% @doc Internally in this module we use more restrictive cache control
+%% settings.
+internal_opts(Opts) ->
+    (opts(Opts))#{
+        hashpath => ignore,
+        cache_control => [<<"no-cache">>, <<"no-store">>]
+    }.
+
 %% @doc Return the `private' key from a message. If the key does not exist, an
 %% empty map is returned.
 from_message(Msg) when is_map(Msg) ->
@@ -40,7 +68,7 @@ get(InputPath, Msg, Default, Opts) ->
         hb_util:deep_get(
             remove_private_specifier(InputPath, Opts),
             from_message(Msg),
-            opts(Opts)
+            internal_opts(Opts)
         ),
     case Resolved of
         not_found -> Default;
@@ -52,13 +80,13 @@ set(Msg, InputPath, Value, Opts) ->
     Path = remove_private_specifier(InputPath, Opts),
     Priv = from_message(Msg),
     ?event({set_private, {in, Path}, {out, Path}, {value, Value}, {opts, Opts}}),
-    NewPriv = hb_util:deep_set(Path, Value, Priv, opts(Opts)),
+    NewPriv = hb_util:deep_set(Path, Value, Priv, internal_opts(Opts)),
     ?event({set_private_res, {out, NewPriv}}),
     set_priv(Msg, NewPriv).
 set(Msg, PrivMap, Opts) ->
     CurrentPriv = from_message(Msg),
     ?event({set_private, {in, PrivMap}, {opts, Opts}}),
-    NewPriv = hb_util:deep_merge(CurrentPriv, PrivMap, opts(Opts)),
+    NewPriv = hb_util:deep_merge(CurrentPriv, PrivMap, internal_opts(Opts)),
     ?event({set_private_res, {out, NewPriv}}),
     set_priv(Msg, NewPriv).
 
@@ -72,7 +100,7 @@ merge(Msg1, Msg2, Opts) ->
         hb_util:deep_merge(
             from_message(Msg1),
             from_message(Msg2),
-            opts(Opts)
+            internal_opts(Opts)
         ),
     % Set the merged private element on the first message.
     set_priv(Msg1, Merged).
@@ -98,31 +126,6 @@ remove_private_specifier(InputPath, Opts) ->
         true -> tl(Path);
         false -> Path
     end.
-
-%% @doc The opts map that should be used when resolving paths against the
-%% private element of a message. We add the `priv_store' option if set, such that
-%% evaluations are not inadvertently persisted in public storage but this module
-%% can still access data from the normal stores. This mechanism requires that
-%% the priv_store is writable. We also ensure that no cache entries are
-%% generated from downstream AO-Core resolutions.
-opts(Opts) ->
-    PrivStore =
-        case hb_opts:get(priv_store, undefined, Opts) of
-            undefined -> [];
-            PrivateStores when is_list(PrivateStores) -> PrivateStores;
-            PrivateStore -> [PrivateStore]
-        end,
-    BaseStore =
-        case hb_opts:get(store, [], Opts) of
-            SingleStore when is_map(SingleStore) -> [SingleStore];
-            Stores when is_list(Stores) -> Stores
-        end,
-    NormStore = PrivStore ++ BaseStore,
-    Opts#{
-        hashpath => ignore,
-        cache_control => [<<"no-cache">>, <<"no-store">>],
-        store => NormStore
-    }.
 
 %% @doc Unset all of the private keys in a message or deep Erlang term.
 %% This function operates on all types of data, such that it can be used on
@@ -188,7 +191,7 @@ priv_opts_store_read_link_test() ->
     % Read the link from the private store. First as a simple store read, then
     % as a link.
     Opts = #{ store => PublicStore, priv_store => OnlyPrivStore },
-    PrivOpts = #{ store := PrivStore } = opts(Opts),
+    PrivOpts = #{ store := PrivStore } = internal_opts(Opts),
     {ok, <<"test-message">>} = hb_store:read(PrivStore, <<"link">>),
     Loaded =
         hb_cache:ensure_loaded(
@@ -202,7 +205,7 @@ priv_opts_cache_read_message_test() ->
     PublicStore = [hb_test_utils:test_store(hb_store_lmdb)],
     OnlyPrivStore = [hb_test_utils:test_store(hb_store_fs)],
     Opts = #{ store => PublicStore, priv_store => OnlyPrivStore },
-    PrivOpts = opts(Opts),
+    PrivOpts = internal_opts(Opts),
     % Use the `~scheduler@1.0' and `~process@1.0' infrastructure to write a
     % complex message into the public store.
     Msg = hb_cache:ensure_all_loaded(dev_process:test_aos_process(Opts), Opts),
