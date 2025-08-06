@@ -1093,7 +1093,9 @@ dynamic_router() ->
     ),
     % Ensure that computation is done by the exec node.
     {ok, ResMsg} = hb_http:get(Node, <<"/c?c+list=1">>, ExecOpts),
-    ?assertEqual([ExecNodeAddr], hb_message:signers(ResMsg, ExecOpts)).
+    Signers = hb_message:signers(ResMsg, ExecOpts),
+    ?event({match_signers, {signers, Signers}, {exec_node_addr, ExecNodeAddr}}),
+    ?assertEqual([ExecNodeAddr], Signers).
 
 %% @doc Demonstrates routing tables being dynamically created and adjusted
 %% according to the real-time performance of nodes. This test utilizes the
