@@ -72,8 +72,10 @@ to_pubkey(PubKey, {rsa, 65537}) ->
     PubKey.
 
 %% @doc Generate an address from a public key.
-to_address(Pubkey) ->
-    to_address(Pubkey, ?DEFAULT_KEY_TYPE).
+to_address(Pubkey) when byte_size(Pubkey) == 65 ->
+    to_address(Pubkey, {ecdsa, 256});
+to_address(PubKey) ->
+    to_address(PubKey, ?DEFAULT_KEY_TYPE).
 to_address(PubKey, {rsa, 65537}) when bit_size(PubKey) == 256 ->
     PubKey;
 to_address({{_, _, PubKey}, {_, PubKey}}, _) ->

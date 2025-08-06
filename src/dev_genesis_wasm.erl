@@ -16,7 +16,7 @@ init(Msg, _Msg2, _Opts) -> {ok, Msg}.
 normalize(Msg, Msg2, Opts) ->
     dev_delegated_compute:normalize(Msg, Msg2, Opts).
 
-%% @doc All the `delegated-compute@1.0' device to execute the request. We then apply
+%% @doc Call the `delegated-compute@1.0' device to execute the request. We then apply
 %% the `patch@1.0' device, applying any state patches that the AO process may have
 %% requested.
 compute(Msg, Msg2, Opts) ->
