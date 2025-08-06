@@ -201,10 +201,11 @@ id(Msg, RawCommitters, Opts) ->
 %% unsigned ID present. By forcing this work to occur in strategically positioned
 %% places, we avoid the need to recalculate the IDs for every `hb_message:id`
 %% call.
-normalize_commitments(Msg, Opts) ->
-    normalize_commitments(Msg, Opts, passive).
-normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
-    ?event(debug_normalize_commitments, {normalize_commitments, {msg, Msg}}),
+normalize_commitments(Msg, _Opts) when is_map(Msg) andalso map_size(Msg) == 0 ->
+    Msg;
+normalize_commitments(Msg = #{<<"priv">> := _}, _Opts) when map_size(Msg) == 1 ->
+    Msg;
+normalize_commitments(Msg, Opts) when is_map(Msg) ->
     NormMsg = 
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->

@@ -244,8 +244,8 @@ generate_wasi_stack(File, Func, Params) ->
 
 vfs_is_serializable_test() ->
     StackMsg = generate_wasi_stack("test/test-print.wasm", <<"hello">>, []),
-    VFSMsg = hb_ao:get(<<"vfs">>, StackMsg),
-    VFSReq =
+    VFSMsg = hb_message:normalize_commitments(hb_ao:get(<<"vfs">>, StackMsg), #{}),
+    VFSMsg2 =
         hb_message:minimize(
             hb_message:convert(
                 hb_message:convert(VFSMsg, <<"httpsig@1.0">>, #{}),
@@ -258,8 +258,11 @@ vfs_is_serializable_test() ->
 wasi_stack_is_serializable_test() ->
     Msg = generate_wasi_stack("test/test-print.wasm", <<"hello">>, []),
     HTTPSigMsg = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
-    Req = hb_message:convert(HTTPSigMsg, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
-    ?assert(hb_message:match(Msg, Req)).
+    Msg2 = hb_message:convert(HTTPSigMsg, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
+    ?assert(hb_message:match(
+        hb_message:normalize_commitments(Msg, #{}), 
+        hb_message:normalize_commitments(Msg2, #{})
+    )).
 
 basic_aos_exec_test() ->
     Init = generate_wasi_stack("test/aos-2-pure-xs.wasm", <<"handle">>, []),
