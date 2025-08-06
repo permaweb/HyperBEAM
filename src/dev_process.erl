@@ -631,31 +631,12 @@ ensure_loaded(Base, Req, Opts) ->
                             MaybeLoadedSnapshotMsg,
                             Opts
                         ),
-                    Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
-                    #{ <<"commitments">> := HmacCommits} =
-                        hb_message:with_commitments(
-                            #{ <<"type">> => <<"hmac-sha256">>},
-                            Process,
-                            Opts),
-                    #{ <<"commitments">> := SignCommits } =
-                        hb_message:with_commitments(ProcID, Process, Opts),
-                    UpdateProcess = hb_maps:put(
-                        <<"commitments">>,
-                        hb_maps:merge(HmacCommits, SignCommits),
-                        Process,
-                        Opts
-                    ),
-                    LoadedSnapshotReq =
-                        LoadedSnapshotMsg#{
-                            <<"process">> => UpdateProcess,
-                            <<"initialized">> => <<"true">>
-                        },
                     LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
-                    ?event(compute, {found_state_checkpoint, ProcID, LoadedSnapshotReq}),
+                    ?event(compute, {found_state_checkpoint, ProcID, LoadedSnapshotMsg}),
                     {ok, Normalized} =
                         run_as(
                             <<"execution">>,
-                            LoadedSnapshotReq,
+                            LoadedSnapshotMsg,
                             normalize,
                             Opts#{ hashpath => ignore }
                         ),
