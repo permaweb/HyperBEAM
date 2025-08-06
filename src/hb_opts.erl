@@ -342,7 +342,7 @@ default_message() ->
                             #{ <<"device">> => <<"http-auth@1.0">> }
                     }
             }
-        }
+        },
         lazy_loading => true
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
