@@ -21,7 +21,6 @@
 %%                    Default: `sync', pushing synchronously.
 push(Base, Req, Opts) ->
     Process = dev_process:as_process(Base, Opts),
-    ?event(transfer_test, {push_base, {base, Process}, {req, Req}}),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
     case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Req}, no_slot, Opts) of
         no_slot ->
@@ -76,8 +75,6 @@ is_async(Process, Req, Opts) ->
 do_push(PrimaryProcess, Assignment, Opts) ->
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
     ID = dev_process:process_id(PrimaryProcess, #{}, Opts),
-    NormalizedPrimaryProcess =
-        hb_message:normalize_commitments(PrimaryProcess, Opts),
     UncommittedID =
         dev_process:process_id(
             PrimaryProcess,
@@ -85,7 +82,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             Opts
         ),
     BaseID = calculate_base_id(PrimaryProcess, Opts),
-    ?event(
+    ?event(debug,
         {push_computing_outbox,
             {process_id, ID},
             {base_id, BaseID},

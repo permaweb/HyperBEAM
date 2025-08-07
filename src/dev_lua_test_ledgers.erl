@@ -132,13 +132,13 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
                         end
                 }
         end,
-    CommitTarget = hb_message:id(ProcMsg, all),
-    CommitRecipient = hb_util:human_id(Recipient),
-    CommittedTransfer = hb_message:commit(
+    XferTarget = hb_message:id(ProcMsg, all),
+    XferRecipient = hb_util:human_id(Recipient),
+    XferBody = hb_message:commit(
         MaybeRoute#{
             <<"action">> => <<"Transfer">>,
-            <<"target">> => CommitTarget,
-            <<"recipient">> => CommitRecipient,
+            <<"target">> => XferTarget,
+            <<"recipient">> => XferRecipient,
             <<"quantity">> => Quantity
         },
         #{ priv_wallet => Sender }
@@ -147,17 +147,13 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
         hb_message:commit(
             #{
                 <<"path">> => <<"push">>,
-                <<"body">> => CommittedTransfer
+                <<"body">> => XferBody
             },
             #{ priv_wallet => Sender }
         ),
-    NormalizedXfer = hb_message:normalize_commitments(
-        hb_cache:ensure_all_loaded(Xfer, Opts),
-        Opts
-    ),
     hb_ao:resolve(
         ProcMsg,
-        NormalizedXfer,
+        Xfer,
         Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
     ).
 
@@ -677,7 +673,7 @@ subledger_to_subledger() ->
         SubLedger1 => subledger1,
         SubLedger2 => subledger2
     },
-    ?event(debug, {names, 
+    ?event(token_log, {names, 
         {alice, hb_util:human_id(ar_wallet:to_address(Alice))},
         {bob, hb_util:human_id(ar_wallet:to_address(Bob))},
         {subledger1, hb_message:id(SubLedger1, signed, Opts)},

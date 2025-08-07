@@ -541,12 +541,12 @@ hyper_token_ledger() ->
     ?assertMatch(50, hb_ao:get(BobAddress, BalancesAfterTopup, Opts)),
     % We now attempt Bob's request again, which should succeed.
     Req2 = Req#{
-        <<"foo">> => <<"bar">>
+        <<"greeting">> => <<"Hello again, world!">>
     },
     SignedReq2 = hb_message:commit(Req2, Opts#{ priv_wallet => BobWallet }),
     ResAfterTopup = hb_http:get(Node, SignedReq2, Opts#{ store => StoreOpts }),
     ?event(debug_token, {res_after_topup, ResAfterTopup}),
-    ?assertMatch({ok, <<"Hello, world!">>}, ResAfterTopup),
+    ?assertMatch({ok, <<"Hello again, world!">>}, ResAfterTopup),
     {ok, Balances} =
         hb_http:get(
             Node,
@@ -554,18 +554,20 @@ hyper_token_ledger() ->
             Opts
         ),
     ?event(debug_token, {balances_after_request, Balances}),
+    % We now check the balance of Alice, Bob, and the operator.
+    AliceBalance = hb_ao:get(AliceAddress, Balances, Opts),
+    BobBalance = hb_ao:get(BobAddress, Balances, Opts),
+    OperatorBalance = hb_ao:get(OperatorAddress, Balances, Opts),
+    ?event(debug_token, 
+        {
+            final_balances, 
+            {alice_balance, AliceBalance},
+            {bob_balance, BobBalance},
+            {operator_balance, OperatorBalance}
+        }
+    ),
     % The new balances should be 50 (100 - 50) for Alice,
     % 48 (0 + 50 - 2) for Bob, and 2 (0 + 2) for the operator.
-    % We now check the balance of Alice.
-    AliceBalance = hb_ao:get(AliceAddress, Balances, Opts),
-    % We now check the balance of Bob.
-    BobBalance = hb_ao:get(BobAddress, Balances, Opts),
-    % Finally, we check the balance of the operator.
-    OperatorBalance = hb_ao:get(OperatorAddress, Balances, Opts),
-    ?event(final_balances, {alice_balance, AliceBalance}),
-    ?event(final_balances, {bob_balance, BobBalance}),
-    ?event(final_balances, {operator_balance, OperatorBalance}),
-
     ?assertMatch(50, AliceBalance),
     ?assertMatch(48, BobBalance),
     ?assertMatch(2, OperatorBalance).

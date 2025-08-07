@@ -657,7 +657,6 @@ without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
             CommitmentKeys,
             Commitments
         ),
-    ?event(debug_hbm, {without_commitments, {commitment_keys, CommitmentKeys}, {filtered_commitments, FilteredCommitments}}),
     ?event({without_commitments, {filtered_commitments, FilteredCommitments}}),
     Msg#{ <<"commitments">> => FilteredCommitments };
 without_commitments(_Spec, Msg, _Opts) ->

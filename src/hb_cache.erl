@@ -260,7 +260,7 @@ do_write_message(List, Store, Opts) when is_list(List) ->
         Opts
     );
 do_write_message(Msg, Store, Opts) when is_map(Msg) ->
-    % ?event(debug_commit, {writing_message, Msg}),
+    ?event(debug_cache, {writing_message, Msg}),
     % Calculate the IDs of the message.
     UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
     AltIDs = calculate_all_ids(Msg, Opts) -- [UncommittedID],

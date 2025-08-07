@@ -149,7 +149,6 @@ lookup_no_spawn_test() ->
         lookup(<<"name1">>, #{}, #{}, Opts)
     ).
 
-%% TODO: This test is failing due to double committing.
 lookup_spawn_test() ->
     Opts = generate_test_opts(),
     Res1 = {_, Process1} =
@@ -162,18 +161,21 @@ lookup_spawn_test() ->
         {ok, #{ <<"device">> := <<"process@1.0">> }},
         Res1
     ),
-    {ok, Process2} = hb_ao:resolve(
-        #{ <<"device">> => <<"node-process@1.0">> },
-        ?TEST_NAME,
-        Opts
-    ),
+    LoadedProcess2 = hb_cache:ensure_all_loaded(Process2, Opts),
+        ),
+    LoadedProcess1 = hb_cache:ensure_all_loaded(Process1, Opts),
+            Opts
+            ?TEST_NAME,
+            #{ <<"device">> => <<"node-process@1.0">> },
+    {ok, Process2} =
+        hb_ao:resolve(
     ?assertEqual(
         hb_message:normalize_commitments(
-            hb_cache:ensure_all_loaded(Process1, Opts),
+            LoadedProcess1,
             Opts
         ),
         hb_message:normalize_commitments(
-            hb_cache:ensure_all_loaded(Process2, Opts),
+            LoadedProcess2,
             Opts
         )
     ).
