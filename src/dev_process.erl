@@ -550,7 +550,11 @@ now(RawBase, Req, Opts) ->
                     ?event(compute_short,
                         {serving_latest_cached_state,
                             {proc_id, ProcessID},
-                            {slot, LatestSlot}
+                            {slot, LatestSlot},
+                            {
+                                loaded_latest_msg, 
+                                hb_cache:ensure_all_loaded(LatestMsg, Opts)
+                            }
                         },
                         Opts
                     ),
