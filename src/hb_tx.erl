@@ -477,7 +477,11 @@ tx_to_tabm_commitments(TABM, TX, CommittedTags, NeedOriginalTags, Opts) ->
         <<"commitment-device">> => get_device(TX),
         <<"committer">> => Address,
         <<"committed">> => CommittedKeys,
-        <<"keyid">> => hb_util:encode(TX#tx.owner),
+        <<"keyid">> =>
+            <<
+                "publickey:",
+                (hb_util:encode(TX#tx.owner))/binary
+            >>,
         <<"signature">> => hb_util:encode(TX#tx.signature),
         <<"type">> => <<"rsa-pss-sha256">>
     },
@@ -724,8 +728,12 @@ tabm_to_tx_signature(TX, Commitment) ->
         )
     ),
     Owner = hb_util:decode(
-        maps:get(<<"keyid">>, Commitment,
-            hb_util:encode(?DEFAULT_OWNER)
+        dev_codec_httpsig_keyid:remove_scheme_prefix(
+            maps:get(
+                <<"keyid">>,
+                Commitment,
+                hb_util:encode(?DEFAULT_OWNER)
+            )
         )
     ),
     TX0 = set_tx_value_or_throw(signature, TX, ?DEFAULT_SIG, Signature),
