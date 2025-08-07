@@ -5,7 +5,7 @@ for partitioning, formatting, mounting, and managing encrypted volumes.
 """.
 -export([list_partitions/0, create_partition/2]).
 -export([format_disk/2, mount_disk/4, change_node_store/2]).
--export([check_for_device/1]).
+-export([check_for_device/1, copy_wallet_to_volume/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -522,7 +522,8 @@ change_node_store(StorePath, CurrentStore) ->
     }}.
 
 %%% Helper functions
-%% Execute system command with error checking
+
+%% @doc Execute system command with error checking
 safe_exec(Command) ->
     safe_exec(Command, ["Error", "failed", "bad", "error"]).
 
@@ -533,7 +534,7 @@ safe_exec(Command, ErrorKeywords) ->
         error -> {error, list_to_binary(Result)}
     end.
 
-%% Check if command result contains error indicators
+%% @doc Check if command result contains error indicators
 check_command_errors(Result, Keywords) ->
     case lists:any(fun(Keyword) -> 
         string:find(Result, Keyword) =/= nomatch 
@@ -542,7 +543,7 @@ check_command_errors(Result, Keywords) ->
         false -> ok
     end.
 
-%% Secure key file management with automatic cleanup
+%% @doc Secure key file management with automatic cleanup
 with_secure_key_file(EncKey, Fun) ->
     ?event(debug_volume, {with_secure_key_file, entry, creating_temp_file}),
     os:cmd("sudo mkdir -p /root/tmp"),
@@ -629,72 +630,131 @@ with_secure_key_file(EncKey, Fun) ->
             erlang:raise(Class, Reason, Stacktrace)
     end.
 
-% Update the store configuration with a new base path
+%% @doc Update the store configuration with a new base path and copy existing data
 -spec update_store_config(StoreConfig :: term(), 
-    NewPath :: binary()) -> term().
-update_store_config(StoreConfig, NewPath) when is_list(StoreConfig) ->
+    NewPrefix :: binary()) -> term().
+update_store_config(StoreConfig, NewPrefix) when is_list(StoreConfig) ->
     % For a list, update each element
-    [update_store_config(Item, NewPath) || Item <- StoreConfig];
+    [update_store_config(Item, NewPrefix) || Item <- StoreConfig];
 update_store_config(
     #{<<"store-module">> := Module} = StoreConfig, 
-    NewPath
+    NewPrefix
 ) when is_map(StoreConfig) ->
-    % Handle various store module types differently
-    case Module of
-        hb_store_fs ->
-            % For filesystem store, prefix the existing path with the new path
-            ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
-            NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
-            ?event(debug_volume, {fs, StoreConfig, NewPath, NewName}),
-            StoreConfig#{<<"name">> => NewName};
-        hb_store_lmdb ->
-            ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
-            NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
-            ?event(debug_volume, {migrate_start, ExistingPath, NewName}),
-            safe_stop_lmdb_store(StoreConfig),
-            ?event(debug_volume, {using_existing_store, NewName}),
-            FinalConfig = StoreConfig#{<<"name">> => NewName},
-            safe_start_lmdb_store(FinalConfig),
-            FinalConfig;
-        hb_store_rocksdb ->
-            StoreConfig;
+    % Get the existing path
+    ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
+    NewName = <<NewPrefix/binary, "/", ExistingPath/binary>>,
+    ?event(debug_volume, 
+        {update_store_config, 
+            module, Module, 
+            existing_path, ExistingPath, 
+            new_name, NewName
+        }
+    ),
+    % Always stop the store first for safe copying
+    ?event(debug_volume, {copy_store_data, stopping_store, {module, Module}}),
+    stop_store_safely(StoreConfig),
+    % Copy existing data to new location
+    copy_store_data(ExistingPath, NewName, Module),
+    % Handle special cases for nested stores
+    UpdatedConfig = case Module of
         hb_store_gateway ->
             % For gateway store, recursively update nested store configs
-            NestedStore = maps:get(<<"store">>, StoreConfig, []),
-            StoreConfig#{
-                <<"store">> => update_store_config(NestedStore, NewPath)
-            };
+            case maps:get(<<"local-store">>, StoreConfig, false) of
+                false ->
+                    StoreConfig#{<<"name">> => NewName};
+                LocalStore ->
+                    StoreConfig#{
+                        <<"name">> => NewName,
+                        <<"local-store">> =>
+                            update_store_config(LocalStore, NewPrefix)
+                    }
+            end;
         _ ->
-            % For any other store type, update the prefix
-            % StoreConfig#{<<"name">> => NewPath}
-            ?event(debug_volume, {other, StoreConfig, NewPath}),
-            StoreConfig
-    end;
-update_store_config({Type, _OldPath, Opts}, NewPath) ->
-    % For tuple format with options
-    {Type, NewPath, Opts};
-update_store_config({Type, _OldPath}, NewPath) ->
-    % For tuple format without options
-    {Type, NewPath};
-update_store_config(StoreConfig, _NewPath) ->
-    % Return unchanged for any other format
-    StoreConfig.
+            % For all other store types, just update the name
+            StoreConfig#{<<"name">> => NewName}
+    end,
+    ?event(debug_volume, {update_store_config, updated_config, UpdatedConfig}),
+    UpdatedConfig.
 
-%% Safely stop LMDB store with error handling
-safe_stop_lmdb_store(StoreConfig) ->
+%% @doc Safely stop any store type with error handling
+stop_store_safely(StoreConfig) ->
     ?event(debug_volume, {stopping_current_store, StoreConfig}),
     try 
-        hb_store_lmdb:stop(StoreConfig)
+        hb_store:stop(StoreConfig)
     catch 
         error:StopReason ->
             ?event(debug_volume, {stop_error, StopReason})
     end.
 
-%% Safely start LMDB store
-safe_start_lmdb_store(StoreConfig) ->
-    NewName = maps:get(<<"name">>, StoreConfig),
-    ?event(debug_volume, {starting_new_store, NewName}),
-    hb_store_lmdb:start(StoreConfig).
+%% @doc Copy store data from source to destination for any store type
+-spec copy_store_data(binary(), binary(), atom()) -> ok.
+copy_store_data(SourcePath, DestPath, Module) ->
+    ?event(debug_volume, {copy_store_data, 
+        entry, {source, SourcePath, dest, DestPath, module, Module}
+        }
+    ),
+    % Check if destination already exists
+    DestStr = binary_to_list(DestPath),
+    case filelib:is_dir(DestStr) of
+        true ->
+            ?event(debug_volume, {copy_store_data, dest_exists, skipping_copy}),
+            ok; % Destination already exists, no need to copy
+        false ->
+            % Check if source exists
+            SourceStr = binary_to_list(SourcePath),
+            case filelib:is_dir(SourceStr) of
+                false ->
+                    ?event(debug_volume, 
+                        {copy_store_data, source_not_found, SourcePath}
+                    ),
+                    ok; % Nothing to copy
+                true ->
+                    ?event(debug_volume, 
+                        {copy_store_data, source_found, copying}
+                    ),
+                    copy_directory_contents(SourcePath, DestPath)
+            end
+    end.
+
+%% @doc Generic directory copying function that works for all store types
+-spec copy_directory_contents(binary(), binary()) -> ok.
+copy_directory_contents(SourcePath, DestPath) ->
+    ?event(debug_volume, 
+        {copy_directory_contents, entry, {source, SourcePath, dest, DestPath}}
+    ),
+    SourceStr = binary_to_list(SourcePath),
+    DestStr = binary_to_list(DestPath),
+    % Ensure destination directory exists
+    ok = filelib:ensure_dir(DestStr ++ "/"),
+    % Use rsync for reliable copying of all file types
+    CopyCommand = io_lib:format(
+        "rsync -av --sparse '~s/' '~s/'", 
+        [SourceStr, DestStr]
+    ),
+    ?event(debug_volume, 
+        {copy_directory_contents, executing_rsync, command}
+    ),
+    case os:cmd(CopyCommand) of
+        Result ->
+            ?event(debug_volume, 
+                {copy_directory_contents, rsync_completed, checking_errors}
+            ),
+            case {
+                string:find(Result, "rsync error"), 
+                string:find(Result, "failed")
+            } of
+                {nomatch, nomatch} ->
+                    ?event(debug_volume, 
+                        {copy_directory_contents, rsync_success, no_errors}
+                ),
+                    ok;
+                _ ->
+                    ?event(debug_volume, 
+                        {copy_directory_contents, rsync_error, Result}
+                    ),
+                    ok % Don't fail the entire operation if copy fails
+            end
+    end.
 
 -doc """
 Check if a device exists on the system.
@@ -718,6 +778,67 @@ check_for_device(Device) ->
         }
     ),
     DeviceExists.
+
+%% @doc Copy wallet to the mounted volume for all store types.
+%% @param StorePath The path to the mounted volume.
+%% @param Opts The current options.
+%% @returns The wallet if found/loaded, undefined otherwise.
+-spec copy_wallet_to_volume(binary(), map()) -> term() | undefined.
+copy_wallet_to_volume(StorePath, Opts) ->
+    ?event(debug_volume, {copy_wallet_to_volume, entry, {store_path, StorePath}}),
+    try
+        WalletName = 
+            hb_opts:get(
+                priv_key_location, 
+                <<"hyperbeam-key.json">>, 
+                Opts
+            ),
+        Cwd = list_to_binary(hb_util:ok(file:get_cwd())),
+        CurrentWallet = <<Cwd/binary, "/", WalletName/binary>>,
+        CachedWallet = <<StorePath/binary, "/", WalletName/binary>>,
+        ?event(debug_volume, 
+            {copy_wallet_to_volume, checking_cached_wallet, CachedWallet}
+        ),
+        case filelib:is_regular(binary_to_list(CachedWallet)) of
+            true ->
+                % Use existing wallet from volume
+                ?event(debug_volume, 
+                    {copy_wallet_to_volume, using_cached_wallet, CachedWallet}
+                ),
+                ar_wallet:load_keyfile(CachedWallet, Opts);
+            false ->
+                % Copy current wallet to volume
+                ?event(debug_volume, 
+                    {copy_wallet_to_volume, 
+                        copying_wallet, {from, CurrentWallet, to, CachedWallet}
+                    }
+                ),
+                case filelib:is_regular(binary_to_list(CurrentWallet)) of
+                    true ->
+                        file:copy(CurrentWallet, CachedWallet),
+                        ?event(debug_volume, 
+                            {copy_wallet_to_volume, wallet_copied, success}
+                        ),
+                        % Return the current wallet from options if available
+                        hb_opts:get(priv_wallet, undefined, Opts);
+                    false ->
+                        ?event(debug_volume, 
+                            {copy_wallet_to_volume, 
+                                no_wallet_to_copy, CurrentWallet
+                            }
+                        ),
+                        undefined
+                end
+        end
+    catch
+        Class:Reason ->
+            ?event(debug_volume, 
+                {copy_wallet_to_volume, error, 
+                    {class, Class, reason, Reason}
+                }
+            ),
+            undefined
+    end.
 
 %%% Unit Tests
 %% Test helper function error checking
@@ -771,16 +892,19 @@ update_store_config_test() ->
     },
     NewPath = <<"/encrypted/mount">>,
     Updated = update_store_config(FSStore, NewPath),
-    Expected = FSStore#{<<"name">> => <<"/encrypted/mount/cache">>},
+    Expected = FSStore#{ <<"name">> => <<"/encrypted/mount/cache">> },
     ?assertEqual(Expected, Updated),
     % Test list of stores
-    StoreList = [FSStore, #{<<"store-module">> => hb_store_gateway}],
+    StoreList = [FSStore, #{ <<"store-module">> => hb_store_gateway }],
     UpdatedList = update_store_config(StoreList, NewPath),
     ?assertEqual(2, length(UpdatedList)),
-    % Test tuple format
-    TupleStore = {fs, <<"old_path">>, []},
-    UpdatedTuple = update_store_config(TupleStore, NewPath),
-    ?assertEqual({fs, NewPath, []}, UpdatedTuple).
+    % Test nested store
+    NestedStore = #{
+        <<"store-module">> => hb_store_gateway,
+        <<"local-store">> => FSStore
+    },
+    UpdatedNested = update_store_config(NestedStore, NewPath),
+    ?assertEqual(NestedStore#{ <<"local-store">> => Expected }, UpdatedNested).
 
 %% Test secure key file management
 with_secure_key_file_test() ->
