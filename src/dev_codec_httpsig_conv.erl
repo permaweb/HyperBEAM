@@ -256,7 +256,7 @@ from_body_part(InlinedKey, Part, Opts) ->
                 hb_maps:without(
                     [
                         <<"content-disposition">>, 
-                        <<"content-type">>, 
+                        % <<"content-type">>, 
                         <<"ao-body-key">>, 
                         <<"content-digest">>
                     ],

@@ -9,8 +9,8 @@
 % %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    normalize_commitments_test(
-        <<"structured@1.0">>,
+    verify_nested_complex_signed_test(
+        #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
         test_opts(normal)
     ).
 
@@ -482,7 +482,7 @@ verify_nested_complex_signed_test(Codec, Opts) ->
                 <<"a">> => 1
             },
             % TODO: Figure out why this is needed.
-            <<"inner-content-type">> => <<"application/html">>,
+            <<"content-type">> => <<"application/html">>,
             <<"body">> =>
                 <<
                     """
@@ -519,9 +519,10 @@ verify_nested_complex_signed_test(Codec, Opts) ->
     LoadedMsg = hb_cache:ensure_all_loaded(Decoded, Opts),
     ?event({loaded, LoadedMsg}),
     % % Ensure that the decoded message matches.
-    MatchRes = hb_message:match(Msg, Decoded, strict, Opts),
+    MatchRes = hb_message:match(LoadedMsg, Decoded, strict, Opts),
     ?event({match_result, MatchRes}),
     ?assert(MatchRes),
+    ?assert(hb_message:verify(Msg, all, Opts)),
     ?assert(hb_message:verify(Decoded, all, Opts)),
     NormalizeOpts = case is_map(Codec) of
         true -> hb_maps:merge(Opts, Codec);
