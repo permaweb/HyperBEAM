@@ -130,10 +130,11 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         end,
     Data = hb_ao:get(<<"data">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
     Target = hb_ao:get(<<"target">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
-    OwnerAddress = case Owner of
-        <<>> -> <<>>;
-        _ -> hb_util:human_id(Owner)
-    end,
+    OwnerAddress = 
+        case Owner of
+            <<>> -> <<>>;
+            _ -> hb_util:human_id(Owner)
+        end,
     % Set "From" if From-Process is Tag or set with "Owner" address
     From =
         hb_ao:get(
