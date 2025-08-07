@@ -3,7 +3,7 @@
 %%% This codec utilizes the httpsig@1.0 codec for signing and verifying.
 -module(dev_codec_json).
 -export([to/3, from/3, commit/3, verify/3, committed/3, content_type/1]).
--export([deserialize/3, serialize/3]).
+-export([deserialize/3, serialize/3, serialize_lua/3]).
 
 %% @doc Return the content type for the codec.
 content_type(_) -> {ok, <<"application/json">>}.
@@ -71,3 +71,11 @@ serialize(Base, Msg, Opts) ->
             <<"body">> => hb_util:ok(to(Base, Msg, Opts))
         }
     }.
+
+%% @doc Serialize a message as Lua will encode JSON
+serialize_lua(Base, Msg, Opts) ->
+    MaybeBaseList = case hb_util:numbered_keys_to_list(Base, Opts) of
+        [] -> Base;
+        ListMsg -> ListMsg
+    end,
+    serialize(MaybeBaseList, Msg, Opts).
