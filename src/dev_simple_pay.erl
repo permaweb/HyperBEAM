@@ -247,12 +247,13 @@ get_balance_and_top_up_test() ->
     {ok, Res} =
         hb_http:get(
             Node,
-            hb_message:commit(
+            Req = hb_message:commit(
                 #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
                 Opts#{ priv_wallet => ClientWallet }
             ),
             Opts
         ),
+    ?event({req_signers, hb_message:signers(Req, Opts)}),
     % Balance is given during the request, before the charge is made, so we 
     % should expect to see the original balance.
     ?assertEqual(100, Res),

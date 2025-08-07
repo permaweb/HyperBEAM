@@ -40,21 +40,8 @@ from(List, Req, Opts) when is_list(List) ->
     };
 from(Msg, Req, Opts) when is_map(Msg) ->
     % Normalize the message, offloading links to the cache.
-    ?event(debug_charge, {from_called, {msg, Msg}, {req, Req}}),
     NormLinks = hb_link:normalize(Msg, linkify_mode(Req, Opts), Opts),
     NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
-    FilteredKeys = lists:filter(
-        fun(Key) ->
-            % Filter keys that the user could set directly, but
-            % should be regenerated when converting. Additionally, we remove
-            % the `commitments' submessage, if applicable, as it should not
-            % be modified during encoding.
-            not lists:member(Key, ?REGEN_KEYS) andalso
-                not hb_private:is_private(Key) andalso
-                not (Key == <<"commitments">>)
-        end,
-        hb_util:to_sorted_keys(NormKeysMap, Opts)
-    ),
     {Types, Values} = lists:foldl(
         fun (Key, {Types, Values}) ->
             case hb_maps:find(Key, NormKeysMap, Opts) of
@@ -85,7 +72,18 @@ from(Msg, Req, Opts) when is_map(Msg) ->
             end
         end,
         {[],[]},
-        FilteredKeys
+        lists:filter(
+            fun(Key) ->
+                % Filter keys that the user could set directly, but
+                % should be regenerated when converting. Additionally, we remove
+                % the `commitments' submessage, if applicable, as it should not
+                % be modified during encoding.
+                not lists:member(Key, ?REGEN_KEYS) andalso
+                    not hb_private:is_private(Key) andalso
+                    not (Key == <<"commitments">>)
+            end,
+            hb_util:to_sorted_keys(NormKeysMap, Opts)
+        )
     ),
     % Encode the AoTypes as a structured dictionary
     % And include as a field on the produced TABM

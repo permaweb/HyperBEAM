@@ -225,7 +225,7 @@ compute(Key, RawBase, Req, Opts) ->
     LoadedReq = 
         hb_message:normalize_commitments(
             hb_cache:read_all_commitments(
-                hb_cache:ensure_all_loaded(Req, Opts),
+                Req,
                 Opts
             ),
             Opts

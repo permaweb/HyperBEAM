@@ -643,13 +643,7 @@ match(Map1, Map2) ->
 match(Map1, Map2, Mode) ->
     match(Map1, Map2, Mode, #{}).
 match(Map1, Map2, Mode, Opts) ->
-    try unsafe_match(
-        Map1,
-        Map2,
-        Mode,
-        [],
-        Opts
-    )
+    try unsafe_match(Map1, Map2, Mode, [], Opts)
     catch _:Details -> Details
     end.
 
@@ -807,7 +801,6 @@ without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
             CommitmentKeys,
             Commitments
         ),
-    ?event(debug_hbm, {without_commitments, {commitment_keys, CommitmentKeys}, {filtered_commitments, FilteredCommitments}}),
     ?event({without_commitments, {filtered_commitments, FilteredCommitments}}),
     Msg#{ <<"commitments">> => FilteredCommitments };
 without_commitments(_Spec, Msg, _Opts) ->

@@ -167,7 +167,6 @@ ensure_all_loaded(Ref, Msg, Opts) ->
 %% @doc List all items in a directory, assuming they are numbered.
 list_numbered(Path, Opts) ->
     SlotDir = hb_store:path(hb_opts:get(store, no_viable_store, Opts), Path),
-    % ?event(debug_charge, {list_numbered, {path, Path}, {dir, SlotDir}, { list, list(SlotDir, Opts) }}),
     [ to_integer(Name) || Name <- list(SlotDir, Opts) ].
 
 %% @doc List all items under a given path.
@@ -239,7 +238,7 @@ do_write_message(List, Store, Opts) when is_list(List) ->
         Opts
     );
 do_write_message(Msg, Store, Opts) when is_map(Msg) ->
-    % ?event(debug_commit, {writing_message, Msg}),
+    ?event(debug_cache, {writing_message, Msg}),
     % Calculate the IDs of the message.
     UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
     AltIDs = calculate_all_ids(Msg, Opts) -- [UncommittedID],

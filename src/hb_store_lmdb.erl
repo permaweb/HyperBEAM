@@ -54,7 +54,7 @@ start(Opts = #{ <<"name">> := DataDir }) ->
             hb_util:list(DataDir),
             [
                 {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
-                no_sync
+                no_mem_init, no_sync
             ]
         ),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),

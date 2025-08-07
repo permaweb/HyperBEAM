@@ -149,7 +149,6 @@ lookup_no_spawn_test() ->
         lookup(<<"name1">>, #{}, #{}, Opts)
     ).
 
-%% TODO: This test is failing due to double committing.
 lookup_spawn_test() ->
     Opts = generate_test_opts(),
     Res1 = {_, Process1} =
@@ -168,24 +167,16 @@ lookup_spawn_test() ->
             ?TEST_NAME,
             Opts
         ),
-    ?event(t, {equal,
-        { p1, hb_private:reset(
-            hb_cache:ensure_all_loaded(Process1, Opts)
-        ) },
-        { p2, hb_private:reset(
-                hb_message:normalize_commitments(
-                    hb_cache:ensure_all_loaded(Process2, Opts),
-                    Opts
-                )
-        ) }
-    }),
+    LoadedProcess1 = hb_cache:ensure_all_loaded(Process1, Opts),
+    LoadedProcess2 = hb_cache:ensure_all_loaded(Process2, Opts),
+    ?event(lookup_spawn, {match, { p1, LoadedProcess1 }, { p2, LoadedProcess2 }}),
     ?assertEqual(
         hb_message:normalize_commitments(
-            hb_cache:ensure_all_loaded(Process1, Opts),
+            LoadedProcess1,
             Opts
         ),
         hb_message:normalize_commitments(
-            hb_cache:ensure_all_loaded(Process2, Opts),
+            LoadedProcess2,
             Opts
         )
     ).

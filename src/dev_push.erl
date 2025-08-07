@@ -21,7 +21,6 @@
 %%                    Default: `sync', pushing synchronously.
 push(Base, Req, Opts) ->
     Process = dev_process:as_process(Base, Opts),
-    ?event(transfer_test, {push_base, {base, Process}, {req, Req}}),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
     case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Req}, no_slot, Opts) of
         no_slot ->
@@ -76,8 +75,6 @@ is_async(Process, Req, Opts) ->
 do_push(PrimaryProcess, Assignment, Opts) ->
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
     ID = dev_process:process_id(PrimaryProcess, #{}, Opts),
-    NormalizedPrimaryProcess =
-        hb_message:normalize_commitments(PrimaryProcess, Opts),
     UncommittedID =
         dev_process:process_id(
             PrimaryProcess,
@@ -85,7 +82,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             Opts
         ),
     BaseID = calculate_base_id(PrimaryProcess, Opts),
-    ?event(
+    ?event(debug,
         {push_computing_outbox,
             {process_id, ID},
             {base_id, BaseID},
@@ -669,20 +666,20 @@ full_push_test_() ->
             },
             Opts
         ),
-        ?event(debug_test, {test_setup, {msg1, Msg1}, {sched_init, SchedInit}}),
+        ?event(full_push, {test_setup, {msg1, Msg1}, {sched_init, SchedInit}}),
         Script = ping_pong_script(2),
-        ?event(debug_test, {script, Script}),
+        ?event(full_push, {script, Script}),
         {ok, Msg2} = dev_process:schedule_aos_call(Msg1, Script, Opts),
-        ?event(debug_test, {msg_sched_result, Msg2}),
+        ?event(full_push, {msg_sched_result, Msg2}),
         {ok, StartingMsgSlot} =
             hb_ao:resolve(Msg2, #{ <<"path">> => <<"slot">> }, Opts),
-        ?event(debug_test, {starting_msg_slot, StartingMsgSlot}),
+        ?event(full_push, {starting_msg_slot, StartingMsgSlot}),
         Msg3 =
             #{
                 <<"path">> => <<"push">>,
                 <<"slot">> => StartingMsgSlot
             },
-        ?event(debug_test, {msg3, Msg3}),
+        ?event(full_push, {msg3, Msg3}),
         {ok, _} = hb_ao:resolve(Msg1, Msg3, Opts),
         ?assertEqual(
             {ok, <<"Done.">>},

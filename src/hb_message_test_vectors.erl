@@ -205,7 +205,7 @@ codec_test_suite(Codecs) ->
 suite_name(CodecSpec) when is_binary(CodecSpec) -> CodecSpec;
 suite_name(CodecSpec) when is_map(CodecSpec) ->
     CodecName = maps:get(<<"device">>, CodecSpec, <<"[! NO CODEC !]">>),
-    case hb_maps:get(<<"bundle">>, CodecSpec, false) of
+    case maps:get(<<"bundle">>, CodecSpec, false) of
         false -> CodecName;
         true -> << CodecName/binary, " (bundle)">>
     end.
@@ -481,7 +481,8 @@ verify_nested_complex_signed_test(Codec, Opts) ->
             <<"parameters">> => #{
                 <<"a">> => 1
             },
-            <<"test-content-type">> => <<"application/html">>,
+            % TODO: Figure out why this is needed.
+            <<"inner-content-type">> => <<"application/html">>,
             <<"body">> =>
                 <<
                     """
@@ -521,25 +522,20 @@ verify_nested_complex_signed_test(Codec, Opts) ->
     MatchRes = hb_message:match(Msg, Decoded, strict, Opts),
     ?event({match_result, MatchRes}),
     ?assert(MatchRes),
-    ?event({verify,
-        {msg, hb_cache:ensure_all_loaded(Msg, Opts)},
-        {encoded, hb_cache:ensure_all_loaded(Encoded, Opts)},
-        {decoded, hb_cache:ensure_all_loaded(Decoded, Opts)}}),
     ?assert(hb_message:verify(Decoded, all, Opts)),
     NormalizeOpts = case is_map(Codec) of
         true -> hb_maps:merge(Opts, Codec);
         _ -> Opts
     end,
     % % Ensure that both of the messages can be verified (and retreived).
-    FoundInner = hb_maps:get(<<"body">>, Msg, not_found, Opts),
-    NormalizedFoundInner = hb_message:normalize_commitments(FoundInner, NormalizeOpts),
-    LoadedFoundInner = hb_cache:ensure_all_loaded(FoundInner, Opts),
+    FoundInner =
+        hb_maps:get(<<"body">>, Msg, not_found, Opts),
+    NormalizedFoundInner =
+        hb_message:normalize_commitments(FoundInner, NormalizeOpts),
+    LoadedFoundInner =
+        hb_cache:ensure_all_loaded(FoundInner, Opts),
     % Verify that the fully loaded version of the inner message, and the one
     % gained by applying `hb_maps:get` match and verify.
-    ?event({matching,
-        {inner, Inner},
-        {normalized_found_inner, NormalizedFoundInner}
-    }),
     ?assert(hb_message:match(Inner, NormalizedFoundInner, primary, Opts)),
     ?assert(hb_message:match(FoundInner, LoadedFoundInner, primary, Opts)),
     ?assert(hb_message:verify(Inner, all, Opts)),
@@ -612,13 +608,13 @@ signed_nested_message_with_child_test(Codec, Opts) ->
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    NormalizeOpts = case is_map(Codec) andalso maps:get(<<"bundle">>, Codec, false) == true of
+    NormalizeOpts = case is_map(Codec) of
         true -> Opts#{ <<"bundle">> => <<"true">> };
         _ -> Opts
     end,
     ?event({matching, {input, Msg}, {output, Decoded}}),
     MatchRes = hb_message:match(
-        hb_message:normalize_commitments(Msg, NormalizeOpts),
+        Msg,
         hb_message:normalize_commitments(
             hb_cache:ensure_all_loaded(Decoded, Opts),
             NormalizeOpts

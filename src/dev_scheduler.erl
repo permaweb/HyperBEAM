@@ -92,6 +92,8 @@ next(Msg1, Msg2, Opts) ->
             )
         ),
     ?event(next_profiling, got_last_processed),
+    ?event(debug_next, {in_message_cache, {schedule, Schedule}}),
+    ?event(next, {last_processed, LastProcessed, {message_cache, length(Schedule)}}),
     % Get the assignments from the message cache, local cache, or fetch from
     % the SU. Returns an ordered list of assignments.
     NextAssignment =
