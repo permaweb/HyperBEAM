@@ -106,8 +106,11 @@ resolve(Opts, CurrPath, [Next|Rest]) ->
         {ok, RawLink} ->
             Link = remove_prefix(Opts, RawLink),
             resolve(Opts, Link, Rest);
-        {error, enoent} ->
-            not_found;
+        % {error, enoent} ->
+            % case Rest of
+            %     [] -> not_found;
+            %     _ -> resolve(Opts, PathPart, Rest)
+            % end;
         _ ->
             resolve(Opts, PathPart, Rest)
     end.
