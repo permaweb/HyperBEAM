@@ -275,6 +275,10 @@ enforce_valid_tx(TX) ->
             hb_util:ok_or_throw(TX,
                 hb_util:check_size(Value, {range, 0, ?MAX_TAG_VALUE_SIZE}),
                 {invalid_field, tag_value, Value}
+            ),
+            hb_util:ok_or_throw(TX,
+                hb_util:check_size(<<Name/binary, Value/binary>>, {range, 0, ?MAX_TAG_COMBINED_SIZE}),
+                {invalid_field, tag_size, {Name, Value}}
             );
             (InvalidTagForm) ->
                 throw({invalid_field, tag, InvalidTagForm})

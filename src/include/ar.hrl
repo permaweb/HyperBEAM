@@ -13,6 +13,7 @@
 
 -define(MAX_TAG_NAME_SIZE, 3072).
 -define(MAX_TAG_VALUE_SIZE, 3072).
+-define(MAX_TAG_COMBINED_SIZE, 4096).
 -define(MAX_TAG_COUNT, 128).
 
 %% The hashing algorithm used to calculate wallet addresses.

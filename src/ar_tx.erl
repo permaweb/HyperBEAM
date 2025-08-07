@@ -478,6 +478,10 @@ enforce_valid_tx(TX) ->
             hb_util:ok_or_throw(TX,
                 hb_util:check_size(Value, {range, 0, ?MAX_TAG_VALUE_SIZE}),
                 {invalid_field, tag_value, Value}
+            ),
+            hb_util:ok_or_throw(TX,
+                hb_util:check_size(<<Name/binary, Value/binary>>, {range, 0, ?MAX_TAG_COMBINED_SIZE}),
+                {invalid_field, tag_size, {Name, Value}}
             );
             (InvalidTagForm) ->
                 throw({invalid_field, tag, InvalidTagForm})
@@ -985,6 +989,7 @@ test_enforce_valid_tx_happy() ->
         {empty_tag_name_value, BaseTX#tx{tags = [{<<>>, <<>>}]}},
         {max_len_tag_name, BaseTX#tx{tags = [{crypto:strong_rand_bytes(?MAX_TAG_NAME_SIZE), <<"val">>}]}},
         {max_len_tag_value, BaseTX#tx{tags = [{<<"key">>, crypto:strong_rand_bytes(?MAX_TAG_VALUE_SIZE)}]}},
+        {max_len_combined, BaseTX#tx{tags = [{crypto:strong_rand_bytes(?MAX_TAG_COMBINED_SIZE div 2), crypto:strong_rand_bytes(?MAX_TAG_COMBINED_SIZE div 2)}]}},
         {max_len_tags, BaseTX#tx{tags = [{crypto:strong_rand_bytes(42), <<"val">>} || _ <- lists:seq(1,?MAX_TAG_COUNT)]}}
     ],
 
@@ -1005,6 +1010,8 @@ test_enforce_valid_tx_failure() ->
     TooLongTagName = crypto:strong_rand_bytes(?MAX_TAG_NAME_SIZE + 1),
     TooLongTagValue = crypto:strong_rand_bytes(?MAX_TAG_VALUE_SIZE + 1),
     TooManyTags = [{crypto:strong_rand_bytes(42), <<"val">>} || _ <- lists:seq(1,?MAX_TAG_COUNT + 1)],
+    LargeTag = crypto:strong_rand_bytes((?MAX_TAG_COMBINED_SIZE div 2) + 1),
+    TooLongCombinedTag = {LargeTag, LargeTag},
 
     SigInvalidSize1 = crypto:strong_rand_bytes(1),
     SigInvalidSize64 = crypto:strong_rand_bytes(64),
@@ -1048,6 +1055,7 @@ test_enforce_valid_tx_failure() ->
         {tag_name_too_long, BaseTX#tx{tags = [{TooLongTagName, <<"val">>}]}, {invalid_field, tag_name, TooLongTagName}},
         {tag_value_not_binary, BaseTX#tx{tags = [{<<"key">>, not_binary}]}, {invalid_field, tag_value, not_binary}},
         {tag_value_too_long, BaseTX#tx{tags = [{<<"key">>, TooLongTagValue}]}, {invalid_field, tag_value, TooLongTagValue}},
+        {tag_combined_size_too_long, BaseTX#tx{tags = [TooLongCombinedTag]}, {invalid_field, tag_size, TooLongCombinedTag}},
         {tag_list_length_too_high, BaseTX#tx{tags = TooManyTags}, {invalid_field, tag_count, TooManyTags}},
         {invalid_tag_form_atom, BaseTX#tx{tags = [not_a_tuple]}, {invalid_field, tag, not_a_tuple}},
         {invalid_tag_form_list, BaseTX#tx{tags = [[<<"name">>, <<"value">>]]}, {invalid_field, tag, [<<"name">>, <<"value">>]} }
