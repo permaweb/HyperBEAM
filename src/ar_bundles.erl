@@ -254,6 +254,10 @@ enforce_valid_tx(TX) ->
         hb_util:check_size(TX#tx.signature, [0, 65, byte_size(?DEFAULT_SIG)]),
         {invalid_field, signature, TX#tx.signature}
     ),
+    hb_util:ok_or_throw(TX,
+        length(TX#tx.tags) =< ?MAX_TAG_COUNT,
+        {invalid_field, tag_count, TX#tx.tags}
+    ),
     lists:foreach(
         fun({Name, Value}) ->
             hb_util:ok_or_throw(TX,
