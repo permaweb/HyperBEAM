@@ -37,6 +37,7 @@
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
 -define(MAX_PENDING_WRITES, 400).               % Force flush after x pending
 -define(FOLD_YIELD_INTERVAL, 100).              % Yield every x keys
+-hb_debug(print).
 
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
@@ -127,8 +128,22 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
     write(Opts, PathBin, Value);
 write(Opts, Path, Value) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
-    case elmdb:put(DBInstance, Path, Value) of
-        ok -> ok;
+    case timer:tc(fun() -> elmdb:put(DBInstance, Path, Value) end) of
+        {Time, ok} ->
+            case Path of
+                <<"data/", _Rest/binary>> ->
+                    increment_counter(Time);
+                <<"computed/", Rest/binary>> ->
+                    case binary:split(Rest, <<"/slot/">>) of
+                        [_Prefix, SlotNumberBin] ->
+                            ?debug_print({slot, SlotNumberBin, get_reset_counter()});
+                        _ ->
+                            ok
+                    end;
+                _OtherBin ->
+                    ok
+            end,
+            ok;
         {error, Type, Description} ->
             ?event(
                 error,
@@ -139,6 +154,32 @@ write(Opts, Path, Value) ->
             ),
             retry
     end.
+
+get_reset_counter() ->
+    CounterRef = persistent_term:get({?MODULE, put_acc_counter}, undefined),
+    TimeCount = counters:get(CounterRef, 1),
+    KeyCount = counters:get(CounterRef, 2),
+    counters:put(CounterRef, 1, 0),
+    {time, TimeCount, keys, KeyCount}.
+
+increment_counter(ElapsedTime) ->
+    CounterRef = 
+        case persistent_term:get({?MODULE, put_acc_counter}, undefined) of
+            undefined ->
+                % If the counter is not found, create a new one.
+                % counters:new(Size, Options) - Size=1 for a single counter.
+                % The options list is usually empty or for custom properties.
+                NewCounterRef = counters:new(2, []),
+                % Store the new counter reference in the persistent term
+                persistent_term:put({?MODULE, put_acc_counter}, NewCounterRef),
+                NewCounterRef;
+
+            Ref ->
+                Ref
+        end,
+    counters:add(CounterRef, 1, ElapsedTime),
+    counters:add(CounterRef, 2, 1),
+    ok.
 
 %% @doc Read a value from the database by key, with automatic link resolution.
 %%
