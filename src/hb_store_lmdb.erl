@@ -131,17 +131,15 @@ write(Opts, Path, Value) ->
     case timer:tc(fun() -> elmdb:put(DBInstance, Path, Value) end) of
         {Time, ok} ->
             case Path of
-                <<"data/", _Rest/binary>> ->
-                    increment_counter(Time);
                 <<"computed/", Rest/binary>> ->
                     case binary:split(Rest, <<"/slot/">>) of
                         [_Prefix, SlotNumberBin] ->
                             ?debug_print({slot, SlotNumberBin, get_reset_counter()});
                         _ ->
-                            ok
+                            increment_counter(Time)
                     end;
-                _OtherBin ->
-                    ok
+                _OtherKey -> 
+                    increment_counter(Time)
             end,
             ok;
         {error, Type, Description} ->
