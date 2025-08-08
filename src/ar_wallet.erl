@@ -5,6 +5,8 @@
 -export([to_json/1, from_json/1, from_json/2]).
 -include("include/ar.hrl").
 -include_lib("public_key/include/public_key.hrl").
+-include_lib("eunit/include/eunit.hrl").
+
 
 %%% @doc Utilities for manipulating wallets.
 
@@ -253,3 +255,68 @@ compress_ecdsa_pubkey(<<4:8, PubPoint/binary>>) ->
             1 -> <<3:8>>
         end,
     iolist_to_binary([PubKeyHeader, X]).
+
+
+%%%===================================================================
+%%% Tests.
+%%%===================================================================
+
+ar_wallet_to_address_rsa_passthrough_test() ->
+    %% default RSA passthrough for 256-bit input using a real address
+    ExpectedAddress = <<"J-j0jyZ1YWhMBXtJMWHz-dl-mDcksoJSQo_Fq5loHUs">>,
+    Address = hb_util:decode(ExpectedAddress),
+    Passthrough = ar_wallet:to_address(Address),
+    EncodedAddress = hb_util:encode(Passthrough),
+    ?assertEqual(ExpectedAddress, EncodedAddress).
+
+ar_wallet_to_address_rsa_hash_test() ->
+    %% default RSA hashing for real modulus
+    ExpectedAddress = <<"J-j0jyZ1YWhMBXtJMWHz-dl-mDcksoJSQo_Fq5loHUs">>,
+    N = <<"g2MqKa45u1l0bE5ZefmZs8N0bvcBpkony4__Kc0TyVcPrQcPMLBi-Thw5xN48aNyd6PZ6DtKP1bS_wCHFSwnCscRHSUiQJBkEQUbRuJzETU1lv-72ZXB8Bj_sP6XjFH6v6eOeyVjzw1exE5nen2ATQQ1LpeOv8UF0ckGvP-Sx5Y8j07EkFr86V7z8lFKDta2i6poX0aIATAyhhMf3PPGKxDxNTNRzBjlysbZEFBr70pg03kwas_YDvT1IWG7skHKgaXUc1IPcOJYaaCOjPsgYenA_53dT7ZyhcKl5jrKiRYHrKom6gjQrm9b-IKBEvSswbbOYkilOS7YZ9_BaDeIoazx3KQSRJnoKve4HPrBnlt1tmOvFFHnR89ZrjwZuZ3tmetptfaN3JwWnOwMm_xIeTe3ughX0XGZKPAv4cg2ZeYZMKWaVIyjpvQ3EkHkO7ntWTdQeQ3LH8EkQwZl2fp8tdr48IGIw9zlV4dyVD72PHQ1CtvUaJsKRbfZNB3YRi5zUTUXkfBbAuHNAfTO0u8LsnKjmXg4pPwiQOIhc7_4pDKs3wQ5vKayYu2mXK_hSYtuoliSIlLW071ehJqardePXZqdoyklv8AauF2oqBtOP4F3n5DX7bKO8QytDcEXRdjFrC8lgLGwTiinEkujpqbycFbzoiXk9aatAfJm_LTNkKk">>,
+    PubKey = hb_util:decode(N),
+    Address = ar_wallet:to_address(PubKey),
+    EncodedAddress = hb_util:encode(Address),
+    ?assertEqual(ExpectedAddress, EncodedAddress).
+
+ar_wallet_to_address_rsa_explicit_test() ->
+    %% explicit RSA key type two-arity using real modulus
+    ExpectedAddress = <<"J-j0jyZ1YWhMBXtJMWHz-dl-mDcksoJSQo_Fq5loHUs">>,
+    N = <<"g2MqKa45u1l0bE5ZefmZs8N0bvcBpkony4__Kc0TyVcPrQcPMLBi-Thw5xN48aNyd6PZ6DtKP1bS_wCHFSwnCscRHSUiQJBkEQUbRuJzETU1lv-72ZXB8Bj_sP6XjFH6v6eOeyVjzw1exE5nen2ATQQ1LpeOv8UF0ckGvP-Sx5Y8j07EkFr86V7z8lFKDta2i6poX0aIATAyhhMf3PPGKxDxNTNRzBjlysbZEFBr70pg03kwas_YDvT1IWG7skHKgaXUc1IPcOJYaaCOjPsgYenA_53dT7ZyhcKl5jrKiRYHrKom6gjQrm9b-IKBEvSswbbOYkilOS7YZ9_BaDeIoazx3KQSRJnoKve4HPrBnlt1tmOvFFHnR89ZrjwZuZ3tmetptfaN3JwWnOwMm_xIeTe3ughX0XGZKPAv4cg2ZeYZMKWaVIyjpvQ3EkHkO7ntWTdQeQ3LH8EkQwZl2fp8tdr48IGIw9zlV4dyVD72PHQ1CtvUaJsKRbfZNB3YRi5zUTUXkfBbAuHNAfTO0u8LsnKjmXg4pPwiQOIhc7_4pDKs3wQ5vKayYu2mXK_hSYtuoliSIlLW071ehJqardePXZqdoyklv8AauF2oqBtOP4F3n5DX7bKO8QytDcEXRdjFrC8lgLGwTiinEkujpqbycFbzoiXk9aatAfJm_LTNkKk">>,
+    PubKey = hb_util:decode(N),
+    Address = ar_wallet:to_address(PubKey, {rsa, 65537}),
+    EncodedAddress = hb_util:encode(Address),
+    ?assertEqual(ExpectedAddress, EncodedAddress).
+
+ar_wallet_to_address_ecdsa_test() ->
+    %% ensure ar_wallet:to_address routes ECDSA keys to Ethereum addresses
+    Input = <<"BAoixXds4JhW42pzlLb83B3-I21lX78j3Q7cPaoFiCjMgjYwYLDj-xL132J147ifZFwRBmzmEMC8eYAXzbRNWuA">>,
+    PubKey = hb_util:decode(Input),
+    Address = ar_wallet:to_address(PubKey),
+    ?assertEqual(<<"0xb7B4360F7F6298dE2e7a11009270F35F189Bd77E">>, Address).
+        
+ar_wallet_to_address_ecdsa_explicit_test() ->
+    %% explicit ECDSA key type two-arity with 65-byte uncompressed key
+    Input = <<"BAoixXds4JhW42pzlLb83B3-I21lX78j3Q7cPaoFiCjMgjYwYLDj-xL132J147ifZFwRBmzmEMC8eYAXzbRNWuA">>,
+    PubKey = hb_util:decode(Input),
+    Address = ar_wallet:to_address(PubKey, {ecdsa, 256}),
+    ?assertEqual(<<"0xb7B4360F7F6298dE2e7a11009270F35F189Bd77E">>, Address).
+
+ar_wallet_to_address_ecdsa_wallet_tuple_test() ->
+    %% wallet tuple with ECDSA 65-byte pubkey 
+    Input = <<"BAoixXds4JhW42pzlLb83B3-I21lX78j3Q7cPaoFiCjMgjYwYLDj-xL132J147ifZFwRBmzmEMC8eYAXzbRNWuA">>,
+    PubKey = hb_util:decode(Input),
+    Wallet = {{keytype, <<17,18>>, PubKey}, {keytype, PubKey}},
+    Address = ar_wallet:to_address(Wallet),
+    ?assertEqual(<<"0xb7B4360F7F6298dE2e7a11009270F35F189Bd77E">>, Address).
+
+ar_wallet_to_address_rsa_wallet_tuple_test() ->
+    %% wallet tuple with RSA 256-bit pubkey 
+    ExpectedAddress = <<"J-j0jyZ1YWhMBXtJMWHz-dl-mDcksoJSQo_Fq5loHUs">>,
+    N = <<"g2MqKa45u1l0bE5ZefmZs8N0bvcBpkony4__Kc0TyVcPrQcPMLBi-Thw5xN48aNyd6PZ6DtKP1bS_wCHFSwnCscRHSUiQJBkEQUbRuJzETU1lv-72ZXB8Bj_sP6XjFH6v6eOeyVjzw1exE5nen2ATQQ1LpeOv8UF0ckGvP-Sx5Y8j07EkFr86V7z8lFKDta2i6poX0aIATAyhhMf3PPGKxDxNTNRzBjlysbZEFBr70pg03kwas_YDvT1IWG7skHKgaXUc1IPcOJYaaCOjPsgYenA_53dT7ZyhcKl5jrKiRYHrKom6gjQrm9b-IKBEvSswbbOYkilOS7YZ9_BaDeIoazx3KQSRJnoKve4HPrBnlt1tmOvFFHnR89ZrjwZuZ3tmetptfaN3JwWnOwMm_xIeTe3ughX0XGZKPAv4cg2ZeYZMKWaVIyjpvQ3EkHkO7ntWTdQeQ3LH8EkQwZl2fp8tdr48IGIw9zlV4dyVD72PHQ1CtvUaJsKRbfZNB3YRi5zUTUXkfBbAuHNAfTO0u8LsnKjmXg4pPwiQOIhc7_4pDKs3wQ5vKayYu2mXK_hSYtuoliSIlLW071ehJqardePXZqdoyklv8AauF2oqBtOP4F3n5DX7bKO8QytDcEXRdjFrC8lgLGwTiinEkujpqbycFbzoiXk9aatAfJm_LTNkKk">>,
+    PubKey = hb_util:decode(N),
+    Wallet = {{keytype, <<17,18>>, PubKey}, {keytype, PubKey}},
+    Address = ar_wallet:to_address(Wallet),
+    EncodedAddress = hb_util:encode(Address),
+    ?assertEqual(ExpectedAddress, EncodedAddress).
+
+      
