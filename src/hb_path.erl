@@ -311,8 +311,10 @@ matches(Key1, Key2) ->
 
 %% @doc Check if two keys match using regex.
 regex_matches(Path1, Path2) ->
+    ?event(debug_matching, {regex_matches, {path1, Path1}, {path2, Path2}}),
     NormP1 = normalize(hb_ao:normalize_key(Path1)),
     NormP2 = normalize(hb_ao:normalize_key(Path2)),
+    ?event(debug_matching, {regex_matches_normalized, {normp1, NormP1}, {normp2, NormP2}}),
     try re:run(NormP1, NormP2) =/= nomatch
     catch _A:_B:_C -> false
     end.
