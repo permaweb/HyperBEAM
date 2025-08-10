@@ -100,7 +100,11 @@ make_expected_tabm(TX, TestOpts, ExpectedFields) ->
                             ++ hb_util:to_sorted_keys(ExpectedFields)
                     )
                 ),
-                <<"keyid">> => hb_util:safe_encode(TX#tx.owner),
+                <<"keyid">> =>
+                        <<
+                            "publickey:",
+                            (hb_util:safe_encode(TX#tx.owner))/binary
+                        >>,
                 <<"signature">> => hb_util:safe_encode(TX#tx.signature),
                 <<"type">> => <<"rsa-pss-sha256">>
             };

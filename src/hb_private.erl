@@ -13,10 +13,10 @@
 %%% 
 %%% See `hb_ao' for more information about the AO-Core protocol
 %%% and private elements of messages.
-
 -module(hb_private).
+-export([opts/1]).
 -export([from_message/1, reset/1, is_private/1]).
--export([get/3, get/4, set/4, set/3, set_priv/2]).
+-export([get/3, get/4, set/4, set/3, set_priv/2, merge/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -40,7 +40,7 @@ get(InputPath, Msg, Default, Opts) ->
         hb_util:deep_get(
             remove_private_specifier(InputPath, Opts),
             from_message(Msg),
-            priv_ao_opts(Opts)
+            opts(Opts)
         ),
     case Resolved of
         not_found -> Default;
@@ -52,15 +52,30 @@ set(Msg, InputPath, Value, Opts) ->
     Path = remove_private_specifier(InputPath, Opts),
     Priv = from_message(Msg),
     ?event({set_private, {in, Path}, {out, Path}, {value, Value}, {opts, Opts}}),
-    NewPriv = hb_util:deep_set(Path, Value, Priv, priv_ao_opts(Opts)),
+    NewPriv = hb_util:deep_set(Path, Value, Priv, opts(Opts)),
     ?event({set_private_res, {out, NewPriv}}),
     set_priv(Msg, NewPriv).
 set(Msg, PrivMap, Opts) ->
     CurrentPriv = from_message(Msg),
     ?event({set_private, {in, PrivMap}, {opts, Opts}}),
-    NewPriv = hb_util:deep_merge(CurrentPriv, PrivMap, priv_ao_opts(Opts)),
+    NewPriv = hb_util:deep_merge(CurrentPriv, PrivMap, opts(Opts)),
     ?event({set_private_res, {out, NewPriv}}),
     set_priv(Msg, NewPriv).
+
+%% @doc Merge the private elements of two messages into one. The keys in the
+%% second message will override the keys in the first message. The base keys
+%% from the first message will be preserved, but the keys in the second message
+%% will be lost.
+merge(Msg1, Msg2, Opts) ->
+    % Merge the private elements of the two messages.
+    Merged =
+        hb_util:deep_merge(
+            from_message(Msg1),
+            from_message(Msg2),
+            opts(Opts)
+        ),
+    % Set the merged private element on the first message.
+    set_priv(Msg1, Merged).
 
 %% @doc Helper function for setting the complete private element of a message.
 set_priv(Msg, PrivMap)
@@ -85,9 +100,29 @@ remove_private_specifier(InputPath, Opts) ->
     end.
 
 %% @doc The opts map that should be used when resolving paths against the
-%% private element of a message.
-priv_ao_opts(Opts) ->
-    Opts#{ hashpath => ignore, cache_control => [<<"no-cache">>, <<"no-store">>] }.
+%% private element of a message. We add the `priv_store' option if set, such that
+%% evaluations are not inadvertently persisted in public storage but this module
+%% can still access data from the normal stores. This mechanism requires that
+%% the priv_store is writable. We also ensure that no cache entries are
+%% generated from downstream AO-Core resolutions.
+opts(Opts) ->
+    PrivStore =
+        case hb_opts:get(priv_store, undefined, Opts) of
+            undefined -> [];
+            PrivateStores when is_list(PrivateStores) -> PrivateStores;
+            PrivateStore -> [PrivateStore]
+        end,
+    BaseStore =
+        case hb_opts:get(store, [], Opts) of
+            SingleStore when is_map(SingleStore) -> [SingleStore];
+            Stores when is_list(Stores) -> Stores
+        end,
+    NormStore = PrivStore ++ BaseStore,
+    Opts#{
+        hashpath => ignore,
+        cache_control => [<<"no-cache">>, <<"no-store">>],
+        store => NormStore
+    }.
 
 %% @doc Unset all of the private keys in a message or deep Erlang term.
 %% This function operates on all types of data, such that it can be used on
@@ -136,7 +171,47 @@ get_private_key_test() ->
     {error, _} = hb_ao:resolve(M1, <<"priv/a">>, #{}),
     {error, _} = hb_ao:resolve(M1, <<"priv">>, #{}).
 
-
 get_deep_key_test() ->
     M1 = #{<<"a">> => 1, <<"priv">> => #{<<"b">> => #{<<"c">> => 3}}},
     ?assertEqual(3, get(<<"b/c">>, M1, #{})).
+
+priv_opts_store_read_link_test() ->
+    % Write a message to the public store.
+    PublicStore = [hb_test_utils:test_store(hb_store_lmdb)],
+    timer:sleep(1),
+    OnlyPrivStore = [hb_test_utils:test_store(hb_store_fs)],
+    ok = hb_store:write(PublicStore, <<"key">>, <<"test-message">>),
+    {ok, <<"test-message">>} = hb_store:read(PublicStore, <<"key">>),
+    % Make a link to the key in the public store.
+    ok = hb_store:make_link(PublicStore, <<"key">>, <<"link">>),
+    {ok, <<"test-message">>} = hb_store:read(PublicStore, <<"link">>),
+    % Read the link from the private store. First as a simple store read, then
+    % as a link.
+    Opts = #{ store => PublicStore, priv_store => OnlyPrivStore },
+    PrivOpts = #{ store := PrivStore } = opts(Opts),
+    {ok, <<"test-message">>} = hb_store:read(PrivStore, <<"link">>),
+    Loaded =
+        hb_cache:ensure_loaded(
+            {link, <<"link">>, #{ <<"type">> => <<"link">>, <<"lazy">> => false }},
+            PrivOpts
+        ),
+    ?assertEqual(<<"test-message">>, Loaded).
+
+priv_opts_cache_read_message_test() ->
+    hb:init(),
+    PublicStore = [hb_test_utils:test_store(hb_store_lmdb)],
+    OnlyPrivStore = [hb_test_utils:test_store(hb_store_fs)],
+    Opts = #{ store => PublicStore, priv_store => OnlyPrivStore },
+    PrivOpts = opts(Opts),
+    % Use the `~scheduler@1.0' and `~process@1.0' infrastructure to write a
+    % complex message into the public store.
+    Msg = hb_cache:ensure_all_loaded(dev_process:test_aos_process(Opts), Opts),
+    {ok, ID} = hb_cache:write(Msg, Opts),
+    % Ensure we can read the message using the public store.
+    {ok, PubMsg} = hb_cache:read(ID, Opts),
+    PubMsgLoaded = hb_cache:ensure_all_loaded(PubMsg, Opts),
+    ?assertEqual(Msg, PubMsgLoaded),
+    % Read the message using the private store.
+    {ok, PrivMsg} = hb_cache:read(ID, PrivOpts),
+    PrivMsgLoaded = hb_cache:ensure_all_loaded(PrivMsg, PrivOpts),
+    ?assertEqual(Msg, PrivMsgLoaded).

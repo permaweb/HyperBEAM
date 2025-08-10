@@ -33,7 +33,7 @@ start() ->
         end,
     MergedConfig =
         hb_maps:merge(
-            hb_opts:default_message(),
+            hb_opts:default_message_with_env(),
             Loaded
         ),
     %% Apply store defaults before starting store
@@ -54,7 +54,45 @@ start() ->
                 Loaded
             )
         ),
-    FormattedConfig = hb_util:debug_fmt(MergedConfig, MergedConfig, 2),
+    maybe_greeter(MergedConfig, PrivWallet),
+    start(
+        Loaded#{
+            priv_wallet => PrivWallet,
+            store => UpdatedStoreOpts,
+            port => hb_opts:get(port, 8734, Loaded),
+            cache_writers => [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
+        }
+    ).
+start(Opts) ->
+    application:ensure_all_started([
+        kernel,
+        stdlib,
+        inets,
+        ssl,
+        ranch,
+        cowboy,
+        gun,
+        os_mon
+    ]),
+    hb:init(),
+    BaseOpts = set_default_opts(Opts),
+    {ok, Listener, _Port} = new_server(BaseOpts),
+    {ok, Listener}.
+
+%% @doc Print the greeter message to the console if we are not running tests.
+maybe_greeter(MergedConfig, PrivWallet) ->
+    case hb_features:test() of
+        false ->
+            print_greeter(MergedConfig, PrivWallet);
+        true ->
+            ok
+    end.
+
+%% @doc Print the greeter message to the console. Includes the version, operator
+%% address, URL to access the node, and the wider configuration (including the
+%% keys inherited from the default configuration).
+print_greeter(Config, PrivWallet) ->
+    FormattedConfig = hb_util:debug_format(Config, Config, 2),
     io:format("~n"
         "===========================================================~n"
         "==    ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗           ==~n"
@@ -85,8 +123,8 @@ start() ->
                     io_lib:format(
                         "http://~s:~p",
                         [
-                            hb_opts:get(host, <<"localhost">>, Loaded),
-                            hb_opts:get(port, 8734, Loaded)
+                            hb_opts:get(host, <<"localhost">>, Config),
+                            hb_opts:get(port, 8734, Config)
                         ]
                     )
                 ),
@@ -95,30 +133,7 @@ start() ->
             hb_util:human_id(ar_wallet:to_address(PrivWallet)),
             FormattedConfig
         ]
-    ),
-    start(
-        Loaded#{
-            priv_wallet => PrivWallet,
-            store => UpdatedStoreOpts,
-            port => hb_opts:get(port, 8734, Loaded),
-            cache_writers => [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
-        }
     ).
-start(Opts) ->
-    application:ensure_all_started([
-        kernel,
-        stdlib,
-        inets,
-        ssl,
-        ranch,
-        cowboy,
-        gun,
-        os_mon
-    ]),
-    hb:init(),
-    BaseOpts = set_default_opts(Opts),
-    {ok, Listener, _Port} = new_server(BaseOpts),
-    {ok, Listener}.
 
 %% @doc Trigger the creation of a new HTTP server node. Accepts a `NodeMsg'
 %% message, which is used to configure the server. This function executed the
@@ -128,7 +143,7 @@ start(Opts) ->
 new_server(RawNodeMsg) ->
     RawNodeMsgWithDefaults =
         hb_maps:merge(
-            hb_opts:default_message(),
+            hb_opts:default_message_with_env(),
             RawNodeMsg#{ only => local }
         ),
     HookMsg = #{ <<"body">> => RawNodeMsgWithDefaults },
@@ -388,27 +403,26 @@ handle_request(RawReq, Body, ServerID) ->
                 hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
             catch
                 Type:Details:Stacktrace ->
-                    Trace = hb_tracer:get_trace(TracePID),
                     FormattedError =
-                        hb_util:bin(hb_message:format(
-                            hb_private:reset(#{
-                                <<"type">> => Type,
-                                <<"details">> => Details,
-                                <<"stacktrace">> => Stacktrace
-                            })
-                        )),
+                        hb_util:bin(
+                            [
+                                <<"Termination type: '">>,
+                                hb_message:format(Type),
+                                <<"'\n\nStacktrace:\n\n">>,
+                                hb_util:format_trace(Stacktrace),
+                                <<"\n\nError details:\n\n">>,
+                                hb_message:format(Details, NodeMsg, 1)
+                            ]
+                        ),
                     {ok, ErrorPage} = dev_hyperbuddy:return_error(FormattedError),
                     ?event(
                         http_error,
-                        {http_error,
-                            {details,
-                                {explicit,
-                                    #{
-                                        type => Type,
-                                        details => Details,
-                                        stacktrace => Stacktrace
-                                    }
-                                }
+                        {unexpected_http_request_termination,
+                            {string,
+                                hb_util:indent(
+                                    <<"\n", FormattedError/binary, "\n">>,
+                                    1
+                                )
                             }
                         }
                     ),
@@ -572,7 +586,7 @@ set_node_opts_test() ->
 %% @doc Test the set_opts/2 function that merges request with options,
 %% manages node history, and updates server state.
 set_opts_test() ->
-    DefaultOpts = hb_opts:default_message(),
+    DefaultOpts = hb_opts:default_message_with_env(),
     start_node(DefaultOpts#{ 
         priv_wallet => Wallet = ar_wallet:new(), 
         port => rand:uniform(10000) + 10000 

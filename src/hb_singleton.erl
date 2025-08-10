@@ -14,6 +14,7 @@
 %%%     Part: (Key + Resolution), Device?, #{ K => V}?
 %%%         - Part => #{ path => Part }
 %%%         - `Part&Key=Value => #{ path => Part, Key => Value }'
+%%%         - `Part=Value&... => #{ path => Part, Part => Value, ... }'
 %%%         - `Part&Key => #{ path => Part, Key => true }'
 %%%         - `Part&k1=v1&k2=v2 => #{ path => Part, k1 => `<<"v1">>', k2 => `<<"v2">>' }'
 %%%         - `Part~Device => {as, Device, #{ path => Part }}'
@@ -52,14 +53,12 @@ to(Messages) ->
                 % Special case when AO-Core message is ID
                 (Message, {Acc, Index, ScopedModifications}) when ?IS_ID(Message) ->
                     {append_path(Message, Acc), Index + 1, ScopedModifications};
-
                 % Special case when AO-Core message contains resolve command
                 ({resolve, SubMessages0}, {Acc, Index, ScopedModifications}) ->
                     SubMessages1 = hb_maps:get(<<"path">>, to(SubMessages0)),
                     <<"/", SubMessages2/binary>> = SubMessages1,
                     SubMessages = <<"(", SubMessages2/binary, ")">>,
                     {append_path(SubMessages, Acc), Index + 1, ScopedModifications};
-
                 % Regular case when message is a map
                 (Message, {Acc, Index, ScopedModifications}) ->
                     {NewMessage, NewScopedModifications} =
@@ -95,7 +94,6 @@ to(Messages) ->
                             end,
                             {Acc, ScopedModifications},
                             Message),
-
                         {NewMessage, Index + 1, NewScopedModifications}
 
             end,
@@ -134,6 +132,8 @@ type(_Value) -> unknown.
 
 %% @doc Normalize a singleton TABM message into a list of executable AO-Core
 %% messages.
+from(RawMsg, Opts) when is_binary(RawMsg) ->
+    from(#{ <<"path">> => RawMsg }, Opts);
 from(RawMsg, Opts) ->
     RawPath = hb_maps:get(<<"path">>, RawMsg, <<>>),
     ?event(parsing, {raw_path, RawPath}),
@@ -169,23 +169,24 @@ from(RawMsg, Opts) ->
 parse_full_path(RelativeRef) ->
     %?event(parsing, {raw_relative_ref, RawRelativeRef}),
     %RelativeRef = hb_escape:decode(RawRelativeRef),
-    ?event(parsing, {parsed_relative_ref, RelativeRef}),
+    Decoded = decode_string(RelativeRef),
+    ?event(parsing, {parsed_relative_ref, Decoded}),
     {Path, QKVList} =
-        case binary:split(RelativeRef, <<"?">>) of
-            [P, QStr] -> {P, cowboy_req:parse_qs(#{ qs => QStr })};
-            [P] -> {P, []}
+        case hb_util:split_depth_string_aware_single("?", Decoded) of
+            {_Sep, P, QStr} -> {P, cowboy_req:parse_qs(#{ qs => QStr })};
+            {no_match, P, <<>>} -> {P, []}
         end,
     {
         ok,
-        lists:map(fun(Part) -> decode_string(Part) end, path_parts($/, Path)),
+        path_parts($/, Path),
         hb_maps:from_list(QKVList)
     }.
 
 %% @doc Step 2: Decode, split and sanitize the path. Split by `/' but avoid
 %% subpath components, such that their own path parts are not dissociated from
 %% their parent path.
-path_messages(RawBin, Opts) when is_binary(RawBin) ->
-    lists:map(fun(Part) -> parse_part(Part, Opts) end, path_parts([$/], decode_string(RawBin))).
+path_messages(Bin, Opts) when is_binary(Bin) ->
+    lists:map(fun(Part) -> parse_part(Part, Opts) end, path_parts([$/], Bin)).
 
 %% @doc Normalize the base path.
 normalize_base([]) -> [];
@@ -208,13 +209,13 @@ path_parts(Sep, PathBin) when is_binary(PathBin) ->
         end,
         all_path_parts(Sep, PathBin)
     ),
+    ?event({path_parts, Res}),
     Res.
 
 %% @doc Extract all of the parts from the binary, given (a list of) separators.
 all_path_parts(_Sep, <<>>) -> [];
 all_path_parts(Sep, Bin) ->
-    {_MatchedSep, Part, Rest} = part(Sep, Bin),
-    [Part | all_path_parts(Sep, Rest)].
+    hb_util:split_depth_string_aware(Sep, Bin).
 
 %% @doc Extract the characters from the binary until a separator is found.
 %% The first argument of the function is an explicit separator character, or
@@ -223,20 +224,7 @@ all_path_parts(Sep, Bin) ->
 part(Sep, Bin) when not is_list(Sep) ->
     part([Sep], Bin);
 part(Seps, Bin) ->
-    part(Seps, Bin, 0, <<>>).
-part(_Seps, <<>>, _Depth, CurrAcc) -> {no_match, CurrAcc, <<>>};
-part(Seps, << $\(, Rest/binary>>, Depth, CurrAcc) ->
-    %% Increase depth
-    part(Seps, Rest, Depth + 1, << CurrAcc/binary, "(" >>);
-part(Seps, << $\), Rest/binary>>, Depth, CurrAcc) when Depth > 0 ->
-    %% Decrease depth
-    part(Seps, Rest, Depth - 1, << CurrAcc/binary, ")">>);
-part(Seps, <<C:8/integer, Rest/binary>>, Depth, CurrAcc) ->
-    case Depth == 0 andalso lists:member(C, Seps) of
-        true -> {C, CurrAcc, Rest};
-        false ->
-            part(Seps, Rest, Depth, << CurrAcc/binary, C:8/integer >>)
-    end.
+    hb_util:split_depth_string_aware_single(Seps, Bin).
 
 %% @doc Step 3: Apply types to values and remove specifiers.
 apply_types(Msg, Opts) ->
@@ -288,26 +276,53 @@ parse_scope(KeyBin) ->
 build_messages(Msgs, ScopedModifications, Opts) ->
     do_build(1, Msgs, ScopedModifications, Opts).
 
-do_build(_, [], _ScopedKeys, _Opts) -> [];
-do_build(I, [{as, DevID, Msg = #{ <<"path">> := <<"">> }}|Rest], ScopedKeys, Opts) ->
-    ScopedKey = lists:nth(I, ScopedKeys),
+do_build(_, [], _, _) -> [];
+do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) ->
+    % We are processing an `as' message. If the path is empty, we need to
+    % remove it from the message and the additional message, such that AO-Core
+    % returns only the message with the device specifier changed. If the message
+    % does have a path, AO-Core will subresolve it.
+    RawAdditional = lists:nth(I, ScopedKeys),
+    {Msg, Additional} =
+        case hb_maps:get(<<"path">>, RawMsg, <<"">>, Opts) of
+            ID when ?IS_ID(ID) ->
+                % When we have an ID, we do not merge the globally scoped elements.
+                {
+                    RawMsg,
+                    #{}
+                };
+            <<"">> ->
+                % When we have an empty path, we remove the path from both
+                % messages. AO-Core will then simply set the device specifier
+                % and not execute a subresolve.
+                {
+                    hb_ao:set(RawMsg, <<"path">>, unset, Opts),
+                    hb_ao:set(RawAdditional, <<"path">>, unset, Opts)
+                };
+            _BasePath ->
+                % When we have a non-empty path, we merge the messages in
+                % totality. The path-part's path will be subresolved.
+                {RawMsg, RawAdditional}
+        end,
+    Merged = hb_maps:merge(Additional, Msg, Opts),
     StepMsg = hb_message:convert(
-        Merged = hb_maps:merge(Msg, ScopedKey),
-        <<"structured@1.0">>,
-		Opts#{ topic => ao_internal }
+        Merged, 
+        <<"structured@1.0">>, 
+        Opts#{ topic => ao_internal }
     ),
-    ?event({merged, {dev, DevID}, {input, Msg}, {merged, Merged}, {output, StepMsg}}),
+    ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, Opts)];
-do_build(I, [Msg|Rest], ScopedKeys, Opts) when not is_map(Msg) ->
+do_build(I, [Msg | Rest], ScopedKeys, Opts) when not is_map(Msg) ->
     [Msg | do_build(I + 1, Rest, ScopedKeys, Opts)];
 do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
-    ScopedKey = lists:nth(I, ScopedKeys),
-    StepMsg =
-        hb_message:convert(
-            hb_maps:merge(Msg, ScopedKey),
-            <<"structured@1.0">>,
-            Opts#{ topic => ao_internal }
-        ),
+    Additional = lists:nth(I, ScopedKeys),
+    Merged = hb_maps:merge(Additional, Msg, Opts),
+    StepMsg = hb_message:convert(
+        Merged, 
+        <<"structured@1.0">>, 
+        Opts#{ topic => ao_internal }
+    ),
+    ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
 
 %% @doc Parse a path part into a message or an ID.
@@ -321,7 +336,7 @@ parse_part(Part, Opts) ->
     case maybe_subpath(Part, Opts) of
         {resolve, Subpath} -> {resolve, Subpath};
         Part ->
-            case part([$&, $~, $+, $ ], Part) of
+            case part([$&, $~, $+, $ , $=], Part) of
                 {no_match, PartKey, <<>>} ->
                     #{ <<"path">> => PartKey };
                 {Sep, PartKey, PartModBin} ->
@@ -357,7 +372,13 @@ parse_part_mods(<< "&", InlinedMsgBin/binary >>, Msg, Opts) ->
             Msg,
             InlinedKeys
         ),
-    MsgWithInlined.
+    MsgWithInlined;
+parse_part_mods(<<$=, InlinedMsgBin/binary>>, M = #{ <<"path">> := Path }, Opts)
+        when map_size(M) =:= 1, is_binary(Path) ->
+    parse_part_mods(<< "&", Path/binary, "=", InlinedMsgBin/binary >>, M, Opts);
+parse_part_mods(<<$+, InlinedMsgBin/binary>>, M = #{ <<"path">> := Path }, Opts)
+        when map_size(M) =:= 1, is_binary(InlinedMsgBin) ->
+    parse_part_mods(<< "&", Path/binary, "+", InlinedMsgBin/binary >>, M, Opts).
 
 %% @doc Extrapolate the inlined key-value pair from a path segment. If the
 %% key has a value, it may provide a type (as with typical keys), but if a
@@ -365,10 +386,19 @@ parse_part_mods(<< "&", InlinedMsgBin/binary >>, Msg, Opts) ->
 parse_inlined_key_val(Bin, Opts) ->
     case part([$=, $&], Bin) of
         {no_match, K, <<>>} -> {K, true};
-        {$=, K, V} ->
+        {$=, K, RawV} ->
+            V = unquote(RawV),
             {_, Key, Val} = maybe_typed(K, maybe_subpath(V, Opts), Opts),
             {Key, Val}
     end.
+
+%% @doc Unquote a string.
+unquote(<<"\"", Inner/binary>>) ->
+    case binary:last(Inner) of
+        $" -> binary:part(Inner, 0, byte_size(Inner) - 1);
+        _ -> Inner
+    end;
+unquote(Bin) -> Bin.
 
 %% @doc Attempt Cowboy URL decode, then sanitize the result.
 decode_string(B) ->
@@ -743,6 +773,50 @@ inlined_keys_test() ->
     ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Msg3)),
     ?assertEqual(not_found, hb_maps:get(<<"k1">>, Msg1, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"k2">>, Msg2, not_found)).
+
+inlined_quoted_key_test() ->
+    Req = #{
+        <<"method">> => <<"POST">>,
+        <<"path">> => <<"/a/b&k1=\"v/1\"/c&k2=v2">>
+    },
+    Msgs = from(Req, #{}),
+    ?assertEqual(4, length(Msgs)),
+    [_, Msg1, Msg2, Msg3] = Msgs,
+    ?assertEqual(<<"v/1">>, hb_maps:get(<<"k1">>, Msg2)),
+    ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Msg3)),
+    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Msg1, not_found)),
+    ?assertEqual(not_found, hb_maps:get(<<"k2">>, Msg2, not_found)),
+    ReqB = #{
+        <<"method">> => <<"POST">>,
+        <<"path">> => <<"/~profile@1.0/eval=%22~meta@1.0/info%22">>
+    },
+    MsgsB = from(ReqB, #{}),
+    [_, Msg2b] = MsgsB,
+    ?assertEqual(<<"~meta@1.0/info">>, hb_maps:get(<<"eval">>, Msg2b)).
+
+inlined_assumed_key_test() ->
+    Req = #{
+        <<"method">> => <<"POST">>,
+        <<"path">> => <<"/a/b=4/c&k2=v2">>
+    },
+    Msgs = from(Req, #{}),
+    ?assertEqual(4, length(Msgs)),
+    [_, Msg1, Msg2, Msg3] = Msgs,
+    ?event({parsed, Msgs}),
+    ?assertEqual(<<"4">>, hb_maps:get(<<"b">>, Msg2)),
+    ?assertEqual(not_found, hb_maps:get(<<"b">>, Msg1, not_found)),
+    ?assertEqual(not_found, hb_maps:get(<<"b">>, Msg3, not_found)),
+    ReqB = #{
+        <<"method">> => <<"POST">>,
+        <<"path">> => <<"/a/b+integer=4/c&k2=v2">>
+    },
+    MsgsB = from(ReqB, #{}),
+    [_, Msg1b, Msg2b, Msg3b] = MsgsB,
+    ?event({parsed, MsgsB}),
+    ?assertEqual(4, hb_maps:get(<<"b">>, Msg2b)),
+    ?assertEqual(not_found, hb_maps:get(<<"b">>, Msg1b, not_found)),
+    ?assertEqual(not_found, hb_maps:get(<<"b">>, Msg3b, not_found)).
+
 
 multiple_inlined_keys_test() ->
     Path = <<"/a/b&k1=v1&k2=v2">>,

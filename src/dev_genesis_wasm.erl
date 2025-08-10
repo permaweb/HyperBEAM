@@ -13,34 +13,50 @@
 init(Msg, _Msg2, _Opts) -> {ok, Msg}.
 
 %% @doc Normalize the device.
-normalize(Msg, _Msg2, _Opts) -> {ok, Msg}.
-
-%% @doc Snapshot the device.
-snapshot(Msg, _Msg2, _Opts) -> {ok, Msg}.
+normalize(Msg, Msg2, Opts) ->
+    dev_delegated_compute:normalize(Msg, Msg2, Opts).
 
 %% @doc All the `delegated-compute@1.0' device to execute the request. We then apply
 %% the `patch@1.0' device, applying any state patches that the AO process may have
 %% requested.
 compute(Msg, Msg2, Opts) ->
     % Validate whether the genesis-wasm feature is enabled.
+    case delegate_request(Msg, Msg2, Opts) of
+        {ok, Msg3} ->
+            % Resolve the `patch@1.0' device.
+            {ok, Msg4} =
+                hb_ao:resolve(
+                    Msg3,
+                    {
+                        as,
+                        <<"patch@1.0">>,
+                        Msg2#{ <<"patch-from">> => <<"/results/outbox">> }
+                    },
+                    Opts
+                ),
+            % Return the patched message.
+            {ok, Msg4};
+        {error, Error} ->
+            % Return the error.
+            {error, Error}
+    end.
+
+%% @doc Snapshot the state of the process via the `delegated-compute@1.0' device.
+snapshot(Msg, Msg2, Opts) ->
+    delegate_request(Msg, Msg2, Opts).
+
+%% @doc Proxy a request to the delegated-compute@1.0 device, ensuring that
+%% the server is running.
+delegate_request(Msg, Msg2, Opts) ->
+    % Validate whether the genesis-wasm feature is enabled.
     case ensure_started(Opts) of
         true ->
             % Resolve the `delegated-compute@1.0' device.
             case hb_ao:resolve(Msg, {as, <<"delegated-compute@1.0">>, Msg2}, Opts) of
                 {ok, Msg3} ->
-                    % Resolve the `patch@1.0' device.
-                    {ok, Msg4} =
-                        hb_ao:resolve(
-                            Msg3,
-                            {
-                                as,
-                                <<"patch@1.0">>,
-                                Msg2#{ <<"patch-from">> => <<"/results/outbox">> }
-                            },
-                            Opts
-                        ),
                     % Return the patched message.
-                    {ok, Msg4};
+                    ?event({delegated_compute_resolved, {req, Msg2}, {msg, Msg3}}),
+                    {ok, Msg3};
                 {error, Error} ->
                     % Return the error.
                     {error, Error}
@@ -69,7 +85,15 @@ ensure_started(Opts) ->
                 filename:join([Cwd, "genesis-wasm-server"]);
             _ ->
                 % We're in development mode - look in the build directory
-                DevPath = filename:join([Cwd, "_build", "genesis_wasm", "genesis-wasm-server"]),
+                DevPath =
+                    filename:join(
+                        [
+                            Cwd,
+                            "_build",
+                            "genesis_wasm",
+                            "genesis-wasm-server"
+                        ]
+                    ),
                 case filelib:is_dir(DevPath) of
                     true -> DevPath;
                     false -> filename:join([Cwd, "genesis-wasm-server"]) % Fallback
@@ -120,11 +144,16 @@ ensure_started(Opts) ->
                         Port =
                             open_port(
                                 {spawn_executable,
-                                    filename:join([GenesisWasmServerDir, "launch-monitored.sh"])
+                                    filename:join(
+                                        [
+                                            GenesisWasmServerDir,
+                                            "launch-monitored.sh"
+                                        ]
+                                    )
                                 },
                                 [
                                     binary, use_stdio, stderr_to_stdout,
-                                    {args, [
+                                    {args, Args = [
                                         "npm",
                                         "--prefix",
                                         GenesisWasmServerDir,
@@ -132,7 +161,7 @@ ensure_started(Opts) ->
                                         "start"
                                     ]},
                                     {env,
-                                        [
+                                        Env = [
                                             {"UNIT_MODE", "hbu"},
                                             {"HB_URL", NodeURL},
                                             {"PORT",
@@ -173,6 +202,13 @@ ensure_started(Opts) ->
                                 ]
                             ),
                         ?event({genesis_wasm_port_opened, {port, Port}}),
+                        ?event(
+                            debug_genesis,
+                            {started_genesis_wasm,
+                                {args, Args},
+                                {env, maps:from_list(Env)}
+                            }
+                        ),
                         collect_events(Port)
                     end
                 ),

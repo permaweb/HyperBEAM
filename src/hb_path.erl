@@ -312,7 +312,11 @@ matches(Key1, Key2) ->
 %% @doc Check if two keys match using regex.
 regex_matches(Path1, Path2) ->
     NormP1 = normalize(hb_ao:normalize_key(Path1)),
-    NormP2 = normalize(hb_ao:normalize_key(Path2)),
+    NormP2 =
+        case hb_ao:normalize_key(Path2) of
+            Normalized = <<"^", _/binary>> -> Normalized;
+            Normalized -> normalize(Normalized)
+        end,
     try re:run(NormP1, NormP2) =/= nomatch
     catch _A:_B:_C -> false
     end.

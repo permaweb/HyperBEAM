@@ -9,25 +9,11 @@
 %% The number of iterations to run each benchmark for.
 -define(BENCHMARK_ITERATIONS, 1_000).
 
-%% Easy hook to make a test executable via the command line:
+%% @doc Easy hook to make a test executable via the command line:
 %% `rebar3 eunit --test hb_ao_test_vectors:run_test'
 %% Comment/uncomment out as necessary.
-% run_test_() ->
-%     {timeout, 10, fun() ->
-%         hb_test_utils:compare_events(
-%             fun dev_lua:pure_lua_process_benchmark/1,
-%             #{
-%                 process_cache_frequency => 50,
-%                 hashpath => ignore
-%             },
-%             #{
-%                 process_cache_frequency => 50
-%             }
-%             % normal,
-%             % without_hashpath,
-%             % test_opts()
-%         )
-%     end}.
+run_test() ->
+    multiple_as_subresolutions_test(#{}).
 
 %% @doc Run each test in the file with each set of options. Start and reset
 %% the store for each test.
@@ -53,6 +39,8 @@ test_suite() ->
             fun as_path_test/1},
         {continue_as, "continue as",
             fun continue_as_test/1},
+        {multiple_as_subresolutions, "multiple as subresolutions",
+            fun multiple_as_subresolutions_test/1},
         {resolve_key_twice, "resolve key twice",
             fun resolve_key_twice_test/1},
         {resolve_from_multiple_keys, "resolve from multiple keys",
@@ -820,6 +808,34 @@ continue_as_test(Opts) ->
             Opts
         )
     ).
+
+multiple_as_subresolutions_test(Opts) ->
+    % Test that multiple as subresolutions in a sequence are handled correctly.
+    Msg = #{
+        <<"device">> => <<"test-device@1.0">>,
+        <<"test-message">> =>
+            #{
+                <<"test-key">> => <<"MESSAGE-1">>,
+                <<"test-message-2">> =>
+                    #{ <<"test-key-2">> => <<"MESSAGE-2">> }
+            }
+    },
+    Res = hb_ao:resolve_many(
+        [
+            {as, <<"message@1.0">>, Msg},
+            #{ <<"path">> => <<"test-message">> },
+            #{ <<"path">> => <<"test-message-2">>, <<"extraneous">> => <<"1">> },
+            <<"test-key-2">>
+        ],
+        Opts
+    ),
+    ?assertEqual({ok, <<"MESSAGE-2">>}, Res),
+    % Attempt to resolve a sequence of more complex messages.
+    Path = <<"/~meta@1.0/info/~hyperbuddy@1.0/format">>,
+    Parsed = hb_singleton:from(Path, Opts),
+    ?event(subresolution, {parsed_sequence, Parsed}),
+    Res2 = hb_ao:resolve(Path, Opts),
+    ?assertMatch({ok, #{ <<"body">> := Bin }} when is_binary(Bin), Res2).
 
 step_hook_test(InitOpts) ->
     % Test that the step hook is called correctly. We do this by sending ourselves

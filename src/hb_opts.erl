@@ -14,10 +14,82 @@
 %%% with a refusal to execute.
 -module(hb_opts).
 -export([get/1, get/2, get/3, as/2, identities/1, load/1, load/2, load_bin/2]).
--export([default_message/0, mimic_default_types/3]).
+-export([default_message/0, default_message_with_env/0, mimic_default_types/3]).
 -export([ensure_node_history/2]).
 -export([check_required_opts/2]).
 -include("include/hb.hrl").
+
+%%% Environment variables that can be used to override the default message.
+-ifdef(TEST).
+-define(DEFAULT_PRINT_OPTS, [error, http_error]).
+-else.
+-define(DEFAULT_PRINT_OPTS,
+    [error, http_error, http_short, compute_short, push_short]
+).
+-endif.
+-define(DEFAULT_PRIMARY_STORE, #{
+    <<"name">> => <<"cache-mainnet/lmdb">>,
+    <<"store-module">> => hb_store_lmdb
+}).
+-define(ENV_KEYS,
+    #{
+        priv_key_location => {"HB_KEY", "hyperbeam-key.json"},
+        hb_config_location => {"HB_CONFIG", "config.flat"},
+        port => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
+        mode => {"HB_MODE", fun list_to_existing_atom/1},
+        debug_print =>
+            {"HB_PRINT",
+                fun
+                    ({preparsed, Parsed}) -> Parsed;
+                    (Str) when Str == "1" -> true;
+                    (Str) when Str == "true" -> true;
+                    (Str) ->
+                        lists:map(
+                            fun(Topic) -> list_to_atom(Topic) end,
+                            string:tokens(Str, ",")
+                        )
+                end,
+                {preparsed, ?DEFAULT_PRINT_OPTS}
+            },
+        lua_scripts => {"LUA_SCRIPTS", "scripts"},
+        lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests},
+        default_index =>
+            {
+                "HB_INDEX",
+                fun("ui") ->
+                    #{
+                        <<"device">> => <<"hyperbuddy@1.0">>
+                    };
+                   ("text") ->
+                    #{
+                        <<"device">> => <<"hyperbuddy@1.0">>,
+                        <<"path">> => <<"format">>
+                    };
+                   (Str) ->
+                    case string:tokens(Str, "/") of
+                        [Device, Path] ->
+                            #{ <<"device">> => Device, <<"path">> => Path };
+                        [Device] ->
+                            #{ <<"device">> => Device }
+                    end
+                end,
+                "ui"
+            }
+    }
+).
+
+%% @doc Return the default message with all environment variables set.
+default_message_with_env() ->
+    maps:fold(
+        fun(Key, _Spec, NodeMsg) ->
+            case global_get(Key, undefined, #{}) of
+                undefined -> NodeMsg;
+                Value -> NodeMsg#{ Key => Value }
+            end
+        end,
+        default_message(),
+        ?ENV_KEYS
+    ).
 
 %% @doc The default configuration options of the hyperbeam node.
 default_message() ->
@@ -50,10 +122,12 @@ default_message() ->
         %% resolution of devices via ID to the default implementations.
         preloaded_devices => [
             #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
+            #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
             #{<<"name">> => <<"compute@1.0">>, <<"module">> => dev_cu},
             #{<<"name">> => <<"cache@1.0">>, <<"module">> => dev_cache},
             #{<<"name">> => <<"cacheviz@1.0">>, <<"module">> => dev_cacheviz},
+            #{<<"name">> => <<"cookie@1.0">>, <<"module">> => dev_codec_cookie},
             #{<<"name">> => <<"cron@1.0">>, <<"module">> => dev_cron},
             #{<<"name">> => <<"dedup@1.0">>, <<"module">> => dev_dedup},
             #{<<"name">> => <<"delegated-compute@1.0">>, <<"module">> => dev_delegated_compute},
@@ -62,6 +136,8 @@ default_message() ->
             #{<<"name">> => <<"genesis-wasm@1.0">>, <<"module">> => dev_genesis_wasm},
             #{<<"name">> => <<"greenzone@1.0">>, <<"module">> => dev_green_zone},
             #{<<"name">> => <<"httpsig@1.0">>, <<"module">> => dev_codec_httpsig},
+            #{<<"name">> => <<"http-auth@1.0">>, <<"module">> => dev_codec_http_auth},
+            #{<<"name">> => <<"hook@1.0">>, <<"module">> => dev_hook},
             #{<<"name">> => <<"hyperbuddy@1.0">>, <<"module">> => dev_hyperbuddy},
             #{<<"name">> => <<"json@1.0">>, <<"module">> => dev_codec_json},
             #{<<"name">> => <<"json-iface@1.0">>, <<"module">> => dev_json_iface},
@@ -91,6 +167,7 @@ default_message() ->
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
 			#{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
+            #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
             #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
@@ -127,10 +204,10 @@ default_message() ->
         % should be recorded here.
         node_history => [],
         debug_stack_depth => 40,
+        debug_print => false,
         debug_print_map_line_threshold => 30,
         debug_print_binary_max => 60,
         debug_print_indent => 2,
-        debug_print => false,
         stack_print_prefixes => ["hb", "dev", "ar", "maps"],
         debug_print_trace => short, % `short` | `false`. Has performance impact.
         short_trace_len => 20,
@@ -149,6 +226,11 @@ default_message() ->
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
                 <<"template">> => <<"/result/.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
+            },
+            #{
+                % Routes for the genesis-wasm device to use a local CU, if requested.
+                <<"template">> => <<"/snapshot/.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
             #{
@@ -178,19 +260,7 @@ default_message() ->
         ],
         store =>
             [
-                % #{
-                %     <<"name">> => <<"cache-mainnet/lru">>,
-                %     <<"capacity">> => 512 * 1024 * 1024,
-                %     <<"store-module">> => hb_store_lru,
-                %     <<"persistent-store">> => #{
-                %         <<"store-module">> => hb_store_fs,
-                %         <<"name">> => <<"cache-mainnet/lru">>
-                %     }
-                % },
-                #{
-                    <<"name">> => <<"cache-mainnet/lmdb">>,
-                    <<"store-module">> => hb_store_lmdb
-                },
+                ?DEFAULT_PRIMARY_STORE,
                 #{
                     <<"store-module">> => hb_store_fs,
                     <<"name">> => <<"cache-mainnet">>
@@ -203,26 +273,21 @@ default_message() ->
                             <<"value">> => <<"ao">>
                         }
                     ],
-                    <<"store">> => 
-                    [
-                        #{
-                            <<"store-module">> => hb_store_lmdb,
-                            <<"name">> => <<"cache-mainnet/lmdb">>
-                        }
-                    ]
+                    <<"store">> => [?DEFAULT_PRIMARY_STORE]
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
-                    <<"store">> =>
-                        [
-                            #{
-                                <<"store-module">> => hb_store_lmdb,
-                                <<"name">> => <<"cache-mainnet/lmdb">>
-                            }
-                        ]
+                    <<"store">> => [?DEFAULT_PRIMARY_STORE]
                 }
             ],
-        default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
+        priv_store =>
+            [
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"name">> => <<"cache-priv">>
+                }
+            ],
+        %default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
         % Should we use the latest cached state of a process when computing?
         process_now_from_cache => false,
         % Should we trust the GraphQL API when converting to ANS-104? Some GQL
@@ -239,8 +304,23 @@ default_message() ->
         % Should the node use persistent processes?
         process_workers => false,
         % Options for the router device
-        <<"router_opts">> => #{
+        router_opts => #{
             routes => []
+        },
+        on => #{
+            <<"request">> => #{
+                <<"device">> => <<"auth-hook@1.0">>,
+                <<"path">> => <<"request">>,
+                <<"when">> => #{
+                    <<"keys">> => [<<"authorization">>, <<"!">>]
+                },
+                <<"secret-provider">> =>
+                    #{
+                        <<"device">> => <<"http-auth@1.0">>,
+                        <<"access-control">> =>
+                            #{ <<"device">> => <<"http-auth@1.0">> }
+                    }
+            }
         }
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
@@ -296,37 +376,6 @@ do_get(Key, Default, Opts = #{ prefer := local }) ->
 do_get(Key, Default, Opts) ->
     % No preference was set in Opts, so we default to local.
     do_get(Key, Default, Opts#{ prefer => local }).
-
--ifdef(TEST).
--define(DEFAULT_PRINT_OPTS, [error, http_error]).
--else.
--define(DEFAULT_PRINT_OPTS, [error, http_error, http_short, compute_short, push_short]).
--endif.
-
--define(ENV_KEYS,
-    #{
-        priv_key_location => {"HB_KEY", "hyperbeam-key.json"},
-        hb_config_location => {"HB_CONFIG", "config.flat"},
-        port => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
-        mode => {"HB_MODE", fun list_to_existing_atom/1},
-        debug_print =>
-            {"HB_PRINT",
-                fun
-                    ({preparsed, Parsed}) -> Parsed;
-                    (Str) when Str == "1" -> true;
-                    (Str) when Str == "true" -> true;
-                    (Str) ->
-                        lists:map(
-                            fun(Topic) -> list_to_atom(Topic) end,
-                            string:tokens(Str, ",")
-                        )
-                end,
-                {preparsed, ?DEFAULT_PRINT_OPTS}
-            },
-        lua_scripts => {"LUA_SCRIPTS", "scripts"},
-        lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests}
-    }
-).
 
 %% @doc Get an environment variable or configuration key. Depending on whether
 %% the value is derived from an environment variable, we may be able to cache
@@ -393,12 +442,45 @@ config_lookup(Key, Default, _Opts) -> maps:get(Key, default_message(), Default).
 %% keys to those in the default message.
 load(Path) -> load(Path, #{}).
 load(Path, Opts) ->
+    {ok, Device} = path_to_device(Path),
     case file:read_file(Path) of
         {ok, Bin} ->
-            load_bin(Bin, Opts);
+            load_bin(Device, Bin, Opts);
         _ -> {error, not_found}
     end.
+
+%% @doc Convert a path to a device from its file extension. If no extension is
+%% provided, we default to `flat@1.0'.
+path_to_device(Path) ->
+    case binary:split(hb_util:bin(Path), <<".">>, []) of
+        [_, Extension] ->
+            ?event(debug_node_msg,
+                {path_to_device,
+                    {path, Path},
+                    {extension, Extension}
+                }
+            ),
+            extension_to_device(Extension);
+        _ -> {ok, <<"flat@1.0">>}
+    end.
+
+%% @doc Convert a file extension to a device name.
+extension_to_device(Ext) ->
+    extension_to_device(Ext, maps:get(preloaded_devices, default_message())).
+extension_to_device(_, []) -> {error, not_found};
+extension_to_device(Ext, [#{ <<"name">> := Name }|Rest]) ->
+    ?event(debug_node_msg, {extension_to_device, {extension, Ext}, {name, Name}}),
+    case binary:match(Name, Ext) of
+        nomatch -> extension_to_device(Ext, Rest);
+        {0, _} -> {ok, Name}
+    end.
+
+%% @doc Parse a given binary with a device (defaulting to `flat@1.0') into a
+%% node message. Types are converted to match those in the default message, if
+%% applicable.
 load_bin(Bin, Opts) ->
+    load_bin(<<"flat@1.0">>, Bin, Opts).
+load_bin(<<"flat@1.0">>, Bin, Opts) ->
     % Trim trailing whitespace from each line in the file.
     Ls =
         lists:map(
@@ -410,11 +492,23 @@ load_bin(Bin, Opts) ->
             {ok, mimic_default_types(Map, new_atoms, Opts)}
     catch
         error:B -> {error, B}
+    end;
+load_bin(Device, Bin, Opts) ->
+    try
+        {
+            ok,
+            mimic_default_types(
+                hb_message:convert(Bin, <<"structured@1.0">>, Device, Opts),
+                new_atoms,
+                Opts
+            )
+        }
+    catch error:B -> {error, B}
     end.
 
 %% @doc Mimic the types of the default message for a given map.
 mimic_default_types(Map, Mode, Opts) ->
-    Default = default_message(),
+    Default = default_message_with_env(),
     hb_maps:from_list(lists:map(
         fun({Key, Value}) ->
             NewKey = try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end,
@@ -631,7 +725,7 @@ global_preference_test() ->
         ?MODULE:get(mode, undefined, Global#{ mode => incorrect })),
     ?assertNotEqual(undefined, ?MODULE:get(mode, undefined, Global)).
 
-load_test() ->
+load_flat_test() ->
     % File contents:
     % port: 1234
     % host: https://ao.computer
@@ -640,6 +734,16 @@ load_test() ->
     ?event({loaded, {explicit, Conf}}),
     % Ensure we convert types as expected.
     ?assertEqual(1234, hb_maps:get(port, Conf)),
+    % A binary
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
+    % An atom, where the key contained a header-key `-' rather than a `_'.
+    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)).
+
+load_json_test() ->
+    {ok, Conf} = load("test/config.json", #{}),
+    ?event(debug_node_msg, {loaded, {explicit, Conf}}),
+    ?assertEqual(1234, hb_maps:get(port, Conf)),
+    ?assertEqual(9001, hb_maps:get(example, Conf)),
     % A binary
     ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.

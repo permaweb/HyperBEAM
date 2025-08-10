@@ -359,17 +359,24 @@ verify(Msg, all, Opts) ->
     verify(Msg, <<"all">>, Opts);
 verify(Msg, signers, Opts) ->
     verify(Msg, hb_message:signers(Msg, Opts), Opts);
-verify(Msg, Committers, Opts) ->
+verify(Msg, Committers, Opts) when not is_map(Committers) ->
+    verify(
+        Msg,
+        #{
+            <<"committers">> =>
+                case ?IS_ID(Committers) of
+                    true -> [Committers];
+                    false -> Committers
+                end
+        },
+        Opts
+    );
+verify(Msg, Spec, Opts) ->
+    ?event(verify, {verify, {spec, Spec}}),
     {ok, Res} =
         dev_message:verify(
             Msg,
-            #{
-                <<"committers">> =>
-                    case ?IS_ID(Committers) of
-                        true -> [Committers];
-                        false -> Committers
-                    end
-            },
+            Spec,
             Opts
         ),
     Res.
@@ -401,8 +408,30 @@ format(Bin, Opts, Indent) when is_binary(Bin) ->
         Indent
     );
 format(List, Opts, Indent) when is_list(List) ->
-    format(lists:map(fun hb_ao:normalize_key/1, List), Opts, Indent);
-format(Map, Opts, Indent) when is_map(Map) ->
+    % Remove the leading newline from the formatted list, if it exists.
+    case hb_util:debug_format(List, Opts, Indent) of
+        [$\n | String] -> String;
+        String -> String
+    end;
+format(RawMap, Opts, Indent) when is_map(RawMap) ->
+    % Should we filter out the priv key?
+    FilterPriv = hb_opts:get(debug_show_priv, false, Opts),
+    MainPriv = hb_maps:get(<<"priv">>, RawMap, #{}, Opts),
+    % Add private keys to the output if they are not hidden. Opt takes 3 forms:
+    % 1. `false' -- never show priv
+    % 2. `if_present' -- show priv only if there are keys inside
+    % 2. `always' -- always show priv
+    FooterKeys =
+        case {FilterPriv, MainPriv} of
+            {false, _} -> [];
+            {if_present, #{}} -> [];
+            {_, Priv} -> [{<<"!Private!">>, Priv}]
+        end,
+    Map =
+        case FilterPriv of
+            false -> RawMap;
+            _ -> hb_private:reset(RawMap)
+        end,
     % Define helper functions for formatting elements of the map.
     ValOrUndef =
         fun(<<"hashpath">>) ->
@@ -501,16 +530,6 @@ format(Map, Opts, Indent) when is_map(Map) ->
             {<<"path">>, ValOrUndef(<<"path">>)},
             {<<"device">>, ValOrUndef(<<"device">>)}
         ],
-    % Add private keys to the output if they are not hidden. Opt takes 3 forms:
-    % 1. `false' -- never show priv
-    % 2. `if_present' -- show priv only if there are keys inside
-    % 2. `always' -- always show priv
-    FooterKeys =
-        case {hb_opts:get(debug_show_priv, false, Opts), hb_maps:get(<<"priv">>, Map, #{}, Opts)} of
-            {false, _} -> [];
-            {if_present, #{}} -> [];
-            {_, Priv} -> [{<<"!Private!">>, Priv}]
-        end,
     % Concatenate the path and device rows with the rest of the key values.
     UnsortedGeneralKeyVals =
         maps:to_list(
@@ -544,6 +563,8 @@ format(Map, Opts, Indent) when is_map(Map) ->
                     case Val of
                         NextMap when is_map(NextMap) ->
                             hb_util:format_maybe_multiline(NextMap, Opts, Indent + 2);
+                        NextList when is_list(NextList) ->
+                            hb_util:debug_format(NextList, Opts, Indent + 2);
                         _ when (byte_size(Val) == 32) or (byte_size(Val) == 43) ->
                             Short = hb_util:short_id(Val),
                             io_lib:format("~s [*]", [Short]);

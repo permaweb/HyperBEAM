@@ -53,7 +53,11 @@
 %% form.
 ensure_loaded(Msg) ->
     ensure_loaded(Msg, #{}).
-ensure_loaded(Lk = {link, ID, LkOpts = #{ <<"type">> := <<"link">>, <<"lazy">> := Lazy }}, RawOpts) ->
+ensure_loaded(Msg, Opts) ->
+    ensure_loaded([], Msg, Opts).
+ensure_loaded(Ref,
+        Lk = {link, ID, LkOpts = #{ <<"type">> := <<"link">>, <<"lazy">> := Lazy }},
+        RawOpts) ->
     % The link is to a submessage; either in lazy (unresolved) form, or direct
     % form.
     Opts = hb_store:scope(RawOpts, local),
@@ -92,10 +96,9 @@ ensure_loaded(Lk = {link, ID, LkOpts = #{ <<"type">> := <<"link">>, <<"lazy">> :
                     Next
             end;
         not_found ->
-            ?event(debug_cache, {lazy_link_not_found, {link, ID}, {link_opts, LkOpts}}),
-            throw({necessary_message_not_found, Lk})
+            report_ensure_loaded_not_found(Ref, Lk, Opts)
     end;
-ensure_loaded(Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
+ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
     % If the user provided their own options, we merge them and _overwrite_
     % the options that are already set in the link.
     Opts = hb_store:scope(RawOpts, local),
@@ -114,12 +117,24 @@ ensure_loaded(Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
                 Type -> dev_codec_structured:decode_value(Type, LoadedMsg)
             end;
         not_found ->
-            throw({necessary_message_not_found, Link})
+            report_ensure_loaded_not_found(Ref, Link, Opts)
     end;
-ensure_loaded({link, ID, LinkOpts}, Opts) ->
-	ensure_loaded({link, ID, LinkOpts#{ <<"lazy">> => true}}, Opts);
-ensure_loaded(Msg, _Opts) when not ?IS_LINK(Msg) ->
+ensure_loaded(Ref, {link, ID, LinkOpts}, Opts) ->
+	ensure_loaded(Ref, {link, ID, LinkOpts#{ <<"lazy">> => true}}, Opts);
+ensure_loaded(_Ref, Msg, _Opts) when not ?IS_LINK(Msg) ->
     Msg.
+
+%% @doc Report that a value was not found in the cache. If a key is provided,
+%% we report that the key was not found, otherwise we report that the link was
+%% not found.
+report_ensure_loaded_not_found(Ref, Lk, Opts) ->
+    ?event(link_error, {link_not_resolvable, {ref, Ref}, {link, Lk}, {opts, Opts}}),
+    throw(
+        {necessary_message_not_found,
+            hb_path:to_binary(lists:reverse(Ref)),
+            hb_link:format_unresolved(Lk)
+        }
+    ).
 
 %% @doc Ensure that all of the components of a message (whether a map, list,
 %% or immediate value) are recursively fully loaded from the stores into memory.
@@ -128,14 +143,19 @@ ensure_loaded(Msg, _Opts) when not ?IS_LINK(Msg) ->
 %% performance costs.
 ensure_all_loaded(Msg) ->
     ensure_all_loaded(Msg, #{}).
-ensure_all_loaded(Link, Opts) when ?IS_LINK(Link) ->
-    ensure_all_loaded(ensure_loaded(Link, Opts), Opts);
-ensure_all_loaded(Msg, Opts) when is_map(Msg) ->
-    hb_maps:map(fun(_K, V) -> ensure_all_loaded(V, Opts) end, Msg, Opts);
-ensure_all_loaded(Msg, Opts) when is_list(Msg) ->
-    lists:map(fun(V) -> ensure_all_loaded(V, Opts) end, Msg);
 ensure_all_loaded(Msg, Opts) ->
-    ensure_loaded(Msg, Opts).
+    ensure_all_loaded([], Msg, Opts).
+ensure_all_loaded(Ref, Link, Opts) when ?IS_LINK(Link) ->
+    ensure_all_loaded(Ref, ensure_loaded(Ref, Link, Opts), Opts);
+ensure_all_loaded(Ref, Msg, Opts) when is_map(Msg) ->
+    maps:map(fun(K, V) -> ensure_all_loaded([K|Ref], V, Opts) end, Msg);
+ensure_all_loaded(Ref, Msg, Opts) when is_list(Msg) ->
+    lists:map(
+        fun({N, V}) -> ensure_all_loaded([N|Ref], V, Opts) end,
+        hb_util:number(Msg)
+    );
+ensure_all_loaded(Ref, Msg, Opts) ->
+    ensure_loaded(Ref, Msg, Opts).
 
 %% @doc List all items in a directory, assuming they are numbered.
 list_numbered(Path, Opts) ->

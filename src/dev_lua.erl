@@ -652,7 +652,7 @@ pure_lua_process_benchmark_test_() ->
         30,
         fun() ->
             pure_lua_process_benchmark(#{
-                process_cache_frequency => 50
+                process_snapshot_slots => 50
             })
     end}.
 pure_lua_process_benchmark(Opts) ->
@@ -725,7 +725,7 @@ aos_process_benchmark_test_() ->
         Opts = #{
             process_async_cache => true,
             hashpath => ignore,
-            process_cache_frequency => 50
+            process_snapshot_slots => 50
         },
         Process = generate_lua_process("test/hyper-aos.lua", Opts),
         Message = generate_test_message(Process, Opts),

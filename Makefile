@@ -6,7 +6,7 @@ compile:
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
 
-GENESIS_WASM_BRANCH = tillathehun0/cu-experimental
+GENESIS_WASM_BRANCH = feat/http-checkpoint
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
 GENESIS_WASM_SERVER_DIR = _build/genesis_wasm/genesis-wasm-server
 

@@ -53,15 +53,17 @@ index(Msg, Req, Opts) ->
             {error, <<"No default index message set.">>};
         DefaultIndex ->
             hb_ao:resolve(
-                maps:merge(
-                    Msg,
-                    if is_map(DefaultIndex) -> DefaultIndex;
-                       is_binary(DefaultIndex) -> {as, DefaultIndex, Msg}
-                    end
-                ),
+                case is_map(DefaultIndex) of
+                    true -> maps:merge(Msg, DefaultIndex);
+                    false -> {as, DefaultIndex, Msg}
+                end,
                 Req#{
                     <<"path">> =>
-                        hb_opts:get(default_index_path, <<"index">>, Opts)
+                        case hb_maps:find(<<"path">>, DefaultIndex, Opts) of
+                            {ok, Path} -> Path;
+                            _ ->
+                                hb_opts:get(default_index_path, <<"index">>, Opts)
+                        end
                 },
                 Opts
             )
@@ -288,6 +290,16 @@ verify(Self, Req, Opts) ->
     ?event(verify, {verify, {base_found, Base}}),
     Commitments = maps:get(<<"commitments">>, Base, #{}),
     IDsToVerify = commitment_ids_from_request(Base, Req, Opts),
+    % Generate the new commitment request base messsage by removing the keys
+    % used by this function (path, committers, commitments) and returning the
+    % remaining keys. This message will then be merged with each commitment
+    % message to generate the final request, allowing the caller to pass 
+    % additional keys to the commitment device.
+    ReqBase =
+        maps:without(
+            [<<"path">>, <<"committers">>, <<"commitments">>],
+            Req
+        ),
     % Verify the commitments. Stop execution if any fail.
     Res =
         lists:all(
@@ -295,7 +307,10 @@ verify(Self, Req, Opts) ->
                 {ok, Res} =
                     verify_commitment(
                         Base,
-                        maps:get(CommitmentID, Commitments),
+                        maps:merge(
+                            ReqBase,
+                            maps:get(CommitmentID, Commitments)
+                        ),
                         Opts
                     ),
                 ?event(verify,
@@ -451,14 +466,9 @@ commitment_ids_from_request(Base, Req, Opts) ->
             <<"none">> -> [];
             <<"all">> -> hb_maps:keys(Commitments, Opts);
             CommitmentIDs ->
-                CommitmentIDs =
-                    if is_list(CommitmentIDs) -> CommitmentIDs;
-                    true -> [CommitmentIDs]
-                    end,
-                lists:map(
-                    fun(CommitmentID) -> maps:get(CommitmentID, Commitments) end,
-                    CommitmentIDs
-                )
+                if is_list(CommitmentIDs) -> CommitmentIDs;
+                true -> [CommitmentIDs]
+                end
         end,
     FromCommitterAddrs =
         case ReqCommitters of
@@ -598,7 +608,7 @@ set(Message1, NewValuesMsg, Opts) ->
         ),
     % Base message with keys-to-unset removed
     BaseValues = hb_maps:without(UnsetKeys, Message1, Opts),
-    ?event(
+    ?event(message_set,
         {performing_set,
             {conflicting_keys, ConflictingKeys},
             {keys_to_unset, UnsetKeys},
@@ -628,11 +638,13 @@ set(Message1, NewValuesMsg, Opts) ->
             },
             Opts
         ),
-    ?event({setting,
-        {committed_keys, CommittedKeys},
-        {keys_to_set, KeysToSet},
-        {message, Message1}
-    }),
+    ?event(message_set,
+        {setting,
+            {committed_keys, CommittedKeys},
+            {keys_to_set, KeysToSet},
+            {message, Message1}
+        }
+    ),
     OverwrittenCommittedKeys =
         lists:filtermap(
             fun(Key) ->
@@ -657,23 +669,54 @@ set(Message1, NewValuesMsg, Opts) ->
             OriginalPriv
         ),
     case OverwrittenCommittedKeys of
-        [] -> {ok, Merged};
+        [] ->
+            ?event(message_set, {no_overwritten_committed_keys, {merged, Merged}}),
+            {ok, Merged};
         _ ->
             % We did overwrite some keys, but do their values match the original?
             % If not, we must remove the commitments.
             case hb_message:match(Merged, Message1, Opts) of
-                true -> {ok, Merged};
-                _ -> {ok, hb_maps:without([<<"commitments">>], Merged, Opts)}
+                true ->
+                    ?event(message_set, {set_keys_matched, {merged, Merged}}),
+                    {ok, Merged};
+                _ ->
+                    ?event(
+                        message_set,
+                        {set_conflict_removing_commitments, {merged, Merged}}
+                    ),
+                    {ok, hb_maps:without([<<"commitments">>], Merged, Opts)}
             end
     end.
 
 %% @doc Special case of `set/3' for setting the `path' key. This cannot be set
-%% using the normal `set' function, as the `path' is a reserved key, necessary 
-%% for AO-Core to know the key to evaluate in requests.
-set_path(Message1, #{ <<"value">> := unset }, _Opts) ->
-    {ok, maps:without([<<"path">>], Message1)};
-set_path(Message1, #{ <<"value">> := Value }, _Opts) ->
-    {ok, Message1#{ <<"path">> => Value }}.
+%% using the normal `set' function, as the `path' is a reserved key, used to
+%% transmit the present key that is being executed. Subsequently, to call `path'
+%% we would need to set `path' to `set', removing the ability to specify its 
+%% new value.
+set_path(Base, #{ <<"value">> := Value }, Opts) ->
+    set_path(Base, Value, Opts);
+set_path(Base, Value, Opts) when not is_map(Value) ->
+    % Determine whether the `path' key is committed. If it is, we remove the
+    % commitment if the new value is different. We try to minimize work by
+    % doing the `hb_maps:get` first, as it is far cheaper than calculating
+    % the committed keys.
+    BaseWithCorrectedComms =
+        case hb_maps:get(<<"path">>, Base, undefined, Opts) of
+            Value -> Base;
+            _ ->
+                % The new value is different, but is it committed? If so, we
+                % must remove the commitments.
+                case hb_message:is_signed_key(<<"path">>, Base, Opts) of
+                  true -> hb_message:uncommitted(Base, Opts);
+                  false -> Base
+                end
+        end,
+    case Value of
+        unset ->
+            {ok, hb_maps:without([<<"path">>], BaseWithCorrectedComms, Opts)};
+        _ ->
+            BaseWithCorrectedComms#{ <<"path">> => Value }
+    end.
 
 %% @doc Remove a key or keys from a message.
 remove(Message1, Key) ->

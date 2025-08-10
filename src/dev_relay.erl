@@ -136,7 +136,7 @@ call(M1, RawM2, Opts) ->
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
     HTTPOpts = Opts#{ http_client => Client, http_only_result => false },
-    case RelayPeer of
+    Res = case RelayPeer of
         not_found ->
             hb_http:request(TargetMod4, HTTPOpts);
         _ ->
@@ -148,7 +148,13 @@ call(M1, RawM2, Opts) ->
                 TargetMod4,
                 HTTPOpts
             )
+    end,
+    case Res of
+        {ok, R} ->
+            {ok, hb_maps:without([<<"set-cookie">>], R)};
+        Err -> Err
     end.
+
 
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.

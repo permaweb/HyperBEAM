@@ -13,6 +13,7 @@
 %%% allow us to test multiple HashPath algorithms in HyperBEAM.
 -module(hb_crypto).
 -export([sha256/1, sha256_chain/2, accumulate/1, accumulate/2]).
+-export([pbkdf2/5]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -42,6 +43,21 @@ accumulate(ID1, ID2) ->
 %% Under-the-hood, this uses OpenSSL.
 sha256(Data) ->
     crypto:hash(sha256, Data).
+
+%% @doc Wrap Erlang's `crypto:pbkdf2_hmac/5' to provide a standard interface.
+pbkdf2(Alg, Password, Salt, Iterations, KeyLength) ->
+    case crypto:pbkdf2_hmac(Alg, Password, Salt, Iterations, KeyLength) of
+        Key when is_binary(Key) -> {ok, Key};
+        {Tag, CFileInfo, Desc} ->
+            ?event(
+                {pbkdf2_error,
+                    {tag, Tag},
+                    {desc, Desc},
+                    {c_file_info, CFileInfo}
+                }
+            ),
+            {error, Desc}
+    end.
 
 %%% Tests
 

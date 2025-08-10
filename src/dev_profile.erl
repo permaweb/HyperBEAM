@@ -144,6 +144,7 @@ validate_signer(Req, Opts) ->
 %% @doc Return the profiling function for the given engine.
 engine(<<"eflame">>) -> {ok, fun eflame_profile/3};
 engine(<<"eprof">>) -> {ok, fun eprof_profile/3};
+engine(<<"event">>) -> {ok, fun event_profile/3};
 engine(default) -> {ok, default()};
 engine(Unknown) -> {unknown_engine, Unknown}.
 
@@ -168,6 +169,7 @@ default() ->
 eflame_profile(Fun, Req, Opts) ->
     File = temp_file(),
     Res = eflame:apply(normal, File, Fun, []),
+    MergeStacks = hb_maps:get(<<"mode">>, Req, <<"merge">>, Opts),
     EflameDir = code:lib_dir(eflame),
     % Get the name of the function to profile. If the path in the request is
     % set, attempt to find it. If that is not found, we use the bare path.
@@ -184,12 +186,17 @@ eflame_profile(Fun, Req, Opts) ->
                 end
         end,
     StackToFlameScript = hb_util:bin(filename:join(EflameDir, "flamegraph.pl")),
+    FlameArg =
+        case MergeStacks of
+            <<"merge">> -> <<"">>;
+            <<"time">> -> <<"--flamechart">>
+        end,
     PreparedCommand = 
         hb_util:list(
             <<
                 "cat ", (hb_util:bin(File))/binary,
                 " | uniq -c | awk '{print $2, \" \", $1}' | ",
-                StackToFlameScript/binary,
+                StackToFlameScript/binary, " ", FlameArg/binary,
                 " --title=\"", Name/binary, "\""
             >>
         ),
@@ -271,6 +278,20 @@ eprof_profile(Fun, Req, Opts) ->
             };
         _ ->
             Res
+    end.
+
+%% @doc Profile using HyperBEAM's events.
+event_profile(Fun, Req, Opts) ->
+    Start = hb_event:counters(),
+    Fun(),
+    End = hb_event:counters(),
+    Diff = hb_message:diff(Start, End, Opts),
+    case return_mode(Req, Opts) of
+        <<"message">> ->
+            {ok, Diff};
+        <<"console">> ->
+            hb_util:debug_print(Diff),
+            {ok, Diff}
     end.
 
 %%% Engine helpers: Generalized tools useful for multiple engines.

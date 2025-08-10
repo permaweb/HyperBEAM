@@ -1,20 +1,11 @@
 %%% @doc Utility functions for working with links.
 -module(hb_link).
--export([read/1, read/2, is_link_key/1, remove_link_specifier/1]).
+-export([is_link_key/1, remove_link_specifier/1]).
 -export([normalize/2, normalize/3]).
 -export([decode_all_links/1]).
--export([format/1, format/2]).
+-export([format/1, format/2, format_unresolved/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
-
-%% @doc Read a link into memory. Uses `hb_cache:ensure_loaded/2' under-the-hood.
-read(Link) -> read(Link, #{}).
-read(Link, Opts) ->
-    try hb_cache:ensure_loaded(Link, Opts)
-    catch
-        throw:{necessary_message_not_found, ID} ->
-            {error, {link_not_found, ID}}
-    end.
 
 %% @doc Takes a message and ensures that it is normalized:
 %% 

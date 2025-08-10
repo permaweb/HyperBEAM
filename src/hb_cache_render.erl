@@ -31,7 +31,11 @@ cache_path_to_graph(ToRender, GraphOpts, StoreOrOpts) when is_map(StoreOrOpts) -
     ?event({store, Store}),
     cache_path_to_graph(ToRender, GraphOpts, Store, StoreOrOpts).
 cache_path_to_graph(all, GraphOpts, Store, Opts) ->
-    {ok, Keys} = hb_store:list(Store, <<"/">>),
+    Keys = 
+        case hb_store:list(Store, <<"/">>) of
+            {ok, KeyList} -> KeyList;
+            not_found -> []
+        end,
     ?event({all_keys, Keys}),
     cache_path_to_graph(Store, GraphOpts, Keys, Opts);
 cache_path_to_graph(InitPath, GraphOpts, Store, Opts) when is_binary(InitPath) ->
@@ -80,7 +84,7 @@ traverse_store(Store, Path, Parent, Graph, Opts) ->
     end.
 
 %% @doc Process a simple (leaf) node
-process_simple_node(_Store, Key, Parent, ResolvedPath, JoinedPath, Graph, Opts) ->
+process_simple_node(_Store, _Key, Parent, ResolvedPath, JoinedPath, Graph, Opts) ->
     % ?event({process_simple_node, {key, Key}, {resolved_path, ResolvedPath}}),
     % Add the node to the graph
     case hb_maps:get(render_data, Graph, true, Opts) of

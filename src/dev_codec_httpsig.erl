@@ -64,29 +64,39 @@ verify(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, EncMsg, EncComm, _} = normalize_for_encoding(Base, Req, Opts),
     SigBase = signature_base(EncMsg, EncComm, Opts),
-    ?event({signature_base_verify, {string, SigBase}}),
-    KeyID = maps:get(<<"keyid">>, Req),
+    KeyRes = dev_codec_httpsig_keyid:req_to_key_material(Req, Opts),
     RawSignature = hb_util:decode(Signature = maps:get(<<"signature">>, Req)),
-    case maps:get(<<"type">>, Req) of
-        <<"rsa-pss-sha512">> ->
+    ?event(debug_httpsig,
+        {
+            httpsig_verifying,
+            {signature, Signature},
+            {parsed_key_material, KeyRes},
+            {req, Req},
+            {signature_base, {string, SigBase}}
+        }
+    ),
+    case {KeyRes, maps:get(<<"type">>, Req)} of
+        {{ok, _, Key, _KeyID}, <<"rsa-pss-sha512">>} ->
             ?event(httpsig_verify, {verify, {rsa_pss_sha512, {sig_base, SigBase}}}),
             {
                 ok,
                 ar_wallet:verify(
-                    {{rsa, 65537}, base64:decode(KeyID)},
+                    {{rsa, 65537}, Key},
                     SigBase,
                     RawSignature,
                     sha512
                 )
             };
-        <<"hmac-sha256">> ->
+        {{ok, _, Key, KeyID}, <<"hmac-sha256">>} ->
+            % Generate the HMAC from the key and signature base.
             ActualHMac =
                 hb_util:human_id(
-                    crypto:mac(hmac, sha256, KeyID, SigBase)
+                    crypto:mac(hmac, sha256, Key, SigBase)
                 ),
             ?event(httpsig_verify,
                 {verify,
                     {hmac_sha256,
+                        {keyid, KeyID},
                         {sig_base, SigBase},
                         {actual_hmac, {string, ActualHMac}},
                         {signature, {string, Signature}},
@@ -94,8 +104,12 @@ verify(Base, Req, RawOpts) ->
                     }
                 }),
             {ok, Signature =:= ActualHMac};
-        UnsupportedType ->
-            {error, <<"Unsupported commitment type: ", UnsupportedType/binary>>}
+        {{error, Reason}, _Type} ->
+            ?event(httpsig_verify, {verify, {error, Reason}}),
+            {ok, false};
+        {{failure, Info}, _Type} ->
+            ?event(httpsig_verify, {verify, {failure, Info}}),
+            {failure, Info}
     end.
 
 %% @doc Commit to a message using the HTTP-Signature format. We use the `type'
@@ -131,7 +145,11 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
             MaybeTagMap#{
                 <<"commitment-device">> => <<"httpsig@1.0">>,
                 <<"type">> => <<"rsa-pss-sha512">>,
-                <<"keyid">> => base64:encode(ar_wallet:to_pubkey(Wallet)),
+                <<"keyid">> =>
+                    <<
+                        "publickey:",
+                        (base64:encode(ar_wallet:to_pubkey(Wallet)))/binary
+                    >>,
                 <<"committer">> =>
                     hb_util:human_id(ar_wallet:to_address(Wallet)),
                 <<"committed">> => ToCommit
@@ -168,42 +186,55 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
         Req#{ <<"type">> => <<"hmac-sha256">> },
         Opts
     );
-commit(Msg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
-    % Find the ID of the message without hmac commitments, then add the hmac
-    % using the set of all presently committed keys as the input. If no (other)
-    % commitments are present, then use all keys from the encoded message.
+commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
+    % Extract the key material from the request.
     Opts = opts(RawOpts),
-    WithoutHmac =
+    ?event({req_to_key_material, {req, Req}}),
+    {ok, Scheme, Key, KeyID} = dev_codec_httpsig_keyid:req_to_key_material(Req, Opts),
+    Committer = dev_codec_httpsig_keyid:keyid_to_committer(Scheme, KeyID),
+    % Remove any existing hmac commitments with the given keyid before adding
+    % the new one.
+    Msg =
         hb_message:without_commitments(
             #{
                 <<"commitment-device">> => <<"httpsig@1.0">>,
-                <<"type">> => <<"hmac-sha256">>
+                <<"type">> => <<"hmac-sha256">>,
+                <<"keyid">> => KeyID
             },
-            Msg,
+            BaseMsg,
             Opts
         ),
-    % Merge together the bundle and tag maps.
     % Extract the base commitments from the message.
-    Commitments = maps:get(<<"commitments">>, WithoutHmac, #{}),
+    Commitments = maps:get(<<"commitments">>, Msg, #{}),
     CommittedKeys = keys_to_commit(Msg, Req, Opts),
+    % Create the commitment with the appropriate keyid, committed keys, and 
+    % bundle specifier.
+    CommitmentWithoutCommitter = #{
+        <<"commitment-device">> => <<"httpsig@1.0">>,
+        <<"type">> => <<"hmac-sha256">>,
+        <<"keyid">> => KeyID,
+        <<"committed">> => hb_ao:normalize_keys(CommittedKeys)
+    },
+    % If the committer is undefined, we do not need to add the `committer' key.
+    BaseCommitment =
+        if Committer =:= undefined -> CommitmentWithoutCommitter;
+        true -> CommitmentWithoutCommitter#{ <<"committer">> => Committer }
+        end,
     UnauthedCommitment =
         maybe_bundle_tag_commitment(
-            #{
-                <<"commitment-device">> => <<"httpsig@1.0">>,
-                <<"type">> => <<"hmac-sha256">>,
-                <<"keyid">> => <<"ao">>,
-                <<"committed">> => hb_ao:normalize_keys(CommittedKeys)
-            },
+            BaseCommitment,
             Req,
             Opts
         ),
     {ok, EncMsg, EncComm, ModCommittedKeys} =
         normalize_for_encoding(Msg, UnauthedCommitment, Opts),
     SigBase = signature_base(EncMsg, EncComm, Opts),    
-    HMac = hb_util:human_id(crypto:mac(hmac, sha256, <<"ao">>, SigBase)),
+    HMac = hb_util:human_id(crypto:mac(hmac, sha256, Key, SigBase)),
     ?event(httpsig_commit,
         {hmac_commit,
             {type, <<"hmac-sha256">>},
+            {keyid, KeyID},
+            {committer, Committer},
             {committed, CommittedKeys},
             {sig_base, SigBase},
             {hmac, HMac}
@@ -527,11 +558,44 @@ validate_large_message_from_http_test() ->
 committed_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
     Signed = hb_message:commit(Msg, hb:wallet()),
+    ?assert(hb_message:verify(Signed, all, #{})),
     ?event({signed_msg, Signed}),
     UnsignedID = hb_message:id(Signed, none),
     SignedID = hb_message:id(Signed, all),
     ?event({ids, {unsigned_id, UnsignedID}, {signed_id, SignedID}}),
     ?assertNotEqual(UnsignedID, SignedID).
+
+commit_secret_key_test() ->
+    Msg = #{ <<"basic">> => <<"value">> },
+    CommittedMsg =
+        hb_message:commit(
+            Msg,
+            #{},
+            #{
+                <<"type">> => <<"hmac-sha256">>,
+                <<"secret">> => <<"test-secret">>,
+                <<"commitment-device">> => <<"httpsig@1.0">>,
+                <<"scheme">> => <<"secret">>
+            }
+        ),
+    ?event({committed_msg, CommittedMsg}),
+    Committers = hb_message:signers(CommittedMsg, #{}),
+    ?assert(length(Committers) == 1),
+    ?event({committers, Committers}),
+    ?assert(
+        hb_message:verify(
+            CommittedMsg,
+            #{ <<"committers">> => Committers, <<"secret">> => <<"test-secret">> },
+            #{}
+        )
+    ),
+    ?assertNot(
+        hb_message:verify(
+            CommittedMsg,
+            #{ <<"committers">> => Committers, <<"secret">> => <<"bad-secret">> },
+            #{}
+        )
+    ).
 
 multicommitted_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },

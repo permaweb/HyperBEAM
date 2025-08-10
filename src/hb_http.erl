@@ -66,10 +66,15 @@ request(Method, Config = #{ <<"nodes">> := Nodes }, Path, Message, Opts) when is
     % The request has a `route' (see `dev_router' for more details), so we use the
     % `multirequest' functionality, rather than a single request.
     multirequest(Config, Method, Path, Message, Opts);
-request(Method, #{ <<"opts">> := NodeOpts, <<"uri">> := URI }, _Path, Message, Opts) ->
+request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Opts) ->
     % The request has a set of additional options, so we apply them to the
     % request.
-    MergedOpts = hb_maps:merge(Opts, NodeOpts, Opts),
+    MergedOpts =
+        hb_maps:merge(
+            Opts,
+            hb_opts:mimic_default_types(ReqOpts, new_atoms, Opts),
+            Opts
+        ),
     % We also recalculate the request. The order of precidence here is subtle:
     % We favor the args given to the function, but the URI rules take precidence
     % over that.
@@ -96,7 +101,9 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             Opts
         ),
     StartTime = os:system_time(millisecond),
+    % Perform the HTTP request.
     {_ErlStatus, Status, Headers, Body} = hb_http_client:req(Req, Opts),
+    % Process the response.
     EndTime = os:system_time(millisecond),
     ?event(http_outbound,
         {
@@ -112,7 +119,38 @@ request(Method, Peer, Path, RawMessage, Opts) ->
         },
         Opts
     ),
-    HeaderMap = hb_maps:from_list(Headers),
+    % Convert the set-cookie headers into a cookie message, if they are present.
+    % We do this by extracting the set-cookie headers and converting them into a
+    % cookie message if they are present.
+    SetCookieLines =
+        [
+            KeyVal
+        ||
+            {<<"set-cookie">>, KeyVal} <- Headers
+        ],
+    MaybeSetCookie =
+        case SetCookieLines of
+            [] -> #{};
+            _ ->
+                ?event(
+                    debug_cookie,
+                    {normalizing_setcookie_headers,
+                        {set_cookie_lines, [ {string, Line} || Line <- SetCookieLines ]}
+                    },
+                    Opts
+                ),
+                {ok, MsgWithCookies} =
+                    dev_codec_cookie:from(
+                        #{ <<"set-cookie">> => SetCookieLines },
+                        #{},
+                        Opts
+                    ),
+                ?event(debug_cookie, {msg_with_cookies, MsgWithCookies}),
+                MsgWithCookies
+        end,
+    % Merge the set-cookie message into the header map, which itself is
+    % constructed from the header key-value pair list.
+    HeaderMap = hb_maps:merge(hb_maps:from_list(Headers), MaybeSetCookie, Opts),
     NormHeaderMap = hb_ao:normalize_keys(HeaderMap, Opts),
     ?event(http_outbound,
         {normalized_response_headers, {norm_header_map, NormHeaderMap}},
@@ -260,10 +298,34 @@ route_to_request(M, {error, Reason}, _Opts) ->
 %% already present in the message, and sets it to `true' if it is not.
 prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     Message = hb_ao:normalize_keys(RawMessage, Opts),
+    % Generate a `cookie' key for the message, if an unencoded cookie is
+    % present.
+    {MaybeCookie, WithoutCookie} =
+        case dev_codec_cookie:extract(Message, #{}, Opts) of
+            {ok, NoCookies} when map_size(NoCookies) == 0 ->
+                {#{}, Message};
+            {ok, _Cookies} ->
+                {ok, #{ <<"cookie">> := CookieLines }} =
+                    dev_codec_cookie:to(
+                        Message,
+                        #{ <<"format">> => <<"cookie">> },
+                        Opts
+                    ),
+                {ok, CookieReset} = dev_codec_cookie:reset(Message, Opts),
+                ?event(http, {cookie_lines, CookieLines}),
+                {
+                    #{ <<"cookie">> => CookieLines },
+                    CookieReset
+                }
+        end,
+    % Remove the private components from the message, if they are present.
+    WithoutPriv = hb_private:reset(WithoutCookie),
+    % Add the `accept-bundle: true' key to the message, if the caller has not
+    % set an explicit preference.
     WithAcceptBundle =
         case hb_ao:get(<<"accept-bundle">>, Message, Opts) of
-            not_found -> Message#{ <<"accept-bundle">> => true };
-            _ -> Message
+            not_found -> WithoutPriv#{ <<"accept-bundle">> => true };
+            _ -> WithoutPriv
         end,
     % Determine the `ao-peer-port' from the message to send or the node message.
     % `port_external' can be set in the node message to override the port that
@@ -301,7 +363,11 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
             Headers = hb_maps:without([<<"body">>], FullEncoding, Opts),
 			?event(http, {request_headers, {explicit, {headers, Headers}}}),
 			?event(http, {request_body, {explicit, {body, Body}}}),
-            hb_maps:merge(ReqBase, #{ headers => Headers, body => Body }, Opts);
+            hb_maps:merge(
+                ReqBase,
+                #{ headers => maps:merge(MaybeCookie, Headers), body => Body },
+                Opts
+            );
         <<"ans104@1.0">> ->
             ?event(debug_accept, {request_message, {message, Message}}),
             {ok, FilteredMessage} =
@@ -312,7 +378,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                 end,
             ReqBase#{
                 headers =>
-                    #{
+                    MaybeCookie#{
                         <<"codec-device">> => <<"ans104@1.0">>,
                         <<"content-type">> => <<"application/ans104">>,
                         <<"accept-bundle">> =>
@@ -339,7 +405,8 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
             };
         _ ->
             ReqBase#{
-                headers => maps:without([<<"body">>], Message),
+                headers =>
+                    maps:merge(MaybeCookie, maps:without([<<"body">>], Message)),
                 body => maps:get(<<"body">>, Message, <<>>)
             }
     end.
@@ -518,9 +585,16 @@ reply(Req, TABMReq, Message, Opts) ->
     reply(Req, TABMReq, Status, Message, Opts).
 reply(Req, TABMReq, BinStatus, RawMessage, Opts) when is_binary(BinStatus) ->
     reply(Req, TABMReq, binary_to_integer(BinStatus), RawMessage, Opts);
-reply(Req, TABMReq, Status, RawMessage, Opts) ->
-    Message = hb_ao:normalize_keys(RawMessage, Opts),
-    {ok, HeadersBeforeCors, EncodedBody} = encode_reply(Status, TABMReq, Message, Opts),
+reply(InitReq, TABMReq, Status, RawMessage, Opts) ->
+    KeyNormMessage = hb_ao:normalize_keys(RawMessage, Opts),
+    {ok, Req, Message} = reply_handle_cookies(InitReq, KeyNormMessage, Opts),
+    {ok, HeadersBeforeCors, EncodedBody} =
+        encode_reply(
+            Status,
+            TABMReq,
+            Message,
+            Opts
+        ),
     % Get the CORS request headers from the message, if they exist.
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
@@ -534,22 +608,11 @@ reply(Req, TABMReq, Status, RawMessage, Opts) ->
             {enc_body, EncodedBody}
         }
     ),
-    % Cowboy handles cookies in headers separately, so we need to manipulate
-    % the request to set the cookies such that they will be sent over the wire
-    % unmodified.
-    SetCookiesReq =
-        case hb_maps:get(<<"set-cookie">>, EncodedHeaders, undefined, Opts) of
-            undefined -> Req#{ resp_headers => EncodedHeaders };
-            Cookies ->
-                Req#{
-                    resp_headers => EncodedHeaders,
-                    resp_cookies => #{ <<"__HB_SET_COOKIE">> => Cookies }
-                }
-        end,
-    Req2 = cowboy_req:stream_reply(Status, #{}, SetCookiesReq),
-    cowboy_req:stream_body(EncodedBody, nofin, Req2),
+    ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
+    PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
+    cowboy_req:stream_body(EncodedBody, nofin, PostStreamReq),
     EndTime = os:system_time(millisecond),
-    ?event(http, {reply_headers, {explicit, {ok, Req2, no_state}}}),
+    ?event(http, {reply_headers, {explicit, PostStreamReq}}),
     ?event(http_short,
         {sent,
             {status, Status},
@@ -565,7 +628,54 @@ reply(Req, TABMReq, Status, RawMessage, Opts) ->
             {body_size, byte_size(EncodedBody)}
         }
     ),
-    {ok, Req2, no_state}.
+    {ok, PostStreamReq, no_state}.
+
+%% @doc Handle replying with cookies if the message contains them. Returns the
+%% new Cowboy `Req` object, and the message with the cookies removed. Both
+%% `set-cookie' and `cookie' fields are treated as viable sources of cookies.
+reply_handle_cookies(Req, Message, Opts) ->
+    {ok, Cookies} = dev_codec_cookie:extract(Message, #{}, Opts),
+    ?event(debug_cookie, {encoding_reply_cookies, {explicit, Cookies}}),
+    case Cookies of
+        NoCookies when map_size(NoCookies) == 0 -> {ok, Req, Message};
+        _ ->
+            % The internal values of the `cookie' field will be stored in the
+            % `priv_store' by default, so we let `dev_codec_cookie:opts/1'
+            % reset the options.
+            {ok, #{ <<"set-cookie">> := SetCookieLines }} =
+                dev_codec_cookie:to(
+                    Message,
+                    #{ <<"format">> => <<"set-cookie">> },
+                    Opts
+                ),
+            ?event(debug_cookie, {outbound_set_cookie_lines, SetCookieLines}),
+            % Add the cookies to the response headers.
+            FinalReq =
+                lists:foldl(
+                    fun(FullCookieLine, ReqAcc) ->
+                        [CookieRef, _] = binary:split(FullCookieLine, <<"=">>),
+                        RespCookies = maps:get(resp_cookies, ReqAcc, #{}),
+                        % Note: Cowboy handles cookies peculiarly. The key
+                        % given in the `resp_cookies' map is not used directly
+                        % in the response headers. Nonetheless, we use the
+                        % key parsed from the cookie line as the key, but do not
+                        % be surprised if while debugging you see a different
+                        % key created by Cowboy in the response headers.
+                        ReqAcc#{
+                            resp_cookies =>
+                                RespCookies#{ CookieRef => FullCookieLine }
+                        }
+                    end,
+                    Req,
+                    SetCookieLines
+                ),
+            {ok, CookieReset} = dev_codec_cookie:reset(Message, Opts),
+            {
+                ok,
+                FinalReq,
+                CookieReset
+            }
+    end.
 
 %% @doc Add permissive CORS headers to a message, if the message has not already
 %% specified CORS headers.
@@ -602,12 +712,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
         ),
     AcceptBundle =
         hb_util:atom(
-            hb_ao:get(
-                <<"accept-bundle">>,
-                {as, <<"message@1.0">>, TABMReq},
-                false,
-                Opts
-            )
+            hb_maps:get(<<"accept-bundle">>, TABMReq, false, Opts)
         ),
     % Codecs generally do not need to specify headers outside of the content-type,
     % aside the default `httpsig@1.0' codec, which expresses its form in HTTP
@@ -623,17 +728,6 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
-        % {500, <<"httpsig@1.0">>, false} ->
-        %     {ok, ErrMsg} =
-        %         dev_hyperbuddy:return_file(
-        %             <<"hyperbuddy@1.0">>,
-        %             <<"500.html">>,
-        %             #{ <<"error">> => <<"500 Internal Server Error">> }
-        %         ),
-        %     {ok,
-        %         maps:without([<<"body">>], ErrMsg),
-        %         maps:get(<<"body">>, ErrMsg, <<>>)
-        %     };
         {_, <<"httpsig@1.0">>, _} ->
             TABM =
                 hb_message:convert(
@@ -910,8 +1004,27 @@ normalize_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
                     maps:get(<<"accept-bundle">>, RawHeaders, false)
                 )
         },
-    case hb_maps:get(<<"ao-peer-port">>, WithoutPeer, undefined, Opts) of
-        undefined -> WithoutPeer;
+    % Parse and add the cookie from the request, if present. We reinstate the
+    % `cookie' field in the message, as it is not typically signed, yet should
+    % be honored by the node anyway.
+    {ok, WithCookie} =
+        case maps:get(<<"cookie">>, RawHeaders, undefined) of
+            undefined -> {ok, WithoutPeer};
+            Cookie ->
+                dev_codec_cookie:from(
+                    WithoutPeer#{ <<"cookie">> => Cookie },
+                    Req,
+                    Opts
+                )
+        end,
+    % If the body is empty and unsigned, we remove it.
+    NormalBody =
+        case hb_maps:get(<<"body">>, WithCookie, undefined, Opts) of
+            <<"">> -> remove_unless_signed(<<"body">>, WithCookie, Opts);
+            _ -> WithCookie
+        end,
+    case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of
+        undefined -> NormalBody;
         P2PPort ->
             % Calculate the peer address from the request. We honor the 
             % `x-real-ip' header if it is present.
@@ -928,7 +1041,7 @@ normalize_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
                     IP -> IP
                 end,
             Peer = <<RealIP/binary, ":", (hb_util:bin(P2PPort))/binary>>,
-            (remove_unless_signed([<<"ao-peer-port">>], WithoutPeer, Opts))#{
+            (remove_unless_signed(<<"ao-peer-port">>, NormalBody, Opts))#{
                 <<"ao-peer">> => Peer
             }
     end.

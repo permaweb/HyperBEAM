@@ -244,20 +244,18 @@ resolve_stage(1, Raw = {as, DevID, SubReq}, Msg2, Opts) ->
     % As this is the first message, we will then continue to execute the request
     % on the result.
     ?event(ao_core, {stage, 1, subresolving_base, {dev, DevID}, {subreq, SubReq}}, Opts),
-    ?event(subresolution, {as, {dev, DevID}, {subreq, SubReq}, {msg2, Msg2}}, Opts),
-    case subresolve(#{}, DevID, SubReq, Opts) of
+    ?event(subresolution, {as, {dev, DevID}, {subreq, SubReq}, {msg2, Msg2}}),
+    case subresolve(SubReq, DevID, SubReq, Opts) of
         {ok, SubRes} ->
             % The subresolution has returned a new message. Continue with it.
             ?event(subresolution,
-                {continuing_with_subresolved_message, {msg1, SubRes}},
-                Opts
+                {continuing_with_subresolved_message, {msg1, SubRes}}
             ),
             resolve_stage(1, SubRes, Msg2, Opts);
         OtherRes ->
             % The subresolution has returned an error. Return it.
             ?event(subresolution,
-                {subresolution_error, {msg1, Raw}, {res, OtherRes}},
-                Opts
+                {subresolution_error, {msg1, Raw}, {res, OtherRes}}
             ),
             OtherRes
     end;
@@ -269,12 +267,18 @@ resolve_stage(1, RawMsg1, Msg2Outer = #{ <<"path">> := {as, DevID, Msg2Inner} },
     LoadedInner = ensure_message_loaded(Msg2Inner, Opts),
     Msg2 =
         hb_maps:merge(
-            Msg2Outer,
-            if is_map(LoadedInner) -> LoadedInner;
-            true -> #{ <<"path">> => LoadedInner }
+            set(Msg2Outer, <<"path">>, unset, Opts),
+            if is_binary(LoadedInner) -> #{ <<"path">> => LoadedInner };
+            true -> LoadedInner
             end,
 			Opts
         ),
+    ?event(subresolution,
+        {subresolving_request_before_execution,
+            {dev, DevID},
+            {msg2, Msg2}
+        }
+    ),
     subresolve(RawMsg1, DevID, Msg2, Opts);
 resolve_stage(1, {resolve, Subres}, Msg2, Opts) ->
     % If the first message is a `{resolve, Subres}' tuple, we should execute it
@@ -697,8 +701,7 @@ subresolve(RawMsg1, DevID, Req, Opts) ->
     % First, ensure that the message is loaded from the cache.
     Msg1 = ensure_message_loaded(RawMsg1, Opts),
     ?event(subresolution,
-        {subresolving, {msg1, Msg1}, {dev, DevID}, {req, Req}},
-        Opts
+        {subresolving, {msg1, Msg1}, {dev, DevID}, {req, Req}}
     ),
     % Next, set the device ID if it is given.
     Msg1b =
@@ -717,7 +720,7 @@ subresolve(RawMsg1, DevID, Req, Opts) ->
                     _ ->
                         set(
 							Msg1b,
-							hb_maps:without([<<"path">>], Req, Opts),
+							set(Req, <<"path">>, unset, Opts),
 							Opts#{ force_message => false }
 						)
                 end,
@@ -728,14 +731,14 @@ subresolve(RawMsg1, DevID, Req, Opts) ->
             {ok, Msg1c};
         Path ->
             ?event(subresolution,
-                {exec_subrequest_on_base, {mod_base, Msg1b}, {req, Path}},
-                Opts
+                {exec_subrequest_on_base,
+                    {mod_base, Msg1b},
+                    {req, Path},
+                    {req, Req}
+                }
             ),
             Res = resolve(Msg1b, Req, Opts),
-            ?event(subresolution,
-                {subresolved_with_new_device, {res, Res}},
-                Opts
-            ),
+            ?event(subresolution, {subresolved_with_new_device, {res, Res}}),
             Res
     end.
 
@@ -816,7 +819,7 @@ ensure_message_loaded(MsgID, Opts) when ?IS_ID(MsgID) ->
         {ok, LoadedMsg} ->
             LoadedMsg;
         not_found ->
-            throw({necessary_message_not_found, MsgID})
+            throw({necessary_message_not_found, <<"/">>, MsgID})
     end;
 ensure_message_loaded(MsgLink, Opts) when ?IS_LINK(MsgLink) ->
     hb_cache:ensure_loaded(MsgLink, Opts);
