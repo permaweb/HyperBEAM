@@ -11,10 +11,8 @@
 -define(DEFAULT_OWNER, << 0:4096 >>).
 -define(DEFAULT_DATA, <<>>).
 
--define(MAX_TAG_NAME_SIZE, 3072).
--define(MAX_TAG_VALUE_SIZE, 3072).
 -define(MAX_TAG_COMBINED_SIZE, 4096).
--define(MAX_TAG_COUNT, 128).
+-define(MAX_TAG_SECTION_SIZE, 128 * 4096).
 
 %% The hashing algorithm used to calculate wallet addresses.
 -define(HASH_ALG, sha256).

@@ -458,35 +458,28 @@ enforce_valid_tx(TX) ->
         {invalid_field, tags, TX#tx.tags}
     ),
     hb_util:ok_or_throw(TX,
-        length(TX#tx.tags) =< ?MAX_TAG_COUNT,
-        {invalid_field, tag_count, TX#tx.tags}
-    ),
-    lists:foreach(
-        fun({Name, Value}) ->
-            hb_util:ok_or_throw(TX,
-                hb_util:check_type(Name, binary),
-                {invalid_field, tag_name, Name}
-            ),
-            hb_util:ok_or_throw(TX,
-                hb_util:check_size(Name, {range, 0, ?MAX_TAG_NAME_SIZE}),
-                {invalid_field, tag_name, Name}
-            ),
-            hb_util:ok_or_throw(TX,
-                hb_util:check_type(Value, binary),
-                {invalid_field, tag_value, Value}
-            ),
-            hb_util:ok_or_throw(TX,
-                hb_util:check_size(Value, {range, 0, ?MAX_TAG_VALUE_SIZE}),
-                {invalid_field, tag_value, Value}
-            ),
-            hb_util:ok_or_throw(TX,
-                hb_util:check_size(<<Name/binary, Value/binary>>, {range, 0, ?MAX_TAG_COMBINED_SIZE}),
-                {invalid_field, tag_size, {Name, Value}}
-            );
-            (InvalidTagForm) ->
+        lists:foldl(
+            fun({Name, Value}, Acc) ->
+                hb_util:ok_or_throw(TX,
+                    hb_util:check_type(Name, binary),
+                    {invalid_field, tag_name, Name}
+                ),
+                hb_util:ok_or_throw(TX,
+                    hb_util:check_type(Value, binary),
+                    {invalid_field, tag_value, Value}
+                ),
+                hb_util:ok_or_throw(TX,
+                    hb_util:check_size(<<Name/binary, Value/binary>>, {range, 0, ?MAX_TAG_COMBINED_SIZE}),
+                    {invalid_field, tag_size, {Name, Value}}
+                ),
+                Acc + byte_size(Name) + byte_size(Value);
+            (InvalidTagForm, _Acc) ->
                 throw({invalid_field, tag, InvalidTagForm})
-        end,
-        TX#tx.tags
+            end,
+            0,
+            TX#tx.tags
+        ) =< ?MAX_TAG_SECTION_SIZE,
+      {invalid_field, tag_section_size, TX#tx.tags}
     ),
     true.
 
@@ -987,10 +980,10 @@ test_enforce_valid_tx_happy() ->
         {data_root_32_bytes, BaseTX#tx{data_root = crypto:strong_rand_bytes(32)}},
         {simple_tag, BaseTX#tx{tags = [{<<"name">>, <<"value">>}]}},
         {empty_tag_name_value, BaseTX#tx{tags = [{<<>>, <<>>}]}},
-        {max_len_tag_name, BaseTX#tx{tags = [{crypto:strong_rand_bytes(?MAX_TAG_NAME_SIZE), <<"val">>}]}},
-        {max_len_tag_value, BaseTX#tx{tags = [{<<"key">>, crypto:strong_rand_bytes(?MAX_TAG_VALUE_SIZE)}]}},
+        {max_len_tag_name, BaseTX#tx{tags = [{crypto:strong_rand_bytes(?MAX_TAG_COMBINED_SIZE), <<"">>}]}},
+        {max_len_tag_value, BaseTX#tx{tags = [{<<"">>, crypto:strong_rand_bytes(?MAX_TAG_COMBINED_SIZE)}]}},
         {max_len_combined, BaseTX#tx{tags = [{crypto:strong_rand_bytes(?MAX_TAG_COMBINED_SIZE div 2), crypto:strong_rand_bytes(?MAX_TAG_COMBINED_SIZE div 2)}]}},
-        {max_len_tags, BaseTX#tx{tags = [{crypto:strong_rand_bytes(42), <<"val">>} || _ <- lists:seq(1,?MAX_TAG_COUNT)]}}
+        {max_len_tags, BaseTX#tx{tags = [{crypto:strong_rand_bytes(42), <<"">>} || _ <- lists:seq(1,?MAX_TAG_SECTION_SIZE div 42)]}}
     ],
 
     lists:foreach(
@@ -1007,9 +1000,9 @@ test_enforce_valid_tx_failure() ->
     BadID31 = crypto:strong_rand_bytes(31),
     BadID33 = crypto:strong_rand_bytes(33),
     BadOwnerSize = crypto:strong_rand_bytes(byte_size(?DEFAULT_OWNER) - 1),
-    TooLongTagName = crypto:strong_rand_bytes(?MAX_TAG_NAME_SIZE + 1),
-    TooLongTagValue = crypto:strong_rand_bytes(?MAX_TAG_VALUE_SIZE + 1),
-    TooManyTags = [{crypto:strong_rand_bytes(42), <<"val">>} || _ <- lists:seq(1,?MAX_TAG_COUNT + 1)],
+    TooLongTagName = {crypto:strong_rand_bytes(?MAX_TAG_COMBINED_SIZE + 1), <<"val">>},
+    TooLongTagValue = {<<"key">>, crypto:strong_rand_bytes(?MAX_TAG_COMBINED_SIZE + 1)},
+    TooManyTags = [{crypto:strong_rand_bytes(?MAX_TAG_COMBINED_SIZE), <<"">>} || _ <- lists:seq(1,1 + ?MAX_TAG_SECTION_SIZE div ?MAX_TAG_COMBINED_SIZE)],
     LargeTag = crypto:strong_rand_bytes((?MAX_TAG_COMBINED_SIZE div 2) + 1),
     TooLongCombinedTag = {LargeTag, LargeTag},
 
@@ -1052,11 +1045,11 @@ test_enforce_valid_tx_failure() ->
         {signature_type_not_rsa, BaseTX#tx{signature_type = ?ECDSA_KEY_TYPE}, {invalid_field, signature_type, ?ECDSA_KEY_TYPE}},
         {tags_not_list, BaseTX#tx{tags = #{}}, {invalid_field, tags, #{}}},
         {tag_name_not_binary, BaseTX#tx{tags = [{not_binary, <<"val">>}]}, {invalid_field, tag_name, not_binary}},
-        {tag_name_too_long, BaseTX#tx{tags = [{TooLongTagName, <<"val">>}]}, {invalid_field, tag_name, TooLongTagName}},
+        {tag_name_too_long, BaseTX#tx{tags = [TooLongTagName]}, {invalid_field, tag_size, TooLongTagName}},
         {tag_value_not_binary, BaseTX#tx{tags = [{<<"key">>, not_binary}]}, {invalid_field, tag_value, not_binary}},
-        {tag_value_too_long, BaseTX#tx{tags = [{<<"key">>, TooLongTagValue}]}, {invalid_field, tag_value, TooLongTagValue}},
+        {tag_value_too_long, BaseTX#tx{tags = [TooLongTagValue]}, {invalid_field, tag_size, TooLongTagValue}},
         {tag_combined_size_too_long, BaseTX#tx{tags = [TooLongCombinedTag]}, {invalid_field, tag_size, TooLongCombinedTag}},
-        {tag_list_length_too_high, BaseTX#tx{tags = TooManyTags}, {invalid_field, tag_count, TooManyTags}},
+        {tag_section_too_big, BaseTX#tx{tags = TooManyTags}, {invalid_field, tag_section_size, TooManyTags}},
         {invalid_tag_form_atom, BaseTX#tx{tags = [not_a_tuple]}, {invalid_field, tag, not_a_tuple}},
         {invalid_tag_form_list, BaseTX#tx{tags = [[<<"name">>, <<"value">>]]}, {invalid_field, tag, [<<"name">>, <<"value">>]} }
     ],
