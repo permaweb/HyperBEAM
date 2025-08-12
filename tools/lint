@@ -1,0 +1,97 @@
+#!/bin/bash
+
+set -e
+
+COMMAND=""
+PROMPT=""
+HEADLESS=false
+
+usage() {
+    echo "Usage: $0 --command {claude|opencode} [prompt] [--headless]"
+    echo ""
+    echo "Options:"
+    echo "  --command {claude|opencode}  Specify which command to use"
+    echo "  [prompt]                      Optional custom prompt (defaults to formatter prompt)"
+    echo "  --headless                    Run in headless/non-interactive mode"
+    echo ""
+    echo "Examples:"
+    echo "  $0 --command claude"
+    echo "  $0 --command opencode --headless"
+    echo "  $0 --command claude \"custom prompt here\""
+    echo "  $0 --command opencode \"fix all linting issues\" --headless"
+    exit 1
+}
+
+if [ $# -eq 0 ]; then
+    usage
+fi
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --command)
+            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+                echo "Error: --command requires an argument"
+                usage
+            fi
+            COMMAND="$2"
+            if [[ "$COMMAND" != "claude" && "$COMMAND" != "opencode" ]]; then
+                echo "Error: command must be either 'claude' or 'opencode'"
+                usage
+            fi
+            shift 2
+            ;;
+        --headless)
+            HEADLESS=true
+            shift
+            ;;
+        -*)
+            echo "Error: Unknown option $1"
+            usage
+            ;;
+        *)
+            if [ -z "$PROMPT" ]; then
+                PROMPT="$1"
+            else
+                echo "Error: Unexpected argument $1"
+                usage
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$COMMAND" ]; then
+    echo "Error: --command is required"
+    usage
+fi
+
+if [ -z "$PROMPT" ]; then
+    PROMPT="use @tools/formatter.md as agent to find and fix any style issues within my current code changes"
+fi
+
+# Execute based on command type and mode
+if [ "$COMMAND" = "claude" ]; then
+    if [ "$HEADLESS" = true ]; then
+        # Claude headless mode: claude -p "prompt"
+        echo "Executing: claude -p \"$PROMPT\""
+        echo ""
+        exec claude -p "$PROMPT"
+    else
+        # Claude interactive mode: just pass the prompt
+        echo "Executing: claude \"$PROMPT\""
+        echo ""
+        exec claude "$PROMPT"
+    fi
+elif [ "$COMMAND" = "opencode" ]; then
+    if [ "$HEADLESS" = true ]; then
+        # OpenCode headless mode: opencode --ask "prompt"
+        echo "Executing: opencode --prompt \"$PROMPT\""
+        echo ""
+        exec opencode --prompt "$PROMPT"
+    else
+        # OpenCode interactive mode: just pass the prompt
+        echo "Executing: opencode \"$PROMPT\""
+        echo ""
+        exec opencode "$PROMPT"
+    fi
+fi
