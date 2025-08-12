@@ -88,7 +88,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
     ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {message, RawMessage}}),
     Req =
         prepare_request(
-            hb_ao:get(
+            hb_maps:get(
                 <<"codec-device">>,
                 RawMessage,
                 <<"httpsig@1.0">>,
@@ -323,7 +323,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % Add the `accept-bundle: true' key to the message, if the caller has not
     % set an explicit preference.
     WithAcceptBundle =
-        case hb_ao:get(<<"accept-bundle">>, Message, Opts) of
+        case hb_maps:get(<<"accept-bundle">>, Message, not_found, Opts) of
             not_found -> WithoutPriv#{ <<"accept-bundle">> => true };
             _ -> WithoutPriv
         end,
@@ -334,7 +334,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     WithSelfPort =
         WithAcceptBundle#{
             <<"ao-peer-port">> =>
-                hb_ao:get(
+                hb_maps:get(
                     <<"ao-peer-port">>,
                     WithAcceptBundle,
                     hb_opts:get(
@@ -727,7 +727,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 }
             ),
             {ok, ErrMsg} =
-                dev_hyperbuddy:return_error(Message),
+                dev_hyperbuddy:return_error(Message, Opts),
             {ok,
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)

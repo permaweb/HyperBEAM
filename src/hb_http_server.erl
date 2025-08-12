@@ -525,7 +525,9 @@ set_default_opts(Opts) ->
         end,
     Store =
         case hb_opts:get(store, no_store, TempOpts) of
-            no_store -> [hb_test_utils:test_store()];
+            no_store ->
+                hb_store:start(Stores = [hb_test_utils:test_store()]),
+                Stores;
             PassedStore -> PassedStore
         end,
     ?event({set_default_opts,

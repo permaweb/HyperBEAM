@@ -10,7 +10,7 @@
 %%% When other cache control settings are not specified, we default to the
 %%% following settings.
 -define(DEFAULT_STORE_OPT, false).
--define(DEFAULT_LOOKUP_OPT, false).
+-define(DEFAULT_LOOKUP_OPT,  true).
 
 %%% Public API
 

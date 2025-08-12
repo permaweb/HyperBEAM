@@ -69,7 +69,15 @@ build(_, _, _NodeMsg) ->
 handle(NodeMsg, RawRequest) ->
     ?event({singleton_tabm_request, RawRequest}),
     NormRequest = hb_singleton:from(RawRequest, NodeMsg),
-    ?event(http, {request, hb_ao:normalize_keys(NormRequest, NodeMsg)}),
+    ?event(
+        http,
+        {request,
+            hb_cache:ensure_all_loaded(
+                hb_ao:normalize_keys(NormRequest, NodeMsg),
+                NodeMsg
+            )
+        }
+    ),
     case hb_opts:get(initialized, false, NodeMsg) of
         false ->
             Res =

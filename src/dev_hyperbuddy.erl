@@ -146,7 +146,7 @@ return_error(ErrorMsg, Opts) ->
     return_file(
         <<"hyperbuddy@1.0">>,
         <<"500.html">>,
-        ErrorMsg#{ <<"body">> => hb_util:format_error(ErrorMsg, Opts) }
+        #{ <<"error">> => hb_util:format_error(ErrorMsg, Opts) }
     ).
 
 %% @doc Apply a template to a body.

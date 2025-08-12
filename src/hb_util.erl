@@ -20,7 +20,7 @@
 -export([format_error/2]).
 -export([format_indented/2, format_indented/3, format_indented/4, format_binary/1]).
 -export([format_maybe_multiline/3, remove_trailing_noise/2]).
--export([debug_print/1, debug_print/2, debug_print/4, eunit_print/2]).
+-export([debug_print/1, debug_print/3, debug_print/5, eunit_print/2]).
 -export([debug_format/1, debug_format/2, debug_format/3]).
 -export([get_trace/0, print_trace/4, trace_macro_helper/5, print_trace_short/4]).
 -export([format_trace/1, trace_to_list/1, format_trace_short/0, format_trace_short/1]).
@@ -544,15 +544,15 @@ maybe_throw(Val, Opts) ->
 %% @doc Print a message to the standard error stream, prefixed by the amount
 %% of time that has elapsed since the last call to this function.
 debug_print(X) ->
-    debug_print(X, <<>>).
-debug_print(X, Info) ->
+    debug_print(X, <<>>, #{}).
+debug_print(X, Info, Opts) ->
     io:format(
         standard_error,
         "=== HB DEBUG ===~s==>~n~s~n",
-        [Info, debug_format(X, #{}, 0)]
+        [Info, debug_format(X, Opts, 0)]
     ),
     X.
-debug_print(X, Mod, Func, LineNum) ->
+debug_print(X, Mod, Func, LineNum, Opts) ->
     Now = erlang:system_time(millisecond),
     Last = erlang:put(last_debug_print, Now),
     TSDiff = case Last of undefined -> 0; _ -> Now - Last end,
@@ -576,7 +576,7 @@ debug_print(X, Mod, Func, LineNum) ->
                 ]
             )
         ),
-    debug_print(X, Info).
+    debug_print(X, Info, Opts).
 
 %% @doc Retreive the server ID of the calling process, if known.
 server_id() ->
@@ -602,10 +602,12 @@ debug_format(X, Opts) -> debug_format(X, Opts, 0).
 debug_format(X, Opts, Indent) ->
     try do_debug_fmt(X, Opts, Indent)
     catch A:B:C ->
-        case hb_opts:get(debug_print_fail_mode, quiet, Opts) of
-            quiet ->
+        Mode = hb_opts:get(mode, prod, Opts),
+        PrintFailPreference = hb_opts:get(debug_print_fail_mode, quiet, Opts),
+        case {Mode, PrintFailPreference} of
+            {debug, quiet} ->
                 format_indented("[!Format failed!] ~p", [X], Opts, Indent);
-            _ ->
+            {debug, _} ->
                 format_indented(
                     "[PRINT FAIL:] ~80p~n===== PRINT ERROR WAS ~p:~p =====~n~s",
                     [
@@ -621,14 +623,30 @@ debug_format(X, Opts, Indent) ->
                     ],
                     Opts,
                     Indent
-                )
+                );
+            _ ->
+                format_indented("[!Format failed!]", [], Opts, Indent)
         end
     end.
 
-do_debug_fmt(Wallet = {{rsa, _PublicExpnt}, _Priv, _Pub}, Opts, Indent) ->
-    format_address(Wallet, Opts, Indent);
-do_debug_fmt({_, Wallet = {{rsa, _PublicExpnt}, _Priv, _Pub}}, Opts, Indent) ->
-    format_address(Wallet, Opts, Indent);
+do_debug_fmt(
+    { { {rsa, _PublicExpnt1}, _Priv1, _Priv2 },
+      { {rsa, _PublicExpnt2}, Pub }
+    },
+    Opts, Indent
+) ->
+    format_address(Pub, Opts, Indent);
+do_debug_fmt(
+    { AtomValue,
+      {
+        { {rsa, _PublicExpnt1}, _Priv1, _Priv2 },
+        { {rsa, _PublicExpnt2}, Pub }
+      }
+    },
+    Opts, Indent
+) ->
+    AddressString = format_address(Pub, Opts, Indent),
+    format_indented("~p: ~s", [AtomValue, AddressString], Opts, Indent);
 do_debug_fmt({explicit, X}, Opts, Indent) ->
     format_indented("[Explicit:] ~p", [X], Opts, Indent);
 do_debug_fmt({string, X}, Opts, Indent) ->
@@ -696,7 +714,11 @@ do_debug_fmt(X, Opts, Indent) ->
 
 %% @doc If the user attempts to print a wallet, format it as an address.
 format_address(Wallet, Opts, Indent) ->
-    format_indented(human_id(ar_wallet:to_address(Wallet)), Opts, Indent).
+    format_indented("Wallet [Addr: ~s]",
+        [short_id(human_id(ar_wallet:to_address(Wallet)))], 
+        Opts, 
+        Indent
+    ).
 
 %% @doc Helper function to format tuples with arity greater than 2.
 format_tuple(Tuple, Opts, Indent) ->

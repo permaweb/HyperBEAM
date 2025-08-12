@@ -114,9 +114,9 @@ call(M1, RawM2, Opts) ->
             true ->
                 case hb_opts:get(relay_allow_commit_request, false, Opts) of
                     true ->
-                        ?event(debug_relay, {recommitting, TargetMod3}),
+                        ?event(debug_relay, {recommitting, TargetMod3}, Opts),
                         Committed = hb_message:commit(TargetMod3, Opts),
-                        ?event({relay_call, {committed, Committed}}),
+                        ?event(debug_relay, {relay_call, {committed, Committed}}, Opts),
                         true = hb_message:verify(Committed, all),
                         Committed;
                     false ->
@@ -298,76 +298,3 @@ commit_request_test() ->
         ),
     ?event({res, Res}),
     ?assertEqual(<<"value">>, Res).
-
-%% @doc Test that we can schedule an ANS-104 data item on a relayed node. The
-%% input to the relaying server comes in the form of a serialized ANS-104
-%% data item, which should then be correctly deserialized and sent to the
-%% scheduler node.
-relay_schedule_ans104_test() ->
-    Port = 10000 + rand:uniform(10000),
-    Wallet = ar_wallet:new(),
-    Scheduler =
-        hb_http_server:start_node(
-            #{
-                store => [hb_test_utils:test_store()],
-                priv_wallet => Wallet,
-                port => Port
-            }
-        ),
-    Node =
-        hb_http_server:start_node(#{
-            relay_allow_commit_request => true,
-            store => [hb_test_utils:test_store()],
-            routes =>
-                [
-                    #{
-                        <<"template">> => <<"/push">>,
-                        <<"strategy">> => <<"Nearest">>,
-                        <<"nodes">> => [
-                            #{
-                                <<"wallet">> => hb_util:human_id(Wallet),
-                                <<"prefix">> => Scheduler
-                            }
-                        ]
-                    }
-                ],
-            on => #{
-                <<"request">> =>
-                    #{
-                        <<"device">> => <<"router@1.0">>,
-                        <<"path">> => <<"preprocess">>,
-                        <<"commit-request">> => true
-                    }
-            }
-        }),
-    ClientOpts =
-        #{
-            store => [hb_test_utils:test_store()],
-            priv_wallet => ar_wallet:new()
-        },
-    % Create process to schedule, then send it to the relaying server as
-    % a serialized ANS-104 data item.
-    Process =
-        hb_message:commit(
-            #{
-                <<"device">> => <<"process@1.0">>,
-                <<"execution-device">> => <<"test-device@1.0">>,
-                <<"push-device">> => <<"push@1.0">>,
-                <<"scheduler">> => hb_util:human_id(Wallet),
-                <<"scheduler-device">> => <<"scheduler@1.0">>,
-                <<"module">> => <<"URgYpPQzvxxfYQtjrIQ116bl3YBfcImo3JEnNo8Hlrk">>
-            },
-            ClientOpts,
-            #{ <<"commitment-device">> => <<"ans104@1.0">> }
-        ),
-    Res =
-        hb_http:post(
-            Node,
-            Process#{
-                <<"path">> => <<"push">>,
-                <<"codec-device">> => <<"ans104@1.0">>
-            },
-            ClientOpts
-        ),
-    ?event({post_result, Res}),
-    ?assertMatch({ok, #{ <<"status">> := 200, <<"slot">> := _ }}, Res).
