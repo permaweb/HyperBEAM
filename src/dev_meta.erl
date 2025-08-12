@@ -209,11 +209,16 @@ adopt_node_message(Request, NodeMsg) ->
 handle_resolve(Req, Msgs, NodeMsg) ->
     TracePID = hb_opts:get(trace, no_tracer_set, NodeMsg),
     % Apply the pre-processor to the request.
-    ?event({resolve_hook, Req, Msgs, NodeMsg}),
+    ?event(http_request,
+        {resolve_hook,
+            {raw_request, Req},
+            {parsed_request_sequence, Msgs}
+        }
+    ),
     LoadedMsgs = hb_cache:ensure_all_loaded(Msgs, NodeMsg),
     case resolve_hook(<<"request">>, Req, LoadedMsgs, NodeMsg) of
         {ok, PreProcessedMsg} ->
-            ?event({result_after_preprocessing, PreProcessedMsg}),
+            ?event(http_request, {request_after_preprocessing, PreProcessedMsg}),
             AfterPreprocOpts = hb_http_server:get_opts(NodeMsg),
             % Resolve the request message.
             HTTPOpts = hb_maps:merge(
@@ -222,35 +227,16 @@ handle_resolve(Req, Msgs, NodeMsg) ->
 				NodeMsg
             ),
             Res =
-                try
-                    hb_ao:resolve_many(
-                        PreProcessedMsg,
-                        HTTPOpts#{ force_message => true, trace => TracePID }
-                    )
-                catch
-                    throw:{necessary_message_not_found, MsgID} ->
-                        ID =
-                            if ?IS_ID(MsgID) -> hb_util:human_id(MsgID);
-                               ?IS_LINK(MsgID) -> hb_link:format(MsgID);
-                               true -> iolist_to_binary([MsgID])
-                            end,
-                        {error, #{
-                            <<"status">> => 404,
-                            <<"unavailable">> => ID,
-                            <<"body">> =>
-                                <<
-                                    "Message necessary to resolve request ",
-                                    "not found: ",
-                                    ID/binary
-                                >>
-                        }}
-                end,
+                hb_ao:resolve_many(
+                    PreProcessedMsg,
+                    HTTPOpts#{ force_message => true, trace => TracePID }
+                ),
             {ok, StatusEmbeddedRes} =
                 embed_status(
                     Res,
                     NodeMsg
                 ),
-            ?event({res, StatusEmbeddedRes}),
+            ?event(http_request, {res, StatusEmbeddedRes}),
             AfterResolveOpts = hb_http_server:get_opts(NodeMsg),
             % Apply the post-processor to the result.
             Output = maybe_sign(
@@ -265,7 +251,7 @@ handle_resolve(Req, Msgs, NodeMsg) ->
                 ),
                 NodeMsg
             ),
-            ?event(http, {response, Output}),
+            ?event(http_request, {response, Output}),
             Output;
         Res -> embed_status(hb_ao:force_message(Res, NodeMsg), NodeMsg)
     end.
@@ -286,8 +272,20 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
     ?event(hook, {resolve_hook, HookName, HookReq}),
     case dev_hook:on(HookName, HookReq, NodeMsg) of
         {ok, #{ <<"body">> := ResponseBody }} ->
+            ?event(hook,
+                {resolve_hook_success,
+                    {name, HookName},
+                    {response_body, ResponseBody}
+                }
+            ),
             {ok, ResponseBody};
         {error, _} = Error ->
+            ?event(hook,
+                {resolve_hook_error,
+                    {name, HookName},
+                    {error, Error}
+                }
+            ),
             Error;
         Other ->
             {error, Other}
@@ -321,7 +319,10 @@ status_code(error, _NodeMsg) -> 400;
 status_code(created, _NodeMsg) -> 201;
 status_code(not_found, _NodeMsg) -> 404;
 status_code(failure, _NodeMsg) -> 500;
-status_code(unavailable, _NodeMsg) -> 503.
+status_code(unavailable, _NodeMsg) -> 503;
+status_code(unauthorized, _NodeMsg) -> 401;
+status_code(forbidden, _NodeMsg) -> 403;
+status_code(_, _NodeMsg) -> 200.
 
 %% @doc Get the HTTP status code from a transaction (if it exists).
 message_to_status(#{ <<"body">> := Status }, NodeMsg) when is_atom(Status) ->

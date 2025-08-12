@@ -591,6 +591,46 @@ subledger_registration_test_disabled() ->
     % Alice can send tokens to Bob on SubLedger2.
     verify_net(RootLedger, [SubLedger1, SubLedger2], Opts).
 
+single_subledger_to_subledger_test_() -> {timeout, 30, fun single_subledger_to_subledger/0}.
+single_subledger_to_subledger() ->
+    Opts = test_opts(),
+    Alice = ar_wallet:new(),
+    Bob = ar_wallet:new(),
+    RootLedger =
+        ledger(
+            <<"scripts/hyper-token.lua">>,
+            #{ <<"balance">> => #{ Alice => 100 } },
+            Opts
+        ),
+    SubLedger1 = subledger(RootLedger, Opts),
+    SL1ID = hb_message:id(SubLedger1, signed, Opts),
+    ?event(debug, {sl1ID, SL1ID}),
+    SubLedger2 = subledger(RootLedger, Opts),
+    SL2ID = hb_message:id(SubLedger2, signed, Opts),
+    ?event(debug, {sl2ID, SL2ID}),
+    Names = #{
+        Alice => alice,
+        Bob => bob,
+        RootLedger => root,
+        SubLedger1 => subledger1,
+        SubLedger2 => subledger2
+    },
+    ?event(debug, {root_ledger, RootLedger}),
+    ?event(debug, {sl1, SubLedger1}),
+    ?event(debug, {sl2, SubLedger2}),
+    ?assertEqual(100, balance(RootLedger, Alice, Opts)),
+    % 2. Alice sends 90 tokens to herself on SubLedger1.
+    ?event(debug, {transfer_1}),
+    transfer(RootLedger, Alice, Alice, 90, SubLedger1, Opts),
+    ?assertEqual(10, balance(RootLedger, Alice, Opts)),
+    ?assertEqual(90, balance(SubLedger1, Alice, Opts)),
+    ?event(debug, {transfer_2}),
+    PushRes = transfer(SubLedger1, Alice, Alice, 80, SubLedger2, Opts),
+    ?event(debug, {push_res, PushRes}),
+    ?event(debug, {map, map([RootLedger, SubLedger1, SubLedger2], Opts)}),
+    ?assertEqual(80, balance(SubLedger2, Alice, Opts)),
+    ?assertEqual(10, balance(SubLedger1, Alice, Opts)).
+
 %% @doc Verify that registered sub-ledgers are able to send tokens to each other
 %% without the need for messages on the root ledger.
 subledger_to_subledger_test_() -> {timeout, 30, fun subledger_to_subledger/0}.
@@ -615,12 +655,11 @@ subledger_to_subledger() ->
     },
     % 1. Alice has tokens on the root ledger.
     ?assertEqual(100, balance(RootLedger, Alice, Opts)),
-    % 2. Alice registers with SubLedger1.
-    register(SubLedger1, SubLedger2, Opts),
-    % 3. Alice sends 90 tokens to herself on SubLedger1.
+    % 2. Alice sends 90 tokens to herself on SubLedger1.
     transfer(RootLedger, Alice, Alice, 90, SubLedger1, Opts),
-    % 4. Alice sends 10 tokens to Bob on SubLedger2.
+    % 3. Alice sends 10 tokens to Bob on SubLedger2.
     transfer(SubLedger1, Alice, Bob, 10, SubLedger2, Opts),
+    ?event(debug, {map, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(80, balance(SubLedger1, Alice, Opts)),
     ?assertEqual(10, balance(SubLedger2, Bob, Opts)),

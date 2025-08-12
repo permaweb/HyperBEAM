@@ -24,7 +24,7 @@ start(ProcID, Proc, Opts) ->
             end,
             % Write the process to the cache. We are the provider-of-last-resort
             % for this data.
-            hb_cache:write(Proc, Opts),
+            dev_scheduler_cache:write_spawn(Proc, Opts),
             case hb_opts:get(scheduling_mode, disabled, Opts) of
                 disabled ->
                     throw({scheduling_disabled_on_node, {requested_for, ProcID}});
@@ -229,9 +229,10 @@ do_assign(State, Message, ReplyPID) ->
 %% @doc Commit to the assignment using all of our appropriate wallets.
 commit_assignment(BaseAssignment, State) ->
     Wallets = maps:get(wallets, State),
+    Opts = maps:get(opts, State),
     lists:foldr(
         fun(Wallet, Assignment) ->
-            hb_message:commit(Assignment, Wallet)
+            hb_message:commit(Assignment, Opts#{ priv_wallet => Wallet })
         end,
         BaseAssignment,
         Wallets
@@ -264,11 +265,11 @@ new_proc_test() ->
     Wallet = ar_wallet:new(),
     SignedItem = hb_message:commit(
         #{ <<"data">> => <<"test">>, <<"random-key">> => rand:uniform(10000) },
-        Wallet
+        #{ priv_wallet => Wallet }
     ),
     SignedItem2 = hb_message:commit(
         #{ <<"data">> => <<"test2">> },
-        Wallet
+        #{ priv_wallet => Wallet }
     ),
     SignedItem3 = hb_message:commit(
         #{
@@ -276,7 +277,7 @@ new_proc_test() ->
             <<"deep-key">> =>
                 #{ <<"data">> => <<"test3">> }
         },
-        Wallet
+        #{ priv_wallet => Wallet }
     ),
     dev_scheduler_registry:find(hb_message:id(SignedItem, all), SignedItem),
     schedule(ID = hb_message:id(SignedItem, all), SignedItem),

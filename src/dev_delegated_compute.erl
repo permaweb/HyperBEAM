@@ -11,11 +11,16 @@
 %% need to do anything special here.
 init(Msg1, _Msg2, _Opts) ->
     {ok, Msg1}.
-normalize(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
-snapshot(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
 
-%% @doc Normal compute execution through external CU.
-%% This function handles standard process execution that permanently modifies state.
+%% @doc We assume that the compute engine stores its own internal state,
+%% with snapshots triggered only when HyperBEAM requests them. Subsequently,
+%% to load a snapshot, we just need to return the original message.
+normalize(Msg1, _Msg2, Opts) ->
+    hb_ao:set(Msg1, #{ <<"snapshot">> => unset }, Opts).
+
+%% @doc Call the delegated server to compute the result. The endpoint is
+%% `POST /compute' and the body is the JSON-encoded message that we want to
+%% evaluate.
 compute(Msg1, Msg2, Opts) ->
     OutputPrefix = dev_stack:prefix(Msg1, Msg2, Opts),
     % Extract the process ID - this identifies which process to run compute against
@@ -96,7 +101,6 @@ do_relay(Method, Path, Body, AOS2, Opts) ->
         Opts
     ).
 extract_json_res(Response, Opts) ->
-    io:format("RESPONSE: ~p~n", [Response]),
     case Response of 
         {ok, Res} ->
             JSONRes = hb_ao:get(<<"body">>, Res, Opts),
@@ -144,4 +148,39 @@ handle_relay_response(Msg1, Msg2, Opts, Response, OutputPrefix, ProcessID, Slot)
             };
         {error, Error} ->
             {error, Error}
+    end.
+
+%% @doc Generate a snapshot of a running computation by calling the 
+%% `GET /snapshot' endpoint.
+snapshot(Msg, Msg2, Opts) ->
+    ?event({snapshotting, {req, Msg2}}),
+    ProcID = dev_process:process_id(Msg, #{}, Opts),
+    Res = 
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"relay@1.0">>,
+                <<"content-type">> => <<"application/json">>
+            },
+            #{
+                <<"path">> => <<"call">>,
+                <<"relay-method">> => <<"POST">>,
+                <<"relay-path">> => <<"/snapshot/", ProcID/binary>>,
+                <<"content-type">> => <<"application/json">>,
+                <<"body">> => <<"{}">>
+            },
+            Opts#{
+                hashpath => ignore,
+                cache_control => [<<"no-store">>, <<"no-cache">>]
+            }
+        ),
+    ?event({snapshotting_result, Res}),
+    case Res of
+        {ok, Response} ->
+            {ok, Response};
+        {error, Error} ->
+            {ok,
+                #{
+                    <<"error">> => <<"No checkpoint produced.">>,
+                    <<"error-details">> => Error
+                }}
     end.

@@ -109,9 +109,11 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     ID = hb_message:id(RawMsg, all),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
     Last = hb_ao:get(<<"anchor">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
+    Signers = hb_message:signers(RawMsg, Opts),
+    ?event({message_to_struct_signer, {signer, Signers}}),
 	Owner =
-        case hb_message:signers(RawMsg, Opts) of
-            [] -> <<>>;
+        case Signers of
+            [] -> hb_ao:get(<<"owner">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<"1234">>, Opts);
             [Signer|_] ->
                 case lists:member(owner_as_address, Features) of
                     true -> hb_util:native_id(Signer);
@@ -128,13 +130,24 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                         )
                 end
         end,
+    ?event({message_to_struct_owner, {owner, Owner}}),
     Data = hb_ao:get(<<"data">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
     Target = hb_ao:get(<<"target">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
     % Set "From" if From-Process is Tag or set with "Owner" address
     From =
-        hb_ao:get(
-            <<"from-process">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
+        % hb_ao:get(
+        %     <<"from-process">>,
+        %     {as, <<"message@1.0">>, MsgWithoutCommitments},
+        %     hb_util:encode(Owner),
+        %     Opts
+        % ),
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, MsgWithoutCommitments}, <<"from-process">>},
+                {{as, <<"message@1.0">>, MsgWithoutCommitments}, <<"From-Process">>},
+                {{as, <<"message@1.0">>, MsgWithoutCommitments}, <<"from">>},
+                {{as, <<"message@1.0">>, MsgWithoutCommitments}, <<"From">>}
+            ],
             hb_util:encode(Owner),
             Opts
         ),

@@ -379,7 +379,7 @@ encode_tags([]) ->
 encode_tags(Tags) ->
     EncodedBlocks = lists:flatmap(
         fun({Name, Value}) ->
-            Res = [encode_avro_string(Name), encode_avro_string(Value)],
+            Res = [encode_avro_name(Name), encode_avro_value(Value)],
             case lists:member(error, Res) of
                 true ->
                     throw({cannot_encode_empty_string, Name, Value});
@@ -394,13 +394,21 @@ encode_tags(Tags) ->
     <<ZigZagCount/binary, (list_to_binary(EncodedBlocks))/binary, 0>>.
 
 %% @doc Encode a string for Avro using ZigZag and VInt encoding.
-encode_avro_string(<<>>) ->
-    % Zero length strings are treated as a special case, due to the Avro encoder.
+encode_avro_name(<<>>) ->
+    % Zero length names are treated as a special case, due to the Avro encoder.
     << 0 >>;
-encode_avro_string(String) ->
-    StringBytes = unicode:characters_to_binary(String, utf8),
+encode_avro_name(String) ->
+    StringBytes = utf8_encoded(String),
     Length = byte_size(StringBytes),
     <<(encode_zigzag(Length))/binary, StringBytes/binary>>.
+
+encode_avro_value(<<>>) ->
+    % Zero length values are treated as a special case, due to the Avro encoder.
+    << 0 >>;
+encode_avro_value(Value) when is_binary(Value) ->
+    % Tag values can be raw binaries
+    Length = byte_size(Value),
+    <<(encode_zigzag(Length))/binary, Value/binary>>.
 
 %% @doc Encode an integer using ZigZag encoding.
 encode_zigzag(Int) when Int >= 0 ->
@@ -635,8 +643,44 @@ ar_bundles_test_() ->
         {timeout, 30, fun test_basic_member_id/0},
         {timeout, 30, fun test_deep_member/0},
         {timeout, 30, fun test_extremely_large_bundle/0},
-        {timeout, 30, fun test_serialize_deserialize_deep_signed_bundle/0}
+        {timeout, 30, fun test_serialize_deserialize_deep_signed_bundle/0},
+        {timeout, 30, fun test_encode_tags/0}
     ].
+
+test_encode_tags() ->
+    BinValue = <<1, 2, 3, 255, 254>>,
+    TestCases = [
+        {simple_string_tags, [{<<"tag1">>, <<"value1">>}]},
+        {binary_value_tag, [{<<"binary-tag">>, BinValue}]},
+        {mixed_tags,
+            [
+                {<<"string-tag">>, <<"string-value">>},
+                {<<"binary-tag">>, BinValue}
+            ]
+        },
+        {empty_value_tag, [{<<"empty-value-tag">>, <<>>}]},
+        {unicode_tag, [{<<"unicode-tag">>, <<"你好世界">>}]}
+    ],
+    lists:foreach(
+        fun({Label, InputTags}) ->
+            Encoded = encode_tags(InputTags),
+            Wrapped =
+                <<
+                    (length(InputTags)):64/little,
+                    (byte_size(Encoded)):64/little,
+                    Encoded/binary
+                >>,
+            {DecodedTags, <<>>} = decode_tags(Wrapped),
+            ?assertEqual(InputTags, DecodedTags, Label)
+        end,
+        TestCases
+    ),
+    % Test case: Empty tags list
+    EmptyTags = [],
+    EncodedEmpty = encode_tags(EmptyTags),
+    ?assertEqual(<<>>, EncodedEmpty),
+    WrappedEmpty = <<0:64/little, 0:64/little>>,
+    {[], <<>>} = decode_tags(WrappedEmpty).
 
 run_test() ->
     test_with_zero_length_tag().
@@ -648,12 +692,9 @@ test_no_tags() ->
     Anchor = crypto:strong_rand_bytes(32),
     DataItem = new_item(Target, Anchor, [], <<"data">>),
     SignedDataItem = sign_item(DataItem, {Priv, Pub}),
-
     ?assertEqual(true, verify_item(SignedDataItem)),
     assert_data_item(KeyType, Owner, Target, Anchor, [], <<"data">>, SignedDataItem),
-
     SignedDataItem2 = deserialize(serialize(SignedDataItem)),
-
     ?assertEqual(SignedDataItem, SignedDataItem2),
     ?assertEqual(true, verify_item(SignedDataItem2)),
     assert_data_item(KeyType, Owner, Target, Anchor, [], <<"data">>, SignedDataItem2).
@@ -666,12 +707,9 @@ test_with_tags() ->
     Tags = [{<<"tag1">>, <<"value1">>}, {<<"tag2">>, <<"value2">>}],
     DataItem = new_item(Target, Anchor, Tags, <<"taggeddata">>),
     SignedDataItem = sign_item(DataItem, {Priv, Pub}),
-
     ?assertEqual(true, verify_item(SignedDataItem)),
     assert_data_item(KeyType, Owner, Target, Anchor, Tags, <<"taggeddata">>, SignedDataItem),
-
     SignedDataItem2 = deserialize(serialize(SignedDataItem)),
-
     ?assertEqual(SignedDataItem, SignedDataItem2),
     ?assertEqual(true, verify_item(SignedDataItem2)),
     assert_data_item(KeyType, Owner, Target, Anchor, Tags, <<"taggeddata">>, SignedDataItem2).

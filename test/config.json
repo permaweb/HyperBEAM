@@ -1,0 +1,6 @@
+{
+    "port": 1234,
+    "example": 9001,
+    "host": "https://ao.computer",
+    "await_inprogress": false
+}

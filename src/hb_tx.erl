@@ -425,7 +425,11 @@ add_commitments(TABM, TX, Device, CommittedTags, Opts) ->
                     <<"commitment-device">> => Device,
                     <<"committer">> => Address,
                     <<"committed">> => CommittedKeys,
-                    <<"keyid">> => hb_util:encode(TX#tx.owner),
+                    <<"keyid">> =>
+                        <<
+                            "publickey:",
+                            (hb_util:encode(TX#tx.owner))/binary
+                        >>,
                     <<"signature">> => hb_util:encode(TX#tx.signature),
                     <<"type">> => <<"rsa-pss-sha256">>
                 },
@@ -726,8 +730,12 @@ flatten_commitments(TABM, Opts) ->
                         ),
                     <<"owner">> =>
                         hb_util:decode(
-                            maps:get(<<"keyid">>, Commitment,
-                                hb_util:encode(?DEFAULT_OWNER)
+                            dev_codec_httpsig_keyid:remove_scheme_prefix(
+                                maps:get(
+                                    <<"keyid">>,
+                                    Commitment,
+                                    hb_util:encode(?DEFAULT_OWNER)
+                                )
                             )
                         )
                 },

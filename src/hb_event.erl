@@ -264,7 +264,7 @@ benchmark_event_test() ->
 %% @doc Benchmark the performance of looking up whether a topic and module
 %% should be printed.
 benchmark_print_lookup_test() ->
-    DefaultOpts = hb_opts:default_message(),
+    DefaultOpts = hb_opts:default_message_with_env(),
     Iterations =
         hb_test_utils:benchmark(
             fun() ->

@@ -2,7 +2,8 @@
 %%% generating isolated (fresh) test stores, running suites of tests with
 %%% differing options, as well as executing and reporting benchmarks.
 -module(hb_test_utils).
--export([suite_with_opts/2, run/4, test_store/0, assert_throws/4]).
+-export([suite_with_opts/2, run/4, assert_throws/4]).
+-export([test_store/0, test_store/1, test_store/2]).
 -export([benchmark/1, benchmark/2, benchmark/3, benchmark_iterations/2]).
 -export([benchmark_print/2, benchmark_print/3, benchmark_print/4]).
 -export([compare_events/3, compare_events/4, compare_events/5]).
@@ -14,14 +15,21 @@
 
 %% @doc Generate a new, unique test store as an isolated context for an execution.
 test_store() ->
+    test_store(maps:get(<<"store-module">>, hd(hb_opts:get(store)))).
+test_store(Mod) ->
+    test_store(Mod, <<"default">>).
+test_store(Mod, Tag) ->
     TestDir =
         <<
-            "cache-TEST/run-fs-",
+            "cache-TEST/run-",
+            Tag/binary, "-",
             (integer_to_binary(erlang:system_time(millisecond)))/binary
         >>,
+    % Wait a tiny interval to ensure that any further tests will get their own
+    % directory.
+    timer:sleep(1),
     filelib:ensure_dir(binary_to_list(TestDir)),
-    DefaultStore = maps:get(<<"store-module">>, hd(hb_opts:get(store))),
-    #{ <<"store-module">> => DefaultStore, <<"name">> => TestDir }.
+    #{ <<"store-module">> => Mod, <<"name">> => TestDir }.
 
 %% @doc Run each test in a suite with each set of options. Start and reset
 %% the store(s) for each test. Expects suites to be a list of tuples with

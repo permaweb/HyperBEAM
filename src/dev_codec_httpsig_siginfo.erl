@@ -6,6 +6,7 @@
 -export([add_derived_specifiers/1, remove_derived_specifiers/1]).
 -export([commitment_to_sig_name/1]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %%% A list of components that are `derived' in the context of RFC-9421 from the
 %%% request message.
@@ -32,7 +33,7 @@ commitments_to_siginfo(Msg, Comms, Opts) ->
             fun(_CommID, Commitment, {Sigs, SigInputs}) ->
                 {ok, SigNameRaw, SFSig, SFSigInput} =
                     commitment_to_sf_siginfo(Msg, Commitment, Opts),
-                SigName = <<"sig-", SigNameRaw/binary>>,
+                SigName = <<"comm-", SigNameRaw/binary>>,
                 {
                     Sigs#{ SigName => SFSig },
                     SigInputs#{ SigName => SFSigInput }
@@ -104,7 +105,7 @@ commitment_to_sf_siginfo(Msg, Commitment, Opts) ->
             {string,
                 hb_util:bin(
                     hb_structured_fields:dictionary(
-                        #{ <<"sig">> => SFSigInput }
+                        #{ <<"comm">> => SFSigInput }
                     )
                 )
             }
@@ -162,7 +163,11 @@ nested_map_to_string(Map) ->
 %% @doc Take a message with a `signature' and `signature-input' key pair and
 %% return a map of commitments.
 siginfo_to_commitments(
-        Msg = #{ <<"signature">> := <<"sig-", SFSigBin/binary>>, <<"signature-input">> := <<"sig-", SFSigInputBin/binary>> },
+        Msg =
+            #{
+                <<"signature">> := <<"comm-", SFSigBin/binary>>,
+                <<"signature-input">> := <<"comm-", SFSigInputBin/binary>>
+            },
         BodyKeys,
         Opts) ->
     % Parse the signature and signature-input structured-fields.
@@ -255,16 +260,14 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
             <<"signature">> => hb_util:encode(Sig),
             <<"committed">> => CommittedKeys
         },
+    KeyID = maps:get(<<"keyid">>, Commitment3, <<>>),
     Commitment5 =
-        case maps:get(<<"keyid">>, Commitment3) of
-            DecKeyID when byte_size(DecKeyID) =< 43 ->
+        case dev_codec_httpsig_keyid:keyid_to_committer(KeyID) of
+            undefined ->
                 Commitment3;
-            DecPubKey ->
+            Committer ->
                 Commitment3#{
-                    <<"committer">> =>
-                        hb_util:human_id(
-                            crypto:hash(sha256, hb_util:decode(DecPubKey))
-                        )
+                    <<"committer">> => Committer
                 }
         end,
     ID =
@@ -482,4 +485,24 @@ remove_derived_specifiers(ComponentIdentifiers) ->
             Key
         end,
         ComponentIdentifiers
+    ).
+
+%%% Tests.
+
+parse_alg_test() ->
+    ?assertEqual(
+        commitment_to_device_specifiers(#{ <<"alg">> => <<"rsa-pss-sha512">> }, #{}),
+        #{
+            <<"commitment-device">> => <<"httpsig@1.0">>,
+            <<"type">> => <<"rsa-pss-sha512">>
+        }
+    ),
+    ?assertEqual(
+        commitment_to_device_specifiers(
+            #{ <<"alg">> => <<"ans104@1.0/rsa-pss-sha256">> },
+            #{}),
+        #{
+            <<"commitment-device">> => <<"ans104@1.0">>,
+            <<"type">> => <<"rsa-pss-sha256">>
+        }
     ).

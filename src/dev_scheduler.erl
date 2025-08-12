@@ -559,9 +559,9 @@ post_location(Msg1, RawReq, RawOpts) ->
 %% scheduling a new message.
 schedule(Msg1, Msg2, Opts) ->
     ?event({resolving_schedule_request, {msg2, Msg2}, {state_msg, Msg1}}),
-    case hb_ao:get(<<"method">>, Msg2, <<"GET">>, Opts) of
-        <<"POST">> -> post_schedule(Msg1, Msg2, Opts);
-        <<"GET">> -> get_schedule(Msg1, Msg2, Opts)
+    case hb_util:key_to_atom(hb_ao:get(<<"method">>, Msg2, <<"GET">>, Opts)) of
+        post -> post_schedule(Msg1, Msg2, Opts);
+        get -> get_schedule(Msg1, Msg2, Opts)
     end.
 
 %% @doc Schedules a new message on the SU. Searches Msg1 for the appropriate ID,
@@ -641,6 +641,10 @@ do_post_schedule(ProcID, PID, Msg2, Opts) ->
         case hb_opts:get(verify_assignments, true, Opts) of
             true ->
                 ?event({verifying_message_before_scheduling, Msg2}),
+                length(hb_message:signers(Msg2, Opts)) > 0
+                    andalso hb_message:verify(Msg2, signers, Opts);
+            accept_unsigned ->
+                ?event({accepting_unsigned_message_before_scheduling, Msg2}),
                 hb_message:verify(Msg2, signers, Opts);
             false -> true
         end,
@@ -1601,7 +1605,8 @@ status_test() ->
 
 register_new_process_test() ->
     start(),
-    Msg1 = test_process(),
+    Opts = #{ priv_wallet => hb:wallet() },
+    Msg1 = hb_message:commit(test_process(Opts), Opts),
     ?event({test_registering_new_process, {msg, Msg1}}),
     ?assertMatch({ok, _},
         hb_ao:resolve(

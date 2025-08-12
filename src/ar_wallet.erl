@@ -2,6 +2,7 @@
 -export([sign/2, sign/3, hmac/1, hmac/2, verify/3, verify/4]).
 -export([to_pubkey/1, to_pubkey/2, to_address/1, to_address/2, new/0, new/1]).
 -export([new_keyfile/2, load_keyfile/1, load_keyfile/2, load_key/1, load_key/2]).
+-export([to_json/1, from_json/1, from_json/2]).
 -include("include/ar.hrl").
 -include_lib("public_key/include/public_key.hrl").
 
@@ -17,6 +18,7 @@ new(KeyType = {KeyAlg, PublicExpnt}) when KeyType =:= {rsa, 65537} ->
     {[_, Pub], [_, Pub, Priv|_]} = {[_, Pub], [_, Pub, Priv|_]}
         = crypto:generate_key(KeyAlg, {4096, PublicExpnt}),
     {{KeyType, Priv, Pub}, {KeyType, Pub}}.
+
 
 %% @doc Sign some data with a private key.
 sign(Key, Data) ->
@@ -91,50 +93,19 @@ new_keyfile(KeyType, WalletName) ->
             {?RSA_SIGN_ALG, PublicExpnt} ->
                 {[Expnt, Pb], [Expnt, Pb, Prv, P1, P2, E1, E2, C]} =
                     crypto:generate_key(rsa, {?RSA_PRIV_KEY_SZ, PublicExpnt}),
-                Ky =
-                    hb_json:encode(
-                        #{
-                            kty => <<"RSA">>,
-                            ext => true,
-                            e => hb_util:encode(Expnt),
-                            n => hb_util:encode(Pb),
-                            d => hb_util:encode(Prv),
-                            p => hb_util:encode(P1),
-                            q => hb_util:encode(P2),
-                            dp => hb_util:encode(E1),
-                            dq => hb_util:encode(E2),
-                            qi => hb_util:encode(C)
-                        }
-                    ),
+                PrivKey = {KeyType, Prv, Pb},
+                Ky = to_json(PrivKey),
                 {Pb, Prv, Ky};
             {?ECDSA_SIGN_ALG, secp256k1} ->
                 {OrigPub, Prv} = crypto:generate_key(ecdh, secp256k1),
-                <<4:8, PubPoint/binary>> = OrigPub,
-                PubPointMid = byte_size(PubPoint) div 2,
-                <<X:PubPointMid/binary, Y:PubPointMid/binary>> = PubPoint,
-                Ky =
-                    hb_json:encode(
-                        #{
-                            kty => <<"EC">>,
-                            crv => <<"secp256k1">>,
-                            x => hb_util:encode(X),
-                            y => hb_util:encode(Y),
-                            d => hb_util:encode(Prv)
-                        }
-                    ),
-                {compress_ecdsa_pubkey(OrigPub), Prv, Ky};
+                CompressedPub = compress_ecdsa_pubkey(OrigPub),
+                PrivKey = {KeyType, Prv, CompressedPub},
+                Ky = to_json(PrivKey),
+                {CompressedPub, Prv, Ky};
             {?EDDSA_SIGN_ALG, ed25519} ->
                 {{_, Prv, Pb}, _} = new(KeyType),
-                Ky =
-                    hb_json:encode(
-                        #{
-                            kty => <<"OKP">>,
-                            alg => <<"EdDSA">>,
-                            crv => <<"Ed25519">>,
-                            x => hb_util:encode(Pb),
-                            d => hb_util:encode(Prv)
-                        }
-                    ),
+                PrivKey = {KeyType, Prv, Pb},
+                Ky = to_json(PrivKey),
                 {Pb, Prv, Ky}
         end,
     Filename = wallet_filepath(WalletName, Pub, KeyType),
@@ -179,7 +150,44 @@ load_keyfile(File) ->
 %% @doc Extract the public and private key from a keyfile.
 load_keyfile(File, Opts) ->
     {ok, Body} = file:read_file(File),
-    Key = hb_json:decode(Body),
+    from_json(Body, Opts).
+
+%% @doc Convert a wallet private key to JSON (JWK) format
+to_json({PrivKey, _PubKey}) ->
+    to_json(PrivKey);
+to_json({{?RSA_SIGN_ALG, PublicExpnt}, Priv, Pub}) when PublicExpnt =:= 65537 ->
+    hb_json:encode(#{
+        kty => <<"RSA">>,
+        ext => true,
+        e => hb_util:encode(<<PublicExpnt:32>>),
+        n => hb_util:encode(Pub),
+        d => hb_util:encode(Priv)
+    });
+to_json({{?ECDSA_SIGN_ALG, secp256k1}, Priv, CompressedPub}) ->
+    % For ECDSA, we need to expand the compressed pubkey to get X,Y coordinates
+    % This is a simplified version - ideally we'd implement pubkey expansion
+    hb_json:encode(#{
+        kty => <<"EC">>,
+        crv => <<"secp256k1">>,
+        d => hb_util:encode(Priv)
+        % TODO: Add x and y coordinates from expanded pubkey
+    });
+to_json({{?EDDSA_SIGN_ALG, ed25519}, Priv, Pub}) ->
+    hb_json:encode(#{
+        kty => <<"OKP">>,
+        alg => <<"EdDSA">>,
+        crv => <<"Ed25519">>,
+        x => hb_util:encode(Pub),
+        d => hb_util:encode(Priv)
+    }).
+
+%% @doc Parse a wallet from JSON (JWK) format
+from_json(JsonBinary) ->
+    from_json(JsonBinary, #{}).
+
+%% @doc Parse a wallet from JSON (JWK) format with options
+from_json(JsonBinary, Opts) ->
+    Key = hb_json:decode(JsonBinary),
     {Pub, Priv, KeyType} =
         case hb_maps:get(<<"kty">>, Key, undefined, Opts) of
             <<"EC">> ->

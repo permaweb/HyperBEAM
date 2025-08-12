@@ -43,42 +43,51 @@ maybe_new_proc(ProcID, ProcMsg, Opts) ->
 
 %%% Tests
 
-generate_test_procs() ->
+test_opts() ->
+    #{
+        store => hb_test_utils:test_store(),
+        priv_wallet => hb:wallet()
+    }.
+
+generate_test_procs(Opts) ->
     [
         hb_message:commit(
             #{
                 <<"type">> => <<"Process">>,
                 <<"image">> => <<0:(1024*32)>>
             },
-            #{ priv_wallet => hb:wallet() }
+            Opts
         ),
         hb_message:commit(
             #{
                 <<"type">> => <<"Process">>,
                 <<"image">> => <<0:(1024*32)>>
             },
-            #{ priv_wallet => hb:wallet() }
+            Opts
         )
     ].
 
 find_non_existent_process_test() ->
-    [Proc1, _Proc2] = generate_test_procs(),
+    Opts = test_opts(),
+    [Proc1, _Proc2] = generate_test_procs(Opts),
     start(),
     ?assertEqual(not_found, ?MODULE:find(hb_message:id(Proc1, all))).
 
 create_and_find_process_test() ->
-    [Proc1, _Proc2] = generate_test_procs(),
-    ID = hb_message:id(Proc1, all),
+    Opts = test_opts(),
+    [Proc1, _Proc2] = generate_test_procs(Opts),
+    ID = hb_message:id(Proc1, all, Opts),
     start(),
     Pid1 = ?MODULE:find(ID, Proc1),
     ?assert(is_pid(Pid1)),
     ?assertEqual(Pid1, ?MODULE:find(ID, Proc1)).
 
 create_multiple_processes_test() ->
-    [Proc1, Proc2] = generate_test_procs(),
+    Opts = test_opts(),
+    [Proc1, Proc2] = generate_test_procs(Opts),
     start(),
-    ID1 = hb_message:id(Proc1, all),
-    ID2 = hb_message:id(Proc2, all),
+    ID1 = hb_message:id(Proc1, all, Opts),
+    ID2 = hb_message:id(Proc2, all, Opts),
     Pid1 = ?MODULE:find(ID1, Proc1),
     Pid2 = ?MODULE:find(ID2, Proc2),
     ?assert(is_pid(Pid1)),
@@ -88,10 +97,11 @@ create_multiple_processes_test() ->
     ?assertEqual(Pid2, ?MODULE:find(ID2, Proc2)).
 
 get_all_processes_test() ->
-    [Proc1, Proc2] = generate_test_procs(),
+    Opts = test_opts(),
+    [Proc1, Proc2] = generate_test_procs(Opts),
     start(),
-    ID1 = hb_message:id(Proc1, all),
-    ID2 = hb_message:id(Proc2, all),
+    ID1 = hb_message:id(Proc1, all, Opts),
+    ID2 = hb_message:id(Proc2, all, Opts),
     ?MODULE:find(ID1, Proc1),
     ?MODULE:find(ID2, Proc2),
     Processes = ?MODULE:get_processes(),

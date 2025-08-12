@@ -411,6 +411,48 @@ footer {
 	border-bottom-left-radius: var(--border-radius);
 }
 
+#ledger-section {
+    padding: 15px 30px;
+    background: var(--section-bg-color-primary);
+	border-right: 1px solid var(--border-color);
+	border-left: 1px solid var(--border-color);
+	border-bottom: 1px solid var(--border-color);
+	border-bottom-right-radius: var(--border-radius);
+	border-bottom-left-radius: var(--border-radius);
+}
+
+.json-type-label {
+    font-size: clamp(13px, 1.75vw, 14px);
+	font-weight: 500;
+    color: var(--text-color-primary);
+    display: block;
+    margin: 0 0 5px 0;
+}
+
+.json-key {
+    font-size: clamp(13px, 1.75vw, 14px);
+	font-weight: 500;
+    color: var(--text-color-alt1);
+}
+
+.json-separator {
+    font-size: clamp(13px, 1.75vw, 14px);
+	font-weight: 500;
+    color: var(--text-color-alt1);
+}
+
+.json-string {
+    font-size: clamp(13px, 1.75vw, 14px);
+	font-weight: 600;
+    color: var(--text-color-primary);
+}
+
+.json-number {
+    font-size: clamp(13px, 1.75vw, 14px);
+	font-weight: 600;
+    color: var(--text-color-primary);
+}
+
 .tabs-wrapper {
 	display: flex;
 	flex-direction: column;

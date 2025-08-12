@@ -221,30 +221,36 @@ ao_data_key_test() ->
     ?assert(hb_message:verify(Dec, all, #{})).
         
 simple_signed_to_httpsig_test_disabled() ->
-    TX =
-        ar_bundles:sign_item(
-            #tx {
-                tags = [
-                    {<<"test-tag">>, <<"test-value">>},
-                    {<<"test-tag-2">>, <<"test-value-2">>},
-                    {<<"Capitalized-Tag">>, <<"test-value-3">>}
-                ]
-            },
-            ar_wallet:new()
+    Structured =
+        hb_message:commit(
+            #{ <<"test-tag">> => <<"test-value">> },
+            #{ priv_wallet => ar_wallet:new() },
+            #{
+                <<"commitment-device">> => <<"ans104@1.0">>
+            }
         ),
-    Structured1 = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
-    ?event(debug, {tx, TX}),
-    TABM = hb_message:convert(TX, tabm, <<"ans104@1.0">>, #{}),
-    ?event(debug, {tabm, TABM}),
-    HTTPSig = hb_message:convert(TABM, <<"httpsig@1.0">>, tabm, #{}),
-    ?event(debug, {httpsig, HTTPSig}),
-    Structured2 = hb_message:convert(HTTPSig, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
-	Match = hb_message:match(Structured1, Structured2, #{}),
-    ?event(debug, {match, Match}),
+    ?event(debug_test, {msg, Structured}),
+    HTTPSig =
+        hb_message:convert(
+            Structured,
+            <<"httpsig@1.0">>,
+            <<"structured@1.0">>,
+            #{}
+        ),
+    ?event(debug_test, {httpsig, HTTPSig}),
+    Structured2 =
+        hb_message:convert(
+            HTTPSig,
+            <<"structured@1.0">>,
+            <<"httpsig@1.0">>,
+            #{}
+        ),
+    ?event(debug_test, {decoded, Structured2}),
+	Match = hb_message:match(Structured, Structured2, #{}),
     ?assert(Match),
     ?assert(hb_message:verify(Structured2, all, #{})),
     HTTPSig2 = hb_message:convert(Structured2, <<"httpsig@1.0">>, <<"structured@1.0">>, #{}),
-    ?event(debug, {httpsig2, HTTPSig2}),
+    ?event(debug_test, {httpsig2, HTTPSig2}),
     ?assert(hb_message:verify(HTTPSig2, all, #{})),
     ?assert(hb_message:match(HTTPSig, HTTPSig2)).
 
@@ -415,3 +421,40 @@ codec_insensitive_get_test() ->
     Structured = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?assertEqual(hb_ao:get(<<"Hello">>, Structured, #{}), <<"World">>),
     ?assertEqual(hb_ao:get(<<"hello">>, Structured, #{}), <<"World">>).
+
+httpsig_bundle_with_nested_ans104_test() ->
+    Inner =
+        hb_message:commit(
+            #{
+                <<"test-key">> => <<"test-value">>,
+                <<"rand-key">> => hb_util:encode(crypto:strong_rand_bytes(32))
+            },
+            #{ priv_wallet => ar_wallet:new() },
+            #{
+                <<"commitment-device">> => <<"ans104@1.0">>
+            }
+        ),
+    Outer = #{ <<"inner">> => Inner },
+    ?assert(hb_message:verify(Outer, all, #{})),
+    ?event(debug_test, {outer, Outer}),
+    Enc =
+        hb_message:convert(
+            Outer,
+            #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
+            <<"structured@1.0">>,
+            #{}
+        ),
+    ?event(debug_test, {full_encoded_msg, Enc}),
+    ?event(debug_test,
+        {encoded_body,
+            {string, hb_maps:get(<<"body">>, Enc, undefined, #{})}
+        }
+    ),
+    Outer2 = hb_message:convert(Enc, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
+    Inner2 = hb_maps:get(<<"inner">>, Outer2, undefined, #{}),
+    ?event(debug_test, {converted, {original, Outer}, {decoded, Outer2}}),
+    ?assert(hb_message:verify(Outer2, all, #{})),
+    ?assert(hb_message:verify(Inner2, all, #{})),
+    ?assert(hb_message:match(Outer, Outer2)),
+    ?assert(hb_message:match(Inner, Inner2)),
+    ok.

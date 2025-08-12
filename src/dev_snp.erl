@@ -670,6 +670,11 @@ execute_is_trusted_subset_match_should_pass_test() ->
     ?assertEqual(true, Result).
 
 verify_test() ->
+    % Note: If this test fails, it may be because the unsigned ID of the node
+    % message in `test/admissible-report.eterm` has changed. If the format ever
+    % changes, this value will need to be updated. Recalculate the unsigned ID
+    % of the `Request/node-message' field, decode `Request/address', concatenate
+    % the two, and encode. The result will be the new `Request/nonce' value.
     {ProxyOpts, VerifyingNode} = setup_test_nodes(),
     {ok, [Request]} = file:consult(<<"test/admissible-report.eterm">>),
     {ok, Result} = hb_http:post(

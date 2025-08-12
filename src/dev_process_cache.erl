@@ -67,7 +67,13 @@ latest(ProcID, Opts) -> latest(ProcID, [], Opts).
 latest(ProcID, RequiredPath, Opts) ->
     latest(ProcID, RequiredPath, undefined, Opts).
 latest(ProcID, RawRequiredPath, Limit, Opts) ->
-    ?event({latest_called, {proc_id, ProcID}, {required_path, RawRequiredPath}, {limit, Limit}, {opts, Opts}}),
+    ?event(
+        {latest_called,
+            {proc_id, ProcID},
+            {required_path, RawRequiredPath},
+            {limit, Limit}
+        }
+    ),
     % Convert the required path to a list of _binary_ keys.
     RequiredPath =
         case RawRequiredPath of

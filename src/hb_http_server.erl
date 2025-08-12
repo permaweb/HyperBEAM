@@ -22,8 +22,6 @@
 %% `Opts' argument to use for all AO-Core resolution requests downstream.
 start() ->
     ?event(http, {start_store, <<"cache-mainnet">>}),
-    Store = hb_opts:get(store, no_store, #{}),
-    hb_store:start(Store),
     Loaded =
         case hb_opts:load(Loc = hb_opts:get(hb_config_location, <<"config.flat">>)) of
             {ok, Conf} ->
@@ -35,9 +33,19 @@ start() ->
         end,
     MergedConfig =
         hb_maps:merge(
-            hb_opts:default_message(),
+            hb_opts:default_message_with_env(),
             Loaded
         ),
+    %% Apply store defaults before starting store
+    StoreOpts = hb_opts:get(store, no_store, MergedConfig),
+    StoreDefaults = hb_opts:get(store_defaults, #{}, MergedConfig),
+    UpdatedStoreOpts = 
+        case StoreOpts of
+            no_store -> no_store;
+            _ when is_list(StoreOpts) -> hb_store_opts:apply(StoreOpts, StoreDefaults);
+            _ -> StoreOpts
+        end,
+    hb_store:start(UpdatedStoreOpts),
     PrivWallet =
         hb:wallet(
             hb_opts:get(
@@ -46,7 +54,45 @@ start() ->
                 Loaded
             )
         ),
-    FormattedConfig = hb_util:debug_fmt(MergedConfig, MergedConfig, 2),
+    maybe_greeter(MergedConfig, PrivWallet),
+    start(
+        Loaded#{
+            priv_wallet => PrivWallet,
+            store => UpdatedStoreOpts,
+            port => hb_opts:get(port, 8734, Loaded),
+            cache_writers => [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
+        }
+    ).
+start(Opts) ->
+    application:ensure_all_started([
+        kernel,
+        stdlib,
+        inets,
+        ssl,
+        ranch,
+        cowboy,
+        gun,
+        os_mon
+    ]),
+    hb:init(),
+    BaseOpts = set_default_opts(Opts),
+    {ok, Listener, _Port} = new_server(BaseOpts),
+    {ok, Listener}.
+
+%% @doc Print the greeter message to the console if we are not running tests.
+maybe_greeter(MergedConfig, PrivWallet) ->
+    case hb_features:test() of
+        false ->
+            print_greeter(MergedConfig, PrivWallet);
+        true ->
+            ok
+    end.
+
+%% @doc Print the greeter message to the console. Includes the version, operator
+%% address, URL to access the node, and the wider configuration (including the
+%% keys inherited from the default configuration).
+print_greeter(Config, PrivWallet) ->
+    FormattedConfig = hb_util:debug_format(Config, Config, 2),
     io:format("~n"
         "===========================================================~n"
         "==    ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗           ==~n"
@@ -77,8 +123,8 @@ start() ->
                     io_lib:format(
                         "http://~s:~p",
                         [
-                            hb_opts:get(host, <<"localhost">>, Loaded),
-                            hb_opts:get(port, 8734, Loaded)
+                            hb_opts:get(host, <<"localhost">>, Config),
+                            hb_opts:get(port, 8734, Config)
                         ]
                     )
                 ),
@@ -87,30 +133,7 @@ start() ->
             hb_util:human_id(ar_wallet:to_address(PrivWallet)),
             FormattedConfig
         ]
-    ),
-    start(
-        Loaded#{
-            priv_wallet => PrivWallet,
-            store => Store,
-            port => hb_opts:get(port, 8734, Loaded),
-            cache_writers => [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
-        }
     ).
-start(Opts) ->
-    application:ensure_all_started([
-        kernel,
-        stdlib,
-        inets,
-        ssl,
-        ranch,
-        cowboy,
-        gun,
-        os_mon
-    ]),
-    hb:init(),
-    BaseOpts = set_default_opts(Opts),
-    {ok, Listener, _Port} = new_server(BaseOpts),
-    {ok, Listener}.
 
 %% @doc Trigger the creation of a new HTTP server node. Accepts a `NodeMsg'
 %% message, which is used to configure the server. This function executed the
@@ -120,7 +143,7 @@ start(Opts) ->
 new_server(RawNodeMsg) ->
     RawNodeMsgWithDefaults =
         hb_maps:merge(
-            hb_opts:default_message(),
+            hb_opts:default_message_with_env(),
             RawNodeMsg#{ only => local }
         ),
     HookMsg = #{ <<"body">> => RawNodeMsgWithDefaults },
@@ -358,8 +381,18 @@ handle_request(RawReq, Body, ServerID) ->
             ),
             TracePID = hb_tracer:start_trace(),
             % Parse the HTTP request into HyerBEAM's message format.
+            ReqSingleton =
+                try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg)
+                catch ParseError:ParseDetails:ParseStacktrace ->
+                    {parse_error, ParseError, ParseDetails, ParseStacktrace}
+                end,
             try 
-                ReqSingleton = hb_http:req_to_tabm_singleton(Req, Body, NodeMsg),
+                case ReqSingleton of
+                    {parse_error, PType, PDetails, PStacktrace} ->
+                        erlang:raise(PType, PDetails, PStacktrace);
+                    _ ->
+                        ok
+                end,
                 CommitmentCodec = hb_http:accept_to_codec(ReqSingleton, NodeMsg),
                 ?event(http,
                     {parsed_singleton,
@@ -380,38 +413,39 @@ handle_request(RawReq, Body, ServerID) ->
                 hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
             catch
                 Type:Details:Stacktrace ->
-                    Trace = hb_tracer:get_trace(TracePID),
-                    FormattedError =
-                        hb_util:bin(hb_message:format(
-                            hb_private:reset(#{
-                                <<"type">> => Type,
-                                <<"details">> => Details,
-                                <<"stacktrace">> => Stacktrace
-                            })
-                        )),
-                    {ok, ErrorPage} = dev_hyperbuddy:return_error(FormattedError),
-                    ?event(
-                        http_error,
-                        {http_error,
-                            {details,
-                                {explicit,
-                                    #{
-                                        type => Type,
-                                        details => Details,
-                                        stacktrace => Stacktrace
-                                    }
-                                }
-                            }
-                        }
-                    ),
-                    hb_http:reply(
+                    handle_error(
                         Req,
-                        #{},
-                        ErrorPage#{ <<"status">> => 500 },
+                        ReqSingleton,
+                        Type,
+                        Details,
+                        Stacktrace,
                         NodeMsg
                     )
             end
-end.
+    end.
+
+%% @doc Return a 500 error response to the client.
+handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
+    ErrorMsg =
+        #{
+            <<"status">> => 500,
+            <<"type">> => hb_message:format(Type),
+            <<"details">> => hb_message:format(Details, NodeMsg, 1),
+            <<"stacktrace">> => hb_util:bin(hb_util:format_trace(Stacktrace))
+        },
+    ErrorBin = hb_util:format_error(ErrorMsg, NodeMsg),
+    ?event(
+        http_error,
+        {returning_500_error,
+            {string,
+                hb_util:indent(
+                    <<"\n", ErrorBin/binary, "\n">>,
+                    1
+                )
+            }
+        }
+    ),
+    hb_http:reply(Req, Singleton, ErrorMsg, NodeMsg).
 
 %% @doc Return the list of allowed methods for the HTTP server.
 allowed_methods(Req, State) ->
@@ -491,10 +525,7 @@ set_default_opts(Opts) ->
         end,
     Store =
         case hb_opts:get(store, no_store, TempOpts) of
-            no_store ->
-                TestDir = <<"cache-TEST/run-fs-", (integer_to_binary(Port))/binary>>,
-                filelib:ensure_dir(binary_to_list(TestDir)),
-                #{ <<"store-module">> => hb_store_fs, <<"name">> => TestDir };
+            no_store -> [hb_test_utils:test_store()];
             PassedStore -> PassedStore
         end,
     ?event({set_default_opts,
@@ -564,7 +595,7 @@ set_node_opts_test() ->
 %% @doc Test the set_opts/2 function that merges request with options,
 %% manages node history, and updates server state.
 set_opts_test() ->
-    DefaultOpts = hb_opts:default_message(),
+    DefaultOpts = hb_opts:default_message_with_env(),
     start_node(DefaultOpts#{ 
         priv_wallet => Wallet = ar_wallet:new(), 
         port => rand:uniform(10000) + 10000 

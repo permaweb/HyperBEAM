@@ -116,7 +116,13 @@ charge(_, RawReq, NodeMsg) ->
                                 (hb_util:bin(NewBalance))/binary,
                             ".">>
                     }}
-            end
+            end;
+        MultipleSigners ->
+            ?event(payment, {charge, {error_multiple_signers, MultipleSigners}}),
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> => <<"Multiple signers in charge.">>
+            }}
     end.
 
 %% @doc Get the balance of a user in the ledger.
