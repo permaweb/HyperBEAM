@@ -70,9 +70,9 @@ to(InputTABM, Req, Opts) when is_map(InputTABM) ->
 to(_Other, _Req, _Opts) ->
     throw(invalid_tx).
 
-%%% ------------------------------------------------------------------------------------------
+%%% ---------------------------------------------------------------------------
 %%% ANS-104-specific testing cases.
-%%% ------------------------------------------------------------------------------------------
+%%% ---------------------------------------------------------------------------
 
 normal_tags_test() ->
     Msg = #{
@@ -191,9 +191,26 @@ name_clash_test() ->
                 <<"tag">> => <<"tag-value">>,
                 <<"commitments">> => #{
                     <<"original-tags">> => #{
-                        <<"1">> => #{<<"name">> => <<"Tag">>, <<"value">> => <<"Tag-value">>},
-                        <<"2">> => #{<<"name">> => <<"tag">>, <<"value">> => <<"tag-value">>},
-                        <<"3">> => #{<<"name">> => <<"tAG">>, <<"value">> => <<"tAG-value">>}
+                        <<"1">> => #{
+                            <<"name">> => <<"Tag">>,
+                            <<"value">> => <<"Tag-value">>
+                        },
+                        <<"2">> => #{
+                            <<"name">> => <<"tag">>,
+                            <<"value">> => <<"tag-value">>
+                        },
+                        <<"3">> => #{
+                            <<"name">> => <<"tAG">>,
+                            <<"value">> => <<"tAG-value">>
+                        }
+                    },
+                    <<"committed">> => #{
+                        <<"1">> => <<"last_tx">>,
+                        <<"2">> => <<"owner">>,
+                        <<"3">> => <<"target">>,
+                        <<"4">> => <<"signature">>,
+                        <<"5">> => <<"data">>,
+                        <<"6">> => <<"tag">>
                     }
                 }
             }
@@ -238,6 +255,13 @@ name_clash_test() ->
                             <<"name">> => <<"lAST_TX">>,
                             <<"value">> => hb_util:encode(ReverseCaseLastTX)
                         }
+                    },
+                    <<"committed">> => #{
+                        <<"1">> => <<"owner">>,
+                        <<"2">> => <<"signature">>,
+                        <<"3">> => <<"data">>,
+                        <<"4">> => <<"last_tx">>,
+                        <<"5">> => <<"target">>
                     }
                 }
             }
@@ -260,6 +284,7 @@ name_clash_test() ->
                 <<"last_tx">> => hb_util:encode(LowercaseLastTX),
                 <<"commitments">> => #{
                     <<"original-target">> => hb_util:encode(L1Target),
+                    <<"original-last_tx">> => hb_util:encode(L1LastTX),
                     <<"original-tags">> => #{
                         <<"1">> => #{
                             <<"name">> => <<"target">>,
@@ -274,17 +299,24 @@ name_clash_test() ->
                             <<"value">> => hb_util:encode(CamelcaseTarget)
                         },
                         <<"4">> => #{
+                            <<"name">> => <<"Last_Tx">>,
+                            <<"value">> => hb_util:encode(CamelcaseLastTX)
+                        },
+                        <<"5">> => #{
                             <<"name">> => <<"last_tx">>,
                             <<"value">> => hb_util:encode(LowercaseLastTX)
                         },
-                        <<"5">> => #{
+                        <<"6">> => #{
                             <<"name">> => <<"lAST_TX">>,
                             <<"value">> => hb_util:encode(ReverseCaseLastTX)
-                        },
-                        <<"6">> => #{
-                            <<"name">> => <<"Last_Tx">>,
-                            <<"value">> => hb_util:encode(CamelcaseLastTX)
                         }
+                    },
+                    <<"committed">> =>#{
+                        <<"1">> => <<"owner">>,
+                        <<"2">> => <<"signature">>,
+                        <<"3">> => <<"data">>,
+                        <<"4">> => <<"last_tx">>,
+                        <<"5">> => <<"target">>
                     }
                 }
             }
@@ -305,6 +337,7 @@ name_clash_test() ->
                 <<"last_tx">> => hb_util:encode(CamelcaseLastTX),
                 <<"commitments">> => #{
                     <<"original-target">> => hb_util:encode(L1Target),
+                    <<"original-last_tx">> => hb_util:encode(L1LastTX),
                     <<"original-tags">> => #{
                         <<"1">> => #{
                             <<"name">> => <<"tARGET">>,
@@ -322,6 +355,13 @@ name_clash_test() ->
                             <<"name">> => <<"Last_Tx">>,
                             <<"value">> => hb_util:encode(CamelcaseLastTX)
                         }
+                    },
+                    <<"committed">> => #{
+                        <<"1">> => <<"owner">>,
+                        <<"2">> => <<"signature">>,
+                        <<"3">> => <<"data">>,
+                        <<"4">> => <<"last_tx">>,
+                        <<"5">> => <<"target">>
                     }
                 }
             }
@@ -329,19 +369,34 @@ name_clash_test() ->
         {l1_and_tag_clash_c,
             #tx{
                 tags = [
-                    {<<"tARGET">>, hb_util:encode(ReverseCaseTarget)}
+                    {<<"tARGET">>, hb_util:encode(ReverseCaseTarget)},
+                    {<<"lAST_TX">>, hb_util:encode(ReverseCaseLastTX)}
                 ],
-                target = L1Target
+                target = L1Target,
+                last_tx = L1LastTX
             },
             #{
                 <<"target">> => hb_util:encode(ReverseCaseTarget),
+                <<"last_tx">> => hb_util:encode(ReverseCaseLastTX),
                 <<"commitments">> => #{
                     <<"original-target">> => hb_util:encode(L1Target),
+                    <<"original-last_tx">> => hb_util:encode(L1LastTX),
                     <<"original-tags">> => #{
                         <<"1">> => #{
                             <<"name">> => <<"tARGET">>,
                             <<"value">> => hb_util:encode(ReverseCaseTarget)
+                        },
+                        <<"2">> => #{
+                            <<"name">> => <<"lAST_TX">>,
+                            <<"value">> => hb_util:encode(ReverseCaseLastTX)
                         }
+                    },
+                    <<"committed">> => #{
+                        <<"1">> => <<"owner">>,
+                        <<"2">> => <<"signature">>,
+                        <<"3">> => <<"data">>,
+                        <<"4">> => <<"last_tx">>,
+                        <<"5">> => <<"target">>
                     }
                 }
             }
@@ -349,19 +404,34 @@ name_clash_test() ->
         {l1_and_tag_clash_d,
             #tx{
                 tags = [
-                    {<<"target">>, hb_util:encode(LowercaseTarget)}
+                    {<<"target">>, hb_util:encode(LowercaseTarget)},
+                    {<<"last_tx">>, hb_util:encode(LowercaseLastTX)}
                 ],
-                target = L1Target
+                target = L1Target,
+                last_tx = L1LastTX
             },
             #{
                 <<"target">> => hb_util:encode(LowercaseTarget),
+                <<"last_tx">> => hb_util:encode(LowercaseLastTX),
                 <<"commitments">> => #{
                     <<"original-target">> => hb_util:encode(L1Target),
+                    <<"original-last_tx">> => hb_util:encode(L1LastTX),
                     <<"original-tags">> => #{
                         <<"1">> => #{
                             <<"name">> => <<"target">>,
                             <<"value">> => hb_util:encode(LowercaseTarget)
+                        },
+                        <<"2">> => #{
+                            <<"name">> => <<"last_tx">>,
+                            <<"value">> => hb_util:encode(LowercaseLastTX)
                         }
+                    },
+                    <<"committed">> => #{
+                        <<"1">> => <<"owner">>,
+                        <<"2">> => <<"signature">>,
+                        <<"3">> => <<"data">>,
+                        <<"4">> => <<"last_tx">>,
+                        <<"5">> => <<"target">>
                     }
                 }
             }
@@ -369,50 +439,77 @@ name_clash_test() ->
         {l1_and_tag_clash_e,
             #tx{
                 tags = [
-                    {<<"target">>, hb_util:encode(L1Target)}
+                    {<<"target">>, hb_util:encode(L1Target)},
+                    {<<"last_tx">>, hb_util:encode(L1LastTX)}
                 ],
-                target = L1Target
+                target = L1Target,
+                last_tx = L1LastTX
             },
             #{
                 <<"target">> => hb_util:encode(L1Target),
+                <<"last_tx">> => hb_util:encode(L1LastTX),
                 <<"commitments">> => #{
                     <<"original-target">> => hb_util:encode(L1Target),
+                    <<"original-last_tx">> => hb_util:encode(L1LastTX),
                     <<"original-tags">> => #{
                         <<"1">> => #{
                             <<"name">> => <<"target">>,
                             <<"value">> => hb_util:encode(L1Target)
+                        },
+                        <<"2">> => #{
+                            <<"name">> => <<"last_tx">>,
+                            <<"value">> => hb_util:encode(L1LastTX)
                         }
+                    },
+                    <<"committed">> => #{
+                        <<"1">> => <<"owner">>,
+                        <<"2">> => <<"signature">>,
+                        <<"3">> => <<"data">>,
+                        <<"4">> => <<"last_tx">>,
+                        <<"5">> => <<"target">>
                     }
                 }
             }
         },
         {no_clash_just_l1,
             #tx{
-                target = L1Target
+                target = L1Target,
+                last_tx = L1LastTX
             },
             #{
                 <<"target">> => hb_util:encode(L1Target),
+                <<"last_tx">> => hb_util:encode(L1LastTX),
                 <<"commitments">> => #{
-                    <<"original-target">> => hb_util:encode(L1Target)
+                    <<"original-target">> => hb_util:encode(L1Target),
+                    <<"original-last_tx">> => hb_util:encode(L1LastTX),
+                    <<"committed">> => #{
+                        <<"1">> => <<"owner">>,
+                        <<"2">> => <<"signature">>,
+                        <<"3">> => <<"data">>,
+                        <<"4">> => <<"last_tx">>,
+                        <<"5">> => <<"target">>
+                    }
                 }
             }
         }
     ],
 
-    %% XXX TODO: try with signing
-    %% XXX TODO: add tests for last_tx / anchor
-
     lists:foreach(
         fun({Label, InputTX, ExpectedTABM}) ->
-            do_name_clash_roundtrip(Label, InputTX, ExpectedTABM)
+            do_unsigned_name_clash_roundtrip(Label, InputTX, ExpectedTABM),
+            do_signed_name_clash_roundtrip(Label, InputTX, ExpectedTABM)
         end,
         TestCases
     ).
 
-do_name_clash_roundtrip(Label, InputTX, ExpectedTABM0) ->
+do_unsigned_name_clash_roundtrip(BaseLabel, InputTX, ExpectedTABM0) ->
+    Label = <<(atom_to_binary(BaseLabel, utf8))/binary, " (unsigned)">>,
     % Fix up the commitments in the ExpectedTABM
     ResetTX = hb_tx:reset_ids(InputTX),
-    ExpectedCommitments0 = maps:get(<<"commitments">>, ExpectedTABM0, #{}),
+    ExpectedCommitments0 = hb_maps:without(
+        [<<"committed">>],
+        maps:get(<<"commitments">>, ExpectedTABM0, #{})
+    ),
     ExpectedCommitments = ExpectedCommitments0#{
         <<"commitment-device">> => <<"ans104@1.0">>,
         <<"type">> => <<"unsigned-sha256">>
@@ -425,13 +522,64 @@ do_name_clash_roundtrip(Label, InputTX, ExpectedTABM0) ->
     
     % Run the tests
     {ok, TABM} = from(InputTX, #{}, #{}),
-    ?event({Label, {expected_tabm, {explicit, ExpectedTABM}}, {actual_tabm, {explicit, TABM}}}),
+    ?event({Label,
+        {expected_tabm, {explicit, ExpectedTABM}},
+        {actual_tabm, {explicit, TABM}},
+        {input_tx, {explicit, InputTX}}
+    }),
     ?assert(hb_message:match(ExpectedTABM, TABM), Label),
 
     {ok, OutputTX} = to(TABM, #{}, #{}),
-    ?event({Label, {input_tx, {explicit, ResetTX}}, {output_tx, {explicit, OutputTX}}}),
+    ?event({Label,
+        {input_tx, {explicit, ResetTX}}, {output_tx, {explicit, OutputTX}}}),
     ?assertEqual(ResetTX, OutputTX, Label),
     ok.
+
+
+do_signed_name_clash_roundtrip(BaseLabel, InputTX, ExpectedTABM0) ->
+    Label = <<(atom_to_binary(BaseLabel, utf8))/binary, " (signed)">>,
+    % Sign the input TX and build the expected commitments for a signed message
+    Wallet = ar_wallet:new(),
+    SignedTX0 = ar_bundles:sign_item(InputTX, Wallet),
+    SignedTX = hb_tx:normalize(SignedTX0),
+
+    ExpectedCommitments0 = maps:get(<<"commitments">>, ExpectedTABM0, #{}),
+    ExpectedCommitments = ExpectedCommitments0#{
+        <<"commitment-device">> => <<"ans104@1.0">>,
+        <<"committer">> => hb_util:human_id(ar_wallet:to_address(Wallet)),
+        <<"keyid">> => <<
+            "publickey:", (hb_util:encode(ar_wallet:to_pubkey(Wallet)))/binary
+        >>,
+        <<"signature">> => hb_util:encode(SignedTX#tx.signature),
+        <<"type">> => <<"rsa-pss-sha256">>
+    },
+    ExpectedTABM = ExpectedTABM0#{
+        <<"commitments">> => #{
+            hb_util:human_id(SignedTX#tx.id) => ExpectedCommitments
+        }
+    },
+
+    % Run the tests
+    {ok, TABM} = from(SignedTX, #{}, #{}),
+    ?event({Label, 
+        {expected_tabm, {explicit, ExpectedTABM}},
+        {actual_tabm, {explicit, TABM}},
+        {input_tx, {explicit, InputTX}},
+        {signed_tx, {explicit, SignedTX}}
+    }),
+    ?assert(hb_message:match(ExpectedTABM, TABM), Label),
+
+    {ok, OutputTX} = to(TABM, #{}, #{}),
+    ?event({Label, 
+        {input_tx, {explicit, InputTX}},
+        {signed_tx, {explicit, SignedTX}},
+        {output_tx, {explicit, OutputTX}}
+    }),
+    ?assertEqual(SignedTX, OutputTX, Label),
+    ?assert(ar_bundles:verify_item(OutputTX)),
+    ok.
+
+
 
 only_committed_maintains_target_test() ->
     TX = ar_bundles:sign_item(#tx {
@@ -443,11 +591,13 @@ only_committed_maintains_target_test() ->
         data = <<"test-data">>
     }, ar_wallet:new()),
     ?event({tx, {explicit, TX}}),
-    Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    Decoded = hb_message:convert(TX,
+        <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({decoded, {explicit, Decoded}}),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, #{}),
     ?event({only_committed, {explicit, OnlyCommitted}}),
-    Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
+    Encoded = hb_message:convert(OnlyCommitted,
+        <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?event({encoded, {explicit, Encoded}}),
     ?event({tx, {explicit, TX}}),
     ?assertEqual(TX, Encoded).
@@ -461,9 +611,11 @@ type_tag_test() ->
             ar_wallet:new()
         ),
     ?event({tx, TX}),
-    Structured = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
+    Structured = hb_message:convert(TX,
+        <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({structured, Structured}),
-    TX2 = hb_message:convert(Structured, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
+    TX2 = hb_message:convert(Structured,
+        <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?event({after_conversion, TX2}),
     ?assertEqual(TX, TX2).
 
@@ -514,7 +666,8 @@ simple_signed_to_httpsig_test_disabled() ->
 	Match = hb_message:match(Structured, Structured2, #{}),
     ?assert(Match),
     ?assert(hb_message:verify(Structured2, all, #{})),
-    HTTPSig2 = hb_message:convert(Structured2, <<"httpsig@1.0">>, <<"structured@1.0">>, #{}),
+    HTTPSig2 = hb_message:convert(Structured2,
+        <<"httpsig@1.0">>, <<"structured@1.0">>, #{}),
     ?event(debug_test, {httpsig2, HTTPSig2}),
     ?assert(hb_message:verify(HTTPSig2, all, #{})),
     ?assert(hb_message:match(HTTPSig, HTTPSig2)).
@@ -571,7 +724,8 @@ set_defaults_test() ->
         <<"denomination">> => 0
     },
     UnsignedTX = #tx{
-        unsigned_id = hb_util:decode(<<"3eMto8z7IlnQgKPrHjmkrI2ohnrJhnCsss6wc4L86QQ">>),
+        unsigned_id = hb_util:decode(
+            <<"3eMto8z7IlnQgKPrHjmkrI2ohnrJhnCsss6wc4L86QQ">>),
         tags = [
             {<<"ao-types">>,
                 <<
@@ -597,14 +751,22 @@ set_defaults_test() ->
 
 invalid_fields_test() ->
     TestCases = [
-        { <<"id">>, #{ <<"id">> => hb_util:encode(crypto:strong_rand_bytes(32)) } },
-        { <<"unsigned_id">>, #{ <<"unsigned_id">> => hb_util:encode(crypto:strong_rand_bytes(32)) } },
-        { <<"owner">>, #{ <<"owner">> => hb_util:encode(crypto:strong_rand_bytes(512)) } },
-        { <<"owner_address">>, #{ <<"owner_address">> => hb_util:encode(crypto:strong_rand_bytes(32)) } },
+        { <<"id">>, #{
+            <<"id">> => hb_util:encode(crypto:strong_rand_bytes(32)) } },
+        { <<"unsigned_id">>, #{
+            <<"unsigned_id">> => hb_util:encode(crypto:strong_rand_bytes(32)) }
+        },
+        { <<"owner">>, #{
+            <<"owner">> => hb_util:encode(crypto:strong_rand_bytes(512)) } },
+        { <<"owner_address">>, #{
+            <<"owner_address">> => hb_util:encode(crypto:strong_rand_bytes(32)) 
+        } },
         { <<"tags">>, #{ <<"tags">> => <<"tags">> } },
         { <<"data_size">>, #{ <<"data_size">> => <<"100">> } },
-        { <<"data_tree">>, #{ <<"data_tree">> => hb_util:encode(crypto:strong_rand_bytes(32)) } },
-        { <<"signature">>, #{ <<"signature">> => hb_util:encode(crypto:strong_rand_bytes(512)) } }
+        { <<"data_tree">>, #{
+            <<"data_tree">> => hb_util:encode(crypto:strong_rand_bytes(32)) } },
+        { <<"signature">>, #{
+            <<"signature">> => hb_util:encode(crypto:strong_rand_bytes(512)) } }
     ],
 
     lists:foreach(
@@ -620,7 +782,8 @@ invalid_fields_test() ->
     ).
 
 do_unsigned_roundtrip(UnsignedStructured, UnsignedTX) ->
-    StructuredCodec = #{<<"device">> => <<"structured@1.0">>, <<"bundle">> => true},
+    StructuredCodec = #{
+        <<"device">> => <<"structured@1.0">>, <<"bundle">> => true},
     TABM0 = hb_message:convert(UnsignedStructured, tabm, StructuredCodec, #{}),
     {ok, CommittedTABM0} =
         dev_codec_ans104:commit(TABM0, #{ <<"type">> => <<"unsigned">> }, #{}),
@@ -644,7 +807,8 @@ do_unsigned_roundtrip(UnsignedStructured, UnsignedTX) ->
 do_signed_roundtrip(UnsignedStructured, UnsignedTX) ->
     {_, {_, Owner}} = Wallet = ar_wallet:new(),
     Opts = #{ priv_wallet => Wallet },
-    StructuredCodec = #{<<"device">> => <<"structured@1.0">>, <<"bundle">> => true},
+    StructuredCodec = #{
+        <<"device">> => <<"structured@1.0">>, <<"bundle">> => true},
 
     TABM0 = hb_message:convert(UnsignedStructured, tabm, StructuredCodec, Opts),
     {ok, SignedTABM0} = 
