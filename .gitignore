@@ -46,3 +46,8 @@ mkdocs-site-manifest.csv
 !test/admissible-report-wallet.json
 !test/admissible-report.json
 !test/config.json
+
+# Claude AI files
+.claude/
+CLAUDE.md
+CLAUDE_CODE_SETUP.md
