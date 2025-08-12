@@ -92,6 +92,6 @@ elif [ "$COMMAND" = "opencode" ]; then
         # OpenCode interactive mode: just pass the prompt
         echo "Executing: opencode \"$PROMPT\""
         echo ""
-        exec opencode "$PROMPT"
+        exec opencode --prompt "$PROMPT"
     fi
 fi
