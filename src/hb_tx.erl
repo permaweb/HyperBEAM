@@ -357,7 +357,7 @@ add_field_to_commitment(NormalizedKey, CurrentValue, Commitment) ->
         Commitment).
 
 original_key(<<"target">>) -> <<"original-target">>;
-original_key(<<"last_tx">>) -> <<"original-anchor">>.
+original_key(<<"last_tx">>) -> <<"original-last_tx">>.
 
 tx_to_tabm_collapse_clashes(TABM) ->
     maps:map(
