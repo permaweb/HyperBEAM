@@ -1010,23 +1010,28 @@ normalize_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
     WithoutPeer =
         (remove_unless_signed([<<"content-length">>], Msg, Opts))#{
             <<"method">> => Method,
-            <<"path">> => MsgPath,
-            <<"accept-bundle">> =>
-                maps:get(
-                    <<"accept-bundle">>,
-                    Msg,
-                    maps:get(<<"accept-bundle">>, RawHeaders, false)
-                )
+            <<"path">> => MsgPath
         },
+    AcceptBundle =
+        maps:get(
+            <<"accept-bundle">>,
+            Msg,
+            maps:get(<<"accept-bundle">>, RawHeaders, undefined)
+        ),
+    WithAcceptBundle =
+        case AcceptBundle of
+            undefined -> WithoutPeer;
+            _ -> WithoutPeer#{ <<"accept-bundle">> => AcceptBundle }
+        end,
     % Parse and add the cookie from the request, if present. We reinstate the
     % `cookie' field in the message, as it is not typically signed, yet should
     % be honored by the node anyway.
     {ok, WithCookie} =
         case maps:get(<<"cookie">>, RawHeaders, undefined) of
-            undefined -> {ok, WithoutPeer};
+            undefined -> {ok, WithAcceptBundle};
             Cookie ->
                 dev_codec_cookie:from(
-                    WithoutPeer#{ <<"cookie">> => Cookie },
+                    WithAcceptBundle#{ <<"cookie">> => Cookie },
                     Req,
                     Opts
                 )
