@@ -39,7 +39,7 @@
 -define(FOLD_YIELD_INTERVAL, 100).              % Yield every x keys
 -define(LINK_PREFIX, <<"link:">>).              
 -define(DATA_PREFIX, <<"data:">>).              
--define(MIN_PREFIX_SIZE, 5).                    % Size of the "link:" and "data:" prefix
+-define(PREFIX_SIZE, 5).                        % Size of the "link:" and "data:" prefix
 
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
@@ -91,15 +91,9 @@ start(_) ->
 -spec type(map(), binary()) -> composite | simple | not_found.
 type(Opts, Key) ->
     case read_direct(Opts, Key) of
-        {ok, <<"group">>} -> composite;
-        {ok, Value} ->
-            case strip_value(Value) of
-                {?LINK_PREFIX, Link} ->
-                    % This is a link, check the target's type
-                    type(Opts, Link);
-                _ ->
-                    simple
-            end;
+        {link, Link} -> type(Opts, Link);
+        {data, _Data} -> simple;
+        {group, _Group} -> composite;
         not_found -> not_found
     end.
 
@@ -202,50 +196,21 @@ read(Opts, Path) ->
             end
     end.
 
-%% @doc Helper function to extract the link or data by removing the prefix.
-strip_value(Value) ->
-    case byte_size(Value) > ?MIN_PREFIX_SIZE of
-        true ->
-            case strip_with_prefix(Value, ?LINK_PREFIX) of
-                {ok, TaggedLink} -> TaggedLink;
-                error ->
-                    case strip_with_prefix(Value, ?DATA_PREFIX) of
-                        {ok, TaggedData} -> TaggedData;
-                        error -> Value
-                    end
-            end;
-        false ->
-            Value
-    end.
-
-% Helper to strip the RawValue tagging it with the prefix
-strip_with_prefix(Value, Prefix) ->
-    PrefixSize = byte_size(Prefix),
-    case binary:part(Value, 0, PrefixSize) =:= Prefix of
-        true ->
-            RawValue =
-                binary:part(
-                    Value,
-                    PrefixSize,
-                    byte_size(Value) - PrefixSize
-                ),
-            {ok, {Prefix, RawValue}};
-        false ->
-            error
-    end.
-
 %% @doc Helper function to convert to a path
 to_path(PathParts) ->
     hb_util:bin(lists:join(<<"/">>, PathParts)).
 
 %% @doc Unified read function that handles LMDB reads with fallback to the 
 %% in-process pending writes, if necessary.
-%% 
-%% Returns {ok, Value} or not_found.
+%%
+%% Returns a tagged tuple with {Type, RawValue} or not_found where Type is one of
+%% group, link, or data.
 read_direct(Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:get(DBInstance, Path) of
-        {ok, Value} -> {ok, Value};
+        {ok, <<Prefix:?PREFIX_SIZE/binary, Data/binary>>} when Prefix == ?DATA_PREFIX -> {data, Data};
+        {ok, <<Prefix:?PREFIX_SIZE/binary, Link/binary>>} when Prefix == ?LINK_PREFIX -> {link, Link};
+        {ok, <<"group">>} -> {group, <<"group">>};
         {error, not_found} -> not_found;  % Normalize error format
         not_found -> not_found  % Handle both old and new format
     end.
@@ -254,19 +219,12 @@ read_direct(Opts, Path) ->
 %% This is the internal implementation that handles actual database reads.
 read_with_links(Opts, Path) ->
     case read_direct(Opts, Path) of
-        {ok, <<"group">>} -> not_found;
-        {ok, Value} ->
-            % Check if this value is actually a link to another key
-            case strip_value(Value) of
-                {?LINK_PREFIX, Link} -> 
-                   % Extract the target key and recursively resolve the link
-                   read_with_links(Opts, Link);
-                {?DATA_PREFIX, Data} ->
-                    {ok, Data};
-                _ ->
-                    % Does not require migration, old data without prefix is returned
-                    {ok, Value}
-            end;
+        {group, <<"group">>} -> not_found;
+        {link, Link} -> 
+            % Extract the target key and recursively resolve the link
+            read_with_links(Opts, Link);
+        {data, RawValue} ->
+            {ok, RawValue};
         not_found ->
             not_found
     end.
@@ -298,19 +256,16 @@ resolve_path_links_acc(Opts, [Head | Tail], AccPath, Depth) ->
     CurrentPathBin = to_path(CurrentPath),
     % Check if the accumulated path (not just the segment) is a link
     case read_direct(Opts, CurrentPathBin) of
-        {ok, Value} ->
-            case strip_value(Value) of
-                {?LINK_PREFIX, Link} ->
-                    % The accumulated path is a link! Resolve it
-                    LinkSegments = binary:split(Link, <<"/">>, [global]),
-                    % Replace the accumulated path with the link target and
-                    % continue with remaining segments
-                    NewPath = LinkSegments ++ Tail,
-                    resolve_path_links(Opts, NewPath, Depth + 1);
-                _ ->
-                    % Not a link, continue accumulating
-                    resolve_path_links_acc(Opts, Tail, [Head | AccPath], Depth)
-            end;
+        {link, Link} ->
+            % The accumulated path is a link! Resolve it
+            LinkSegments = binary:split(Link, <<"/">>, [global]),
+            % Replace the accumulated path with the link target and
+            % continue with remaining segments
+            NewPath = LinkSegments ++ Tail,
+            resolve_path_links(Opts, NewPath, Depth + 1);
+        {_Any, _Data} ->
+            % Not a link, continue accumulating
+            resolve_path_links_acc(Opts, Tail, [Head | AccPath], Depth);
         not_found ->
             % Path doesn't exist as a complete link, continue accumulating
             resolve_path_links_acc(Opts, Tail, [Head | AccPath], Depth)
@@ -360,17 +315,10 @@ list(Opts, Path) ->
     % Check if Path is a link and resolve it if necessary
     ResolvedPath =
         case read_direct(Opts, Path) of
-            {ok, Value} ->
-                case strip_value(Value) of
-                    {?LINK_PREFIX, Link} ->
-                        Link;
-                    {?DATA_PREFIX, Data} ->
-                        Data;
-                    _ ->
-                        % Not a link; use original path
-                        Path
-                end;
-            not_found ->
+            {link, Link} -> 
+                Link;
+            _Any -> 
+                % Not a link; use original path
                 Path
         end,
     % Ensure path ends with / for elmdb:list API
@@ -471,7 +419,7 @@ create_parent_groups(Opts, Current, [Next | Rest]) ->
     case read_direct(Opts, GroupPath) of
         not_found ->
             make_group(Opts, GroupPath);
-        {ok, _} ->
+        {_Type, _Value} ->
             % Already exists, skip
             ok
     end,
