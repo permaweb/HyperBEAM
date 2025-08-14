@@ -16,7 +16,9 @@ info() ->
             <<"bundle.js">> => <<"bundle.js">>,
             % Error pages:
             <<"404.html">> => <<"404.html">>,
-            <<"500.html">> => <<"500.html">>
+            <<"500.html">> => <<"500.html">>,
+            <<"styles.css">> => <<"styles.css">>,
+            <<"script.js">> => <<"script.js">>
         },
         excludes => [<<"return_file">>]
     }.
