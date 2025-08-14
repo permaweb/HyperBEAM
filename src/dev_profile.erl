@@ -290,7 +290,7 @@ event_profile(Fun, Req, Opts) ->
         <<"message">> ->
             {ok, Diff};
         <<"console">> ->
-            hb_util:debug_print(Diff),
+            hb_format:print(Diff),
             {ok, Diff}
     end.
 

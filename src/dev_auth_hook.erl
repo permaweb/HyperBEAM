@@ -150,7 +150,7 @@ request(Base, HookReq, Opts) ->
                 NewOpts
             ),
         ?event({auth_hook_returning, FinalSequence}),
-        {ok, #{ <<"body">> => FinalSequence }}
+        {ok, #{ <<"body">> => FinalSequence, <<"request">> => SignedReq }}
     else
         {error, AuthError} ->
             ?event({auth_hook_auth_error, AuthError}),
@@ -564,6 +564,61 @@ http_auth_test() ->
         [Signer],
         signers_from_commitments_response(Resp3, ServerWallet)
     ).
+
+chained_preprocess_test() ->
+    % Start a node with the `~http-auth@1.0' device as the secret-provider, with
+    % a router chained afterwards in the request hook.
+    RelayWallet = ar_wallet:new(),
+    RelayAddress = hb_util:human_id(RelayWallet),
+    RelayURL = hb_http_server:start_node(#{ priv_wallet => RelayWallet }),
+    Node =
+        hb_http_server:start_node(
+            #{
+                priv_wallet => ar_wallet:new(),
+                relay_allow_commit_request => true,
+                on => #{
+                    <<"request">> =>
+                        [
+                            #{
+                                <<"device">> => <<"auth-hook@1.0">>,
+                                <<"path">> => <<"request">>,
+                                <<"secret-provider">> =>
+                                    #{
+                                        <<"device">> => <<"http-auth@1.0">>,
+                                        <<"access-control">> =>
+                                            #{
+                                                <<"device">> => <<"http-auth@1.0">>
+                                            }
+                                    }
+                            },
+                            #{
+                                <<"device">> => <<"router@1.0">>,
+                                <<"path">> => <<"preprocess">>,
+                                <<"commit-request">> => true
+                            }
+                        ]
+                },
+                routes => [
+                    #{
+                        <<"template">> => <<"/~meta@1.0/info/address">>,
+                        <<"node">> => #{ <<"prefix">> => RelayURL }
+                    }
+                ]
+            }
+        ),
+    % Run a request with the `Authorization' header and check that the response
+    % is signed.
+    AuthStr = << "Basic ", (base64:encode(<<"user:pass">>))/binary >>,
+    Resp1 =
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"/~meta@1.0/info/address">>,
+                <<"authorization">> => AuthStr
+            },
+            #{}
+        ),
+    ?assertMatch({ok, RelayAddress}, Resp1).
 
 when_test() ->
     % Start a node with the `~http-auth@1.0' device as the secret-provider. Only

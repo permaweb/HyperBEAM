@@ -1,6 +1,6 @@
 %%% @doc A device that renders a REPL-like interface for AO-Core via HTML.
 -module(dev_hyperbuddy).
--export([info/0, format/3, return_file/2, return_error/1]).
+-export([info/0, format/3, return_file/2, return_error/2]).
 -export([metrics/3, events/3]).
 -export([throw/3]).
 -include_lib("include/hb.hrl").
@@ -62,7 +62,7 @@ format(Base, Req, Opts) ->
         #{
             <<"body">> =>
                 hb_util:bin(
-                    hb_message:format(
+                    hb_format:message(
                         #{
                             <<"base">> =>
                                 maps:without(
@@ -131,11 +131,13 @@ return_file(Device, Name, Template) ->
     end.
 
 %% @doc Return an error page, with the `{{error}}` template variable replaced.
-return_error(Error) ->
+return_error(Error, Opts) when not is_map(Error) ->
+    return_error(#{ <<"body">> => Error }, Opts);
+return_error(ErrorMsg, Opts) ->
     return_file(
         <<"hyperbuddy@1.0">>,
         <<"500.html">>,
-        #{ <<"error">> => Error }
+        #{ <<"error">> => hb_format:error(ErrorMsg, Opts) }
     ).
 
 %% @doc Apply a template to a body.

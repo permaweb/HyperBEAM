@@ -572,7 +572,7 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
         ),
     % Calculate write rate.
     WriteRate = erlang:round(WriteOps / (WriteTime / 1000000)),
-    hb_util:eunit_print(
+    hb_format:eunit_print(
         "Wrote ~s records in ~p ms (~s records/s)",
         [
             hb_util:human_int(WriteOps),
@@ -606,7 +606,7 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
         ),
     % Calculate read rate.
     ReadRate = erlang:round(ReadOps / (ReadTime / 1000000)),
-    hb_util:eunit_print(
+    hb_format:eunit_print(
         "Read ~s records in ~p ms (~s records/s)",
         [
             hb_util:human_int(ReadOps),
@@ -661,7 +661,7 @@ benchmark_list(Store, WriteOps, ListOps, GroupSize) ->
             end,
             lists:seq(1, GroupCount = WriteOps div GroupSize)
         ),
-    hb_util:eunit_print(
+    hb_format:eunit_print(
         "Generated ~s groups of ~s keys",
         [
             hb_util:human_int(GroupCount),
@@ -801,7 +801,7 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
             end,
             lists:seq(1, WriteOps)
         ),
-    hb_util:eunit_print(
+    hb_format:eunit_print(
         "Generated ~s messages (size ~s bits)",
         [
             hb_util:human_int(WriteOps),

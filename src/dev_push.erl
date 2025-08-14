@@ -108,7 +108,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
         {push_computed,
             {status, Status},
             {assignment, Assignment},
-            {request, hb_maps:get(<<"body">>, Assignment, Assignment)},
+            {request, hb_maps:get(<<"body">>, Assignment, Assignment, Opts)},
             {result,
                 if is_list(Result) ->
                     hb_ao:normalize_keys(Result);

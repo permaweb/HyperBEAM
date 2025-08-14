@@ -788,7 +788,7 @@ local_dynamic_router() ->
             lists:seq(1, BenchRoutes)
         ),
     AfterExec = os:system_time(millisecond),
-    hb_util:eunit_print(
+    hb_format:eunit_print(
         "Calculated ~p routes in ~ps (~.2f routes/s)",
         [
             BenchRoutes,

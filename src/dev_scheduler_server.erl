@@ -313,7 +313,7 @@ new_proc_test() ->
 %         end,
 %         BenchTime
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Scheduled ~p messages in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchTime, Iterations / BenchTime]
 %     ),

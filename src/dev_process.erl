@@ -201,7 +201,7 @@ compute(Msg1, Msg2, Opts) ->
                             {result, Result}
                         }
                     ),
-                    {ok, Result};
+                    {ok, without_snapshot(Result, Opts)};
                 not_found ->
                     {ok, Loaded} = ensure_loaded(ProcBase, Msg2, Opts),
                     ?event(compute,
@@ -256,7 +256,7 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                 Msg2,
                 Opts
             ),
-            {ok, as_process(Msg1, Opts)};
+            {ok, without_snapshot(as_process(Msg1, Opts), Opts)};
         CurrentSlot ->
             % Compute the next state transition.
             NextSlot = CurrentSlot + 1,
@@ -490,7 +490,8 @@ now(RawMsg1, Msg2, Opts) ->
             % than computing it.
             LatestKnown = dev_process_cache:latest(ProcessID, [], Opts),
             case LatestKnown of
-                {ok, LatestSlot, LatestMsg} ->
+                {ok, LatestSlot, RawLatestMsg} ->
+                    LatestMsg = without_snapshot(RawLatestMsg, Opts),
                     ?event(compute_short,
                         {serving_latest_cached_state,
                             {proc_id, ProcessID},
@@ -596,12 +597,14 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                             normalize,
                             Opts#{ hashpath => ignore }
                         ),
-                    NormalizedWithoutSnapshot = hb_maps:remove(<<"snapshot">>, Normalized, Opts),
-                    ?event({loaded_state_checkpoint_result,
-                        {proc_id, ProcID},
-                        {slot, LoadedSlot},
-                        {after_normalization, NormalizedWithoutSnapshot}
-                    }),
+                    NormalizedWithoutSnapshot = without_snapshot(Normalized, Opts),
+                    ?event(snapshot,
+                        {loaded_state_checkpoint_result,
+                            {proc_id, ProcID},
+                            {slot, LoadedSlot},
+                            {after_normalization, NormalizedWithoutSnapshot}
+                        }
+                    ),
                     {ok, NormalizedWithoutSnapshot};
                 not_found ->
                     % If we do not have a checkpoint, initialize the
@@ -615,6 +618,10 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                     init(Msg1, Msg2, Opts)
             end
     end.
+
+%% @doc Remove the `snapshot' key from a message and return it.
+without_snapshot(Msg, Opts) ->
+    hb_maps:remove(<<"snapshot">>, Msg, Opts).
 
 %% @doc Run a message against Msg1, with the device being swapped out for
 %% the device found at `Key'. After execution, the device is swapped back
@@ -1284,7 +1291,7 @@ simple_wasm_persistent_worker_benchmark_test() ->
         BenchTime
     ),
     ?event(benchmark, {scheduled, Iterations}),
-    hb_util:eunit_print(
+    hb_format:eunit_print(
         "Scheduled and evaluated ~p simple wasm process messages in ~p s (~s msg/s)",
         [Iterations, BenchTime, hb_util:human_int(Iterations / BenchTime)]
     ),
@@ -1323,7 +1330,7 @@ aos_persistent_worker_benchmark_test_() ->
             BenchTime
         ),
         ?event(benchmark, {scheduled, Iterations}),
-        hb_util:eunit_print(
+        hb_format:eunit_print(
             "Scheduled and evaluated ~p AOS process messages in ~p s (~s msg/s)",
             [Iterations, BenchTime, hb_util:human_int(Iterations / BenchTime)]
         ),

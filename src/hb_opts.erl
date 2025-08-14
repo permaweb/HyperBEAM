@@ -215,7 +215,7 @@ default_message() ->
         debug_ids => true,
         debug_committers => true,
         debug_show_priv => if_present,
-        debug_resolve_links => false,
+        debug_resolve_links => true,
 		trusted => #{},
         snp_enforced_keys => [
             firmware, kernel, 
@@ -273,11 +273,11 @@ default_message() ->
                             <<"value">> => <<"ao">>
                         }
                     ],
-                    <<"store">> => [?DEFAULT_PRIMARY_STORE]
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
-                    <<"store">> => [?DEFAULT_PRIMARY_STORE]
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 }
             ],
         priv_store =>
@@ -469,7 +469,6 @@ extension_to_device(Ext) ->
     extension_to_device(Ext, maps:get(preloaded_devices, default_message())).
 extension_to_device(_, []) -> {error, not_found};
 extension_to_device(Ext, [#{ <<"name">> := Name }|Rest]) ->
-    ?event(debug_node_msg, {extension_to_device, {extension, Ext}, {name, Name}}),
     case binary:match(Name, Ext) of
         nomatch -> extension_to_device(Ext, Rest);
         {0, _} -> {ok, Name}
@@ -498,7 +497,10 @@ load_bin(Device, Bin, Opts) ->
         {
             ok,
             mimic_default_types(
-                hb_message:convert(Bin, <<"structured@1.0">>, Device, Opts),
+                hb_cache:ensure_all_loaded(
+                    hb_message:convert(Bin, <<"structured@1.0">>, Device, Opts),
+                    Opts
+                ),
                 new_atoms,
                 Opts
             )
@@ -741,13 +743,18 @@ load_flat_test() ->
 
 load_json_test() ->
     {ok, Conf} = load("test/config.json", #{}),
-    ?event(debug_node_msg, {loaded, {explicit, Conf}}),
+    ?event(debug_node_msg, {loaded, Conf}),
     ?assertEqual(1234, hb_maps:get(port, Conf)),
     ?assertEqual(9001, hb_maps:get(example, Conf)),
     % A binary
     ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
-    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)).
+    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)),
+    % Ensure that a store with `ao-types' is loaded correctly.
+    ?assertMatch(
+        [#{ <<"store-module">> := hb_store_fs }|_],
+        hb_maps:get(store, Conf)
+    ).
 
 as_identity_test() ->
     DefaultWallet = ar_wallet:new(),

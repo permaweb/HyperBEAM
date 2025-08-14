@@ -4,6 +4,7 @@
 -module(dev_codec_json).
 -export([to/3, from/3, commit/3, verify/3, committed/3, content_type/1]).
 -export([deserialize/3, serialize/3]).
+-include_lib("eunit/include/eunit.hrl").
 
 %% @doc Return the content type for the codec.
 content_type(_) -> {ok, <<"application/json">>}.
@@ -25,7 +26,8 @@ to(Msg, _Req, _Opts) ->
 
 %% @doc Decode a JSON string to a message.
 from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};
-from(JSON, _Req, _Opts) -> {ok, json:decode(JSON)}.
+from(JSON, Req, Opts) ->
+    dev_codec_structured:from(json:decode(JSON), Req, Opts).
 
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 
@@ -71,3 +73,22 @@ serialize(Base, Msg, Opts) ->
             <<"body">> => hb_util:ok(to(Base, Msg, Opts))
         }
     }.
+
+%%% Tests
+
+decode_with_atom_test() ->
+    JSON =
+        <<"""
+        [
+            {
+                "store-module": "hb_store_fs",
+                "name": "cache-TEST/json-test-store",
+                "ao-types": "store-module=\"atom\""
+            }
+        ]
+        """>>,
+    Msg = hb_message:convert(JSON, <<"structured@1.0">>, <<"json@1.0">>, #{}),
+    ?assertMatch(
+        [#{ <<"store-module">> := hb_store_fs }|_],
+        hb_cache:ensure_all_loaded(Msg, #{})
+    ).

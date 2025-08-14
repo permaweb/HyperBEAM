@@ -71,13 +71,13 @@ add_route(Node, Route, Opts) ->
 %% @doc Grab the latest block information from the Arweave gateway node.
 arweave_timestamp() ->
     case hb_opts:get(mode) of
-        debug -> {0, 0, <<0:256>>};
+        debug -> {0, 0, hb_util:human_id(<<0:256>>)};
         prod ->
             {ok, {{_, 200, _}, _, Body}} =
                 httpc:request(
                     <<(hb_opts:get(gateway))/binary, "/block/current">>
                 ),
-            Fields = hb_json:decode(Body),
+            Fields = hb_json:decode(hb_util:bin(Body)),
             Timestamp = hb_maps:get(<<"timestamp">>, Fields),
             Hash = hb_maps:get(<<"indep_hash">>, Fields),
             Height = hb_maps:get(<<"height">>, Fields),

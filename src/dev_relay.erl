@@ -114,9 +114,9 @@ call(M1, RawM2, Opts) ->
             true ->
                 case hb_opts:get(relay_allow_commit_request, false, Opts) of
                     true ->
-                        ?event(debug_relay, {recommitting, TargetMod3}),
+                        ?event(debug_relay, {recommitting, TargetMod3}, Opts),
                         Committed = hb_message:commit(TargetMod3, Opts),
-                        ?event({relay_call, {committed, Committed}}),
+                        ?event(debug_relay, {relay_call, {committed, Committed}}, Opts),
                         true = hb_message:verify(Committed, all),
                         Committed;
                     false ->
