@@ -45,18 +45,10 @@
     ]
 ).
 
-%% List of fields that should be forced into the tag list, rather than being
-%% encoded as fields in the TX record.
--define(FORCED_TAG_FIELDS,
+-define(ORIGINAL_FIELDS,
     [
-        <<"quantity">>,
-        <<"manifest">>,
-        <<"data_size">>,
-        <<"data_tree">>,
-        <<"data_root">>,
-        <<"reward">>,
-        <<"denomination">>,
-        <<"signature_type">>
+        <<"target">>,
+        <<"last_tx">>
     ]
 ).
 
@@ -223,7 +215,10 @@ sign(TX, Wallet) ->
 verify(#tx{ format = ans104 } = TX) ->
     ar_bundles:verify_item(TX);
 verify(TX) ->
-    ar_tx:verify(TX). 
+    ar_tx:verify(TX).
+
+get_device(#tx{ format = ans104 }) -> <<"ans104@1.0">>;
+get_device(_) -> <<"tx@1.0">>.
 
 tx_to_tabm(RawTX, CommittedTags, Req, Opts) ->
     case lists:keyfind(<<"ao-type">>, 1, RawTX#tx.tags) of
@@ -234,67 +229,192 @@ tx_to_tabm(RawTX, CommittedTags, Req, Opts) ->
     end.
 
 tx_to_tabm2(RawTX, CommittedTags, Req, Opts) ->
-    Device = case RawTX#tx.format of
-        ans104 -> <<"ans104@1.0">>;
-        _ -> <<"tx@1.0">>
-    end,
     % Ensure the TX is fully deserialized.
     TX = ar_bundles:deserialize(normalize(RawTX)),
-    % Initialize message from the transaction tags
-    RawTags = deduplicating_from_list(TX#tx.tags, Opts),
 
-    % 0. Add keys to the TABM for any non-default values in the #tx record.
-    TABM0 = apply_tx_to_tabm(RawTags, TX, Opts),
+    TABM0 = tx_to_tabm_tags(TX#tx.tags),
 
-    % 1. Strip out any fields that will be auto-computed
-    TABM1 = maps:without(invalid_fields(RawTX), TABM0),
+    TABM1 = tx_to_tabm_fields(TABM0,TX),
 
-    % 2. Set the data field, if it's a map, we need to recursively turn its children
-    %    into messages from their tx representations.
-    TABM2 = set_map_data_or_throw(TABM1, TX, Req, Opts),
+    NeedOriginalTags = not normal_tags(TX#tx.tags) orelse has_key_clashes(TABM1),
 
-    % 3. Add the commitments to the message if the TX has a signature.
-    TABM3 = add_commitments(TABM2, TX, Device, CommittedTags, Opts),
+    TABM2 = tx_to_tabm_collapse_clashes(TABM1),
 
-    Result = hb_maps:without(?FILTERED_TAGS, TABM3, Opts),
-    ?event({tx_to_tabm, {result, {explicit, Result}}}),
+    TABM3 = tx_to_tabm_data(TABM2, TX, Req, Opts),
+
+    TABM4 = tx_to_tabm_aotypes(TABM3, Opts),
+
+    TABM5 = tx_to_tabm_commitments(TABM4, TX, CommittedTags, NeedOriginalTags, Opts),
+
+    Result = hb_maps:without(?FILTERED_TAGS, TABM5, Opts),
     Result.
 
+%% @doc Deduplicate a list of key-value pairs by key, generating a list of
+%% values for each normalized key if there are duplicates.
+tx_to_tabm_tags(Tags) ->
+    Grouped = lists:foldl(
+        fun({Key, Value}, Acc) ->
+            NormKey = hb_util:to_lower(hb_ao:normalize_key(Key)),
+            case maps:find(NormKey, Acc) of
+                {ok, Pairs} -> Acc#{ NormKey => [{Key, Value} | Pairs] };
+                error -> Acc#{ NormKey => [{Key, Value}] }
+            end
+        end,
+        #{},
+        Tags
+    ),
+    % sort the values for each key
+    maps:map(
+        fun(_NormKey, Pairs) ->
+            lists:sort(
+                fun({KeyA, _}, {KeyB, _}) ->
+                    tag_sort(KeyA, KeyB)
+                end,
+                Pairs
+            )
+        end,
+        Grouped
+    ).
+
+%% @doc Returns true if KeyA is less than KeyB according to the following rules:
+%% - Assumes KeyA and KeyB differ only in casing
+%% - Sort in the following order:
+%%   1. lowercase
+%%   2. Capitalized
+%%   3. all other casing sorted by built-in alphanumeric sort
+tag_sort(KeyA, KeyB) ->
+    IsLowerA = hb_util:to_lower(KeyA) == KeyA,
+    IsLowerB = hb_util:to_lower(KeyB) == KeyB,
+    IsFirstCapA = is_first_char_uppercase(KeyA),
+    IsFirstCapB = is_first_char_uppercase(KeyB),
+
+    case {IsLowerA, IsLowerB} of
+        {true, false} -> true;
+        {false, true} -> false;
+        {true, true} -> true;
+        {false, false} ->
+            case {IsFirstCapA, IsFirstCapB} of
+                {true, false} -> true;
+                {false, true} -> false;
+                _ -> KeyA =< KeyB
+            end
+    end.
+
+%% @doc Check if the first character of a binary is uppercase (A-Z)
+is_first_char_uppercase(<<>>) -> false;
+is_first_char_uppercase(<<FirstChar, _/binary>>) when FirstChar >= $A, FirstChar =< $Z -> true;
+is_first_char_uppercase(_) -> false.
+
+tx_to_tabm_fields(TABM, TX) ->
+    process_original_fields(TX, TABM, fun add_field_to_tabm/3).
+
+add_original_fields(Commitment, TX) ->
+    process_original_fields(TX, Commitment, fun add_field_to_commitment/3).
+
+%% @doc Common function to process original fields with different actions
+process_original_fields(TX, Map, ActionFun) ->
+    FieldDefaults = hb_message:default_tx_list(),
+    
+    lists:foldl(
+        fun(NormalizedKey, Acc) ->
+            % Get the current value from the TX record
+            FieldIndex = field_index(hb_util:atom(NormalizedKey)),
+            CurrentValue = element(FieldIndex, TX),
+            
+            % Get the default value for this field from hb_message:default_tx_list
+            {_, DefaultValue} = lists:keyfind(NormalizedKey, 1, FieldDefaults),
+            
+            % Check if value is not default
+            case CurrentValue =/= DefaultValue of
+                true ->
+                    ActionFun(NormalizedKey, CurrentValue, Acc);
+                false ->
+                    % Skip default values
+                    Acc
+            end
+        end,
+        Map,
+        ?ORIGINAL_FIELDS
+    ).
+
+%% @doc Action function for fields_to_tabm - adds field to TABM if key doesn't exist
+add_field_to_tabm(NormalizedKey, CurrentValue, TABM) ->
+    % At this point the TABM stores a sorted list of {key, value} for each key, later
+    % we will collapse this to a single value.
+    Value = {original_key(NormalizedKey), hb_util:encode(CurrentValue)},
+    case maps:find(NormalizedKey, TABM) of
+        {ok, Values} ->
+            maps:put(NormalizedKey, Values ++ [Value], TABM);
+        error ->
+            maps:put(NormalizedKey, [Value], TABM)
+    end.
+
+%% @doc Action function for add_original_fields - adds original-fieldname to commitment
+add_field_to_commitment(NormalizedKey, CurrentValue, Commitment) ->
+    maps:put(
+        original_key(NormalizedKey),
+        hb_util:encode(CurrentValue),
+        Commitment).
+
+original_key(<<"target">>) -> <<"original-target">>;
+original_key(<<"last_tx">>) -> <<"original-last_tx">>.
+
+tx_to_tabm_collapse_clashes(TABM) ->
+    maps:map(
+        fun(Key, Values) when is_list(Values) ->
+            {_Key, FirstValue} = hd(Values),
+            FirstValue;
+        (Key, Value) ->
+            Value
+        end,
+        TABM
+    ).
+
+tx_to_tabm_aotypes(TABM, Opts) ->
+    AOTypes = dev_codec_structured:decode_ao_types(TABM, Opts),
+    case maps:size(AOTypes) of
+        0 -> TABM;
+        _ ->
+            LowercaseAOTypes = maps:fold(
+                fun(Key, Value, Acc) ->
+                    maps:put(hb_util:to_lower(Key), Value, Acc)
+                end,
+                #{},
+                AOTypes
+            ),
+            maps:put(<<"ao-types">>,
+                dev_codec_structured:encode_ao_types(
+                    LowercaseAOTypes,
+                    Opts
+                ),
+                TABM
+            )
+    end.
+
 tabm_to_tx(BaseTX, InputTABM, Req, Opts) ->
+    % Prepare the TABM and Commitments
     NormalizedTABM = hb_ao:normalize_keys(normalize_data_field(InputTABM), Opts),
-    ?event({tabm_to_tx, {input_tabm, {explicit, NormalizedTABM}}}),
+    Commitments = hb_maps:get(<<"commitments">>, NormalizedTABM, #{}, Opts),
+    BaseTABM = hb_maps:without([<<"commitments">>], NormalizedTABM),
+    BundledTABM = maybe_bundle(BaseTABM, Req, Opts),
+    LoadedTABM = hb_cache:ensure_all_loaded(BundledTABM),
 
-    TABM = maybe_bundle(NormalizedTABM, Req, Opts),
-    
-    % 1. Initialize the #tx record with the values from the TABM.
-    {TX, RemainingTABM, OriginalTags} = apply_tabm_to_tx(BaseTX, TABM, Req, Opts),
+    {TX0, TABM0} = tabm_to_tx_data(BaseTX, LoadedTABM, Req, Opts),
+    {TX1, _TABM1} = tabm_to_tx_commitments(TX0, TABM0, Commitments, Opts),
 
-    % 2. Ensure any links are loaded.
-    LoadedTABM = hb_cache:ensure_all_loaded(RemainingTABM),
-
-    % 3. Extract tags and data items from the remaining TABM keys.
-    {Tags, DataItems} = to_data_items(LoadedTABM, Req, Opts),
-
-    % 4. Set the tags on the #tx record.
-    TXWithoutData = set_tags(TX, Tags, OriginalTags, Opts),
-    
-    % 5. Set the data items on the #tx record.
-    TXWithData = set_tx_data_or_throw(TXWithoutData, DataItems, Req, Opts),
-    
-    TXFinal = normalize(TXWithData),
+    FinalTX = normalize(TX1),
 
     % Check for invalid fields. We do this at the end once tx.format and tx.data have been
     % set.
     HasInvalidFields = [
         Field || 
-        Field <- invalid_fields(BaseTX), maps:is_key(Field, TABM)],
+        Field <- invalid_fields(BaseTX), maps:is_key(Field, NormalizedTABM)],
     case HasInvalidFields of
         [] -> ok;
         _ -> throw({invalid_fields, HasInvalidFields})
     end,
 
-    ?event({tabm_to_tx, {result, {explicit, TXFinal}}}),
-    TXFinal.
+    FinalTX.
 
 binary_to_tx(Binary) ->
     % ans104 and Arweave cannot serialize just a simple binary or get an ID for it, so
@@ -308,70 +428,25 @@ binary_to_tx(Binary) ->
 %%% ------------------------------------------------------------------------------------------
 %%% tx_to_tabm/5 helpers
 %%% ------------------------------------------------------------------------------------------
-
-
-%% @doc Add keys to the TABM for any non-default values in the #tx record. Throws an error if
-%% there's a value clash between the input TABM and #tx values.
-apply_tx_to_tabm(InputTABM, TX, Opts) ->
-    % We'll build up the output message first as a structured message, then we'll convert it
-    % back to a TABM at the end. This is so that we can compare values to check for clashes - 
-    % easier to do when the values are in their native form and not the aotypes/encoded form.
-    Structured0 = hb_message:convert(
-        hb_maps:with(hb_message:default_tx_keys(), InputTABM),
-        <<"structured@1.0">>,
-        Opts
-    ),
-
-    Structured1 = apply_to_structured(Structured0, TX),
-
-    OutputTABM = hb_message:convert(
-        Structured1,
-        tabm,
-        <<"structured@1.0">>,
-        Opts
-    ),
-
-    hb_maps:merge(
-        hb_maps:without(hb_message:default_tx_keys(), InputTABM, Opts),
-        OutputTABM, Opts).
-
-apply_to_structured(Structured, TX) ->
-    % Process each field in the default TX list, excluding auto-computed fields and data.
-    SkipFields = [<<"data">> | invalid_fields(TX)],
-    lists:foldl(
-        fun ({Field, DefaultValue}, AccStructured) ->
-            case lists:member(Field, SkipFields) of
-                true -> AccStructured;
-                false ->
-                    % Get the field value from TX
-                    FieldIndex = field_index(hb_util:atom(Field)),
-                    TXValue = element(FieldIndex, TX),
-                    NormField = hb_ao:normalize_key(Field),
-                    
-                    % Only add to Structured if value is different from default
-                    case {Field, TXValue} of
-                        {<<"format">>, <<"1">>} ->
-                            set_map_value_or_throw(NormField, 1, AccStructured);
-                        {<<"format">>, _} -> AccStructured;
-                        {_, DefaultValue} -> AccStructured;
-                        _ ->
-                            % Try to coerce the value to match the expected type
-                            case coerce_value(Field, TXValue, DefaultValue) of
-                                {ok, CoercedValue} ->
-                                    set_map_value_or_throw(
-                                        NormField, CoercedValue, AccStructured);
-                                error ->
-                                    AccStructured
-                            end
-                    end
-            end
-        end,
-        Structured,
-        hb_message:default_tx_list()
-    ).
     
-add_commitments(TABM, TX, Device, CommittedTags, Opts) ->
-    OriginalTagMap = encoded_tags_to_map(TX#tx.tags),
+tx_to_tabm_commitments(TABM, #tx{ signature = ?DEFAULT_SIG } = TX, _, NeedOriginalTags, Opts) ->
+    ?event({no_signature_detected, TABM}),
+    Commitment = initialize_commitment(TX, NeedOriginalTags),
+    case maps:size(Commitment) of
+        0 -> TABM;
+        _ ->
+            ID = hb_util:human_id(TX#tx.unsigned_id),
+            Commitments = #{
+                ID => Commitment#{
+                    <<"commitment-device">> => get_device(TX),
+                    <<"type">> => <<"unsigned-sha256">>
+                }
+            },
+            set_map_value_or_throw( <<"commitments">>, Commitments, TABM)
+    end;
+tx_to_tabm_commitments(TABM, TX, CommittedTags, NeedOriginalTags, Opts) ->
+    Address = hb_util:human_id(ar_wallet:to_address(TX#tx.owner)),
+    ?event(debug_test, {inbound_committed_tags, CommittedTags}),
     CommittedKeys =
         hb_ao:normalize_keys(
             hb_util:unique(
@@ -384,72 +459,59 @@ add_commitments(TABM, TX, Device, CommittedTags, Opts) ->
                 hb_util:to_sorted_keys(TABM)
             )
         ),
-    ?event({committed_keys,
-        {committed_keys, {explicit, CommittedKeys}},
-        {tags, {explicit, TX#tx.tags}},
-        {sorted_tabm, {explicit, hb_util:to_sorted_keys(TABM)}}
-    }),
-    WithCommitments =
-        case TX#tx.signature of
-            ?DEFAULT_SIG ->
-                ?event({no_signature_detected, TABM}),
-                case normal_tags(TX#tx.tags) of
-                    true -> TABM;
-                    false ->
-                        ID = hb_util:human_id(TX#tx.unsigned_id),
-                        Commitments = #{
-                            ID => #{
-                                <<"commitment-device">> => Device,
-                                <<"type">> => <<"unsigned-sha256">>,
-                                <<"original-tags">> => OriginalTagMap
-                            }
-                        },
-                        set_map_value_or_throw( <<"commitments">>, Commitments, TABM)
-                end;
-            _ ->
-                Address = hb_util:human_id(ar_wallet:to_address(TX#tx.owner)),
-                WithoutBaseCommitment =
-                    hb_maps:without(
-                        [
-                            <<"id">>,
-                            <<"keyid">>,
-                            <<"signature">>,
-                            <<"commitment-device">>,
-                            <<"original-tags">>
-                        ],
-                        TABM,
-                        Opts
-                    ),
-                ID = hb_util:human_id(TX#tx.id),
-                Commitment0 = #{
-                    <<"commitment-device">> => Device,
-                    <<"committer">> => Address,
-                    <<"committed">> => CommittedKeys,
-                    <<"keyid">> =>
-                        <<
-                            "publickey:",
-                            (hb_util:encode(TX#tx.owner))/binary
-                        >>,
-                    <<"signature">> => hb_util:encode(TX#tx.signature),
-                    <<"type">> => <<"rsa-pss-sha256">>
-                },
-                Commitment1 =
-                    case lists:member(<<"bundle-format">>, maps:values(CommittedKeys)) of
-                        true -> Commitment0#{ <<"bundle">> => true };
-                        false -> Commitment0
-                    end,
-                Commitment2 = case normal_tags(TX#tx.tags) of
-                    true -> Commitment1;
-                    false ->
-                        Commitment1#{
-                            <<"original-tags">> => OriginalTagMap
-                        }
-                end,
-                Commitments = #{ ID => Commitment2 },
-                set_map_value_or_throw( <<"commitments">>, Commitments, WithoutBaseCommitment)
+    ?event(debug_test, {committed_keys, CommittedKeys}),
+    WithoutBaseCommitment =
+        hb_maps:without(
+            [
+                <<"id">>,
+                <<"keyid">>,
+                <<"signature">>,
+                <<"commitment-device">>,
+                <<"original-tags">>
+            ],
+            TABM,
+            Opts
+        ),
+    ID = hb_util:human_id(TX#tx.id),
+    Commitment0 = initialize_commitment(TX, NeedOriginalTags),
+    Commitment1 = Commitment0#{
+        <<"commitment-device">> => get_device(TX),
+        <<"committer">> => Address,
+        <<"committed">> => CommittedKeys,
+        <<"keyid">> =>
+            <<
+                "publickey:",
+                (hb_util:encode(TX#tx.owner))/binary
+            >>,
+        <<"signature">> => hb_util:encode(TX#tx.signature),
+        <<"type">> => <<"rsa-pss-sha256">>
+    },
+    Commitment2 =
+        case lists:member(<<"bundle-format">>, maps:values(CommittedKeys)) of
+            true -> Commitment1#{ <<"bundle">> => true };
+            false -> Commitment1
         end,
-    WithCommitments.
+    Commitments = #{ ID => Commitment2 },
+    set_map_value_or_throw( <<"commitments">>, Commitments, WithoutBaseCommitment).
 
+initialize_commitment(TX, NeedOriginalTags) ->
+    Commitment0 = add_original_tags(#{}, TX, NeedOriginalTags),
+    add_original_fields(Commitment0, TX).
+
+add_original_tags(Commitment, TX, false) ->
+    Commitment;
+add_original_tags(Commitment, TX, true) ->
+    Commitment#{ <<"original-tags">> => encoded_tags_to_map(TX#tx.tags) }.
+
+has_key_clashes(TABM) ->
+    lists:any(
+        fun(Values) when is_list(Values) ->
+            length(Values) > 1;
+        (_Value) ->
+            false
+        end,
+        maps:values(TABM)
+    ).
 
 set_map_value_or_throw(Key, NewValue, Map) ->
     case Map of
@@ -458,7 +520,7 @@ set_map_value_or_throw(Key, NewValue, Map) ->
         _ -> maps:put(Key, NewValue, Map)
     end.
 
-set_map_data_or_throw(Map, TX, Req, Opts) ->
+tx_to_tabm_data(Map, TX, Req, Opts) ->
     DataMap = case TX#tx.data of
         Data when is_map(Data) ->
             % If the data is a map, we need to recursively turn its children
@@ -568,181 +630,217 @@ maybe_bundle(TABM, Req, Opts) ->
             Structured = hb_message:convert(TABM, <<"structured@1.0">>, Opts),
             Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
             % Convert to TABM with bundling enabled.
-            LoadedTABM =
-                hb_message:convert(
-                    Loaded,
-                    tabm,
-                    #{
-                        <<"device">> => <<"structured@1.0">>,
-                        <<"bundle">> => true
-                    },
-                    Opts
-                ),
-            % Ensure the commitments from the original message are the only
-            % ones in the fully loaded message.
-            LoadedComms = maps:get(<<"commitments">>, TABM, #{}),
-            LoadedTABM#{ <<"commitments">> => LoadedComms }
+            hb_message:convert(
+                Loaded,
+                tabm,
+                #{
+                    <<"device">> => <<"structured@1.0">>,
+                    <<"bundle">> => true
+                },
+                Opts
+            )
     end.
 
-%% @doc Update a #tx record with the values of any TABM keys matching a #tx record field.
-%% We convert the TABM to a structured message first so that any aotype'd fields are coerced
-%% to their native type. This allows for easier value comparison with exiting #tx record
-%% values.
-%% 
-%% Returns the updated #tx record, any remaining unapplied TABM keys, and the original tags
-%% extracted from the TABM commitments.
-apply_tabm_to_tx(TX, InputTABM, Req,  Opts) ->
-    % There are 3 classes of values that can be applied directly to the #tx record:
-    % 1. Simple fields (e.g. data_root, quantity, etc...)
-    % 2. Commitments
-    % 3. The data field
-    
-    % Extract forced tag fields - these should never be applied to TX record
-    ForcedTagFields = hb_maps:with(?FORCED_TAG_FIELDS, InputTABM),
-    
-    % 1. Convert simple TABM fields to their native type, and apply to the #tx record.
-    %    Simple fields are: the default #tx fields *excluding* data.
-    DefaultTXTABM= hb_maps:with(hb_message:default_tx_keys(), InputTABM),
-    SimpleTABM = hb_maps:without([<<"data">> | ?FORCED_TAG_FIELDS], DefaultTXTABM),
-    Structured = hb_message:convert(
-        SimpleTABM,
-        <<"structured@1.0">>,
-        Opts
-    ),
-    {AppliedSimpleFields, TX1} = apply_to_tx(TX, Structured),
-    
-    % 2. Flatten the commitments into the 'signature' and 'owner' keys, and then apply those.
-    {SignatureMap, OriginalTags} = flatten_commitments(InputTABM, Opts),
-    {_, TX2} = apply_to_tx(TX1, SignatureMap),
-
-    % 3. If the data field is a map, we recursively turn it into messages.
-    %    Notably, we do not simply call message_to_tx/1 on the inner map
-    %    because that would lead to adding an extra layer of nesting to the
-    %    data. Apply the result.
-    RawData = hb_maps:get(<<"data">>, InputTABM, ?DEFAULT_DATA, Opts),
+tabm_to_tx_data(TX, TABM, Req, Opts) ->
+    % Extract the <<"data">> field from the TABM
+    RawData = hb_maps:get(<<"data">>, TABM, ?DEFAULT_DATA, Opts),
     Data = case RawData of
         _ when is_map(RawData) -> hb_util:ok(dev_codec_ans104:to(RawData, Req, Opts));
         _ -> RawData
     end,
-    {AppliedDataField, TX3} = apply_to_tx(TX2, #{ <<"data">> => Data }),
+    TABM0 = hb_maps:without([<<"data">>], TABM),
 
-    % Return any remaining TABM keys that were not applied. These will be processed later.
-    InputAOTypes = hb_ao:get(<<"ao-types">>, InputTABM, <<>>, Opts),
-    DecodedAOTypes = dev_codec_structured:decode_ao_types(InputAOTypes, Opts),
-    UnappliedAOTypes = hb_maps:fold(fun(K, V, Acc) ->
-        maps:put(hb_util:to_lower(K), V, Acc)
-    end, #{}, hb_maps:without(AppliedSimpleFields, DecodedAOTypes), Opts),
-    UnappliedTABM0 = hb_maps:without(
-        AppliedSimpleFields ++ AppliedDataField ++ [<<"commitments">>, <<"ao-types">>],
-        InputTABM
-    ),
-    
-    % Add forced tag fields back to unapplied TABM so they become tags
-    UnappliedTABMWithForced = hb_maps:merge(UnappliedTABM0, ForcedTagFields, Opts),
-    
-    UnappliedTABM = case hb_maps:size(UnappliedAOTypes, Opts) of
-        0 -> UnappliedTABMWithForced;
-        _ -> UnappliedTABMWithForced#{
-            <<"ao-types">> => dev_codec_structured:encode_ao_types(UnappliedAOTypes, Opts)
-        }
+    % Extract any large tags from the TABM
+    {TABM1, LargeTagMap} = tabm_to_tx_large_tags(TABM0, Req, Opts),
+
+    MergedData = case {Data, hb_maps:size(LargeTagMap, Opts)} of
+        {?DEFAULT_DATA, 0} ->
+            ?DEFAULT_DATA;
+        {_, 0} when is_record(Data, tx) ->
+            % Only binary, list, and map are allowd for the #tx.data field
+            #{ <<"data">> => Data };
+        {_, 0} ->
+            Data;
+        {?DEFAULT_DATA, _} ->
+            LargeTagMap;
+        _ ->
+            case is_binary(Data) of 
+                true ->
+                    LargeTagMap#{ <<"data">> => hb_util:ok(dev_codec_ans104:to(Data, Req, Opts)) };
+                false ->
+                    LargeTagMap#{ <<"data">> => Data }
+            end
     end,
-    {TX3, UnappliedTABM, OriginalTags}.
+    TX0 = set_tx_value_or_throw(data, TX, ?DEFAULT_DATA, MergedData),
 
-apply_to_tx(TX, Structured) ->
-    % Process each field in the default TX list
-    {AppliedFields, UpdatedTX} = lists:foldl(
-        fun ({Field, DefaultValue}, {AccAppliedFields, AccTX}) ->
-            % Get the normalized key for the field
-            NormKey = hb_ao:normalize_key(Field),
-            
-            % Try to get the value from Structured
-            case hb_maps:find(NormKey, Structured) of
+    % If the TABM explicitly sets the data key to default, we need to preserve it in
+    % the #tx tags in order to maintain idempotency when going TABM -> TX -> TABM.
+    TABM2 = case maps:is_key(<<"data">>, TABM) andalso RawData == ?DEFAULT_DATA of
+        true -> TABM1#{ <<"data">> => ?DEFAULT_DATA };
+        false -> TABM1
+    end,
+    {TX0, TABM2}.
+
+tabm_to_tx_large_tags(TABM, Req, Opts) ->
+    % Process each key-value pair in Structured
+    maps:fold(
+        fun(Key, Value, {AccTABM, AccDataItems}) ->
+            case Value of
+                % Leave small binaries as tags
+                Value when is_binary(Value), byte_size(Value) < ?MAX_TAG_VAL ->
+                    {AccTABM, AccDataItems};
+                % All other values are converted to data items, and the keys removed from
+                % the TABM (as they won't be converted to tags on the #tx record)
+                _ ->
+                    {
+                        maps:remove(Key, AccTABM),
+                        AccDataItems#{
+                            hb_ao:normalize_key(Key) =>
+                                hb_util:ok(dev_codec_ans104:to(Value, Req, Opts))
+                        }
+                    }
+            end
+        end,
+        {TABM, #{}},
+        TABM
+    ).
+
+tabm_to_tx_commitments(TX, TABM, Commitments, Opts) ->
+    Commitment = get_commitment(Commitments),
+    TX0 = tabm_to_tx_signature(TX, Commitment),
+    {TX1, TABM1} = tabm_to_tx_original_fields(TX0, TABM, Commitment),
+    {TX2, TABM2} =
+        case maps:is_key(<<"original-tags">>, Commitment) of
+            true -> tabm_to_tx_original_tags(TX1, TABM1, Commitment, Opts);
+            false -> {tabm_to_tx_tags(Commitment, TX1, TABM1), TABM1}
+        end,
+    
+    {TX2, hb_maps:without([<<"commitments">>], TABM2)}.
+
+get_commitment(Commitments) ->
+    case hb_maps:keys(Commitments) of
+        [] ->
+            #{};
+        [ID] ->
+            hb_maps:get(ID, Commitments);
+        _ -> throw({multisignatures_not_supported_by_ans104, Commitments})
+    end.
+
+tabm_to_tx_signature(TX, Commitment) ->
+    Signature = hb_util:decode(
+        maps:get(<<"signature">>, Commitment,
+            hb_util:encode(?DEFAULT_SIG)
+        )
+    ),
+    Owner = hb_util:decode(
+        dev_codec_httpsig_keyid:remove_scheme_prefix(
+            maps:get(
+                <<"keyid">>,
+                Commitment,
+                hb_util:encode(?DEFAULT_OWNER)
+            )
+        )
+    ),
+    TX0 = set_tx_value_or_throw(signature, TX, ?DEFAULT_SIG, Signature),
+    TX1 = set_tx_value_or_throw(owner, TX0, ?DEFAULT_OWNER, Owner),
+    TX1.
+
+tabm_to_tx_original_fields(TX, TABM, Commitment) ->
+    FieldDefaults = hb_message:default_tx_list(),
+    
+    {TX0, TABM0} = lists:foldl(
+        fun(NormalizedKey, {AccTX, AccTABM}) ->
+            OriginalKey = original_key(NormalizedKey),
+            case maps:find(OriginalKey, Commitment) of
                 error ->
-                    {AccAppliedFields, AccTX};                    
+                    {AccTX, AccTABM};
                 {ok, Value} ->
-                    % Try to coerce the value to match the default value's type
-                    case coerce_value(Field, Value, DefaultValue) of
-                        {ok, DefaultValue} ->
-                            % Values are the same, keep in Structured
-                            {AccAppliedFields, AccTX};
+                    % Get the default value for this field
+                    {_, DefaultValue} = lists:keyfind(NormalizedKey, 1, FieldDefaults),
+                    
+                    % Coerce the value
+                    case coerce_value(NormalizedKey, Value, DefaultValue) of
                         {ok, CoercedValue} ->
-                            % Values are different, move to TX
-                            {
-                                [ Field | AccAppliedFields ],
-                                set_tx_value_or_throw(Field, AccTX, DefaultValue, CoercedValue)
-                            };
+                            % Set the value on TX
+                            FieldAtom = hb_util:atom(NormalizedKey),
+                            NewTX = set_tx_value_or_throw(FieldAtom, AccTX, DefaultValue, CoercedValue),
+                            
+                            % Remove the field from TABM
+                            NewTABM = maps:remove(NormalizedKey, AccTABM),
+                            
+                            {NewTX, NewTABM};
                         error ->
-                            ?event(warning, {coercion_failed,
-                                {field, Field}, {value, Value}, {default_value, DefaultValue}}),
-                            % Coercion failed, keep in Structured
-                            {AccAppliedFields, AccTX}
+                            ?event(warning, {coercion_failed, {field, NormalizedKey},
+                                {value, Value}, {default_value, DefaultValue}}),
+                            {AccTX, AccTABM}
                     end
             end
         end,
-        {[], TX},
-        hb_message:default_tx_list()
+        {TX, TABM},
+        ?ORIGINAL_FIELDS
     ),
-    {AppliedFields, UpdatedTX}.
+    {TX0, TABM0}.
 
-set_tx_data_or_throw(TX, DataItems, Req, Opts) ->
-    case {TX#tx.data, hb_maps:size(DataItems, Opts)} of
-        {Binary, 0} when is_binary(Binary) ->
-            TX;
-        {?DEFAULT_DATA, _} ->
-            TX#tx{ data = DataItems };
-        {Data, _} when is_map(Data) ->
-            TX#tx{ data = hb_maps:merge(Data, DataItems, Opts) };
-        {Data, _} when is_record(Data, tx) ->
-            TX#tx{ data = DataItems#{ <<"data">> => Data } };
-        {Data, _} when is_binary(Data) ->
-            DataItem = hb_util:ok(dev_codec_ans104:to(Data, Req, Opts)),
-            TX#tx{
-                data = set_map_value_or_throw(<<"data">>, DataItem, DataItems)
-            }
-    end.
+tabm_to_tx_original_tags(TX, TABM, Commitment, Opts) ->
+    OriginalTags = hb_maps:get(<<"original-tags">>, Commitment, #{}),
+    Tags = tag_map_to_encoded_tags(OriginalTags),
 
-% Helper function to set a field value in a TX record, throwing if the field
-% already has a non-default value
-set_tx_value_or_throw(Field, TX, DefaultValue, NewValue) ->
-    FieldIndex = field_index(hb_util:atom(Field)),
+    % XXX TODO: re-add the check that compares original tags to the TABM
+    % case maps:size(OriginalTags) > 0 of
+    %     true ->
+    %         ExpectedTags = hb_util:lower_case_key_map(deduplicating_from_list(TABM, Opts), Opts),
+    %         case ExpectedTags == Tags of
+    %             true -> ok;
+    %             false ->
+    %                 ?event(warning, {invalid_original_tags, {expected, ExpectedTags}, {given, Tags}}),
+    %                 throw({invalid_original_tags, ExpectedTags, Tags})
+    %         end;
+    %     false ->
+    %         ok
+    % end,
+
+    TABM0 = lists:foldl(
+        fun({Key, Value}, Acc) ->
+            NormalizedKey = hb_util:to_lower(hb_ao:normalize_key(Key)),
+            maps:remove(NormalizedKey, Acc)
+        end,
+        TABM,
+        Tags
+    ),
+    TX0 = set_tx_value_or_throw(tags, TX, [], Tags),
+    {TX0, TABM0}.
+
+tabm_to_tx_tags(Commitment, TX, TABM) ->
+    Committed =
+        hb_util:message_to_ordered_list(
+            hb_maps:get(<<"committed">>, Commitment, #{})
+        ),
+    ?event(debug_test, {tabm_to_tx_tags, {explicit, TABM}}),
+    Tags =
+        lists:filtermap(
+            fun(Key) ->
+                case maps:find(Key, TABM) of
+                    {ok, Value} ->
+                        case lists:member({Key, Value}, TX#tx.tags) of
+                            true -> false;
+                            false -> {true, {Key, Value}}
+                        end;
+                    error -> false
+                end
+            end,
+            Committed
+        ),
+    set_tx_value_or_throw(tags, TX, [], Tags).
+
+%% @doc Helper function to set a field value in a TX record, throwing if the field
+%% already has a non-default value
+set_tx_value_or_throw(FieldAtom, TX, DefaultValue, NewValue) ->
+    FieldIndex = field_index(FieldAtom),
     case element(FieldIndex, TX) of 
         DefaultValue ->
             setelement(FieldIndex, TX, NewValue);
         ExistingValue ->
-            throw({invalid_field_value, Field, ExistingValue, NewValue})
-    end.
-
-flatten_commitments(TABM, Opts) ->
-    Commitments = hb_maps:get(<<"commitments">>, TABM, #{}, Opts),
-    case hb_maps:keys(Commitments, Opts) of
-        [] ->
-            {#{}, []};
-        [ID] ->
-            Commitment = hb_maps:get(ID, Commitments),
-            % Flatten the commitment into the 'signature' and 'owner' keys.
-            Signature =
-                #{
-                    <<"signature">> =>
-                        hb_util:decode(
-                            maps:get(<<"signature">>, Commitment,
-                                hb_util:encode(?DEFAULT_SIG)
-                            )
-                        ),
-                    <<"owner">> =>
-                        hb_util:decode(
-                            dev_codec_httpsig_keyid:remove_scheme_prefix(
-                                maps:get(
-                                    <<"keyid">>,
-                                    Commitment,
-                                    hb_util:encode(?DEFAULT_OWNER)
-                                )
-                            )
-                        )
-                },
-            % Flatten the original tags into the 'original-tags' key.
-            OriginalTags = hb_maps:get(<<"original-tags">>, Commitment, #{}),
-            {Signature, tag_map_to_encoded_tags(OriginalTags)};
-        _ -> throw({multisignatures_not_supported_by_ans104, TABM})
+            throw({invalid_field_value, FieldAtom, ExistingValue, NewValue})
     end.
 
 %% @doc Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
@@ -756,61 +854,6 @@ tag_map_to_encoded_tags(TagMap) ->
         end,
         OrderedList
     ).
-
-to_data_items(Structured, Req, Opts) ->
-    % Process each key-value pair in Structured
-    {Tags, DataItems} = maps:fold(
-        fun(Key, Value, {AccTags, AccDataItems}) ->
-            case Value of
-                % Leave small binaries as tags
-                Value when is_binary(Value), byte_size(Value) < ?MAX_TAG_VAL ->
-                    {AccTags, AccDataItems};
-                % All other values are converted to data items
-                _ ->
-                    {
-                        maps:remove(Key, AccTags),
-                        [
-                            {hb_ao:normalize_key(Key), hb_util:ok(dev_codec_ans104:to(Value, Req, Opts))}
-                            | AccDataItems
-                        ]
-                    }
-            end
-        end,
-        {Structured, []},
-        Structured
-    ),
-    {Tags, hb_maps:from_list(DataItems)}.
-
-set_tags(TX, Tags, OriginalTags, Opts) ->
-    % Check that the remaining keys are as we expect them to be, given the 
-    % original tags. We do this by re-calculating the expected tags from the
-    % original tags and comparing the result to the remaining keys.
-    if length(OriginalTags) > 0 ->
-        ExpectedTagsFromOriginal = hb_util:lower_case_key_map(
-            deduplicating_from_list(OriginalTags, Opts), 
-        Opts),
-        case Tags == ExpectedTagsFromOriginal of
-            true -> ok;
-            false ->
-                ?event(warning,
-                    {invalid_original_tags,
-                        {expected, ExpectedTagsFromOriginal},
-                        {given, Tags}
-                    }
-                ),
-                throw({invalid_original_tags, OriginalTags, Tags})
-        end;
-    true -> ok
-    end,
-    % Restore the original tags, or the remaining keys if there are no original
-    % tags.
-    TX#tx{
-        tags =
-            case OriginalTags of
-                [] -> hb_maps:to_list(Tags);
-                _ -> OriginalTags
-            end
-    }.
 
 %%% ------------------------------------------------------------------------------------------
 %%% Generic helpers
@@ -887,6 +930,8 @@ coerce_value(<<"format">>, Value, _DefaultValue) ->
         <<"2">> -> {ok, 2};
         _ -> {ok, Value}
     end;
+coerce_value(<<"target">>, Value, _DefaultValue) ->
+    {ok, hb_util:decode(Value)};
 coerce_value(_Field, Value, DefaultValue) ->
     case {Value, DefaultValue} of
         {V, D} when is_binary(V), ?IS_ID(V), is_binary(D) ->
@@ -1102,3 +1147,24 @@ test_tag_map_to_encoded_tags_happy() ->
         end,
         TestCases
     ).
+
+unsorted_tag_map_test() ->
+    TX =
+        ar_bundles:sign_item(
+            #tx{
+                format = ans104,
+                tags = [
+                    {<<"z">>, <<"position-1">>},
+                    {<<"a">>, <<"position-2">>}
+                ],
+                data = <<"data">>
+            },
+            ar_wallet:new()
+        ),
+    ?assert(ar_bundles:verify_item(TX)),
+    ?event(debug_test, {tx, TX}),
+    {ok, TABM} = dev_codec_ans104:from(TX, #{}, #{}),
+    ?event(debug_test, {tabm, TABM}),
+    {ok, Decoded} = dev_codec_ans104:to(TABM, #{}, #{}),
+    ?event(debug_test, {decoded, Decoded}),
+    ?assert(ar_bundles:verify_item(Decoded)).

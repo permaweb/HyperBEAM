@@ -370,16 +370,18 @@ list_replace(List, Key, Value) ->
 %% @doc Take a list and return a list of unique elements. The function is
 %% order-preserving.
 unique(List) ->
-    lists:foldr(
-        fun(Item, Acc) ->
-            case lists:member(Item, Acc) of
-                true -> Acc;
-                false -> [Item | Acc]
-            end
-        end,
-        [],
-        List
-    ).
+    Unique =
+        lists:foldl(
+            fun(Item, Acc) ->
+                case lists:member(Item, Acc) of
+                    true -> Acc;
+                    false -> [Item | Acc]
+                end
+            end,
+            [],
+            List
+        ),
+    lists:reverse(Unique).
 
 %% @doc Returns the intersection of two lists, with stable ordering.
 list_intersection(List1, List2) ->
