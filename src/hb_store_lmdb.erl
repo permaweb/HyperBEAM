@@ -21,7 +21,7 @@
 
 %% Public API exports
 -export([start/1, stop/1, scope/0, scope/1, reset/1]).
--export([read/2, write/3, list/2, match/2, iterate_start/3, iterate_cont/3]).
+-export([read/2, write/3, flush/1, list/2, match/2, iterate_start/3, iterate_cont/3]).
 -export([make_group/2, make_link/3, type/2]).
 -export([path/2, add_path/3, resolve/2]).
 
@@ -142,6 +142,22 @@ write(Opts, Path, Value) ->
                 }
             ),
             retry
+    end.
+
+-spec flush(map()) -> ok | {error, flush_failed}.
+flush(Opts) ->
+    #{ <<"env">> := DBEnv } = find_env(Opts),
+    case elmdb:env_sync(DBEnv) of
+        ok -> ok;
+        {error, Type, Description} ->
+            ?event(
+                error,
+                {lmdb_error,
+                    {type, Type},
+                    {description, Description}
+                }
+            ),
+            {error, flush_failed}
     end.
 
 %% @doc Read a value from the database by key, with automatic link resolution.
@@ -1167,3 +1183,17 @@ read_follow_test() ->
     {ok, Value3} = read(StoreOpts2, <<"HelloLink">>),
     ?assertEqual(Value3, <<"Hello">>),
     ok = stop(StoreOpts).
+%% @doc Test that list function resolves links correctly
+flush_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/flush">>,
+        <<"capacity">> => ?DEFAULT_SIZE
+    },
+    reset(StoreOpts),
+    write(StoreOpts, <<"key1">>, <<"value1">>),
+    write(StoreOpts, <<"key2">>, <<"value2">>),
+    write(StoreOpts, <<"key3">>, <<"value3">>),
+    ?assertEqual(ok, flush(StoreOpts)),
+    ?assertEqual({ok, <<"value1">>}, read(StoreOpts, <<"key1">>)),
+    stop(StoreOpts).
