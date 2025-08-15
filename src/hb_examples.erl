@@ -4,6 +4,7 @@
 -module(hb_examples).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
+-export([start_example_cluster/0]).
 
 %% @doc Start a node running the simple pay meta device, and use it to relay
 %% a message for a client. We must ensure:
@@ -209,110 +210,9 @@ schedule(ProcMsg, Target, Wallet, Node) ->
 %% data item, which should then be correctly deserialized and sent to the
 %% scheduler node.
 relay_schedule_ans104_test() ->
-    SchedulerWallet = ar_wallet:new(),
-    ComputeWallet = ar_wallet:new(),
-    RelayWallet = ar_wallet:new(),
-    ?event(debug_test,
-        {wallets,
-            {scheduler, hb_util:human_id(SchedulerWallet)},
-            {compute, hb_util:human_id(ComputeWallet)},
-            {relay, hb_util:human_id(RelayWallet)}
-        }
-    ),
-    Scheduler =
-        hb_http_server:start_node(
-            #{
-                on => #{
-                    <<"start">> => #{
-                        <<"device">> => <<"scheduler@1.0">>,
-                        <<"path">> => <<"location">>,
-                        <<"method">> => <<"POST">>,
-                        <<"target">> => <<"self">>,
-                        <<"accept-codec">> => <<"ans104@1.0">>,
-                        <<"hook">> => #{
-                            <<"result">> => <<"ignore">>,
-                            <<"commit-request">> => true
-                        }
-                    }
-                },
-                store => [hb_test_utils:test_store()],
-                priv_wallet => SchedulerWallet
-            }
-        ),
-    ?event(debug_test, {scheduler, Scheduler}),
-    Compute =
-        hb_http_server:start_node(
-            #{
-                priv_wallet => ComputeWallet,
-                store =>
-                    [
-                        ComputeStore = hb_test_utils:test_store(),
-                        #{
-                            <<"store-module">> => hb_store_remote_node,
-                            <<"name">> => <<"cache-TEST/remote-node">>,
-                            <<"node">> => Scheduler
-                        }
-                    ]
-            }
-        ),
-    % Get the scheduler location of the scheduling node and write it to the
-    % compute node's store.
-    {ok, SchedulerLocation} =
-        hb_http:get(
-            Scheduler,
-            <<"/~scheduler@1.0/location">>,
-            #{}
-        ),
-    ?event({scheduler_location, SchedulerLocation}),
-    dev_scheduler_cache:write_location(
-        hb_maps:get(<<"body">>, SchedulerLocation, <<"NO BODY">>, #{}),
-        #{ store => [ComputeStore] }
-    ),
-    % Create the relaying server.
-    Relay =
-        hb_http_server:start_node(#{
-            priv_wallet => RelayWallet,
-            relay_allow_commit_request => true,
-            store => [hb_test_utils:test_store()],
-            routes =>
-                [
-                    #{
-                        <<"template">> => <<"^/push">>,
-                        <<"strategy">> => <<"Nearest">>,
-                        <<"nodes">> => [
-                            #{
-                                <<"wallet">> => hb_util:human_id(SchedulerWallet),
-                                <<"prefix">> => Scheduler
-                            }
-                        ]
-                    },
-                    #{
-                        <<"template">> => <<"^/.*">>,
-                        <<"strategy">> => <<"Nearest">>,
-                        <<"nodes">> => [
-                            #{
-                                <<"wallet">> => hb_util:human_id(ComputeWallet),
-                                <<"prefix">> => Compute
-                            }
-                        ]
-                    }
-                ],
-            on => #{
-                <<"request">> =>
-                    #{
-                        <<"device">> => <<"router@1.0">>,
-                        <<"path">> => <<"preprocess">>,
-                        <<"commit-request">> => true
-                    }
-            }
-        }),
-    ?event(debug_test,
-        {nodes,
-            {scheduler, {url, Scheduler}, {wallet, hb_util:human_id(SchedulerWallet)}},
-            {compute, {url, Compute}, {wallet, hb_util:human_id(ComputeWallet)}},
-            {relay, {url, Relay}, {wallet, hb_util:human_id(RelayWallet)}}
-        }
-    ),
+    {started_cluster, Cluster} = start_example_cluster(),
+    SchedulerWallet = maps:get(scheduler_wallet, Cluster),
+    Relay = maps:get(relay, Cluster),
     ClientOpts =
         #{
             store => [hb_test_utils:test_store()],
@@ -367,3 +267,137 @@ relay_schedule_ans104_test() ->
         ),
     ?event(debug_test, {post_result, PushRes}),
     ?assertMatch({ok, #{ <<"status">> := 200, <<"slot">> := 1 }}, PushRes).
+
+%% @doc Starts a cluster of:
+%% - A scheduler node
+%% - A compute node with the scheduler location
+%% - A relaying server that routes messages to the scheduler and compute nodes.
+start_example_cluster() ->
+    start_example_cluster(8735).
+start_example_cluster(Port) ->
+    SchedulerWallet = ar_wallet:new(),
+    ComputeWallet = ar_wallet:new(),
+    RelayWallet = ar_wallet:new(),
+    ?event(debug_test,
+        {wallets,
+            {scheduler, hb_util:human_id(SchedulerWallet)},
+            {compute, hb_util:human_id(ComputeWallet)},
+            {relay, hb_util:human_id(RelayWallet)}
+        }
+    ),
+    Scheduler =
+        hb_http_server:start_node(
+            #{
+                on => #{
+                    <<"start">> => #{
+                        <<"device">> => <<"scheduler@1.0">>,
+                        <<"path">> => <<"location">>,
+                        <<"method">> => <<"POST">>,
+                        <<"target">> => <<"self">>,
+                        <<"accept-codec">> => <<"ans104@1.0">>,
+                        <<"hook">> => #{
+                            <<"result">> => <<"ignore">>,
+                            <<"commit-request">> => true
+                        }
+                    }
+                },
+                store => [hb_test_utils:test_store()],
+                priv_wallet => SchedulerWallet
+            }
+        ),
+    ?event(debug_test, {scheduler, Scheduler}),
+    Compute =
+        hb_http_server:start_node(
+            #{
+                priv_wallet => ComputeWallet,
+                store =>
+                    [
+                        ComputeStore = hb_test_utils:test_store(),
+                        #{
+                            <<"store-module">> => hb_store_remote_node,
+                            <<"name">> => <<"cache-TEST/remote-node">>,
+                            <<"node">> => Scheduler
+                        }
+                    ]
+            }
+        ),
+    % Get the scheduler location of the scheduling node and write it to the
+    % compute node's store.
+    {ok, LocationRes} =
+        hb_http:get(
+            Scheduler,
+            <<"/~scheduler@1.0/location">>,
+            #{}
+        ),
+    SchedulerLocation = hb_ao:get(<<"body">>, LocationRes, #{}),
+    ?event({scheduler_location, SchedulerLocation}),
+    dev_scheduler_cache:write_location(
+        SchedulerLocation,
+        #{ store => [ComputeStore] }
+    ),
+    {ok, ReadLocation} =
+        hb_http:get(
+            Scheduler,
+            <<
+                "/~scheduler@1.0/location?address=",
+                (hb_util:human_id(SchedulerWallet))/binary
+            >>,
+            #{}
+        ),
+    ?assertMatch(SchedulerLocation, hb_ao:get(<<"body">>, ReadLocation, #{})),
+    % Create the relaying server.
+    Relay =
+        hb_http_server:start_node(#{
+            port => Port,
+            priv_wallet => RelayWallet,
+            relay_allow_commit_request => true,
+            store => [hb_test_utils:test_store()],
+            routes =>
+                [
+                    #{
+                        <<"template">> => <<"^/push">>,
+                        <<"strategy">> => <<"Nearest">>,
+                        <<"nodes">> => [
+                            #{
+                                <<"wallet">> => hb_util:human_id(SchedulerWallet),
+                                <<"prefix">> => Scheduler
+                            }
+                        ]
+                    },
+                    #{
+                        <<"template">> => <<"^/.*">>,
+                        <<"strategy">> => <<"Nearest">>,
+                        <<"nodes">> => [
+                            #{
+                                <<"wallet">> => hb_util:human_id(ComputeWallet),
+                                <<"prefix">> => Compute
+                            }
+                        ]
+                    }
+                ],
+            on => #{
+                <<"request">> =>
+                    #{
+                        <<"device">> => <<"router@1.0">>,
+                        <<"path">> => <<"preprocess">>,
+                        <<"commit-request">> => true
+                    }
+            }
+        }),
+    ?event(debug_test,
+        {nodes,
+            {scheduler, {url, Scheduler}, {wallet, hb_util:human_id(SchedulerWallet)}},
+            {compute, {url, Compute}, {wallet, hb_util:human_id(ComputeWallet)}},
+            {relay, {url, Relay}, {wallet, hb_util:human_id(RelayWallet)}}
+        }
+    ),
+    {started_cluster,
+        #{
+            scheduler => Scheduler,
+            compute => Compute,
+            relay => Relay,
+            scheduler_wallet => SchedulerWallet,
+            compute_wallet => ComputeWallet,
+            relay_wallet => RelayWallet
+        }
+    }.
