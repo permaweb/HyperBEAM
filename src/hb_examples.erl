@@ -354,16 +354,16 @@ start_example_cluster(Port) ->
             store => [hb_test_utils:test_store()],
             routes =>
                 [
-                    #{
-                        <<"template">> => <<"^/push">>,
-                        <<"strategy">> => <<"Nearest">>,
-                        <<"nodes">> => [
-                            #{
-                                <<"wallet">> => hb_util:human_id(SchedulerWallet),
-                                <<"prefix">> => Scheduler
-                            }
-                        ]
-                    },
+                   % #{
+                   %     <<"template">> => <<"^/push">>,
+                   %     <<"strategy">> => <<"Nearest">>,
+                   %     <<"nodes">> => [
+                   %         #{
+                   %             <<"wallet">> => hb_util:human_id(SchedulerWallet),
+                   %             <<"prefix">> => Scheduler
+                   %         }
+                   %     ]
+                   % },
                     #{
                         <<"template">> => <<"^/.*">>,
                         <<"strategy">> => <<"Nearest">>,
