@@ -400,10 +400,9 @@ tabm_to_tx(BaseTX, InputTABM, Req, Opts) ->
     LoadedTABM = hb_cache:ensure_all_loaded(BundledTABM),
 
     {TX0, TABM0} = tabm_to_tx_data(BaseTX, LoadedTABM, Req, Opts),
-    {TX1, TABM1} = tabm_to_tx_commitments(TX0, TABM0, Commitments, Opts),
-    TX2 = tabm_to_tx_tags(TX1, TABM1),
+    {TX1, _TABM1} = tabm_to_tx_commitments(TX0, TABM0, Commitments, Opts),
 
-    FinalTX = normalize(TX2),
+    FinalTX = normalize(TX1),
 
     % Check for invalid fields. We do this at the end once tx.format and tx.data have been
     % set.
@@ -447,6 +446,7 @@ tx_to_tabm_commitments(TABM, #tx{ signature = ?DEFAULT_SIG } = TX, _, NeedOrigin
     end;
 tx_to_tabm_commitments(TABM, TX, CommittedTags, NeedOriginalTags, Opts) ->
     Address = hb_util:human_id(ar_wallet:to_address(TX#tx.owner)),
+    ?event(debug_test, {inbound_committed_tags, CommittedTags}),
     CommittedKeys =
         hb_ao:normalize_keys(
             hb_util:unique(
@@ -459,6 +459,7 @@ tx_to_tabm_commitments(TABM, TX, CommittedTags, NeedOriginalTags, Opts) ->
                 hb_util:to_sorted_keys(TABM)
             )
         ),
+    ?event(debug_test, {committed_keys, CommittedKeys}),
     WithoutBaseCommitment =
         hb_maps:without(
             [
@@ -708,7 +709,11 @@ tabm_to_tx_commitments(TX, TABM, Commitments, Opts) ->
     Commitment = get_commitment(Commitments),
     TX0 = tabm_to_tx_signature(TX, Commitment),
     {TX1, TABM1} = tabm_to_tx_original_fields(TX0, TABM, Commitment),
-    {TX2, TABM2} = tabm_to_tx_original_tags(TX1, TABM1, Commitment, Opts),
+    {TX2, TABM2} =
+        case maps:is_key(<<"original-tags">>, Commitment) of
+            true -> tabm_to_tx_original_tags(TX1, TABM1, Commitment, Opts);
+            false -> {tabm_to_tx_tags(Commitment, TX1, TABM1), TABM1}
+        end,
     
     {TX2, hb_maps:without([<<"commitments">>], TABM2)}.
 
@@ -805,16 +810,30 @@ tabm_to_tx_original_tags(TX, TABM, Commitment, Opts) ->
     TX0 = set_tx_value_or_throw(tags, TX, [], Tags),
     {TX0, TABM0}.
 
-tabm_to_tx_tags(TX, TABM) ->
-    case hb_maps:size(TABM) of
-        0 -> TX;
-        _ ->
-            Tags = hb_maps:to_list(TABM),
-            set_tx_value_or_throw(tags, TX, [], Tags)
-    end.
+tabm_to_tx_tags(Commitment, TX, TABM) ->
+    Committed =
+        hb_util:message_to_ordered_list(
+            hb_maps:get(<<"committed">>, Commitment, #{})
+        ),
+    ?event(debug_test, {tabm_to_tx_tags, {explicit, TABM}}),
+    Tags =
+        lists:filtermap(
+            fun(Key) ->
+                case maps:find(Key, TABM) of
+                    {ok, Value} ->
+                        case lists:member({Key, Value}, TX#tx.tags) of
+                            true -> false;
+                            false -> {true, {Key, Value}}
+                        end;
+                    error -> false
+                end
+            end,
+            Committed
+        ),
+    set_tx_value_or_throw(tags, TX, [], Tags).
 
-% Helper function to set a field value in a TX record, throwing if the field
-% already has a non-default value
+%% @doc Helper function to set a field value in a TX record, throwing if the field
+%% already has a non-default value
 set_tx_value_or_throw(FieldAtom, TX, DefaultValue, NewValue) ->
     FieldIndex = field_index(FieldAtom),
     case element(FieldIndex, TX) of 
@@ -1128,3 +1147,24 @@ test_tag_map_to_encoded_tags_happy() ->
         end,
         TestCases
     ).
+
+unsorted_tag_map_test() ->
+    TX =
+        ar_bundles:sign_item(
+            #tx{
+                format = ans104,
+                tags = [
+                    {<<"z">>, <<"position-1">>},
+                    {<<"a">>, <<"position-2">>}
+                ],
+                data = <<"data">>
+            },
+            ar_wallet:new()
+        ),
+    ?assert(ar_bundles:verify_item(TX)),
+    ?event(debug_test, {tx, TX}),
+    {ok, TABM} = dev_codec_ans104:from(TX, #{}, #{}),
+    ?event(debug_test, {tabm, TABM}),
+    {ok, Decoded} = dev_codec_ans104:to(TABM, #{}, #{}),
+    ?event(debug_test, {decoded, Decoded}),
+    ?assert(ar_bundles:verify_item(Decoded)).
