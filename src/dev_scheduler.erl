@@ -427,12 +427,12 @@ post_location(Msg1, RawReq, RawOpts) ->
                 hb_opts:get(priv_wallet, hb:wallet(), Opts)
             )
         ),
-    ExistingNonce = 
-        case hb_gateway_client:scheduler_location(Self, Opts) of
-            {ok, SchedulerLocation} ->
-                hb_ao:get(<<"nonce">>, SchedulerLocation, 0, Opts);
-            {error, _} -> -1
-        end,
+    ExistingNonce = -1,
+    %    case hb_gateway_client:scheduler_location(Self, Opts) of
+    %        {ok, SchedulerLocation} ->
+    %            hb_ao:get(<<"nonce">>, SchedulerLocation, 0, Opts);
+    %        {error, _} -> -1
+    %    end,
     NewNonce = hb_ao:get(<<"nonce">>, OnlyCommitted, ExistingNonce + 1, Opts),
     case {NewNonce > ExistingNonce, lists:member(Self, Signers)} of
         {false, _} ->
