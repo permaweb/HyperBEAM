@@ -12,8 +12,14 @@ start(ProcID, Proc, Opts) ->
     ?event(scheduling, {starting_scheduling_server, {proc_id, ProcID}}),
     spawn_link(
         fun() ->
+            Self =
+                hb_util:human_id(
+                    ar_wallet:to_address(
+                        hb_opts:get(priv_wallet, hb:wallet(), Opts)
+                    )
+                ),
             % Before we start, register the scheduler name.
-            case hb_name:register({<<"scheduler@1.0">>, ProcID}) of
+            case hb_name:register({<<"scheduler@1.0">>, Self, ProcID}) of
                 ok -> ok;
                 error ->
                     throw(

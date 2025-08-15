@@ -27,7 +27,13 @@ find(ProcID, ProcMsgOrFalse) ->
 %% @doc Same as `find/2' but with additional options passed when spawning a 
 %% new process (if needed)
 find(ProcID, ProcMsgOrFalse, Opts) ->
-    case hb_name:lookup({<<"scheduler@1.0">>, ProcID}) of
+    Self =
+        hb_util:human_id(
+            ar_wallet:to_address(
+                hb_opts:get(priv_wallet, hb:wallet(), Opts)
+            )
+        ),
+    case hb_name:lookup({<<"scheduler@1.0">>, Self, ProcID}) of
         undefined -> maybe_new_proc(ProcID, ProcMsgOrFalse, Opts);
         Pid -> Pid
     end.
@@ -35,7 +41,7 @@ find(ProcID, ProcMsgOrFalse, Opts) ->
 %% @doc Return a list of all currently registered ProcID.
 get_processes() ->
     ?event({getting_processes, hb_name:all()}),
-    [ ProcID || {{<<"scheduler@1.0">>, ProcID}, _} <- hb_name:all() ].
+    [ ProcID || {{<<"scheduler@1.0">>, _, ProcID}, _} <- hb_name:all() ].
 
 maybe_new_proc(_ProcID, false, _Opts) -> not_found;
 maybe_new_proc(ProcID, ProcMsg, Opts) -> 
