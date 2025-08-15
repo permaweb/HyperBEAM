@@ -344,7 +344,7 @@ start_example_cluster(Port) ->
             >>,
             #{}
         ),
-    ?assertMatch(SchedulerLocation, hb_ao:get(<<"body">>, ReadLocation, #{})),
+    ?assert(hb_message:match(SchedulerLocation, hb_ao:get(<<"body">>, ReadLocation, #{}))),
     % Create the relaying server.
     Relay =
         hb_http_server:start_node(#{
