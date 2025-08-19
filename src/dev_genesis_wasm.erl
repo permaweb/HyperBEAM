@@ -9,6 +9,9 @@
 %%% Timeout for legacy CU status check.
 -define(STATUS_TIMEOUT, 100).
 
+%%% Constants.
+-define(DEFAULT_MEMORY_MAX_LIMIT, 16 * 1024 * 1024 * 1024).
+
 %% @doc Initialize the device.
 init(Msg, _Msg2, _Opts) -> {ok, Msg}.
 
@@ -196,7 +199,17 @@ ensure_started(Opts) ->
                                                 )
                                             },
 											{"DISABLE_PROCESS_FILE_CHECKPOINT_CREATION", "false"},
-											{"PROCESS_MEMORY_FILE_CHECKPOINTS_DIR", CheckpointDir}
+											{"PROCESS_MEMORY_FILE_CHECKPOINTS_DIR", CheckpointDir},
+                                            {
+                                                "PROCESS_WASM_MEMORY_MAX_LIMIT",
+                                                hb_util:list(
+                                                    hb_opts:get(
+                                                        genesis_wasm_memory_max_limit,
+                                                        ?DEFAULT_MEMORY_MAX_LIMIT,
+                                                        Opts
+                                                    )
+                                                )
+                                            }
                                         ]
                                     }
                                 ]
