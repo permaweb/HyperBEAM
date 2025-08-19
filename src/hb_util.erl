@@ -71,9 +71,10 @@ bin(Value) when is_binary(Value) ->
     Value.
 
 %% @doc Coerce a value to a string list.
-list(Value) when is_binary(Value) ->
-    binary_to_list(Value);
 list(Value) when is_list(Value) -> Value;
+list(Value) when is_binary(Value) -> binary_to_list(Value);
+list(Int) when is_integer(Int) -> integer_to_list(Int);
+list(Float) when is_float(Float) -> float_to_list(Float);
 list(Value) when is_atom(Value) -> atom_to_list(Value).
 
 %% @doc Ensure that a value is a map. Only supports maps and lists of key-value
