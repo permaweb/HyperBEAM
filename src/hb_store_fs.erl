@@ -46,17 +46,21 @@ reset(#{ <<"name">> := DataDir }) ->
 
 %% @doc Read a key from the store, following symlinks as needed.
 read(Opts, Key) ->
-    read(add_prefix(Opts, resolve(Opts, Key))).
-read(Path) ->
+    FollowSymlink = maps:get(<<"follow-symlink">>, Opts, true),
+    read_path(add_prefix(Opts, resolve(Opts, Key)), FollowSymlink).
+read_path(Path, FollowSymlink) ->
 	?event({read, Path}),
 	case file:read_file_info(Path) of
 		{ok, #file_info{type = regular}} ->
 			{ok, _} = file:read_file(Path);
 		_ ->
 			case file:read_link(Path) of
-				{ok, Link} ->
+				{ok, Link} when FollowSymlink->
 					?event({link_found, Path, Link}),
-					read(Link);
+					read_path(Link, true);
+                {ok, Link} ->
+					?event({link_found, Path, Link}),
+					{ok, Link};
 				_ ->
 					not_found
 			end
@@ -113,16 +117,20 @@ resolve(Opts, CurrPath, [Next|Rest]) ->
 
 %% @doc Determine the type of a key in the store.
 type(Opts, Key) ->
-    type(add_prefix(Opts, Key)).
-type(Path) ->
+    FollowSymlink = maps:get(<<"follow-symlink">>, Opts, true),
+    type_path(add_prefix(Opts, Key), FollowSymlink).
+
+type_path(Path, FollowSymlink) ->
     ?event({type, Path}),
     case file:read_file_info(Path) of
         {ok, #file_info{type = directory}} -> composite;
         {ok, #file_info{type = regular}} -> simple;
         _ ->
             case file:read_link(Path) of
-                {ok, Link} ->
-                    type(Link);
+                {ok, Link} when FollowSymlink ->
+                    type_path(Link, true);
+                {ok, _Link} ->
+                    link;
                 _ ->
                     not_found
             end
