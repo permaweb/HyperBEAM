@@ -85,6 +85,57 @@ message_lookup_device_resolver(Msg) ->
         }
     }.
 
+-define(TEST_ARNS_PREFIX,
+    "H4r5gBeEVEL-aVPLpP3Ht5o0MYy462cpyNwEgxVtPCk~process@1.0"
+        "/compute/cache/arns/records/").
+
+test_arns_resolver() ->
+    #{
+        <<"device">> => #{
+            <<"lookup">> =>
+                fun(_, Req, Opts) ->
+                    Key = hb_ao:get(<<"key">>, Req, Opts),
+                    Path =
+                        <<
+                            ?TEST_ARNS_PREFIX,
+                            Key/binary,
+                            "/processid"
+                        >>,
+                    ?event(
+                        {test_arns_resolver_executing,
+                            {key, Key},
+                            {path, {string, Path}}
+                        }
+                    ),
+                    case hb_ao:resolve(Path, Opts) of
+                        {ok, ProcessID} ->
+                            ?event(
+                                {test_arns_resolver_processid_found, {processid, ProcessID}}
+                            ),
+                            ARNTPath =
+                                <<
+                                    ProcessID/binary,
+                                    "/compute/records/@/transactionid"
+                                >>,
+                            case hb_ao:resolve(ARNTPath, Opts) of
+                                {ok, ID} ->
+                                    ?event(
+                                        {test_arns_resolver_arn_found, {arn, ID}}
+                                    ),
+                                    {ok, ID};
+                                _ ->
+                                    ?event(
+                                        {test_ant_state_not_found, {path, ARNTPath}}
+                                    ),
+                                    not_found
+                            end;
+                        _ ->
+                            not_found
+                    end
+            end
+        }
+    }.
+
 single_resolver_test() ->
     ?assertEqual(
         {ok, <<"world">>},
@@ -146,4 +197,13 @@ load_and_execute_test() ->
                 ]
             }
         )
+    ).
+
+%% @doc Test an example ARNS-namespace resolver.
+arns_resolver_test() ->
+    ?assertEqual(
+        {ok, <<"1234567890">>},
+        resolve(<<"ardrive">>, #{}, #{}, #{
+            name_resolvers => [test_arns_resolver()]
+        })
     ).
