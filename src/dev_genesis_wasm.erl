@@ -22,27 +22,51 @@ normalize(Msg, Msg2, Opts) ->
 %% @doc All the `delegated-compute@1.0' device to execute the request. We then apply
 %% the `patch@1.0' device, applying any state patches that the AO process may have
 %% requested.
-compute(Msg, Msg2, Opts) ->
+compute(Msg, Req, Opts) ->
     % Validate whether the genesis-wasm feature is enabled.
-    case delegate_request(Msg, Msg2, Opts) of
-        {ok, Msg3} ->
-            % Resolve the `patch@1.0' device.
-            {ok, Msg4} =
+    case delegate_request(Msg, Req, Opts) of
+        {ok, ComputeResult} ->
+            % Resolve the `patch@1.0' device. We first normalize `null' values
+            % to the atom `unset'.
+            ?event({compute_result, ComputeResult}),
+            NormRes = normalize_nulls(ComputeResult, Opts),
+            ?event({normalized_result, NormRes}),
+            {ok, PatchedRes} =
                 hb_ao:resolve(
-                    Msg3,
+                    NormRes,
                     {
                         as,
                         <<"patch@1.0">>,
-                        Msg2#{ <<"patch-from">> => <<"/results/outbox">> }
+                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
                     },
                     Opts
                 ),
             % Return the patched message.
-            {ok, Msg4};
+            {ok, PatchedRes};
         {error, Error} ->
             % Return the error.
             {error, Error}
     end.
+
+%% @doc Normalize `null' values to the atom `unset'.
+normalize_nulls(Msg, Opts) when is_map(Msg) ->
+    hb_maps:map(
+        fun(_Key, Value) ->
+            case Value of
+                <<"null">> -> unset;
+                _ -> normalize_nulls(Value, Opts)
+            end
+        end,
+        Msg,
+        Opts
+    );
+normalize_nulls(Msg, Opts) when is_list(Msg) ->
+    lists:map(
+        fun(Item) -> normalize_nulls(Item, Opts) end,
+        Msg
+    );
+normalize_nulls(Msg, _Opts) ->
+    Msg.
 
 %% @doc Snapshot the state of the process via the `delegated-compute@1.0' device.
 snapshot(Msg, Msg2, Opts) ->
