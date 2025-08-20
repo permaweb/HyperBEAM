@@ -45,7 +45,7 @@ reset(#{ <<"name">> := DataDir }) ->
     ?event({reset_store, {path, DataDir}}).
 
 %% @doc Read a key from the store, following symlinks as needed.
-read(#{<<"follow-link">> := false} = Opts, Key) ->
+read(#{<<"resolve">> := false} = Opts, Key) ->
     maybe {prefixed_link, Link} ?= read_path(add_prefix(Opts, Key), false),
         {ok, remove_prefix(Opts, Link)}
     end;
@@ -121,7 +121,7 @@ resolve(Opts, CurrPath, [Next|Rest]) ->
 
 %% @doc Determine the type of a key in the store.
 type(Opts, Key) ->
-    FollowLink = maps:get(<<"follow-link">>, Opts, true),
+    FollowLink = maps:get(<<"resolve">>, Opts, true),
     type_path(add_prefix(Opts, Key), FollowLink).
 
 type_path(Path, FollowLink) ->
