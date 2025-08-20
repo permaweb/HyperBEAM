@@ -1291,7 +1291,7 @@ simple_wasm_persistent_worker_benchmark_test() ->
         BenchTime
     ),
     ?event(benchmark, {scheduled, Iterations}),
-    hb_util:eunit_print(
+    hb_format:eunit_print(
         "Scheduled and evaluated ~p simple wasm process messages in ~p s (~s msg/s)",
         [Iterations, BenchTime, hb_util:human_int(Iterations / BenchTime)]
     ),
@@ -1330,7 +1330,7 @@ aos_persistent_worker_benchmark_test_() ->
             BenchTime
         ),
         ?event(benchmark, {scheduled, Iterations}),
-        hb_util:eunit_print(
+        hb_format:eunit_print(
             "Scheduled and evaluated ~p AOS process messages in ~p s (~s msg/s)",
             [Iterations, BenchTime, hb_util:human_int(Iterations / BenchTime)]
         ),

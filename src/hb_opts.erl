@@ -157,6 +157,7 @@ default_message() ->
             #{<<"name">> => <<"process@1.0">>, <<"module">> => dev_process},
             #{<<"name">> => <<"profile@1.0">>, <<"module">> => dev_profile},
             #{<<"name">> => <<"push@1.0">>, <<"module">> => dev_push},
+            #{<<"name">> => <<"query@1.0">>, <<"module">> => dev_query},
             #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
             #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
             #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},

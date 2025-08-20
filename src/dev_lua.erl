@@ -309,7 +309,7 @@ process_response({lua_error, RawError, State}, _Priv, Opts) ->
 process_response({error, Reason, Trace}, _Priv, _Opts) ->
     % An Erlang error occurred while calling the Lua function. Return it.
     ?event(lua_error, {trace, Trace}),
-    TraceBin = iolist_to_binary(hb_util:format_trace(Trace)),
+    TraceBin = iolist_to_binary(hb_format:trace(Trace)),
     ?event(lua_error, {formatted, {string, TraceBin}}),
     ReasonBin = iolist_to_binary(io_lib:format("~p", [Reason])),
     {error, #{

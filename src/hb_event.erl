@@ -28,7 +28,7 @@ log(Topic, X, Mod, Func, undefined, Opts) -> log(Topic, X, Mod, Func, "", Opts);
 log(Topic, X, Mod, Func, Line, Opts) ->
     % Check if the debug_print option has the topic in it if set.
     case should_print(Topic, Opts) orelse should_print(Mod, Opts) of
-        true -> hb_util:debug_print(X, Mod, Func, Line, Opts);
+        true -> hb_format:print(X, Mod, Func, Line, Opts);
         false -> X
     end,
 	%handle_tracer(Topic, X, Opts),
@@ -124,14 +124,14 @@ increment_callers(Topic) ->
     BinTopic = hb_util:bin(Topic),
     increment(
         <<BinTopic/binary, "-call-paths">>,
-        hb_util:format_trace_short(),
+        hb_format:trace_short(),
         #{}
     ),
     lists:foreach(
         fun(Caller) ->
             increment(<<BinTopic/binary, "-callers">>, Caller, #{})
         end,
-        hb_util:trace_to_list(hb_util:get_trace())
+        hb_format:trace_to_list(hb_format:get_trace())
     ).
 
 %% @doc Return a message containing the current counter values for all logged

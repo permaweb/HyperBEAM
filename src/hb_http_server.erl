@@ -92,7 +92,7 @@ maybe_greeter(MergedConfig, PrivWallet) ->
 %% address, URL to access the node, and the wider configuration (including the
 %% keys inherited from the default configuration).
 print_greeter(Config, PrivWallet) ->
-    FormattedConfig = hb_util:debug_format(Config, Config, 2),
+    FormattedConfig = hb_format:term(Config, Config, 2),
     io:format("~n"
         "===========================================================~n"
         "==    ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗           ==~n"
@@ -429,16 +429,16 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
     ErrorMsg =
         #{
             <<"status">> => 500,
-            <<"type">> => hb_message:format(Type),
-            <<"details">> => hb_message:format(Details, NodeMsg, 1),
-            <<"stacktrace">> => hb_util:bin(hb_util:format_trace(Stacktrace))
+            <<"type">> => hb_format:message(Type),
+            <<"details">> => hb_format:message(Details, NodeMsg, 1),
+            <<"stacktrace">> => hb_util:bin(hb_format:trace(Stacktrace))
         },
-    ErrorBin = hb_util:format_error(ErrorMsg, NodeMsg),
+    ErrorBin = hb_format:error(ErrorMsg, NodeMsg),
     ?event(
         http_error,
         {returning_500_error,
             {string,
-                hb_util:indent(
+                hb_format:indent_lines(
                     <<"\n", ErrorBin/binary, "\n">>,
                     1
                 )

@@ -827,6 +827,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
 %% Options can be specified in mime-type format (`application/*') or in
 %% AO device format (`device@1.0').
 accept_to_codec(TABMReq, Opts) ->
+    ?event(only, {accept_to_codec, {tabm_req, TABMReq}}),
     AcceptCodec =
         hb_maps:get(
             <<"accept-codec">>,

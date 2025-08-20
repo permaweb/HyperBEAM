@@ -71,7 +71,7 @@ format(Base, Req, Opts) ->
         #{
             <<"body">> =>
                 hb_util:bin(
-                    hb_message:format(
+                    hb_format:message(
                         #{
                             <<"base">> =>
                                 maps:without(
@@ -146,7 +146,7 @@ return_error(ErrorMsg, Opts) ->
     return_file(
         <<"hyperbuddy@1.0">>,
         <<"500.html">>,
-        #{ <<"error">> => hb_util:format_error(ErrorMsg, Opts) }
+        #{ <<"error">> => hb_format:error(ErrorMsg, Opts) }
     ).
 
 %% @doc Apply a template to a body.

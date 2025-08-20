@@ -166,7 +166,7 @@ graph_to_dot(Graph, Opts) ->
                 Acc,
                 io_lib:format(
                     <<"  \"~s\" [label=\"~s\", color=~s, style=filled];~n">>,
-                    [ID, hb_util:short_id(hb_util:bin(Label)), Color]
+                    [ID, hb_format:short_id(hb_util:bin(Label)), Color]
                 )
             ]
         end,
@@ -181,7 +181,7 @@ graph_to_dot(Graph, Opts) ->
                 Acc,
                 io_lib:format(
                     <<"  \"~s\" -> \"~s\" [label=\"~s\"];~n">>,
-                    [From, To, hb_util:short_id(hb_util:bin(Label))]
+                    [From, To, hb_format:short_id(hb_util:bin(Label))]
                 )
             ]
         end,
