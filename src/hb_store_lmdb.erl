@@ -87,11 +87,11 @@ start(_) ->
 %% @returns 'composite' for group entries, 'simple' for regular values
 -spec type(map(), binary()) -> composite | simple | link | not_found.
 type(Opts, Key) ->
-    FollowSymlink = maps:get(<<"follow-symlink">>, Opts, true),
+    FollowLink = maps:get(<<"follow-link">>, Opts, true),
     case read_direct(Opts, Key) of
         {ok, Value} ->
             case is_link(Value) of
-                {true, Link} when FollowSymlink ->
+                {true, Link} when FollowLink ->
                     % This is a link, check the target's type
                     type(Opts, Link);
                 {true, _Link} ->
@@ -168,7 +168,7 @@ write(Opts, Path, Value) ->
 -spec read(map(), binary() | list()) -> {ok, binary()} | {error, term()}.
 read(Opts, PathParts) when is_list(PathParts) ->
     read(Opts, to_path(PathParts));
-read(#{<<"follow-symlink">> := false} = Opts, Path) ->
+read(#{<<"follow-link">> := false} = Opts, Path) ->
     maybe {ok, <<"link:", RawValue/binary>>} ?= read_direct(Opts, Path),
         {ok, RawValue}
     end;
@@ -760,7 +760,7 @@ type_link_test() ->
     make_link(StoreOpts, [<<"test-dir1">>], <<"test-link">>),
     Type1 = type(StoreOpts, <<"test-link">>),
     ?assertEqual(composite, Type1),
-    StoreOpts2 = maps:put(<<"follow-symlink">>, false, StoreOpts),
+    StoreOpts2 = maps:put(<<"follow-link">>, false, StoreOpts),
     Type2 = type(StoreOpts2, <<"test-link">>),
     ?assertEqual(link, Type2).
     
@@ -1100,7 +1100,7 @@ read_follow_test() ->
     ?assertEqual(Value, <<"World">>),
     {ok, Value2} = read(StoreOpts, <<"HelloLink">>),
     ?assertEqual(Value2, <<"World">>),
-    StoreOpts2 = maps:put(<<"follow-symlink">>, false, StoreOpts),
+    StoreOpts2 = maps:put(<<"follow-link">>, false, StoreOpts),
     {ok, Value3} = read(StoreOpts2, <<"HelloLink">>),
     ?assertEqual(Value3, <<"Hello">>),
     ok = stop(StoreOpts).
