@@ -45,9 +45,13 @@ reset(#{ <<"name">> := DataDir }) ->
     ?event({reset_store, {path, DataDir}}).
 
 %% @doc Read a key from the store, following symlinks as needed.
+read(#{<<"follow-link">> := false} = Opts, Key) ->
+    maybe {prefixed_link, Link} ?= read_path(add_prefix(Opts, Key), false),
+        {ok, remove_prefix(Opts, Link)}
+    end;
 read(Opts, Key) ->
-    FollowLink = maps:get(<<"follow-link">>, Opts, true),
-    read_path(add_prefix(Opts, resolve(Opts, Key)), FollowLink).
+    read_path(add_prefix(Opts, resolve(Opts, Key)), true).
+
 read_path(Path, FollowLink) ->
 	?event({read, Path}),
 	case file:read_file_info(Path) of
@@ -59,8 +63,8 @@ read_path(Path, FollowLink) ->
 					?event({link_found, Path, Link}),
 					read_path(Link, true);
                 {ok, Link} ->
-					?event({link_found, Path, Link}),
-					{ok, Link};
+					?event({link_found_ret, Path, Link}),
+					{prefixed_link, Link};
 				_ ->
 					not_found
 			end
