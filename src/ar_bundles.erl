@@ -254,28 +254,29 @@ enforce_valid_tx(TX) ->
         hb_util:check_size(TX#tx.signature, [0, 65, byte_size(?DEFAULT_SIG)]),
         {invalid_field, signature, TX#tx.signature}
     ),
-    lists:foreach(
-        fun({Name, Value}) ->
-            hb_util:ok_or_throw(TX,
-                hb_util:check_type(Name, binary),
-                {invalid_field, tag_name, Name}
-            ),
-            hb_util:ok_or_throw(TX,
-                hb_util:check_size(Name, {range, 0, ?MAX_TAG_NAME_SIZE}),
-                {invalid_field, tag_name, Name}
-            ),
-            hb_util:ok_or_throw(TX,
-                hb_util:check_type(Value, binary),
-                {invalid_field, tag_value, Value}
-            ),
-            hb_util:ok_or_throw(TX,
-                hb_util:check_size(Value, {range, 0, ?MAX_TAG_VALUE_SIZE}),
-                {invalid_field, tag_value, Value}
-            );
-            (InvalidTagForm) ->
-                throw({invalid_field, tag, InvalidTagForm})
-        end,
-        TX#tx.tags
+    hb_util:ok_or_throw(TX,
+        lists:foldl(
+            fun({Name, Value}, Acc) ->
+                hb_util:ok_or_throw(TX,
+                    hb_util:check_type(Name, binary),
+                    {invalid_field, tag_name, Name}
+                ),
+                hb_util:ok_or_throw(TX,
+                    hb_util:check_type(Value, binary),
+                    {invalid_field, tag_value, Value}
+                ),
+                hb_util:ok_or_throw(TX,
+                    hb_util:check_size(<<Name/binary, Value/binary>>, {range, 0, ?MAX_TAG_COMBINED_SIZE}),
+                    {invalid_field, tag_size, {Name, Value}}
+                ),
+                Acc + byte_size(Name) + byte_size(Value);
+                (InvalidTagForm, _Acc) ->
+                    throw({invalid_field, tag, InvalidTagForm})
+            end,
+            0,
+            TX#tx.tags
+        ) =< ?MAX_TAG_SECTION_SIZE,
+      {invalid_field, tag_section_size, TX#tx.tags}
     ),
     hb_util:ok_or_throw(
         TX,
