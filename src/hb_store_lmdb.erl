@@ -481,10 +481,12 @@ make_link(Opts, Existing, New) when is_list(Existing) ->
     ExistingBin = to_path(Existing),
     make_link(Opts, ExistingBin, New);
 make_link(Opts, Existing, New) ->
-   ExistingBin = hb_util:bin(Existing),
-   % Ensure parent groups exist for the new link path (like filesystem ensure_dir)
-   ensure_parent_groups(Opts, New),
-   write(Opts, New, <<"link:", ExistingBin/binary>>). 
+    % ensure key-value is binary pair
+    ExistingBin = hb_util:bin(Existing),
+    NewBin = maybe <<"/", Path/binary>> ?= hb_util:bin(New), Path end,
+    % Ensure parent groups exist for the new link path (like filesystem ensure_dir)
+    ensure_parent_groups(Opts, NewBin),
+    write(Opts, NewBin, <<"link:", ExistingBin/binary>>).
 
 %% @doc Transform a path into the store's canonical form.
 %% For LMDB, paths are simply joined with "/" separators.

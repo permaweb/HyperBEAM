@@ -46,7 +46,7 @@
 -export([behavior_info/1]).
 -export([start/1, stop/1, reset/1]).
 -export([filter/2, scope/2, sort/2]).
--export([type/2, read/2, write/3, list/2, match/2]).
+-export([type/2, read/2, write/3, sync/2, list/2, match/2]).
 -export([path/1, path/2, add_path/2, add_path/3, join/1]).
 -export([make_group/2, make_link/3, resolve/2]).
 -export([find/1]).
@@ -304,6 +304,42 @@ list(Modules, Path) -> call_function(Modules, list, [Path]).
 %% messages in the store that feature all of the given key-value pairs. `Matches'
 %% is given as a list of IDs.
 match(Modules, Match) -> call_function(Modules, match, [Match]).
+
+%% @doc Copies the contents of one store to another.
+sync(FromStore, ToStore) ->
+    ?event({sync_start, FromStore, ToStore}),
+    FromStoreOpts = maps:put(<<"resolve">>, false, FromStore),
+    {ok, Entries} = hb_store:list(FromStore, <<"/">>),
+    case sync_entries(Entries, <<"">>, FromStoreOpts, ToStore) of
+        [] -> ok;
+        FailedKeyValues -> {error, {sync_failed, FailedKeyValues}}
+    end.
+
+sync_entries(Entries, ParentDir, FromStore, ToStore) ->
+    ?event({sync_entries, ParentDir, Entries}),
+    lists:foldl(fun(Key, Acc) ->
+        Path = <<ParentDir/binary, "/", Key/binary>>,
+        case type(FromStore, Path) of
+            Type when Type == simple orelse Type == link ->
+                case hb_store:read(FromStore, Path) of
+                    {ok, Value} when Type == simple ->
+                        case hb_store:write(ToStore, Path, Value) of
+                            ok -> Acc;
+                            _Error -> [{Path, Value} | Acc]
+                        end;
+                    {ok, Link} when Type == link ->
+                        ok = hb_store:make_link(ToStore, Path, Link),
+                        Acc;
+                    _Error ->
+                        [{Path, undefined} | Acc]
+                end;
+            composite ->
+                {ok, Entries2} = hb_store:list(FromStore, Path),
+                Acc ++ sync_entries(Entries2, Path, FromStore, ToStore);
+            not_found ->
+                Acc
+        end
+    end, [], Entries).
 
 %% @doc Call a function on the first store module that succeeds. Returns its
 %% result, or `not_found` if none of the stores succeed. If `TIME_CALLS` is set,
