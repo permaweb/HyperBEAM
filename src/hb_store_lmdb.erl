@@ -55,13 +55,18 @@ start(Opts = #{ <<"name">> := DataDir }) ->
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
     ok = filelib:ensure_dir(filename:join(DataDirPath, "dummy")),
+    NoSyncParam =
+        case maps:get(<<"no-sync">>, Opts, true) of
+            true -> [no_sync];
+            false -> []
+        end,
     % Create the LMDB environment with specified size limit
     {ok, Env} =
         elmdb:env_open(
             DataDirPath,
             [
                 {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
-                no_mem_init, no_sync
+                no_mem_init | NoSyncParam
             ]
         ),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
