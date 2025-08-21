@@ -85,14 +85,17 @@ start(_) ->
 %% @param Opts Database configuration map
 %% @param Key The key to examine
 %% @returns 'composite' for group entries, 'simple' for regular values
--spec type(map(), binary()) -> composite | simple | not_found.
+-spec type(map(), binary()) -> composite | simple | link | not_found.
 type(Opts, Key) ->
+    FollowLink = maps:get(<<"resolve">>, Opts, true),
     case read_direct(Opts, Key) of
         {ok, Value} ->
             case is_link(Value) of
-                {true, Link} ->
+                {true, Link} when FollowLink ->
                     % This is a link, check the target's type
                     type(Opts, Link);
+                {true, _Link} ->
+                    link;
                 false ->
                     case Value of
                         <<"group">> -> 
@@ -166,8 +169,11 @@ write(Opts, Path, Value) ->
 -spec read(map(), binary() | list()) -> {ok, binary()} | {error, term()}.
 read(Opts, PathParts) when is_list(PathParts) ->
     read(Opts, to_path(PathParts));
+read(#{<<"resolve">> := false} = Opts, Path) ->
+    maybe {ok, <<"link:", RawValue/binary>>} ?= read_direct(Opts, Path),
+        {ok, RawValue}
+    end;
 read(Opts, Path) ->
-    % Try direct read first (fast path for non-link paths)
     case read_with_links(Opts, Path) of
         {ok, Value} -> 
             {ok, Value};
@@ -765,6 +771,26 @@ type_test() ->
     Type2 = type(StoreOpts, <<"assets/1">>),
     ?event({type2, Type2}),
     ?assertEqual(simple, Type2).
+    
+type_link_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/store-7">>,
+        <<"capacity">> => ?DEFAULT_SIZE
+    },
+    reset(StoreOpts),
+    ?event(debug, step1_make_group),
+    make_group(StoreOpts, <<"test-dir1">>),
+    ?event(debug, step2_write_file),
+    write(StoreOpts, [<<"test-dir1">>, <<"test-file">>], <<"test-data">>),
+    ?event(debug, step3_make_link),
+    make_link(StoreOpts, [<<"test-dir1">>], <<"test-link">>),
+    Type1 = type(StoreOpts, <<"test-link">>),
+    ?assertEqual(composite, Type1),
+    StoreOpts2 = maps:put(<<"resolve">>, false, StoreOpts),
+    Type2 = type(StoreOpts2, <<"test-link">>),
+    ?assertEqual(link, Type2).
+    
 
 %% @doc Link key list test - verifies symbolic link creation using structured key paths.
 %%
@@ -1086,3 +1112,22 @@ list_with_link_test() ->
     ?event({link_children, LinkChildren}),
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
     stop(StoreOpts).
+
+
+%% @doc Read follow test - verifies shallow reads and reads with links.
+read_follow_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/lmdb-read-follow">>
+    },
+    reset(StoreOpts),
+    write(StoreOpts, <<"Hello">>, <<"World">>),
+    make_link(StoreOpts, <<"Hello">>, <<"HelloLink">>),
+    {ok, Value} = read(StoreOpts, <<"Hello">>),
+    ?assertEqual(Value, <<"World">>),
+    {ok, Value2} = read(StoreOpts, <<"HelloLink">>),
+    ?assertEqual(Value2, <<"World">>),
+    StoreOpts2 = maps:put(<<"resolve">>, false, StoreOpts),
+    {ok, Value3} = read(StoreOpts2, <<"HelloLink">>),
+    ?assertEqual(Value3, <<"Hello">>),
+    ok = stop(StoreOpts).
