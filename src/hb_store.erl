@@ -46,7 +46,7 @@
 -export([behavior_info/1]).
 -export([start/1, stop/1, reset/1]).
 -export([filter/2, scope/2, sort/2]).
--export([type/2, read/2, write/3, list/2]).
+-export([type/2, read/2, write/3, list/2, sync/2]).
 -export([path/1, path/2, add_path/2, add_path/3, join/1]).
 -export([make_group/2, make_link/3, resolve/2]).
 -export([find/1]).
@@ -298,6 +298,43 @@ resolve(Modules, Path) -> call_function(Modules, resolve, [Path]).
 %% The hyperbeam model assumes that stores are built as efficient hash-based
 %% structures, so this is likely to be very slow for most stores.
 list(Modules, Path) -> call_function(Modules, list, [Path]).
+
+%% @doc Copies the contents of one store to another.
+sync(FromStore, ToStore) ->
+    ?event({sync_start, FromStore, ToStore}),
+    FromStoreOpts = maps:put(<<"resolve">>, false, FromStore),
+    {ok, Entries} = hb_store:list(FromStore, <<"/">>),
+    case sync_entries(Entries, <<"">>, FromStoreOpts, ToStore) of
+        [] -> ok;
+        FailedKeyValues -> {error, {sync_failed, FailedKeyValues}}
+    end.
+
+sync_entries(Entries, ParentDir, FromStore, ToStore) ->
+    ?event({sync_entries, ParentDir, Entries}),
+    lists:foldl(fun(Key, Acc) ->
+        Path = <<ParentDir/binary, "/", Key/binary>>,
+        case type(FromStore, Path) of
+            Type when Type == simple orelse Type == link ->
+                case hb_store:read(FromStore, Path) of
+                    {ok, Value} when Type == simple ->
+                        case hb_store:write(ToStore, Path, Value) of
+                            ok -> Acc;
+                            _Error -> [{Path, Value} | Acc]
+                        end;
+                    {ok, Link} when Type == link ->
+                        ok = hb_store:make_link(ToStore, Path, Link),
+                        Acc;
+                    _Error ->
+                        [{Path, undefined} | Acc]
+                end;
+            composite ->
+                {ok, Entries2} = hb_store:list(FromStore, Path),
+                Acc ++ sync_entries(Entries2, Path, FromStore, ToStore);
+            not_found ->
+                Acc
+        end
+    end, [], Entries).
+    
 
 %% @doc Call a function on the first store module that succeeds. Returns its
 %% result, or `not_found` if none of the stores succeed. If `TIME_CALLS` is set,
