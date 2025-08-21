@@ -419,6 +419,8 @@ match(Opts, MatchKVs) ->
 %% @param GroupName Binary name for the group
 %% @returns Result of the write operation
 -spec make_group(map(), binary()) -> ok | {error, term()}.
+make_group(Opts, <<"/", GroupName/binary>>) when is_map(Opts) ->
+    make_group(Opts, GroupName);
 make_group(Opts, GroupName) when is_map(Opts), is_binary(GroupName) ->
     write(Opts, GroupName, <<"group">>);
 make_group(_,_) ->
