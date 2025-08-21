@@ -310,6 +310,7 @@ sync(FromStore, ToStore) ->
     ?event({sync_start, FromStore, ToStore}),
     FromStoreOpts = maps:put(<<"resolve">>, false, FromStore),
     {ok, Entries} = hb_store:list(FromStore, <<"/">>),
+    ok = hb_store:make_group(ToStore, <<"/">>),
     case sync_entries(Entries, <<"">>, FromStoreOpts, ToStore) of
         [] -> ok;
         FailedKeyValues -> {error, {sync_failed, FailedKeyValues}}
@@ -334,8 +335,13 @@ sync_entries(Entries, ParentDir, FromStore, ToStore) ->
                         [{Path, undefined} | Acc]
                 end;
             composite ->
-                {ok, Entries2} = hb_store:list(FromStore, Path),
-                Acc ++ sync_entries(Entries2, Path, FromStore, ToStore);
+                case hb_store:make_group(ToStore, Path) of
+                    ok ->
+                        {ok, Entries2} = hb_store:list(FromStore, Path),
+                        Acc ++ sync_entries(Entries2, Path, FromStore, ToStore);
+                    _Error ->
+                        [{Path, undefined} | Acc]
+                end;
             not_found ->
                 Acc
         end
