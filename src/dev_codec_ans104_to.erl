@@ -84,7 +84,7 @@ commitment_to_tx(Commitment, Opts) ->
     LastTX =
         case hb_maps:find(<<"field-anchor">>, Commitment, Opts) of
             {ok, EncodedLastTX} -> hb_util:decode(EncodedLastTX);
-            error -> ?DEFAULT_LAST_TX
+            error -> ?DEFAULT_ANCHOR
         end,
     Target =
         case hb_maps:find(<<"field-target">>, Commitment, Opts) of

@@ -11,8 +11,9 @@
 -define(DEFAULT_ID, << 0:256 >>).
 -define(DEFAULT_OWNER, << 0:4096 >>).
 -define(DEFAULT_DATA, <<>>).
--define(DEFAULT_LAST_TX, <<>>).
+-define(DEFAULT_ANCHOR, <<>>).
 -define(DEFAULT_TARGET, <<>>).
+-define(DEFAULT_DATA_ROOT, <<>>).
 
 -define(MAX_TAG_COUNT, 128).
 -define(MAX_TAG_NAME_SIZE, 1024).
@@ -34,7 +35,7 @@
     %% Either the identifier of the previous transaction from
     %% the same wallet or the identifier of one of the
     %% last ?MAX_TX_ANCHOR_DEPTH blocks.
-    anchor = ?DEFAULT_LAST_TX,
+    anchor = ?DEFAULT_ANCHOR,
     %% The public key the transaction is signed with.
     owner =	?DEFAULT_OWNER,
     %% The owner address. Used as a cache to avoid recomputing it, not serialized.
@@ -55,7 +56,7 @@
     %% Deprecated. Not used, not gossiped.
     data_tree = [],
     %% The Merkle root of the Merkle tree of data chunks.
-    data_root = <<>>,
+    data_root = ?DEFAULT_DATA_ROOT,
     %% The signature.
     signature = ?DEFAULT_SIG,
     %% The fee in Winstons.
@@ -101,3 +102,12 @@
 
 %% The default key type used by transactions that do not specify a signature type.
 -define(DEFAULT_KEY_TYPE, ?RSA_KEY_TYPE).
+
+-define(BUNDLE_TAGS, [
+    {<<"bundle-format">>, <<"binary">>},
+    {<<"bundle-version">>, <<"2.0.0">>}
+]).
+
+-define(LIST_TAGS, [
+    {<<"map-format">>, <<"list">>}
+]).

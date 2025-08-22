@@ -2,6 +2,7 @@
 -module(ar_tx).
 
 -export([sign/2, verify/1, verify_tx_id/2]).
+-export([id/1, id/2, get_owner_address/1, data_root/1]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
 
 -include("include/hb.hrl").
@@ -62,6 +63,40 @@ verify(TX) ->
 %% @doc Verify the given transaction actually has the given identifier.
 verify_tx_id(ExpectedID, #tx{ id = ID } = TX) ->
     ExpectedID == ID andalso verify_signature(TX) andalso verify_hash(TX).
+
+%% @doc Return or generate the ID for a given transaction.
+id(TX) -> id(TX, unsigned).
+id(#tx{ id = ?DEFAULT_ID, signature = ?DEFAULT_SIG }, signed) ->
+    not_signed;
+id(#tx{ id = ?DEFAULT_ID } = TX, signed) ->
+    generate_id(TX, signed);
+id(#tx{ id = ID }, signed) ->
+    ID;
+id(#tx{ unsigned_id = ?DEFAULT_ID } = TX, unsigned) ->
+    generate_id(TX, unsigned);
+id(#tx{ unsigned_id = UnsignedID }, unsigned) ->
+    UnsignedID.
+
+%% @doc Generate the ID for a given transaction.
+generate_id(TX, signed) ->
+    crypto:hash(sha256, TX#tx.signature);
+generate_id(TX, unsigned) ->
+    crypto:hash(sha256, generate_signature_data_segment(TX)).
+
+%% @doc Return the transaction's owner address. Take the cached value if available.
+get_owner_address(#tx{ owner = ?DEFAULT_OWNER }) ->
+    not_set;
+get_owner_address(#tx{ owner = Owner, signature_type = KeyType, owner_address = not_set }) ->
+    ar_wallet:to_address(Owner, KeyType);
+get_owner_address(#tx{ owner_address = OwnerAddress }) ->
+    OwnerAddress.
+
+data_root(Bin) ->
+    Chunks = chunk_binary(?DATA_CHUNK_SIZE, Bin),
+    SizeTaggedChunks = chunks_to_size_tagged_chunks(Chunks),
+    SizeTaggedChunkIDs = sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
+    {Root, _} = ar_merkle:generate_tree(SizeTaggedChunkIDs),
+    Root.
 
 %%%===================================================================
 %%% Private functions.
@@ -160,16 +195,17 @@ verify_v2(_) ->
     [].
 
 sign(TX, PrivKey, {KeyType, Owner}, SignatureDataSegment) ->
-    NewTX = TX#tx{ owner = Owner, signature_type = KeyType,
-            owner_address = ar_wallet:to_address(Owner, KeyType) },
-    Sig = ar_wallet:sign(PrivKey, SignatureDataSegment),
-    ID = crypto:hash(?HASH_ALG, <<Sig/binary>>),
-    NewTX#tx{ id = ID, signature = Sig }.
-
+    NewTX = TX#tx{ 
+        owner = Owner, 
+        signature_type = KeyType,
+        owner_address = ar_wallet:to_address(Owner, KeyType),
+        signature = ar_wallet:sign(PrivKey, SignatureDataSegment)
+    },
+    NewTX#tx{ id = generate_id(NewTX, signed) }.
 
 %% @doc Verify that the transaction's ID is a hash of its signature.
-verify_hash(#tx{ signature = Sig, id = ID }) ->
-    ID == crypto:hash(sha256, << Sig/binary >>).
+verify_hash(#tx{ id = ID } = TX) ->
+    ID == generate_id(TX, signed).
 
 collect_validation_results(_TXID, Checks) ->
     KeepFailed = fun
@@ -178,9 +214,9 @@ collect_validation_results(_TXID, Checks) ->
     end,
     case lists:filtermap(KeepFailed, Checks) of
         [] -> true;
-    FailedChecks -> 
-        ?event({tx_validation_failed, FailedChecks}),
-        false
+        FailedChecks -> 
+            ?event({tx_validation_failed, FailedChecks}),
+            false
     end.
 
 json_struct_to_tx(TXStruct) ->
@@ -269,17 +305,17 @@ tx_to_json_struct(
     %% Only RSA supported for now
     ?RSA_KEY_TYPE = SigType,
     Fields = [
-        {format,
+        {<<"format">>,
             case Format of
                 undefined ->
                     1;
                 _ ->
                     Format
             end},
-        {id, hb_util:encode(ID)},
-        {last_tx, hb_util:encode(Anchor)},
-        {owner, hb_util:encode(Owner)},
-        {tags,
+        {<<"id">>, hb_util:encode(ID)},
+        {<<"last_tx">>, hb_util:encode(Anchor)},
+        {<<"owner">>, hb_util:encode(Owner)},
+        {<<"tags">>,
             lists:map(
                 fun({Name, Value}) ->
                     {
@@ -292,19 +328,19 @@ tx_to_json_struct(
                 Tags
             )
         },
-        {target, hb_util:encode(Target)},
-        {quantity, integer_to_binary(Quantity)},
-        {data, hb_util:encode(Data)},
-        {data_size, integer_to_binary(DataSize)},
-        {data_tree, []},
-        {data_root, hb_util:encode(DataRoot)},
-        {reward, integer_to_binary(Reward)},
-        {signature, hb_util:encode(Sig)}
+        {<<"target">>, hb_util:encode(Target)},
+        {<<"quantity">>, integer_to_binary(Quantity)},
+        {<<"data">>, hb_util:encode(Data)},
+        {<<"data_size">>, integer_to_binary(DataSize)},
+        {<<"data_tree">>, []},
+        {<<"data_root">>, hb_util:encode(DataRoot)},
+        {<<"reward">>, integer_to_binary(Reward)},
+        {<<"signature">>, hb_util:encode(Sig)}
     ],
     Fields2 =
         case Denomination > 0 of
             true ->
-                Fields ++ [{denomination, integer_to_binary(Denomination)}];
+                Fields ++ [{<<"denomination">>, integer_to_binary(Denomination)}];
             false ->
                 Fields
         end,
