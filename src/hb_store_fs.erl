@@ -46,8 +46,8 @@ reset(#{ <<"name">> := DataDir }) ->
 
 %% @doc Read a key from the store, following symlinks as needed.
 read(#{<<"resolve">> := false} = Opts, Key) ->
-    maybe {prefixed_link, Link} ?= read_path(add_prefix(Opts, Key), false),
-        {ok, remove_prefix(Opts, Link)}
+    maybe {prefixed_link, LinkTarget} ?= read_path(add_prefix(Opts, Key), false),
+        {ok, remove_prefix(Opts, LinkTarget)}
     end;
 read(Opts, Key) ->
     read_path(add_prefix(Opts, resolve(Opts, Key)), true).
@@ -62,9 +62,9 @@ read_path(Path, FollowLink) ->
 				{ok, Link} when FollowLink->
 					?event({link_found, Path, Link}),
 					read_path(Link, true);
-                {ok, Link} ->
-					?event({link_found_ret, Path, Link}),
-					{prefixed_link, Link};
+                {ok, LinkTarget} ->
+					?event({link_found_ret, Path, LinkTarget}),
+					{prefixed_link, list_to_binary(LinkTarget)};
 				_ ->
 					not_found
 			end
