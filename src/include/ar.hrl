@@ -1,3 +1,12 @@
+
+%% Maximum size of a single data chunk, in bytes.
+-define(DATA_CHUNK_SIZE, (256 * 1024)).
+
+%% The size of data chunk hashes, in bytes.
+-define(CHUNK_ID_HASH_SIZE, 32).
+
+-define(NOTE_SIZE, 32).
+
 -define(DEFAULT_SIG, << 0:4096 >>).
 -define(DEFAULT_ID, << 0:256 >>).
 -define(DEFAULT_OWNER, << 0:4096 >>).
@@ -5,8 +14,16 @@
 -define(DEFAULT_LAST_TX, <<>>).
 -define(DEFAULT_TARGET, <<>>).
 
--define(MAX_TAG_NAME_SIZE, 3072).
+-define(MAX_TAG_COUNT, 128).
+-define(MAX_TAG_NAME_SIZE, 1024).
 -define(MAX_TAG_VALUE_SIZE, 3072).
+
+%% Winstons per AR.
+-define(WINSTON_PER_AR, 1000000000000).
+
+%% A macro to convert AR into Winstons.
+-define(AR(AR), (?WINSTON_PER_AR * AR)).
+
 %% @doc A transaction.
 -record(tx, {
     %% 1 or 2 or ans104.
@@ -20,6 +37,8 @@
     anchor = ?DEFAULT_LAST_TX,
     %% The public key the transaction is signed with.
     owner =	?DEFAULT_OWNER,
+    %% The owner address. Used as a cache to avoid recomputing it, not serialized.
+    owner_address = not_set,
     %% A list of arbitrary key-value pairs. Keys and values are binaries.
     tags = [],
     %% The address of the recipient, if any. The SHA2-256 hash of the public key.
@@ -71,12 +90,14 @@
 
 -define(RSA_SIGN_ALG, rsa).
 -define(RSA_PRIV_KEY_SZ, 4096).
+-define(RSA_KEY_TYPE, {?RSA_SIGN_ALG, 65537}).
 
 -define(ECDSA_SIGN_ALG, ecdsa).
 -define(ECDSA_TYPE_BYTE, <<2>>).
 
 -define(EDDSA_SIGN_ALG, eddsa).
 -define(EDDSA_TYPE_BYTE, <<3>>).
+-define(ECDSA_KEY_TYPE, {?ECDSA_SIGN_ALG, secp256k1}).
 
 %% The default key type used by transactions that do not specify a signature type.
--define(DEFAULT_KEY_TYPE, {?RSA_SIGN_ALG, 65537}).
+-define(DEFAULT_KEY_TYPE, ?RSA_KEY_TYPE).
