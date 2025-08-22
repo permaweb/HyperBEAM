@@ -7,161 +7,14 @@
 -export([serialize/1, serialize/2, deserialize/1, deserialize/2]).
 -export([data_item_signature_data/1]).
 -export([normalize/1]).
--export([print/1, format/1, format/2, format/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %%% @doc Module for creating, signing, and verifying Arweave data items and bundles.
 
--define(BUNDLE_TAGS, [
-    {<<"bundle-format">>, <<"binary">>},
-    {<<"bundle-version">>, <<"2.0.0">>}
-]).
-
--define(LIST_TAGS, [
-    {<<"map-format">>, <<"list">>}
-]).
-
-% How many bytes of a binary to print with `print/1'.
--define(BIN_PRINT, 20).
--define(INDENT_SPACES, 2).
-
 %%%===================================================================
 %%% Public interface.
 %%%===================================================================
-
-print(Item) ->
-    io:format(standard_error, "~s", [lists:flatten(format(Item))]).
-
-format(Item) -> format(Item, 0).
-format(Item, Indent) -> format(Item, Indent, #{}).
-format(Item, Indent, Opts) when is_list(Item); is_map(Item) ->
-    format(normalize(Item), Indent, Opts);
-format(Item, Indent, Opts) when is_record(Item, tx) ->
-    MustVerify = hb_opts:get(debug_ids, true, Opts),
-    Valid =
-        if MustVerify -> verify_item(Item);
-        true -> true
-        end,
-    UnsignedID =
-        if MustVerify -> hb_util:encode(id(Item, unsigned));
-        true -> <<"[SKIPPED ID]">>
-        end,
-    SignedID =
-        if MustVerify ->
-            case id(Item, signed) of
-                not_signed -> <<"[NOT SIGNED]">>;
-                ID -> hb_util:encode(ID)
-            end;
-        true -> <<"[SKIPPED ID]">>
-        end,
-    format_line(
-        "TX ( ~s: ~s ) {",
-        [
-            if
-                MustVerify andalso Item#tx.signature =/= ?DEFAULT_SIG ->
-                    lists:flatten(
-                        io_lib:format(
-                            "~s (signed) ~s (unsigned)",
-                            [SignedID, UnsignedID]
-                        )
-                    );
-                true -> UnsignedID
-            end,
-            if
-                not MustVerify -> "[SKIPPED VERIFICATION]";
-                Valid == true -> "[SIGNED+VALID]";
-                true -> "[UNSIGNED/INVALID]"
-            end
-        ],
-        Indent
-    ) ++
-    case MustVerify andalso (not Valid) andalso Item#tx.signature =/= ?DEFAULT_SIG of
-        true ->
-            format_line("!!! CAUTION: ITEM IS SIGNED BUT INVALID !!!", Indent + 1);
-        false -> []
-    end ++
-    case is_signed(Item) of
-        true ->
-            format_line("Signer: ~s", [hb_util:encode(signer(Item))], Indent + 1);
-        false -> []
-    end ++
-    format_line("Target: ~s", [
-            case Item#tx.target of
-                <<>> -> "[NONE]";
-                Target -> hb_util:id(Target)
-            end
-        ], Indent + 1) ++
-    format_line("Last TX: ~s", [
-            case Item#tx.anchor of
-                ?DEFAULT_LAST_TX -> "[NONE]";
-                LastTX -> hb_util:encode(LastTX)
-            end
-        ], Indent + 1) ++
-    format_line("Tags:", Indent + 1) ++
-    lists:map(
-        fun({Key, Val}) -> format_line("~s -> ~s", [Key, Val], Indent + 2) end,
-        Item#tx.tags
-    ) ++
-    format_line("Data:", Indent + 1) ++ format_data(Item, Indent + 2) ++
-    format_line("}", Indent);
-format(Item, Indent, _Opts) ->
-    % Whatever we have, its not a tx...
-    format_line("INCORRECT ITEM: ~p", [Item], Indent).
-
-format_data(Item, Indent) when is_binary(Item#tx.data) ->
-    case lists:keyfind(<<"bundle-format">>, 1, Item#tx.tags) of
-        {_, _} ->
-            format_data(deserialize(serialize(Item)), Indent);
-        false ->
-            format_line(
-                "Binary: ~p... <~p bytes>",
-                [format_binary(Item#tx.data), byte_size(Item#tx.data)],
-                Indent
-            )
-    end;
-format_data(Item, Indent) when is_map(Item#tx.data) ->
-    format_line("Map:", Indent) ++
-    lists:map(
-        fun({Name, MapItem}) ->
-            format_line("~s ->", [Name], Indent + 1) ++
-            format(MapItem, Indent + 2)
-        end,
-        maps:to_list(Item#tx.data)
-    );
-format_data(Item, Indent) when is_list(Item#tx.data) ->
-    format_line("List:", Indent) ++
-    lists:map(
-        fun(ListItem) ->
-            format(ListItem, Indent + 1)
-        end,
-        Item#tx.data
-    ).
-
-format_binary(Bin) ->
-    lists:flatten(
-        io_lib:format(
-            "~p",
-            [
-                binary:part(
-                    Bin,
-                    0,
-                    case byte_size(Bin) of
-                        X when X < ?BIN_PRINT -> X;
-                        _ -> ?BIN_PRINT
-                    end
-                )
-            ]
-        )
-    ).
-
-format_line(Str, Indent) -> format_line(Str, "", Indent).
-format_line(RawStr, Fmt, Ind) ->
-    io_lib:format(
-        [$\s || _ <- lists:seq(1, Ind * ?INDENT_SPACES)] ++
-            lists:flatten(RawStr) ++ "\n",
-        Fmt
-    ).
 
 %% @doc Return the address of the signer of an item, if it is signed.
 signer(#tx { owner = ?DEFAULT_OWNER }) -> undefined;
@@ -1149,9 +1002,7 @@ test_serialize_deserialize_deep_signed_bundle() ->
     Item2 = sign_item(#tx{data = #{<<"key1">> => Item1}}, W),
     Bundle = serialize(Item2),
     Deser2 = deserialize(Bundle),
-    format(Deser2),
     #{ <<"key1">> := Deser1 } = Deser2#tx.data,
-    format(Deser1),
     ?assertEqual(id(Item2, unsigned), id(Deser2, unsigned)),
     ?assertEqual(id(Item2, signed), id(Deser2, signed)),
     ?assertEqual(id(Item1, unsigned), id(Deser1, unsigned)),

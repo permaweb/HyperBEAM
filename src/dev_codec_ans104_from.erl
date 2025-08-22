@@ -170,7 +170,7 @@ with_unsigned_commitment(Item, Tags, UncommittedMessage, CommittedKeys, Opts) ->
                             end,
                         <<"field-anchor">> =>
                             case Item#tx.anchor of
-                                ?DEFAULT_LAST_TX -> unset;
+                                ?DEFAULT_ANCHOR -> unset;
                                 LastTX -> LastTX
                             end
                     },
@@ -198,7 +198,7 @@ with_signed_commitment(Item, Tags, UncommittedMessage, CommittedKeys, Opts) ->
                 <<"original-tags">> => original_tags(Item, Opts),
                 <<"field-anchor">> =>
                     case Item#tx.anchor of
-                        ?DEFAULT_LAST_TX -> unset;
+                        ?DEFAULT_ANCHOR -> unset;
                         LastTX -> LastTX
                     end,
                 <<"field-target">> =>
