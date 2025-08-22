@@ -144,7 +144,7 @@ data_messages(TABM, Opts) when is_map(TABM) ->
             Opts
         ),
     % If there are too many keys in the TABM, throw an error.
-    if map_size(UncommittedTABM) > 128 ->
+    if map_size(UncommittedTABM) > ?MAX_TAG_COUNT ->
         throw({too_many_keys, UncommittedTABM});
     true ->
         % If there are less than 128 keys, we return those that are large, or
@@ -153,7 +153,7 @@ data_messages(TABM, Opts) when is_map(TABM) ->
             fun(Key, Value) ->
                 case is_map(Value) of
                     true -> true;
-                    false -> byte_size(Value) > 3072 orelse byte_size(Key) > 1024
+                    false -> byte_size(Value) > ?MAX_TAG_VALUE_SIZE orelse byte_size(Key) > ?MAX_TAG_NAME_SIZE
                 end
             end,
             UncommittedTABM,

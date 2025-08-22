@@ -438,7 +438,7 @@ enforce_valid_tx(TX) ->
     ),
     ok_or_throw(TX,
         check_size(TX#tx.anchor, [0, 32]),
-        {invalid_field, last_tx, TX#tx.anchor}
+        {invalid_field, anchor, TX#tx.anchor}
     ),
     ok_or_throw(TX,
         check_size(TX#tx.owner, [0, byte_size(?DEFAULT_OWNER)]),
