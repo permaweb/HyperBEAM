@@ -310,7 +310,8 @@ sync(FromStore, ToStore) ->
     ?event({sync_start, FromStore, ToStore}),
     FromStoreOpts = maps:put(<<"resolve">>, false, FromStore),
     {ok, Entries} = hb_store:list(FromStore, <<"/">>),
-    case sync_entries(Entries, <<"">>, FromStoreOpts, ToStore) of
+    ValidEntries = lists:filter(fun(Key) -> Key =/= <<"lmdb">> end, Entries),
+    case sync_entries(ValidEntries, <<"">>, FromStoreOpts, ToStore) of
         [] -> ok;
         FailedKeyValues -> {error, {sync_failed, FailedKeyValues}}
     end.
