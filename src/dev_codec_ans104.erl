@@ -6,6 +6,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(BASE_FIELDS, [<<"anchor">>, <<"target">>]).
+
 %% @doc Return the content type for the codec.
 content_type(_) -> {ok, <<"application/ans104">>}.
 
@@ -89,20 +91,21 @@ do_from(RawTX, Req, Opts) ->
     TX = ar_bundles:deserialize(ar_bundles:normalize(RawTX)),
     ?event({parsed_tx, TX}),
     % Get the fields, tags, and data from the TX.
-    Fields = dev_codec_ans104_from:fields(TX, Opts),
+    Fields = dev_codec_ans104_from:fields(TX, <<>>, Opts),
     Tags = dev_codec_ans104_from:tags(TX, Opts),
     Data = dev_codec_ans104_from:data(TX, Req, Tags, Opts),
     ?event({parsed_components, {fields, Fields}, {tags, Tags}, {data, Data}}),
     % Calculate the committed keys on from the TX.
-    Keys = dev_codec_ans104_from:committed(TX, Fields, Tags, Data, Opts),
+    Keys = dev_codec_ans104_from:committed(?BASE_FIELDS, TX, Fields, Tags, Data, Opts),
     ?event({determined_committed_keys, Keys}),
     % Create the base message from the fields, tags, and data, filtering to
     % include only the keys that are committed. Will throw if a key is missing.
     Base = dev_codec_ans104_from:base(Keys, Fields, Tags, Data, Opts),
     ?event({calculated_base_message, Base}),
     % Add the commitments to the message if the TX has a signature.
-    WithCommitments =
-        dev_codec_ans104_from:with_commitments(TX, Tags, Base, Keys, Opts),
+    CommittedFields = dev_codec_ans104_from:fields(TX, <<"field-">>, Opts),
+    WithCommitments = dev_codec_ans104_from:with_commitments(
+        TX, CommittedFields, Tags, Base, Keys, Opts),
     ?event({parsed_message, WithCommitments}),
     {ok, WithCommitments}.
 
