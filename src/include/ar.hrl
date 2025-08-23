@@ -14,6 +14,8 @@
 -define(DEFAULT_ANCHOR, <<>>).
 -define(DEFAULT_TARGET, <<>>).
 -define(DEFAULT_DATA_ROOT, <<>>).
+-define(DEFAULT_QUANTITY, 0).
+-define(DEFAULT_REWARD, 0).
 
 -define(MAX_TAG_COUNT, 128).
 -define(MAX_TAG_NAME_SIZE, 1024).
@@ -45,7 +47,7 @@
     %% The address of the recipient, if any. The SHA2-256 hash of the public key.
     target = ?DEFAULT_TARGET,
     %% The amount of Winstons to send to the recipient, if any.
-    quantity = 0,
+    quantity = ?DEFAULT_QUANTITY,
     %% The data to upload, if any. For v2 transactions, the field is optional - a fee
     %% is charged based on the "data_size" field, data itself may be uploaded any time
     %% later in chunks.
@@ -60,7 +62,7 @@
     %% The signature.
     signature = ?DEFAULT_SIG,
     %% The fee in Winstons.
-    reward = 0,
+    reward = ?DEFAULT_REWARD,
 
     %% The code for the denomination of AR in base units.
     %%

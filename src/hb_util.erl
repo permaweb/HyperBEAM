@@ -126,8 +126,10 @@ until(Condition, Fun, Count) ->
 %% @doc Return the human-readable form of an ID of a message when given either
 %% a message explicitly, raw encoded ID, or an Erlang Arweave `tx' record.
 id(Item) -> id(Item, unsigned).
-id(TX, Type) when is_record(TX, tx) ->
+id(#tx{ format = ans104 } = TX, Type) when is_record(TX, tx) ->
     encode(ar_bundles:id(TX, Type));
+id(TX, Type) when is_record(TX, tx) ->
+    encode(ar_tx:id(TX, Type));
 id(Map, Type) when is_map(Map) ->
     hb_message:id(Map, Type);
 id(Bin, _) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
