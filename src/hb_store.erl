@@ -311,7 +311,7 @@ sync(FromStore, ToStore) ->
     FromStoreOpts = maps:put(<<"resolve">>, false, FromStore),
     {ok, Entries} = hb_store:list(FromStore, <<"/">>),
     ValidEntries = lists:filter(fun(Key) -> Key =/= <<"lmdb">> end, Entries),
-    case sync_entries(ValidEntries, <<"">>, FromStoreOpts, ToStore) of
+    case sync_entries(ValidEntries, <<"/">>, FromStoreOpts, ToStore) of
         [] -> ok;
         FailedKeyValues -> {error, {sync_failed, FailedKeyValues}}
     end.
@@ -319,28 +319,32 @@ sync(FromStore, ToStore) ->
 sync_entries(Entries, ParentDir, FromStore, ToStore) ->
     ?event({sync_entries, ParentDir, Entries}),
     lists:foldl(fun(Key, Acc) ->
-        Path = <<ParentDir/binary, "/", Key/binary>>,
-        case type(FromStore, Path) of
+        NewPath =  
+            case ParentDir of
+                Bin when Bin == <<"">> orelse Bin == <<"/">> -> Key;
+                _ -> <<ParentDir/binary, "/", Key/binary>>
+            end,
+        case type(FromStore, NewPath) of
             Type when Type == simple orelse Type == link ->
-                case hb_store:read(FromStore, Path) of
+                case hb_store:read(FromStore, NewPath) of
                     {ok, Value} when Type == simple ->
-                        case hb_store:write(ToStore, Path, Value) of
+                        case hb_store:write(ToStore, NewPath, Value) of
                             ok -> Acc;
-                            _Error -> [{Path, Value} | Acc]
+                            _Error -> [{NewPath, Value} | Acc]
                         end;
                     {ok, LinkTarget} when Type == link ->
-                        ok = hb_store:make_link(ToStore, LinkTarget, Path),
+                        ok = hb_store:make_link(ToStore, LinkTarget, NewPath),
                         Acc;
                     _Error ->
-                        [{Path, undefined} | Acc]
+                        [{NewPath, undefined} | Acc]
                 end;
             composite ->
-                case hb_store:make_group(ToStore, Path) of
+                case hb_store:make_group(ToStore, NewPath) of
                     ok ->
-                        {ok, Entries2} = hb_store:list(FromStore, Path),
-                        Acc ++ sync_entries(Entries2, Path, FromStore, ToStore);
+                        {ok, Entries2} = hb_store:list(FromStore, NewPath),
+                        Acc ++ sync_entries(Entries2, NewPath, FromStore, ToStore);
                     _Error ->
-                        [{Path, undefined} | Acc]
+                        [{NewPath, undefined} | Acc]
                 end;
             not_found ->
                 Acc

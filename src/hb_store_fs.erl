@@ -47,7 +47,10 @@ reset(#{ <<"name">> := DataDir }) ->
 %% @doc Read a key from the store, following symlinks as needed.
 read(#{<<"resolve">> := false} = Opts, Key) ->
     maybe {prefixed_link, LinkTarget} ?= read_path(add_prefix(Opts, Key), false),
-        {ok, remove_prefix(Opts, LinkTarget)}
+        case remove_prefix(Opts, LinkTarget) of
+            <<"/", Path/binary>> -> {ok, Path};
+            Path -> {ok, Path}
+        end
     end;
 read(Opts, Key) ->
     read_path(add_prefix(Opts, resolve(Opts, Key)), true).
