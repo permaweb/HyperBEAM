@@ -559,11 +559,81 @@ hierarchical_path_resolution_test(Store) ->
         hb_store:read(Store, [<<"test-link">>, <<"test-file">>])
     ).
 
+%% @doc Test the hb_store:sync function by syncing from hb_store_fs to hb_store_lmdb
+hb_store_sync_test(_Store) ->
+    % Generate unique names to avoid conflicts
+    TestId = integer_to_binary(erlang:system_time(microsecond)),
+    % Set up FromStore (hb_store_fs) with resolve=false as specified
+    FromStore = #{
+        <<"store-module">> => hb_store_fs, 
+        <<"name">> => <<"cache-sync-from-", TestId/binary>>, 
+        <<"resolve">> => false
+    },
+    % Set up ToStore (hb_store_lmdb)
+    ToStore = #{
+        <<"store-module">> => hb_store_lmdb, 
+        <<"name">> => <<"cache-sync-to-", TestId/binary>>
+    },
+    
+    % Clean up any existing data
+    hb_store:reset(FromStore),
+    hb_store:reset(ToStore),
+    
+    % Start both stores
+    hb_store:start(FromStore),
+    hb_store:start(ToStore),
+    
+    % Populate FromStore with directories, files, and links
+    % Create a directory structure
+    ok = hb_store:make_group(FromStore, <<"test-dir">>),
+    ok = hb_store:write(FromStore, <<"test-dir/file1.txt">>, <<"Hello World">>),
+    ok = hb_store:write(FromStore, <<"test-dir/file2.txt">>, <<"Test Data">>),
+    
+    % Create a nested directory
+    ok = hb_store:make_group(FromStore, <<"test-dir/nested">>),
+    ok = hb_store:write(FromStore, <<"test-dir/nested/deep-file.txt">>, <<"Deep Content">>),
+    
+    % Create some top-level files
+    ok = hb_store:write(FromStore, <<"root-file.txt">>, <<"Root Content">>),
+    
+    % Create a link
+    ok = hb_store:make_link(FromStore, <<"root-file.txt">>, <<"link-to-root">>),
+    
+    % Perform the sync operation
+    Result = hb_store:sync(FromStore, ToStore),
+    ?assertEqual(ok, Result),
+    
+    % Verify that directories exist in ToStore
+    ?assertEqual(composite, hb_store:type(ToStore, <<"test-dir">>)),
+    ?assertEqual(composite, hb_store:type(ToStore, <<"test-dir/nested">>)),
+    
+    % Verify that files exist in ToStore
+    {ok, File1Content} = hb_store:read(ToStore, <<"test-dir/file1.txt">>),
+    ?assertEqual(<<"Hello World">>, File1Content),
+    
+    {ok, File2Content} = hb_store:read(ToStore, <<"test-dir/file2.txt">>),
+    ?assertEqual(<<"Test Data">>, File2Content),
+    
+    {ok, DeepContent} = hb_store:read(ToStore, <<"test-dir/nested/deep-file.txt">>),
+    ?assertEqual(<<"Deep Content">>, DeepContent),
+    
+    {ok, RootContent} = hb_store:read(ToStore, <<"root-file.txt">>),
+    ?assertEqual(<<"Root Content">>, RootContent),
+    
+    % Verify that links work in ToStore
+    {ok, LinkContent} = hb_store:read(ToStore, <<"link-to-root">>),
+    ?assertEqual(<<"Root Content">>, LinkContent),
+    
+    % Clean up
+    hb_store:stop(FromStore),
+    hb_store:stop(ToStore).
+
 store_suite_test_() ->
     generate_test_suite([
         {"simple path resolution", fun simple_path_resolution_test/1},
         {"resursive path resolution", fun resursive_path_resolution_test/1},
-        {"hierarchical path resolution", fun hierarchical_path_resolution_test/1}
+        {"hierarchical path resolution", fun hierarchical_path_resolution_test/1},
+        {"hb_store sync", fun hb_store_sync_test/1}
     ]).
 
 benchmark_suite_test_() ->
