@@ -320,8 +320,8 @@ tx_to_json_struct(
                 fun({Name, Value}) ->
                     {
                         [
-                            {name, hb_util:encode(Name)},
-                            {value, hb_util:encode(Value)}
+                            {<<"name">>, hb_util:encode(Name)},
+                            {<<"value">>, hb_util:encode(Value)}
                         ]
                     }
                 end,
