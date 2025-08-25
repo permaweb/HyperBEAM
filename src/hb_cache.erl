@@ -60,7 +60,8 @@ ensure_loaded(Ref,
         RawOpts) ->
     % The link is to a submessage; either in lazy (unresolved) form, or direct
     % form.
-    Opts = hb_store:scope(RawOpts, local),
+    UnscopedOpts = hb_util:deep_merge(RawOpts, LkOpts, RawOpts),
+    Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LkOpts)),
     Store = hb_opts:get(store, no_viable_store, Opts),
     ?event(debug_cache,
         {loading_multi_link,
@@ -101,9 +102,9 @@ ensure_loaded(Ref,
 ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
     % If the user provided their own options, we merge them and _overwrite_
     % the options that are already set in the link.
-    Opts = hb_store:scope(RawOpts, local),
-    MergedOpts = hb_util:deep_merge(Opts, LinkOpts, Opts),
-    case hb_cache:read(ID, MergedOpts) of
+    UnscopedOpts = hb_util:deep_merge(RawOpts, LinkOpts, RawOpts),
+    Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LinkOpts)),
+    case hb_cache:read(ID, Opts) of
         {ok, LoadedMsg} ->
             ?event(caching,
                 {lazy_loaded,

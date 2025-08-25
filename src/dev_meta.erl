@@ -239,11 +239,7 @@ handle_resolve(Req, Msgs, NodeMsg) ->
                     PreProcessedMsg,
                     HTTPOpts#{ force_message => true, trace => TracePID }
                 ),
-            {ok, StatusEmbeddedRes} =
-                embed_status(
-                    Res,
-                    NodeMsg
-                ),
+            {ok, StatusEmbeddedRes} = embed_status(Res, NodeMsg),
             ?event(http_request, {res, StatusEmbeddedRes}),
             AfterResolveOpts = hb_http_server:get_opts(NodeMsg),
             % Apply the post-processor to the result.

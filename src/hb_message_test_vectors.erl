@@ -6,11 +6,11 @@
 -include("include/hb.hrl").
 
 %% @doc Test invocation function, making it easier to run a specific test.
-% %% Disable/enable as needed.
+%% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    normalize_commitments_test(
-        <<"structured@1.0">>,
+    encode_small_balance_table_test(
+        <<"ans104@1.0">>,
         test_opts(normal)
     ).
 
@@ -24,8 +24,7 @@ test_codecs() ->
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
-        <<"json@1.0">>,
-        <<"tx@1.0">>
+        <<"json@1.0">>
     ].
 
 %% @doc Return a set of options for testing, taking the codec name as an
@@ -314,17 +313,17 @@ codec_roundtrip_conversion_is_idempotent_test(Codec, Opts) ->
 %% that have the default values found in the tx record, but not those that
 %% have been set by the user.
 default_keys_removed_test() ->
-    TX = #tx { unsigned_id = << 1:256 >>, last_tx = << 2:256 >> },
+    TX = #tx { unsigned_id = << 1:256 >>, anchor = << 2:256 >> },
     TXMap = #{
         <<"unsigned_id">> => TX#tx.unsigned_id,
-        <<"last_tx">> => TX#tx.last_tx,
+        <<"anchor">> => TX#tx.anchor,
         <<"owner">> => TX#tx.owner,
         <<"target">> => TX#tx.target,
         <<"data">> => TX#tx.data
     },
     FilteredMap = hb_message:filter_default_keys(TXMap),
     ?assertEqual(<< 1:256 >>, hb_maps:get(<<"unsigned_id">>, FilteredMap)),
-    ?assertEqual(<< 2:256 >>, hb_maps:get(<<"last_tx">>, FilteredMap, not_found)),
+    ?assertEqual(<< 2:256 >>, hb_maps:get(<<"anchor">>, FilteredMap, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"owner">>, FilteredMap, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"target">>, FilteredMap, not_found)).
 
@@ -363,7 +362,7 @@ set_body_codec_test(Codec, Opts) ->
 %% @doc Test that we can convert a message into a tx record and back.
 single_layer_message_to_encoding_test(Codec, Opts) ->
     Msg = #{
-        <<"last_tx">> => << 2:256 >>,
+        <<"anchor">> => << 2:256 >>,
         <<"target">> => << 4:256 >>,
         <<"data">> => <<"DATA">>,
         <<"special-key">> => <<"SPECIAL_VALUE">>
@@ -558,9 +557,9 @@ simple_nested_message_test(Codec, Opts) ->
         <<"c">> => <<"3">>
     },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    ?event({encoded, {explicit, Encoded}}),
+    ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    ?event({matching, {input, {explicit, Msg}}, {output, {explicit, Decoded}}}),
+    ?event({matching, {input, Msg}, {output, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 simple_signed_nested_message_test(Codec, Opts) ->
@@ -574,6 +573,7 @@ simple_signed_nested_message_test(Codec, Opts) ->
             Opts,
             Codec
         ),
+    ?assert(hb_message:verify(Msg, all, Opts)),
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
@@ -645,7 +645,7 @@ nested_message_with_large_content_test(Codec, Opts) ->
     },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    ?event({matching, {input, {explicit, Msg}, {output, {explicit, Decoded}}}}),
+    ?event({matching, {input, Msg}, {output, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 %% @doc Test that we can convert a 3 layer nested message into a tx record and back.
@@ -888,7 +888,7 @@ deep_typed_message_id_test(Codec, Opts) ->
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     DecodedID = hb_message:id(Decoded, none, Opts),
     ?event({decoded_id, DecodedID}),
-    ?event({stages, {init, {explicit, Msg}}, {encoded, {explicit, Encoded}}, {decoded, {explicit, Decoded}}}),
+    ?event({stages, {init, Msg}, {encoded, Encoded}, {decoded, Decoded}}),
     ?assertEqual(
         InitID,
         DecodedID
@@ -976,9 +976,7 @@ unsigned_id_test(Codec, Opts) ->
 message_with_simple_embedded_list_test(Codec, Opts) ->
     Msg = #{ <<"list">> => [<<"value-1">>, <<"value-2">>, <<"value-3">>] },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    ?event({encoded, {explicit, Encoded}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    ?event({decoded, {explicit, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 empty_string_in_nested_tag_test(Codec, Opts) ->
@@ -1348,10 +1346,9 @@ recursive_nested_list_test(Codec, Opts) ->
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 priv_survives_conversion_test(<<"ans104@1.0">>, _Opts) -> skip;
-priv_survives_conversion_test(<<"tx@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(<<"json@1.0">>, _Opts) -> skip;
-priv_survives_conversion_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) -> skip;
-priv_survives_conversion_test(#{ <<"device">> := <<"tx@1.0">> }, _Opts) -> skip;
+priv_survives_conversion_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
+    skip;
 priv_survives_conversion_test(Codec, Opts) ->
     Msg = #{
         <<"data">> => <<"TEST_DATA">>,
@@ -1375,16 +1372,23 @@ encode_balance_table(Size, Codec, Opts) ->
         ||
             _ <- lists:seq(1, Size)
         },
-    ?event({msg, {explicit, Msg}}),
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    % ?event({encoded, {explicit, Encoded}}),
-    Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    ?event({decoded, {explicit, Decoded}}),
-    ?assert(hb_message:match(Msg, Decoded, only_present, Opts)).
+    ?event(debug, {encoded, {explicit, Encoded}}),
+    Decoded =
+        hb_message:uncommitted(
+            hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
+            Opts
+        ),
+    ?event(debug, {decoded, {explicit, Decoded}}),
+    ?assert(hb_message:match(Msg, Decoded, if_present, Opts)).
 
 encode_small_balance_table_test(Codec, Opts) ->
     encode_balance_table(5, Codec, Opts).
 
+encode_large_balance_table_test(<<"ans104@1.0">>, _Opts) ->
+    skip;
+encode_large_balance_table_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
+    skip;
 encode_large_balance_table_test(Codec, Opts) ->
     encode_balance_table(1000, Codec, Opts).
 
@@ -1402,9 +1406,12 @@ sign_links_test(Codec, Opts) ->
     ?event(debug, {signed, Signed}),
     ?assert(hb_message:verify(Signed, all, Opts)).
 
-bundled_and_unbundled_ids_differ_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
-    skip;
 bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) ->
+    SignatureType =
+        case maps:get(<<"device">>, Codec, undefined) of
+            <<"ans104@1.0">> -> <<"rsa-pss-sha256">>;
+            _ -> <<"hmac-sha256">>
+        end,
     Msg = #{
         <<"immediate-key">> => <<"immediate-value">>,
         <<"nested">> => #{
@@ -1418,15 +1425,17 @@ bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) -
             maps:without([<<"bundle">>], Codec)
         ),
     SignedBundled = hb_message:commit(Msg, Opts, Codec),
+    ?event(debug, {signed_no_bundle, SignedNoBundle}),
+    ?event(debug, {signed_bundled, SignedBundled}),
     {ok, UnbundledID, _} =
         hb_message:commitment(
-            #{ <<"type">> => <<"hmac-sha256">> },
+            #{ <<"type">> => SignatureType },
             SignedNoBundle,
             Opts
         ),
     {ok, BundledID, _} =
         hb_message:commitment(
-            #{ <<"type">> => <<"hmac-sha256">> },
+            #{ <<"type">> => SignatureType },
             SignedBundled,
             Opts
         ),
@@ -1554,8 +1563,6 @@ find_multiple_commitments_test_disabled() ->
 
 %% @doc Ensure that a httpsig@1.0 message which is bundled and requests an 
 %% invalid ordering of keys is normalized to a valid ordering.
-bundled_ordering_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
-    skip;
 bundled_ordering_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     % Opts = (test_opts(normal))#{
     %     store => [

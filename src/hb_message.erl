@@ -61,10 +61,11 @@
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
 -export([verify/1, verify/2, verify/3, commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([commitment/2, commitment/3, with_only_committed/2, is_signed_key/3]).
+-export([without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, normalize_commitments/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
--export([default_tx_list/0, default_tx_keys/0, filter_default_keys/1]).
+-export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
 -export([print/1]).
 -include("include/hb.hrl").
@@ -289,6 +290,16 @@ with_only_committers(Msg, _Committers, _Opts) ->
 %% @doc Determine whether a specific key is part of a message's commitments.
 is_signed_key(Key, Msg, Opts) ->
     lists:member(Key, hb_message:committed(Msg, all, Opts)).
+
+%% @doc Remove the any of the given keys that are not signed from a message.
+without_unless_signed(Key, Msg, Opts) when not is_list(Key) ->
+    without_unless_signed([Key], Msg, Opts);
+without_unless_signed(Keys, Msg, Opts) ->
+    SignedKeys = hb_message:committed(Msg, all, Opts),
+    maps:without(
+        lists:filter(fun(K) -> not lists:member(K, SignedKeys) end, Keys),
+        Msg
+    ).
 
 %% @doc Sign a message with the given wallet.
 commit(Msg, WalletOrOpts) ->
@@ -708,8 +719,5 @@ default_tx_message() ->
 %% @doc Get the ordered list of fields as AO-Core keys and default values of
 %% the tx record.
 default_tx_list() ->
-    lists:zip(default_tx_keys(), tl(tuple_to_list(#tx{}))).
-
-%% @doc Get the ordered list of tx record fields, normalized as AO-Core keys.
-default_tx_keys() ->
-    lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)).
+    Keys = lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)),
+    lists:zip(Keys, tl(tuple_to_list(#tx{}))).

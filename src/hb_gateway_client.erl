@@ -125,7 +125,11 @@ scheduler_location(Address, Opts) ->
         #{
             <<"query">> =>
                 <<"query($SchedulerAddrs: [String!]!) { ",
-                    "transactions(owners: $SchedulerAddrs, tags: { name: \"Type\" values: [\"Scheduler-Location\"] }, first: 1){ ",
+                    "transactions(",
+                        "owners: $SchedulerAddrs, ",
+                        "tags: { name: \"Type\" values: [\"Scheduler-Location\"] }, ",
+                        "first: 1",
+                    "){ ",
                         "edges { ",
                             (item_spec())/binary ,
                         " } ",
@@ -137,8 +141,11 @@ scheduler_location(Address, Opts) ->
                 }
         },
     case query(Query, Opts) of
-        {error, Reason} -> {error, Reason};
+        {error, Reason} ->
+            ?event(error, {scheduler_location, {query, Query}, {error, Reason}}),
+            {error, Reason};
         {ok, GqlMsg} ->
+            ?event({scheduler_location_req, {query, Query}, {response, GqlMsg}}),
             case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
                 not_found -> {error, not_found};
                 Item = #{ <<"id">> := ID } -> result_to_message(ID, Item, Opts)
@@ -149,12 +156,18 @@ scheduler_location(Address, Opts) ->
 %% a list of URLs to use, optionally as a tuple with an additional map of options
 %% to use for the request.
 query(Query, Opts) ->
+    % Find the routes for the GraphQL API.
     Res = hb_http:request(
         #{
             % Add options for the HTTP request, in case it is being made to
             % many nodes.
-            <<"multirequest-accept-status">> => 200,
             <<"multirequest-responses">> => 1,
+            <<"multirequest-admissible-status">> => 200,
+            <<"multirequest-admissible">> =>
+                #{
+                    <<"device">> =>
+                        #{ <<"is-admissible">> => fun is_admissible/3 }
+                },
             % Main request fields
             <<"method">> => <<"POST">>,
             <<"path">> => <<"/graphql">>,
@@ -171,6 +184,19 @@ query(Query, Opts) ->
                 )
             };
         {error, Reason} -> {error, Reason}
+    end.
+
+%% @doc Return whether a GraphQL response has transaction results. This function
+%% is used in the client library's multirequest configuration to determine if
+%% the response from the node should be considered admissible.
+is_admissible(_Base, Req, _Opts) ->
+    JSON = hb_maps:get(<<"body">>, Req, <<"false">>),
+    Decoded = hb_json:decode(JSON),
+    ?event(debug_multi, {is_admissible, {decoded_json, Decoded}}),
+    case Decoded of
+        #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := [] } } } ->
+            false;
+        _ -> true
     end.
 
 %% @doc Takes a GraphQL item node, matches it with the appropriate data from a
@@ -211,9 +237,9 @@ result_to_message(ExpectedID, Item, Opts) ->
             _ -> unsupported_tx_signature_type
         end,
     TX =
-        #tx {
+        ar_bundles:reset_ids(#tx {
             format = ans104,
-            last_tx =
+            anchor =
                 normalize_null(hb_maps:get(<<"anchor">>, Item, not_found, GQLOpts)),
             signature = Signature,
             signature_type = SignatureType,
@@ -239,7 +265,7 @@ result_to_message(ExpectedID, Item, Opts) ->
                 ],
             data_size = DataSize,
             data = Data
-        },
+        }),
     ?event({raw_ans104, TX}),
     ?event({ans104_form_response, TX}),
     TABM = hb_util:ok(dev_codec_ans104:from(TX, #{}, Opts)),

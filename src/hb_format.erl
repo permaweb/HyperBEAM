@@ -148,7 +148,7 @@ do_debug_fmt({X, Y}, Opts, Indent) when is_atom(X) and is_atom(Y) ->
     indent("~p: ~p", [X, Y], Opts, Indent);
 do_debug_fmt({X, Y}, Opts, Indent) when is_record(Y, tx) ->
     indent("~p: [TX item]~n~s",
-        [X, hb_tx:format(Y, Indent + 1)],
+        [X, ar_bundles:format(Y, Indent + 1, Opts)],
         Opts,
         Indent
     );
@@ -176,6 +176,12 @@ do_debug_fmt({X, Y}, Opts, Indent) ->
             remove_leading_noise(term(X, Opts, Indent)),
             remove_leading_noise(term(Y, Opts, Indent))
         ],
+        Opts,
+        Indent
+    );
+do_debug_fmt(TX, Opts, Indent) when is_record(TX, tx) ->
+    indent("[TX item]~n~s",
+        [ar_bundles:format(TX, Indent, Opts)],
         Opts,
         Indent
     );
@@ -308,6 +314,7 @@ do_to_lines(In =[RawElem | Rest]) ->
 %% @doc Remove any leading whitespace from a string.
 remove_leading_noise(Str) ->
     remove_leading_noise(Str, ?NOISE_CHARS).
+remove_leading_noise([], _) -> [];
 remove_leading_noise([Char|Str], Noise) ->
     case lists:member(Char, Noise) of
         true ->
@@ -729,8 +736,8 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
                     case Val of
                         NextMap when is_map(NextMap) ->
                             maybe_multiline(NextMap, Opts, Indent + 2);
-                        NextList when is_list(NextList) ->
-                            term(NextList, Opts, Indent + 2);
+                        Next when is_list(Next); is_record(Next, tx) ->
+                            remove_leading_noise(term(Next, Opts, Indent + 2));
                         _ when (byte_size(Val) == 32) ->
                             Short = short_id(Val),
                             io_lib:format("~s [*]", [Short]);

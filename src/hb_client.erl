@@ -158,7 +158,7 @@ upload_raw_ans104_with_anchor_test() ->
     Serialized = ar_bundles:serialize(
         ar_bundles:sign_item(#tx{
             data = <<"TEST">>,
-            last_tx = crypto:strong_rand_bytes(32),
+            anchor = crypto:strong_rand_bytes(32),
             tags = [{<<"test-tag">>, <<"test-value">>}]
         }, hb:wallet())
     ),
