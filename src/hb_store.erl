@@ -457,7 +457,7 @@ call_all(X, _Function, _Args) when not is_list(X) ->
 call_all([], _Function, _Args) ->
     ok;
 call_all([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
-    try apply_store_function(Mod, Function, Store, Args)
+    try apply_store_function(Mod, Store, Function, Args)
     catch
         Class:Reason:Stacktrace ->
             ?event(warning, {store_call_failed, {Class, Reason, Stacktrace}}),
