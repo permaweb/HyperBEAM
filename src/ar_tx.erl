@@ -2,7 +2,7 @@
 -module(ar_tx).
 
 -export([sign/2, verify/1, verify_tx_id/2]).
--export([id/1, id/2, get_owner_address/1, data_root/1]).
+-export([id/1, id/2, generate_id/2, get_owner_address/1, data_root/1]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
 
 -include("include/hb.hrl").
