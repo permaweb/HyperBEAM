@@ -10,7 +10,7 @@
 %%% requires (many reads and writes to explicit keys, few directory 'listing' or
 %%% search operations), awhile others perform suboptimally.
 %%% 
-%%% Additionally, thisstore implementation offers the ability for simple 
+%%% Additionally, this store implementation offers the ability for simple 
 %%% integration of HyperBEAM with other non-volatile storage media: `hb_store_fs'
 %%% will interact with any service that implements the host operating system's
 %%% native filesystem API. By mounting devices via `FUSE' (etc), HyperBEAM is
@@ -56,22 +56,22 @@ read(Opts, Key) ->
     read_path(add_prefix(Opts, resolve(Opts, Key)), true).
 
 read_path(Path, FollowLink) ->
-	?event({read, Path}),
-	case file:read_file_info(Path) of
-		{ok, #file_info{type = regular}} ->
-			{ok, _} = file:read_file(Path);
-		_ ->
-			case file:read_link(Path) of
-				{ok, Link} when FollowLink->
-					?event({link_found, Path, Link}),
-					read_path(Link, true);
+    ?event({read, Path}),
+    case file:read_file_info(Path) of
+        {ok, #file_info{type = regular}} ->
+            {ok, _} = file:read_file(Path);
+        _ ->
+            case file:read_link(Path) of
+                {ok, Link} when FollowLink ->
+                    ?event({link_found, Path, Link}),
+                    read_path(Link, true);
                 {ok, LinkTarget} ->
-					?event({link_found_ret, Path, LinkTarget}),
-					{prefixed_link, list_to_binary(LinkTarget)};
-				_ ->
-					not_found
-			end
-	end.
+                    ?event({link_found_ret, Path, LinkTarget}),
+                    {prefixed_link, list_to_binary(LinkTarget)};
+                _ ->
+                    not_found
+            end
+    end.
 
 %% @doc Write a value to the specified path in the store.
 write(Opts, PathComponents, Value) ->
@@ -150,7 +150,7 @@ make_group(Opts = #{ <<"name">> := _DataDir }, Path) ->
     % We need to ensure that the parent directory exists, so that we can
     % make the group.
     filelib:ensure_dir(P),
-   case file:make_dir(P) of
+    case file:make_dir(P) of
         ok -> ok;
         {error, eexist} -> ok
     end.
@@ -159,8 +159,8 @@ make_group(Opts = #{ <<"name">> := _DataDir }, Path) ->
 make_link(_, Link, Link) -> ok;
 make_link(Opts, Existing, New) ->
     ?event({symlink,
-		add_prefix(Opts, Existing),
-		P2 = add_prefix(Opts, New)}),
+        add_prefix(Opts, Existing),
+        P2 = add_prefix(Opts, New)}),
     filelib:ensure_dir(P2),
     case file:make_symlink(add_prefix(Opts, Existing), N = add_prefix(Opts, New)) of
         ok -> ok;
@@ -179,7 +179,7 @@ make_link(Opts, Existing, New) ->
 
 %% @doc Add the directory prefix to a path.
 add_prefix(#{ <<"name">> := Prefix }, Path) ->
-	?event({add_prefix, Prefix, Path}),
+    ?event({add_prefix, Prefix, Path}),
     % Check if the prefix is an absolute path
     IsAbsolute = is_binary(Prefix) andalso binary:first(Prefix) =:= $/ orelse
                  is_list(Prefix) andalso hd(Prefix) =:= $/,

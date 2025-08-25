@@ -319,7 +319,7 @@ sync(FromStore, ToStore) ->
 sync_entries(Entries, ParentDir, FromStore, ToStore) ->
     ?event({sync_entries, ParentDir, Entries}),
     lists:foldl(fun(Key, Acc) ->
-        NewPath =  
+        NewPath =
             case ParentDir of
                 Bin when Bin == <<"">> orelse Bin == <<"/">> -> Key;
                 _ -> <<ParentDir/binary, "/", Key/binary>>
