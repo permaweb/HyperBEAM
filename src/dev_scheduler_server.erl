@@ -24,7 +24,7 @@ start(ProcID, Proc, Opts) ->
             end,
             % Write the process to the cache. We are the provider-of-last-resort
             % for this data.
-            hb_cache:write(Proc, Opts),
+            dev_scheduler_cache:write_spawn(Proc, Opts),
             case hb_opts:get(scheduling_mode, disabled, Opts) of
                 disabled ->
                     throw({scheduling_disabled_on_node, {requested_for, ProcID}});
@@ -313,7 +313,7 @@ new_proc_test() ->
 %         end,
 %         BenchTime
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Scheduled ~p messages in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchTime, Iterations / BenchTime]
 %     ),

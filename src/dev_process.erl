@@ -60,13 +60,13 @@
 -include_lib("include/hb.hrl").
 
 %% The frequency at which the process state should be cached. Can be overridden
-%% with the `process_snapshot_interval' or `process_snapshot_secs' options.
+%% with the `process_snapshot_slots' or `process_snapshot_time' options.
 -if(TEST == true).
 -define(DEFAULT_SNAPSHOT_SLOTS, 1).
--define(DEFAULT_SNAPSHOT_SECS, undefined).
+-define(DEFAULT_SNAPSHOT_TIME, undefined).
 -else.
 -define(DEFAULT_SNAPSHOT_SLOTS, undefined).
--define(DEFAULT_SNAPSHOT_SECS, 60).
+-define(DEFAULT_SNAPSHOT_TIME, 60).
 -endif.
 
 %% @doc When the info key is called, we should return the process exports.
@@ -176,7 +176,15 @@ compute(Msg1, Msg2, Opts) ->
     % If we do not have a live state, restore or initialize one.
     ProcBase = ensure_process_key(Msg1, Opts),
     ProcID = process_id(ProcBase, #{}, Opts),
-    case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Msg2}, Opts) of
+    TargetSlot =
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, Msg2}, <<"compute">>},
+                {{as, <<"message@1.0">>, Msg2}, <<"slot">>}
+            ],
+            Opts
+        ),
+    case TargetSlot of
         not_found ->
             % The slot is not set, so we need to serve the latest known state.
             % We do this by setting the `process_now_from_cache' option to `true'.
@@ -193,7 +201,7 @@ compute(Msg1, Msg2, Opts) ->
                             {result, Result}
                         }
                     ),
-                    {ok, Result};
+                    {ok, without_snapshot(Result, Opts)};
                 not_found ->
                     {ok, Loaded} = ensure_loaded(ProcBase, Msg2, Opts),
                     ?event(compute,
@@ -238,9 +246,17 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                 }
             );
         CurrentSlot when CurrentSlot == TargetSlot ->
-            % We reached the target height so we return.
+            % We reached the target height so we force a snapshot and return.
             ?event(compute, {reached_target_slot_returning_state, TargetSlot}),
-            {ok, as_process(Msg1, Opts)};
+            store_result(
+                true,
+                ProcID,
+                TargetSlot,
+                Msg1,
+                Msg2,
+                Opts
+            ),
+            {ok, without_snapshot(as_process(Msg1, Opts), Opts)};
         CurrentSlot ->
             % Compute the next state transition.
             NextSlot = CurrentSlot + 1,
@@ -249,7 +265,13 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                 {error, Res} ->
                     % If the scheduler device cannot provide a next message,
                     % we return its error details, along with the current slot.
-                    ?event(compute, {error_getting_schedule, {error, Res}, {phase, <<"get-schedule">>}, {attempted_slot, NextSlot}}),
+                    ?event(compute,
+                        {error_getting_schedule,
+                            {error, Res},
+                            {phase, <<"get-schedule">>},
+                            {attempted_slot, NextSlot}
+                        }
+                    ),
                     {error, Res#{
                         <<"phase">> => <<"get-schedule">>,
                         <<"attempted-slot">> => NextSlot
@@ -275,7 +297,13 @@ compute_to_slot(ProcID, Msg1, Msg2, TargetSlot, Opts) ->
                                     Error;
                                 true -> #{ <<"error">> => Error }
                                 end,
-                            ?event(compute, {error_computing_slot, {error, ErrMsg}, {phase, <<"compute">>}, {attempted_slot, NextSlot}}),
+                            ?event(compute,
+                                {error_computing_slot,
+                                    {error, ErrMsg},
+                                    {phase, <<"compute">>},
+                                    {attempted_slot, NextSlot}
+                                }
+                            ),
                             {error,
                                 ErrMsg#{
                                     <<"phase">> => <<"compute">>,
@@ -320,6 +348,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
             ),
             ProcStateWithSnapshot =
                 store_result(
+                    false,
                     ProcID,
                     NextSlot,
                     NewProcStateMsgWithSlot,
@@ -333,10 +362,10 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
 
 %% @doc Store the resulting state in the cache, potentially with the snapshot
 %% key.
-store_result(ProcID, Slot, Msg3, Msg2, Opts) ->
+store_result(ForceSnapshot, ProcID, Slot, Msg3, Msg2, Opts) ->
     % Cache the `Snapshot' key as frequently as the node is configured to.
     Msg3MaybeWithSnapshot =
-        case should_snapshot(Slot, Msg3, Opts) of
+        case ForceSnapshot orelse should_snapshot(Slot, Msg3, Opts) of
             false -> Msg3;
             true ->
                 ?event(compute_debug,
@@ -388,21 +417,32 @@ store_result(ProcID, Slot, Msg3, Msg2, Opts) ->
     hb_maps:without([<<"snapshot">>], Msg3MaybeWithSnapshot, Opts).
 
 %% @doc Should we snapshot a new full state result? First, we check if the 
-%% `process_snapshot_ms' option is set. If it is, we check if the elapsed time
-%% since the last snapshot is greater than the value. Otherwise, we check the
-%% `process_snapshot_interval' option. If it is set, we check if the slot is
-%% a multiple of the interval. If neither are set, we return `true'.
+%% `process_snapshot_time' option is set. If it is, we check if the elapsed time
+%% since the last snapshot is greater than the value. We also check the
+%% `process_snapshot_slots' option. If it is set, we check if the slot is
+%% a multiple of the interval. If either are true, we must snapshot.
 should_snapshot(Slot, Msg3, Opts) ->
-    case hb_opts:get(process_snapshot_secs, ?DEFAULT_SNAPSHOT_SECS, Opts) of
-        undefined ->
-            SnapshotSlots = 
-                hb_opts:get(
-                    process_snapshot_interval,
-                    ?DEFAULT_SNAPSHOT_SLOTS,
-                    Opts
-                ),
-            Slot rem SnapshotSlots == 0;
-        Secs ->
+    should_snapshot_slots(Slot, Opts)
+        orelse should_snapshot_time(Msg3, Opts).
+
+%% @doc Calculate if we should snapshot based on the number of slots.
+should_snapshot_slots(Slot, Opts) ->
+    case hb_opts:get(process_snapshot_slots, ?DEFAULT_SNAPSHOT_SLOTS, Opts) of
+        Undef when (Undef == undefined) or (Undef == <<"false">>) ->
+            false;
+        RawSnapshotSlots ->
+            SnapshotSlots = hb_util:int(RawSnapshotSlots),
+            Slot rem SnapshotSlots == 0
+    end.
+
+%% @doc Calculate if we should snapshot based on the elapsed time since the last
+%% snapshot.
+should_snapshot_time(Msg3, Opts) ->
+    case hb_opts:get(process_snapshot_time, ?DEFAULT_SNAPSHOT_TIME, Opts) of
+        Undef when (Undef == undefined) or (Undef == <<"false">>) ->
+            false;
+        RawSecs ->
+            Secs = hb_util:int(RawSecs),
             case hb_private:get(<<"last-snapshot">>, Msg3, undefined, Opts) of
                 undefined ->
                     ?event(
@@ -450,7 +490,8 @@ now(RawMsg1, Msg2, Opts) ->
             % than computing it.
             LatestKnown = dev_process_cache:latest(ProcessID, [], Opts),
             case LatestKnown of
-                {ok, LatestSlot, LatestMsg} ->
+                {ok, LatestSlot, RawLatestMsg} ->
+                    LatestMsg = without_snapshot(RawLatestMsg, Opts),
                     ?event(compute_short,
                         {serving_latest_cached_state,
                             {proc_id, ProcessID},
@@ -545,12 +586,14 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                             normalize,
                             Opts#{ hashpath => ignore }
                         ),
-                    NormalizedWithoutSnapshot = hb_maps:remove(<<"snapshot">>, Normalized, Opts),
-                    ?event({loaded_state_checkpoint_result,
-                        {proc_id, ProcID},
-                        {slot, LoadedSlot},
-                        {after_normalization, NormalizedWithoutSnapshot}
-                    }),
+                    NormalizedWithoutSnapshot = without_snapshot(Normalized, Opts),
+                    ?event(snapshot,
+                        {loaded_state_checkpoint_result,
+                            {proc_id, ProcID},
+                            {slot, LoadedSlot},
+                            {after_normalization, NormalizedWithoutSnapshot}
+                        }
+                    ),
                     {ok, NormalizedWithoutSnapshot};
                 not_found ->
                     % If we do not have a checkpoint, initialize the
@@ -564,6 +607,10 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                     init(Msg1, Msg2, Opts)
             end
     end.
+
+%% @doc Remove the `snapshot' key from a message and return it.
+without_snapshot(Msg, Opts) ->
+    hb_maps:remove(<<"snapshot">>, Msg, Opts).
 
 %% @doc Run a message against Msg1, with the device being swapped out for
 %% the device found at `Key'. After execution, the device is swapped back
@@ -1267,7 +1314,7 @@ simple_wasm_persistent_worker_benchmark_test() ->
         BenchTime
     ),
     ?event(benchmark, {scheduled, Iterations}),
-    hb_util:eunit_print(
+    hb_format:eunit_print(
         "Scheduled and evaluated ~p simple wasm process messages in ~p s (~s msg/s)",
         [Iterations, BenchTime, hb_util:human_int(Iterations / BenchTime)]
     ),
@@ -1313,7 +1360,7 @@ aos_persistent_worker_benchmark_test_() ->
             BenchTime
         ),
         ?event(benchmark, {scheduled, Iterations}),
-        hb_util:eunit_print(
+        hb_format:eunit_print(
             "Scheduled and evaluated ~p AOS process messages in ~p s (~s msg/s)",
             [Iterations, BenchTime, hb_util:human_int(Iterations / BenchTime)]
         ),

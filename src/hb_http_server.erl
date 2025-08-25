@@ -92,7 +92,7 @@ maybe_greeter(MergedConfig, PrivWallet) ->
 %% address, URL to access the node, and the wider configuration (including the
 %% keys inherited from the default configuration).
 print_greeter(Config, PrivWallet) ->
-    FormattedConfig = hb_util:debug_format(Config, Config, 2),
+    FormattedConfig = hb_format:term(Config, Config, 2),
     io:format("~n"
         "===========================================================~n"
         "==    ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗           ==~n"
@@ -381,8 +381,18 @@ handle_request(RawReq, Body, ServerID) ->
             ),
             TracePID = hb_tracer:start_trace(),
             % Parse the HTTP request into HyerBEAM's message format.
+            ReqSingleton =
+                try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg)
+                catch ParseError:ParseDetails:ParseStacktrace ->
+                    {parse_error, ParseError, ParseDetails, ParseStacktrace}
+                end,
             try 
-                ReqSingleton = hb_http:req_to_tabm_singleton(Req, Body, NodeMsg),
+                case ReqSingleton of
+                    {parse_error, PType, PDetails, PStacktrace} ->
+                        erlang:raise(PType, PDetails, PStacktrace);
+                    _ ->
+                        ok
+                end,
                 CommitmentCodec = hb_http:accept_to_codec(ReqSingleton, NodeMsg),
                 ?event(http,
                     {parsed_singleton,
@@ -403,37 +413,39 @@ handle_request(RawReq, Body, ServerID) ->
                 hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
             catch
                 Type:Details:Stacktrace ->
-                    FormattedError =
-                        hb_util:bin(
-                            [
-                                <<"Termination type: '">>,
-                                hb_message:format(Type),
-                                <<"'\n\nStacktrace:\n\n">>,
-                                hb_util:format_trace(Stacktrace),
-                                <<"\n\nError details:\n\n">>,
-                                hb_message:format(Details, NodeMsg, 1)
-                            ]
-                        ),
-                    {ok, ErrorPage} = dev_hyperbuddy:return_error(FormattedError),
-                    ?event(
-                        http_error,
-                        {unexpected_http_request_termination,
-                            {string,
-                                hb_util:indent(
-                                    <<"\n", FormattedError/binary, "\n">>,
-                                    1
-                                )
-                            }
-                        }
-                    ),
-                    hb_http:reply(
+                    handle_error(
                         Req,
-                        #{},
-                        ErrorPage#{ <<"status">> => 500 },
+                        ReqSingleton,
+                        Type,
+                        Details,
+                        Stacktrace,
                         NodeMsg
                     )
             end
-end.
+    end.
+
+%% @doc Return a 500 error response to the client.
+handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
+    ErrorMsg =
+        #{
+            <<"status">> => 500,
+            <<"type">> => hb_format:message(Type),
+            <<"details">> => hb_format:message(Details, NodeMsg, 1),
+            <<"stacktrace">> => hb_util:bin(hb_format:trace(Stacktrace))
+        },
+    ErrorBin = hb_format:error(ErrorMsg, NodeMsg),
+    ?event(
+        http_error,
+        {returning_500_error,
+            {string,
+                hb_format:indent_lines(
+                    <<"\n", ErrorBin/binary, "\n">>,
+                    1
+                )
+            }
+        }
+    ),
+    hb_http:reply(Req, Singleton, ErrorMsg, NodeMsg).
 
 %% @doc Return the list of allowed methods for the HTTP server.
 allowed_methods(Req, State) ->
@@ -514,9 +526,8 @@ set_default_opts(Opts) ->
     Store =
         case hb_opts:get(store, no_store, TempOpts) of
             no_store ->
-                TestDir = <<"cache-TEST/run-fs-", (integer_to_binary(Port))/binary>>,
-                filelib:ensure_dir(binary_to_list(TestDir)),
-                #{ <<"store-module">> => hb_store_fs, <<"name">> => TestDir };
+                hb_store:start(Stores = [hb_test_utils:test_store()]),
+                Stores;
             PassedStore -> PassedStore
         end,
     ?event({set_default_opts,

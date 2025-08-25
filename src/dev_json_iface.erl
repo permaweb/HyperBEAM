@@ -38,7 +38,7 @@
 %%% Public interface helpers:
 -export([message_to_json_struct/2, json_to_message/2]).
 %%% Test helper exports:
--export([generate_stack/1, generate_stack/2, generate_aos_msg/2]).
+-export([generate_stack/1, generate_stack/2, generate_stack/3, generate_aos_msg/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -98,13 +98,12 @@ denormalize_message(Message, Opts) ->
 message_to_json_struct(RawMsg, Opts) ->
     message_to_json_struct(RawMsg, [owner_as_address], Opts).
 message_to_json_struct(RawMsg, Features, Opts) ->
-    DeNormTABM = 
+    TABM = 
         hb_message:convert(
             hb_private:reset(RawMsg),
             tabm,
             Opts
         ),
-    TABM = hb_tx:normalize_data_field(DeNormTABM),
     MsgWithoutCommitments = hb_maps:without([<<"commitments">>], TABM, Opts),
     ID = hb_message:id(RawMsg, all, Opts),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
@@ -416,12 +415,20 @@ postprocess_outbox(Msg, Proc, Opts) ->
 
 %%% Tests
 
+normalize_test_opts(Opts) ->
+    Opts#{
+        priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts)
+    }.
+
 test_init() ->
     application:ensure_all_started(hb).
 
 generate_stack(File) ->
     generate_stack(File, <<"WASM">>).
-generate_stack(File, _Mode) ->
+generate_stack(File, Mode) ->
+    generate_stack(File, Mode, #{}).
+generate_stack(File, _Mode, RawOpts) ->
+    Opts = normalize_test_opts(RawOpts),
     test_init(),
     Opts = #{ priv_wallet => hb:wallet() },
     Msg0 = dev_wasm:cache_wasm_image(File),
@@ -452,6 +459,9 @@ generate_stack(File, _Mode) ->
 
 generate_aos_msg(ProcID, Code) ->
     Opts = #{ priv_wallet => hb:wallet() },
+    generate_aos_msg(ProcID, Code, Opts).
+generate_aos_msg(ProcID, Code, RawOpts) ->
+    Opts = normalize_test_opts(RawOpts),
     hb_message:commit(#{
         <<"path">> => <<"compute">>,
         <<"body">> => 
@@ -482,19 +492,21 @@ basic_aos_call_test_() ->
 aos_stack_benchmark_test_() ->
     {timeout, 20, fun() ->
         BenchTime = 5,
-        RawWASMMsg = generate_stack("test/aos-2-pure-xs.wasm"),
-        Proc = hb_ao:get(<<"process">>, RawWASMMsg, #{ hashpath => ignore }),
-        ProcID = hb_ao:get(id, Proc, #{}),
+        Opts = #{ store => hb_test_utils:test_store() },
+        RawWASMMsg = generate_stack("test/aos-2-pure-xs.wasm", <<"WASM">>, Opts),
+        Proc = hb_ao:get(<<"process">>, RawWASMMsg, Opts#{ hashpath => ignore }),
+        ProcID = hb_ao:get(id, Proc, Opts),
+        Msg = generate_aos_msg(ProcID, <<"return 1">>, Opts),
         {ok, Initialized} =
-        hb_ao:resolve(
-            RawWASMMsg,
-            generate_aos_msg(ProcID, <<"return 1">>),
-            #{}
-        ),
-        Msg = generate_aos_msg(ProcID, <<"return 1+1">>),
+            hb_ao:resolve(
+                RawWASMMsg,
+                Msg,
+                Opts
+            ),
+        Msg2 = generate_aos_msg(ProcID, <<"return 1+1">>, Opts),
         Iterations =
             hb_test_utils:benchmark(
-                fun() -> hb_ao:resolve(Initialized, Msg, #{}) end,
+                fun() -> hb_ao:resolve(Initialized, Msg2, Opts) end,
                 BenchTime
             ),
         hb_test_utils:benchmark_print(

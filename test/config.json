@@ -1,0 +1,13 @@
+{
+    "port": 1234,
+    "example": 9001,
+    "host": "https://ao.computer",
+    "await_inprogress": false,
+    "store": [
+        {
+            "store-module": "hb_store_fs",
+            "name": "cache-TEST/json-test-store",
+            "ao-types": "store-module=\"atom\""
+        }
+    ]
+}

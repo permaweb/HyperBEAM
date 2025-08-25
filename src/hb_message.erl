@@ -44,7 +44,7 @@
 %%% 
 %%% Additionally, this module provides a number of utility functions for
 %%% manipulating messages. For example, `hb_message:sign/2' to sign a message of
-%%% arbitrary type, or `hb_message:format/1' to print an AO-Core/TABM message in
+%%% arbitrary type, or `hb_formatter:format_msg/1' to print an AO-Core/TABM message in
 %%% a human-readable format.
 %%% 
 %%% The `hb_cache' module is responsible for storing and retrieving messages in
@@ -61,12 +61,13 @@
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
 -export([verify/1, verify/2, verify/3, commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([commitment/2, commitment/3, with_only_committed/2, is_signed_key/3]).
+-export([without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, normalize_commitments/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
--export([default_tx_list/0, default_tx_keys/0, filter_default_keys/1]).
+-export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
--export([print/1, format/1, format/2, format/3]).
+-export([print/1]).
 -include("include/hb.hrl").
 
 %% @doc Convert a message from one format to another. Taking a message in the
@@ -306,6 +307,16 @@ with_only_committers(Msg, _Committers, _Opts) ->
 is_signed_key(Key, Msg, Opts) ->
     lists:member(Key, hb_message:committed(Msg, all, Opts)).
 
+%% @doc Remove the any of the given keys that are not signed from a message.
+without_unless_signed(Key, Msg, Opts) when not is_list(Key) ->
+    without_unless_signed([Key], Msg, Opts);
+without_unless_signed(Keys, Msg, Opts) ->
+    SignedKeys = hb_message:committed(Msg, all, Opts),
+    maps:without(
+        lists:filter(fun(K) -> not lists:member(K, SignedKeys) end, Keys),
+        Msg
+    ).
+
 %% @doc Sign a message with the given wallet.
 commit(Msg, Opts) ->
     commit(
@@ -416,205 +427,7 @@ signers(Msg, Opts) ->
 %% @doc Pretty-print a message.
 print(Msg) -> print(Msg, 0).
 print(Msg, Indent) ->
-    io:format(standard_error, "~s", [lists:flatten(format(Msg, #{}, Indent))]).
-
-%% @doc Format a message for printing, optionally taking an indentation level
-%% to start from.
-format(Item) -> format(Item, #{}).
-format(Item, Opts) -> format(Item, Opts, 0).
-format(Bin, Opts, Indent) when is_binary(Bin) ->
-    hb_util:format_indented(
-        hb_util:format_binary(Bin),
-        Opts,
-        Indent
-    );
-format(List, Opts, Indent) when is_list(List) ->
-    % Remove the leading newline from the formatted list, if it exists.
-    case hb_util:debug_format(List, Opts, Indent) of
-        [$\n | String] -> String;
-        String -> String
-    end;
-format(RawMap, Opts, Indent) when is_map(RawMap) ->
-    % Should we filter out the priv key?
-    FilterPriv = hb_opts:get(debug_show_priv, false, Opts),
-    MainPriv = hb_maps:get(<<"priv">>, RawMap, #{}, Opts),
-    % Add private keys to the output if they are not hidden. Opt takes 3 forms:
-    % 1. `false' -- never show priv
-    % 2. `if_present' -- show priv only if there are keys inside
-    % 2. `always' -- always show priv
-    FooterKeys =
-        case {FilterPriv, MainPriv} of
-            {false, _} -> [];
-            {if_present, #{}} -> [];
-            {_, Priv} -> [{<<"!Private!">>, Priv}]
-        end,
-    Map =
-        case FilterPriv of
-            false -> RawMap;
-            _ -> hb_private:reset(RawMap)
-        end,
-    % Define helper functions for formatting elements of the map.
-    ValOrUndef =
-        fun(<<"hashpath">>) ->
-            case Map of
-                #{ <<"priv">> := #{ <<"hashpath">> := HashPath } } ->
-                    hb_util:short_id(HashPath);
-                _ ->
-                    undefined
-            end;
-        (Key) ->
-            case dev_message:get(Key, Map, Opts) of
-                {ok, Val} ->
-                    case hb_util:short_id(Val) of
-                        undefined -> Val;
-                        ShortID -> ShortID
-                    end;
-                {error, _} -> undefined
-            end
-        end,
-    FilterUndef =
-        fun(List) ->
-            lists:filter(fun({_, undefined}) -> false; (_) -> true end, List)
-        end,
-    % Prepare the metadata row for formatting.
-    % Note: We try to get the IDs _if_ they are *already* in the map. We do not
-    % force calculation of the IDs here because that may cause significant
-    % overhead unless the `debug_ids' option is set.
-    IDMetadata =
-        case hb_opts:get(debug_ids, false, #{}) of
-            false ->
-                [
-                    {<<"#P">>, ValOrUndef(<<"hashpath">>)},
-                    {<<"*U">>, ValOrUndef(<<"unsigned_id">>)},
-                    {<<"*S">>, ValOrUndef(<<"id">>)}
-                ];
-            true ->
-                {ok, UID} = dev_message:id(Map, #{}, Opts),
-                {ok, ID} =
-                    dev_message:id(Map, #{ <<"commitments">> => <<"all">> }, Opts),
-                [
-                    {<<"#P">>, hb_util:short_id(ValOrUndef(<<"hashpath">>))},
-                    {<<"*U">>, hb_util:short_id(UID)}
-                ] ++
-                case ID of
-                    UID -> [];
-                    _ -> [{<<"*S">>, hb_util:short_id(ID)}]
-                end
-        end,
-    CommitterMetadata =
-        case hb_opts:get(debug_committers, true, Opts) of
-            false -> [];
-            true ->
-                case dev_message:committers(Map, #{}, Opts) of
-                    {ok, []} -> [];
-                    {ok, [Committer]} ->
-                        [{<<"Comm.">>, hb_util:short_id(Committer)}];
-                    {ok, Committers} ->
-                        [
-                            {
-                                <<"Comms.">>,
-                                string:join(
-                                    lists:map(
-                                        fun(X) ->
-                                            [hb_util:short_id(X)]
-                                        end,
-                                        Committers
-                                    ),
-                                    ", "
-                                )
-                            }
-                        ]
-                end
-        end,
-    % Concatenate the present metadata rows.
-    Metadata = FilterUndef(lists:flatten([IDMetadata, CommitterMetadata])),
-    % Format the metadata row.
-    Header =
-        hb_util:format_indented("Message [~s] {",
-            [
-                string:join(
-                    [
-                        io_lib:format("~s: ~s", [Lbl, Val])
-                        ||
-                            {Lbl, Val} <- Metadata,
-                            Val /= undefined
-                    ],
-                    ", "
-                )
-            ],
-            Opts,
-            Indent
-        ),
-    % Put the path and device rows into the output at the _top_ of the map.
-    PriorityKeys =
-        [
-            {<<"path">>, ValOrUndef(<<"path">>)},
-            {<<"device">>, ValOrUndef(<<"device">>)}
-        ],
-    % Concatenate the path and device rows with the rest of the key values.
-    UnsortedGeneralKeyVals =
-        maps:to_list(
-            maps:without(
-                [<<"path">>, <<"device">>],
-                Map
-            )
-        ),
-    KeyVals =
-        FilterUndef(PriorityKeys) ++
-        lists:sort(
-            fun({K1, _}, {K2, _}) -> K1 < K2 end,
-            UnsortedGeneralKeyVals
-        ) ++
-        FooterKeys,
-    % Format the remaining 'normal' keys and values.
-    Res = lists:map(
-        fun({Key, Val}) ->
-            NormKey = hb_ao:normalize_key(Key, Opts#{ error_strategy => ignore }),
-            KeyStr = 
-                case NormKey of
-                    undefined ->
-                        io_lib:format("~p [!!! INVALID KEY !!!]", [Key]);
-                    _ ->
-                        hb_ao:normalize_key(Key)
-                end,
-            hb_util:format_indented(
-                "~s => ~s~n",
-                [
-                    lists:flatten([KeyStr]),
-                    case Val of
-                        NextMap when is_map(NextMap) ->
-                            hb_util:format_maybe_multiline(NextMap, Opts, Indent + 2);
-                        NextList when is_list(NextList) ->
-                            hb_util:debug_format(NextList, Opts, Indent + 2);
-                        _ when (byte_size(Val) == 32) or (byte_size(Val) == 43) ->
-                            Short = hb_util:short_id(Val),
-                            io_lib:format("~s [*]", [Short]);
-                        _ when byte_size(Val) == 87 ->
-                            io_lib:format("~s [#p]", [hb_util:short_id(Val)]);
-                        Bin when is_binary(Bin) ->
-                            hb_util:format_binary(Bin);
-                        Link when ?IS_LINK(Link) ->
-                            hb_link:format(Link, Opts);
-                        Other ->
-                            io_lib:format("~p", [Other])
-                    end
-                ],
-                Opts,
-                Indent + 1
-            )
-        end,
-        KeyVals
-    ),
-    case Res of
-        [] -> lists:flatten(Header ++ " [Empty] }");
-        _ ->
-            lists:flatten(
-                Header ++ ["\n"] ++ Res ++ hb_util:format_indented("}", Indent)
-            )
-    end;
-format(Item, Opts, Indent) ->
-    % Whatever we have is not a message map.
-    hb_util:format_indented("~p", [Item], Opts, Indent).
+    io:format(standard_error, "~s", [lists:flatten(hb_format:message(Msg, #{}, Indent))]).
 
 %% @doc Return the type of an encoded message.
 type(TX) when is_record(TX, tx) -> tx;
@@ -698,7 +511,7 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
                                         false ->
                                             throw(
                                                 {value_mismatch,
-                                                    hb_util:short_id(
+                                                    hb_format:short_id(
                                                         hb_path:to_binary(
                                                             Path ++ [Key]
                                                         )
@@ -716,7 +529,7 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
         false ->
             throw(
                 {keys_mismatch,
-                    {path, hb_util:short_id(hb_path:to_binary(Path))},
+                    {path, hb_format:short_id(hb_path:to_binary(Path))},
                     {keys1, Keys1},
                     {keys2, Keys2}
                 }
@@ -927,8 +740,5 @@ default_tx_message() ->
 %% @doc Get the ordered list of fields as AO-Core keys and default values of
 %% the tx record.
 default_tx_list() ->
-    lists:zip(default_tx_keys(), tl(tuple_to_list(#tx{}))).
-
-%% @doc Get the ordered list of tx record fields, normalized as AO-Core keys.
-default_tx_keys() ->
-    lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)).
+    Keys = lists:map(fun hb_ao:normalize_key/1, record_info(fields, tx)),
+    lists:zip(Keys, tl(tuple_to_list(#tx{}))).

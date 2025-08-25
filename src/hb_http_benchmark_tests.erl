@@ -23,7 +23,7 @@
 %         end,
 %         BenchTime
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p messages through AO-Core via HTTP in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchTime, Iterations / BenchTime]
 %     ),
@@ -47,7 +47,7 @@
 %         BenchTime,
 %         BenchWorkers
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p messages via HTTP (~p workers) in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchWorkers, BenchTime, Iterations / BenchTime]
 %     ),
@@ -76,7 +76,7 @@
 %         end,
 %         BenchTime
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p WASM invocations via HTTP in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchTime, Iterations / BenchTime]
 %     ),
@@ -96,7 +96,7 @@
 %         end,
 %         BenchTime
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p WASM invocations via HTTP in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchTime, Iterations / BenchTime]
 %     ),
@@ -119,7 +119,7 @@
 %         BenchTime,
 %         BenchWorkers
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p WASM invocations via HTTP (~p workers) in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchWorkers, BenchTime, Iterations / BenchTime]
 %     ),
@@ -141,7 +141,7 @@
 %         BenchTime,
 %         BenchWorkers
 %     ),
-%     hb_util:eunit_print(
+%     hb_formatter:eunit_print(
 %         "Resolved ~p WASM invocations via HTTP (~p workers) in ~p seconds (~.2f msg/s)",
 %         [Iterations, BenchWorkers, BenchTime, Iterations / BenchTime]
 %     ),
@@ -186,7 +186,7 @@
 % %     },
 % %     Res = hb_http:post(URL, Msg3),
 % %     ?event({slot_result, Res}),
-% %     hb_util:eunit_print(
+% %     hb_formatter:eunit_print(
 % %         "Scheduled ~p messages through AO-Core in ~p seconds (~.2f msg/s)",
 % %         [Iterations, BenchTime, Iterations / BenchTime]
 % %     ),

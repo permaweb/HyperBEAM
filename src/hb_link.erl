@@ -141,7 +141,7 @@ format(Link) -> format(Link, #{}).
 format(Link, Opts) ->
     case hb_opts:get(debug_resolve_links, false, Opts) of
         true ->
-            try hb_message:format(hb_cache:ensure_all_loaded(Link, Opts), Opts)
+            try hb_format:message(hb_cache:ensure_all_loaded(Link, Opts), Opts)
             catch
                 _:_ -> << "!UNRESOLVABLE! ", (format_unresolved(Link))/binary >>
             end;

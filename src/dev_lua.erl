@@ -331,7 +331,7 @@ process_response({lua_error, RawError, State}, _Priv, Opts) ->
 process_response({error, Reason, Trace}, _Priv, _Opts) ->
     % An Erlang error occurred while calling the Lua function. Return it.
     ?event(lua_error, {trace, Trace}),
-    TraceBin = iolist_to_binary(hb_util:format_trace(Trace)),
+    TraceBin = iolist_to_binary(hb_format:trace(Trace)),
     ?event(lua_error, {formatted, {string, TraceBin}}),
     ReasonBin = iolist_to_binary(io_lib:format("~p", [Reason])),
     {error, #{
@@ -674,7 +674,7 @@ pure_lua_process_benchmark_test_() ->
         30,
         fun() ->
             pure_lua_process_benchmark(#{
-                process_cache_frequency => 50
+                process_snapshot_slots => 50
             })
     end}.
 pure_lua_process_benchmark(Opts) ->
@@ -747,7 +747,7 @@ aos_process_benchmark_test_() ->
         Opts = #{
             process_async_cache => true,
             hashpath => ignore,
-            process_cache_frequency => 50
+            process_snapshot_slots => 50
         },
         Process = generate_lua_process("test/hyper-aos.lua", Opts),
         Message = generate_test_message(Process, Opts),

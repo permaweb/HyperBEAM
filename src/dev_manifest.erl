@@ -1,7 +1,7 @@
 %%% @doc An Arweave path manifest resolution device. Follows the v1 schema:
 %%% https://specs.ar.io/?tx=lXLd0OPwo-dJLB_Amz5jgIeDhiOkjXuM3-r0H_aiNj0
 -module(dev_manifest).
--export([info/0]).
+-export([index/3, info/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -12,6 +12,17 @@ info() ->
         default => fun route/4,
         excludes => [keys, set, committers]
     }.
+
+%% @doc Return the fallback index page when the manifest itself is requested.
+index(M1, M2, Opts) ->
+    ?event({manifest_index_request, M1, M2}),
+    case route(<<"index">>, M1, M2, Opts) of
+        {ok, Index} ->
+            ?event({manifest_index_returned, Index}),
+            {ok, Index};
+        {error, not_found} ->
+            {error, not_found}
+    end.
 
 %% @doc Route a request to the associated data via its manifest.
 route(<<"index">>, M1, M2, Opts) ->
@@ -30,7 +41,7 @@ route(<<"index">>, M1, M2, Opts) ->
                     Opts
                 ),
             ?event({manifest_index_found, Index}),
-            Path = hb_ao:get(<<"path">>, {as, <<"message@1.0">>, Index}, Opts),
+            Path = hb_maps:get(<<"path">>, Index, Opts),
             case Path of
                 not_found ->
                     ?event({manifest_path_not_found, <<"index/path">>}),
@@ -45,27 +56,14 @@ route(<<"index">>, M1, M2, Opts) ->
     end;
 route(Key, M1, M2, Opts) ->
     ?event({manifest_lookup, Key}),
-    {ok, JSONStruct} = manifest(M1, M2, Opts),
-    ?event({manifest_json_struct, JSONStruct}),
-    case hb_ao:resolve(JSONStruct, [<<"paths">>, Key], Opts) of
-        {ok, Entry} ->
-            ?event({manifest_entry, Entry}),
-            ID = maps:get(<<"id">>, Entry),
-            ?event({manifest_serving, ID}),
-            case hb_cache:read(ID, Opts) of
-                {ok, Data} ->
-                    ?event({manifest_data, Data}),
-                    {ok, Data};
-                {error, not_found} ->
-                    Fallback = hb_ao:get(JSONStruct, <<"fallback">>, Opts),
-                    FallbackID = maps:get(<<"id">>, Fallback),
-                    ?event({manifest_serving_fallback, FallbackID}),
-                    hb_cache:read(FallbackID, Opts)
-            end;
-        _ ->
-            ?event({manifest_not_found, Key}),
-            {error, not_found}
-    end.
+    {ok, Manifest} = manifest(M1, M2, Opts),
+    {ok,
+        hb_ao:get(
+            <<"paths/", Key/binary>>,
+            {as, <<"message@1.0">>, Manifest},
+            Opts
+        )
+    }.
 
 %% @doc Find and deserialize a manifest from the given base.
 manifest(Base, _Req, Opts) ->
@@ -78,56 +76,70 @@ manifest(Base, _Req, Opts) ->
             Opts
         ),
     ?event({manifest_json, JSON}),
-    hb_ao:resolve(
-        #{ <<"device">> => <<"json@1.0">>, <<"body">> => JSON },
-        <<"deserialize">>,
+    Structured = 
+        hb_cache:ensure_all_loaded(
+            hb_message:convert(JSON, <<"structured@1.0">>, <<"json@1.0">>, Opts),
+            Opts
+        ),
+    ?event({manifest_structured, {explicit, Structured}}),
+    Linkified = linkify(Structured, Opts),
+    ?event({manifest_linkified, {explicit, Linkified}}),
+    {ok, Linkified}.
+
+%% @doc Generate a nested message of links to content from a parsed (and
+%% structured) manifest.
+linkify(#{ <<"id">> := ID }, Opts) ->
+    LinkOptsBase = (maps:with([store], Opts))#{ scope => [local, remote]},
+    {link, ID, LinkOptsBase#{ <<"type">> => <<"link">>, <<"lazy">> => false }};
+linkify(Manifest, Opts) when is_map(Manifest) ->
+    hb_maps:map(
+        fun(_Key, Val) -> linkify(Val, Opts) end,
+        Manifest,
         Opts
-    ).
+    );
+linkify(Manifest, Opts) when is_list(Manifest) ->
+    lists:map(
+        fun(Item) -> linkify(Item, Opts) end,
+        Manifest
+    );
+linkify(Manifest, _Opts) ->
+    Manifest.
 
 %%% Tests
 
 resolve_test() ->
+    Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
     IndexPage = #{
         <<"content-type">> => <<"text/html">>,
-        <<"body">> =>
-            <<
-                """
-                <html>
-                    <body>
-                        <h1>Hello, World!</h1>
-                        <a href="page2">Click me</a>
-                    </body>
-                </html>
-                """
-            >>
+        <<"body">> => <<"Page 1">>
     },
-    {ok, IndexID} = hb_cache:write(IndexPage, #{}),
+    {ok, IndexID} = hb_cache:write(IndexPage, Opts),
     Page2 = #{
         <<"content-type">> => <<"text/html">>,
-        <<"body">> =>
-            <<
-                """
-                <html>
-                    <body>
-                        <h1>Page 2</h1>
-                    </body>
-                </html>
-                """
-            >>
+        <<"body">> => <<"Page 2">>
     },
-    {ok, Page2ID} = hb_cache:write(Page2, #{}),
+    {ok, Page2ID} = hb_cache:write(Page2, Opts),
     Manifest = #{
         <<"paths">> => #{
-            <<"page2">> => #{ <<"id">> => Page2ID },
+            <<"nested">> => #{ <<"page2">> => #{ <<"id">> => Page2ID } },
             <<"page1">> => #{ <<"id">> => IndexID }
         },
         <<"index">> => #{ <<"path">> => <<"page1">> }
     },
-    JSON = hb_message:convert(Manifest, <<"json@1.0">>, #{}),
+    JSON = hb_message:convert(Manifest, <<"json@1.0">>, <<"structured@1.0">>, Opts),
     ManifestMsg =
         #{
             <<"device">> => <<"manifest@1.0">>,
             <<"body">> => JSON
         },
-    {ok, ManifestID} = hb_cache:write(ManifestMsg, #{}),
-    ?event({manifest_id, ManifestID}).
+    {ok, ManifestID} = hb_cache:write(ManifestMsg, Opts),
+    ?event({manifest_id, ManifestID}),
+    Node = hb_http_server:start_node(Opts),
+    ?assertMatch(
+        {ok, #{ <<"body">> := <<"Page 1">> }},
+        hb_http:get(Node, << ManifestID/binary, "/index" >>, Opts)
+    ),
+    {ok, Res} = hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts),
+    ?event({manifest_resolve_test, Res}),
+    ?assertEqual(<<"Page 2">>, hb_maps:get(<<"body">>, Res, <<"NO BODY">>, Opts)),
+    ok.

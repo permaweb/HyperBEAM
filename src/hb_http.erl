@@ -65,11 +65,16 @@ request(Method, Peer, Path, Opts) ->
 request(Method, Config = #{ <<"nodes">> := Nodes }, Path, Message, Opts) when is_list(Nodes) ->
     % The request has a `route' (see `dev_router' for more details), so we use the
     % `multirequest' functionality, rather than a single request.
-    multirequest(Config, Method, Path, Message, Opts);
-request(Method, #{ <<"opts">> := NodeOpts, <<"uri">> := URI }, _Path, Message, Opts) ->
+    hb_http_multi:request(Config, Method, Path, Message, Opts);
+request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Opts) ->
     % The request has a set of additional options, so we apply them to the
     % request.
-    MergedOpts = hb_maps:merge(Opts, NodeOpts, Opts),
+    MergedOpts =
+        hb_maps:merge(
+            Opts,
+            hb_opts:mimic_default_types(ReqOpts, new_atoms, Opts),
+            Opts
+        ),
     % We also recalculate the request. The order of precidence here is subtle:
     % We favor the args given to the function, but the URI rules take precidence
     % over that.
@@ -83,7 +88,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
     ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {message, RawMessage}}),
     Req =
         prepare_request(
-            hb_ao:get(
+            hb_maps:get(
                 <<"codec-device">>,
                 RawMessage,
                 <<"httpsig@1.0">>,
@@ -318,7 +323,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % Add the `accept-bundle: true' key to the message, if the caller has not
     % set an explicit preference.
     WithAcceptBundle =
-        case hb_ao:get(<<"accept-bundle">>, Message, Opts) of
+        case hb_maps:get(<<"accept-bundle">>, Message, not_found, Opts) of
             not_found -> WithoutPriv#{ <<"accept-bundle">> => true };
             _ -> WithoutPriv
         end,
@@ -329,7 +334,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     WithSelfPort =
         WithAcceptBundle#{
             <<"ao-peer-port">> =>
-                hb_ao:get(
+                hb_maps:get(
                     <<"ao-peer-port">>,
                     WithAcceptBundle,
                     hb_opts:get(
@@ -405,170 +410,6 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                 body => maps:get(<<"body">>, Message, <<>>)
             }
     end.
-
-%% @doc Dispatch the same HTTP request to many nodes. Can be configured to
-%% await responses from all nodes or just one, and to halt all requests after
-%% after it has received the required number of responses, or to leave all
-%% requests running until they have all completed. Default: Race for first
-%% response.
-%%
-%% Expects a config message of the following form:
-%%      /Nodes/1..n: Hostname | #{ hostname => Hostname, address => Address }
-%%      /Responses: Number of responses to gather
-%%      /Stop-After: Should we stop after the required number of responses?
-%%      /Parallel: Should we run the requests in parallel?
-multirequest(Config, Method, Path, Message, Opts) ->
-    #{
-        nodes := Nodes,
-        responses := Responses,
-        stop_after := StopAfter,
-        accept_status := Statuses,
-        parallel := Parallel
-    } = multirequest_opts(Config, Message, Opts),
-    ?event(http,
-        {multirequest_opts_parsed,
-            {config, Config},
-            {message, Message}
-        }),
-    AllResults =
-        if Parallel ->
-            parallel_multirequest(
-                Nodes, Responses, StopAfter, Method, Path, Message, Statuses, Opts);
-        true ->
-            serial_multirequest(
-                Nodes, Responses, Method, Path, Message, Statuses, Opts)
-        end,
-    ?event(http, {multirequest_results, {results, AllResults}}),
-    case AllResults of
-        [] -> {error, no_viable_responses};
-        Results -> if Responses == 1 -> hd(Results); true -> Results end
-    end.
-
-%% @doc Get the multirequest options from the config or message. The options in 
-%% the message take precidence over the options in the config.
-multirequest_opts(Config, Message, Opts) ->
-    Opts#{
-        nodes =>
-            multirequest_opt(<<"nodes">>, Config, Message, #{}, Opts),
-        responses =>
-            multirequest_opt(<<"responses">>, Config, Message, 1, Opts),
-        stop_after =>
-            multirequest_opt(<<"stop-after">>, Config, Message, true, Opts),
-        accept_status =>
-            multirequest_opt(<<"accept-status">>, Config, Message, <<"All">>, Opts),
-        parallel =>
-            multirequest_opt(<<"parallel">>, Config, Message, false, Opts)
-    }.
-
-%% @doc Get a value for a multirequest option from the config or message.
-multirequest_opt(Key, Config, Message, Default, Opts) ->
-    hb_ao:get_first(
-        [
-            {Message, <<"multirequest-", Key/binary>>},
-            {Config, Key}
-        ],
-        Default,
-        Opts#{ hashpath => ignore }
-    ).
-
-%% @doc Serially request a message, collecting responses until the required
-%% number of responses have been gathered. Ensure that the statuses are
-%% allowed, according to the configuration.
-serial_multirequest(_Nodes, 0, _Method, _Path, _Message, _Statuses, _Opts) -> [];
-serial_multirequest([], _, _Method, _Path, _Message, _Statuses, _Opts) -> [];
-serial_multirequest([Node|Nodes], Remaining, Method, Path, Message, Statuses, Opts) ->
-    {ErlStatus, Res} = request(Method, Node, Path, Message, Opts),
-    BaseStatus = hb_ao:get(<<"status">>, Res, Opts),
-    case (ErlStatus == ok) andalso allowed_status(BaseStatus, Statuses) of
-        true ->
-            ?event(http, {admissible_status, {response, Res}}),
-            [
-                {ErlStatus, Res}
-            |
-                serial_multirequest(Nodes, Remaining - 1, Method, Path, Message, Statuses, Opts)
-            ];
-        false ->
-            ?event(http, {inadmissible_status, {response, Res}}),
-            serial_multirequest(Nodes, Remaining, Method, Path, Message, Statuses, Opts)
-    end.
-
-%% @doc Dispatch the same HTTP request to many nodes in parallel.
-parallel_multirequest(Nodes, Responses, StopAfter, Method, Path, Message, Statuses, Opts) ->
-    Ref = make_ref(),
-    Parent = self(),
-    Procs = lists:map(
-        fun(Node) ->
-            spawn(
-                fun() ->
-                    Res = request(Method, Node, Path, Message, Opts),
-                    receive no_reply -> stopping
-                    after 0 -> Parent ! {Ref, self(), Res}
-                    end
-                end
-            )
-        end,
-        Nodes
-    ),
-    parallel_responses([], Procs, Ref, Responses, StopAfter, Statuses, Opts).
-
-%% @doc Check if a status is allowed, according to the configuration.
-allowed_status(_, <<"All">>) -> true;
-allowed_status(_ResponseMsg = #{ <<"status">> := Status }, Statuses) ->
-    allowed_status(Status, Statuses);
-allowed_status(Status, Statuses) when is_integer(Statuses) ->
-    allowed_status(Status, [Statuses]);
-allowed_status(Status, Statuses) when is_binary(Status) ->
-    allowed_status(binary_to_integer(Status), Statuses);
-allowed_status(Status, Statuses) when is_binary(Statuses) ->
-    % Convert the statuses to a list of integers.
-    allowed_status(
-        Status,
-        lists:map(fun binary_to_integer/1, binary:split(Statuses, <<",">>))
-    );
-allowed_status(Status, Statuses) when is_list(Statuses) ->
-    lists:member(Status, Statuses).
-
-%% @doc Collect the necessary number of responses, and stop workers if
-%% configured to do so.
-parallel_responses(Res, Procs, Ref, 0, false, _Statuses, _Opts) ->
-    lists:foreach(fun(P) -> P ! no_reply end, Procs),
-    empty_inbox(Ref),
-    {ok, Res};
-parallel_responses(Res, Procs, Ref, 0, true, _Statuses, _Opts) ->
-    lists:foreach(fun(P) -> exit(P, kill) end, Procs),
-    empty_inbox(Ref),
-    Res;
-parallel_responses(Res, Procs, Ref, Awaiting, StopAfter, Statuses, Opts) ->
-    receive
-        {Ref, Pid, {Status, NewRes}} ->
-            case allowed_status(Status, Statuses) of
-                true ->
-                    parallel_responses(
-                        [NewRes | Res],
-                        lists:delete(Pid, Procs),
-                        Ref,
-                        Awaiting - 1,
-                        StopAfter,
-                        Statuses,
-                        Opts
-                    );
-                false ->
-                    parallel_responses(
-                        Res,
-                        lists:delete(Pid, Procs),
-                        Ref,
-                        Awaiting,
-                        StopAfter,
-                        Statuses,
-                        Opts
-                    )
-            end
-    end.
-
-%% @doc Empty the inbox of the current process for all messages with the given
-%% reference.
-empty_inbox(Ref) ->
-    receive {Ref, _} -> empty_inbox(Ref) after 0 -> ok end.
 
 %% @doc Reply to the client's HTTP request with a message.
 reply(Req, TABMReq, Message, Opts) ->
@@ -713,6 +554,20 @@ encode_reply(Status, TABMReq, Message, Opts) ->
     % aside the default `httpsig@1.0' codec, which expresses its form in HTTP
     % documents, and subsequently must set its own headers.
     case {Status, Codec, AcceptBundle} of
+        {500, <<"httpsig@1.0">>, false} ->
+            ?event(debug_accept,
+                {returning_500_error,
+                    {status, Status},
+                    {codec, Codec},
+                    {bundle, AcceptBundle}
+                }
+            ),
+            {ok, ErrMsg} =
+                dev_hyperbuddy:return_error(Message, Opts),
+            {ok,
+                maps:without([<<"body">>], ErrMsg),
+                maps:get(<<"body">>, ErrMsg, <<>>)
+            };
         {404, <<"httpsig@1.0">>, false} ->
             {ok, ErrMsg} =
                 dev_hyperbuddy:return_file(
@@ -808,6 +663,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
 %% Options can be specified in mime-type format (`application/*') or in
 %% AO device format (`device@1.0').
 accept_to_codec(TABMReq, Opts) ->
+    ?event(only, {accept_to_codec, {tabm_req, TABMReq}}),
     AcceptCodec =
         hb_maps:get(
             <<"accept-codec">>,
@@ -989,7 +845,7 @@ normalize_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
             Opts
         ),
     WithoutPeer =
-        (remove_unless_signed([<<"content-length">>], Msg, Opts))#{
+        (hb_message:without_unless_signed([<<"content-length">>], Msg, Opts))#{
             <<"method">> => Method,
             <<"path">> => MsgPath,
             <<"accept-bundle">> =>
@@ -1015,7 +871,7 @@ normalize_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
     % If the body is empty and unsigned, we remove it.
     NormalBody =
         case hb_maps:get(<<"body">>, WithCookie, undefined, Opts) of
-            <<"">> -> remove_unless_signed(<<"body">>, WithCookie, Opts);
+            <<"">> -> hb_message:without_unless_signed(<<"body">>, WithCookie, Opts);
             _ -> WithCookie
         end,
     case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of
@@ -1036,20 +892,10 @@ normalize_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
                     IP -> IP
                 end,
             Peer = <<RealIP/binary, ":", (hb_util:bin(P2PPort))/binary>>,
-            (remove_unless_signed(<<"ao-peer-port">>, NormalBody, Opts))#{
+            (hb_message:without_unless_signed(<<"ao-peer-port">>, NormalBody, Opts))#{
                 <<"ao-peer">> => Peer
             }
     end.
-
-%% @doc Remove all keys from the message unless they are signed.
-remove_unless_signed(Key, Msg, Opts) when not is_list(Key) ->
-    remove_unless_signed([Key], Msg, Opts);
-remove_unless_signed(Keys, Msg, Opts) ->
-    SignedKeys = hb_message:committed(Msg, all, Opts),
-    maps:without(
-        lists:filter(fun(K) -> not lists:member(K, SignedKeys) end, Keys),
-        Msg
-    ).
 
 %%% Tests
 

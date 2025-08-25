@@ -44,7 +44,11 @@ parse_spec(Str) when is_list(Str) ->
 parse_spec(tests) ->
     % The user has not given a test spec, so we default to running all tests in
     % the `LUA_SCRIPTS' directory (defaulting to `scripts/').
-    {ok, Files} = file:list_dir(ScriptDir = hb_opts:get(lua_scripts)),
+    Files = 
+        case file:list_dir(ScriptDir = hb_opts:get(lua_scripts)) of
+            {ok, FileList} -> FileList;
+            {error, enoent} -> []
+        end,
     RelevantFiles = 
         lists:filter(
             fun(File) ->
@@ -150,7 +154,7 @@ exec_test(State, Function) ->
     case Status of
         ok -> ok;
         error ->
-            hb_util:debug_print(Result, <<"Lua">>, Function, 1),
+            hb_format:debug_print(Result, <<"Lua">>, Function, 1),
             ?assertEqual(
                 ok,
                 Status

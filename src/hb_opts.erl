@@ -27,7 +27,10 @@
     [error, http_error, http_short, compute_short, push_short]
 ).
 -endif.
-
+-define(DEFAULT_PRIMARY_STORE, #{
+    <<"name">> => <<"cache-mainnet/lmdb">>,
+    <<"store-module">> => hb_store_lmdb
+}).
 -define(ENV_KEYS,
     #{
         priv_key_location => {"HB_KEY", "hyperbeam-key.json"},
@@ -52,12 +55,12 @@
         lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests},
         default_index =>
             {
-                "INDEX",
+                "HB_INDEX",
                 fun("ui") ->
                     #{
                         <<"device">> => <<"hyperbuddy@1.0">>
                     };
-                   ("format") ->
+                   ("text") ->
                     #{
                         <<"device">> => <<"hyperbuddy@1.0">>,
                         <<"path">> => <<"format">>
@@ -154,6 +157,7 @@ default_message() ->
             #{<<"name">> => <<"process@1.0">>, <<"module">> => dev_process},
             #{<<"name">> => <<"profile@1.0">>, <<"module">> => dev_profile},
             #{<<"name">> => <<"push@1.0">>, <<"module">> => dev_push},
+            #{<<"name">> => <<"query@1.0">>, <<"module">> => dev_query},
             #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
             #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
             #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
@@ -163,7 +167,6 @@ default_message() ->
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
-			#{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
             #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
@@ -212,7 +215,8 @@ default_message() ->
         debug_ids => false,
         debug_committers => true,
         debug_show_priv => if_present,
-        debug_resolve_links => false,
+        debug_resolve_links => true,
+        debug_print_fail_mode => long,
 		trusted => #{},
         snp_enforced_keys => [
             firmware, kernel, 
@@ -236,6 +240,10 @@ default_message() ->
                 <<"nodes">> =>
                     [
                         #{
+                            <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
+                        #{
                             <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
                             <<"opts">> => #{ http_client => httpc, protocol => http2 }
                         },
@@ -257,19 +265,7 @@ default_message() ->
         ],
         store =>
             [
-                % #{
-                %     <<"name">> => <<"cache-mainnet/lru">>,
-                %     <<"capacity">> => 512 * 1024 * 1024,
-                %     <<"store-module">> => hb_store_lru,
-                %     <<"persistent-store">> => #{
-                %         <<"store-module">> => hb_store_fs,
-                %         <<"name">> => <<"cache-mainnet/lru">>
-                %     }
-                % },
-                #{
-                   <<"name">> => <<"cache-mainnet/lmdb">>,
-                   <<"store-module">> => hb_store_lmdb
-                },
+                ?DEFAULT_PRIMARY_STORE,
                 #{
                     <<"store-module">> => hb_store_fs,
                     <<"name">> => <<"cache-mainnet">>
@@ -282,23 +278,11 @@ default_message() ->
                             <<"value">> => <<"ao">>
                         }
                     ],
-                    <<"local-store">> => 
-                        [
-                            #{
-                                <<"store-module">> => hb_store_lmdb,
-                                <<"name">> => <<"cache-mainnet/lmdb">>
-                            }
-                        ]
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
-                    <<"local-store">> =>
-                        [
-                            #{
-                                <<"store-module">> => hb_store_lmdb,
-                                <<"name">> => <<"cache-mainnet/lmdb">>
-                            }
-                        ]
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 }
             ],
         priv_store =>
@@ -325,7 +309,7 @@ default_message() ->
         % Should the node use persistent processes?
         process_workers => false,
         % Options for the router device
-        <<"router_opts">> => #{
+        router_opts => #{
             routes => []
         },
         on => #{
@@ -464,12 +448,44 @@ config_lookup(Key, Default, _Opts) -> maps:get(Key, default_message(), Default).
 %% keys to those in the default message.
 load(Path) -> load(Path, #{}).
 load(Path, Opts) ->
+    {ok, Device} = path_to_device(Path),
     case file:read_file(Path) of
         {ok, Bin} ->
-            load_bin(Bin, Opts);
+            load_bin(Device, Bin, Opts);
         _ -> {error, not_found}
     end.
+
+%% @doc Convert a path to a device from its file extension. If no extension is
+%% provided, we default to `flat@1.0'.
+path_to_device(Path) ->
+    case binary:split(hb_util:bin(Path), <<".">>, []) of
+        [_, Extension] ->
+            ?event(debug_node_msg,
+                {path_to_device,
+                    {path, Path},
+                    {extension, Extension}
+                }
+            ),
+            extension_to_device(Extension);
+        _ -> {ok, <<"flat@1.0">>}
+    end.
+
+%% @doc Convert a file extension to a device name.
+extension_to_device(Ext) ->
+    extension_to_device(Ext, maps:get(preloaded_devices, default_message())).
+extension_to_device(_, []) -> {error, not_found};
+extension_to_device(Ext, [#{ <<"name">> := Name }|Rest]) ->
+    case binary:match(Name, Ext) of
+        nomatch -> extension_to_device(Ext, Rest);
+        {0, _} -> {ok, Name}
+    end.
+
+%% @doc Parse a given binary with a device (defaulting to `flat@1.0') into a
+%% node message. Types are converted to match those in the default message, if
+%% applicable.
 load_bin(Bin, Opts) ->
+    load_bin(<<"flat@1.0">>, Bin, Opts).
+load_bin(<<"flat@1.0">>, Bin, Opts) ->
     % Trim trailing whitespace from each line in the file.
     Ls =
         lists:map(
@@ -481,6 +497,21 @@ load_bin(Bin, Opts) ->
             {ok, mimic_default_types(Map, new_atoms, Opts)}
     catch
         error:B -> {error, B}
+    end;
+load_bin(Device, Bin, Opts) ->
+    try
+        {
+            ok,
+            mimic_default_types(
+                hb_cache:ensure_all_loaded(
+                    hb_message:convert(Bin, <<"structured@1.0">>, Device, Opts),
+                    Opts
+                ),
+                new_atoms,
+                Opts
+            )
+        }
+    catch error:B -> {error, B}
     end.
 
 %% @doc Mimic the types of the default message for a given map.
@@ -702,7 +733,7 @@ global_preference_test() ->
         ?MODULE:get(mode, undefined, Global#{ mode => incorrect })),
     ?assertNotEqual(undefined, ?MODULE:get(mode, undefined, Global)).
 
-load_test() ->
+load_flat_test() ->
     % File contents:
     % port: 1234
     % host: https://ao.computer
@@ -715,6 +746,21 @@ load_test() ->
     ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
     ?assertEqual(false, hb_maps:get(await_inprogress, Conf)).
+
+load_json_test() ->
+    {ok, Conf} = load("test/config.json", #{}),
+    ?event(debug_node_msg, {loaded, Conf}),
+    ?assertEqual(1234, hb_maps:get(port, Conf)),
+    ?assertEqual(9001, hb_maps:get(example, Conf)),
+    % A binary
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(host, Conf)),
+    % An atom, where the key contained a header-key `-' rather than a `_'.
+    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)),
+    % Ensure that a store with `ao-types' is loaded correctly.
+    ?assertMatch(
+        [#{ <<"store-module">> := hb_store_fs }|_],
+        hb_maps:get(store, Conf)
+    ).
 
 as_identity_test() ->
     DefaultWallet = ar_wallet:new(),

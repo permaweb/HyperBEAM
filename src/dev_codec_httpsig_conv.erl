@@ -513,19 +513,7 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                                 Opts
                             );
                         (Key, Value) ->
-                            Committed =
-                                maps:get(
-                                    <<Key/binary, "/committed">>,
-                                    GroupedBodyMap,
-                                    undefined
-                                ),
-                            ValueWithCommitted =
-                                case Committed of
-                                    undefined -> Value;
-                                    Committed ->
-                                        maps:put(<<"committed">>, Committed, Value)
-                                end,
-                            encode_body_part(Key, ValueWithCommitted, InlineKey, Opts)
+                            encode_body_part(Key, Value, InlineKey, Opts)
                         end,
                         GroupedBodyMap,
                         Opts
@@ -732,13 +720,14 @@ encode_body_part(PartName, BodyPart, InlineKey, Opts) ->
     % HB message field that resolves to the sub-message
     case BodyPart of
         BPMap when is_map(BPMap) ->
-            WithDisposition = hb_maps:put(
-                <<"content-disposition">>,
-                Disposition,
-                BPMap,
-                Opts
-            ),
-            encode_http_msg(WithDisposition, Opts);
+            WithDisposition =
+                hb_maps:put(
+                    <<"content-disposition">>,
+                    Disposition,
+                    BPMap,
+                    Opts
+                ),
+            encode_http_flat_msg(WithDisposition, Opts);
         BPBin when is_binary(BPBin) ->
             % A properly encoded inlined body part MUST have a CRLF between
             % it and the header block, so we MUST use two CRLF:
@@ -787,10 +776,16 @@ inline_key(Msg, Opts) ->
         _ -> {#{}, <<"body">>}
     end.
 
-%% @doc Encode a HTTP message into a binary.
+%% @doc Encode a HTTP message into a binary, converting it to `httpsig@1.0'
+%% first.
 encode_http_msg(Msg, Opts) ->
     % Convert the message to a HTTP-Sig encoded output.
     Httpsig = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts),
+    encode_http_flat_msg(Httpsig, Opts).
+
+%% @doc Encode a HTTP message into a binary. The input *must* be a raw map of 
+%% binary keys and values.
+encode_http_flat_msg(Httpsig, Opts) ->
     % Serialize the headers, to be included in the part of the multipart response
     HeaderList =
         lists:foldl(

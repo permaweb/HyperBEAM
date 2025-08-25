@@ -6,6 +6,7 @@
 -export([add_derived_specifiers/1, remove_derived_specifiers/1]).
 -export([commitment_to_sig_name/1]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %%% A list of components that are `derived' in the context of RFC-9421 from the
 %%% request message.
@@ -137,6 +138,8 @@ get_additional_params(Commitment) ->
     lists:map(fun(Param) ->
         ParamValue = maps:get(Param, Commitment),
         case ParamValue of
+            Val when is_atom(Val) ->
+                {Param, {string, atom_to_binary(Val, utf8)}};
             Val when is_binary(Val) ->
                 {Param, {string, Val}};
             Val when is_list(Val) ->
@@ -484,4 +487,24 @@ remove_derived_specifiers(ComponentIdentifiers) ->
             Key
         end,
         ComponentIdentifiers
+    ).
+
+%%% Tests.
+
+parse_alg_test() ->
+    ?assertEqual(
+        commitment_to_device_specifiers(#{ <<"alg">> => <<"rsa-pss-sha512">> }, #{}),
+        #{
+            <<"commitment-device">> => <<"httpsig@1.0">>,
+            <<"type">> => <<"rsa-pss-sha512">>
+        }
+    ),
+    ?assertEqual(
+        commitment_to_device_specifiers(
+            #{ <<"alg">> => <<"ans104@1.0/rsa-pss-sha256">> },
+            #{}),
+        #{
+            <<"commitment-device">> => <<"ans104@1.0">>,
+            <<"type">> => <<"rsa-pss-sha256">>
+        }
     ).

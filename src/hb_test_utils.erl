@@ -225,7 +225,7 @@ benchmark(Fun, TLen, Procs) ->
 benchmark_print(Verb, Iterations) ->
     benchmark_print(Verb, Iterations, ?DEFAULT_BENCHMARK_TIME).
 benchmark_print(Verb, Iterations, Time) when is_integer(Iterations) ->
-    hb_util:eunit_print(
+    hb_format:eunit_print(
         "~s ~s in ~s (~s/s)",
         [
             Verb,
@@ -237,7 +237,7 @@ benchmark_print(Verb, Iterations, Time) when is_integer(Iterations) ->
 benchmark_print(Verb, Noun, Iterations) ->
     benchmark_print(Verb, Noun, Iterations, ?DEFAULT_BENCHMARK_TIME).
 benchmark_print(Verb, Noun, Iterations, Time) ->
-    hb_util:eunit_print(
+    hb_format:eunit_print(
         "~s ~s ~s in ~s (~s ~s/s)",
         [
             Verb,
