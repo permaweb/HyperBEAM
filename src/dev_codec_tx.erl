@@ -19,8 +19,7 @@ from(TX, Req, Opts) when is_record(TX, tx) ->
             {ok, TX#tx.data}
     end.
 do_from(RawTX, Req, Opts) ->
-    % Ensure the TX is fully deserialized.
-    TX = RawTX, %ar_bundles:deserialize(ar_bundles:normalize(RawTX)),
+    TX = normalize(RawTX),
     ?event({parsed_tx, TX}),
     % Get the fields, tags, and data from the TX.
     Fields = dev_codec_tx_from:fields(TX, <<>>, Opts),
@@ -81,7 +80,12 @@ to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
 
 normalize(TX) ->
-    reset_ids(normalize_data_root(ar_bundles:normalize_data(TX))).
+    reset_ids(
+        normalize_data_root(
+            ar_bundles:normalize_data(
+                TX#tx{ owner_address = ar_tx:get_owner_address(TX) })
+        )
+    ).
     
 normalize_data_root(Item = #tx{data = Bin, format = 2})
         when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
@@ -123,7 +127,6 @@ happy_tx_test() ->
         data_root = ar_tx:data_root(Data),
         reward = 2000
     },
-
     UnsignedTABM = #{
         <<"anchor">> => hb_util:encode(Anchor),
         <<"target">> => hb_util:encode(Target),
@@ -156,7 +159,10 @@ do_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
    do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment).
 
 do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM) ->
-    TABM = hb_util:ok(from(UnsignedTX, #{}, #{})),
+    JSON = ar_tx:tx_to_json_struct(UnsignedTX),
+    DeserializedTX = ar_tx:json_struct_to_tx(JSON),
+
+    TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
     ?event(debug_test, {unsigned_tx_roundtrip,{expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
     ?assertEqual(UnsignedTABM, TABM, unsigned_tx_roundtrip),
 
@@ -168,7 +174,11 @@ do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM) ->
 do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
     SignedTX = ar_tx:sign(UnsignedTX, hb:wallet()),
     ?assert(ar_tx:verify(SignedTX), signed_tx_roundtrip),
-    TABM = hb_util:ok(from(SignedTX, #{}, #{})),
+
+    JSON = ar_tx:tx_to_json_struct(SignedTX),
+    DeserializedTX = ar_tx:json_struct_to_tx(JSON),
+
+    TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
 
     SignedCommitment = Commitment#{
         <<"committer">> => hb_util:human_id(SignedTX#tx.owner_address),
@@ -179,4 +189,10 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
     SignedTABM = UnsignedTABM#{
         <<"commitments">> => #{ hb_util:human_id(SignedTX#tx.id) => SignedCommitment }},
     ?event(debug_test, {signed_tx_roundtrip, {expected_tabm, SignedTABM}, {actual_tabm, TABM}}),
-    ?assertEqual(SignedTABM, TABM, signed_tx_roundtrip).
+    ?assertEqual(SignedTABM, TABM, signed_tx_roundtrip),
+
+
+    TX = hb_util:ok(to(TABM, #{}, #{})),
+    ExpectedTX = SignedTX#tx{ unsigned_id = ar_tx:id(SignedTX, unsigned) },
+    ?event(debug_test, {signed_tx_roundtrip, {expected_tx, ExpectedTX}, {actual_tx, TX}}),
+    ?assertEqual(ExpectedTX, TX, signed_tx_roundtrip).
