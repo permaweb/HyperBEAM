@@ -1,6 +1,7 @@
 %%% @doc Library functions for encoding messages to the ANS-104 format.
 -module(dev_codec_ans104_to).
--export([maybe_load/3, siginfo/2, data/3, tags/4]).
+-export([maybe_load/3, data/3, tags/5, excluded_tags/3]).
+-export([siginfo/3, fields_to_tx/4]).
 -include("include/hb.hrl").
 
 %% @doc Determine if the message should be loaded from the cache and re-converted
@@ -37,7 +38,7 @@ maybe_load(RawTABM, Req, Opts) ->
 %% we check if the `target' field is set in the message. If it is encodable as
 %% a valid 32-byte binary ID (assuming it is base64url encoded in the `to' call),
 %% we place it in the `target' field. Otherwise, we leave it unset.
-siginfo(Message, Opts) ->
+siginfo(Message, FieldsFun, Opts) ->
     MaybeCommitment =
         hb_message:commitment(
             #{ <<"commitment-device">> => <<"ans104@1.0">> },
@@ -45,17 +46,10 @@ siginfo(Message, Opts) ->
             Opts
         ),
     case MaybeCommitment of
-        {ok, _, Commitment} -> commitment_to_tx(Commitment, Opts);
+        {ok, _, Commitment} -> commitment_to_tx(
+            Commitment, FieldsFun, Opts);
         not_found ->
-            case hb_maps:find(<<"target">>, Message, Opts) of
-                {ok, EncodedTarget} ->
-                    case hb_util:safe_decode(EncodedTarget) of
-                        {ok, Target} when ?IS_ID(Target) ->
-                            #tx{ target = Target };
-                        _ -> #tx{}
-                    end;
-                error -> #tx{}
-            end;
+            FieldsFun(#tx{}, <<>>, Message, Opts);
         multiple_matches ->
             throw({multiple_ans104_commitments_unsupported, Message})
     end.
@@ -63,7 +57,7 @@ siginfo(Message, Opts) ->
 %% @doc Convert a commitment to a base TX record. Extracts the owner, signature,
 %% tags, and last TX from the commitment. If the value is not present, the
 %% default value is used.
-commitment_to_tx(Commitment, Opts) ->
+commitment_to_tx(Commitment, FieldsFun, Opts) ->
     Signature =
         hb_util:decode(
             maps:get(<<"signature">>, Commitment, hb_util:encode(?DEFAULT_SIG))
@@ -81,25 +75,40 @@ commitment_to_tx(Commitment, Opts) ->
             {ok, OriginalTags} -> original_tags_to_tags(OriginalTags);
             error -> []
         end,
-    LastTX =
-        case hb_maps:find(<<"field-anchor">>, Commitment, Opts) of
-            {ok, EncodedLastTX} -> hb_util:decode(EncodedLastTX);
-            error -> ?DEFAULT_ANCHOR
-        end,
-    Target =
-        case hb_maps:find(<<"field-target">>, Commitment, Opts) of
-            {ok, EncodedTarget} -> hb_util:decode(EncodedTarget);
-            error -> ?DEFAULT_TARGET
-        end,
     ?event({commitment_owner, Owner}),
     ?event({commitment_signature, Signature}),
     ?event({commitment_tags, Tags}),
-    ?event({commitment_last_tx, LastTX}),
-    #tx{
+    TX = #tx{
         owner = Owner,
         signature = Signature,
-        tags = Tags,
-        anchor = LastTX,
+        tags = Tags
+    },
+    FieldsFun(TX, ?FIELD_PREFIX, Commitment, Opts).
+
+fields_to_tx(TX, Prefix, Map, Opts) ->
+    Anchor =
+        case hb_maps:find(<<Prefix/binary, "anchor">>, Map, Opts) of
+            {ok, EncodedAnchor} ->
+                case hb_util:safe_decode(EncodedAnchor) of
+                    {ok, DecodedAnchor} when ?IS_ID(DecodedAnchor) ->
+                        DecodedAnchor;
+                    _ -> ?DEFAULT_ANCHOR
+                end;
+            error -> ?DEFAULT_ANCHOR
+        end,
+    Target =
+        case hb_maps:find(<<Prefix/binary, "target">>, Map, Opts) of
+            {ok, EncodedTarget} ->
+                case hb_util:safe_decode(EncodedTarget) of
+                    {ok, DecodedTarget} when ?IS_ID(DecodedTarget) -> 
+                        DecodedTarget;
+                    _ -> ?DEFAULT_TARGET
+                end;
+            error -> ?DEFAULT_TARGET
+        end,
+    ?event({fields_to_tx, {prefix, Prefix}, {anchor, Anchor}, {target, Target}}),
+    TX#tx{
+        anchor = Anchor,
         target = Target
     }.
 
@@ -164,9 +173,9 @@ data_messages(TABM, Opts) when is_map(TABM) ->
 %% @doc Calculate the tags field for a data item. If the TX already has tags
 %% from the commitment decoding step, we use them. Otherwise we determine the
 %% keys to use from the `committed' field of the TABM.
-tags(#tx{ tags = ExistingTags }, _, _, _) when ExistingTags =/= [] ->
+tags(#tx{ tags = ExistingTags }, _, _, _, _) when ExistingTags =/= [] ->
     ExistingTags;
-tags(TX, TABM, Data, Opts) ->
+tags(TX, TABM, Data, ExcludedTagsFun, Opts) ->
     DataKey = inline_key(TABM),
     MaybeCommitment =
         hb_message:commitment(
@@ -203,14 +212,11 @@ tags(TX, TABM, Data, Opts) ->
                         )
                     )
                 ) --
-                    % If the target is set in the base TX from the
-                    % commitment, we check if the TABM equals that value. If it does,
-                    % we do not additionally add the target tag. If they differ, we
+                    % If a base field is set in the base TX from the commitment,
+                    % we check if the TABM equals that value. If it does, we do
+                    % not additionally add the target tag. If they differ, we
                     % include it.
-                    case include_target_tag(TX, TABM, Opts) of
-                        false -> [<<"target">>];
-                        true -> []
-                    end;
+                    ExcludedTagsFun(TX, TABM, Opts);
             not_found ->
                 % There is no commitment, so we need to generate the tags. The
                 % bundle-format and bundle-version tags are added by `ar_bundles`
@@ -223,10 +229,7 @@ tags(TX, TABM, Data, Opts) ->
                         if is_map(Data) -> hb_maps:keys(Data, Opts);
                         true -> []
                         end ++
-                        case include_target_tag(TX, TABM, Opts) of
-                            false -> [<<"target">>];
-                            true -> []
-                        end,
+                        ExcludedTagsFun(TX, TABM, Opts),
                     hb_util:to_sorted_keys(hb_private:reset(TABM), Opts)
                 );
             multiple_matches ->
@@ -241,12 +244,26 @@ tags(TX, TABM, Data, Opts) ->
         }),
     committed_tag_keys_to_tags(TX, TABM, DataKey, CommittedTagKeys, Opts).
 
-%% @doc Return whether to include the `target' tag in the tags list.
-include_target_tag(TX, TABM, Opts) ->
+%% @doc Return a list of base fields that should be excluded from the tags
+%% lists
+excluded_tags(TX, TABM, Opts) ->
+    exclude_target_tag(TX, TABM, Opts) ++
+    exclude_anchor_tag(TX, TABM, Opts).
+
+exclude_target_tag(TX, TABM, Opts) ->
     case {TX#tx.target, hb_maps:get(<<"target">>, TABM, undefined, Opts)} of
-        {?DEFAULT_TARGET, _} -> true;
-        {FieldTarget, TagTarget} when FieldTarget =/= TagTarget -> false;
-        _ -> true
+        {?DEFAULT_TARGET, _} -> [];
+        {FieldTarget, TagTarget} when FieldTarget =/= TagTarget -> 
+            [<<"target">>];
+        _ -> []
+    end.
+
+exclude_anchor_tag(TX, TABM, Opts) ->
+    case {TX#tx.anchor, hb_maps:get(<<"anchor">>, TABM, undefined, Opts)} of
+        {?DEFAULT_ANCHOR, _} -> [];
+        {FieldAnchor, TagAnchor} when FieldAnchor =/= TagAnchor -> 
+            [<<"anchor">>];
+        _ -> []
     end.
 
 %% @doc Apply the `ao-data-key' to the committed keys to generate the list of

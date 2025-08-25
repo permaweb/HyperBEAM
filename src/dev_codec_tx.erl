@@ -35,11 +35,71 @@ do_from(RawTX, Req, Opts) ->
     Base = dev_codec_ans104_from:base(Keys, Fields, Tags, Data, Opts),
     ?event({calculated_base_message, Base}),
     % Add the commitments to the message if the TX has a signature.
-    CommittedFields = dev_codec_tx_from:fields(TX, <<"field-">>, Opts),
+    CommittedFields = dev_codec_tx_from:fields(TX, ?FIELD_PREFIX, Opts),
     WithCommitments = dev_codec_ans104_from:with_commitments(
         TX, CommittedFields, Tags, Base, Keys, Opts),
     ?event({parsed_message, WithCommitments}),
     {ok, WithCommitments}.
+
+%% @doc Internal helper to translate a message to its #tx record representation,
+%% which can then be used by ar_tx to serialize the message. We call the 
+%% message's device in order to get the keys that we will be checkpointing. We 
+%% do this recursively to handle nested messages. The base case is that we hit
+%% a binary, which we return as is.
+to(Binary, _Req, _Opts) when is_binary(Binary) ->
+    % ar_tx cannot serialize just a simple binary or get an ID for it, so
+    % we turn it into a TX record with a special tag, tx_to_message will
+    % identify this tag and extract just the binary.
+    {ok,
+        #tx{
+            tags = [{<<"ao-type">>, <<"binary">>}],
+            data = Binary
+        }
+    };
+to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
+to(RawTABM, Req, Opts) when is_map(RawTABM) ->
+    % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
+    ?event({to, {inbound, RawTABM}, {req, Req}}),
+    MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, Req, Opts),
+    TX0 = dev_codec_ans104_to:siginfo(
+        MaybeBundle, fun dev_codec_tx_to:fields_to_tx/4, Opts),
+    ?event({found_siginfo, TX0}),
+    % Calculate and normalize the `data', if applicable.
+    Data = dev_codec_ans104_to:data(MaybeBundle, Req, Opts),
+    ?event({calculated_data, Data}),
+    TX1 = TX0#tx { data = Data },
+    % Calculate the tags for the TX.
+    Tags = dev_codec_ans104_to:tags(
+        TX1, MaybeBundle, Data, fun dev_codec_tx_to:excluded_tags/3, Opts),
+    ?event({calculated_tags, Tags}),
+    TX2 = TX1#tx { tags = Tags },
+    ?event({tx_before_id_gen, TX2}),
+    Res = normalize(TX2),
+    ?event({to_result, Res}),
+    {ok, Res};
+to(Other, _Req, _Opts) ->
+    throw({invalid_tx, Other}).
+
+normalize(TX) ->
+    reset_ids(normalize_data_root(ar_bundles:normalize_data(TX))).
+    
+normalize_data_root(Item = #tx{data = Bin, format = 2})
+        when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
+    Item#tx{data_root = ar_tx:data_root(Bin)};
+normalize_data_root(Item) -> Item.
+
+reset_ids(TX) ->
+    update_ids(TX#tx{unsigned_id = ?DEFAULT_ID, id = ?DEFAULT_ID}).
+
+update_ids(TX = #tx{ unsigned_id = ?DEFAULT_ID }) ->
+    update_ids(TX#tx{unsigned_id = ar_tx:generate_id(TX, unsigned)});
+update_ids(TX = #tx{ id = ?DEFAULT_ID, signature = ?DEFAULT_SIG }) ->
+    TX;
+update_ids(TX = #tx{ signature = ?DEFAULT_SIG }) ->
+    TX#tx{ id = ?DEFAULT_ID };
+update_ids(TX = #tx{ signature = Sig }) when Sig =/= ?DEFAULT_SIG ->
+    TX#tx{ id = ar_tx:generate_id(TX, signed) };
+update_ids(TX) -> TX.
 
 %%%===================================================================
 %%% Tests.
@@ -97,8 +157,13 @@ do_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
 
 do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM) ->
     TABM = hb_util:ok(from(UnsignedTX, #{}, #{})),
-    ?event(debug_test, {unsigned_tx_roundtrip,{expected, UnsignedTABM}, {actual, TABM}}),
-    ?assertEqual(UnsignedTABM, TABM, unsigned_tx_roundtrip).
+    ?event(debug_test, {unsigned_tx_roundtrip,{expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
+    ?assertEqual(UnsignedTABM, TABM, unsigned_tx_roundtrip),
+
+    TX = hb_util:ok(to(TABM, #{}, #{})),
+    ExpectedTX = UnsignedTX#tx{ unsigned_id = ar_tx:id(UnsignedTX, unsigned) },
+    ?event(debug_test, {unsigned_tx_roundtrip, {expected_tx, ExpectedTX}, {actual_tx, TX}}),
+    ?assertEqual(ExpectedTX, TX, unsigned_tx_roundtrip).
 
 do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
     SignedTX = ar_tx:sign(UnsignedTX, hb:wallet()),
@@ -113,5 +178,5 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
     },
     SignedTABM = UnsignedTABM#{
         <<"commitments">> => #{ hb_util:human_id(SignedTX#tx.id) => SignedCommitment }},
-    ?event(debug_test, {signed_tx_roundtrip, {expected, SignedTABM}, {actual, TABM}}),
+    ?event(debug_test, {signed_tx_roundtrip, {expected_tabm, SignedTABM}, {actual_tabm, TABM}}),
     ?assertEqual(SignedTABM, TABM, signed_tx_roundtrip).

@@ -1,6 +1,7 @@
 %% @doc A collection of utility functions for building with HyperBEAM.
 -module(hb_util).
 -export([int/1, float/1, atom/1, bin/1, list/1, map/1]).
+-export([safe_int/1]).
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
 -export([key_to_atom/1, key_to_atom/2, binary_to_addresses/1]).
@@ -39,6 +40,15 @@ int(Str) when is_list(Str) ->
     list_to_integer(Str);
 int(Int) when is_integer(Int) ->
     Int.
+
+%% @doc Safely coerce a string to an integer, returning an ok or error tuple.
+safe_int(Value) ->
+    try
+        Integer = int(Value),
+        {ok, Integer}
+    catch
+        _:_ -> {error, invalid}
+    end.
 
 %% @doc Coerce a string to a float.
 float(Str) when is_binary(Str) ->

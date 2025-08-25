@@ -6,7 +6,7 @@
 -export([encode_tags/1, decode_tags/1]).
 -export([serialize/1, serialize/2, deserialize/1, deserialize/2]).
 -export([data_item_signature_data/1]).
--export([normalize/1]).
+-export([normalize/1, normalize_data/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
