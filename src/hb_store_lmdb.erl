@@ -277,7 +277,7 @@ resolve_path_links(Opts, Path, Depth) ->
 resolve_path_links_acc(_Opts, [], AccPath, _Depth) ->
     % No more segments to process
     {ok, lists:reverse(AccPath)};
-resolve_path_links_acc(_, FullPath = [<<"data">>|_], [], _Depth) ->
+resolve_path_links_acc(_, FullPath = [<<"data">> | _], [], _Depth) ->
     {ok, FullPath};
 resolve_path_links_acc(Opts, [Head | Tail], AccPath, Depth) ->
     % Build the accumulated path so far
@@ -423,7 +423,7 @@ make_group(Opts, <<"/", GroupName/binary>>) when is_map(Opts) ->
     make_group(Opts, GroupName);
 make_group(Opts, GroupName) when is_map(Opts), is_binary(GroupName) ->
     write(Opts, GroupName, <<"group">>);
-make_group(_,_) ->
+make_group(_, _) ->
     {error, {badarg, <<"StoreOps must be map and GroupName must be a binary">>}}.
 
 %% @doc Ensure all parent groups exist for a given path.
@@ -489,7 +489,7 @@ make_link(Opts, Existing, New) when is_list(Existing) ->
     ExistingBin = to_path(Existing),
     make_link(Opts, ExistingBin, New);
 make_link(Opts, Existing, New) ->
-    % ensure key-value is binary pair 
+    % Ensure key-value is binary pair
     ExistingBin = hb_util:bin(Existing),
     NewBin = hb_util:bin(New),
     % Ensure parent groups exist for the new link path (like filesystem ensure_dir)
@@ -540,7 +540,7 @@ resolve(Opts, PathParts) when is_list(PathParts) ->
             % If resolution fails, return original path as binary
             to_path(PathParts)
     end;
-resolve(_,_) -> not_found.
+resolve(_, _) -> not_found.
 
 %% @doc Retrieve or create the LMDB environment handle for a database.
 find_env(Opts) -> hb_store:find(Opts).
