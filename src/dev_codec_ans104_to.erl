@@ -1,7 +1,7 @@
 %%% @doc Library functions for encoding messages to the ANS-104 format.
 -module(dev_codec_ans104_to).
--export([maybe_load/3, data/3, tags/5, excluded_tags/3]).
--export([siginfo/3, fields_to_tx/4]).
+-export([maybe_load/3, data/3, tags/6, excluded_tags/3]).
+-export([siginfo/4, fields_to_tx/4]).
 -include("include/hb.hrl").
 
 %% @doc Determine if the message should be loaded from the cache and re-converted
@@ -38,10 +38,10 @@ maybe_load(RawTABM, Req, Opts) ->
 %% we check if the `target' field is set in the message. If it is encodable as
 %% a valid 32-byte binary ID (assuming it is base64url encoded in the `to' call),
 %% we place it in the `target' field. Otherwise, we leave it unset.
-siginfo(Message, FieldsFun, Opts) ->
+siginfo(Message, Device, FieldsFun, Opts) ->
     MaybeCommitment =
         hb_message:commitment(
-            #{ <<"commitment-device">> => <<"ans104@1.0">> },
+            #{ <<"commitment-device">> => Device },
             Message,
             Opts
         ),
@@ -173,13 +173,13 @@ data_messages(TABM, Opts) when is_map(TABM) ->
 %% @doc Calculate the tags field for a data item. If the TX already has tags
 %% from the commitment decoding step, we use them. Otherwise we determine the
 %% keys to use from the `committed' field of the TABM.
-tags(#tx{ tags = ExistingTags }, _, _, _, _) when ExistingTags =/= [] ->
+tags(#tx{ tags = ExistingTags }, _, _, _, _, _) when ExistingTags =/= [] ->
     ExistingTags;
-tags(TX, TABM, Data, ExcludedTagsFun, Opts) ->
+tags(TX, Device, TABM, Data, ExcludedTagsFun, Opts) ->
     DataKey = inline_key(TABM),
     MaybeCommitment =
         hb_message:commitment(
-            #{ <<"commitment-device">> => <<"ans104@1.0">> },
+            #{ <<"commitment-device">> => Device },
             TABM,
             Opts
         ),

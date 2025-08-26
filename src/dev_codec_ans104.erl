@@ -96,7 +96,8 @@ do_from(RawTX, Req, Opts) ->
     Data = dev_codec_ans104_from:data(TX, Req, Tags, Opts),
     ?event({parsed_components, {fields, Fields}, {tags, Tags}, {data, Data}}),
     % Calculate the committed keys on from the TX.
-    Keys = dev_codec_ans104_from:committed(?BASE_FIELDS, TX, Fields, Tags, Data, Opts),
+    Keys = dev_codec_ans104_from:committed(
+        ?BASE_FIELDS, TX, Fields, Tags, Data, Opts),
     ?event({determined_committed_keys, Keys}),
     % Create the base message from the fields, tags, and data, filtering to
     % include only the keys that are committed. Will throw if a key is missing.
@@ -105,7 +106,7 @@ do_from(RawTX, Req, Opts) ->
     % Add the commitments to the message if the TX has a signature.
     CommittedFields = dev_codec_ans104_from:fields(TX, ?FIELD_PREFIX, Opts),
     WithCommitments = dev_codec_ans104_from:with_commitments(
-        TX, CommittedFields, Tags, Base, Keys, Opts),
+        TX, <<"ans104@1.0">>, CommittedFields, Tags, Base, Keys, Opts),
     ?event({parsed_message, WithCommitments}),
     {ok, WithCommitments}.
 
@@ -130,7 +131,7 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     ?event({to, {inbound, RawTABM}, {req, Req}}),
     MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, Req, Opts),
     TX0 = dev_codec_ans104_to:siginfo(
-        MaybeBundle, 
+        MaybeBundle, <<"ans104@1.0">>,
         fun dev_codec_ans104_to:fields_to_tx/4,
         Opts
     ),
@@ -141,7 +142,8 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     TX1 = TX0#tx { data = Data },
     % Calculate the tags for the TX.
     Tags = dev_codec_ans104_to:tags(
-        TX1, MaybeBundle, Data, fun dev_codec_ans104_to:excluded_tags/3, Opts),
+        TX1, <<"ans104@1.0">>, MaybeBundle, Data,
+        fun dev_codec_ans104_to:excluded_tags/3, Opts),
     ?event({calculated_tags, Tags}),
     TX2 = TX1#tx { tags = Tags },
     ?event({tx_before_id_gen, TX2}),

@@ -16,16 +16,16 @@
 %% Used in tests and by the handler of the POST /unsigned_tx endpoint, which is
 %% disabled by default.
 sign(TX, {PrivKey, PubKey = {KeyType, Owner}}) ->
-    TX2 = TX#tx{ owner = Owner, signature_type = KeyType,
-            owner_address = ar_wallet:to_address(Owner, KeyType) },
-    SignatureDataSegment = generate_signature_data_segment(TX2),
-    sign(TX2, PrivKey, PubKey, SignatureDataSegment).
+    TX2 = TX#tx{ owner = Owner, signature_type = KeyType },
+    TX3 = TX2#tx{ owner_address = get_owner_address(TX2) },
+    SignatureDataSegment = generate_signature_data_segment(TX3),
+    sign(TX3, PrivKey, PubKey, SignatureDataSegment).
 
 sign(TX, PrivKey, PubKey = {KeyType, Owner}) ->
-    TX2 = TX#tx{ owner = Owner, signature_type = KeyType,
-            owner_address = ar_wallet:to_address(Owner, KeyType) },
-    SignatureDataSegment = generate_signature_data_segment(TX2),
-    sign(TX2, PrivKey, PubKey, SignatureDataSegment).
+    TX2 = TX#tx{ owner = Owner, signature_type = KeyType },
+    TX3 = TX2#tx{ owner_address = get_owner_address(TX2) },
+    SignatureDataSegment = generate_signature_data_segment(TX3),
+    sign(TX3, PrivKey, PubKey, SignatureDataSegment).
 
 %% @doc Cryptographically sign (claim ownership of) a v1 transaction.
 %% Used in tests and by the handler of the POST /unsigned_tx endpoint, which is
@@ -198,10 +198,11 @@ sign(TX, PrivKey, {KeyType, Owner}, SignatureDataSegment) ->
     NewTX = TX#tx{ 
         owner = Owner, 
         signature_type = KeyType,
-        owner_address = ar_wallet:to_address(Owner, KeyType),
         signature = ar_wallet:sign(PrivKey, SignatureDataSegment)
     },
-    NewTX#tx{ id = generate_id(NewTX, signed) }.
+    NewTX#tx{
+        id = generate_id(NewTX, signed), 
+        owner_address = get_owner_address(NewTX) }.
 
 %% @doc Verify that the transaction's ID is a hash of its signature.
 verify_hash(#tx{ id = ID } = TX) ->
@@ -253,12 +254,11 @@ json_struct_to_tx(TXStruct) ->
     SigType = set_sig_type_from_pub_key(Owner),
     %% Only RSA supported for now
     ?RSA_KEY_TYPE = SigType,
-    #tx{
+    TX = #tx{
         format = Format,
         id = TXID,
         anchor = hb_util:decode(hb_util:find_value(<<"last_tx">>, TXStruct)),
         owner = hb_util:decode(hb_util:find_value(<<"owner">>, TXStruct)),
-        owner_address = ar_wallet:to_address(Owner, SigType),
         tags = [{hb_util:decode(Name), hb_util:decode(Value)}
                 %% Only the elements matching this pattern are included in the list.
                 || {[{<<"name">>, Name}, {<<"value">>, Value}]} <- Tags],
@@ -275,7 +275,8 @@ json_struct_to_tx(TXStruct) ->
                 DR -> hb_util:decode(DR)
             end,
         denomination = Denomination
-    }.
+    },
+    TX#tx{ owner_address = get_owner_address(TX) }.
 
 set_sig_type_from_pub_key(Owner) ->
     case Owner of
@@ -731,7 +732,10 @@ test_tx_to_json_struct_happy() ->
 
     %% Helper to create the expected tag structure for JSON
     JsonTagFun = fun({Name, Value}) ->
-        {[{name, hb_util:encode(Name)}, {value, hb_util:encode(Value)}]}
+        {[
+            {<<"name">>, hb_util:encode(Name)},
+            {<<"value">>, hb_util:encode(Value)}
+        ]}
     end,
 
     SpecificTarget = crypto:strong_rand_bytes(32),
@@ -760,37 +764,40 @@ test_tx_to_json_struct_happy() ->
                 undefined -> 1;
                 _ -> TXVariant#tx.format
             end,
-            ?assertEqual(ExpectedFormat, maps:get(format, JsonStruct), Label),
-            ?assertEqual(hb_util:encode(TXVariant#tx.id), maps:get(id, JsonStruct), Label),
-            ?assertEqual(hb_util:encode(TXVariant#tx.anchor), maps:get(last_tx, JsonStruct), Label),
-            ?assertEqual(hb_util:encode(TXVariant#tx.owner), maps:get(owner, JsonStruct), Label),
-            ?assertEqual(hb_util:encode(TXVariant#tx.target), maps:get(target, JsonStruct), Label),
-            ?assertEqual(hb_util:encode(TXVariant#tx.signature), maps:get(signature, JsonStruct), Label),
-            ?assertEqual(integer_to_binary(TXVariant#tx.quantity), maps:get(quantity, JsonStruct), Label),
-            ?assertEqual(integer_to_binary(TXVariant#tx.reward), maps:get(reward, JsonStruct), Label),
-            ?assertEqual(integer_to_binary(TXVariant#tx.data_size), maps:get(data_size, JsonStruct), Label),
-            ?assertEqual(hb_util:encode(TXVariant#tx.data), maps:get(data, JsonStruct), Label),
-            ?assertEqual(hb_util:encode(TXVariant#tx.data_root), maps:get(data_root, JsonStruct), Label),
+            ?assertEqual(ExpectedFormat, maps:get(<<"format">>, JsonStruct), Label),
+            ?assertEqual(hb_util:encode(TXVariant#tx.id), maps:get(<<"id">>, JsonStruct), Label),
+            ?assertEqual(hb_util:encode(TXVariant#tx.anchor), maps:get(<<"last_tx">>, JsonStruct), Label),
+            ?assertEqual(hb_util:encode(TXVariant#tx.owner), maps:get(<<"owner">>, JsonStruct), Label),
+            ?assertEqual(hb_util:encode(TXVariant#tx.target), maps:get(<<"target">>, JsonStruct), Label),
+            ?assertEqual(hb_util:encode(TXVariant#tx.signature), maps:get(<<"signature">>, JsonStruct), Label),
+            ?assertEqual(integer_to_binary(TXVariant#tx.quantity), maps:get(<<"quantity">>, JsonStruct), Label),
+            ?assertEqual(integer_to_binary(TXVariant#tx.reward), maps:get(<<"reward">>, JsonStruct), Label),
+            ?assertEqual(integer_to_binary(TXVariant#tx.data_size), maps:get(<<"data_size">>, JsonStruct), Label),
+            ?assertEqual(hb_util:encode(TXVariant#tx.data), maps:get(<<"data">>, JsonStruct), Label),
+            ?assertEqual(hb_util:encode(TXVariant#tx.data_root), maps:get(<<"data_root">>, JsonStruct), Label),
             ?assertEqual(integer_to_binary(TXVariant#tx.denomination),
-                maps:get(denomination, JsonStruct, integer_to_binary(0)), Label),
-            ?assertEqual([], maps:get(data_tree, JsonStruct), Label), % Always empty list
+                maps:get(<<"denomination">>, JsonStruct, integer_to_binary(0)), Label),
+            ?assertEqual([], maps:get(<<"data_tree">>, JsonStruct), Label), % Always empty list
 
             ExpectedJsonTags = lists:map(JsonTagFun, TXVariant#tx.tags),
-            ?assertEqual(ExpectedJsonTags, maps:get(tags, JsonStruct), Label),
+            ?assertEqual(ExpectedJsonTags, maps:get(<<"tags">>, JsonStruct), 
+                {tags_mismatch, Label}),
 
             %% Assert no extra keys are present
             BaseExpectedKeys = [
-                format, id, last_tx, owner, tags, target, quantity, data, data_size, data_tree,
-                data_root, reward, signature
+                <<"format">>, <<"id">>, <<"last_tx">>, <<"owner">>, <<"tags">>,
+                 <<"target">>, <<"quantity">>, <<"data">>, <<"data_size">>,
+                 <<"data_tree">>, <<"data_root">>, <<"reward">>,
+                 <<"signature">>
             ],
             ExpectedKeys =
                 case TXVariant#tx.denomination > 0 of
-                    true  -> lists:sort([denomination | BaseExpectedKeys]);
+                    true  -> lists:sort([<<"denomination">> | BaseExpectedKeys]);
                     false -> lists:sort(BaseExpectedKeys)
                 end,
             ActualKeys = lists:sort(maps:keys(JsonStruct)),
-            ?assertEqual(ExpectedKeys, ActualKeys,
-                {extra_or_missing_keys, Label, ExpectedKeys, ActualKeys})
+            ?assertEqual(ExpectedKeys, ActualKeys, 
+                {extra_or_missing_keys, Label})
         end,
         Variants
     ).

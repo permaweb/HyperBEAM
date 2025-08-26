@@ -1,7 +1,7 @@
 %%% @doc Library functions for decoding ANS-104-style data items to TABM form.
 -module(dev_codec_ans104_from).
 -export([fields/3, tags/2, data/4, committed/6, base/5]).
--export([with_commitments/6]).
+-export([with_commitments/7]).
 -include("include/hb.hrl").
 
 %% @doc Return a TABM message containing the fields of the given decoded
@@ -56,7 +56,8 @@ ao_types(#{ <<"ao-types">> := AoTypes } = Tags, Opts) ->
 ao_types(Tags, _Opts) ->
     Tags.
 
-%% @doc Return a TABM of the keys and values found in the data field of the item.
+%% @doc Return a TABM of the keys and values found in the data field of the
+%% item.
 data(Item, Req, Tags, Opts) ->
     % If the data field is empty, we return an empty map. If it is a map, we
     % return it as such. Otherwise, we return a map with the data key set to
@@ -151,22 +152,25 @@ base(CommittedKeys, Fields, Tags, Data, Opts) ->
     ).
 
 %% @doc Return a message with the appropriate commitments added to it.
-with_commitments(Item, CommittedFields, Tags, Base, CommittedKeys, Opts) ->
+with_commitments(
+        Item, Device, CommittedFields, Tags, Base, CommittedKeys, Opts) ->
     case Item#tx.signature of
         ?DEFAULT_SIG ->
             case normal_tags(Item#tx.tags) of
                 true -> Base;
                 false ->
                     with_unsigned_commitment(
-                        Item, CommittedFields, Tags, Base, CommittedKeys, Opts)
+                        Item, Device, CommittedFields, Tags, Base, CommittedKeys, Opts)
             end;
         _ -> with_signed_commitment(
-            Item, CommittedFields, Tags, Base, CommittedKeys, Opts)
+            Item, Device, CommittedFields, Tags, Base, CommittedKeys, Opts)
     end.
 
 %% @doc Returns a commitments message for an item, containing an unsigned
 %% commitment.
-with_unsigned_commitment(Item, CommittedFields, Tags, UncommittedMessage, CommittedKeys, Opts) ->
+with_unsigned_commitment(
+        Item, Device, CommittedFields, Tags, 
+        UncommittedMessage, CommittedKeys, Opts) ->
     ID = hb_util:human_id(Item#tx.unsigned_id),
     UncommittedMessage#{
         <<"commitments">> => #{
@@ -175,7 +179,7 @@ with_unsigned_commitment(Item, CommittedFields, Tags, UncommittedMessage, Commit
                     hb_maps:merge(
                         CommittedFields,
                         #{
-                            <<"commitment-device">> => <<"ans104@1.0">>,
+                            <<"commitment-device">> => Device,
                             <<"committed">> => CommittedKeys,
                             <<"type">> => <<"unsigned-sha256">>,
                             <<"bundle">> => bundle_commitment_key(Tags, Opts),
@@ -190,7 +194,9 @@ with_unsigned_commitment(Item, CommittedFields, Tags, UncommittedMessage, Commit
 
 %% @doc Returns a commitments message for an item, containing a signed
 %% commitment.
-with_signed_commitment(Item, CommittedFields, Tags, UncommittedMessage, CommittedKeys, Opts) ->
+with_signed_commitment(
+        Item, Device, CommittedFields, Tags, 
+        UncommittedMessage, CommittedKeys, Opts) ->
     Address = hb_util:human_id(ar_wallet:to_address(Item#tx.owner)),
     ID = hb_util:human_id(Item#tx.id),
     Commitment =
@@ -198,7 +204,7 @@ with_signed_commitment(Item, CommittedFields, Tags, UncommittedMessage, Committe
             hb_maps:merge(
                 CommittedFields,
                 #{
-                    <<"commitment-device">> => <<"ans104@1.0">>,
+                    <<"commitment-device">> => Device,
                     <<"committer">> => Address,
                     <<"committed">> => CommittedKeys,
                     <<"signature">> => hb_util:encode(Item#tx.signature),
