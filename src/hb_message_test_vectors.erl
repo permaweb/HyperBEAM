@@ -25,7 +25,7 @@ test_codecs() ->
         <<"ans104@1.0">>,
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         <<"json@1.0">>,
-        #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true }
+        #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
         <<"tx@1.0">>
     ].
 

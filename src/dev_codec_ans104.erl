@@ -431,7 +431,6 @@ field_and_tag_ordering_test() ->
         <<"z">> => <<"value2">>,
         <<"target">> => <<"NON-ID-TARGET">>
     },
-        
     Wallet = hb:wallet(),
     SignedTABM = hb_message:commit(
         UnsignedTABM, #{priv_wallet => Wallet}, <<"ans104@1.0">>),

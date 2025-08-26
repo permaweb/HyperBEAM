@@ -320,7 +320,7 @@ non_conforming_fields_test() ->
     SignedCommitment = #{
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"anchor">>, <<"data_root">>, <<"quantity">>,
-            <<"reward">>, <<"target">>, <<"tag1">>, <<"tag2">>],
+            <<"reward">>, <<"tag1">>, <<"tag2">>, <<"target">>],
         <<"type">> => <<"rsa-pss-sha256">>,
         <<"bundle">> => <<"false">>
     },
@@ -332,27 +332,28 @@ do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
    do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment).
 
 do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM) ->
+    % Serialize -> Deserialize
     JSON = ar_tx:tx_to_json_struct(UnsignedTX),
     DeserializedTX = ar_tx:json_struct_to_tx(JSON),
-
+    % TX -> TABM
     TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
     ?event(debug_test, {unsigned_tx_roundtrip,{expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
     ?assertEqual(UnsignedTABM, TABM, unsigned_tx_roundtrip),
-
+    % TABM -> TX
     TX = hb_util:ok(to(TABM, #{}, #{})),
     ExpectedTX = UnsignedTX#tx{ unsigned_id = ar_tx:id(UnsignedTX, unsigned) },
     ?event(debug_test, {unsigned_tx_roundtrip, {expected_tx, ExpectedTX}, {actual_tx, TX}}),
     ?assertEqual(ExpectedTX, TX, unsigned_tx_roundtrip).
 
 do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
+    % Sign TX
     SignedTX = ar_tx:sign(UnsignedTX, hb:wallet()),
     ?assert(ar_tx:verify(SignedTX), signed_tx_roundtrip),
-
+    % Serialize -> Deserialize
     JSON = ar_tx:tx_to_json_struct(SignedTX),
     DeserializedTX = ar_tx:json_struct_to_tx(JSON),
-
+    % TX -> TABM
     TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
-
     SignedCommitment = Commitment#{
         <<"committer">> => hb_util:human_id(SignedTX#tx.owner_address),
         <<"signature">> => hb_util:encode(SignedTX#tx.signature),
@@ -363,7 +364,7 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
         <<"commitments">> => #{ hb_util:human_id(SignedTX#tx.id) => SignedCommitment }},
     ?event(debug_test, {signed_tx_roundtrip, {expected_tabm, SignedTABM}, {actual_tabm, TABM}}),
     ?assertEqual(SignedTABM, TABM, signed_tx_roundtrip),
-
+    % TABM -> TX
     TX = hb_util:ok(to(TABM, #{}, #{})),
     ExpectedTX = SignedTX,
     ?event(debug_test, {signed_tx_roundtrip, {expected_tx, ExpectedTX}, {actual_tx, TX}}),
@@ -371,37 +372,31 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
 
 %% @doc Run a series of roundtrip tests that start and end with a TABM.
 do_tabm_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
-    % do_unsigned_tabm_roundtrip(UnsignedTX, UnsignedTABM),
+    do_unsigned_tabm_roundtrip(UnsignedTX, UnsignedTABM),
     do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment).
     
 do_unsigned_tabm_roundtrip(UnsignedTX, UnsignedTABM) ->
+    % TABM -> TX
     TX = hb_util:ok(to(UnsignedTABM, #{}, #{})),
+    % Serialize -> Deserialize
     JSON = ar_tx:tx_to_json_struct(TX),
     DeserializedTX = ar_tx:json_struct_to_tx(JSON),
-    ExpectedTX = UnsignedTX#tx{ unsigned_id = ar_tx:id(UnsignedTX, unsigned) },
     ?event(debug_test, {unsigned_tabm_roundtrip, 
-        {expected_tx, {explicit, UnsignedTX}}, {actual_tx, {explicit, DeserializedTX}}}),
+        {expected_tx, UnsignedTX}, {actual_tx, DeserializedTX}}),
     ?assertEqual(UnsignedTX, DeserializedTX, unsigned_tabm_roundtrip),
-
+    % TX -> TABM
     TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
     ?event(debug_test, {unsigned_tabm_roundtrip,
         {expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
     ?assertEqual(UnsignedTABM, TABM, unsigned_tabm_roundtrip).
 
 do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
+    % Commit TABM
     Wallet = hb:wallet(),
-    TX = hb_util:ok(to(UnsignedTABM, #{}, #{})),
-    ?event(debug_test, {unsigned_tabm_roundtrip, {unsigned_tx, {explicit, UnsignedTX}}, {tx, {explicit, TX}}}),
-    ?assertEqual(UnsignedTX#tx{ unsigned_id = ar_tx:id(UnsignedTX, unsigned) }, TX, unsigned_tabm_roundtrip),
-    SignedTX = ar_tx:sign(UnsignedTX, Wallet),
-    ?event(debug_test, {signed_tabm_roundtrip, {signed_tx, {explicit, SignedTX}}}),
-    ?assert(ar_tx:verify(SignedTX), signed_tabm_roundtrip),
-    
     SignedTABM = hb_message:commit(
         UnsignedTABM, #{priv_wallet => Wallet}, <<"tx@1.0">>),
     ?event(debug_test, {signed_tabm_roundtrip, {signed_tabm, SignedTABM}}),
     ?assert(hb_message:verify(SignedTABM), signed_tabm_roundtrip),
-
     {ok, _, SignedCommitment} = hb_message:commitment(
         #{ <<"commitment-device">> => <<"tx@1.0">> },
         SignedTABM,
@@ -414,33 +409,19 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
             <<"publickey:", (hb_util:encode(ar_wallet:to_pubkey(Wallet)))/binary>>
     },
     ?assertEqual(ExpectedCommitment, SignedCommitment, signed_tabm_roundtrip),
-    
-    TX = hb_util:ok(to(SignedTABM, #{}, #{})),
+    % TABM -> TX
+    SignedTX = hb_util:ok(to(SignedTABM, #{}, #{})),
+    ?assert(ar_tx:verify(SignedTX), signed_tabm_roundtrip),
     ExpectedTX = ar_tx:sign(UnsignedTX, Wallet),
-    ?event(debug_test, {signed_tabm_roundtrip, 
-        {expected_tx, {explicit, ExpectedTX}}, {actual_tx, {explicit, TX}}}),
-    ?assertEqual(ExpectedTX, TX, signed_tabm_roundtrip).
-
-    % SignedTX = ar_tx:sign(UnsignedTX, hb:wallet()),
-    % ?assert(ar_tx:verify(SignedTX), signed_tx_roundtrip),
-
-    % JSON = ar_tx:tx_to_json_struct(SignedTX),
-    % DeserializedTX = ar_tx:json_struct_to_tx(JSON),
-
-    % TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
-
-    % SignedCommitment = Commitment#{
-    %     <<"committer">> => hb_util:human_id(SignedTX#tx.owner_address),
-    %     <<"signature">> => hb_util:encode(SignedTX#tx.signature),
-    %     <<"keyid">> =>
-    %         <<"publickey:", (hb_util:encode(SignedTX#tx.owner))/binary>>
-    % },
-    % SignedTABM = UnsignedTABM#{
-    %     <<"commitments">> => #{ hb_util:human_id(SignedTX#tx.id) => SignedCommitment }},
-    % ?event(debug_test, {signed_tx_roundtrip, {expected_tabm, SignedTABM}, {actual_tabm, TABM}}),
-    % ?assertEqual(SignedTABM, TABM, signed_tx_roundtrip),
-
-    % TX = hb_util:ok(to(TABM, #{}, #{})),
-    % ExpectedTX = SignedTX#tx{ unsigned_id = ar_tx:id(SignedTX, unsigned) },
-    % ?event(debug_test, {signed_tx_roundtrip, {expected_tx, ExpectedTX}, {actual_tx, TX}}),
-    % ?assertEqual(ExpectedTX, TX, signed_tx_roundtrip).
+    ?assert(ar_tx:verify(ExpectedTX), signed_tabm_roundtrip),
+    % Copy the SignedTX signature data over to the ExpectedTX since we expect
+    % a different signature each time we sign.
+    ?assertEqual(
+        ExpectedTX#tx{ 
+            unsigned_id = ar_tx:generate_id(ExpectedTX, unsigned),
+            id = SignedTX#tx.id,
+            signature = SignedTX#tx.signature
+        }, SignedTX, signed_tabm_roundtrip),
+    % TX -> TABM
+    FinalTABM = hb_util:ok(from(SignedTX, #{}, #{})),
+    ?assertEqual(SignedTABM, FinalTABM, signed_tabm_roundtrip).

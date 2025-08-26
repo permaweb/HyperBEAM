@@ -61,7 +61,12 @@ format(TX, Indent, Opts) when is_record(TX, tx) ->
     end ++
     case ar_bundles:is_signed(TX) of
         true ->
-            format_line("Signer: ~s", [hb_util:encode(ar_bundles:signer(TX))], Indent + 1);
+            format_line("Signer: ~s",
+                [hb_util:encode(ar_bundles:signer(TX))], 
+                Indent + 1),
+            format_line("Signature: ~s", 
+                [hb_format:binary(TX#tx.signature)],
+                Indent + 1);
         false -> []
     end ++
     format_fields(TX, Indent) ++
