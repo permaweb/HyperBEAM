@@ -12,10 +12,9 @@
 %%
 %% For the remote store, the scope is always `remote'.
 %%
-%% @param Arg An arbitrary parameter (ignored).
+%% @param StoreOpts A message with the store options (ignored).
 %% @returns remote.
-scope(Arg) ->
-    ?event({remote_scope, {arg, Arg}}),
+scope(_StoreOpts) ->
     remote.
 
 %% @doc Resolve a key path in the remote store.
@@ -53,7 +52,14 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
 %% @returns {ok, Msg} on success or not_found if the key is missing.
 read(Opts = #{ <<"node">> := Node }, Key) ->
     ?event({remote_read, {node, Node}, {key, Key}}),
-    case hb_http:get(Node, #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key }, Opts) of
+    HTTPRes =
+        hb_http:get(
+            Node,
+            #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key },
+            Opts
+        ),
+    ?event({remote_read, {http_response, HTTPRes}}),
+    case HTTPRes of
         {ok, Res} ->
             % returning the whole response to get the test-key
             {ok, Msg} = hb_message:with_only_committed(Res, Opts),

@@ -9,8 +9,8 @@
 %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    encode_small_balance_table_test(
-        <<"ans104@1.0">>,
+    nested_structured_fields_test(
+        #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
         test_opts(normal)
     ).
 
@@ -24,7 +24,8 @@ test_codecs() ->
         <<"flat@1.0">>,
         <<"ans104@1.0">>,
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
-        <<"json@1.0">>
+        <<"json@1.0">>,
+        #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true }
     ].
 
 %% @doc Return a set of options for testing, taking the codec name as an
@@ -34,7 +35,7 @@ suite_test_opts() ->
     [
         #{
             name => normal,
-            desc => "Default opts",
+            desc => <<"Default opts">>,
             opts => test_opts(normal)
         }
     ].
@@ -43,17 +44,7 @@ suite_test_opts(OptsName) ->
 
 test_opts(normal) ->
     #{
-        store =>
-            [
-                #{
-                    <<"store-module">> => hb_store_lru,
-                    <<"name">> => <<"cache-TEST/lru">>,
-                    <<"persistent-store">> => #{
-                        <<"store-module">> => hb_store_fs,
-                        <<"name">> => <<"cache-TEST">>
-                    }
-                }
-            ],
+        store => hb_test_utils:test_store(),
         priv_wallet => hb:wallet()
     }.
  
@@ -177,12 +168,17 @@ test_suite() ->
 suite_test_() ->
     hb_test_utils:suite_with_opts(
         codec_test_suite(
-            test_codecs()
+            test_codecs(),
+            normal
         ),
         suite_test_opts(normal)
     ).
 
-codec_test_suite(Codecs) ->
+%% @doc Run the test suite for a set of codecs, using the given options type.
+%% Unlike normal `hb_test_utils:suite_with_opts/2' users, this suite generator
+%% creates a new options message for each individual test, such that stores 
+%% are completely isolated from each other.
+codec_test_suite(Codecs, OptsType) ->
     lists:flatmap(
         fun(CodecName) ->
             lists:map(fun({Desc, Test}) ->
@@ -190,10 +186,11 @@ codec_test_suite(Codecs) ->
                     binary_to_list(
                         << (suite_name(CodecName))/binary, ": ", Desc/binary >>
                     ),
+                TestSpecificOpts = test_opts(OptsType),
                 {
                     Desc,
                     TestName,
-                    fun(Opts) -> Test(CodecName, Opts) end
+                    fun(_SuiteOpts) -> Test(CodecName, TestSpecificOpts) end
                 }
             end, test_suite())
         end,
@@ -1289,11 +1286,11 @@ sign_node_message_test(Codec, Opts) ->
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-    ?event({decoded, Decoded}),
-    ?assert(hb_message:verify(Decoded, all, Opts)),
+    ?event({final, Decoded}),
     MatchRes = hb_message:match(Msg, Decoded, strict, Opts),
     ?event({match_result, MatchRes}),
-    ?assertEqual(true, MatchRes).
+    ?assert(MatchRes),
+    ?assert(hb_message:verify(Decoded, all, Opts)).
 
 nested_body_list_test(Codec, Opts) ->
     Msg = #{
@@ -1348,6 +1345,8 @@ recursive_nested_list_test(Codec, Opts) ->
 priv_survives_conversion_test(<<"ans104@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(<<"json@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
+    skip;
+priv_survives_conversion_test(#{ <<"device">> := <<"json@1.0">> }, _Opts) ->
     skip;
 priv_survives_conversion_test(Codec, Opts) ->
     Msg = #{

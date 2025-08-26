@@ -678,6 +678,13 @@ do_post_schedule(ProcID, PID, Msg2, Opts) ->
             ),
             {ok, dev_scheduler_server:schedule(PID, Msg2)};
         {true, _} ->
+            ?event(
+                {scheduling_message,
+                    {proc_id, ProcID},
+                    {pid, PID},
+                    {is_alive, is_process_alive(PID)}
+                }
+            ),
             % If Message2 is not a process, use the ID of Message1 as the PID
             {ok, dev_scheduler_server:schedule(PID, Msg2)}
     end.

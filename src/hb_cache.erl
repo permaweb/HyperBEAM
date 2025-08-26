@@ -245,8 +245,7 @@ write(Bin, Opts) when is_binary(Bin) ->
 do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its calculated content-hash.
     % Return the path.
-    Hashpath = hb_path:hashpath(Bin, Opts),
-    ok = hb_store:write(Store, Path = <<"data/", Hashpath/binary>>, Bin),
+    ok = hb_store:write(Store, Path = generate_binary_path(Bin, Opts), Bin),
     %lists:map(fun(ID) -> hb_store:make_link(Store, Path, ID) end, AllIDs),
     {ok, Path};
 do_write_message(List, Store, Opts) when is_list(List) ->

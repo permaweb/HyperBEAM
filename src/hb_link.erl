@@ -98,7 +98,7 @@ normalize(OtherVal, _Mode, _Opts) ->
     OtherVal.
 
 %% @doc Decode links embedded in the headers of a message.
-decode_all_links(Msg) ->
+decode_all_links(Msg) when is_map(Msg) ->
     maps:from_list(
         lists:map(
             fun({Key, MaybeID}) ->
@@ -120,7 +120,11 @@ decode_all_links(Msg) ->
             end,
             maps:to_list(Msg)
         )
-    ).
+    );
+decode_all_links(List) when is_list(List) ->
+    lists:map(fun(X) -> decode_all_links(X) end, List);
+decode_all_links(OtherVal) ->
+    OtherVal.
 
 %% @doc Determine if a key is an encoded link.
 is_link_key(Key) when byte_size(Key) >= 5 ->

@@ -699,12 +699,7 @@ push_as_identity_test_() ->
             identities => #{
                 SchedulingID => #{
                     priv_wallet => SchedulingWallet,
-                    store => [
-                        #{
-                            <<"store-module">> => hb_store_fs,
-                            <<"name">> => <<"cache-TEST/scheduler">>
-                        }
-                    ]
+                    store => [hb_test_utils:test_store()]
                 },
                 ComputeID => #{
                     priv_wallet => ComputeWallet

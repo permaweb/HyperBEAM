@@ -11,6 +11,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(DEFAULT_FILTER_KEYS, [<<"content-length">>]).
+
 start() ->
     httpc:set_options([{max_keep_alive_length, 0}]),
     ok.
@@ -533,7 +535,7 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
 
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, Message, Opts) ->
-    Codec = accept_to_codec(TABMReq, Opts),
+    Codec = accept_to_codec(TABMReq, Message, Opts),
     ?event(http, {encoding_reply, {codec, Codec}, {message, Message}}),
     BaseHdrs =
         hb_maps:merge(
@@ -550,6 +552,14 @@ encode_reply(Status, TABMReq, Message, Opts) ->
         hb_util:atom(
             hb_maps:get(<<"accept-bundle">>, TABMReq, false, Opts)
         ),
+    ?event(http,
+        {encoding_reply,
+            {status, Status},
+            {codec, Codec},
+            {should_bundle, AcceptBundle},
+            {response_message, Message}
+        }
+    ),
     % Codecs generally do not need to specify headers outside of the content-type,
     % aside the default `httpsig@1.0' codec, which expresses its form in HTTP
     % documents, and subsequently must set its own headers.
@@ -640,35 +650,59 @@ encode_reply(Status, TABMReq, Message, Opts) ->
         _ ->
             % Other codecs are already in binary format, so we can just convert
             % the message to the codec. We also include all of the top-level 
-            % fields in the message and return them as headers.
-            ExtraHdrs = hb_maps:filter(fun(_, V) -> not is_map(V) end, Message, Opts),
-            ?event({extra_headers, {headers, {explicit, ExtraHdrs}}, {message, Message}}),
+            % fields, except for maps and lists, in the message and return them 
+            % as headers.
+            ExtraHdrs =
+                hb_maps:filter(
+                    fun(_, V) -> not is_map(V) andalso not is_list(V) end,
+                    Message,
+                    Opts
+                ),
+            % Encode all header values as strings.
+            EncodedExtraHdrs =
+                maps:map(
+                    fun(_K, V) -> hb_util:bin(V) end,
+                    ExtraHdrs
+                ),
             {ok,
-                hb_maps:merge(BaseHdrs, ExtraHdrs, Opts),
+                hb_maps:merge(EncodedExtraHdrs, BaseHdrs, Opts),
                 hb_message:convert(
                     Message,
-                    Codec,
+                    #{ <<"device">> => Codec, <<"bundle">> => AcceptBundle },
                     <<"structured@1.0">>,
                     Opts#{ topic => ao_internal }
                 )
             }
     end.
 
-%% @doc Calculate the codec name to use for a reply given its initiating Cowboy
-%% request, the parsed TABM request, and the response message. The precidence
+%% @doc Calculate the codec name to use for a reply given the original parsed 
+%% singleton TABM request and the response message. The precidence
 %% order for finding the codec is:
-%% 1. The `accept-codec' field in the message
-%% 2. The `accept' field in the request headers
-%% 3. The default codec
+%% 1. If the `content-type' field is present in the response message, we always
+%%    use `httpsig@1.0', as the device is expected to have already encoded the
+%%    message and the `body' field.
+%% 2. The `accept-codec' field in the original request.
+%% 3. The `accept' field in the original request.
+%% 4. The default codec
 %% Options can be specified in mime-type format (`application/*') or in
 %% AO device format (`device@1.0').
-accept_to_codec(TABMReq, Opts) ->
-    ?event(only, {accept_to_codec, {tabm_req, TABMReq}}),
+accept_to_codec(OriginalReq, Opts) ->
+    accept_to_codec(OriginalReq, undefined, Opts).
+accept_to_codec(_OriginalReq, #{ <<"content-type">> := _ }, _Opts) ->
+    <<"httpsig@1.0">>;
+accept_to_codec(OriginalReq, _, Opts) ->
+    Accept = hb_ao:get(<<"accept">>, OriginalReq, <<"*/*">>, Opts),
+    ?event(debug_accept,
+        {accept_to_codec,
+            {original_req, OriginalReq},
+            {accept, Accept}
+        }
+    ),
     AcceptCodec =
-        hb_maps:get(
+        hb_ao:get(
             <<"accept-codec">>,
-            TABMReq,
-            mime_to_codec(hb_maps:get(<<"accept">>, TABMReq, <<"*/*">>), Opts),
+            OriginalReq,
+            mime_to_codec(Accept, Opts),
 			Opts
         ),
     case AcceptCodec of
@@ -687,13 +721,20 @@ mime_to_codec(<<"application/", Mime/binary>>, Opts) ->
             nomatch -> << Mime/binary, "@1.0" >>;
             _ -> Mime
         end,
-    try hb_ao:message_to_device(#{ <<"device">> => Name }, Opts)
-    catch _:Error ->
-        ?event(http, {accept_to_codec_error, {name, Name}, {error, Error}}),
-        default_codec(Opts)
+    case hb_ao:load_device(Name, Opts) of
+        {ok, _} -> Name;
+        {error, _} ->
+            Default = default_codec(Opts),
+            ?event(http,
+                {codec_parsing_error,
+                    {given, Name},
+                    {defaulting_to, Default}
+                }
+            ),
+            Default
     end;
 mime_to_codec(<<"device/", Name/binary>>, _Opts) -> Name;
-mime_to_codec(_, _Opts) -> not_specified.
+mime_to_codec(_, Opts) -> default_codec(Opts).
 
 %% @doc Return the default codec for the given options.
 default_codec(Opts) ->
@@ -715,12 +756,48 @@ codec_to_content_type(Codec, Opts) ->
         CT -> CT
     end.
 
-%% @doc Convert a cowboy request to a normalized message.
+%% @doc Convert a cowboy request to a normalized message. We first parse the
+%% `primitive' message from the request: A message (represented as an Erlang
+%% map) of binary keys and values for the request headers and query parameters.
+%% We then determine the codec to use for the request, decode it, and merge it
+%% overriding the keys of the `primitive' message.
 req_to_tabm_singleton(Req, Body, Opts) ->
-    case cowboy_req:header(<<"codec-device">>, Req, <<"httpsig@1.0">>) of
+    FullPath =
+        <<
+            (cowboy_req:path(Req))/binary,
+            "?",
+            (cowboy_req:qs(Req))/binary
+        >>,
+    Headers = cowboy_req:headers(Req),
+    {ok, _Path, QueryKeys} = hb_singleton:from_path(FullPath),
+    PrimitiveMsg = maps:merge(Headers, QueryKeys),
+    Codec =
+        case hb_maps:find(<<"codec-device">>, PrimitiveMsg, Opts) of
+            {ok, ExplicitCodec} -> ExplicitCodec;
+            error ->
+                case hb_maps:find(<<"content-type">>, PrimitiveMsg, Opts) of
+                    {ok, ContentType} -> mime_to_codec(ContentType, Opts);
+                    error -> default_codec(Opts)
+                end
+        end,
+    ?event(http,
+        {parsing_req,
+            {path, FullPath},
+            {query, QueryKeys},
+            {headers, Headers},
+            {primitive_message, PrimitiveMsg}
+        }
+    ),
+    ?event({req_to_tabm_singleton, {codec, Codec}}),
+    case Codec of
         <<"httpsig@1.0">> ->
-			?event({req_to_tabm_singleton, {request, {explicit, Req}, {body, {string, Body}}}}),
-            httpsig_to_tabm_singleton(Req, Body, Opts);
+			?event(
+                {req_to_tabm_singleton,
+                    {request, {explicit, Req},
+                    {body, {string, Body}}
+                }}
+            ),
+            httpsig_to_tabm_singleton(PrimitiveMsg, Req, Body, Opts);
         <<"ans104@1.0">> ->
             Item = ar_bundles:deserialize(Body),
             ?event(debug_accept,
@@ -739,12 +816,13 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                             <<"ans104@1.0">>,
                             Opts
                         ),
-                    normalize_unsigned(Req, ANS104, Opts);
+                    normalize_unsigned(PrimitiveMsg, Req, ANS104, Opts);
                 false ->
                     throw({invalid_ans104_signature, Item})
             end;
         Codec ->
             % Assume that the codec stores the encoded message in the `body' field.
+            ?event(http, {decoding_body, {codec, Codec}, {body, {string, Body}}}),
             Decoded =
                 hb_message:convert(
                     Body,
@@ -752,17 +830,19 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                     Codec,
                     Opts
                 ),
+            ReqMessage = hb_maps:merge(PrimitiveMsg, Decoded, Opts),
             ?event(
                 {verifying_encoded_message,
+                    {codec, Codec},
                     {body, {string, Body}},
-                    {decoded, Decoded}
+                    {decoded, ReqMessage}
                 }
             ),
-            case hb_message:verify(Decoded, all) of
+            case hb_message:verify(ReqMessage, all) of
                 true ->
-                    normalize_unsigned(Req, Decoded, Opts);
+                    normalize_unsigned(PrimitiveMsg, Req, ReqMessage, Opts);
                 false ->
-                    throw({invalid_signature, Decoded})
+                    throw({invalid_commitment, ReqMessage})
             end
     end.
 
@@ -771,27 +851,28 @@ req_to_tabm_singleton(Req, Body, Opts) ->
 %% In particular, the signatures are verified if present and required by the 
 %% node configuration. Additionally, non-committed fields are removed from the
 %% message if it is signed, with the exception of the `path' and `method' fields.
-httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
-    {ok, SignedMsg} =
+httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
+    {ok, Decoded} =
         hb_message:with_only_committed(
             hb_message:convert(
-                RawHeaders#{ <<"body">> => Body },
+                PrimMsg#{ <<"body">> => Body },
                 <<"structured@1.0">>,
                 <<"httpsig@1.0">>,
                 Opts
             ),
             Opts
         ),
+    ?event(http, {decoded, Decoded}, Opts),
     ForceSignedRequests = hb_opts:get(force_signed_requests, false, Opts),
-    case (not ForceSignedRequests) orelse hb_message:verify(SignedMsg, all, Opts) of
+    case (not ForceSignedRequests) orelse hb_message:verify(Decoded, all, Opts) of
         true ->
-            ?event(http_verify, {verified_signature, SignedMsg}),
-            Signers = hb_message:signers(SignedMsg, Opts),
+            ?event(http_verify, {verified_signature, Decoded}),
+            Signers = hb_message:signers(Decoded, Opts),
             case Signers =/= [] andalso hb_opts:get(store_all_signed, false, Opts) of
                 true ->
-                    ?event(http_verify, {storing_signed_from_wire, SignedMsg}),
+                    ?event(http_verify, {storing_signed_from_wire, Decoded}),
                     {ok, _} =
-                        hb_cache:write(SignedMsg,
+                        hb_cache:write(Decoded,
                             Opts#{
                                 store =>
                                     #{
@@ -803,16 +884,15 @@ httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
                 false ->
                     do_nothing
             end,
-            normalize_unsigned(Req, SignedMsg, Opts);
+            normalize_unsigned(PrimMsg, Req, Decoded, Opts);
         false ->
             ?event(http_verify,
                 {invalid_signature,
-                    {raw, RawHeaders},
-                    {signed, SignedMsg},
+                    {signed, Decoded},
                     {force, ForceSignedRequests}
                 }
             ),
-            throw({invalid_signature, SignedMsg})
+            throw({invalid_commitments, Decoded})
     end.
 
 %% @doc Add the method and path to a message, if they are not already present.
@@ -821,7 +901,7 @@ httpsig_to_tabm_singleton(Req = #{ headers := RawHeaders }, Body, Opts) ->
 %% The precidence order for finding the path is:
 %% 1. The path in the message
 %% 2. The path in the request URI
-normalize_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
+normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
     ?event({adding_method_and_path_from_request, {explicit, Req}}),
     Method = cowboy_req:method(Req),
     MsgPath =
@@ -844,26 +924,43 @@ normalize_unsigned(Req = #{ headers := RawHeaders }, Msg, Opts) ->
             ),
             Opts
         ),
-    WithoutPeer =
-        (hb_message:without_unless_signed([<<"content-length">>], Msg, Opts))#{
+    FilterKeys = hb_opts:get(http_inbound_filter_keys, ?DEFAULT_FILTER_KEYS, Opts),
+    FilteredMsg = hb_message:without_unless_signed(FilterKeys, Msg, Opts),
+    BaseMsg =
+        FilteredMsg#{
             <<"method">> => Method,
             <<"path">> => MsgPath,
             <<"accept-bundle">> =>
                 maps:get(
                     <<"accept-bundle">>,
                     Msg,
-                    maps:get(<<"accept-bundle">>, RawHeaders, false)
+                    maps:get(
+                        <<"accept-bundle">>,
+                        PrimMsg,
+                        maps:get(<<"accept-bundle">>, RawHeaders, false)
+                    )
+                ),
+            <<"accept">> =>
+                Accept = maps:get(
+                    <<"accept">>,
+                    Msg,
+                    maps:get(
+                        <<"accept">>,
+                        PrimMsg,
+                        maps:get(<<"accept">>, RawHeaders, <<"*/*">>)
+                    )
                 )
         },
+    ?event(debug_accept, {normalize_unsigned, {accept, Accept}}),
     % Parse and add the cookie from the request, if present. We reinstate the
     % `cookie' field in the message, as it is not typically signed, yet should
     % be honored by the node anyway.
     {ok, WithCookie} =
         case maps:get(<<"cookie">>, RawHeaders, undefined) of
-            undefined -> {ok, WithoutPeer};
+            undefined -> {ok, BaseMsg};
             Cookie ->
                 dev_codec_cookie:from(
-                    WithoutPeer#{ <<"cookie">> => Cookie },
+                    BaseMsg#{ <<"cookie">> => Cookie },
                     Req,
                     Opts
                 )
