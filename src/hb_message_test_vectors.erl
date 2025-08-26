@@ -26,6 +26,7 @@ test_codecs() ->
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         <<"json@1.0">>,
         #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true }
+        <<"tx@1.0">>
     ].
 
 %% @doc Return a set of options for testing, taking the codec name as an

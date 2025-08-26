@@ -1,13 +1,65 @@
 %%% @doc Codec for managing transformations from `ar_tx'-style Arweave TX
 %%% records to and from TABMs.
 -module(dev_codec_tx).
--export([from/3]).
+-export([from/3, to/3, commit/3, verify/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(BASE_FIELDS, [
     <<"anchor">>, <<"data_root">>, <<"format">>,
     <<"quantity">>, <<"reward">>, <<"target">> ]).
+
+%% @doc Sign a message using the `priv_wallet' key in the options. Supports both
+%% the `hmac-sha256' and `rsa-pss-sha256' algorithms, offering unsigned and
+%% signed commitments.
+commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
+    commit(Msg, Req#{ <<"type">> => <<"unsigned-sha256">> }, Opts);
+commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
+    commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha256">> }, Opts);
+commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
+    % Convert the given message to an L1 TX record, sign it, and convert
+    % it back to a structured message.
+    {ok, TX} = to(hb_private:reset(Msg), Req, Opts),
+    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
+    Signed = ar_tx:sign(TX, Wallet),
+    SignedStructured =
+        hb_message:convert(
+            Signed,
+            <<"structured@1.0">>,
+            <<"tx@1.0">>,
+            Opts
+        ),
+    {ok, SignedStructured};
+commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
+    % Remove the commitments from the message, convert it to an L1 TX, 
+    % then back. This forces the message to be normalized and the unsigned ID
+    % to be recalculated.
+    {
+        ok,
+        hb_message:convert(
+            hb_maps:without([<<"commitments">>], Msg, Opts),
+            <<"tx@1.0">>,
+            <<"structured@1.0">>,
+            Opts
+        )
+    }.
+
+%% @doc Verify an L1 TX commitment.
+verify(Msg, Req, Opts) ->
+    ?event({verify, {base, Msg}, {req, Req}}),
+    OnlyWithCommitment =
+        hb_private:reset(
+            hb_message:with_commitments(
+                Req,
+                Msg,
+                Opts
+            )
+        ),
+    ?event(debug_test, {verify, {only_with_commitment, {explicit, OnlyWithCommitment}}}),
+    {ok, TX} = to(OnlyWithCommitment, Req, Opts),
+    ?event(debug_test, {verify, {encoded, {explicit, TX}}}),
+    Res = ar_tx:verify(TX),
+    {ok, Res}.
 
 %% @doc Convert a #tx record into a message map recursively.
 from(Binary, _Req, _Opts) when is_binary(Binary) -> {ok, Binary};
@@ -36,7 +88,7 @@ do_from(RawTX, Req, Opts) ->
     % Add the commitments to the message if the TX has a signature.
     CommittedFields = dev_codec_tx_from:fields(TX, ?FIELD_PREFIX, Opts),
     WithCommitments = dev_codec_ans104_from:with_commitments(
-        TX, CommittedFields, Tags, Base, Keys, Opts),
+        TX, <<"tx@1.0">>, CommittedFields, Tags, Base, Keys, Opts),
     ?event({parsed_message, WithCommitments}),
     {ok, WithCommitments}.
 
@@ -61,7 +113,7 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     ?event({to, {inbound, RawTABM}, {req, Req}}),
     MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, Req, Opts),
     TX0 = dev_codec_ans104_to:siginfo(
-        MaybeBundle, fun dev_codec_tx_to:fields_to_tx/4, Opts),
+        MaybeBundle, <<"tx@1.0">>, fun dev_codec_tx_to:fields_to_tx/4, Opts),
     ?event({found_siginfo, TX0}),
     % Calculate and normalize the `data', if applicable.
     Data = dev_codec_ans104_to:data(MaybeBundle, Req, Opts),
@@ -69,7 +121,8 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     TX1 = TX0#tx { data = Data },
     % Calculate the tags for the TX.
     Tags = dev_codec_ans104_to:tags(
-        TX1, MaybeBundle, Data, fun dev_codec_tx_to:excluded_tags/3, Opts),
+        TX1, <<"tx@1.0">>, MaybeBundle, Data,
+        fun dev_codec_tx_to:excluded_tags/3, Opts),
     ?event({calculated_tags, Tags}),
     TX2 = TX1#tx { tags = Tags },
     ?event({tx_before_id_gen, TX2}),
@@ -137,8 +190,8 @@ happy_tx_test() ->
         <<"tag1">> => <<"value1">>,
         <<"tag2">> => <<"value2">>
     },
-    Commitment = #{
-        <<"commitment-device">> => <<"ans104@1.0">>,
+    SignedCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [
             <<"anchor">>, <<"data_root">>,
             <<"quantity">>, <<"reward">>, <<"target">>,
@@ -151,10 +204,130 @@ happy_tx_test() ->
         <<"field-quantity">> => <<"1000">>,
         <<"field-reward">> => <<"2000">>
     },
-    do_roundtrips(TX, UnsignedTABM, Commitment).
+    do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
 
+tag_name_case_test() ->
+    TX = #tx{
+        format = 2,
+        tags = [
+            {<<"Test-Tag">>, <<"test-value">>}
+        ]
+    },
+    UnsignedID = ar_tx:generate_id(TX, unsigned),
+    UnsignedTABM = #{
+        <<"test-tag">> => <<"test-value">>,
+        <<"commitments">> => #{
+            hb_util:encode(UnsignedID) => #{
+                <<"commitment-device">> => <<"tx@1.0">>,
+                <<"committed">> => [<<"test-tag">>],
+                <<"original-tags">> =>#{
+                    <<"1">> => #{
+                        <<"name">> => <<"Test-Tag">>,
+                        <<"value">> => <<"test-value">>
+                    }
+                },
+                <<"type">> => <<"unsigned-sha256">>,
+                <<"bundle">> => <<"false">>
+            }
+        }
+    },
+    SignedCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [<<"test-tag">>],
+        <<"original-tags">> =>#{
+            <<"1">> => #{
+                <<"name">> => <<"Test-Tag">>,
+                <<"value">> => <<"test-value">>
+            }
+        },
+        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"bundle">> => <<"false">>
+    },
+    do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
 
-do_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
+duplicated_tag_name_test() ->
+    TX = #tx{
+        format = 2,
+        tags = [
+            {<<"Test-Tag">>, <<"test-value">>},
+            {<<"test-tag">>, <<"test-value-2">>}
+        ]
+    },
+    UnsignedID = ar_tx:generate_id(TX, unsigned),
+    UnsignedTABM = #{
+        <<"test-tag">> => <<"\"test-value\", \"test-value-2\"">>,
+        <<"commitments">> => #{
+            hb_util:encode(UnsignedID) => #{
+                <<"commitment-device">> => <<"tx@1.0">>,
+                <<"committed">> => [<<"test-tag">>],
+                <<"original-tags">> =>#{
+                    <<"1">> => #{
+                        <<"name">> => <<"Test-Tag">>,
+                        <<"value">> => <<"test-value">>
+                    },
+                    <<"2">> => #{
+                        <<"name">> => <<"test-tag">>,
+                        <<"value">> => <<"test-value-2">>
+                    }
+                },
+                <<"type">> => <<"unsigned-sha256">>,
+                <<"bundle">> => <<"false">>
+            }
+        }
+    },
+    SignedCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [<<"test-tag">>],
+        <<"original-tags">> =>#{
+            <<"1">> => #{
+                <<"name">> => <<"Test-Tag">>,
+                <<"value">> => <<"test-value">>
+            },
+            <<"2">> => #{
+                <<"name">> => <<"test-tag">>,
+                <<"value">> => <<"test-value-2">>
+            }
+        },
+        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"bundle">> => <<"false">>
+    },
+    do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
+
+%% @doc Test that when a TABM has base field keys set to values that are not
+%% valid on a #tx record, they are preserved as tags instead.
+non_conforming_fields_test() ->
+    UnsignedTABM = #{
+        <<"anchor">> => Anchor = <<"NON-ID-ANCHOR">>,
+        <<"target">> => Target = <<"NON-ID-TARGET">>,
+        <<"quantity">> => Quantity = <<"NON-INT-QUANTITY">>,
+        <<"reward">> => Reward = <<"NON-INT-REWARD">>,
+        <<"data_root">> => DataRoot = <<"NON-ID-DATA-ROOT">>,
+        <<"tag1">> => <<"value1">>,
+        <<"tag2">> => <<"value2">>
+    },
+    UnsignedTX = #tx{
+        format = 2,
+        tags = [
+            {<<"anchor">>, Anchor},
+            {<<"data_root">>, DataRoot},
+            {<<"quantity">>, Quantity},
+            {<<"reward">>, Reward},
+            {<<"tag1">>, <<"value1">>},
+            {<<"tag2">>, <<"value2">>},
+            {<<"target">>, Target}
+        ]
+    },
+    SignedCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [<<"anchor">>, <<"data_root">>, <<"quantity">>,
+            <<"reward">>, <<"target">>, <<"tag1">>, <<"tag2">>],
+        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"bundle">> => <<"false">>
+    },
+    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, SignedCommitment).
+
+%% @doc Run a series of roundtrip tests that start and end with a #tx record
+do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
    do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM),
    do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment).
 
@@ -191,8 +364,83 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
     ?event(debug_test, {signed_tx_roundtrip, {expected_tabm, SignedTABM}, {actual_tabm, TABM}}),
     ?assertEqual(SignedTABM, TABM, signed_tx_roundtrip),
 
-
     TX = hb_util:ok(to(TABM, #{}, #{})),
-    ExpectedTX = SignedTX#tx{ unsigned_id = ar_tx:id(SignedTX, unsigned) },
+    ExpectedTX = SignedTX,
     ?event(debug_test, {signed_tx_roundtrip, {expected_tx, ExpectedTX}, {actual_tx, TX}}),
     ?assertEqual(ExpectedTX, TX, signed_tx_roundtrip).
+
+%% @doc Run a series of roundtrip tests that start and end with a TABM.
+do_tabm_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
+    % do_unsigned_tabm_roundtrip(UnsignedTX, UnsignedTABM),
+    do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment).
+    
+do_unsigned_tabm_roundtrip(UnsignedTX, UnsignedTABM) ->
+    TX = hb_util:ok(to(UnsignedTABM, #{}, #{})),
+    JSON = ar_tx:tx_to_json_struct(TX),
+    DeserializedTX = ar_tx:json_struct_to_tx(JSON),
+    ExpectedTX = UnsignedTX#tx{ unsigned_id = ar_tx:id(UnsignedTX, unsigned) },
+    ?event(debug_test, {unsigned_tabm_roundtrip, 
+        {expected_tx, {explicit, UnsignedTX}}, {actual_tx, {explicit, DeserializedTX}}}),
+    ?assertEqual(UnsignedTX, DeserializedTX, unsigned_tabm_roundtrip),
+
+    TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
+    ?event(debug_test, {unsigned_tabm_roundtrip,
+        {expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
+    ?assertEqual(UnsignedTABM, TABM, unsigned_tabm_roundtrip).
+
+do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
+    Wallet = hb:wallet(),
+    TX = hb_util:ok(to(UnsignedTABM, #{}, #{})),
+    ?event(debug_test, {unsigned_tabm_roundtrip, {unsigned_tx, {explicit, UnsignedTX}}, {tx, {explicit, TX}}}),
+    ?assertEqual(UnsignedTX#tx{ unsigned_id = ar_tx:id(UnsignedTX, unsigned) }, TX, unsigned_tabm_roundtrip),
+    SignedTX = ar_tx:sign(UnsignedTX, Wallet),
+    ?event(debug_test, {signed_tabm_roundtrip, {signed_tx, {explicit, SignedTX}}}),
+    ?assert(ar_tx:verify(SignedTX), signed_tabm_roundtrip),
+    
+    SignedTABM = hb_message:commit(
+        UnsignedTABM, #{priv_wallet => Wallet}, <<"tx@1.0">>),
+    ?event(debug_test, {signed_tabm_roundtrip, {signed_tabm, SignedTABM}}),
+    ?assert(hb_message:verify(SignedTABM), signed_tabm_roundtrip),
+
+    {ok, _, SignedCommitment} = hb_message:commitment(
+        #{ <<"commitment-device">> => <<"tx@1.0">> },
+        SignedTABM,
+        #{}
+    ),
+    ExpectedCommitment = Commitment#{
+        <<"committer">> => hb_util:human_id(ar_wallet:to_address(Wallet)),
+        <<"signature">> => maps:get(<<"signature">>, SignedCommitment),
+        <<"keyid">> =>
+            <<"publickey:", (hb_util:encode(ar_wallet:to_pubkey(Wallet)))/binary>>
+    },
+    ?assertEqual(ExpectedCommitment, SignedCommitment, signed_tabm_roundtrip),
+    
+    TX = hb_util:ok(to(SignedTABM, #{}, #{})),
+    ExpectedTX = ar_tx:sign(UnsignedTX, Wallet),
+    ?event(debug_test, {signed_tabm_roundtrip, 
+        {expected_tx, {explicit, ExpectedTX}}, {actual_tx, {explicit, TX}}}),
+    ?assertEqual(ExpectedTX, TX, signed_tabm_roundtrip).
+
+    % SignedTX = ar_tx:sign(UnsignedTX, hb:wallet()),
+    % ?assert(ar_tx:verify(SignedTX), signed_tx_roundtrip),
+
+    % JSON = ar_tx:tx_to_json_struct(SignedTX),
+    % DeserializedTX = ar_tx:json_struct_to_tx(JSON),
+
+    % TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
+
+    % SignedCommitment = Commitment#{
+    %     <<"committer">> => hb_util:human_id(SignedTX#tx.owner_address),
+    %     <<"signature">> => hb_util:encode(SignedTX#tx.signature),
+    %     <<"keyid">> =>
+    %         <<"publickey:", (hb_util:encode(SignedTX#tx.owner))/binary>>
+    % },
+    % SignedTABM = UnsignedTABM#{
+    %     <<"commitments">> => #{ hb_util:human_id(SignedTX#tx.id) => SignedCommitment }},
+    % ?event(debug_test, {signed_tx_roundtrip, {expected_tabm, SignedTABM}, {actual_tabm, TABM}}),
+    % ?assertEqual(SignedTABM, TABM, signed_tx_roundtrip),
+
+    % TX = hb_util:ok(to(TABM, #{}, #{})),
+    % ExpectedTX = SignedTX#tx{ unsigned_id = ar_tx:id(SignedTX, unsigned) },
+    % ?event(debug_test, {signed_tx_roundtrip, {expected_tx, ExpectedTX}, {actual_tx, TX}}),
+    % ?assertEqual(ExpectedTX, TX, signed_tx_roundtrip).
