@@ -3,6 +3,26 @@
 compile:
 	rebar3 compile
 
+# llama.cpp (OpenAI-compatible server lives in this repo)
+LLAMACPP_REPO = https://github.com/ggml-org/llama.cpp
+LLAMACPP_DIR = _build/llama.cpp
+LLAMACPP_BUILD_DIR = $(LLAMACPP_DIR)/build
+
+.PHONY: llama-server
+llama-server: $(LLAMACPP_BUILD_DIR)/bin/llama-server
+	@echo "llama-server built at: $(LLAMACPP_BUILD_DIR)/bin/llama-server"
+
+.PHONY: llama-cpp
+llama-cpp: $(LLAMACPP_DIR)
+
+# Clone llama.cpp into the build directory (shallow clone)
+$(LLAMACPP_DIR):
+	git clone --depth 1 $(LLAMACPP_REPO) $(LLAMACPP_DIR)
+
+$(LLAMACPP_BUILD_DIR)/bin/llama-server: $(LLAMACPP_DIR)
+	cmake -S $(LLAMACPP_DIR) -B $(LLAMACPP_BUILD_DIR) -DLLAMA_BUILD_SERVER=ON
+	cmake --build $(LLAMACPP_BUILD_DIR) --target llama-server -j$$(nproc)
+
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
 
