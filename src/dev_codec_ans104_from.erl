@@ -88,7 +88,7 @@ committed(FieldKeys, Item, Fields, Tags, Data, Opts) ->
     hb_util:unique(
         data_keys(Data, Opts) ++
         tag_keys(Item, Opts) ++
-        field_keys(Fields, Tags, Data, Opts)
+        field_keys(FieldKeys, Fields, Tags, Data, Opts)
     ).
 
 %% @doc Return the list of the keys from the fields TABM.
