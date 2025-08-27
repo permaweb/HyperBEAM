@@ -14,8 +14,7 @@ fields(TX, Prefix, Opts) ->
             target_field(TX, Prefix, Opts),
             anchor_field(TX, Prefix, Opts),
             quantity_field(TX, Prefix, Opts),
-            reward_field(TX, Prefix, Opts),
-            data_root_field(TX, Prefix, Opts)
+            reward_field(TX, Prefix, Opts)
         ]
     ).
 
@@ -59,10 +58,3 @@ reward_field(TX, Prefix, _Opts) ->
         }
     end.
 
-data_root_field(TX, Prefix, _Opts) ->
-    case TX#tx.data_root of
-        ?DEFAULT_DATA_ROOT -> #{};
-        DataRoot -> #{
-            <<Prefix/binary, "data_root">> => hb_util:encode(DataRoot)
-        }
-    end.

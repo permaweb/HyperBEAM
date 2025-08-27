@@ -9,8 +9,7 @@ fields_to_tx(TX, Prefix, Map, Opts) ->
         target = target_field(Prefix, Map, Opts),
         anchor = anchor_field(Prefix, Map, Opts),
         quantity = quantity_field(Prefix, Map, Opts),
-        reward = reward_field(Prefix, Map, Opts),
-        data_root = data_root_field(Prefix, Map, Opts)
+        reward = reward_field(Prefix, Map, Opts)
     }.
 
 format_field(Prefix, Map, Opts) ->
@@ -63,22 +62,11 @@ reward_field(Prefix, Map, Opts) ->
         error -> ?DEFAULT_REWARD
     end.
 
-data_root_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "data_root">>, Map, Opts) of
-        {ok, EncodedDataRoot} ->
-            case hb_util:safe_decode(EncodedDataRoot) of
-                {ok, DataRoot} when ?IS_ID(DataRoot) -> DataRoot;
-                _ -> ?DEFAULT_DATA_ROOT
-            end;
-        error -> ?DEFAULT_DATA_ROOT
-    end.
-
 excluded_tags(TX, TABM, Opts) ->
     exclude_target_tag(TX, TABM, Opts) ++
     exclude_anchor_tag(TX, TABM, Opts) ++
     exclude_quantity_tag(TX, TABM, Opts) ++
-    exclude_reward_tag(TX, TABM, Opts) ++
-    exclude_data_root_tag(TX, TABM, Opts).
+    exclude_reward_tag(TX, TABM, Opts).
 
 exclude_target_tag(TX, TABM, Opts) ->
     case {TX#tx.target, hb_maps:get(<<"target">>, TABM, undefined, Opts)} of
@@ -109,13 +97,5 @@ exclude_reward_tag(TX, TABM, Opts) ->
         {?DEFAULT_REWARD, _} -> [];
         {FieldReward, TagReward} when FieldReward =/= TagReward -> 
             [<<"reward">>];
-        _ -> []
-    end.
-
-exclude_data_root_tag(TX, TABM, Opts) ->
-    case {TX#tx.data_root, hb_maps:get(<<"data_root">>, TABM, undefined, Opts)} of
-        {?DEFAULT_DATA_ROOT, _} -> [];
-        {FieldDataRoot, TagDataRoot} when FieldDataRoot =/= TagDataRoot -> 
-            [<<"data_root">>];
         _ -> []
     end.
