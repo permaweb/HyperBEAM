@@ -40,7 +40,7 @@
 -module(hb_cache).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
--export([list/2, list_numbered/2]).
+-export([match/2, list/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -60,7 +60,8 @@ ensure_loaded(Ref,
         RawOpts) ->
     % The link is to a submessage; either in lazy (unresolved) form, or direct
     % form.
-    Opts = hb_store:scope(RawOpts, local),
+    UnscopedOpts = hb_util:deep_merge(RawOpts, LkOpts, RawOpts),
+    Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LkOpts)),
     Store = hb_opts:get(store, no_viable_store, Opts),
     ?event(debug_cache,
         {loading_multi_link,
@@ -101,9 +102,9 @@ ensure_loaded(Ref,
 ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
     % If the user provided their own options, we merge them and _overwrite_
     % the options that are already set in the link.
-    Opts = hb_store:scope(RawOpts, local),
-    MergedOpts = hb_util:deep_merge(Opts, LinkOpts, Opts),
-    case hb_cache:read(ID, MergedOpts) of
+    UnscopedOpts = hb_util:deep_merge(RawOpts, LinkOpts, RawOpts),
+    Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LinkOpts)),
+    case hb_cache:read(ID, Opts) of
         {ok, LoadedMsg} ->
             ?event(caching,
                 {lazy_loaded,
@@ -132,7 +133,7 @@ report_ensure_loaded_not_found(Ref, Lk, Opts) ->
     throw(
         {necessary_message_not_found,
             hb_path:to_binary(lists:reverse(Ref)),
-            hb_link:format_unresolved(Lk)
+            hb_link:format_unresolved(Lk, Opts, 0)
         }
     ).
 
@@ -177,6 +178,29 @@ list(Path, Store) ->
         not_found -> []
     end.
 
+%% @doc Match a template message against the cache, returning a list of IDs
+%% that match the template. We match on the binary representation of values,
+%% rather than their types explicitly, such that 'AO-Types' keys that are
+%% only partial matches do not cause the match to fail.
+match(MatchSpec, Opts) ->
+    Spec = hb_message:convert(MatchSpec, tabm, <<"structured@1.0">>, Opts),
+    ConvertedMatchSpec =
+        maps:map(
+            fun(_, Value) ->
+                generate_binary_path(Value, Opts)
+            end,
+            maps:without([<<"ao-types">>], hb_ao:normalize_keys(Spec, Opts))
+        ),
+    case hb_store:match(hb_opts:get(store, no_viable_store, Opts), ConvertedMatchSpec) of
+        {ok, Matches} -> {ok, Matches};
+        _ -> not_found
+    end.
+
+%% @doc Generate the path at which a binary value should be stored.
+generate_binary_path(Bin, Opts) ->
+    Hashpath = hb_path:hashpath(Bin, Opts),
+    <<"data/", Hashpath/binary>>.
+
 %% @doc Write a message to the cache. For raw binaries, we write the data at
 %% the hashpath of the data (by default the SHA2-256 hash of the data). We link
 %% the unattended ID's hashpath for the keys (including `/commitments') on the
@@ -188,30 +212,26 @@ list(Path, Store) ->
 %% the commitments of the inner messages. We do not, however, store the IDs from
 %% commitments on signed _inner_ messages. We may wish to revisit this.
 write(RawMsg, Opts) when is_map(RawMsg) ->
-    TABM = hb_message:convert(RawMsg, tabm, <<"structured@1.0">>, Opts),
-    case hb_message:with_only_committed(TABM, Opts) of
-        {ok, Msg} ->
-            ?event(debug_cache, {writing_full_message, {msg, Msg}}),
-            %try
-                do_write_message(
-                    TABM,
-                    hb_opts:get(store, no_viable_store, Opts),
-                    Opts
-                );
-            % catch
-            %     Type:Reason:Stacktrace ->
-            %         ?event(error,
-            %             {cache_write_error,
-            %                 {type, Type},
-            %                 {reason, Reason},
-            %                 {stacktrace, Stacktrace}
-            %             },
-            %             Opts
-            %         ),
-            %         {error, no_viable_store}
-            % end;
-        {error, Err} ->
-            {error, Err}
+    {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
+    TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
+    ?event(debug_cache, {writing_full_message, {msg, TABM}}),
+    try
+        do_write_message(
+            TABM,
+            hb_opts:get(store, no_viable_store, Opts),
+            Opts
+        )
+    catch
+        Type:Reason:Stacktrace ->
+            ?event(error,
+                {cache_write_error,
+                    {type, Type},
+                    {reason, Reason},
+                    {stacktrace, {trace, Stacktrace}}
+                },
+                Opts
+            ),
+            erlang:raise(Type, Reason, Stacktrace)
     end;
 write(List, Opts) when is_list(List) ->
     write(hb_message:convert(List, tabm, <<"structured@1.0">>, Opts), Opts);
@@ -221,8 +241,7 @@ write(Bin, Opts) when is_binary(Bin) ->
 do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its calculated content-hash.
     % Return the path.
-    Hashpath = hb_path:hashpath(Bin, Opts),
-    ok = hb_store:write(Store, Path = <<"data/", Hashpath/binary>>, Bin),
+    ok = hb_store:write(Store, Path = generate_binary_path(Bin, Opts), Bin),
     %lists:map(fun(ID) -> hb_store:make_link(Store, Path, ID) end, AllIDs),
     {ok, Path};
 do_write_message(List, Store, Opts) when is_list(List) ->
@@ -795,6 +814,73 @@ test_message_with_list(Store) ->
     {ok, RetrievedItem} = read(Path, Opts),
     ?assert(hb_message:match(Msg, RetrievedItem, strict, Opts)).
 
+test_match_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->
+    skip;
+test_match_message(Store) ->
+    hb_store:reset(Store),
+    Opts = #{ store => Store },
+    % Write two messages that match the template, and a third that does not.
+    {ok, ID1} = hb_cache:write(#{ <<"x">> => <<"1">> }, Opts),
+    {ok, ID2} = hb_cache:write(#{ <<"y">> => <<"2">>, <<"z">> => <<"3">> }, Opts),
+    {ok, ID2b} = hb_cache:write(#{ <<"x">> => <<"4">>, <<"z">> => <<"3">> }, Opts),
+    {ok, ID3} = hb_cache:write(#{ <<"z">> => <<"5">>, <<"c">> => <<"d">> }, Opts),
+    % Match the template, and ensure that we get two matches.
+    {ok, MatchedItems} = match(#{ <<"z">> => <<"3">> }, Opts),
+    ?assertEqual(2, length(MatchedItems)),
+    ?assert(
+        lists:all(
+            fun(ID) ->
+                {ok, Msg} = read(ID, Opts),
+                hb_maps:get(<<"z">>, Msg, Opts) =:= <<"3">> andalso
+                    lists:member(ID, [ID2, ID2b])
+            end,
+            MatchedItems
+        )
+    ),
+    {ok, MatchedItems2} = match(#{ <<"x">> => <<"4">> }, Opts),
+    ?assertEqual(1, length(MatchedItems2)),
+    ?assertEqual([ID2b], MatchedItems2).
+
+test_match_linked_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->
+    skip;
+test_match_linked_message(Store) ->
+    hb_store:reset(Store),
+    Opts = #{ store => Store },
+    Msg = #{ <<"a">> => Inner = #{ <<"b">> => <<"c">>, <<"d">> => <<"e">> } },
+    {ok, _ID} = write(Msg, Opts),
+    {ok, [MatchedID]} = match(#{ <<"b">> => <<"c">> }, Opts),
+    {ok, Read1} = read(MatchedID, Opts),
+    ?assertEqual(
+        #{ <<"b">> => <<"c">>, <<"d">> => <<"e">> },
+        hb_cache:ensure_all_loaded(Read1, Opts)
+    ),
+    {ok, [MatchedID2]} = match(#{ <<"a">> => Inner }, Opts),
+    {ok, Read2} = read(MatchedID2, Opts),
+    ?assertEqual(#{ <<"a">> => Inner }, ensure_all_loaded(Read2, Opts)).
+
+test_match_typed_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->
+    skip;
+test_match_typed_message(Store) ->
+    hb_store:reset(Store),
+    Opts = #{ store => Store },
+    % Add some messages that should not match the template, as well as the main
+    % message that should match the template.
+    write(#{ <<"atom-value">> => atom, <<"wrong">> => <<"wrong">> }, Opts),
+    write(#{ <<"integer-value">> => 1337, <<"wrong">> => <<"wrong-2">> }, Opts),
+    Msg =
+        #{
+            <<"int-key">> => 1337,
+            <<"other-key">> => <<"other-test-value">>,
+            <<"atom-key">> => atom
+        },
+    {ok, _ID} = write(Msg, Opts),
+    {ok, [MatchedID]} = match(#{ <<"int-key">> => 1337 }, Opts),
+    {ok, Read1} = read(MatchedID, Opts),
+    ?assertEqual(Msg, ensure_all_loaded(Read1, Opts)),
+    {ok, [MatchedID2]} = match(#{ <<"atom-key">> => atom }, Opts),
+    {ok, Read2} = read(MatchedID2, Opts),
+    ?assertEqual(Msg, ensure_all_loaded(Read2, Opts)).
+
 cache_suite_test_() ->
     hb_store:generate_test_suite([
         {"store unsigned empty message",
@@ -805,7 +891,10 @@ cache_suite_test_() ->
         {"store simple unsigned message", fun test_store_simple_unsigned_message/1},
         {"store simple signed message", fun test_store_simple_signed_message/1},
         {"deeply nested complex message", fun test_deeply_nested_complex_message/1},
-        {"message with list", fun test_message_with_list/1}
+        {"message with list", fun test_message_with_list/1},
+        {"match message", fun test_match_message/1},
+        {"match linked message", fun test_match_linked_message/1},
+        {"match typed message", fun test_match_typed_message/1}
     ]).
 
 %% @doc Test that message whose device is `#{}' cannot be written. If it were to
@@ -821,3 +910,8 @@ test_device_map_cannot_be_written_test() ->
     catch
         _:_:_ -> ?assert(true)
     end.
+
+%% @doc Run a specific test with a given store module.
+run_test() ->
+    Store = hb_test_utils:test_store(hb_store_lmdb),
+    test_match_message(Store).

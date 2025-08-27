@@ -47,7 +47,7 @@
 %%%                      assignments, in addition to `/Results'.
 -module(dev_process).
 %%% Public API
--export([info/1, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
+-export([info/1, as/3, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
 -export([ensure_process_key/2]).
 %%% Public utilities
 -export([as_process/2, process_id/3]).
@@ -84,6 +84,50 @@ info(_Msg1) ->
             <<"dev_test_process">>,
             <<"test_wasm_process">>
         ]
+    }.
+
+%% @doc Return the process state with the device swapped out for the device
+%% of the given key.
+as(RawMsg1, Msg2, Opts) ->
+    {ok, Msg1} = ensure_loaded(RawMsg1, Msg2, Opts),
+    Key = 
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, Msg2}, <<"as">>},
+                {{as, <<"message@1.0">>, Msg2}, <<"as-device">>}
+            ],
+            <<"execution">>,
+            Opts
+        ),
+    {ok,
+        hb_util:deep_merge(
+            ensure_process_key(Msg1, Opts),
+            #{
+                <<"device">> =>
+                    hb_maps:get(
+                        << Key/binary, "-device">>,
+                        Msg1,
+                        default_device(Msg1, Key, Opts),
+                        Opts
+                    ),
+                % Configure input prefix for proper message routing within the
+                % device
+                <<"input-prefix">> =>
+                    case hb_maps:get(<<"input-prefix">>, Msg1, not_found, Opts) of
+                        not_found -> <<"process">>;
+                        Prefix -> Prefix
+                    end,
+                % Configure output prefixes for result organization
+                <<"output-prefixes">> =>
+                    hb_maps:get(
+                        <<Key/binary, "-output-prefixes">>,
+                        Msg1,
+                        undefined, % Undefined in set will be ignored.
+                        Opts
+                    )
+            },
+            Opts
+        )
     }.
 
 %% @doc Returns the default device for a given piece of functionality. Expects
@@ -170,10 +214,19 @@ init(Msg1, Msg2, Opts) ->
         )
     }.
 
-%% @doc Compute the result of an assignment applied to the process state, if it 
-%% is the next message.
+%% @doc Compute the result of an assignment applied to the process state.
+%% This function serves as the main entry point for compute operations and routes
+%% between two distinct execution paths:
+%% 
+%% - GET method: Normal compute execution that applies messages to process state
+%%   and advances the state permanently. Used for regular process execution.
+%% 
+%% - POST method: Dryrun compute execution that simulates message processing
+%%   without permanently modifying process state. Used for testing message 
+%%   handlers and previewing results. The POST method is the key entry point
+%%   for the dryrun functionality that allows external clients to test
+%%   message processing without side effects.
 compute(Msg1, Msg2, Opts) ->
-    % If we do not have a live state, restore or initialize one.
     ProcBase = ensure_process_key(Msg1, Opts),
     ProcID = process_id(ProcBase, #{}, Opts),
     TargetSlot =
@@ -587,7 +640,11 @@ ensure_loaded(Msg1, Msg2, Opts) ->
                         Process,
                         Opts
                     ),
-                    LoadedSnapshotMsg2 = LoadedSnapshotMsg#{ <<"process">> => UpdateProcess },
+                    LoadedSnapshotMsg2 =
+                        LoadedSnapshotMsg#{
+                            <<"process">> => UpdateProcess,
+                            <<"initialized">> => <<"true">>
+                        },
                     LoadedSlot = hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
                     ?event(compute, {found_state_checkpoint, ProcID, LoadedSnapshotMsg2}),
                     {ok, Normalized} =
@@ -626,9 +683,14 @@ without_snapshot(Msg, Opts) ->
 %% @doc Run a message against Msg1, with the device being swapped out for
 %% the device found at `Key'. After execution, the device is swapped back
 %% to the original device if the device is the same as we left it.
+run_as(Key, Msg1, Path, Opts) when not is_map(Path) ->
+    run_as(Key, Msg1, #{ <<"path">> => Path }, Opts);
 run_as(Key, Msg1, Msg2, Opts) ->
+    % Store the original device so we can restore it after execution
     BaseDevice = hb_maps:get(<<"device">>, Msg1, not_found, Opts),
     ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
+    % Prepare the message with the specialized device configuration.
+    % This sets up the device context for the specific operation type.
     PreparedMsg =
         hb_util:deep_merge(
             ensure_process_key(Msg1, Opts),
@@ -641,11 +703,13 @@ run_as(Key, Msg1, Msg2, Opts) ->
                             default_device(Msg1, Key, Opts),
                             Opts
                         ),
+                % Configure input prefix for proper message routing within the device
                 <<"input-prefix">> =>
                     case hb_maps:get(<<"input-prefix">>, Msg1, not_found, Opts) of
                         not_found -> <<"process">>;
                         Prefix -> Prefix
                     end,
+                % Configure output prefixes for result organization
                 <<"output-prefixes">> =>
                     hb_maps:get(
                         <<Key/binary, "-output-prefixes">>,
@@ -659,12 +723,15 @@ run_as(Key, Msg1, Msg2, Opts) ->
     ?event(debug_prefix,
         {input_prefix, hb_maps:get(<<"output-prefixes">>, PreparedMsg, not_found, Opts)
     }),
+    % Execute the message through the specialized device.
     {Status, BaseResult} =
         hb_ao:resolve(
             PreparedMsg,
             Msg2,
             Opts
         ),
+    % Restore the original device context after execution.
+    % This ensures the process maintains its identity after device delegation.
     case {Status, BaseResult} of
         {ok, #{ <<"device">> := DeviceSet }} ->
             {ok, hb_ao:set(BaseResult, #{ <<"device">> => BaseDevice }, Opts)};

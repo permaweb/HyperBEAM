@@ -678,6 +678,13 @@ do_post_schedule(ProcID, PID, Msg2, Opts) ->
             ),
             {ok, dev_scheduler_server:schedule(PID, Msg2)};
         {true, _} ->
+            ?event(
+                {scheduling_message,
+                    {proc_id, ProcID},
+                    {pid, PID},
+                    {is_alive, is_process_alive(PID)}
+                }
+            ),
             % If Message2 is not a process, use the ID of Message1 as the PID
             {ok, dev_scheduler_server:schedule(PID, Msg2)}
     end.
@@ -1187,13 +1194,25 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                                 ),
 								Opts
                             )
-                        ),
+                        ),                    
+                    % Normalize the local assignments to get the slot.
+                    FromLocalCacheNormalized = lists:map(
+                        fun (Assignment) ->
+                            Norm = dev_scheduler_formats:aos2_normalize_types(Assignment),
+                            #{
+                                <<"body">> => Norm,
+                                <<"slot">> => 
+                                    hb_maps:get(<<"slot">>, Norm, undefined, Opts)
+                            }
+                        end, 
+                        LocalAssignments
+                    ),
                     % Merge the local assignments with the remote assignments,
                     % and normalize the keys.
                     Merged =
                         dev_scheduler_formats:assignments_to_bundle(
                             ProcID,
-                            MergedAssignments = LocalAssignments ++ RemoteAssignments,
+                            MergedAssignments = FromLocalCacheNormalized ++ RemoteAssignments,
                             hb_ao:get(<<"continues">>, NormSched, false, Opts),
                             Opts
                         ),

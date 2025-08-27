@@ -699,12 +699,7 @@ push_as_identity_test_() ->
             identities => #{
                 SchedulingID => #{
                     priv_wallet => SchedulingWallet,
-                    store => [
-                        #{
-                            <<"store-module">> => hb_store_fs,
-                            <<"name">> => <<"cache-TEST/scheduler">>
-                        }
-                    ]
+                    store => [hb_test_utils:test_store()]
                 },
                 ComputeID => #{
                     priv_wallet => ComputeWallet
@@ -720,7 +715,7 @@ push_as_identity_test_() ->
                     scheduler => [SchedulingID, ComputeID]
                 }
             ),
-        ?event(debug, {msg1, Msg1}),
+        ?event({msg1, Msg1}),
         % Perform the remainder of the test as with `full_push_test_/0'.
         hb_cache:write(Msg1, Opts),
         {ok, SchedInit} =

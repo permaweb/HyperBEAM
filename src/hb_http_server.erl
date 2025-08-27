@@ -426,12 +426,14 @@ handle_request(RawReq, Body, ServerID) ->
 
 %% @doc Return a 500 error response to the client.
 handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
+    DetailsStr = hb_util:bin(hb_format:message(Details, NodeMsg, 1)),
+    StacktraceStr = hb_util:bin(hb_format:trace(Stacktrace)),
     ErrorMsg =
         #{
             <<"status">> => 500,
-            <<"type">> => hb_format:message(Type),
-            <<"details">> => hb_format:message(Details, NodeMsg, 1),
-            <<"stacktrace">> => hb_util:bin(hb_format:trace(Stacktrace))
+            <<"type">> => hb_util:bin(hb_format:message(Type)),
+            <<"details">> => DetailsStr,
+            <<"stacktrace">> => StacktraceStr
         },
     ErrorBin = hb_format:error(ErrorMsg, NodeMsg),
     ?event(
@@ -445,7 +447,13 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
             }
         }
     ),
-    hb_http:reply(Req, Singleton, ErrorMsg, NodeMsg).
+    % Remove leading and trailing noise from the stacktrace and details.
+    FormattedErrorMsg =
+        ErrorMsg#{
+            <<"stacktrace">> => hb_util:bin(hb_format:remove_noise(StacktraceStr)),
+            <<"details">> => hb_util:bin(hb_format:remove_noise(DetailsStr))
+        },
+    hb_http:reply(Req, Singleton, FormattedErrorMsg, NodeMsg).
 
 %% @doc Return the list of allowed methods for the HTTP server.
 allowed_methods(Req, State) ->

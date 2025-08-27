@@ -27,6 +27,13 @@
     [error, http_error, http_short, compute_short, push_short]
 ).
 -endif.
+
+-ifdef(AO_PROFILING).
+-define(DEFAULT_TRACE_TYPE, ao).
+-else.
+-define(DEFAULT_TRACE_TYPE, erlang).
+-endif.
+
 -define(DEFAULT_PRIMARY_STORE, #{
     <<"name">> => <<"cache-mainnet/lmdb">>,
     <<"store-module">> => hb_store_lmdb
@@ -139,6 +146,7 @@ default_message() ->
             #{<<"name">> => <<"http-auth@1.0">>, <<"module">> => dev_codec_http_auth},
             #{<<"name">> => <<"hook@1.0">>, <<"module">> => dev_hook},
             #{<<"name">> => <<"hyperbuddy@1.0">>, <<"module">> => dev_hyperbuddy},
+            #{<<"name">> => <<"copycat@1.0">>, <<"module">> => dev_copycat},
             #{<<"name">> => <<"json@1.0">>, <<"module">> => dev_codec_json},
             #{<<"name">> => <<"json-iface@1.0">>, <<"module">> => dev_json_iface},
             #{<<"name">> => <<"local-name@1.0">>, <<"module">> => dev_local_name},
@@ -157,6 +165,7 @@ default_message() ->
             #{<<"name">> => <<"process@1.0">>, <<"module">> => dev_process},
             #{<<"name">> => <<"profile@1.0">>, <<"module">> => dev_profile},
             #{<<"name">> => <<"push@1.0">>, <<"module">> => dev_push},
+            #{<<"name">> => <<"query@1.0">>, <<"module">> => dev_query},
             #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
             #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
             #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
@@ -166,7 +175,6 @@ default_message() ->
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
-			#{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
             #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
@@ -210,12 +218,14 @@ default_message() ->
         debug_print_indent => 2,
         stack_print_prefixes => ["hb", "dev", "ar", "maps"],
         debug_print_trace => short, % `short` | `false`. Has performance impact.
+        debug_trace_type => ?DEFAULT_TRACE_TYPE,
         short_trace_len => 20,
         debug_metadata => true,
         debug_ids => true,
         debug_committers => true,
         debug_show_priv => if_present,
         debug_resolve_links => true,
+        debug_print_fail_mode => long,
 		trusted => #{},
         snp_enforced_keys => [
             firmware, kernel, 
@@ -234,10 +244,19 @@ default_message() ->
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
             #{
+                % Routes for the genesis-wasm device to use a local CU, if requested.
+                <<"template">> => <<"/dry-run.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
+            },
+            #{
                 % Routes for GraphQL requests to use a remote GraphQL API.
                 <<"template">> => <<"/graphql">>,
                 <<"nodes">> =>
                     [
+                        #{
+                            <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
+                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        },
                         #{
                             <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
                             <<"opts">> => #{ http_client => httpc, protocol => http2 }

@@ -13,11 +13,11 @@
 -export([print/1, print/3, print/4, print/5, eunit_print/2]).
 -export([message/1, message/2, message/3]).
 -export([binary/1, error/2, trace/1, trace_short/0, trace_short/1]).
--export([indent/2, indent/3, indent/4, indent_lines/2]).
--export([maybe_multiline/3, removing_trailing_noise/2]).
+-export([indent/2, indent/3, indent/4, indent_lines/2, maybe_multiline/3]).
+-export([remove_leading_noise/1, remove_trailing_noise/1, remove_noise/1]).
 %%% Public Utility Functions.
 -export([escape_format/1, short_id/1, trace_to_list/1]).
--export([get_trace/0, print_trace/4, trace_macro_helper/5, print_trace_short/4]).
+-export([get_trace/1, print_trace/4, trace_macro_helper/5, print_trace_short/4]).
 -include("include/hb.hrl").
 
 %%% Characters that are considered noise and should be removed from strings
@@ -36,7 +36,7 @@ print(X, Info, Opts) ->
     ),
     X.
 print(X, Mod, Func, LineNum) ->
-    print(X, format_debug_trace(Mod, Func, LineNum), #{}).
+    print(X, format_debug_trace(Mod, Func, LineNum, #{}), #{}).
 print(X, Mod, Func, LineNum, Opts) ->
     Now = erlang:system_time(millisecond),
     Last = erlang:put(last_debug_print, Now),
@@ -57,7 +57,7 @@ print(X, Mod, Func, LineNum, Opts) ->
                                 )
                             )
                     end,
-                    format_debug_trace(Mod, Func, LineNum)
+                    format_debug_trace(Mod, Func, LineNum, Opts)
                 ]
             )
         ),
@@ -73,10 +73,23 @@ server_id(Opts) ->
     end.
 
 %% @doc Generate the appropriate level of trace for a given call.
-format_debug_trace(Mod, Func, Line) ->
+format_debug_trace(Mod, Func, Line, Opts) ->
     case hb_opts:get(debug_print_trace, false, #{}) of
         short ->
-            trace_short(get_trace());
+            Trace =
+                case hb_opts:get(debug_trace_type, erlang, Opts) of
+                    erlang -> get_trace(erlang);
+                    ao ->
+                        % If we are printing AO-Core traces, we add the module
+                        % and line number to the end to show exactly where in
+                        % the handler-flow the event arose.
+                        [
+                            hb_util:bin(format_trace_element({Mod, Line}))
+                        |
+                            get_trace(ao)
+                        ]
+                end,
+            trace_short(Trace);
         false ->
             io_lib:format("~p:~w ~p", [Mod, Line, Func])
     end.
@@ -148,7 +161,7 @@ do_debug_fmt({X, Y}, Opts, Indent) when is_atom(X) and is_atom(Y) ->
     indent("~p: ~p", [X, Y], Opts, Indent);
 do_debug_fmt({X, Y}, Opts, Indent) when is_record(Y, tx) ->
     indent("~p: [TX item]~n~s",
-        [X, hb_tx:format(Y, Indent + 1)],
+        [X, ar_bundles:format(Y, Indent + 1, Opts)],
         Opts,
         Indent
     );
@@ -176,6 +189,12 @@ do_debug_fmt({X, Y}, Opts, Indent) ->
             remove_leading_noise(term(X, Opts, Indent)),
             remove_leading_noise(term(Y, Opts, Indent))
         ],
+        Opts,
+        Indent
+    );
+do_debug_fmt(TX, Opts, Indent) when is_record(TX, tx) ->
+    indent("[TX item]~n~s",
+        [ar_bundles:format(TX, Indent, Opts)],
         Opts,
         Indent
     );
@@ -305,9 +324,16 @@ do_to_lines(In =[RawElem | Rest]) ->
         false -> Elem ++ ", " ++ do_to_lines(Rest)
     end.
 
+%% @doc Remove any leading or trailing noise from a string.
+remove_noise(Str) ->
+    remove_leading_noise(remove_trailing_noise(Str)).
+
 %% @doc Remove any leading whitespace from a string.
 remove_leading_noise(Str) ->
     remove_leading_noise(Str, ?NOISE_CHARS).
+remove_leading_noise(Bin, Noise) when is_binary(Bin) ->
+    hb_util:bin(remove_leading_noise(hb_util:list(Bin), Noise));
+remove_leading_noise([], _) -> [];
 remove_leading_noise([Char|Str], Noise) ->
     case lists:member(Char, Noise) of
         true ->
@@ -319,11 +345,13 @@ remove_leading_noise([Char|Str], Noise) ->
 %% whitespace, newlines, and `,'.
 remove_trailing_noise(Str) ->
     removing_trailing_noise(Str, ?NOISE_CHARS).
-removing_trailing_noise(Str, Noise) ->
-    case lists:member(lists:last(Str), Noise) of
+removing_trailing_noise(Bin, Noise) when is_binary(Bin) ->
+    removing_trailing_noise(binary:bin_to_list(Bin), Noise);
+removing_trailing_noise(BinList, Noise) when is_list(BinList) ->
+    case lists:member(lists:last(BinList), Noise) of
         true ->
-            removing_trailing_noise(lists:droplast(Str), Noise);
-        false -> Str
+            removing_trailing_noise(lists:droplast(BinList), Noise);
+        false -> BinList
     end.
 
 %% @doc Format a string with an indentation level.
@@ -523,7 +551,9 @@ print_trace_short(Trace, Mod, Func, Line) ->
 trace_to_list(Trace) ->
     Prefixes = hb_opts:get(stack_print_prefixes, [], #{}),
     lists:filtermap(
-        fun(TraceItem) ->
+        fun(TraceItem) when is_binary(TraceItem) ->
+            {true, TraceItem};
+           (TraceItem) ->
             Formatted = format_trace_element(TraceItem),
             case hb_util:is_hb_module(Formatted, Prefixes) of
                 true -> {true, Formatted};
@@ -534,11 +564,16 @@ trace_to_list(Trace) ->
     ).
 
 %% @doc Format a trace to a short string.
-trace_short() -> trace_short(get_trace()).
+trace_short() -> trace_short(get_trace(erlang)).
+trace_short(Type) when is_atom(Type) -> trace_short(get_trace(Type));
 trace_short(Trace) when is_list(Trace) ->
     lists:join(" / ", lists:reverse(trace_to_list(Trace))).
 
-%% @doc Format a trace element in form `mod:line' or `mod:func'.
+%% @doc Format a trace element in form `mod:line' or `mod:func' for Erlang
+%% traces, or their raw form for others.
+format_trace_element(Bin) when is_binary(Bin) -> Bin;
+format_trace_element({Mod, Line}) ->
+    lists:flatten(io_lib:format("~p:~p", [Mod, Line]));
 format_trace_element({Mod, _, _, [{file, _}, {line, Line}|_]}) ->
     lists:flatten(io_lib:format("~p:~p", [Mod, Line]));
 format_trace_element({Mod, Func, _ArityOrTerm, _Extras}) ->
@@ -549,12 +584,18 @@ format_trace_element({Mod, Func, _ArityOrTerm, _Extras}) ->
 trace_macro_helper(Fun, {_, {_, Stack}}, Mod, Func, Line) ->
     Fun(Stack, Mod, Func, Line).
 
-%% @doc Get the trace of the current process.
-get_trace() ->
+%% @doc Get the trace of the current execution. If the argument is `erlang',
+%% we return the Erlang stack trace. If the argument is `ao', we return the
+%% AO-Core execution stack.
+get_trace(erlang) ->
     case catch error(debugging_print) of
-        {_, {_, Stack}} ->
-            normalize_trace(Stack);
+        {_, {_, Stack}} -> normalize_trace(Stack);
         _ -> []
+    end;
+get_trace(ao) ->
+    case get(ao_stack) of
+        undefined -> [];
+        Stack -> Stack
     end.
 
 %% @doc Remove all calls from this module from the top of a trace.
@@ -729,8 +770,8 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
                     case Val of
                         NextMap when is_map(NextMap) ->
                             maybe_multiline(NextMap, Opts, Indent + 2);
-                        NextList when is_list(NextList) ->
-                            term(NextList, Opts, Indent + 2);
+                        Next when is_list(Next); is_record(Next, tx) ->
+                            remove_leading_noise(term(Next, Opts, Indent + 2));
                         _ when (byte_size(Val) == 32) ->
                             Short = short_id(Val),
                             io_lib:format("~s [*]", [Short]);
@@ -741,7 +782,11 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
                         Bin when is_binary(Bin) ->
                             binary(Bin);
                         Link when ?IS_LINK(Link) ->
-                            hb_link:format(Link, Opts);
+                            remove_leading_noise(
+                                hb_util:bin(
+                                    hb_link:format(Link, Opts, Indent + 2)
+                                )
+                            );
                         Other ->
                             io_lib:format("~p", [Other])
                     end

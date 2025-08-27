@@ -46,7 +46,7 @@
 -export([behavior_info/1]).
 -export([start/1, stop/1, reset/1]).
 -export([filter/2, scope/2, sort/2]).
--export([type/2, read/2, write/3, list/2]).
+-export([type/2, read/2, write/3, list/2, match/2]).
 -export([path/1, path/2, add_path/2, add_path/3, join/1]).
 -export([make_group/2, make_link/3, resolve/2]).
 -export([find/1]).
@@ -68,7 +68,7 @@ behavior_info(callbacks) ->
     [
         {start, 1}, {stop, 1}, {reset, 1}, {make_group, 2}, {make_link, 3},
         {type, 2}, {read, 2}, {write, 3},
-        {list, 2}, {path, 2}, {add_path, 3}
+        {list, 2}, {match, 2}, {path, 2}, {add_path, 3}
     ].
 
 -define(DEFAULT_SCOPE, local).
@@ -299,6 +299,12 @@ resolve(Modules, Path) -> call_function(Modules, resolve, [Path]).
 %% structures, so this is likely to be very slow for most stores.
 list(Modules, Path) -> call_function(Modules, list, [Path]).
 
+%% @doc Match a series of keys and values against the store. Returns 
+%% `{ok, Matches}' if the match is successful, or `not_found' if there are no
+%% messages in the store that feature all of the given key-value pairs. `Matches'
+%% is given as a list of IDs.
+match(Modules, Match) -> call_function(Modules, match, [Match]).
+
 %% @doc Call a function on the first store module that succeeds. Returns its
 %% result, or `not_found` if none of the stores succeed. If `TIME_CALLS` is set,
 %% this function will also time the call and increment the appropriate event
@@ -422,19 +428,13 @@ call_all([Store = #{<<"store-module">> := Mod} | Rest], Function, Args) ->
 %% default into all HyperBEAM distributions.
 test_stores() ->
     [
-        #{
-            <<"store-module">> => hb_store_fs,
-            <<"name">> => <<"cache-TEST/fs">>,
+        (hb_test_utils:test_store(hb_store_fs))#{
             <<"benchmark-scale">> => 0.001
         },
-        #{
-            <<"store-module">> => hb_store_lmdb,
-            <<"name">> => <<"cache-TEST/lmdb">>,
+        (hb_test_utils:test_store(hb_store_lmdb))#{
             <<"benchmark-scale">> => 0.5
         },
-        #{
-            <<"store-module">> => hb_store_lru,
-            <<"name">> => <<"cache-TEST/lru">>,
+        (hb_test_utils:test_store(hb_store_lru))#{
             <<"persistent-store">> => [
                 #{
                     <<"store-module">> => hb_store_fs,

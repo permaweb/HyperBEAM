@@ -319,5 +319,5 @@ verifiability_test() ->
             <<"httpsig@1.0">>,
             #{}
         ),
-    ?event(debug, {verifying, {structured, Structured}, {original, Message}}),
+    ?event({verifying, {structured, Structured}, {original, Message}}),
     ?assert(hb_message:verify(Structured)).

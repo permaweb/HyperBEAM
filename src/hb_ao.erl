@@ -128,6 +128,9 @@
 %%     13: Recurse or terminate.
 resolve(Path, Opts) when is_binary(Path) ->
     resolve(#{ <<"path">> => Path }, Opts);
+resolve(SingletonMsg, _Opts)
+        when is_map(SingletonMsg), not is_map_key(<<"path">>, SingletonMsg) ->
+    {error, <<"Attempted to resolve a message without a path.">>};
 resolve(SingletonMsg, Opts) ->
     resolve_many(hb_singleton:from(SingletonMsg, Opts), Opts).
 
@@ -183,6 +186,8 @@ resolve_many(MsgList, Opts) ->
     Res = do_resolve_many(MsgList, Opts),
     ?event(ao_core, {resolve_many_complete, {res, Res}, {req, MsgList}}, Opts),
     Res.
+do_resolve_many([], _Opts) ->
+    {failure, <<"Attempted to resolve an empty message sequence.">>};
 do_resolve_many([Msg3], Opts) ->
     ?event(ao_core, {stage, 11, resolve_complete, Msg3}),
     {ok, hb_cache:ensure_loaded(Msg3, Opts)};
@@ -746,30 +751,41 @@ subresolve(RawMsg1, DevID, Req, Opts) ->
 %% `rebar3 as ao_profiling') we record statistics about the execution of the
 %% function. This is a costly operation, so if it is not defined, we simply
 %% apply the function and return the result.
--ifdef(AO_PROFILING).
+-ifndef(AO_PROFILING).
+maybe_profiled_apply(Func, Args, _Msg1, _Msg2, _Opts) ->
+    apply(Func, Args).
+-else.
 maybe_profiled_apply(Func, Args, Msg1, Msg2, Opts) ->
     CallStack = erlang:get(ao_stack),
+    ?event(ao_trace,
+        {profiling_apply,
+            {func, Func},
+            {args, Args},
+            {call_stack, CallStack}
+        }
+    ),
     Key =
-        case hb_maps:get(<<"device">>, Msg1, undefined) of
-            Device when is_binary(Device) or is_atom(Device) ->
-                case hb_maps:get(<<"path">>, Msg2, undefined) of
+        case hb_maps:get(<<"device">>, Msg1, undefined, Opts) of
+            undefined ->
+                hb_util:bin(erlang:fun_to_list(Func));
+            Device ->
+                case hb_maps:get(<<"path">>, Msg2, undefined, Opts) of
                     undefined ->
                         hb_util:bin(erlang:fun_to_list(Func));
                     Path ->
                         MethodStr =
-                            case hb_maps:get(<<"method">>, Msg2, undefined) of
+                            case hb_maps:get(<<"method">>, Msg2, undefined, Opts) of
                                 undefined -> <<"">>;
-                                Method -> <<"[", Method/binary, "]">>
+                                <<"GET">> -> <<"">>;
+                                Method -> <<"<", Method/binary, ">">>
                             end,
                         << 
                             (hb_util:bin(Device))/binary,
                             "/",
-                            (hb_util:bin(Path))/binary,
-                            MethodStr/binary
+                            MethodStr/binary,
+                            (hb_util:bin(Path))/binary
                         >>
-                end;
-            _ ->
-                hb_util:bin(erlang:fun_to_list(Func))
+                end
         end,
     put(
         ao_stack,
@@ -807,9 +823,6 @@ maybe_profiled_apply(Func, Args, Msg1, Msg2, Opts) ->
             )
     end,
     Res.
--else.
-maybe_profiled_apply(Func, Args, _Msg1, _Msg2, _Opts) ->
-    apply(Func, Args).
 -endif.
 
 %% @doc Ensure that a message is loaded from the cache if it is an ID, or 
