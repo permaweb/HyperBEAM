@@ -269,6 +269,7 @@ external_item_with_target_field_test() ->
         ar_bundles:sign_item(
             #tx {
                 target = crypto:strong_rand_bytes(32),
+                anchor = crypto:strong_rand_bytes(32),
                 tags = [
                     {<<"test-tag">>, <<"test-value">>},
                     {<<"test-tag-2">>, <<"test-value-2">>}
@@ -278,15 +279,19 @@ external_item_with_target_field_test() ->
             ar_wallet:new()
         ),
     EncodedTarget = hb_util:encode(TX#tx.target),
+    EncodedAnchor = hb_util:encode(TX#tx.anchor),
     ?event({tx, TX}),
     Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({decoded, Decoded}),
     ?assertEqual(EncodedTarget, hb_maps:get(<<"target">>, Decoded, undefined, #{})),
+    ?assertEqual(EncodedAnchor, hb_maps:get(<<"anchor">>, Decoded, undefined, #{})),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, #{}),
     ?event({only_committed, OnlyCommitted}),
     ?assertEqual(EncodedTarget, hb_maps:get(<<"target">>, OnlyCommitted, undefined, #{})),
+    ?assertEqual(EncodedAnchor, hb_maps:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
     Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?assertEqual(TX#tx.target, Encoded#tx.target),
+    ?assertEqual(TX#tx.anchor, Encoded#tx.anchor),
     ?event({result, {initial, TX}, {result, Encoded}}),
     ?assertEqual(TX, Encoded).
 
@@ -296,20 +301,24 @@ generate_item_with_target_tag_test() ->
     Msg =
         #{
             <<"target">> => Target = <<"NON-ID-TARGET">>,
+            <<"anchor">> => Anchor = <<"NON-ID-ANCHOR">>,
             <<"other-key">> => <<"other-value">>
         },
     {ok, TX} = to(Msg, #{}, #{}),
     ?event({encoded_tx, TX}),
     % The encoded TX should have ignored the `target' field, setting a tag instead.
     ?assertEqual(?DEFAULT_TARGET, TX#tx.target),
+    ?assertEqual(?DEFAULT_ANCHOR, TX#tx.anchor),
     Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({decoded, Decoded}),
     % The decoded message should have the `target' key set to the tag value.
     ?assertEqual(Target, hb_maps:get(<<"target">>, Decoded, undefined, #{})),
+    ?assertEqual(Anchor, hb_maps:get(<<"anchor">>, Decoded, undefined, #{})),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, #{}),
     ?event({only_committed, OnlyCommitted}),
     % The target key should have been committed.
     ?assertEqual(Target, hb_maps:get(<<"target">>, OnlyCommitted, undefined, #{})),
+    ?assertEqual(Anchor, hb_maps:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
     Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?event({result, {initial, TX}, {result, Encoded}}),
     ?assertEqual(TX, Encoded).
@@ -319,6 +328,7 @@ generate_item_with_target_field_test() ->
         hb_message:commit(
             #{
                 <<"target">> => Target = hb_util:encode(crypto:strong_rand_bytes(32)),
+                <<"anchor">> => Anchor = hb_util:encode(crypto:strong_rand_bytes(32)),
                 <<"other-key">> => <<"other-value">>
             },
             #{ priv_wallet => hb:wallet() },
@@ -327,12 +337,15 @@ generate_item_with_target_field_test() ->
     {ok, TX} = to(Msg, #{}, #{}),
     ?event({encoded_tx, TX}),
     ?assertEqual(Target, hb_util:encode(TX#tx.target)),
+    ?assertEqual(Anchor, hb_util:encode(TX#tx.anchor)),
     Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({decoded, Decoded}),
     ?assertEqual(Target, hb_maps:get(<<"target">>, Decoded, undefined, #{})),
+    ?assertEqual(Anchor, hb_maps:get(<<"anchor">>, Decoded, undefined, #{})),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, #{}),
     ?event({only_committed, OnlyCommitted}),
     ?assertEqual(Target, hb_maps:get(<<"target">>, OnlyCommitted, undefined, #{})),
+    ?assertEqual(Anchor, hb_maps:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
     Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?event({result, {initial, TX}, {result, Encoded}}),
     ?assertEqual(TX, Encoded).
