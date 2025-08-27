@@ -164,6 +164,7 @@ default_message() ->
             #{<<"name">> => <<"patch@1.0">>, <<"module">> => dev_patch},
             #{<<"name">> => <<"poda@1.0">>, <<"module">> => dev_poda},
             #{<<"name">> => <<"process@1.0">>, <<"module">> => dev_process},
+            #{<<"name">> => <<"process-list@1.0">>, <<"module">> => dev_process_list},
             #{<<"name">> => <<"profile@1.0">>, <<"module">> => dev_profile},
             #{<<"name">> => <<"push@1.0">>, <<"module">> => dev_push},
             #{<<"name">> => <<"query@1.0">>, <<"module">> => dev_query},
