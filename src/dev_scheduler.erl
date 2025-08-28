@@ -978,7 +978,7 @@ remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
                     ?event({got_slot_response, {assignment, A}}),
                     {ok, #{
                         <<"process">> => ProcID,
-                        <<"current">> => hb_maps:get(<<"slot">>, A, undefined, Opts),
+                        <<"current">> => hb_maps:get(<<"nonce">>, A, undefined, Opts),
                         <<"timestamp">> => hb_maps:get(<<"timestamp">>, A, undefined, Opts),
                         <<"block-height">> => hb_maps:get(<<"block-height">>, A, undefined, Opts),
                         <<"block-hash">> => hb_util:encode(<<0:256>>),
@@ -1036,10 +1036,12 @@ get_schedule(Msg1, Msg2, Opts) ->
             ?event({redirect_received, {redirect, Redirect}}),
             case hb_opts:get(scheduler_follow_redirects, true, Opts) of
                 true ->
-                    case get_remote_schedule(ProcID, From, To, Redirect, Opts) of
+                    GetRemoteScheduleRes = get_remote_schedule(ProcID, From, To, Redirect, Opts),
+                    case GetRemoteScheduleRes of
                         {ok, Res} ->
                             case uri_string:percent_decode(Format) of
                                 <<"application/aos-2">> ->
+                                    ?event(debug_assignments, {assignments_to_aos2_1, {proc_id, ProcID}, {res, Res}}),
                                     dev_scheduler_formats:assignments_to_aos2(
                                         ProcID,
                                         hb_ao:get(
@@ -1097,14 +1099,16 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, _, Opts)
             undefined,
             Opts
         ),
-    ?event(debug_sched,
+    ?event(debug_assignments,
         {returning_remote_schedule_from_only_cache,
             {length, length(LocalAssignments)},
             {from_after_local_cache, From},
-            {original_to, To}
+            {original_to, To},
+            {res, Res}
         }),
     Res;
 do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
+    ?event(debug_assignments, {do_get_remote_schedule, {proc_id, ProcID}, {local_assignments, LocalAssignments}, {from, From}, {to, To}, {redirect, Redirect}}),
     % We don't have all of the assignments from the local cache, so we need to
     % fetch the rest from the remote scheduler.
     Node = node_from_redirect(Redirect, Opts),
@@ -1162,7 +1166,9 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                 >>
         end,
     ?event({getting_remote_schedule, {node, {string, Node}}, {path, {string, Path}}}),
-    case hb_http:get(Node, Path, Opts#{ http_client => httpc, protocol => http2 }) of
+    Response = hb_http:get(Node, Path, Opts#{ http_client => httpc, protocol => http2 }),
+    ?event(debug_assignments, {remote_schedule, {res, Response}}),
+    case Response of
         {ok, Res} ->
             case hb_util:int(hb_ao:get(<<"status">>, Res, 200, Opts)) of
                 200 ->
@@ -1201,11 +1207,14 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                                 ),
 								Opts
                             )
-                        ),                    
+                        ),       
+                    ?event(debug_lc, {length, {remote, length(RemoteAssignments)}, {local, length(LocalAssignments)}}),             
+                    %% TODO: here
                     % Normalize the local assignments to get the slot.
                     FromLocalCacheNormalized = lists:map(
                         fun (Assignment) ->
                             Norm = dev_scheduler_formats:aos2_normalize_types(Assignment),
+                            ?event(debug_lc, {from_local_cache, {raw, Assignment}, {normalized, Norm}}),
                             #{
                                 <<"body">> => Norm,
                                 <<"slot">> => 
@@ -1219,7 +1228,7 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                     Merged =
                         dev_scheduler_formats:assignments_to_bundle(
                             ProcID,
-                            MergedAssignments = FromLocalCacheNormalized ++ RemoteAssignments,
+                            MergedAssignments = LocalAssignments ++ RemoteAssignments,
                             hb_ao:get(<<"continues">>, NormSched, false, Opts),
                             Opts
                         ),
@@ -1548,6 +1557,7 @@ generate_local_schedule(Format, ProcID, From, To, Opts) ->
     ?event({got_assignments, length(Assignments), {more, More}}),
     % Determine and apply the formatting function to use for generation 
     % of the response, based on the `Accept' header.
+    ?event(debug_assignments, {assignments_to_aos2_2, {format, Format}}),
     FormatterFun =
         case uri_string:percent_decode(Format) of
             <<"application/aos-2">> ->

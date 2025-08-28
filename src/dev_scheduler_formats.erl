@@ -31,9 +31,10 @@ assignments_to_bundle(ProcID, Assignments, More, TimeInfo, RawOpts) ->
             hb_maps:from_list(
                 lists:map(
                     fun(Assignment) ->
+                        ?event(debug_nonce, {assignment, Assignment}),
                         {
                             hb_ao:get(
-                                <<"slot">>,
+                                <<"nonce">>,
                                 Assignment,
                                 Opts#{ hashpath => ignore }
                             ),
@@ -47,6 +48,7 @@ assignments_to_bundle(ProcID, Assignments, More, TimeInfo, RawOpts) ->
 
 %%% Return legacy net-SU compatible results.
 assignments_to_aos2(ProcID, Assignments, More, RawOpts) when is_map(Assignments) ->
+    ?event(debug_assignments, {assignments_to_aos2_is_map, {proc_id, ProcID}, {assignments, Assignments}, {more, More}}),
     assignments_to_aos2(
         ProcID,
         hb_util:message_to_ordered_list(Assignments),
@@ -54,6 +56,7 @@ assignments_to_aos2(ProcID, Assignments, More, RawOpts) when is_map(Assignments)
         format_opts(RawOpts)
     );
 assignments_to_aos2(ProcID, Assignments, More, RawOpts) ->
+    ?event(debug_assignments, {assignments_to_aos2, {proc_id, ProcID}, {assignments, Assignments}, {more, More}}),
     Opts = format_opts(RawOpts),
     {Timestamp, Height, Hash} = ar_timestamp:get(),
     BodyStruct = 
@@ -92,11 +95,13 @@ assignments_to_aos2(ProcID, Assignments, More, RawOpts) ->
 %% (`ao.TN.1') assignments, we may want to use the assignment ID.
 cursor(Assignment, RawOpts) ->
     Opts = format_opts(RawOpts),
-    hb_ao:get(<<"slot">>, Assignment, Opts).
+    hb_ao:get(<<"nonce">>, Assignment, Opts).
 %% @doc Convert an assignment to an AOS2-compatible JSON structure.
 assignment_to_aos2(Assignment, RawOpts) ->
+    ?event(debug_format, {assignment_to_aos2, {assignment, Assignment}}),
     Opts = format_opts(RawOpts),
     Message = hb_ao:get(<<"body">>, Assignment, Opts),
+    ?event(debug_format, {message, Message}),
     AssignmentWithoutBody = hb_maps:without([<<"body">>], Assignment, Opts),
     #{
         <<"message">> =>
@@ -183,14 +188,14 @@ aos2_normalize_data(JSONStruct) ->
 aos2_normalize_types(Msg = #{ <<"timestamp">> := TS }) when is_binary(TS) ->
     aos2_normalize_types(Msg#{ <<"timestamp">> => hb_util:int(TS) });
 aos2_normalize_types(Msg = #{ <<"nonce">> := Nonce })
-        when is_binary(Nonce) and not is_map_key(<<"slot">>, Msg) ->
+        when is_binary(Nonce) and not is_map_key(<<"nonce">>, Msg) ->
     aos2_normalize_types(
-        Msg#{ <<"slot">> => hb_util:int(Nonce) }
+        Msg#{ <<"nonce">> => hb_util:int(Nonce) }
     );
 aos2_normalize_types(Msg = #{ <<"epoch">> := DS }) when is_binary(DS) ->
     aos2_normalize_types(Msg#{ <<"epoch">> => hb_util:int(DS) });
-aos2_normalize_types(Msg = #{ <<"slot">> := Slot }) when is_binary(Slot) ->
-    aos2_normalize_types(Msg#{ <<"slot">> => hb_util:int(Slot) });
+aos2_normalize_types(Msg = #{ <<"nonce">> := Nonce }) when is_binary(Nonce) ->
+    aos2_normalize_types(Msg#{ <<"nonce">> => hb_util:int(Nonce) });
 aos2_normalize_types(Msg) when not is_map_key(<<"block-hash">>, Msg) ->
     ?event({missing_block_hash, Msg}),
     aos2_normalize_types(Msg#{ <<"block-hash">> => hb_util:encode(<<0:256>>) });

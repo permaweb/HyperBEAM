@@ -233,7 +233,7 @@ compute(Msg1, Msg2, Opts) ->
         hb_ao:get_first(
             [
                 {{as, <<"message@1.0">>, Msg2}, <<"compute">>},
-                {{as, <<"message@1.0">>, Msg2}, <<"slot">>}
+                {{as, <<"message@1.0">>, Msg2}, <<"nonce">>}
             ],
             Opts
         ),
