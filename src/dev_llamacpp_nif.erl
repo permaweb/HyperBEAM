@@ -1,5 +1,5 @@
 -module(dev_llamacpp_nif).
--compile(export_all).
+-export([start/1, stop/0, completion/2, completion/3, chat/2, chat/3, ensure_ets/0]).
 -include_lib("eunit/include/eunit.hrl").
 
 %% C NIF does not use cargo.hrl loader; load from priv root

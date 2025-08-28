@@ -48,3 +48,4 @@ mkdocs-site-manifest.csv
 !test/config.json
 
 models
+node_modules
