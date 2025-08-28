@@ -691,7 +691,7 @@ accept_to_codec(OriginalReq, Opts) ->
 accept_to_codec(_OriginalReq, #{ <<"content-type">> := _ }, _Opts) ->
     <<"httpsig@1.0">>;
 accept_to_codec(OriginalReq, _, Opts) ->
-    Accept = hb_ao:get(<<"accept">>, OriginalReq, <<"*/*">>, Opts),
+    Accept = hb_maps:get(<<"accept">>, OriginalReq, <<"*/*">>, Opts),
     ?event(debug_accept,
         {accept_to_codec,
             {original_req, OriginalReq},
@@ -699,7 +699,7 @@ accept_to_codec(OriginalReq, _, Opts) ->
         }
     ),
     AcceptCodec =
-        hb_ao:get(
+        hb_maps:get(
             <<"accept-codec">>,
             OriginalReq,
             mime_to_codec(Accept, Opts),

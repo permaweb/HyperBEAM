@@ -150,7 +150,7 @@ schedule(Msg1, Msg2, Opts) ->
     run_as(<<"scheduler">>, Msg1, Msg2, Opts).
 
 slot(Msg1, Msg2, Opts) ->
-    ?event({slot_called, {msg1, Msg1}, {msg2, Msg2}, {opts, Opts}}),
+    ?event({slot_called, {msg1, Msg1}, {msg2, Msg2}}),
     run_as(<<"scheduler">>, Msg1, Msg2, Opts).
 
 next(Msg1, _Msg2, Opts) ->
@@ -199,7 +199,7 @@ process_id(Msg1, Msg2, Opts) ->
 %% `Initialized' key to `True' to indicate that the process has been
 %% initialized.
 init(Msg1, Msg2, Opts) ->
-    ?event({init_called, {msg1, Msg1}, {msg2, Msg2}, {opts, Opts}}),
+    ?event({init_called, {msg1, Msg1}, {msg2, Msg2}}),
     {ok, Initialized} =
         run_as(<<"execution">>, Msg1, #{ <<"path">> => init }, Opts),
     {
@@ -591,7 +591,7 @@ ensure_loaded(Msg1, Msg2, Opts) ->
     % Get the nonce we are currently on and the inbound nonce.
     TargetSlot = hb_ao:get(<<"slot">>, Msg2, undefined, Opts),
     ProcID = process_id(Msg1, #{}, Opts),
-    ?event({ensure_loaded, {msg1, Msg1}, {msg2, Msg2}, {opts, Opts}}),
+    ?event({ensure_loaded, {msg1, Msg1}, {msg2, Msg2}}),
     case hb_ao:get(<<"initialized">>, Msg1, Opts) of
         <<"true">> ->
             ?event(already_initialized),
