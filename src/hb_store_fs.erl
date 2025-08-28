@@ -83,7 +83,17 @@ write(Opts, PathComponents, Value) ->
 %% @doc List contents of a directory in the store.
 list(Opts, Path) ->
     case file:list_dir(add_prefix(Opts, Path)) of
-        {ok, Files} -> {ok, lists:map(fun hb_util:bin/1, Files)};
+        {ok, Files} ->
+            ValidEntries = lists:filtermap(
+                fun(Entry) ->
+                    case hb_util:bin(Entry) of
+                        <<"lmdb">> -> false;
+                        <<"lock.mdb">> -> false;
+                        <<"data.mdb">> -> false;
+                        EntryBin -> {true, EntryBin}
+                    end
+                end, Files),
+            {ok, ValidEntries};
         {error, _} -> not_found
     end.
 

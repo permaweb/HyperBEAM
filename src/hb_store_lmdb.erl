@@ -21,7 +21,7 @@
 
 %% Public API exports
 -export([start/1, stop/1, scope/0, scope/1, reset/1]).
--export([read/2, write/3, list/2, match/2]).
+-export([read/2, write/3, list/2, match/2, iterate_start/3, iterate_cont/3]).
 -export([make_group/2, make_link/3, type/2]).
 -export([path/2, add_path/3, resolve/2]).
 
@@ -343,6 +343,25 @@ scope(_) -> scope().
 %% @param Path Binary prefix to search for
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
 -spec list(map(), binary()) -> {ok, [binary()]} | {error, term()}.
+list(Opts, <<"/">>) ->
+    #{ <<"db">> := DBInstance } = find_env(Opts),
+    case elmdb:match_prefix(DBInstance, <<"group:">>) of
+        {ok, Children} ->
+            Groups = lists:filtermap(
+                fun(<<"group:", Group/binary>>) ->
+                    case binary:split(Group, <<"/">>, [global]) of
+                        [GroupNoSlash] -> {true, GroupNoSlash};
+                        [GroupSlashRemoved, <<>>] -> {true, GroupSlashRemoved};
+                        _ -> false
+                    end
+                end,
+                Children
+            ),
+            {ok, Groups};
+        not_found ->
+            {ok, []}  % Handle both old and new format
+    end;
+
 list(Opts, Path) ->
     % Check if Path is a link and resolve it if necessary
     ResolvedPath =
@@ -373,7 +392,6 @@ list(Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:list(DBInstance, SearchPath) of
         {ok, Children} -> {ok, Children};
-        {error, not_found} -> {ok, []};  % Normalize new error format
         not_found -> {ok, []}  % Handle both old and new format
     end.
 
@@ -397,10 +415,17 @@ match(Opts, MatchKVs) ->
         {ok, Matches} ->
             ?event({elmdb_matched, Matches}),
             {ok, Matches};
-        {error, not_found} -> not_found;
         not_found -> not_found
     end.
 
+iterate_start(Opts, Key, Limit) ->
+    #{ <<"db">> := DBInstance } = find_env(Opts),
+    elmdb:flush(DBInstance),
+    elmdb:iterate_start(DBInstance, Key, Limit).
+
+iterate_cont(Opts, Continuation, Limit) ->
+    #{ <<"db">> := DBInstance } = find_env(Opts),
+    elmdb:iterate_cont(DBInstance, Continuation, Limit).
 
 %% @doc Create a group entry that can contain other keys hierarchically.
 %%
@@ -422,7 +447,8 @@ match(Opts, MatchKVs) ->
 make_group(Opts, <<"/", GroupName/binary>>) when is_map(Opts) ->
     make_group(Opts, GroupName);
 make_group(Opts, GroupName) when is_map(Opts), is_binary(GroupName) ->
-    write(Opts, GroupName, <<"group">>);
+    write(Opts, GroupName, <<"group">>),
+    write(Opts, <<"group:", GroupName/binary>>, <<"">>);
 make_group(_, _) ->
     {error, {badarg, <<"StoreOps must be map and GroupName must be a binary">>}}.
 
