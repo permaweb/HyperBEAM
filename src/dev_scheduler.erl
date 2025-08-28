@@ -1040,10 +1040,14 @@ get_schedule(Msg1, Msg2, Opts) ->
                         {ok, Res} ->
                             case uri_string:percent_decode(Format) of
                                 <<"application/aos-2">> ->
+                                    Assignments = hb_ao:get(
+                                        <<"assignments">>, Res, [], Opts),
+                                    WrapBody = hb_maps:map(fun(_, Assignment) ->
+                                        #{<<"body">> => Assignment}
+                                    end, Assignments),
                                     dev_scheduler_formats:assignments_to_aos2(
                                         ProcID,
-                                        hb_ao:get(
-                                            <<"assignments">>, Res, [], Opts),
+                                        WrapBody,
                                         hb_util:atom(hb_ao:get(
                                             <<"continues">>, Res, false, Opts)),
                                         Opts
@@ -1067,6 +1071,16 @@ get_remote_schedule(RawProcID, From, To, Redirect, Opts) ->
     % the slots _after_ the stated nonce.
     ProcID = without_hint(RawProcID),
     {FromLocalCache, _} = get_local_assignments(ProcID, From, To, Opts),
+    % Normalize the local assignments to get the slot
+    FromLocalCacheNormalized = lists:map(
+        fun (Assignment = #{<<"nonce">> := Nonce}) when is_binary(Nonce) ->
+            Assignment#{
+                <<"slot">> => hb_util:int(Nonce)
+            };
+            (Assignment) -> Assignment
+        end,
+        FromLocalCache
+    ),
     ?event(debug_sched,
         {from_local_cache,
             {from, From},
@@ -1076,7 +1090,7 @@ get_remote_schedule(RawProcID, From, To, Redirect, Opts) ->
     ),
     do_get_remote_schedule(
         ProcID,
-        FromLocalCache,
+        FromLocalCacheNormalized,
         From + length(FromLocalCache),
         To,
         Redirect,
@@ -1202,24 +1216,12 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
 								Opts
                             )
                         ),                    
-                    % Normalize the local assignments to get the slot.
-                    FromLocalCacheNormalized = lists:map(
-                        fun (Assignment) ->
-                            Norm = dev_scheduler_formats:aos2_normalize_types(Assignment),
-                            #{
-                                <<"body">> => Norm,
-                                <<"slot">> => 
-                                    hb_maps:get(<<"slot">>, Norm, undefined, Opts)
-                            }
-                        end, 
-                        LocalAssignments
-                    ),
                     % Merge the local assignments with the remote assignments,
                     % and normalize the keys.
                     Merged =
                         dev_scheduler_formats:assignments_to_bundle(
                             ProcID,
-                            MergedAssignments = FromLocalCacheNormalized ++ RemoteAssignments,
+                            MergedAssignments = LocalAssignments ++ RemoteAssignments,
                             hb_ao:get(<<"continues">>, NormSched, false, Opts),
                             Opts
                         ),
