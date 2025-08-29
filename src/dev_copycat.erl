@@ -11,7 +11,14 @@
 -include("include/hb.hrl").
 
 -define(SUPPORTED_FILTERS,
-    [<<"query">>, <<"tag">>, <<"owners">>, <<"recipients">>, <<"ids">>, <<"all">>]
+    [
+        <<"query">>, 
+        <<"tag">>, 
+        <<"tags">>,
+        <<"owners">>, 
+        <<"recipients">>, 
+        <<"ids">>, 
+        <<"all">>]
 ).
 
 %% @doc Takes a GraphQL query, optionally with a node address, and curses through
