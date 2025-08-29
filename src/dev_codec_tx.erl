@@ -610,17 +610,8 @@ nested_data_tabm_test() ->
         <<"type">> => <<"rsa-pss-sha256">>,
         <<"bundle">> => <<"true">>
     },
-    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true),
-
-    % XXX: Fails in some ans104 code, commenting out until we can resolve.
-    % LinksCommitment = #{
-    %     <<"commitment-device">> => <<"tx@1.0">>,
-    %     <<"committed">> => [<<"data+link">>, <<"tag">>],
-    %     <<"type">> => <<"rsa-pss-sha256">>,
-    %     <<"bundle">> => <<"false">>
-    % },
-    % do_tabm_roundtrips(UnsignedTX, UnsignedTABM, LinksCommitment, false),
-    ok.
+    % only bundle true is supported
+    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true).
 
 nested_non_data_key_tabm_test() ->
     UnsignedTABM = #{
@@ -664,17 +655,8 @@ nested_non_data_key_tabm_test() ->
         <<"type">> => <<"rsa-pss-sha256">>,
         <<"bundle">> => <<"true">>
     },
-    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true),
-
-    % XXX: Fails in some ans104 code, commenting out until we can resolve.
-    % LinksCommitment = #{
-    %     <<"commitment-device">> => <<"tx@1.0">>,
-    %     <<"committed">> => [<<"a1+link">>, <<"tag1">>],
-    %     <<"type">> => <<"rsa-pss-sha256">>,
-    %     <<"bundle">> => <<"false">>
-    % },
-    % do_tabm_roundtrips(UnsignedTX, UnsignedTABM, LinksCommitment, false),
-    ok.
+    % only bundle true is supported
+    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true).
 
 nested_multiple_tabm_test() ->
     UnsignedTABM = #{
@@ -736,17 +718,8 @@ nested_multiple_tabm_test() ->
         <<"type">> => <<"rsa-pss-sha256">>,
         <<"bundle">> => <<"true">>
     },
-    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true),
-
-    % XXX: Fails in some ans104 code, commenting out until we can resolve.
-    % LinksCommitment = #{
-    %     <<"commitment-device">> => <<"tx@1.0">>,
-    %     <<"committed">> => [<<"a1+link">>, <<"tag1">>],
-    %     <<"type">> => <<"rsa-pss-sha256">>,
-    %     <<"bundle">> => <<"false">>
-    % },
-    % do_tabm_roundtrips(UnsignedTX, UnsignedTABM, LinksCommitment, false),
-    ok.
+    % only bundle true is supported
+    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true).
 
 %% @doc This test is disabled for now. Unclear whether we should deserialize
 %% data by default. If we don't need to deserialize data, then this test

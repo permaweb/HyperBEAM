@@ -448,23 +448,3 @@ field_and_tag_ordering_test() ->
     SignedTABM = hb_message:commit(
         UnsignedTABM, #{priv_wallet => Wallet}, <<"ans104@1.0">>),
     ?assert(hb_message:verify(SignedTABM)).
-
-%% @doc This test is disabled until we can resolve an exception that gets
-%% thrown during the `to/3` call.
-nested_data_test_disabled() ->
-    TABM = #{
-        <<"tag">> => <<"level-1">>,
-        <<"data">> => #{
-            <<"tag">> => <<"level-2">>,
-            <<"data">> => #{
-                <<"tag">> => <<"level-3">>,
-                <<"data">> => <<"nested-data">>
-            }  
-        }
-    },
-    Wallet = hb:wallet(),
-    SignedTABM = hb_message:commit(
-        TABM, #{priv_wallet => Wallet}, <<"ans104@1.0">>),
-    ?assert(hb_message:verify(SignedTABM)),
-    SignedTX = hb_util:ok(to(SignedTABM, #{}, #{})),
-    ?assert(ar_bundles:verify_item(SignedTX)).
