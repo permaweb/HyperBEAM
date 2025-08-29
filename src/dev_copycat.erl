@@ -272,12 +272,15 @@ default_query(Parts) ->
 
 
 %%% Tests
-
-%% @doc Basic test to test copycat device
-basic_test() ->
+%% @doc Run node for testing
+run_test_node() ->
     Store = hb_test_utils:test_store(hb_store_lmdb),
     Opts = #{ store => Store, priv_wallet => hb:wallet() },
     Node = hb_http_server:start_node(Opts),
+    {Node ,Opts}. 
+%% @doc Basic test to test copycat device
+basic_test() ->
+    {Node, _Opts} = run_test_node(),
     {ok, Res} =
         hb_http:get(
             Node,
@@ -427,4 +430,25 @@ combined_filters_test() ->
         binary:matches(Query, <<"ids: [\"id1\", \"id2\"]">>)
         =/= []
     ),
+    ok.
+
+%% @doc Real world test with actual indexing
+fetch_scheduler_location_test() ->
+    {Node, Opts} = run_test_node(),
+    {ok, Res} =
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"~copycat@1.0/graphql?tags+map=Type=Scheduler-Location">>
+            },
+            #{}
+        ),
+    ?event({graphql_indexing_completed, {response, Res}}),
+    % Verify we got data
+    ?assert(is_tuple(Res)),
+    {Status, Data} = Res,
+    ?assertEqual(ok, Status),
+    ?assert(is_integer(Data)),
+    ?assert(Data > 0),
+    ?event({schedulers_indexed, Data}),
     ok.
