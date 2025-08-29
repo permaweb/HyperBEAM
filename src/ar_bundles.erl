@@ -200,7 +200,8 @@ normalize_data(Bundle) when is_list(Bundle); is_map(Bundle) ->
     ?event({normalize_data, bundle, Bundle}),
     normalize_data(#tx{ data = Bundle });
 normalize_data(Item = #tx { data = Data }) when is_list(Data) ->
-    ?event({normalize_data, list, Item}),
+    ?event({normalize_data, list,
+        hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id)}),
     normalize_data(
         Item#tx{
             tags = add_list_tags(Item#tx.tags),
@@ -220,7 +221,8 @@ normalize_data(Item = #tx { data = Data }) when is_list(Data) ->
         }
     );
 normalize_data(Item = #tx{data = Data}) ->
-    ?event({normalize_data, map, Item}),
+    ?event({normalize_data, map,
+        hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id)}),
     normalize_data_size(
         case serialize_bundle_data(Data, Item#tx.manifest) of
             {Manifest, Bin} ->
