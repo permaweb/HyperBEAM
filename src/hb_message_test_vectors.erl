@@ -26,7 +26,8 @@ test_codecs() ->
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
         <<"json@1.0">>,
         #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
-        <<"tx@1.0">>
+        <<"tx@1.0">>,
+        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }
     ].
 
 %% @doc Return a set of options for testing, taking the codec name as an
@@ -1344,9 +1345,12 @@ recursive_nested_list_test(Codec, Opts) ->
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 priv_survives_conversion_test(<<"ans104@1.0">>, _Opts) -> skip;
+priv_survives_conversion_test(<<"tx@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(<<"json@1.0">>, _Opts) -> skip;
 priv_survives_conversion_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
     skip;
+priv_survives_conversion_test(#{ <<"device">> := <<"tx@1.0">> }, _Opts) ->
+skip;
 priv_survives_conversion_test(#{ <<"device">> := <<"json@1.0">> }, _Opts) ->
     skip;
 priv_survives_conversion_test(Codec, Opts) ->
@@ -1388,6 +1392,10 @@ encode_small_balance_table_test(Codec, Opts) ->
 encode_large_balance_table_test(<<"ans104@1.0">>, _Opts) ->
     skip;
 encode_large_balance_table_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
+    skip;
+encode_large_balance_table_test(<<"tx@1.0">>, _Opts) ->
+    skip;
+encode_large_balance_table_test(#{ <<"device">> := <<"tx@1.0">> }, _Opts) ->
     skip;
 encode_large_balance_table_test(Codec, Opts) ->
     encode_balance_table(1000, Codec, Opts).
