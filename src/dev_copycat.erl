@@ -304,3 +304,68 @@ query_test() ->
         ) =/= []
     ),
     ok.
+
+%% @doc Test tag/value pair format
+tag_value_test() ->
+    Base = #{<<"tag">> => <<"type">>, <<"value">> => <<"process">>},
+    {ok, Query} = parse_query(Base, #{}, #{}),
+    ?event({tag_value_test, {query, Query}}),
+    ?assert(
+        binary:matches(
+            Query,
+            <<"{name: \"type\", values: [\"process\"]}">>
+        ) =/= []
+    ),
+    ok.
+
+%% @doc Test owners filter with single value
+owners_filter_test() ->
+    Base = #{<<"owners">> => <<"addr123">>},
+    {ok, Query} = parse_query(Base, #{}, #{}),
+    ?event({owners_filter_test, {query, Query}}),
+    ?assert(
+        binary:matches(
+            Query,
+            <<"owners: [\"addr123\"]">>
+        ) =/= []
+    ),
+    ok.
+
+%% @doc Test recipients filter with array values
+recipients_filter_test() ->
+    Base = #{<<"recipients">> => [<<"rec1">>, <<"rec2">>]},
+    {ok, Query} = parse_query(Base, #{}, #{}),
+    ?event({recipients_filter_test, {query, Query}}),
+    ?assert(
+        binary:matches(
+            Query,
+            <<"recipients: [\"rec1\", \"rec2\"]">>
+        ) =/= []
+    ),
+    ok.
+
+%% @doc Test ids filter
+ids_filter_test() ->
+    Base = #{<<"ids">> => [<<"id1">>, <<"id2">>, <<"id3">>]},
+    {ok, Query} = parse_query(Base, #{}, #{}),
+    ?event({ids_filter_test, {query, Query}}),
+    ?assert(
+        binary:matches(
+            Query,
+            <<"ids: [\"id1\", \"id2\", \"id3\"]">>
+        ) =/= []
+    ),
+    ok.
+
+%% @doc Test all filter type
+all_filter_test() ->
+    Base = #{<<"all">> => <<"true">>},
+    {ok, Query} = parse_query(Base, #{}, #{}),
+    ?event({all_filter_test, {query, Query}}),
+    ?assert(
+        binary:matches(
+            Query,
+            <<"transactions(after: $after)">>
+        ) =/= []
+    ),
+    ok.
