@@ -11,14 +11,7 @@
 -include("include/hb.hrl").
 
 -define(SUPPORTED_FILTERS,
-    [
-        <<"query">>, 
-        <<"tag">>, 
-        <<"owners">>, 
-        <<"recipients">>, 
-        <<"ids">>, 
-        <<"all">>
-    ]
+    [<<"query">>, <<"tag">>, <<"owners">>, <<"recipients">>, <<"ids">>, <<"all">>]
 ).
 
 %% @doc Takes a GraphQL query, optionally with a node address, and curses through
@@ -151,7 +144,8 @@ parse_query(Base, Req, Opts) ->
             % Find the query in either the `query' field or the `body'.
             case hb_maps:find(<<"query">>, Merged, Opts) of
                 {ok, QueryKeys} when is_map(QueryKeys) ->
-                    default_query(<<"tags">>, QueryKeys, Opts);
+                    LoadedKeys = hb_cache:ensure_all_loaded(QueryKeys, Opts),
+                    default_query(<<"tags">>, LoadedKeys, Opts);
                 {ok, Bin} when is_binary(Bin) ->
                     {ok, Bin};
                 _ ->
@@ -168,17 +162,12 @@ parse_query(Base, Req, Opts) ->
                     end
             end;
         [<<"tag">>|_] ->
-            TagPairs = extract_tag_pairs(Base, Req, Opts),
-            default_query(<<"tags">>, TagPairs, Opts);
+            Key = hb_maps:get(<<"tag">>, Merged, <<>>, Opts),
+            Value = hb_maps:get(<<"value">>, Merged, <<>>, Opts),
+            default_query(<<"tag">>, {Key, Value}, Opts);
         [FilterKey|_] ->
-            % Handle array-type parameters (owners, recipients, ids)
-            case FilterKey of
-                K when K =:= <<"owners">>; K =:= <<"recipients">>; K =:= <<"ids">> ->
-                    Values = extract_array_values(K, Merged, Opts),
-                    default_query(K, Values, Opts);
-                _ ->
-                    default_query(FilterKey, Merged, Opts)
-            end;
+            LoadedMerged = hb_cache:ensure_all_loaded(Merged, Opts),
+            default_query(FilterKey, LoadedMerged, Opts);
         [] ->
             {error,
                 #{
@@ -198,18 +187,25 @@ parse_query(Base, Req, Opts) ->
             }
     end.
 
-%% @doc Return a default query for a given filter type.
-default_query(<<"tags">>, RawMessage, Opts) ->
-    Message = hb_cache:ensure_all_loaded(RawMessage, Opts),
+%% @doc Build GraphQL array from single value or list of values
+build_graphql_array(Values) when is_list(Values) ->
+    ValuesList = lists:map(fun hb_util:bin/1, Values),
+    ValuesStr = hb_util:bin(lists:join(<<"\", \"">>, ValuesList)),
+    <<"[\"", ValuesStr/binary, "\"]">>;
+build_graphql_array(SingleValue) when is_binary(SingleValue) ->
+    <<"[\"", SingleValue/binary, "\"]">>.
+
+default_query(<<"tags">>, Message, Opts) ->
     BinaryPairs =
         lists:map(
-            fun({Key, Value}) -> {hb_util:bin(Key), hb_util:bin(Value)} end,
+            fun({Key, Value}) -> {hb_util:bin(Key), Value} end,
             hb_maps:to_list(Message, Opts)
         ),
     TagsQueryStr =
         hb_util:bin(
             [
-                <<"{name: \"", Key/binary, "\", values: [\"", Value/binary, "\"]}">>
+                <<"{name: \"", Key/binary, "\", values: ", 
+                    (build_graphql_array(Value))/binary, "}">>
             ||
                 {Key, Value} <- BinaryPairs
             ]
@@ -228,28 +224,33 @@ default_query(<<"tags">>, RawMessage, Opts) ->
     "} }">>};
 default_query(<<"tag">>, {Key, Value}, _Opts) ->
     {ok, <<"query($after: String) { ",
-        "transactions(after: $after, tags: [", TagsQuery/binary, "]) { ",
+        "transactions(after: $after, tags: [",
+            "{name: \"", Key/binary, "\", values: [\"", Value/binary, "\"]}",
+        "]) { ",
         "edges { ", (hb_gateway_client:item_spec())/binary , " } ",
         "pageInfo { hasNextPage }",
     "} }">>};
-default_query(<<"owners">>, Values, _Opts) when is_list(Values) ->
-    ValuesArray = build_string_array(Values),
+default_query(<<"owners">>, Message, Opts) ->
+    Owners = hb_maps:get(<<"owners">>, Message, <<>>, Opts),
+    OwnerList = build_graphql_array(Owners),
     {ok, <<"query($after: String) { ",
-        "transactions(after: $after, recipients: [\"", Recipient/binary, "\"]) { ",
+        "transactions(after: $after, owners: ", OwnerList/binary, ") { ",
         "edges { ", (hb_gateway_client:item_spec())/binary , " } ",
         "pageInfo { hasNextPage }",
     "} }">>};
-default_query(<<"recipients">>, Values, _Opts) when is_list(Values) ->
-    ValuesArray = build_string_array(Values),
+default_query(<<"recipients">>, Message, Opts) ->
+    Recipients = hb_maps:get(<<"recipients">>, Message, <<>>, Opts),
+    RecipientList = build_graphql_array(Recipients),
     {ok, <<"query($after: String) { ",
-        "transactions(after: $after, recipients: [", ValuesArray/binary, "]) { ",
+        "transactions(after: $after, recipients: ", RecipientList/binary, ") { ",
         "edges { ", (hb_gateway_client:item_spec())/binary , " } ",
         "pageInfo { hasNextPage }",
     "} }">>};
-default_query(<<"ids">>, Values, _Opts) when is_list(Values) ->
-    ValuesArray = build_string_array(Values),
+default_query(<<"ids">>, Message, Opts) ->
+    Ids = hb_maps:get(<<"ids">>, Message, <<>>, Opts),
+    IdList = build_graphql_array(Ids),
     {ok, <<"query($after: String) { ",
-        "transactions(ids: [", ValuesArray/binary, "]) { ",
+        "transactions(ids: ", IdList/binary, ") { ",
         "edges { ", (hb_gateway_client:item_spec())/binary , " } ",
         "pageInfo { hasNextPage }",
     "} }">>};
@@ -260,138 +261,6 @@ default_query(<<"all">>, _Merged, _Opts) ->
         "pageInfo { hasNextPage }",
     "} }">>}.
 
-%% @doc Extract tag pairs from request parameters, handling multiple 
-%% tag/value pairs. Supports both single pairs (tag=X&value=Y) and 
-%% array syntax (tag=[X,Z]&value=[Y,W])
-extract_tag_pairs(Base, Req, Opts) ->
-    Merged = hb_maps:merge(Base, Req, Opts),
-    TagResult = hb_maps:find(<<"tag">>, Merged, Opts),
-    ValueResult = hb_maps:find(<<"value">>, Merged, Opts),
-    case {TagResult, ValueResult} of
-        {{ok, TagParam}, {ok, ValueParam}} 
-        when is_binary(TagParam), is_binary(ValueParam) ->
-            extract_from_parameters(TagParam, ValueParam);
-        _ ->
-            extract_with_defaults(Merged, Opts)
-    end.
-
-%% @doc Extract tag pairs from found tag and value parameters
-extract_from_parameters(TagParam, ValueParam) ->
-    IsTagArray = is_array_syntax(TagParam),
-    IsValueArray = is_array_syntax(ValueParam),
-    case {IsTagArray, IsValueArray} of
-        {true, true} ->
-            % Both are arrays: [tag1,tag2] & [val1,val2]
-            Tags = parse_array_parameter(TagParam),
-            Values = parse_array_parameter(ValueParam),
-            TagValuePairs = pair_tags_values(Tags, Values),
-            group_tag_pairs(TagValuePairs);
-        {false, false} ->
-            % Single tag/value pair: tag=X & value=Y
-            [{TagParam, ValueParam}];
-        _ ->
-            % Mismatched formats, treat as single pair
-            [{TagParam, ValueParam}]
-    end.
-
-%% @doc Extract tag pairs with default values when parameters not found
-extract_with_defaults(Merged, Opts) ->
-    Key = hb_maps:get(<<"tag">>, Merged, <<"">>, Opts),
-    Value = hb_maps:get(<<"value">>, Merged, <<"">>, Opts),
-    [{Key, Value}].
-
-%% @doc Pair up tags and values, handling mismatched counts
-pair_tags_values([], []) -> [];
-pair_tags_values([Tag|Tags], [Value|Values]) -> 
-    [{Tag, Value} | pair_tags_values(Tags, Values)];
-pair_tags_values([Tag|Tags], []) -> 
-    [{Tag, <<"">>} | pair_tags_values(Tags, [])];
-pair_tags_values([], [Value|Values]) -> 
-    [{<<"">>, Value} | pair_tags_values([], Values)].
-
-%% @doc Group tag pairs by tag name, combining values for duplicate tags
-%% Example: [{<<"type">>, <<"process">>}, {<<"type">>, <<"message">>}] 
-%% -> [{<<"type">>, [<<"process">>, <<"message">>]}]
-group_tag_pairs(TagValuePairs) ->
-    % Group by tag name
-    GroupedMap = lists:foldl(
-        fun({Tag, Value}, Acc) ->
-            maps:update_with(
-                Tag, 
-                fun(Existing) -> 
-                    [Value | Existing] 
-                end, 
-                [Value], 
-                Acc
-            )
-        end,
-        #{},
-        TagValuePairs
-    ),
-    % Convert back to list, reversing values to maintain order
-    [{Tag, lists:reverse(Values)} || {Tag, Values} <- maps:to_list(GroupedMap)].
-
-%% @doc Check if a parameter uses array syntax [item1,item2,...]
-is_array_syntax(<<$[, _/binary>> = Param) ->
-    byte_size(Param) > 2 andalso binary:last(Param) =:= $];
-is_array_syntax(_) ->
-    false.
-
-%% @doc Parse array parameter "[item1,item2,item3]" into 
-%% ["item1", "item2", "item3"]
-parse_array_parameter(<<$[, Rest/binary>>) ->
-    % Remove the closing bracket
-    RestSize = byte_size(Rest),
-    ContentWithoutBracket = binary:part(Rest, 0, RestSize - 1),
-    % Split by comma and trim whitespace
-    Items = binary:split(ContentWithoutBracket, <<",">>, [global]),
-    [string:trim(Item) || Item <- Items].
-
-%% @doc Build GraphQL tags query from tag pairs list
-%% Handles both single values and lists of values per tag
-%% Example: [{<<"type">>, <<"process">>}] -> 
-%% <<"{"name": "type", "values": ["process"]}">>
-build_tags_query(TagPairs) ->
-    TagStrings = lists:map(fun build_single_tag_query/1, TagPairs),
-    iolist_to_binary(lists:join(<<", ">>, TagStrings)).
-
-%% @doc Build GraphQL query fragment for a single tag
-build_single_tag_query({Key, Value}) when is_binary(Value) ->
-    % Single value: {name: "tag", values: ["value"]}
-    build_tag_with_values(Key, [Value]);
-build_single_tag_query({Key, Values}) when is_list(Values) ->
-    % Multiple values: {name: "tag", values: ["val1", "val2"]}
-    build_tag_with_values(Key, Values).
-
-%% @doc Build GraphQL tag object with quoted values array
-build_tag_with_values(Key, Values) ->
-    QuotedValues = [<<"\"", V/binary, "\"">> || V <- Values],
-    ValuesArray = iolist_to_binary(lists:join(<<", ">>, QuotedValues)),
-    <<"{name: \"", Key/binary, "\", values: [", ValuesArray/binary, "]}">>.
-
-%% @doc Extract array values from parameters, supporting multiple input formats
-%% Handles: "value", "val1,val2", "[val1,val2]"
-extract_array_values(ParamKey, Merged, Opts) ->
-    case hb_maps:get(ParamKey, Merged, <<>>, Opts) of
-        <<>> -> [];
-        Param when is_binary(Param) ->
-            case is_array_syntax(Param) of
-                true -> parse_array_parameter(Param);
-                false -> parse_comma_separated(Param)
-            end;
-        _ -> []
-    end.
-
-%% @doc Parse comma-separated values "val1,val2,val3" into ["val1", "val2", "val3"]
-parse_comma_separated(<<>>) -> [];
-parse_comma_separated(Param) ->
-    Items = binary:split(Param, <<",">>, [global]),
-    [string:trim(Item) || Item <- Items].
-
-%% @doc Build string array for GraphQL: ["val1", "val2"] -> "\"val1\", \"val2\""
-build_string_array(Values) ->
-    QuotedValues = [<<"\"", V/binary, "\"">> || V <- Values, V =/= <<>>],
-    iolist_to_binary(lists:join(<<", ">>, QuotedValues)).
 
 %%% Tests
 
@@ -411,45 +280,27 @@ basic_test() ->
     ?event({basic_test_result, Res}),
     ok.
 
-%% @doc Test multiple tag query functionality
-multiple_tags_test() ->
-    Store = hb_test_utils:test_store(hb_store_lmdb),
-    Opts = #{ store => Store, priv_wallet => hb:wallet() },
-    Node = hb_http_server:start_node(Opts),
-    
-    % Test query construction with multiple tag pairs
-    TagPairs = [{<<"type">>, <<"process">>}, {<<"Data-Protocol">>, <<"ao">>}],
-    QueryResult = build_tags_query(TagPairs),
-    ?event({multiple_tags_query_result, QueryResult}),
-    {ok, Res} =
-        hb_http:get(
-            Node,
-            #{
-                <<"path">> => 
-                    <<"~copycat@1.0/graphql?tag=[type,type,Data-Protocol]"
-                      "&value=[process,message,ao]">>
-            },
-            #{}
-        ),
-    ?event({multiple_tags_test_result, Res}),
-    ok.
-
-%% @doc Test owners query with comma-separated values
-owners_query_test() ->
-    Store = hb_test_utils:test_store(hb_store_lmdb),
-    Opts = #{ store => Store, priv_wallet => hb:wallet() },
-    Node = hb_http_server:start_node(Opts),
-    
-    {ok, Res} =
-        hb_http:get(
-            Node,
-            #{
-                <<"path">> => 
-                    <<"~copycat@1.0/graphql?"
-                    "owners=pxfKw58POM24dwBLmiah2K81UX-sM2CXOAm6AI13SvY"
-                    ",VXj58O78wcrorcWV1Y5zT9vTmukV3_Xmb36iaJsztK0">>
-            },
-            #{}
-        ),
-    ?event({owners_test_result, Res}),
+query_test() ->
+    Base = #{
+        <<"query">> => #{
+            <<"type">> => [<<"process">>,<<"assignment">>],
+            <<"Data-Protocol">> => <<"ao">>
+        }
+    },
+    Req = #{},
+    Opts = #{},
+    {ok, Query} = parse_query(Base, Req, Opts),
+    ?event({query_test_result, {explicit, Query}}),
+    ?assert(
+        binary:matches(
+            Query, 
+            <<"{name: \"type\", values: [\"process\", \"assignment\"]}">>
+        ) =/= []
+    ),
+    ?assert(
+        binary:matches(
+            Query, 
+            <<"{name: \"Data-Protocol\", values: [\"ao\"]}">>
+        ) =/= []
+    ),
     ok.
