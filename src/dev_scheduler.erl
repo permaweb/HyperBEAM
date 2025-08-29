@@ -1169,6 +1169,7 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                     {ok, NormSched} = 
                         case Variant of
                             <<"ao.N.1">> ->
+                                cache_remote_schedule(Variant, ProcID, Res, Opts),
                                 {ok, Res};
                             <<"ao.TN.1">> ->
                                 JSONRes =
@@ -1180,6 +1181,8 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                                             Opts#{ hashpath => ignore }
                                         )
                                     ),
+                                cache_remote_schedule(Variant, ProcID, JSONRes, Opts),
+                                ?event(debug_aos2, {json_res, {json, JSONRes}}),
                                 Filtered = filter_json_assignments(JSONRes, To, From, Opts),
                                 dev_scheduler_formats:aos2_to_assignments(
                                     ProcID,
@@ -1187,7 +1190,6 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                                     Opts
                                 )
                         end,
-                    cache_remote_schedule(NormSched, Opts),
                     % Add existing local assignments we read to the remote schedule.
                     % In order to do this, we need to first convert the remote
                     % assignments to a list, maintaining the order of the keys.
@@ -1201,25 +1203,13 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                                 ),
 								Opts
                             )
-                        ),                    
-                    % Normalize the local assignments to get the slot.
-                    FromLocalCacheNormalized = lists:map(
-                        fun (Assignment) ->
-                            Norm = dev_scheduler_formats:aos2_normalize_types(Assignment),
-                            #{
-                                <<"body">> => Norm,
-                                <<"slot">> => 
-                                    hb_maps:get(<<"slot">>, Norm, undefined, Opts)
-                            }
-                        end, 
-                        LocalAssignments
-                    ),
+                        ),
                     % Merge the local assignments with the remote assignments,
                     % and normalize the keys.
                     Merged =
                         dev_scheduler_formats:assignments_to_bundle(
                             ProcID,
-                            MergedAssignments = FromLocalCacheNormalized ++ RemoteAssignments,
+                            MergedAssignments = LocalAssignments ++ RemoteAssignments,
                             hb_ao:get(<<"continues">>, NormSched, false, Opts),
                             Opts
                         ),
@@ -1251,16 +1241,34 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
     end.
 
 %% @doc Cache a schedule received from a remote scheduler.
-cache_remote_schedule(Schedule, Opts) ->
+cache_remote_schedule(<<"ao.TN.1">>, ProcID, Schedule, Opts) ->
+    % If the schedule has a variant of ao.TN.1, we add this to the raw assignment
+    % before caching it.
+    ModSchedule =
+        lists:map(
+            fun(Assignment) ->
+                Assignment#{
+                    <<"variant">> => <<"ao.TN.1">>,
+                    <<"slot">> =>
+                        hb_maps:get(<<"cursor">>, Assignment, undefined, Opts),
+                    <<"process">> => ProcID
+                }
+            end,
+            hb_util:ok(hb_maps:find(<<"edges">>, Schedule, Opts))
+        ),
+    cache_remote_schedule(common, ProcID, ModSchedule, Opts);
+cache_remote_schedule(<<"ao.N.1">>, ProcID, Schedule, Opts) ->
+    Assignments =
+        hb_ao:get(
+            <<"assignments">>,
+            Schedule,
+            Opts#{ hashpath => ignore }
+        ),
+    cache_remote_schedule(common, ProcID, Assignments, Opts);
+cache_remote_schedule(_, _ProcID, Schedule, Opts) ->
     Cacher =
         fun() ->
             ?event(debug_sched, {caching_remote_schedule, {schedule, Schedule}}),
-            Assignments =
-                hb_ao:get(
-                    <<"assignments">>,
-                    Schedule,
-                    Opts#{ hashpath => ignore }
-                ),
             lists:foreach(
                 fun(Assignment) ->
                     % We do not care about the result of the write because it is only
@@ -1274,7 +1282,11 @@ cache_remote_schedule(Schedule, Opts) ->
                 end,
                 AssignmentList =
                     hb_util:message_to_ordered_list(
-                        hb_maps:without([<<"priv">>], hb_ao:normalize_keys(Assignments, Opts), Opts)
+                        hb_maps:without(
+                            [<<"priv">>],
+                            hb_ao:normalize_keys(Schedule, Opts),
+                            Opts
+                        )
                     )
             ),
             ?event(debug_sched,

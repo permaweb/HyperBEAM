@@ -153,7 +153,12 @@ from_bare_item(BareItem) ->
                 )
             );
         {string, S} -> S;
-        {token, T} -> binary_to_existing_atom(T);
+        {token, T} ->
+            try binary_to_existing_atom(T) of
+                Atom -> Atom
+            catch
+                error:badarg -> T
+            end;
         {binary, B} -> B
     end.
 

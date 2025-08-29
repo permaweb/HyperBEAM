@@ -150,6 +150,8 @@ parse_query(Base, Req, Opts) ->
         [<<"query">>|_] ->
             % Find the query in either the `query' field or the `body'.
             case hb_maps:find(<<"query">>, Merged, Opts) of
+                {ok, QueryKeys} when is_map(QueryKeys) ->
+                    default_query(<<"tags">>, QueryKeys, Opts);
                 {ok, Bin} when is_binary(Bin) ->
                     {ok, Bin};
                 _ ->
@@ -197,8 +199,34 @@ parse_query(Base, Req, Opts) ->
     end.
 
 %% @doc Return a default query for a given filter type.
-default_query(<<"tags">>, TagPairs, _Opts) ->
-    TagsQuery = build_tags_query(TagPairs),
+default_query(<<"tags">>, RawMessage, Opts) ->
+    Message = hb_cache:ensure_all_loaded(RawMessage, Opts),
+    BinaryPairs =
+        lists:map(
+            fun({Key, Value}) -> {hb_util:bin(Key), hb_util:bin(Value)} end,
+            hb_maps:to_list(Message, Opts)
+        ),
+    TagsQueryStr =
+        hb_util:bin(
+            [
+                <<"{name: \"", Key/binary, "\", values: [\"", Value/binary, "\"]}">>
+            ||
+                {Key, Value} <- BinaryPairs
+            ]
+        ),
+    ?event({tags_query,
+        {message, Message},
+        {binary_pairs, BinaryPairs},
+        {tags_query_str, {string, TagsQueryStr}}
+    }),
+    {ok, <<"query($after: String) { ",
+        "transactions(after: $after, tags: [",
+            TagsQueryStr/binary,
+        "]) { ",
+        "edges { ", (hb_gateway_client:item_spec())/binary , " } ",
+        "pageInfo { hasNextPage }",
+    "} }">>};
+default_query(<<"tag">>, {Key, Value}, _Opts) ->
     {ok, <<"query($after: String) { ",
         "transactions(after: $after, tags: [", TagsQuery/binary, "]) { ",
         "edges { ", (hb_gateway_client:item_spec())/binary , " } ",
@@ -207,7 +235,7 @@ default_query(<<"tags">>, TagPairs, _Opts) ->
 default_query(<<"owners">>, Values, _Opts) when is_list(Values) ->
     ValuesArray = build_string_array(Values),
     {ok, <<"query($after: String) { ",
-        "transactions(after: $after, owners: [", ValuesArray/binary, "]) { ",
+        "transactions(after: $after, recipients: [\"", Recipient/binary, "\"]) { ",
         "edges { ", (hb_gateway_client:item_spec())/binary , " } ",
         "pageInfo { hasNextPage }",
     "} }">>};

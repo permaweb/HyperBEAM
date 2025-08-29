@@ -55,6 +55,8 @@ ensure_loaded(Msg) ->
     ensure_loaded(Msg, #{}).
 ensure_loaded(Msg, Opts) ->
     ensure_loaded([], Msg, Opts).
+ensure_loaded(Ref, {Status, Msg}, Opts) when Status == ok; Status == error ->
+    {Status, ensure_loaded(Ref, Msg, Opts)};
 ensure_loaded(Ref,
         Lk = {link, ID, LkOpts = #{ <<"type">> := <<"link">>, <<"lazy">> := Lazy }},
         RawOpts) ->

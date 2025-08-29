@@ -81,8 +81,7 @@ read(ProcID, Slot, RawOpts) ->
         {read_assignment,
             {proc_id, ProcID},
             {slot, Slot},
-            {store, Store},
-            {opts, Opts}
+            {store, Store}
         }
     ),
     ?event({resolved_path, {p1, P1}, {p2, P2}, {resolved, ResolvedPath}}),
@@ -90,11 +89,13 @@ read(ProcID, Slot, RawOpts) ->
         {ok, Assignment} ->
             % If the slot key is not present, the format of the assignment is
             % AOS2, so we need to convert it to the canonical format.
-            case hb_ao:get(<<"slot">>, Assignment, Opts) of
-                not_found ->
-                    Norm = dev_scheduler_formats:aos2_normalize_types(Assignment),
-                    {ok, hb_cache:ensure_all_loaded(Norm, Opts)};
-                _ ->
+            case hb_ao:get(<<"variant">>, Assignment, Opts) of
+                <<"ao.TN.1">> ->
+                    Loaded = hb_cache:ensure_all_loaded(Assignment, Opts),
+                    Norm = dev_scheduler_formats:aos2_to_assignment(Loaded, Opts),
+                    ?event({normalized_aos2_assignment, Norm}),
+                    {ok, Norm};
+                <<"ao.N.1">> ->
                     {ok, hb_cache:ensure_all_loaded(Assignment, Opts)}
             end;
         not_found ->
@@ -202,6 +203,7 @@ volatile_schedule_test() ->
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),
     Assignment = #{
+        <<"variant">> => <<"ao.N.1">>,
         <<"process">> => ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
         <<"slot">> => 1,
         <<"hash-chain">> => <<"test-hash-chain">>
@@ -276,6 +278,7 @@ concurrent_read_write_test() ->
     spawn_link(fun() ->
         lists:foreach(fun(Slot) ->
             Assignment = #{
+                <<"variant">> => <<"ao.N.1">>,
                 <<"process">> => ProcID,
                 <<"slot">> => Slot,
                 <<"hash-chain">> => <<"race-test-", (integer_to_binary(Slot))/binary>>
@@ -346,6 +349,7 @@ large_assignment_volume_test() ->
     lists:foreach(
         fun(Slot) ->
             Assignment = #{
+                <<"variant">> => <<"ao.N.1">>,
                 <<"process">> => ProcID,
                 <<"slot">> => Slot,
                 <<"hash-chain">> => crypto:strong_rand_bytes(64)
@@ -382,6 +386,7 @@ rapid_restart_test() ->
             lists:foreach(
                 fun(Slot) ->
                     Assignment = #{
+                        <<"variant">> => <<"ao.N.1">>,
                         <<"process">> => ProcID,
                         <<"slot">> => Slot + (Cycle * 10),
                         <<"hash-chain">> =>
@@ -419,6 +424,7 @@ mixed_store_reset_operations_test() ->
     hb_store:start(NonVolStore),
     ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Assignment1 = #{
+        <<"variant">> => <<"ao.N.1">>,
         <<"process">> => ProcID,
         <<"slot">> => 1,
         <<"hash-chain">> => <<"mixed-test-1">>
@@ -534,6 +540,7 @@ volatile_store_corruption_test() ->
     hb_store:start(NonVolStore),
     ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Assignment = #{
+        <<"variant">> => <<"ao.N.1">>,
         <<"process">> => ProcID,
         <<"slot">> => 1,
         <<"hash-chain">> => <<"corruption-test">>

@@ -437,8 +437,9 @@ maybe_typed(Key, Value, Opts) ->
                         OnlyKey,
                         {resolve, from(#{ <<"path">> => Subpath }, Opts)}
                     };
-                {_T, Bin} when is_binary(Bin) ->
-                    {typed, OnlyKey, dev_codec_structured:decode_value(Type, Bin)}
+                {_T, RawValue} when is_binary(RawValue) ->
+                    Decoded = hb_escape:decode_quotes(RawValue),
+                    {typed, OnlyKey, dev_codec_structured:decode_value(Type, Decoded)}
             end
     end.
 

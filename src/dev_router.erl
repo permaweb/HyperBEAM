@@ -888,7 +888,7 @@ dynamic_router_pricing() ->
                         #{
                             <<"registration-peer">> => <<"http://localhost:10010">>,         
                             <<"template">> => <<"/c">>,  
-                            <<"prefix">> => <<"http://localhost:10009">>,                   
+                            <<"prefix">> => <<"http://localhost:10009">>,
                             <<"price">> => 0                   
                         },
                         #{
