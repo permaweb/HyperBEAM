@@ -587,13 +587,13 @@ nested_data_tabm_test() ->
         ],
         data = #{ 
             <<"data">> => #tx{
-                format = 2,
+                format = ans104,
                 tags = [
                     {<<"tag">>, <<"level-2">>}
                 ],
                 data = #{
                     <<"data">> => #tx{
-                        format = 2,
+                        format = ans104,
                         tags = [
                             {<<"tag">>, <<"level-3">>}
                         ],
@@ -641,13 +641,13 @@ nested_non_data_key_tabm_test() ->
         ],
         data = #{ 
             <<"a1">> => #tx{
-                format = 2,
+                format = ans104,
                 tags = [
                     {<<"tag2">>, <<"level-2">>}
                 ],
                 data = #{
                     <<"a2">> => #tx{
-                        format = 2,
+                        format = ans104,
                         tags = [
                             {<<"a3">>, <<"nested-data">>},
                             {<<"tag3">>, <<"level-3">>}
@@ -701,20 +701,20 @@ nested_multiple_tabm_test() ->
         ],
         data = #{ 
             <<"a1">> => #tx{
-                format = 2,
+                format = ans104,
                 tags = [
                     {<<"tag2">>, <<"level-2">>}
                 ],
                 data = #{
                     <<"a2">> => #tx{
-                        format = 2,
+                        format = ans104,
                         tags = [
                             {<<"a3">>, <<"nested-data">>},
                             {<<"tag3">>, <<"level-3">>}
                         ]
                     },
                     <<"data">> => #tx{
-                        format = 2,
+                        format = ans104,
                         tags = [
                             {<<"other-tag3">>, <<"other-level-3">>}
                         ]
@@ -722,7 +722,7 @@ nested_multiple_tabm_test() ->
                 }
             },
             <<"data">> => #tx{
-                format = 2,
+                format = ans104,
                 tags = [
                     {<<"other-tag2">>, <<"other-level-2">>}
                 ]
