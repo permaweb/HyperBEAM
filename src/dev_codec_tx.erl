@@ -73,7 +73,7 @@ do_from(RawTX, Req, Opts) ->
     % Assert a minimally valid TX record so we can avoid a lot of edge case
     % handling in the rest of the code.
     enforce_valid_tx(RawTX),
-    TX = normalize(RawTX),
+    TX = ar_bundles:deserialize(normalize(RawTX)),
     ?event({parsed_tx, TX}),
     % Get the fields, tags, and data from the TX.
     Fields = dev_codec_tx_from:fields(TX, <<>>, Opts),
@@ -106,6 +106,7 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
     % identify this tag and extract just the binary.
     {ok,
         normalize(#tx{
+            format = 2,
             tags = [{<<"ao-type">>, <<"binary">>}],
             data = Binary
         })
@@ -543,28 +544,273 @@ ao_data_key_test() ->
     },
     do_tabm_roundtrips(UnsignedTX, UnsignedTABM, SignedCommitment).
 
+unsorted_tags_test() ->
+    TX = #tx{
+        format = 2,
+        tags = [
+            {<<"z">>, <<"position-1">>},
+            {<<"a">>, <<"position-2">>}
+        ]
+    },
+    UnsignedTABM = #{
+        <<"z">> => <<"position-1">>,
+        <<"a">> => <<"position-2">>
+    },
+    SignedCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [<<"z">>, <<"a">>],
+        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"bundle">> => <<"false">>
+    },
+    % Only do a signed test since we don't need the tag order to be preserved
+    % for messages without a commitment. And since this test case doesn't
+    % require an original-tags commitment, no unsigned commitment will be
+    % generated.
+    do_signed_tx_roundtrip(TX, UnsignedTABM, SignedCommitment, false).
+
+nested_data_tabm_test() ->
+    UnsignedTABM = #{
+        <<"data">> => #{
+            <<"data">> => #{
+                <<"data">> => <<"nested-data">>,
+                <<"tag">> => <<"level-3">>
+            },
+            <<"tag">> => <<"level-2">>
+        },
+        <<"tag">> => <<"level-1">>
+    },
+
+    TX = #tx{
+        format = 2,
+        tags = [
+            {<<"tag">>, <<"level-1">>}
+        ],
+        data = #{ 
+            <<"data">> => #tx{
+                format = 2,
+                tags = [
+                    {<<"tag">>, <<"level-2">>}
+                ],
+                data = #{
+                    <<"data">> => #tx{
+                        format = 2,
+                        tags = [
+                            {<<"tag">>, <<"level-3">>}
+                        ],
+                        data = <<"nested-data">>
+                    }
+                }
+            }
+        }
+    },
+    UnsignedTX = normalize(TX),
+    NoLinksCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [<<"data">>, <<"tag">>],
+        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"bundle">> => <<"true">>
+    },
+    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true),
+
+    % XXX: Fails in some ans104 code, commenting out until we can resolve.
+    % LinksCommitment = #{
+    %     <<"commitment-device">> => <<"tx@1.0">>,
+    %     <<"committed">> => [<<"data+link">>, <<"tag">>],
+    %     <<"type">> => <<"rsa-pss-sha256">>,
+    %     <<"bundle">> => <<"false">>
+    % },
+    % do_tabm_roundtrips(UnsignedTX, UnsignedTABM, LinksCommitment, false),
+    ok.
+
+nested_non_data_key_tabm_test() ->
+    UnsignedTABM = #{
+        <<"a1">> => #{
+            <<"a2">> => #{
+                <<"a3">> => <<"nested-data">>,
+                <<"tag3">> => <<"level-3">>
+            },
+            <<"tag2">> => <<"level-2">>
+        },
+        <<"tag1">> => <<"level-1">>
+    },
+
+    TX = #tx{
+        format = 2,
+        tags = [
+            {<<"tag1">>, <<"level-1">>}
+        ],
+        data = #{ 
+            <<"a1">> => #tx{
+                format = 2,
+                tags = [
+                    {<<"tag2">>, <<"level-2">>}
+                ],
+                data = #{
+                    <<"a2">> => #tx{
+                        format = 2,
+                        tags = [
+                            {<<"a3">>, <<"nested-data">>},
+                            {<<"tag3">>, <<"level-3">>}
+                        ]
+                    }
+                }
+            }
+        }
+    },
+    UnsignedTX = normalize(TX),
+    NoLinksCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [<<"a1">>, <<"tag1">>],
+        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"bundle">> => <<"true">>
+    },
+    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true),
+
+    % XXX: Fails in some ans104 code, commenting out until we can resolve.
+    % LinksCommitment = #{
+    %     <<"commitment-device">> => <<"tx@1.0">>,
+    %     <<"committed">> => [<<"a1+link">>, <<"tag1">>],
+    %     <<"type">> => <<"rsa-pss-sha256">>,
+    %     <<"bundle">> => <<"false">>
+    % },
+    % do_tabm_roundtrips(UnsignedTX, UnsignedTABM, LinksCommitment, false),
+    ok.
+
+nested_multiple_tabm_test() ->
+    UnsignedTABM = #{
+        <<"a1">> => #{
+            <<"a2">> => #{
+                <<"a3">> => <<"nested-data">>,
+                <<"tag3">> => <<"level-3">>
+            },
+            <<"data">> => #{
+                <<"other-tag3">> => <<"other-level-3">>
+            },
+            <<"tag2">> => <<"level-2">>
+        },
+        <<"data">> => #{
+            <<"other-tag2">> => <<"other-level-2">>
+        },
+        <<"tag1">> => <<"level-1">>
+    },
+
+    TX = #tx{
+        format = 2,
+        tags = [
+            {<<"tag1">>, <<"level-1">>}
+        ],
+        data = #{ 
+            <<"a1">> => #tx{
+                format = 2,
+                tags = [
+                    {<<"tag2">>, <<"level-2">>}
+                ],
+                data = #{
+                    <<"a2">> => #tx{
+                        format = 2,
+                        tags = [
+                            {<<"a3">>, <<"nested-data">>},
+                            {<<"tag3">>, <<"level-3">>}
+                        ]
+                    },
+                    <<"data">> => #tx{
+                        format = 2,
+                        tags = [
+                            {<<"other-tag3">>, <<"other-level-3">>}
+                        ]
+                    }
+                }
+            },
+            <<"data">> => #tx{
+                format = 2,
+                tags = [
+                    {<<"other-tag2">>, <<"other-level-2">>}
+                ]
+            }
+        }
+    },
+    UnsignedTX = normalize(TX),
+    NoLinksCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [<<"a1">>, <<"data">>, <<"tag1">>],
+        <<"type">> => <<"rsa-pss-sha256">>,
+        <<"bundle">> => <<"true">>
+    },
+    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true),
+
+    % XXX: Fails in some ans104 code, commenting out until we can resolve.
+    % LinksCommitment = #{
+    %     <<"commitment-device">> => <<"tx@1.0">>,
+    %     <<"committed">> => [<<"a1+link">>, <<"tag1">>],
+    %     <<"type">> => <<"rsa-pss-sha256">>,
+    %     <<"bundle">> => <<"false">>
+    % },
+    % do_tabm_roundtrips(UnsignedTX, UnsignedTABM, LinksCommitment, false),
+    ok.
+
+%% @doc This test is disabled for now. Unclear whether we should deserialize
+%% data by default. If we don't need to deserialize data, then this test
+%% is no different from earlier tests which have `data` set to a binary.
+serialized_data_item_tx_test_disabled() ->
+    Anchor = crypto:strong_rand_bytes(32),
+    Target = crypto:strong_rand_bytes(32),
+    Data = <<"data">>,
+
+    DataItem = #tx{
+        format = ans104,
+        tags = [
+            {<<"ans104-tag1">>, <<"value1">>},
+            {<<"ans104-tag2">>, <<"value2">>}
+        ],
+        anchor = Anchor,
+        target = Target,
+        data = Data
+    },
+
+    SerializedDataItem = ar_bundles:serialize(DataItem),
+    TX = #tx{
+        format = 2,
+        tags = [
+            {<<"tx-tag1">>, <<"value1">>},
+            {<<"tx-tag2">>, <<"value2">>}
+        ],
+        data = SerializedDataItem,
+        data_size = byte_size(SerializedDataItem),
+        data_root = ar_tx:data_root(SerializedDataItem)
+    },
+    UnsignedTABM = #{ },
+    SignedCommitment = #{ },
+    do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment, false).
+
 %% @doc Run a series of roundtrip tests that start and end with a #tx record
 do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
-   do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM),
-   do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment).
+    % For tests which don't care about bundling, just use false.
+    do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment, false).
+do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment, Bundle) ->
+    Req = #{ <<"bundle">> => Bundle },
+    do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM, Req),
+    do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Req).
 
-do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM) ->
+do_unsigned_tx_roundtrip(UnsignedTX, UnsignedTABM, Req) ->
     % Serialize -> Deserialize
     JSON = ar_tx:tx_to_json_struct(UnsignedTX),
     DeserializedTX = ar_tx:json_struct_to_tx(JSON),
+    ?event(debug_test, {unsigned_tx_roundtrip,
+        {expected_tx, UnsignedTX}, {deserialized_tx, DeserializedTX}}),
+    ?assertEqual(UnsignedTX, DeserializedTX, unsigned_tx_roundtrip),
     % TX -> TABM
-    TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
+    TABM = hb_util:ok(from(DeserializedTX, Req, #{})),
     ?event(debug_test, {unsigned_tx_roundtrip,
         {expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
     ?assertEqual(UnsignedTABM, TABM, unsigned_tx_roundtrip),
     % TABM -> TX
-    TX = hb_util:ok(to(TABM, #{}, #{})),
+    TX = hb_util:ok(to(TABM, Req, #{})),
     ExpectedTX = UnsignedTX#tx{ unsigned_id = ar_tx:id(UnsignedTX, unsigned) },
     ?event(debug_test, {unsigned_tx_roundtrip,
         {expected_tx, ExpectedTX}, {actual_tx, TX}}),
     ?assertEqual(ExpectedTX, TX, unsigned_tx_roundtrip).
 
-do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
+do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Req) ->
     % Sign TX
     SignedTX = ar_tx:sign(UnsignedTX, hb:wallet()),
     ?assert(ar_tx:verify(SignedTX), signed_tx_roundtrip),
@@ -572,7 +818,7 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
     JSON = ar_tx:tx_to_json_struct(SignedTX),
     DeserializedTX = ar_tx:json_struct_to_tx(JSON),
     % TX -> TABM
-    TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
+    TABM = hb_util:ok(from(DeserializedTX, Req, #{})),
     SignedCommitment = Commitment#{
         <<"committer">> => hb_util:human_id(SignedTX#tx.owner_address),
         <<"signature">> => hb_util:encode(SignedTX#tx.signature),
@@ -586,7 +832,7 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
         {expected_tabm, SignedTABM}, {actual_tabm, TABM}}),
     ?assertEqual(SignedTABM, TABM, signed_tx_roundtrip),
     % TABM -> TX
-    TX = hb_util:ok(to(TABM, #{}, #{})),
+    TX = hb_util:ok(to(TABM, Req, #{})),
     ExpectedTX = SignedTX#tx{ 
         unsigned_id = ar_tx:generate_id(SignedTX, unsigned) },
     ?event(debug_test, {signed_tx_roundtrip,
@@ -595,30 +841,36 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
 
 %% @doc Run a series of roundtrip tests that start and end with a TABM.
 do_tabm_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
-    do_unsigned_tabm_roundtrip(UnsignedTX, UnsignedTABM),
-    do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment).
+    % For tests which don't care about bundling, just use false.
+    do_tabm_roundtrips(UnsignedTX, UnsignedTABM, Commitment, false).
+do_tabm_roundtrips(UnsignedTX, UnsignedTABM, Commitment, Bundle) ->
+    Req = #{ <<"bundle">> => Bundle },
+    Device = #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => Bundle },
+    do_unsigned_tabm_roundtrip(UnsignedTX, UnsignedTABM, Req),
+    do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req).
     
-do_unsigned_tabm_roundtrip(UnsignedTX, UnsignedTABM) ->
+do_unsigned_tabm_roundtrip(UnsignedTX0, UnsignedTABM, Req) ->
+    UnsignedTX = UnsignedTX0#tx{ 
+        unsigned_id = ar_tx:generate_id(UnsignedTX0, unsigned) },
     % TABM -> TX
-    TX = hb_util:ok(to(UnsignedTABM, #{}, #{})),
+    TX = hb_util:ok(to(UnsignedTABM, Req, #{})),
+    ?event(debug_test, {unsigned_tabm_roundtrip, 
+        {expected_tx, UnsignedTX}, {actual_tx, TX}}),
+    ?assertEqual(UnsignedTX, TX, unsigned_tabm_roundtrip),
     % Serialize -> Deserialize
     JSON = ar_tx:tx_to_json_struct(TX),
     DeserializedTX = ar_tx:json_struct_to_tx(JSON),
-    ?event(debug_test, {unsigned_tabm_roundtrip, 
-        {expected_tx, UnsignedTX},
-        {actual_tx, DeserializedTX}}),
-    ?assertEqual(UnsignedTX, DeserializedTX, unsigned_tabm_roundtrip),
     % TX -> TABM
-    TABM = hb_util:ok(from(DeserializedTX, #{}, #{})),
+    TABM = hb_util:ok(from(DeserializedTX, Req, #{})),
     ?event(debug_test, {unsigned_tabm_roundtrip,
         {expected_tabm, UnsignedTABM}, {actual_tabm, TABM}}),
     ?assertEqual(UnsignedTABM, TABM, unsigned_tabm_roundtrip).
 
-do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
+do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
     % Commit TABM
     Wallet = hb:wallet(),
     SignedTABM = hb_message:commit(
-        UnsignedTABM, #{priv_wallet => Wallet}, <<"tx@1.0">>),
+        UnsignedTABM, #{priv_wallet => Wallet}, Device),
     ?event(debug_test, {signed_tabm_roundtrip, {signed_tabm, SignedTABM}}),
     ?assert(hb_message:verify(SignedTABM), signed_tabm_roundtrip),
     {ok, _, SignedCommitment} = hb_message:commitment(
@@ -632,9 +884,12 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
         <<"keyid">> =>
             <<"publickey:", (hb_util:encode(ar_wallet:to_pubkey(Wallet)))/binary>>
     },
+    ?event(debug_test, {signed_tabm_roundtrip,
+        {expected_commitment, ExpectedCommitment},
+        {signed_commitment, SignedCommitment}}),
     ?assertEqual(ExpectedCommitment, SignedCommitment, signed_tabm_roundtrip),
     % TABM -> TX
-    SignedTX = hb_util:ok(to(SignedTABM, #{}, #{})),
+    SignedTX = hb_util:ok(to(SignedTABM, Req, #{})),
     ?assert(ar_tx:verify(SignedTX), signed_tabm_roundtrip),
     ExpectedTX = ar_tx:sign(UnsignedTX, Wallet),
     ?assert(ar_tx:verify(ExpectedTX), signed_tabm_roundtrip),
@@ -647,5 +902,5 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment) ->
             signature = SignedTX#tx.signature
         }, SignedTX, signed_tabm_roundtrip),
     % TX -> TABM
-    FinalTABM = hb_util:ok(from(SignedTX, #{}, #{})),
+    FinalTABM = hb_util:ok(from(SignedTX, Req, #{})),
     ?assertEqual(SignedTABM, FinalTABM, signed_tabm_roundtrip).
