@@ -75,100 +75,6 @@ post_config(NodeUrl, ConfigContent, Device) ->
             }
     end.
 
-%% @doc Create an AO process (equivalent to RedAO deploy-gz-ao.js)
-create_ao_process(Node, Wallet) ->
-    % Get wallet address (equivalent to gzAOAddress)
-    WalletAddress = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    % Load config values (equivalent to config.json)
-    Config = #{
-        <<"hb-authority">> => WalletAddress,
-        <<"legacy-authority">> => <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>,
-        <<"ao-token">> => <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>,
-        <<"beta-gz-ao-src">> => <<"LxLUDGJD2QLnyIVO_boJnUbVnyXjSuV0d90VNCt6I0g">>,
-        <<"beta-gz-ao-name">> => <<"[BETA-1.2] Green Zone AO">>,
-        <<"beta-gz-ao-ticker">> => <<"BETA-GZ">>,
-        <<"beta-gz-ao-denomination">> => <<"12">>,
-        <<"process-module">> => <<"URgYpPQzvxxfYQtjrIQ116bl3YBfcImo3JEnNo8Hlrk">>,
-        <<"process-scheduler">> => <<"_GQ33BkPtZrqxA84vM8Zk-N2aO0toNNu_C-l-rawrBA">>
-    },
-    
-    
-    % Build authorities list
-    HBAuthority = maps:get(<<"hb-authority">>, Config),
-    LegacyAuthority = maps:get(<<"legacy-authority">>, Config),
-    Authorities = <<HBAuthority/binary, ",", LegacyAuthority/binary>>,
-    
-    % Create process message (equivalent to aoLegacy.spawn)
-    ProcMsg = #{
-        <<"data-protocol">> => <<"ao">>,
-        <<"Type">> => <<"Process">>,
-        <<"Variant">> => <<"ao.TN.1">>,
-        <<"Module">> => maps:get(<<"process-module">>, Config),
-        <<"Scheduler">> => maps:get(<<"process-scheduler">>, Config),
-        <<"data">> => <<"1984">>,
-        % Tags equivalent to JavaScript version
-        <<"On-Boot">> => maps:get(<<"beta-gz-ao-src">>, Config),
-        <<"Authority">> => Authorities,
-        <<"ParentToken">> => maps:get(<<"ao-token">>, Config),
-        <<"Name">> => maps:get(<<"beta-gz-ao-name">>, Config),
-        <<"Ticker">> => maps:get(<<"beta-gz-ao-ticker">>, Config),
-        <<"Denomination">> => maps:get(<<"beta-gz-ao-denomination">>, Config)
-    },
-    
-    ?event({creating_ao_process, {process_msg, ProcMsg}}),
-    
-    % Sign and commit the process message
-    SignedProc = hb_message:commit(ProcMsg, #{ priv_wallet => Wallet }),
-    ProcessId = hb_message:id(SignedProc, none),
-    
-    ?event({ao_process_created, {process_id, ProcessId}}),
-    
-    % Schedule the process (equivalent to spawn)
-    case schedule_process(SignedProc, ProcessId, Wallet, Node) of
-        {ok, ScheduleRes} ->
-            ?event({ao_process_scheduled, {result, ScheduleRes}}),
-            
-            % Send authorities update message (equivalent to authoritiesUpdate)
-            AuthUpdateData = <<"ao.authorities = {'", HBAuthority/binary, "', '", LegacyAuthority/binary, "'}">>,
-            AuthUpdateMsg = #{
-                <<"data-protocol">> => <<"ao">>,
-                <<"type">> => <<"Message">>,
-                <<"variant">> => <<"ao.TN.1">>,
-                <<"target">> => ProcessId,
-                <<"data">> => AuthUpdateData,
-                <<"Action">> => <<"Eval">>
-            },
-            
-            SignedAuthUpdate = hb_message:commit(AuthUpdateMsg, #{ priv_wallet => Wallet }),
-            AuthUpdateId = hb_message:id(SignedAuthUpdate, none),
-            
-            case schedule_process(SignedAuthUpdate, AuthUpdateId, Wallet, Node) of
-                {ok, AuthRes} ->
-                    ?event({ao_authorities_updated, {result, AuthRes}}),
-                    {ok, ProcessId};
-                {error, AuthError} ->
-                    ?event({ao_authorities_update_failed, {error, AuthError}}),
-                    {error, AuthError}
-            end;
-        {error, ScheduleError} ->
-            ?event({ao_process_schedule_failed, {error, ScheduleError}}),
-            {error, ScheduleError}
-    end.
-
-%% @doc Schedule a process or message (helper function)
-schedule_process(SignedMsg, Target, Wallet, Node) ->
-    SignedReq = 
-        hb_message:commit(
-            #{
-                <<"path">> => <<"/~scheduler@1.0/schedule">>,
-                <<"method">> => <<"POST">>,
-                <<"type">> => <<"Process">>,
-                <<"body">> => SignedMsg
-            },
-            #{ priv_wallet => Wallet }
-        ),
-    hb_http:post(Node, SignedReq, #{}).
-
 
 %% @doc Test the deployment of the HyperBEAM node.
 run_test() ->
@@ -221,16 +127,28 @@ run_test() ->
 
     LedgerNode = hb_http_server:start_node(Opts),
 
-    % Create AO process (equivalent to RedAO deployment)
-    ?event({running_ao_deployment, "Creating AO process in Erlang"}),
-    case create_ao_process(LedgerNode, LedgerWallet) of
-        {ok, ProcessId} ->
-            ?event({ao_deployment_success, {process_id, ProcessId}});
-        {error, Error} ->
-            ?event({ao_deployment_error, {error, Error}})
+    % Run RedAO deployment script
+    ?event({running_redao_deployment, "Starting npm run deploy-gz-ao"}),
+    RedAODir = filename:join(["deployment", "RedAO"]),
+    ?event({redao_dir, {string, RedAODir}}),
+
+    InstallCommand = "cd " ++ RedAODir ++ " && npm i",
+    case os:cmd(InstallCommand) of
+        Output when is_list(Output) ->
+            ?event({redao_deployment_output, {explicit, Output}});
+        Error ->
+            ?event({redao_deployment_error, {string, hb_util:bin(Error)}})
     end,
 
-    timer:sleep(5000),
+    DeployCommand = "cd " ++ RedAODir ++ " && npm run deploy-gz-ao",
+    case os:cmd(DeployCommand) of
+        Output2 when is_list(Output2) ->
+            ?event({redao_deployment_output, {explicit, Output2}});
+        Error2 ->
+            ?event({redao_deployment_error, {string, hb_util:bin(Error2)}})
+    end,
+
+    timer:sleep(10000),
 
     % Define multiple nested updates
     ?event({ledger_node,  {explicit, LedgerNode}}),
