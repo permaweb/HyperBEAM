@@ -1,0 +1,7 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.VerificationError = void 0;
+class VerificationError extends Error {
+}
+exports.VerificationError = VerificationError;
+//# sourceMappingURL=verification-error.js.map

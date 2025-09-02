@@ -14,6 +14,7 @@
 -export([set_opts/1, set_opts/2, get_opts/0, get_opts/1]).
 -export([set_default_opts/1, set_proc_server_id/1]).
 -export([start_node/0, start_node/1]).
+-export([new_server/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 

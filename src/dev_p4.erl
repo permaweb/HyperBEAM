@@ -225,7 +225,7 @@ response(State, RawResponse, NodeMsg) ->
                                         Multiple -> Multiple
                                     end,
                                 <<"recipient">> =>
-                                    case hb_opts:get(p4_recipient, undefined, NodeMsg) of
+                                    case hb_opts:get(<<"p4_recipient">>, undefined, NodeMsg) of
                                         Addr when ?IS_ID(Addr) ->
                                             hb_util:human_id(Addr);
                                         _ ->
@@ -291,7 +291,7 @@ balance(_, Req, NodeMsg) ->
 is_chargable_req(Req, NodeMsg) ->
     NonChargableRoutes =
         hb_opts:get(
-            p4_non_chargable_routes,
+            <<"p4_non_chargable_routes">>,
             ?DEFAULT_NON_CHARGABLE_ROUTES,
             NodeMsg
         ),
@@ -370,7 +370,7 @@ non_chargable_route_test() ->
         },
     Node = hb_http_server:start_node(
         #{
-            p4_non_chargable_routes =>
+            <<"p4_non_chargable_routes">> =>
                 [
                     #{ <<"template">> => <<"/~p4@1.0/balance">> },
                     #{ <<"template">> => <<"/~meta@1.0/*/*">> }
@@ -450,7 +450,7 @@ hyper_token_ledger() ->
             #{
                 store => [hb_test_utils:test_store()],
                 priv_wallet => HostWallet,
-                p4_non_chargable_routes =>
+                <<"p4_non_chargable_routes">> =>
                     [
                         #{
                             <<"template">> => <<"/*~node-process@1.0/*">>

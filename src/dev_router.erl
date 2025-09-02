@@ -878,7 +878,7 @@ dynamic_router_pricing() ->
                     }
                 },
                 p4_recipient => ExecNodeAddr, 
-                p4_non_chargable_routes => [
+                <<"p4_non_chargable_routes">> => [
                     #{ <<"template">> => <<"/*~node-process@1.0/*">> },
                     #{ <<"template">> => <<"/*~router@1.0/*">> }
                 ],
@@ -886,7 +886,7 @@ dynamic_router_pricing() ->
                     <<"request">> => Processor,
                     <<"response">> => Processor
                 },
-                node_process_spawn_codec => <<"ans104@1.0">>,
+                <<"node_process_spawn_codec">> => <<"ans104@1.0">>,
                 router_opts => #{
                     <<"offered">> => [
                         #{

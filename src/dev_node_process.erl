@@ -50,7 +50,7 @@ spawn_register(Name, Opts) ->
                 hb_message:commit(
                     augment_definition(BaseDef, Opts),
                     Opts,
-                    hb_opts:get(node_process_spawn_codec, <<"httpsig@1.0">>, Opts)
+                    hb_opts:get(<<"node_process_spawn_codec">>, <<"httpsig@1.0">>, Opts)
                 ),
             ?event(node_process, {signed, {name, Name}, {signed, Signed}}),
             ID = hb_message:id(Signed, signed, Opts),
