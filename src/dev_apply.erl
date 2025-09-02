@@ -1,14 +1,13 @@
-%%% @doc A device that executes AO resolutions. It can be passed either a key
-%%% that points to a singleton message or list of messages to resolve, or a 
-%%% `base' and `request' pair to execute together via invoking the `pair' key.
-%%% 
+%%% @doc A device that executes AO resolutions. It can be passed a key that
+%%% refers to a path stored in the base message to execute upon the base or
+%%% message referenced by the `source' key.
+%%%
+%%% Alternatively, a `base' and `request' pair can be passed to execute
+%%% together via invoking the `pair' key.
+%%%
 %%% When given a message with a `base' and `request' key, the default handler
 %%% will invoke `pair' upon it, setting the `path' in the resulting request to
 %%% the key that `apply' was invoked with.
-%%% 
-%%% If no `base' or `request' key is present, the default handler will invoke
-%%% `eval' upon the given message, using the given key as the `source' of the
-%%% message/list of messages to resolve.
 %%% 
 %%% Paths found in keys interpreted by this device can contain a `base:' or
 %%% `request:' prefix to indicate the message from which the path should be
@@ -23,7 +22,7 @@
 %% resolved with the `apply/4' function.
 info(_) ->
     #{
-        excludes => [<<"keys">>, <<"set">>],
+        excludes => [<<"keys">>, <<"set">>, <<"set_path">>, <<"remove">>],
         default => fun default/4
     }.
 
@@ -38,19 +37,48 @@ default(Key, Base, Request, Opts) ->
         {B, R} when B =/= not_found andalso R =/= not_found ->
             pair(Key, Base, Request, Opts);
         _ ->
-            eval(Base, Request#{ <<"source">> => Key }, Opts)
+            eval(Base, Request#{ <<"apply-path">> => Key }, Opts)
     end.
 
-%% @doc Apply the request's `source' key. If this key is invoked as a result
-%% of the default handler, the `source' key is set to the key of the request.
+%% @doc Apply a request. We source the `base' message for the request either
+%% from the `source' key if it is present, or we assume that the entire base
+%% should be used. After sourcing the base, we resolve the `apply-path' on top
+%% of it as a singleton message, if it is present in the request.
 eval(Base, Request, Opts) ->
     maybe
-        {ok, Path} ?= find_path(<<"source">>, Base, Request, Opts),
-        {ok, SingletonOrMsgList} ?= find_message(Path, Base, Request, Opts),
-        if is_list(SingletonOrMsgList) ->
-            hb_ao:resolve_many(SingletonOrMsgList, Opts);
-        true ->
-            hb_ao:resolve(SingletonOrMsgList, Opts)
+        ?event({eval, {base, Base}, {request, Request}}),
+        {ok, ApplyBase} ?=
+            case find_path(<<"source">>, Base, Request, Opts) of
+                {ok, SourcePath} ->
+                    find_key(SourcePath, Base, Request, Opts);
+                {error, path_not_found, _} ->
+                    % If the base is not found, we return the base for this 
+                    % request, minus the device (which will, inherently, be
+                    % `apply@1.0' and cause recursion).
+                    {ok, hb_maps:without([<<"device">>], Base, Opts)}
+            end,
+        ?event({eval, {apply_base, ApplyBase}}),
+        case find_path(<<"apply-path">>, Base, Request, Opts) of
+            {error, path_not_found, _} ->
+                ?event({eval, no_path_to_execute}),
+                {ok, ApplyBase};
+            {ok, ApplyPathKey} ->
+                ?event({eval, {key_containing_path_to_execute, ApplyPathKey}}),
+                case find_key(ApplyPathKey, ApplyBase, Request, Opts) of
+                    {error, _, _} ->
+                        ?event({eval, path_to_execute_not_found}),
+                        {error,
+                            <<
+                                "Path `",
+                                (normalize_path(ApplyPathKey))/binary,
+                                "` to execute not found."
+                            >>
+                        };
+                    {ok, ApplyPath} ->
+                        ApplyMsg = ApplyBase#{ <<"path">> => ApplyPath },
+                        ?event({executing, ApplyMsg}),
+                        hb_ao:resolve(ApplyMsg, Opts)
+                end
         end
     else
         Error -> error_to_message(Error)
@@ -64,8 +92,8 @@ pair(PathToSet, Base, Request, Opts) ->
         {ok, RequestPath} ?= find_path(<<"request">>, Base, Request, Opts),
         {ok, BasePath} ?= find_path(<<"base">>, Base, Request, Opts),
         ?event({eval_pair, {base_source, BasePath}, {request_source, RequestPath}}),
-        {ok, RequestSource} ?= find_message(RequestPath, Base, Request, Opts),
-        {ok, BaseSource} ?= find_message(BasePath, Base, Request, Opts),
+        {ok, RequestSource} ?= find_key(RequestPath, Base, Request, Opts),
+        {ok, BaseSource} ?= find_key(BasePath, Base, Request, Opts),
         PreparedRequest =
             case PathToSet of
                 <<"undefined">> -> RequestSource;
@@ -95,7 +123,7 @@ find_path(Path, Base, Request, Opts) ->
 
 %% @doc Find the value of the source key, supporting `base:' and `request:'
 %% prefixes.
-find_message(Path, Base, Request, Opts) ->
+find_key(Path, Base, Request, Opts) ->
     BaseAs = {as, <<"message@1.0">>, Base},
     RequestAs = {as, <<"message@1.0">>, Request},
     MaybeResolve =
@@ -122,6 +150,12 @@ find_message(Path, Base, Request, Opts) ->
         Err = {error, _, _} -> Err;
         {message, Message} -> {ok, Message};
         {resolve, Sources} ->
+            ?event(
+                {resolving_from_sources,
+                    {path, Path},
+                    {sources, Sources}
+                }
+            ),
             case hb_ao:get_first(Sources, source_not_found, Opts) of
                 source_not_found -> {error, source_not_found, Path};
                 Source -> {ok, Source}
@@ -165,13 +199,14 @@ error_to_message(Error) ->
 %%% Tests
 
 resolve_key_test() ->
+    hb:init(),
     Base = #{
         <<"device">> => <<"apply@1.0">>,
+        <<"body">> => <<"/~meta@1.0/build/node">>,
         <<"irrelevant">> => <<"irrelevant">>
     },
     Request = #{
         <<"irrelevant2">> => <<"irrelevant2">>,
-        <<"body">> => <<"/~meta@1.0/build/node">>,
         <<"path">> => <<"body">>
     },
     ?assertEqual({ok, <<"HyperBEAM">>}, hb_ao:resolve(Base, Request, #{})).
@@ -191,20 +226,6 @@ resolve_pair_test() ->
     },
     ?assertEqual({ok, <<"DATA">>}, hb_ao:resolve(Base, Request, #{})).
 
-resolve_with_prefix_test() ->
-    ?assertEqual(
-        {ok, <<"DATA">>},
-        hb_ao:resolve(
-            <<"/~meta@1.0/info/base:example-resolver~apply@1.0">>,
-            #{
-                <<"example-resolver">> => #{
-                    <<"path">> => <<"test-key">>,
-                    <<"test-key">> => <<"DATA">>
-                }
-            }
-        )
-    ).
-
 reverse_resolve_pair_test() ->
     ?assertEqual(
         {ok, <<"TEST">>},
@@ -217,15 +238,31 @@ reverse_resolve_pair_test() ->
         )
     ).
 
+resolve_with_prefix_test() ->
+    ShortTraceLen = hb_opts:get(short_trace_len),
+    Node = hb_http_server:start_node(),
+    ?assertEqual(
+        {ok, ShortTraceLen},
+        hb_http:request(
+            <<"GET">>,
+            Node,
+            <<"/~meta@1.0/info/request:debug-info~apply@1.0">>,
+            #{
+                <<"debug-info">> => <<"short_trace_len">>
+            },
+            #{}
+        )
+    ).
+
 apply_over_http_test() ->
     Node = hb_http_server:start_node(),
     Signed =
         hb_message:commit(
             #{
                 <<"device">> => <<"apply@1.0">>,
+                <<"user-path">> => <<"/user-request/test-key">>,
                 <<"user-request">> =>
                     #{
-                        <<"path">> => <<"/test-key">>,
                         <<"test-key">> => <<"DATA">>
                     }
             },
@@ -234,7 +271,7 @@ apply_over_http_test() ->
     ?assertEqual(
         {ok, <<"DATA">>},
         hb_ao:resolve(
-            Signed#{ <<"path">> => <<"/user-request">> },
+            Signed#{ <<"path">> => <<"/user-path">> },
             #{ priv_wallet => hb:wallet() }
         )
     ),
@@ -243,7 +280,7 @@ apply_over_http_test() ->
         hb_http:request(
             <<"GET">>,
             Node,
-            <<"/user-request">>,
+            <<"/user-path">>,
             Signed,
             #{ priv_wallet => hb:wallet() }
         )

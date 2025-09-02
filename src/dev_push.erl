@@ -208,10 +208,8 @@ do_push(PrimaryProcess, Assignment, Opts) ->
 maybe_evaluate_message(Message, Opts) ->
     case hb_ao:get(<<"resolve">>, Message, Opts) of
         not_found -> 
-            ?event(x, {not_found, {msg, Message}    }),
             {ok, Message};
         ResolvePath ->
-            ?event(x, {resolve_path, ResolvePath, {msg, Message}}),
             ReqMsg =
                 maps:without(
                     [<<"target">>],
@@ -699,12 +697,7 @@ push_as_identity_test_() ->
             identities => #{
                 SchedulingID => #{
                     priv_wallet => SchedulingWallet,
-                    store => [
-                        #{
-                            <<"store-module">> => hb_store_fs,
-                            <<"name">> => <<"cache-TEST/scheduler">>
-                        }
-                    ]
+                    store => [hb_test_utils:test_store()]
                 },
                 ComputeID => #{
                     priv_wallet => ComputeWallet
@@ -720,7 +713,7 @@ push_as_identity_test_() ->
                     scheduler => [SchedulingID, ComputeID]
                 }
             ),
-        ?event(debug, {msg1, Msg1}),
+        ?event({msg1, Msg1}),
         % Perform the remainder of the test as with `full_push_test_/0'.
         hb_cache:write(Msg1, Opts),
         {ok, SchedInit} =
@@ -1009,10 +1002,14 @@ nested_push_prompts_encoding_change() ->
     Msg = hb_message:commit(#{
         <<"path">> => <<"push">>,
         <<"method">> => <<"POST">>,
-        <<"body">> => #{
-            <<"target">> => hb_message:id(Msg1, all, Opts),
-            <<"action">> => <<"Ping">>
-        }
+        <<"body">> =>
+            hb_message:commit(
+                #{
+                    <<"target">> => hb_message:id(Msg1, all, Opts),
+                    <<"action">> => <<"Ping">>
+                },
+                Opts
+            )
     }, Opts),
     ?event(push, {msg1, Msg}),
     Res2 =

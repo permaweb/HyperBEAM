@@ -239,12 +239,7 @@ handle_resolve(Req, Msgs, NodeMsg) ->
                     PreProcessedMsg,
                     HTTPOpts#{ force_message => true, trace => TracePID }
                 ),
-            {ok, StatusEmbeddedRes} =
-                embed_status(
-                    Res,
-                    NodeMsg
-                ),
-            ?event(http_request, {res, StatusEmbeddedRes}),
+            {ok, StatusEmbeddedRes} = embed_status(Res, NodeMsg),
             AfterResolveOpts = hb_http_server:get_opts(NodeMsg),
             % Apply the post-processor to the result.
             Output = maybe_sign(
@@ -259,7 +254,12 @@ handle_resolve(Req, Msgs, NodeMsg) ->
                 ),
                 NodeMsg
             ),
-            ?event(http_request, {response, Output}),
+            ?event(http_request,
+                {http_request,
+                    {request, Req},
+                    {result, Output}
+                }
+            ),
             Output;
         Res -> embed_status(hb_ao:force_message(Res, NodeMsg), NodeMsg)
     end.

@@ -33,7 +33,7 @@
 %%%         - N.Key+res=(/a/b/c) => #{ Key => (resolve /a/b/c), ... }
 %%% </pre>
 -module(hb_singleton).
--export([from/2, to/1]).
+-export([from/2, from_path/1, to/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(MAX_SEGMENT_LENGTH, 512).
@@ -137,12 +137,13 @@ from(RawMsg, Opts) when is_binary(RawMsg) ->
 from(RawMsg, Opts) ->
     RawPath = hb_maps:get(<<"path">>, RawMsg, <<>>),
     ?event(parsing, {raw_path, RawPath}),
-    {ok, Path, Query} = parse_full_path(RawPath),
+    {ok, Path, Query} = from_path(RawPath),
     ?event(parsing, {parsed_path, Path, Query}),
-    MsgWithoutBasePath = hb_maps:merge(
-        hb_maps:remove(<<"path">>, RawMsg),
-        Query
-    ),
+    MsgWithoutBasePath =
+        hb_maps:merge(
+            hb_maps:remove(<<"path">>, RawMsg),
+            Query
+        ),
     % 2. Decode, split, and sanitize path segments. Each yields one step message.
     RawMsgs =
         lists:flatten(
@@ -166,7 +167,7 @@ from(RawMsg, Opts) ->
     Result.
 
 %% @doc Parse the relative reference into path, query, and fragment.
-parse_full_path(RelativeRef) ->
+from_path(RelativeRef) ->
     %?event(parsing, {raw_relative_ref, RawRelativeRef}),
     %RelativeRef = hb_escape:decode(RawRelativeRef),
     Decoded = decode_string(RelativeRef),
@@ -436,8 +437,9 @@ maybe_typed(Key, Value, Opts) ->
                         OnlyKey,
                         {resolve, from(#{ <<"path">> => Subpath }, Opts)}
                     };
-                {_T, Bin} when is_binary(Bin) ->
-                    {typed, OnlyKey, dev_codec_structured:decode_value(Type, Bin)}
+                {_T, RawValue} when is_binary(RawValue) ->
+                    Decoded = hb_escape:decode_quotes(RawValue),
+                    {typed, OnlyKey, dev_codec_structured:decode_value(Type, Decoded)}
             end
     end.
 

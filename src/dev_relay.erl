@@ -129,7 +129,7 @@ call(M1, RawM2, Opts) ->
     true = hb_message:verify(TargetMod4),
     ?event(debug_relay, {relay_call, {verified, true}}),
     Client =
-        case hb_ao:get(<<"http-client">>, BaseTarget, Opts) of
+        case hb_maps:get(<<"http-client">>, BaseTarget, not_found, Opts) of
             not_found -> hb_opts:get(relay_http_client, Opts);
             RequestedClient -> RequestedClient
         end,

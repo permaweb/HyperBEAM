@@ -138,6 +138,8 @@ get_additional_params(Commitment) ->
     lists:map(fun(Param) ->
         ParamValue = maps:get(Param, Commitment),
         case ParamValue of
+            Val when is_atom(Val) ->
+                {Param, {string, atom_to_binary(Val, utf8)}};
             Val when is_binary(Val) ->
                 {Param, {string, Val}};
             Val when is_list(Val) ->
