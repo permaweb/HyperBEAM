@@ -69,7 +69,7 @@ run_test () ->
   end,
 
   % Load AO holder wallet
-  HolderWallet = ar_wallet:load_keyfile("/home/vince/jnb.json"),
+  HolderWallet = ar_wallet:load_keyfile("/test/wallet.json"),
   HolderAddress = hb_util:encode(ar_wallet:to_address(HolderWallet)),
   
   % Create a new wallet to topup
