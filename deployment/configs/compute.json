@@ -1,0 +1,51 @@
+{
+  "host_bootstrap_node": "https://scheduler.forward.computer",
+  "operator": "trustless",
+  "initialized": "permanent",
+
+
+
+  "p4_non_chargable_routes": [
+    {
+      "template": "/.*~node-process@1.0/.*"
+    },
+    {
+      "template": "/.*~greenzone@1.0/.*"
+    },
+    {
+      "template": "/.*~router@1.0/.*"
+    },
+    {
+      "template": "/.*~meta@1.0/.*"
+    },
+    {
+      "template": "/schedule"
+    },
+    {
+      "template": "/push"
+    },
+    {
+      "template": "/~hyperbuddy@1.0/.*"
+    },
+    {
+      "template": "/ledger~node-process@1.0/*"
+    }
+  ],
+
+  "node_process_spawn_codec": "ans104@1.0",
+
+  "node_processes": {
+    "ledger": {
+      "device": "process@1.0",
+      "execution-device": "lua@5.3a",
+      "scheduler-device": "scheduler@1.0",
+      "authority-match": 1,
+      "admin": "REPLACE_ME",
+      "token": "REPLACE_ME",
+      "module": "W-FoIIxJlBdhO5Z3CbQJg7UKxgawCTT0yVGkJGNWzLs",
+      "authority": "REPLACE_ME"
+    }
+  },
+
+  "p4_recipient": "REPLACE_ME"
+}

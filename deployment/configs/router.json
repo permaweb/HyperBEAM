@@ -1,0 +1,44 @@
+{
+  "host_bootstrap_node": "https://scheduler.forward.computer",
+  "operator": "trustless",
+  "initialized": "permanent",
+
+  "on": {
+    "request": {
+      "device": "router@1.0",
+      "path": "preprocess",
+      "commit-request": true
+    }
+  },
+
+  "router_opts": {
+    "provider": {
+      "path": "/router~node-process@1.0/compute/routes~message@1.0"
+    },
+    "registrar": {
+      "path": "/router~node-process@1.0"
+    },
+    "registrar-path": "schedule"
+  },
+
+  "relay_allow_commit_request": true,
+
+  "node_processes": {
+    "router": {
+      "type": "Process",
+      "device": "process@1.0",
+      "execution-device": "lua@5.3a",
+      "scheduler-device": "scheduler@1.0",
+      "pricing-weight": 5,
+      "performance-weight": 2,
+      "score-preference": 2,
+      "performance-period": 5,
+      "initial-performance": 500,
+      "is-admissible": {
+        "path": "default",
+        "default": "false"
+      },
+      "module": "hlmvWa2_11_mkRD-gu-MxpxpydKL7lGbs6cJQUJLrfc"
+    }
+  }
+}

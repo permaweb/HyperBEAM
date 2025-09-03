@@ -1,0 +1,10 @@
+  "router_opts": {
+    "offered": [
+      {
+        "registration-peer": "http://localhost:8734",
+        "template": "^/.*",
+        "prefix": "http://localhost:10000",
+        "price": 0
+      }
+    ]
+  },

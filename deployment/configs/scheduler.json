@@ -1,0 +1,16 @@
+{
+  "on": {
+    "start": {
+      "device": "scheduler@1.0",
+      "path": "location",
+      "target": "self",
+      "url": "https://scheduler.forward.computer",
+      "method": "POST",
+      "accept-codec": "ans104@1.0",
+      "hook": {
+        "result": "ignore",
+        "commit-request": true
+      }
+    }
+  }
+}
