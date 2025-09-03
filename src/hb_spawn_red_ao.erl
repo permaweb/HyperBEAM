@@ -67,6 +67,44 @@ run_test () ->
     {error, AuthReason} ->
       io:format("Authorities Update Error: ~p~n", [AuthReason])
   end,
+
+  % Load AO holder wallet
+  HolderWallet = ar_wallet:load_keyfile("/home/vince/jnb.json"),
+  HolderAddress = hb_util:encode(ar_wallet:to_address(HolderWallet)),
   
+  % Create a new wallet to topup
+  TopupWallet = ar_wallet:new(),
+  TopupAddress = hb_util:encode(ar_wallet:to_address(TopupWallet)),
+  
+  io:format("AO Holder Address: ~s~n", [HolderAddress]),
+  io:format("Topup Address: ~s~n", [TopupAddress]),
+  
+  % Transfer AO to Beta Green Zone AO
+  io:format("Transferring AO to Beta Green Zone AO...~n"),
+  TransferMsg = #{
+    <<"Type">> => <<"Message">>,
+    <<"Data-Protocol">> => <<"ao">>,
+    <<"Variant">> => <<"ao.TN.1">>,
+    <<"target">> => <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>, % ao-token
+    <<"Action">> => <<"Transfer">>,
+    <<"Quantity">> => <<"50">>,
+    <<"Recipient">> => ProcessId % beta-gz-ao-token
+  },
+  
+  {ok, TransferTX} = dev_codec_ans104:to(TransferMsg, #{}, #{}),
+  SignedTransferTX = ar_bundles:sign_item(TransferTX, HolderWallet),
+  io:format("SignedTransferTX ID: ~s~n", [hb_util:encode(SignedTransferTX#tx.id)]),
+  TransferANS104Bytes = ar_bundles:serialize(SignedTransferTX),
+  
+  case httpc:request(post, {LEGACY_URL, Headers, "application/octet-stream", TransferANS104Bytes}, HTTPOptions, Options) of
+    {ok, {{_Version5, TransferStatusCode, _ReasonPhrase5}, _TransferResponseHeaders, TransferBody}} ->
+      io:format("Transfer Response: ~p~n", [TransferStatusCode]),
+      io:format("Transfer ID: ~s~n", [TransferBody]),
+      TransferBody;
+    {error, TransferReason} ->
+      io:format("Transfer Error: ~p~n", [TransferReason]),
+      <<>>
+  end,
+
   ok.
   
