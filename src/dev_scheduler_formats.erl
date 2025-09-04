@@ -134,17 +134,19 @@ aos2_to_assignments(ProcID, Body, RawOpts) ->
 %% NOTE: This method is destructive to the verifiability of the assignment.
 aos2_to_assignment(A, RawOpts) ->
     Opts = format_opts(RawOpts),
+    % 'A' can exist in three states
+    % { assignment, message }
+    % { node: { assignment, message }}
+    % { edges: [ { node: {assignment, message }}]
+    % This expression checks if assignment is wrapped
+    % in edges list, or node map, or neither.
     % Unwrap the node if it is provided
     Node =
-        case hb_maps:get(<<"node">>, A, undefined, Opts) of
-            undefined ->
-                hb_maps:get(
-                  <<"node">>, 
-                  hd(hb_maps:get(<<"edges">>, A, [], Opts)), 
-                  undefined, Opts
-                 );
-            NodeValue ->
-                NodeValue
+        case hb_maps:get(<<"edges">>, A, undefined, Opts) of
+            Edges when is_list(Edges), Edges =/= [] ->
+                hb_maps:get(<<"node">>, hd(Edges), undefined, Opts);
+            _ ->
+                hb_maps:get(<<"node">>, A, A, Opts)
         end,
     ?event({node, Node}),
     {ok, Assignment} =
