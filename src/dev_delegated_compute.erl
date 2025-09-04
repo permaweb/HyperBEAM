@@ -31,14 +31,17 @@ compute(Msg1, Msg2, Opts) ->
     Type = hb_ao:get(<<"type">>, Msg2, not_found, Opts),
     ?event({doing_delegated_compute, {msg2, Msg2}, {type, Type}}),
     % Execute the compute via external CU
-    case Type of
-        <<"assignment">> ->
-            Slot = hb_ao:get(<<"slot">>, Msg2, Opts),
-            Res = do_compute(ProcessID, Msg2, Opts);
-        _ ->
-            Slot = dryrun,
-            Res = do_dryrun(ProcessID, Msg2, Opts)
-    end,
+    % case Type of
+    %     <<"assignment">> ->
+    %         Slot = hb_ao:get(<<"slot">>, Msg2, Opts),
+    %         Res = do_compute(ProcessID, Msg2, Opts);
+    %     _ ->
+    %         Slot = dryrun,
+    %         Res = do_dryrun(ProcessID, Msg2, Opts)
+    % end,
+    ?event(tom, {type, Type}),
+    Slot = hb_ao:get(<<"slot">>, Msg2, Opts),
+    Res = do_compute(ProcessID, Msg2, Opts),
     handle_relay_response(Msg1, Msg2, Opts, Res, OutputPrefix, ProcessID, Slot).
 
 %% @doc Execute computation on a remote machine via relay and the JSON-Iface.
