@@ -52,11 +52,7 @@ post_tx(_Base, Request, Opts) ->
 get_tx(Base, Request, Opts) ->
     case find_txid(Base, Request, Opts) of
         not_found -> {error, not_found};
-        TXID -> 
-            Res = {ok, Structured} =request(<<"GET">>, <<"/tx/", TXID/binary>>, Opts),
-            HTTPSig = hb_message:convert(Structured, <<"httpsig@1.0">>, <<"structured@1.0">>, Opts),
-            ?event(arweave, {get_tx, {txid, TXID}, {structured, Structured}, {httpsig_res, HTTPSig}}),
-            Res
+        TXID -> request(<<"GET">>, <<"/tx/", TXID/binary>>, Opts)
     end.
 
 %% @doc Handle the optional adding of data to the transaction header, depending
@@ -323,22 +319,3 @@ get_bad_tx_test() ->
     Path = <<"/~arweave@2.9-pre/tx?tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
     ?assertEqual({error, not_found}, Res).
-
-httpsig_test() ->
-    TX = #tx{
-        format = 2,
-        tags = [
-            {<<"z">>, <<"position-1">>},
-            {<<"a">>, <<"position-2">>}
-        ]
-    },
-    SignedTX = ar_tx:sign(TX, hb:wallet()),
-    ?assert(ar_tx:verify(SignedTX)),
-    ?event(debug_test, {signed_tx, {explicit, SignedTX}}),
-    TABM1 = hb_util:ok(dev_codec_tx:from(SignedTX, #{}, #{})),
-    ?event(debug_test, {tabm1, {explicit, TABM1}}),
-    HTTPSig = hb_util:ok(dev_codec_httpsig:to(TABM1, #{}, #{})),
-    ?event(debug_test, {httpsig, {explicit, HTTPSig}}),
-    TABM2 = hb_util:ok(dev_codec_httpsig:from(HTTPSig, #{}, #{})),
-    ?event(debug_test, {tabm2, {explicit, TABM2}}),
-    ?assert(hb_message:match(TABM1, TABM2, #{})).
