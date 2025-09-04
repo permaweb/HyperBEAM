@@ -9,8 +9,8 @@
 %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    nested_structured_fields_test(
-        #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
+    specific_order_deeply_nested_signed_message_test(
+        #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
         test_opts(normal)
     ).
 
@@ -464,6 +464,32 @@ message_with_large_keys_test(Codec, Opts) ->
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
+
+nested_with_content_type_and_body_test(Codec, Opts) ->
+    Msg =
+        hb_cache:ensure_all_loaded(
+            hb_message:commit(
+                #{
+                    <<"parameters">> => #{
+                        <<"a">> => 1
+                    },
+                    <<"content-type">> => <<"application/html">>,
+                    <<"body">> =>
+                        <<
+                            """
+                            <html>
+                            <h1>Hello, multiline message</h1>
+                            </html>
+                            """
+                        >>
+                },
+                Opts,
+                Codec
+            ),
+            Opts
+        ),
+    ?event({original, Msg}),
+    ?assert(hb_message:verify(Msg, all, Opts)).
 
 %% @doc Check that a nested signed message with an embedded typed list can 
 %% be further nested and signed. We then encode and decode the message. This
