@@ -281,7 +281,7 @@ load_routes(Opts) ->
             ProviderMsgs = hb_singleton:from(RoutesProvider, Opts),
             ?event({<<"provider">>, ProviderMsgs}),
             case hb_ao:resolve_many(ProviderMsgs, Opts) of
-                {ok, Routes} -> Routes;
+                {ok, Routes} -> hb_cache:ensure_all_loaded(Routes, Opts);
                 {error, Error} -> throw({routes, routes_provider_failed, Error})
             end
     end.
@@ -324,7 +324,7 @@ apply_routes(Msg, R, Opts) ->
 %% - `opts': A map of options to pass to the request.
 %% - `prefix': The prefix to add to the path.
 %% - `suffix': The suffix to add to the path.
-%% - `replace': A regex to replace in the path.
+%% - `match' and `with': A regex to replace in the path.
 apply_route(Msg, Route, Opts) ->
     % LoadedRoute = hb_cache:ensure_all_loaded(Route, Opts),
     RouteOpts = hb_maps:get(<<"opts">>, Route, #{}),
@@ -360,7 +360,8 @@ do_apply_route(
     case re:replace(Path, Match, With, [global, {return, binary}]) of
         NewPath when is_binary(NewPath) ->
             {ok, NewPath};
-        _ -> {error, invalid_replace_args}
+        _ ->
+            {error, invalid_replace_args}
     end.
 
 %% @doc Find the first matching template in a list of known routes. Allows the
@@ -387,8 +388,8 @@ match(Base, Req, Opts) ->
 
 match_routes(ToMatch, Routes, Opts) ->
     match_routes(
-        ToMatch,
-        Routes,
+        hb_cache:ensure_all_loaded(ToMatch, Opts),
+        hb_cache:ensure_all_loaded(Routes, Opts),
         hb_ao:keys(hb_ao:normalize_keys(Routes, Opts)),
         Opts
     ).
@@ -573,9 +574,9 @@ preprocess(Msg1, Msg2, Opts) ->
             RelayReq =
                 #{
                     <<"device">> => <<"apply@1.0">>,
-                    <<"path">> => <<"user-request">>,
+                    <<"path">> => <<"user-path">>,
                     <<"source">> => <<"user-message">>,
-                    <<"user-request">> => hb_maps:get(<<"path">>, Req, Opts),
+                    <<"user-path">> => hb_maps:get(<<"path">>, Req, Opts),
                     <<"user-message">> => UserReqWithCommit
                 },
             ?event(debug_preprocess, {prepared_relay_req, RelayReq}),
@@ -705,9 +706,10 @@ local_dynamic_router_test_() ->
     {timeout, 60, fun local_dynamic_router/0}.
 local_dynamic_router() ->
     BenchRoutes = 50,
+    TestNodes = 5,
     {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
     Node = hb_http_server:start_node(Opts = #{
-        store => hb_opts:get(store),
+        store => hb_test_utils:test_store(),
         priv_wallet => ar_wallet:new(),
         router_opts => #{
             <<"registrar">> => #{
@@ -740,34 +742,37 @@ local_dynamic_router() ->
     Store = hb_opts:get(store, no_store, Opts),
     ?event(debug_dynrouter, {store, Store}),
     % Register workers with the dynamic router with varied prices.
-    lists:foreach(fun(X) ->
-        hb_http:post(
-            Node,
-            #{
-                <<"path">> => <<"/router1~node-process@1.0/schedule">>,
-                <<"method">> => <<"POST">>,
-                <<"body">> =>
-                    hb_message:commit(
-                        #{
-                            <<"path">> => <<"register">>,
-                            <<"route">> =>
-                                #{
-                                    <<"prefix">> => 
-                                        <<
-                                            "https://test-node-",
-                                                (hb_util:bin(X))/binary,
-                                                ".com"
-                                        >>,
-                                    <<"template">> => <<"/.*~process@1.0/.*">>,
-                                    <<"price">> => X * 250
-                                }
-                        },
-                        Opts
-                    )
-            },
-            Opts
-        )
-    end, lists:seq(1, 5)),
+    lists:foreach(
+        fun(X) ->
+            hb_http:post(
+                Node,
+                #{
+                    <<"path">> => <<"/router1~node-process@1.0/schedule">>,
+                    <<"method">> => <<"POST">>,
+                    <<"body">> =>
+                        hb_message:commit(
+                            #{
+                                <<"path">> => <<"register">>,
+                                <<"route">> =>
+                                    #{
+                                        <<"prefix">> => 
+                                            <<
+                                                "https://test-node-",
+                                                    (hb_util:bin(X))/binary,
+                                                    ".com"
+                                            >>,
+                                        <<"template">> => <<"/.*~process@1.0/.*">>,
+                                        <<"price">> => X * 250
+                                    }
+                            },
+                            Opts
+                        )
+                },
+                Opts
+            )
+        end,
+        lists:seq(1, TestNodes)
+    ),
     % Force computation of the current state. This should be done with a 
     % background worker (ex: a `~cron@1.0/every' task).
     hb_http:get(Node, <<"/router~node-process@1.0/now">>, #{}),
@@ -845,17 +850,17 @@ dynamic_router_pricing() ->
         },
     ExecNode =
         hb_http_server:start_node(
-            ExecOpts = #{ 
+            ExecOpts = #{
                 priv_wallet => ExecWallet, 
                 port => 10009,
-                store => hb_opts:get(store),
+                store => hb_test_utils:test_store(),
                 node_processes => #{
                     <<"ledger2">> => #{
                         <<"device">> => <<"process@1.0">>,
                         <<"execution-device">> => <<"lua@5.3a">>,
                         <<"scheduler-device">> => <<"scheduler@1.0">>,
                         <<"authority-match">> => 1,
-                        <<"admin">> => ExecNodeAddr,             
+                        <<"admin">> => ExecNodeAddr,
                         <<"token">> =>
                             <<"iVplXcMZwiu5mn0EZxY-PxAkz_A9KOU0cmRE0rwej3E">>,                 
                         <<"module">> => [
@@ -888,22 +893,22 @@ dynamic_router_pricing() ->
                         #{
                             <<"registration-peer">> => <<"http://localhost:10010">>,         
                             <<"template">> => <<"/c">>,  
-                            <<"prefix">> => <<"http://localhost:10009">>,                   
-                            <<"price">> => 0                   
+                            <<"prefix">> => <<"http://localhost:10009">>,
+                            <<"price">> => 0
                         },
                         #{
                             <<"registration-peer">> => <<"http://localhost:10010">>,         
                             <<"template">> => <<"/b">>,  
                             <<"prefix">> => <<"http://localhost:10009">>,                   
-                            <<"price">> => 1                   
+                            <<"price">> => 1
                         }
                     ]
                 }
             }
         ),
-    Node = hb_http_server:start_node(#{
+    RouterNode = hb_http_server:start_node(#{
         port => 10010,
-        store => hb_opts:get(store),
+        store => hb_test_utils:test_store(),
         priv_wallet => ProxyWallet,
         on => 
             #{
@@ -949,7 +954,7 @@ dynamic_router_pricing() ->
     }),
     ?event(
         debug_load_routes,
-        {node_message, hb_http:get(Node, <<"/~meta@1.0/info">>, #{})}
+        {node_message, hb_http:get(RouterNode, <<"/~meta@1.0/info">>, #{})}
     ),
     % Register workers with the dynamic router with varied prices.
     {ok, <<"Routes registered.">>} =
@@ -961,17 +966,17 @@ dynamic_router_pricing() ->
     % Force computation of the current state.
     {Status, _NodeRoutes} =
         hb_http:get(
-            Node,
+            RouterNode,
             <<"/router2~node-process@1.0/now/at-slot">>,
             #{}
         ),
     ?assertEqual(ok, Status),
-    % Check that path /c is free 
-    {ok, CRes} = hb_http:get(Node, <<"/c?c+list=1">>, #{}),
+    % Check that path /c is free
+    {ok, CRes} = hb_http:get(RouterNode, <<"/c?c+list=1">>, #{}),
     ?event(debug_dynrouter, {res_msg, CRes}),
     ?assertEqual(1, hb_maps:get(<<"1">>, CRes, not_found)),
     % Check that path /b is not free and returns Insufficient funds
-    {error, BRes} = hb_http:get(Node, <<"/b?b+list=1">>, #{}),
+    {error, BRes} = hb_http:get(RouterNode, <<"/b?b+list=1">>, #{}),
     ?event(debug_dynrouter, {res_msg, BRes}),
     ?assertEqual(<<"Insufficient funds">>, hb_maps:get(<<"body">>, BRes, not_found)).
 
@@ -988,7 +993,7 @@ dynamic_router() ->
     ProxyWallet = ar_wallet:new(),
     ExecNode =
         hb_http_server:start_node(
-            ExecOpts = #{ priv_wallet => ExecWallet, store => hb_opts:get(store) }
+            ExecOpts = #{ priv_wallet => ExecWallet, store => hb_test_utils:test_store() }
         ),
     Node = hb_http_server:start_node(ProxyOpts = #{
         snp_trusted => [
@@ -1007,7 +1012,7 @@ dynamic_router() ->
                     <<"95a34faced5e487991f9cc2253a41cbd26b708bf00328f98dddbbf6b3ea2892e">>
             }
         ],
-        store => hb_opts:get(store),
+        store => hb_test_utils:test_store(),
         priv_wallet => ProxyWallet,
         on => 
             #{
@@ -1113,7 +1118,7 @@ dynamic_routing_by_performance() ->
     {ok, Script} = file:read_file(<<"scripts/dynamic-router.lua">>),
     Node = hb_http_server:start_node(Opts = #{
         relay_http_client => gun,
-        store => hb_opts:get(store),
+        store => hb_test_utils:test_store(),
         priv_wallet => ar_wallet:new(),
         router_opts => #{
             <<"provider">> => #{
@@ -1157,7 +1162,7 @@ dynamic_routing_by_performance() ->
                 XNode =
                     hb_http_server:start_node(
                         #{
-                            store => hb_opts:get(store),
+                            store => hb_test_utils:test_store(),
                             on =>
                                 #{
                                     <<"request">> => #{

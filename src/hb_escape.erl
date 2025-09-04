@@ -33,6 +33,7 @@ decode_quotes(String) when is_binary(String) ->
     list_to_binary(decode_quotes(binary_to_list(String)));
 decode_quotes([]) -> [];
 decode_quotes([$\\, $\" | Rest]) -> [$\" | decode_quotes(Rest)];
+decode_quotes([$\" | Rest]) -> decode_quotes(Rest);
 decode_quotes([C | Rest]) -> [C | decode_quotes(Rest)].
 
 %% @doc Return a message with all of its keys decoded.

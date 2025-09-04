@@ -141,8 +141,21 @@ scheduler_location(Address, Opts) ->
         {ok, GqlMsg} ->
             ?event({scheduler_location_req, {query, Query}, {response, GqlMsg}}),
             case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
-                not_found -> {error, not_found};
-                Item = #{ <<"id">> := ID } -> result_to_message(ID, Item, Opts)
+                not_found ->
+                    ?event(scheduler_location,
+                        {graphql_scheduler_location_not_found,
+                            {address, Address}
+                        }
+                    ),
+                    {error, not_found};
+                Item = #{ <<"id">> := ID } ->
+                    ?event(scheduler_location,
+                        {found_via_graphql,
+                            {address, Address},
+                            {id, ID}
+                        }
+                    ),
+                    result_to_message(ID, Item, Opts)
             end
     end.
         
@@ -189,8 +202,8 @@ query(Query, Variables, Node, Operation, Opts) ->
             <<"multirequest-admissible-status">> => 200,
             <<"multirequest-admissible">> =>
                 #{
-                    <<"device">> =>
-                        #{ <<"is-admissible">> => fun is_admissible/3 }
+                    <<"device">> => <<"query@1.0">>,
+                    <<"path">> => <<"has-results">>
                 },
             % Main request fields
             <<"method">> => <<"POST">>,
@@ -204,19 +217,6 @@ query(Query, Variables, Node, Operation, Opts) ->
         {ok, Msg} ->
             {ok, hb_json:decode(hb_ao:get(<<"body">>, Msg, <<>>, Opts))};
         {error, Reason} -> {error, Reason}
-    end.
-
-%% @doc Return whether a GraphQL response has transaction results. This function
-%% is used in the client library's multirequest configuration to determine if
-%% the response from the node should be considered admissible.
-is_admissible(_Base, Req, _Opts) ->
-    JSON = hb_maps:get(<<"body">>, Req, <<"false">>),
-    Decoded = hb_json:decode(JSON),
-    ?event(debug_multi, {is_admissible, {decoded_json, Decoded}}),
-    case Decoded of
-        #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := [] } } } ->
-            false;
-        _ -> true
     end.
 
 %% @doc Takes a GraphQL item node, matches it with the appropriate data from a
@@ -238,6 +238,7 @@ result_to_message(ExpectedID, Item, Opts) ->
     Data =
         case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
             BinData when is_binary(BinData) -> BinData;
+            #{ <<"size">> := 0 } -> <<>>;
             _ ->
                 {ok, Bytes} = data(ExpectedID, Opts),
                 Bytes

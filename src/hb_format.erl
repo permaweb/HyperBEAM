@@ -734,14 +734,15 @@ message(RawMap, Opts, Indent) when is_map(RawMap) ->
     % Put the path and device rows into the output at the _top_ of the map.
     PriorityKeys =
         [
+            {<<"device">>, ValOrUndef(<<"device">>)},
             {<<"path">>, ValOrUndef(<<"path">>)},
-            {<<"device">>, ValOrUndef(<<"device">>)}
+            {<<"commitments">>, ValOrUndef(<<"commitments">>)}
         ],
     % Concatenate the path and device rows with the rest of the key values.
     UnsortedGeneralKeyVals =
         maps:to_list(
             maps:without(
-                [<<"path">>, <<"device">>],
+                [ PriorityKey || {PriorityKey, _} <- PriorityKeys ],
                 Map
             )
         ),

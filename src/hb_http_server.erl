@@ -358,7 +358,7 @@ handle_request(RawReq, Body, ServerID) ->
         {<<"/">>, <<>>} ->
             % If the request is for the root path, serve a redirect to the default 
             % request of the node.
-            cowboy_req:reply(
+            Req2 = cowboy_req:reply(
                 302,
                 #{
                     <<"location">> =>
@@ -369,7 +369,8 @@ handle_request(RawReq, Body, ServerID) ->
                         )
                 },
                 RawReq
-            );
+            ),
+            {ok, Req2, no_state};
         _ ->
             % The request is of normal AO-Core form, so we parse it and invoke
             % the meta@1.0 device to handle it.
@@ -610,7 +611,7 @@ set_opts_test() ->
         priv_wallet => Wallet = ar_wallet:new(), 
         port => rand:uniform(10000) + 10000 
     }),
-    Opts = ?MODULE:get_opts(#{ 
+    Opts = get_opts(#{ 
         http_server => hb_util:human_id(ar_wallet:to_address(Wallet))
     }),
     NodeHistory = hb_opts:get(node_history, [], Opts),

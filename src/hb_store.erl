@@ -385,7 +385,7 @@ apply_store_function(Mod, Store, Function, Args, AttemptsRemaining) ->
         Other -> Other
     catch Class:Reason:Stacktrace ->
         ?event(store_error,
-            {store_call_failed_attempting_retrying,
+            {store_call_failed_retrying,
                 #{
                     store => Store,
                     function => Function,

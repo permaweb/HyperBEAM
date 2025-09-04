@@ -25,7 +25,7 @@
 %%% Message matching API:
 -export([info/1, only/3, all/3, base/3]).
 %%% GraphQL API:
--export([graphql/3]).
+-export([graphql/3, has_results/3]).
 %%% Test setup:
 -export([test_setup/0]).
 -include_lib("eunit/include/eunit.hrl").
@@ -46,6 +46,28 @@ info(_Opts) ->
 %% @doc Execute the query via GraphQL.
 graphql(Req, Base, Opts) ->
     dev_query_graphql:handle(Req, Base, Opts).
+
+%% @doc Return whether a GraphQL esponse in a message has transaction results.
+%% This key is used in HB's gateway client multirequest configuration to
+%% determine if the response from the node should be considered admissible.
+has_results(Base, Req, Opts) ->
+    JSON =
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, Base}, <<"body">>},
+                {{as, <<"message@1.0">>, Req}, <<"body">>}
+            ],
+            <<"{}">>,
+            Opts
+        ),
+    Decoded = hb_json:decode(JSON),
+    ?event(debug_multi, {has_results, {decoded_json, Decoded}}),
+    case Decoded of
+        #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Nodes } } }
+                when length(Nodes) > 0 ->
+            true;
+        _ -> false
+    end.
 
 %% @doc Search for the keys specified in the request message.
 default(_, Base, Req, Opts) ->

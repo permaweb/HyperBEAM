@@ -158,13 +158,6 @@ request(Method, Peer, Path, RawMessage, Opts) ->
         {normalized_response_headers, {norm_header_map, NormHeaderMap}},
         Opts
     ),
-    BaseStatus =
-        case Status of
-            201 -> created;
-            X when X < 400 -> ok;
-            X when X < 500 -> error;
-            _ -> failure
-        end,
     ?event(http_short,
         {received,
             {status, Status},
@@ -180,9 +173,14 @@ request(Method, Peer, Path, RawMessage, Opts) ->
     case ReturnAOResult of
         Key when is_binary(Key) ->
             Msg = http_response_to_httpsig(Status, NormHeaderMap, Body, Opts),
-            ?event(http_outbound, {result_is_single_key, {key, Key}, {msg, Msg}}, Opts),
+            ?event(
+                http_outbound,
+                {result_is_single_key, {key, Key}, {msg, Msg}},
+                Opts
+            ),
             case {Key, hb_maps:get(Key, Msg, undefined, Opts)} of
-                {<<"body">>, undefined} -> {BaseStatus, <<>>};
+                {<<"body">>, undefined} ->
+                    {response_status_to_atom(Status), <<>>};
                 {_, undefined} ->
                     {failure,
                         <<
@@ -196,32 +194,74 @@ request(Method, Peer, Path, RawMessage, Opts) ->
                             Body/binary
                         >>
                     };
-                {_, Value} -> {BaseStatus, Value}
+                {_, Value} ->
+                    {response_status_to_atom(Status), Value}
             end;
         false ->
-            case hb_maps:get(<<"codec-device">>, NormHeaderMap, <<"httpsig@1.0">>, Opts) of
-                <<"httpsig@1.0">> ->
-                    ?event(http_outbound, {result_is_httpsig, {body, Body}}, Opts),
-                    {
-                        BaseStatus,
-                        http_response_to_httpsig(Status, NormHeaderMap, Body, Opts)
-                    };
-                <<"ans104@1.0">> ->
-                    ?event(http_outbound, {result_is_ans104, {body, Body}}, Opts),
-                    Deserialized = ar_bundles:deserialize(Body),
-                    % We don't need to add the status to the message, because
-                    % it is already present in the encoded ANS-104 message.
-                    {
-                        BaseStatus,
-                        hb_message:convert(
-                            Deserialized,
-                            <<"structured@1.0">>,
-                            <<"ans104@1.0">>,
-                            Opts
-                        )
-                    }
-            end
+            % Find the codec device from the headers, if set.
+            CodecDev =
+                hb_maps:get(
+                    <<"codec-device">>,
+                    NormHeaderMap,
+                    <<"httpsig@1.0">>,
+                    Opts
+                ),
+            outbound_result_to_message(
+                CodecDev,
+                Status,
+                NormHeaderMap,
+                Body,
+                Opts
+            )
     end.
+
+%% @doc Convert a HTTP status code to a status atom.
+response_status_to_atom(Status) ->
+    case Status of
+        201 -> created;
+        X when X < 400 -> ok;
+        X when X < 500 -> error;
+        _ -> failure
+    end.
+
+%% @doc Convert an HTTP response to a message.
+outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
+    ?event(http_outbound,
+        {result_is_ans104, {headers, Headers}, {body, Body}},
+        Opts
+    ),
+    try ar_bundles:deserialize(Body) of
+        Deserialized ->
+            {
+                response_status_to_atom(Status),
+                hb_message:convert(
+                    Deserialized,
+                    <<"structured@1.0">>,
+                    <<"ans104@1.0">>,
+                    Opts
+                )
+            }
+    catch
+      _Class:ExceptionPattern:Stacktrace ->
+        % The response message had a `codec-device: ans104@1.0', but we
+        % failed to deserialize it, so we fallback to HTTPSig.
+        ?event(http_outbound,
+            {failed_to_deserialize_ans104_attempting_httpsig,
+                {headers, Headers},
+                {body, Body},
+                {error, ExceptionPattern},
+                {stacktrace, {trace, Stacktrace}}
+            },
+            Opts
+        ),
+        outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts)
+    end;
+outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
+    ?event(http_outbound, {result_is_httpsig, {body, Body}}, Opts),
+    {
+        response_status_to_atom(Status),
+        http_response_to_httpsig(Status, Headers, Body, Opts)
+    }.
 
 %% @doc Convert a HTTP response to a httpsig message.
 http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
@@ -654,7 +694,12 @@ encode_reply(Status, TABMReq, Message, Opts) ->
             % as headers.
             ExtraHdrs =
                 hb_maps:filter(
-                    fun(_, V) -> not is_map(V) andalso not is_list(V) end,
+                    fun(Key, V) ->
+                        not is_map(V)
+                            andalso not is_list(V)
+                            andalso Key =/= <<"body">>
+                            andalso Key =/= <<"data">>
+                    end,
                     Message,
                     Opts
                 ),
@@ -688,6 +733,8 @@ encode_reply(Status, TABMReq, Message, Opts) ->
 %% AO device format (`device@1.0').
 accept_to_codec(OriginalReq, Opts) ->
     accept_to_codec(OriginalReq, undefined, Opts).
+accept_to_codec(#{ <<"require-codec">> := RequiredCodec }, _Reply, Opts) ->
+    mime_to_codec(RequiredCodec, Opts);
 accept_to_codec(_OriginalReq, #{ <<"content-type">> := _ }, _Opts) ->
     <<"httpsig@1.0">>;
 accept_to_codec(OriginalReq, _, Opts) ->
@@ -698,21 +745,7 @@ accept_to_codec(OriginalReq, _, Opts) ->
             {accept, Accept}
         }
     ),
-    AcceptCodec =
-        hb_maps:get(
-            <<"accept-codec">>,
-            OriginalReq,
-            mime_to_codec(Accept, Opts),
-			Opts
-        ),
-    case AcceptCodec of
-        not_specified ->
-            % We hold off until confirming that the codec is not directly in the
-            % message before calling `hb_opts:get/3', as it is comparatively
-            % expensive.
-            default_codec(Opts);
-        _ -> AcceptCodec
-    end.
+    mime_to_codec(Accept, Opts).
 
 %% @doc Find a codec name from a mime-type.
 mime_to_codec(<<"application/", Mime/binary>>, Opts) ->
@@ -734,7 +767,11 @@ mime_to_codec(<<"application/", Mime/binary>>, Opts) ->
             Default
     end;
 mime_to_codec(<<"device/", Name/binary>>, _Opts) -> Name;
-mime_to_codec(_, Opts) -> default_codec(Opts).
+mime_to_codec(Device, Opts) ->
+    case binary:match(Device, <<"@">>) of
+        nomatch -> default_codec(Opts);
+        _ -> Device
+    end.
 
 %% @doc Return the default codec for the given options.
 default_codec(Opts) ->
@@ -1101,7 +1138,7 @@ ans104_wasm_test() ->
     Msg =
         hb_message:commit(
             #{
-                <<"accept-codec">> => <<"ans104@1.0">>,
+                <<"require-codec">> => <<"ans104@1.0">>,
                 <<"codec-device">> => <<"ans104@1.0">>,
                 <<"device">> => <<"wasm-64@1.0">>,
                 <<"function">> => <<"fac">>,
