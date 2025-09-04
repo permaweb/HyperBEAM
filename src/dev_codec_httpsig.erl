@@ -77,7 +77,7 @@ verify(Base, Req, RawOpts) ->
     ),
     case {KeyRes, maps:get(<<"type">>, Req)} of
         {{ok, _, Key, _KeyID}, <<"rsa-pss-sha512">>} ->
-            ?event(httpsig_verify, {verify, {rsa_pss_sha512, {sig_base, SigBase}}}),
+            ?event(httpsig_verify, {verify_sig_base, {string, SigBase}}),
             {
                 ok,
                 ar_wallet:verify(
@@ -162,7 +162,7 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
     ?event({encoded_to_httpsig_for_commitment, MsgToSign}),
     % Generate the signature base
     SignatureBase = signature_base(EncMsg, EncComm, Opts),
-    ?event({rsa_signature_base, {string, SignatureBase}}),
+    ?event(httpsig_commit, {rsa_signature_base, {string, SignatureBase}}),
     ?event({mod_committed_keys, ModCommittedKeys}),
     % Sign the signature base
     Signature = ar_wallet:sign(Wallet, SignatureBase, sha512),
@@ -353,7 +353,23 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
     % convert the `body' key to a `content-digest' key, if present.
     Encoded = add_content_digest(EncodedWithSigInfo, Opts),
     % Transform the list of requested keys to their `httpsig@1.0' equivalents.
-    EncodedKeys = maps:keys(Encoded),
+    EncodedKeys =
+        if is_map_key(<<"ao-body-key">>, Encoded) -> [<<"ao-body-key">>];
+        true -> []
+        end ++
+        if is_map_key(<<"content-digest">>, Encoded) -> [<<"content-digest">>];
+        true -> []
+        end ++
+        if is_map_key(<<"content-type">>, Encoded) -> [<<"content-type">>];
+        true -> []
+        end ++
+        lists:filter(
+            fun(Key) -> is_map_key(Key, Encoded) end,
+            hb_util:list_without(
+                [<<"ao-body-key">>, <<"content-digest">>, <<"content-type">>],
+                Inputs
+            )
+        ),
     EncodedKeysWithBodyKey =
         case hb_maps:get(<<"ao-body-key">>, EncodedWithSigInfo, not_found) of
             not_found ->
