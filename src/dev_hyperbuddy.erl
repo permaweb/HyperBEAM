@@ -14,6 +14,11 @@ info() ->
             % Default message viewer page:
             <<"index">> => <<"index.html">>,
             <<"bundle.js">> => <<"bundle.js">>,
+            <<"fonts.css">> => <<"fonts.css">>,
+            <<"Open-Sans.ttf">> => <<"Open-Sans.ttf">>,
+            <<"TitilliumWeb-Bold.ttf">> => <<"TitilliumWeb-Bold.ttf">>,
+            <<"TitilliumWeb-Regular.ttf">> => <<"TitilliumWeb-Regular.ttf">>,
+            <<"TitilliumWeb-SemiBold.ttf">> => <<"TitilliumWeb-SemiBold.ttf">>,
             % Error pages:
             <<"404.html">> => <<"404.html">>,
             <<"500.html">> => <<"500.html">>,
@@ -124,7 +129,8 @@ return_file(Device, Name, Template) ->
                         <<".js">> -> <<"text/javascript">>;
                         <<".css">> -> <<"text/css">>;
                         <<".png">> -> <<"image/png">>;
-                        <<".ico">> -> <<"image/x-icon">>
+                        <<".ico">> -> <<"image/x-icon">>;
+                        <<".ttf">> -> <<"font/ttf">>
                     end
                 }
             };
