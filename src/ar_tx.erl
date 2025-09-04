@@ -189,7 +189,8 @@ verify_v1(_) ->
 verify_v2(#tx{ format = 2 } = TX) ->
     [
         {"tx_data_size_negative", TX#tx.data_size >= 0},
-        {"tx_data_size_data_root_mismatch", (TX#tx.data_size == 0) == (TX#tx.data_root == <<>>)}
+        {"tx_data_size_data_root_mismatch", (TX#tx.data_size == 0) == (TX#tx.data_root == <<>>)},
+        {"tx_data_mismatch", verify_v2_data(TX)}
     ];
 verify_v2(_) ->
     [].
@@ -207,6 +208,19 @@ sign(TX, PrivKey, {KeyType, Owner}, SignatureDataSegment) ->
 %% @doc Verify that the transaction's ID is a hash of its signature.
 verify_hash(#tx{ id = ID } = TX) ->
     ID == generate_id(TX, signed).
+
+%% @doc On Arweave we don't have data on format=2 transactions, and so
+%% traditionally just verify the transcation based on data_rot and data_size.
+%% However in HyperBEAM we will often populate the data field. Adding this
+%% check to verify that `data_root`, `data_size`, and `data` are consistent.
+verify_v2_data(#tx{ format = 2, data = ?DEFAULT_DATA }) ->
+    true;
+verify_v2_data(#tx{ 
+        format = 2, data_root = DataRoot, 
+        data_size = DataSize, data = Data }) ->
+    (DataSize == byte_size(Data)) andalso (DataRoot == data_root(Data));
+verify_v2_data(_) ->
+    true.
 
 collect_validation_results(_TXID, Checks) ->
     KeepFailed = fun

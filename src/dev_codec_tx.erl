@@ -721,39 +721,67 @@ nested_multiple_tabm_test() ->
     % only bundle true is supported
     do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true).
 
-%% @doc This test is disabled for now. Unclear whether we should deserialize
-%% data by default. If we don't need to deserialize data, then this test
-%% is no different from earlier tests which have `data` set to a binary.
 serialized_data_item_tx_test_disabled() ->
-    Anchor = crypto:strong_rand_bytes(32),
-    Target = crypto:strong_rand_bytes(32),
-    Data = <<"data">>,
+    Opts = #{},
+    % TXID = <<"lbCBr8PWhb2PQ-_2OPt1Zi8liJaHsFgvP-tA45JW0mc">>,
+    % TXID = <<"rpjh7bDHa-Rrv4qgwmJN7gUBldvn3USH2TpT1rUsfSM">>,
+    % TXID = <<"lVlGRqvOlSAZiuszUB67AYuapjqLUIU1CTh6CURTeD8">>,
+    TXID = <<"R2yzhguH9d2Wea3Bjm5ygW2-1MqJQC9uCAm-tRo0eyU">>,
+    {ok, #{ <<"body">> := TXJSON }} = hb_http:request(
+        #{
+            <<"path">> => <<"/arweave/tx/", TXID/binary>>,
+            <<"method">> => <<"GET">>
+        },
+        Opts
+    ),
+    {ok, #{ <<"body">> := Data }} = hb_http:request(
+        #{
+            <<"path">> => <<"/arweave/raw/", TXID/binary>>,
+            <<"method">> => <<"GET">>
+        },
+        Opts
+    ),
+    ?event(debug_test, {header_json, TXJSON}),
+    ?event(debug_test, {data, {explicit, Data}}),
+    TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(TXJSON)),
+    TX = TXHeader#tx{ data = Data },
+    ?event(debug_test, {tx, TX}),
+    ?assert(ar_tx:verify(TX)),
+    
+    DeserializedData = ar_bundles:unbundle(TX),
+    % DataItems = ar_bundles:deserialize(Data, binary),
+    ?event(debug_test, {data_items, DeserializedData}),
+    ok.
+% serialized_data_item_tx_test() ->
+%     Anchor = crypto:strong_rand_bytes(32),
+%     Target = crypto:strong_rand_bytes(32),
+%     Data = <<"data">>,
 
-    DataItem = #tx{
-        format = ans104,
-        tags = [
-            {<<"ans104-tag1">>, <<"value1">>},
-            {<<"ans104-tag2">>, <<"value2">>}
-        ],
-        anchor = Anchor,
-        target = Target,
-        data = Data
-    },
+%     DataItem = #tx{
+%         format = ans104,
+%         tags = [
+%             {<<"ans104-tag1">>, <<"value1">>},
+%             {<<"ans104-tag2">>, <<"value2">>}
+%         ],
+%         anchor = Anchor,
+%         target = Target,
+%         data = Data
+%     },
 
-    SerializedDataItem = ar_bundles:serialize(DataItem),
-    TX = #tx{
-        format = 2,
-        tags = [
-            {<<"tx-tag1">>, <<"value1">>},
-            {<<"tx-tag2">>, <<"value2">>}
-        ],
-        data = SerializedDataItem,
-        data_size = byte_size(SerializedDataItem),
-        data_root = ar_tx:data_root(SerializedDataItem)
-    },
-    UnsignedTABM = #{ },
-    SignedCommitment = #{ },
-    do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment, false).
+%     SerializedDataItem = ar_bundles:serialize(DataItem),
+%     TX = #tx{
+%         format = 2,
+%         tags = [
+%             {<<"tx-tag1">>, <<"value1">>},
+%             {<<"tx-tag2">>, <<"value2">>}
+%         ],
+%         data = SerializedDataItem,
+%         data_size = byte_size(SerializedDataItem),
+%         data_root = ar_tx:data_root(SerializedDataItem)
+%     },
+%     UnsignedTABM = #{ },
+%     SignedCommitment = #{ },
+%     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment, false).
 
 %% @doc Run a series of roundtrip tests that start and end with a #tx record
 do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->
