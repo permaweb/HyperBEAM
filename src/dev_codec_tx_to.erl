@@ -36,7 +36,7 @@ anchor_field(Prefix, Map, Opts) ->
     case hb_maps:find(<<Prefix/binary, "anchor">>, Map, Opts) of
         {ok, EncodedAnchor} ->
             case hb_util:safe_decode(EncodedAnchor) of
-                {ok, Anchor} when ?IS_ID(Anchor) -> Anchor;
+                {ok, Anchor} -> Anchor;
                 _ -> ?DEFAULT_ANCHOR
             end;
         error -> ?DEFAULT_ANCHOR

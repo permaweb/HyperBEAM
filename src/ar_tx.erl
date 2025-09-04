@@ -261,7 +261,7 @@ json_struct_to_tx(TXStruct) ->
         owner = hb_util:decode(hb_util:find_value(<<"owner">>, TXStruct)),
         tags = [{hb_util:decode(Name), hb_util:decode(Value)}
                 %% Only the elements matching this pattern are included in the list.
-                || {[{<<"name">>, Name}, {<<"value">>, Value}]} <- Tags],
+                || #{<<"name">> := Name, <<"value">> := Value} <- Tags],
         target = hb_util:decode(hb_util:find_value(<<"target">>, TXStruct)),
         quantity = binary_to_integer(hb_util:find_value(<<"quantity">>, TXStruct)),
         data = Data,
@@ -319,11 +319,9 @@ tx_to_json_struct(
         {<<"tags">>,
             lists:map(
                 fun({Name, Value}) ->
-                    {
-                        [
-                            {<<"name">>, hb_util:encode(Name)},
-                            {<<"value">>, hb_util:encode(Value)}
-                        ]
+                    #{
+                        <<"name">> => hb_util:encode(Name),
+                        <<"value">> => hb_util:encode(Value)
                     }
                 end,
                 Tags

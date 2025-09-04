@@ -198,7 +198,7 @@ enforce_valid_tx(TX) ->
         {invalid_field, unsigned_id, TX#tx.unsigned_id}
     ),
     hb_util:ok_or_throw(TX,
-        hb_util:check_size(TX#tx.anchor, [0, 32]),
+        hb_util:check_size(TX#tx.anchor, [0, 32, 48]),
         {invalid_field, anchor, TX#tx.anchor}
     ),
     hb_util:ok_or_throw(TX,
@@ -787,9 +787,11 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Req) ->
     % Sign TX
     SignedTX = ar_tx:sign(UnsignedTX, hb:wallet()),
     ?assert(ar_tx:verify(SignedTX), signed_tx_roundtrip),
+    ?event(debug_test, {signed_tx_roundtrip, {signed_tx, SignedTX}}),
     % Serialize -> Deserialize
     JSON = ar_tx:tx_to_json_struct(SignedTX),
     DeserializedTX = ar_tx:json_struct_to_tx(JSON),
+    ?event(debug_test, {signed_tx_roundtrip, {deserialized_tx, DeserializedTX}}),
     % TX -> TABM
     TABM = hb_util:ok(from(DeserializedTX, Req, #{})),
     SignedCommitment = Commitment#{

@@ -52,19 +52,17 @@ post_tx(_Base, Request, Opts) ->
 get_tx(Base, Request, Opts) ->
     case find_txid(Base, Request, Opts) of
         not_found -> {error, not_found};
-        TXID ->
-            case request(<<"GET">>, <<"/tx/", TXID/binary>>, Opts) of
-                {ok, TXHeader} ->
-                    ?event(arweave, {retrieved_tx_header, {tx, TXID}}),
-                    maybe_add_data(TXID, TXHeader, Base, Request, Opts);
-                Other -> Other
-            end
+        TXID -> 
+            Res = {ok, Structured} =request(<<"GET">>, <<"/tx/", TXID/binary>>, Opts),
+            HTTPSig = hb_message:convert(Structured, <<"httpsig@1.0">>, <<"structured@1.0">>, Opts),
+            ?event(arweave, {get_tx, {txid, TXID}, {structured, Structured}, {httpsig_res, HTTPSig}}),
+            Res
     end.
 
 %% @doc Handle the optional adding of data to the transaction header, depending
 %% on the request. Semantics of the `data' key are described in the `get_tx/3'
 %% documentation.
-maybe_add_data(TXID, Header, Base, Request, Opts) ->
+maybe_add_data(TXID, TXHeader, Base, Request, Opts) ->
     GetData =
         hb_util:atom(hb_ao:get_first(
             [
@@ -76,41 +74,44 @@ maybe_add_data(TXID, Header, Base, Request, Opts) ->
         )),
     case hb_util:atom(GetData) of
         false ->
-            {ok, Header};
+            {ok, TXHeader};
         _ ->
-            case data(Base, Request, Opts) of
-                {ok, Data} ->
-                    FullMessage = Header#{ <<"data">> => Data },
-                    ?event(
-                        arweave,
-                        {retrieved_tx_with_data,
-                            {id, TXID},
-                            {data_size, byte_size(Data)},
-                            {message, FullMessage}
-                        }
-                    ),
-                    {ok, FullMessage};
+            case add_data(TXID, TXHeader, Opts) of
+                {ok, TX} -> {ok, TX};
                 {error, Reason} ->
-                    ?event(arweave,
-                        {data_retrieval_failed_after_header,
-                            {id, TXID},
-                            {error, Reason}
-                        }
-                    ),
-                    if GetData =/= always -> {ok, Header};
+                    if GetData =/= always -> {ok, TXHeader};
                     true -> {error, Reason}
                     end
             end
     end.
 
-%% @doc Retrieve the data of a transaction from Arweave.
-data(Base, Request, Opts) ->
-    case find_txid(Base, Request, Opts) of
-        not_found -> {error, not_found};
-        TXID ->
-            ?event(arweave, {retrieving_tx_data, {tx, TXID}}),
-            request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts)
+add_data(TXID, TXHeader, Opts) ->
+    case data(TXID, Opts) of
+        {ok, Data} ->
+            TX = TXHeader#tx{ data = Data },
+            ?event(
+                arweave,
+                {retrieved_tx_with_data,
+                    {id, TXID},
+                    {data_size, byte_size(Data)},
+                    {tx, TX}
+                }
+            ),
+            {ok, TX};
+        {error, Reason} ->
+            ?event(arweave,
+                {data_retrieval_failed_after_header,
+                    {id, TXID},
+                    {error, Reason}
+                }
+            ),
+            {error, Reason}
     end.
+
+%% @doc Retrieve the data of a transaction from Arweave.
+data(TXID, Opts) ->
+    ?event(arweave, {retrieving_tx_data, {tx, TXID}}),
+    request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -198,6 +199,28 @@ request(Method, Path, Opts) ->
     to_message(Path, Res, Opts).
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
+to_message(_Path, {error, #{ <<"status">> := 404 }}, _Opts) ->
+    {error, not_found};
+to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts) ->
+    TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
+    ?event(arweave,
+        {arweave_tx_response,
+            {path, Path},
+            {raw_body, {explicit, Body}},
+            {body, {explicit, hb_json:decode(Body)}},
+            {tx, TXHeader}
+        }
+    ),
+    {ok, TX} = add_data(TXID, TXHeader, Opts),
+    {
+        ok,
+        hb_message:convert(
+            TX,
+            <<"structured@1.0">>,
+            <<"tx@1.0">>,
+            Opts
+        )
+    };
 to_message(Path = <<"/raw/", _/binary>>, {ok, #{ <<"body">> := Body }}, _Opts) ->
     ?event(arweave,
         {arweave_raw_response,
@@ -287,3 +310,35 @@ post_ans104_tx_test() ->
         GetRes
     ),
     ok.
+get_tx_test() ->
+    Node = hb_http_server:start_node(),
+    Path = <<"/~arweave@2.9-pre/tx?tx=MH1M9gedlPsu7-57-N0S_-F1OBoYacLYLe5jL0Tvr9c">>,
+    {ok, StructuredTX} = hb_http:get(Node, Path, #{}),
+    ?event(debug_test, {structured_tx, StructuredTX}),
+    ?assert(hb_message:verify(StructuredTX, all, #{})).
+
+
+get_bad_tx_test() ->
+    Node = hb_http_server:start_node(),
+    Path = <<"/~arweave@2.9-pre/tx?tx=INVALID-ID">>,
+    Res = hb_http:get(Node, Path, #{}),
+    ?assertEqual({error, not_found}, Res).
+
+httpsig_test() ->
+    TX = #tx{
+        format = 2,
+        tags = [
+            {<<"z">>, <<"position-1">>},
+            {<<"a">>, <<"position-2">>}
+        ]
+    },
+    SignedTX = ar_tx:sign(TX, hb:wallet()),
+    ?assert(ar_tx:verify(SignedTX)),
+    ?event(debug_test, {signed_tx, {explicit, SignedTX}}),
+    TABM1 = hb_util:ok(dev_codec_tx:from(SignedTX, #{}, #{})),
+    ?event(debug_test, {tabm1, {explicit, TABM1}}),
+    HTTPSig = hb_util:ok(dev_codec_httpsig:to(TABM1, #{}, #{})),
+    ?event(debug_test, {httpsig, {explicit, HTTPSig}}),
+    TABM2 = hb_util:ok(dev_codec_httpsig:from(HTTPSig, #{}, #{})),
+    ?event(debug_test, {tabm2, {explicit, TABM2}}),
+    ?assert(hb_message:match(TABM1, TABM2, #{})).
