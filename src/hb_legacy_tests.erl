@@ -1,11 +1,11 @@
-%%% @doc Simple EUnit test that logs an event and asserts.
+%%% @doc remote scheduler with legacy net tests 
 -module(hb_legacy_tests).
 
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -ifdef(ENABLE_GENESIS_WASM).
-% create hb node for testing
+%% @doc Create hb node for testing.
 create_node() ->
     ComputeStore = hb_test_utils:test_store(),
     hb_http_server:start_node(
@@ -31,6 +31,7 @@ create_node() ->
          }
     ).
 
+%% @doc Get a process message to be used to spawn legacy net processes.
 get_process_message(ClientOpts, Keys) ->
     % for legacy net process it is important that 
     % Type, Data-Protocol, Variant, Scheduler, Module
@@ -59,6 +60,7 @@ get_process_message(ClientOpts, Keys) ->
          }
     ).
 
+%% @doc spawn a legacy net process using remote scheduler 
 legacy_spawn_process_test() -> 
     ClientOpts = 
         #{
@@ -81,6 +83,7 @@ legacy_spawn_process_test() ->
     ?assertEqual(200, hb_maps:get(~"status", PushRes, 404, #{})),
     ok.
 
+%% @doc spawn ln process and compute a ln message using remote scheduler
 legacy_process_msg_test() ->
     ClientOpts = 
         #{
