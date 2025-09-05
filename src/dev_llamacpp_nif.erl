@@ -1,5 +1,5 @@
 -module(dev_llamacpp_nif).
--export([start/1, stop/0, completion/2, completion/3, chat/2, chat/3, ensure_ets/0]).
+-export([start/1, stop/0, load_model/1, completion/2, completion/3, chat/2, chat/3]).
 -include_lib("eunit/include/eunit.hrl").
 
 %% C NIF does not use cargo.hrl loader; load from priv root
@@ -12,7 +12,6 @@ init() ->
 load() ->
     PrivDir = case code:priv_dir(hb) of
         {error, bad_name} -> 
-            %% During tests, application might not be started. Use relative path.
             "./priv";
         Dir -> Dir
     end,
@@ -36,24 +35,45 @@ stop() ->
     ets:delete(dev_llamacpp_state, server),
     ok.
 
+load_model(Opts) ->
+    ensure_ets(),
+    case ets:lookup(dev_llamacpp_state, server) of
+        [{server, OldState}] ->
+            %% Server is running, restart it
+            _ = stop_server_nif(),
+            
+            MergedOpts = maps:merge(OldState, Opts),
+            Host = maps:get(host, MergedOpts),
+            Port = maps:get(port, MergedOpts),
+            Model = maps:get(model, MergedOpts),
+            Restarts = maps:get(restarts, OldState, 0),
+
+            case start_server_nif(Model, Host, Port) of
+                ok ->
+                    ets:insert(dev_llamacpp_state, {server, MergedOpts#{restarts => Restarts + 1}}),
+                    ok;
+                {error, _}=E -> E
+            end;
+        [] ->
+            %% Server not running, just start it
+            start(Opts)
+    end.
+
 %% JSON binaries for opts
 completion(PromptBin, OptsJSONBin) when is_binary(PromptBin), is_binary(OptsJSONBin) ->
     completion(PromptBin, OptsJSONBin, 60000).
 
 completion(PromptBin, OptsJSONBin, _TimeoutMs) ->
-    %% Use httpc to call llama.cpp server; return raw JSON
     ensure_inets(),
     ensure_ets(),
     case ets:lookup(dev_llamacpp_state, server) of
         [{server, #{host := Host, port := Port}}] ->
             URL = io_lib:format("http://~s:~p/v1/completions", [binary_to_list(Host), Port]),
-            %% Parse options JSON and merge with standard fields
             case jsx:decode(OptsJSONBin, [return_maps]) of
                 OptsMap when is_map(OptsMap) ->
-                    %% Build complete request body
                     RequestBody = OptsMap#{
-                        <<"prompt">> => PromptBin,
-                        <<"stream">> => false
+                         <<"prompt">> => PromptBin,
+                         <<"stream">> => false
                     },
                     Body = jsx:encode(RequestBody),
                     case httpc:request(post, {lists:flatten(URL), [{"content-type","application/json"}], "application/json", Body}, [{timeout, 60000}], []) of
@@ -76,13 +96,11 @@ chat(MessagesJSONBin, OptsJSONBin, _TimeoutMs) ->
     case ets:lookup(dev_llamacpp_state, server) of
         [{server, #{host := Host, port := Port}}] ->
             URL = io_lib:format("http://~s:~p/v1/chat/completions", [binary_to_list(Host), Port]),
-            %% Parse JSON inputs and merge properly
             case {jsx:decode(MessagesJSONBin, [return_maps]), jsx:decode(OptsJSONBin, [return_maps])} of
                 {Messages, OptsMap} when is_list(Messages), is_map(OptsMap) ->
-                    %% Build complete chat completion request
                     RequestBody = OptsMap#{
-                        <<"messages">> => Messages,
-                        <<"stream">> => false
+                         <<"messages">> => Messages,
+                         <<"stream">> => false
                     },
                     Body = jsx:encode(RequestBody),
                     case httpc:request(post, {lists:flatten(URL), [{"content-type","application/json"}], "application/json", Body}, [{timeout, 60000}], []) of
@@ -119,20 +137,17 @@ integration_test_() ->
                 fun() -> ok end,
                 fun(_S) -> catch stop() end,
                 fun() ->
-                    %% Use a high port to avoid conflicts
                     Port = 4571,
-                    Host = <<"127.0.0.1">>,
+                    Host = list_to_binary("127.0.0.1"),
                     R = start(#{model => list_to_binary("models/qwen2.5-14b-instruct-q2_k.gguf"), host => Host, port => Port}),
                     case R of
                         ok -> ok;
                         {error, already_running} -> ok;
                         Other -> ?assertEqual(ok, Other)
                     end,
-                    %% Small completion
-                    Comp = completion(<<"Hello">>, <<"{\"max_tokens\": 8}">>),
+                    Comp = completion(list_to_binary("Hello"), list_to_binary("{\"max_tokens\": 8}")),
                     ?assertMatch({ok, _}, Comp),
-                    %% Small chat
-                    Chat = chat(<<"[{\"role\":\"user\",\"content\":\"Hi\"}]">>, <<"{\"max_tokens\": 8}">>),
+                    Chat = chat(list_to_binary("[{\"role\":\"user\",\"content\":\"Hi\"}]"), list_to_binary("{\"max_tokens\": 8}")),
                     ?assertMatch({ok, _}, Chat)
                 end}};
         _ -> {skip, "Set HB_LLAMA_TEST=1 and ensure llama-server + models/*.gguf exist to run integration test"}

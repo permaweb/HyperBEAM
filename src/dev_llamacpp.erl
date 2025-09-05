@@ -1,5 +1,5 @@
 %%% @doc Device for interfacing with llama.cpp server.
-%%% 
+%%%
 %%% This device accepts user requests and forwards them to a llama.cpp server,
 %%% handling both completion and chat completion endpoints based on session management.
 %%%
@@ -8,21 +8,20 @@
 %%% - config (optional): JSON options with max_tokens, temperature, top_p
 %%% - session_id (optional): For maintaining chat session history
 %%% - reference (required): Reference identifier passed back to user
-%%% - worker (required): Worker identifier passed back to user
 %%%
 %%% When session_id is not provided, uses v1/completions API.
 %%% When session_id is provided, uses v1/chat/completions API with session history.
 %%%
 %%% Returns structured response with:
 %%% - body: JSON array with result from llama.cpp
-%%% - Custom headers: X-Session, X-Reference, X-Worker
+%%% - Custom headers: X-Session, X-Reference
 %%% - Action: "Infer-Response"
 %%% - status: 200
 %%%
 %%% Note: Session history is managed by llamacpp_session_manager to ensure
 %%% persistence across different HyperBEAM processes.
 -module(dev_llamacpp).
--export([info/0, infer/3, infer_sec/3]).
+-export([info/0, chat/3, completion/3, load_model/3, read_model_by_ID/2]).
 -export([init_session_table/0]). % For testing
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -33,84 +32,31 @@
 %% @doc Device metadata and exported functions.
 info() ->
     #{
-        exports => [infer, infer_sec]
+        exports => [chat, completion, load_model]
     }.
 
-infer_sec(_M1, M2, Opts) ->
-    case dev_cc:generate(#{}, #{nonce => <<"da4a06c3604a5fac8aa0b4aaf5a6354cdd0dc7c193299bc3464f30b5cbfb931a">>}, Opts) of
-        {ok, TokenJSON} ->
-            case infer(_M1, M2, Opts) of
-                {ok, Result} ->
-                    ExistingBody = maps:get(<<"body">>, Result, <<"{}">>),
-                    ExistingData = hb_json:decode(ExistingBody),
-                    UpdatedData = ExistingData#{
-                        <<"attestation">> => hb_json:decode(TokenJSON)
-                    },
-                    UpdatedResult = Result#{<<"body">> => hb_json:encode(UpdatedData)},
-                    {ok, UpdatedResult};
-                {error, Reason} ->
-                    ?event(dev_llamacpp, {infer_sec_failed, Reason}),
-                    {error, {infer_sec_failed, Reason}}
-            end;
-        {error, Reason} ->
-            ?event(dev_llamacpp, {infer_sec_failed, Reason}),
-            {error, {infer_sec_failed, Reason}}
-    end.
-
-%% @doc Main inference function that handles requests to llama.cpp server.
-infer(_Msg1, Msg2, Opts) ->
+%% @doc Handles completion requests to llama.cpp server.
+completion(_Msg1, Msg2, Opts) ->
     try
-        % Initialize session table if not already done
-        init_session_table(),
-        
-        % Ensure llama.cpp server is running
         ensure_server_running(Msg2, Opts),
         
-        % Extract required parameters
         Prompt = extract_required_param(<<"prompt">>, Msg2, Opts),
         Reference = extract_required_param(<<"reference">>, Msg2, Opts),
-        Worker = extract_required_param(<<"worker">>, Msg2, Opts),
         
-        % Extract optional parameters
         Config = hb_ao:get(<<"config">>, Msg2, <<>>, Opts),
-        SessionId = hb_ao:get(<<"session_id">>, Msg2, undefined, Opts),
         
-        % Parse config JSON and extract allowed parameters
         LlamaCppParams = parse_config(Config, Opts),
         
-        % Choose API endpoint based on session_id
-        {ResponseBody} = 
-            case SessionId of
-                undefined ->
-                    % Use completions API
-                    OptsJSON = hb_json:encode(LlamaCppParams),
-                    case dev_llamacpp_nif:completion(Prompt, OptsJSON) of
-                        {ok, RespBody} -> {RespBody};
-                        {error, Reason} -> throw({llamacpp_error, Reason})
-                    end;
-                _ ->
-                    % Use chat completions API with session history
-                    Messages = get_session_history(SessionId, Prompt, Opts),
-                    MessagesJSON = hb_json:encode(Messages),
-                    OptsJSON = hb_json:encode(LlamaCppParams),
-                    case dev_llamacpp_nif:chat(MessagesJSON, OptsJSON) of
-                        {ok, RespBody} -> {RespBody};
-                        {error, Reason} -> throw({llamacpp_error, Reason})
-                    end
-            end,
-        
-        % Extract content from response
-        Content = extract_content_from_response(ResponseBody, SessionId),
-        
-        % Update session history if applicable
-        case SessionId of
-            undefined -> ok;
-            _ -> update_session_history(SessionId, Prompt, Content, Opts)
+        OptsJSON = hb_json:encode(LlamaCppParams),
+        {ResponseBody} = case dev_llamacpp_nif:completion(Prompt, OptsJSON) of
+            {ok, RespBody} -> {RespBody};
+            {error, Reason} -> throw({llamacpp_error, Reason})
         end,
         
-        ?event(dev_llamacpp, {infer_success, Reference}),
-        % Return structured response
-        {ok, build_response(Content, SessionId, Reference, Worker)}
+        Content = extract_content_from_response(ResponseBody, undefined), % No session Id
+        
+        ?event(dev_llamacpp, {completion_success, Reference}),
+        {ok, build_response(Content, undefined, Reference)} 
         
     catch
         throw:{missing_required_param, Param} ->
@@ -126,13 +72,149 @@ infer(_Msg1, Msg2, Opts) ->
         throw:{server_start_failed, Error} ->
             {error, Error};
         _:Error:Stacktrace ->
-            ?event(llamacpp_error, {unexpected_error, Error, Stacktrace}),
-            {error, <<"Unexpected error occurred">>}
+            ?event(llamacpp_error, {completion_unexpected_error, Error, Stacktrace}),
+            {error, <<"Unexpected error occurred">>} 
+    end.
+
+%% @doc Handles chat requests to llama.cpp server.
+chat(_Msg1, Msg2, Opts) ->
+    try
+        init_session_table(),
+        
+        ensure_server_running(Msg2, Opts),
+        
+        Prompt = extract_required_param(<<"prompt">>, Msg2, Opts),
+        Reference = extract_required_param(<<"reference">>, Msg2, Opts),
+        SessionId = extract_required_param(<<"session_id">>, Msg2, Opts), % session_id is required for chat
+        
+        Config = hb_ao:get(<<"config">>, Msg2, <<>>, Opts),
+        
+        LlamaCppParams = parse_config(Config, Opts),
+        
+        Messages = get_session_history(SessionId, Prompt, Opts),
+        MessagesJSON = hb_json:encode(Messages),
+        OptsJSON = hb_json:encode(LlamaCppParams),
+        {ResponseBody} = case dev_llamacpp_nif:chat(MessagesJSON, OptsJSON) of
+            {ok, RespBody} -> {RespBody};
+            {error, Reason} -> throw({llamacpp_error, Reason})
+        end,
+        
+        Content = extract_content_from_response(ResponseBody, SessionId),
+        
+        update_session_history(SessionId, Prompt, Content, Opts),
+        
+        ?event(dev_llamacpp, {chat_success, Reference}),
+        {ok, build_response(Content, SessionId, Reference)} 
+        
+    catch
+        throw:{missing_required_param, Param} ->
+            {error, <<"Missing required parameter: ", Param/binary>>};
+        throw:{invalid_json, Error} ->
+            {error, <<"Invalid JSON in config: ", Error/binary>>};
+        throw:{llamacpp_error, Error} ->
+            {error, <<"llama.cpp API error: ", (hb_util:bin(Error))/binary>>};
+        throw:{parse_error, Error} ->
+            {error, <<"Failed to parse llama.cpp response: ", Error/binary>>};
+        throw:{missing_model, Error} ->
+            {error, Error};
+        throw:{server_start_failed, Error} ->
+            {error, Error};
+        _:Error:Stacktrace ->
+            ?event(llamacpp_error, {chat_unexpected_error, Error, Stacktrace}),
+            {error, <<"Unexpected error occurred">>} 
+    end.
+
+%% @doc Load a new model into the llama.cpp server.
+load_model(_Msg1, Msg2, Opts) ->
+    try
+        Model = extract_required_param(<<"model">>, Msg2, Opts),
+
+        % Check if the model is a URL or a local path
+        case read_model_by_ID(Model, Opts) of
+            {ok, LocalModelPath} ->
+                LoadOpts = #{model => list_to_binary(LocalModelPath)},
+                case dev_llamacpp_nif:load_model(LoadOpts) of
+                    ok ->
+                        timer:sleep(2000),
+                        {ok, <<"Model downloaded and loaded successfully">>};
+                    {error, Reason} ->
+                        throw({load_model_failed, Reason})
+                end;
+            {error, Reason} ->
+                throw({model_download_failed, Reason})
+        end
+    catch
+        throw:{missing_required_param, Param} ->
+            {error, <<"Missing required parameter: ", Param/binary>>};
+        throw:{load_model_failed, Error} ->
+            {error, <<"llama.cpp load_model error: ", (hb_util:bin(Error))/binary>>};
+        throw:{model_download_failed, Error} ->
+            {error, <<"Model download failed: ", (hb_util:bin(Error))/binary>>};
+        _:Error:Stacktrace ->
+            ?event(llamacpp_error, {load_model_error, Error, Stacktrace}),
+            {error, <<"Unexpected error occurred during model load">>} 
+    end.
+
+%% @doc Configure options with model storage settings.
+opts(BaseOpts) ->
+    %% Allow user to configure model store, or use default
+    DefaultModelStore = #{
+        <<"store-module">> => hb_store_fs,
+        <<"name">> => <<"model-cache">>
+    },
+    ModelStore = hb_opts:get(model_store, DefaultModelStore, BaseOpts),
+    %% Extend base options with model store configuration
+    BaseOpts#{
+        store => [ModelStore | hb_opts:get(store, [], BaseOpts)]
+    }.
+
+%% @doc Download and retrieve a model by Arweave transaction ID.
+read_model_by_ID(TxID, Opts) ->
+    %% Start the HTTP server (required for gateway access)
+    hb_http_server:start_node(#{}),
+    %% Configure options with model storage settings
+    ConfiguredOpts = opts(Opts),
+    ModelStore = hd(hb_opts:get(store, [], ConfiguredOpts)),
+    %% Attempt to read the model from cache or download from Arweave
+    case hb_cache:read(TxID, ConfiguredOpts) of
+        {ok, Message} ->
+            ?event(cache, {successfully_read_message_from_arweave}),
+            %% Extract the data reference from the message
+            DataLink = hb_maps:get(<<"data">>, Message, undefined, ConfiguredOpts),
+            ?event(cache, {data_link, DataLink}),
+            
+            %% Ensure the data is loaded and get its path
+            {ok, LoadedData, _LoadedOpts} = hb_cache:ensure_loaded_with_opts(DataLink, ConfiguredOpts),
+            ?event(cache, {loaded_data_size, byte_size(LoadedData)}),
+
+            %% Generate content-based hash path for storage location
+            Hashpath = hb_path:hashpath(LoadedData, ConfiguredOpts),
+            ?event(cache, {calculated_hashpath, Hashpath}),
+
+            %% Construct the standardized data path using content hash
+            DataPath = <<"data/", Hashpath/binary>>,
+            ?event(cache, {data_path, DataPath}),
+
+            %% Resolve to actual filesystem path and construct full path
+            ResolvedPath = hb_store:resolve(ModelStore, DataPath),
+            StoreName = hb_maps:get(<<"name">>, ModelStore, undefined, ConfiguredOpts),
+            ActualFilePath = <<StoreName/binary, "/", ResolvedPath/binary>>,
+            ?event(cache, {actual_file_path, ActualFilePath}),
+
+            %% Convert binary path to string for external API compatibility
+            StringPath = case is_binary(ActualFilePath) of
+                true -> binary_to_list(ActualFilePath);
+                false -> ActualFilePath
+            end,
+            {ok, StringPath};
+        not_found ->
+            %% Model transaction ID not found on Arweave network
+            ?event({string, <<"Message not found on Arweave">>}),
+            {error, not_found}
     end.
 
 %% @doc Initialize the session manager.
 init_session_table() ->
-    % Start the session manager process if not already running
     case whereis(llamacpp_session_manager) of
         undefined ->
             {ok, _Pid} = llamacpp_session_manager:start_link(),
@@ -148,30 +230,23 @@ ensure_server_running(Msg2, Opts) ->
 
 %% @doc Start llama.cpp server with configuration.
 start_server(Msg2, Opts) ->
-    % Get model path from config or use default
     Model = case hb_ao:get(<<"model">>, Msg2, undefined, Opts) of
         undefined -> 
             % Use fixed default model
             <<"models/gemma-3-270m-it-F16.gguf">>;
         ModelPath -> ModelPath
     end,
-    
-    % Get host and port from config or use defaults
+
     Host = <<"127.0.0.1">>,
     Port = 9567,
-    
-    % Debug logging
     ?event(dev_llamacpp, {debug_start_server, #{model => Model, host => Host, port => Port}}),
     
-    % Start the server
     case dev_llamacpp_nif:start(#{model => Model, host => Host, port => Port}) of
         ok ->
             % Wait a bit for server to be ready
             timer:sleep(2000),
             ok;
         {error, already_running} ->
-            % Even if already running, ensure ETS table has the server info
-            % This fixes the issue where subsequent requests fail with not_running
             try
                 dev_llamacpp_nif:ensure_ets(),
                 ets:insert(dev_llamacpp_state, {server, #{host => Host, port => Port, model => Model, restarts => 0}})
@@ -270,18 +345,16 @@ extract_content_from_response(ResponseBody, SessionId) ->
     end.
 
 %% @doc Build structured response.
-build_response(Content, SessionId, Reference, Worker) ->
+build_response(Content, SessionId, Reference) ->
     ResponseBody = hb_json:encode(#{<<"result">> => Content}),
     
     BaseResponse = #{
         <<"body">> => ResponseBody,
         <<"Action">> => <<"Infer-Response">>,
         <<"status">> => 200,
-        <<"X-Reference">> => Reference,
-        <<"X-Worker">> => Worker
+        <<"X-Reference">> => Reference
     },
     
-    % Add X-Session header if session_id exists
     case SessionId of
         undefined -> BaseResponse;
         _ -> BaseResponse#{<<"X-Session">> => SessionId}
@@ -289,96 +362,71 @@ build_response(Content, SessionId, Reference, Worker) ->
 
 %%% Tests
 
+read_model_by_ID_test(_Config) ->
+    ModelID = <<"ISrbGzQot05rs_HKC08O_SmkipYQnqgB1yC3mjZZeEo">>,
+    Opts = #{},
+    Result = dev_llamacpp:read_model_by_ID(ModelID, Opts),
+    ?assertMatch({ok, _}, Result),
+    {ok, Path} = Result,
+    ?assert(is_list(Path)).
 
-integration_test_() ->
-    case {filelib:is_file("_build/llama.cpp/build/bin/llama-server")} of
-        {true} ->
-            {timeout, 120, {setup,
-                fun() -> ok
-                end,
-                fun(_S) -> 
-                    % Stop llama.cpp server
-                    catch dev_llamacpp_nif:stop()
-                end,
-                fun() ->
-                    % Test completion without session
-                    Msg1 = #{},
-                    Msg2 = #{
-                        <<"prompt">> => <<"Hello">>,
-                        <<"reference">> => <<"integration-test-ref">>,
-                        <<"worker">> => <<"integration-test-worker">>,
-                        <<"config">> => <<"{\"max_tokens\": 8, \"temperature\": 0.1}">>
-                    },
-                    Opts = #{},
-                    
-                    Result1 = infer(Msg1, Msg2, Opts),
-                    ?assertMatch({ok, _}, Result1),
-                    {ok, Response1} = Result1,
-                    
-                    % Verify response structure
-                    ?assert(maps:is_key(<<"body">>, Response1)),
-                    ?assertEqual(200, maps:get(<<"status">>, Response1)),
-                    ?assertEqual(<<"Infer-Response">>, maps:get(<<"Action">>, Response1)),
-                    ?assertEqual(<<"integration-test-ref">>, maps:get(<<"X-Reference">>, Response1)),
-                    ?assertEqual(<<"integration-test-worker">>, maps:get(<<"X-Worker">>, Response1)),
-                    
-                    % Verify response body contains result
-                    Body1 = hb_json:decode(maps:get(<<"body">>, Response1)),
-                    ?assert(maps:is_key(<<"result">>, Body1)),
-                    ?assert(is_binary(maps:get(<<"result">>, Body1))),
-                    
-                    % Test chat completion with session
-                    SessionId = <<"test-session-integration">>,
-                    Msg2WithSession = Msg2#{<<"session_id">> => SessionId},
-                    
-                    Result2 = infer(Msg1, Msg2WithSession, Opts),
-                    ?assertMatch({ok, _}, Result2),
-                    {ok, Response2} = Result2,
-                    
-                    % Verify session header is present
-                    ?assertEqual(SessionId, maps:get(<<"X-Session">>, Response2)),
-                    
-                    % Verify response body
-                    Body2 = hb_json:decode(maps:get(<<"body">>, Response2)),
-                    ?assert(maps:is_key(<<"result">>, Body2)),
-                    ?assert(is_binary(maps:get(<<"result">>, Body2))),
-                    
-                    % Test second message in same session
-                    Msg2SecondInSession = #{
-                        <<"prompt">> => <<"How are you?">>,
-                        <<"reference">> => <<"integration-test-ref-2">>,
-                        <<"worker">> => <<"integration-test-worker-2">>,
-                        <<"session_id">> => SessionId,
-                        <<"config">> => <<"{\"max_tokens\": 8, \"temperature\": 0.1}">>
-                    },
-                    
-                    Result3 = infer(Msg1, Msg2SecondInSession, Opts),
-                    ?assertMatch({ok, _}, Result3),
-                    {ok, Response3} = Result3,
-                    
-                    % Verify session header is still present
-                    ?assertEqual(SessionId, maps:get(<<"X-Session">>, Response3)),
-                    
-                    % Test infer_sec with attestation
-                    try
-                        Result4 = infer_sec(Msg1, Msg2, Opts),
-                        case Result4 of
-                            {ok, ResponseSec} ->
-                                % Verify attestation is present in response
-                                BodySec = hb_json:decode(maps:get(<<"body">>, ResponseSec)),
-                                ?assert(maps:is_key(<<"result">>, BodySec)),
-                                ?assert(maps:is_key(<<"attestation">>, BodySec));
-                            {error, _} ->
-                                % dev_cc might not be available in test environment
-                                io:format("infer_sec test skipped due to dev_cc error~n")
-                        end
-                    catch
-                        error:undef ->
-                            % dev_cc module not available in test environment
-                            io:format("infer_sec test skipped due to dev_cc unavailability~n");
-                        _:Error ->
-                            io:format("infer_sec test skipped due to error: ~p~n", [Error])
-                    end
-                end}};
-        _ -> {skip, "Set HB_LLAMA_TEST=1 and ensure llama-server exists to run integration test"}
-    end.
+load_model_test(_Config) ->
+    ModelID = <<"ISrbGzQot05rs_HKC08O_SmkipYQnqgB1yC3mjZZeEo">>,
+    Msg1 = #{},
+    LoadModelMsg2 = #{ 
+        <<"model">> => ModelID,
+        <<"reference">> => <<"load-model-ref">>
+    },
+    Opts = #{},
+    
+    Result = dev_llamacpp:load_model(Msg1, LoadModelMsg2, Opts),
+    ?assertMatch({ok, _}, Result),
+    {ok, Response} = Result,
+    ?assertEqual(<<"Model downloaded and loaded successfully">>, Response).
+
+completion_test(_Config) ->
+    ModelID = <<"ISrbGzQot05rs_HKC08O_SmkipYQnqgB1yC3mjZZeEo">>,
+    Msg1 = #{},
+    Msg2 = #{ 
+        <<"model">> => ModelID,
+        <<"prompt">> => <<"Hello">>,
+        <<"reference">> => <<"completion-test-ref">>,
+        <<"config">> => "{"max_tokens": 8, "temperature": 0.1}"
+    },
+    Opts = #{},
+    
+    Result = dev_llamacpp:completion(Msg1, Msg2, Opts),
+    ?assertMatch({ok, _}, Result),
+    {ok, Response} = Result,
+    
+    ?assert(maps:is_key(<<"body">>, Response)),
+    ?assertEqual(200, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"Infer-Response">>, maps:get(<<"Action">>, Response)),
+    ?assertEqual(<<"completion-test-ref">>, maps:get(<<"X-Reference">>, Response)),
+    
+    Body = hb_json:decode(maps:get(<<"body">>, Response)),
+    ?assert(maps:is_key(<<"result">>, Body)),
+    ?assert(is_binary(maps:get(<<"result">>, Body))).
+
+chat_test(_Config) ->
+    ModelID = <<"ISrbGzQot05rs_HKC08O_SmkipYQnqgB1yC3mjZZeEo">>,
+    Msg1 = #{},
+    SessionId = <<"test-session-chat">>,
+    Msg2 = #{ 
+        <<"model">> => ModelID,
+        <<"prompt">> => <<"Hello">>,
+        <<"reference">> => <<"chat-test-ref">>,
+        <<"session_id">> => SessionId,
+        <<"config">> => "{"max_tokens": 8, "temperature": 0.1}"
+    },
+    Opts = #{},
+    
+    Result = dev_llamacpp:chat(Msg1, Msg2, Opts),
+    ?assertMatch({ok, _}, Result),
+    {ok, Response} = Result,
+    
+    ?assertEqual(SessionId, maps:get(<<"X-Session">>, Response)),
+    
+    Body = hb_json:decode(maps:get(<<"body">>, Response)),
+    ?assert(maps:is_key(<<"result">>, Body)),
+    ?assert(is_binary(maps:get(<<"result">>, Body))).
