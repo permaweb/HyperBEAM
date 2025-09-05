@@ -1,7 +1,7 @@
 -module(dev_test).
 -export([info/3]).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
--export([update_state/3, increment_counter/3, delay/3]).
+-export([update_state/3, increment_counter/3, delay/3, alt_svc/3]).
 -export([index/3, postprocess/3, load/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -45,6 +45,22 @@ info(_Msg1, _Msg2, _Opts) ->
 		}
 	},
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
+
+%% @doc Register an alternative service with the recipient.
+alt_svc(_, Req, Opts) ->
+    case hb_opts:get(mode, prod, Opts) of
+        prod -> {error, <<"Test Alt-Svc not available in `prod` mode.">>};
+        debug ->
+            Proto = hb_ao:get(<<"alt-proto">>, Req, <<"h2">>, Opts),
+            Host = hb_ao:get(<<"alt-host">>, Req, <<":443">>, Opts),
+            {ok,
+                #{
+                    <<"body">> => <<"Registering alt-svc...">>,
+                    <<"alt-svc">> =>
+                        <<Proto/binary, "=\"", Host/binary, "\"; ma=3600">>
+                }
+            }
+    end.
 
 %% @doc Example index handler.
 index(Msg, _Req, Opts) ->
