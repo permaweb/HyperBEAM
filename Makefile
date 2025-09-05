@@ -5,6 +5,7 @@ compile:
 
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
+WASI_NN_DIR = _build/wasi_nn/wasi_nn_backend
 
 GENESIS_WASM_BRANCH = feat/http-checkpoint
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
@@ -104,3 +105,19 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 	fi
 	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."
+# Set up wasi-nn environment
+$(WASI_NN_DIR):
+	@echo "Cloning wasi-nn backend repository..." && \
+	git clone --depth=1 -b stage/wasi-nn https://github.com/apuslabs/wasi_nn_backend.git $(WASI_NN_DIR) && \
+	echo "Cloned wasi-nn backend to $(WASI_NN_DIR)"
+
+setup-wasi-nn: $(WASI_NN_DIR)
+	@mkdir -p $(WASI_NN_DIR)/lib
+	@echo "Building wasi-nn backend..." && \
+	cmake \
+		$(WAMR_FLAGS) \
+		-S $(WASI_NN_DIR) \
+		-B $(WASI_NN_DIR)/build && \
+	make -C $(WASI_NN_DIR)/build -j8 && \
+	cp $(WASI_NN_DIR)/build/libwasi_nn_backend.so ./native/wasi_nn_llama && \
+	echo "Successfully built wasi-nn backend"
