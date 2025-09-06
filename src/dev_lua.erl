@@ -464,6 +464,33 @@ simple_invocation_test() ->
     },
     ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})).
 
+post_invocation_message_validation_test() ->
+    {ok, Script} = file:read_file("test/test.lua"),
+    Opts = #{ priv_wallet => hb:wallet() },
+    Base =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"lua@5.3a">>,
+                <<"module">> => #{
+                    <<"content-type">> => <<"application/lua">>,
+                    <<"body">> => Script
+                },
+                <<"test-key">> => <<"test-value-1">>
+            },
+            Opts
+        ),
+    {ok, UnsignedID} = hb_cache:write(Base, Opts),
+    ?event({base, {msg, Base}, {unsigned_id, UnsignedID}}),
+    {ok, Res} = hb_ao:resolve(Base, <<"mutate_test_key">>, Opts),
+    NormRes = hb_message:normalize_commitments(Res, Opts, verify),
+    ?event({res, NormRes}),
+    {ok, ResID} = hb_cache:write(NormRes, Opts),
+    ?event({res_id, ResID}),
+    {ok, ReadMsg} = hb_cache:read(UnsignedID, Opts),
+    ?assertEqual(<<"test-value-1">>, hb_ao:get(<<"test-key">>, ReadMsg, Opts)),
+    ?assert(length(hb_message:signers(ReadMsg, Opts)) == 0),
+    ?assert(hb_message:verify(NormRes, all, Opts)).
+
 load_modules_by_id_test_() ->
     {timeout, 30, fun load_modules_by_id/0}.
 load_modules_by_id() ->
