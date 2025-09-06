@@ -228,7 +228,7 @@ relay_schedule_ans104_test() ->
                         <<"path">> => <<"location">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
-                        <<"accept-codec">> => <<"ans104@1.0">>,
+                        <<"require-codec">> => <<"ans104@1.0">>,
                         <<"hook">> => #{
                             <<"result">> => <<"ignore">>,
                             <<"commit-request">> => true

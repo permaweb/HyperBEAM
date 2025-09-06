@@ -24,7 +24,7 @@
 -define(DEFAULT_PRINT_OPTS, [error, http_error]).
 -else.
 -define(DEFAULT_PRINT_OPTS,
-    [error, http_error, http_short, compute_short, push_short]
+    [error, http_error, http_short, compute_short, push_short, copycat_short]
 ).
 -endif.
 
@@ -128,6 +128,7 @@ default_message() ->
         %% Preloaded devices for the node to use. These names override
         %% resolution of devices via ID to the default implementations.
         preloaded_devices => [
+            #{<<"name">> => <<"arweave@2.9-pre">>, <<"module">> => dev_arweave},
             #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
             #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
@@ -266,6 +267,16 @@ default_message() ->
                             <<"opts">> => #{ http_client => gun, protocol => http2 }
                         }
                     ]
+            },
+            #{
+                % Routes for Arweave transaction requests to use a remote gateway.
+                <<"template">> => <<"/arweave">>,
+                <<"node">> =>
+                    #{
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => <<"https://arweave.net">>,
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                    }
             },
             #{
                 % Routes for raw data requests to use a remote gateway.

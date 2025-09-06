@@ -25,6 +25,23 @@ write_test_message(Opts) ->
     ),
     {ok, Msg}.
 
+%% @doc Populate the cache with three test blocks.
+get_test_blocks(Node) ->
+    InitialHeight = 1745749,
+    FinalHeight = 1745750,
+    lists:foreach(
+        fun(Height) ->
+            {ok, _} =
+                hb_http:request(
+                    <<"GET">>,
+                    Node,
+                    <<"/~arweave@2.9-pre/block=", (hb_util:bin(Height))/binary>>,
+                    #{}
+                )
+        end,
+        lists:seq(InitialHeight, FinalHeight)
+    ).
+
 %% Helper function to write test message with Recipient
 write_test_message_with_recipient(Recipient, Opts) ->
     hb_cache:write(
@@ -48,6 +65,102 @@ write_test_message_with_recipient(Recipient, Opts) ->
     {ok, Msg}.
 
 %%% Tests
+
+simple_blocks_query_test() ->
+    Opts =
+        #{
+            priv_wallet => hb:wallet(),
+            store => [hb_test_utils:test_store(hb_store_lmdb)]
+        },
+    Node = hb_http_server:start_node(Opts),
+    get_test_blocks(Node),
+    Query =
+        <<"""
+            query {
+                blocks(
+                    ids: ["V7yZNKPQLIQfUu8r8-lcEaz4o7idl6LTHn5AHlGIFF8TKfxIe7s_yFxjqan6OW45"]
+                ) {
+                    edges {
+                        node {
+                            id
+                            previous
+                            height
+                            timestamp
+                        }
+                    }
+                }
+            }
+        """>>,
+    ?assertMatch(
+        #{
+            <<"data">> := #{
+                <<"blocks">> := #{
+                    <<"edges">> := [
+                        #{
+                            <<"node">> := #{
+                                <<"id">> := _,
+                                <<"previous">> := _,
+                                <<"height">> := 1745749,
+                                <<"timestamp">> := 1756866695
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        dev_query_graphql:test_query(Node, Query, #{}, Opts)
+    ).
+
+block_by_height_query_test() ->
+    Opts =
+        #{
+            priv_wallet => hb:wallet(),
+            store => [hb_test_utils:test_store(hb_store_lmdb)]
+        },
+    Node = hb_http_server:start_node(Opts),
+    get_test_blocks(Node),
+    Query =
+        <<"""
+            query {
+                blocks( height: {min: 1745749, max: 1745750} ) {
+                    edges {
+                        node {
+                            id
+                            previous
+                            height
+                            timestamp
+                        }
+                    }
+                }
+            }
+        """>>,
+    ?assertMatch(
+        #{
+            <<"data">> := #{
+                <<"blocks">> := #{
+                    <<"edges">> := [
+                        #{
+                            <<"node">> := #{
+                                <<"id">> := _,
+                                <<"previous">> := _,
+                                <<"height">> := 1745749,
+                                <<"timestamp">> := 1756866695
+                            }
+                        },
+                        #{
+                            <<"node">> := #{
+                                <<"id">> := _,
+                                <<"previous">> := _,
+                                <<"height">> := 1745750,
+                                <<"timestamp">> := _
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        dev_query_graphql:test_query(Node, Query, #{}, Opts)
+    ).
 
 simple_ans104_query_test() ->
     Opts =
@@ -569,31 +682,25 @@ transaction_query_not_found_test() ->
             priv_wallet => hb:wallet(),
             store => [hb_test_utils:test_store(hb_store_lmdb)]
         },
-    Node = hb_http_server:start_node(Opts),
-    NonExistentID = hb_util:encode(crypto:strong_rand_bytes(32)),
-    Query =
-        <<"""
-            query($id: ID!) {
-                transaction(id: $id) {
-                    id
-                    tags {
-                        name
-                        value
-                    }
-                }
-            }
-        """>>,
     Res =
         dev_query_graphql:test_query(
-            Node,
-            Query,
+            hb_http_server:start_node(Opts),
+            <<"""
+                query($id: ID!) {
+                    transaction(id: $id) {
+                        id
+                        tags {
+                            name
+                            value
+                        }
+                    }
+                }
+            """>>,
             #{
-                <<"id">> => NonExistentID
+                <<"id">> => hb_util:encode(crypto:strong_rand_bytes(32))
             },
             Opts
         ),
-    ?event({non_existent_id, NonExistentID}),
-    ?event({transaction_query_not_found_test, Res}),
     % Should return null for non-existent transaction
     ?assertMatch(
         #{

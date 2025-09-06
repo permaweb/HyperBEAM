@@ -163,7 +163,7 @@ ensure_all_loaded(Ref, Msg, Opts) ->
 %% @doc List all items in a directory, assuming they are numbered.
 list_numbered(Path, Opts) ->
     SlotDir = hb_store:path(hb_opts:get(store, no_viable_store, Opts), Path),
-    [ to_integer(Name) || Name <- list(SlotDir, Opts) ].
+    [ hb_util:int(Name) || Name <- list(SlotDir, Opts) ].
 
 %% @doc List all items under a given path.
 list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) ->
@@ -620,11 +620,6 @@ link(Existing, New, Opts) ->
         Existing,
         New
     ).
-
-to_integer(Value) when is_list(Value) ->
-    list_to_integer(Value);
-to_integer(Value) when is_binary(Value) ->
-    binary_to_integer(Value).
 
 %%% Tests
 

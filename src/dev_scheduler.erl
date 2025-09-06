@@ -502,8 +502,8 @@ post_location(Msg1, RawReq, RawOpts) ->
             Codec =
                 hb_ao:get_first(
                     [
-                        {Msg1, <<"accept-codec">>},
-                        {OnlyCommitted, <<"accept-codec">>}
+                        {Msg1, <<"require-codec">>},
+                        {OnlyCommitted, <<"require-codec">>}
                     ],
                     <<"httpsig@1.0">>,
                     Opts
@@ -1701,7 +1701,7 @@ register_location_on_boot_test() ->
                         <<"path">> => <<"location">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
-                        <<"accept-codec">> => <<"ans104@1.0">>,
+                        <<"require-codec">> => <<"ans104@1.0">>,
                         <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
                         <<"hook">> => #{
                             <<"result">> => <<"ignore">>,
@@ -1874,7 +1874,7 @@ register_scheduler_test() ->
         <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
         <<"method">> => <<"POST">>,
         <<"nonce">> => 1,
-        <<"accept-codec">> => <<"ans104@1.0">>
+        <<"require-codec">> => <<"ans104@1.0">>
     }, Wallet),
     {ok, Res} = hb_http:post(Node, Msg1, #{}),
     ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res).

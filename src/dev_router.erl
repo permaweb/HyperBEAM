@@ -324,7 +324,7 @@ apply_routes(Msg, R, Opts) ->
 %% - `opts': A map of options to pass to the request.
 %% - `prefix': The prefix to add to the path.
 %% - `suffix': The suffix to add to the path.
-%% - `replace': A regex to replace in the path.
+%% - `match' and `with': A regex to replace in the path.
 apply_route(Msg, Route, Opts) ->
     % LoadedRoute = hb_cache:ensure_all_loaded(Route, Opts),
     RouteOpts = hb_maps:get(<<"opts">>, Route, #{}),
@@ -360,7 +360,8 @@ do_apply_route(
     case re:replace(Path, Match, With, [global, {return, binary}]) of
         NewPath when is_binary(NewPath) ->
             {ok, NewPath};
-        _ -> {error, invalid_replace_args}
+        _ ->
+            {error, invalid_replace_args}
     end.
 
 %% @doc Find the first matching template in a list of known routes. Allows the
