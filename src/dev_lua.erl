@@ -488,7 +488,7 @@ post_invocation_message_validation_test() ->
     ?event({res_id, ResID}),
     {ok, ReadMsg} = hb_cache:read(UnsignedID, Opts),
     ?assertEqual(<<"test-value-1">>, hb_ao:get(<<"test-key">>, ReadMsg, Opts)),
-    ?assert(length(hb_message:signers(ReadMsg, Opts)) == 0),
+    ?assert(length(hb_message:signers(NormRes, Opts)) == 0),
     ?assert(hb_message:verify(NormRes, all, Opts)).
 
 load_modules_by_id_test_() ->
