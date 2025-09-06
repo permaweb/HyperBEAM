@@ -367,49 +367,53 @@ normalize(Base, _Req, RawOpts) ->
     end.
 
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message.
-decode(EncMsg, _Opts) when is_list(EncMsg) andalso length(EncMsg) == 0 ->
+decode(EncMsg, Opts) ->
+    hb_message:normalize_commitments(do_decode(EncMsg, Opts), Opts, verify).
+do_decode(EncMsg, _Opts) when is_list(EncMsg) andalso length(EncMsg) == 0 ->
     % The value is an empty table, so we assume it is a message rather than
     % a list.
     #{};
-decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
-    decode(
+do_decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
+    do_decode(
         maps:map(
-            fun(_, V) -> decode(V, Opts) end,
+            fun(_, V) -> do_decode(V, Opts) end,
             maps:from_list(EncMsg)
         ),
         Opts
     );
-decode(Msg, Opts) when is_map(Msg) ->
+do_decode(Msg, Opts) when is_map(Msg) ->
     % If the message is an ordered list encoded as a map, decode it to a list.
     case hb_util:is_ordered_list(Msg, Opts) of
         true ->
             lists:map(
-                fun(V) -> decode(V, Opts) end,
+                fun(V) -> do_decode(V, Opts) end,
                 hb_util:message_to_ordered_list(Msg)
             );
         false ->
             Msg
     end;
-decode(Other, _Opts) ->
+do_decode(Other, _Opts) ->
     Other.
 
 %% @doc Encode a HyperBEAM `structured@1.0' message into a Lua term.
-encode(Map, Opts) when is_map(Map) ->
+encode(Map, Opts) ->
+    hb_message:normalize_commitments(do_encode(Map, Opts), Opts).
+do_encode(Map, Opts) when is_map(Map) ->
     hb_cache:ensure_all_loaded(
         case hb_util:is_ordered_list(Map, Opts) of
-            true -> encode(hb_util:message_to_ordered_list(Map), Opts);
-            false -> maps:to_list(maps:map(fun(_, V) -> encode(V, Opts) end, Map))
+            true -> do_encode(hb_util:message_to_ordered_list(Map), Opts);
+            false -> maps:to_list(maps:map(fun(_, V) -> do_encode(V, Opts) end, Map))
         end,
         Opts
     );
-encode(List, Opts) when is_list(List) ->
+do_encode(List, Opts) when is_list(List) ->
     hb_cache:ensure_all_loaded(
-        lists:map(fun(V) -> encode(V, Opts) end, List),
+        lists:map(fun(V) -> do_encode(V, Opts) end, List),
         Opts
     );
-encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
+do_encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
     hb_util:bin(Atom);
-encode(Other, _Opts) ->
+do_encode(Other, _Opts) ->
     Other.
 
 %% @doc Parse a Lua stack trace into a list of messages.
@@ -482,14 +486,12 @@ post_invocation_message_validation_test() ->
     {ok, UnsignedID} = hb_cache:write(Base, Opts),
     ?event({base, {msg, Base}, {unsigned_id, UnsignedID}}),
     {ok, Res} = hb_ao:resolve(Base, <<"mutate_test_key">>, Opts),
-    NormRes = hb_message:normalize_commitments(Res, Opts, verify),
-    ?event({res, NormRes}),
-    {ok, ResID} = hb_cache:write(NormRes, Opts),
+    {ok, ResID} = hb_cache:write(Res, Opts),
     ?event({res_id, ResID}),
     {ok, ReadMsg} = hb_cache:read(UnsignedID, Opts),
     ?assertEqual(<<"test-value-1">>, hb_ao:get(<<"test-key">>, ReadMsg, Opts)),
-    ?assert(length(hb_message:signers(NormRes, Opts)) == 0),
-    ?assert(hb_message:verify(NormRes, all, Opts)).
+    ?assert(length(hb_message:signers(Res, Opts)) == 0),
+    ?assert(hb_message:verify(Res, all, Opts)).
 
 load_modules_by_id_test_() ->
     {timeout, 30, fun load_modules_by_id/0}.
