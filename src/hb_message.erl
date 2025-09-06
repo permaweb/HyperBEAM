@@ -242,7 +242,28 @@ do_normalize_commitments(Msg, Opts, verify) ->
     case lists:member(NormID, MsgCommIDs) of
         true -> Msg;
         false ->
-            Msg#{ <<"commitments">> => NormCommitments }
+            do_normalize_commitments(
+                Msg#{ <<"commitments">> => NormCommitments },
+                Opts,
+                fast
+            )
+    end;
+do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
+    ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
+    ?event(normalization,
+        {normalizing_commitments,
+            {expected_hash, ExpectedHash},
+            {priv, hb_private:from_message(Msg)},
+            {msg, Msg}
+        }
+    ),
+    case hb_private:get(<<"last-phash2">>, Msg, not_found, Opts) of
+        not_found ->
+            hb_private:set(Msg, <<"last-phash2">>, ExpectedHash, Opts);
+        ExpectedHash ->
+            Msg;
+        _DifferingHash ->
+            do_normalize_commitments(Msg, Opts, verify)
     end.
 
 %% @doc Return a message with only the committed keys. If no commitments are
