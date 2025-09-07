@@ -12,6 +12,7 @@
 
 -export([update_nested_value/3, apply_nested_updates/2]).
 -export([post_config/2, post_config/3]).
+-export([create_node/2]).
 -export([create_wallet/0, load_wallet/1]).
 -export([build_authorities/2]).
 -export([create_ao_process_msg/1, create_authorities_msg/3]).
@@ -147,6 +148,62 @@ post_config(NodeUrl, ConfigContent, Device) ->
             ?event({res_error, {reason, Reason}}),
             {error, Reason}
     end.
+
+%% @doc Creates and configures a HyperBEAM test node with wallet and storage.
+%%
+%% This function performs the following setup operations:
+%% 1. Generates a new wallet and extracts its address
+%% 2. Initializes an LMDB test store with the specified name
+%% 3. Configures multiple storage layers including filesystem cache and gateway
+%% 4. Sets up router options with service offerings and pricing
+%% 5. Starts the HTTP server node with all configurations
+%%
+%% The node configuration includes:
+%% - Port 10000 for HTTP communications
+%% - Multi-layer storage system (LMDB, filesystem, gateway)
+%% - Router with service template matching and pricing
+%% - Integration with Arweave data protocol filtering
+%%
+%% @param Name Binary name identifier for the test store
+%% @returns {Opts, Wallet, WalletAddress, Node} tuple containing:
+%%   - Opts: Complete node configuration map
+%%   - Wallet: Generated private wallet for the node
+%%   - WalletAddress: Public address of the generated wallet
+%%   - Node: Started HTTP server node process
+create_node(Name, Port) ->
+    {Wallet, WalletAddress} = hb_deployment_utils:create_wallet(),
+    Store = hb_test_utils:test_store(hb_store_lmdb, Name),
+    Opts = #{
+        port => Port,
+        operator => unclaimed,
+        priv_wallet => Wallet,
+        store =>
+            [
+                Store,
+                #{
+                    <<"store-module">> => hb_store_fs,
+                    <<"name">> => <<"cache-mainnet">>
+                },
+                #{
+                    <<"store-module">> => hb_store_gateway,
+                    <<"subindex">> => [
+                        #{
+                            <<"name">> => <<"Data-Protocol">>,
+                            <<"value">> => <<"ao">>
+                        }
+                    ],
+                    <<"local-store">> => [Store]
+                },
+                #{
+                    <<"store-module">> => hb_store_gateway,
+                    <<"local-store">> => [Store]
+                }
+            ]
+    },
+    Node = hb_http_server:start_node(Opts),
+    ?event({hyperbeam_node_started, {node, Node}}),
+    Node,
+    {Opts, Wallet, WalletAddress, Node}.
 
 %% @doc Create a new wallet and return wallet + address for AO process
 %% deployment

@@ -11,7 +11,6 @@
 -define(AMOUNT, <<"2">>).
 -define(PRICE, <<"1">>).
 
-
 %% @doc Tests the complete deployment and ledger balance verification workflow.
 %%
 %% This comprehensive test function performs the following operations:
@@ -37,7 +36,8 @@ ledger_balance_test() ->
     %% TODO: Probably best not to use real wallets with funds... 
     %% TODO: Maybe Think of a way to mock this instead.
     % Setup test node and load wallet
-    { _, _, ComputeAddress, ComputeNode } = setup_node_config(<<"compute">>),
+    { _, _, ComputeAddress, ComputeNode } = 
+        hb_deployment_utils:create_node(<<"compute">>, 10000),
     RedAOWalletPath = case os:getenv("WALLET_PATH") of
         EnvPath -> EnvPath;
         false -> "/test/wallet.json"
@@ -153,6 +153,10 @@ ledger_balance_test() ->
     }),
     % Verify final balances after P4 transaction
     FinalLedgerBalance = get_ledger_balance(ComputeNode),
+    FinalRedAOWalletBalance = 
+        hb_deployment_utils:trim_trailing_zero(
+            hb_maps:get(RedAOWalletAddress, FinalLedgerBalance)
+        ),
     P4RecipientBalance = 
         hb_deployment_utils:trim_trailing_zero(
             hb_maps:get(?P4_RECIPIENT, FinalLedgerBalance)
@@ -161,7 +165,7 @@ ledger_balance_test() ->
     ?event({p4_recipient_balance, { explicit, P4RecipientBalance}}),
     % Assert wallet balance reduced by transaction price
     ?assertEqual(
-        RedAOWalletBalance,
+        FinalRedAOWalletBalance,
         hb_util:bin(IntegerAmount - IntegerPrice)
     ),
     % Assert P4 recipient received the transaction fee
@@ -169,75 +173,6 @@ ledger_balance_test() ->
         P4RecipientBalance,
         hb_util:bin(IntegerPrice)
     ).
-
-
-%% @doc Creates and configures a HyperBEAM test node with wallet and storage.
-%%
-%% This function performs the following setup operations:
-%% 1. Generates a new wallet and extracts its address
-%% 2. Initializes an LMDB test store with the specified name
-%% 3. Configures multiple storage layers including filesystem cache and gateway
-%% 4. Sets up router options with service offerings and pricing
-%% 5. Starts the HTTP server node with all configurations
-%%
-%% The node configuration includes:
-%% - Port 10000 for HTTP communications
-%% - Multi-layer storage system (LMDB, filesystem, gateway)
-%% - Router with service template matching and pricing
-%% - Integration with Arweave data protocol filtering
-%%
-%% @param Name Binary name identifier for the test store
-%% @returns {Opts, Wallet, WalletAddress, Node} tuple containing:
-%%   - Opts: Complete node configuration map
-%%   - Wallet: Generated private wallet for the node
-%%   - WalletAddress: Public address of the generated wallet
-%%   - Node: Started HTTP server node process
-setup_node_config(Name) ->
-    {Wallet, WalletAddress} = hb_deployment_utils:create_wallet(),
-    Store = hb_test_utils:test_store(hb_store_lmdb, Name),
-    Opts = #{
-        port => 10000,
-        operator => unclaimed,
-        priv_wallet => Wallet,
-        store =>
-            [
-                Store,
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-mainnet">>
-                },
-                #{
-                    <<"store-module">> => hb_store_gateway,
-                    <<"subindex">> => [
-                        #{
-                            <<"name">> => <<"Data-Protocol">>,
-                            <<"value">> => <<"ao">>
-                        }
-                    ],
-                    <<"local-store">> => [Store]
-                },
-                #{
-                    <<"store-module">> => hb_store_gateway,
-                    <<"local-store">> => [Store]
-                }
-            ],
-            router_opts => #{
-                <<"offered">> =>
-                    [
-                        #{ 
-                            <<"template">> => <<"^/.*~process@1.0/.*">>,
-                            <<"registration-peer">> => <<"http://localhost:10000">>,
-                            <<"prefix">> => <<"http://localhost:10000">>,
-                            <<"price">> => binary_to_integer(?PRICE)
-                        }
-                    ]
-            }
-    },
-    Node = hb_http_server:start_node(Opts),
-    ?event({hyperbeam_node_started, {node, Node}}),
-    Node,
-    {Opts, Wallet, WalletAddress, Node}.
-
 
 %% @doc Loads and customizes compute node configuration for AO process deployment.
 %%
@@ -291,6 +226,19 @@ setup_compute_config(ProcessWalletAddress, RedAOProcessId) ->
         {
             [<<"p4_recipient">>], 
             ?P4_RECIPIENT
+        },
+        {
+            [<<"router_opts">>], 
+            #{
+                <<"offered">> => [
+                    #{
+                        <<"template">> => <<"^/.*~process@1.0/.*">>,
+                        <<"registration-peer">> => <<"http://localhost:10000">>,
+                        <<"prefix">> => <<"http://localhost:10000">>,
+                        <<"price">> => binary_to_integer(?PRICE)
+                    }
+                ]
+            }
         }
     ],
     hb_deployment_utils:apply_nested_updates(DecodedConfig, Updates).
@@ -352,42 +300,42 @@ compute_slot_request(Node, Slot, ProcessId, RedAOWallet) ->
     ComputeSlotResult.
 
 %% TODO: In the future lets send everything through HyperBEAM.
- % SignedTransferTokenMsg = hb_message:commit(
-    %     #{
-    %         <<"Type">> => <<"Message">>,
-    %         <<"Data-Protocol">> => <<"ao">>,
-    %         <<"Variant">> => <<"ao.TN.1">>,
-    %         % Parent AO token contract identifier
-    %         <<"target">> => <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>, 
-    %         <<"action">> => <<"Transfer">>,
-    %         <<"Quantity">> => ?AMOUNT,
-    %         % Target process receiving the token transfer
-    %         <<"Recipient">> => RedAOProcessId,
-    %         <<"device">> => <<"process@1.0">>,
-    %         <<"execution-device">> => <<"genesis-wasm@1.0">>,
-    %         <<"scheduler-device">> => <<"scheduler@1.0">>,
-    %         <<"push-device">> => <<"push@1.0">>
-    %     },
-    %     #{ priv_wallet => RedAOWallet },
-    %     #{ 
-    %         <<"commitment-device">> => <<"ans104@1.0">>,
-    %         <<"accept-bundle">> => <<"true">>,
-    %         <<"accept">> => <<"application/ans104">>
-    %     }
-    % ),
-    % case hb_http:post(
-    %     ComputeNode,
-    %     SignedTransferTokenMsg#{ 
-    %         <<"path">> => PushPath,
-    %         <<"codec-device">> => <<"ans104@1.0">>
-    %     },
-    %     #{ priv_wallet => RedAOWallet }
-    % ) of
-    %     {ok, TransferTokenRes} ->
-    %         ?event({transfer_token_res, {explicit, TransferTokenRes}});
-    %     {error, TransferTokenReason} ->
-    %         ?event({transfer_token_res_error, {reason, TransferTokenReason}}),
-    %         {error, TransferTokenReason}
-    % end,
+% SignedTransferTokenMsg = hb_message:commit(
+%     #{
+%         <<"Type">> => <<"Message">>,
+%         <<"Data-Protocol">> => <<"ao">>,
+%         <<"Variant">> => <<"ao.TN.1">>,
+%         % Parent AO token contract identifier
+%         <<"target">> => <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>, 
+%         <<"action">> => <<"Transfer">>,
+%         <<"Quantity">> => ?AMOUNT,
+%         % Target process receiving the token transfer
+%         <<"Recipient">> => RedAOProcessId,
+%         <<"device">> => <<"process@1.0">>,
+%         <<"execution-device">> => <<"genesis-wasm@1.0">>,
+%         <<"scheduler-device">> => <<"scheduler@1.0">>,
+%         <<"push-device">> => <<"push@1.0">>
+%     },
+%     #{ priv_wallet => RedAOWallet },
+%     #{ 
+%         <<"commitment-device">> => <<"ans104@1.0">>,
+%         <<"accept-bundle">> => <<"true">>,
+%         <<"accept">> => <<"application/ans104">>
+%     }
+% ),
+% case hb_http:post(
+%     ComputeNode,
+%     SignedTransferTokenMsg#{ 
+%         <<"path">> => PushPath,
+%         <<"codec-device">> => <<"ans104@1.0">>
+%     },
+%     #{ priv_wallet => RedAOWallet }
+% ) of
+%     {ok, TransferTokenRes} ->
+%         ?event({transfer_token_res, {explicit, TransferTokenRes}});
+%     {error, TransferTokenReason} ->
+%         ?event({transfer_token_res_error, {reason, TransferTokenReason}}),
+%         {error, TransferTokenReason}
+% end,
 
-    % timer:sleep(15000),
+% timer:sleep(15000),
