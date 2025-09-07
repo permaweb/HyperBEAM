@@ -135,7 +135,13 @@ aos2_to_assignments(ProcID, Body, RawOpts) ->
 aos2_to_assignment(A, RawOpts) ->
     Opts = format_opts(RawOpts),
     % Unwrap the node if it is provided
-    Node = hb_maps:get(<<"node">>, A, A, Opts),
+    Node =
+    case hb_maps:get(<<"edges">>, A, undefined, Opts) of
+        Edges when is_list(Edges), Edges =/= [] ->
+            hb_maps:get(<<"node">>, hd(Edges), undefined, Opts);
+        _ ->
+            hb_maps:get(<<"node">>, A, A, Opts)
+    end,
     ?event({node, Node}),
     {ok, Assignment} =
         hb_gateway_client:result_to_message(

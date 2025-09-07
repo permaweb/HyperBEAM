@@ -48,3 +48,5 @@ mkdocs-site-manifest.csv
 !test/config.json
 
 !/deployment/configs/*.json
+
+backup

@@ -37,7 +37,7 @@
       "template": "/schedule"
     },
     {
-      "template": "/push"
+      "template": ".*push.*"
     },
     {
       "template": "/~hyperbuddy@1.0/.*"
@@ -54,9 +54,20 @@
       "authority-match": 1,
       "admin": "REPLACE_ME",
       "token": "REPLACE_ME",
-      "module": "W-FoIIxJlBdhO5Z3CbQJg7UKxgawCTT0yVGkJGNWzLs",
+      "module": "REPLACE_ME",
       "authority": "REPLACE_ME"
     }
+  },
+
+  "router_opts": {
+    "offered": [
+      {
+        "template": "^/.*~process@1.0/.*",
+        "registration-peer": "http://localhost:10000",
+        "prefix": "http://localhost:10000",
+        "price": 1
+      }
+    ]
   },
 
   "p4_recipient": "REPLACE_ME"
