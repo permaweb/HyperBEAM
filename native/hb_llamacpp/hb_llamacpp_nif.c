@@ -143,7 +143,7 @@ static ERL_NIF_TERM start_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
         // child: exec server
         char port_str[16];
         snprintf(port_str, sizeof(port_str), "%d", port);
-        execl(bin_path, bin_path, "-m", model_path, "--host", host_buf, "--port", port_str, (char*)NULL);
+        execl(bin_path, bin_path, "-fa", "on", "-np", "4", "-c", "16384", "-s", "1234", "-m", model_path, "--host", host_buf, "--port", port_str, (char*)NULL);
         _exit(127);
     }
 

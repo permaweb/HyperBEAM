@@ -20,8 +20,8 @@ $(LLAMACPP_DIR):
 	git clone --depth 1 $(LLAMACPP_REPO) $(LLAMACPP_DIR)
 
 $(LLAMACPP_BUILD_DIR)/bin/llama-server: $(LLAMACPP_DIR)
-	cmake -S $(LLAMACPP_DIR) -B $(LLAMACPP_BUILD_DIR) -DLLAMA_BUILD_SERVER=ON
-	cmake --build $(LLAMACPP_BUILD_DIR) --target llama-server -j$$(nproc)
+	cmake -S $(LLAMACPP_DIR) -B $(LLAMACPP_BUILD_DIR) -DLLAMA_BUILD_SERVER=ON -DGGML_CUDA=ON
+	$(MAKE) llama-server -C $(LLAMACPP_BUILD_DIR) -j$$(nproc)
 
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr

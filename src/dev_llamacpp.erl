@@ -39,6 +39,9 @@ info() ->
 %% @doc Handles completion requests to llama.cpp server.
 completion(_Msg1, Msg2, Opts) ->
     try
+        % Ensure HTTP client is started for health checks
+        application:ensure_all_started(inets),
+        
         ensure_server_running(Msg2, Opts),
         
         Prompt = extract_required_param(<<"prompt">>, Msg2, Opts),
@@ -51,6 +54,14 @@ completion(_Msg1, Msg2, Opts) ->
         OptsJSON = hb_json:encode(LlamaCppParams),
         {ResponseBody} = case dev_llamacpp_nif:completion(Prompt, OptsJSON) of
             {ok, RespBody} -> {RespBody};
+            {error, not_running} -> 
+                ?event(dev_llamacpp, {completion_failed_server_not_running, Reference}),
+                % Try to restart server once more
+                start_server(Msg2, Opts),
+                case dev_llamacpp_nif:completion(Prompt, OptsJSON) of
+                    {ok, RespBody} -> {RespBody};
+                    {error, Reason} -> throw({llamacpp_error, Reason})
+                end;
             {error, Reason} -> throw({llamacpp_error, Reason})
         end,
         
@@ -95,6 +106,7 @@ chat(_Msg1, Msg2, Opts) ->
         Messages = get_session_history(SessionId, Prompt, Opts),
         MessagesJSON = hb_json:encode(Messages),
         OptsJSON = hb_json:encode(LlamaCppParams),
+        ?event(dev_llamacpp, {debug_chat_request, #{session_id => SessionId, reference => Reference, messages => Messages, config => LlamaCppParams}}),
         {ResponseBody} = case dev_llamacpp_nif:chat(MessagesJSON, OptsJSON) of
             {ok, RespBody} -> {RespBody};
             {error, Reason} -> throw({llamacpp_error, Reason})
@@ -210,10 +222,34 @@ init_session_table() ->
             ok
     end.
 
+%% @doc Check if the llama.cpp server is healthy and responding.
+check_server_health() ->
+    try
+        dev_llamacpp_nif:ensure_ets(),
+        case ets:lookup(dev_llamacpp_state, server) of
+            [{server, #{host := Host, port := Port}}] ->
+                % Try to make a simple health check request
+                URL = io_lib:format("http://~s:~p/health", [binary_to_list(Host), Port]),
+                case httpc:request(get, {lists:flatten(URL), []}, [{timeout, 5000}], []) of
+                    {ok, {{_, 200, _}, _, _}} -> true;
+                    _ -> false
+                end;
+            _ -> false
+        end
+    catch
+        _:_ -> false
+    end.
+
 %% @doc Ensure llama.cpp server is running, start it if not.
 ensure_server_running(Msg2, Opts) ->
-    % Always try to start server - the NIF will handle already_running case
-    start_server(Msg2, Opts).
+    % Check if server is actually running and restart if needed
+    case check_server_health() of
+        true -> 
+            ok;
+        false ->
+            ?event(dev_llamacpp, {server_not_healthy_restarting}),
+            start_server(Msg2, Opts)
+    end.
 
 %% @doc Start llama.cpp server with configuration.
 start_server(Msg2, Opts) ->
@@ -226,20 +262,26 @@ start_server(Msg2, Opts) ->
     Port = 9567,
     ?event(dev_llamacpp, {debug_start_server, #{model => Model, host => Host, port => Port}}),
     
+    % Ensure ETS table exists before attempting to start server
+    dev_llamacpp_nif:ensure_ets(),
+    
     case dev_llamacpp_nif:start(#{model => Model, host => Host, port => Port}) of
         ok ->
             % Wait a bit for server to be ready
             timer:sleep(2000),
+            % Verify server state is properly stored
+            dev_llamacpp_nif:ensure_ets(),
+            ets:insert(dev_llamacpp_state, {server, #{host => Host, port => Port, model => Model, restarts => 0}}),
+            ?event(dev_llamacpp, {server_started_successfully, #{host => Host, port => Port}}),
             ok;
         {error, already_running} ->
-            try
-                dev_llamacpp_nif:ensure_ets(),
-                ets:insert(dev_llamacpp_state, {server, #{host => Host, port => Port, model => Model, restarts => 0}})
-            catch
-                _:_ -> ok % Ignore ETS errors, server is running anyway
-            end,
+            % Ensure ETS state is consistent even when server is already running
+            dev_llamacpp_nif:ensure_ets(),
+            ets:insert(dev_llamacpp_state, {server, #{host => Host, port => Port, model => Model, restarts => 0}}),
+            ?event(dev_llamacpp, {server_already_running, #{host => Host, port => Port}}),
             ok;
         {error, Reason} ->
+            ?event(dev_llamacpp, {server_start_failed, Reason}),
             throw({server_start_failed, <<"Failed to start server: ", (hb_util:bin(Reason))/binary>>})
     end.
 

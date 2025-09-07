@@ -1,5 +1,5 @@
 -module(dev_llamacpp_nif).
--export([start/1, stop/0, load_model/1, completion/2, completion/3, chat/2, chat/3]).
+-export([start/1, stop/0, load_model/1, completion/2, completion/3, chat/2, chat/3, ensure_ets/0]).
 -include_lib("eunit/include/eunit.hrl").
 
 %% C NIF does not use cargo.hrl loader; load from priv root
@@ -84,7 +84,14 @@ completion(PromptBin, OptsJSONBin, _TimeoutMs) ->
                     end;
                 _ -> {error, invalid_json}
             end;
-        _ -> {error, not_running}
+        [] -> 
+            % Log that ETS table is empty
+            error_logger:warning_msg("ETS table dev_llamacpp_state is empty~n"),
+            {error, not_running};
+        _ -> 
+            % Log unexpected ETS content
+            error_logger:warning_msg("ETS table dev_llamacpp_state has unexpected content~n"),
+            {error, not_running}
     end.
 
 chat(MessagesJSONBin, OptsJSONBin) when is_binary(MessagesJSONBin), is_binary(OptsJSONBin) ->
@@ -116,8 +123,15 @@ chat(MessagesJSONBin, OptsJSONBin, _TimeoutMs) ->
 
 ensure_ets() ->
     case ets:info(dev_llamacpp_state) of
-        undefined -> ets:new(dev_llamacpp_state, [named_table, set, public]);
-        _ -> ok
+        undefined -> 
+            ets:new(dev_llamacpp_state, [named_table, set, public]);
+        _ -> 
+            ok
+    end,
+    % Verify table is accessible
+    case ets:info(dev_llamacpp_state, name) of
+        dev_llamacpp_state -> ok;
+        _ -> error(ets_table_not_accessible)
     end.
 
 ensure_inets() ->
