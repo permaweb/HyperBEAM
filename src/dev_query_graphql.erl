@@ -208,6 +208,8 @@ message_query(Msg, Field, _Args, Opts)
         when Field =:= <<"name">> orelse Field =:= <<"value">> ->
     ?event({message_query_name_or_value, {object, Msg}, {field, Field}}),
     {ok, hb_maps:get(Field, Msg, null, Opts)};
+message_query(Msg = #{ <<"independent_hash">> := _ }, <<"id">>, _Args, Opts) ->
+    {ok, hb_maps:get(<<"independent_hash">>, Msg, null, Opts)};
 message_query(Msg, <<"id">>, _Args, Opts) ->
     ?event({message_query_id, {object, Msg}}),
     {ok, hb_message:id(Msg, all, Opts)};

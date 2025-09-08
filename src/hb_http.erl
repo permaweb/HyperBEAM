@@ -733,6 +733,8 @@ encode_reply(Status, TABMReq, Message, Opts) ->
 %% AO device format (`device@1.0').
 accept_to_codec(OriginalReq, Opts) ->
     accept_to_codec(OriginalReq, undefined, Opts).
+accept_to_codec(#{ <<"require-codec">> := RequiredCodec }, _Reply, Opts) ->
+    mime_to_codec(RequiredCodec, Opts);
 accept_to_codec(_OriginalReq, #{ <<"content-type">> := _ }, _Opts) ->
     <<"httpsig@1.0">>;
 accept_to_codec(OriginalReq, _, Opts) ->
@@ -743,21 +745,7 @@ accept_to_codec(OriginalReq, _, Opts) ->
             {accept, Accept}
         }
     ),
-    AcceptCodec =
-        hb_maps:get(
-            <<"accept-codec">>,
-            OriginalReq,
-            mime_to_codec(Accept, Opts),
-			Opts
-        ),
-    case AcceptCodec of
-        not_specified ->
-            % We hold off until confirming that the codec is not directly in the
-            % message before calling `hb_opts:get/3', as it is comparatively
-            % expensive.
-            default_codec(Opts);
-        _ -> AcceptCodec
-    end.
+    mime_to_codec(Accept, Opts).
 
 %% @doc Find a codec name from a mime-type.
 mime_to_codec(<<"application/", Mime/binary>>, Opts) ->
@@ -779,7 +767,11 @@ mime_to_codec(<<"application/", Mime/binary>>, Opts) ->
             Default
     end;
 mime_to_codec(<<"device/", Name/binary>>, _Opts) -> Name;
-mime_to_codec(_, Opts) -> default_codec(Opts).
+mime_to_codec(Device, Opts) ->
+    case binary:match(Device, <<"@">>) of
+        nomatch -> default_codec(Opts);
+        _ -> Device
+    end.
 
 %% @doc Return the default codec for the given options.
 default_codec(Opts) ->
@@ -1146,7 +1138,7 @@ ans104_wasm_test() ->
     Msg =
         hb_message:commit(
             #{
-                <<"accept-codec">> => <<"ans104@1.0">>,
+                <<"require-codec">> => <<"ans104@1.0">>,
                 <<"codec-device">> => <<"ans104@1.0">>,
                 <<"device">> => <<"wasm-64@1.0">>,
                 <<"function">> => <<"fac">>,

@@ -611,7 +611,7 @@ set_opts_test() ->
         priv_wallet => Wallet = ar_wallet:new(), 
         port => rand:uniform(10000) + 10000 
     }),
-    Opts = ?MODULE:get_opts(#{ 
+    Opts = get_opts(#{ 
         http_server => hb_util:human_id(ar_wallet:to_address(Wallet))
     }),
     NodeHistory = hb_opts:get(node_history, [], Opts),
