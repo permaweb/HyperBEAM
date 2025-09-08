@@ -109,7 +109,3 @@
     {<<"bundle-format">>, <<"binary">>},
     {<<"bundle-version">>, <<"2.0.0">>}
 ]).
-
--define(LIST_TAGS, [
-    {<<"map-format">>, <<"list">>}
-]).
