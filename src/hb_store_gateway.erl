@@ -320,13 +320,15 @@ remote_hyperbeam_node_ans104_test() ->
     Msg =
         hb_message:commit(
             #{
-                <<"hello">> => <<"world">>
+                <<"hello">> => <<"world">>,
+                <<"test-1">> => <<"value-1">>
             },
             ServerOpts,
-            #{ <<"commitment-device">> => <<"ans104@1.0">> }
+            #{ <<"commitment-device">> => <<"ans104@1.0">>}
         ),
     {ok, ID} = hb_cache:write(Msg, ServerOpts),
     {ok, ReadMsg} = hb_cache:read(ID, ServerOpts),
+    ?event({read_back, {msg, ReadMsg}, {id, ID}}),
     ?assert(hb_message:verify(ReadMsg)),
     ClientOpts =
         #{
@@ -334,24 +336,26 @@ remote_hyperbeam_node_ans104_test() ->
                 [
                     #{
                         <<"store-module">> => hb_store_gateway,
-                        <<"node">> => Server
-                    },
-                    hb_test_utils:test_store()
-                ],
-            routes => [
-                #{
-                    % Routes for GraphQL requests to use the remote server's
-                    % GraphQL API.
-                    <<"template">> => <<"/graphql">>,
-                    <<"nodes">> =>
-                        [
+                        <<"node">> => Server,
+                        routes => [
                             #{
-                                <<"prefix">> => <<Server/binary, "/~query@1.0">>
+                                % Routes for GraphQL requests to use the remote server's
+                                % GraphQL API.
+                                <<"template">> => <<"/graphql">>,
+                                <<"nodes">> =>
+                                    [
+                                        #{
+                                            <<"prefix">> => <<Server/binary, "/~query@1.0">>
+                                        }
+                                    ]
                             }
                         ]
-                }
-            ]
+                    },
+                    hb_test_utils:test_store()
+                ]
         },
+    ?event({client_opts, ClientOpts}),
     {ok, Msg2} = hb_cache:read(ID, ClientOpts),
+    ?event({read_via_gateway, {msg, Msg2}, {id, ID}}),
     ?assert(hb_message:verify(Msg2)),
     ?assert(hb_message:match(Msg, Msg2)).
