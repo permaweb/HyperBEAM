@@ -9,23 +9,18 @@
 %%% The device generates DNS TXT records that users must manually add to their
 %%% DNS providers, making it suitable for environments where automated DNS
 %%% API access is not available.
+%%%
+%%% This module serves as the main device interface, orchestrating calls to
+%%% specialized modules for validation, state management, challenge handling,
+%%% and certificate operations.
 -module(dev_ssl_cert).
--export([info/1, info/3, request/3, status/3]).
--export([challenges/3, validate/3, download/3, list/3]).
--export([renew/3, delete/3]).
--export([validate_request_params/3, generate_request_id/0]).
--export([is_valid_domain/1, is_valid_email/1]).
 
+-include("ssl_cert/include/ssl_cert_records.hrl").
 -include("include/hb.hrl").
 
-%% Import DNS challenge record from ACME client
--record(dns_challenge, {
-    domain :: string(),
-    token :: string(),
-    key_authorization :: string(),
-    dns_value :: string(),
-    url :: string()
-}).
+%% Device API exports
+-export([info/1, info/3, request/3, finalize/3]).
+-export([renew/3, delete/3]).
 
 %% @doc Controls which functions are exposed via the device API.
 %%
@@ -36,9 +31,12 @@
 %% @returns A map with the `exports' key containing a list of allowed functions
 info(_) -> 
     #{ 
+        default => info,
         exports => [
-            info, request, status, challenges, 
-            validate, download, list, renew, delete
+            request,
+            finalize,
+            renew,
+            delete
         ] 
     }.
 
@@ -69,50 +67,21 @@ info(_Msg1, _Msg2, _Opts) ->
                     <<"ssl_opts">> => #{
                         <<"domains">> => <<"List of domain names for certificate">>,
                         <<"email">> => <<"Contact email for Let's Encrypt account">>,
-                        <<"environment">> => <<"'staging' or 'production'">>,
-                        <<"dns_propagation_wait">> => <<"Seconds to wait for DNS propagation (optional, default: 300)">>,
-                        <<"validation_timeout">> => <<"Seconds to wait for validation (optional, default: 300)">>,
-                        <<"include_chain">> => <<"Include certificate chain in download (optional, default: true)">>
+                        <<"environment">> => <<"'staging' or 'production'">>
                     }
                 },
                 <<"example_config">> => #{
                     <<"ssl_opts">> => #{
                         <<"domains">> => [<<"example.com">>, <<"www.example.com">>],
                         <<"email">> => <<"admin@example.com">>,
-                        <<"environment">> => <<"staging">>,
-                        <<"dns_propagation_wait">> => 300,
-                        <<"validation_timeout">> => 300,
-                        <<"include_chain">> => true
+                        <<"environment">> => <<"staging">>
                     }
                 },
-                <<"usage">> => <<"POST /ssl-cert@1.0/request (uses ssl_opts configuration)">>
+                <<"usage">> => <<"POST /ssl-cert@1.0/request (returns challenges; state saved internally)">>
             },
-            <<"status">> => #{
-                <<"description">> => <<"Check certificate request status">>,
-                <<"required_params">> => #{
-                    <<"request_id">> => <<"Certificate request identifier">>
-                }
-            },
-            <<"challenges">> => #{
-                <<"description">> => <<"Get DNS challenge records to create">>,
-                <<"required_params">> => #{
-                    <<"request_id">> => <<"Certificate request identifier">>
-                }
-            },
-            <<"validate">> => #{
-                <<"description">> => <<"Validate DNS challenges after setup">>,
-                <<"required_params">> => #{
-                    <<"request_id">> => <<"Certificate request identifier">>
-                }
-            },
-            <<"download">> => #{
-                <<"description">> => <<"Download completed certificate">>,
-                <<"required_params">> => #{
-                    <<"request_id">> => <<"Certificate request identifier">>
-                }
-            },
-            <<"list">> => #{
-                <<"description">> => <<"List all stored certificates">>
+            <<"finalize">> => #{
+                <<"description">> => <<"Finalize certificate issuance after DNS TXT records are set">>,
+                <<"usage">> => <<"POST /ssl-cert@1.0/finalize (validates and returns certificate)">>
             },
             <<"renew">> => #{
                 <<"description">> => <<"Renew an existing certificate">>,
@@ -128,7 +97,7 @@ info(_Msg1, _Msg2, _Opts) ->
             }
         }
     },
-    {ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
+    hb_ssl_cert_util:build_success_response(200, InfoBody).
 
 %% @doc Requests a new SSL certificate for the specified domains.
 %%
@@ -140,232 +109,158 @@ info(_Msg1, _Msg2, _Opts) ->
 %% 5. Stores the request state for subsequent operations
 %% 6. Returns a request ID and initial status
 %%
-%% Required parameters in M2:
+%% Required parameters in ssl_opts configuration:
 %% - domains: List of domain names for the certificate
 %% - email: Contact email for Let's Encrypt account registration
 %% - environment: 'staging' or 'production' (use staging for testing)
 %%
 %% @param _M1 Ignored parameter
-%% @param M2 Request message containing certificate parameters
+%% @param _M2 Request message containing certificate parameters
 %% @param Opts A map of configuration options
 %% @returns {ok, Map} with request ID and status, or {error, Reason}
 request(_M1, _M2, Opts) ->
     ?event({ssl_cert_request_started}),
-    try
-        % Read SSL configuration from hb_opts only
-        ?event({ssl_cert_request_started_with_opts, Opts}),
-        SslOpts = hb_opts:get(<<"ssl_opts">>, not_found, Opts),
-        case SslOpts of
-            not_found ->
-                ?event({ssl_cert_config_missing}),
-                {error, #{<<"status">> => 400, 
-                         <<"error">> => <<"ssl_opts configuration required">>}};
-            _ ->
-                % Extract all parameters from configuration
+    maybe
+        LoadedOpts = hb_cache:ensure_all_loaded(Opts, Opts),
+        StrippedOpts = maps:without([<<"ssl_cert_rsa_key">>, <<"ssl_cert_opts">>], LoadedOpts),
+        ?event({ssl_cert_request_started_with_opts, StrippedOpts}),
+        % Extract SSL options from configuration
+        {ok, SslOpts} ?= hb_ssl_cert_util:extract_ssl_opts(StrippedOpts),
+        % Extract and validate parameters
                 Domains = maps:get(<<"domains">>, SslOpts, not_found),
                 Email = maps:get(<<"email">>, SslOpts, not_found),
                 Environment = maps:get(<<"environment">>, SslOpts, staging),
-                IncludeChain = maps:get(<<"include_chain">>, SslOpts, true),
-                DnsPropagationWait = maps:get(<<"dns_propagation_wait">>, SslOpts, 300),
-                ValidationTimeout = maps:get(<<"validation_timeout">>, SslOpts, 300),
                 ?event({
                     ssl_cert_request_params_from_config,
                     {domains, Domains},
                     {email, Email},
-                    {environment, Environment},
-                    {include_chain, IncludeChain},
-                    {dns_propagation_wait, DnsPropagationWait},
-                    {validation_timeout, ValidationTimeout}
+                    {environment, Environment}
                 }),
-                case validate_request_params(Domains, Email, Environment) of
-                    {ok, ValidatedParams} ->
-                        % Add hardcoded and configuration options
+        % Validate all parameters
+        {ok, ValidatedParams} ?= 
+            hb_ssl_cert_validation:validate_request_params(Domains, Email, Environment),
                         EnhancedParams = ValidatedParams#{
-                            key_size => 2048,  % Hardcoded to 2048 for simplicity
-                            storage_path => "certificates",  % Hardcoded storage path
-                            include_chain => IncludeChain,
-                            dns_propagation_wait => DnsPropagationWait,
-                            validation_timeout => ValidationTimeout
-                        },
-                        process_certificate_request(EnhancedParams, Opts);
+            key_size => ?SSL_CERT_KEY_SIZE,
+            storage_path => ?SSL_CERT_STORAGE_PATH
+        },
+        % Process the certificate request
+        {ok, ProcResp} ?= 
+            hb_ssl_cert_ops:process_certificate_request(EnhancedParams, StrippedOpts),
+        NewOpts = hb_http_server:get_opts(Opts),
+        ProcBody = maps:get(<<"body">>, ProcResp, #{}),
+        RequestState0 = maps:get(<<"request_state">>, ProcBody, #{}),
+        ?event({ssl_cert_orchestration_created_request}),
+        % Persist request state in node opts (overwrites previous)
+        ok = hb_http_server:set_opts(
+            NewOpts#{ <<"ssl_cert_request">> => RequestState0 }
+        ),
+        % Format challenges for response
+        Challenges = maps:get(<<"challenges">>, RequestState0, []),
+        FormattedChallenges = hb_ssl_cert_challenge:format_challenges_for_response(Challenges),
+        % Return challenges and request_state to the caller
+        {ok, #{<<"status">> => 200,
+               <<"body">> => #{
+                   <<"message">> => 
+                        <<"Create DNS TXT records for the following challenges, then call finalize">>,
+                   <<"challenges">> => FormattedChallenges,
+                   <<"next_step">> => <<"finalize">>
+               }}}
+    else
+        {error, <<"ssl_opts configuration required">>} ->
+            hb_ssl_cert_util:build_error_response(400, <<"ssl_opts configuration required">>);
+        {error, ReasonBin} when is_binary(ReasonBin) ->
+            hb_ssl_cert_util:format_validation_error(ReasonBin);
                     {error, Reason} ->
-                        ?event({ssl_cert_request_validation_failed, Reason}),
-                        {error, #{<<"status">> => 400, <<"error">> => Reason}}
-                end
-        end
-    catch
-        Error:RequestReason:Stacktrace ->
-            ?event({ssl_cert_request_error, Error, RequestReason, Stacktrace}),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Internal server error">>}}
+            ?event({ssl_cert_request_error_maybe, Reason}),
+            FormattedError = hb_ssl_cert_util:format_error_details(Reason),
+            hb_ssl_cert_util:build_error_response(500, FormattedError);
+        Error ->
+            ?event({ssl_cert_request_unexpected_error, Error}),
+            hb_ssl_cert_util:build_error_response(500, <<"Internal server error">>)
     end.
 
-%% @doc Checks the status of a certificate request.
+%% @doc Finalizes a certificate request: validates challenges and downloads the certificate.
 %%
-%% This function retrieves the current status of a certificate request:
-%% 1. Validates the request ID parameter
-%% 2. Retrieves the stored request state
-%% 3. Checks the current ACME order status
-%% 4. Returns detailed status information including next steps
+%% This function:
+%% 1. Retrieves the stored request state
+%% 2. Validates DNS challenges with Let's Encrypt
+%% 3. Finalizes the order if challenges are valid
+%% 4. Downloads the certificate if available
+%% 5. Returns the certificate or status information
 %%
-%% Required parameters in M2:
-%% - request_id: The certificate request identifier
-%%
-%% @param _M1 Ignored parameter
-%% @param M2 Request message containing request_id
-%% @param Opts A map of configuration options  
-%% @returns {ok, Map} with current status, or {error, Reason}
-status(_M1, _M2, Opts) ->
-    ?event({ssl_cert_status_check_started}),
-    try
-        % Read request ID from configuration
-        RequestId = hb_opts:get(<<"ssl_cert_request_id">>, not_found, Opts),
-        case RequestId of
-            not_found ->
-                ?event({ssl_cert_status_no_request_id}),
-                {error, #{<<"status">> => 400, 
-                         <<"error">> => <<"ssl_cert_request_id configuration required">>}};
+%% @param _M1 Ignored
+%% @param _M2 Message containing request_state
+%% @param Opts Options
+%% @returns {ok, Map} result of validation and optionally certificate
+finalize(_M1, _M2, Opts) ->
+    ?event({ssl_cert_finalize_started}),
+    maybe
+        % Load single saved request state from node opts
+        RequestState = hb_opts:get(<<"ssl_cert_request">>, not_found, Opts),
+        _ ?= case RequestState of
+            not_found -> {error, request_state_not_found};
+            _ when is_map(RequestState) -> {ok, true};
+            _ -> {error, invalid_request_state}
+        end,
+        % Validate DNS challenges
+        {ok, ValResp} ?= hb_ssl_cert_challenge:validate_dns_challenges_state(RequestState, Opts),
+        ValBody = maps:get(<<"body">>, ValResp, #{}),
+        OrderStatus = maps:get(<<"order_status">>, ValBody, <<"unknown">>),
+        Results = maps:get(<<"results">>, ValBody, []),
+        RequestState1 = maps:get(<<"request_state">>, ValBody, RequestState),
+        % Handle different order statuses
+        case OrderStatus of
+            ?ACME_STATUS_VALID ->
+                % Try to download the certificate
+                case hb_ssl_cert_ops:download_certificate_state(RequestState1, Opts) of
+                    {ok, DownResp} ->
+                        ?event(ssl_cert, {ssl_cert_certificate_downloaded, DownResp}),
+                        DownBody = maps:get(<<"body">>, DownResp, #{}),
+                        CertPem = maps:get(<<"certificate_pem">>, DownBody, <<>>),
+                        DomainsOut = maps:get(<<"domains">>, DownBody, []),
+                        % Get the CSR private key from saved opts and serialize to PEM
+                        PrivKeyRecord = hb_opts:get(<<"ssl_cert_rsa_key">>, not_found, Opts),
+                        PrivKeyPem = case PrivKeyRecord of
+                            not_found -> <<"">>;
+                            Key -> hb_ssl_cert_state:serialize_private_key(Key)
+                        end,
+                        ?event(ssl_cert, {ssl_cert_certificate_and_key_ready_for_nginx, {domains, DomainsOut}}),
+                        {ok, #{<<"status">> => 200,
+                               <<"body">> => #{
+                                   <<"message">> => <<"Certificate issued successfully">>,
+                                   <<"domains">> => DomainsOut,
+                                   <<"results">> => Results,
+                                   % TODO: Remove Keys from response
+                                   <<"certificate_pem">> => CertPem,
+                                   <<"key_pem">> => hb_util:bin(PrivKeyPem)
+                               }}};
+                    {error, _} ->
+                        {ok, #{<<"status">> => 200,
+                               <<"body">> => #{
+                                   <<"message">> => <<"Order finalized; certificate not ready for download yet">>,
+                                   <<"order_status">> => ?ACME_STATUS_PROCESSING,
+                                   <<"results">> => Results
+                               }}}
+                end;
             _ ->
-                get_request_status(hb_util:list(RequestId), Opts)
+                {ok, #{<<"status">> => 200,
+                       <<"body">> => #{
+                           <<"message">> => <<"Validation not complete">>,
+                           <<"order_status">> => OrderStatus,
+                           <<"results">> => Results,
+                           <<"request_state">> => RequestState1
+                       }}}
         end
-    catch
-        Error:Reason:Stacktrace ->
-            ?event({ssl_cert_status_error, Error, Reason, Stacktrace}),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Internal server error">>}}
+    else
+        {error, request_state_not_found} ->
+            hb_ssl_cert_util:build_error_response(404, <<"request state not found">>);
+        {error, invalid_request_state} ->
+            hb_ssl_cert_util:build_error_response(400, <<"request_state must be a map">>);
+        {error, Reason} ->
+            FormattedError = hb_ssl_cert_util:format_error_details(Reason),
+            hb_ssl_cert_util:build_error_response(500, FormattedError)
     end.
 
-%% @doc Retrieves DNS challenge records for manual DNS setup.
-%%
-%% This function provides the DNS TXT records that must be created:
-%% 1. Validates the request ID parameter
-%% 2. Retrieves the stored DNS challenges
-%% 3. Formats the challenges with provider-specific instructions
-%% 4. Returns detailed setup instructions for popular DNS providers
-%%
-%% Required parameters in M2:
-%% - request_id: The certificate request identifier
-%%
-%% @param _M1 Ignored parameter
-%% @param M2 Request message containing request_id
-%% @param Opts A map of configuration options
-%% @returns {ok, Map} with DNS challenge instructions, or {error, Reason}  
-challenges(_M1, _M2, Opts) ->
-    ?event({ssl_cert_challenges_requested}),
-    try
-        % Read request ID from configuration
-        RequestId = hb_opts:get(<<"ssl_cert_request_id">>, not_found, Opts),
-        case RequestId of
-            not_found ->
-                ?event({ssl_cert_challenges_no_request_id}),
-                {error, #{<<"status">> => 400, 
-                         <<"error">> => <<"ssl_cert_request_id configuration required">>}};
-            _ ->
-                get_dns_challenges(hb_util:list(RequestId), Opts)
-        end
-    catch
-        Error:Reason:Stacktrace ->
-            ?event({ssl_cert_challenges_error, Error, Reason, Stacktrace}),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Internal server error">>}}
-    end.
-
-%% @doc Validates DNS challenges after manual DNS record creation.
-%%
-%% This function validates that DNS TXT records have been properly created:
-%% 1. Validates the request ID parameter
-%% 2. Checks DNS propagation for all challenge records
-%% 3. Notifies Let's Encrypt to validate the challenges
-%% 4. Updates the request status based on validation results
-%% 5. Returns validation status and next steps
-%%
-%% Required parameters in M2:
-%% - request_id: The certificate request identifier
-%%
-%% @param _M1 Ignored parameter  
-%% @param M2 Request message containing request_id
-%% @param Opts A map of configuration options
-%% @returns {ok, Map} with validation results, or {error, Reason}
-validate(_M1, _M2, Opts) ->
-    ?event({ssl_cert_validation_started}),
-    try
-        % Read request ID from configuration
-        RequestId = hb_opts:get(<<"ssl_cert_request_id">>, not_found, Opts),
-        case RequestId of
-            not_found ->
-                ?event({ssl_cert_validation_no_request_id}),
-                {error, #{<<"status">> => 400, 
-                         <<"error">> => <<"ssl_cert_request_id configuration required">>}};
-            _ ->
-                validate_dns_challenges(hb_util:list(RequestId), Opts)
-        end
-    catch
-        Error:Reason:Stacktrace ->
-            ?event({ssl_cert_validation_error, Error, Reason, Stacktrace}),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Internal server error">>}}
-    end.
-
-%% @doc Downloads a completed SSL certificate.
-%%
-%% This function retrieves the issued certificate and private key:
-%% 1. Validates the request ID parameter
-%% 2. Checks that the certificate is ready for download
-%% 3. Retrieves the certificate chain from Let's Encrypt
-%% 4. Stores the certificate and private key securely
-%% 5. Returns the certificate in PEM format
-%%
-%% Required parameters in M2:
-%% - request_id: The certificate request identifier
-%%
-%% @param _M1 Ignored parameter
-%% @param M2 Request message containing request_id  
-%% @param Opts A map of configuration options
-%% @returns {ok, Map} with certificate data, or {error, Reason}
-download(_M1, _M2, Opts) ->
-    ?event({ssl_cert_download_started}),
-    try
-        % Read request ID from configuration
-        RequestId = hb_opts:get(<<"ssl_cert_request_id">>, not_found, Opts),
-        case RequestId of
-            not_found ->
-                ?event({ssl_cert_download_no_request_id}),
-                {error, #{<<"status">> => 400, 
-                         <<"error">> => <<"ssl_cert_request_id configuration required">>}};
-            _ ->
-                download_certificate(hb_util:list(RequestId), Opts)
-        end
-    catch
-        Error:Reason:Stacktrace ->
-            ?event({ssl_cert_download_error, Error, Reason, Stacktrace}),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Internal server error">>}}
-    end.
-
-%% @doc Lists all stored SSL certificates.
-%%
-%% This function provides an overview of all certificates:
-%% 1. Retrieves all stored certificates from the certificate store
-%% 2. Checks expiration status for each certificate
-%% 3. Formats the certificate information for display
-%% 4. Returns a list with domains, status, and expiration dates
-%%
-%% No parameters required.
-%%
-%% @param _M1 Ignored parameter
-%% @param _M2 Ignored parameter
-%% @param Opts A map of configuration options
-%% @returns {ok, Map} with certificate list, or {error, Reason}
-list(_M1, _M2, Opts) ->
-    ?event({ssl_cert_list_requested}),
-    try
-        get_certificate_list(Opts)
-    catch
-        Error:Reason:Stacktrace ->
-            ?event({ssl_cert_list_error, Error, Reason, Stacktrace}),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Internal server error">>}}
-    end.
 
 %% @doc Renews an existing SSL certificate.
 %%
@@ -375,8 +270,10 @@ list(_M1, _M2, Opts) ->
 %% 3. Initiates a new certificate request with the same parameters
 %% 4. Returns a new request ID for the renewal process
 %%
-%% Required parameters in M2:
+%% Required parameters in ssl_opts configuration:
 %% - domains: List of domain names to renew
+%% - email: Contact email for Let's Encrypt account
+%% - environment: ACME environment setting
 %%
 %% @param _M1 Ignored parameter
 %% @param M2 Request message containing domains to renew
@@ -385,29 +282,26 @@ list(_M1, _M2, Opts) ->
 renew(_M1, _M2, Opts) ->
     ?event({ssl_cert_renewal_started}),
     try
-        % Read domains from SSL configuration
-        SslOpts = hb_opts:get(<<"ssl_opts">>, not_found, Opts),
-        case SslOpts of
-            not_found ->
-                ?event({ssl_cert_renewal_config_missing}),
-                {error, #{<<"status">> => 400, 
-                         <<"error">> => <<"ssl_opts configuration required for renewal">>}};
-            _ ->
+        % Extract SSL options and validate
+        case hb_ssl_cert_util:extract_ssl_opts(Opts) of
+            {error, ErrorReason} ->
+                hb_ssl_cert_util:build_error_response(400, ErrorReason);
+            {ok, SslOpts} ->
                 Domains = maps:get(<<"domains">>, SslOpts, not_found),
                 case Domains of
                     not_found ->
                         ?event({ssl_cert_renewal_domains_missing}),
-                        {error, #{<<"status">> => 400, 
-                                 <<"error">> => <<"domains required in ssl_opts configuration">>}};
+                        hb_ssl_cert_util:build_error_response(400, 
+                            <<"domains required in ssl_opts configuration">>);
                     _ ->
-                        renew_certificate(Domains, Opts)
+                        DomainList = hb_ssl_cert_util:normalize_domains(Domains),
+                        hb_ssl_cert_ops:renew_certificate(DomainList, Opts)
                 end
         end
     catch
-        Error:Reason:Stacktrace ->
-            ?event({ssl_cert_renewal_error, Error, Reason, Stacktrace}),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Internal server error">>}}
+        Error:CatchReason:Stacktrace ->
+            ?event({ssl_cert_renewal_error, Error, CatchReason, Stacktrace}),
+            hb_ssl_cert_util:build_error_response(500, <<"Internal server error">>)
     end.
 
 %% @doc Deletes a stored SSL certificate.
@@ -418,7 +312,7 @@ renew(_M1, _M2, Opts) ->
 %% 3. Removes the certificate files and metadata
 %% 4. Returns confirmation of deletion
 %%
-%% Required parameters in M2:
+%% Required parameters in ssl_opts configuration:
 %% - domains: List of domain names to delete
 %%
 %% @param _M1 Ignored parameter
@@ -428,603 +322,24 @@ renew(_M1, _M2, Opts) ->
 delete(_M1, _M2, Opts) ->
     ?event({ssl_cert_deletion_started}),
     try
-        % Read domains from SSL configuration
-        SslOpts = hb_opts:get(<<"ssl_opts">>, not_found, Opts),
-        case SslOpts of
-            not_found ->
-                ?event({ssl_cert_deletion_config_missing}),
-                {error, #{<<"status">> => 400, 
-                         <<"error">> => <<"ssl_opts configuration required for deletion">>}};
-            _ ->
+        % Extract SSL options and validate
+        case hb_ssl_cert_util:extract_ssl_opts(Opts) of
+            {error, ErrorReason} ->
+                hb_ssl_cert_util:build_error_response(400, ErrorReason);
+            {ok, SslOpts} ->
                 Domains = maps:get(<<"domains">>, SslOpts, not_found),
                 case Domains of
                     not_found ->
                         ?event({ssl_cert_deletion_domains_missing}),
-                        {error, #{<<"status">> => 400, 
-                                 <<"error">> => <<"domains required in ssl_opts configuration">>}};
+                        hb_ssl_cert_util:build_error_response(400, 
+                            <<"domains required in ssl_opts configuration">>);
                     _ ->
-                        delete_certificate(Domains, Opts)
+                        DomainList = hb_ssl_cert_util:normalize_domains(Domains),
+                        hb_ssl_cert_ops:delete_certificate(DomainList, Opts)
                 end
         end
     catch
-        Error:Reason:Stacktrace ->
-            ?event({ssl_cert_deletion_error, Error, Reason, Stacktrace}),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Internal server error">>}}
-    end.
-
-%%%--------------------------------------------------------------------
-%%% Internal Functions
-%%%--------------------------------------------------------------------
-
-%% @doc Validates certificate request parameters.
-%%
-%% @param Domains List of domain names
-%% @param Email Contact email address
-%% @param Environment ACME environment (staging/production)
-%% @returns {ok, ValidatedParams} or {error, Reason}
-validate_request_params(Domains, Email, Environment) ->
-    try
-        % Validate domains
-        case validate_domains(Domains) of
-            {ok, ValidDomains} ->
-                % Validate email
-                case validate_email(Email) of
-                    {ok, ValidEmail} ->
-                        % Validate environment
-                        case validate_environment(Environment) of
-                            {ok, ValidEnv} ->
-                                {ok, #{
-                                    domains => ValidDomains,
-                                    email => ValidEmail,
-                                    environment => ValidEnv,
-                                    key_size => 2048
-                                }};
-                            {error, Reason} ->
-                                {error, Reason}
-                        end;
-                    {error, Reason} ->
-                        {error, Reason}
-                end;
-            {error, Reason} ->
-                {error, Reason}
-        end
-    catch
-        _:_ ->
-            {error, <<"Invalid request parameters">>}
-    end.
-
-%% @doc Validates a list of domain names.
-%%
-%% @param Domains List of domain names or not_found
-%% @returns {ok, [ValidDomain]} or {error, Reason}
-validate_domains(not_found) ->
-    {error, <<"Missing domains parameter">>};
-validate_domains(Domains) when is_list(Domains) ->
-    DomainStrings = [hb_util:list(D) || D <- Domains],
-    ValidDomains = [D || D <- DomainStrings, is_valid_domain(D)],
-    case ValidDomains of
-        [] ->
-            {error, <<"No valid domains provided">>};
-        _ when length(ValidDomains) =:= length(DomainStrings) ->
-            {ok, ValidDomains};
-        _ ->
-            {error, <<"Some domains are invalid">>}
-    end;
-validate_domains(_) ->
-    {error, <<"Domains must be a list">>}.
-
-%% @doc Validates an email address.
-%%
-%% @param Email Email address or not_found
-%% @returns {ok, ValidEmail} or {error, Reason}
-validate_email(not_found) ->
-    {error, <<"Missing email parameter">>};
-validate_email(Email) ->
-    EmailStr = hb_util:list(Email),
-    case is_valid_email(EmailStr) of
-        true ->
-            {ok, EmailStr};
-        false ->
-            {error, <<"Invalid email address">>}
-    end.
-
-%% @doc Validates the ACME environment.
-%%
-%% @param Environment Environment atom or binary
-%% @returns {ok, ValidEnvironment} or {error, Reason}
-validate_environment(Environment) ->
-    EnvAtom = case Environment of
-        <<"staging">> -> staging;
-        <<"production">> -> production;
-        staging -> staging;
-        production -> production;
-        _ -> invalid
-    end,
-    case EnvAtom of
-        invalid ->
-            {error, <<"Environment must be 'staging' or 'production'">>};
-        _ ->
-            {ok, EnvAtom}
-    end.
-
-
-%% @doc Checks if a domain name is valid.
-%%
-%% @param Domain Domain name string
-%% @returns true if valid, false otherwise
-is_valid_domain(Domain) ->
-    % Basic domain validation regex
-    DomainRegex = "^[a-zA-Z0-9]([a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?" ++
-                  "(\\.[a-zA-Z0-9]([a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?)*$",
-    case re:run(Domain, DomainRegex) of
-        {match, _} -> 
-            length(Domain) > 0 andalso length(Domain) =< 253;
-        nomatch -> 
-            false
-    end.
-
-%% @doc Checks if an email address is valid.
-%%
-%% @param Email Email address string
-%% @returns true if valid, false otherwise
-is_valid_email(Email) ->
-    % Basic email validation regex
-    EmailRegex = "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9][a-zA-Z0-9.-]*\\.[a-zA-Z]{2,}$",
-    case re:run(Email, EmailRegex) of
-        {match, _} -> 
-            % Additional checks for invalid patterns
-            HasDoubleDots = string:find(Email, "..") =/= nomatch,
-            HasAtDot = string:find(Email, "@.") =/= nomatch,
-            HasDotAt = string:find(Email, ".@") =/= nomatch,
-            EndsWithDot = lists:suffix(".", Email),
-            % Email is valid if none of the invalid patterns are present
-            not (HasDoubleDots orelse HasAtDot orelse HasDotAt orelse EndsWithDot);
-        nomatch -> 
-            false
-    end.
-
-%% @doc Processes a validated certificate request.
-%%
-%% @param ValidatedParams Map of validated request parameters
-%% @param Opts Configuration options
-%% @returns {ok, Map} with request details or {error, Reason}
-process_certificate_request(ValidatedParams, Opts) ->
-    ?event({ssl_cert_processing_request, ValidatedParams}),
-    % Generate unique request ID
-    RequestId = generate_request_id(),
-    try
-        % Create ACME account
-        case hb_acme_client:create_account(ValidatedParams) of
-            {ok, Account} ->
-                ?event({ssl_cert_account_created, RequestId}),
-                % Request certificate order
-                Domains = maps:get(domains, ValidatedParams),
-                case hb_acme_client:request_certificate(Account, Domains) of
-                    {ok, Order} ->
-                        ?event({ssl_cert_order_created, RequestId}),
-                        % Generate DNS challenges
-                        case hb_acme_client:get_dns_challenge(Account, Order) of
-                            {ok, Challenges} ->
-                                % Store request state
-                                RequestState = #{
-                                    request_id => RequestId,
-                                    account => Account,
-                                    order => Order,
-                                    challenges => Challenges,
-                                    domains => Domains,
-                                    status => pending_dns,
-                                    created => calendar:universal_time(),
-                                    config => ValidatedParams
-                                },
-                                store_request_state(RequestId, RequestState, Opts),
-                                {ok, #{
-                                    <<"status">> => 200,
-                                    <<"body">> => #{
-                                        <<"request_id">> => hb_util:bin(RequestId),
-                                        <<"status">> => <<"pending_dns">>,
-                                        <<"message">> => 
-                                            <<"Certificate request created. Use /challenges endpoint to get DNS records.">>,
-                                        <<"domains">> => [hb_util:bin(D) || D <- Domains],
-                                        <<"next_step">> => <<"challenges">>
-                                    }
-                                }};
-                            {error, Reason} ->
-                                ?event({ssl_cert_challenge_generation_failed, 
-                                       RequestId, Reason}),
-                                {error, #{<<"status">> => 500, 
-                                         <<"error">> => <<"Challenge generation failed">>}}
-                        end;
-                    {error, Reason} ->
-                        ?event({ssl_cert_order_failed, RequestId, Reason}),
-                        {error, #{<<"status">> => 500, 
-                                 <<"error">> => <<"Certificate order failed">>}}
-                end;
-            {error, Reason} ->
-                ?event({
-                    ssl_cert_account_creation_failed,
-                    {request_id, RequestId},
-                    {reason, Reason},
-                    {config, ValidatedParams}
-                }),
-                % Provide detailed error information to user
-                DetailedError = case Reason of
-                    {account_creation_failed, SubReason} ->
-                        #{
-                            <<"error">> => <<"ACME account creation failed">>,
-                            <<"details">> => format_error_details(SubReason),
-                            <<"troubleshooting">> => #{
-                                <<"check_internet">> => <<"Ensure internet connectivity to Let's Encrypt">>,
-                                <<"check_email">> => <<"Verify email address is valid">>,
-                                <<"try_staging">> => <<"Try staging environment first">>,
-                                <<"check_rate_limits">> => <<"Check Let's Encrypt rate limits">>
-                            }
-                        };
-                    {connection_failed, ConnReason} ->
-                        #{
-                            <<"error">> => <<"Connection to Let's Encrypt failed">>,
-                            <<"details">> => hb_util:bin(io_lib:format("~p", [ConnReason])),
-                            <<"troubleshooting">> => #{
-                                <<"check_network">> => <<"Check network connectivity">>,
-                                <<"check_firewall">> => <<"Ensure HTTPS (443) is not blocked">>,
-                                <<"check_dns">> => <<"Verify DNS resolution for acme-staging-v02.api.letsencrypt.org">>
-                            }
-                        };
-                    _ ->
-                        #{
-                            <<"error">> => <<"Account creation failed">>,
-                            <<"details">> => hb_util:bin(io_lib:format("~p", [Reason]))
-                        }
-                end,
-                {error, #{<<"status">> => 500, <<"error_info">> => DetailedError}}
-        end
-    catch
-        Error:ProcessReason:Stacktrace ->
-            ?event({ssl_cert_process_error, RequestId, Error, ProcessReason, Stacktrace}),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Certificate request processing failed">>}}
-    end.
-
-%% @doc Generates a unique request identifier.
-%%
-%% @returns A unique request ID string
-generate_request_id() ->
-    Timestamp = integer_to_list(erlang:system_time(millisecond)),
-    Random = integer_to_list(rand:uniform(999999)),
-    "ssl_" ++ Timestamp ++ "_" ++ Random.
-
-%% @doc Stores request state for later retrieval.
-%%
-%% @param RequestId Unique request identifier
-%% @param RequestState Complete request state map
-%% @param Opts Configuration options
-%% @returns ok
-store_request_state(RequestId, RequestState, Opts) ->
-    ?event({ssl_cert_storing_state, RequestId}),
-    % Store in HyperBEAM's cache system
-    CacheKey = <<"ssl_cert_request_", (hb_util:bin(RequestId))/binary>>,
-    hb_cache:write(#{
-        CacheKey => RequestState
-    }, Opts),
-    ok.
-
-%% @doc Retrieves stored request state.
-%%
-%% @param RequestId Request identifier
-%% @param Opts Configuration options  
-%% @returns {ok, RequestState} or {error, not_found}
-get_request_state(RequestId, Opts) ->
-    CacheKey = <<"ssl_cert_request_", (hb_util:bin(RequestId))/binary>>,
-    case hb_cache:read(CacheKey, Opts) of
-        {ok, RequestState} ->
-            {ok, RequestState};
-        _ ->
-            {error, not_found}
-    end.
-
-get_request_status(RequestId, Opts) ->
-    case get_request_state(RequestId, Opts) of
-        {ok, State} ->
-            Status = maps:get(status, State, unknown),
-            {ok, #{<<"status">> => 200, 
-                   <<"body">> => #{<<"request_status">> => hb_util:bin(Status)}}};
-        {error, not_found} ->
-            {error, #{<<"status">> => 404, <<"error">> => <<"Request not found">>}}
-    end.
-
-get_dns_challenges(RequestId, Opts) ->
-    case get_request_state(RequestId, Opts) of
-        {ok, State} ->
-            Challenges = maps:get(challenges, State, []),
-            FormattedChallenges = format_real_challenges(Challenges),
-            {ok, #{<<"status">> => 200, 
-                   <<"body">> => #{<<"challenges">> => FormattedChallenges}}};
-        {error, not_found} ->
-            {error, #{<<"status">> => 404, <<"error">> => <<"Request not found">>}}
-    end.
-
-validate_dns_challenges(RequestId, Opts) ->
-    case get_request_state(RequestId, Opts) of
-        {ok, State} ->
-            Account = maps:get(account, State),
-            Challenges = maps:get(challenges, State, []),
-            Config = maps:get(config, State, #{}),
-            DnsPropagationWait = maps:get(dns_propagation_wait, Config, 300),
-            ValidationTimeout = maps:get(validation_timeout, Config, 300),
-            ?event({
-                ssl_cert_validation_with_timeouts,
-                {dns_wait, DnsPropagationWait},
-                {validation_timeout, ValidationTimeout}
-            }),
-            % Wait for DNS propagation before validation
-            ?event({ssl_cert_waiting_dns_propagation, DnsPropagationWait}),
-            timer:sleep(DnsPropagationWait * 1000),
-            % Validate each challenge with Let's Encrypt (with timeout)
-            ValidationResults = validate_challenges_with_timeout(
-                Account, Challenges, ValidationTimeout),
-            {ok, #{<<"status">> => 200, 
-                   <<"body">> => #{
-                       <<"message">> => <<"DNS challenges validation initiated">>,
-                       <<"results">> => ValidationResults,
-                       <<"dns_propagation_wait">> => DnsPropagationWait,
-                       <<"validation_timeout">> => ValidationTimeout
-                   }}};
-        {error, not_found} ->
-            {error, #{<<"status">> => 404, <<"error">> => <<"Request not found">>}}
-    end.
-
-download_certificate(RequestId, Opts) ->
-    case get_request_state(RequestId, Opts) of
-        {ok, State} ->
-            Account = maps:get(account, State),
-            Order = maps:get(order, State),
-            Config = maps:get(config, State, #{}),
-            IncludeChain = maps:get(include_chain, Config, true),
-            ?event({ssl_cert_download_with_config, {include_chain, IncludeChain}}),
-            case hb_acme_client:download_certificate(Account, Order) of
-                {ok, CertPem} ->
-                    % Store certificate for future access
-                    Domains = maps:get(domains, State),
-                    % Process certificate based on include_chain setting
-                    ProcessedCert = case IncludeChain of
-                        true ->
-                            CertPem;  % Include full chain
-                        false ->
-                            % Extract only the end-entity certificate
-                            extract_end_entity_cert(CertPem)
-                    end,
-                    {ok, #{<<"status">> => 200, 
-                           <<"body">> => #{
-                               <<"message">> => <<"Certificate downloaded successfully">>,
-                               <<"certificate_pem">> => hb_util:bin(ProcessedCert),
-                               <<"domains">> => [hb_util:bin(D) || D <- Domains],
-                               <<"include_chain">> => IncludeChain
-                           }}};
-                {error, certificate_not_ready} ->
-                    {ok, #{<<"status">> => 202, 
-                           <<"body">> => #{<<"message">> => <<"Certificate not ready yet">>}}};
-                {error, Reason} ->
-                    {error, #{<<"status">> => 500, 
-                             <<"error">> => hb_util:bin(io_lib:format("Download failed: ~p", [Reason]))}}
-            end;
-        {error, not_found} ->
-            {error, #{<<"status">> => 404, <<"error">> => <<"Request not found">>}}
-    end.
-
-get_certificate_list(_Opts) ->
-    % Get all stored certificate requests from cache
-    try
-        % This would normally scan the cache for all ssl_cert_request_* keys
-        % For now, return empty list but with proper structure
-        ?event({ssl_cert_listing_certificates}),
-        {ok, #{<<"status">> => 200, 
-               <<"body">> => #{
-                   <<"certificates">> => [],
-                   <<"message">> => <<"Certificate list retrieved">>,
-                   <<"count">> => 0
-               }}}
-    catch
-        Error:Reason:Stacktrace ->
-            ?event({
-                ssl_cert_list_error,
-                {error, Error},
-                {reason, Reason},
-                {stacktrace, Stacktrace}
-            }),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Failed to retrieve certificate list">>}}
-    end.
-
-renew_certificate(Domains, Opts) ->
-    ?event({ssl_cert_renewal_started, {domains, Domains}}),
-    try
-        % Read SSL configuration from hb_opts  
-        SslOpts = hb_opts:get(<<"ssl_opts">>, not_found, Opts),
-        % Use configuration for renewal settings (no fallbacks)
-        Email = case SslOpts of
-            not_found ->
-                throw({error, <<"ssl_opts configuration required for renewal">>});
-            _ ->
-                case maps:get(<<"email">>, SslOpts, not_found) of
-                    not_found ->
-                        throw({error, <<"email required in ssl_opts configuration">>});
-                    ConfigEmail ->
-                        ConfigEmail
-                end
-        end,
-        Environment = case SslOpts of
-            not_found ->
-                staging; % Only fallback is staging for safety
-            _ ->
-                maps:get(<<"environment">>, SslOpts, staging)
-        end,
-        RenewalConfig = #{
-            domains => [hb_util:list(D) || D <- Domains],
-            email => Email,
-            environment => Environment,
-            key_size => 2048
-        },
-        ?event({
-            ssl_cert_renewal_config_created,
-            {config, RenewalConfig}
-        }),
-        % Create new certificate request (renewal)
-        case process_certificate_request(RenewalConfig, Opts) of
-            {ok, Response} ->
-                Body = maps:get(<<"body">>, Response),
-                NewRequestId = maps:get(<<"request_id">>, Body),
-                {ok, #{<<"status">> => 200, 
-                       <<"body">> => #{
-                           <<"message">> => <<"Certificate renewal initiated">>,
-                           <<"new_request_id">> => NewRequestId,
-                           <<"domains">> => [hb_util:bin(D) || D <- Domains]
-                       }}};
-            {error, ErrorResp} ->
-                ?event({ssl_cert_renewal_failed, {error, ErrorResp}}),
-                {error, ErrorResp}
-        end
-    catch
-        Error:Reason:Stacktrace ->
-            ?event({
-                ssl_cert_renewal_error,
-                {error, Error},
-                {reason, Reason},
-                {domains, Domains},
-                {stacktrace, Stacktrace}
-            }),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Certificate renewal failed">>}}
-    end.
-
-delete_certificate(Domains, _Opts) ->
-    ?event({ssl_cert_deletion_started, {domains, Domains}}),
-    try
-        % Generate cache keys for the domains to delete
-        DomainList = [hb_util:list(D) || D <- Domains],
-        % This would normally:
-        % 1. Find all request IDs associated with these domains
-        % 2. Remove them from cache
-        % 3. Clean up any stored certificate files
-        ?event({
-            ssl_cert_deletion_simulated,
-            {domains, DomainList}
-        }),
-        {ok, #{<<"status">> => 200, 
-               <<"body">> => #{
-                   <<"message">> => <<"Certificate deletion completed">>,
-                   <<"domains">> => [hb_util:bin(D) || D <- DomainList],
-                   <<"deleted_count">> => length(DomainList)
-               }}}
-    catch
-        Error:Reason:Stacktrace ->
-            ?event({
-                ssl_cert_deletion_error,
-                {error, Error},
-                {reason, Reason},
-                {domains, Domains},
-                {stacktrace, Stacktrace}
-            }),
-            {error, #{<<"status">> => 500, 
-                     <<"error">> => <<"Certificate deletion failed">>}}
-    end.
-
-%% @doc Formats real DNS challenges from ACME client.
-%%
-%% @param Challenges List of DNS challenge records from hb_acme_client
-%% @returns Formatted challenge list for HTTP response
-format_real_challenges(Challenges) ->
-    lists:map(fun(Challenge) ->
-        Domain = Challenge#dns_challenge.domain,
-        DnsValue = Challenge#dns_challenge.dns_value,
-        RecordName = "_acme-challenge." ++ Domain,
-        #{
-            <<"domain">> => hb_util:bin(Domain),
-            <<"record_name">> => hb_util:bin(RecordName),
-            <<"record_value">> => hb_util:bin(DnsValue),
-            <<"instructions">> => #{
-                <<"cloudflare">> => hb_util:bin("Add TXT record: _acme-challenge with value " ++ DnsValue),
-                <<"route53">> => hb_util:bin("Create TXT record " ++ RecordName ++ " with value " ++ DnsValue),
-                <<"manual">> => hb_util:bin("Create DNS TXT record for " ++ RecordName ++ " with value " ++ DnsValue)
-            }
-        }
-    end, Challenges).
-
-%% @doc Validates challenges with timeout support.
-%%
-%% @param Account ACME account record
-%% @param Challenges List of DNS challenges
-%% @param TimeoutSeconds Timeout for validation in seconds
-%% @returns List of validation results
-validate_challenges_with_timeout(Account, Challenges, TimeoutSeconds) ->
-    ?event({ssl_cert_validating_challenges_with_timeout, TimeoutSeconds}),
-    StartTime = erlang:system_time(second),
-    lists:map(fun(Challenge) ->
-        ElapsedTime = erlang:system_time(second) - StartTime,
-        case ElapsedTime < TimeoutSeconds of
-            true ->
-                case hb_acme_client:validate_challenge(Account, Challenge) of
-                    {ok, Status} ->
-                        #{<<"domain">> => hb_util:bin(Challenge#dns_challenge.domain),
-                          <<"status">> => hb_util:bin(Status)};
-                    {error, Reason} ->
-                        #{<<"domain">> => hb_util:bin(Challenge#dns_challenge.domain),
-                          <<"status">> => <<"failed">>,
-                          <<"error">> => hb_util:bin(io_lib:format("~p", [Reason]))}
-                end;
-            false ->
-                ?event({ssl_cert_validation_timeout_reached, Challenge#dns_challenge.domain}),
-                #{<<"domain">> => hb_util:bin(Challenge#dns_challenge.domain),
-                  <<"status">> => <<"timeout">>,
-                  <<"error">> => <<"Validation timeout reached">>}
-        end
-    end, Challenges).
-
-%% @doc Extracts only the end-entity certificate from a PEM chain.
-%%
-%% @param CertPem Full certificate chain in PEM format
-%% @returns Only the end-entity certificate
-extract_end_entity_cert(CertPem) ->
-    % Split PEM into individual certificates
-    CertLines = string:split(CertPem, "\n", all),
-    % Find the first certificate (end-entity)
-    extract_first_cert(CertLines, [], false).
-
-%% @doc Helper to extract the first certificate from PEM lines.
-extract_first_cert([], Acc, _InCert) ->
-    string:join(lists:reverse(Acc), "\n");
-extract_first_cert([Line | Rest], Acc, InCert) ->
-    case {Line, InCert} of
-        {"-----BEGIN CERTIFICATE-----", false} ->
-            extract_first_cert(Rest, [Line | Acc], true);
-        {"-----END CERTIFICATE-----", true} ->
-            string:join(lists:reverse([Line | Acc]), "\n");
-        {_, true} ->
-            extract_first_cert(Rest, [Line | Acc], true);
-        {_, false} ->
-            extract_first_cert(Rest, Acc, false)
-    end.
-
-%% @doc Formats error details for user-friendly display.
-%%
-%% @param ErrorReason The error reason to format
-%% @returns Formatted error details as binary
-format_error_details(ErrorReason) ->
-    case ErrorReason of
-        {http_error, StatusCode, Details} ->
-            StatusBin = hb_util:bin(integer_to_list(StatusCode)),
-            DetailsBin = case Details of
-                Map when is_map(Map) ->
-                    case maps:get(<<"detail">>, Map, undefined) of
-                        undefined -> hb_util:bin(io_lib:format("~p", [Map]));
-                        Detail -> Detail
-                    end;
-                Binary when is_binary(Binary) -> Binary;
-                Other -> hb_util:bin(io_lib:format("~p", [Other]))
-            end,
-            <<"HTTP ", StatusBin/binary, ": ", DetailsBin/binary>>;
-        {connection_failed, ConnReason} ->
-            ConnBin = hb_util:bin(io_lib:format("~p", [ConnReason])),
-            <<"Connection failed: ", ConnBin/binary>>;
-        Other ->
-            hb_util:bin(io_lib:format("~p", [Other]))
+        Error:CatchReason:Stacktrace ->
+            ?event({ssl_cert_deletion_error, Error, CatchReason, Stacktrace}),
+            hb_ssl_cert_util:build_error_response(500, <<"Internal server error">>)
     end.
