@@ -419,6 +419,10 @@ do_push_signed_message(Msg, Wallet, Node, Path) ->
             {ok, Res, Id};
         {error, Reason} ->
             ?event({res_error, {reason, Reason}}),
+            {error, Reason};
+        {failure, #{<<"details">> := Details} = Reason} ->
+            ?event({res_failure, {reason, Reason}}),
+            ?event({res_failure_details, {explicit, Details}}),
             {error, Reason}
     end.
 
