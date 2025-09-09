@@ -107,28 +107,54 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     MsgWithoutCommitments = hb_maps:without([<<"commitments">>], TABM, Opts),
     ID = hb_message:id(RawMsg, all),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
-    Last = hb_ao:get(<<"anchor">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
-	Owner =
+	{Owner, Signature} =
         case hb_message:signers(RawMsg, Opts) of
-            [] -> <<>>;
+            [] -> {<<>>, <<>>};
             [Signer|_] ->
+                {ok, _, Commitment} =
+                    hb_message:commitment(Signer, RawMsg, Opts),
+                CommitmentSignature =
+                    hb_ao:get(<<"signature">>, Commitment, <<>>, Opts),
                 case lists:member(owner_as_address, Features) of
-                    true -> hb_util:native_id(Signer);
+                    true -> 
+                        {
+                            hb_util:native_id(Signer),
+                            CommitmentSignature
+                        };
                     false ->
-                        {ok, Commitment} =
-                            hb_message:commitment(Signer, RawMsg, Opts),
-                        hb_ao:get_first(
-                            [
-                                {Commitment, <<"key">>},
-                                {Commitment, <<"owner">>}
-                            ],
-                            no_signing_public_key_found_in_commitment,
-                            Opts
-                        )
+                        CommitmentOwner =
+                            hb_ao:get_first(
+                                [
+                                    {Commitment, <<"key">>},
+                                    {Commitment, <<"owner">>}
+                                ],
+                                no_signing_public_key_found_in_commitment,
+                                Opts
+                            ),
+                        {CommitmentOwner, CommitmentSignature}
                 end
         end,
-    Data = hb_ao:get(<<"data">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
-    Target = hb_ao:get(<<"target">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
+    Last =
+        hb_ao:get(
+            <<"anchor">>,
+            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            <<>>,
+            Opts
+        ),
+    Data =
+        hb_ao:get(
+            <<"data">>,
+            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            <<>>,
+            Opts
+        ),
+    Target =
+        hb_ao:get(
+            <<"target">>,
+            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            <<>>,
+            Opts
+        ),
     % Set "From" if From-Process is Tag or set with "Owner" address
     From =
         hb_ao:get(
@@ -137,7 +163,6 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             hb_util:encode(Owner),
             Opts
         ),
-    Sig = hb_ao:get(<<"signature">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
     #{
         <<"Id">> => safe_to_id(ID),
         % NOTE: In Arweave TXs, these are called "last_tx"
@@ -149,10 +174,10 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         <<"Target">> => safe_to_id(Target),
         <<"Data">> => Data,
         <<"Signature">> =>
-            case byte_size(Sig) of
+            case byte_size(Signature) of
                 0 -> <<>>;
-                512 -> hb_util:encode(Sig);
-                _ -> Sig
+                512 -> hb_util:encode(Signature);
+                _ -> Signature
             end
     }.
 
