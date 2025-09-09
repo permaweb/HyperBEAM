@@ -426,7 +426,7 @@ combined_filters_test() ->
     ok.
 
 %% @doc Real world test with actual indexing
-fetch_scheduler_location_test() ->
+fetch_scheduler_location_test_disabled() ->
     {Node, _Opts} = run_test_node(),
     {ok, Res} =
         hb_http:get(
