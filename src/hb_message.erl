@@ -204,6 +204,7 @@ id(Msg, RawCommitters, Opts) ->
 normalize_commitments(Msg, Opts) ->
     normalize_commitments(Msg, Opts, passive).
 normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
+    ?event(debug_normalize_commitments, {normalize_commitments, {msg, Msg}}),
     NormMsg = 
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
@@ -214,11 +215,13 @@ normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
         ),
     do_normalize_commitments(NormMsg, Opts, Mode);
 normalize_commitments(Msg, Opts, Mode) when is_list(Msg) ->
+    ?event(debug_normalize_commitments, {normalize_commitments, {list, Msg}}),
     lists:map(fun(X) -> normalize_commitments(X, Opts, Mode) end, Msg);
 normalize_commitments(Msg, _Opts, _Mode) ->
     Msg.
 
 do_normalize_commitments(Msg, Opts, passive) ->
+    ?event(debug_normalize_commitments, {passive, {msg, Msg}}),
     case hb_maps:get(<<"commitments">>, Msg, not_found, Opts) of
         not_found ->
             {ok, #{ <<"commitments">> := Commitments }} =
