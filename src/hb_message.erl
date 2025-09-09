@@ -237,34 +237,39 @@ do_normalize_commitments(Msg, Opts, verify) ->
             #{ <<"type">> => <<"unsigned">> },
             Opts
         ),
+    ?event(normalization, {normalizing_commitments, verify}),
     [NormID] = hb_maps:keys(NormCommitments, Opts),
     MsgCommIDs = hb_maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts),
     case lists:member(NormID, MsgCommIDs) of
         true -> Msg;
         false ->
-            do_normalize_commitments(
-                Msg#{ <<"commitments">> => NormCommitments },
-                Opts,
-                fast
-            )
+            attach_phash2(Msg#{ <<"commitments">> => NormCommitments }, Opts)
     end;
 do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
     ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
     ?event(normalization,
         {normalizing_commitments,
             {expected_hash, ExpectedHash},
-            {priv, hb_private:from_message(Msg)},
-            {msg, Msg}
+            {priv, hb_private:from_message(Msg)}
         }
     ),
     case hb_private:get(<<"last-phash2">>, Msg, not_found, Opts) of
         not_found ->
-            hb_private:set(Msg, <<"last-phash2">>, ExpectedHash, Opts);
+            attach_phash2(Msg, ExpectedHash, Opts);
         ExpectedHash ->
             Msg;
         _DifferingHash ->
-            do_normalize_commitments(Msg, Opts, verify)
+            MsgWithHash = attach_phash2(Msg, ExpectedHash, Opts),
+            do_normalize_commitments(MsgWithHash, Opts, verify)
     end.
+
+%% @doc Annotate a message with its phash2 value in the `priv' sub-map,
+%% calculating it if necessary.
+attach_phash2(Msg, Opts) ->
+    ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
+    attach_phash2(Msg, ExpectedHash, Opts).
+attach_phash2(Msg, ExpectedHash, Opts) ->
+    hb_private:set(Msg, <<"last-phash2">>, ExpectedHash, Opts).
 
 %% @doc Return a message with only the committed keys. If no commitments are
 %% present, the message is returned unchanged. This means that you need to
