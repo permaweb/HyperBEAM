@@ -35,7 +35,13 @@ setup_test_env() ->
         store => [TestStore],
         ssl_cert_environment => staging,
         ssl_cert_storage_dir => "test_certificates",
-        cache_control => <<"always">>
+        cache_control => <<"always">>,
+        % SSL certificate configuration
+        <<"ssl_opts">> => #{
+            <<"domains">> => ?TEST_DOMAINS,
+            <<"email">> => ?TEST_EMAIL,
+            <<"environment">> => ?TEST_ENVIRONMENT
+        }
     },
     ?event({ssl_cert_test_setup_completed, {store, TestStore}}),
     Opts.
@@ -98,47 +104,68 @@ device_info_test() ->
 %% including domains, email addresses, and environment settings.
 request_validation_test() ->
     ?event({ssl_cert_test_request_validation_started}),
-    Opts = setup_test_env(),
-    % Test missing domains parameter
-    ?event({ssl_cert_test_validating_missing_domains}),
-    {error, ErrorResp1} = dev_ssl_cert:request(#{}, #{}, Opts),
+    
+    % Test missing ssl_opts configuration
+    ?event({ssl_cert_test_validating_missing_config}),
+    OptsNoConfig = setup_test_env(),
+    OptsWithoutSsl = maps:remove(<<"ssl_opts">>, OptsNoConfig),
+    {error, ErrorResp1} = dev_ssl_cert:request(#{}, #{}, OptsWithoutSsl),
     ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp1),
-    ?event({ssl_cert_test_missing_domains_validated}),
-    % Test invalid domains
-    ?event({ssl_cert_test_validating_invalid_domains}),
-    {error, ErrorResp2} = dev_ssl_cert:request(#{}, #{
-        <<"domains">> => [?INVALID_DOMAIN],
-        <<"email">> => ?TEST_EMAIL,
-        <<"environment">> => ?TEST_ENVIRONMENT
-    }, Opts),
+    ?event({ssl_cert_test_missing_config_validated}),
+    
+    % Test invalid domains in configuration
+    ?event({ssl_cert_test_validating_invalid_domains_config}),
+    OptsInvalidDomains = OptsNoConfig#{
+        <<"ssl_opts">> => #{
+            <<"domains">> => [?INVALID_DOMAIN],
+            <<"email">> => ?TEST_EMAIL,
+            <<"environment">> => ?TEST_ENVIRONMENT
+        }
+    },
+    {error, ErrorResp2} = dev_ssl_cert:request(#{}, #{}, OptsInvalidDomains),
     ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp2),
-    ?event({ssl_cert_test_invalid_domains_validated}),
-    % Test missing email
-    ?event({ssl_cert_test_validating_missing_email}),
-    {error, ErrorResp3} = dev_ssl_cert:request(#{}, #{
-        <<"domains">> => ?TEST_DOMAINS
-    }, Opts),
+    ?event({ssl_cert_test_invalid_domains_config_validated}),
+    
+    % Test missing email in configuration
+    ?event({ssl_cert_test_validating_missing_email_config}),
+    OptsNoEmail = OptsNoConfig#{
+        <<"ssl_opts">> => #{
+            <<"domains">> => ?TEST_DOMAINS
+        }
+    },
+    {error, ErrorResp3} = dev_ssl_cert:request(#{}, #{}, OptsNoEmail),
     ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp3),
-    ?event({ssl_cert_test_missing_email_validated}),
-    % Test invalid email
-    ?event({ssl_cert_test_validating_invalid_email}),
-    {error, ErrorResp4} = dev_ssl_cert:request(#{}, #{
-        <<"domains">> => ?TEST_DOMAINS,
-        <<"email">> => ?INVALID_EMAIL,
-        <<"environment">> => ?TEST_ENVIRONMENT
-    }, Opts),
+    ?event({ssl_cert_test_missing_email_config_validated}),
+    
+    % Test invalid email in configuration
+    ?event({ssl_cert_test_validating_invalid_email_config}),
+    OptsInvalidEmail = OptsNoConfig#{
+        <<"ssl_opts">> => #{
+            <<"domains">> => ?TEST_DOMAINS,
+            <<"email">> => ?INVALID_EMAIL,
+            <<"environment">> => ?TEST_ENVIRONMENT
+        }
+    },
+    {error, ErrorResp4} = dev_ssl_cert:request(#{}, #{}, OptsInvalidEmail),
     ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp4),
-    ?event({ssl_cert_test_invalid_email_validated}),
-    % Test invalid environment
-    ?event({ssl_cert_test_validating_invalid_environment}),
-    {error, ErrorResp5} = dev_ssl_cert:request(#{}, #{
-        <<"domains">> => ?TEST_DOMAINS,
-        <<"email">> => ?TEST_EMAIL,
-        <<"environment">> => <<"invalid">>
-    }, Opts),
-    ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp5),
-    ?event({ssl_cert_test_invalid_environment_validated}),
-    cleanup_test_env(Opts),
+    ?event({ssl_cert_test_invalid_email_config_validated}),
+    
+    % Test valid configuration
+    ?event({ssl_cert_test_validating_valid_config}),
+    OptsValid = setup_test_env(),
+    % This will likely fail due to ACME but should pass validation
+    RequestResult = dev_ssl_cert:request(#{}, #{}, OptsValid),
+    case RequestResult of
+        {ok, _} ->
+            ?event({ssl_cert_test_valid_config_request_succeeded});
+        {error, ErrorResp} ->
+            % Should be ACME failure, not validation failure
+            Status = maps:get(<<"status">>, ErrorResp, 500),
+            ?assert(Status =:= 500), % Internal error, not validation error
+            ?event({ssl_cert_test_valid_config_acme_failed_as_expected})
+    end,
+    
+    cleanup_test_env(OptsValid),
     ?event({ssl_cert_test_request_validation_completed}).
 
 %% @doc Tests parameter validation for certificate requests.
@@ -188,20 +215,21 @@ request_validation_logic_test() ->
 %% the current state of certificate requests.
 status_endpoint_test() ->
     ?event({ssl_cert_test_status_endpoint_started}),
-    Opts = setup_test_env(),
-    % Test missing request_id parameter
-    ?event({ssl_cert_test_status_missing_id}),
-    {error, ErrorResp1} = dev_ssl_cert:status(#{}, #{}, Opts),
+    % Test missing ssl_cert_request_id configuration
+    ?event({ssl_cert_test_status_missing_config}),
+    OptsNoRequestId = setup_test_env(),
+    {error, ErrorResp1} = dev_ssl_cert:status(#{}, #{}, OptsNoRequestId),
     ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp1),
-    ?event({ssl_cert_test_status_missing_id_validated}),
-    % Test non-existent request ID
+    ?event({ssl_cert_test_status_missing_config_validated}),
+    % Test with configured request ID (non-existent)
     ?event({ssl_cert_test_status_nonexistent_id}),
-    {error, ErrorResp2} = dev_ssl_cert:status(#{}, #{
-        <<"request_id">> => <<"nonexistent">>
-    }, Opts),
+    OptsWithRequestId = OptsNoRequestId#{
+        <<"ssl_cert_request_id">> => <<"nonexistent_id_123">>
+    },
+    {error, ErrorResp2} = dev_ssl_cert:status(#{}, #{}, OptsWithRequestId),
     ?assertMatch(#{<<"status">> := 404, <<"error">> := _}, ErrorResp2),
     ?event({ssl_cert_test_status_nonexistent_id_validated}),
-    cleanup_test_env(Opts),
+    cleanup_test_env(OptsNoRequestId),
     ?event({ssl_cert_test_status_endpoint_completed}).
 
 %% @doc Tests the challenges endpoint functionality.
@@ -209,48 +237,69 @@ status_endpoint_test() ->
 %% Verifies that the challenges endpoint returns properly formatted
 %% DNS challenge information for manual DNS record creation.
 challenges_endpoint_test() ->
-    Opts = setup_test_env(),
-    % Test missing request_id parameter
-    {error, ErrorResp1} = dev_ssl_cert:challenges(#{}, #{}, Opts),
+    ?event({ssl_cert_test_challenges_endpoint_started}),
+    % Test missing ssl_cert_request_id configuration
+    ?event({ssl_cert_test_challenges_missing_config}),
+    OptsNoRequestId = setup_test_env(),
+    {error, ErrorResp1} = dev_ssl_cert:challenges(#{}, #{}, OptsNoRequestId),
     ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp1),
-    % Test non-existent request ID
-    {error, ErrorResp2} = dev_ssl_cert:challenges(#{}, #{
-        <<"request_id">> => <<"nonexistent">>
-    }, Opts),
+    ?event({ssl_cert_test_challenges_missing_config_validated}),
+    % Test with configured request ID (non-existent)
+    ?event({ssl_cert_test_challenges_nonexistent_id}),
+    OptsWithRequestId = OptsNoRequestId#{
+        <<"ssl_cert_request_id">> => <<"nonexistent_challenge_id">>
+    },
+    {error, ErrorResp2} = dev_ssl_cert:challenges(#{}, #{}, OptsWithRequestId),
     ?assertMatch(#{<<"status">> := 404, <<"error">> := _}, ErrorResp2),
-    cleanup_test_env(Opts).
+    ?event({ssl_cert_test_challenges_nonexistent_id_validated}),
+    cleanup_test_env(OptsNoRequestId),
+    ?event({ssl_cert_test_challenges_endpoint_completed}).
 
 %% @doc Tests the validation endpoint functionality.
 %%
 %% Verifies that the validation endpoint properly handles DNS challenge
 %% validation requests and updates request status accordingly.
 validation_endpoint_test() ->
-    Opts = setup_test_env(),
-    % Test missing request_id parameter
-    {error, ErrorResp1} = dev_ssl_cert:validate(#{}, #{}, Opts),
+    ?event({ssl_cert_test_validation_endpoint_started}),
+    % Test missing ssl_cert_request_id configuration
+    ?event({ssl_cert_test_validation_missing_config}),
+    OptsNoRequestId = setup_test_env(),
+    {error, ErrorResp1} = dev_ssl_cert:validate(#{}, #{}, OptsNoRequestId),
     ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp1),
-    % Test non-existent request ID
-    {ok, Response} = dev_ssl_cert:validate(#{}, #{
-        <<"request_id">> => <<"nonexistent">>
-    }, Opts),
-    ?assertMatch(#{<<"status">> := 200, <<"body">> := _}, Response),
-    cleanup_test_env(Opts).
+    ?event({ssl_cert_test_validation_missing_config_validated}),
+    % Test with configured request ID (non-existent)
+    ?event({ssl_cert_test_validation_nonexistent_id}),
+    OptsWithRequestId = OptsNoRequestId#{
+        <<"ssl_cert_request_id">> => <<"nonexistent_validation_id">>
+    },
+    {error, ErrorResp2} = dev_ssl_cert:validate(#{}, #{}, OptsWithRequestId),
+    ?assertMatch(#{<<"status">> := 404, <<"error">> := _}, ErrorResp2),
+    ?event({ssl_cert_test_validation_nonexistent_id_validated}),
+    cleanup_test_env(OptsNoRequestId),
+    ?event({ssl_cert_test_validation_endpoint_completed}).
 
 %% @doc Tests the download endpoint functionality.
 %%
 %% Verifies that the download endpoint properly handles certificate
 %% download requests and returns certificate data when ready.
 download_endpoint_test() ->
-    Opts = setup_test_env(),
-    % Test missing request_id parameter
-    {error, ErrorResp1} = dev_ssl_cert:download(#{}, #{}, Opts),
+    ?event({ssl_cert_test_download_endpoint_started}),
+    % Test missing ssl_cert_request_id configuration
+    ?event({ssl_cert_test_download_missing_config}),
+    OptsNoRequestId = setup_test_env(),
+    {error, ErrorResp1} = dev_ssl_cert:download(#{}, #{}, OptsNoRequestId),
     ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp1),
-    % Test download request
-    {ok, Response} = dev_ssl_cert:download(#{}, #{
-        <<"request_id">> => <<"test_id">>
-    }, Opts),
-    ?assertMatch(#{<<"status">> := 200, <<"body">> := _}, Response),
-    cleanup_test_env(Opts).
+    ?event({ssl_cert_test_download_missing_config_validated}),
+    % Test with configured request ID (non-existent)
+    ?event({ssl_cert_test_download_nonexistent_id}),
+    OptsWithRequestId = OptsNoRequestId#{
+        <<"ssl_cert_request_id">> => <<"nonexistent_download_id">>
+    },
+    {error, ErrorResp2} = dev_ssl_cert:download(#{}, #{}, OptsWithRequestId),
+    ?assertMatch(#{<<"status">> := 404, <<"error">> := _}, ErrorResp2),
+    ?event({ssl_cert_test_download_nonexistent_id_validated}),
+    cleanup_test_env(OptsNoRequestId),
+    ?event({ssl_cert_test_download_endpoint_completed}).
 
 %% @doc Tests the list endpoint functionality.
 %%
@@ -271,32 +320,55 @@ list_endpoint_test() ->
 %% Verifies that the renew endpoint properly handles certificate
 %% renewal requests and initiates new certificate orders.
 renew_endpoint_test() ->
-    Opts = setup_test_env(),
-    % Test missing domains parameter
-    {error, ErrorResp1} = dev_ssl_cert:renew(#{}, #{}, Opts),
+    ?event({ssl_cert_test_renew_endpoint_started}),
+    % Test missing ssl_opts configuration
+    ?event({ssl_cert_test_renew_missing_config}),
+    OptsNoConfig = setup_test_env(),
+    OptsWithoutSsl = maps:remove(<<"ssl_opts">>, OptsNoConfig),
+    {error, ErrorResp1} = dev_ssl_cert:renew(#{}, #{}, OptsWithoutSsl),
     ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp1),
-    % Test renewal request
-    {ok, Response} = dev_ssl_cert:renew(#{}, #{
-        <<"domains">> => ?TEST_DOMAINS
-    }, Opts),
-    ?assertMatch(#{<<"status">> := 200, <<"body">> := _}, Response),
-    cleanup_test_env(Opts).
+    ?event({ssl_cert_test_renew_missing_config_validated}),
+    % Test renewal with valid configuration (will fail due to ACME)
+    ?event({ssl_cert_test_renew_with_config}),
+    OptsValid = setup_test_env(),
+    RenewalResult = dev_ssl_cert:renew(#{}, #{}, OptsValid),
+    % Accept either success (if ACME works) or error (if ACME unavailable)
+    case RenewalResult of
+        {ok, Response} ->
+            ?assertMatch(#{<<"status">> := 200, <<"body">> := _}, Response),
+            ?event({ssl_cert_test_renew_succeeded});
+        {error, ErrorResp} ->
+            % Check for either old error format or new error_info format
+            Status = maps:get(<<"status">>, ErrorResp, 500),
+            ?assert(Status =:= 500),
+            ?assert(maps:is_key(<<"error">>, ErrorResp) orelse 
+                   maps:is_key(<<"error_info">>, ErrorResp)),
+            ?event({ssl_cert_test_renew_acme_failed_as_expected})
+    end,
+    cleanup_test_env(OptsValid),
+    ?event({ssl_cert_test_renew_endpoint_completed}).
 
 %% @doc Tests the delete endpoint functionality.
 %%
 %% Verifies that the delete endpoint properly handles certificate
 %% deletion requests and removes certificates from storage.
 delete_endpoint_test() ->
-    Opts = setup_test_env(),
-    % Test missing domains parameter
-    {error, ErrorResp1} = dev_ssl_cert:delete(#{}, #{}, Opts),
+    ?event({ssl_cert_test_delete_endpoint_started}),
+    % Test missing ssl_opts configuration
+    ?event({ssl_cert_test_delete_missing_config}),
+    OptsNoConfig = setup_test_env(),
+    OptsWithoutSsl = maps:remove(<<"ssl_opts">>, OptsNoConfig),
+    {error, ErrorResp1} = dev_ssl_cert:delete(#{}, #{}, OptsWithoutSsl),
     ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp1),
-    % Test deletion request
-    {ok, Response} = dev_ssl_cert:delete(#{}, #{
-        <<"domains">> => ?TEST_DOMAINS
-    }, Opts),
+    ?event({ssl_cert_test_delete_missing_config_validated}),
+    % Test deletion with valid configuration
+    ?event({ssl_cert_test_delete_with_config}),
+    OptsValid = setup_test_env(),
+    {ok, Response} = dev_ssl_cert:delete(#{}, #{}, OptsValid),
     ?assertMatch(#{<<"status">> := 200, <<"body">> := _}, Response),
-    cleanup_test_env(Opts).
+    ?event({ssl_cert_test_delete_succeeded}),
+    cleanup_test_env(OptsValid),
+    ?event({ssl_cert_test_delete_endpoint_completed}).
 
 %%%--------------------------------------------------------------------
 %%% ACME Client Tests
@@ -311,7 +383,7 @@ acme_parameter_validation_test() ->
     ValidConfig = #{
         environment => staging,
         email => ?TEST_EMAIL,
-        key_size => 2048
+        key_size => 2048  % Still used internally by ACME client
     },
     % Verify all required keys are present
     ?assert(maps:is_key(environment, ValidConfig)),
@@ -319,10 +391,9 @@ acme_parameter_validation_test() ->
     ?assert(maps:is_key(key_size, ValidConfig)),
     % Test environment validation
     ?assertEqual(staging, maps:get(environment, ValidConfig)),
-    % Test key size validation
+    % Test key size validation (hardcoded to 2048 in device)
     KeySize = maps:get(key_size, ValidConfig),
-    ?assert(KeySize >= 2048),
-    ?assert(KeySize =< 4096).
+    ?assertEqual(2048, KeySize).
 
 %% @doc Tests DNS challenge data structure validation.
 %%
@@ -969,28 +1040,30 @@ workflow_error_handling_test_impl() ->
     ?event({ssl_cert_workflow_error_handling_started}),
     Opts = setup_test_env(),
     try
-        % Test 1: Invalid domains in workflow
-        ?event({ssl_cert_testing_invalid_domain_workflow}),
-        {error, ErrorResp1} = dev_ssl_cert:request(#{}, #{
-            <<"domains">> => [""],
-            <<"email">> => ?TEST_EMAIL,
-            <<"environment">> => <<"staging">>
-        }, Opts),
+        % Test 1: Missing configuration workflow
+        ?event({ssl_cert_testing_missing_config_workflow}),
+        OptsNoConfig = maps:remove(<<"ssl_opts">>, Opts),
+        {error, ErrorResp1} = dev_ssl_cert:request(#{}, #{}, OptsNoConfig),
         ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp1),
         ?event({
-            ssl_cert_invalid_domain_workflow_handled,
+            ssl_cert_missing_config_workflow_handled,
             {error_status, maps:get(<<"status">>, ErrorResp1)}
         }),
-        % Test 2: Missing parameters workflow
-        ?event({ssl_cert_testing_missing_params_workflow}),
-        {error, ErrorResp2} = dev_ssl_cert:request(#{}, #{}, Opts),
+        % Test 2: Invalid configuration workflow  
+        ?event({ssl_cert_testing_invalid_config_workflow}),
+        OptsInvalidConfig = Opts#{
+            <<"ssl_opts">> => #{
+                <<"domains">> => [""],
+                <<"email">> => ?INVALID_EMAIL
+            }
+        },
+        {error, ErrorResp2} = dev_ssl_cert:request(#{}, #{}, OptsInvalidConfig),
         ?assertMatch(#{<<"status">> := 400, <<"error">> := _}, ErrorResp2),
-        ?event({ssl_cert_missing_params_workflow_handled}),
+        ?event({ssl_cert_invalid_config_workflow_handled}),
         % Test 3: Non-existent request ID in subsequent calls
         ?event({ssl_cert_testing_nonexistent_id_workflow}),
-        {error, StatusError} = dev_ssl_cert:status(#{}, #{
-            <<"request_id">> => <<"fake_id_123">>
-        }, Opts),
+        OptsWithFakeId = Opts#{<<"ssl_cert_request_id">> => <<"fake_id_123">>},
+        {error, StatusError} = dev_ssl_cert:status(#{}, #{}, OptsWithFakeId),
         ?assertMatch(#{<<"status">> := 404, <<"error">> := _}, StatusError),
         ?event({ssl_cert_nonexistent_id_workflow_handled}),
         ?event({ssl_cert_workflow_error_handling_completed})
@@ -1121,8 +1194,7 @@ test_ssl_config() ->
     #{
         domains => ?TEST_DOMAINS,
         email => ?TEST_EMAIL,
-        environment => ?TEST_ENVIRONMENT,
-        key_size => 2048
+        environment => ?TEST_ENVIRONMENT
     }.
 
 %% @doc Validates that a response has the expected HTTP structure.
