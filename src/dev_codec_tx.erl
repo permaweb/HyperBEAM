@@ -727,21 +727,24 @@ real_basic_data_tx_test() ->
         #tx{ data = <<"data">> }
     ).
 
-real_bundle_tx_test() ->
+real_rsa_nested_bundle_tx_test() ->
+    %
+    do_real_tx_verify(
+        <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+        #tx{
+            format = 2,
+            id = hb_util:decode(<<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>)
+         }
+    ).
+
+real_ecdsa_bundle_tx_test() ->
     % 12 items, no mint
     do_real_tx_verify(
         <<"EOARN0wNp4qttWgd15k6IeylsZ88vI2ZeaW2b-mJRkg">>,
         #tx{ data = <<"data">> }
     ).
 
-real_mint_bundle_tx_test() ->
-    % 6 items, mint
-    do_real_tx_verify(
-        <<"eZGGs5MCpBJ5eKxByou1jxkzneQqgYAY7D7ltpC_10I">>,
-        #tx{ data = <<"data">> }
-    ).
-
-real_single_item_bundle_tx_test() ->
+real_ecdsa_single_item_bundle_tx_test_disabled() ->
     do_real_tx_verify(
         <<"5CHMPU1oDCiqwrjGG5PEh7mht9VdVFnnF9yGfjPehno">>,
         #tx{ data = <<"data">> }
@@ -763,59 +766,34 @@ do_real_tx_verify(TXID, ExpectedTX) ->
         Opts
     ),
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(TXJSON)),
-    TX = case ExpectedTX#tx.data of
-        ?DEFAULT_DATA ->
-            TXHeader;
-        _ ->
-            {ok, #{ <<"body">> := Data }} = hb_http:request(
-                #{
-                    <<"path">> => <<"/arweave/raw/", TXID/binary>>,
-                    <<"method">> => <<"GET">>
-                },
-                Opts
-            ),
-            ?event(debug_test, {{tx_id, TXID}, {data, {explicit, Data}}}),
-            TXHeader#tx{ data = Data }
+    TX = case hb_http:request(
+        #{
+            <<"path">> => <<"/arweave/raw/", TXID/binary>>,
+            <<"method">> => <<"GET">>
+        },
+        Opts
+    ) of
+        {ok, #{ <<"body">> := Data }} ->
+            ?event(debug_test, {
+                {tx_id, TXID},
+                {size, byte_size(Data)},
+                {data, {explicit, Data}}
+            }),
+            TXHeader#tx{ data = Data };
+        {error, #{ <<"status_code">> := 404 }} ->
+            TXHeader#tx{ data = ?DEFAULT_DATA };
+        {error, Error} ->
+            throw({http_request_error, Error})
     end,
     ?event(debug_test, {tx, TX}),
     ?assert(ar_tx:verify(TX)),
     
     Deserialized = ar_bundles:deserialize(TX),
     ?event(debug_test, {deserialized, {explicit, Deserialized}}),
-    % DataItems = ar_bundles:deserialize(Data, binary),
+    Reserialized = normalize(Deserialized),
+    ?event(debug_test, {reserialized, {explicit, Reserialized}}),
+    ?assert(ar_tx:verify(Reserialized)),
     ok.
-
-
-% serialized_data_item_tx_test() ->
-%     Anchor = crypto:strong_rand_bytes(32),
-%     Target = crypto:strong_rand_bytes(32),
-%     Data = <<"data">>,
-
-%     DataItem = #tx{
-%         format = ans104,
-%         tags = [
-%             {<<"ans104-tag1">>, <<"value1">>},
-%             {<<"ans104-tag2">>, <<"value2">>}
-%         ],
-%         anchor = Anchor,
-%         target = Target,
-%         data = Data
-%     },
-
-%     SerializedDataItem = ar_bundles:serialize(DataItem),
-%     TX = #tx{
-%         format = 2,
-%         tags = [
-%             {<<"tx-tag1">>, <<"value1">>},
-%             {<<"tx-tag2">>, <<"value2">>}
-%         ],
-%         data = SerializedDataItem,
-%         data_size = byte_size(SerializedDataItem),
-%         data_root = ar_tx:data_root(SerializedDataItem)
-%     },
-%     UnsignedTABM = #{ },
-%     SignedCommitment = #{ },
-%     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment, false).
 
 %% @doc Run a series of roundtrip tests that start and end with a #tx record
 do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->

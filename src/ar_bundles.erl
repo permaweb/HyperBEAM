@@ -6,7 +6,7 @@
 -export([encode_tags/1, decode_tags/1]).
 -export([serialize/1, deserialize/1]).
 -export([data_item_signature_data/1]).
--export([normalize/1, normalize_data/1]).
+-export([type/1, normalize/1, normalize_data/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -185,6 +185,8 @@ normalize(Item) -> reset_ids(normalize_data(Item)).
 
 %% @doc Ensure that a data item (potentially containing a map or list) has a
 %% standard, serialized form.
+%% 
+%% Lists are converted to maps with numbered keys and then seriaalized.
 normalize_data(not_found) -> throw(not_found);
 normalize_data(Item = #tx{data = Bin}) when is_binary(Bin) ->
     ?event({normalize_data, binary, Item}),
@@ -197,7 +199,6 @@ normalize_data(Item = #tx { data = Data }) when is_list(Data) ->
         hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id)}),
     normalize_data(
         Item#tx{
-            tags = add_bundle_tags(Item#tx.tags),
             data =
                 maps:from_list(
                     lists:zipwith(
@@ -216,8 +217,8 @@ normalize_data(Item = #tx { data = Data }) when is_list(Data) ->
 normalize_data(Item = #tx{data = Data}) ->
     ?event({normalize_data, map,
         hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id)}),
-    normalize_data_size(
-        case serialize_bundle_data(Data) of
+    normalize_data(
+        case serialize_data(Data) of
             {Manifest, Bin} ->
                 Item#tx{
                     data = Bin,
@@ -241,7 +242,7 @@ normalize_data_size(Item = #tx{data = Bin}) when is_binary(Bin) ->
     Item#tx{data_size = byte_size(Bin)};
 normalize_data_size(Item) -> Item.
 
-%% @doc Convert a #tx record to its binary representation.
+%% @doc Convert an ans104 #tx record to its binary representation.
 serialize(not_found) -> throw(not_found);
 serialize(TX) when is_binary(TX) -> TX;
 serialize(RawTX) ->
@@ -268,54 +269,58 @@ enforce_valid_tx(List) when is_list(List) ->
 enforce_valid_tx(Map) when is_map(Map) ->
     lists:all(fun(Item) -> enforce_valid_tx(Item) end, maps:values(Map));
 enforce_valid_tx(TX) ->
-    ok_or_throw(TX,
-        check_type(TX, message),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_type(TX, message),
         {invalid_tx, TX}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.id, [0, 32]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_value(TX#tx.format, [ans104]),
+        {invalid_field, format, TX#tx.format}
+    ),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.id, [0, 32]),
         {invalid_field, id, TX#tx.id}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.unsigned_id, [0, 32]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.unsigned_id, [0, 32]),
         {invalid_field, unsigned_id, TX#tx.unsigned_id}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.anchor, [0, 32]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.anchor, [0, 32]),
         {invalid_field, anchor, TX#tx.anchor}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.owner, [0, byte_size(?DEFAULT_OWNER)]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.owner, [0, byte_size(?DEFAULT_OWNER)]),
         {invalid_field, owner, TX#tx.owner}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.target, [0, 32]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.target, [0, 32]),
         {invalid_field, target, TX#tx.target}
     ),
-    ok_or_throw(TX,
-        check_size(TX#tx.signature, [0, 65, byte_size(?DEFAULT_SIG)]),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_size(TX#tx.signature, [0, 65, byte_size(?DEFAULT_SIG)]),
         {invalid_field, signature, TX#tx.signature}
     ),
-    ok_or_throw(TX,
-        check_type(TX#tx.tags, list),
+    hb_util:ok_or_throw(TX,
+        hb_util:check_type(TX#tx.tags, list),
         {invalid_field, tags, TX#tx.tags}
     ),
     lists:foreach(
         fun({Name, Value}) ->
-            ok_or_throw(TX,
-                check_type(Name, binary),
+            hb_util:ok_or_throw(TX,
+                hb_util:check_type(Name, binary),
                 {invalid_field, tag_name, Name}
             ),
-            ok_or_throw(TX,
-                check_size(Name, {range, 0, ?MAX_TAG_NAME_SIZE}),
+            hb_util:ok_or_throw(TX,
+                hb_util:check_size(Name, {range, 0, ?MAX_TAG_NAME_SIZE}),
                 {invalid_field, tag_name, Name}
             ),
-            ok_or_throw(TX,
-                check_type(Value, binary),
+            hb_util:ok_or_throw(TX,
+                hb_util:check_type(Value, binary),
                 {invalid_field, tag_value, {Name, Value}}
             ),
-            ok_or_throw(TX,
-                check_size(Value, {range, 0, ?MAX_TAG_VALUE_SIZE}),
+            hb_util:ok_or_throw(TX,
+                hb_util:check_size(Value, {range, 0, ?MAX_TAG_VALUE_SIZE}),
                 {invalid_field, tag_value, {Name, Value}}
             );
             (InvalidTagForm) ->
@@ -323,39 +328,14 @@ enforce_valid_tx(TX) ->
         end,
         TX#tx.tags
     ),
-    ok_or_throw(
+    hb_util:ok_or_throw(
         TX,
-        check_type(TX#tx.data, binary)
-            orelse check_type(TX#tx.data, map)
-            orelse check_type(TX#tx.data, list),
+        hb_util:check_type(TX#tx.data, binary)
+            orelse hb_util:check_type(TX#tx.data, map)
+            orelse hb_util:check_type(TX#tx.data, list),
         {invalid_field, data, TX#tx.data}
     ),
     true.
-
-%% @doc Force that a binary is either empty or the given number of bytes.
-check_size(Bin, {range, Start, End}) ->
-    check_type(Bin, binary)
-        andalso byte_size(Bin) >= Start
-        andalso byte_size(Bin) =< End;
-check_size(Bin, Sizes) ->
-    check_type(Bin, binary)
-        andalso lists:member(byte_size(Bin), Sizes).
-
-%% @doc Ensure that a value is of the given type.
-check_type(Value, binary) when is_binary(Value) -> true;
-check_type(Value, _) when is_binary(Value) -> false;
-check_type(Value, list) when is_list(Value) -> true;
-check_type(Value, _) when is_list(Value) -> false;
-check_type(Value, map) when is_map(Value) -> true;
-check_type(Value, _) when is_map(Value) -> false;
-check_type(Value, message) ->
-    is_record(Value, tx) or is_map(Value) or is_list(Value);
-check_type(_Value, _) -> false.
-
-%% @doc Throw an error if the given value is not ok.
-ok_or_throw(_, true, _) -> true;
-ok_or_throw(_TX, false, Error) ->
-    throw(Error).
 
 %% @doc Take an item and ensure that both the unsigned and signed IDs are
 %% appropriately set. This function is structured to fall through all cases
@@ -410,30 +390,40 @@ finalize_bundle_data(Processed) ->
 to_serialized_pair(Item) when is_binary(Item) ->
     % Support bundling of bare binary payloads by wrapping them in a TX that
     % is explicitly marked as a binary data item.
-    to_serialized_pair(#tx{ tags = [{<<"ao-type">>, <<"binary">>}], data = Item });
+    to_serialized_pair(
+        #tx{ tags = [{<<"ao-type">>, <<"binary">>}], data = Item });
 to_serialized_pair(Item) ->
-    ?event({to_serialized_pair, Item}),
+    ?event(debug_test, {to_serialized_pair, Item}),
     % TODO: This is a hack to get the ID of the item. We need to do this because we may not
     % have the ID in 'item' if it is just a map/list. We need to make this more efficient.
-    Serialized = serialize(reset_ids(normalize(Item))),
+    Serialized = serialize(Item),
     Deserialized = deserialize(Serialized),
     UnsignedID = id(Deserialized, unsigned),
     ?event({serialized_pair,
         {unsigned_id, UnsignedID}, {size, byte_size(Serialized)}}),
     {UnsignedID, Serialized}.
 
-serialize_bundle_data(Map) when is_map(Map) ->
+serialize_data(List) when is_list(List) ->
+    finalize_bundle_data(lists:map(
+        fun(Item) -> to_serialized_pair(Item) end, List));
+serialize_data(Map) when is_map(Map) ->
     % TODO: Make this compatible with the normal manifest spec.
     % For now we just serialize the map to a JSON string of Key=>TXID
-    BinItems = maps:map(fun(_, Item) -> to_serialized_pair(Item) end, Map),
+    BinItems = maps:map(
+        fun(_, Item) -> to_serialized_pair(Item) end, Map),
     Index = maps:map(fun(_, {TXID, _}) -> hb_util:encode(TXID) end, BinItems),
     NewManifest = new_manifest(Index),
     %?event({generated_manifest, NewManifest == Manifest, hb_util:encode(id(NewManifest, unsigned)), Index}),
-    {NewManifest, finalize_bundle_data([to_serialized_pair(NewManifest) | maps:values(BinItems)])};
-serialize_bundle_data(Data) ->
-    throw({cannot_serialize_tx_data, must_be_map, Data}).
+    FinalizedData = finalize_bundle_data(
+        [to_serialized_pair(NewManifest) | maps:values(BinItems)]),
+    {NewManifest, FinalizedData};
+serialize_data(Data) when is_binary(Data) ->
+    Data;
+serialize_data(Data) ->
+    throw({cannot_serialize_tx_data, must_be_list_or_map, Data}).
 
 new_manifest(Index) ->
+    ?event(debug_test, {new_manifest, Index}),
     TX = normalize(#tx{
         format = ans104,
         tags = [
@@ -546,10 +536,6 @@ deserialize(Binary) ->
     deserialize_item(Binary).
 
 deserialize_item(Binary) ->
-    ?event(debug_test, {deserialize_item,
-        {size, byte_size(Binary)},
-        {binary, {explicit, binary:part(Binary, 0, 100)}}
-    }),
     {SignatureType, Signature, Owner, Rest} = decode_signature(Binary),
     {Target, Rest2} = decode_optional_field(Rest),
     {Anchor, Rest3} = decode_optional_field(Rest2),
@@ -568,44 +554,49 @@ deserialize_item(Binary) ->
         })
     ).
 
-is_bundle(Item) ->
+type(Item) ->
     Format = tagfind(<<"bundle-format">>, Item#tx.tags, <<>>),
     Version = tagfind(<<"bundle-version">>, Item#tx.tags, <<>>),
-    case {hb_util:to_lower(Format), hb_util:to_lower(Version)} of
-        {<<"binary">>, <<"2.0.0">>} ->
-            true;
+    MapTXID = tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
+    case {hb_util:to_lower(Format), hb_util:to_lower(Version), MapTXID} of
+        {<<"binary">>, <<"2.0.0">>, <<>>} ->
+            list;
+        {<<"binary">>, <<"2.0.0">>, MapTXID} ->
+            MapTXID;
         _ ->
-            false
+            binary
     end.
 
 maybe_unbundle(Item) ->
-    case is_bundle(Item) of
-        true -> maybe_unbundle_map(Item);
-        _ ->  Item
+    case type(Item) of
+        list -> unbundle_list(Item);
+        binary -> Item;
+        MapTXID -> unbundle_map(Item, MapTXID)
     end.
 
-maybe_unbundle_map(Bundle) ->
-    case tagfind(<<"bundle-map">>, Bundle#tx.tags, <<>>) of
-        <<>> ->
-            ?event(debug_test, {maybe_unbundle_map, {no_map, Bundle}}),
-            unbundle(Bundle);
-        MapTXID ->
-            case unbundle(Bundle) of
-                detached -> Bundle#tx { data = detached };
-                Items ->
-                    MapItem = find_single_layer(hb_util:decode(MapTXID), Items),
-                    Map = hb_json:decode(MapItem#tx.data),
-                    Bundle#tx{
-                        manifest = MapItem,
-                        data =
-                            maps:map(
-                                fun(_K, TXID) ->
-                                    find_single_layer(hb_util:decode(TXID), Items)
-                                end,
-                                Map
-                            )
-                    }
-            end
+unbundle_list(Item) ->
+    case unbundle(Item#tx.data) of
+        detached -> Item#tx{data = detached};
+        Items -> Item#tx{data = hb_util:list_to_numbered_message(Items)}
+    end.
+
+unbundle_map(Item, MapTXID) ->
+    case unbundle(Item#tx.data) of
+        detached -> Item#tx{data = detached};
+        Items ->
+            MapItem = find_single_layer(hb_util:decode(MapTXID), Items),
+            Map = hb_json:decode(MapItem#tx.data),
+            Item#tx{
+                manifest = MapItem,
+                data =
+                    maps:map(
+                        fun(_K, TXID) ->
+                            find_single_layer(
+                                hb_util:decode(TXID), Items)
+                        end,
+                        Map
+                    )
+            }
     end.
 
 
@@ -622,13 +613,8 @@ find_single_layer(UnsignedID, Items) ->
             throw({cannot_find_item, hb_util:encode(UnsignedID)})
     end.
 
-unbundle(Item) when is_binary(Item#tx.data) ->
-    ?event(debug_test, {unbundle_binary, {binary, Item#tx.data}}),
-    Item#tx{data = unbundle(Item#tx.data)};
 unbundle(<<Count:256/little-integer, Content/binary>>) ->
-    ?event(debug_test, {unbundle_count, {count, Count}}),
     {ItemsBin, Items} = decode_bundle_header(Count, Content),
-    ?event(debug_test, {unbundle_items, {binary, {explicit, ItemsBin}}}),
     decode_bundle_items(Items, ItemsBin);
 unbundle(<<>>) -> detached.
 
