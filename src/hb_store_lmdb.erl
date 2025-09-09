@@ -418,11 +418,19 @@ match(Opts, MatchKVs) ->
         not_found -> not_found
     end.
 
+-type key_value() :: {binary(), binary()}.
+-type continuation() :: tuple() | not_found.
+-type ok_iteration() :: {ok, [key_value()], continuation()}.
+
+-spec iterate_start(DBInstance :: term(), KeyPrefix :: binary(), Limit :: integer()) -> 
+    ok_iteration() | not_found | {error, term(), binary()}.
 iterate_start(Opts, Key, Limit) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     elmdb:flush(DBInstance),
     elmdb:iterate_start(DBInstance, Key, Limit).
 
+-spec iterate_cont(DBInstance :: term(), Continuation :: continuation(), Limit :: integer()) -> 
+    ok_iteration() | not_found | {error, term(), binary()}.
 iterate_cont(Opts, Continuation, Limit) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     elmdb:iterate_cont(DBInstance, Continuation, Limit).
