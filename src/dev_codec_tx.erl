@@ -721,12 +721,40 @@ nested_multiple_tabm_test() ->
     % only bundle true is supported
     do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true).
 
-serialized_data_item_tx_test_disabled() ->
+real_basic_data_tx_test() ->
+    do_real_tx_verify(
+        <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+        #tx{ data = <<"data">> }
+    ).
+
+real_bundle_tx_test() ->
+    % 12 items, no mint
+    do_real_tx_verify(
+        <<"EOARN0wNp4qttWgd15k6IeylsZ88vI2ZeaW2b-mJRkg">>,
+        #tx{ data = <<"data">> }
+    ).
+
+real_mint_bundle_tx_test() ->
+    % 6 items, mint
+    do_real_tx_verify(
+        <<"eZGGs5MCpBJ5eKxByou1jxkzneQqgYAY7D7ltpC_10I">>,
+        #tx{ data = <<"data">> }
+    ).
+
+real_single_item_bundle_tx_test() ->
+    do_real_tx_verify(
+        <<"5CHMPU1oDCiqwrjGG5PEh7mht9VdVFnnF9yGfjPehno">>,
+        #tx{ data = <<"data">> }
+    ).
+
+real_no_data_tx_test() ->
+    do_real_tx_verify(
+        <<"N1Cyu67lQtmZMQlIZVFpNfy3xz6k9wEZ8LLeDbOebbk">>,
+        #tx{}
+    ).
+    
+do_real_tx_verify(TXID, ExpectedTX) ->
     Opts = #{},
-    % TXID = <<"lbCBr8PWhb2PQ-_2OPt1Zi8liJaHsFgvP-tA45JW0mc">>,
-    % TXID = <<"rpjh7bDHa-Rrv4qgwmJN7gUBldvn3USH2TpT1rUsfSM">>,
-    % TXID = <<"lVlGRqvOlSAZiuszUB67AYuapjqLUIU1CTh6CURTeD8">>,
-    TXID = <<"R2yzhguH9d2Wea3Bjm5ygW2-1MqJQC9uCAm-tRo0eyU">>,
     {ok, #{ <<"body">> := TXJSON }} = hb_http:request(
         #{
             <<"path">> => <<"/arweave/tx/", TXID/binary>>,
@@ -734,24 +762,30 @@ serialized_data_item_tx_test_disabled() ->
         },
         Opts
     ),
-    {ok, #{ <<"body">> := Data }} = hb_http:request(
-        #{
-            <<"path">> => <<"/arweave/raw/", TXID/binary>>,
-            <<"method">> => <<"GET">>
-        },
-        Opts
-    ),
-    ?event(debug_test, {header_json, TXJSON}),
-    ?event(debug_test, {data, {explicit, Data}}),
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(TXJSON)),
-    TX = TXHeader#tx{ data = Data },
+    TX = case ExpectedTX#tx.data of
+        ?DEFAULT_DATA ->
+            TXHeader;
+        _ ->
+            {ok, #{ <<"body">> := Data }} = hb_http:request(
+                #{
+                    <<"path">> => <<"/arweave/raw/", TXID/binary>>,
+                    <<"method">> => <<"GET">>
+                },
+                Opts
+            ),
+            ?event(debug_test, {{tx_id, TXID}, {data, {explicit, Data}}}),
+            TXHeader#tx{ data = Data }
+    end,
     ?event(debug_test, {tx, TX}),
     ?assert(ar_tx:verify(TX)),
     
-    DeserializedData = ar_bundles:unbundle(TX),
+    Deserialized = ar_bundles:deserialize(TX),
+    ?event(debug_test, {deserialized, {explicit, Deserialized}}),
     % DataItems = ar_bundles:deserialize(Data, binary),
-    ?event(debug_test, {data_items, DeserializedData}),
     ok.
+
+
 % serialized_data_item_tx_test() ->
 %     Anchor = crypto:strong_rand_bytes(32),
 %     Target = crypto:strong_rand_bytes(32),

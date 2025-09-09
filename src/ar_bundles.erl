@@ -1,6 +1,6 @@
 -module(ar_bundles).
 -export([signer/1, is_signed/1]).
--export([id/1, id/2, reset_ids/1, map/1, hd/1, member/2, find/2]).
+-export([id/1, id/2, reset_ids/1, map/1, hd/1, member/2, find/2, tagfind/3]).
 -export([manifest/1, manifest_item/1, parse_manifest/1]).
 -export([new_item/4, sign_item/2, verify_item/1]).
 -export([encode_tags/1, decode_tags/1]).
@@ -89,6 +89,17 @@ find(Key, Item = #tx { data = Data }) ->
     end;
 find(_Key, _) ->
     not_found.
+
+%% @doc Case-insensitively find a tag in a list and return its value.
+tagfind(Key, Tags, Default) ->
+    LowerCaseKey = hb_util:to_lower(Key),
+    Found = lists:search(fun({TagName, _}) ->
+        hb_util:to_lower(TagName) == LowerCaseKey
+    end, Tags),
+    case Found of
+        {value, {_TagName, Value}} -> Value;
+        false -> Default
+    end.
 
 %% @doc Return the manifest item in a bundle-map/list.
 manifest_item(#tx { manifest = Manifest }) when is_record(Manifest, tx) ->
@@ -384,9 +395,8 @@ add_bundle_tags(Tags) -> ?BUNDLE_TAGS ++ (Tags -- ?BUNDLE_TAGS).
 
 add_manifest_tags(Tags, ManifestID) ->
     lists:filter(
-        fun
-            ({<<"bundle-map">>, _}) -> false;
-            (_) -> true
+        fun({TagName, _}) ->
+            hb_util:to_lower(TagName) =/= <<"bundle-map">>
         end,
         Tags
     ) ++ [{<<"bundle-map">>, hb_util:encode(ManifestID)}].
@@ -536,6 +546,10 @@ deserialize(Binary) ->
     deserialize_item(Binary).
 
 deserialize_item(Binary) ->
+    ?event(debug_test, {deserialize_item,
+        {size, byte_size(Binary)},
+        {binary, {explicit, binary:part(Binary, 0, 100)}}
+    }),
     {SignatureType, Signature, Owner, Rest} = decode_signature(Binary),
     {Target, Rest2} = decode_optional_field(Rest),
     {Anchor, Rest3} = decode_optional_field(Rest2),
@@ -555,10 +569,10 @@ deserialize_item(Binary) ->
     ).
 
 is_bundle(Item) ->
-    Format = lists:keyfind(<<"bundle-format">>, 1, Item#tx.tags),
-    Version = lists:keyfind(<<"bundle-version">>, 1, Item#tx.tags),
-    case {Format, Version} of
-        {{<<"bundle-format">>, <<"binary">>}, {<<"bundle-version">>, <<"2.0.0">>}} ->
+    Format = tagfind(<<"bundle-format">>, Item#tx.tags, <<>>),
+    Version = tagfind(<<"bundle-version">>, Item#tx.tags, <<>>),
+    case {hb_util:to_lower(Format), hb_util:to_lower(Version)} of
+        {<<"binary">>, <<"2.0.0">>} ->
             true;
         _ ->
             false
@@ -571,8 +585,11 @@ maybe_unbundle(Item) ->
     end.
 
 maybe_unbundle_map(Bundle) ->
-    case lists:keyfind(<<"bundle-map">>, 1, Bundle#tx.tags) of
-        {<<"bundle-map">>, MapTXID} ->
+    case tagfind(<<"bundle-map">>, Bundle#tx.tags, <<>>) of
+        <<>> ->
+            ?event(debug_test, {maybe_unbundle_map, {no_map, Bundle}}),
+            unbundle(Bundle);
+        MapTXID ->
             case unbundle(Bundle) of
                 detached -> Bundle#tx { data = detached };
                 Items ->
@@ -588,10 +605,10 @@ maybe_unbundle_map(Bundle) ->
                                 Map
                             )
                     }
-            end;
-        _ ->
-            unbundle(Bundle)
+            end
     end.
+
+
 
 %% @doc An internal helper for finding an item in a single-layer of a bundle.
 %% Does not recurse! You probably want `find/2' in most cases.
@@ -606,9 +623,12 @@ find_single_layer(UnsignedID, Items) ->
     end.
 
 unbundle(Item) when is_binary(Item#tx.data) ->
+    ?event(debug_test, {unbundle_binary, {binary, Item#tx.data}}),
     Item#tx{data = unbundle(Item#tx.data)};
 unbundle(<<Count:256/little-integer, Content/binary>>) ->
+    ?event(debug_test, {unbundle_count, {count, Count}}),
     {ItemsBin, Items} = decode_bundle_header(Count, Content),
+    ?event(debug_test, {unbundle_items, {binary, {explicit, ItemsBin}}}),
     decode_bundle_items(Items, ItemsBin);
 unbundle(<<>>) -> detached.
 
@@ -640,7 +660,9 @@ decode_bundle_header(Count, <<Size:256/little-integer, ID:32/binary, Rest/binary
 decode_signature(<<1, 0, Signature:512/binary, Owner:512/binary, Rest/binary>>) ->
     {{rsa, 65537}, Signature, Owner, Rest};
 decode_signature(Other) ->
-    ?event({error_decoding_signature, Other}),
+    ?event({error_decoding_signature,
+        {sig_type, {explicit, binary:part(Other, 0, 2)}},
+        {binary, Other}}),
     unsupported_tx_format.
 
 %% @doc Decode tags from a binary format using Apache Avro.
