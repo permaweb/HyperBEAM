@@ -59,5 +59,46 @@
     }
   },
 
-  "p4_recipient": "REPLACE_ME"
+  "p4_recipient": "REPLACE_ME",
+
+  "store": [
+    {
+      "store-module": "hb_store_lmdb",
+      "name": "cache-mainnet/lmdb",
+      "ao-types": "store-module=\"atom\""
+    },
+    {
+      "store-module": "hb_store_remote_node",
+      "node": "https://scheduler.forward.computer",
+      "ao-types": "store-module=\"atom\""
+    },
+    {
+      "store-module": "hb_store_gateway",
+      "subindex": [
+        {
+          "name": "Data-Protocol",
+          "value": "ao"
+        }
+      ],
+      "local-store": [
+        {
+          "store-module": "hb_store_lmdb",
+          "name": "cache-mainnet/lmdb",
+          "ao-types": "store-module=\"atom\""
+        }
+      ],
+      "ao-types": "store-module=\"atom\""
+    },
+    {
+      "store-module": "hb_store_gateway",
+      "local-store": [
+        {
+          "store-module": "hb_store_lmdb",
+          "name": "cache-mainnet/lmdb",
+          "ao-types": "store-module=\"atom\""
+        }
+      ],
+      "ao-types": "store-module=\"atom\""
+    }
+  ]
 }
