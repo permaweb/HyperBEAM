@@ -69,6 +69,9 @@ read(Opts = #{ <<"node">> := Node }, Key) ->
             {ok, Msg};
         {error, _Err} ->
             ?event(store_remote_node, {read_not_found, {key, Key}}),
+            not_found;
+        { _, _ } ->
+            ?event(store_remote_node, {read_not_found, {key, Key}}),
             not_found
     end.
 
