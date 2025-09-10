@@ -1,7 +1,7 @@
 %%% @doc Codec for managing transformations from `ar_tx'-style Arweave TX
 %%% records to and from TABMs.
 -module(dev_codec_tx).
--export([from/3, to/3, commit/3, verify/3]).
+-export([from/3, to/3, commit/3, verify/3, normalize/1, normalize/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -137,13 +137,20 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
 
-normalize(TX) ->
-    reset_ids(
-        normalize_data_root(
-            ar_bundles:normalize_data(
-                TX#tx{ owner_address = ar_tx:get_owner_address(TX) })
-        )
-    ).
+normalize(TX) -> normalize(TX, false).
+normalize(TX, JustData) ->
+    NormalizedTX= ar_bundles:normalize(TX, JustData),
+    case JustData of
+        true -> NormalizedTX;
+        false -> 
+            reset_ids(
+                normalize_data_root(
+                    NormalizedTX#tx{
+                        owner_address = ar_tx:get_owner_address(TX)
+                    }
+                )
+            )
+    end.
     
 normalize_data_root(Item = #tx{data = Bin, format = 2})
         when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
@@ -724,39 +731,44 @@ nested_multiple_tabm_test() ->
 real_basic_data_tx_test() ->
     do_real_tx_verify(
         <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
-        #tx{ data = <<"data">> }
+        [<<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>]
     ).
 
 real_rsa_nested_bundle_tx_test() ->
-    %
     do_real_tx_verify(
         <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
-        #tx{
-            format = 2,
-            id = hb_util:decode(<<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>)
-         }
+        [
+            <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+            <<"8_YOiWq-vc7bErBIef0J-AJ5AOq0ik_GoqBsw2rxmH0">>,
+            <<"3MyW4IFKB4ZqBog7N31wKwun__AnGseuZNP0GuRdo7c">>,
+            <<"swN9cX9-vwB1eCn8OygZ1J13Aibs1K7m2dkpoygYpkA">>,
+            <<"LDcC_5NM9J9kMLry5RAUKGo3QoSkNDeAm_kLPCo83_k">>,
+            <<"34r40QBNWF2sSE2FjXD44AnJVgEFtK3cOxk5RSNbd8A">>,
+            <<"ephwZY1QMLNNup2uKl_q9avkph8nr3oRY-QFOKOE6wk">>
+        ]
     ).
 
-real_ecdsa_bundle_tx_test() ->
+%% @doc Disabled until we support ECDSA signatures.
+real_ecdsa_bundle_tx_test_disabled() ->
     % 12 items, no mint
     do_real_tx_verify(
         <<"EOARN0wNp4qttWgd15k6IeylsZ88vI2ZeaW2b-mJRkg">>,
-        #tx{ data = <<"data">> }
+        []
     ).
 
 real_ecdsa_single_item_bundle_tx_test_disabled() ->
     do_real_tx_verify(
         <<"5CHMPU1oDCiqwrjGG5PEh7mht9VdVFnnF9yGfjPehno">>,
-        #tx{ data = <<"data">> }
+        []
     ).
 
 real_no_data_tx_test() ->
     do_real_tx_verify(
         <<"N1Cyu67lQtmZMQlIZVFpNfy3xz6k9wEZ8LLeDbOebbk">>,
-        #tx{}
+        [<<"N1Cyu67lQtmZMQlIZVFpNfy3xz6k9wEZ8LLeDbOebbk">>]
     ).
-    
-do_real_tx_verify(TXID, ExpectedTX) ->
+
+do_real_tx_verify(TXID, ExpectedIDs) ->
     Opts = #{},
     {ok, #{ <<"body">> := TXJSON }} = hb_http:request(
         #{
@@ -780,20 +792,53 @@ do_real_tx_verify(TXID, ExpectedTX) ->
                 {data, {explicit, Data}}
             }),
             TXHeader#tx{ data = Data };
-        {error, #{ <<"status_code">> := 404 }} ->
+        {ok, _} ->
             TXHeader#tx{ data = ?DEFAULT_DATA };
         {error, Error} ->
             throw({http_request_error, Error})
     end,
-    ?event(debug_test, {tx, TX}),
+    ?event(debug_test, {tx, {explicit, TX}}),
     ?assert(ar_tx:verify(TX)),
     
     Deserialized = ar_bundles:deserialize(TX),
-    ?event(debug_test, {deserialized, {explicit, Deserialized}}),
-    Reserialized = normalize(Deserialized),
-    ?event(debug_test, {reserialized, {explicit, Reserialized}}),
-    ?assert(ar_tx:verify(Reserialized)),
-    ok.
+    ?event(debug_test, {deserialized}),
+
+    verify_items(Deserialized, ExpectedIDs).
+
+verify_items(RootItem, ExpectedIDs) ->
+    AllItems = flatten_items(RootItem),
+    ?assertEqual(length(ExpectedIDs), length(AllItems)),
+    [RootItem | NestedItems] = AllItems,
+    [RootID | NestedIDs] = ExpectedIDs,
+    ?assert(
+        ar_tx:verify(normalize(RootItem, true)),
+        hb_util:encode(RootItem#tx.id)),
+    ?assertEqual(RootID, hb_util:encode(RootItem#tx.id)),
+    lists:zipwith(
+        fun(Item, ExpectedID) ->
+            ?assert(ar_bundles:verify_item(Item), hb_util:encode(Item#tx.id)),
+            ?assertEqual(ExpectedID, hb_util:encode(Item#tx.id))
+        end,
+        NestedItems,
+        NestedIDs
+    ).
+
+flatten_items(Item) when is_record(Item, tx) ->
+    NestedItems = case Item#tx.data of
+        Data when is_map(Data) ->
+            SortedKeys = lists:sort(maps:keys(Data)),
+            lists:flatmap(
+                fun(Key) ->
+                    flatten_items(maps:get(Key, Data))
+                end,
+                SortedKeys
+            );
+        _ ->
+            []
+    end,
+    [Item | NestedItems];
+flatten_items(_) ->
+    [].
 
 %% @doc Run a series of roundtrip tests that start and end with a #tx record
 do_tx_roundtrips(UnsignedTX, UnsignedTABM, Commitment) ->

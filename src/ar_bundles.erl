@@ -6,7 +6,7 @@
 -export([encode_tags/1, decode_tags/1]).
 -export([serialize/1, deserialize/1]).
 -export([data_item_signature_data/1]).
--export([type/1, normalize/1, normalize_data/1]).
+-export([type/1, normalize/1, normalize/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -122,7 +122,7 @@ new_item(Target, Anchor, Tags, Data) ->
 %% @doc Sign a data item.
 sign_item(_, undefined) -> throw(wallet_not_found);
 sign_item(RawItem, {PrivKey, {KeyType, Owner}}) ->
-    Item = (normalize_data(RawItem))#tx{format = ans104, owner = Owner, signature_type = KeyType},
+    Item = (normalize(RawItem))#tx{format = ans104, owner = Owner, signature_type = KeyType},
     % Generate the signature from the data item's data segment in 'signed'-ready mode.
     Sig = ar_wallet:sign(PrivKey, data_item_signature_data(Item, signed)),
     reset_ids(Item#tx{signature = Sig}).
@@ -145,7 +145,9 @@ data_item_signature_data(RawItem, unsigned) ->
     data_item_signature_data(RawItem#tx { owner = ?DEFAULT_OWNER }, signed);
 data_item_signature_data(RawItem, signed) ->
     true = enforce_valid_tx(RawItem),
-    NormItem = normalize_data(RawItem),
+    ?event({data_item_signature_data, hb_util:human_id(RawItem#tx.unsigned_id)}),
+    NormItem = normalize_data(RawItem, true),
+    ?event({data_item_signature_data, {explicit, NormItem}}),
     ar_deep_hash:hash([
         utf8_encoded("dataitem"),
         utf8_encoded("1"),
@@ -181,61 +183,145 @@ verify_data_item_tags(DataItem) ->
     ),
     ValidCount andalso ValidTags.
 
-normalize(Item) -> reset_ids(normalize_data(Item)).
-
 %% @doc Ensure that a data item (potentially containing a map or list) has a
 %% standard, serialized form.
 %% 
-%% Lists are converted to maps with numbered keys and then seriaalized.
-normalize_data(not_found) -> throw(not_found);
-normalize_data(Item = #tx{data = Bin}) when is_binary(Bin) ->
-    ?event({normalize_data, binary, Item}),
-    normalize_data_size(Item);
-normalize_data(Bundle) when is_list(Bundle); is_map(Bundle) ->
-    ?event({normalize_data, bundle, Bundle}),
-    normalize_data(#tx{ data = Bundle });
-normalize_data(Item = #tx { data = Data }) when is_list(Data) ->
-    ?event({normalize_data, list,
+%% When JustData is false, several fields on the data item might be updated,
+%% and we'll also ensure that a bundle is converted to a map before being
+%% normalized (this may cause the ?BUNDLE_TAGS to be added to the tags).
+%% 
+%% When JustData is true, only the data field is normalized. In this case
+%% we'll look for the `bundle-map` tag and to determine whether a bundle should
+%% be converted to a map (present) or a list (absent) before normalizing.
+%% 
+%% In general JustData will be `false` when normalizing a data item that has
+%% been created by this HyperBeam node, and `true` when normaliznig a data item
+%% that has been downloaded from the network.
+normalize(Item) -> normalize(Item, false).
+normalize(Item, JustData) -> 
+    NormalizedItem = normalize_data(Item, JustData),
+    case JustData of
+        true -> NormalizedItem;
+        false -> reset_ids(NormalizedItem)
+    end.
+
+normalize_data(not_found, _JustData) -> throw(not_found);
+normalize_data(Item = #tx{data = Bin}, JustData) when is_binary(Bin) ->
+    ?event({normalize_data, binary,
         hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id)}),
-    normalize_data(
-        Item#tx{
-            data =
+    case JustData of
+        true -> Item;
+        false -> normalize_data_size(Item)
+    end;
+normalize_data(Bundle, JustData) when is_list(Bundle); is_map(Bundle) ->
+    ?event({normalize_data, bundle}),
+    normalize_data(#tx{ data = Bundle }, JustData);
+normalize_data(Item = #tx { data = Data }, JustData) when is_list(Data) ->
+    IsBundleMap = type(Item) == map,
+    ConvertListToMap = not JustData orelse IsBundleMap,
+    ?event({normalize_data, list,
+        hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id),
+        {just_data, JustData},
+        {is_bundle_map, IsBundleMap},
+        {convert_list_to_map, ConvertListToMap},
+        {before_convert, Data}
+    }),
+    ConvertedData = 
+        case ConvertListToMap of
+            true ->
                 maps:from_list(
                     lists:zipwith(
                         fun(Index, MapItem) ->
                             {
                                 integer_to_binary(Index),
-                                update_ids(normalize_data(MapItem))
+                                MapItem
                             }
                         end,
                         lists:seq(1, length(Data)),
                         Data
                     )
-                )
-        }
-    );
-normalize_data(Item = #tx{data = Data}) ->
+                );
+            false ->
+                Data
+        end,
+    ?event({normalize_data, list,
+        {after_convert, ConvertedData}
+    }),
+    finalize_data(Item#tx{data = ConvertedData}, JustData);
+normalize_data(Item = #tx{data = Data}, JustData) when is_map(Data) ->
+    IsBundleMap = type(Item) == map,
+    ConvertMapToList = JustData andalso not IsBundleMap,
     ?event({normalize_data, map,
-        hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id)}),
-    normalize_data(
-        case serialize_data(Data) of
-            {Manifest, Bin} ->
-                Item#tx{
-                    data = Bin,
-                    manifest = Manifest,
-                    tags =
-                        add_manifest_tags(
+        {explicit, hb_util:human_id(Item#tx.unsigned_id)},
+        {explicit, hb_util:human_id(Item#tx.id)},
+        {just_data, JustData},
+        {is_bundle_map, IsBundleMap},
+        {convert_map_to_list, ConvertMapToList},
+        {before_convert, Data}
+    }),
+    ConvertedData = 
+        case ConvertMapToList of
+            true ->
+                lists:map(
+                    fun(Index) ->
+                        maps:get(list_to_binary(integer_to_list(Index)), Data)
+                    end,
+                    lists:seq(1, maps:size(Data))
+                );
+            false ->
+                Data
+        end,
+    ?event({normalize_data, map,
+        {explicit, hb_util:human_id(Item#tx.unsigned_id)},
+        {explicit, hb_util:human_id(Item#tx.id)},
+        {just_data, JustData},
+        {is_bundle_map, IsBundleMap},
+        {convert_map_to_list, ConvertMapToList},
+        {after_convert, ConvertedData}
+    }),
+    finalize_data(Item#tx{data = ConvertedData}, JustData).
+
+finalize_data(Item, JustData) ->
+    FinalizedItem = case serialize_data(Item#tx.data, JustData) of
+        {Manifest, Bin} ->
+            case JustData of
+                true ->
+                    Item#tx{
+                        data = Bin
+                    };
+                false ->
+                    Item#tx{
+                        data = Bin,
+                        manifest = Manifest,
+                        tags = add_manifest_tags(
                             add_bundle_tags(Item#tx.tags),
                             id(Manifest, unsigned)
                         )
-                };
-            DirectBin ->
-                Item#tx{
-                    data = DirectBin,
-                    tags = add_bundle_tags(Item#tx.tags)
-                }
-        end
-    ).
+                    }
+            end;
+        DirectBin ->
+            case JustData of
+                true ->
+                    Item#tx{
+                        data = DirectBin
+                    };
+                false ->
+                    Item#tx{
+                        data = DirectBin,
+                        tags = add_bundle_tags(Item#tx.tags)
+                    }
+            end
+        end,
+    ?event({finalize_data, 
+        {explicit, hb_util:human_id(Item#tx.unsigned_id)},
+        {explicit, hb_util:human_id(Item#tx.id)},
+        {just_data, JustData},
+        {byte_size, byte_size(FinalizedItem#tx.data)},
+        {input_item, {explicit, Item}},
+        {finalized_item, FinalizedItem},
+        {finalized_item, {explicit, FinalizedItem}}
+    }),
+    normalize_data(FinalizedItem, JustData).
 
 %% @doc Reset the data size of a data item. Assumes that the data is already normalized.
 normalize_data_size(Item = #tx{data = Bin}) when is_binary(Bin) ->
@@ -243,11 +329,12 @@ normalize_data_size(Item = #tx{data = Bin}) when is_binary(Bin) ->
 normalize_data_size(Item) -> Item.
 
 %% @doc Convert an ans104 #tx record to its binary representation.
-serialize(not_found) -> throw(not_found);
-serialize(TX) when is_binary(TX) -> TX;
-serialize(RawTX) ->
+serialize(TX) -> serialize(TX, false).
+serialize(not_found, _JustData) -> throw(not_found);
+serialize(TX, _JustData) when is_binary(TX) -> TX;
+serialize(RawTX, JustData) ->
     true = enforce_valid_tx(RawTX),
-    TX = normalize(RawTX),
+    TX = normalize(RawTX, JustData),
     EncodedTags = encode_tags(TX#tx.tags),
     <<
         (encode_signature_type(TX#tx.signature_type))/binary,
@@ -272,10 +359,6 @@ enforce_valid_tx(TX) ->
     hb_util:ok_or_throw(TX,
         hb_util:check_type(TX, message),
         {invalid_tx, TX}
-    ),
-    hb_util:ok_or_throw(TX,
-        hb_util:check_value(TX#tx.format, [ans104]),
-        {invalid_field, format, TX#tx.format}
     ),
     hb_util:ok_or_throw(TX,
         hb_util:check_size(TX#tx.id, [0, 32]),
@@ -387,43 +470,55 @@ finalize_bundle_data(Processed) ->
     Items = <<<<Data/binary>> || {_, Data} <- Processed>>,
     <<Length/binary, Index/binary, Items/binary>>.
 
-to_serialized_pair(Item) when is_binary(Item) ->
+to_serialized_pair(Item, JustData) when is_binary(Item) ->
     % Support bundling of bare binary payloads by wrapping them in a TX that
     % is explicitly marked as a binary data item.
     to_serialized_pair(
-        #tx{ tags = [{<<"ao-type">>, <<"binary">>}], data = Item });
-to_serialized_pair(Item) ->
-    ?event(debug_test, {to_serialized_pair, Item}),
+        #tx{ tags = [{<<"ao-type">>, <<"binary">>}], data = Item }, JustData);
+to_serialized_pair(Item, JustData) ->
+    ?event({to_serialized_pair, Item}),
     % TODO: This is a hack to get the ID of the item. We need to do this because we may not
     % have the ID in 'item' if it is just a map/list. We need to make this more efficient.
-    Serialized = serialize(Item),
+    Serialized = serialize(Item, JustData),
     Deserialized = deserialize(Serialized),
     UnsignedID = id(Deserialized, unsigned),
+    SignedID = id(Deserialized, signed),
     ?event({serialized_pair,
-        {unsigned_id, UnsignedID}, {size, byte_size(Serialized)}}),
-    {UnsignedID, Serialized}.
+        {unsigned_id, UnsignedID}, {signed_id, SignedID}, {size, byte_size(Serialized)}}),
+    {UnsignedID, SignedID, Serialized}.
 
-serialize_data(List) when is_list(List) ->
-    finalize_bundle_data(lists:map(
-        fun(Item) -> to_serialized_pair(Item) end, List));
-serialize_data(Map) when is_map(Map) ->
+serialize_data(List, JustData) when is_list(List) ->
+    finalize_bundle_data(
+        lists:map(
+            fun(Item) ->
+                {UnsignedID, SignedID, Serialized} = to_serialized_pair(Item, JustData),
+                {SignedID, Serialized}
+            end,
+            List)
+    );
+serialize_data(Map, JustData) when is_map(Map) ->
     % TODO: Make this compatible with the normal manifest spec.
     % For now we just serialize the map to a JSON string of Key=>TXID
     BinItems = maps:map(
-        fun(_, Item) -> to_serialized_pair(Item) end, Map),
+        fun(_, Item) -> 
+            {UnsignedID, SignedID, Serialized} = to_serialized_pair(Item, JustData),
+            {UnsignedID, Serialized}
+        end,
+        Map),
     Index = maps:map(fun(_, {TXID, _}) -> hb_util:encode(TXID) end, BinItems),
     NewManifest = new_manifest(Index),
+    {NewManifestUnsignedID, NewManifestSignedID, NewManifestSerialized} = to_serialized_pair(NewManifest, JustData),
     %?event({generated_manifest, NewManifest == Manifest, hb_util:encode(id(NewManifest, unsigned)), Index}),
     FinalizedData = finalize_bundle_data(
-        [to_serialized_pair(NewManifest) | maps:values(BinItems)]),
+        [{NewManifestUnsignedID, NewManifestSerialized} | maps:values(BinItems)]),
     {NewManifest, FinalizedData};
-serialize_data(Data) when is_binary(Data) ->
+serialize_data(Data, _JustData) when is_binary(Data) ->
     Data;
-serialize_data(Data) ->
+serialize_data(Data, _JustData) ->
     throw({cannot_serialize_tx_data, must_be_list_or_map, Data}).
 
 new_manifest(Index) ->
-    ?event(debug_test, {new_manifest, Index}),
+    ?event({new_manifest, Index}),
     TX = normalize(#tx{
         format = ans104,
         tags = [
@@ -561,8 +656,8 @@ type(Item) ->
     case {hb_util:to_lower(Format), hb_util:to_lower(Version), MapTXID} of
         {<<"binary">>, <<"2.0.0">>, <<>>} ->
             list;
-        {<<"binary">>, <<"2.0.0">>, MapTXID} ->
-            MapTXID;
+        {<<"binary">>, <<"2.0.0">>, _} ->
+            map;
         _ ->
             binary
     end.
@@ -571,7 +666,7 @@ maybe_unbundle(Item) ->
     case type(Item) of
         list -> unbundle_list(Item);
         binary -> Item;
-        MapTXID -> unbundle_map(Item, MapTXID)
+        map -> unbundle_map(Item)
     end.
 
 unbundle_list(Item) ->
@@ -580,7 +675,8 @@ unbundle_list(Item) ->
         Items -> Item#tx{data = hb_util:list_to_numbered_message(Items)}
     end.
 
-unbundle_map(Item, MapTXID) ->
+unbundle_map(Item) ->
+    MapTXID = tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
     case unbundle(Item#tx.data) of
         detached -> Item#tx{data = detached};
         Items ->
@@ -979,22 +1075,23 @@ arbundles_item_roundtrip_test() ->
     Serialized = serialize(Item),
     ?assertEqual(Bin, Serialized).
 
-%% @doc Similar test as arbundles_item_roundtrip_test *but* we can't do
-%% a full roundtrip since HyperBEAM explicitly serializes lists as maps
-%% so the full roundtrip will not match.
-arbundles_list_bundle_deserialize_test() ->
+arbundles_list_bundle_roundtrip_test() ->
+    W = ar_wallet:new(),
     {ok, Bin} = file:read_file(<<"test/arbundles.js/ans104-list-bundle.bundle">>),
-    TX = #tx{ 
+    TX = sign_item(#tx{ 
         format = ans104,
         data = Bin,
         data_size = byte_size(Bin),
         tags = ?BUNDLE_TAGS
-    },
-    ?event(debug_test, {serialized, {explicit, TX}}),
-    DeserializedJS = deserialize(TX),
-    ?event(debug_test, {deserialized, {explicit, DeserializedJS}}),
-    ?assertEqual(3, length(DeserializedJS#tx.data)),
-    [Item1, Item2, Item3] = DeserializedJS#tx.data,
+    }, W),
+    ?event(debug_test, {tx, {explicit, TX}}),
+    ?assert(verify_item(TX)),
+
+    Deserialized = deserialize(TX),
+    ?event(debug_test, {deserialized, Deserialized}),
+    ?assertEqual(3, maps:size(Deserialized#tx.data)),
+    #{<<"1">> := Item1, <<"2">> := Item2, <<"3">> := Item3} = 
+        Deserialized#tx.data,
     ?assertEqual(<<"first">>, Item1#tx.data),
     ?assertEqual([{<<"Type">>, <<"list">>}, {<<"Index">>, <<"0">>}], Item1#tx.tags),
     ?assertEqual(
@@ -1017,53 +1114,42 @@ arbundles_list_bundle_deserialize_test() ->
     ?assert(verify_item(Item2)),
     ?assert(verify_item(Item3)),
 
-    % Normalizing the bundle will convert it to a serialized HyperBEAM bundle
-    % (i.e. map instead of list)
-    Normalized = normalize(DeserializedJS),
-    ?event(debug_test, {normalized, {explicit, Normalized}}),
-    ?assertEqual([
-        {<<"bundle-format">>, <<"binary">>},
-        {<<"bundle-version">>, <<"2.0.0">>},
-        {<<"bundle-map">>, hb_util:encode(id(Normalized#tx.manifest, unsigned))}
-    ], Normalized#tx.tags),
-    % Deserialize again so we can verify the data itme
-    DeserializedHB = deserialize(Normalized),
-    ?event(debug_test, {deserialized_hb, DeserializedHB}),
-    ?assertEqual(
-        #{ <<"1">> => Item1, <<"2">> => Item2, <<"3">> => Item3 }, 
-        DeserializedHB#tx.data).
+    Normalized = normalize(Deserialized, true),
+    ?event(debug_test, {normalized, Normalized}),
+    ?assert(verify_item(Normalized)),
+    ?assertEqual(Bin, Normalized#tx.data),
+    ok.
 
-arbundles_single_list_bundle_deserialize_test() ->
+arbundles_single_list_bundle_roundtrip_test() ->
+    W = ar_wallet:new(),
     {ok, Bin} = file:read_file(<<"test/arbundles.js/ans104-single-list-bundle.bundle">>),
     % Deserialize and verify the arbundles.js bundle
-    TX = #tx{ 
+    TX = sign_item(#tx{ 
         format = ans104,
         data = Bin,
         data_size = byte_size(Bin),
         tags = ?BUNDLE_TAGS
-    },
-    ?event(debug_test, {serialized, {explicit, TX}}),
-    DeserializedJS = deserialize(TX),
-    ?event(debug_test, {deserialized, DeserializedJS}),
-    ?assertEqual(1, length(DeserializedJS#tx.data)),
-    [Item] = DeserializedJS#tx.data,
+    }, W),
+    ?event(debug_test, {tx, {explicit, TX}}),
+    ?assert(verify_item(TX)),
+    
+    Deserialized = deserialize(TX),
+    ?event(debug_test, {deserialized, Deserialized}),
+    ?assertEqual(1, maps:size(Deserialized#tx.data)),
+    #{<<"1">> := Item} = Deserialized#tx.data,
+    ?event(debug_test, {item, Item}),
+    ?assertEqual(
+        <<"IchWLlJKLaCqKd4KW6BcDKe560XpfgFuPHXjjK8tfgA">>,
+        hb_util:encode(Item#tx.id)),
     ?assertEqual(<<"only">>, Item#tx.data),
     ?assertEqual([{<<"Type">>, <<"list">>}, {<<"Index">>, <<"1">>}], Item#tx.tags),
     ?assert(verify_item(Item)),
 
-    % Normalizing the bundle will convert it to a serialized HyperBEAM bundle
-    % (i.e. map instead of list)
-    Normalized = normalize(DeserializedJS),
-    ?event(debug_test, {normalized, {explicit, Normalized}}),
-    ?assertEqual([
-        {<<"bundle-format">>, <<"binary">>},
-        {<<"bundle-version">>, <<"2.0.0">>},
-        {<<"bundle-map">>, hb_util:encode(id(Normalized#tx.manifest, unsigned))}
-    ], Normalized#tx.tags),
-    % Deserialize again so we can verify the data itme
-    DeserializedHB = deserialize(Normalized),
-    ?event(debug_test, {deserialized_hb, DeserializedHB}),
-    ?assertEqual(#{ <<"1">> => Item }, DeserializedHB#tx.data).
+    Normalized = normalize(Deserialized, true),
+    ?event(debug_test, {normalized, Normalized}),
+    ?assert(verify_item(Normalized)),
+    ?assertEqual(Bin, Normalized#tx.data),
+    ok.
 
 %% @doc This test generates and writes a map bundle to a file so that we can
 %% validate that it is handled correctly by dha-team/arbundles. You can
