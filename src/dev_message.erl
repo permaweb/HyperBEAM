@@ -248,7 +248,13 @@ commit(Self, Req, Opts) ->
     % We _do not_ set the `device' key in the message, as the device will be
     % part of the commitment. Instead, we find the device module's `commit'
     % function and apply it.
-    CommitOpts = Opts#{ linkify_mode => offload },
+    CommitOpts =
+        case hb_maps:get(<<"type">>, Req, <<"signed">>) of
+            <<"unsigned">> ->
+                Opts#{ linkify_mode => discard };
+            _ ->
+                Opts#{ linkify_mode => offload }
+        end,
     AttMod = hb_ao:message_to_device(#{ <<"device">> => AttDev }, CommitOpts),
     {ok, AttFun} = hb_ao:find_exported_function(Base, AttMod, commit, 3, CommitOpts),
     % Encode to a TABM
