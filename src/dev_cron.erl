@@ -1,13 +1,13 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([once/3, every/3, stop/3, list/3, info/1, info/3]).
+-export([once/3, every/3, stop/3, list/3, json/3, info/1, info/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
 info(_) -> 
-	#{ exports => [info, once, every, stop, list] }.
+	#{ exports => [info, once, every, stop, list, json] }.
 
 info(_Msg1, _Msg2, _Opts) ->
 	InfoBody = #{
@@ -198,6 +198,60 @@ list(_Msg1, _Msg2, _Opts) ->
 	),
 	{ok, #{<<"status">> => 200, <<"body">> => CronTasks}}.
 
+%% @doc Return list as raw JSON array
+json(_Msg1, _Msg2, _Opts) ->
+	AllNames = hb_name:all(),
+	CronTasks = lists:filtermap(
+		fun
+			({{<<"cron@1.0">>, TaskID}, Pid}) when is_pid(Pid) ->
+				% Try to get metadata from process dictionary first (non-blocking)
+				Info = case erlang:process_info(Pid, dictionary) of
+					{dictionary, Dict} ->
+						case lists:keyfind(cron_metadata, 1, Dict) of
+							{cron_metadata, Metadata} ->
+								% Found metadata in process dictionary
+								Metadata#{
+									<<"task_id">> => TaskID,
+									<<"pid">> => list_to_binary(pid_to_list(Pid))
+								};
+							false ->
+								% No metadata in process dictionary, try messaging
+								Pid ! {info, self()},
+								receive
+									{cron_info, Metadata} ->
+										Metadata#{
+											<<"task_id">> => TaskID,
+											<<"pid">> => list_to_binary(pid_to_list(Pid))
+										}
+								after 50 ->
+									% Timeout - return basic info
+									#{
+										<<"task_id">> => TaskID,
+										<<"pid">> => list_to_binary(pid_to_list(Pid)),
+										<<"type">> => <<"unknown">>,
+										<<"path">> => <<"unknown">>
+									}
+								end
+						end;
+					undefined ->
+						% Process doesn't exist anymore
+						false
+				end,
+				case Info of
+					false -> false;
+					_ -> {true, Info}
+				end;
+			(_) ->
+				false
+		end,
+		AllNames
+	),
+	% Return as binary JSON string directly
+	JsonBinary = hb_json:encode(CronTasks),
+	{ok, #{
+		<<"content-type">> => <<"application/json">>,
+		<<"body">> => JsonBinary
+	}}.
 
 every_worker_loop(CronPath, Req, Opts, IntervalMillis, CreatedAt, IntervalString) ->
     % Store metadata in process dictionary for instant access
