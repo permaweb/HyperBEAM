@@ -207,7 +207,11 @@ balances(Mode, ProcMsg, Opts) when is_atom(Mode) ->
     balances(hb_util:bin(Mode), ProcMsg, Opts);
 balances(Prefix, ProcMsg, Opts) ->
     Balances = hb_ao:get(<<Prefix/binary, "/balance">>, ProcMsg, #{}, Opts),
-    hb_private:reset(hb_cache:ensure_all_loaded(Balances, Opts)).
+    hb_private:reset(
+        hb_message:uncommitted(
+            hb_cache:ensure_all_loaded(Balances, Opts)
+        )
+    ).
 
 %% @doc Get the supply of a ledger, either `now` or `initial`.
 supply(ProcMsg, Opts) ->
