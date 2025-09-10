@@ -121,8 +121,7 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
     do_write(Opts, PathBin, <<?DATA_PREFIX/binary, Value/binary>>);
 
 write(Opts, Path, Value) ->
-    PrefixedValue = <<?DATA_PREFIX/binary, Value/binary>>,
-    do_write(Opts, Path, PrefixedValue).
+    do_write(Opts, Path, <<?DATA_PREFIX/binary, Value/binary>>).
     
 do_write(Opts, Path, PrefixedValue) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
@@ -193,7 +192,15 @@ read(Opts, Path) ->
                     ),
                     % If link resolution fails, return not_found
                     not_found
-            end
+            end;
+        {error, badformat} ->
+            ?event(error,
+                        {
+                            resolve_path_links_failed, 
+                            data_missing_prefix
+                        }
+                    ),
+            {error, badformat}
     end.
 
 %% @doc Helper function to convert to a path
@@ -212,7 +219,8 @@ read_direct(Opts, Path) ->
         {ok, <<Prefix:?PREFIX_SIZE/binary, Link/binary>>} when Prefix == ?LINK_PREFIX -> {link, Link};
         {ok, <<"group">>} -> {group, <<"group">>};
         {error, not_found} -> not_found;  % Normalize error format
-        not_found -> not_found  % Handle both old and new format
+        not_found -> not_found;  % Handle both old and new format
+        _OldData -> error
     end.
 
 %% @doc Read a value directly from the database with link resolution.
@@ -226,7 +234,9 @@ read_with_links(Opts, Path) ->
         {data, RawValue} ->
             {ok, RawValue};
         not_found ->
-            not_found
+            not_found;
+        error ->
+            {error, badformat}
     end.
 
 %% @doc Resolve links in a path, checking each segment except the last.
@@ -1053,4 +1063,30 @@ list_with_link_test() ->
     {ok, LinkChildren} = list(StoreOpts, <<"link-to-group">>),
     ?event({link_children, LinkChildren}),
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
+    stop(StoreOpts).
+
+%% @doc Test that data previously written without prefix returns {error, badformat}
+%%
+%% This test verifies that when data is written directly to LMDB without the
+%% required prefix, attempting to read it returns {error, badformat} rather
+%% than the raw unprefixed data. This ensures data integrity by rejecting
+%% improperly formatted entries.
+data_without_prefix_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/store-no-prefix">>,
+        <<"capacity">> => ?DEFAULT_SIZE
+    },
+    reset(StoreOpts),
+    % Get the LMDB environment to write data directly without prefix
+    #{ <<"db">> := DBInstance } = find_env(StoreOpts),
+    % Write data directly to LMDB without the required "data:" prefix
+    Key = <<"test-key">>,
+    ValueWithoutPrefix = <<"raw-value-no-prefix">>,
+    ok = elmdb:put(DBInstance, Key, ValueWithoutPrefix),
+    % Attempt to read the data through the normal read function
+    % This should return {error, badformat} because the data lacks the prefix
+    Result = read(StoreOpts, Key),
+    ?event({data_without_prefix_result, Result}),
+    ?assertEqual({error, badformat}, Result),
     stop(StoreOpts).
