@@ -233,6 +233,8 @@ do_normalize_commitments(Msg, Opts, passive) ->
             Msg#{ <<"commitments">> => Commitments };
         _ -> Msg
     end;
+do_normalize_commitments(Msg, _Opts, verify) when ?IS_EMPTY_MESSAGE(Msg) ->
+    Msg;
 do_normalize_commitments(Msg, Opts, verify) ->
     {ok, #{ <<"commitments">> := NormCommitments }} =
         dev_message:commit(
