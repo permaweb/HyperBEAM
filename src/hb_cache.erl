@@ -380,14 +380,7 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either a
 %% richly typed map or a direct binary.
 read(Path, Opts) ->
-    case store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts) of
-        not_found -> not_found;
-        {ok, Res} ->
-            %?event({applying_types_to_read_message, Res}),
-            %Structured = dev_codec_structured:to(Res),
-            %?event({finished_read, Structured}),
-            {ok, Res}
-    end.
+    store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts).
 
 %% @doc List all of the subpaths of a given path and return a map of keys and
 %% links to the subpaths, including their types.
