@@ -69,8 +69,12 @@ read(ID, Opts) ->
         {error, Reason} -> {error, Reason};
         {ok, GqlMsg} ->
             case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
-                not_found -> {error, not_found};
-                Item = #{<<"id">> := ID} -> result_to_message(ID, Item, Opts)
+                not_found ->
+                    ?event({read_not_found, {id, ID}, {gql_msg, GqlMsg}}),
+                    {error, not_found};
+                Item ->
+                    ?event({read_found, {id, ID}, {item, Item}}),
+                    result_to_message(ID, Item, Opts)
             end
     end.
 

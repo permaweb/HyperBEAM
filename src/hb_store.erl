@@ -386,14 +386,12 @@ apply_store_function(Mod, Store, Function, Args, AttemptsRemaining) ->
     catch Class:Reason:Stacktrace ->
         ?event(store_error,
             {store_call_failed_retrying,
-                #{
-                    store => Store,
-                    function => Function,
-                    args => Args,
-                    class => Class,
-                    reason => Reason,
-                    stacktrace => Stacktrace
-                }
+                {store, Store},
+                {function, Function},
+                {args, Args},
+                {class, Class},
+                {reason, Reason},
+                {stacktrace, {trace, Stacktrace}}
             }
         ),
         retry(Mod, Store, Function, Args, AttemptsRemaining)

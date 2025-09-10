@@ -22,7 +22,8 @@
         <<"keys">>,
         <<"tags">>,
         <<"name">>,
-        <<"value">>
+        <<"value">>,
+        <<"cursor">>
     ]
 ).
 
@@ -213,6 +214,8 @@ message_query(Msg = #{ <<"independent_hash">> := _ }, <<"id">>, _Args, Opts) ->
 message_query(Msg, <<"id">>, _Args, Opts) ->
     ?event({message_query_id, {object, Msg}}),
     {ok, hb_message:id(Msg, all, Opts)};
+message_query(_Msg, <<"cursor">>, _Args, _Opts) ->
+    {ok, <<"">>};
 message_query(_Obj, _Field, _, _) ->
     {ok, <<"Not found.">>}.
 
