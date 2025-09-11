@@ -14,7 +14,7 @@
   1},
  {<<"elmdb">>,
   {git,"https://github.com/twilson63/elmdb-rs.git",
-       {ref,"90c8857cd4ccff341fbe415b96bc5703d17ff7f0"}},
+       {ref,"5ac27143b44f4f19175fc0179b33c707300f1d44"}},
   0},
  {<<"graphql">>,{pkg,<<"graphql_erl">>,<<"0.17.1">>},0},
  {<<"gun">>,
@@ -29,7 +29,11 @@
  {<<"ranch">>,
   {git,"https://github.com/ninenines/ranch",
        {ref,"a692f44567034dacf5efcaa24a24183788594eb7"}},
-  1}]}.
+  1},
+ {<<"ssl_cert">>,
+  {git,"https://github.com/permaweb/ssl_cert.git",
+       {ref,"1ab6490623763a19002facdc4a9eac4c01860df4"}},
+  0}]}.
 [
 {pkg_hash,[
  {<<"accept">>, <<"CD6E34A2D7E28CA38B2D3CB233734CA0C221EFBC1F171F91FEC5F162CC2D18DA">>},

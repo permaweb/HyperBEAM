@@ -15,8 +15,8 @@
 %%% and certificate operations.
 -module(dev_ssl_cert).
 
--include("ssl_cert/include/ssl_cert_records.hrl").
 -include("include/hb.hrl").
+-include_lib("ssl_cert/include/ssl_cert.hrl").
 
 %% Device API exports
 -export([info/1, info/3, request/3, finalize/3]).
@@ -97,7 +97,7 @@ info(_Msg1, _Msg2, _Opts) ->
             }
         }
     },
-    hb_ssl_cert_util:build_success_response(200, InfoBody).
+    ssl_utils:build_success_response(200, InfoBody).
 
 %% @doc Requests a new SSL certificate for the specified domains.
 %%
@@ -125,7 +125,7 @@ request(_M1, _M2, Opts) ->
         StrippedOpts = maps:without([<<"ssl_cert_rsa_key">>, <<"ssl_cert_opts">>], LoadedOpts),
         ?event({ssl_cert_request_started_with_opts, StrippedOpts}),
         % Extract SSL options from configuration
-        {ok, SslOpts} ?= hb_ssl_cert_util:extract_ssl_opts(StrippedOpts),
+        {ok, SslOpts} ?= extract_ssl_opts(StrippedOpts),
         % Extract and validate parameters
                 Domains = maps:get(<<"domains">>, SslOpts, not_found),
                 Email = maps:get(<<"email">>, SslOpts, not_found),
@@ -138,25 +138,27 @@ request(_M1, _M2, Opts) ->
                 }),
         % Validate all parameters
         {ok, ValidatedParams} ?= 
-            hb_ssl_cert_validation:validate_request_params(Domains, Email, Environment),
+            ssl_cert_validation:validate_request_params(Domains, Email, Environment),
                         EnhancedParams = ValidatedParams#{
             key_size => ?SSL_CERT_KEY_SIZE,
             storage_path => ?SSL_CERT_STORAGE_PATH
         },
         % Process the certificate request
+        Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
         {ok, ProcResp} ?= 
-            hb_ssl_cert_ops:process_certificate_request(EnhancedParams, StrippedOpts),
+            ssl_cert_ops:process_certificate_request(EnhancedParams, Wallet),
         NewOpts = hb_http_server:get_opts(Opts),
         ProcBody = maps:get(<<"body">>, ProcResp, #{}),
         RequestState0 = maps:get(<<"request_state">>, ProcBody, #{}),
+        CertificateKey = maps:get(<<"certificate_key">>, ProcBody, not_found),
         ?event({ssl_cert_orchestration_created_request}),
         % Persist request state in node opts (overwrites previous)
         ok = hb_http_server:set_opts(
-            NewOpts#{ <<"ssl_cert_request">> => RequestState0 }
+            NewOpts#{ <<"ssl_cert_request">> => RequestState0, <<"ssl_cert_rsa_key">> => CertificateKey }
         ),
         % Format challenges for response
         Challenges = maps:get(<<"challenges">>, RequestState0, []),
-        FormattedChallenges = hb_ssl_cert_challenge:format_challenges_for_response(Challenges),
+        FormattedChallenges = ssl_cert_challenge:format_challenges_for_response(Challenges),
         % Return challenges and request_state to the caller
         {ok, #{<<"status">> => 200,
                <<"body">> => #{
@@ -167,16 +169,16 @@ request(_M1, _M2, Opts) ->
                }}}
     else
         {error, <<"ssl_opts configuration required">>} ->
-            hb_ssl_cert_util:build_error_response(400, <<"ssl_opts configuration required">>);
+            ssl_utils:build_error_response(400, <<"ssl_opts configuration required">>);
         {error, ReasonBin} when is_binary(ReasonBin) ->
-            hb_ssl_cert_util:format_validation_error(ReasonBin);
+            ssl_utils:format_validation_error(ReasonBin);
                     {error, Reason} ->
             ?event({ssl_cert_request_error_maybe, Reason}),
-            FormattedError = hb_ssl_cert_util:format_error_details(Reason),
-            hb_ssl_cert_util:build_error_response(500, FormattedError);
+            FormattedError = ssl_utils:format_error_details(Reason),
+            ssl_utils:build_error_response(500, FormattedError);
         Error ->
             ?event({ssl_cert_request_unexpected_error, Error}),
-            hb_ssl_cert_util:build_error_response(500, <<"Internal server error">>)
+            ssl_utils:build_error_response(500, <<"Internal server error">>)
     end.
 
 %% @doc Finalizes a certificate request: validates challenges and downloads the certificate.
@@ -202,8 +204,9 @@ finalize(_M1, _M2, Opts) ->
             _ when is_map(RequestState) -> {ok, true};
             _ -> {error, invalid_request_state}
         end,
+        PrivKeyRecord = hb_opts:get(<<"ssl_cert_rsa_key">>, not_found, Opts),
         % Validate DNS challenges
-        {ok, ValResp} ?= hb_ssl_cert_challenge:validate_dns_challenges_state(RequestState, Opts),
+        {ok, ValResp} ?= ssl_cert_challenge:validate_dns_challenges_state(RequestState, PrivKeyRecord),
         ValBody = maps:get(<<"body">>, ValResp, #{}),
         OrderStatus = maps:get(<<"order_status">>, ValBody, <<"unknown">>),
         Results = maps:get(<<"results">>, ValBody, []),
@@ -212,17 +215,16 @@ finalize(_M1, _M2, Opts) ->
         case OrderStatus of
             ?ACME_STATUS_VALID ->
                 % Try to download the certificate
-                case hb_ssl_cert_ops:download_certificate_state(RequestState1, Opts) of
+                case ssl_cert_ops:download_certificate_state(RequestState1, Opts) of
                     {ok, DownResp} ->
                         ?event(ssl_cert, {ssl_cert_certificate_downloaded, DownResp}),
                         DownBody = maps:get(<<"body">>, DownResp, #{}),
                         CertPem = maps:get(<<"certificate_pem">>, DownBody, <<>>),
                         DomainsOut = maps:get(<<"domains">>, DownBody, []),
                         % Get the CSR private key from saved opts and serialize to PEM
-                        PrivKeyRecord = hb_opts:get(<<"ssl_cert_rsa_key">>, not_found, Opts),
                         PrivKeyPem = case PrivKeyRecord of
                             not_found -> <<"">>;
-                            Key -> hb_ssl_cert_state:serialize_private_key(Key)
+                            Key -> ssl_cert_state:serialize_private_key(Key)
                         end,
                         ?event(ssl_cert, {ssl_cert_certificate_and_key_ready_for_nginx, {domains, DomainsOut}}),
                         {ok, #{<<"status">> => 200,
@@ -253,12 +255,12 @@ finalize(_M1, _M2, Opts) ->
         end
     else
         {error, request_state_not_found} ->
-            hb_ssl_cert_util:build_error_response(404, <<"request state not found">>);
+            ssl_utils:build_error_response(404, <<"request state not found">>);
         {error, invalid_request_state} ->
-            hb_ssl_cert_util:build_error_response(400, <<"request_state must be a map">>);
+            ssl_utils:build_error_response(400, <<"request_state must be a map">>);
         {error, Reason} ->
-            FormattedError = hb_ssl_cert_util:format_error_details(Reason),
-            hb_ssl_cert_util:build_error_response(500, FormattedError)
+            FormattedError = ssl_utils:format_error_details(Reason),
+            ssl_utils:build_error_response(500, FormattedError)
     end.
 
 
@@ -283,25 +285,25 @@ renew(_M1, _M2, Opts) ->
     ?event({ssl_cert_renewal_started}),
     try
         % Extract SSL options and validate
-        case hb_ssl_cert_util:extract_ssl_opts(Opts) of
+        case extract_ssl_opts(Opts) of
             {error, ErrorReason} ->
-                hb_ssl_cert_util:build_error_response(400, ErrorReason);
+                ssl_utils:build_error_response(400, ErrorReason);
             {ok, SslOpts} ->
                 Domains = maps:get(<<"domains">>, SslOpts, not_found),
                 case Domains of
                     not_found ->
                         ?event({ssl_cert_renewal_domains_missing}),
-                        hb_ssl_cert_util:build_error_response(400, 
+                        ssl_utils:build_error_response(400, 
                             <<"domains required in ssl_opts configuration">>);
                     _ ->
-                        DomainList = hb_ssl_cert_util:normalize_domains(Domains),
-                        hb_ssl_cert_ops:renew_certificate(DomainList, Opts)
+                        DomainList = ssl_utils:normalize_domains(Domains),
+                        ssl_cert_ops:renew_certificate(DomainList, Opts)
                 end
         end
     catch
         Error:CatchReason:Stacktrace ->
             ?event({ssl_cert_renewal_error, Error, CatchReason, Stacktrace}),
-            hb_ssl_cert_util:build_error_response(500, <<"Internal server error">>)
+            ssl_utils:build_error_response(500, <<"Internal server error">>)
     end.
 
 %% @doc Deletes a stored SSL certificate.
@@ -323,23 +325,40 @@ delete(_M1, _M2, Opts) ->
     ?event({ssl_cert_deletion_started}),
     try
         % Extract SSL options and validate
-        case hb_ssl_cert_util:extract_ssl_opts(Opts) of
+        case extract_ssl_opts(Opts) of
             {error, ErrorReason} ->
-                hb_ssl_cert_util:build_error_response(400, ErrorReason);
+                ssl_utils:build_error_response(400, ErrorReason);
             {ok, SslOpts} ->
                 Domains = maps:get(<<"domains">>, SslOpts, not_found),
                 case Domains of
                     not_found ->
                         ?event({ssl_cert_deletion_domains_missing}),
-                        hb_ssl_cert_util:build_error_response(400, 
+                        ssl_utils:build_error_response(400, 
                             <<"domains required in ssl_opts configuration">>);
                     _ ->
-                        DomainList = hb_ssl_cert_util:normalize_domains(Domains),
-                        hb_ssl_cert_ops:delete_certificate(DomainList, Opts)
+                        DomainList = ssl_utils:normalize_domains(Domains),
+                        ssl_cert_ops:delete_certificate(DomainList, Opts)
                 end
         end
     catch
         Error:CatchReason:Stacktrace ->
             ?event({ssl_cert_deletion_error, Error, CatchReason, Stacktrace}),
-            hb_ssl_cert_util:build_error_response(500, <<"Internal server error">>)
+            ssl_utils:build_error_response(500, <<"Internal server error">>)
+    end.
+
+%% @doc Extracts SSL options from configuration with validation.
+%%
+%% This function extracts and validates the ssl_opts configuration from
+%% the provided options map, ensuring all required fields are present.
+%%
+%% @param Opts Configuration options map
+%% @returns {ok, SslOpts} or {error, Reason}
+extract_ssl_opts(Opts) when is_map(Opts) ->
+    case hb_opts:get(<<"ssl_opts">>, not_found, Opts) of
+        not_found ->
+            {error, <<"ssl_opts configuration required">>};
+        SslOpts when is_map(SslOpts) ->
+            {ok, SslOpts};
+        _ ->
+            {error, <<"ssl_opts must be a map">>}
     end.
