@@ -21,7 +21,7 @@
 
 %% Public API exports
 -export([start/1, stop/1, scope/0, scope/1, reset/1]).
--export([read/2, write/3, list/2, match/2]).
+-export([read/2, write/3, flush/1, list/2, match/2]).
 -export([make_group/2, make_link/3, type/2]).
 -export([path/2, add_path/3, resolve/2]).
 
@@ -55,13 +55,18 @@ start(Opts = #{ <<"name">> := DataDir }) ->
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
     ok = filelib:ensure_dir(filename:join(DataDirPath, "dummy")),
+    NoSyncParam =
+        case maps:get(<<"no-sync">>, Opts, true) of
+            true -> [no_sync];
+            false -> []
+        end,
     % Create the LMDB environment with specified size limit
     {ok, Env} =
         elmdb:env_open(
             DataDirPath,
             [
                 {map_size, maps:get(<<"capacity">>, Opts, ?MAX_SIZE)},
-                no_mem_init, no_sync
+                no_mem_init, NoSyncParam
             ]
         ),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
@@ -139,6 +144,22 @@ write(Opts, Path, Value) ->
                 }
             ),
             retry
+    end.
+
+-spec flush(map()) -> ok | {error, flush_failed}.
+flush(Opts) ->
+    #{ <<"env">> := DBEnv } = find_env(Opts),
+    case elmdb:env_sync(DBEnv) of
+        ok -> ok;
+        {error, Type, Description} ->
+            ?event(
+                error,
+                {lmdb_error,
+                    {type, Type},
+                    {description, Description}
+                }
+            ),
+            {error, flush_failed}
     end.
 
 %% @doc Read a value from the database by key, with automatic link resolution.
@@ -657,8 +678,7 @@ basic_test() ->
 list_test() ->
     StoreOpts = #{
         <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store-2">>,
-        <<"capacity">> => ?MAX_SIZE
+        <<"name">> => <<"/tmp/store-2">>
     },
     reset(StoreOpts),
     ?assertEqual(list(StoreOpts, <<"colors">>), {ok, []}),
@@ -986,8 +1006,7 @@ reconstruct_map(StoreOpts, Path) ->
 cache_debug_test() ->
     StoreOpts = #{
         <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/cache-debug">>,
-        <<"capacity">> => ?MAX_SIZE
+        <<"name">> => <<"/tmp/cache-debug">>
     },
     reset(StoreOpts),
     % Simulate what the cache does:
@@ -1024,8 +1043,7 @@ cache_debug_test() ->
 isolated_type_debug_test() ->
     StoreOpts = #{
         <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/isolated-debug">>,
-        <<"capacity">> => ?MAX_SIZE
+        <<"name">> => <<"/tmp/isolated-debug">>
     },
     reset(StoreOpts),
     % Create the exact scenario from user's description:
@@ -1064,8 +1082,7 @@ isolated_type_debug_test() ->
 list_with_link_test() ->
     StoreOpts = #{
         <<"store-module">> => ?MODULE,
-        <<"name">> => <<"/tmp/store-list-link">>,
-        <<"capacity">> => ?MAX_SIZE
+        <<"name">> => <<"/tmp/store-list-link">>
     },
     reset(StoreOpts),
     % Create a group with some children
@@ -1084,4 +1101,18 @@ list_with_link_test() ->
     {ok, LinkChildren} = list(StoreOpts, <<"link-to-group">>),
     ?event({link_children, LinkChildren}),
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
+    stop(StoreOpts).
+
+%% @doc Test that list function resolves links correctly
+flush_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/flush">>
+    },
+    reset(StoreOpts),
+    write(StoreOpts, <<"key1">>, <<"value1">>),
+    write(StoreOpts, <<"key2">>, <<"value2">>),
+    write(StoreOpts, <<"key3">>, <<"value3">>),
+    ?assertEqual(ok, flush(StoreOpts)),
+    ?assertEqual({ok, <<"value1">>}, read(StoreOpts, <<"key1">>)),
     stop(StoreOpts).
