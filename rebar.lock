@@ -32,7 +32,7 @@
   1},
  {<<"ssl_cert">>,
   {git,"https://github.com/permaweb/ssl_cert.git",
-       {ref,"1ab6490623763a19002facdc4a9eac4c01860df4"}},
+       {ref,"31db2a01b4393042cfaf4072afe45ca1c01562fc"}},
   0}]}.
 [
 {pkg_hash,[
