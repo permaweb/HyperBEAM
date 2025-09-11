@@ -14,7 +14,7 @@
 format(TX) -> format(TX, 0).
 format(TX, Indent) -> format(TX, Indent, #{}).
 format(TX, Indent, Opts) when is_list(TX); is_map(TX) ->
-    format(ar_bundles:normalize(TX), Indent, Opts);
+    format(dev_arweave_common:normalize(TX), Indent, Opts);
 format(TX, Indent, Opts) when is_record(TX, tx) ->
     MustVerify = hb_opts:get(debug_ids, true, Opts),
     Valid =

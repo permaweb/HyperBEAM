@@ -2,7 +2,8 @@
 -module(ar_tx).
 
 -export([sign/2, verify/1, verify_tx_id/2]).
--export([id/1, id/2, generate_id/2, get_owner_address/1, data_root/1]).
+-export([id/1, id/2, get_owner_address/1, data_root/1]).
+-export([generate_signature_data_segment/1]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
 
 -include("include/hb.hrl").
@@ -68,20 +69,14 @@ verify_tx_id(ExpectedID, #tx{ id = ID } = TX) ->
 id(TX) -> id(TX, unsigned).
 id(#tx{ id = ?DEFAULT_ID, signature = ?DEFAULT_SIG }, signed) ->
     not_signed;
-id(#tx{ id = ?DEFAULT_ID } = TX, signed) ->
-    generate_id(TX, signed);
+id(TX = #tx{ id = ?DEFAULT_ID }, signed) ->
+    dev_arweave_common:generate_id(TX, signed);
 id(#tx{ id = ID }, signed) ->
     ID;
-id(#tx{ unsigned_id = ?DEFAULT_ID } = TX, unsigned) ->
-    generate_id(TX, unsigned);
+id(TX = #tx{ unsigned_id = ?DEFAULT_ID }, unsigned) ->
+    dev_arweave_common:generate_id(TX, unsigned);
 id(#tx{ unsigned_id = UnsignedID }, unsigned) ->
     UnsignedID.
-
-%% @doc Generate the ID for a given transaction.
-generate_id(TX, signed) ->
-    crypto:hash(sha256, TX#tx.signature);
-generate_id(TX, unsigned) ->
-    crypto:hash(sha256, generate_signature_data_segment(TX)).
 
 %% @doc Return the transaction's owner address. Take the cached value if available.
 get_owner_address(#tx{ owner = ?DEFAULT_OWNER }) ->
@@ -202,12 +197,12 @@ sign(TX, PrivKey, {KeyType, Owner}, SignatureDataSegment) ->
         signature = ar_wallet:sign(PrivKey, SignatureDataSegment)
     },
     NewTX#tx{
-        id = generate_id(NewTX, signed), 
+        id = dev_arweave_common:generate_id(NewTX, signed), 
         owner_address = get_owner_address(NewTX) }.
 
 %% @doc Verify that the transaction's ID is a hash of its signature.
 verify_hash(#tx{ id = ID } = TX) ->
-    ID == generate_id(TX, signed).
+    ID == dev_arweave_common:generate_id(TX, signed).
 
 %% @doc On Arweave we don't have data on format=2 transactions, and so
 %% traditionally just verify the transcation based on data_rot and data_size.
@@ -242,6 +237,7 @@ json_struct_to_tx(TXStruct) ->
             Xs ->
                 Xs
         end,
+    ?event(debug_test, {json_struct_to_tx, {tags, {explicit, Tags}}}),
     Data = hb_util:decode(hb_util:find_value(<<"data">>, TXStruct)),
     Format =
         case hb_util:find_value(<<"format">>, TXStruct) of
@@ -573,13 +569,7 @@ test_generate_chunk_tree_and_validate_path(Data, ChallengeLocation) ->
 %% json_struct_to_tx tests
 %%===================================================================
 
-json_struct_to_tx_test_() ->
-    [
-        {timeout, 30, fun test_json_struct_to_tx_happy/0},
-        {timeout, 30, fun test_json_struct_to_tx_failure/0}
-    ].
-
-test_json_struct_to_tx_happy() ->
+json_struct_to_tx_happy_test() ->
     ID32        = crypto:strong_rand_bytes(32),
     Owner32     = crypto:strong_rand_bytes(32),
     LastTx32    = crypto:strong_rand_bytes(32),
@@ -601,11 +591,9 @@ test_json_struct_to_tx_happy() ->
     },
 
     TagFun = fun(Key, Val) ->
-        {
-            [
-                {<<"name">>,  hb_util:encode(Key)},
-                {<<"value">>, hb_util:encode(Val)}
-            ]
+        #{ 
+            <<"name">> =>  hb_util:encode(Key),
+            <<"value">> => hb_util:encode(Val)
         }
     end,
 
@@ -651,7 +639,7 @@ test_json_struct_to_tx_happy() ->
         Variants
     ).
 
-test_json_struct_to_tx_failure() ->
+json_struct_to_tx_failure_test() ->
     ID32        = crypto:strong_rand_bytes(32),
     Owner32     = crypto:strong_rand_bytes(32),
     LastTx32    = crypto:strong_rand_bytes(32),
@@ -674,8 +662,8 @@ test_json_struct_to_tx_failure() ->
     InvalidB64 = <<"!!not_base64!!">>,
 
     %% invalid tag variants
-    BadTagName   = [ {[{<<"name">>, InvalidB64}, {<<"value">>, hb_util:encode(<<"val">>)}]} ],
-    BadTagValue  = [ {[{<<"name">>, hb_util:encode(<<"key">>)}, {<<"value">>, InvalidB64}]} ],
+    BadTagName   = [ #{ <<"name">> => InvalidB64, <<"value">> => hb_util:encode(<<"val">>)} ],
+    BadTagValue  = [ #{ <<"name">> => hb_util:encode(<<"key">>), <<"value">> => InvalidB64} ],
 
     FailureCases = [
         {"invalid_format", BaseStruct#{ <<"format">> => <<"abc">> }, badarg},
@@ -714,14 +702,7 @@ test_json_struct_to_tx_failure() ->
 %%===================================================================
 %% tx_to_json_struct tests
 %%===================================================================
-
-tx_to_json_struct_test_() ->
-    [
-        {timeout, 30, fun test_tx_to_json_struct_happy/0},
-        {timeout, 30, fun test_tx_to_json_struct_failure/0}
-    ].
-
-test_tx_to_json_struct_happy() ->
+tx_to_json_struct_happy_test() ->
     Owner = crypto:strong_rand_bytes(32),
 
     BaseTX = #tx{
@@ -744,10 +725,10 @@ test_tx_to_json_struct_happy() ->
 
     %% Helper to create the expected tag structure for JSON
     JsonTagFun = fun({Name, Value}) ->
-        {[
-            {<<"name">>, hb_util:encode(Name)},
-            {<<"value">>, hb_util:encode(Value)}
-        ]}
+        #{ 
+            <<"name">> =>  hb_util:encode(Name),
+            <<"value">> => hb_util:encode(Value)
+        }
     end,
 
     SpecificTarget = crypto:strong_rand_bytes(32),
@@ -814,7 +795,7 @@ test_tx_to_json_struct_happy() ->
         Variants
     ).
 
-test_tx_to_json_struct_failure() ->
+tx_to_json_struct_failure_test() ->
     RandBin32 = crypto:strong_rand_bytes(32),
     BaseTX = #tx{
         id = RandBin32, anchor = RandBin32, owner = RandBin32,

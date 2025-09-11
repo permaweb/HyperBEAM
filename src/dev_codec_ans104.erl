@@ -88,7 +88,7 @@ from(TX, Req, Opts) when is_record(TX, tx) ->
     end.
 do_from(RawTX, Req, Opts) ->
     % Ensure the TX is fully deserialized.
-    TX = ar_bundles:deserialize(ar_bundles:normalize(RawTX)),
+    TX = ar_bundles:deserialize(dev_arweave_common:normalize(RawTX)),
     ?event({parsed_tx, TX}),
     % Get the fields, tags, and data from the TX.
     Fields = dev_codec_ans104_from:fields(TX, <<>>, Opts),
@@ -148,7 +148,7 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     TX2 = TX1#tx { tags = Tags },
     ?event({tx_before_id_gen, TX2}),
     Res =
-        try ar_bundles:reset_ids(ar_bundles:normalize(TX2))
+        try dev_arweave_common:normalize(TX2)
         catch
             Type:Error:Stacktrace ->
                 ?event({{reset_ids_error, Error}, {tx_without_data, TX2}}),
@@ -190,7 +190,7 @@ from_maintains_tag_name_case_test() ->
     ConvertedTX = hb_util:ok(to(TABM, #{}, #{})),
     ?event({converted_tx, ConvertedTX}),
     ?assert(ar_bundles:verify_item(ConvertedTX)),
-    ?assertEqual(ConvertedTX, ar_bundles:normalize(SignedTX)).
+    ?assertEqual(ConvertedTX, dev_arweave_common:normalize(SignedTX)).
 
 restore_tag_name_case_from_cache_test() ->
     Opts = #{ store => hb_test_utils:test_store() },
@@ -222,12 +222,12 @@ restore_tag_name_case_from_cache_test() ->
     ?assert(ar_bundles:verify_item(ReadTX)).
 
 unsigned_duplicated_tag_name_test() ->
-    TX = ar_bundles:reset_ids(ar_bundles:normalize(#tx {
+    TX = dev_arweave_common:normalize(#tx {
         tags = [
             {<<"Test-Tag">>, <<"test-value">>},
             {<<"test-tag">>, <<"test-value-2">>}
         ]
-    })),
+    }),
     Msg = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
     ?event({msg, Msg}),
     TX2 = hb_message:convert(Msg, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),

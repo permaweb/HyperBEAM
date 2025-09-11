@@ -1,7 +1,7 @@
 %%% @doc Codec for managing transformations from `ar_tx'-style Arweave TX
 %%% records to and from TABMs.
 -module(dev_codec_tx).
--export([from/3, to/3, commit/3, verify/3, normalize/1, normalize/2]).
+-export([from/3, to/3, commit/3, verify/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -73,7 +73,7 @@ do_from(RawTX, Req, Opts) ->
     % Assert a minimally valid TX record so we can avoid a lot of edge case
     % handling in the rest of the code.
     enforce_valid_tx(RawTX),
-    TX = ar_bundles:deserialize(normalize(RawTX)),
+    TX = ar_bundles:deserialize(dev_arweave_common:normalize(RawTX)),
     ?event({parsed_tx, TX}),
     % Get the fields, tags, and data from the TX.
     Fields = dev_codec_tx_from:fields(TX, <<>>, Opts),
@@ -105,7 +105,7 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
     % we turn it into a TX record with a special tag, tx_to_message will
     % identify this tag and extract just the binary.
     {ok,
-        normalize(#tx{
+        dev_arweave_common:normalize(#tx{
             format = 2,
             tags = [{<<"ao-type">>, <<"binary">>}],
             data = Binary
@@ -130,47 +130,13 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     ?event({calculated_tags, Tags}),
     TX2 = TX1#tx { tags = Tags },
     ?event({tx_before_id_gen, TX2}),
-    FinalTX = normalize(TX2),
+    FinalTX = dev_arweave_common:normalize(TX2),
     enforce_valid_tx(FinalTX),
     ?event({to_result, FinalTX}),
     {ok, FinalTX};
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
-
-normalize(TX) -> normalize(TX, false).
-normalize(TX, JustData) ->
-    NormalizedTX= ar_bundles:normalize(TX, JustData),
-    case JustData of
-        true -> NormalizedTX;
-        false -> 
-            reset_ids(
-                normalize_data_root(
-                    NormalizedTX#tx{
-                        owner_address = ar_tx:get_owner_address(TX)
-                    }
-                )
-            )
-    end.
     
-normalize_data_root(Item = #tx{data = Bin, format = 2})
-        when is_binary(Bin) andalso Bin =/= ?DEFAULT_DATA ->
-    Item#tx{data_root = ar_tx:data_root(Bin)};
-normalize_data_root(Item) -> Item.
-
-reset_ids(TX) ->
-    update_ids(TX#tx{unsigned_id = ?DEFAULT_ID, id = ?DEFAULT_ID}).
-
-update_ids(TX = #tx{ unsigned_id = ?DEFAULT_ID }) ->
-    update_ids(TX#tx{unsigned_id = ar_tx:generate_id(TX, unsigned)});
-update_ids(TX = #tx{ id = ?DEFAULT_ID, signature = ?DEFAULT_SIG }) ->
-    TX;
-update_ids(TX = #tx{ signature = ?DEFAULT_SIG }) ->
-    TX#tx{ id = ?DEFAULT_ID };
-update_ids(TX = #tx{ signature = Sig }) when Sig =/= ?DEFAULT_SIG ->
-    TX#tx{ id = ar_tx:generate_id(TX, signed) };
-update_ids(TX) -> TX.
-
-
 %% @doc Verifies that the given transaction is a minimally valid signed or
 %% unsigned transaction.
 %% 
@@ -414,7 +380,7 @@ tag_name_case_test() ->
             {<<"Test-Tag">>, <<"test-value">>}
         ]
     },
-    UnsignedID = ar_tx:generate_id(TX, unsigned),
+    UnsignedID = dev_arweave_common:generate_id(TX, unsigned),
     UnsignedTABM = #{
         <<"test-tag">> => <<"test-value">>,
         <<"commitments">> => #{
@@ -454,7 +420,7 @@ duplicated_tag_name_test() ->
             {<<"test-tag">>, <<"test-value-2">>}
         ]
     },
-    UnsignedID = ar_tx:generate_id(TX, unsigned),
+    UnsignedID = dev_arweave_common:generate_id(TX, unsigned),
     UnsignedTABM = #{
         <<"test-tag">> => <<"\"test-value\", \"test-value-2\"">>,
         <<"commitments">> => #{
@@ -610,7 +576,7 @@ nested_data_tabm_test() ->
             }
         }
     },
-    UnsignedTX = normalize(TX),
+    UnsignedTX = dev_arweave_common:normalize(TX),
     NoLinksCommitment = #{
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"data">>, <<"tag">>],
@@ -655,7 +621,7 @@ nested_non_data_key_tabm_test() ->
             }
         }
     },
-    UnsignedTX = normalize(TX),
+    UnsignedTX = dev_arweave_common:normalize(TX),
     NoLinksCommitment = #{
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"a1">>, <<"tag1">>],
@@ -718,7 +684,7 @@ nested_multiple_tabm_test() ->
             }
         }
     },
-    UnsignedTX = normalize(TX),
+    UnsignedTX = dev_arweave_common:normalize(TX),
     NoLinksCommitment = #{
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"a1">>, <<"data">>, <<"tag1">>],
@@ -794,6 +760,8 @@ do_real_tx_verify(TXID, ExpectedIDs) ->
             TXHeader#tx{ data = Data };
         {ok, _} ->
             TXHeader#tx{ data = ?DEFAULT_DATA };
+        {error, #{ <<"status">> := 404 }} ->
+            TXHeader#tx{ data = ?DEFAULT_DATA };
         {error, Error} ->
             throw({http_request_error, Error})
     end,
@@ -811,7 +779,7 @@ verify_items(RootItem, ExpectedIDs) ->
     [RootItem | NestedItems] = AllItems,
     [RootID | NestedIDs] = ExpectedIDs,
     ?assert(
-        ar_tx:verify(normalize(RootItem, true)),
+        ar_tx:verify(ar_bundles:serialize_data(RootItem)),
         hb_util:encode(RootItem#tx.id)),
     ?assertEqual(RootID, hb_util:encode(RootItem#tx.id)),
     lists:zipwith(
@@ -894,7 +862,7 @@ do_signed_tx_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Req) ->
     % TABM -> TX
     TX = hb_util:ok(to(TABM, Req, #{})),
     ExpectedTX = SignedTX#tx{ 
-        unsigned_id = ar_tx:generate_id(SignedTX, unsigned) },
+        unsigned_id = dev_arweave_common:generate_id(SignedTX, unsigned) },
     ?event(debug_test, {signed_tx_roundtrip,
         {expected_tx, ExpectedTX}, {actual_tx, TX}}),
     ?assertEqual(ExpectedTX, TX, signed_tx_roundtrip).
@@ -911,7 +879,7 @@ do_tabm_roundtrips(UnsignedTX, UnsignedTABM, Commitment, Bundle) ->
     
 do_unsigned_tabm_roundtrip(UnsignedTX0, UnsignedTABM, Req) ->
     UnsignedTX = UnsignedTX0#tx{ 
-        unsigned_id = ar_tx:generate_id(UnsignedTX0, unsigned) },
+        unsigned_id = dev_arweave_common:generate_id(UnsignedTX0, unsigned) },
     % TABM -> TX
     TX = hb_util:ok(to(UnsignedTABM, Req, #{})),
     ?event(debug_test, {unsigned_tabm_roundtrip, 
@@ -957,7 +925,7 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
     % a different signature each time we sign.
     ?assertEqual(
         ExpectedTX#tx{ 
-            unsigned_id = ar_tx:generate_id(ExpectedTX, unsigned),
+            unsigned_id = dev_arweave_common:generate_id(ExpectedTX, unsigned),
             id = SignedTX#tx.id,
             signature = SignedTX#tx.signature
         }, SignedTX, signed_tabm_roundtrip),
