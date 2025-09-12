@@ -105,15 +105,14 @@ httpc_req(Args, _, Opts) ->
     end.
 
 gun_req(Args, ReestablishedConnection, Opts) ->
-	StartTime = os:system_time(millisecond),
-	#{ peer := Peer, path := Path, method := Method } = Args,
-	Response =
+    StartTime = os:system_time(millisecond),
+    #{ peer := Peer, path := Path, method := Method } = Args,
+    Response =
         case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
             {ok, PID} ->
                 ar_rate_limiter:throttle(Peer, Path, Opts),
                 case request(PID, Args, Opts) of
-                    {error, Error} when Error == {shutdown, normal};
-                            Error == noproc ->
+                    {error, Error} when Error == {shutdown, normal}; Error == noproc ->
                         case ReestablishedConnection of
                             true ->
                                 {error, client_error};
@@ -121,30 +120,41 @@ gun_req(Args, ReestablishedConnection, Opts) ->
                                 req(Args, true, Opts)
                         end;
                     Reply ->
-                        Reply
-                end;
+                        case Reply of
+                            {_Ok, 301, RedirectRes, _} ->
+                                handle_redirect(
+                                  Args,
+                                  ReestablishedConnection,
+                                  Opts,
+                                  RedirectRes,
+                                  Reply
+                                );
+                            _ ->
+                                Reply
+                        end
+                  end;
             {'EXIT', _} ->
                 {error, client_error};
             Error ->
                 Error
-	    end,
-	EndTime = os:system_time(millisecond),
-	%% Only log the metric for the top-level call to req/2 - not the recursive call
-	%% that happens when the connection is reestablished.
-	case ReestablishedConnection of
-		true ->
-			ok;
-		false ->
-            record_duration(#{
-                    <<"request-method">> => method_to_bin(Method),
-                    <<"request-path">> => hb_util:bin(Path),
-                    <<"status-class">> => get_status_class(Response),
-                    <<"duration">> => EndTime - StartTime
-                },
-                Opts
-            )
-	end,
-	Response.
+        end,
+    EndTime = os:system_time(millisecond),
+    %% Only log the metric for the top-level call to req/2 - not the recursive call
+    %% that happens when the connection is reestablished.
+    case ReestablishedConnection of
+      true ->
+          ok;
+      false ->
+          record_duration(#{
+              <<"request-method">> => method_to_bin(Method),
+              <<"request-path">> => hb_util:bin(Path),
+              <<"status-class">> => get_status_class(Response),
+              <<"duration">> => EndTime - StartTime
+              },
+              Opts
+          )
+    end,
+    Response.
 
 %% @doc Record the duration of the request in an async process. We write the 
 %% data to prometheus if the application is enabled, as well as invoking the
@@ -455,6 +465,32 @@ terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
 %%% Private functions.
 %%% ==================================================================
 
+handle_redirect(Args, ReestablishedConnection, Opts, Res, Reply) ->
+    case lists:keyfind(<<"location">>, 1, Res) of
+        false ->
+            % Server returned a 301 but no Location header, so we can't follow the redirect.
+            Reply;
+        {_LocationHeaderName, Location} ->
+            case uri_string:parse(Location) of
+                {error, _Reason, _Detail} ->
+                    % Server returned a Location header but the URI was malformed.
+                    Reply;
+                 Parsed ->
+                    #{ scheme := NewScheme, host := NewHost, path := NewPath } = Parsed,
+                    NewPeer = lists:flatten(
+                        io_lib:format(
+                            "~s://~s~s",
+                            [NewScheme, NewHost, NewPath]
+                        )
+                    ),
+                    NewArgs = Args#{
+                        peer := NewPeer,
+                        path := NewPath
+                    },
+                    gun_req(NewArgs, ReestablishedConnection, Opts)
+            end
+    end.
+
 %% @doc Safe wrapper for prometheus_gauge:inc/2.
 inc_prometheus_gauge(Name) ->
     case application:get_application(prometheus) of
@@ -481,7 +517,13 @@ inc_prometheus_counter(Name, Labels, Value) ->
     end.
 
 open_connection(#{ peer := Peer }, Opts) ->
-    {Host, Port} = parse_peer(Peer, Opts),
+    ParsedPeer = uri_string:parse(iolist_to_binary(Peer)),
+    #{ scheme := Scheme, host := Host } = ParsedPeer,
+    DefaultPort = case Scheme of
+        <<"https">> -> 443;
+        <<"http">> -> 80
+      end,
+    Port = maps:get(port, ParsedPeer, DefaultPort),
     ?event(http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
     BaseGunOpts =
         #{
@@ -526,7 +568,7 @@ open_connection(#{ peer := Peer }, Opts) ->
             {transport, Transport}
         }
     ),
-	gun:open(Host, Port, GunOpts).
+    gun:open(hb_util:list(Host), Port, GunOpts).
 
 parse_peer(Peer, Opts) ->
     Parsed = uri_string:parse(Peer),
