@@ -16,7 +16,31 @@ init(Msg1, _Msg2, _Opts) ->
 %% with snapshots triggered only when HyperBEAM requests them. Subsequently,
 %% to load a snapshot, we just need to return the original message.
 normalize(Msg1, _Msg2, Opts) ->
-    hb_ao:set(Msg1, #{ <<"snapshot">> => unset }, Opts).
+    case hb_maps:find(<<"snapshot">>, Msg1, Opts) of
+        error -> {ok, Msg1};
+        {ok, Snapshot} ->
+            Unset = hb_ao:set(Msg1, #{ <<"snapshot">> => unset }, Opts),
+            case hb_maps:get(<<"type">>, Snapshot, Opts) == <<"Checkpoint">> of
+                false -> Unset;
+                true ->
+                    load_snapshot(Snapshot, Opts),
+                    Unset
+            end
+    end.
+
+%% @doc Attempt to load a snapshot into the delegated compute server.
+load_snapshot(Snapshot, Opts) ->
+    ?event({loading_snapshot, {snapshot, Snapshot}}),
+    do_relay(
+        <<"POST">>,
+        <<"/checkpoint">>,
+        hb_maps:get(<<"data">>, Snapshot, Opts),
+        hb_maps:without([<<"data">>], Snapshot, Opts),
+        Opts#{
+            hashpath => ignore,
+            cache_control => [<<"no-store">>, <<"no-cache">>]
+        }
+    ).
 
 %% @doc Call the delegated server to compute the result. The endpoint is
 %% `POST /compute' and the body is the JSON-encoded message that we want to
@@ -95,18 +119,25 @@ do_dryrun(ProcID, Msg2, Opts) ->
     ),
     extract_json_res(Response, Opts).
 
-do_relay(Method, Path, Body, AOS2, Opts) ->
+do_relay(Method, Path, Body, Headers, Opts) ->
+    ContentType =
+        hb_maps:get(
+            <<"content-type">>,
+            Headers,
+            <<"application/json">>,
+            Opts
+        ),
     hb_ao:resolve(
         #{
             <<"device">> => <<"relay@1.0">>,
-            <<"content-type">> => <<"application/json">>
+            <<"content-type">> => ContentType
         },
-        AOS2#{
+        Headers#{
             <<"path">> => <<"call">>,
             <<"relay-method">> => Method,
             <<"relay-body">> => Body,
             <<"relay-path">> => Path,
-            <<"content-type">> => <<"application/json">>
+            <<"content-type">> => ContentType
         },
         Opts
     ).

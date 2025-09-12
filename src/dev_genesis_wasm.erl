@@ -2,7 +2,8 @@
 %%% processes, using HyperBEAM infrastructure. This allows existing `legacynet'
 %%% AO process definitions to be used in HyperBEAM.
 -module(dev_genesis_wasm).
--export([init/3, compute/3, normalize/3, snapshot/3]).
+-export([init/3, compute/3, normalize/3, snapshot/3, import/3]).
+-export([latest_checkpoint/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -246,6 +247,138 @@ ensure_started(Opts) ->
             true
     end.
 
+%% @doc Find either a specific checkpoint by its ID, or find the most recent
+%% checkpoint via GraphQL.
+import(ProcMsg, Req, Opts) ->
+    case hb_maps:find(<<"import">>, Req, Opts) of
+        {ok, ImportID} ->
+            case hb_cache:read(ImportID, Opts) of
+                {ok, CheckpointMessage} ->
+                    do_import(ProcMsg, CheckpointMessage, Opts);
+                not_found -> {error, not_found}
+            end;
+        error ->
+            ProcID = dev_process:process_id(ProcMsg, #{}, Opts),
+            case latest_checkpoint(ProcID, Opts) of
+                {ok, CheckpointMessage} ->
+                    do_import(ProcMsg, CheckpointMessage, Opts);
+                Err -> Err
+            end
+    end.
+
+%% @doc Find the most recent legacy checkpoint for a process.
+latest_checkpoint(ProcID, Opts) ->
+    case hb_opts:get(genesis_wasm_import_authorities, [], Opts) of
+        [] -> {error, no_import_authorities};
+        TrustedSigners -> latest_checkpoint(ProcID, TrustedSigners, Opts)
+    end.
+latest_checkpoint(ProcID, TrustedSigners, Opts) ->
+    Query =
+        <<
+            <<"""
+            query($ProcID: String!, $TrustedSigners: [String!]) {
+                transactions(
+                    tags: [
+                        { name: "Type" values: ["Checkpoint"] },
+                        { name: "Process" values: [$ProcID] }
+                    ],
+                    owners: $TrustedSigners,
+                    first: 1,
+                    sort: HEIGHT_DESC
+                ){
+                edges {
+            """>>/binary,
+            (hb_gateway_client:item_spec())/binary,
+            """
+                }
+            }}
+        """>>,
+    Variables =
+        #{
+            <<"ProcID">> => ProcID,
+            <<"TrustedSigners">> => TrustedSigners
+        },
+    case hb_gateway_client:query(Query, Variables, Opts) of
+        {error, Reason} ->
+            {error, Reason};
+        {ok, GqlMsg} ->
+            case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
+                not_found -> {error, not_found};
+                Item -> hb_gateway_client:result_to_message(Item, Opts)
+            end
+    end.
+
+%% @doc Validate whether a checkpoint message is signed by a trusted snapshot
+%% authority and is for a `ao.TN.1' process or has `execution-device' set to
+%% `genesis-wasm@1.0', then normalize into a state snapshot.
+%% Save the state snapshot into the store.
+do_import(Proc, CheckpointMessage, Opts) ->
+    maybe
+        % Validate that the process is a valid target for importing a checkpoint.
+        Variant = hb_maps:get(<<"variant">>, Proc, false, Opts),
+        ExecutionDevice = hb_maps:get(<<"execution-device">>, Proc, false, Opts),
+        true ?=
+            (Variant == <<"ao.TN.1">>) orelse
+            (ExecutionDevice == <<"genesis-wasm@1.0">>) orelse
+            invalid_import_target,
+        CheckpointSigners = hb_message:signers(CheckpointMessage, Opts),
+        % Validate that the checkpoint message is signed by a trusted snapshot
+        % authority, and targets this process.
+        TrustedSigners = hb_opts:get(genesis_wasm_import_authorities, [], Opts),
+        true ?=
+            lists:any(
+                fun(Signer) -> lists:member(Signer, TrustedSigners) end,
+                CheckpointSigners
+            ) orelse untrusted,
+        true ?= hb_message:verify(CheckpointMessage, all, Opts) orelse unverified,
+        CheckpointTargetProcID = hb_maps:get(<<"process">>, CheckpointMessage, Opts),
+        ProcID = dev_process:process_id(Proc, #{}, Opts),
+        true ?= CheckpointTargetProcID == ProcID orelse process_mismatch,
+        % Normalize the checkpoint message into a process state message with 
+        % a state snapshot.
+        {ok, SlotBin} ?= hb_maps:find(<<"nonce">>, CheckpointMessage, Opts),
+        Slot = hb_util:int(SlotBin),
+        InitializedProc = dev_process:ensure_process_key(Proc, Opts),
+        WithSnapshot =
+            InitializedProc#{
+                <<"at-slot">> => Slot,
+                <<"snapshot">> => CheckpointMessage
+            },
+        % Save the state snapshot into the store.
+        {ok, _} ?= dev_process_cache:write(ProcID, Slot, WithSnapshot, Opts),
+        % Return the normalized process message.
+        {ok, WithSnapshot}
+    else
+        invalid_import_target ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<
+                        "Process is not a valid target for importing a "
+                        "`~genesis-wasm@1.0' checkpoint."
+                    >>
+            }};
+        process_mismatch ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<"Checkpoint message targets a different process.">>
+            }};
+        unverified ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<"Checkpoint message is not verifiable.">>
+            }};
+        untrusted ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<"Checkpoint message is not signed by a trusted snapshot "
+                        "authority.">>
+            }}
+    end.
+
 %% @doc Check if the genesis-wasm server is running, using the cached process ID
 %% if available.
 is_genesis_wasm_server_running(Opts) ->
@@ -320,6 +453,35 @@ log_server_events([Line | Rest]) ->
     log_server_events(Rest).
 
 %%% Tests
+
+import_legacy_checkpoint_test_() ->
+    { timeout, 900, fun import_legacy_checkpoint/0 }.
+import_legacy_checkpoint() ->
+    application:ensure_all_started(hb),
+    Opts = #{
+        priv_wallet => hb:wallet(),
+        genesis_wasm_import_authorities =>
+            [<<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>]
+    },
+    ProcID = <<"DM3FoZUq_yebASPhgd8pEIRIzDW6muXEhxz5-JwbZwo">>,
+    {ok, ProcWithCheckpoint} =
+        hb_ao:resolve(
+           << ProcID/binary, "~genesis-wasm@1.0/import">>,
+           Opts
+        ),
+    ?assertMatch(
+        Slot when Slot > 0,
+        hb_maps:get(<<"at-slot">>, ProcWithCheckpoint)
+    ),
+    ?assertMatch(
+        #{ <<"data">> := Data } when byte_size(Data) > 0,
+        hb_maps:get(<<"snapshot">>, ProcWithCheckpoint)
+    ),
+    ?assertMatch(
+        {ok, Slot, _} when Slot > 0,
+        dev_process_cache:latest(ProcID, Opts)
+    ),
+    hb_ao:resolve(<<ProcID/binary, "~process@1.0/now">>, Opts).
 
 -ifdef(ENABLE_GENESIS_WASM).
 test_base_process() ->
