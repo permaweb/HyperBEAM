@@ -31,8 +31,8 @@
 %% @returns A map with the `exports' key containing a list of allowed functions
 info(_) -> 
     #{ 
-        default => info,
         exports => [
+            info,
             request,
             finalize,
             renew,
