@@ -23,24 +23,26 @@ normalize(Msg1, _Msg2, Opts) ->
             case hb_maps:get(<<"type">>, Snapshot, Opts) == <<"Checkpoint">> of
                 false -> Unset;
                 true ->
-                    load_snapshot(Snapshot, Opts),
+                    load_state(Snapshot, Opts),
                     Unset
             end
     end.
 
 %% @doc Attempt to load a snapshot into the delegated compute server.
-load_snapshot(Snapshot, Opts) ->
-    ?event({loading_snapshot, {snapshot, Snapshot}}),
-    do_relay(
+load_state(Snapshot, Opts) ->
+    ?event(debug_load_snapshot, {loading_snapshot, {snapshot, Snapshot}}),
+    Res = do_relay(
         <<"POST">>,
-        <<"/checkpoint">>,
+        <<"/state">>,
         hb_maps:get(<<"data">>, Snapshot, Opts),
         hb_maps:without([<<"data">>], Snapshot, Opts),
         Opts#{
             hashpath => ignore,
             cache_control => [<<"no-store">>, <<"no-cache">>]
         }
-    ).
+    ),
+    ?event(debug_load_snapshot, {load_result, Res}),
+    Res.
 
 %% @doc Call the delegated server to compute the result. The endpoint is
 %% `POST /compute' and the body is the JSON-encoded message that we want to

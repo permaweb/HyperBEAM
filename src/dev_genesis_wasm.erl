@@ -15,7 +15,15 @@ init(Msg, _Msg2, _Opts) -> {ok, Msg}.
 
 %% @doc Normalize the device.
 normalize(Msg, Msg2, Opts) ->
-    dev_delegated_compute:normalize(Msg, Msg2, Opts).
+    case ensure_started(Opts) of
+        true ->
+            dev_delegated_compute:normalize(Msg, Msg2, Opts);
+        false ->
+            {error, #{
+                <<"status">> => 500,
+                <<"message">> => <<"Genesis-wasm server not running.">>
+            }}
+    end.
 
 %% @doc Genesis-wasm device compute handler.
 %% Normal compute execution through external CU with state persistence
