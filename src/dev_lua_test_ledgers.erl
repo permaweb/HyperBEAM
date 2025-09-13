@@ -137,7 +137,7 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
             <<"path">> => <<"push">>,
             <<"body">> =>
                 hb_message:commit(MaybeRoute#{
-                        <<"action">> => <<"Transfer">>,
+                        <<"action">> => <<"transfer">>,
                         <<"target">> => hb_message:id(ProcMsg, all),
                         <<"recipient">> => hb_util:human_id(Recipient),
                         <<"quantity">> => Quantity
