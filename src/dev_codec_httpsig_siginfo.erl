@@ -155,7 +155,7 @@ nested_map_to_string(Map) ->
         case maps:get(I, Map) of
             Val when is_map(Val) ->
                 Name = maps:get(<<"name">>, Val),
-                Value = maps:get(<<"value">>, Val),
+                Value = hb_util:encode(maps:get(<<"value">>, Val)),
                 <<I/binary, ":", Name/binary, ":", Value/binary>>;
             Val ->
                 Val
@@ -286,7 +286,10 @@ decoding_nested_map_binary(Bin) ->
                 case binary:split(X, <<":">>, [global]) of
                     [ID, Key, Value] ->
                         Acc#{
-                            ID => #{ <<"name">> => Key, <<"value">> => Value }
+                            ID => #{ 
+                                <<"name">> => Key,
+                                <<"value">> => hb_util:decode(Value)
+                            }
                         };
                     _ ->
                         X
@@ -508,3 +511,35 @@ parse_alg_test() ->
             <<"type">> => <<"rsa-pss-sha256">>
         }
     ).
+
+%% @doc Test that tag values with special characters are correctly encoded and
+%% decoded.
+escaped_value_test() ->
+    KeyID = crypto:strong_rand_bytes(32),
+    Committer = hb_util:human_id(ar_wallet:to_address(KeyID)),
+    Signature = crypto:strong_rand_bytes(512),
+    ID = hb_util:human_id(crypto:hash(sha256, Signature)),
+    Commitment = #{
+        <<"committed">> => #{},
+        <<"committer">> => Committer,
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"keyid">> => <<"publickey:", (hb_util:encode(KeyID))/binary>>,
+        <<"original-tags">> => #{
+            <<"1">> => #{
+                <<"name">> => <<"Key">>,
+                <<"value">> => <<"value">>
+            },
+            <<"2">> => #{
+                <<"name">> => <<"Quotes">>,
+                <<"value">> => <<"{\"function\":\"mint\"}">>
+            }
+        },
+        <<"signature">> => hb_util:encode(Signature),
+        <<"type">> => <<"rsa-pss-sha256">>
+    },
+
+    SigInfo = commitments_to_siginfo(#{}, #{ ID => Commitment }, #{}),
+    Commitments = siginfo_to_commitments(SigInfo, #{}, #{}),
+    ?event(debug_test, {siginfo, {explicit, SigInfo}}),
+    ?event(debug_test, {commitments, {explicit, Commitments}}),
+    ?assertEqual(#{ ID => Commitment }, Commitments).
