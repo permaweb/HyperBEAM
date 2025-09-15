@@ -29,13 +29,17 @@ HyperBEAM includes many preloaded devices that provide core functionality. Some 
 *   [`~relay@1.0`](./relay-at-1-0.md): Forwards messages between AO nodes or to external HTTP endpoints.
 *   [`~json@1.0`](./json-at-1-0.md): Provides access to JSON data structures.
 *   [`~message@1.0`](./message-at-1-0.md): Manages message state and processing.
+*   [**Authentication Ecosystem**](./auth-ecosystem-at-1-0.md): Comprehensive wallet-less authentication (`~auth-hook@1.0`, `~secret@1.0`, `~cookie@1.0`, `~http-auth@1.0`).
+*   [**Data Discovery Engine**](./data-discovery-at-1-0.md): Advanced message search and query capabilities (`~query@1.0`).
+*   [**Data Replication Engine**](./data-replication-at-1-0.md): External data ingestion and synchronization (`~copycat@1.0`).
 *   [`~patch@1.0`](https://cookbook_ao.arweave.net/guides/migrating-to-hyperbeam/exposing-process-state.html): Applies state updates directly to a process, often used for migrating or managing process data.
 
 ## Beyond the Basics
 
 Devices aren't limited to just computation or state management. They can represent more abstract concepts:
 
-*   **Security Devices** ([`~snp@1.0`](./source-code/dev_snp.md), [`dev_codec_httpsig`](./source-code/dev_codec_httpsig.md)): Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
+*   **Security & Authentication Devices** ([`~snp@1.0`](./source-code/dev_snp.md), [`dev_codec_httpsig`](./source-code/dev_codec_httpsig.md), [**Authentication Ecosystem**](./auth-ecosystem-at-1-0.md)): Handle tasks related to Trusted Execution Environments (TEEs), message signing, wallet-less authentication, and session management, adding layers of security and verification.
+*   **Data Management Devices** ([**Data Discovery Engine**](./data-discovery-at-1-0.md), [**Data Replication Engine**](./data-replication-at-1-0.md)): Provide comprehensive data ingestion, search, and discovery capabilities for building data-rich applications with external source integration.
 *   **Payment/Access Control Devices** ([`~p4@1.0`](./source-code/dev_p4.md), [`~faff@1.0`](./source-code/dev_faff.md)): Manage metering, billing, or access control for node services.
 *   **Workflow/Utility Devices** ([`dev_cron`](./source-code/dev_cron.md), [`dev_stack`](./source-code/dev_stack.md), [`dev_monitor`](./source-code/dev_monitor.md)): Coordinate complex execution flows, schedule tasks, or monitor process activity.
 
