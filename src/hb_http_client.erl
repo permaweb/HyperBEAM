@@ -554,7 +554,7 @@ open_connection(#{ peer := Peer }, Opts) ->
     Transport =
         case Scheme of
             <<"https">> -> tls;
-            _ -> tcp
+            <<"http">> -> tcp
         end,
     DefaultProto =
         case hb_features:http3() of
