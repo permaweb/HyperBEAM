@@ -207,7 +207,7 @@ ensure_started(Opts) ->
                                                 hb_util:list(
                                                     hb_opts:get(
                                                         genesis_wasm_log_level,
-                                                        "error",
+                                                        "debug",
                                                         Opts
                                                     )
                                                 )
@@ -262,13 +262,19 @@ import(ProcMsg, Req, Opts) ->
         {ok, ImportID} ->
             case hb_cache:read(ImportID, Opts) of
                 {ok, CheckpointMessage} ->
+                    ?event(debug_cu_state, {had_import_id, {state, CheckpointMessage}}),
                     do_import(ProcMsg, CheckpointMessage, Opts);
                 not_found -> {error, not_found}
             end;
         error ->
-            ProcID = dev_process:process_id(ProcMsg, #{}, Opts),
+            ProcID = case hb_maps:get(<<"process-id">>, Req, not_found, Opts) of
+                not_found -> dev_process:process_id(ProcMsg, #{}, Opts);
+                PassedProcId -> PassedProcId
+            end,
+            ?event(debug_proc_id, {proc_id, ProcID}),
             case latest_checkpoint(ProcID, Opts) of
                 {ok, CheckpointMessage} ->
+                    ?event(debug_proc_id, {no_import_id, {state, CheckpointMessage}}),
                     do_import(ProcMsg, CheckpointMessage, Opts);
                 Err -> Err
             end
@@ -310,6 +316,7 @@ latest_checkpoint(ProcID, TrustedSigners, Opts) ->
         {error, Reason} ->
             {error, Reason};
         {ok, GqlMsg} ->
+            ?event(debug_proc_id, {gql_msg, GqlMsg}),
             case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
                 not_found -> {error, not_found};
                 Item -> hb_gateway_client:result_to_message(Item, Opts)
@@ -457,7 +464,7 @@ log_server_events(Bin) when is_binary(Bin) ->
     log_server_events(binary:split(Bin, <<"\n">>, [global]));
 log_server_events([Remaining]) -> Remaining;
 log_server_events([Line | Rest]) ->
-    ?event(genesis_wasm_server, {server_logged, {string, Line}}),
+    ?event(genesis_wasm_server, {string, Line}),
     log_server_events(Rest).
 
 %%% Tests
@@ -469,14 +476,19 @@ import_legacy_checkpoint() ->
     Opts = #{
         priv_wallet => hb:wallet(),
         genesis_wasm_import_authorities =>
-            [<<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>]
+            [
+                <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>,
+                <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
+            ]
     },
-    ProcID = <<"DM3FoZUq_yebASPhgd8pEIRIzDW6muXEhxz5-JwbZwo">>,
-    {ok, ProcWithCheckpoint} =
+    ProcID = <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>,
+    CheckpointRes =
         hb_ao:resolve(
-           << ProcID/binary, "~genesis-wasm@1.0/import">>,
+           <<"~genesis-wasm@1.0/import&process-id=", ProcID/binary>>,
            Opts
         ),
+    ?event(debug_import_result, {checkpoint_res, CheckpointRes}),
+    {ok, ProcWithCheckpoint} = CheckpointRes,
     ?assertMatch(
         Slot when Slot > 0,
         hb_maps:get(<<"at-slot">>, ProcWithCheckpoint)
@@ -489,7 +501,9 @@ import_legacy_checkpoint() ->
         {ok, Slot, _} when Slot > 0,
         dev_process_cache:latest(ProcID, Opts)
     ),
-    hb_ao:resolve(<<ProcID/binary, "~process@1.0/now">>, Opts).
+    Result = hb_ao:resolve(<<ProcID/binary, "~process@1.0/now">>, Opts),
+    ?event(debug_import_result, {result, Result}),
+    Result.
 
 -ifdef(ENABLE_GENESIS_WASM).
 test_base_process() ->
