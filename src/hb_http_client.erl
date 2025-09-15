@@ -470,7 +470,7 @@ terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
 handle_redirect(Args, ReestablishedConnection, Opts, Res, Reply) ->
     case lists:keyfind(<<"location">>, 1, Res) of
         false ->
-            % Server returned a 301 but no Location header, so we can't follow the redirect.
+            % There's no Location header, so we can't follow the redirect.
             Reply;
         {_LocationHeaderName, Location} ->
             case uri_string:parse(Location) of
@@ -479,10 +479,15 @@ handle_redirect(Args, ReestablishedConnection, Opts, Res, Reply) ->
                     Reply;
                  Parsed ->
                     #{ scheme := NewScheme, host := NewHost, path := NewPath } = Parsed,
+                    Port = maps:get(port, Parsed, undefined),
+                    FormattedPort = case Port of
+                        undefined -> "";
+                        _ -> lists:flatten(io_lib:format(":~i", [Port]))
+                    end,
                     NewPeer = lists:flatten(
                         io_lib:format(
-                            "~s://~s~s",
-                            [NewScheme, NewHost, NewPath]
+                            "~s://~s~s~s",
+                            [NewScheme, NewHost, FormattedPort, NewPath]
                         )
                     ),
                     NewArgs = Args#{
