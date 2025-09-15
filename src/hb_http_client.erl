@@ -552,8 +552,8 @@ open_connection(#{ peer := Peer }, Opts) ->
                 )
         },
     Transport =
-        case Port of
-            443 -> tls;
+        case Scheme of
+            <<"https">> -> tls;
             _ -> tcp
         end,
     DefaultProto =
@@ -565,7 +565,7 @@ open_connection(#{ peer := Peer }, Opts) ->
     GunOpts =
         case Proto = hb_opts:get(protocol, DefaultProto, Opts) of
             http3 -> BaseGunOpts#{protocols => [http3], transport => quic};
-            _ -> BaseGunOpts
+            _ -> BaseGunOpts#{transport => Transport}
         end,
     ?event(http_outbound,
         {gun_open,
