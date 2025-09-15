@@ -117,9 +117,10 @@ tag_keys(Item, _Opts) ->
     ],
     lists:filtermap(
         fun({Tag, _}) ->
-            case lists:member(Tag, MetaTags) of
+            NormalizedTag = hb_util:to_lower(hb_ao:normalize_key(Tag)),
+            case lists:member(NormalizedTag, MetaTags) of
                 true -> false;
-                false -> {true, hb_util:to_lower(hb_ao:normalize_key(Tag))}
+                false -> {true, NormalizedTag}
             end
         end,
         Item#tx.tags
@@ -153,17 +154,18 @@ base(CommittedKeys, Fields, Tags, Data, Opts) ->
 
 %% @doc Return a message with the appropriate commitments added to it.
 with_commitments(
-        Item, Device, CommittedFields, Tags, Base, CommittedKeys, Opts) ->
+        Item, Device, FieldCommitments, Tags, Base, CommittedKeys, Opts) ->
     case Item#tx.signature of
         ?DEFAULT_SIG ->
             case normal_tags(Item#tx.tags) of
                 true -> Base;
                 false ->
                     with_unsigned_commitment(
-                        Item, Device, CommittedFields, Tags, Base, CommittedKeys, Opts)
+                        Item, Device, FieldCommitments, Tags, Base, 
+                        CommittedKeys, Opts)
             end;
         _ -> with_signed_commitment(
-            Item, Device, CommittedFields, Tags, Base, CommittedKeys, Opts)
+            Item, Device, FieldCommitments, Tags, Base, CommittedKeys, Opts)
     end.
 
 %% @doc Returns a commitments message for an item, containing an unsigned
@@ -195,14 +197,19 @@ with_unsigned_commitment(
 %% @doc Returns a commitments message for an item, containing a signed
 %% commitment.
 with_signed_commitment(
-        Item, Device, CommittedFields, Tags, 
+        Item, Device, FieldCommitments, Tags, 
         UncommittedMessage, CommittedKeys, Opts) ->
     Address = hb_util:human_id(ar_wallet:to_address(Item#tx.owner)),
     ID = hb_util:human_id(Item#tx.id),
+    ExtraCommitments = hb_maps:merge(
+        FieldCommitments,
+        hb_maps:with(?BUNDLE_KEYS, Tags),
+        Opts
+    ),
     Commitment =
         filter_unset(
             hb_maps:merge(
-                CommittedFields,
+                ExtraCommitments,
                 #{
                     <<"commitment-device">> => Device,
                     <<"committer">> => Address,

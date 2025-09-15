@@ -237,7 +237,6 @@ json_struct_to_tx(TXStruct) ->
             Xs ->
                 Xs
         end,
-    ?event(debug_test, {json_struct_to_tx, {tags, {explicit, Tags}}}),
     Data = hb_util:decode(hb_util:find_value(<<"data">>, TXStruct)),
     Format =
         case hb_util:find_value(<<"format">>, TXStruct) of

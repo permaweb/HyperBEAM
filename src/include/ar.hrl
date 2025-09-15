@@ -109,3 +109,6 @@
     {<<"bundle-format">>, <<"binary">>},
     {<<"bundle-version">>, <<"2.0.0">>}
 ]).
+
+-define(BUNDLE_KEYS, [
+    <<"bundle-format">>, <<"bundle-version">>, <<"bundle-map">>]).

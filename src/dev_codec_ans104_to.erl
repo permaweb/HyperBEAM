@@ -1,6 +1,6 @@
 %%% @doc Library functions for encoding messages to the ANS-104 format.
 -module(dev_codec_ans104_to).
--export([maybe_load/3, data/3, tags/6, excluded_tags/3]).
+-export([maybe_load/3, data/3, tags/5, excluded_tags/3]).
 -export([siginfo/4, fields_to_tx/4]).
 -include("include/hb.hrl").
 
@@ -84,6 +84,19 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
         tags = Tags
     },
     FieldsFun(TX, ?FIELD_PREFIX, Commitment, Opts).
+
+
+%% @doc Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
+%% recreating the original order of the tags.
+original_tags_to_tags(TagMap) ->
+    OrderedList = hb_util:message_to_ordered_list(hb_private:reset(TagMap)),
+    ?event({ordered_tagmap, {explicit, OrderedList}, {input, {explicit, TagMap}}}),
+    lists:map(
+        fun(#{ <<"name">> := Key, <<"value">> := Value }) ->
+            {Key, Value}
+        end,
+        OrderedList
+    ).
 
 fields_to_tx(TX, Prefix, Map, Opts) ->
     Anchor =
@@ -172,77 +185,71 @@ data_messages(TABM, Opts) when is_map(TABM) ->
 
 %% @doc Calculate the tags field for a data item. If the TX already has tags
 %% from the commitment decoding step, we use them. Otherwise we determine the
-%% keys to use from the `committed' field of the TABM.
-tags(#tx{ tags = ExistingTags }, _, _, _, _, _) when ExistingTags =/= [] ->
+%% keys to use from the commitment.
+tags(#tx{ tags = ExistingTags }, _, _, _, _) when ExistingTags =/= [] ->
     ExistingTags;
-tags(TX, Device, TABM, Data, ExcludedTagsFun, Opts) ->
-    DataKey = inline_key(TABM),
+tags(TX, Device, TABM, ExcludedTagKeys, Opts) ->
     MaybeCommitment =
         hb_message:commitment(
             #{ <<"commitment-device">> => Device },
             TABM,
             Opts
         ),
-    CommittedTagKeys =
-        case MaybeCommitment of
-            {ok, _, Commitment} ->
-                % There is already a commitment, so the tags and order are
-                % pre-determined. However, if the message has been bundled,
-                % any `+link`-suffixed keys in the committed list may need to
-                % be resolved to their base keys (e.g., `output+link` -> `output`).
-                % We normalize each committed key to whichever form actually
-                % exists in the current TABM to avoid missing keys.
-                lists:map(
-                    fun(CommittedKey) ->
-                        NormalizedKey = hb_ao:normalize_key(CommittedKey),
-                        BaseKey = hb_link:remove_link_specifier(NormalizedKey),
-                        case hb_maps:find(BaseKey, TABM, Opts) of
-                            {ok, _} -> BaseKey;
-                            error ->
-                                BaseKeyLink = <<BaseKey/binary, "+link">>,
-                                case hb_maps:find(BaseKeyLink, TABM, Opts) of
-                                    {ok, _} -> BaseKeyLink;
-                                    error -> BaseKey
-                                end
-                        end
-                    end,
-                    hb_util:message_to_ordered_list(
-                        hb_util:ok(
-                            hb_maps:find(<<"committed">>, Commitment, Opts)
-                        )
-                    )
-                ) --
-                    % If a base field is set in the base TX from the commitment,
-                    % we check if the TABM equals that value. If it does, we do
-                    % not additionally add the target tag. If they differ, we
-                    % include it.
-                    ExcludedTagsFun(TX, TABM, Opts);
-            not_found ->
-                % There is no commitment, so we need to generate the tags. The
-                % bundle-format and bundle-version tags are added by `ar_bundles`
-                % so we do not add them here. The ao-data-key tag is added if it
-                % is set to a non-default value, followed by the keys from the
-                % TABM (less the data keys and target key -- see 
-                % `include_target_tag/3` for rationale).
-                hb_util:list_without(
-                    [<<"commitments">>] ++
-                        if is_map(Data) -> hb_maps:keys(Data, Opts);
-                        true -> []
-                        end ++
-                        ExcludedTagsFun(TX, TABM, Opts),
-                    hb_util:to_sorted_keys(hb_private:reset(TABM), Opts)
-                );
-            multiple_matches ->
-                throw({multiple_ans104_commitments_unsupported, TABM})
+    CommittedTagKeys = committed_tag_keys(MaybeCommitment, TABM, Opts),
+    DataKeysToExclude =
+        case TX#tx.data of
+            Data when is_map(Data)-> maps:keys(Data);
+            _ -> []
         end,
-    ?event(
-        {tags_before_data_key,
-            {committed_tag_keys, CommittedTagKeys},
-            {data_key, DataKey},
-            {data, Data},
-            {tabm, TABM}
-        }),
-    committed_tag_keys_to_tags(TX, TABM, DataKey, CommittedTagKeys, Opts).
+    TagKeys = hb_util:list_without(
+        ExcludedTagKeys ++ DataKeysToExclude, 
+        CommittedTagKeys
+    ),
+    Tags =
+        bundle_tags_to_tags(MaybeCommitment) ++
+        committed_tag_keys_to_tags(TABM, TagKeys, Opts),
+    Tags.
+
+committed_tag_keys({ok, _, Commitment}, TABM, Opts) ->
+    % There is already a commitment, so the tags and order are
+    % pre-determined. However, if the message has been bundled,
+    % any `+link`-suffixed keys in the committed list may need to
+    % be resolved to their base keys (e.g., `output+link` -> `output`).
+    % We normalize each committed key to whichever form actually
+    % exists in the current TABM to avoid missing keys.
+    lists:map(
+        fun(CommittedKey) ->
+            NormalizedKey = hb_ao:normalize_key(CommittedKey),
+            BaseKey = hb_link:remove_link_specifier(NormalizedKey),
+            case hb_maps:find(BaseKey, TABM, Opts) of
+                {ok, _} -> BaseKey;
+                error ->
+                    BaseKeyLink = <<BaseKey/binary, "+link">>,
+                    case hb_maps:find(BaseKeyLink, TABM, Opts) of
+                        {ok, _} -> BaseKeyLink;
+                        error -> BaseKey
+                    end
+            end
+        end,
+        hb_util:message_to_ordered_list(
+            hb_util:ok(
+                hb_maps:find(<<"committed">>, Commitment, Opts)
+            )
+        )
+    );
+committed_tag_keys(not_found, TABM, Opts) ->
+    % There is no commitment, so we need to generate the tags. The
+    % bundle-format and bundle-version tags are added by
+    % `ar_bundles` so we do not add them here. The ao-data-key tag
+    % is added if it is set to a non-default value, followed by the
+    % keys from the TABM (less the data keys and target key -- see
+    % `include_target_tag/3` for rationale).
+    hb_util:list_without(
+        [<<"commitments">>],
+        hb_util:to_sorted_keys(hb_private:reset(TABM), Opts)
+    );
+committed_tag_keys(multiple_matches, TABM, _Opts) ->
+    throw({multiple_ans104_commitments_unsupported, TABM}).
 
 %% @doc Return a list of base fields that should be excluded from the tags
 %% lists
@@ -268,12 +275,14 @@ exclude_anchor_tag(TX, TABM, Opts) ->
 
 %% @doc Apply the `ao-data-key' to the committed keys to generate the list of
 %% tags to include in the message.
-committed_tag_keys_to_tags(TX, TABM, DataKey, Committed, Opts) ->
-    DataKeysToExclude =
-        case TX#tx.data of
-            Data when is_map(Data)-> maps:keys(Data);
-            _ -> []
-        end,
+committed_tag_keys_to_tags(TABM, Committed, Opts) ->
+    DataKey = inline_key(TABM),
+    ?event(
+        {tags_before_data_key,
+            {tag_keys, Committed},
+            {data_key, DataKey},
+            {tabm, TABM}
+        }),
     case DataKey of
         <<"data">> -> [];
         _ -> [{<<"ao-data-key">>, DataKey}]
@@ -285,11 +294,23 @@ committed_tag_keys_to_tags(TX, TABM, DataKey, Committed, Opts) ->
                 {ok, Value} -> {Key, Value}
             end
         end,
-        hb_util:list_without(
-            [DataKey | DataKeysToExclude],
-            Committed
-        )
+        hb_util:list_without([DataKey], Committed)
     ).
+
+bundle_tags_to_tags({ok, _, Commitment}) ->
+    lists:flatmap(
+        fun(Key) ->
+            case hb_maps:find(Key, Commitment) of
+                {ok, Value} ->
+                    [{Key, Value}];
+                error ->
+                    []
+            end
+        end,
+        ?BUNDLE_KEYS
+    );
+bundle_tags_to_tags(_) ->
+    [].
 
 %%% Utility functions
     
@@ -313,15 +334,3 @@ inline_key(Msg) ->
             % Default: `data' resolves to `data'.
             <<"data">>
     end.
-
-%% @doc Convert a HyperBEAM-compatible map into an ANS-104 encoded tag list,
-%% recreating the original order of the tags.
-original_tags_to_tags(TagMap) ->
-    OrderedList = hb_util:message_to_ordered_list(hb_private:reset(TagMap)),
-    ?event({ordered_tagmap, {explicit, OrderedList}, {input, {explicit, TagMap}}}),
-    lists:map(
-        fun(#{ <<"name">> := Key, <<"value">> := Value }) ->
-            {Key, Value}
-        end,
-        OrderedList
-    ).

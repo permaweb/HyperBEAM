@@ -89,9 +89,9 @@ do_from(RawTX, Req, Opts) ->
     Base = dev_codec_ans104_from:base(Keys, Fields, Tags, Data, Opts),
     ?event({calculated_base_message, Base}),
     % Add the commitments to the message if the TX has a signature.
-    CommittedFields = dev_codec_tx_from:fields(TX, ?FIELD_PREFIX, Opts),
+    FieldCommitments = dev_codec_tx_from:fields(TX, ?FIELD_PREFIX, Opts),
     WithCommitments = dev_codec_ans104_from:with_commitments(
-        TX, <<"tx@1.0">>, CommittedFields, Tags, Base, Keys, Opts),
+        TX, <<"tx@1.0">>, FieldCommitments, Tags, Base, Keys, Opts),
     ?event({parsed_message, WithCommitments}),
     {ok, WithCommitments}.
 
@@ -125,8 +125,9 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     TX1 = TX0#tx { data = Data },
     % Calculate the tags for the TX.
     Tags = dev_codec_ans104_to:tags(
-        TX1, <<"tx@1.0">>, MaybeBundle, Data,
-        fun dev_codec_tx_to:excluded_tags/3, Opts),
+        TX1, <<"tx@1.0">>, MaybeBundle,
+        dev_codec_tx_to:excluded_tags(TX1, MaybeBundle, Opts),
+        Opts),
     ?event({calculated_tags, Tags}),
     TX2 = TX1#tx { tags = Tags },
     ?event({tx_before_id_gen, TX2}),
@@ -581,7 +582,10 @@ nested_data_tabm_test() ->
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"data">>, <<"tag">>],
         <<"type">> => <<"rsa-pss-sha256">>,
-        <<"bundle">> => <<"true">>
+        <<"bundle">> => <<"true">>,
+        <<"bundle-format">> => <<"binary">>,
+        <<"bundle-version">> => <<"2.0.0">>,
+        <<"bundle-map">> => <<"ucPqsShS_YNxyPdPbcDpZzxBvpu_eIppvaFM_nzB-CA">>
     },
     % only bundle true is supported
     do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true).
@@ -626,7 +630,10 @@ nested_non_data_key_tabm_test() ->
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"a1">>, <<"tag1">>],
         <<"type">> => <<"rsa-pss-sha256">>,
-        <<"bundle">> => <<"true">>
+        <<"bundle">> => <<"true">>,
+        <<"bundle-format">> => <<"binary">>,
+        <<"bundle-version">> => <<"2.0.0">>,
+        <<"bundle-map">> => <<"dO5bHNSlNCDS-kOv435QJ7Z_z--TJGa3avQog0f0DDw">>
     },
     % only bundle true is supported
     do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true).
@@ -689,7 +696,10 @@ nested_multiple_tabm_test() ->
         <<"commitment-device">> => <<"tx@1.0">>,
         <<"committed">> => [<<"a1">>, <<"data">>, <<"tag1">>],
         <<"type">> => <<"rsa-pss-sha256">>,
-        <<"bundle">> => <<"true">>
+        <<"bundle">> => <<"true">>,
+        <<"bundle-format">> => <<"binary">>,
+        <<"bundle-version">> => <<"2.0.0">>,
+        <<"bundle-map">> => <<"8dP-rTKhUiDOnDf1BNGFl0yYpRCrhtfVcbSgImZ4bJI">>
     },
     % only bundle true is supported
     do_tabm_roundtrips(UnsignedTX, UnsignedTABM, NoLinksCommitment, true).
@@ -779,7 +789,7 @@ verify_items(RootItem, ExpectedIDs) ->
     [RootItem | NestedItems] = AllItems,
     [RootID | NestedIDs] = ExpectedIDs,
     ?assert(
-        ar_tx:verify(ar_bundles:serialize_data(RootItem)),
+        ar_tx:verify(dev_arweave_common:normalize(RootItem)),
         hb_util:encode(RootItem#tx.id)),
     ?assertEqual(RootID, hb_util:encode(RootItem#tx.id)),
     lists:zipwith(

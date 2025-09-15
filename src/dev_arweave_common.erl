@@ -1,10 +1,39 @@
 %%% @doc Utility module for routing functionality to ar_bundles.erl or
 %%% ar_tx.erl based off #tx.format.
 -module(dev_arweave_common).
--export([reset_ids/1, generate_id/2, normalize/1]).
+-export([is_signed/1, type/1, tagfind/3]).
+-export([reset_ids/1, generate_id/2, normalize/1, serialize_data/1]).
 -export([convert_bundle_list_to_map/1, convert_bundle_map_to_list/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+%% @doc Check if an item is signed.
+is_signed(TX) ->
+    TX#tx.signature =/= ?DEFAULT_SIG.
+
+type(Item) ->
+    Format = tagfind(<<"bundle-format">>, Item#tx.tags, <<>>),
+    Version = tagfind(<<"bundle-version">>, Item#tx.tags, <<>>),
+    MapTXID = tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
+    case {hb_util:to_lower(Format), hb_util:to_lower(Version), MapTXID} of
+        {<<"binary">>, <<"2.0.0">>, <<>>} ->
+            list;
+        {<<"binary">>, <<"2.0.0">>, _} ->
+            map;
+        _ ->
+            binary
+    end.
+
+%% @doc Case-insensitively find a tag in a list and return its value.
+tagfind(Key, Tags, Default) ->
+    LowerCaseKey = hb_util:to_lower(Key),
+    Found = lists:search(fun({TagName, _}) ->
+        hb_util:to_lower(TagName) == LowerCaseKey
+    end, Tags),
+    case Found of
+        {value, {_TagName, Value}} -> Value;
+        false -> Default
+    end.
 
 %% @doc Re-calculate both of the IDs for a #tx. This is a wrapper
 %% function around `update_ids/1' that ensures both IDs are set from
@@ -47,33 +76,55 @@ generate_signature_data_segment(TX) ->
 %% @doc Ensure that a data item (potentially containing a map or list) has a
 %% standard, serialized form.
 normalize(not_found) -> throw(not_found);
-normalize(Item = #tx{data = Bin}) when is_binary(Bin) ->
+normalize(TX = #tx{data = Bin}) when is_binary(Bin) ->
     ?event({normalize, binary,
-        hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id)}),
+        hb_util:human_id(TX#tx.unsigned_id), hb_util:human_id(TX#tx.id)}),
     reset_ids(
         normalize_data_root(
             normalize_data_size(
                 reset_owner_address(
-                    Item))));
+                    TX))));
 normalize(Bundle) when is_list(Bundle); is_map(Bundle) ->
     ?event({normalize, bundle}),
     normalize(#tx{ data = Bundle });
-normalize(Item = #tx { data = Data }) when is_list(Data) ->
-    ?event({normalize, list,
-        hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id)}),
-    normalize(Item#tx{data = convert_bundle_list_to_map(Data)});
-normalize(Item = #tx{data = Data}) when is_map(Data) ->
-    {Manifest, Bin} = ar_bundles:serialize_bundle(Item#tx.data, true),
-    SerializedItem =
-        Item#tx{
-            data = Bin,
-            manifest = Manifest,
-            tags = add_manifest_tags(
-                add_bundle_tags(Item#tx.tags),
-                ar_bundles:id(Manifest, unsigned)
-            )
-        },
-    normalize(SerializedItem).
+normalize(TX = #tx{data = Data}) ->
+    SerializedTX = serialize_data(TX, true),
+    NormalizedTX = case is_signed(TX) of
+        true ->
+            SerializedTX;
+        false ->
+            add_bundle_tags(SerializedTX)
+    end,
+    normalize(NormalizedTX).
+
+serialize_data(TX) -> serialize_data(TX, false).
+serialize_data(Item = #tx{data = Data}, _) when is_binary(Data) ->
+    Item;
+serialize_data(Item = #tx{data = Data}, NormalizeChildren) ->
+    IsBundleMap = type(Item) == map,
+    ?event({serialize_data,
+        hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id),
+        {normalize_children, NormalizeChildren},
+        {is_bundle_map, IsBundleMap},
+        {is_list, is_list(Data)},
+        {is_map, is_map(Data)}}),
+    ConvertedData = 
+        case {is_signed(Item), IsBundleMap, is_list(Data), is_map(Data)} of
+            {true, true, true, false} ->
+                % Signed transaction with bundle-map tag and list data
+                convert_bundle_list_to_map(Data);
+            {true, false, false, true} ->
+                % Signed transaction without bundle-map tag and map data
+                convert_bundle_map_to_list(Data);
+            {false, _, true, false} ->
+                % Unsigned transaction with list data
+                convert_bundle_list_to_map(Data);
+            _ ->
+                Data
+        end,
+    {Manifest, SerializedData} =
+        ar_bundles:serialize_bundle(ConvertedData, NormalizeChildren),
+    Item#tx{data = SerializedData, manifest = Manifest}.
 
 convert_bundle_list_to_map(Data) ->
     maps:from_list(
@@ -97,15 +148,16 @@ convert_bundle_map_to_list(Data) ->
         lists:seq(1, maps:size(Data))
     ).
 
-add_bundle_tags(Tags) -> ?BUNDLE_TAGS ++ (Tags -- ?BUNDLE_TAGS).
-
-add_manifest_tags(Tags, ManifestID) ->
-    lists:filter(
+add_bundle_tags(TX) -> 
+    ManifestID = ar_bundles:id(TX#tx.manifest, unsigned),
+    BundleTags = ?BUNDLE_TAGS ++ [{<<"bundle-map">>, hb_util:encode(ManifestID)}],
+    StrippedTags = lists:filter(
         fun({TagName, _}) ->
-            hb_util:to_lower(TagName) =/= <<"bundle-map">>
+            not lists:member(hb_util:to_lower(TagName), ?BUNDLE_KEYS)
         end,
-        Tags
-    ) ++ [{<<"bundle-map">>, hb_util:encode(ManifestID)}].
+        TX#tx.tags
+    ),
+    TX#tx{tags = BundleTags ++ StrippedTags}.
 
 %% @doc Reset the data size of a data item. Assumes that the data is already normalized.
 normalize_data_size(Item = #tx{data = Bin}) when is_binary(Bin) ->

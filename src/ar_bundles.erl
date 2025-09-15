@@ -1,11 +1,10 @@
 -module(ar_bundles).
--export([signer/1, is_signed/1]).
--export([id/1, id/2, hd/1, member/2, find/2, tagfind/3]).
+-export([signer/1]).
+-export([id/1, id/2, hd/1, member/2, find/2]).
 -export([new_item/4, sign_item/2, verify_item/1]).
 -export([encode_tags/1, decode_tags/1]).
--export([serialize/1, deserialize/1, serialize_data/1, serialize_bundle/2]).
+-export([serialize/1, deserialize/1, serialize_bundle/2]).
 -export([data_item_signature_data/1]).
--export([type/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -18,10 +17,6 @@
 %% @doc Return the address of the signer of an item, if it is signed.
 signer(#tx { owner = ?DEFAULT_OWNER }) -> undefined;
 signer(Item) -> crypto:hash(sha256, Item#tx.owner).
-
-%% @doc Check if an item is signed.
-is_signed(Item) ->
-    Item#tx.signature =/= ?DEFAULT_SIG.
 
 %% @doc Return the ID of an item -- either signed or unsigned as specified.
 %% If the item is unsigned and the user requests the signed ID, we return
@@ -75,17 +70,6 @@ find(Key, Item = #tx { data = Data }) ->
     end;
 find(_Key, _) ->
     not_found.
-
-%% @doc Case-insensitively find a tag in a list and return its value.
-tagfind(Key, Tags, Default) ->
-    LowerCaseKey = hb_util:to_lower(Key),
-    Found = lists:search(fun({TagName, _}) ->
-        hb_util:to_lower(TagName) == LowerCaseKey
-    end, Tags),
-    case Found of
-        {value, {_TagName, Value}} -> Value;
-        false -> Default
-    end.
 
 %% @doc Create a new data item. Should only be used for testing.
 new_item(Target, Anchor, Tags, Data) ->
@@ -196,7 +180,7 @@ enforce_valid_tx(TX) ->
 %% @doc Generate the data segment to be signed for a data item.
 data_item_signature_data(RawItem) ->
     true = enforce_valid_tx(RawItem),
-    Item = serialize_data(RawItem),
+    Item = dev_arweave_common:serialize_data(RawItem),
     ar_deep_hash:hash([
         utf8_encoded("dataitem"),
         utf8_encoded("1"),
@@ -237,7 +221,7 @@ serialize(not_found) -> throw(not_found);
 serialize(TX) when is_binary(TX) -> TX;
 serialize(RawTX) when is_record(RawTX, tx) ->
     true = enforce_valid_tx(RawTX),
-    TX = serialize_data(RawTX),
+    TX = dev_arweave_common:serialize_data(RawTX),
     EncodedTags = encode_tags(TX#tx.tags),
     <<
         (encode_signature_type(TX#tx.signature_type))/binary,
@@ -251,27 +235,6 @@ serialize(RawTX) when is_record(RawTX, tx) ->
     >>;
 serialize(TX) ->
     throw({cannot_serialize_tx, must_be_binary_or_tx, TX}).
-
-serialize_data(Item = #tx{data = Data}) when is_binary(Data) ->
-    Item;
-serialize_data(Item = #tx{data = Data}) ->
-    IsBundleMap = type(Item) == map,
-    ?event({serialize_data,
-        hb_util:human_id(Item#tx.unsigned_id), hb_util:human_id(Item#tx.id),
-        {is_bundle_map, IsBundleMap},
-        {is_list, is_list(Data)},
-        {is_map, is_map(Data)}}),
-    ConvertedData = 
-        case {IsBundleMap, is_list(Data), is_map(Data)} of
-            {true, true, false} ->
-                dev_arweave_common:convert_bundle_list_to_map(Data);
-            {false, false, true} ->
-                dev_arweave_common:convert_bundle_map_to_list(Data);
-            _ ->
-                Data
-        end,
-    {Manifest, SerializedData} = serialize_bundle(ConvertedData, false),
-    Item#tx{data = SerializedData, manifest = Manifest}.
 
 serialize_bundle(List, Normalize) when is_list(List) ->
     FinalizedData = finalize_bundle_data(
@@ -303,7 +266,7 @@ serialize_bundle(Map, Normalize) when is_map(Map) ->
         [{NewManifestUnsignedID, NewManifestSerialized} | maps:values(BinItems)]),
     {NewManifest, FinalizedData};
 serialize_bundle(Data, _Normalize) when is_binary(Data) ->
-    Data;
+    {undefined, Data};
 serialize_bundle(Data, _Normalize) ->
     throw({cannot_serialize_tx_data, must_be_list_or_map, Data}).
 
@@ -454,21 +417,8 @@ deserialize_item(Binary) ->
         })
     ).
 
-type(Item) ->
-    Format = tagfind(<<"bundle-format">>, Item#tx.tags, <<>>),
-    Version = tagfind(<<"bundle-version">>, Item#tx.tags, <<>>),
-    MapTXID = tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
-    case {hb_util:to_lower(Format), hb_util:to_lower(Version), MapTXID} of
-        {<<"binary">>, <<"2.0.0">>, <<>>} ->
-            list;
-        {<<"binary">>, <<"2.0.0">>, _} ->
-            map;
-        _ ->
-            binary
-    end.
-
 maybe_unbundle(Item) ->
-    case type(Item) of
+    case dev_arweave_common:type(Item) of
         list -> unbundle_list(Item);
         binary -> Item;
         map -> unbundle_map(Item)
@@ -481,7 +431,7 @@ unbundle_list(Item) ->
     end.
 
 unbundle_map(Item) ->
-    MapTXID = tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
+    MapTXID = dev_arweave_common:tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
     case unbundle(Item#tx.data) of
         detached -> Item#tx{data = detached};
         Items ->
@@ -921,7 +871,7 @@ arbundles_list_bundle_roundtrip_test() ->
     ?assert(verify_item(Item2)),
     ?assert(verify_item(Item3)),
 
-    Reserialized = serialize_data(Deserialized),
+    Reserialized = dev_arweave_common:normalize(Deserialized),
     ?event(debug_test, {reserialized, Reserialized}),
     ?assert(verify_item(Reserialized)),
     ?assertEqual(Bin, Reserialized#tx.data),
@@ -952,7 +902,7 @@ arbundles_single_list_bundle_roundtrip_test() ->
     ?assertEqual([{<<"Type">>, <<"list">>}, {<<"Index">>, <<"1">>}], Item#tx.tags),
     ?assert(verify_item(Item)),
 
-    Reserialized = serialize_data(Deserialized),
+    Reserialized = dev_arweave_common:normalize(Deserialized),
     ?event(debug_test, {reserialized, Reserialized}),
     ?assert(verify_item(Reserialized)),
     ?assertEqual(Bin, Reserialized#tx.data),
@@ -984,7 +934,7 @@ arbundles_map_bundle_roundtrip_test() ->
     Manifest = Deserialized#tx.manifest,
     ?event(debug_test, {manifest, Manifest}),
     ?assertNotEqual(undefined, Manifest),
-    ?assertEqual(false, is_signed(Manifest)),
+    ?assertEqual(false, dev_arweave_common:is_signed(Manifest)),
     ?assertEqual([
         {<<"data-protocol">>, <<"bundle-map">>},
         {<<"variant">>, <<"0.0.1">>}

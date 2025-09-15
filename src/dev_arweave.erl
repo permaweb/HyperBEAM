@@ -306,12 +306,59 @@ post_ans104_tx_test() ->
         GetRes
     ),
     ok.
-get_tx_test() ->
+get_tx_basic_data_test() ->
     Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx?tx=MH1M9gedlPsu7-57-N0S_-F1OBoYacLYLe5jL0Tvr9c">>,
-    {ok, StructuredTX} = hb_http:get(Node, Path, #{}),
-    ?event(debug_test, {structured_tx, StructuredTX}),
-    ?assert(hb_message:verify(StructuredTX, all, #{})).
+    Path = <<"/~arweave@2.9-pre/tx?tx=ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+    {ok, Structured} = hb_http:get(Node, Path, #{}),
+    ?event(debug_test, {structured_tx, Structured}),
+    ?assert(hb_message:verify(Structured, all, #{})),
+    % Hash the data to make it easier to match
+    StructuredWithHash = Structured#{
+        <<"data">> => hb_util:encode(
+            crypto:hash(sha256, (maps:get(<<"data">>, Structured)))
+        )
+    },
+    ExpectedMsg = #{
+        <<"data">> => <<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>,
+        <<"reward">> => <<"482143296">>,
+        <<"anchor">> => <<"XTzaU2_m_hRYDLiXkcleOC4zf5MVTXIeFWBOsJSRrtEZ8kM6Oz7EKLhZY7fTAvKq">>,
+        <<"content-type">> => <<"application/json">>
+    },
+    ?assert(hb_message:match(ExpectedMsg, StructuredWithHash, only_present)),
+    ok.
+
+get_tx_rsa_nested_bundle_test() ->
+    Node = hb_http_server:start_node(),
+    Path = <<"/~arweave@2.9-pre/tx?tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    {ok, Structured} = hb_http:get(Node, Path, #{}),
+    TABM = hb_message:convert(
+        Structured,
+        tabm,
+        #{
+            <<"device">> => <<"structured@1.0">>,
+            <<"bundle">> => true
+        },
+        #{}),
+    {ok, TX} = dev_codec_tx:to(TABM, #{}, #{}),
+    ?event(debug_test, {tabm, TABM}),
+    ?event(debug_test, {tx, TX}),
+    % ?event(debug_test, {structured_tx, Structured}),
+    ?assert(ar_tx:verify(TX)),
+    ?assert(hb_message:verify(Structured, all, #{})),
+    % % Hash the data to make it easier to match
+    % StructuredWithHash = Structured#{
+    %     <<"data">> => hb_util:encode(
+    %         crypto:hash(sha256, (maps:get(<<"data">>, Structured)))
+    %     )
+    % },
+    % ExpectedMsg = #{
+    %     <<"data">> => <<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>,
+    %     <<"reward">> => <<"482143296">>,
+    %     <<"anchor">> => <<"XTzaU2_m_hRYDLiXkcleOC4zf5MVTXIeFWBOsJSRrtEZ8kM6Oz7EKLhZY7fTAvKq">>,
+    %     <<"content-type">> => <<"application/json">>
+    % },
+    % ?assert(hb_message:match(ExpectedMsg, StructuredWithHash, only_present)),
+    ok.
 
 
 get_bad_tx_test() ->

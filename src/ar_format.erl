@@ -59,7 +59,7 @@ format(TX, Indent, Opts) when is_record(TX, tx) ->
             format_line("!!! CAUTION: ITEM IS SIGNED BUT INVALID !!!", Indent + 1);
         false -> []
     end ++
-    case ar_bundles:is_signed(TX) of
+    case dev_arweave_common:is_signed(TX) of
         true ->
             format_line("Signer: ~s",
                 [hb_util:safe_encode(ar_bundles:signer(TX))], 
