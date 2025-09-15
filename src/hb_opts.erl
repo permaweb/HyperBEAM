@@ -110,7 +110,8 @@ default_message() ->
         %% Should the HTTP client automatically follow 3xx redirects?
         http_follow_redirects => true,
         %% For the gun HTTP client, to mitigate resource exhaustion attacks, what's
-        %% the maximum number of automatic 3xx redirects we'll allow?
+        %% the maximum number of automatic 3xx redirects we'll allow when
+        %% http_follow_redirects = true?
         gun_max_redirects => 5,
         %% Scheduling mode: Determines when the SU should inform the recipient
         %% that an assignment has been scheduled for a message.

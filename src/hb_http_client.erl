@@ -126,20 +126,19 @@ gun_req(Args, ReestablishedConnection, Opts) ->
                             false ->
                                 req(Args, true, Opts)
                         end;
-                    Reply ->
+                    Reply = {_Ok, StatusCode, RedirectRes, _} ->
                         FollowRedirects = hb_maps:get(http_follow_redirects, Opts, true),
-                        case Reply of
-                            {_Ok, 301, RedirectRes, _} when FollowRedirects, RedirectsLeft > 0 ->
-                                RedirectArgs = Args#{ redirects_left := RedirectsLeft - 1 },
-                                handle_redirect(
-                                  RedirectArgs,
-                                  ReestablishedConnection,
-                                  Opts,
-                                  RedirectRes,
-                                  Reply
-                                );
-                            _ ->
-                                Reply
+                        case lists:member(StatusCode, [301, 302, 307, 308]) of
+                            true when FollowRedirects, RedirectsLeft > 0 ->
+                            RedirectArgs = Args#{ redirects_left := RedirectsLeft - 1 },
+                            handle_redirect(
+                              RedirectArgs,
+                              ReestablishedConnection,
+                              Opts,
+                              RedirectRes,
+                              Reply
+                            );
+                            _ -> Reply
                         end
                   end;
             {'EXIT', _} ->
