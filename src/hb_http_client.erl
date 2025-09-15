@@ -35,11 +35,13 @@ httpc_req(Args, _, Opts) ->
         body := Body
     } = Args,
     ?event({httpc_req, Args}),
-    {Host, Port} = parse_peer(Peer, Opts),
-    Scheme = case Port of
-        443 -> "https";
-        _ -> "http"
+    ParsedPeer = uri_string:parse(iolist_to_binary(Peer)),
+    #{ scheme := Scheme, host := Host } = ParsedPeer,
+    DefaultPort = case Scheme of
+        <<"https">> -> 443;
+        <<"http">> -> 80
     end,
+    Port = maps:get(port, ParsedPeer, DefaultPort),
     ?event(http_client, {httpc_req, {explicit, Args}}),
     URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
     FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
@@ -522,7 +524,7 @@ open_connection(#{ peer := Peer }, Opts) ->
     DefaultPort = case Scheme of
         <<"https">> -> 443;
         <<"http">> -> 80
-      end,
+    end,
     Port = maps:get(port, ParsedPeer, DefaultPort),
     ?event(http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
     BaseGunOpts =
@@ -569,21 +571,6 @@ open_connection(#{ peer := Peer }, Opts) ->
         }
     ),
     gun:open(hb_util:list(Host), Port, GunOpts).
-
-parse_peer(Peer, Opts) ->
-    Parsed = uri_string:parse(Peer),
-    case Parsed of
-        #{ host := Host, port := Port } ->
-            {hb_util:list(Host), Port};
-        URI = #{ host := Host } ->
-            {
-                hb_util:list(Host),
-                case hb_maps:get(scheme, URI, undefined, Opts) of
-                    <<"https">> -> 443;
-                    _ -> hb_opts:get(port, 8734, Opts)
-                end
-            }
-    end.
 
 reply_error([], _Reason) ->
 	ok;
