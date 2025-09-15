@@ -43,12 +43,15 @@ payments information, amongst other configuration options.
 
 To begin using HyperBeam, you will need to install:
 
-- The Erlang runtime (OTP 27)
+- Erlang runtime and compiler (OTP 27)
 - Rebar3
 - Git
+- NodeJs (for the Compute Unit on genesis_wasm profile)
 - Docker (optional, for containerized deployment)
 
 You will also need:
+- Cmake (recommended version is 3.31)
+- Rust (latest)
 - A wallet and it's keyfile *(generate a new wallet and keyfile with https://www.wander.app)*
 
 Then you can clone the HyperBEAM source and build it:
