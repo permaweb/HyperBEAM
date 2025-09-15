@@ -107,6 +107,8 @@ default_message() ->
         %% What HTTP client should the node use?
         %% Options: gun, httpc
         http_client => gun,
+        %% Should the HTTP client automatically follow 3xx redirects?
+        http_follow_redirects => true,
         %% Scheduling mode: Determines when the SU should inform the recipient
         %% that an assignment has been scheduled for a message.
         %% Options: aggressive(!), local_confirmation, remote_confirmation,

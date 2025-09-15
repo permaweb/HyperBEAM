@@ -80,9 +80,11 @@ httpc_req(Args, _, Opts) ->
                 }
         end,
     ?event({http_client_outbound, Method, URL, Request}),
+    FollowRedirects = hb_maps:get(http_follow_redirects, Opts, true),
+    ReqOpts = [{autoredirect, FollowRedirects}],
     HTTPCOpts = [{full_result, true}, {body_format, binary}],
 	StartTime = os:system_time(millisecond),
-    case httpc:request(Method, Request, [], HTTPCOpts) of
+    case httpc:request(Method, Request, ReqOpts, HTTPCOpts) of
         {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
 	        EndTime = os:system_time(millisecond),
             RespHeaders =
@@ -122,8 +124,9 @@ gun_req(Args, ReestablishedConnection, Opts) ->
                                 req(Args, true, Opts)
                         end;
                     Reply ->
+                        FollowRedirects = hb_maps:get(http_follow_redirects, Opts, true),
                         case Reply of
-                            {_Ok, 301, RedirectRes, _} ->
+                            {_Ok, 301, RedirectRes, _} when FollowRedirects ->
                                 handle_redirect(
                                   Args,
                                   ReestablishedConnection,
