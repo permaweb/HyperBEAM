@@ -22,7 +22,10 @@ start_link(Opts) ->
 req(Args, Opts) -> req(Args, false, Opts).
 req(Args, ReestablishedConnection, Opts) ->
     case hb_opts:get(http_client, gun, Opts) of
-        gun -> gun_req(Args, ReestablishedConnection, Opts);
+        gun ->
+            MaxRedirects = hb_maps:get(gun_max_redirects, Opts, 5),
+            GunArgs = Args#{redirects_left => MaxRedirects},
+            gun_req(GunArgs, ReestablishedConnection, Opts);
         httpc -> httpc_req(Args, ReestablishedConnection, Opts)
     end.
 
@@ -110,7 +113,7 @@ httpc_req(Args, _, Opts) ->
 
 gun_req(Args, ReestablishedConnection, Opts) ->
     StartTime = os:system_time(millisecond),
-    #{ peer := Peer, path := Path, method := Method } = Args,
+    #{ peer := Peer, path := Path, method := Method, redirects_left := RedirectsLeft } = Args,
     Response =
         case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
             {ok, PID} ->
@@ -126,9 +129,10 @@ gun_req(Args, ReestablishedConnection, Opts) ->
                     Reply ->
                         FollowRedirects = hb_maps:get(http_follow_redirects, Opts, true),
                         case Reply of
-                            {_Ok, 301, RedirectRes, _} when FollowRedirects ->
+                            {_Ok, 301, RedirectRes, _} when FollowRedirects, RedirectsLeft > 0 ->
+                                RedirectArgs = Args#{ redirects_left := RedirectsLeft - 1 },
                                 handle_redirect(
-                                  Args,
+                                  RedirectArgs,
                                   ReestablishedConnection,
                                   Opts,
                                   RedirectRes,
