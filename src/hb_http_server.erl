@@ -782,7 +782,7 @@ redirect_to_https(Req0, State) ->
         443 -> <<"https://", Host/binary>>;
         _ -> 
             PortBin = integer_to_binary(HttpsPort),
-            <<"http://", Host/binary, ":", PortBin/binary>>
+            <<"https://", Host/binary, ":", PortBin/binary>>
     end,
     
     Location = case Qs of
