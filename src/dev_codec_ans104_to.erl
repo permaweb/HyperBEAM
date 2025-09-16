@@ -165,22 +165,25 @@ data_messages(TABM, Opts) when is_map(TABM) ->
             hb_private:reset(TABM),
             Opts
         ),
-    % If there are too many keys in the TABM, throw an error.
-    if map_size(UncommittedTABM) > ?MAX_TAG_COUNT ->
+    
+    % Find keys that are too large or are nested messages, they will be
+    % encoded as data messages.
+    DataMessages = hb_maps:filter(
+        fun(Key, Value) ->
+            case is_map(Value) of
+                true -> true;
+                false -> byte_size(Value) > ?MAX_TAG_VALUE_SIZE orelse byte_size(Key) > ?MAX_TAG_NAME_SIZE
+            end
+        end,
+        UncommittedTABM,
+        Opts
+    ),
+    % If the remaining keys are too many to put in tags, throw an error.
+    TagCount = map_size(UncommittedTABM) - map_size(DataMessages),
+    if TagCount > ?MAX_TAG_COUNT ->
         throw({too_many_keys, UncommittedTABM});
     true ->
-        % If there are less than 128 keys, we return those that are large, or
-        % are nested messages.
-        hb_maps:filter(
-            fun(Key, Value) ->
-                case is_map(Value) of
-                    true -> true;
-                    false -> byte_size(Value) > ?MAX_TAG_VALUE_SIZE orelse byte_size(Key) > ?MAX_TAG_NAME_SIZE
-                end
-            end,
-            UncommittedTABM,
-            Opts
-        )
+        DataMessages
     end.
 
 %% @doc Calculate the tags field for a data item. If the TX already has tags
