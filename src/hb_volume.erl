@@ -625,7 +625,7 @@ safe_exec(Command) ->
     collect_output(Port, []).
 
 -spec collect_output(Port :: port(), Acc :: [binary()]) -> 
-    {ok, binary()} | {error, {command_failed, integer(), binary()}} | {error, {command_timeout, binary()}}.
+    {ok, string()} | {error, {command_failed, integer(), binary()}} | {error, {command_timeout, binary()}}.
 collect_output(Port, Acc) ->
     receive
         {Port, {data, {eol, Line}}} ->
