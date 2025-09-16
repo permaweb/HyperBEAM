@@ -630,8 +630,8 @@ new_https_server(Opts, CertPem, KeyPem, RedirectTo) ->
     ?event(https, {creating_new_https_server, {opts_keys, maps:keys(Opts)}}),
     
     % Create temporary files for the certificate and key
-    CertFile = "/home/peterfarber/M3/HyperBEAM_ssl/test/localhost.pem",
-    KeyFile = "/home/peterfarber/M3/HyperBEAM_ssl/test/localhost-key.pem",
+    CertFile = "./hyperbeam_cert.pem",
+    KeyFile = "./hyperbeam_key.pem",
     
     try
         % Write certificate and key to temporary files
