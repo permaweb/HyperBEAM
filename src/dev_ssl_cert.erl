@@ -241,7 +241,9 @@ finalize(_M1, _M2, Opts) ->
                         case hb_opts:get(<<"auto_https">>, true, Opts) of
                             true ->
                                 ?event(ssl_cert, {starting_https_server_with_certificate, {domains, DomainsOut}}),
-                                try hb_http_server:start_https_node(CertPem, hb_util:bin(PrivKeyPem), #{auto_https => true, https_port => 443, port => 443}) of
+                                HttpsPortFromOpts = hb_opts:get(https_port, not_found, Opts),
+                                ?event(ssl_cert, {https_port_config_check, {https_port_in_opts, HttpsPortFromOpts}, {opts_keys, maps:keys(Opts)}}),
+                                try hb_http_server:start_https_node(CertPem, hb_util:bin(PrivKeyPem), Opts) of
                                     ServerUrl when is_binary(ServerUrl) ->
                                         ?event(ssl_cert, {https_server_started_successfully, {server_url, ServerUrl}, {domains, DomainsOut}}),
                                         ResponseBody = #{

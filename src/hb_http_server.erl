@@ -700,19 +700,35 @@ new_https_server(Opts, CertPem, KeyPem) ->
             false -> ProtoOpts
         end,
         
-        % Get HTTPS port
+        % Get HTTPS port with detailed logging
+        HttpsPortFromNodeMsg = hb_opts:get(https_port, not_found, NodeMsg),
+        HttpsPortFromOpts = hb_opts:get(https_port, not_found, Opts),
         HttpsPort = hb_opts:get(https_port, 8443, NodeMsg),
+        ?event(https, {https_port_resolution, 
+                      {from_node_msg, HttpsPortFromNodeMsg}, 
+                      {from_opts, HttpsPortFromOpts}, 
+                      {final_port, HttpsPort}}),
         
-        % Start HTTPS listener
-        StartResult = cowboy:start_tls(
-            HttpsServerID,
-            [
-                {port, HttpsPort},
-                {certfile, CertFile},
-                {keyfile, KeyFile}
-            ],
-            FinalProtoOpts
-        ),
+        % Start HTTPS listener with protocol selection (like new_server does)
+        DefaultProto =
+            case hb_features:http3() of
+                true -> http3;
+                false -> http2
+            end,
+        ?event(https, {starting_tls_listener, {server_id, HttpsServerID}, {port, HttpsPort}, {cert_file, CertFile}, {key_file, KeyFile}}),
+        {ok, Port, Listener} =
+            case Protocol = hb_opts:get(protocol, DefaultProto, NodeMsg) of
+                http3 ->
+                    start_https_http3(HttpsServerID, FinalProtoOpts, NodeMsg, CertFile, KeyFile);
+                Pro when Pro =:= http2; Pro =:= http1 ->
+                    start_https_http2(HttpsServerID, FinalProtoOpts, NodeMsg, CertFile, KeyFile);
+                https ->
+                    % Force HTTPS/TLS mode
+                    start_https_http2(HttpsServerID, FinalProtoOpts, NodeMsg, CertFile, KeyFile);
+                _ -> {error, {unknown_protocol, Protocol}}
+            end,
+        ?event(https, {https_listener_started, {protocol, Protocol}, {port, Port}, {listener, Listener}}),
+        StartResult = {ok, Listener},
         
         case StartResult of
             {ok, Listener} ->
@@ -740,6 +756,69 @@ new_https_server(Opts, CertPem, KeyPem) ->
         % Clean up temporary files
         file:delete(CertFile),
         file:delete(KeyFile)
+    end.
+
+%% @doc Start HTTPS server using HTTP/2 with TLS transport
+start_https_http2(ServerID, ProtoOpts, NodeMsg, CertFile, KeyFile) ->
+    ?event(https, {start_https_http2, ServerID}),
+    HttpsPort = hb_opts:get(https_port, 8443, NodeMsg),
+    StartRes = cowboy:start_tls(
+        ServerID,
+        [
+            {port, HttpsPort},
+            {certfile, CertFile},
+            {keyfile, KeyFile}
+        ],
+        ProtoOpts
+    ),
+    case StartRes of
+        {ok, Listener} ->
+            ?event(https, {https_http2_started, {listener, Listener}, {port, HttpsPort}}),
+            {ok, HttpsPort, Listener};
+        {error, {already_started, Listener}} ->
+            ?event(https, {https_http2_already_started, {listener, Listener}}),
+            cowboy:stop_listener(ServerID),
+            start_https_http2(ServerID, ProtoOpts, NodeMsg, CertFile, KeyFile)
+    end.
+
+%% @doc Start HTTPS server using HTTP/3 with QUIC transport
+start_https_http3(ServerID, ProtoOpts, NodeMsg, CertFile, KeyFile) ->
+    ?event(https, {start_https_http3, ServerID}),
+    HttpsPort = hb_opts:get(https_port, 8443, NodeMsg),
+    Parent = self(),
+    ServerPID =
+        spawn(fun() ->
+            application:ensure_all_started(quicer),
+            {ok, Listener} = cowboy:start_quic(
+                ServerID, 
+                TransOpts = #{
+                    socket_opts => [
+                        {certfile, CertFile},
+                        {keyfile, KeyFile},
+                        {port, HttpsPort}
+                    ]
+                },
+                ProtoOpts
+            ),
+            {ok, {_, GivenPort}} = quicer:sockname(Listener),
+            ranch_server:set_new_listener_opts(
+                ServerID,
+                1024,
+                ranch:normalize_opts(
+                    hb_maps:to_list(TransOpts#{ port => GivenPort })
+                ),
+                ProtoOpts,
+                []
+            ),
+            ranch_server:set_addr(ServerID, {<<"localhost">>, GivenPort}),
+            ConnSup = spawn(fun() -> http3_conn_sup_loop() end),
+            ranch_server:set_connections_sup(ServerID, ConnSup),
+            Parent ! {ok, GivenPort},
+            receive stop -> stopped end
+        end),
+    receive {ok, GivenPort} -> {ok, GivenPort, ServerPID}
+    after 2000 ->
+        {error, {timeout, starting_https_http3_server, ServerID}}
     end.
 
 %% @doc Set up HTTP to HTTPS redirect on the original server.
