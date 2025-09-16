@@ -221,7 +221,7 @@ create_partition_table(Device) ->
                     {result, Output}
                 }
             ),
-            {ok, Output};
+            {ok, <<"Successfully created partition table">>};
         {error, Error} ->
             ?event(debug_volume, 
                 {create_partition_table, gpt_label_error, 
@@ -264,7 +264,7 @@ create_partition(Device, PartType) ->
                    {result, Output}
                 }
             ),
-            {ok, Output};
+            {ok, <<"Successfully created partition">>};
         {error, Error} ->
             ?event(debug_volume, 
                 {create_partition, mkpart_error, 
@@ -624,6 +624,8 @@ safe_exec(Command) ->
     Port = erlang:open_port({spawn, Command}, [exit_status, {line, 256}]),
     collect_output(Port, []).
 
+-spec collect_output(Port :: port(), Acc :: [binary()]) -> 
+    {ok, binary()} | {error, {command_failed, integer(), binary()}} | {error, {command_timeout, binary()}}.
 collect_output(Port, Acc) ->
     receive
         {Port, {data, {eol, Line}}} ->
@@ -661,11 +663,11 @@ with_secure_key_file(EncKey, Fun) ->
     ?event(debug_volume, {with_secure_key_file, key_file_path, KeyFile}),
 
     maybe
-        {create_temp_directory, ok} ?= {create_temp_directory, filelib:ensure_path("/root/tmp")},
+        {_, ok} ?= {create_temp_directory, filelib:ensure_path("/root/tmp")},
         BinaryEncryptionKey ?= encryption_key_to_binary(EncKey),
-        {write_encryption_binary_to_file, ok} ?= {write_encryption_binary_to_file, file:write_file(KeyFile, BinaryEncryptionKey, [raw])},
+        {_, ok} ?= {write_encryption_binary_to_file, file:write_file(KeyFile, BinaryEncryptionKey, [raw])},
         Result ?= Fun(KeyFile),
-        {shred_key_file_after_execution, {ok, _}} ?= {shred_key_file_after_execution, safe_exec("shred -u " ++ KeyFile)},
+        {_, {ok, _}} ?= {shred_key_file_after_execution, safe_exec("shred -u " ++ KeyFile)},
         {ok, Result}
     else
         {create_temp_directory, {error, Error}} ->
