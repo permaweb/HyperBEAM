@@ -1187,7 +1187,7 @@ send_large_signed_request_test() ->
             hb_http_server:start_node(),
             <<"/node-message/short_trace_len">>,
             Req,
-            #{ http_client => httpc }
+            #{ http_client => gun }
         )
     ).
 

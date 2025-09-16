@@ -207,7 +207,7 @@ do_assign(State, Message, ReplyPID) ->
                         <<"timestamp">> => scheduler_time(),
                         <<"hash-chain">> => hb_util:id(HashChain),
                         <<"body">> => OnlyAttested,
-                        <<"type">> => <<"assignment">>
+                        <<"type">> => <<"Assignment">>
                     },
                     State
                 ),

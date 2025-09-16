@@ -113,6 +113,12 @@ query(#{ <<"key">> := Key }, <<"key">>, _Args, _Opts) ->
     {ok, Key};
 query(#{ <<"address">> := Address }, <<"address">>, _Args, _Opts) ->
     {ok, Address};
+query(Msg, <<"fee">>, _Args, Opts) ->
+    {ok, hb_maps:get(<<"fee">>, Msg, 0, Opts)};
+query(Msg, <<"quantity">>, _Args, Opts) ->
+    {ok, hb_maps:get(<<"quantity">>, Msg, 0, Opts)};
+query(Number, <<"winston">>, _Args, _Opts) when is_number(Number) ->
+    {ok, Number};
 query(Msg, <<"recipient">>, _Args, Opts) ->
     case find_field_key(<<"field-target">>, Msg, Opts) of
         {ok, null} -> {ok, <<"">>};

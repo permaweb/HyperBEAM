@@ -446,7 +446,8 @@ schedule_aos_call(Msg1, Code, Action, Opts) ->
             #{
                 <<"action">> => Action,
                 <<"data">> => Code,
-                <<"target">> => ProcID
+                <<"target">> => ProcID,
+                <<"timestamp">> => os:system_time(millisecond)
             },
             #{ priv_wallet => Wallet }
         ),

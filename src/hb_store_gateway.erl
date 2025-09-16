@@ -42,7 +42,8 @@ type(StoreOpts, Key) ->
 
 %% @doc Read the data at the given key from the GraphQL route. Will only attempt
 %% to read the data if the key is an ID.
-read(StoreOpts, Key) ->
+read(BaseStoreOpts, Key) ->
+    StoreOpts = opts(BaseStoreOpts),
     case hb_path:term_to_path_parts(Key, StoreOpts) of
         [ID] when ?IS_ID(ID) ->
             ?event({read, StoreOpts, Key}),
@@ -59,6 +60,55 @@ read(StoreOpts, Key) ->
         _ ->
             ?event({ignoring_non_id, Key}),
             not_found
+    end.
+
+%% @doc Normalize the routes in the given `Opts`.
+opts(Opts) ->
+    case hb_maps:find(<<"node">>, Opts) of
+        error -> Opts;
+        {ok, Node} ->
+            case hb_maps:get(<<"node-type">>, Opts, <<"arweave">>, Opts) of
+                <<"arweave">> ->
+                    Opts#{
+                        routes => [
+                            #{
+                                % Routes for GraphQL requests to use the remote
+                                % server's GraphQL API.
+                                <<"template">> => <<"/graphql">>,
+                                <<"nodes">> => [#{ <<"prefix">> => Node }]
+                            },
+                            #{
+                                <<"template">> => <<"/raw">>,
+                                <<"nodes">> => [#{ <<"prefix">> => Node }]
+                            }
+                        ]
+                    };
+                <<"ao">> ->
+                    Opts#{
+                        routes => [
+                            #{
+                                <<"template">> => <<"/graphql">>,
+                                <<"nodes">> =>
+                                    [
+                                        #{
+                                            <<"prefix">> =>
+                                                <<Node/binary, "/~query@1.0">>
+                                        }
+                                    ]
+                            },
+                            #{
+                                <<"template">> => <<"/raw">>,
+                                <<"nodes">> =>
+                                [
+                                    #{
+                                        <<"match">> => <<"^/raw">>,
+                                        <<"with">> => Node
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+            end
     end.
 
 %%% Tests
@@ -328,29 +378,18 @@ remote_hyperbeam_node_ans104_test() ->
     {ok, ID} = hb_cache:write(Msg, ServerOpts),
     {ok, ReadMsg} = hb_cache:read(ID, ServerOpts),
     ?assert(hb_message:verify(ReadMsg)),
+    LocalStore = hb_test_utils:test_store(),
     ClientOpts =
         #{
             store =>
                 [
                     #{
                         <<"store-module">> => hb_store_gateway,
-                        <<"node">> => Server
-                    },
-                    hb_test_utils:test_store()
-                ],
-            routes => [
-                #{
-                    % Routes for GraphQL requests to use the remote server's
-                    % GraphQL API.
-                    <<"template">> => <<"/graphql">>,
-                    <<"nodes">> =>
-                        [
-                            #{
-                                <<"prefix">> => <<Server/binary, "/~query@1.0">>
-                            }
-                        ]
-                }
-            ]
+                        <<"node">> => Server,
+                        <<"node-type">> => <<"ao">>,
+                        <<"local-store">> => [LocalStore]
+                    }
+                ]
         },
     {ok, Msg2} = hb_cache:read(ID, ClientOpts),
     ?assert(hb_message:verify(Msg2)),
