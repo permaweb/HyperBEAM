@@ -81,7 +81,9 @@ info(_Msg1, _Msg2, _Opts) ->
             },
             <<"finalize">> => #{
                 <<"description">> => <<"Finalize certificate issuance after DNS TXT records are set">>,
-                <<"usage">> => <<"POST /ssl-cert@1.0/finalize (validates and returns certificate)">>
+                <<"usage">> => <<"POST /ssl-cert@1.0/finalize (validates and returns certificate)">>,
+                <<"auto_https">> => <<"Automatically starts HTTPS server and redirects HTTP traffic (default: true)">>,
+                <<"https_port">> => <<"Configurable HTTPS port (default: 8443 for development, set to 443 for production)">>
             },
             <<"renew">> => #{
                 <<"description">> => <<"Renew an existing certificate">>,
@@ -188,11 +190,18 @@ request(_M1, _M2, Opts) ->
 %% 2. Validates DNS challenges with Let's Encrypt
 %% 3. Finalizes the order if challenges are valid
 %% 4. Downloads the certificate if available
-%% 5. Returns the certificate or status information
+%% 5. Automatically starts HTTPS server on port 443 (if auto_https is enabled)
+%% 6. Configures HTTP server to redirect to HTTPS
+%% 7. Returns the certificate and HTTPS server status
+%%
+%% The auto_https feature (enabled by default) will:
+%% - Start a new HTTPS listener on port 443 using the issued certificate
+%% - Reconfigure the existing HTTP server to send 301 redirects to HTTPS
+%% - Preserve all existing server configuration and functionality
 %%
 %% @param _M1 Ignored
 %% @param _M2 Message containing request_state
-%% @param Opts Options
+%% @param Opts Options (supports auto_https: true/false)
 %% @returns {ok, Map} result of validation and optionally certificate
 finalize(_M1, _M2, Opts) ->
     ?event({ssl_cert_finalize_started}),
@@ -227,15 +236,66 @@ finalize(_M1, _M2, Opts) ->
                             Key -> ssl_cert_state:serialize_private_key(Key)
                         end,
                         ?event(ssl_cert, {ssl_cert_certificate_and_key_ready_for_nginx, {domains, DomainsOut}}),
-                        {ok, #{<<"status">> => 200,
-                               <<"body">> => #{
-                                   <<"message">> => <<"Certificate issued successfully">>,
-                                   <<"domains">> => DomainsOut,
-                                   <<"results">> => Results,
-                                   % TODO: Remove Keys from response
-                                   <<"certificate_pem">> => CertPem,
-                                   <<"key_pem">> => hb_util:bin(PrivKeyPem)
-                               }}};
+                        
+                        % Start HTTPS server with the new certificate and build response
+                        case hb_opts:get(<<"auto_https">>, true, Opts) of
+                            true ->
+                                ?event(ssl_cert, {starting_https_server_with_certificate, {domains, DomainsOut}}),
+                                case hb_http_server:start_https_server(CertPem, PrivKeyPem, Opts) of
+                                    {ok, _Listener, HttpsPort} ->
+                                        ?event(ssl_cert, {https_server_started_successfully, {port, HttpsPort}, {domains, DomainsOut}}),
+                                        ResponseBody = #{
+                                            <<"message">> => <<"Certificate issued successfully">>,
+                                            <<"domains">> => DomainsOut,
+                                            <<"results">> => Results,
+                                            % TODO: Remove Keys from response
+                                            <<"certificate_pem">> => CertPem,
+                                            <<"key_pem">> => hb_util:bin(PrivKeyPem),
+                                            <<"https_server">> => #{
+                                                <<"status">> => <<"started">>,
+                                                <<"port">> => HttpsPort,
+                                                <<"message">> => iolist_to_binary([
+                                                    <<"HTTPS server started on port ">>, 
+                                                    integer_to_binary(HttpsPort), 
+                                                    <<", HTTP traffic will be redirected">>
+                                                ])
+                                            }
+                                        },
+                                        {ok, #{<<"status">> => 200, <<"body">> => ResponseBody}};
+                                    {error, HttpsError} ->
+                                        ?event(ssl_cert, {https_server_start_failed, HttpsError, {domains, DomainsOut}}),
+                                        ResponseBody = #{
+                                            <<"message">> => <<"Certificate issued successfully">>,
+                                            <<"domains">> => DomainsOut,
+                                            <<"results">> => Results,
+                                            % TODO: Remove Keys from response
+                                            <<"certificate_pem">> => CertPem,
+                                            <<"key_pem">> => hb_util:bin(PrivKeyPem),
+                                            <<"https_server">> => #{
+                                                <<"status">> => <<"failed">>,
+                                                <<"error">> => hb_util:bin(hb_format:term(HttpsError)),
+                                                <<"message">> => <<"Certificate issued but HTTPS server failed to start">>
+                                            }
+                                        },
+                                        {ok, #{<<"status">> => 200, <<"body">> => ResponseBody}}
+                                end;
+                            false ->
+                                ?event(ssl_cert, {auto_https_disabled, {domains, DomainsOut}}),
+                                ResponseBody = #{
+                                    <<"message">> => <<"Certificate issued successfully">>,
+                                    <<"domains">> => DomainsOut,
+                                    <<"results">> => Results,
+                                    % TODO: Remove Keys from response
+                                    <<"certificate_pem">> => CertPem,
+                                    <<"key_pem">> => hb_util:bin(PrivKeyPem),
+                                    <<"https_server">> => #{
+                                        <<"status">> => <<"skipped">>,
+                                        <<"reason">> => <<"auto_https_disabled">>,
+                                        <<"message">> => <<"Certificate issued, HTTPS server not started (auto_https disabled)">>
+                                    }
+                                },
+                                {ok, #{<<"status">> => 200, <<"body">> => ResponseBody}}
+                        end;
                     {error, _} ->
                         {ok, #{<<"status">> => 200,
                                <<"body">> => #{

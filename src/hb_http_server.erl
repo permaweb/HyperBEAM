@@ -14,6 +14,7 @@
 -export([set_opts/1, set_opts/2, get_opts/0, get_opts/1]).
 -export([set_default_opts/1, set_proc_server_id/1]).
 -export([start_node/0, start_node/1]).
+-export([start_https_server/3, redirect_to_https/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -60,7 +61,9 @@ start() ->
             priv_wallet => PrivWallet,
             store => UpdatedStoreOpts,
             port => hb_opts:get(port, 8734, Loaded),
-            cache_writers => [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
+            cache_writers => [hb_util:human_id(ar_wallet:to_address(PrivWallet))],
+            auto_https => hb_opts:get(auto_https, true, Loaded),
+            https_port => hb_opts:get(https_port, 8443, Loaded)
         }
     ).
 start(Opts) ->
@@ -572,6 +575,169 @@ start_node(Opts) ->
     ServerOpts = set_default_opts(Opts),
     {ok, _Listener, Port} = new_server(ServerOpts),
     <<"http://localhost:", (integer_to_binary(Port))/binary, "/">>.
+
+%% @doc Start an HTTPS server with the given certificate and key.
+%%
+%% This function creates a new HTTPS listener using the same configuration
+%% as the existing HTTP server but with TLS transport enabled. It also
+%% automatically configures the original HTTP server to redirect all traffic
+%% to HTTPS with 301 Moved Permanently responses.
+%%
+%% The HTTPS port is configurable via the `https_port` option (defaults to 8443
+%% for development, avoiding the need for root privileges on port 443).
+%%
+%% The certificate and key are temporarily written to local files for Cowboy
+%% to use, then cleaned up after the server starts.
+%%
+%% @param CertPem PEM-encoded certificate chain
+%% @param KeyPem PEM-encoded private key  
+%% @param Opts Server configuration options (supports https_port)
+%% @returns {ok, Listener, Port} or {error, Reason}
+start_https_server(CertPem, KeyPem, Opts) ->
+    ?event(https, {starting_https_server, {opts_keys, maps:keys(Opts)}}),
+    
+    % Create temporary files for the certificate and key
+    CertFile = "./hyperbeam_cert.pem",
+    KeyFile = "./hyperbeam_key.pem",
+    
+    try
+        % Write certificate and key to temporary files
+        ok = file:write_file(CertFile, CertPem),
+        ok = file:write_file(KeyFile, KeyPem),
+        
+        % Get server ID from opts
+        ServerID = hb_opts:get(http_server, <<"https_server">>, Opts),
+        HttpsServerID = <<ServerID/binary, "_https">>,
+        
+        % Create dispatcher with same configuration as HTTP server
+        Dispatcher = cowboy_router:compile([{'_', [{'_', ?MODULE, HttpsServerID}]}]),
+        
+        % Protocol options for HTTPS
+        ProtoOpts = #{
+            env => #{dispatch => Dispatcher, node_msg => Opts},
+            stream_handlers => [cowboy_stream_h],
+            max_connections => infinity,
+            idle_timeout => hb_opts:get(idle_timeout, 300000, Opts)
+        },
+        
+        % Add Prometheus support if enabled
+        FinalProtoOpts = case hb_opts:get(prometheus, not hb_features:test(), Opts) of
+            true ->
+                try
+                    application:ensure_all_started([prometheus, prometheus_cowboy]),
+                    ProtoOpts#{
+                        metrics_callback => fun prometheus_cowboy2_instrumenter:observe/1,
+                        stream_handlers => [cowboy_metrics_h, cowboy_stream_h]
+                    }
+                catch
+                    _:_ -> ProtoOpts
+                end;
+            false -> ProtoOpts
+        end,
+        
+        % Get HTTPS port from configuration, default to 8443 for development
+        HttpsPort = hb_opts:get(https_port, 8443, Opts),
+        
+        % Start the HTTPS listener
+        StartResult = cowboy:start_tls(
+            HttpsServerID,
+            [
+                {port, HttpsPort},
+                {certfile, CertFile},
+                {keyfile, KeyFile}
+            ],
+            FinalProtoOpts
+        ),
+        
+        case StartResult of
+            {ok, Listener} ->
+                ?event(https, {https_server_started, {listener, Listener}, {server_id, HttpsServerID}, {port, HttpsPort}}),
+                
+                % Now update the original HTTP server to redirect to HTTPS
+                OriginalServerID = hb_opts:get(http_server, no_server, Opts),
+                case OriginalServerID of
+                    no_server ->
+                        ?event(https, {no_original_server_to_redirect}),
+                        ok;
+                    _ ->
+                        setup_http_redirect(OriginalServerID, Opts#{https_port => HttpsPort})
+                end,
+                
+                {ok, Listener, HttpsPort};
+            {error, Reason} ->
+                ?event(https, {https_server_start_failed, Reason}),
+                {error, Reason}
+        end
+    catch
+        Error:Details:Stacktrace ->
+            ?event(https, {https_server_exception, Error, Details, Stacktrace}),
+            {error, {exception, Error, Details}}
+    after
+        % Clean up temporary files
+        file:delete(CertFile),
+        file:delete(KeyFile)
+    end.
+
+%% @doc Set up HTTP to HTTPS redirect on the original server.
+%%
+%% This modifies the existing HTTP server's dispatcher to redirect
+%% all traffic to the HTTPS equivalent.
+setup_http_redirect(ServerID, Opts) ->
+    ?event(https, {setting_up_http_redirect, {server_id, ServerID}}),
+    
+    % Create a new dispatcher that redirects everything to HTTPS
+    RedirectDispatcher = cowboy_router:compile([
+        {'_', [
+            {'_', fun redirect_to_https/2, Opts}
+        ]}
+    ]),
+    
+    % Update the server's dispatcher
+    cowboy:set_env(ServerID, dispatch, RedirectDispatcher),
+    ?event(https, {http_redirect_configured, {server_id, ServerID}}).
+
+%% @doc HTTP to HTTPS redirect handler.
+%%
+%% This handler sends a 301 Moved Permanently response redirecting
+%% the client to the same URL but using HTTPS.
+%%
+%% @param Req Cowboy request object
+%% @param State Handler state (server options)
+%% @returns {ok, UpdatedReq, State}
+redirect_to_https(Req0, State) ->
+    Host = cowboy_req:host(Req0),
+    Path = cowboy_req:path(Req0),
+    Qs = cowboy_req:qs(Req0),
+    
+    % Get HTTPS port from state, default to 443
+    HttpsPort = hb_opts:get(https_port, 443, State),
+    
+    % Build the HTTPS URL with port if not 443
+    BaseUrl = case HttpsPort of
+        443 -> <<"https://", Host/binary>>;
+        _ -> 
+            PortBin = integer_to_binary(HttpsPort),
+            <<"https://", Host/binary, ":", PortBin/binary>>
+    end,
+    
+    Location = case Qs of
+        <<>> -> 
+            <<BaseUrl/binary, Path/binary>>;
+        _ -> 
+            <<BaseUrl/binary, Path/binary, "?", Qs/binary>>
+    end,
+    
+    ?event(https, {redirecting_to_https, {from, Path}, {to, Location}, {https_port, HttpsPort}}),
+    
+    % Send 301 redirect
+    Req = cowboy_req:reply(301, #{
+        <<"location">> => Location,
+        <<"access-control-allow-origin">> => <<"*">>,
+        <<"access-control-allow-headers">> => <<"*">>,
+        <<"access-control-allow-methods">> => <<"GET, POST, PUT, DELETE, OPTIONS, PATCH">>
+    }, Req0),
+    
+    {ok, Req, State}.
 
 %%% Tests
 %%% The following only covering the HTTP server initialization process. For tests
