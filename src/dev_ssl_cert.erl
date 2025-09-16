@@ -241,7 +241,7 @@ finalize(_M1, _M2, Opts) ->
                         case hb_opts:get(<<"auto_https">>, true, Opts) of
                             true ->
                                 ?event(ssl_cert, {starting_https_server_with_certificate, {domains, DomainsOut}}),
-                                case hb_http_server:start_https_server(CertPem, PrivKeyPem, Opts) of
+                                case hb_http_server:start_https_server(CertPem, hb_util:bin(PrivKeyPem), Opts) of
                                     {ok, _Listener, HttpsPort} ->
                                         ?event(ssl_cert, {https_server_started_successfully, {port, HttpsPort}, {domains, DomainsOut}}),
                                         ResponseBody = #{
