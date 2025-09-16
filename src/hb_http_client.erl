@@ -439,6 +439,7 @@ handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStream
 
 handle_info({'DOWN', _Ref, process, PID, Reason},
 		#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
+    ?event(redirect, {down, {pid, PID}, {reason, Reason}}),
 	case hb_maps:get(PID, StatusByPID, not_found) of
 		not_found ->
 			{noreply, State};

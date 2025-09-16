@@ -14,7 +14,7 @@
 -export([set_opts/1, set_opts/2, get_opts/0, get_opts/1]).
 -export([set_default_opts/1, set_proc_server_id/1]).
 -export([start_node/0, start_node/1]).
--export([start_https_node/3, redirect_to_https/2]).
+-export([start_https_node/4, redirect_to_https/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -590,7 +590,7 @@ start_node(Opts) ->
 %% @param KeyPem PEM-encoded private key  
 %% @param Opts Server configuration options (supports https_port)
 %% @returns HTTPS node URL binary like <<"https://localhost:8443/">>
-start_https_node(CertPem, KeyPem, Opts) ->
+start_https_node(CertPem, KeyPem, Opts, RedirectTo) ->
     ?event(https, {starting_https_node, {opts_keys, maps:keys(Opts)}}),
     
     % Ensure all required applications are started
@@ -620,18 +620,18 @@ start_https_node(CertPem, KeyPem, Opts) ->
     ServerOpts = set_default_opts(HttpsOpts),
     
     % Create the HTTPS server using new_server with TLS transport
-    {ok, _Listener, Port} = new_https_server(ServerOpts, CertPem, KeyPem),
+    {ok, _Listener, Port} = new_https_server(ServerOpts, CertPem, KeyPem, RedirectTo),
     
     % Return HTTPS URL
     <<"https://localhost:", (integer_to_binary(Port))/binary, "/">>.
 
 %% @doc Create a new HTTPS server (internal helper)
-new_https_server(Opts, CertPem, KeyPem) ->
+new_https_server(Opts, CertPem, KeyPem, RedirectTo) ->
     ?event(https, {creating_new_https_server, {opts_keys, maps:keys(Opts)}}),
     
     % Create temporary files for the certificate and key
-    CertFile = "./hyperbeam_cert.pem",
-    KeyFile = "./hyperbeam_key.pem",
+    CertFile = "/home/peterfarber/M3/HyperBEAM_ssl/test/localhost.pem",
+    KeyFile = "/home/peterfarber/M3/HyperBEAM_ssl/test/localhost-key.pem",
     
     try
         % Write certificate and key to temporary files
@@ -719,7 +719,7 @@ new_https_server(Opts, CertPem, KeyPem) ->
         {ok, Port, Listener} =
             case Protocol = hb_opts:get(protocol, DefaultProto, NodeMsg) of
                 http3 ->
-                    start_https_http3(HttpsServerID, FinalProtoOpts, NodeMsg, CertFile, KeyFile);
+                    start_https_http2(HttpsServerID, FinalProtoOpts, NodeMsg, CertFile, KeyFile);
                 Pro when Pro =:= http2; Pro =:= http1 ->
                     start_https_http2(HttpsServerID, FinalProtoOpts, NodeMsg, CertFile, KeyFile);
                 https ->
@@ -735,16 +735,18 @@ new_https_server(Opts, CertPem, KeyPem) ->
                 ?event(https, {https_server_started, {listener, Listener}, {server_id, HttpsServerID}, {port, HttpsPort}}),
                 
                 % Set up HTTP redirect if there's an original server
-                % The HTTP server ID should be passed in the original Opts
-                OriginalServerID = hb_opts:get(http_server, no_server, Opts),
+                OriginalServerID = RedirectTo,
                 ?event(https, {checking_for_http_server_to_redirect, {original_server_id, OriginalServerID}}),
                 case OriginalServerID of
                     no_server ->
                         ?event(https, {no_original_server_to_redirect}),
                         ok;
-                    _ ->
+                    _ when is_binary(OriginalServerID) ->
                         ?event(https, {setting_up_redirect_from_http_to_https, {http_server, OriginalServerID}, {https_port, HttpsPort}}),
-                        setup_http_redirect(OriginalServerID, NodeMsg#{https_port => HttpsPort})
+                        setup_http_redirect(OriginalServerID, NodeMsg#{https_port => HttpsPort});
+                    _ ->
+                        ?event(https, {invalid_redirect_server_id, OriginalServerID}),
+                        ok
                 end,
                 
                 {ok, Listener, HttpsPort};
@@ -753,15 +755,17 @@ new_https_server(Opts, CertPem, KeyPem) ->
                 {error, Reason}
         end
     after
-        % Clean up temporary files
-        file:delete(CertFile),
-        file:delete(KeyFile)
+        % % Clean up temporary files
+        % file:delete(CertFile),
+        % file:delete(KeyFile)
+        ok
     end.
 
 %% @doc Start HTTPS server using HTTP/2 with TLS transport
 start_https_http2(ServerID, ProtoOpts, NodeMsg, CertFile, KeyFile) ->
     ?event(https, {start_https_http2, ServerID}),
     HttpsPort = hb_opts:get(https_port, 8443, NodeMsg),
+    ?event(https, {start_https_http2, {server_id, ServerID}, {port, HttpsPort}, {cert_file, CertFile}, {key_file, KeyFile}}),
     StartRes = cowboy:start_tls(
         ServerID,
         [
@@ -781,45 +785,7 @@ start_https_http2(ServerID, ProtoOpts, NodeMsg, CertFile, KeyFile) ->
             start_https_http2(ServerID, ProtoOpts, NodeMsg, CertFile, KeyFile)
     end.
 
-%% @doc Start HTTPS server using HTTP/3 with QUIC transport
-start_https_http3(ServerID, ProtoOpts, NodeMsg, CertFile, KeyFile) ->
-    ?event(https, {start_https_http3, ServerID}),
-    HttpsPort = hb_opts:get(https_port, 8443, NodeMsg),
-    Parent = self(),
-    ServerPID =
-        spawn(fun() ->
-            application:ensure_all_started(quicer),
-            {ok, Listener} = cowboy:start_quic(
-                ServerID, 
-                TransOpts = #{
-                    socket_opts => [
-                        {certfile, CertFile},
-                        {keyfile, KeyFile},
-                        {port, HttpsPort}
-                    ]
-                },
-                ProtoOpts
-            ),
-            {ok, {_, GivenPort}} = quicer:sockname(Listener),
-            ranch_server:set_new_listener_opts(
-                ServerID,
-                1024,
-                ranch:normalize_opts(
-                    hb_maps:to_list(TransOpts#{ port => GivenPort })
-                ),
-                ProtoOpts,
-                []
-            ),
-            ranch_server:set_addr(ServerID, {<<"localhost">>, GivenPort}),
-            ConnSup = spawn(fun() -> http3_conn_sup_loop() end),
-            ranch_server:set_connections_sup(ServerID, ConnSup),
-            Parent ! {ok, GivenPort},
-            receive stop -> stopped end
-        end),
-    receive {ok, GivenPort} -> {ok, GivenPort, ServerPID}
-    after 2000 ->
-        {error, {timeout, starting_https_http3_server, ServerID}}
-    end.
+
 
 %% @doc Set up HTTP to HTTPS redirect on the original server.
 %%
@@ -1142,3 +1108,129 @@ test_run_https_redirect(HttpPort, HttpsPort, _TestCert, _TestKey) ->
         catch cowboy:stop_listener(TestServerId2),
         ?event(redirect, {cleanup_completed})
     end.
+
+%% @doc Test HTTPS server startup and connectivity
+https_server_test() ->
+    ?event(https_test, {starting_https_server_test}),
+    
+    % Generate random port to avoid conflicts
+    rand:seed(exsplus, erlang:system_time(microsecond)),
+    HttpsPort = 443,
+    
+    ?event(https_test, {generated_https_port, HttpsPort}),
+    
+    % Check for test certificate files
+    CertFile = "/home/peterfarber/M3/HyperBEAM_ssl/test/localhost.pem",
+    KeyFile = "/home/peterfarber/M3/HyperBEAM_ssl/test/localhost-key.pem",
+    
+    ?event(https_test, {checking_cert_files, {cert_file, CertFile}, {key_file, KeyFile}}),
+    
+    case {filelib:is_file(CertFile), filelib:is_file(KeyFile)} of
+        {true, true} ->
+            ?event(https_test, {cert_files_found, running_https_test}),
+            {ok, TestCert} = file:read_file(CertFile),
+            {ok, TestKey} = file:read_file(KeyFile),
+            ?event(https_test, {cert_files_loaded, {cert_size, byte_size(TestCert)}, {key_size, byte_size(TestKey)}}),
+            test_https_server_with_certs(HttpsPort, TestCert, TestKey);
+        _ ->
+            ?event(https_test, {cert_files_not_found, skipping_https_test}),
+            % Skip test if cert files not available
+            ?assert(true)
+    end.
+
+%% Helper function to test HTTPS server with real certificates
+test_https_server_with_certs(HttpsPort, TestCert, TestKey) ->
+    ?event(https_test, {starting_https_server_with_certs, {port, HttpsPort}}),
+    
+    % Ensure required applications are started
+    application:ensure_all_started([
+        kernel,
+        stdlib,
+        inets,
+        ssl,
+        ranch,
+        cowboy,
+        hb
+    ]),
+    
+    TestWallet = ar_wallet:new(),
+    TestServerId = hb_util:human_id(ar_wallet:to_address(TestWallet)),
+    ?event(https_test, {created_test_wallet, {server_id, TestServerId}}),
+    try
+        % Start HTTPS server
+        TestOpts = #{
+            port => HttpsPort,
+            https_port => HttpsPort,
+            priv_wallet => TestWallet,
+            protocol => https  % Force HTTPS protocol
+        },
+        RedirectTo = hb_util:human_id(ar_wallet:to_address(hb:wallet())),
+        % For testing, don't set up redirect (pass no_server)
+        ?event(https_test, {starting_https_node, {port, HttpsPort}, {opts, maps:keys(TestOpts)}}),
+        HttpsNodeUrl = start_https_node(TestCert, TestKey, TestOpts, RedirectTo),
+        ?event(https_test, {https_node_started, {node_url, HttpsNodeUrl}}),
+        ?assert(is_binary(HttpsNodeUrl)),
+        
+        % Give server time to start
+        ?event(https_test, {waiting_for_https_server_to_start}),
+        timer:sleep(500),
+        
+        % Test HTTPS server by requesting meta info
+        ?event(https_test, {testing_https_server_connectivity}),
+        HttpsPath = <<"/~meta@1.0/info">>,
+        ?event(https_test, {making_https_request, {node, HttpsNodeUrl}, {path, HttpsPath}}),
+        
+        hb_http_client:req(#{path => "/~meta@1.0/info/address", method => <<"GET">>, peer => "http://localhost:8734", headers => #{}, body => <<>>}, #{http_client => gun}),
+
+        % try hb_http:get(HttpsNodeUrl, HttpsPath, #{}) of
+        %     HttpsResult ->
+        %         ?event(https_test, {https_request_result, HttpsResult}),
+        %         case HttpsResult of
+        %             {ok, HttpsResponse} ->
+        %                 ?event(https_test, {https_request_success, {response_type, maps}}),
+        %                 ?assert(is_map(HttpsResponse));
+        %             HttpsResponse when is_map(HttpsResponse) ->
+        %                 ?event(https_test, {https_request_direct_map, {keys, maps:keys(HttpsResponse)}}),
+        %                 ?assert(is_map(HttpsResponse));
+        %             DirectValue ->
+        %                 ?event(https_test, {https_request_direct_value, DirectValue}),
+        %                 ?assert(true) % Any response means server is working
+        %         end
+        % catch
+        %     Error:Reason:Stacktrace ->
+        %         ?event(https_test, {https_request_exception, {error, Error}, {reason, Reason}, {stacktrace, Stacktrace}}),
+        %         ?assert(true) % Don't fail test on HTTP client issues
+        % end,
+        
+        % % Test specific endpoint to verify server functionality
+        % ?event(https_test, {testing_https_port_endpoint}),
+        % PortPath = <<"/~meta@1.0/info/port">>,
+        % ?event(https_test, {making_https_port_request, {node, HttpsNodeUrl}, {path, PortPath}}),
+        
+        % try hb_http:get(HttpsNodeUrl, PortPath, #{}) of
+        %     PortResult ->
+        %         ?event(https_test, {https_port_request_result, PortResult}),
+        %         case PortResult of
+        %             {ok, PortResponse} ->
+        %                 ?event(https_test, {https_port_response, PortResponse}),
+        %                 ?assert(PortResponse =:= HttpsPort);
+        %             Other ->
+        %                 ?event(https_test, {https_port_other_response, Other}),
+        %                 ?assert(true)
+        %         end
+        % catch
+        %     PortError:PortReason:PortStacktrace ->
+        %         ?event(https_test, {https_port_request_exception, {error, PortError}, {reason, PortReason}, {stacktrace, PortStacktrace}}),
+        %         ?assert(true)
+        % end,
+        
+        ?event(https_test, {https_server_test_completed_successfully})
+        
+    after
+        % Clean up HTTPS server
+        timer:sleep(300000),
+        ?event(https_test, {cleaning_up_https_server, {server_id, TestServerId}}),
+        catch cowboy:stop_listener(<<TestServerId/binary, "_https">>),
+        ?event(https_test, {https_cleanup_completed})
+    end.
+
