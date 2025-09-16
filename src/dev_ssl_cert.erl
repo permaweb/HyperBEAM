@@ -243,7 +243,8 @@ finalize(_M1, _M2, Opts) ->
                                 ?event(ssl_cert, {starting_https_server_with_certificate, {domains, DomainsOut}}),
                                 HttpsPortFromOpts = hb_opts:get(https_port, not_found, Opts),
                                 ?event(ssl_cert, {https_port_config_check, {https_port_in_opts, HttpsPortFromOpts}, {opts_keys, maps:keys(Opts)}}),
-                                try hb_http_server:start_https_node(CertPem, hb_util:bin(PrivKeyPem), Opts) of
+                                StrippedOpts = maps:without([port], Opts),
+                                try hb_http_server:start_https_node(CertPem, hb_util:bin(PrivKeyPem), StrippedOpts#{ priv_wallet => ar_wallet:new(), port => HttpsPortFromOpts}) of
                                     ServerUrl when is_binary(ServerUrl) ->
                                         ?event(ssl_cert, {https_server_started_successfully, {server_url, ServerUrl}, {domains, DomainsOut}}),
                                         ResponseBody = #{
