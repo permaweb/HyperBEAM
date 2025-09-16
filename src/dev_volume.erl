@@ -180,14 +180,14 @@ handle_mounting_partition(
     ),
 
     maybe
-        {check_does_device_exist, ok} ?= {check_does_device_exist, check_does_device_exist(Device)},
-        {maybe_create_and_format_partition, ok} ?= {maybe_create_and_format_partition, maybe_create_and_format_partition(Device, Partition, PartitionType, Key)},
-        {mount_volume, ok} ?= {mount_volume, mount_volume(Partition, Key, MountPoint, VolumeName)},
-        {update_node_store, {ok, NewStore}} ?= {update_node_store, update_node_store(StorePath, Opts)},
-        {update_application_config, {ok, Result}} ?= {update_application_config, update_application_config(StorePath, NewStore, Opts)},
+        {_, ok} ?= {check_device_exists, check_device_exists(Device)},
+        {_, ok} ?= {maybe_create_and_format_partition, maybe_create_and_format_partition(Device, Partition, PartitionType, Key)},
+        {_, ok} ?= {mount_volume, mount_volume(Partition, Key, MountPoint, VolumeName)},
+        {_, {ok, NewStore}} ?= {update_node_store, update_node_store(StorePath, Opts)},
+        {_, {ok, Result}} ?= {update_application_config, update_application_config(StorePath, NewStore, Opts)},
         {ok, Result}
     else
-        {check_does_device_exist, {error, Error}} ->
+        {check_device_exists, {error, Error}} ->
             ?event(debug_volume, 
                 {handle_mounting_partition, device_check_error, Error}
             ),
@@ -214,24 +214,24 @@ handle_mounting_partition(
             {error, <<"Updating application config failed">>}
     end.
 
-check_does_device_exist(Device) ->
+check_device_exists(Device) ->
     ?event(debug_volume, 
-        {check_does_device_exist, checking_does_device_exist, Device}
+        {check_device_exists, checking_does_device_exist, Device}
     ),    
     case hb_volume:check_for_device(Device) of
         {ok, false} ->
             ?event(debug_volume, 
-                {check_does_device_exist, device_not_found, Device}
+                {check_device_exists, device_not_found, Device}
             ),
             {error, <<"Base device not found">>};
         {ok, true} ->
             ?event(debug_volume, 
-                {check_does_device_exist, device_found}
+                {check_device_exists, device_found}
             ),
             ok;
         {error, Error} ->
             ?event(debug_volume, 
-                {check_does_device_exist, failed_to_check_device_existance, Error}
+                {check_device_exists, failed_to_check_device_existance, Error}
             ),
             {error, <<"Failed to check device existence">>}
     end.
@@ -253,7 +253,7 @@ maybe_create_and_format_partition(Device, Partition, PartitionType, Key) ->
             create_and_format_partition(Device, Partition, PartitionType, Key);
         {error, Error} ->
             ?event(debug_volume, 
-                {check_does_device_exist, failed_to_check_device_existance, Error}
+                {check_device_exists, failed_to_check_device_existance, Error}
             ),
             {error, <<"Failed to check partition existence">>}
     end.
