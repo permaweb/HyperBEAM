@@ -329,35 +329,36 @@ get_tx_basic_data_test() ->
 
 get_tx_rsa_nested_bundle_test() ->
     Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx?tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
-    {ok, Structured} = hb_http:get(Node, Path, #{}),
-    TABM = hb_message:convert(
-        Structured,
-        tabm,
-        #{
-            <<"device">> => <<"structured@1.0">>,
-            <<"bundle">> => true
-        },
-        #{}),
-    {ok, TX} = dev_codec_tx:to(TABM, #{}, #{}),
-    ?event(debug_test, {tabm, TABM}),
-    ?event(debug_test, {tx, TX}),
-    % ?event(debug_test, {structured_tx, Structured}),
-    ?assert(ar_tx:verify(TX)),
-    ?assert(hb_message:verify(Structured, all, #{})),
-    % % Hash the data to make it easier to match
-    % StructuredWithHash = Structured#{
-    %     <<"data">> => hb_util:encode(
-    %         crypto:hash(sha256, (maps:get(<<"data">>, Structured)))
-    %     )
-    % },
-    % ExpectedMsg = #{
-    %     <<"data">> => <<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>,
-    %     <<"reward">> => <<"482143296">>,
-    %     <<"anchor">> => <<"XTzaU2_m_hRYDLiXkcleOC4zf5MVTXIeFWBOsJSRrtEZ8kM6Oz7EKLhZY7fTAvKq">>,
-    %     <<"content-type">> => <<"application/json">>
-    % },
-    % ?assert(hb_message:match(ExpectedMsg, StructuredWithHash, only_present)),
+    Path = <<"/~arweave@2.9-pre/tx&tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    {ok, Root} = hb_http:get(Node, Path, #{}),
+    ?event(debug_test, {root, Root}),
+    ?assert(hb_message:verify(Root, all, #{})),
+
+    ChildPath = <<Path/binary, "/1/2">>,
+    {ok, Child} = hb_http:get(Node, ChildPath, #{}),
+    ?event(debug_test, {child, Child}),
+    ?assert(hb_message:verify(Child, all, #{})),
+
+    {ok, ExpectedChild} =
+        hb_ao:resolve(
+            Root,
+            <<"1/2">>,
+            #{}
+        ),
+    ?assert(hb_message:match(ExpectedChild, Child, only_present)),
+
+    ManualChild = #{
+        <<"data">> => <<"{\"totalTickedRewardsDistributed\":0,\"distributedEpochIndexes\":[],\"newDemandFactors\":[],\"newEpochIndexes\":[],\"tickedRewardDistributions\":[],\"newPruneGatewaysResults\":[{\"delegateStakeReturned\":0,\"stakeSlashed\":0,\"gatewayStakeReturned\":0,\"delegateStakeWithdrawing\":0,\"prunedGateways\":[],\"slashedGateways\":[],\"gatewayStakeWithdrawing\":0}]}">>,
+        <<"data-protocol">> => <<"ao">>,
+        <<"from-module">> => <<"cbn0KKrBZH7hdNkNokuXLtGryrWM--PjSTBqIzw9Kkk">>,
+        <<"from-process">> => <<"agYcCFJtrMG6cqMuZfskIkFTGvUPddICmtQSBIoPdiA">>,
+        <<"anchor">> => <<"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAyODAxODg">>,
+        <<"reference">> => <<"280188">>,
+        <<"target">> => <<"1R5QEtX53Z_RRQJwzFWf40oXiPW2FibErT_h02pu8MU">>,
+        <<"type">> => <<"Message">>,
+        <<"variant">> => <<"ao.TN.1">>
+    },
+    ?assert(hb_message:match(ManualChild, Child, only_present)),
     ok.
 
 
