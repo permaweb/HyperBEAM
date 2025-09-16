@@ -241,9 +241,9 @@ finalize(_M1, _M2, Opts) ->
                         case hb_opts:get(<<"auto_https">>, true, Opts) of
                             true ->
                                 ?event(ssl_cert, {starting_https_server_with_certificate, {domains, DomainsOut}}),
-                                case hb_http_server:start_https_server(CertPem, hb_util:bin(PrivKeyPem), Opts) of
-                                    {ok, _Listener, HttpsPort} ->
-                                        ?event(ssl_cert, {https_server_started_successfully, {port, HttpsPort}, {domains, DomainsOut}}),
+                                try hb_http_server:start_https_node(CertPem, hb_util:bin(PrivKeyPem), Opts) of
+                                    ServerUrl when is_binary(ServerUrl) ->
+                                        ?event(ssl_cert, {https_server_started_successfully, {server_url, ServerUrl}, {domains, DomainsOut}}),
                                         ResponseBody = #{
                                             <<"message">> => <<"Certificate issued successfully">>,
                                             <<"domains">> => DomainsOut,
@@ -253,17 +253,18 @@ finalize(_M1, _M2, Opts) ->
                                             <<"key_pem">> => hb_util:bin(PrivKeyPem),
                                             <<"https_server">> => #{
                                                 <<"status">> => <<"started">>,
-                                                <<"port">> => HttpsPort,
+                                                <<"server_url">> => ServerUrl,
                                                 <<"message">> => iolist_to_binary([
-                                                    <<"HTTPS server started on port ">>, 
-                                                    integer_to_binary(HttpsPort), 
+                                                    <<"HTTPS server started at ">>, 
+                                                    ServerUrl, 
                                                     <<", HTTP traffic will be redirected">>
                                                 ])
                                             }
                                         },
-                                        {ok, #{<<"status">> => 200, <<"body">> => ResponseBody}};
-                                    {error, HttpsError} ->
-                                        ?event(ssl_cert, {https_server_start_failed, HttpsError, {domains, DomainsOut}}),
+                                        {ok, #{<<"status">> => 200, <<"body">> => ResponseBody}}
+                                catch
+                                    Error:Reason:Stacktrace ->
+                                        ?event(ssl_cert, {https_server_start_failed, {error, Error}, {reason, Reason}, {stacktrace, Stacktrace}, {domains, DomainsOut}}),
                                         ResponseBody = #{
                                             <<"message">> => <<"Certificate issued successfully">>,
                                             <<"domains">> => DomainsOut,
@@ -273,7 +274,7 @@ finalize(_M1, _M2, Opts) ->
                                             <<"key_pem">> => hb_util:bin(PrivKeyPem),
                                             <<"https_server">> => #{
                                                 <<"status">> => <<"failed">>,
-                                                <<"error">> => hb_util:bin(hb_format:term(HttpsError)),
+                                                <<"error">> => hb_util:bin(hb_format:term({Error, Reason})),
                                                 <<"message">> => <<"Certificate issued but HTTPS server failed to start">>
                                             }
                                         },
@@ -318,8 +319,8 @@ finalize(_M1, _M2, Opts) ->
             ssl_utils:build_error_response(404, <<"request state not found">>);
         {error, invalid_request_state} ->
             ssl_utils:build_error_response(400, <<"request_state must be a map">>);
-        {error, Reason} ->
-            FormattedError = ssl_utils:format_error_details(Reason),
+        {error, FinalReason} ->
+            FormattedError = ssl_utils:format_error_details(FinalReason),
             ssl_utils:build_error_response(500, FormattedError)
     end.
 
