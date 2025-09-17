@@ -257,24 +257,27 @@ ensure_started(Opts) ->
 
 %% @doc Find either a specific checkpoint by its ID, or find the most recent
 %% checkpoint via GraphQL.
-import(ProcMsg, Req, Opts) ->
+import(Base, Req, Opts) ->
+    PassedProcID = hb_maps:find(<<"process-id">>, Req, Opts),
+    ProcMsg =
+        case PassedProcID of
+            {ok, ProcessId} ->
+                {ok, CacheProcMsg} = hb_cache:read(ProcessId, Opts),
+                CacheProcMsg;
+            error ->
+                Base
+        end,
     case hb_maps:find(<<"import">>, Req, Opts) of
         {ok, ImportID} ->
             case hb_cache:read(ImportID, Opts) of
                 {ok, CheckpointMessage} ->
-                    ?event(debug_cu_state, {had_import_id, {state, CheckpointMessage}}),
                     do_import(ProcMsg, CheckpointMessage, Opts);
                 not_found -> {error, not_found}
             end;
         error ->
-            ProcID = case hb_maps:get(<<"process-id">>, Req, not_found, Opts) of
-                not_found -> dev_process:process_id(ProcMsg, #{}, Opts);
-                PassedProcId -> PassedProcId
-            end,
-            ?event(debug_proc_id, {proc_id, ProcID}),
+            ProcID = dev_process:process_id(ProcMsg, #{}, Opts),
             case latest_checkpoint(ProcID, Opts) of
                 {ok, CheckpointMessage} ->
-                    ?event(debug_proc_id, {no_import_id, {state, CheckpointMessage}}),
                     do_import(ProcMsg, CheckpointMessage, Opts);
                 Err -> Err
             end
@@ -464,7 +467,7 @@ log_server_events(Bin) when is_binary(Bin) ->
     log_server_events(binary:split(Bin, <<"\n">>, [global]));
 log_server_events([Remaining]) -> Remaining;
 log_server_events([Line | Rest]) ->
-    ?event(genesis_wasm_server, {string, Line}),
+    ?event(genesis_wasm_server, {server_logged, {string, Line}}),
     log_server_events(Rest).
 
 %%% Tests
@@ -481,14 +484,12 @@ import_legacy_checkpoint() ->
                 <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
             ]
     },
-    ProcID = <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>,
-    CheckpointRes =
+    ProcID = <<"NTE-RcHEeO15MYMUbXwWytRxn_IUJmXPKPOFVc5qZcg">>,
+    {ok, ProcWithCheckpoint} =
         hb_ao:resolve(
            <<"~genesis-wasm@1.0/import&process-id=", ProcID/binary>>,
            Opts
         ),
-    ?event(debug_import_result, {checkpoint_res, CheckpointRes}),
-    {ok, ProcWithCheckpoint} = CheckpointRes,
     ?assertMatch(
         Slot when Slot > 0,
         hb_maps:get(<<"at-slot">>, ProcWithCheckpoint)
@@ -501,9 +502,7 @@ import_legacy_checkpoint() ->
         {ok, Slot, _} when Slot > 0,
         dev_process_cache:latest(ProcID, Opts)
     ),
-    Result = hb_ao:resolve(<<ProcID/binary, "~process@1.0/now">>, Opts),
-    ?event(debug_import_result, {result, Result}),
-    Result.
+    {ok, _} = hb_ao:resolve(<<ProcID/binary, "~process@1.0/now">>, Opts).
 
 -ifdef(ENABLE_GENESIS_WASM).
 test_base_process() ->
