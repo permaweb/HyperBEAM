@@ -36,7 +36,13 @@ once(_Msg1, Msg2, Opts) ->
                     maps:put(<<"path">>, CronPath, Msg2)
                 ),
 			Name = {<<"cron@1.0">>, ReqMsgID},
-			Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts) end),
+			Pid = spawn(fun() -> 
+                maybe <<DelayBin/binary>> ?= hb_ao:get(<<"delay">>, Msg2),
+                    DelaySecs = timer:seconds(hb_util:int(DelayBin)),
+                    timer:sleep(DelaySecs)
+                end,
+                once_worker(CronPath, ModifiedMsg2, Opts) 
+            end),
 			hb_name:register(Name, Pid),
 			{ok, ReqMsgID}
 	end.
@@ -274,6 +280,39 @@ once_executed_test() ->
 	{ok, _ReqMsgId} = hb_http:get(Node, UrlPath, #{}),
 	% wait for the request to be processed
 	timer:sleep(1000),
+	% send a message to the worker to get the state
+	PID ! {get, self()},
+	% receive the state from the worker
+	receive
+		{state, State} ->
+			?event({once_executed_test_received_state, {state, State}}),
+			?assertMatch(#{ <<"test-id">> := ID }, State)
+	after 1000 ->
+		FinalLookup = hb_name:lookup({<<"test">>, ID}),
+		?event({timeout_waiting_for_worker, {pid, PID}, {lookup_result, FinalLookup}}),
+		throw(no_response_from_worker)
+	end.
+
+
+%% @doc This test verifies that a one-time task can be scheduled and executed with a delay.
+once_delayed_and_executed_test() ->
+	% start a new node 
+	Node = hb_http_server:start_node(),
+	% spawn a worker on the new node that calls test_worker/0 which inits
+    % test_worker/1 with a state of undefined
+	PID = spawn(fun test_worker/0),
+	% generate a random id that we can then use later to lookup the worker
+	ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+	% register the worker with the id
+	hb_name:register({<<"test">>, ID}, PID),
+	% Construct the URL path with the dynamic ID
+	UrlPath = <<"/~cron@1.0/once?delay=1&test-id=", ID/binary,
+			"&cron-path=/~test-device@1.0/update_state">>,
+	% this should call the worker via the test device
+	% the test device should look up the worker via the id given 
+	{ok, _ReqMsgId} = hb_http:get(Node, UrlPath, #{}),
+	% wait for the request to be processed
+	timer:sleep(1500),
 	% send a message to the worker to get the state
 	PID ! {get, self()},
 	% receive the state from the worker
