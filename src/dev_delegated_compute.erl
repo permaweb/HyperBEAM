@@ -31,11 +31,13 @@ normalize(Msg1, _Msg2, Opts) ->
 %% @doc Attempt to load a snapshot into the delegated compute server.
 load_state(Snapshot, Opts) ->
     ?event(debug_load_snapshot, {loading_snapshot, {snapshot, Snapshot}}),
+    Body = hb_maps:get(<<"data">>, Snapshot, Opts),
+    Headers = hb_maps:without([<<"data">>], Snapshot, Opts),
     Res = do_relay(
         <<"POST">>,
         <<"/state">>,
-        hb_maps:get(<<"data">>, Snapshot, Opts),
-        hb_maps:without([<<"data">>], Snapshot, Opts),
+        Body,
+        Headers,
         Opts#{
             hashpath => ignore,
             cache_control => [<<"no-store">>, <<"no-cache">>]
@@ -139,6 +141,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
             <<"relay-method">> => Method,
             <<"relay-body">> => Body,
             <<"relay-path">> => Path,
+            <<"relay-headers">> => Headers,
             <<"content-type">> => ContentType
         },
         Opts

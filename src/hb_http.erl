@@ -265,15 +265,19 @@ outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
 
 %% @doc Convert a HTTP response to a httpsig message.
 http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
-    (hb_message:convert(
+    BinStatus = hb_util:bin(Status),
+    BodyMap = case byte_size(Body) of
+        0 -> #{};
+        _ -> #{ <<"body">> => Body }
+    end,
+    ConvertFrom = 
         hb_maps:merge(
-            HeaderMap#{ <<"status">> => hb_util:bin(Status) },
-            case Body of
-                <<>> -> #{};
-                _ -> #{ <<"body">> => Body }
-            end,
+            HeaderMap#{ <<"status">> => BinStatus },
+            BodyMap,
 			Opts
         ),
+    (hb_message:convert(
+        ConvertFrom,
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
         <<"httpsig@1.0">>,
         Opts
