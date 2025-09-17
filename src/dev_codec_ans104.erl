@@ -89,25 +89,26 @@ from(TX, Req, Opts) when is_record(TX, tx) ->
 do_from(RawTX, Req, Opts) ->
     % Ensure the TX is fully deserialized.
     TX = ar_bundles:deserialize(dev_arweave_common:normalize(RawTX)),
-    ?event({parsed_tx, TX}),
+    ?event({from, {parsed_tx, TX}}),
     % Get the fields, tags, and data from the TX.
     Fields = dev_codec_ans104_from:fields(TX, <<>>, Opts),
     Tags = dev_codec_ans104_from:tags(TX, Opts),
     Data = dev_codec_ans104_from:data(TX, Req, Tags, Opts),
-    ?event({parsed_components, {fields, Fields}, {tags, Tags}, {data, Data}}),
+    ?event({from,
+        {parsed_components, {fields, Fields}, {tags, Tags}, {data, Data}}}),
     % Calculate the committed keys on from the TX.
     Keys = dev_codec_ans104_from:committed(
         ?BASE_FIELDS, TX, Fields, Tags, Data, Opts),
-    ?event({determined_committed_keys, Keys}),
+    ?event({from, {determined_committed_keys, Keys}}),
     % Create the base message from the fields, tags, and data, filtering to
     % include only the keys that are committed. Will throw if a key is missing.
     Base = dev_codec_ans104_from:base(Keys, Fields, Tags, Data, Opts),
-    ?event({calculated_base_message, Base}),
+    ?event({from, {calculated_base_message, Base}}),
     % Add the commitments to the message if the TX has a signature.
     FieldCommitments = dev_codec_ans104_from:fields(TX, ?FIELD_PREFIX, Opts),
     WithCommitments = dev_codec_ans104_from:with_commitments(
         TX, <<"ans104@1.0">>, FieldCommitments, Tags, Base, Keys, Opts),
-    ?event({parsed_message, WithCommitments}),
+    ?event({from, {parsed_message, WithCommitments}}),
     {ok, WithCommitments}.
 
 %% @doc Internal helper to translate a message to its #tx record representation,
@@ -128,37 +129,39 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
-    ?event({to, {inbound, RawTABM}, {req, Req}}),
+    ?event({to, {inbound, RawTABM}, {req, Req}, {opts, Opts}}),
     MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, Req, Opts),
-    TX0 = dev_codec_ans104_to:siginfo(
-        MaybeBundle, <<"ans104@1.0">>,
-        fun dev_codec_ans104_to:fields_to_tx/4,
-        Opts
-    ),
-    ?event({found_siginfo, TX0}),
+    ?event({to, {maybe_bundle, MaybeBundle}}),
+
     % Calculate and normalize the `data', if applicable.
     Data = dev_codec_ans104_to:data(MaybeBundle, Req, Opts),
-    ?event({calculated_data, Data}),
+    ?event({to, {calculated_data, Data}}),
+    TX0 = dev_codec_ans104_to:siginfo(
+        MaybeBundle, Data, <<"ans104@1.0">>,
+        fun dev_codec_ans104_to:fields_to_tx/4, Opts
+    ),
+    ?event({to, {found_siginfo, TX0}}),
     TX1 = TX0#tx { data = Data },
     % Calculate the tags for the TX.
     Tags = dev_codec_ans104_to:tags(
         TX1, <<"ans104@1.0">>, MaybeBundle,
         dev_codec_ans104_to:excluded_tags(TX1, MaybeBundle, Opts), Opts),
-    ?event({calculated_tags, Tags}),
+    ?event({to, {calculated_tags, Tags}}),
     TX2 = TX1#tx { tags = Tags },
-    ?event({tx_before_id_gen, TX2}),
     Res =
         try dev_arweave_common:normalize(TX2)
         catch
             Type:Error:Stacktrace ->
-                ?event({{reset_ids_error, Error}, {tx_without_data, TX2}}),
+                ?event({
+                    {reset_ids_error, Error},
+                    {tx_without_data, {explicit, TX2}}}),
                 ?event({prepared_tx_before_ids,
                     {tags, {explicit, TX2#tx.tags}},
                     {data, TX2#tx.data}
                 }),
                 erlang:raise(Type, Error, Stacktrace)
         end,
-    ?event({to_result, Res}),
+    ?event({to, {result, Res}}),
     {ok, Res};
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
@@ -280,19 +283,19 @@ external_item_with_target_field_test() ->
         ),
     EncodedTarget = hb_util:encode(TX#tx.target),
     EncodedAnchor = hb_util:encode(TX#tx.anchor),
-    ?event(debug_test, {tx, TX}),
+    ?event({tx, TX}),
     Decoded = hb_message:convert(TX, <<"structured@1.0">>, <<"ans104@1.0">>, #{}),
-    ?event(debug_test, {decoded, Decoded}),
+    ?event({decoded, Decoded}),
     ?assertEqual(EncodedTarget, hb_maps:get(<<"target">>, Decoded, undefined, #{})),
     ?assertEqual(EncodedAnchor, hb_maps:get(<<"anchor">>, Decoded, undefined, #{})),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, #{}),
-    ?event(debug_test, {only_committed, OnlyCommitted}),
+    ?event({only_committed, OnlyCommitted}),
     ?assertEqual(EncodedTarget, hb_maps:get(<<"target">>, OnlyCommitted, undefined, #{})),
     ?assertEqual(EncodedAnchor, hb_maps:get(<<"anchor">>, OnlyCommitted, undefined, #{})),
     Encoded = hb_message:convert(OnlyCommitted, <<"ans104@1.0">>, <<"structured@1.0">>, #{}),
     ?assertEqual(TX#tx.target, Encoded#tx.target),
     ?assertEqual(TX#tx.anchor, Encoded#tx.anchor),
-    ?event(debug_test, {result, {initial, TX}, {result, Encoded}}),
+    ?event({result, {initial, TX}, {result, Encoded}}),
     ?assertEqual(TX, Encoded).
 
 % @doc Ensure that items made inside HyperBEAM use the tags to encode `target'
@@ -392,7 +395,7 @@ simple_signed_to_httpsig_test() ->
                 <<"commitment-device">> => <<"ans104@1.0">>
             }
         ),
-    ?event(debug_test, {msg, Structured}),
+    ?event({msg, Structured}),
     HTTPSig =
         hb_message:convert(
             Structured,
@@ -400,7 +403,7 @@ simple_signed_to_httpsig_test() ->
             <<"structured@1.0">>,
             #{}
         ),
-    ?event(debug_test, {httpsig, HTTPSig}),
+    ?event({httpsig, HTTPSig}),
     Structured2 =
         hb_message:convert(
             HTTPSig,
@@ -408,12 +411,12 @@ simple_signed_to_httpsig_test() ->
             <<"httpsig@1.0">>,
             #{}
         ),
-    ?event(debug_test, {decoded, Structured2}),
+    ?event({decoded, Structured2}),
 	Match = hb_message:match(Structured, Structured2, #{}),
     ?assert(Match),
     ?assert(hb_message:verify(Structured2, all, #{})),
     HTTPSig2 = hb_message:convert(Structured2, <<"httpsig@1.0">>, <<"structured@1.0">>, #{}),
-    ?event(debug_test, {httpsig2, HTTPSig2}),
+    ?event({httpsig2, HTTPSig2}),
     ?assert(hb_message:verify(HTTPSig2, all, #{})),
     ?assert(hb_message:match(HTTPSig, HTTPSig2)).
 
@@ -431,11 +434,11 @@ unsorted_tag_map_test() ->
             ar_wallet:new()
         ),
     ?assert(ar_bundles:verify_item(TX)),
-    ?event(debug_test, {tx, TX}),
+    ?event({tx, TX}),
     {ok, TABM} = dev_codec_ans104:from(TX, #{}, #{}),
-    ?event(debug_test, {tabm, TABM}),
+    ?event({tabm, TABM}),
     {ok, Decoded} = dev_codec_ans104:to(TABM, #{}, #{}),
-    ?event(debug_test, {decoded, Decoded}),
+    ?event({decoded, Decoded}),
     ?assert(ar_bundles:verify_item(Decoded)).
 
 field_and_tag_ordering_test() ->
@@ -460,7 +463,7 @@ unsigned_lowercase_bundle_map_tags_test() ->
         }
     },
     {ok, UnsignedTX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
-    ?event(debug_test, {tx, UnsignedTX}),
+    ?event({tx, UnsignedTX}),
     ?assertEqual([
         {<<"bundle-format">>, <<"binary">>},
         {<<"bundle-version">>, <<"2.0.0">>},
@@ -470,7 +473,7 @@ unsigned_lowercase_bundle_map_tags_test() ->
     ], UnsignedTX#tx.tags),
     ?assert(UnsignedTX#tx.manifest =/= undefined),
     {ok, TABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
-    ?event(debug_test, {tabm, TABM}),
+    ?event({tabm, TABM}),
     ?assertEqual(UnsignedTABM, TABM).
 
 unsigned_mixedcase_bundle_map_tags_test() ->
@@ -491,7 +494,7 @@ unsigned_mixedcase_bundle_map_tags_test() ->
             }
         }
     }),
-    ?event(debug_test, {unsigned_tx, UnsignedTX}),
+    ?event(debug_test, {unsigned_tx, {explicit, UnsignedTX}}),
     ?assertEqual([
         {<<"bundle-format">>, <<"binary">>},
         {<<"bundle-version">>, <<"2.0.0">>},
@@ -518,7 +521,7 @@ unsigned_mixedcase_bundle_map_tags_test() ->
         ExpectedCommitment,
         hb_maps:with([<<"committed">>, <<"original-tags">>], Commitment, #{})),
     {ok, TX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
-    ?event(debug_test, {tx, TX}),
+    ?event(debug_test, {tx, {explicit, TX}}),
     ?assertEqual(UnsignedTX, TX),
     ok.
 
@@ -535,7 +538,7 @@ signed_lowercase_bundle_map_tags_test() ->
     },
     {ok, UnsignedTX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
     SignedTX = ar_bundles:sign_item(UnsignedTX, Wallet),
-    ?event(debug_test, {tx, SignedTX}),
+    ?event({tx, SignedTX}),
     ?assertEqual([
         {<<"bundle-format">>, <<"binary">>},
         {<<"bundle-version">>, <<"2.0.0">>},
@@ -545,11 +548,11 @@ signed_lowercase_bundle_map_tags_test() ->
     ], SignedTX#tx.tags),
     ?assert(SignedTX#tx.manifest =/= undefined),
     {ok, SignedTABM} = dev_codec_ans104:from(SignedTX, #{}, #{}),
-    ?event(debug_test, {signed_tabm, SignedTABM}),
+    ?event({signed_tabm, SignedTABM}),
     ?assertEqual(UnsignedTABM, hb_maps:without([<<"commitments">>], SignedTABM)),
     Commitment = hb_message:commitment(
         hb_util:human_id(SignedTX#tx.id), SignedTABM),
-    ?event(debug_test, {commitment, Commitment}),
+    ?event({commitment, Commitment}),
     ExpectedCommitment = #{
         <<"committed">> => [<<"data">>, <<"a1">>, <<"c1">>],
         <<"bundle-format">> => <<"binary">>,
@@ -565,7 +568,7 @@ signed_lowercase_bundle_map_tags_test() ->
             <<"bundle-map">>], Commitment, #{})),
 
     {ok, TX} = dev_codec_ans104:to(SignedTABM, #{}, #{}),
-    ?event(debug_test, {tx, TX}),
+    ?event({tx, TX}),
     ?assert(ar_bundles:verify_item(TX)),
     ?assertEqual(SignedTX, TX).
 
@@ -591,9 +594,9 @@ signed_mixedcase_bundle_map_tags_test() ->
         {<<"Bundle-Format">>, <<"binary">>},
         {<<"Bundle-Version">>, <<"2.0.0">>}
     ]},
-    ?event(debug_test, {unsigned_tx, UnsignedTX}),
+    ?event({unsigned_tx, UnsignedTX}),
     SignedTX = ar_bundles:sign_item(UnsignedTX, Wallet),
-    ?event(debug_test, {signed_tx, SignedTX}),
+    ?event({signed_tx, SignedTX}),
     ?assertEqual([
         {<<"bundle-map">>, <<"mlOQnRTom7Jlg_UdXk6n_dMMc5h-bUvoTo_QguH7AOE">>},
         {<<"TagA1">>, <<"value1">>},
@@ -603,11 +606,11 @@ signed_mixedcase_bundle_map_tags_test() ->
     ], SignedTX#tx.tags),
     ?assert(SignedTX#tx.manifest =/= undefined),
     {ok, SignedTABM} = dev_codec_ans104:from(SignedTX, #{}, #{}),
-    ?event(debug_test, {signed_tabm, SignedTABM}),
+    ?event({signed_tabm, SignedTABM}),
     ?assertEqual(UnsignedTABM, hb_maps:without([<<"commitments">>], SignedTABM)),
     Commitment = hb_message:commitment(
         hb_util:human_id(SignedTX#tx.id), SignedTABM),
-    ?event(debug_test, {commitment, Commitment}),
+    ?event({commitment, Commitment}),
     ExpectedCommitment = #{
         <<"committed">> => [<<"data">>, <<"taga1">>, <<"taga2">>],
         <<"bundle-format">> => <<"binary">>,
@@ -630,6 +633,45 @@ signed_mixedcase_bundle_map_tags_test() ->
             <<"bundle-map">>,
             <<"original-tags">>], Commitment, #{})),
     {ok, TX} = dev_codec_ans104:to(SignedTABM, #{}, #{}),
-    ?event(debug_test, {tx, TX}),
+    ?event({tx, TX}),
     ?assert(ar_bundles:verify_item(TX)),
     ?assertEqual(SignedTX, TX).
+
+bundle_commitment_test() ->
+    Opts = #{ priv_wallet => hb:wallet() },
+    Structured = #{ <<"list">> => [1, 2, 3] },
+
+    MsgFalse = hb_message:commit(
+        Structured,
+        Opts,
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }),
+    ?event(debug_test, {msg_false, MsgFalse}),
+    ?assert(hb_message:verify(MsgFalse, all, Opts)),
+    TXFalseFalse = hb_message:convert(MsgFalse, 
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false },
+        <<"structured@1.0">>, #{}),
+    ?event(debug_test, {tx_false_false,  TXFalseFalse}),
+    ?assert(ar_bundles:verify_item(TXFalseFalse)),
+    TXFalseTrue = hb_message:convert(MsgFalse, 
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+        <<"structured@1.0">>, #{}),
+    ?event(debug_test, {tx_false_true,  TXFalseTrue}),
+    ?assertEqual(false, dev_arweave_common:is_signed(TXFalseTrue)),
+    
+    MsgTrue = hb_message:commit(
+        MsgFalse,
+        Opts,
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }),
+    ?event(debug_test, {msg_true, MsgTrue}),
+    ?assert(hb_message:verify(MsgTrue, all, Opts)),
+    TXTrueFalse = hb_message:convert(MsgTrue, 
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false },
+        <<"structured@1.0">>, #{}),
+    ?event(debug_test, {tx_true_false, TXTrueFalse}),
+    ?assertEqual(false, dev_arweave_common:is_signed(TXTrueFalse)),
+    TXTrueTrue = hb_message:convert(MsgTrue, 
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+        <<"structured@1.0">>, #{}),
+    ?event(debug_test, {tx_true_true,  TXTrueTrue}),
+    ?assert(ar_bundles:verify_item(TXTrueTrue)),
+    ok.

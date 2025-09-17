@@ -1,7 +1,7 @@
 %%% @doc Library functions for encoding messages to the ANS-104 format.
 -module(dev_codec_ans104_to).
 -export([maybe_load/3, data/3, tags/5, excluded_tags/3]).
--export([siginfo/4, fields_to_tx/4]).
+-export([siginfo/5, fields_to_tx/4]).
 -include("include/hb.hrl").
 
 %% @doc Determine if the message should be loaded from the cache and re-converted
@@ -38,7 +38,18 @@ maybe_load(RawTABM, Req, Opts) ->
 %% we check if the `target' field is set in the message. If it is encodable as
 %% a valid 32-byte binary ID (assuming it is base64url encoded in the `to' call),
 %% we place it in the `target' field. Otherwise, we leave it unset.
-siginfo(Message, Device, FieldsFun, Opts) ->
+siginfo(Message, Data, Device, FieldsFun, Opts) ->
+    Commitment = commitment(Message, Data, Device, Opts),
+    case Commitment of
+        not_found ->
+            FieldsFun(#tx{}, <<>>, Message, Opts);
+        multiple_matches ->
+            throw({multiple_ans104_commitments_unsupported, Message});
+        _ ->
+            commitment_to_tx(Commitment, FieldsFun, Opts)
+    end.
+
+commitment(Message, Data, Device,Opts) ->
     MaybeCommitment =
         hb_message:commitment(
             #{ <<"commitment-device">> => Device },
@@ -46,12 +57,14 @@ siginfo(Message, Device, FieldsFun, Opts) ->
             Opts
         ),
     case MaybeCommitment of
-        {ok, _, Commitment} -> commitment_to_tx(
-            Commitment, FieldsFun, Opts);
-        not_found ->
-            FieldsFun(#tx{}, <<>>, Message, Opts);
-        multiple_matches ->
-            throw({multiple_ans104_commitments_unsupported, Message})
+        {ok, _, Commitment} -> 
+            IsCommitmentBundled = hb_util:bin(hb_ao:get(<<"bundle">>, Commitment, false, Opts)),
+            IsMessageBundled = hb_util:bin(is_map(Data)),
+            case IsMessageBundled =:= IsCommitmentBundled of
+                true -> Commitment;
+                false -> not_found
+            end;
+        _ -> MaybeCommitment
     end.
 
 %% @doc Convert a commitment to a base TX record. Extracts the owner, signature,
