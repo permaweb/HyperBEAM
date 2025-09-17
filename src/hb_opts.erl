@@ -356,7 +356,12 @@ default_message() ->
                             #{ <<"device">> => <<"http-auth@1.0">> }
                     }
             }
-        }
+        },
+        genesis_wasm_import_authorities =>
+            [
+                <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>,
+                <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
+            ]
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,

@@ -153,7 +153,6 @@ call(M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {without_http_params, TargetMod4}}),
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
-
     ?event(debug_relay, {relay_call, {verified, true}}),
     Client =
         case hb_maps:get(<<"http-client">>, BaseTarget, not_found, Opts) of
