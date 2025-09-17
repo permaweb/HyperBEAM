@@ -106,8 +106,43 @@ add_data(TXID, TXHeader, Opts) ->
 
 %% @doc Retrieve the data of a transaction from Arweave.
 data(TXID, Opts) ->
-    ?event(arweave, {retrieving_tx_data, {tx, TXID}}),
-    request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
+    case hb_util:atom(hb_opts:get(arweave_node_type, node, Opts)) of
+        gateway ->
+            request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts);
+        node ->
+            node_data(TXID, Opts)
+    end.
+
+%% @doc Retrieve the byte offset of a transaction from an Arweave node, then
+%% retrieve each chunk in turm.
+node_data(TXID, Opts) ->
+    case offset(TXID, Opts) of
+        {error, Reason} ->
+            {error, Reason};
+        {ok, Offset, Size} ->
+            {ok, iolist_to_binary(chunks(Offset, Size, Opts))}
+    end.
+
+%% @doc Retrieve the chunks at a specitic offset inside the Arweave network.
+chunks(_Offset, Size, _Opts) when Size =< 0 ->
+    [];
+chunks(Offset, Size, Opts) ->
+    ?event(arweave, {retrieving_chunk, {offset, Offset}, {size, Size}}),
+    case chunk(Offset, Opts) of
+        {error, Reason} ->
+            {error, Reason};
+        {ok, Chunk} ->
+            RecvdBytes = byte_size(Chunk),
+            [Chunk | chunks(Offset + RecvdBytes, Size - RecvdBytes, Opts)]
+    end.
+
+%% @doc Retrieve the byte offset and data size of a transaction.
+offset(TXID, Opts) ->
+    request(<<"GET">>, <<"/tx/", TXID/binary, "/offset">>, Opts).
+
+%% @doc Retrieve the bytes at a specitic offset inside the Arweave network.
+chunk(Offset, Opts) ->
+    request(<<"GET">>, <<"/chunk2/", (hb_util:bin(Offset))/binary>>, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -197,7 +232,8 @@ request(Method, Path, Opts) ->
 %% @doc Transform a response from the Arweave node into an AO-Core message.
 to_message(_Path, {error, #{ <<"status">> := 404 }}, _Opts) ->
     {error, not_found};
-to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts) ->
+to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts)
+        when ?IS_ID(TXID) ->
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
     ?event(arweave,
         {arweave_tx_response,
@@ -217,6 +253,18 @@ to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts) 
             Opts
         )
     };
+to_message(<<"/tx/", _/binary>>, {ok, #{ <<"body">> := OffsetData }}, _Opts) ->
+    % Other `/tx/...` responses that do not match an IS_ID must be offset calls.
+    #{ <<"offset">> := Offset, <<"size">> := Size } = hb_json:decode(OffsetData),
+    {ok, hb_util:int(Offset), hb_util:int(Size)};
+to_message(<<"/chunk2/", Offset/binary>>, {ok, #{ <<"body">> := Chunk }}, _Opts) ->
+    ?event(arweave,
+        {arweave_chunk_response,
+            {path, <<"/chunk2/", Offset/binary>>},
+            {chunk_size, byte_size(Chunk)}
+        }
+    ),
+    {ok, Chunk};
 to_message(Path = <<"/raw/", _/binary>>, {ok, #{ <<"body">> := Body }}, _Opts) ->
     ?event(arweave,
         {arweave_raw_response,
