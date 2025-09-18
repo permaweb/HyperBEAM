@@ -1,0 +1,341 @@
+/*
+  GitHub-like syntax highlighting theme for Highlight.js
+  Optimized for mdBook and HyperBEAM branding
+*/
+
+.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 0.5em;
+  color: #24292e;
+  background: #f6f8fa;
+  border-radius: 0.25em;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: #6a737d;
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst {
+  color: #d73a49;
+  font-weight: bold;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag .hljs-attr {
+  color: #005cc5;
+}
+
+.hljs-string,
+.hljs-doctag {
+  color: #032f62;
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-selector-id {
+  color: #6f42c1;
+  font-weight: bold;
+}
+
+.hljs-subst {
+  font-weight: normal;
+}
+
+.hljs-type,
+.hljs-class .hljs-title {
+  color: #e36209;
+  font-weight: bold;
+}
+
+.hljs-tag,
+.hljs-name,
+.hljs-attribute {
+  color: #22863a;
+  font-weight: normal;
+}
+
+.hljs-regexp,
+.hljs-link {
+  color: #032f62;
+}
+
+.hljs-symbol,
+.hljs-bullet {
+  color: #e36209;
+}
+
+.hljs-built_in,
+.hljs-builtin-name {
+  color: #005cc5;
+}
+
+.hljs-meta {
+  color: #6a737d;
+  font-weight: bold;
+}
+
+.hljs-deletion {
+  background: #fdd;
+}
+
+.hljs-addition {
+  background: #dfd;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
+/* Rust theme - warm, earthy color scheme */
+.rust .hljs {
+  color: #2d2a24;
+  background: hsl(60deg 6.35% 80%);;
+}
+
+.rust .hljs-comment,
+.rust .hljs-quote {
+  color: #5a5750;
+  font-style: italic;
+}
+
+.rust .hljs-keyword,
+.rust .hljs-selector-tag,
+.rust .hljs-subst {
+  color: #a0714a;
+  font-weight: bold;
+}
+
+.rust .hljs-string,
+.rust .hljs-doctag {
+  color: #8b5a2b;
+}
+
+.rust .hljs-number,
+.rust .hljs-literal,
+.rust .hljs-variable,
+.rust .hljs-template-variable {
+  color: #d4935c;
+}
+
+.rust .hljs-title,
+.rust .hljs-section,
+.rust .hljs-selector-id {
+  color: #a0714a;
+  font-weight: bold;
+}
+
+.rust .hljs-type,
+.rust .hljs-class .hljs-title {
+  color: #a97951;
+  font-weight: bold;
+}
+
+.rust .hljs-built_in,
+.rust .hljs-builtin-name {
+  color: #c7814b;
+}
+
+.rust .hljs-meta {
+  color: #5a5750;
+  font-weight: bold;
+}
+
+.rust .hljs-tag,
+.rust .hljs-name,
+.rust .hljs-attribute {
+  color: #a0714a;
+}
+
+.rust .hljs-regexp,
+.rust .hljs-link {
+  color: #b5753a;
+}
+
+.rust .hljs-symbol,
+.rust .hljs-bullet {
+  color: #c7814b;
+}
+
+/* Override CSS rules that force blue/green colors in rust theme */
+.rust .content a > .hljs,
+.rust #searchresults a > .hljs,
+.rust a:link > .hljs,
+.rust a:visited > .hljs {
+  color: #d4935c !important;
+}
+
+.rust .chapter li a.active > .hljs {
+  color: #d4935c !important;
+}
+
+/* Navy theme - keep existing dark styling */
+.navy .hljs,
+.coal .hljs,
+.ayu .hljs {
+  color: #c9d1d9;
+  background: #0d1117;
+}
+
+.navy .hljs-comment,
+.coal .hljs-comment,
+.ayu .hljs-comment,
+.navy .hljs-quote,
+.coal .hljs-quote,
+.ayu .hljs-quote {
+  color: #8b949e;
+}
+
+.navy .hljs-keyword,
+.coal .hljs-keyword,
+.ayu .hljs-keyword {
+  color: #ff7b72;
+}
+
+.navy .hljs-string,
+.coal .hljs-string,
+.ayu .hljs-string {
+  color: #a5d6ff;
+}
+
+.navy .hljs-number,
+.coal .hljs-number,
+.ayu .hljs-number {
+  color: #79c0ff;
+}
+
+.navy .hljs-literal,
+.coal .hljs-literal,
+.ayu .hljs-literal,
+.navy .hljs-variable,
+.coal .hljs-variable,
+.ayu .hljs-variable,
+.navy .hljs-template-variable,
+.coal .hljs-template-variable,
+.ayu .hljs-template-variable,
+.navy .hljs-tag .hljs-attr,
+.coal .hljs-tag .hljs-attr,
+.ayu .hljs-tag .hljs-attr {
+  color: #79c0ff;
+}
+
+.navy .hljs-title,
+.coal .hljs-title,
+.ayu .hljs-title,
+.navy .hljs-section,
+.coal .hljs-section,
+.ayu .hljs-section,
+.navy .hljs-selector-id,
+.coal .hljs-selector-id,
+.ayu .hljs-selector-id {
+  color: #d2a8ff;
+  font-weight: bold;
+}
+
+.navy .hljs-type,
+.coal .hljs-type,
+.ayu .hljs-type,
+.navy .hljs-class .hljs-title,
+.coal .hljs-class .hljs-title,
+.ayu .hljs-class .hljs-title {
+  color: #ffa657;
+  font-weight: bold;
+}
+
+.navy .hljs-tag,
+.coal .hljs-tag,
+.ayu .hljs-tag,
+.navy .hljs-name,
+.coal .hljs-name,
+.ayu .hljs-name,
+.navy .hljs-attribute,
+.coal .hljs-attribute,
+.ayu .hljs-attribute {
+  color: #7ee787;
+  font-weight: normal;
+}
+
+.navy .hljs-regexp,
+.coal .hljs-regexp,
+.ayu .hljs-regexp,
+.navy .hljs-link,
+.coal .hljs-link,
+.ayu .hljs-link {
+  color: #a5d6ff;
+}
+
+.navy .hljs-symbol,
+.coal .hljs-symbol,
+.ayu .hljs-symbol,
+.navy .hljs-bullet,
+.coal .hljs-bullet,
+.ayu .hljs-bullet {
+  color: #ffa657;
+}
+
+.navy .hljs-built_in,
+.coal .hljs-built_in,
+.ayu .hljs-built_in,
+.navy .hljs-builtin-name,
+.coal .hljs-builtin-name,
+.ayu .hljs-builtin-name {
+  color: #79c0ff;
+}
+
+.navy .hljs-meta,
+.coal .hljs-meta,
+.ayu .hljs-meta {
+  color: #7d8590;
+  font-weight: bold;
+}
+
+.navy .hljs-selector-tag,
+.coal .hljs-selector-tag,
+.ayu .hljs-selector-tag,
+.navy .hljs-subst,
+.coal .hljs-subst,
+.ayu .hljs-subst {
+  color: #ff7b72;
+  font-weight: bold;
+}
+
+.navy .hljs-doctag,
+.coal .hljs-doctag,
+.ayu .hljs-doctag {
+  color: #a5d6ff;
+}
+
+.navy .hljs-deletion,
+.coal .hljs-deletion,
+.ayu .hljs-deletion {
+  background: #490202;
+}
+
+.navy .hljs-addition,
+.coal .hljs-addition,
+.ayu .hljs-addition {
+  background: #033a16;
+}
+
+.navy .hljs-emphasis,
+.coal .hljs-emphasis,
+.ayu .hljs-emphasis {
+  font-style: italic;
+}
+
+.navy .hljs-strong,
+.coal .hljs-strong,
+.ayu .hljs-strong {
+  font-weight: bold;
+}

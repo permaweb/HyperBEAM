@@ -12,7 +12,7 @@ build-dir = "dist"
 edition = "2021"
 
 [output.html]
-additional-css = ["custom.css"]
+additional-css = ["custom.css", "theme/highlight.css"]
 additional-js = ["custom.js"]
 mathjax-support = false
 copy-fonts = true
