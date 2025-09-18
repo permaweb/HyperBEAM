@@ -37,11 +37,11 @@
 
 /* Fix excessive heading margins in generated documentation */
 .content h2 {
-  margin-top: 1em !important;
+  margin-top: 0 !important;
   margin-bottom: 0.5em !important;
 }
 
 .content h3 {
-  margin-top: 1em !important;
+  margin-top: 0 !important;
   margin-bottom: 0.5em !important;
 }
