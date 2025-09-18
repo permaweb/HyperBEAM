@@ -1,0 +1,56 @@
+[book]
+authors = ["Dylan Shade", "HyperBEAM Team"]
+language = "en"
+src = "src"
+title = "HyperBEAM Literate Documentation"
+description = "Literate programming documentation for the HyperBEAM decentralized operating system, combining Erlang source code with comprehensive documentation."
+
+[build]
+build-dir = "dist"
+
+[rust]
+edition = "2021"
+
+[output.html]
+additional-css = ["custom.css"]
+additional-js = ["custom.js"]
+mathjax-support = false
+copy-fonts = true
+site-url = "/HyperBEAM-Literate-Documentation/"
+cname = ""
+edit-url-template = "https://github.com/permaweb/HyperBEAM/edit/edge/src/{path}"
+git-repository-url = "https://github.com/permaweb/HyperBEAM"
+git-repository-icon = "fa-github"
+no-section-label = true
+
+[output.html.serve]
+port = 3471
+
+[output.html.live-reload]
+enable = true
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.playground]
+editable = false
+copyable = true
+copy-js = true
+line-numbers = false
+runnable = false
+
+[output.html.search]
+enable = true
+limit-results = 30
+teaser-word-count = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 1
+boost-paragraph = 1
+expand = true
+heading-split-level = 3
+
+[preprocessor.links]
+
+[preprocessor.index]

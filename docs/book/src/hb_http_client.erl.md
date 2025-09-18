@@ -1,0 +1,923 @@
+# hb_http_client
+
+[View source on GitHub](https://github.com/permaweb/HyperBEAM/blob/edge/src/hb_http_client.erl)
+
+A wrapper library for gun. This module originates from the Arweave
+project, and has been modified for use in HyperBEAM.
+
+---
+
+## Exported Functions
+
+- `handle_call/3`
+- `handle_cast/2`
+- `handle_info/2`
+- `init/1`
+- `req/2`
+- `start_link/1`
+- `terminate/2`
+
+---
+
+### start_link
+
+A wrapper library for gun. This module originates from the Arweave
+
+```erlang
+start_link(Opts) ->
+	gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
+```
+
+### req
+
+```erlang
+req(Args, Opts) -> req(Args, false, Opts).
+```
+
+### req
+
+```erlang
+req(Args, ReestablishedConnection, Opts) ->
+    case hb_opts:get(http_client, gun, Opts) of
+        gun -> gun_req(Args, ReestablishedConnection, Opts);
+        httpc -> httpc_req(Args, ReestablishedConnection, Opts)
+    end.
+```
+
+### httpc_req
+
+```erlang
+httpc_req(Args, _, Opts) ->
+    #{
+        peer := Peer,
+        path := Path,
+        method := RawMethod,
+        headers := Headers,
+        body := Body
+    } = Args,
+    ?event({httpc_req, Args}),
+    {Host, Port} = parse_peer(Peer, Opts),
+    Scheme = case Port of
+        443 -> "https";
+        _ -> "http"
+    end,
+    ?event(http_client, {httpc_req, {explicit, Args}}),
+    URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
+    FilteredHeaders = hb_maps:without([<<"content-type">>, <<"cookie">>], Headers, Opts),
+    HeaderKV =
+        [
+            {binary_to_list(Key), binary_to_list(Value)}
+        ||
+            {Key, Value} <- hb_maps:to_list(FilteredHeaders, Opts)
+        ] ++
+        [
+            {<<"cookie">>, CookieLine}
+        ||
+            CookieLine <-
+                case hb_maps:get(<<"cookie">>, Headers, [], Opts) of
+                    Binary when is_binary(Binary) ->
+                        [Binary];
+                    List when is_list(List) ->
+                        List
+                end
+        ],
+    Method = binary_to_existing_atom(hb_util:to_lower(RawMethod)),
+    ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/octet-stream">>, Opts),
+    Request =
+        case Method of
+            get ->
+                {
+                    URL,
+                    HeaderKV
+                };
+            _ ->
+                {
+                    URL,
+                    HeaderKV,
+                    binary_to_list(ContentType),
+                    Body
+                }
+        end,
+    ?event({http_client_outbound, Method, URL, Request}),
+    HTTPCOpts = [{full_result, true}, {body_format, binary}],
+	StartTime = os:system_time(millisecond),
+    case httpc:request(Method, Request, [], HTTPCOpts) of
+        {ok, {{_, Status, _}, RawRespHeaders, RespBody}} ->
+	        EndTime = os:system_time(millisecond),
+            RespHeaders =
+                [
+                    {list_to_binary(Key), list_to_binary(Value)}
+                ||
+                    {Key, Value} <- RawRespHeaders
+                ],
+            ?event(http_client, {httpc_resp, Status, RespHeaders, RespBody}),
+            record_duration(#{
+                    <<"request-method">> => method_to_bin(Method),
+                    <<"request-path">> => hb_util:bin(Path),
+                    <<"status-class">> => get_status_class(Status),
+                    <<"duration">> => EndTime - StartTime
+                },
+                Opts
+            ),
+            {ok, Status, RespHeaders, RespBody};
+        {error, Reason} ->
+            ?event(http_client, {httpc_error, Reason}),
+            {error, Reason}
+    end.
+```
+
+### gun_req
+
+```erlang
+gun_req(Args, ReestablishedConnection, Opts) ->
+	StartTime = os:system_time(millisecond),
+	#{ peer := Peer, path := Path, method := Method } = Args,
+	Response =
+        case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
+            {ok, PID} ->
+                ar_rate_limiter:throttle(Peer, Path, Opts),
+                case request(PID, Args, Opts) of
+                    {error, Error} when Error == {shutdown, normal};
+                            Error == noproc ->
+                        case ReestablishedConnection of
+                            true ->
+                                {error, client_error};
+                            false ->
+                                req(Args, true, Opts)
+                        end;
+                    Reply ->
+                        Reply
+                end;
+            {'EXIT', _} ->
+                {error, client_error};
+            Error ->
+                Error
+	    end,
+	EndTime = os:system_time(millisecond),
+	%% Only log the metric for the top-level call to req/2 - not the recursive call
+	%% that happens when the connection is reestablished.
+```
+
+### record_duration
+
+Record the duration of the request in an async process. We write the 
+
+```erlang
+record_duration(Details, Opts) ->
+    spawn(
+        fun() ->
+            % First, write to prometheus if it is enabled. Prometheus works
+            % only with strings as lists, so we encode the data before granting
+            % it.
+```
+
+### maybe_invoke_monitor
+
+Invoke the HTTP monitor message with AO-Core, if it is set in the 
+
+```erlang
+maybe_invoke_monitor(Details, Opts) ->
+    case hb_ao:get(<<"http_monitor">>, Opts, Opts) of
+        not_found -> ok;
+        Monitor ->
+            % We have a monitor message. Place the `details' into the body, set
+            % the `method' to "POST", add the `http_reference' (if applicable)
+            % and sign the request. We use the node message's wallet as the
+            % source of the key.
+```
+
+### init
+
+```erlang
+init(Opts) ->
+    case hb_opts:get(prometheus, not hb_features:test(), Opts) of
+        true ->
+            ?event({starting_prometheus_application,
+                    {test_mode, hb_features:test()}
+                }
+            ),
+            try
+                application:ensure_all_started([prometheus, prometheus_cowboy]),
+                init_prometheus(Opts)
+            catch
+                Type:Reason:Stack ->
+                    ?event(warning,
+                        {prometheus_not_started,
+                            {type, Type},
+                            {reason, Reason},
+                            {stack, Stack}
+                        }
+                    ),
+                    {ok, #state{ opts = Opts }}
+            end;
+        false -> {ok, #state{ opts = Opts }}
+    end.
+```
+
+### init_prometheus
+
+```erlang
+init_prometheus(Opts) ->
+    application:ensure_all_started([prometheus, prometheus_cowboy]),
+	prometheus_counter:new([
+		{name, gun_requests_total},
+		{labels, [http_method, route, status_class]},
+		{
+			help,
+			"The total number of GUN requests."
+		}
+	]),
+	prometheus_gauge:new([{name, outbound_connections},
+		{help, "The current number of the open outbound network connections"}]),
+	prometheus_histogram:new([
+		{name, http_request_duration_seconds},
+		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
+        {labels, [http_method, route, status_class]},
+		{
+			help,
+			"The total duration of an hb_http_client:req call. This includes more than"
+            " just the GUN request itself (e.g. establishing a connection, "
+            "throttling, etc...)"
+		}
+	]),
+	prometheus_histogram:new([
+		{name, http_client_get_chunk_duration_seconds},
+		{buckets, [0.1, 1, 10, 60]},
+        {labels, [status_class, peer]},
+		{
+			help,
+			"The total duration of an HTTP GET chunk request made to a peer."
+		}
+	]),
+	prometheus_counter:new([
+		{name, http_client_downloaded_bytes_total},
+		{help, "The total amount of bytes requested via HTTP, per remote endpoint"},
+		{labels, [route]}
+	]),
+	prometheus_counter:new([
+		{name, http_client_uploaded_bytes_total},
+		{help, "The total amount of bytes posted via HTTP, per remote endpoint"},
+		{labels, [route]}
+	]),
+    ?event(started),
+	{ok, #state{ opts = Opts }}.
+```
+
+### handle_call
+
+```erlang
+handle_call({get_connection, Args, Opts}, From,
+		#state{ pid_by_peer = PIDPeer, status_by_pid = StatusByPID } = State) ->
+	Peer = hb_maps:get(peer, Args, undefined, Opts),
+	case hb_maps:get(Peer, PIDPeer, not_found, Opts) of
+		not_found ->
+			{ok, PID} = open_connection(Args, hb_maps:merge(State#state.opts, Opts, Opts)),
+			MonitorRef = monitor(process, PID),
+			PIDPeer2 = hb_maps:put(Peer, PID, PIDPeer, Opts),
+			StatusByPID2 =
+                hb_maps:put(
+                    PID,
+                    {{connecting, [{From, Args}]}, MonitorRef, Peer},
+					StatusByPID,
+					Opts
+                ),
+			{
+                reply,
+                {ok, PID},
+                State#state{
+                    pid_by_peer = PIDPeer2,
+                    status_by_pid = StatusByPID2
+                }
+            };
+		PID ->
+			case hb_maps:get(PID, StatusByPID, undefined, Opts) of
+				{{connecting, PendingRequests}, MonitorRef, Peer} ->
+					StatusByPID2 =
+                        hb_maps:put(PID,
+                            {
+                                {connecting, [{From, Args} | PendingRequests]},
+                                MonitorRef,
+                                Peer
+                            },
+                            StatusByPID,
+							Opts
+                        ),
+					{noreply, State#state{ status_by_pid = StatusByPID2 }};
+				{connected, _MonitorRef, Peer} ->
+					{reply, {ok, PID}, State}
+			end
+	end;
+```
+
+### handle_call
+
+```erlang
+handle_call(Request, _From, State) ->
+	?event(warning, {unhandled_call, {module, ?MODULE}, {request, Request}}),
+	{reply, ok, State}.
+```
+
+### handle_cast
+
+```erlang
+handle_cast(Cast, State) ->
+	?event(warning, {unhandled_cast, {module, ?MODULE}, {cast, Cast}}),
+	{noreply, State}.
+```
+
+### handle_info
+
+```erlang
+handle_info({gun_up, PID, _Protocol}, #state{ status_by_pid = StatusByPID } = State) ->
+	case hb_maps:get(PID, StatusByPID, not_found) of
+		not_found ->
+			%% A connection timeout should have occurred.
+```
+
+### handle_info
+
+```erlang
+handle_info({gun_error, PID, Reason},
+		#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
+	case hb_maps:get(PID, StatusByPID, not_found) of
+		not_found ->
+			?event(warning, {gun_connection_error_with_unknown_pid}),
+			{noreply, State};
+		{Status, _MonitorRef, Peer} ->
+			PIDByPeer2 = hb_maps:remove(Peer, PIDByPeer),
+			StatusByPID2 = hb_maps:remove(PID, StatusByPID),
+			Reason2 =
+				case Reason of
+					timeout ->
+						connect_timeout;
+					{Type, _} ->
+						Type;
+					_ ->
+						Reason
+				end,
+			case Status of
+				{connecting, PendingRequests} ->
+					reply_error(PendingRequests, Reason2);
+				connected ->
+					dec_prometheus_gauge(outbound_connections),
+					ok
+			end,
+			gun:shutdown(PID),
+			?event({connection_error, {reason, Reason}}),
+			{noreply, State#state{ status_by_pid = StatusByPID2, pid_by_peer = PIDByPeer2 }}
+	end;
+```
+
+### handle_info
+
+```erlang
+handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStreams},
+			#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
+	case hb_maps:get(PID, StatusByPID, not_found) of
+		not_found ->
+			?event(warning,
+                {gun_connection_down_with_unknown_pid, {protocol, Protocol}}),
+			{noreply, State};
+		{Status, _MonitorRef, Peer} ->
+			PIDByPeer2 = hb_maps:remove(Peer, PIDByPeer),
+			StatusByPID2 = hb_maps:remove(PID, StatusByPID),
+			Reason2 =
+				case Reason of
+					{Type, _} ->
+						Type;
+					_ ->
+						Reason
+				end,
+			case Status of
+				{connecting, PendingRequests} ->
+					reply_error(PendingRequests, Reason2);
+				_ ->
+					dec_prometheus_gauge(outbound_connections),
+					ok
+			end,
+			{noreply,
+                State#state{
+                    status_by_pid = StatusByPID2,
+                    pid_by_peer = PIDByPeer2
+                }
+            }
+	end;
+```
+
+### handle_info
+
+```erlang
+handle_info({'DOWN', _Ref, process, PID, Reason},
+		#state{ pid_by_peer = PIDByPeer, status_by_pid = StatusByPID } = State) ->
+	case hb_maps:get(PID, StatusByPID, not_found) of
+		not_found ->
+			{noreply, State};
+		{Status, _MonitorRef, Peer} ->
+			PIDByPeer2 = hb_maps:remove(Peer, PIDByPeer),
+			StatusByPID2 = hb_maps:remove(PID, StatusByPID),
+			case Status of
+				{connecting, PendingRequests} ->
+					reply_error(PendingRequests, Reason);
+				_ ->
+					dec_prometheus_gauge(outbound_connections),
+					ok
+			end,
+			{noreply,
+                State#state{
+                    status_by_pid = StatusByPID2,
+                    pid_by_peer = PIDByPeer2
+                }
+            }
+	end;
+```
+
+### handle_info
+
+```erlang
+handle_info(Message, State) ->
+	?event(warning, {unhandled_info, {module, ?MODULE}, {message, Message}}),
+	{noreply, State}.
+```
+
+### terminate
+
+```erlang
+terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
+	?event(info,{http_client_terminating, {reason, Reason}}),
+	hb_maps:map(fun(PID, _Status) -> gun:shutdown(PID) end, StatusByPID),
+	ok.
+```
+
+### inc_prometheus_gauge
+
+Safe wrapper for prometheus_gauge:inc/2.
+
+```erlang
+inc_prometheus_gauge(Name) ->
+    case application:get_application(prometheus) of
+        undefined -> ok;
+        _ ->
+            try prometheus_gauge:inc(Name)
+            catch _:_ ->
+                init_prometheus(#{}),
+                prometheus_gauge:inc(Name)
+            end
+    end.
+```
+
+### dec_prometheus_gauge
+
+Safe wrapper for prometheus_gauge:dec/2.
+
+```erlang
+dec_prometheus_gauge(Name) ->
+    case application:get_application(prometheus) of
+        undefined -> ok;
+        _ -> prometheus_gauge:dec(Name)
+    end.
+```
+
+### inc_prometheus_counter
+
+```erlang
+inc_prometheus_counter(Name, Labels, Value) ->
+    case application:get_application(prometheus) of
+        undefined -> ok;
+        _ -> prometheus_counter:inc(Name, Labels, Value)
+    end.
+```
+
+### open_connection
+
+```erlang
+open_connection(#{ peer := Peer }, Opts) ->
+    {Host, Port} = parse_peer(Peer, Opts),
+    ?event(http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
+    BaseGunOpts =
+        #{
+            http_opts =>
+                #{
+                    keepalive =>
+                        hb_opts:get(
+                            http_keepalive,
+                            no_keepalive_timeout,
+                            Opts
+                        )
+                },
+            retry => 0,
+            connect_timeout =>
+                hb_opts:get(
+                    http_connect_timeout,
+                    no_connect_timeout,
+                    Opts
+                )
+        },
+    Transport =
+        case Port of
+            443 -> tls;
+            _ -> tcp
+        end,
+    DefaultProto =
+        case hb_features:http3() of
+            true -> http3;
+            false -> http2
+        end,
+    % Fallback through earlier HTTP versions if the protocol is not supported.
+```
+
+### parse_peer
+
+```erlang
+parse_peer(Peer, Opts) ->
+    Parsed = uri_string:parse(Peer),
+    case Parsed of
+        #{ host := Host, port := Port } ->
+            {hb_util:list(Host), Port};
+        URI = #{ host := Host } ->
+            {
+                hb_util:list(Host),
+                case hb_maps:get(scheme, URI, undefined, Opts) of
+                    <<"https">> -> 443;
+                    _ -> hb_opts:get(port, 8734, Opts)
+                end
+            }
+    end.
+```
+
+### reply_error
+
+```erlang
+reply_error([], _Reason) ->
+	ok;
+```
+
+### reply_error
+
+```erlang
+reply_error([PendingRequest | PendingRequests], Reason) ->
+	ReplyTo = element(1, PendingRequest),
+	Args = element(2, PendingRequest),
+	Method = hb_maps:get(method, Args),
+	Path = hb_maps:get(path, Args),
+	record_response_status(Method, Path, {error, Reason}),
+	gen_server:reply(ReplyTo, {error, Reason}),
+	reply_error(PendingRequests, Reason).
+```
+
+### record_response_status
+
+```erlang
+record_response_status(Method, Path, Response) ->
+	inc_prometheus_counter(gun_requests_total,
+        [
+            hb_util:list(method_to_bin(Method)),
+			Path,
+			hb_util:list(get_status_class(Response))
+        ],
+        1
+    ).
+```
+
+### method_to_bin
+
+```erlang
+method_to_bin(get) ->
+	<<"GET">>;
+```
+
+### method_to_bin
+
+```erlang
+method_to_bin(post) ->
+	<<"POST">>;
+```
+
+### method_to_bin
+
+```erlang
+method_to_bin(put) ->
+	<<"PUT">>;
+```
+
+### method_to_bin
+
+```erlang
+method_to_bin(head) ->
+	<<"HEAD">>;
+```
+
+### method_to_bin
+
+```erlang
+method_to_bin(delete) ->
+	<<"DELETE">>;
+```
+
+### method_to_bin
+
+```erlang
+method_to_bin(connect) ->
+	<<"CONNECT">>;
+```
+
+### method_to_bin
+
+```erlang
+method_to_bin(options) ->
+	<<"OPTIONS">>;
+```
+
+### method_to_bin
+
+```erlang
+method_to_bin(trace) ->
+	<<"TRACE">>;
+```
+
+### method_to_bin
+
+```erlang
+method_to_bin(patch) ->
+	<<"PATCH">>;
+```
+
+### method_to_bin
+
+```erlang
+method_to_bin(_) ->
+	<<"unknown">>.
+```
+
+### request
+
+```erlang
+request(PID, Args, Opts) ->
+	Timer =
+        inet:start_timer(
+            hb_opts:get(http_request_send_timeout, no_request_send_timeout, Opts)
+        ),
+	Method = hb_maps:get(method, Args, undefined, Opts),
+	Path = hb_maps:get(path, Args, undefined, Opts),
+    HeaderMap = hb_maps:get(headers, Args, #{}, Opts),
+    % Normalize cookie header lines from the header map. We support both
+    % lists of cookie lines and a single cookie line.
+```
+
+### await_response
+
+```erlang
+await_response(Args, Opts) ->
+	#{ pid := PID, stream_ref := Ref, timer := Timer, limit := Limit,
+			counter := Counter, acc := Acc, method := Method, path := Path } = Args,
+	case gun:await(PID, Ref, inet:timeout(Timer)) of
+		{response, fin, Status, Headers} ->
+			upload_metric(Args),
+			?event(http, {gun_response, {status, Status}, {headers, Headers}, {body, none}}),
+			{ok, Status, Headers, <<>>};
+		{response, nofin, Status, Headers} ->
+			await_response(Args#{ status => Status, headers => Headers }, Opts);
+		{data, nofin, Data} ->
+			case Limit of
+				infinity ->
+					await_response(Args#{ acc := [Acc | Data] }, Opts);
+				Limit ->
+					Counter2 = size(Data) + Counter,
+					case Limit >= Counter2 of
+						true ->
+							await_response(
+                                Args#{
+                                    counter := Counter2,
+                                    acc := [Acc | Data]
+                                },
+                                Opts
+                            );
+						false ->
+							?event(error, {http_fetched_too_much_data, Args,
+									<<"Fetched too much data">>, Opts}),
+							{error, too_much_data}
+					end
+			end;
+		{data, fin, Data} ->
+			FinData = iolist_to_binary([Acc | Data]),
+			download_metric(FinData, Args),
+			upload_metric(Args),
+			{ok,
+                hb_maps:get(status, Args, undefined, Opts),
+                hb_maps:get(headers, Args, undefined, Opts),
+                FinData
+            };
+		{error, timeout} = Response ->
+			record_response_status(Method, Path, Response),
+			gun:cancel(PID, Ref),
+			log(warn, gun_await_process_down, Args, Response, Opts),
+			Response;
+		{error, Reason} = Response when is_tuple(Reason) ->
+			record_response_status(Method, Path, Response),
+			log(warn, gun_await_process_down, Args, Reason, Opts),
+			Response;
+		Response ->
+			record_response_status(Method, Path, Response),
+			log(warn, gun_await_unknown, Args, Response, Opts),
+			Response
+	end.
+```
+
+### log
+
+```erlang
+log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) ->
+    ?event(
+        http,
+        {gun_log,
+            {type, Type},
+            {event, Event},
+            {method, Method},
+            {peer, Peer},
+            {path, Path},
+            {reason, Reason}
+        },
+        Opts
+    ),
+    ok.
+```
+
+### download_metric
+
+```erlang
+download_metric(Data, #{path := Path}) ->
+	inc_prometheus_counter(
+		http_client_downloaded_bytes_total,
+		[Path],
+		byte_size(Data)
+	).
+```
+
+### upload_metric
+
+```erlang
+upload_metric(#{method := post, path := Path, body := Body}) ->
+	inc_prometheus_counter(
+		http_client_uploaded_bytes_total,
+		[Path],
+		byte_size(Body)
+	);
+```
+
+### upload_metric
+
+```erlang
+upload_metric(_) ->
+	ok.
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({ok, {{Status, _}, _, _, _, _}}) ->
+	get_status_class(Status);
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({error, connection_closed}) ->
+	<<"connection_closed">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({error, connect_timeout}) ->
+	<<"connect_timeout">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({error, timeout}) ->
+	<<"timeout">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({error,{shutdown,timeout}}) ->
+	<<"shutdown_timeout">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({error, econnrefused}) ->
+	<<"econnrefused">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({error, {shutdown,econnrefused}}) ->
+	<<"shutdown_econnrefused">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({error, {shutdown,ehostunreach}}) ->
+	<<"shutdown_ehostunreach">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({error, {shutdown,normal}}) ->
+	<<"shutdown_normal">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({error, {closed,_}}) ->
+	<<"closed">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class({error, noproc}) ->
+	<<"noproc">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class(208) ->
+	<<"already_processed">>;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class(Data) when is_integer(Data), Data > 0 ->
+	hb_util:bin(prometheus_http:status_class(Data));
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class(Data) when is_binary(Data) ->
+	case catch binary_to_integer(Data) of
+		{_, _} ->
+			<<"unknown">>;
+		Status ->
+			get_status_class(Status)
+	end;
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class(Data) when is_atom(Data) ->
+	atom_to_binary(Data);
+```
+
+### get_status_class
+
+Return the HTTP status class label for cowboy_requests_total and
+
+```erlang
+get_status_class(_) ->
+```
+
+---
+
+*Generated from [hb_http_client.erl](https://github.com/permaweb/HyperBEAM/blob/edge/src/hb_http_client.erl)*

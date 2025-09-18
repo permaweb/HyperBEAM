@@ -1,0 +1,36 @@
+/* HyperBEAM Brand Extension for mdBook - MINIMAL approach */
+/* Only add brand colors, no layout modifications */
+
+:root {
+  /* HyperBEAM brand palette */
+  --hyperbeam-neon: #00ff94;
+  --hyperbeam-cyan: #00d4ff;
+  --hyperbeam-yellow: #fff700;
+  --hyperbeam-magenta: #ff006a;
+}
+
+/* Only override accent colors, keep all layout/structure intact */
+.ayu {
+  --sidebar-active: var(--hyperbeam-neon);
+  --links: var(--hyperbeam-cyan);
+}
+
+.coal {
+  --sidebar-active: var(--hyperbeam-cyan);
+  --links: var(--hyperbeam-neon);
+}
+
+.light {
+  --sidebar-active: var(--hyperbeam-cyan);
+  --links: var(--hyperbeam-magenta);
+}
+
+.navy {
+  --sidebar-active: var(--hyperbeam-cyan);
+  --links: var(--hyperbeam-neon);
+}
+
+.rust {
+  --sidebar-active: var(--hyperbeam-neon);
+  --links: var(--hyperbeam-cyan);
+}

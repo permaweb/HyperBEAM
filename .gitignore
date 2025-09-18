@@ -43,6 +43,9 @@ mkdocs-site/
 mkdocs-site-id.txt
 mkdocs-site-manifest.csv
 
+# mdbook generated documentation
+docs/book/dist/
+
 !test/admissible-report-wallet.json
 !test/admissible-report.json
 !test/config.json
