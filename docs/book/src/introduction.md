@@ -21,10 +21,6 @@ Use the sidebar to browse modules organized by category:
 - **Core Services**: Essential HyperBEAM services and components
 - **HyperBEAM Core**: Foundation modules and utilities
 
-## Copy Functionality
-
-Each page includes a copy button (📋) in the top-right corner that copies the original markdown content to your clipboard - perfect for sharing with LLMs or analysis tools.
-
 ## About HyperBEAM
 
 HyperBEAM is a client implementation of the AO-Core protocol, providing a framework for decentralized computations. It offers:

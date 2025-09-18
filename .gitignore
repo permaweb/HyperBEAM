@@ -46,6 +46,10 @@ mkdocs-site-manifest.csv
 # mdbook generated documentation
 docs/book/dist/
 
+# Generated literate Erlang documentation files
+docs/literate-erlang/
+docs/book/src/*.erl.md
+
 !test/admissible-report-wallet.json
 !test/admissible-report.json
 !test/config.json

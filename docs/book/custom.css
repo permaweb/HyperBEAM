@@ -34,3 +34,14 @@
   --sidebar-active: var(--hyperbeam-neon);
   --links: var(--hyperbeam-cyan);
 }
+
+/* Fix excessive heading margins in generated documentation */
+.content h2 {
+  margin-top: 1em !important;
+  margin-bottom: 0.5em !important;
+}
+
+.content h3 {
+  margin-top: 1em !important;
+  margin-bottom: 0.5em !important;
+}
