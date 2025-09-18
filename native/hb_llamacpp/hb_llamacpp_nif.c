@@ -175,7 +175,7 @@ static ERL_NIF_TERM start_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
     }
     
     // Now check health endpoint (additional 30s timeout)
-    const int health_tries = 300; // 30 seconds
+    const int health_tries = 1200; // 30 seconds
     for (int i = 0; i < health_tries; i++) {
         if (check_health_endpoint(g_state.host, g_state.port)) {
             return atom_ok;
