@@ -1,0 +1,109 @@
+name: 📖 Build & Deploy mdBook Documentation
+
+on:
+  pull_request:
+    branches:
+      - edge
+    paths:
+      # Trigger on changes to mdbook docs or the workflow itself
+      - "docs/book/**"
+      - ".github/workflows/build-deploy-mdbook.yml"
+  push:
+    branches:
+      - edge
+    paths:
+      # Trigger on changes to mdbook docs or the workflow itself
+      - "docs/book/**"
+      - ".github/workflows/build-deploy-mdbook.yml"
+
+  # Perform a release using a workflow dispatch
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Run the build as part of PRs to confirm the site properly builds
+  check_build:
+    if: ${{ startsWith(github.ref, 'refs/pull/') }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: ⬇️ Checkout repo
+        uses: actions/checkout@v3
+
+      # Install mdBook for literate documentation
+      - name: 📖 Install mdBook
+        run: |
+          curl -L https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          chmod +x mdbook
+          sudo mv mdbook /usr/local/bin/mdbook
+          mdbook --version
+
+      - name: 📝 Generate Literate Erlang Documentation
+        run: |
+          ./docs/build-literate-erlang.sh -v
+
+      - name: 📚 Build mdBook Documentation
+        run: |
+          cd docs/book && mdbook build
+
+  # Build and deploy the mdBook to Arweave
+  deploy:
+    if: github.ref == 'refs/heads/edge'
+    runs-on: ubuntu-22.04
+    # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+    # However, do NOT cancel in-progress runs as we want to allow these deployments to complete.
+    concurrency:
+      group: deploy-mdbook
+      cancel-in-progress: false
+    steps:
+      - name: ⬇️ Checkout repo
+        uses: actions/checkout@v3
+
+      # Setup Node.js (needed for npx deploy command)
+      - name: ⎔ Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22
+
+      - name: 👀 Env
+        run: |
+          echo "Event name: ${{ github.event_name }}"
+          echo "Git ref:    ${{ github.ref }}"
+          echo "GH actor:   ${{ github.actor }}"
+          echo "SHA:        ${{ github.sha }}"
+          VER=`node --version`; echo "Node ver:   $VER"
+          VER=`npm --version`; echo "npm ver:    $VER"
+
+      # Install mdBook for literate documentation
+      - name: 📖 Install mdBook
+        run: |
+          curl -L https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          chmod +x mdbook
+          sudo mv mdbook /usr/local/bin/mdbook
+          mdbook --version
+
+      - name: 📝 Generate Literate Erlang Documentation
+        run: |
+          ./docs/build-literate-erlang.sh -v
+
+      - name: 📚 Build mdBook Documentation
+        id: build_mdbook
+        run: |
+          cd docs/book && mdbook build
+          cd ../..
+          echo "mdbook_output_dir=docs/book/dist" >> $GITHUB_OUTPUT
+
+      - name: 📖 Publish mdBook to Arweave
+        id: publish_mdbook
+        run: |
+          npx permaweb-deploy \
+            --arns-name=hyperbeam \
+            --undername=book \
+            --ant-process=${{ secrets.ANT_PROCESS }} \
+            --deploy-folder=${MDBOOK_OUTPUT_DIR}
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          MDBOOK_OUTPUT_DIR: ${{ steps.build_mdbook.outputs.mdbook_output_dir }}
+          ANT_PROCESS: ${{ secrets.ANT_PROCESS }}
