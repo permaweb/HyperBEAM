@@ -36,6 +36,7 @@ native/hb_beamr/*.d
 attestation_sdk.log
 verifier.log
 
+!native/dev_sev_gpu/NVGPULocalv4Policy.json
 priv/*
 .DS_STORE
 cache-*
