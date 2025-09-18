@@ -1,125 +1,105 @@
-# HyperBEAM Book - Literate Documentation
+# HyperBEAM mdBook - Literate Documentation
 
-This repository contains the mdBook-based documentation for HyperBEAM, generated from Erlang source files using a literate programming approach.
+This directory contains the mdBook configuration for generating literate programming documentation from HyperBEAM Erlang source code.
+
+**Live Documentation**: [hyperbeam.arweave.dev/book](https://hyperbeam.arweave.dev/book)
 
 ## Overview
 
-The documentation combines Erlang source code with comprehensive documentation in a format optimized for both reading and LLM consumption. Each `.erl.md` file represents a module from the HyperBEAM codebase with embedded documentation, function signatures, and implementation details.
+The mdBook system generates comprehensive documentation by extracting comments and code structure from Erlang source files, creating a browsable reference that stays in sync with the codebase.
 
-## Generation Process
-
-### 1. Source Documentation Generation
-
-Documentation is generated from the HyperBEAM repository using the literate Erlang script:
+## Quick Start
 
 ```bash
-# From the HyperBEAM repository
-./docs/build-literate-erlang.sh
+# From project root - generate and build in one step
+./docs/build-literate-erlang.sh -v
+
+# Build mdBook only (if .erl.md files already exist)
+cd docs/book && mdbook build
+
+# Serve locally for development
+cd docs/book && mdbook serve  # Opens on http://localhost:3471
 ```
 
-This script:
-- Extracts module documentation from `%%%` comments
-- Converts edoc tags (`@author`, `@copyright`, `@doc`, `@end`) to markdown format
-- Processes function documentation and specifications
-- Converts quote patterns (`'text'` to `text`) for proper backtick formatting
-- Generates individual `.erl.md` files for each module
+## Automated Deployment
 
-### 2. Copy Generated Files
+Documentation automatically deploys when source code changes:
 
-Copy the generated documentation to this book's source directory:
+- **Triggers**: Pushes to `edge` branch affecting `src/**` or mdBook config
+- **GitHub Action**: `build-deploy-mdbook.yml`
+- **Process**: Generates `.erl.md` → builds mdBook → deploys to ArNS
+- **Live URL**: [hyperbeam.arweave.dev/book](https://hyperbeam.arweave.dev/book)
 
-```bash
-# Copy from HyperBEAM docs/literate-erlang/ to src/
-cp /path/to/HyperBEAM/docs/literate-erlang/*.erl.md src/
+## File Structure
+
 ```
-
-### 3. Build the mdBook
-
-Generate the final documentation:
-
-```bash
-mdbook build
+book/
+├── book.toml           # mdBook configuration
+├── custom.css          # HyperBEAM brand styling
+├── custom.js           # Enhanced copy functionality
+├── src/
+│   ├── SUMMARY.md      # Navigation structure
+│   ├── introduction.md # Welcome page
+│   └── *.erl.md        # Generated module docs (auto-copied)
+└── dist/               # Built documentation (gitignored)
 ```
-
-This creates the static HTML documentation in the `book/` directory.
 
 ## Features
 
+### HyperBEAM Branding
+- Custom CSS with brand colors across all mdBook themes
+- Enhanced search interface with theme-aware styling
+- Professional appearance matching HyperBEAM design
+
 ### Enhanced Copy Functionality
+- Copy button (📋) for LLM consumption
+- Fetches raw markdown preserving all formatting
+- Perfect for AI analysis and code understanding
 
-The documentation includes a custom copy button (📋 icon) in the top-right corner that:
-- Fetches the original markdown content from the `src/` directory
-- Copies the raw markdown to clipboard for LLM use
-- Preserves all formatting, code blocks, and structure exactly as written
-
-### Theme Support
-
-Supports all mdBook themes with HyperBEAM brand colors:
-- **Neon Green**: `#00ff94`
-- **Cyan**: `#00d4ff`
-- **Yellow**: `#fff700`
-- **Magenta**: `#ff006a`
-
-### Clean Documentation Structure
-
-Each module page includes:
-- GitHub source link pointing to the `edge` branch
-- **Author** and **Copyright** information (when available)
-- Exported functions list
-- Function documentation with signatures
-- Implementation code blocks
-- Test functions (when present)
+### Source Integration
+- Direct links to GitHub source files on `edge` branch
+- Module documentation extracted from `%%%` comments
+- Function documentation and type specifications
+- Clean code block formatting
 
 ## Configuration
 
-### book.toml
-
-Key configuration options:
+### book.toml Key Settings
 
 ```toml
 [book]
-title = "HyperBEAM Literate Documentation"
+title = "HyperBEAM Book"
 src = "src"
 
 [build]
-build-dir = "book"
+build-dir = "dist"
 
 [output.html]
 additional-css = ["custom.css"]
 additional-js = ["custom.js"]
 edit-url-template = "https://github.com/permaweb/HyperBEAM/edit/edge/src/{path}"
-git-repository-url = "https://github.com/permaweb/HyperBEAM"
 ```
 
-### Custom Styling
+### Port Configuration
+- **Default**: `localhost:3000`
+- **Configured**: `localhost:3471` (to avoid conflicts)
 
-- `custom.css`: HyperBEAM brand colors for all themes
-- `custom.js`: Copy functionality and theme detection
+## Development
 
-## Development Workflow
+### Manual Workflow
+1. **Edit Erlang source** with proper documentation comments
+2. **Generate docs**: `./docs/build-literate-erlang.sh -v`
+3. **Preview**: `cd docs/book && mdbook serve`
 
-1. **Update source documentation**: Run `./docs/build-literate-erlang.sh` in HyperBEAM repo
-2. **Copy to book**: Transfer generated `.erl.md` files to `src/`
-3. **Build book**: Run `mdbook build`
-4. **Serve locally**: Use `mdbook serve` for development
+### Production Workflow
+1. **Push to edge** with source changes
+2. **GitHub Actions** handles the rest automatically
 
-## Repository Structure
+## Dependencies
 
-```
-HB-DevicesBook/
-├── src/                    # Markdown source files
-│   ├── *.erl.md           # Generated module documentation
-│   └── SUMMARY.md         # Book structure
-├── book/                  # Generated HTML output
-├── custom.css             # HyperBEAM theme styling
-├── custom.js              # Copy functionality
-├── book.toml              # mdBook configuration
-└── README.md              # This file
-```
+- **mdBook**: `cargo install mdbook` or [download binary](https://github.com/rust-lang/mdBook/releases)
+- **Generated by**: `build-literate-erlang.sh` script
 
-## Notes
+---
 
-- The documentation is generated from the HyperBEAM `edge` branch
-- All GitHub links point to the source files in the HyperBEAM repository
-- The copy functionality fetches original markdown for accurate LLM consumption
-- Search is enabled with fuzzy matching and result limiting for performance
+For the complete documentation overview including MkDocs, see [../README.md](../README.md).

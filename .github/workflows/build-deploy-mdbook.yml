@@ -5,15 +5,23 @@ on:
     branches:
       - edge
     paths:
-      # Trigger on changes to mdbook docs or the workflow itself
-      - "docs/book/**"
+      # Trigger on changes to source code, mdbook config, or the workflow itself
+      - "src/**"
+      - "docs/book/book.toml"
+      - "docs/book/custom.css"
+      - "docs/book/custom.js"
+      - "docs/build-literate-erlang.sh"
       - ".github/workflows/build-deploy-mdbook.yml"
   push:
     branches:
       - edge
     paths:
-      # Trigger on changes to mdbook docs or the workflow itself
-      - "docs/book/**"
+      # Trigger on changes to source code, mdbook config, or the workflow itself
+      - "src/**"
+      - "docs/book/book.toml"
+      - "docs/book/custom.css"
+      - "docs/book/custom.js"
+      - "docs/build-literate-erlang.sh"
       - ".github/workflows/build-deploy-mdbook.yml"
 
   # Perform a release using a workflow dispatch

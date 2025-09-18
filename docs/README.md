@@ -1,7 +1,13 @@
-
 ## Documentation
 
-HyperBEAM uses [MkDocs](https://www.mkdocs.org/) with the [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) theme to build its documentation site.
+HyperBEAM uses two documentation systems:
+
+1. **[MkDocs](https://www.mkdocs.org/)** - Main documentation site with Material theme
+2. **[mdBook](https://rust-lang.github.io/mdBook/)** - Literate programming documentation generated from Erlang source
+
+## MkDocs Documentation
+
+The main documentation site uses MkDocs with the Material for MkDocs theme.
 
 Building the documentation requires Python 3 and pip. It's recommended to use a virtual environment:
 
@@ -51,6 +57,31 @@ To view the built documentation locally:
 Press `Ctrl+C` in the terminal where the server is running to stop it.
 
 The final static site is generated in the `mkdocs-site` directory, as configured in `mkdocs.yml` (`site_dir: mkdocs-site`).
+
+## mdBook Documentation (Literate Programming)
+
+The literate programming documentation system generates browsable documentation directly from Erlang source code comments.
+
+**Live Site:** [hyperbeam.arweave.dev/book](https://hyperbeam.arweave.dev/book)
+
+### Quick Start
+
+```bash
+# Generate literate docs and build the book (integrated workflow)
+./docs/build-literate-erlang.sh    # Generate .erl.md files and copy to mdBook
+cd docs/book && mdbook build       # Build the documentation site
+cd docs/book && mdbook serve       # Serve locally on http://localhost:3471
+```
+
+### Automated Deployment
+
+Documentation is automatically deployed via GitHub Actions:
+
+- **Triggers**: Pushes to `edge` branch affecting `src/**` or mdBook configuration
+- **Process**: Generates fresh documentation from source → builds mdBook → deploys to ArNS
+- **URL**: [hyperbeam.arweave.dev/book](https://hyperbeam.arweave.dev/book)
+
+For complete mdBook documentation details, see [book/README.md](book/README.md).
 
 ### Contributing to the Documentation
 
