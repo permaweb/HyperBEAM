@@ -1,4 +1,4 @@
-# HyperBEAM Literate Documentation
+# HyperBEAM Book - Literate Documentation
 
 This repository contains the mdBook-based documentation for HyperBEAM, generated from Erlang source files using a literate programming approach.
 

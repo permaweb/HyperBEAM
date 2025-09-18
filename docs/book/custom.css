@@ -37,11 +37,56 @@
 
 /* Fix excessive heading margins in generated documentation */
 .content h2 {
-  margin-top: 0 !important;
+  margin-top: 0.5em !important;
   margin-bottom: 0.5em !important;
 }
 
 .content h3 {
-  margin-top: 0 !important;
-  margin-bottom: 0.5em !important;
+  margin-top: 0.5em !important;
+  margin-bottom: 0.75em !important;
+}
+
+/* Search input styling */
+#searchbar {
+  outline: none !important;
+  border: 1px solid transparent !important;
+  transition: border-color 300ms ease-in-out, box-shadow 300ms ease-in-out !important;
+}
+
+#searchbar:focus,
+#searchbar.active {
+  box-shadow: none !important;
+  border-color: var(--links) !important;
+}
+
+/* Search result highlighting */
+.searchresults mark {
+  background-color: var(--links) !important;
+  color: var(--bg) !important;
+  opacity: 0.8;
+}
+
+/* Search input clear button (X) styling */
+#searchbar::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  width: 14px;
+  cursor: pointer;
+  position: relative;
+}
+
+#searchbar::-webkit-search-cancel-button::before {
+  content: "×";
+  font-size: 18px;
+  color: var(--links);
+  font-weight: bold;
+  position: absolute;
+  top: -2px;
+  left: 0;
+  line-height: 1;
+}
+
+#searchbar::-webkit-search-cancel-button:hover::before {
+  color: var(--sidebar-active);
 }

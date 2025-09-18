@@ -2,7 +2,7 @@
 authors = ["Dylan Shade", "HyperBEAM Team"]
 language = "en"
 src = "src"
-title = "HyperBEAM Literate Documentation"
+title = "HyperBEAM Book"
 description = "Literate programming documentation for the HyperBEAM decentralized operating system, combining Erlang source code with comprehensive documentation."
 
 [build]
