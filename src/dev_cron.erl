@@ -37,7 +37,7 @@ once(_Msg1, Msg2, Opts) ->
                 ),
 			Name = {<<"cron@1.0">>, ReqMsgID},
 			Pid = spawn(fun() -> 
-                maybe <<DelayBin/binary>> ?= hb_ao:get(<<"delay">>, Msg2),
+                maybe <<DelayBin/binary>> ?= hb_ao:get(<<"after">>, Msg2),
                     DelaySecs = timer:seconds(hb_util:int(DelayBin)),
                     timer:sleep(DelaySecs)
                 end,
@@ -305,7 +305,7 @@ once_delayed_and_executed_test() ->
 	% register the worker with the id
 	hb_name:register({<<"test">>, ID}, PID),
 	% Construct the URL path with the dynamic ID
-	UrlPath = <<"/~cron@1.0/once?delay=1&test-id=", ID/binary,
+	UrlPath = <<"/~cron@1.0/once?after=1&test-id=", ID/binary,
 			"&cron-path=/~test-device@1.0/update_state">>,
 	% this should call the worker via the test device
 	% the test device should look up the worker via the id given 
