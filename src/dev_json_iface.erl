@@ -111,8 +111,13 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         case hb_message:signers(RawMsg, Opts) of
             [] -> {<<>>, <<>>};
             [Signer|_] ->
-                {ok, _, Commitment} =
-                    hb_message:commitment(Signer, RawMsg, Opts),
+                Commitment = case hb_message:commitment(Signer, RawMsg, Opts) of
+                  {ok, _, SingleCommitment} -> SingleCommitment;
+                  multiple_matches ->
+                    Commitments = hb_message:commitments(Signer, RawMsg, Opts),
+                    [FirstID | _] = hb_maps:keys(Commitments),
+                    hb_maps:get(FirstID, Commitments, Opts)
+                end,
                 CommitmentSignature =
                     hb_ao:get(<<"signature">>, Commitment, <<>>, Opts),
                 case lists:member(owner_as_address, Features) of
