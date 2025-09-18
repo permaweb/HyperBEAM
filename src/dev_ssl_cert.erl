@@ -21,9 +21,20 @@
 %% Device API exports
 -export([info/1, info/3, request/3, finalize/3]).
 -export([renew/3, delete/3]).
+-export([get_cert/3, request_cert/3]).
 
--define(CERT_PEM_FILE, <<"./hyperbeam_cert.pem">>).
--define(KEY_PEM_FILE, <<"./hyperbeam_key.pem">>).
+-define(CERT_DIR, filename:join([file:get_cwd(), "certs"])).
+-define(CERT_PEM_FILE, 
+    filename:join(
+        [?CERT_DIR, <<"hyperbeam_cert.pem">>]
+    )
+).
+-define(KEY_PEM_FILE,
+    filename:join(
+        [?CERT_DIR, <<"hyperbeam_key.pem">>]
+    )
+).
+-define(DEFAULT_HTTPS_PORT, 443).
 
 %% @doc Controls which functions are exposed via the device API.
 %%
@@ -39,7 +50,9 @@ info(_) ->
             request,
             finalize,
             renew,
-            delete
+            delete,
+            get_cert,
+            request_cert
         ]
     }.
 
@@ -77,7 +90,13 @@ info(_Msg1, _Msg2, _Opts) ->
                         <<"email">> => 
                             <<"Contact email for Let's Encrypt account">>,
                         <<"environment">> => 
-                            <<"'staging' or 'production'">>
+                            <<"'staging' or 'production'">>,
+                        <<"auto_https">> =>
+                            <<
+                                "Automatically start HTTPS server and",
+                                "redirect HTTP traffic (default: true)"
+                            >>,
+                        <<"https_port">> => <<"HTTPS port (default: 443)">>
                     }
                 },
                 <<"example_config">> => #{
@@ -85,7 +104,9 @@ info(_Msg1, _Msg2, _Opts) ->
                         <<"domains">> => 
                             [<<"example.com">>, <<"www.example.com">>],
                         <<"email">> => <<"admin@example.com">>,
-                        <<"environment">> => <<"staging">>
+                        <<"environment">> => <<"staging">>,
+                        <<"auto_https">> => <<"true">>,
+                        <<"https_port">> => <<"443">>
                     }
                 },
                 <<"usage">> =>
@@ -127,6 +148,30 @@ info(_Msg1, _Msg2, _Opts) ->
                 <<"required_params">> => #{
                     <<"domains">> => <<"List of domain names to delete">>
                 }
+            },
+            <<"get_cert">> => #{
+                <<"description">> => 
+                    <<"Get encrypted certificate and private key for sharing">>,
+                <<"usage">> => <<"POST /ssl-cert@1.0/get_cert">>,
+                <<"note">> => 
+                    <<
+                        "Returns encrypted certificate data that can be used by",
+                        "another node with the same green zone AES key"
+                    >>
+            },
+            <<"request_cert">> => #{
+                <<"description">> => 
+                    <<"Request and use certificate from another node">>,
+                <<"required_params">> => #{
+                    <<"peer_location">> => <<"URL of the peer node">>,
+                    <<"peer_id">> => <<"ID of the peer node">>
+                },
+                <<"usage">> => <<"POST /ssl-cert@1.0/request_cert">>,
+                <<"note">> =>
+                    <<
+                        "Automatically starts HTTPS server with the retrieved",
+                        "certificate"
+                    >>
             }
         }
     },
@@ -318,11 +363,213 @@ delete(_M1, _M2, Opts) ->
             ssl_utils:build_error_response(500, <<"Internal server error">>)
     end.
 
+%% @doc Get encrypted certificate and private key for sharing with other nodes.
+%%
+%% This function encrypts the current certificate and private key using the
+%% shared green zone AES key, similar to how the green zone shares wallet keys.
+%% The encrypted data can be requested by another node that has the same
+%% green zone AES key.
+%%
+%% @param _M1 Ignored parameter
+%% @param _M2 Ignored parameter  
+%% @param Opts Server configuration options
+%% @returns {ok, Map} with encrypted certificate data, or {error, Reason}
+get_cert(_M1, _M2, Opts) ->
+    ?event(ssl_cert, {get_cert, start}),
+    maybe
+        {ok, CertPem} ?= file:read_file(?CERT_PEM_FILE),
+        {ok, KeyPem} ?= file:read_file(?KEY_PEM_FILE),
+        % Create combined certificate data
+        CertData = #{
+            cert_pem => CertPem,
+            key_pem => KeyPem,
+            timestamp => erlang:system_time(second)
+        },
+        % Encrypt using green zone helper function
+        {ok, {EncryptedData, IV}} ?= 
+            dev_green_zone:encrypt_data(CertData, Opts),
+        ?event(ssl_cert, {get_cert, encrypt, complete}),
+        ssl_utils:build_success_response(200, #{
+            <<"encrypted_cert">> => base64:encode(EncryptedData),
+            <<"iv">> => base64:encode(IV),
+            <<"message">> => 
+                <<"Certificate encrypted and ready for sharing">>
+        })
+    else
+        {error, enoent} ->
+            ?event(ssl_cert, {get_cert, file_not_found}),
+            ssl_utils:build_error_response(
+                404, 
+                <<"Certificate or key file not found">>
+            );
+        {error, no_green_zone_aes_key} ->
+            ?event(ssl_cert, {get_cert, error, <<"no aes key">>}),
+            ssl_utils:build_error_response(
+                400, 
+                <<"Node not part of a green zone - no shared AES key">>
+            );
+        {error, EncryptError} ->
+            ?event(ssl_cert, {get_cert, encrypt_error, EncryptError}),
+            ssl_utils:build_error_response(500, <<"Encryption failed">>);
+        Error ->
+            ?event(ssl_cert, {get_cert, unexpected_error, Error}),
+            ssl_utils:build_error_response(500, <<"Internal server error">>)
+    end.
 
+%% @doc Request certificate from another node and start HTTPS server.
+%%
+%% This function requests encrypted certificate data from another node,
+%% decrypts it using the shared green zone AES key, and automatically
+%% starts an HTTPS server with the retrieved certificate.
+%%
+%% Required parameters:
+%% - peer_location: URL of the peer node
+%% - peer_id: ID of the peer node for verification
+%%
+%% @param _M1 Ignored parameter
+%% @param _M2 Request message containing peer information
+%% @param Opts Server configuration options
+%% @returns {ok, Map} with certificate status and HTTPS server info, or 
+%%          {error, Reason}
+request_cert(_M1, _M2, Opts) ->
+    ?event(ssl_cert, {request_cert, start}),
+    % Extract peer information
+    PeerLocation = hb_opts:get(<<"peer_location">>, undefined, Opts),
+    PeerID = hb_opts:get(<<"peer_id">>, undefined, Opts),
+    case {PeerLocation, PeerID} of
+        {undefined, _} ->
+            ssl_utils:build_error_response(
+                400, 
+                <<"peer_location required">>
+            );
+        {_, undefined} ->
+            ssl_utils:build_error_response(
+                400, 
+                <<"peer_id required">>
+            );
+        {_, _} ->
+            try_request_cert_from_peer(PeerLocation, PeerID, Opts)
+    end.
 
 %%% ===================================================================
 %%% Internal Helper Functions
 %%% ===================================================================
+
+%% @doc Try to request certificate from peer node.
+%%
+%% This function makes an HTTP request to the peer node's get_cert endpoint,
+%% verifies the response signature, decrypts the certificate data, and
+%% starts an HTTPS server with the retrieved certificate.
+%%
+%% @param PeerLocation URL of the peer node
+%% @param PeerID Expected signer ID for verification
+%% @param Opts Server configuration options
+%% @returns {ok, Map} with certificate status, or {error, Reason}
+try_request_cert_from_peer(PeerLocation, PeerID, Opts) ->
+    maybe
+        ?event(ssl_cert, {request_cert, getting_cert, PeerLocation, PeerID}),
+        % Request encrypted certificate from peer
+        {ok, CertResp} ?= hb_http:get(PeerLocation, 
+                                     <<"/~ssl-cert@1.0/get_cert">>, Opts),
+        % Verify response signature
+        Signers = hb_message:signers(CertResp, Opts),
+        true ?= (hb_message:verify(CertResp, Signers, Opts) and 
+                 lists:member(PeerID, Signers)),
+        finalize_cert_request(CertResp, Opts)
+    else
+        false ->
+            ?event(ssl_cert, {request_cert, invalid_signature}),
+            ssl_utils:build_error_response(
+                400, 
+                <<"Invalid response signature from peer">>
+            );
+        Error ->
+            ?event(ssl_cert, {request_cert, error, Error}),
+            ssl_utils:build_error_response(
+                500, 
+                <<"Failed to request certificate from peer">>
+            )
+    end.
+
+%% @doc Finalize certificate request by decrypting and using the certificate.
+%%
+%% This function decrypts the certificate data received from the peer,
+%% writes it to local files, and starts an HTTPS server.
+%%
+%% @param CertResp Response from peer containing encrypted certificate
+%% @param Opts Server configuration options
+%% @returns {ok, Map} with HTTPS server status
+finalize_cert_request(CertResp, Opts) ->
+    maybe
+        % Extract encrypted data from response
+        Body = hb_ao:get(<<"body">>, CertResp, Opts),
+        Combined = 
+            base64:decode(hb_ao:get(<<"encrypted_cert">>, Body, Opts)),
+        IV = base64:decode(hb_ao:get(<<"iv">>, Body, Opts)),
+        % Decrypt using green zone helper function
+        {ok, DecryptedBin} ?= dev_green_zone:decrypt_data(Combined, IV, Opts),
+        % Extract certificate components
+        #{cert_pem := CertPem, key_pem := KeyPem, timestamp := Timestamp} = 
+            binary_to_term(DecryptedBin),
+        ?event(
+            ssl_cert, 
+            {request_cert, decrypted_cert, {timestamp, Timestamp}}
+        ),
+        % Write certificate files
+        {ok, {CertFile, KeyFile}} ?= write_certificate_files(CertPem, KeyPem),
+        ?event(ssl_cert, {request_cert, files_written, {CertFile, KeyFile}}),
+        % Start HTTPS server with the certificate
+        HttpsPort = hb_opts:get(<<"https_port">>, ?DEFAULT_HTTPS_PORT, Opts),
+        RedirectTo = get_redirect_server_id(Opts),
+        HttpsResult = try hb_http_server:start_https_node(
+            CertFile, 
+            KeyFile, 
+            Opts, 
+            RedirectTo,
+            HttpsPort
+        ) of
+            ServerUrl when is_binary(ServerUrl) ->
+                ?event(ssl_cert, {request_cert, https_started, ServerUrl}),
+                {started, ServerUrl}
+        catch
+            StartError:StartReason:StartStacktrace ->
+                ?event(ssl_cert, 
+                    {
+                        request_cert, https_failed, 
+                        {error, StartError},
+                        {reason, StartReason},
+                        {stacktrace, StartStacktrace}
+                    }
+                ),
+                {failed, {StartError, StartReason}}
+        end,
+        % Build response
+        ssl_utils:build_success_response(200, #{
+            <<"message">> => 
+                <<"Certificate retrieved and HTTPS server started">>,
+            <<"https_server">> => format_https_server_status(HttpsResult),
+            <<"certificate_timestamp">> => Timestamp
+        })
+    else
+        {error, no_green_zone_aes_key} ->
+            ?event(ssl_cert, {request_cert, error, <<"no aes key">>}),
+            ssl_utils:build_error_response(
+                400, 
+                <<"Node not part of a green zone - no shared AES key">>
+            );
+        {error, DecryptError} ->
+            ?event(ssl_cert, {request_cert, decrypt_error, DecryptError}),
+            ssl_utils:build_error_response(
+                400, 
+                <<"Failed to decrypt certificate data">>
+            );
+        Error ->
+            ?event(ssl_cert, {request_cert, general_error, Error}),
+            ssl_utils:build_error_response(
+                500, 
+                <<"Internal server error">>
+            )
+    end.
 
 %% @doc Extracts SSL options from configuration with validation.
 %%
@@ -351,13 +598,13 @@ extract_ssl_opts(Opts) when is_map(Opts) ->
 %%             and ssl_cert_rsa_key
 %% @returns {ok, {RequestState, PrivKeyRecord}} or {error, Reason}
 load_certificate_state(Opts) ->
-    RequestState = hb_opts:get(<<"ssl_cert_request">>, not_found, Opts),
+    RequestState = hb_opts:get(<<"priv_ssl_cert_request">>, not_found, Opts),
     case RequestState of
         not_found ->
             {error, request_state_not_found};
         _ when is_map(RequestState) ->
             PrivKeyRecord = 
-                hb_opts:get(<<"ssl_cert_rsa_key">>, not_found, Opts),
+                hb_opts:get(<<"priv_ssl_cert_rsa_key">>, not_found, Opts),
             {ok, {RequestState, PrivKeyRecord}};
         _ ->
             {error, invalid_request_state}
@@ -465,7 +712,8 @@ extract_certificate_data(DownResp, PrivKeyRecord) ->
 %% @param Opts Server configuration options (checks auto_https setting)
 %% @returns {started, ServerUrl} | {skipped, Reason} | {failed, Error}
 maybe_start_https_server(CertPem, PrivKeyPem, DomainsOut, Opts) ->
-    case hb_opts:get(<<"auto_https">>, true, Opts) of
+    SSLOpts = extract_and_validate_ssl_params(Opts),
+    case hb_opts:get(<<"auto_https">>, true, SSLOpts) of
         true ->
             ?event(
                 ssl_cert, 
@@ -474,11 +722,13 @@ maybe_start_https_server(CertPem, PrivKeyPem, DomainsOut, Opts) ->
                     {domains, DomainsOut}
                 }
             ),
+            HttpsPort = hb_opts:get(<<"https_port">>, ?DEFAULT_HTTPS_PORT, SSLOpts),
             start_https_server_with_certificate(
                 CertPem, 
                 PrivKeyPem, 
                 DomainsOut, 
-                Opts
+                Opts,
+                HttpsPort
             );
         false ->
             ?event(ssl_cert, {auto_https_disabled, {domains, DomainsOut}}),
@@ -495,8 +745,11 @@ maybe_start_https_server(CertPem, PrivKeyPem, DomainsOut, Opts) ->
 %% @param PrivKeyPem PEM-encoded private key
 %% @param DomainsOut List of domains for logging and tracking
 %% @param Opts Server configuration options
+%% @param HttpsPort HTTPS port number for the server
 %% @returns {started, ServerUrl} or {failed, {Error, Reason}}
-start_https_server_with_certificate(CertPem, PrivKeyPem, DomainsOut, Opts) ->
+start_https_server_with_certificate(
+    CertPem,PrivKeyPem, DomainsOut, Opts, HttpsPort
+) ->
     maybe
         {ok, {CertFile, KeyFile}} ?= 
             write_certificate_files(CertPem, PrivKeyPem),
@@ -507,14 +760,16 @@ start_https_server_with_certificate(CertPem, PrivKeyPem, DomainsOut, Opts) ->
                 https_server_config, 
                 {cert_file, CertFile}, 
                 {key_file, KeyFile}, 
-                {redirect_to, RedirectTo}
+                {redirect_to, RedirectTo},
+                {https_port, HttpsPort}
             }
         ),
         try hb_http_server:start_https_node(
             CertFile, 
             KeyFile, 
             Opts, 
-            RedirectTo
+            RedirectTo,
+            HttpsPort
         ) of
             ServerUrl when is_binary(ServerUrl) ->
                 ?event(
@@ -541,10 +796,11 @@ start_https_server_with_certificate(CertPem, PrivKeyPem, DomainsOut, Opts) ->
         end
     end.
 
-%% @doc Write certificate and key to temporary files.
+%% @doc Write certificate and key to files.
 %%
 %% This function writes the PEM-encoded certificate and private key to
-%% temporary files that can be used by Cowboy for TLS configuration.
+%% files that can be used by Cowboy for TLS configuration. It ensures
+%% the target directory exists before writing files.
 %% Both files must be written successfully for the operation to succeed.
 %%
 %% @param CertPem PEM-encoded certificate chain
@@ -553,14 +809,20 @@ start_https_server_with_certificate(CertPem, PrivKeyPem, DomainsOut, Opts) ->
 write_certificate_files(CertPem, PrivKeyPem) ->
     CertFile = ?CERT_PEM_FILE,
     KeyFile = ?KEY_PEM_FILE,
-    case {
-        file:write_file(CertFile, CertPem), 
-        file:write_file(KeyFile, ssl_utils:bin(PrivKeyPem))
-    } of
-        {ok, ok} -> {ok, {CertFile, KeyFile}};
-        {Error, ok} -> Error;
-        {ok, Error} -> Error;
-        {Error1, _Error2} -> Error1  % Return first error if both fail
+    % Ensure the directory exists
+    case filelib:ensure_dir(filename:join(?CERT_DIR, "dummy")) of
+        ok ->
+            case {
+                file:write_file(CertFile, CertPem), 
+                file:write_file(KeyFile, ssl_utils:bin(PrivKeyPem))
+            } of
+                {ok, ok} -> {ok, {CertFile, KeyFile}};
+                {Error, ok} -> Error;
+                {ok, Error} -> Error;
+                {Error1, _Error2} -> Error1  % Return first error if both fail
+            end;
+        {error, Reason} ->
+            {error, {failed_to_create_cert_directory, Reason}}
     end.
 
 %% @doc Get the server ID for HTTP redirect setup.
@@ -788,8 +1050,8 @@ persist_request_state(ProcResp, Opts) ->
         % Persist request state in node opts (overwrites previous)
         ok = hb_http_server:set_opts(
             NewOpts#{ 
-                <<"ssl_cert_request">> => RequestState0, 
-                <<"ssl_cert_rsa_key">> => CertificateKey 
+                <<"priv_ssl_cert_request">> => RequestState0, 
+                <<"priv_ssl_cert_rsa_key">> => CertificateKey 
             }
         ),
         % Format challenges using library function

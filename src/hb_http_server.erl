@@ -26,7 +26,7 @@
 -export([
     start/0, start/1,
     start_node/0, start_node/1,
-    start_https_node/4
+    start_https_node/5
 ]).
 
 %% Request handling exports  
@@ -37,7 +37,7 @@
 
 %% HTTPS and redirect exports
 -export([
-    redirect_to_https/2
+    redirect_to_https/3
 ]).
 
 %% Configuration and state management exports
@@ -62,9 +62,10 @@
     binary(), 
     binary(), 
     server_opts(), 
-    server_id() | no_server
+    server_id() | no_server,
+    integer()
 ) -> binary().
--spec redirect_to_https(cowboy_req:req(), server_opts()) -> 
+-spec redirect_to_https(cowboy_req:req(), server_opts(), integer()) -> 
     {ok, cowboy_req:req(), server_opts()}.
 
 -include_lib("eunit/include/eunit.hrl").
@@ -72,7 +73,6 @@
 
 %% Default configuration constants
 -define(DEFAULT_HTTP_PORT, 8734).
--define(DEFAULT_HTTPS_PORT, 8443).
 -define(DEFAULT_IDLE_TIMEOUT, 300000).
 -define(DEFAULT_CONFIG_FILE, <<"config.flat">>).
 -define(DEFAULT_PRIV_KEY_FILE, <<"hyperbeam-key.json">>).
@@ -147,9 +147,7 @@ start() ->
             store => UpdatedStoreOpts,
             port => hb_opts:get(port, ?DEFAULT_HTTP_PORT, Loaded),
             cache_writers => 
-                [hb_util:human_id(ar_wallet:to_address(PrivWallet))],
-            auto_https => hb_opts:get(auto_https, true, Loaded),
-            https_port => hb_opts:get(https_port, ?DEFAULT_HTTPS_PORT, Loaded)
+                [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
         }
     ).
 
@@ -207,25 +205,25 @@ start_node(Opts) ->
 %% @param KeyFile Path to private key PEM file
 %% @param Opts Server configuration options (supports https_port)
 %% @param RedirectTo HTTP server ID to configure for redirect
+%% @param HttpsPort HTTPS port number for the server
 %% @returns HTTPS node URL binary like <<"https://localhost:8443/">>
-start_https_node(CertFile, KeyFile, Opts, RedirectTo) ->
+start_https_node(CertFile, KeyFile, Opts, RedirectTo, HttpsPort) ->
     ?event(https, {starting_https_node, {opts_keys, maps:keys(Opts)}}),
     % Ensure all required applications are started
     start_required_applications(),
     % Initialize HyperBEAM
     hb:init(),
     % Start supervisor with HTTPS-specific options
-    StrippedOpts = maps:without([port, protocol], Opts),
+    StrippedOpts = maps:without([port], Opts),
     HttpsOpts = StrippedOpts#{
-        protocol => https,
-        port => hb_opts:get(https_port, ?DEFAULT_HTTPS_PORT, StrippedOpts)
+        port => HttpsPort
     },
     hb_sup:start_link(HttpsOpts),
     % Set up server options for HTTPS
     ServerOpts = set_default_opts(HttpsOpts),
     % Create the HTTPS server using new_server with TLS transport
     {ok, _Listener, Port} = 
-        new_https_server(ServerOpts, CertFile, KeyFile, RedirectTo),
+        new_https_server(ServerOpts, CertFile, KeyFile, RedirectTo, HttpsPort),
     % Return HTTPS URL
     <<"https://localhost:", (integer_to_binary(Port))/binary, "/">>.
 
@@ -300,8 +298,9 @@ new_server(RawNodeMsg) ->
 %% @param CertFile Path to SSL certificate PEM file
 %% @param KeyFile Path to SSL private key PEM file
 %% @param RedirectTo HTTP server ID to configure for redirect (or no_server)
+%% @param HttpsPort HTTPS port number for the server
 %% @returns {ok, Listener, Port} or {error, Reason}
-new_https_server(Opts, CertFile, KeyFile, RedirectTo) ->
+new_https_server(Opts, CertFile, KeyFile, RedirectTo, HttpsPort) ->
     ?event(https, {creating_new_https_server, {opts_keys, maps:keys(Opts)}}),
     try
         {ok, NodeMsg} = process_server_hooks(Opts),
@@ -309,7 +308,6 @@ new_https_server(Opts, CertFile, KeyFile, RedirectTo) ->
         {_Dispatcher, ProtoOpts} = 
             create_https_dispatcher(HttpsServerID, NodeMsg),
         FinalProtoOpts = add_prometheus_if_enabled(ProtoOpts, NodeMsg),
-        HttpsPort = hb_opts:get(https_port, ?DEFAULT_HTTPS_PORT, NodeMsg),
         {ok, Listener} = 
             start_tls_listener(
                 HttpsServerID, 
@@ -463,11 +461,11 @@ start_http2(ServerID, ProtoOpts, NodeMsg) ->
 %% The function routes requests based on the handler state type.
 %%
 %% @param Req Cowboy request object
-%% @param State Either {redirect_https, Opts} or ServerID
+%% @param State Either {redirect_https, Opts, HttpsPort} or ServerID
 %% @returns {ok, UpdatedReq, State}
-init(Req, {redirect_https, Opts}) ->
+init(Req, {redirect_https, Opts, HttpsPort}) ->
     % Handle HTTPS redirect
-    redirect_to_https(Req, Opts);
+    redirect_to_https(Req, Opts, HttpsPort);
 init(Req, ServerID) ->
     % Handle normal requests
     case cowboy_req:method(Req) of
@@ -696,14 +694,15 @@ allowed_methods(Req, State) ->
 %%
 %% @param ServerID HTTP server identifier to configure for redirect
 %% @param Opts Configuration options containing HTTPS port information
+%% @param HttpsPort HTTPS port number for the server
 %% @returns ok
-setup_http_redirect(ServerID, Opts) ->
+setup_http_redirect(ServerID, Opts, HttpsPort) ->
     ?event(https, {setting_up_http_redirect, {server_id, ServerID}}),
     % Create a new dispatcher that redirects everything to HTTPS
     % We use a special redirect handler that will be handled by init/2
     RedirectDispatcher = cowboy_router:compile([
         {'_', [
-            {'_', ?MODULE, {redirect_https, Opts}}
+            {'_', ?MODULE, {redirect_https, Opts, HttpsPort}}
         ]}
     ]),
     % Update the server's dispatcher
@@ -721,13 +720,13 @@ setup_http_redirect(ServerID, Opts) ->
 %%
 %% @param Req0 Cowboy request object
 %% @param State Handler state containing server options
+%% @param HttpsPort HTTPS port number for the server
 %% @returns {ok, UpdatedReq, State}
-redirect_to_https(Req0, State) ->
+redirect_to_https(Req0, State, HttpsPort) ->
     Host = cowboy_req:host(Req0),
     Path = cowboy_req:path(Req0),
     Qs = cowboy_req:qs(Req0),
     % Get HTTPS port from state, default to 443
-    HttpsPort = hb_opts:get(https_port, ?DEFAULT_HTTPS_PORT, State),
     % Build the HTTPS URL with port if not standard HTTPS port
     BaseUrl = case HttpsPort of
         443 -> <<"https://", Host/binary>>;
@@ -1248,7 +1247,7 @@ setup_redirect_if_needed(RedirectTo, NodeMsg, HttpsPort) ->
                     {https_port, HttpsPort}
                 }
             ),
-            setup_http_redirect(RedirectTo, NodeMsg#{https_port => HttpsPort});
+            setup_http_redirect(RedirectTo, NodeMsg, HttpsPort);
         _ ->
             ?event(https, {invalid_redirect_server_id, RedirectTo}),
             ok

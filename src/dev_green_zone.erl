@@ -6,6 +6,8 @@
 %%% commitment and encryption.
 -module(dev_green_zone).
 -export([info/1, info/3, join/3, init/3, become/3, key/3, is_trusted/3]).
+%% Encryption helper functions
+-export([encrypt_data/2, decrypt_data/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("public_key/include/public_key.hrl").
@@ -82,7 +84,7 @@ info(_Msg1, _Msg2, _Opts) ->
 %% @param Opts A map of configuration options from which to derive defaults
 %% @returns A map of required configuration options for the green zone
 -spec default_zone_required_opts(Opts :: map()) -> map().
-default_zone_required_opts(Opts) ->
+default_zone_required_opts(_Opts) ->
     #{
         % trusted_device_signers => hb_opts:get(trusted_device_signers, [], Opts),
         % load_remote_devices => hb_opts:get(load_remote_devices, false, Opts),
@@ -262,8 +264,7 @@ join(M1, M2, Opts) ->
     {ok, map()} | {error, binary()}.
 key(_M1, _M2, Opts) ->
     ?event(green_zone, {get_key, start}),
-    % Retrieve the shared AES key and the node's wallet.
-    GreenZoneAES = hb_opts:get(priv_green_zone_aes, undefined, Opts),
+    % Retrieve the node's wallet.
     Identities = hb_opts:get(identities, #{}, Opts),
     Wallet = case maps:find(<<"green-zone">>, Identities) of
         {ok, #{priv_wallet := GreenZoneWallet}} -> GreenZoneWallet;
@@ -272,31 +273,24 @@ key(_M1, _M2, Opts) ->
     {{KeyType, Priv, Pub}, _PubKey} = Wallet,
     ?event(green_zone, 
         {get_key, wallet, hb_util:human_id(ar_wallet:to_address(Pub))}),
-    case GreenZoneAES of
-        undefined ->
-            % Log error if no shared AES key is found.
-            ?event(green_zone, {get_key, error, <<"no aes key">>}),
-            {error, <<"Node not part of a green zone.">>};
-        _ ->
-            % Generate an IV and encrypt the node's private key using AES-256-GCM.
-            IV = crypto:strong_rand_bytes(16),
-            {EncryptedKey, Tag} = crypto:crypto_one_time_aead(
-                aes_256_gcm,
-                GreenZoneAES,
-                IV,
-                term_to_binary({KeyType, Priv, Pub}),
-                <<>>,
-                true
-            ),
-            
+    
+    % Encrypt the node's private key using the helper function
+    case encrypt_data({KeyType, Priv, Pub}, Opts) of
+        {ok, {EncryptedData, IV}} ->
             % Log successful encryption of the private key.
             ?event(green_zone, {get_key, encrypt, complete}),
             {ok, #{
                 <<"status">>        => 200,
-                <<"encrypted_key">> => 
-                    base64:encode(<<EncryptedKey/binary, Tag/binary>>),
+                <<"encrypted_key">> => base64:encode(EncryptedData),
                 <<"iv">>            => base64:encode(IV)
-            }}
+            }};
+        {error, no_green_zone_aes_key} ->
+            % Log error if no shared AES key is found.
+            ?event(green_zone, {get_key, error, <<"no aes key">>}),
+            {error, <<"Node not part of a green zone.">>};
+        {error, EncryptError} ->
+            ?event(green_zone, {get_key, encrypt_error, EncryptError}),
+            {error, <<"Encryption failed">>}
     end.
 
 %% @doc Clones the identity of a target node in the green zone.
@@ -346,31 +340,17 @@ become(_M1, _M2, Opts) ->
                     % The response is not from the expected peer.
                     {error, <<"Received incorrect response from peer!">>};
                 true ->
-                    finalize_become(KeyResp, NodeLocation, NodeID, 
-                                   GreenZoneAES, Opts)
+                    finalize_become(KeyResp, NodeLocation, NodeID, Opts)
             end
     end.
 
-finalize_become(KeyResp, NodeLocation, NodeID, GreenZoneAES, Opts) ->
+finalize_become(KeyResp, NodeLocation, NodeID, Opts) ->
     % 4. Decode the response to obtain the encrypted key and IV.
-    Combined =
-        base64:decode(
-            hb_ao:get(<<"encrypted_key">>, KeyResp, Opts)),
+    Combined = base64:decode(hb_ao:get(<<"encrypted_key">>, KeyResp, Opts)),
     IV = base64:decode(hb_ao:get(<<"iv">>, KeyResp, Opts)),
-    % 5. Separate the ciphertext and the authentication tag.
-    CipherLen = byte_size(Combined) - 16,
-    <<Ciphertext:CipherLen/binary, Tag:16/binary>> = Combined,
-    % 6. Decrypt the ciphertext using AES-256-GCM with the shared AES
-    %    key and IV.
-    DecryptedBin = crypto:crypto_one_time_aead(
-        aes_256_gcm,
-        GreenZoneAES,
-        IV,
-        Ciphertext,
-        <<>>,
-        Tag,
-        false
-    ),
+    
+    % 5. Decrypt using the helper function
+    {ok, DecryptedBin} = decrypt_data(Combined, IV, Opts),
     OldWallet = hb_opts:get(priv_wallet, undefined, Opts),
     OldWalletAddr = hb_util:human_id(ar_wallet:to_address(OldWallet)),
     ?event(green_zone, {become, old_wallet, OldWalletAddr}),
@@ -783,3 +763,95 @@ rsa_wallet_integration_test() ->
     ?assertEqual(PlainText, Decrypted),
     % Verify wallet structure
     ?assertEqual(KeyType, {rsa, 65537}).
+
+%%% ===================================================================
+%%% Encryption Helper Functions
+%%% ===================================================================
+
+%% @doc Encrypt data using AES-256-GCM with the green zone shared key.
+%%
+%% This function provides a standardized way to encrypt data using the
+%% green zone AES key from the node's configuration. It generates a random IV 
+%% and returns the encrypted data with authentication tag, ready for base64 
+%% encoding and transmission.
+%%
+%% @param Data The data to encrypt (will be converted to binary via term_to_binary)
+%% @param Opts Server configuration options containing priv_green_zone_aes
+%% @returns {ok, {EncryptedData, IV}} where EncryptedData includes the auth tag,
+%%          or {error, Reason} if no AES key or encryption fails
+encrypt_data(Data, Opts) ->
+    case hb_opts:get(priv_green_zone_aes, undefined, Opts) of
+        undefined ->
+            {error, no_green_zone_aes_key};
+        AESKey ->
+            try
+                % Generate random IV
+                IV = crypto:strong_rand_bytes(16),
+                
+                % Convert data to binary if needed
+                DataBin = case is_binary(Data) of
+                    true -> Data;
+                    false -> term_to_binary(Data)
+                end,
+                
+                % Encrypt using AES-256-GCM
+                {EncryptedData, Tag} = crypto:crypto_one_time_aead(
+                    aes_256_gcm,
+                    AESKey,
+                    IV,
+                    DataBin,
+                    <<>>,
+                    true
+                ),
+                
+                % Combine encrypted data and tag
+                Combined = <<EncryptedData/binary, Tag/binary>>,
+                {ok, {Combined, IV}}
+            catch
+                Error:Reason ->
+                    {error, {encryption_failed, Error, Reason}}
+            end
+    end.
+
+%% @doc Decrypt data using AES-256-GCM with the green zone shared key.
+%%
+%% This function provides a standardized way to decrypt data that was
+%% encrypted with encrypt_data/2. It expects the encrypted data to include
+%% the 16-byte authentication tag at the end.
+%%
+%% @param Combined The encrypted data with authentication tag appended
+%% @param IV The initialization vector used during encryption
+%% @param Opts Server configuration options containing priv_green_zone_aes
+%% @returns {ok, DecryptedData} or {error, Reason}
+decrypt_data(Combined, IV, Opts) ->
+    case hb_opts:get(priv_green_zone_aes, undefined, Opts) of
+        undefined ->
+            {error, no_green_zone_aes_key};
+        AESKey ->
+            try
+                % Separate ciphertext and authentication tag
+                CipherLen = byte_size(Combined) - 16,
+                case CipherLen >= 0 of
+                    false ->
+                        {error, invalid_encrypted_data_length};
+                    true ->
+                        <<Ciphertext:CipherLen/binary, Tag:16/binary>> = Combined,
+                        
+                        % Decrypt using AES-256-GCM
+                        DecryptedBin = crypto:crypto_one_time_aead(
+                            aes_256_gcm,
+                            AESKey,
+                            IV,
+                            Ciphertext,
+                            <<>>,
+                            Tag,
+                            false
+                        ),
+                        
+                        {ok, DecryptedBin}
+                end
+            catch
+                Error:Reason ->
+                    {error, {decryption_failed, Error, Reason}}
+            end
+    end.
