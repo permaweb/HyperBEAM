@@ -519,7 +519,7 @@ finalize_cert_request(CertResp, Opts) ->
         {ok, {CertFile, KeyFile}} ?= write_certificate_files(CertPem, KeyPem),
         ?event(ssl_cert, {request_cert, files_written, {CertFile, KeyFile}}),
         % Start HTTPS server with the certificate
-        HttpsPort = hb_opts:get(https_port, ?DEFAULT_HTTPS_PORT, Opts),
+        HttpsPort = hb_opts:get(<<"https_port">>, ?DEFAULT_HTTPS_PORT, Opts),
         RedirectTo = get_redirect_server_id(Opts),
         HttpsResult = try hb_http_server:start_https_node(
             CertFile, 
@@ -712,9 +712,9 @@ extract_certificate_data(DownResp, PrivKeyRecord) ->
 %% @param Opts Server configuration options (checks auto_https setting)
 %% @returns {started, ServerUrl} | {skipped, Reason} | {failed, Error}
 maybe_start_https_server(CertPem, PrivKeyPem, DomainsOut, Opts) ->
-    SSLOpts = extract_and_validate_ssl_params(Opts),
-    ?event(ssl_cert,{sslopts, {explicit, SSLOpts}}),
-    case hb_opts:get(auto_https, true, SSLOpts) of
+    {ok, SSLOpts} = extract_and_validate_ssl_params(Opts),
+    ?event(ssl_cert, {sslopts, {explicit, SSLOpts}}),
+    case hb_opts:get(<<"auto_https">>, true, SSLOpts) of
         true ->
             ?event(
                 ssl_cert, 
@@ -723,7 +723,7 @@ maybe_start_https_server(CertPem, PrivKeyPem, DomainsOut, Opts) ->
                     {domains, DomainsOut}
                 }
             ),
-            HttpsPort = hb_opts:get(https_port, ?DEFAULT_HTTPS_PORT, SSLOpts),
+            HttpsPort = hb_opts:get(<<"https_port">>, ?DEFAULT_HTTPS_PORT, SSLOpts),
             start_https_server_with_certificate(
                 CertPem, 
                 PrivKeyPem, 
