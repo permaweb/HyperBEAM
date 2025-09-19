@@ -22,7 +22,10 @@ start_link(Opts) ->
 req(Args, Opts) -> req(Args, false, Opts).
 req(Args, ReestablishedConnection, Opts) ->
     case hb_opts:get(http_client, gun, Opts) of
-        gun -> gun_req(Args, ReestablishedConnection, Opts);
+        gun ->
+            MaxRedirects = hb_maps:get(gun_max_redirects, Opts, 5),
+            GunArgs = Args#{redirects_left => MaxRedirects},
+            gun_req(GunArgs, ReestablishedConnection, Opts);
         httpc -> httpc_req(Args, ReestablishedConnection, Opts)
     end.
 
@@ -110,7 +113,7 @@ httpc_req(Args, _, Opts) ->
 
 gun_req(Args, ReestablishedConnection, Opts) ->
     StartTime = os:system_time(millisecond),
-    #{ peer := Peer, path := Path, method := Method } = Args,
+    #{ peer := Peer, path := Path, method := Method, redirects_left := RedirectsLeft } = Args,
     Response =
         case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
             {ok, PID} ->
@@ -123,9 +126,21 @@ gun_req(Args, ReestablishedConnection, Opts) ->
                             false ->
                                 req(Args, true, Opts)
                         end;
-                    Reply ->
-                        Reply
-                end;
+                    Reply = {_Ok, StatusCode, RedirectRes, _} ->
+                        FollowRedirects = hb_maps:get(http_follow_redirects, Opts, true),
+                        case lists:member(StatusCode, [301, 302, 307, 308]) of
+                            true when FollowRedirects, RedirectsLeft > 0 ->
+                            RedirectArgs = Args#{ redirects_left := RedirectsLeft - 1 },
+                            handle_redirect(
+                              RedirectArgs,
+                              ReestablishedConnection,
+                              Opts,
+                              RedirectRes,
+                              Reply
+                            );
+                            _ -> Reply
+                        end
+                  end;
             {'EXIT', _} ->
                 {error, client_error};
             Error ->
@@ -459,6 +474,36 @@ terminate(Reason, #state{ status_by_pid = StatusByPID }) ->
 %%% Private functions.
 %%% ==================================================================
 
+handle_redirect(Args, ReestablishedConnection, Opts, Res, Reply) ->
+    case lists:keyfind(<<"location">>, 1, Res) of
+        false ->
+            % There's no Location header, so we can't follow the redirect.
+            Reply;
+        {_LocationHeaderName, Location} ->
+            case uri_string:parse(Location) of
+                {error, _Reason, _Detail} ->
+                    % Server returned a Location header but the URI was malformed.
+                    Reply;
+                 Parsed ->
+                    #{ scheme := NewScheme, host := NewHost, path := NewPath } = Parsed,
+                    Port = maps:get(port, Parsed, undefined),
+                    FormattedPort = case Port of
+                        undefined -> "";
+                        _ -> lists:flatten(io_lib:format(":~i", [Port]))
+                    end,
+                    NewPeer = lists:flatten(
+                        io_lib:format(
+                            "~s://~s~s~s",
+                            [NewScheme, NewHost, FormattedPort, NewPath]
+                        )
+                    ),
+                    NewArgs = Args#{
+                        peer := NewPeer,
+                        path := NewPath
+                    },
+                    gun_req(NewArgs, ReestablishedConnection, Opts)
+            end
+    end.
 
 %% @doc Safe wrapper for prometheus_gauge:inc/2.
 inc_prometheus_gauge(Name) ->
@@ -486,7 +531,13 @@ inc_prometheus_counter(Name, Labels, Value) ->
     end.
 
 open_connection(#{ peer := Peer }, Opts) ->
-    {Host, Port} = parse_peer(Peer, Opts),
+    ParsedPeer = uri_string:parse(iolist_to_binary(Peer)),
+    #{ scheme := Scheme, host := Host } = ParsedPeer,
+    DefaultPort = case Scheme of
+        <<"https">> -> 443;
+        <<"http">> -> 80
+    end,
+    Port = maps:get(port, ParsedPeer, DefaultPort),
     ?event(http_outbound, {parsed_peer, {peer, Peer}, {host, Host}, {port, Port}}),
     BaseGunOpts =
         #{
@@ -508,9 +559,9 @@ open_connection(#{ peer := Peer }, Opts) ->
                 )
         },
     Transport =
-        case Port of
-            443 -> tls;
-            _ -> tcp
+        case Scheme of
+            <<"https">> -> tls;
+            <<"http">> -> tcp
         end,
     DefaultProto =
         case hb_features:http3() of
@@ -521,7 +572,13 @@ open_connection(#{ peer := Peer }, Opts) ->
     GunOpts =
         case Proto = hb_opts:get(protocol, DefaultProto, Opts) of
             http3 -> BaseGunOpts#{protocols => [http3], transport => quic};
-            _ -> BaseGunOpts#{transport => Transport}
+            _ -> BaseGunOpts#{
+                transport => Transport,
+                tls_opts => [
+                    % {verify, verify_none},  % For development - disable peer verification
+                    {cacerts, public_key:cacerts_get()}
+                ]
+            }
         end,
     ?event(http_outbound,
         {gun_open,
@@ -531,23 +588,7 @@ open_connection(#{ peer := Peer }, Opts) ->
             {transport, Transport}
         }
     ),
-    gun:open(Host, Port, GunOpts).
-
-%% @doc Parse peer URL to extract host and port
-parse_peer(Peer, Opts) ->
-    Parsed = uri_string:parse(Peer),
-    case Parsed of
-        #{ host := Host, port := Port } ->
-            {hb_util:list(Host), Port};
-        URI = #{ host := Host } ->
-            {
-                hb_util:list(Host),
-                case hb_maps:get(scheme, URI, undefined, Opts) of
-                    <<"https">> -> 443;
-                    _ -> hb_opts:get(port, 8734, Opts)
-                end
-            }
-    end.
+    gun:open(hb_util:list(Host), Port, GunOpts).
 
 reply_error([], _Reason) ->
 	ok;
