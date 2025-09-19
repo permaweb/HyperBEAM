@@ -46,13 +46,13 @@
 info(_) ->
     #{
         exports => [
-            info,
-            request,
-            finalize,
-            renew,
-            delete,
-            get_cert,
-            request_cert
+            <<"info">>,
+            <<"request">>,
+            <<"finalize">>,
+            <<"renew">>,
+            <<"delete">>,
+            <<"get_cert">>,
+            <<"request_cert">>
         ]
     }.
 
