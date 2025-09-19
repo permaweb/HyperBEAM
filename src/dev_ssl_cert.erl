@@ -163,8 +163,8 @@ info(_Msg1, _Msg2, _Opts) ->
                 <<"description">> => 
                     <<"Request and use certificate from another node">>,
                 <<"required_params">> => #{
-                    <<"peer_location">> => <<"URL of the peer node">>,
-                    <<"peer_id">> => <<"ID of the peer node">>
+                    <<"green_zone_peer_location">> => <<"URL of the peer node">>,
+                    <<"green_zone_peer_id">> => <<"ID of the peer node">>
                 },
                 <<"usage">> => <<"POST /ssl-cert@1.0/request_cert">>,
                 <<"note">> =>
@@ -434,18 +434,18 @@ get_cert(_M1, _M2, Opts) ->
 request_cert(_M1, _M2, Opts) ->
     ?event(ssl_cert, {request_cert, start}),
     % Extract peer information
-    PeerLocation = hb_opts:get(<<"peer_location">>, undefined, Opts),
-    PeerID = hb_opts:get(<<"peer_id">>, undefined, Opts),
+    PeerLocation = hb_opts:get(<<"green_zone_peer_location">>, undefined, Opts),
+    PeerID = hb_opts:get(<<"green_zone_peer_id">>, undefined, Opts),
     case {PeerLocation, PeerID} of
         {undefined, _} ->
             ssl_utils:build_error_response(
                 400, 
-                <<"peer_location required">>
+                <<"green_zone_peer_location required">>
             );
         {_, undefined} ->
             ssl_utils:build_error_response(
                 400, 
-                <<"peer_id required">>
+                <<"green_zone_peer_id required">>
             );
         {_, _} ->
             try_request_cert_from_peer(PeerLocation, PeerID, Opts)
