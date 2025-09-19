@@ -383,8 +383,9 @@ class ErlangLiterateParser {
                 if (parsed.returns.length > 0) {
                     docParts.push('### Returns');
                     docParts.push('');
-                    for (const r of parsed.returns) {
-                        docParts.push(`- ${this.cleanDocumentation(r)}`);
+                    const expanded = parsed.returns.flatMap(r => this.splitReturnsIntoOutcomes(r));
+                    for (const r of expanded) {
+                        docParts.push(`- ${this.formatReturnsText(r)}`);
                     }
                     docParts.push('');
                 }
@@ -426,6 +427,13 @@ class ErlangLiterateParser {
                         : `@returns ${cleaned.trim()}`;
                     // Accumulate tag lines
                     pendingTagLines.push(lineAsTag);
+                } else if (
+                    pendingTagLines.length > 0 &&
+                    (pendingTagLines[pendingTagLines.length - 1].startsWith('@returns') ||
+                     pendingTagLines[pendingTagLines.length - 1].startsWith('@param'))
+                ) {
+                    // Continuation of the previous @returns/@param block; append line
+                    pendingTagLines.push(cleaned.trim());
                 } else {
                     // Flush any pending tag block before emitting a normal comment
                     flushTags();
@@ -459,7 +467,7 @@ class ErlangLiterateParser {
         });
 
         // Convert Erlang doc syntax to Markdown
-        return text
+        let cleaned = text
             .replace(/`([^']*?)'/g, '`$1`')  // Convert `code' to `code`
             .replace(/&lt;&lt;/g, '<<')       // Fix HTML entities
             .replace(/&gt;&gt;/g, '>>')
@@ -467,6 +475,118 @@ class ErlangLiterateParser {
             .replace(/\n\s*\n\s*\n/g, '\n\n')   // Normalize multiple empty lines to double newlines
             .replace(/[ \t]+$/gm, '')               // Trim trailing spaces per line
             .replace(/^\s+|\s+$/g, '');            // Final trim
+
+        // Reflow numbered lists and ensure separation from following headings/labels
+        cleaned = this.reflowNumberedLists(cleaned);
+
+        return cleaned;
+    }
+
+    formatReturnsText(text) {
+        if (!text) return '';
+        // First, clean the documentation text
+        let result = this.cleanDocumentation(text);
+
+        // Wrap leading return token if it's a tuple/list or common atom
+        const leadingMatch = result.match(/^(\s*)(\{[^}]+\}|\[[^\]]+\]|ok|error|not_found|true|false)(\b|\s|$)/i);
+        if (leadingMatch) {
+            const [, leadSpace, token, trail] = leadingMatch;
+            result = leadSpace + '`' + token + '`' + result.slice(leadSpace.length + token.length);
+        }
+
+        // Wrap any standalone tuple occurrences not already inside backticks
+        result = result.replace(/(^|[^`])(\{[^}]+\})([^`]|$)/g, (m, pre, tuple, post) => {
+            return `${pre}\`${tuple}\`${post}`;
+        });
+
+        return result;
+    }
+
+    splitReturnsIntoOutcomes(text) {
+        if (!text) return [];
+        const s = this.cleanDocumentation(text);
+        const tokenRegex = /(\{[^}]+\}|\bok\b|\berror\b|\bnot_found\b|\btrue\b|\bfalse\b)/gi;
+        const parts = [];
+        let match;
+        const matches = [];
+        while ((match = tokenRegex.exec(s)) !== null) {
+            matches.push({ index: match.index, token: match[0] });
+        }
+        // If no tokens or prose exists before the first token, don't split; keep as one descriptive line
+        if (matches.length === 0 || (matches.length > 0 && matches[0].index > 0)) {
+            return [s.trim()];
+        }
+        for (let i = 0; i < matches.length; i++) {
+            const start = matches[i].index;
+            const nextStart = (i + 1 < matches.length) ? matches[i + 1].index : s.length;
+            let segment = s.slice(start, nextStart).trim();
+            // Remove leading commas that were used as separators
+            segment = segment.replace(/^,\s*/, '');
+            // If there's trailing comma before next token, trim it but keep sentence end
+            segment = segment.replace(/,\s*$/, '');
+            if (segment) parts.push(segment.trim());
+        }
+        // If we accidentally merged two outcomes without clear token boundaries, ensure uniqueness
+        return parts.filter(p => p.length > 0);
+    }
+
+    reflowNumberedLists(text) {
+        if (!text) return '';
+        const lines = text.split('\n');
+        const out = [];
+        let inNumbered = false;
+        let lastNumIndex = -1;
+        for (let i = 0; i < lines.length; i++) {
+            const raw = lines[i];
+            const trimmed = raw.trim();
+
+            const isNumbered = /^\d+\.\s/.test(trimmed);
+            const isBullet = /^[-*]\s/.test(trimmed);
+            const isHeading = /^#{1,6}\s/.test(trimmed);
+            const isCodeFence = /^```/.test(trimmed);
+
+            if (isNumbered) {
+                out.push(trimmed);
+                inNumbered = true;
+                lastNumIndex = out.length - 1;
+                continue;
+            }
+
+            if (inNumbered) {
+                if (trimmed === '') {
+                    out.push('');
+                    inNumbered = false;
+                    lastNumIndex = -1;
+                    continue;
+                }
+                if (!isNumbered && !isBullet && !isHeading && !isCodeFence) {
+                    // Continuation of previous numbered item; append
+                    out[lastNumIndex] = out[lastNumIndex] + ' ' + trimmed;
+                    continue;
+                }
+                // Different kind of line; end numbered block and fall through
+                inNumbered = false;
+                lastNumIndex = -1;
+            }
+
+            out.push(raw);
+        }
+
+        // Ensure a blank line between last numbered item and a label/heading line like 'Config options ...:'
+        const separated = [];
+        for (let i = 0; i < out.length; i++) {
+            const cur = out[i];
+            const next = i + 1 < out.length ? out[i + 1] : '';
+            separated.push(cur);
+            if (/^\d+\.\s/.test(cur.trim()) && next && !/^\s*$/.test(next) && /:\s*$/.test(next.trim())) {
+                // Insert a blank line if not already present
+                if (separated[separated.length - 1] !== '') {
+                    separated.push('');
+                }
+            }
+        }
+
+        return separated.join('\n');
     }
 
     formatPreContent(content) {
@@ -561,6 +681,7 @@ class ErlangLiterateParser {
 
         let currentSection = 'description';
         let currentParam = null;
+        let lastReturnIndex = -1;
 
         for (const line of lines) {
             const trimmed = line.trim();
@@ -587,17 +708,33 @@ class ErlangLiterateParser {
                 }
                 const returnsText = trimmed.replace(/^@returns?\s*/, '');
                 result.returns.push(returnsText);
+                lastReturnIndex = result.returns.length - 1;
                 currentSection = 'returns';
                 continue;
             }
 
             // Add to current section
-            if (currentSection === 'description' && trimmed) {
-                result.description.push(trimmed);
+            if (currentSection === 'description') {
+                if (trimmed) {
+                    result.description.push(trimmed);
+                } else {
+                    // Preserve a single blank line to break paragraphs/lists
+                    const last = result.description[result.description.length - 1];
+                    if (last !== '') {
+                        result.description.push('');
+                    }
+                }
             } else if (currentSection === 'param' && currentParam && trimmed) {
                 currentParam.description += ' ' + trimmed;
             } else if (currentSection === 'returns' && trimmed) {
-                result.returns.push(trimmed);
+                if (lastReturnIndex >= 0) {
+                    // Append continuation text to the last returns entry
+                    result.returns[lastReturnIndex] =
+                        (result.returns[lastReturnIndex] + ' ' + trimmed).replace(/\s+/g, ' ').trim();
+                } else {
+                    result.returns.push(trimmed);
+                    lastReturnIndex = result.returns.length - 1;
+                }
             }
         }
 
@@ -747,8 +884,9 @@ class ErlangLiterateParser {
                 if (parsed.returns.length > 0) {
                     combinedDoc.push('### Returns');
                     combinedDoc.push('');
-                    for (const ret of parsed.returns) {
-                        combinedDoc.push(`- ${this.cleanDocumentation(ret)}`);
+                    const expanded = parsed.returns.flatMap(r => this.splitReturnsIntoOutcomes(r));
+                    for (const ret of expanded) {
+                        combinedDoc.push(`- ${this.formatReturnsText(ret)}`);
                     }
                     combinedDoc.push('');
                 }
