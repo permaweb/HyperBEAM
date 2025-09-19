@@ -1,5 +1,5 @@
 [book]
-authors = ["Dylan Shade", "HyperBEAM Team"]
+authors = ["HyperBEAM Core Team"]
 language = "en"
 src = "src"
 title = "HyperBEAM Book"
@@ -12,6 +12,7 @@ build-dir = "dist"
 edition = "2021"
 
 [output.html]
+default-theme = "rust"
 additional-css = ["custom.css", "theme/highlight.css"]
 additional-js = ["custom.js"]
 mathjax-support = false

@@ -2,6 +2,9 @@
 // Following mdBook best practices: minimal JavaScript additions
 
 document.addEventListener('DOMContentLoaded', function() {
+    // Set default theme to Rust if no theme is stored
+    setDefaultTheme();
+
     // Initialize theme change detection
     initThemeDetection();
 
@@ -11,6 +14,18 @@ document.addEventListener('DOMContentLoaded', function() {
     // Replace edit icon with page copy functionality
     replaceEditWithCopy();
 });
+
+function setDefaultTheme() {
+    // Check if there's already a stored theme preference
+    const storedTheme = localStorage.getItem('mdbook-theme');
+
+    // If no theme is stored, set default to rust
+    if (!storedTheme) {
+        localStorage.setItem('mdbook-theme', 'rust');
+        document.documentElement.className = document.documentElement.className.replace(/\brust\b|\blight\b|\bnavy\b|\bayu\b/g, '').trim();
+        document.documentElement.classList.add('rust');
+    }
+}
 
 function initThemeDetection() {
     // Watch for theme changes via class changes on html element
