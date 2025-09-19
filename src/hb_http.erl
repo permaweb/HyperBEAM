@@ -8,6 +8,7 @@
 -export([get/2, get/3, post/3, post/4, request/2, request/4, request/5]).
 -export([message_to_request/2, reply/4, accept_to_codec/2]).
 -export([req_to_tabm_singleton/3]).
+-export([reply_streamed/5, reply_streamed/6, send_streamed_response/4]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -511,6 +512,44 @@ reply(InitReq, TABMReq, Status, RawMessage, Opts) ->
         }
     ),
     {ok, PostStreamReq, no_state}.
+
+%% @doc Reply with chunked transfer encoding for streaming large responses
+reply_streamed(Req, TABMReq, Status, StreamFun, Opts) ->
+    reply_streamed(Req, TABMReq, Status, #{}, StreamFun, Opts).
+
+reply_streamed(Req, TABMReq, Status, ExtraHeaders, StreamFun, Opts) ->
+    {ok, HeadersBeforeCors, _} = encode_reply(Status, TABMReq, #{}, Opts),
+
+    HeadersWithChunked = HeadersBeforeCors#{
+        <<"transfer-encoding">> => <<"chunked">>
+    },
+
+    HeadersWithExtras = maps:merge(HeadersWithChunked, ExtraHeaders),
+
+    ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
+    HeadersWithCors = add_cors_headers(HeadersWithExtras, ReqHdr, Opts),
+    EncodedHeaders = hb_private:reset(HeadersWithCors),
+
+    StreamReq = cowboy_req:stream_reply(Status, EncodedHeaders, Req),
+
+    try
+        StreamFun(StreamReq),
+        cowboy_req:stream_body(<<>>, fin, StreamReq)
+    catch
+        _:_ ->
+            % On error, try to finish the stream gracefully
+            cowboy_req:stream_body(<<>>, fin, StreamReq)
+    end,
+
+    {ok, StreamReq, no_state}.
+
+%% @doc Send a streamed chunk response to the client
+send_streamed_response(StreamReq, Chunk, IsFinal, _Opts) when is_binary(Chunk) ->
+    Flag = case IsFinal of
+        true -> fin;
+        false -> nofin
+    end,
+    cowboy_req:stream_body(Chunk, Flag, StreamReq).
 
 %% @doc Handle replying with cookies if the message contains them. Returns the
 %% new Cowboy `Req` object, and the message with the cookies removed. Both
