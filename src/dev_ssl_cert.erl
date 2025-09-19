@@ -23,7 +23,7 @@
 -export([renew/3, delete/3]).
 -export([get_cert/3, request_cert/3]).
 
--define(CERT_DIR, filename:join([file:get_cwd(), "certs"])).
+-define(CERT_DIR, filename:join([element(2, file:get_cwd()), "certs"])).
 -define(CERT_PEM_FILE, 
     filename:join(
         [?CERT_DIR, <<"hyperbeam_cert.pem">>]
