@@ -117,7 +117,7 @@ extract_module_doc() {
     fi
   done < "$file"
 
-  # Clean up @doc prefixes, empty lines, and convert edocs syntax to markdown
+  # Clean up @doc prefixes and convert edocs syntax to markdown, preserving paragraph breaks
   echo "$doc_content" | \
     sed 's/^@doc$//' | \
     sed 's/^@doc //' | \
@@ -125,15 +125,27 @@ extract_module_doc() {
     sed 's/^@author /**Author:** /' | \
     sed 's/^@copyright /**Copyright:** /' | \
     sed 's/^---*$//' | \
-    sed '/^[[:space:]]*$/d' | \
-    sed "s/\`\([^']*\)'/\`\1\`/g"
+    sed "s/\`\([^']*\)'/\`\1\`/g" | \
+    awk '
+    BEGIN { prev_empty = 0 }
+    /^[[:space:]]*$/ {
+      if (!prev_empty) {
+        print ""
+        prev_empty = 1
+      }
+      next
+    }
+    {
+      print $0
+      prev_empty = 0
+    }'
 }
 
 # --- Function to extract function documentation ---
 extract_function_doc() {
   local content="$1"
 
-  # Remove leading %% or % and @doc tags, then convert edocs syntax to markdown
+  # Remove leading %% or % and @doc tags, then convert edocs syntax to markdown, preserving paragraph breaks
   echo "$content" | \
     sed 's/^%% *//' | \
     sed 's/^% *//' | \
@@ -143,8 +155,20 @@ extract_function_doc() {
     sed 's/^@author /**Author:** /' | \
     sed 's/^@copyright /**Copyright:** /' | \
     sed 's/^---*$//' | \
-    sed '/^$/d' | \
-    sed "s/\`\([^']*\)'/\`\1\`/g"
+    sed "s/\`\([^']*\)'/\`\1\`/g" | \
+    awk '
+    BEGIN { prev_empty = 0 }
+    /^[[:space:]]*$/ {
+      if (!prev_empty) {
+        print ""
+        prev_empty = 1
+      }
+      next
+    }
+    {
+      print $0
+      prev_empty = 0
+    }'
 }
 
 # --- Function to process a single Erlang file ---
@@ -250,8 +274,9 @@ EOF
     # Continue collecting function content
     if [ "$in_function" = true ]; then
       function_content+="$line"$'\n'
-      # Check for function end (period at end of line not in string)
-      if [[ "$line" =~ \.[[:space:]]*$ ]] && ! [[ "$line" =~ \" ]]; then
+      # Check for function end (period at end of line, not in string or comment)
+      if [[ "$line" =~ ^[[:space:]]*end\.[[:space:]]*$ ]] ||
+         ([[ "$line" =~ \.[[:space:]]*$ ]] && ! [[ "$line" =~ \" ]] && ! [[ "$line" =~ ^[[:space:]]*% ]]); then
         in_function=false
         write_clean_function "$output_file" "$current_function" "$spec_content" "$doc_content" "$function_content" "$functions_written"
         ((functions_written++))
@@ -312,10 +337,76 @@ write_clean_function() {
     echo "" >> "$output_file"
   fi
 
-  # Add implementation
-  echo '```erlang' >> "$output_file"
-  echo -n "$code" | sed '/^[[:space:]]*$/d' >> "$output_file"
-  echo '```' >> "$output_file"
+  # Add implementation with inline comment processing
+  write_code_with_inline_comments "$output_file" "$code"
+}
+
+# --- Function to write code blocks with inline comments breaking them ---
+write_code_with_inline_comments() {
+  local output_file="$1"
+  local code="$2"
+
+  local in_code_block=false
+  local in_comment_block=false
+  local comment_lines=()
+
+  while IFS= read -r line; do
+    # Check if this is an inline comment
+    # Match lines that have whitespace followed by a single % (not %% or %%%)
+    if [[ "$line" =~ ^[[:space:]]*%([[:space:]]|$) ]] && ! [[ "$line" =~ ^[[:space:]]*%% ]]; then
+      # If we were in a code block, close it
+      if [ "$in_code_block" = true ]; then
+        echo '```' >> "$output_file"
+        echo "" >> "$output_file"
+        in_code_block=false
+      fi
+
+      # Extract comment text - remove leading whitespace and %
+      comment_text=$(echo "$line" | sed 's/^[[:space:]]*%//')
+
+      # Remove leading space after % if present
+      comment_text=$(echo "$comment_text" | sed 's/^[[:space:]]//')
+
+      # Convert backtick-quote pairs to proper markdown backticks
+      comment_text=$(echo "$comment_text" | sed "s/\`\([^']*\)'/\`\1\`/g")
+
+      # Add to comment lines array
+      comment_lines+=("$comment_text")
+      in_comment_block=true
+    else
+      # Regular code line (including %% and %%% doc comments)
+      # If we were collecting comments, write them out first
+      if [ "$in_comment_block" = true ]; then
+        # Write each comment line separately to preserve structure
+        for comment_line in "${comment_lines[@]}"; do
+          echo "$comment_line" >> "$output_file"
+        done
+        echo "" >> "$output_file"
+        echo '```erlang' >> "$output_file"
+        in_comment_block=false
+        comment_lines=()
+        in_code_block=true
+      elif [ "$in_code_block" = false ]; then
+        echo '```erlang' >> "$output_file"
+        in_code_block=true
+      fi
+      echo "$line" >> "$output_file"
+    fi
+  done <<< "$code"
+
+  # Handle any remaining comment lines
+  if [ "$in_comment_block" = true ]; then
+    for comment_line in "${comment_lines[@]}"; do
+      echo "$comment_line" >> "$output_file"
+    done
+    echo "" >> "$output_file"
+  fi
+
+  # Close any remaining code block
+  if [ "$in_code_block" = true ]; then
+    echo '```' >> "$output_file"
+    echo "" >> "$output_file"
+  fi
 }
 
 # --- Main processing loop ---
