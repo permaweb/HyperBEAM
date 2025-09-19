@@ -16,9 +16,9 @@ This documentation combines source code with comprehensive explanations using a 
 Use the sidebar to browse modules organized by category:
 
 - **Arweave Foundation**: Core Arweave protocol implementations
-- **Device Framework**: AO device implementations and utilities
+- **Devices**: AO device implementations and utilities
 - **Codec Modules**: Data encoding/decoding functionality
-- **Core Services**: Essential HyperBEAM services and components
+  (Core Services grouped under Devices)
 - **HyperBEAM Core**: Foundation modules and utilities
 
 ## About HyperBEAM

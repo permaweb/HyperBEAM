@@ -37,7 +37,8 @@ class ErlangLiterateParser {
             pendingDoc: '',
             specFunctionName: '',
             braceDepth: 0,
-            parenDepth: 0
+            parenDepth: 0,
+            inlineDocTags: []
         };
     }
 
@@ -86,10 +87,11 @@ class ErlangLiterateParser {
                 let docLine = trimmed.substring(3).trim();
                 // Remove @doc if present
                 docLine = docLine.replace(/^@doc\s*/, '');
-                if (docLine) moduleDoc.push(docLine);
+                // Always push the line, even if empty (for paragraph breaks)
+                moduleDoc.push(docLine);
             } else if (inModuleDoc && trimmed === '') {
-                // Empty line in module doc, continue
-                continue;
+                // Empty line in module doc, preserve it for paragraph breaks
+                moduleDoc.push('');
             } else if (inModuleDoc && trimmed.startsWith('%')) {
                 // Continue with other comment types but end module doc
                 inModuleDoc = false;
@@ -116,6 +118,8 @@ class ErlangLiterateParser {
 
             // Check for -spec
             if (trimmed.startsWith('-spec ')) {
+                // Before collecting the spec, check if there are @param/@returns tags immediately before
+                this.collectParamTagsBeforeSpec(i);
                 this.collectSpec(i);
                 // Extract function name from spec line
                 const specMatch = trimmed.match(/-spec\s+([a-z][a-z0-9_]*)\s*\(/);
@@ -207,6 +211,46 @@ class ErlangLiterateParser {
         this.currentState.pendingDoc = docLines.join('\n');
     }
 
+    collectParamTagsBeforeSpec(specIdx) {
+        const paramLines = [];
+        let hitDocBlock = false;
+
+        // Look backwards from the -spec line to find @param and @returns tags
+        for (let i = specIdx - 1; i >= 0; i--) {
+            const line = this.lines[i];
+            const trimmed = line.trim();
+
+            // If we hit a @doc line, we already collected this documentation
+            if (trimmed.startsWith('%% @doc')) {
+                hitDocBlock = true;
+                break;
+            }
+
+            // If we hit an empty line or a non-comment line, stop looking backwards
+            if (trimmed === '' || (!trimmed.startsWith('%%') && !trimmed.startsWith('%'))) {
+                break;
+            }
+
+            // Check if this line contains @param or @returns
+            if (trimmed.startsWith('%%') && (trimmed.includes('@param') || trimmed.includes('@returns'))) {
+                let docLine = trimmed.substring(2).trim();
+                paramLines.unshift(docLine); // Add to beginning to maintain order
+            }
+        }
+
+        // Only add the tags if we didn't find a @doc block (meaning these are standalone tags)
+        if (paramLines.length > 0 && !hitDocBlock) {
+            const existingDoc = this.currentState.pendingDoc || '';
+            const newDoc = paramLines.join('\n');
+
+            if (existingDoc) {
+                this.currentState.pendingDoc = existingDoc + '\n' + newDoc;
+            } else {
+                this.currentState.pendingDoc = newDoc;
+            }
+        }
+    }
+
     collectSpec(startIdx) {
         const specLines = [];
         let depth = 0;
@@ -260,6 +304,7 @@ class ErlangLiterateParser {
         this.currentState.functionLines = [];
         this.currentState.braceDepth = 0;
         this.currentState.parenDepth = 0;
+        this.currentState.inlineDocTags = [];
     }
 
     collectFunctionLine(line, lineIdx) {
@@ -306,25 +351,58 @@ class ErlangLiterateParser {
         this.currentState.functionDoc = '';
         this.currentState.functionLines = [];
         this.currentState.specFunctionName = '';
+        this.currentState.inlineDocTags = [];
     }
 
     processFunctionBody(lines) {
         const segments = [];
         let currentCode = [];
-        let inCodeBlock = false;
+        let pendingTagLines = [];
+
+        const flushCode = () => {
+            if (currentCode.length > 0) {
+                segments.push({ type: 'code', content: currentCode.join('\n') });
+                currentCode = [];
+            }
+        };
+
+        const flushTags = () => {
+            if (pendingTagLines.length > 0) {
+                const tagText = pendingTagLines.join('\n');
+                const parsed = this.parseDocumentation(tagText);
+                let docParts = [];
+                if (parsed.params.length > 0) {
+                    docParts.push('### Parameters');
+                    docParts.push('');
+                    for (const p of parsed.params) {
+                        const desc = this.cleanDocumentation(p.description || '');
+                        docParts.push(`- \`${p.name}\` - ${desc}`);
+                    }
+                    docParts.push('');
+                }
+                if (parsed.returns.length > 0) {
+                    docParts.push('### Returns');
+                    docParts.push('');
+                    for (const r of parsed.returns) {
+                        docParts.push(`- ${this.cleanDocumentation(r)}`);
+                    }
+                    docParts.push('');
+                }
+                if (docParts.length > 0) {
+                    segments.push({ type: 'doc', content: docParts.join('\n') });
+                }
+                pendingTagLines = [];
+            }
+        };
 
         for (const line of lines) {
             const trimmed = line.trim();
 
-            // Check for inline comment (% or %% but not %%%)
             if (trimmed.match(/^\s*%[^%]/) || trimmed.match(/^\s*%%[^%]/)) {
-                // Save any accumulated code
+                // It's a comment line
+                // Save any accumulated code block first
                 if (currentCode.length > 0) {
-                    segments.push({
-                        type: 'code',
-                        content: currentCode.join('\n')
-                    });
-                    currentCode = [];
+                    flushCode();
                 }
 
                 // Extract comment text (remove % or %% prefix)
@@ -334,23 +412,35 @@ class ErlangLiterateParser {
                 } else {
                     commentText = line.replace(/^\s*%\s?/, '');
                 }
-                segments.push({
-                    type: 'comment',
-                    content: this.cleanInlineComment(commentText)
-                });
+                const cleaned = this.cleanInlineComment(commentText);
+
+                // Heuristic: returns-like lines (e.g., `{ok, Binary}` / `{error, Binary}` ...)
+                const returnsLikeTuple = /^`?\{[^}]+\}`?/.test(cleaned);
+                const returnsLikeAtom = /^`?(ok|error|not_found|true|false)\b/i.test(cleaned);
+                const isTagParam = /^\s*@param\b/i.test(cleaned);
+                const isTagReturns = /^\s*@returns?\b/i.test(cleaned);
+
+                if (isTagParam || isTagReturns || returnsLikeTuple || returnsLikeAtom) {
+                    const lineAsTag = isTagParam || isTagReturns
+                        ? cleaned.trim()
+                        : `@returns ${cleaned.trim()}`;
+                    // Accumulate tag lines
+                    pendingTagLines.push(lineAsTag);
+                } else {
+                    // Flush any pending tag block before emitting a normal comment
+                    flushTags();
+                    segments.push({ type: 'comment', content: cleaned });
+                }
             } else {
-                // Regular code line
+                // Non-comment code line; flush any pending tags first, then add code
+                flushTags();
                 currentCode.push(line);
             }
         }
 
-        // Add any remaining code
-        if (currentCode.length > 0) {
-            segments.push({
-                type: 'code',
-                content: currentCode.join('\n')
-            });
-        }
+        // Flush any remaining tag or code blocks
+        flushTags();
+        flushCode();
 
         return segments;
     }
@@ -363,13 +453,102 @@ class ErlangLiterateParser {
     cleanDocumentation(text) {
         if (!text) return '';
 
+        // Handle <pre> tags with structured content
+        text = text.replace(/<pre>([\s\S]*?)<\/pre>/g, (match, content) => {
+            return this.formatPreContent(content);
+        });
+
         // Convert Erlang doc syntax to Markdown
         return text
             .replace(/`([^']*?)'/g, '`$1`')  // Convert `code' to `code`
             .replace(/&lt;&lt;/g, '<<')       // Fix HTML entities
             .replace(/&gt;&gt;/g, '>>')
             .replace(/@doc\s*/g, '')          // Remove @doc tags
-            .trim();
+            .replace(/\n\s*\n\s*\n/g, '\n\n')   // Normalize multiple empty lines to double newlines
+            .replace(/[ \t]+$/gm, '')               // Trim trailing spaces per line
+            .replace(/^\s+|\s+$/g, '');            // Final trim
+    }
+
+    formatPreContent(content) {
+        // First, let's look at the actual structure of the content more carefully
+        // The issue is that definitions span multiple lines with varying indentation
+
+        const lines = content.trim().split('\n');
+        const formatted = [];
+
+        let i = 0;
+        while (i < lines.length) {
+            const line = lines[i].trim();
+
+            if (!line) {
+                i++;
+                continue;
+            }
+
+            // Look for definition pattern: starts with word(s), colon, then description
+            // Pattern: "DevMod:ExportedFunc : Description" or "info/exports : Description"
+            const defMatch = line.match(/^(\S+(?:\s*:\s*\S+)?)\s*:\s*(.*)$/);
+
+            if (defMatch) {
+                const [, term, initialDesc] = defMatch;
+                let fullDescription = initialDesc.trim();
+
+                // Collect continuation lines for this definition
+                let j = i + 1;
+                while (j < lines.length) {
+                    const nextLine = lines[j];
+
+                    // Empty line - check if there's more content
+                    if (!nextLine.trim()) {
+                        j++;
+                        continue;
+                    }
+
+                    // If it looks like a new definition, stop
+                    if (nextLine.trim().match(/^\S+(?:\s*:\s*\S+)?\s*:\s*/)) {
+                        break;
+                    }
+
+                    // This is a continuation line - add it to the description
+                    if (nextLine.trim()) {
+                        fullDescription += ' ' + nextLine.trim();
+                    }
+                    j++;
+                }
+
+                // Format the definition
+                formatted.push('');
+                formatted.push(`**${term.trim()}**`);
+                formatted.push('');
+                formatted.push(fullDescription);
+
+                i = j; // Move to the next unprocessed line
+            } else {
+                // Not a definition - handle as regular content
+                if (line.toLowerCase().includes('hyperbeam') && line.includes('options')) {
+                    formatted.push('');
+                    formatted.push(`### ${line}`);
+                    formatted.push('');
+                } else if (line.match(/^`[^`]+`\s*:/)) {
+                    // Special case for option definitions like `update_hashpath`:
+                    const optMatch = line.match(/^(`[^`]+`)\s*:\s*(.*)$/);
+                    if (optMatch) {
+                        const [, optName, optDesc] = optMatch;
+                        formatted.push('');
+                        formatted.push(`**${optName}**`);
+                        formatted.push('');
+                        formatted.push(optDesc);
+                    } else {
+                        formatted.push(line);
+                    }
+                } else {
+                    formatted.push(line);
+                }
+                i++;
+            }
+        }
+
+        return formatted.join('\n');
     }
 
     parseDocumentation(docText) {
@@ -460,65 +639,49 @@ class ErlangLiterateParser {
             md.push('');
         }
 
+        // Group functions by name to merge overloaded functions
+        const groupedFunctions = this.groupFunctionsByName(this.functions);
+
         // Functions
-        for (const func of this.functions) {
-            md.push(`## ${func.name}`);
+        for (const group of groupedFunctions) {
+            md.push(`## ${group.name}`);
             md.push('');
 
-            // Parse and format documentation
-            if (func.doc) {
-                const parsed = this.parseDocumentation(func.doc);
-
-                // Description
-                if (parsed.description.length > 0) {
-                    md.push(this.cleanDocumentation(parsed.description.join(' ')));
-                    md.push('');
-                }
-
-                // Parameters
-                if (parsed.params.length > 0) {
-                    md.push('### Parameters');
-                    md.push('');
-                    for (const param of parsed.params) {
-                        const desc = this.cleanDocumentation(param.description);
-                        md.push(`- \`${param.name}\` - ${desc}`);
-                    }
-                    md.push('');
-                }
-
-                // Returns
-                if (parsed.returns.length > 0) {
-                    md.push('### Returns');
-                    md.push('');
-                    for (const ret of parsed.returns) {
-                        md.push(`- ${this.cleanDocumentation(ret)}`);
-                    }
-                    md.push('');
-                }
-            }
-
-            // Spec
-            if (func.spec) {
-                md.push('```erlang');
-                md.push(func.spec.trim());
-                md.push('```');
+            // Combine documentation from all functions in the group
+            const combinedDoc = this.combineFunctionDocs(group.functions);
+            if (combinedDoc) {
+                md.push(combinedDoc);
                 md.push('');
             }
 
-            // Function body with inline comments
-            if (func.body && func.body.length > 0) {
-                // md.push('### Function');
-                md.push('');
+            // Add all specs and bodies for the function group
+            for (const func of group.functions) {
+                // Spec
+                if (func.spec) {
+                    md.push('```erlang');
+                    md.push(func.spec.trim());
+                    md.push('```');
+                    md.push('');
+                }
 
-                for (const segment of func.body) {
-                    if (segment.type === 'comment') {
-                        md.push(segment.content);
-                        md.push('');
-                    } else if (segment.type === 'code') {
-                        md.push('```erlang');
-                        md.push(segment.content.trim());
-                        md.push('```');
-                        md.push('');
+                // Function body with inline comments
+                if (func.body && func.body.length > 0) {
+                    md.push('');
+
+                    for (const segment of func.body) {
+                        if (segment.type === 'comment') {
+                            md.push(segment.content);
+                            md.push('');
+                        } else if (segment.type === 'doc') {
+                            // Insert structured params/returns adjacent to the preceding code
+                            md.push(segment.content);
+                            md.push('');
+                        } else if (segment.type === 'code') {
+                            md.push('```erlang');
+                            md.push(segment.content.trim());
+                            md.push('```');
+                            md.push('');
+                        }
                     }
                 }
             }
@@ -532,6 +695,68 @@ class ErlangLiterateParser {
         md.push(`*Generated from [${fileName}](${githubUrl})*`);
 
         return md.join('\n');
+    }
+
+    groupFunctionsByName(functions) {
+        const groups = [];
+        let currentGroup = null;
+
+        for (const func of functions) {
+            if (!currentGroup || currentGroup.name !== func.name) {
+                // Start a new group
+                currentGroup = {
+                    name: func.name,
+                    functions: [func]
+                };
+                groups.push(currentGroup);
+            } else {
+                // Add to current group
+                currentGroup.functions.push(func);
+            }
+        }
+
+        return groups;
+    }
+
+    combineFunctionDocs(functions) {
+        // Use the documentation from the first function that has it
+        // In practice, usually only the first clause of an overloaded function has detailed docs
+        for (const func of functions) {
+            if (func.doc) {
+                const parsed = this.parseDocumentation(func.doc);
+                let combinedDoc = [];
+
+                // Description
+                if (parsed.description.length > 0) {
+                    combinedDoc.push(this.cleanDocumentation(parsed.description.join('\n')));
+                    combinedDoc.push('');
+                }
+
+                // Parameters
+                if (parsed.params.length > 0) {
+                    combinedDoc.push('### Parameters');
+                    combinedDoc.push('');
+                    for (const param of parsed.params) {
+                        const desc = this.cleanDocumentation(param.description);
+                        combinedDoc.push(`- \`${param.name}\` - ${desc}`);
+                    }
+                    combinedDoc.push('');
+                }
+
+                // Returns
+                if (parsed.returns.length > 0) {
+                    combinedDoc.push('### Returns');
+                    combinedDoc.push('');
+                    for (const ret of parsed.returns) {
+                        combinedDoc.push(`- ${this.cleanDocumentation(ret)}`);
+                    }
+                    combinedDoc.push('');
+                }
+
+                return combinedDoc.join('\n');
+            }
+        }
+        return null;
     }
 }
 
