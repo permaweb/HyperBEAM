@@ -2,6 +2,10 @@
 
 # Script to generate literate Erlang documentation from HyperBEAM source files
 #
+# ⚠️  DEPRECATED: This bash parser has been superseded by the JavaScript version
+# For superior results with comprehensive comment parsing, use:
+#   ./docs/build-literate-erlang-js.sh
+#
 # This creates .erl.md files that combine source code with documentation
 # in a format optimized for GitHub rendering with cleaner appearance
 #
@@ -88,6 +92,14 @@ ${GRAY}  =${GRAY}%%${NEON_GREEN}*+${BRIGHT_RED}=-:::::::::${GRAY}        LITERAT
 display_logo
 log_step "LITERATE ERLANG DOCUMENTATION GENERATION"
 
+# Display deprecation notice
+echo -e "${YELLOW}${BOLD}⚠️  DEPRECATION NOTICE${NC}"
+echo -e "${YELLOW}This bash parser has been superseded by a superior JavaScript implementation.${NC}"
+echo -e "${YELLOW}For comprehensive comment parsing and true literate programming, use:${NC}"
+echo -e "${GREEN}${BOLD}  ./docs/build-literate-erlang-js.sh${NC}"
+echo -e "${GRAY}Continuing with legacy bash parser...${NC}"
+echo ""
+
 # Ensure we're in the root directory
 ROOT_DIR="$(dirname "$(realpath "$0")")/.."
 cd "$ROOT_DIR" || { log_error "Failed to change to root directory"; exit 1; }
@@ -145,30 +157,171 @@ extract_module_doc() {
 extract_function_doc() {
   local content="$1"
 
-  # Remove leading %% or % and @doc tags, then convert edocs syntax to markdown, preserving paragraph breaks
-  echo "$content" | \
+  # Clean the content and separate into sections
+  local cleaned_content=$(echo "$content" | \
     sed 's/^%% *//' | \
     sed 's/^% *//' | \
     sed 's/^@doc$//' | \
     sed 's/^@doc //' | \
     sed 's/^@end$//' | \
-    sed 's/^@author /**Author:** /' | \
-    sed 's/^@copyright /**Copyright:** /' | \
-    sed 's/^---*$//' | \
-    sed "s/\`\([^']*\)'/\`\1\`/g" | \
-    awk '
-    BEGIN { prev_empty = 0 }
-    /^[[:space:]]*$/ {
-      if (!prev_empty) {
-        print ""
-        prev_empty = 1
+    sed "s/\`\([^']*\)'/\`\1\`/g")
+
+  # Initialize variables for different sections
+  local description=""
+  local params=""
+  local returns=""
+  local in_params=false
+  local in_returns=false
+  local current_param=""
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^@param[[:space:]]+([^[:space:]]+)[[:space:]]+(.*)$ ]]; then
+      # Save any current param before starting new one
+      if [ -n "$current_param" ]; then
+        params+="- ${current_param}"$'\n'
+      fi
+      # Start new param with code-formatted name
+      current_param="\`${BASH_REMATCH[1]}\` - ${BASH_REMATCH[2]}"
+      in_params=true
+      in_returns=false
+    elif [[ "$line" =~ ^@returns?[[:space:]]+(.*)$ ]]; then
+      # Save any current param before starting returns
+      if [ -n "$current_param" ]; then
+        params+="- ${current_param}"$'\n'
+        current_param=""
+      fi
+      returns="${BASH_REMATCH[1]}"
+      in_params=false
+      in_returns=true
+    elif [[ "$line" =~ ^@author[[:space:]]+(.*)$ ]]; then
+      # Skip author lines for now
+      continue
+    elif [[ "$line" =~ ^@copyright[[:space:]]+(.*)$ ]]; then
+      # Skip copyright lines for now
+      continue
+    elif [[ "$line" =~ ^[[:space:]]*$ ]]; then
+      # Empty line - add to current section
+      if [ "$in_params" = true ] && [ -n "$current_param" ]; then
+        current_param+=" "
+      elif [ "$in_returns" = true ]; then
+        returns+=" "
+      elif [ "$in_params" = false ] && [ "$in_returns" = false ]; then
+        description+="$line"$'\n'
+      fi
+    else
+      # Regular content line
+      if [ "$in_params" = true ]; then
+        # Continue current param description - clean up whitespace
+        local cleaned_line=$(echo "$line" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+        current_param+=" $cleaned_line"
+      elif [ "$in_returns" = true ]; then
+        # Continue returns description - clean up whitespace
+        local cleaned_line=$(echo "$line" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+        returns+=" $cleaned_line"
+      else
+        # Part of main description
+        description+="$line"$'\n'
+      fi
+    fi
+  done <<< "$cleaned_content"
+
+  # Save any remaining param
+  if [ -n "$current_param" ]; then
+    params+="- ${current_param}"$'\n'
+  fi
+
+  # Build formatted output
+  local output=""
+
+  # Add description (clean up extra newlines)
+  if [ -n "$description" ]; then
+    output+=$(echo "$description" | awk '
+      BEGIN { prev_empty = 0 }
+      /^[[:space:]]*$/ {
+        if (!prev_empty) {
+          print ""
+          prev_empty = 1
+        }
+        next
       }
-      next
-    }
-    {
-      print $0
-      prev_empty = 0
-    }'
+      {
+        print $0
+        prev_empty = 0
+      }')
+    output+=$'\n'
+  fi
+
+  # Add parameters section
+  if [ -n "$params" ]; then
+    output+=$'\n'"#### Parameters"$'\n'$'\n'
+    output+="$params"$'\n'
+  fi
+
+  # Add returns section
+  if [ -n "$returns" ]; then
+    output+=$'\n'"#### Returns"$'\n'$'\n'
+    # Clean up returns text and parse return type vs description
+    local cleaned_returns=$(echo "$returns" | sed 's/[[:space:]]\+/ /g' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+
+    # Try to extract and format return types - always use bullet format
+    # Check for multiple return patterns first (most comprehensive)
+    if [[ "$cleaned_returns" =~ , ]]; then
+      # Try to format multiple return patterns - handle nested braces properly
+      # Use a more robust approach for nested structures
+      local formatted_returns=$(echo "$cleaned_returns" | \
+        perl -pe 's/(\{(?:[^{}]++|(?1))*\})/`$1`/g' 2>/dev/null || \
+        echo "$cleaned_returns" | sed -E 's/(\{[^{}]*(\{[^}]*\}[^{}]*)*\})/`\1`/g')
+      formatted_returns=$(echo "$formatted_returns" | sed -E 's/([[:space:]]|^)(not_found|error|ok|true|false)([[:space:]]|$)/\1`\2`\3/g')
+      output+="- $formatted_returns"$'\n'
+    elif [[ "$cleaned_returns" =~ ^\{ ]]; then
+      # Complex return type - use better pattern to handle nested braces
+      # Extract the complete tuple including nested structures
+      local temp_string="$cleaned_returns"
+      local brace_count=0
+      local char_pos=0
+      local return_type=""
+
+      # Parse character by character to find matching braces
+      while [ $char_pos -lt ${#temp_string} ]; do
+        local char="${temp_string:$char_pos:1}"
+        return_type+="$char"
+
+        if [ "$char" = "{" ]; then
+          ((brace_count++))
+        elif [ "$char" = "}" ]; then
+          ((brace_count--))
+          if [ $brace_count -eq 0 ]; then
+            break
+          fi
+        fi
+        ((char_pos++))
+      done
+
+      # Extract description after the return type
+      local return_desc="${temp_string:$((char_pos + 1))}"
+      return_desc=$(echo "$return_desc" | sed 's/^[[:space:]]*//')
+
+      if [ -n "$return_desc" ]; then
+        output+="- \`$return_type\` $return_desc"$'\n'
+      else
+        output+="- \`$return_type\`"$'\n'
+      fi
+    elif [[ "$cleaned_returns" =~ ^(true|false)[[:space:]]+(.*) ]]; then
+      # Boolean return types
+      local return_type="${BASH_REMATCH[1]}"
+      local return_desc="${BASH_REMATCH[2]}"
+      output+="- \`$return_type\` $return_desc"$'\n'
+    elif [[ "$cleaned_returns" =~ ^(ok|error|not_found)[[:space:]]+(.*) ]]; then
+      # Simple atom return types
+      local return_type="${BASH_REMATCH[1]}"
+      local return_desc="${BASH_REMATCH[2]}"
+      output+="- \`$return_type\` $return_desc"$'\n'
+    else
+      output+="- $cleaned_returns"$'\n'
+    fi
+  fi
+
+  echo "$output"
 }
 
 # --- Function to process a single Erlang file ---
@@ -223,18 +376,25 @@ EOF
   local function_content=""
   local spec_content=""
   local doc_content=""
+  local previous_doc_content=""
   local functions_written=0
 
   while IFS= read -r line; do
     # Check for doc comments (before functions)
-    if [[ "$line" =~ ^%+[[:space:]]?@doc[[:space:]](.*)$ ]] ||
-       ([[ "$line" =~ ^%+[[:space:]](.*)$ ]] && [ "$in_doc_comment" = true ]); then
+    if [[ "$line" =~ ^%%[[:space:]]?@doc[[:space:]](.*)$ ]] ||
+       [[ "$line" =~ ^%%[[:space:]]?@doc$ ]]; then
       in_doc_comment=true
       if [[ "$line" =~ @doc[[:space:]](.*)$ ]]; then
         doc_content+="${BASH_REMATCH[1]}"$'\n'
-      else
-        doc_content+="${BASH_REMATCH[1]}"$'\n'
       fi
+      continue
+    fi
+
+    # Continue collecting doc comment lines
+    if [ "$in_doc_comment" = true ] && [[ "$line" =~ ^%% ]]; then
+      # Remove %% prefix and collect
+      local cleaned_line=$(echo "$line" | sed 's/^%%[[:space:]]*//')
+      doc_content+="$cleaned_line"$'\n'
       continue
     fi
 
@@ -259,15 +419,18 @@ EOF
     if [[ "$line" =~ ^([a-z][a-z0-9_]*)[[:space:]]*\( ]]; then
       # If we were already in a function, write it out
       if [ -n "$current_function" ] && [ -n "$function_content" ]; then
-        write_clean_function "$output_file" "$current_function" "$spec_content" "$doc_content" "$function_content" "$functions_written"
+        write_clean_function "$output_file" "$current_function" "$spec_content" "$previous_doc_content" "$function_content" "$functions_written"
         ((functions_written++))
       fi
 
-      # Start new function
+      # Start new function - preserve current doc_content for this function
       current_function="${BASH_REMATCH[1]}"
       function_content="$line"$'\n'
       in_function=true
       in_doc_comment=false
+      previous_doc_content="$doc_content"
+      spec_content=""
+      doc_content=""
       continue
     fi
 
@@ -278,22 +441,25 @@ EOF
       if [[ "$line" =~ ^[[:space:]]*end\.[[:space:]]*$ ]] ||
          ([[ "$line" =~ \.[[:space:]]*$ ]] && ! [[ "$line" =~ \" ]] && ! [[ "$line" =~ ^[[:space:]]*% ]]); then
         in_function=false
-        write_clean_function "$output_file" "$current_function" "$spec_content" "$doc_content" "$function_content" "$functions_written"
+        write_clean_function "$output_file" "$current_function" "$spec_content" "$previous_doc_content" "$function_content" "$functions_written"
         ((functions_written++))
         current_function=""
         function_content=""
         spec_content=""
+        previous_doc_content=""
+      fi
+    else
+      # Only reset doc content if we hit a non-comment, non-spec, non-function line
+      if ! [[ "$line" =~ ^% ]] && ! [[ "$line" =~ ^-spec ]] && [ "$in_doc_comment" = false ]; then
         doc_content=""
       fi
-    elif [ "$in_doc_comment" = false ]; then
-      # Reset doc content if we hit a non-comment, non-function line
-      doc_content=""
+      in_doc_comment=false
     fi
   done < "$src_file"
 
   # Write any remaining function
   if [ -n "$current_function" ] && [ -n "$function_content" ]; then
-    write_clean_function "$output_file" "$current_function" "$spec_content" "$doc_content" "$function_content" "$functions_written"
+    write_clean_function "$output_file" "$current_function" "$spec_content" "$previous_doc_content" "$function_content" "$functions_written"
   fi
 
   # Add footer
@@ -336,6 +502,10 @@ write_clean_function() {
     echo '```' >> "$output_file"
     echo "" >> "$output_file"
   fi
+
+  # Add Function subheader before the implementation
+  echo "#### Function" >> "$output_file"
+  echo "" >> "$output_file"
 
   # Add implementation with inline comment processing
   write_code_with_inline_comments "$output_file" "$code"
