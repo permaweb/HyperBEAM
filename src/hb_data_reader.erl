@@ -1,5 +1,5 @@
 -module(hb_data_reader).
--export([metadata/2, read_range/4, fetch_full/3, stream/4, stream_from/5, next_chunk/5]).
+-export([metadata/2, read_range/4, fetch_full/3, stream/4, stream_from/5, next_chunk/5, chunk_size/1]).
 -ifdef(TEST).
 -export([compute_next_range/3]).
 -endif.

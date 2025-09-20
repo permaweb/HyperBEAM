@@ -45,7 +45,7 @@ serialize(Msg, #{ <<"format">> := <<"components">> }, Opts) ->
     % Convert to HTTPSig via TABM through calling `hb_message:convert` rather
     % than executing `to/3` directly. This ensures that our responses are 
     % normalized.
-    {ok, EncMsg} = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts),
+    EncMsg = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts),
     {ok,
         #{
             <<"body">> => hb_maps:get(<<"body">>, EncMsg, <<>>),

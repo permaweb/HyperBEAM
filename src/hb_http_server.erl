@@ -376,7 +376,7 @@ handle_request(RawReq, Body, ServerID) ->
             % the meta@1.0 device to handle it.
             Path = cowboy_req:path(RawReq),
             Method = cowboy_req:method(RawReq),
-            case maybe_handle_data_request(Method, Path, RawReq, NodeMsg) of
+            case maybe_handle_data_request(Method, Path, Req, NodeMsg) of
                 {ok, _, _} = Reply ->
                     Reply;
                 pass ->
@@ -458,70 +458,130 @@ handle_data_request(DataID, RangeHeader, RawReq, Path, NodeMsg) ->
     end.
 
 handle_range_request(DataID, RangeBin, Meta, RawReq, NodeMsg) ->
-    case hb_data_reader:read_range(DataID, RangeBin, Meta, NodeMsg) of
-        {ok, #{body := Partial, start := Start, range_end := End, total := Total} = RangeInfo} ->
-            CType = maps:get(content_type, RangeInfo, maps:get(content_type, Meta)),
-            ContentRange = hb_http_range:build_content_range(Start, End, Total),
-            Headers =
-                maps:merge(
-                    cors_headers(),
-                    #{
-                        <<"accept-ranges">> => <<"bytes">>,
-                        <<"content-range">> => ContentRange,
-                        <<"content-length">> => integer_to_binary((End - Start) + 1),
-                        <<"content-type">> => CType
-                    }
-                ),
-            {ok, cowboy_req:reply(206, Headers, Partial, RawReq), no_state};
-        {error, {range_not_satisfiable, Total}} ->
+    Total = maps:get(size, Meta, 0),
+    case hb_http_range:parse(RangeBin, Total) of
+        {ok, {Start, End}} ->
+            CType = maps:get(content_type, Meta),
+            Threshold = hb_opts:get(streaming_threshold, default_streaming_threshold(), NodeMsg),
+            RangeLen = (End - Start) + 1,
+            case RangeLen > Threshold of
+                true ->
+                    stream_range_request(DataID, Meta, CType, Start, End, RawReq, NodeMsg);
+                false ->
+                    case hb_data_reader:read_range(DataID, RangeBin, Meta, NodeMsg) of
+                        {ok, #{body := Partial, start := RespStart, range_end := RespEnd, total := RespTotal} = RangeInfo} ->
+                            RespContentType = maps:get(content_type, RangeInfo, CType),
+                            ContentRange = hb_http_range:build_content_range(RespStart, RespEnd, RespTotal),
+                            Msg = #{
+                                <<"status">> => 206,
+                                <<"ao-result">> => <<"body">>,
+                                <<"body">> => Partial,
+                                <<"content-type">> => RespContentType,
+                                <<"content-range">> => ContentRange,
+                                <<"accept-ranges">> => <<"bytes">>
+                            },
+                            Signed = hb_message:commit(Msg, NodeMsg),
+                            hb_http:reply(RawReq, #{ <<"path">> => cowboy_req:path(RawReq) }, Signed, NodeMsg);
+                        {error, Reason} ->
+                            ?event(error, {range_request_failed, {id, DataID}, {reason, Reason}}),
+                            hb_http:reply(RawReq, #{ <<"path">> => cowboy_req:path(RawReq) }, #{ <<"status">> => 500, <<"body">> => <<"Range request failed">> }, NodeMsg)
+                    end
+            end;
+        {error, {range_not_satisfiable, _}} ->
             Unsat = hb_http_range:build_unsatisfied_content_range(Total),
-            Headers = maps:merge(cors_headers(), #{ <<"content-range">> => Unsat }),
-            {ok, cowboy_req:reply(416, Headers, <<>>, RawReq), no_state};
-        {error, {invalid_range, Total}} ->
-            Headers = maps:merge(cors_headers(), #{ <<"content-range">> => hb_http_range:build_unsatisfied_content_range(Total) }),
-            {ok, cowboy_req:reply(416, Headers, <<>>, RawReq), no_state};
-        {error, {http_error, 404}} ->
-            {ok, cowboy_req:reply(404, cors_headers(), <<>>, RawReq), no_state};
-        {error, Reason} ->
-            ?event(error, {range_request_failed, {id, DataID}, {reason, Reason}}),
-            {ok, cowboy_req:reply(500, error_headers(), <<"Range request failed">>, RawReq), no_state}
+            Msg = #{ <<"status">> => 416, <<"content-range">> => Unsat },
+            hb_http:reply(RawReq, #{ <<"path">> => cowboy_req:path(RawReq) }, Msg, NodeMsg);
+        {error, invalid_range} ->
+            Msg = #{ <<"status">> => 416, <<"content-range">> => hb_http_range:build_unsatisfied_content_range(Total) },
+            hb_http:reply(RawReq, #{ <<"path">> => cowboy_req:path(RawReq) }, Msg, NodeMsg)
     end.
+
+stream_range_request(DataID, Meta, CType, Start, End, RawReq, NodeMsg) ->
+    ContentRange = hb_http_range:build_content_range(Start, End, maps:get(size, Meta, 0)),
+    HeaderMsg = #{
+        <<"status">> => 206,
+        <<"ao-result">> => <<"body">>,
+        <<"content-type">> => CType,
+        <<"content-range">> => ContentRange,
+        <<"accept-ranges">> => <<"bytes">>
+    },
+    SignedHeaderMsg = hb_message:commit(HeaderMsg, NodeMsg, #{
+        <<"commitment-device">> => <<"httpsig@1.0">>,
+        <<"committed">> => [<<"ao-result">>, <<"status">>]
+    }),
+    ExtraHeaders = #{
+        <<"accept-ranges">> => <<"bytes">>,
+        <<"content-type">> => CType,
+        <<"content-range">> => ContentRange
+    },
+    ChunkSize0 = hb_data_reader:chunk_size(NodeMsg),
+    StreamFun = fun(StreamReq) ->
+        stream_range_loop(StreamReq, DataID, Meta, Start, End, ChunkSize0, NodeMsg)
+    end,
+    hb_http:reply_streamed_signed(RawReq, #{ <<"path">> => cowboy_req:path(RawReq) }, 206, SignedHeaderMsg, ExtraHeaders, StreamFun, NodeMsg).
+
+stream_range_loop(StreamReq, DataID, Meta, Offset, End, ChunkSize, NodeMsg) when Offset =< End ->
+    MaxSize = End - Offset + 1,
+    ThisSize = case ChunkSize =< MaxSize of true -> ChunkSize; false -> MaxSize end,
+    case hb_data_reader:next_chunk(DataID, Meta, Offset, ThisSize, NodeMsg) of
+        {ok, #{ body := Body, range_end := RangeEnd }} ->
+            IsFinal = RangeEnd >= End,
+            hb_http:send_streamed_response(StreamReq, Body, IsFinal, NodeMsg),
+            case IsFinal of
+                true -> ok;
+                false -> stream_range_loop(StreamReq, DataID, Meta, RangeEnd + 1, End, ChunkSize, NodeMsg)
+            end;
+        {error, _} -> ok
+    end;
+stream_range_loop(_StreamReq, _DataID, _Meta, _Offset, _End, _ChunkSize, _NodeMsg) -> ok.
 
 handle_full_request(DataID, Meta = #{size := Total}, RawReq, Path, NodeMsg) ->
     CType = maps:get(content_type, Meta),
     Threshold = hb_opts:get(streaming_threshold, default_streaming_threshold(), NodeMsg),
-    case Total =< Threshold of
+    StreamSig = hb_util:atom(hb_opts:get(stream_signature, off, NodeMsg)),
+    ShouldStream = (Total > Threshold) andalso (StreamSig =/= off),
+    case ShouldStream of
         true ->
+            stream_large_data(DataID, Meta, CType, RawReq, Path, NodeMsg);
+        false ->
             case hb_data_reader:fetch_full(DataID, Meta, NodeMsg) of
                 {ok, #{data := Data}} ->
-                    Headers =
-                        maps:merge(
-                            cors_headers(),
-                            #{
-                                <<"accept-ranges">> => <<"bytes">>,
-                                <<"content-type">> => CType,
-                                <<"content-length">> => integer_to_binary(Total)
-                            }
-                        ),
-                    {ok, cowboy_req:reply(200, Headers, Data, RawReq), no_state};
+                    Msg = #{
+                        <<"status">> => 200,
+                        <<"ao-result">> => <<"body">>,
+                        <<"body">> => Data,
+                        <<"content-type">> => CType,
+                        <<"accept-ranges">> => <<"bytes">>
+                    },
+                    Signed = hb_message:commit(Msg, NodeMsg),
+                    hb_http:reply(RawReq, #{ <<"path">> => Path }, Signed, NodeMsg);
                 {error, {http_error, 404}} ->
-                    {ok, cowboy_req:reply(404, cors_headers(), <<>>, RawReq), no_state};
+                    hb_http:reply(RawReq, #{ <<"path">> => Path }, #{ <<"status">> => 404 }, NodeMsg);
                 {error, Reason} ->
                     ?event(error, {full_data_fetch_failed, {id, DataID}, {reason, Reason}}),
-                    {ok, cowboy_req:reply(500, error_headers(), <<"Streaming request failed">>, RawReq), no_state}
-            end;
-        false ->
-            stream_large_data(DataID, Meta, CType, RawReq, Path, NodeMsg)
+                    hb_http:reply(RawReq, #{ <<"path">> => Path }, #{ <<"status">> => 500, <<"body">> => <<"Streaming request failed">> }, NodeMsg)
+            end
     end.
 
 stream_large_data(DataID, Meta, CType, RawReq, Path, NodeMsg) ->
     ChunkSize = hb_data_reader:chunk_size(NodeMsg),
     case hb_data_reader:next_chunk(DataID, Meta, 0, ChunkSize, NodeMsg) of
         {ok, FirstChunk} ->
+            % Sign only header fields (no content-digest). Always use header mode for streaming.
             ExtraHeaders = #{
                 <<"accept-ranges">> => <<"bytes">>,
                 <<"content-type">> => CType
             },
+            HeaderMsg = #{
+                <<"status">> => 200,
+                <<"ao-result">> => <<"body">>,
+                <<"content-type">> => CType
+            },
+            CommitSpec = #{
+                <<"commitment-device">> => <<"httpsig@1.0">>,
+                <<"committed">> => [<<"ao-result">>, <<"status">>]
+            },
+            SignedHeaderMsg = hb_message:commit(HeaderMsg, NodeMsg, CommitSpec),
             StreamFun = fun(StreamReq) ->
                 Body0 = maps:get(body, FirstChunk),
                 Final0 = maps:get(final, FirstChunk, false),
@@ -547,15 +607,11 @@ stream_large_data(DataID, Meta, CType, RawReq, Path, NodeMsg) ->
                                         {offset, NextOffset},
                                         {reason, Reason}
                                     }
-                                ),
-                                cowboy_req:stream_trailers(
-                                    StreamReq,
-                                    #{ <<"x-range-error">> => hb_util:bin(Reason) }
                                 )
                         end
                 end
             end,
-            hb_http:reply_streamed(RawReq, #{ <<"path">> => Path }, 200, ExtraHeaders, StreamFun, NodeMsg);
+            hb_http:reply_streamed_signed(RawReq, #{ <<"path">> => Path }, 200, SignedHeaderMsg, ExtraHeaders, StreamFun, NodeMsg);
         {error, {http_error, 404}} ->
             {ok, cowboy_req:reply(404, cors_headers(), <<>>, RawReq), no_state};
         {error, done} ->
