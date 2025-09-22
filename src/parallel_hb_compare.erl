@@ -134,9 +134,6 @@ handle_worker_completion(CompletedPid, State) ->
     end.
 
 %% @doc Spawn worker processes up to the maximum limit
-spawn_workers(#{active_workers := ActiveWorkers, max_workers := MaxWorkers} = State) when map_size(ActiveWorkers) =:= MaxWorkers ->
-    State;
-
 spawn_workers(State) ->
     ActiveCount = maps:size(State#state.active_workers),
     AvailableSlots = State#state.max_workers - ActiveCount,

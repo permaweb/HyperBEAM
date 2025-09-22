@@ -65,7 +65,7 @@ compare_legacy_at_nonce_hb(ProcessId, Nonce) ->
     MessageId = get_message_id(ProcessId, Nonce),
     io:format("Got message id ~s~n", [MessageId]),
     
-    TestnetResult = get_testnet_result(MessageId, ProcessId),
+    TestnetResult = get_testnet_result(MessageId, ProcessId, 1),
     MainnetResult = get_mainnet_result(ProcessId, Nonce),
     
     io:format("Fetched testnet result~n"),
@@ -133,7 +133,7 @@ get_message_id(ProcessId, Nonce) ->
         _ -> throw({error, "Failed to get message id"})
     end.
 
-get_testnet_result(MessageId, ProcessId) ->
+get_testnet_result(MessageId, ProcessId, Attempt) ->
     TestnetBase = case ?LOCAL_LEGACY of
         true -> "http://localhost:6364";
         false -> "https://cu.ao-testnet.xyz"
@@ -144,6 +144,8 @@ get_testnet_result(MessageId, ProcessId) ->
     case httpc:request(get, {TestnetUrl, []}, [], []) of
         {ok, {{_, 200, _}, _, Body}} ->
             hb_json:decode(list_to_binary(Body));
+        _Error when Attempt < 3 ->
+            get_testnet_result(MessageId, ProcessId, Attempt + 1);
         _ -> throw({error, "Failed to fetch testnet result"})
     end.
 
@@ -271,11 +273,11 @@ compare_array_elements([H1|T1], [H2|T2], Path, Index) ->
         true -> maps:merge(#{NewPath => HeadMismatches}, TailMismatches);
         false -> TailMismatches
     end;
-compare_array_elements([H1|T1], [], Path, Index) ->
+compare_array_elements([_H1|T1], [], Path, Index) ->
     NewPath = Path ++ "[" ++ integer_to_list(Index) ++ "]",
     maps:put(NewPath, "missing in second array", 
              compare_array_elements(T1, [], Path, Index + 1));
-compare_array_elements([], [H2|T2], Path, Index) ->
+compare_array_elements([], [_H2|T2], Path, Index) ->
     NewPath = Path ++ "[" ++ integer_to_list(Index) ++ "]",
     maps:put(NewPath, "missing in first array",
              compare_array_elements([], T2, Path, Index + 1)).
