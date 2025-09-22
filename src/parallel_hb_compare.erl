@@ -9,6 +9,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
+-define(SUPERVISED_MODE, true).
 -define(DEFAULT_MAX_WORKERS, 10).
 
 -record(state, {
@@ -39,12 +40,26 @@ compare_processes(ProcessList) ->
 %% @doc Compare processes with custom max workers
 compare_processes(ProcessList, MaxWorkers) ->
     case whereis(?SERVER) of
+        undefined when ?SUPERVISED_MODE ->
+            {ok, _} = start_supervised(MaxWorkers);
         undefined ->
             {ok, _} = start_link(MaxWorkers);
         _Pid ->
             ok
     end,
     gen_server:call(?SERVER, {compare_processes, ProcessList}, infinity).
+
+start_supervised(MaxWorkers) ->
+    %% Then add the parallel module child dynamically
+    ChildSpec = #{
+        id => parallel_hb_compare,
+        start => {parallel_hb_compare, start_link, [MaxWorkers]},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [parallel_hb_compare]
+    },
+    supervisor:start_child(hb_sup, ChildSpec).
 
 %% @doc Stop the GenServer
 stop() ->
