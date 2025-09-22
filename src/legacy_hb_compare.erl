@@ -10,21 +10,21 @@ compare_testnet(ProcessId) ->
     compare_testnet_and_whitezone(ProcessId, undefined).
 
 compare_testnet_and_whitezone(ProcessId, WhiteZone) ->
-    io:format("Comparing legacy and hyperbeam results on process ~s~n", [ProcessId]),
     LatestNonce = case fetch_latest_nonce(ProcessId) of
         {ok, Nonce} -> Nonce;
-        {error, _} -> throw({error, "No latest nonce found, exiting"})
+        {error, _} ->
+            Msg = "No latest nonce found for " ++ ProcessId, 
+            throw({error, Msg})
     end,
     
     FinalNonce = case ?NONCE_OVERRIDE of
         0 -> LatestNonce;
         Override -> Override
     end,
-    
-    io:format("Latest nonce: ~p~n", [FinalNonce]),
+    io:format("Comparing process ~s until nonce ~p~n", [ProcessId, FinalNonce]),
     
     TestnetMismatches = compare_nonces(ProcessId, FinalNonce),
-    io:format("~p~n", [TestnetMismatches]),
+    io:format("Mismatches: ~p~n", [TestnetMismatches]),
     Timestamp = erlang:system_time(millisecond),
     save_mismatches(ProcessId, FinalNonce, Timestamp, TestnetMismatches, testnet),
     
@@ -36,9 +36,21 @@ compare_testnet_and_whitezone(ProcessId, WhiteZone) ->
     end.
 
 compare_nonces(ProcessId, LatestNonce) ->
-    CompareList = [{Nonce, compare_legacy_at_nonce_hb(ProcessId, Nonce)} || Nonce <- lists:seq(0, LatestNonce)],
-    MismatchList = lists:filter(fun({_Nonce, #{mismatches := Map}}) -> map_size(Map) > 0 end, CompareList),
-    maps:from_list(MismatchList).
+    Result = 
+        lists:foldl(fun(Nonce, Res) ->
+            maybe undefined ?= Res,
+                case compare_legacy_at_nonce_hb(ProcessId, Nonce) of
+                    #{mismatches := Map} = Res when map_size(Map) > 0 ->
+                        #{Nonce => Res};
+                    _Matches ->
+                        undefined
+                end
+            end
+        end, undefined, lists:seq(0, LatestNonce)),
+    maybe 
+        undefined ?= Result,
+        #{}
+    end.
 
 compare_nonces(_ProcessId, _LatestNonce, undefined) -> #{};
 compare_nonces(ProcessId, LatestNonce, WhiteZone) ->
@@ -61,8 +73,7 @@ compare_legacy_at_nonce_hb(ProcessId, Nonce) ->
     io:format("Comparing results...~n"),
     
     Mismatches = deep_compare(TestnetResult, MainnetResult, ""),
-    io:format("Mismatches: ~p~n", [Mismatches]),
-    #{mismatches => #{}, testnet_result => TestnetResult,
+    #{mismatches => Mismatches, testnet_result => TestnetResult,
     mainnet_result => MainnetResult, message_id => MessageId}.
 
 
@@ -77,8 +88,6 @@ compare_legacy_at_nonce_hb(ProcessId, Nonce, WhiteZone) ->
     io:format("Comparing results...~n"),
     
     Mismatches = deep_compare(WhitezoneResult, MainnetResult, ""),
-    
-    io:format("Mismatches: ~p~n", [Mismatches]),
     #{mismatches => Mismatches, whitezone_result => WhitezoneResult,
         mainnet_result => MainnetResult, message_id => MessageId}.
 
@@ -172,7 +181,7 @@ get_mainnet_result_production(ProcessId, Nonce) ->
         _ -> throw({error, "Failed to fetch mainnet result"})
     end.
 
-deep_compare(A, B, Path) when A =:= B -> 
+deep_compare(A, B, _Path) when A =:= B -> 
     #{};
 
 deep_compare(A, B, Path) ->

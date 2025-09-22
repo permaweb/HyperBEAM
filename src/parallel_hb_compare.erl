@@ -17,8 +17,7 @@
     active_workers = #{} :: #{pid() => string()}, % pid -> process_id mapping
     pending_processes = [] :: [string()],
     completed = 0 :: integer(),
-    total = 0 :: integer(),
-    caller = undefined :: pid() | undefined
+    total = 0 :: integer()
 }).
 
 %%%===================================================================
@@ -149,16 +148,16 @@ spawn_workers(State) ->
             State;
         _ ->
             %% Start new workers
-            NewActiveWorkers = 
-                lists:foldl(fun(ProcessId, WorkersAcc) ->
+            {NewActiveWorkers, PendingProcesses} = 
+                lists:foldl(fun(ProcessId, {WorkersAcc, [_ | PendingProcesses]}) ->
                     WorkerPid = spawn_link(fun() -> worker_function(ProcessId) end),
                     io:format("Started worker ~p for process ~s~n", [WorkerPid, ProcessId]),
-                    maps:put(WorkerPid, ProcessId, WorkersAcc)
-                end, State#state.active_workers, ProcessesToStart),
-
-            PendingProcesses = lists:nthtail(AvailableSlots, State#state.pending_processes),
+                    {
+                        maps:put(WorkerPid, ProcessId, WorkersAcc),
+                        PendingProcesses
+                    }
+                end, {State#state.active_workers, State#state.pending_processes}, ProcessesToStart),
             io:format("~p processes pending left.~n", [length(PendingProcesses)]),
-            
             State#state{
                 active_workers = NewActiveWorkers,
                 pending_processes = PendingProcesses
