@@ -129,21 +129,24 @@ set(Trie, Req, Opts) ->
                     group_keys(Trie, Insertable, Opts),
                     Opts
                 ),
-            Linkified =
-                hb_message:convert(
-                    NewTrie,
-                    <<"structured@1.0">>,
-                    <<"structured@1.0">>,
-                    Opts
-                ),
-            WithoutHMac =
-                hb_message:without_commitments(
-                    #{ <<"type">> => <<"unsigned">> },
-                    Linkified,
-                    Opts
-                ),
-            hb_message:commit(WithoutHMac, Opts, #{ <<"type">> => <<"unsigned">> })
+            normalize_id(NewTrie, Opts)
     end.
+
+%% @doc Update the unsigned ID of a layer of the trie.
+normalize_id(Trie, Opts) ->
+    WithoutHMac =
+        hb_message:without_commitments(
+            #{ <<"type">> => <<"unsigned">> },
+            Trie,
+            Opts
+        ),
+    {ok, #{ <<"commitments">> := Commitments }} =
+        dev_message:commit(
+            WithoutHMac,
+            #{ <<"type">> => <<"unsigned">> },
+            Opts
+        ),
+    WithoutHMac#{ <<"commitments">> => Commitments }.
 
 %% @doc Take a request of keys and values, then return a new map of requests
 %% with keys split into sub-requests for each best-matching sub-trie of the base.
