@@ -73,10 +73,8 @@ init([MaxWorkers]) ->
 handle_cast({compare_processes, ProcessList}, State) ->
     io:format("Starting comparison of ~p processes~n", [length(ProcessList)]),
     NewState = State#state{
-        pending_processes = ProcessList,
-        completed = 0,
-        total = length(ProcessList),
-        active_workers = #{}
+        pending_processes = State#state.pending_processes ++ ProcessList,
+        total = State#state.total + length(ProcessList)
     },
     %% Start initial batch of workers
     UpdatedState = spawn_workers(NewState),
@@ -119,8 +117,7 @@ handle_worker_completion(CompletedPid, State) ->
     %% Remove completed worker from active workers
     NewActiveWorkers = maps:remove(CompletedPid, State#state.active_workers),
     NewCompleted = State#state.completed + 1,
-    
-    UpdatedState = State#state{
+    CompletedState = State#state{
         active_workers = NewActiveWorkers,
         completed = NewCompleted
     },
@@ -130,18 +127,17 @@ handle_worker_completion(CompletedPid, State) ->
         true ->
             %% All processes completed
             io:format("All ~p processes completed successfully~n", [State#state.total]),
-            case State#state.caller of
-                undefined -> ok;
-                Caller -> gen_server:reply(Caller, ok)
-            end,
-            {noreply, UpdatedState#state{caller = undefined}};
+            {noreply, CompletedState};
         false ->
             %% More work to do, spawn next worker if available
-            FinalState = spawn_workers(UpdatedState),
+            FinalState = spawn_workers(CompletedState),
             {noreply, FinalState}
     end.
 
 %% @doc Spawn worker processes up to the maximum limit
+spawn_workers(#{active_workers := ActiveWorkers, max_workers := MaxWorkers} = State) when map_size(ActiveWorkers) =:= MaxWorkers ->
+    State;
+
 spawn_workers(State) ->
     ActiveCount = maps:size(State#state.active_workers),
     AvailableSlots = State#state.max_workers - ActiveCount,
@@ -153,16 +149,19 @@ spawn_workers(State) ->
             State;
         _ ->
             %% Start new workers
-            {NewActiveWorkers, RemainingProcesses} = 
-                lists:foldl(fun(ProcessId, {WorkersAcc, [_|RestProcesses]}) ->
+            NewActiveWorkers = 
+                lists:foldl(fun(ProcessId, WorkersAcc) ->
                     WorkerPid = spawn_link(fun() -> worker_function(ProcessId) end),
                     io:format("Started worker ~p for process ~s~n", [WorkerPid, ProcessId]),
-                    {maps:put(WorkerPid, ProcessId, WorkersAcc), RestProcesses}
-                end, {State#state.active_workers, State#state.pending_processes}, ProcessesToStart),
+                    maps:put(WorkerPid, ProcessId, WorkersAcc)
+                end, State#state.active_workers, ProcessesToStart),
+
+            PendingProcesses = lists:nthtail(AvailableSlots, State#state.pending_processes),
+            io:format("~p processes pending left.~n", [length(PendingProcesses)]),
             
             State#state{
                 active_workers = NewActiveWorkers,
-                pending_processes = RemainingProcesses
+                pending_processes = PendingProcesses
             }
     end.
 
