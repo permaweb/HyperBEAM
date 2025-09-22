@@ -3,10 +3,10 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, start_link/1, compare_processes/1, compare_processes/2, stop/0]).
+-export([start_link/0, start_link/1, compare_processes/1, compare_processes/2]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+-export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 -define(SUPERVISED_MODE, true).
@@ -47,7 +47,7 @@ compare_processes(ProcessList, MaxWorkers) ->
         _Pid ->
             ok
     end,
-    gen_server:call(?SERVER, {compare_processes, ProcessList}, infinity).
+    gen_server:cast(?SERVER, {compare_processes, ProcessList}).
 
 start_supervised(MaxWorkers) ->
     %% Then add the parallel module child dynamically
@@ -61,10 +61,6 @@ start_supervised(MaxWorkers) ->
     },
     supervisor:start_child(hb_sup, ChildSpec).
 
-%% @doc Stop the GenServer
-stop() ->
-    gen_server:call(?SERVER, stop).
-
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -74,27 +70,20 @@ init([MaxWorkers]) ->
     io:format("Starting parallel comparison server with ~p max workers~n", [MaxWorkers]),
     {ok, #state{max_workers = MaxWorkers}}.
 
-handle_call({compare_processes, ProcessList}, From, State) ->
+handle_cast({compare_processes, ProcessList}, State) ->
     io:format("Starting comparison of ~p processes~n", [length(ProcessList)]),
     NewState = State#state{
         pending_processes = ProcessList,
         completed = 0,
         total = length(ProcessList),
-        caller = From,
         active_workers = #{}
     },
     %% Start initial batch of workers
     UpdatedState = spawn_workers(NewState),
-    {noreply, UpdatedState};
+    {noreply, UpdatedState}.
 
-handle_call(stop, _From, State) ->
-    {stop, normal, ok, State};
-
-handle_call(_Request, _From, State) ->
-    {reply, {error, unknown_request}, State}.
-
-handle_cast(_Msg, State) ->
-    {noreply, State}.
+handle_call(_Msg, _From, State) ->
+    {reply, error, State}.
 
 %% Handle worker completion/failure
 handle_info({'EXIT', Pid, Reason}, State) ->
