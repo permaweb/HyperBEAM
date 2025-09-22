@@ -75,15 +75,17 @@ info(_Msg1) ->
         worker => fun dev_process_worker:server/3,
         grouper => fun dev_process_worker:group/3,
         await => fun dev_process_worker:await/5,
-        excludes => [
-            <<"test">>,
-            <<"init">>,
-            <<"ping_ping_script">>,
-            <<"schedule_aos_call">>,
-            <<"test_aos_process">>,
-            <<"dev_test_process">>,
-            <<"test_wasm_process">>
-        ]
+        exports =>
+            [
+                <<"info">>,
+                <<"as">>,
+                <<"compute">>,
+                <<"now">>,
+                <<"schedule">>,
+                <<"slot">>,
+                <<"snapshot">>,
+                <<"push">>
+            ]
     }.
 
 %% @doc Return the process state with the device swapped out for the device

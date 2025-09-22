@@ -754,7 +754,7 @@ mime_to_codec(<<"application/", Mime/binary>>, Opts) ->
             nomatch -> << Mime/binary, "@1.0" >>;
             _ -> Mime
         end,
-    case hb_ao:load_device(Name, Opts) of
+    case hb_ao_device:load(Name, Opts) of
         {ok, _} -> Name;
         {error, _} ->
             Default = default_codec(Opts),

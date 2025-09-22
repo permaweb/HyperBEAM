@@ -161,7 +161,7 @@ conversion_spec_to_req(Spec, Opts) ->
             case Device of
                 tabm -> tabm;
                 _ ->
-                    hb_ao:message_to_device(
+                    hb_ao_device:message_to_device(
                         #{
                             <<"device">> => Device
                         },

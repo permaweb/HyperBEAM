@@ -26,7 +26,7 @@ write(ProcID, Slot, Msg, Opts) ->
     MsgIDPath =
         path(
             ProcID,
-            ID = hb_util:human_id(hb_ao:get(id, Msg, Opts)),
+            ID = hb_message:id(Msg, uncommitted, Opts),
             Opts
         ),
     ?event(

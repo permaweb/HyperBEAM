@@ -23,7 +23,7 @@
 %% info call will match the three-argument version of the function. If in the 
 %% future the `request' is added as an argument to AO-Core's internal `info'
 %% function, we will need to find a different approach.
-info(_) -> #{ exports => [info, build] }.
+info(_) -> #{ exports => [<<"info">>, <<"build">>] }.
 
 %% @doc Utility function for determining if a request is from the `operator' of
 %% the node.

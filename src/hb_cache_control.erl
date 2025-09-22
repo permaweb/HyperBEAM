@@ -51,26 +51,24 @@ lookup(Msg1, Msg2, Opts) ->
             ?event({skip_cache_check, lookup_disabled}),
             {continue, Msg1, Msg2};
         Settings = #{ <<"lookup">> := true } ->
-            OutputScopedOpts = 
+            OutputScopedOpts =
                 hb_store:scope(
                     Opts,
                     hb_opts:get(store_scope_resolved, local, Opts)
                 ),
             case hb_cache:read_resolved(Msg1, Msg2, OutputScopedOpts) of
-                {ok, Msg3} ->
+                {hit, not_found} ->
+                    {error, not_found};
+                {hit, {ok, Res}} ->
                     ?event(caching,
                         {cache_hit,
-                            case is_binary(Msg3) of
-                                true -> hb_path:hashpath(Msg1, Msg2, Opts);
-                                false -> hb_path:hashpath(Msg3, Opts)
-                            end,
                             {msg1, Msg1},
                             {msg2, Msg2},
-                            {msg3, Msg3}
+                            {msg3, Res}
                         }
                     ),
-                    {ok, Msg3};
-                not_found ->
+                    {ok, Res};
+                _ ->
                     ?event(caching, {result_cache_miss, Msg1, Msg2}),
                     case Settings of
                         #{ <<"only-if-cached">> := true } ->
@@ -185,8 +183,8 @@ necessary_messages_not_found_error(Msg1, Msg2, Opts) ->
 
 %% @doc Determine whether we are likely to be faster looking up the result in
 %% our cache (hoping we have it), or executing it directly.
-exec_likely_faster_heuristic(M1, _M2, _) when (not ?IS_ID(M1)) ->
-    true;
+exec_likely_faster_heuristic(_M1, _M2, _) ->
+    false;
 exec_likely_faster_heuristic({as, _, Msg1}, Msg2, Opts) ->
     exec_likely_faster_heuristic(Msg1, Msg2, Opts);
 exec_likely_faster_heuristic(Msg1, Msg2, Opts) ->

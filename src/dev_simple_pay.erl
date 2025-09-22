@@ -365,7 +365,7 @@ apply_price_test() ->
         hb_http:get(
             Node,
             hb_message:commit(
-                #{<<"path">> => <<"/~p4@1.0/balance">>},
+                #{ <<"path">> => <<"/~p4@1.0/balance">> },
                 Opts#{ priv_wallet => ClientWallet }
             ),
             Opts
