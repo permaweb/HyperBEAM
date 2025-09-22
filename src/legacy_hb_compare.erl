@@ -315,16 +315,20 @@ compare_primitives(A, B, Path) ->
             end
     end.
 
-save_mismatches(_Pid, _Nonce, _Ts, Mismatches, _Type) when map_size(Mismatches) =:= 0-> ok;
-
 save_mismatches(ProcessId, LatestNonce, Timestamp, Mismatches, Type) ->
     TypeStr = atom_to_list(Type),
     Dir = "hb_mismatches/" ++ ProcessId ++ "/" ++ TypeStr,
     filelib:ensure_dir(Dir ++ "/"),
-    Filename = Dir ++ "/nonce-" ++ integer_to_list(LatestNonce) ++ 
-               "-" ++ integer_to_list(Timestamp) ++ ".json",
-    JsonData = hb_json:encode(Mismatches),
-    file:write_file(Filename, JsonData).
+    case map_size(Mismatches) > 0 of
+        true ->
+            Filename = Dir ++ "/nonce-" ++ integer_to_list(LatestNonce) ++ 
+                    "-" ++ integer_to_list(Timestamp) ++ ".json",
+            JsonData = hb_json:encode(Mismatches),
+            file:write_file(Filename, JsonData);
+        false ->
+            Filename = Dir ++ "/no_mismatch",
+            file:write_file(Filename, <<"ok">>)
+    end.
 
 is_json_string(Str) when is_binary(Str) ->
     case catch binary_to_integer(Str) of
