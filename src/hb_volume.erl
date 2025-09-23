@@ -203,7 +203,7 @@ create_partition_table(Device) ->
     ),
     % Create a GPT partition table
     DeviceStr = binary_to_list(Device),
-    MklabelCmd = "parted " ++ DeviceStr ++ " mklabel gpt",
+    MklabelCmd = "parted -s " ++ DeviceStr ++ " mklabel gpt",
     ?event(debug_volume, 
         {create_partition_table, creating_gpt_label, 
             {device, Device}

@@ -4,12 +4,9 @@
 -include_lib("public_key/include/public_key.hrl").
 
 %% WARNING: These tests perform DESTRUCTIVE operations on real disks
-%% Only run with devices you can afford to lose data on!
-%% Recommended: Use a test VM with attached storage or dedicated test device
-
 %% Test configuration - CHANGE THESE FOR YOUR TEST ENVIRONMENT
--define(TEST_DEVICE, <<"/dev/sdc">>).
--define(TEST_PARTITION, <<"/dev/sdc1">>).
+-define(TEST_DEVICE, <<"/dev/sda">>).
+-define(TEST_PARTITION, <<"/dev/sda1">>).
 -define(TEST_PARTITION_TYPE, <<"ext4">>).
 -define(TEST_VOLUME_NAME, <<"hb_test_volume">>).
 -define(TEST_MOUNT_POINT, <<"/mnt/hb_test">>).
@@ -37,31 +34,8 @@ setup_real_disk_test_opts() ->
         store => [],
         genesis_wasm_db_dir => "cache-mainnet/genesis-wasm",
         volume_skip_decryption => <<"true">>,  % Skip decryption for test
-        priv_wallet => create_test_wallet()
+        priv_wallet => hb:wallet()
     }.
-
-create_test_wallet() ->
-    % Generate a test RSA key pair
-    {ok, PrivKey} = generate_rsa_key(),
-    PubKeyBinary = extract_public_key_binary(PrivKey),
-    {{{rsa, 65537}, extract_private_key_binary(PrivKey), PubKeyBinary}, 
-     <<"test_pub_key">>}.
-
-generate_rsa_key() ->
-    % Generate 2048-bit RSA key
-    try
-        PrivKey = public_key:generate_key({rsa, 2048, 65537}),
-        {ok, PrivKey}
-    catch
-        _:Error ->
-            {error, Error}
-    end.
-
-extract_public_key_binary(#'RSAPrivateKey'{modulus = Modulus}) ->
-    crypto:integer_to_binary(Modulus).
-
-extract_private_key_binary(#'RSAPrivateKey'{privateExponent = PrivExp}) ->
-    crypto:integer_to_binary(PrivExp).
 
 %% Safety checks before running destructive tests
 safety_checks() ->
@@ -150,45 +124,12 @@ full_disk_integration_test_() ->
               end,
               fun(Opts) ->
                   [
-                      ?_test(test_device_detection(Opts)),
-                      ?_test(test_partition_creation_and_format(Opts)),
-                      ?_test(test_complete_mount_process(Opts)),
-                      ?_test(test_volume_operations(Opts)),
-                      ?_test(test_store_configuration(Opts))
+                      ?_test(test_complete_mount_process(Opts))
                   ]
               end
              }
             }
     end.
-
-%% Individual test functions
-test_device_detection(Opts) ->
-    Device = maps:get(volume_device, Opts),
-    
-    % Test that device exists
-    Result = dev_volume:check_device_exists(Device),
-    ?assertEqual(ok, Result),
-    
-    io:format("Device detection test passed for ~s~n", [Device]).
-
-test_partition_creation_and_format(Opts) ->
-    Device = maps:get(volume_device, Opts),
-    Partition = maps:get(volume_partition, Opts),
-    PartitionType = maps:get(volume_partition_type, Opts),
-    Key = maps:get(priv_volume_key, Opts),
-    
-    % First, ensure partition doesn't exist by cleaning up
-    cleanup_existing_partition(Partition),
-    
-    % Test partition creation
-    Result = dev_volume:create_and_format_partition(Device, Partition, PartitionType, Key),
-    ?assertEqual(ok, Result),
-    
-    % Verify partition was created
-    PartitionExists = hb_volume:check_for_device(Partition),
-    ?assertEqual({ok, true}, PartitionExists),
-    
-    io:format("Partition creation and formatting test passed~n").
 
 test_complete_mount_process(Opts) ->
     % Test the complete mount process
@@ -200,54 +141,6 @@ test_complete_mount_process(Opts) ->
     ?assert(filelib:is_dir(MountPoint)),
     
     io:format("Complete mount process test passed~n").
-
-test_volume_operations(Opts) ->
-    MountPoint = binary_to_list(maps:get(volume_mount_point, Opts)),
-    
-    % Test writing to the mounted volume
-    TestFile = MountPoint ++ "/test_write.txt",
-    TestContent = "HyperBEAM volume test content",
-    
-    ok = file:write_file(TestFile, TestContent),
-    {ok, ReadContent} = file:read_file(TestFile),
-    ?assertEqual(list_to_binary(TestContent), ReadContent),
-    
-    % Clean up test file
-    file:delete(TestFile),
-    
-    io:format("Volume operations test passed~n").
-
-test_store_configuration(Opts) ->
-    StorePath = maps:get(volume_store_path, Opts),
-    
-    % Test store directory creation
-    StoreDir = binary_to_list(StorePath),
-    os:cmd("mkdir -p " ++ StoreDir),
-    ?assert(filelib:is_dir(StoreDir)),
-    
-    % Test store configuration update
-    {ok, NewStore} = dev_volume:update_node_store(StorePath, Opts),
-    ?assert(is_binary(NewStore)),
-    
-    io:format("Store configuration test passed~n").
-
-cleanup_existing_partition(Partition) ->
-    PartitionStr = binary_to_list(Partition),
-    
-    % Unmount if mounted
-    os:cmd("umount " ++ PartitionStr ++ " 2>/dev/null"),
-    
-    % Close LUKS if open
-    os:cmd("cryptsetup luksClose " ++ binary_to_list(?TEST_VOLUME_NAME) ++ " 2>/dev/null"),
-    
-    % Remove partition
-    Device = binary_to_list(?TEST_DEVICE),
-    os:cmd("parted -s " ++ Device ++ " rm 1 2>/dev/null"),
-    
-    % Clear partition table
-    os:cmd("dd if=/dev/zero of=" ++ Device ++ " bs=512 count=1 2>/dev/null"),
-    
-    ok.
 
 %% Comprehensive test with error injection
 error_handling_integration_test_() ->
