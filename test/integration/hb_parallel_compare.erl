@@ -1,5 +1,5 @@
 %% Add this to your module or create a new module: parallel_hb_compare.erl
--module(parallel_hb_compare).
+-module(hb_parallel_compare).
 -behaviour(gen_server).
 
 %% API

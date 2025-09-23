@@ -1,4 +1,4 @@
--module(legacy_hb_compare).
+-module(hb_legacy_compare).
 -export([compare_testnet/1, compare_with_network/2, compare_legacy_at_nonce_hb/3, fetch_latest_nonce/1, get_message_id/2]).
 
 -define(NONCE_OVERRIDE, 0).
