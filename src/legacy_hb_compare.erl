@@ -1,14 +1,14 @@
 -module(legacy_hb_compare).
--export([compare_testnet/1, compare_testnet_and_whitezone/2, compare_legacy_at_nonce_hb/3, fetch_latest_nonce/1, get_message_id/2]).
+-export([compare_testnet/1, compare_with_network/2, compare_legacy_at_nonce_hb/3, fetch_latest_nonce/1, get_message_id/2]).
 
 -define(NONCE_OVERRIDE, 0).
 -define(LOCAL_LEGACY, false).
 -define(LOCAL_MAINNET, true).
 
 compare_testnet(ProcessId) ->
-    compare_testnet_and_whitezone(ProcessId, undefined).
+    compare_with_network(ProcessId, testnet).
 
-compare_testnet_and_whitezone(ProcessId, WhiteZone) ->
+compare_with_network(ProcessId, Network) ->
     LatestNonce = case fetch_latest_nonce(ProcessId) of
         {ok, Nonce} -> Nonce;
         {error, _} ->
@@ -21,17 +21,17 @@ compare_testnet_and_whitezone(ProcessId, WhiteZone) ->
         Override -> Override
     end,
     io:format("Comparing process ~s until nonce ~p~n", [ProcessId, FinalNonce]),
-    
-    TestnetMismatches = compare_nonces(ProcessId, FinalNonce, testnet),
-    io:format("Mismatches: ~p~n", [TestnetMismatches]),
-    Timestamp = erlang:system_time(millisecond),
-    save_mismatches(ProcessId, FinalNonce, Timestamp, TestnetMismatches, testnet),
-    
-    case WhiteZone of
-        undefined -> ok;
-        _ ->
-            WhitezoneMismatches = compare_nonces(ProcessId, FinalNonce, WhiteZone), 
-            save_mismatches(ProcessId, FinalNonce, Timestamp, WhitezoneMismatches, whitezone)
+    maybe 
+        true ?= Network == testnet,
+        false ?= filelib:is_dir("hb_mismatches/" ++ ProcessId ++ "/testnet"),
+        TestnetMismatches = compare_nonces(ProcessId, FinalNonce, testnet),
+        save_mismatches(ProcessId, FinalNonce, TestnetMismatches, testnet)
+    end,
+    maybe
+        true ?= Network =/= testnet,
+        false ?= filelib:is_dir("hb_mismatches/" ++ ProcessId ++ "/whitezone"),
+        WhitezoneMismatches = compare_nonces(ProcessId, FinalNonce, Network), 
+        save_mismatches(ProcessId, FinalNonce, WhitezoneMismatches, whitezone)
     end.
 
 compare_nonces(ProcessId, LatestNonce, Target) ->
@@ -320,7 +320,8 @@ compare_primitives(A, B, Path) ->
             end
     end.
 
-save_mismatches(ProcessId, LatestNonce, Timestamp, Mismatches, Type) ->
+save_mismatches(ProcessId, LatestNonce, Mismatches, Type) ->
+    Timestamp = erlang:system_time(millisecond),
     TypeStr = atom_to_list(Type),
     Dir = "hb_mismatches/" ++ ProcessId ++ "/" ++ TypeStr,
     filelib:ensure_dir(Dir ++ "/"),
