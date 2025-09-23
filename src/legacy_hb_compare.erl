@@ -46,7 +46,7 @@ compare_nonces(ProcessId, LatestNonce) ->
                         undefined
                 end
             end
-        end, undefined, lists:seq(0, LatestNonce)),
+        end, undefined, lists:seq(1, LatestNonce)),
     maybe 
         undefined ?= Result,
         #{}
