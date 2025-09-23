@@ -1,6 +1,5 @@
 -module(legacy_hb_compare).
--export([compare_testnet/1, compare_testnet_and_whitezone/2, compare_legacy_at_nonce_hb/2, 
-         compare_legacy_at_nonce_hb/3]).
+-export([compare_testnet/1, compare_testnet_and_whitezone/2, compare_legacy_at_nonce_hb/3, fetch_latest_nonce/1, get_message_id/2]).
 
 -define(NONCE_OVERRIDE, 0).
 -define(LOCAL_LEGACY, false).
@@ -23,7 +22,7 @@ compare_testnet_and_whitezone(ProcessId, WhiteZone) ->
     end,
     io:format("Comparing process ~s until nonce ~p~n", [ProcessId, FinalNonce]),
     
-    TestnetMismatches = compare_nonces(ProcessId, FinalNonce),
+    TestnetMismatches = compare_nonces(ProcessId, FinalNonce, testnet),
     io:format("Mismatches: ~p~n", [TestnetMismatches]),
     Timestamp = erlang:system_time(millisecond),
     save_mismatches(ProcessId, FinalNonce, Timestamp, TestnetMismatches, testnet),
@@ -35,31 +34,25 @@ compare_testnet_and_whitezone(ProcessId, WhiteZone) ->
             save_mismatches(ProcessId, FinalNonce, Timestamp, WhitezoneMismatches, whitezone)
     end.
 
-compare_nonces(ProcessId, LatestNonce) ->
+compare_nonces(ProcessId, LatestNonce, Target) ->
+    Nonces = lists:reverse(lists:seq(1, LatestNonce)),
     Result = 
         lists:foldl(fun(Nonce, Res) ->
             maybe undefined ?= Res,
-                case compare_legacy_at_nonce_hb(ProcessId, Nonce) of
+                case compare_legacy_at_nonce_hb(ProcessId, Nonce, Target) of
                     #{mismatches := Map} = Res when map_size(Map) > 0 ->
                         #{Nonce => Res};
                     _Matches ->
                         undefined
                 end
             end
-        end, undefined, lists:seq(1, LatestNonce)),
+        end, undefined, Nonces),
     maybe 
         undefined ?= Result,
         #{}
     end.
 
-compare_nonces(_ProcessId, _LatestNonce, undefined) -> #{};
-compare_nonces(ProcessId, LatestNonce, WhiteZone) ->
-    maps:from_list([
-        {CurrNonce, compare_legacy_at_nonce_hb(ProcessId, CurrNonce, WhiteZone)}
-        || CurrNonce <- lists:seq(0, LatestNonce)
-    ]).
-
-compare_legacy_at_nonce_hb(ProcessId, Nonce) ->
+compare_legacy_at_nonce_hb(ProcessId, Nonce, testnet) ->
     io:format("Comparing legacy and hyperbeam results on process ~s at nonce ~p~n", 
                      [ProcessId, Nonce]),
     MessageId = get_message_id(ProcessId, Nonce),
@@ -74,8 +67,7 @@ compare_legacy_at_nonce_hb(ProcessId, Nonce) ->
     
     Mismatches = deep_compare(TestnetResult, MainnetResult, ""),
     #{mismatches => Mismatches, testnet_result => TestnetResult,
-    mainnet_result => MainnetResult, message_id => MessageId}.
-
+    mainnet_result => MainnetResult, message_id => MessageId};
 
 compare_legacy_at_nonce_hb(ProcessId, Nonce, WhiteZone) ->
     io:format("Whitezone detected, getting whitezone result...~n"),
@@ -143,6 +135,8 @@ get_testnet_result(MessageId, ProcessId, Attempt) ->
     
     case httpc:request(get, {TestnetUrl, []}, [], []) of
         {ok, {{_, 200, _}, _, Body}} ->
+            hb_json:decode(list_to_binary(Body));
+        {ok, {{_, 425, _}, _, Body}} ->
             hb_json:decode(list_to_binary(Body));
         _Error when Attempt < 3 ->
             get_testnet_result(MessageId, ProcessId, Attempt + 1);
