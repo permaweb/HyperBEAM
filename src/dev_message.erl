@@ -148,9 +148,9 @@ calculate_id(Base, Req, NodeOpts) ->
     % set. We can tell if the device is not set (or is the default) by checking 
     % whether the device module is the same as this module.
     DevMod =
-        case hb_ao:message_to_device(#{ <<"device">> => IDMod }, NodeOpts) of
+        case hb_ao_device:message_to_device(#{ <<"device">> => IDMod }, NodeOpts) of
             ?MODULE ->
-                hb_ao:message_to_device(
+                hb_ao_device:message_to_device(
                     #{ <<"device">> => ?DEFAULT_ID_DEVICE },
                     NodeOpts
                 );
@@ -158,13 +158,13 @@ calculate_id(Base, Req, NodeOpts) ->
         end,
     % Apply the function's default `commit' function with the appropriate arguments.
     % If it doesn't exist, error.
-    case hb_ao:find_exported_function(Base, DevMod, commit, 3, NodeOpts) of
+    case hb_ao_device:find_exported_function(Base, DevMod, commit, 3, NodeOpts) of
         {ok, Fun} ->
             ?event(id, {called_id_device, IDMod}, NodeOpts),
             {ok, #{ <<"commitments">> := Comms} } = 
                 apply(
                     Fun,
-                    hb_ao:truncate_args(
+                    hb_ao_device:truncate_args(
                         Fun,
                         [Base, Req#{ <<"type">> => <<"unsigned">> }, NodeOpts]
                     )
@@ -249,8 +249,8 @@ commit(Self, Req, Opts) ->
     % part of the commitment. Instead, we find the device module's `commit'
     % function and apply it.
     CommitOpts = Opts#{ linkify_mode => offload },
-    AttMod = hb_ao:message_to_device(#{ <<"device">> => AttDev }, CommitOpts),
-    {ok, AttFun} = hb_ao:find_exported_function(Base, AttMod, commit, 3, CommitOpts),
+    AttMod = hb_ao_device:message_to_device(#{ <<"device">> => AttDev }, CommitOpts),
+    {ok, AttFun} = hb_ao_device:find_exported_function(Base, AttMod, commit, 3, CommitOpts),
     % Encode to a TABM
     Loaded =
         ensure_commitments_loaded(
@@ -260,7 +260,7 @@ commit(Self, Req, Opts) ->
     {ok, Committed} =
         apply(
             AttFun,
-            hb_ao:truncate_args(
+            hb_ao_device:truncate_args(
                 AttFun,
                 [
                     Loaded,
@@ -339,12 +339,12 @@ verify_commitment(Base, Commitment, Opts) ->
             Opts
         ),
     AttMod =
-        hb_ao:message_to_device(
+        hb_ao_device:message_to_device(
             #{ <<"device">> => AttDev },
             Opts
         ),
     {ok, AttFun} =
-        hb_ao:find_exported_function(
+        hb_ao_device:find_exported_function(
             Base,
             AttMod,
             verify,

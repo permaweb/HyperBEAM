@@ -32,7 +32,17 @@
 %% @doc Exported function for getting device info, controls which functions are
 %% exposed via the device API.
 info(_) -> 
-    #{ exports => [info, routes, route, match, register, preprocess] }.
+    #{
+        exports =>
+            [
+                <<"info">>,
+                <<"routes">>,
+                <<"route">>,
+                <<"match">>,
+                <<"register">>,
+                <<"preprocess">>
+            ]
+    }.
 
 %% @doc HTTP info response providing information about this device
 info(_Msg1, _Msg2, _Opts) ->

@@ -65,8 +65,8 @@ has_results(Base, Req, Opts) ->
     case Decoded of
         #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Nodes } } }
                 when length(Nodes) > 0 ->
-            true;
-        _ -> false
+            {ok, true};
+        _ -> {ok, false}
     end.
 
 %% @doc Search for the keys specified in the request message.

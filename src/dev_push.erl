@@ -360,7 +360,7 @@ calculate_base_id(GivenProcess, Opts) ->
     BaseProcess = maps:without([<<"authority">>, <<"scheduler">>], Process),
     {ok, BaseID} = hb_ao:resolve(
         BaseProcess,
-        #{ <<"path">> => <<"id">>, <<"commitments">> => <<"none">> },
+        #{ <<"path">> => <<"id">> },
         Opts
     ),
     ?event({push_generated_base, {id, BaseID}, {base, BaseProcess}}),
