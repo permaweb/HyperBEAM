@@ -10,7 +10,7 @@ on:
       - "docs/book/book.toml"
       - "docs/book/custom.css"
       - "docs/book/custom.js"
-      - "docs/build-literate-erlang.sh"
+      - "docs/generate-literate-docs.sh"
       - ".github/workflows/build-deploy-mdbook.yml"
   push:
     branches:
@@ -21,7 +21,7 @@ on:
       - "docs/book/book.toml"
       - "docs/book/custom.css"
       - "docs/book/custom.js"
-      - "docs/build-literate-erlang.sh"
+      - "docs/generate-literate-docs.sh"
       - ".github/workflows/build-deploy-mdbook.yml"
 
   # Perform a release using a workflow dispatch
@@ -50,7 +50,7 @@ jobs:
 
       - name: 📝 Generate Literate Erlang Documentation
         run: |
-          ./docs/build-literate-erlang.sh -v
+          ./docs/generate-literate-docs.sh -v
 
       - name: 📚 Build mdBook Documentation
         run: |
@@ -94,7 +94,7 @@ jobs:
 
       - name: 📝 Generate Literate Erlang Documentation
         run: |
-          ./docs/build-literate-erlang.sh -v
+          ./docs/generate-literate-docs.sh -v
 
       - name: 📚 Build mdBook Documentation
         id: build_mdbook
