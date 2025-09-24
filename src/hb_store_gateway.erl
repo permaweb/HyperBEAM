@@ -45,17 +45,24 @@ type(StoreOpts, Key) ->
 read(BaseStoreOpts, Key) ->
     StoreOpts = opts(BaseStoreOpts),
     case hb_path:term_to_path_parts(Key, StoreOpts) of
-        [ID] when ?IS_ID(ID) ->
-            ?event({read, StoreOpts, Key}),
-            case hb_gateway_client:read(Key, StoreOpts) of
+        [ID|Rest] when ?IS_ID(ID) ->
+            ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
+            case hb_gateway_client:read(ID, StoreOpts) of
                 {error, _} ->
-                    ?event(store_gateway, {read_not_found, {key, ID}}),
+                    ?event({read_not_found, {key, ID}}),
                     not_found;
                 {ok, Message} ->
-                    ?event(store_gateway, {read_found, {key, ID}}),
+                    ?event({read_found, {key, ID}}),
                     try hb_store_remote_node:maybe_cache(StoreOpts, Message)
                     catch _:_ -> ignored end,
-                    {ok, Message}
+                    case Rest of
+                        [] -> {ok, Message};
+                        _ ->
+                            case hb_util:deep_get(Rest, Message, StoreOpts) of
+                                not_found -> not_found;
+                                Value -> {ok, Value}
+                            end
+                    end
             end;
         _ ->
             ?event({ignoring_non_id, Key}),

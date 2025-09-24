@@ -48,13 +48,13 @@ info() ->
     #{
         exports =>
             [
-                location,
-                status,
-                next,
-                schedule,
-                slot,
-                init,
-                checkpoint
+                <<"location">>,
+                <<"status">>,
+                <<"next">>,
+                <<"schedule">>,
+                <<"slot">>,
+                <<"init">>,
+                <<"checkpoint">>
             ],
         excludes => [set, keys],
         default => fun router/4

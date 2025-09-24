@@ -395,9 +395,9 @@ store_read(_Path, no_viable_store, _) ->
     not_found;
 store_read(Path, Store, Opts) ->
     ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
-    ?event({read_resolved,
+    ?event({reading,
         {original_path, {string, PathBin}},
-        {resolved_path, ResolvedFullPath},
+        {fully_resolved_path, ResolvedFullPath},
         {store, Store}
     }),
     case hb_store:type(Store, ResolvedFullPath) of
@@ -600,17 +600,96 @@ types_to_implicit(Types) ->
         Types
     ).
 
-%% @doc Read the output of a prior computation, given Msg1, Msg2, and some
-%% options.
-read_resolved(MsgID1, MsgID2, Opts) when ?IS_ID(MsgID1) and ?IS_ID(MsgID2) ->
-    ?event({cache_lookup, {msg1, MsgID1}, {msg2, MsgID2}, {opts, Opts}}),
-    read(<<MsgID1/binary, "/", MsgID2/binary>>, Opts);
-read_resolved(MsgID1, Msg2, Opts) when ?IS_ID(MsgID1) and is_map(Msg2) ->
-    {ok, MsgID2} = dev_message:id(Msg2, #{ <<"committers">> => <<"all">> }, Opts),
-    read(<<MsgID1/binary, "/", MsgID2/binary>>, Opts);
-read_resolved(Msg1, Msg2, Opts) when is_map(Msg1) and is_map(Msg2) ->
-    read(hb_path:hashpath(Msg1, Msg2, Opts), Opts);
-read_resolved(_, _, _) -> not_found.
+%% @doc Read the result of a computation, using hueristics. The supported
+%% hueristics are as follows:
+%% 1. If the base message is an ID, we try to determine if the message has an
+%% if the message has an explicit device. If it does not, we can simply read the
+%% key and return it if it exists, as this is the behavior of `message@1.0'.
+%% 2. If the base message is loaded (a map), we determine if it has an explicit,
+%% non-direct data access device. If it does, we simply read the key from the
+%% message and return it if it exists.
+%% 2. If the message has an explicit device, we attempt to read the hashpath to
+%% see if it has already been computed.
+read_resolved(BaseMsg, Key, Opts) when is_binary(Key) ->
+    read_resolved(BaseMsg, #{ <<"path">> => Key }, Opts);
+read_resolved({link, ID, LinkOpts}, Req, Opts) ->
+    read_resolved(ID, Req, maps:merge(LinkOpts, Opts));
+read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsgID) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    NormKey = hb_ao:normalize_key(Key, Opts),
+    case hb_ao_device:is_direct_key_access(BaseMsgID, Req, Opts, Store) of
+        unknown -> miss;
+        false ->
+            ?event(read_cached,
+                {found_non_message_device,
+                    {key, NormKey}
+                }
+            ),
+            read_hashpath(BaseMsgID, Req, Opts);
+        true ->
+            % Either the message does not exist in the store, or there is no
+            % explicit device in the message. If the message exists this implies
+            % that the default (`message@1.0`) device will be used to execute
+            % the key. Subsequently, we can simply read the key and return it if
+            % it exists.
+            ?event(read_cached,
+                {skipping_execution_store_lookup,
+                    {base_msg, BaseMsgID},
+                    {key, NormKey}
+                }
+            ),
+            KeyPath = hb_store:resolve(Store, [BaseMsgID, Key]),
+            {hit, read(KeyPath, Opts)}
+    end;
+read_resolved(BaseMsg, Req = #{ <<"path">> := Key }, Opts) when is_map(BaseMsg) ->
+    % The base message is loaded, so we determine if it has an explicit device
+    % and perform a direct lookup if it does not.
+    NormKey = hb_ao:normalize_key(Key, Opts),
+    case hb_ao_device:is_direct_key_access(BaseMsg, Req, Opts) of
+        false -> read_hashpath(BaseMsg, Req, Opts);
+        true ->
+            ?event(read_cached,
+                {skip_execution_memory_lookup,
+                    {path, NormKey}
+                }
+            ),
+            {hit, read_in_memory_key(BaseMsg, NormKey, Opts)}
+    end;
+read_resolved(Base, Req, Opts) ->
+    read_hashpath(Base, Req, Opts).
+
+%% @doc Return a key from an in-memory message, returning the same form as
+%% a store read (`{Status, Value}').
+read_in_memory_key(BaseMsg, NormKey, _Opts) ->
+    % For now, just wrap maps:find.
+    case maps:find(NormKey, BaseMsg) of
+        error ->
+            ?event(read_cached, {key_not_found, {key, NormKey}}),
+            not_found;
+        {ok, Value} ->
+            ?event(read_cached, {key_found, {key, NormKey}}),
+            {ok, Value}
+    end.
+
+%% @doc Read the output of a prior computation, given BaseMsg and Req.
+read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) ->
+    ?event({cache_lookup, {msg1, BaseMsgID}, {msg2, ReqID}, {opts, Opts}}),
+    case read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts) of
+        {ok, Msg} -> {hit, {ok, Msg}};
+        not_found -> miss
+    end;
+read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
+    {ok, ReqID} = dev_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
+    case read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts) of
+        {ok, Msg} -> {hit, {ok, Msg}};
+        not_found -> miss
+    end;
+read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
+    case read(hb_path:hashpath(BaseMsg, Req, Opts), Opts) of
+        {ok, Msg} -> {hit, {ok, Msg}};
+        not_found -> miss
+    end;
+read_hashpath(_, _, _) -> miss.
 
 %% @doc Make a link from one path to another in the store.
 %% Note: Argument order is `link(Src, Dst, Opts)'.

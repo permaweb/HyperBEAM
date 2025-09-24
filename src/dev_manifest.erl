@@ -141,5 +141,5 @@ resolve_test() ->
     ),
     {ok, Res} = hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts),
     ?event({manifest_resolve_test, Res}),
-    ?assertEqual(<<"Page 2">>, hb_maps:get(<<"body">>, Res, <<"NO BODY">>, Opts)),
+    ?assertEqual(<<"Page 2">>, Res),
     ok.

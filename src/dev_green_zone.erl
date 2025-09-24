@@ -18,7 +18,17 @@
 %% @param _ Ignored parameter
 %% @returns A map with the `exports' key containing a list of allowed functions
 info(_) -> 
-    #{ exports => [info, init, join, become, key, is_trusted] }.
+    #{
+        exports =>
+            [
+                <<"info">>,
+                <<"init">>,
+                <<"join">>,
+                <<"become">>,
+                <<"key">>,
+                <<"is_trusted">>
+            ]
+    }.
 
 %% @doc Provides information about the green zone device and its API.
 %%

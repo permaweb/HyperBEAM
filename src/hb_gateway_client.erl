@@ -432,7 +432,7 @@ l2_dataitem_test() ->
 %% @doc Test optimistic index
 ao_dataitem_test() ->
     _Node = hb_http_server:start_node(#{}),
-    {ok, Res} = read(<<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>, #{ }),
+    {ok, Res} = read(<<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>, #{}),
     ?event(gateway, {l2_dataitem, Res}),
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"Hello World">>, Data).
