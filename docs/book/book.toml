@@ -8,9 +8,7 @@ description = "Literate programming documentation for the HyperBEAM decentralize
 [build]
 build-dir = "dist"
 
-[rust]
-edition = "2021"
-
+# Configure for non-Rust documentation - this prevents mdBook from trying to compile code blocks as Rust
 [output.html]
 default-theme = "rust"
 additional-css = ["custom.css", "theme/highlight.css"]
@@ -40,6 +38,7 @@ copyable = true
 copy-js = true
 line-numbers = false
 runnable = false
+
 
 [output.html.search]
 enable = true

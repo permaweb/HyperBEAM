@@ -14,7 +14,7 @@ echo -e "${BLUE}🚀 Building and serving HyperBEAM documentation...${NC}"
 
 # Generate literate documentation
 echo -e "${GREEN}📚 Generating literate documentation...${NC}"
-./build-literate-erlang-js.sh
+./generate-literate-docs.sh
 
 # Build and serve mdBook
 echo -e "${GREEN}📖 Building mdBook...${NC}"

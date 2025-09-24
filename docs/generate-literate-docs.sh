@@ -16,16 +16,54 @@ cd "$ROOT_DIR"
 
 # Configuration
 SRC_DIR="${SRC_DIR:-$ROOT_DIR/src}"
-OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/docs/literate-erlang}"
+OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/docs/book/src}"
 PARSER_SCRIPT="$SCRIPT_DIR/erlang-literate-parser.js"
 
 # Parse arguments
 VERBOSE=false
+DRY_RUN=false
+SHOW_HELP=false
+
+if [[ "$@" == *"-h"* ]] || [[ "$@" == *"--help"* ]]; then
+    SHOW_HELP=true
+fi
 if [[ "$@" == *"-v"* ]] || [[ "$@" == *"--verbose"* ]]; then
     VERBOSE=true
 fi
+if [[ "$@" == *"--dry-run"* ]] || [[ "$@" == *"--dryrun"* ]]; then
+    DRY_RUN=true
+fi
+
+if [ "$SHOW_HELP" = true ]; then
+    echo -e "${GREEN}HyperBEAM Literate Erlang Documentation Generator (JavaScript)${NC}"
+    echo "========================================================"
+    echo ""
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  -v, --verbose     Enable verbose output"
+    echo "  --dry-run        Simulate deployment without actually deploying"
+    echo "  -h, --help       Show this help message"
+    echo ""
+    echo "Environment Variables:"
+    echo "  SRC_DIR          Source directory (default: ./src)"
+    echo "  OUTPUT_DIR       Output directory (default: ./docs/book/src)"
+    echo "  DEPLOY_KEY       Arweave wallet key for deployment"
+    echo "  ANT_PROCESS      ANT process ID for ArNS deployment"
+    echo ""
+    echo "Examples:"
+    echo "  $0                    # Generate documentation normally"
+    echo "  $0 -v                 # Generate with verbose output"
+    echo "  $0 --dry-run          # Test deployment without deploying"
+    echo "  $0 --dry-run -v       # Dry run with verbose output"
+    echo ""
+    exit 0
+fi
 
 echo -e "${GREEN}HyperBEAM Literate Erlang Documentation Generator (JavaScript)${NC}"
+if [ "$DRY_RUN" = true ]; then
+    echo -e "${YELLOW}[DRY RUN MODE] - No actual deployment will occur${NC}"
+fi
 echo "========================================================"
 
 # Check for Node.js
@@ -106,31 +144,53 @@ if [ $PARSER_EXIT_CODE -eq 0 ]; then
 
     # Copy to mdBook if it exists
     if [ -d "$ROOT_DIR/docs/book/src" ]; then
-        echo -e "${GREEN}Copying documentation to mdBook...${NC}"
-        cp "$OUTPUT_DIR"/*.md "$ROOT_DIR/docs/book/src/" 2>/dev/null
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✓ Documentation copied to mdBook${NC}"
+        if [ "$DRY_RUN" = true ]; then
+            echo -e "${YELLOW}[DRY RUN] Would copy documentation to mdBook...${NC}"
+            echo -e "${YELLOW}[DRY RUN] ✓ Documentation would be copied to mdBook${NC}"
         else
-            echo -e "${YELLOW}Warning: Could not copy to mdBook (no files generated?)${NC}"
+            echo -e "${GREEN}Copying documentation to mdBook...${NC}"
+            cp "$OUTPUT_DIR"/*.md "$ROOT_DIR/docs/book/src/" 2>/dev/null
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✓ Documentation copied to mdBook${NC}"
+            else
+                echo -e "${YELLOW}Warning: Could not copy to mdBook (no files generated?)${NC}"
+            fi
         fi
     fi
 
     # Build mdBook if available
     if command -v mdbook &> /dev/null && [ -f "$ROOT_DIR/docs/book/book.toml" ]; then
-        echo -e "${GREEN}Building mdBook...${NC}"
-        cd "$ROOT_DIR/docs/book"
-        mdbook build
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✓ mdBook built successfully${NC}"
-            echo "View at: file://$ROOT_DIR/docs/book/book/index.html"
+        if [ "$DRY_RUN" = true ]; then
+            echo -e "${YELLOW}[DRY RUN] Would build mdBook...${NC}"
+            echo -e "${YELLOW}[DRY RUN] ✓ mdBook would be built successfully${NC}"
+            echo -e "${YELLOW}[DRY RUN] Would be viewable at: file://$ROOT_DIR/docs/book/dist/index.html${NC}"
         else
-            echo -e "${YELLOW}Warning: mdBook build failed${NC}"
+            echo -e "${GREEN}Building mdBook...${NC}"
+            cd "$ROOT_DIR/docs/book"
+            mdbook build
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✓ mdBook built successfully${NC}"
+                echo "View at: file://$ROOT_DIR/docs/book/dist/index.html"
+            else
+                echo -e "${YELLOW}Warning: mdBook build failed${NC}"
+            fi
+            cd "$ROOT_DIR"
         fi
-        cd "$ROOT_DIR"
+    fi
+
+    # Run deployment dry run if requested
+    if [ "$DRY_RUN" = true ]; then
+        echo ""
+        echo -e "${YELLOW}Running deployment dry run...${NC}"
+        "$SCRIPT_DIR/deploy-dry-run.sh"
     fi
 
     echo ""
-    echo -e "${GREEN}Documentation generation complete!${NC}"
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}Documentation generation and deployment dry run complete!${NC}"
+    else
+        echo -e "${GREEN}Documentation generation complete!${NC}"
+    fi
     echo "Output directory: $OUTPUT_DIR"
 
 else

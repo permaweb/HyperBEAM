@@ -50,8 +50,14 @@ const REGEX = {
     MODULE: /^-module\(([^)]+)\)/,
     EXPORT: /^-export\(\[([^\]]+)\]\)/,
     EXPORT_PREFIX: /^-export\(\[/,
+    INCLUDE: /^-include(?:_lib)?\(["']([^"']+)["']\)/,
+    DEFINE: /^-define\(([^,)]+)(?:,\s*(.*))?\)/,
+    BEHAVIOUR: /^-behaviour\(([^)]+)\)/,
+    RECORD: /^-record\(([^,)]+),\s*\{/,
+    TYPE: /^-type\s+([a-z][a-z0-9_]*)\(/,
     SPEC: /^-spec\s+([a-z][a-z0-9_]*)\s*\(/,
     FUNCTION: /^([a-z][a-z0-9_]*)\s*\(/,
+    ATTRIBUTE: /^-([a-z][a-z0-9_]*)\(/,
     DOC_BLOCK_START: /^%% @doc/,
     COMMENT_SINGLE: /^\s*%[^%]/,
     COMMENT_DOUBLE: /^\s*%%[^%]/,
@@ -98,8 +104,23 @@ class ErlangLiterateParser {
 
     reset() {
         this.lines = [];
-        this.moduleInfo = { name: null, doc: null, exports: null };
+        this.moduleInfo = {
+            name: null,
+            doc: null,
+            exports: [],
+            includes: [],
+            defines: [],
+            behaviours: [],
+            records: [],
+            types: [],
+            specs: [],
+            attributes: []
+        };
         this.functions = [];
+        this.undocumentedFunctions = [];
+        this.commentedCodeBlocks = [];
+        this.conditionalDirectives = [];
+        this.sections = [];
         this.currentState = {
             inFunction: false,
             functionName: STRINGS.EMPTY,
@@ -128,6 +149,7 @@ class ErlangLiterateParser {
     extractModuleInfo() {
         const moduleDoc = [];
         let inModuleDoc = false;
+        let moduleDocCollected = false;
         const linesLength = this.lines.length;
 
         for (let i = 0; i < linesLength; i++) {
@@ -142,49 +164,243 @@ class ErlangLiterateParser {
             // Fast character check before regex
             const firstChar = trimmed.charCodeAt(0);
 
-            // Module name - check for dash first
-            if (firstChar === CHAR_CODES.DASH && trimmed.startsWith('-module(')) {
-                const moduleMatch = trimmed.match(REGEX.MODULE);
-                if (moduleMatch) {
-                    this.moduleInfo.name = moduleMatch[1];
+            // Handle all module-level declarations
+            if (firstChar === CHAR_CODES.DASH) {
+                // Module name
+                if (trimmed.startsWith('-module(')) {
+                    const moduleMatch = trimmed.match(REGEX.MODULE);
+                    if (moduleMatch) {
+                        this.moduleInfo.name = moduleMatch[1];
+                    }
+                    continue;
                 }
-                continue;
+
+                // Exports - handle multi-line exports
+                if (REGEX.EXPORT_PREFIX.test(trimmed)) {
+                    const exportLines = this.collectMultiLineConstruct(i, '[', ']');
+                    const fullExport = exportLines.join(' ');
+                    const exportMatch = fullExport.match(REGEX.EXPORT);
+                    if (exportMatch) {
+                        const exports = exportMatch[1]
+                            .split(',')
+                            .map(e => e.trim())
+                            .filter(Boolean);
+                        this.moduleInfo.exports.push(...exports);
+                    }
+                    i += exportLines.length - 1;
+                    continue;
+                }
+
+                // Includes
+                const includeMatch = trimmed.match(REGEX.INCLUDE);
+                if (includeMatch) {
+                    this.moduleInfo.includes.push({
+                        file: includeMatch[1],
+                        line: trimmed
+                    });
+                    continue;
+                }
+
+                // Defines
+                const defineMatch = trimmed.match(REGEX.DEFINE);
+                if (defineMatch) {
+                    this.moduleInfo.defines.push({
+                        name: defineMatch[1],
+                        value: defineMatch[2] || '',
+                        line: trimmed
+                    });
+                    continue;
+                }
+
+                // Behaviours
+                const behaviourMatch = trimmed.match(REGEX.BEHAVIOUR);
+                if (behaviourMatch) {
+                    this.moduleInfo.behaviours.push(behaviourMatch[1]);
+                    continue;
+                }
+
+                // Records
+                if (REGEX.RECORD.test(trimmed)) {
+                    const recordLines = this.collectMultiLineConstruct(i, '{', '}');
+                    const recordMatch = trimmed.match(REGEX.RECORD);
+                    if (recordMatch) {
+                        this.moduleInfo.records.push({
+                            name: recordMatch[1],
+                            definition: recordLines.join('\n')
+                        });
+                    }
+                    i += recordLines.length - 1;
+                    continue;
+                }
+
+                // Types
+                const typeMatch = trimmed.match(REGEX.TYPE);
+                if (typeMatch) {
+                    const typeLines = this.collectMultiLineConstruct(i, '(', ')');
+                    this.moduleInfo.types.push({
+                        name: typeMatch[1],
+                        definition: typeLines.join('\n')
+                    });
+                    i += typeLines.length - 1;
+                    continue;
+                }
+
+                // Specs (collect but don't process here)
+                if (REGEX.SPEC.test(trimmed)) {
+                    const specLines = this.collectMultiLineConstruct(i, '(', ')');
+                    const specMatch = trimmed.match(REGEX.SPEC);
+                    if (specMatch) {
+                        this.moduleInfo.specs.push({
+                            function: specMatch[1],
+                            definition: specLines.join('\n')
+                        });
+                    }
+                    i += specLines.length - 1;
+                    continue;
+                }
+
+                // Other attributes
+                const attrMatch = trimmed.match(REGEX.ATTRIBUTE);
+                if (attrMatch) {
+                    this.moduleInfo.attributes.push({
+                        name: attrMatch[1],
+                        line: trimmed
+                    });
+                    continue;
+                }
             }
 
-            // Exports - check for dash first
-            if (firstChar === CHAR_CODES.DASH && REGEX.EXPORT_PREFIX.test(trimmed)) {
-                const exportMatch = trimmed.match(REGEX.EXPORT);
-                if (exportMatch) {
-                    this.moduleInfo.exports = exportMatch[1]
-                        .split(',')
-                        .map(e => e.trim())
-                        .filter(Boolean);
-                }
-                continue;
-            }
-
-            // Module documentation - check for percent first
-            if (firstChar === CHAR_CODES.PERCENT && trimmed.startsWith(STRINGS.TRIPLE_PERCENT)) {
+            // Module documentation - only collect at the beginning of the file
+            if (firstChar === CHAR_CODES.PERCENT && trimmed.startsWith(STRINGS.TRIPLE_PERCENT) && !moduleDocCollected) {
                 inModuleDoc = true;
                 let docLine = trimmed.substring(3).trim();
                 docLine = docLine.replace(REGEX.REMOVE_DOC, STRINGS.EMPTY);
+
+                // Check for termination pattern (%%% ''')
+                if (docLine === "'''") {
+                    inModuleDoc = false; // End module documentation processing
+                    moduleDocCollected = true; // Mark as collected
+                    continue; // Continue processing rest of file
+                }
+
                 moduleDoc.push(docLine);
             } else if (inModuleDoc && (firstChar === CHAR_CODES.PERCENT || firstChar === CHAR_CODES.DASH)) {
-                break;
+                inModuleDoc = false;
+                moduleDocCollected = true; // Mark as collected
+                // Don't break - continue processing this line for module declarations
+                i--; // Re-process this line outside module doc context
             }
         }
 
-        this.moduleInfo.doc = this.cleanDocumentation(moduleDoc.join(STRINGS.NEWLINE));
+        this.moduleInfo.doc = this.cleanDocumentation(this.fixModuleDocCodeBlocks(moduleDoc.join(STRINGS.NEWLINE)));
+    }
+
+    collectMultiLineConstruct(startIdx, openChar, closeChar) {
+        const lines = [];
+        let depth = 0;
+        let found = false;
+
+        for (let i = startIdx; i < this.lines.length; i++) {
+            const line = this.lines[i];
+            lines.push(line);
+
+            for (let j = 0; j < line.length; j++) {
+                const char = line[j];
+                if (char === openChar) {
+                    depth++;
+                    found = true;
+                } else if (char === closeChar && found) {
+                    depth--;
+                    if (depth === 0) {
+                        return lines;
+                    }
+                }
+            }
+
+            // Safety check for runaway constructs
+            if (i - startIdx > 100) break;
+        }
+
+        return lines;
     }
 
     processFunctions() {
         const linesLength = this.lines.length;
+        const processedFunctions = new Set();
+        const commentedCodeBlocks = [];
+        let currentCommentedBlock = [];
+        let inCommentedBlock = false;
 
         for (let i = 0; i < linesLength; i++) {
             const line = this.lines[i];
             const trimmed = line.trim();
 
-            if (!trimmed) continue;
+            if (!trimmed) {
+                if (inCommentedBlock) {
+                    currentCommentedBlock.push(line);
+                }
+                continue;
+            }
+
+            // Check for comment-style section headers
+            if (trimmed.startsWith('%%%') && trimmed.match(/^%%%-{10,}$/)) {
+                // This is a dash line, check if next line is a header and line after that is also dashes
+                if (i + 1 < linesLength && i + 2 < linesLength) {
+                    const nextLine = this.lines[i + 1].trim();
+                    const afterLine = this.lines[i + 2].trim();
+
+                    if (nextLine.startsWith('%%%') && !nextLine.match(/^%%%-{10,}$/) &&
+                        afterLine.match(/^%%%-{10,}$/)) {
+                        // Extract header text
+                        const headerText = nextLine.replace(/^%%%\s*/, '').trim();
+                        if (headerText) {
+                            this.sections.push({
+                                type: 'section_header',
+                                title: headerText,
+                                lineNumber: i + 2 // Store line number for sorting later
+                            });
+                        }
+                        // Skip the next two lines
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+
+            // Check for commented-out code blocks (lines starting with % but containing code patterns)
+            if (trimmed.startsWith('%') && !trimmed.startsWith('%%')) {
+                const uncommented = trimmed.substring(1).trim();
+                if (this.looksLikeCode(uncommented)) {
+                    if (!inCommentedBlock) {
+                        inCommentedBlock = true;
+                        currentCommentedBlock = [];
+                    }
+                    currentCommentedBlock.push(line);
+                    continue;
+                } else if (inCommentedBlock) {
+                    // End of commented code block
+                    if (currentCommentedBlock.length > 0) {
+                        commentedCodeBlocks.push({
+                            type: 'commented_code',
+                            lines: [...currentCommentedBlock],
+                            startLine: i - currentCommentedBlock.length + 1
+                        });
+                    }
+                    inCommentedBlock = false;
+                    currentCommentedBlock = [];
+                }
+            } else if (inCommentedBlock) {
+                // End of commented code block
+                if (currentCommentedBlock.length > 0) {
+                    commentedCodeBlocks.push({
+                        type: 'commented_code',
+                        lines: [...currentCommentedBlock],
+                        startLine: i - currentCommentedBlock.length + 1
+                    });
+                }
+                inCommentedBlock = false;
+                currentCommentedBlock = [];
+            }
 
             // Check for start of function documentation block
             if (REGEX.DOC_BLOCK_START.test(trimmed)) {
@@ -203,16 +419,31 @@ class ErlangLiterateParser {
                 continue;
             }
 
+            // Check for conditional compilation directives
+            if (trimmed.startsWith('-ifdef(') || trimmed.startsWith('-ifndef(') ||
+                trimmed.startsWith('-else') || trimmed.startsWith('-endif')) {
+                this.addDirectiveToOutput(line, i);
+                continue;
+            }
+
             // Check for function start
             const funcMatch = trimmed.match(REGEX.FUNCTION);
             if (funcMatch && !this.currentState.inFunction) {
+                const functionName = this.currentState.specFunctionName || funcMatch[1];
+                processedFunctions.add(functionName);
+
                 if (this.currentState.pendingDoc) {
                     this.currentState.functionDoc = this.currentState.pendingDoc;
                     this.currentState.pendingDoc = STRINGS.EMPTY;
+                    this.startFunction(functionName, i);
+                } else {
+                    // This is an undocumented function
+                    this.startUndocumentedFunction(functionName, i);
+                    // Skip ahead to avoid reprocessing
+                    while (i < linesLength && !this.isFunctionEnd(this.lines[i])) {
+                        i++;
+                    }
                 }
-
-                const functionName = this.currentState.specFunctionName || funcMatch[1];
-                this.startFunction(functionName);
                 this.currentState.specFunctionName = STRINGS.EMPTY;
             }
 
@@ -225,9 +456,21 @@ class ErlangLiterateParser {
             }
         }
 
+        // Handle remaining commented code block
+        if (inCommentedBlock && currentCommentedBlock.length > 0) {
+            commentedCodeBlocks.push({
+                type: 'commented_code',
+                lines: currentCommentedBlock,
+                startLine: linesLength - currentCommentedBlock.length + 1
+            });
+        }
+
         if (this.currentState.inFunction) {
             this.endFunction();
         }
+
+        // Store commented code blocks for later inclusion
+        this.commentedCodeBlocks = commentedCodeBlocks;
     }
 
     collectFunctionDoc(startIdx) {
@@ -316,9 +559,10 @@ class ErlangLiterateParser {
         this.currentState.functionSpec = specLines.join(STRINGS.NEWLINE);
     }
 
-    startFunction(name) {
+    startFunction(name, lineNumber = 0) {
         this.currentState.inFunction = true;
         this.currentState.functionName = name;
+        this.currentState.functionLineNumber = lineNumber;
         this.currentState.functionLines.length = 0;
         this.currentState.braceDepth = 0;
         this.currentState.parenDepth = 0;
@@ -365,17 +609,118 @@ class ErlangLiterateParser {
             name: this.currentState.functionName,
             spec: this.currentState.functionSpec,
             doc: this.currentState.functionDoc,
-            body: processedBody
+            body: processedBody,
+            hasImplementation: true,
+            lineNumber: this.currentState.functionLineNumber
         });
 
         // Reset state efficiently
         this.currentState.inFunction = false;
         this.currentState.functionName = STRINGS.EMPTY;
+        this.currentState.functionLineNumber = 0;
         this.currentState.functionSpec = STRINGS.EMPTY;
         this.currentState.functionDoc = STRINGS.EMPTY;
         this.currentState.functionLines.length = 0;
         this.currentState.specFunctionName = STRINGS.EMPTY;
         this.currentState.inlineDocTags.length = 0;
+    }
+
+    startUndocumentedFunction(name, startLine) {
+        const functionLines = [];
+        let braceDepth = 0;
+        let parenDepth = 0;
+        let i = startLine;
+
+        // Collect the entire function
+        while (i < this.lines.length) {
+            const line = this.lines[i];
+            functionLines.push(line);
+
+            // Track depth
+            for (let j = 0; j < line.length; j++) {
+                const charCode = line.charCodeAt(j);
+                switch (charCode) {
+                    case CHAR_CODES.OPEN_BRACE:
+                    case CHAR_CODES.OPEN_BRACKET:
+                        braceDepth++;
+                        break;
+                    case CHAR_CODES.CLOSE_BRACE:
+                    case CHAR_CODES.CLOSE_BRACKET:
+                        braceDepth--;
+                        break;
+                    case CHAR_CODES.OPEN_PAREN:
+                        parenDepth++;
+                        break;
+                    case CHAR_CODES.CLOSE_PAREN:
+                        parenDepth--;
+                        break;
+                }
+            }
+
+            // Check if function ended
+            const trimmed = line.trim();
+            if (braceDepth === 0 && parenDepth === 0 &&
+                trimmed.charCodeAt(trimmed.length - 1) === CHAR_CODES.DOT &&
+                trimmed.charCodeAt(0) !== CHAR_CODES.PERCENT) {
+                break;
+            }
+
+            i++;
+        }
+
+        // Find corresponding spec
+        const spec = this.moduleInfo.specs.find(s => s.function === name);
+
+        this.undocumentedFunctions.push({
+            name,
+            spec: spec ? spec.definition : null,
+            body: this.processFunctionBody(functionLines),
+            lines: functionLines
+        });
+    }
+
+    // Helper method to detect if a line looks like code
+    looksLikeCode(line) {
+        if (!line || line.length === 0) return false;
+
+        // Check for common code patterns
+        const codePatterns = [
+            /^[a-z][a-z0-9_]*\s*\(/,           // function calls: function(
+            /^[A-Z][a-zA-Z0-9_]*\s*=/,         // variable assignments: Var =
+            /^\s*\{/,                          // tuples/records: {
+            /^\s*\[/,                          // lists: [
+            /^\s*case\s+/,                     // case statements
+            /^\s*if\s+/,                       // if statements
+            /^\s*catch\s+/,                    // catch blocks
+            /^\s*after\s+/,                    // after blocks
+            /^\s*end[,.]?\s*$/,                // end keywords
+            /^\s*ok\s*$/,                      // ok atoms
+            /^\s*true\s*$/,                    // boolean atoms
+            /^\s*false\s*$/,                   // boolean atoms
+            /->\s*$/,                          // arrow operators
+            /^\s*\?[A-Z]/,                     // macro usage
+            /^\s*[a-z_][a-z0-9_]*\s*\(/,      // function definitions
+            /^\s*\d+\s*$/,                     // numbers
+            /^\s*".*"\s*$/,                   // strings
+            /^\s*<<.*>>\s*$/,                  // binaries
+            /^\s*#\w+/,                        // record syntax
+            /^\s*receive\s+/,                  // receive blocks
+            /^\s*spawn/,                       // spawn calls
+            /^\s*gen_server:/,                 // gen_server calls
+            /^\s*supervisor:/,                 // supervisor calls
+            /\bmatch\b|\bguard\b|\btry\b|\bfun\b/, // erlang keywords
+        ];
+
+        return codePatterns.some(pattern => pattern.test(line));
+    }
+
+    // Helper method to add conditional compilation directives
+    addDirectiveToOutput(line, lineNumber) {
+        this.conditionalDirectives.push({
+            line: line.trim(),
+            lineNumber: lineNumber + 1,
+            type: 'conditional_compilation'
+        });
     }
 
     processFunctionBody(lines) {
@@ -399,7 +744,7 @@ class ErlangLiterateParser {
                 if (parsed.params.length > 0) {
                     docParts.push(STRINGS.PARAMETERS_HEADER, STRINGS.EMPTY);
                     parsed.params.forEach(p => {
-                        const desc = this.cleanDocumentation(p.description || STRINGS.EMPTY);
+                        const desc = this.cleanDocumentation(p.description || STRINGS.EMPTY, true);
                         docParts.push(`- ${STRINGS.BACKTICK}${p.name}${STRINGS.BACKTICK} - ${desc}`);
                     });
                     docParts.push(STRINGS.EMPTY);
@@ -467,12 +812,139 @@ class ErlangLiterateParser {
         return text.replace(REGEX.BACKTICK_QUOTE, `${STRINGS.BACKTICK}$1${STRINGS.BACKTICK}`).trim();
     }
 
-    cleanDocumentation(text) {
+    fixCodeBlocks(text) {
+        if (!text) return text;
+
+        const lines = text.split(STRINGS.NEWLINE);
+        const result = [];
+        let inCodeBlock = false;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const trimmed = line.trim();
+
+            // Check if this is a code block delimiter
+            if (REGEX.CODE_FENCE.test(trimmed)) {
+                if (!inCodeBlock && trimmed === '```') {
+                    // Start of unmarked code block - check if it's empty first
+                    let blockContent = [];
+                    let j = i + 1;
+
+                    // Collect content until closing ```
+                    while (j < lines.length) {
+                        const contentLine = lines[j];
+                        if (contentLine.trim() === '```') {
+                            break;
+                        }
+                        blockContent.push(contentLine);
+                        j++;
+                    }
+
+                    // If block is empty, skip it entirely
+                    const hasContent = blockContent.some(line => line.trim() !== '');
+                    if (!hasContent) {
+                        // Skip the empty code block entirely
+                        i = j; // Skip to after the closing ```
+                        continue;
+                    }
+
+                    // Determine appropriate language based on content
+                    const nextLine = blockContent.length > 0 ? blockContent[0].trim() : '';
+                    let language = 'text'; // default
+
+                    // Heuristics to determine language based on content
+                    if (nextLine.startsWith('/') || nextLine.includes('Parameters:') ||
+                        nextLine.includes('- `') || nextLine.includes('(optional)')) {
+                        language = 'text';
+                    } else if (nextLine.includes('#{') || nextLine.includes('<<') ||
+                              nextLine.includes('->') || nextLine.match(/^[a-z_]+\(/)) {
+                        language = 'erlang';
+                    }
+
+                    // For text blocks, add ignore attribute to prevent mdBook testing
+                    if (language === 'text') {
+                        result.push('```text,ignore');
+                    } else {
+                        result.push('```' + language);
+                    }
+                    inCodeBlock = true;
+                } else if (inCodeBlock && trimmed === '```') {
+                    // End of code block
+                    result.push(line);
+                    inCodeBlock = false;
+                } else {
+                    // Already has language specifier or other case
+                    result.push(line);
+                    if (trimmed.startsWith('```')) {
+                        inCodeBlock = !inCodeBlock;
+                    }
+                }
+            } else {
+                result.push(line);
+            }
+        }
+
+        return result.join(STRINGS.NEWLINE);
+    }
+
+    fixModuleDocCodeBlocks(text) {
+        if (!text) return STRINGS.EMPTY;
+
+        const lines = text.split(STRINGS.NEWLINE);
+        const result = [];
+        let inCodeBlock = false;
+        let codeBlockStart = -1;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const trimmed = line.trim();
+
+            // Check for code block start
+            if (trimmed === '```' && !inCodeBlock) {
+                inCodeBlock = true;
+                codeBlockStart = i;
+                result.push(line);
+                continue;
+            }
+
+            // Check for code block end
+            if (trimmed === '```' && inCodeBlock) {
+                inCodeBlock = false;
+                result.push(line);
+                continue;
+            }
+
+            // Check for implicit code block end (new section starting with /)
+            if (inCodeBlock && trimmed.startsWith('/')) {
+                // Close the previous code block
+                result.push('```');
+                result.push('');
+                inCodeBlock = false;
+            }
+
+            result.push(line);
+        }
+
+        // Close any unclosed code block at the end
+        if (inCodeBlock) {
+            result.push('```');
+        }
+
+        return result.join(STRINGS.NEWLINE);
+    }
+
+    cleanDocumentation(text, skipCodeBlockFix = false) {
         if (!text) return STRINGS.EMPTY;
 
         text = text.replace(REGEX.PRE_TAG, (match, content) => this.formatPreContent(content));
 
-        const cleaned = text
+        // Only fix unmarked code blocks for module-level documentation
+        // Skip for function documentation to avoid excessive text,ignore blocks
+        if (!skipCodeBlockFix) {
+            text = this.fixCodeBlocks(text);
+        }
+
+        let cleaned = text
             .replace(REGEX.BACKTICK_QUOTE, `${STRINGS.BACKTICK}$1${STRINGS.BACKTICK}`)
             .replace(REGEX.HTML_ENTITIES_LT, '<<')
             .replace(REGEX.HTML_ENTITIES_GT, '>>')
@@ -484,9 +956,127 @@ class ErlangLiterateParser {
         return this.reflowNumberedLists(cleaned);
     }
 
+    convertCommentStyleHeaders(text) {
+        if (!text) return text;
+
+        const lines = text.split(STRINGS.NEWLINE);
+        const result = [];
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const trimmed = line.trim();
+
+            // Look for pattern: dashes followed by text followed by dashes
+            if (trimmed.match(/^-{10,}$/)) {
+                // This is a dash line, check if next line is a header
+                if (i + 1 < lines.length) {
+                    const nextLine = lines[i + 1];
+                    const nextTrimmed = nextLine.trim();
+
+                    // Check if the line after is also dashes (closing the header)
+                    if (i + 2 < lines.length && lines[i + 2].trim().match(/^-{10,}$/)) {
+                        // This is a comment-style header: convert to markdown
+                        if (nextTrimmed) {
+                            result.push(`## ${nextTrimmed}`);
+                            result.push(STRINGS.EMPTY);
+                        }
+                        // Skip the next two lines (header text and closing dashes)
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+
+            result.push(line);
+        }
+
+        return result.join(STRINGS.NEWLINE);
+    }
+
+    generateInterleavedContent(md) {
+        // Create a combined list of sections and functions, sorted by line number
+        const contentItems = [];
+
+        // Add sections
+        for (const section of this.sections) {
+            if (section.type === 'section_header') {
+                contentItems.push({
+                    type: 'section',
+                    lineNumber: section.lineNumber,
+                    title: section.title
+                });
+            }
+        }
+
+        // Add functions
+        const groupedFunctions = this.groupFunctionsByName(this.functions);
+        for (const group of groupedFunctions) {
+            // Use the line number of the first function in the group
+            const lineNumber = group.functions[0]?.lineNumber || 0;
+            contentItems.push({
+                type: 'function_group',
+                lineNumber: lineNumber,
+                group: group
+            });
+        }
+
+        // Sort by line number
+        contentItems.sort((a, b) => a.lineNumber - b.lineNumber);
+
+        // Generate markdown for each item
+        for (const item of contentItems) {
+            if (item.type === 'section') {
+                md.push(`## ${item.title}`);
+                md.push(STRINGS.EMPTY);
+            } else if (item.type === 'function_group') {
+                this.generateFunctionGroupMarkdown(md, item.group);
+            }
+        }
+    }
+
+    generateFunctionGroupMarkdown(md, group) {
+        md.push(`## ${group.name}`);
+        md.push(STRINGS.EMPTY);
+
+        const combinedDoc = this.combineFunctionDocs(group.functions);
+        if (combinedDoc) {
+            md.push(combinedDoc);
+            md.push(STRINGS.EMPTY);
+        }
+
+        for (const func of group.functions) {
+            if (func.spec) {
+                md.push(`\`\`\`${STRINGS.ERLANG}`);
+                md.push(func.spec.trim());
+                md.push('```');
+                md.push(STRINGS.EMPTY);
+            }
+
+            if (func.body?.length > 0) {
+                md.push(STRINGS.EMPTY);
+                for (const segment of func.body) {
+                    if (segment.type === 'comment') {
+                        md.push(segment.content);
+                        md.push(STRINGS.EMPTY);
+                    } else if (segment.type === 'doc') {
+                        md.push(segment.content);
+                        md.push(STRINGS.EMPTY);
+                    } else if (segment.type === 'code') {
+                        md.push(`\`\`\`${STRINGS.ERLANG}`);
+                        md.push(segment.content.trim());
+                        md.push('```');
+                        md.push(STRINGS.EMPTY);
+                    }
+                }
+            }
+        }
+
+        md.push(STRINGS.EMPTY);
+    }
+
     formatReturnsText(text) {
         if (!text) return STRINGS.EMPTY;
-        let result = this.cleanDocumentation(text);
+        let result = this.cleanDocumentation(text, true);
 
         const leadingMatch = result.match(REGEX.LEADING_RETURN_TOKEN);
         if (leadingMatch) {
@@ -501,7 +1091,7 @@ class ErlangLiterateParser {
 
     splitReturnsIntoOutcomes(text) {
         if (!text) return [];
-        const s = this.cleanDocumentation(text);
+        const s = this.cleanDocumentation(text, true);
         const matches = [];
         let match;
 
@@ -734,6 +1324,31 @@ class ErlangLiterateParser {
         return result;
     }
 
+    addSeparator(md) {
+        // Only add separator if the last entry is not empty and not already a separator
+        if (md.length > 0) {
+            const lastLine = md[md.length - 1];
+            const prevLine = md.length > 1 ? md[md.length - 2] : '';
+
+            // Don't add separator if last line is already empty and previous is separator
+            if (lastLine === STRINGS.EMPTY && prevLine === STRINGS.SEPARATOR) {
+                return;
+            }
+
+            // Don't add separator if last line is already a separator
+            if (lastLine === STRINGS.SEPARATOR) {
+                return;
+            }
+
+            // Add separator with proper spacing
+            if (lastLine !== STRINGS.EMPTY) {
+                md.push(STRINGS.EMPTY);
+            }
+            md.push(STRINGS.SEPARATOR);
+            md.push(STRINGS.EMPTY);
+        }
+    }
+
     generateMarkdown(fileName) {
         const githubUrl = `${this.options.githubBase}/${fileName}`;
         const md = [];
@@ -744,38 +1359,61 @@ class ErlangLiterateParser {
         md.push(`[View source on GitHub](${githubUrl})`);
         md.push(STRINGS.EMPTY);
 
+        // Metadata section
+        this.generateMetadataSection(md);
+
         // Module documentation
         if (this.moduleInfo.doc) {
             md.push(this.moduleInfo.doc);
-            md.push(STRINGS.EMPTY);
-            md.push(STRINGS.SEPARATOR);
-            md.push(STRINGS.EMPTY);
+            this.addSeparator(md);
         }
 
-        // Exports
-        if (this.moduleInfo.exports?.length > 0) {
-            md.push(STRINGS.EXPORTED_FUNCTIONS);
-            md.push(STRINGS.EMPTY);
-            this.moduleInfo.exports.forEach(exp =>
-                md.push(`- ${STRINGS.BACKTICK}${exp}${STRINGS.BACKTICK}`));
-            md.push(STRINGS.EMPTY);
-            md.push(STRINGS.SEPARATOR);
-            md.push(STRINGS.EMPTY);
-        }
+        // Generate interleaved content (sections and functions) sorted by line number
+        this.generateInterleavedContent(md);
 
-        const groupedFunctions = this.groupFunctionsByName(this.functions);
-
-        for (const group of groupedFunctions) {
-            md.push(`## ${group.name}`);
+        // Commented-out code blocks
+        if (this.commentedCodeBlocks && this.commentedCodeBlocks.length > 0) {
+            md.push('## Commented-Out Code');
+            md.push(STRINGS.EMPTY);
+            md.push('*The following code blocks are commented out but may contain useful examples:*');
             md.push(STRINGS.EMPTY);
 
-            const combinedDoc = this.combineFunctionDocs(group.functions);
-            if (combinedDoc) {
-                md.push(combinedDoc);
+            for (const block of this.commentedCodeBlocks) {
+                md.push('```erlang');
+                for (const line of block.lines) {
+                    md.push(line);
+                }
+                md.push('```');
                 md.push(STRINGS.EMPTY);
             }
+        }
 
-            for (const func of group.functions) {
+        // Conditional compilation directives
+        if (this.conditionalDirectives && this.conditionalDirectives.length > 0) {
+            md.push('## Conditional Compilation');
+            md.push(STRINGS.EMPTY);
+            md.push('*The following conditional compilation directives are used in this module:*');
+            md.push(STRINGS.EMPTY);
+
+            md.push('```erlang');
+            for (const directive of this.conditionalDirectives) {
+                md.push(directive.line);
+            }
+            md.push('```');
+            md.push(STRINGS.EMPTY);
+        }
+
+        // Undocumented functions section
+        if (this.undocumentedFunctions.length > 0) {
+            md.push('## Undocumented Functions');
+            md.push(STRINGS.EMPTY);
+            md.push('*The following functions lack documentation comments but are included for completeness:*');
+            md.push(STRINGS.EMPTY);
+
+            for (const func of this.undocumentedFunctions) {
+                md.push(`### ${func.name}`);
+                md.push(STRINGS.EMPTY);
+
                 if (func.spec) {
                     md.push(`\`\`\`${STRINGS.ERLANG}`);
                     md.push(func.spec.trim());
@@ -784,12 +1422,8 @@ class ErlangLiterateParser {
                 }
 
                 if (func.body?.length > 0) {
-                    md.push(STRINGS.EMPTY);
                     for (const segment of func.body) {
                         if (segment.type === 'comment') {
-                            md.push(segment.content);
-                            md.push(STRINGS.EMPTY);
-                        } else if (segment.type === 'doc') {
                             md.push(segment.content);
                             md.push(STRINGS.EMPTY);
                         } else if (segment.type === 'code') {
@@ -802,14 +1436,109 @@ class ErlangLiterateParser {
                 }
             }
 
+            this.addSeparator(md);
+        }
+
+        this.addSeparator(md);
+        md.push(`*Generated from [${fileName}](${githubUrl})*`);
+
+        const finalMarkdown = md.join(STRINGS.NEWLINE);
+        return finalMarkdown;
+    }
+
+    generateMetadataSection(md) {
+        md.push('## Module Metadata');
+        md.push(STRINGS.EMPTY);
+
+        // Basic module information
+        md.push(`**Module:** \`${this.moduleInfo.name || 'unknown'}\``);
+        md.push(`**Exports:** ${this.moduleInfo.exports.length} functions`);
+
+        if (this.moduleInfo.behaviours.length > 0) {
+            md.push(`**Behaviours:** ${this.moduleInfo.behaviours.map(b => `\`${b}\``).join(', ')}`);
+        }
+
+        if (this.moduleInfo.includes.length > 0) {
+            md.push(`**Includes:** ${this.moduleInfo.includes.length} files`);
+        }
+
+        if (this.moduleInfo.defines.length > 0) {
+            md.push(`**Defines:** ${this.moduleInfo.defines.length} macros`);
+        }
+
+        if (this.moduleInfo.records.length > 0) {
+            md.push(`**Records:** ${this.moduleInfo.records.length} records`);
+        }
+
+        if (this.moduleInfo.types.length > 0) {
+            md.push(`**Types:** ${this.moduleInfo.types.length} type definitions`);
+        }
+
+        md.push(STRINGS.EMPTY);
+
+        // Exports section
+        if (this.moduleInfo.exports.length > 0) {
+            md.push('### Exported Functions');
+            md.push(STRINGS.EMPTY);
+            this.moduleInfo.exports.forEach(exp => {
+                md.push(`- \`${exp}\``);
+            });
             md.push(STRINGS.EMPTY);
         }
 
-        md.push(STRINGS.SEPARATOR);
-        md.push(STRINGS.EMPTY);
-        md.push(`*Generated from [${fileName}](${githubUrl})*`);
+        // Includes section
+        if (this.moduleInfo.includes.length > 0) {
+            md.push('### Includes');
+            md.push(STRINGS.EMPTY);
+            md.push('```erlang');
+            this.moduleInfo.includes.forEach(inc => {
+                md.push(inc.line);
+            });
+            md.push('```');
+            md.push(STRINGS.EMPTY);
+        }
 
-        return md.join(STRINGS.NEWLINE);
+        // Defines section
+        if (this.moduleInfo.defines.length > 0) {
+            md.push('### Macro Definitions');
+            md.push(STRINGS.EMPTY);
+            md.push('```erlang');
+            this.moduleInfo.defines.forEach(def => {
+                md.push(def.line);
+            });
+            md.push('```');
+            md.push(STRINGS.EMPTY);
+        }
+
+        // Records section
+        if (this.moduleInfo.records.length > 0) {
+            md.push('### Record Definitions');
+            md.push(STRINGS.EMPTY);
+            this.moduleInfo.records.forEach(rec => {
+                md.push(`#### \`${rec.name}\``);
+                md.push(STRINGS.EMPTY);
+                md.push('```erlang');
+                md.push(rec.definition);
+                md.push('```');
+                md.push(STRINGS.EMPTY);
+            });
+        }
+
+        // Types section
+        if (this.moduleInfo.types.length > 0) {
+            md.push('### Type Definitions');
+            md.push(STRINGS.EMPTY);
+            this.moduleInfo.types.forEach(type => {
+                md.push(`#### \`${type.name}\``);
+                md.push(STRINGS.EMPTY);
+                md.push('```erlang');
+                md.push(type.definition);
+                md.push('```');
+                md.push(STRINGS.EMPTY);
+            });
+        }
+
+        this.addSeparator(md);
     }
 
     groupFunctionsByName(functions) {
@@ -835,7 +1564,7 @@ class ErlangLiterateParser {
                 const combinedDoc = [];
 
                 if (parsed.description.length > 0) {
-                    combinedDoc.push(this.cleanDocumentation(parsed.description.join(STRINGS.NEWLINE)));
+                    combinedDoc.push(this.cleanDocumentation(parsed.description.join(STRINGS.NEWLINE), true));
                     combinedDoc.push(STRINGS.EMPTY);
                 }
 
@@ -843,7 +1572,7 @@ class ErlangLiterateParser {
                     combinedDoc.push(STRINGS.PARAMETERS_HEADER);
                     combinedDoc.push(STRINGS.EMPTY);
                     parsed.params.forEach(param => {
-                        const desc = this.cleanDocumentation(param.description);
+                        const desc = this.cleanDocumentation(param.description, true);
                         combinedDoc.push(`- ${STRINGS.BACKTICK}${param.name}${STRINGS.BACKTICK} - ${desc}`);
                     });
                     combinedDoc.push(STRINGS.EMPTY);
@@ -870,7 +1599,7 @@ function main() {
     const verbose = args.includes('-v') || args.includes('--verbose');
 
     const srcDir = process.env.SRC_DIR || path.join(process.cwd(), 'src');
-    const outputDir = process.env.OUTPUT_DIR || path.join(process.cwd(), 'docs/literate-erlang');
+    const outputDir = process.env.OUTPUT_DIR || path.join(process.cwd(), 'docs/book/src');
 
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
