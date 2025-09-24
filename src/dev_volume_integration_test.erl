@@ -57,15 +57,17 @@ check_test_environment() ->
     end.
 
 check_device_availability() ->
-    Device = binary_to_list(?TEST_DEVICE),
+    Device = ?TEST_DEVICE,
     case hb_volume:check_for_device(Device) of
-        true -> 
+        {ok, true} ->
             case check_device_not_mounted() of
                 ok -> warn_about_data_loss();
                 Error -> Error
             end;
-        false -> 
-            {error, io_lib:format("Test device ~s not found", [Device])}
+        {ok, false} ->
+            {error, io_lib:format("Test device ~s not found", [Device])};
+        {error, Error} ->
+            {error, io_lib:format("Error(~s) occurred when searching for the device ~s", [Error, Device])}
     end.
 
 check_device_not_mounted() ->
