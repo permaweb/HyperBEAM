@@ -10,7 +10,7 @@
 
 -define(SERVER, ?MODULE).
 -define(SUPERVISED_MODE, true).
--define(DEFAULT_MAX_WORKERS, 10).
+-define(DEFAULT_MAX_WORKERS, 7).
 
 -record(state, {
     max_workers = ?DEFAULT_MAX_WORKERS :: integer(),
