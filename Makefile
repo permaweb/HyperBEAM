@@ -10,6 +10,10 @@ GENESIS_WASM_BRANCH = feat/http-checkpoint
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
 GENESIS_WASM_SERVER_DIR = _build/genesis_wasm/genesis-wasm-server
 
+LLAMACPP_REPO = https://github.com/ggml-org/llama.cpp
+LLAMACPP_DIR = _build/llama.cpp
+LLAMACPP_BUILD_DIR = $(LLAMACPP_DIR)/build
+
 ifdef HB_DEBUG
 	WAMR_FLAGS = -DWAMR_ENABLE_LOG=1 -DWAMR_BUILD_DUMP_CALL_STACK=1 -DCMAKE_BUILD_TYPE=Debug
 else
@@ -104,3 +108,22 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 	fi
 	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."
+
+.PHONY: llama-server
+llama-bin: llama-clean $(LLAMACPP_BUILD_DIR)/bin
+
+llama-cpp: $(LLAMACPP_DIR)
+
+llama-update: llama-cpp
+	cd $(LLAMACPP_DIR) && git pull origin main
+
+llama-clean:
+	rm -rf $(LLAMACPP_BUILD_DIR)
+
+# Clone llama.cpp into the build directory (shallow clone)
+$(LLAMACPP_DIR):
+	git clone --depth 1 $(LLAMACPP_REPO) $(LLAMACPP_DIR)
+
+$(LLAMACPP_BUILD_DIR)/bin: $(LLAMACPP_DIR)
+	cmake -S $(LLAMACPP_DIR) -B $(LLAMACPP_BUILD_DIR) -DGGML_CUDA=ON
+	cmake --build $(LLAMACPP_BUILD_DIR) --config Release -- -j$$(nproc)
