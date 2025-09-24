@@ -58,7 +58,7 @@ check_test_environment() ->
 
 check_device_availability() ->
     Device = binary_to_list(?TEST_DEVICE),
-    case filelib:is_file(Device) of
+    case hb_volume:check_for_device(Device) of
         true -> 
             case check_device_not_mounted() of
                 ok -> warn_about_data_loss();
