@@ -714,9 +714,4 @@ binary_is_atom(X) ->
     lists:member(X, lists:map(fun hb_util:bin/1, all_atoms())).
 
 lower_case_key_map(Map, Opts) ->
-    hb_maps:fold(fun
-        (K, V, Acc) when is_map(V) ->
-            maps:put(hb_util:to_lower(K), lower_case_key_map(V, Opts), Acc);
-        (K, V, Acc) ->
-            maps:put(hb_util:to_lower(K), V, Acc)
-    end, #{}, Map, Opts).
+    hb_ao:normalize_keys(Map, Opts).

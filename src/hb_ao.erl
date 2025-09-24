@@ -1182,7 +1182,6 @@ normalize_keys(Msg1, Opts) when is_list(Msg1) ->
         ),
 		Opts
 	);
-
 normalize_keys(Map, Opts) when is_map(Map) ->
     hb_maps:from_list(
         lists:map(

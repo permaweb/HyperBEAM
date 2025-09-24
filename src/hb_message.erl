@@ -453,7 +453,11 @@ match(Map1, Map2, Mode) ->
     match(Map1, Map2, Mode, #{}).
 match(Map1, Map2, Mode, Opts) ->
     try unsafe_match(Map1, Map2, Mode, [], Opts)
-    catch _:Details -> Details
+    catch
+        throw:{mismatch, Type, Path, Val1, Val2} ->
+            ?event(match_error, {mismatch, {type, Type}, {path, Path}, {val1, Val1}, {val2, Val2}}),
+            {mismatch, Type, Path, Val1, Val2};
+        _:Details:St -> {error, {Details, {trace, St}}}
     end.
 
 %% @doc Match two maps, returning `true' if they match, or throwing an error
@@ -461,17 +465,24 @@ match(Map1, Map2, Mode, Opts) ->
 unsafe_match(Map1, Map2, Mode, Path, Opts) ->
     Keys1 =
         hb_maps:keys(
-            NormMap1 = hb_util:lower_case_key_map(minimize(
-                normalize(hb_ao:normalize_keys(Map1, Opts), Opts),
-                [<<"content-type">>, <<"ao-body-key">>]
-            ), Opts)
+            NormMap1 =
+                minimize(
+                    normalize(hb_ao:normalize_keys(Map1, Opts), Opts),
+                    [<<"content-type">>, <<"ao-body-key">>]
+                ),
+            Opts
         ),
     Keys2 =
         hb_maps:keys(
-            NormMap2 = hb_util:lower_case_key_map(minimize(
-                normalize(hb_ao:normalize_keys(Map2, Opts), Opts),
-                [<<"content-type">>, <<"ao-body-key">>]
-            ), Opts)
+            NormMap2 =
+                minimize(
+                    normalize(
+                        hb_ao:normalize_keys(Map2, Opts),
+                        Opts
+                    ),
+                    [<<"content-type">>, <<"ao-body-key">>]
+                ),
+            Opts
         ),
     PrimaryKeysPresent =
         (Mode == primary) andalso
@@ -495,41 +506,43 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
                 fun(Key) ->
                     ?event(match, {matching_key, Key}),
                     Val1 =
-                        hb_ao:normalize_keys(
-                            hb_maps:get(Key, NormMap1, not_found, Opts),
-                            Opts
-                        ),
+                        dev_message:get(Key, {as, <<"message@1.0">>, NormMap1}, Opts),
                     Val2 =
-                        hb_ao:normalize_keys(
-                            hb_maps:get(Key, NormMap2, not_found, Opts),
-                            Opts
-                        ),
-                    BothPresent = (Val1 =/= not_found) and (Val2 =/= not_found),
+                        dev_message:get(Key, {as, <<"message@1.0">>, NormMap2}, Opts),
+                    BothPresent =
+                        (Val1 =/= {error, not_found})
+                            andalso (Val2 =/= {error, not_found}),
                     case (not BothPresent) and (Mode == only_present) of
                         true -> true;
                         false ->
-                            case is_map(Val1) andalso is_map(Val2) of
-                                true ->
-                                    unsafe_match(Val1, Val2, Mode, Path ++ [Key], Opts);
-                                false ->
-                                    case {Val1, Val2} of
-                                        {V, V} -> true;
-                                        {V, '_'} when V =/= not_found -> true;
-                                        {'_', V} when V =/= not_found -> true;
-                                        {'_', '_'} -> true;
-                                        _ ->
-                                            throw(
-                                                {value_mismatch,
-                                                    hb_format:short_id(
-                                                        hb_path:to_binary(
-                                                            Path ++ [Key]
-                                                        )
-                                                    ),
-                                                    {val1, Val1},
-                                                    {val2, Val2}
-                                                }
-                                            )
-                                    end
+                            case {hb_util:ok(Val1), hb_util:ok(Val2)} of
+                                {V1, V2} when is_map(V1) andalso is_map(V2) ->
+                                    unsafe_match(V1, V2, Mode, Path ++ [Key], Opts);
+                                {V1, V2} when is_list(V1) andalso is_list(V2) ->
+                                    unsafe_match(
+                                        hb_ao:normalize_keys(V1, Opts),
+                                        hb_ao:normalize_keys(V2, Opts),
+                                        Mode,
+                                        Path ++ [Key],
+                                        Opts
+                                    );
+                                {V, V} -> true;
+                                {V, '_'} when V =/= not_found -> true;
+                                {'_', V} when V =/= not_found -> true;
+                                {'_', '_'} -> true;
+                                _ ->
+                                    throw(
+                                        {mismatch,
+                                            value,
+                                            hb_format:short_id(
+                                                hb_path:to_binary(
+                                                    Path ++ [Key]
+                                                )
+                                            ),
+                                            Val1,
+                                            Val2
+                                        }
+                                    )
                             end
                     end
                 end,
