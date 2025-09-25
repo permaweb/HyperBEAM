@@ -93,11 +93,22 @@ const char* chat(
         result = llama_chat_apply_template(tmpl, messages, n_messages, true, buf.data(), buf.size());
     }
 
-    // Call the completion function with the formatted prompt
-    return completion(instance, buf.data(), params);
+    // Call the generate function with the formatted prompt
+    return generate(instance, buf.data(), params);
 }
 
 const char* completion(
+    struct hb_instance* instance,
+    const char* prompt,
+    struct hb_generate_params params
+) {
+    struct llama_chat_message messages[] = {
+        {"user", prompt}
+    };
+    return chat(instance, messages, 1, params);
+}
+
+const char* generate(
     struct hb_instance* instance,
     const char* prompt,
     struct hb_generate_params params

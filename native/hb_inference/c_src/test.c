@@ -27,7 +27,7 @@ static struct hb_generate_params get_default_generate_params() {
 
 void run_completion_test(struct hb_instance* instance) {
     printf("\n--- Running Completion Test ---\n");
-    const char* prompt = "What's Arweave? Answer in concise 20 words. End after 20 words.";
+    const char* prompt = "/no_think What's Arweave? Answer concisely.";
     struct hb_generate_params gen_params = get_default_generate_params();
 
     printf("Prompt: %s\n", prompt);

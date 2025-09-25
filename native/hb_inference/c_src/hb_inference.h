@@ -37,6 +37,12 @@ const char* chat(
     struct hb_generate_params params
 );
 
+const char* generate(
+    struct hb_instance* instance,
+    const char* prompt,
+    struct hb_generate_params params
+);
+
 const char* completion(
     struct hb_instance* instance,
     const char* prompt,
