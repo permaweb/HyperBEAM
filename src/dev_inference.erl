@@ -1,9 +1,9 @@
 %%%-------------------------------------------------------------------
 %%% @doc
-%%% The Inference Device provides integration with llama.cpp for running
-%%% large language models directly within the HyperBEAM environment.
+%%% The Inference Device provides integration with `llama.cpp` via Erlang NIFs
+%%% for running large language models directly within the HyperBEAM environment.
 %%% This device enables text completion and chat conversation capabilities
-%%% using GGUF format models.
+%%% using GGUF format models, leveraging native performance for inference tasks.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(dev_inference).
@@ -33,14 +33,18 @@ info() ->
 %% @param Opts The options for the request.
 %% @spec completion(term(), map(), list()) -> {ok, map()} | {error, term()}
 completion(_Msg1, Msg2, Opts) ->
-    Prompt = extract_required_param(<<"prompt">>, Msg2, Opts),
-    Reference = hb_ao:get(<<"reference">>, Msg2, undefined, Opts),
-    MaxTokens = hb_ao:get(<<"max_tokens">>, Msg2, 512, Opts),
-    TopP = hb_ao:get(<<"top_p">>, Msg2, 0.9, Opts),
+    case extract_required_param(<<"prompt">>, Msg2, Opts) of
+        {ok, Prompt} ->
+            Reference = hb_ao:get(<<"reference">>, Msg2, undefined, Opts),
+            MaxTokens = hb_ao:get(<<"max_tokens">>, Msg2, 512, Opts),
+            TopP = hb_ao:get(<<"top_p">>, Msg2, 0.9, Opts),
 
-    case nif_completion(Prompt, #{top_p => TopP, n_predict => MaxTokens}) of
-        {ok, Content} -> {ok, build_response(Content, Reference)};
-        {error, Reason} -> {error, Reason}
+            case nif_completion(Prompt, #{top_p => TopP, n_predict => MaxTokens}) of
+                {ok, Content} -> {ok, build_response(Content, Reference)};
+                {error, Reason} -> {error, Reason}
+            end;
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %% @doc
@@ -50,14 +54,18 @@ completion(_Msg1, Msg2, Opts) ->
 %% @param Opts The options for the request.
 %% @spec chat(term(), map(), list()) -> {ok, map()} | {error, term()}
 chat(_Msg1, Msg2, Opts) ->
-    Messages = extract_required_param(<<"messages">>, Msg2, Opts),
-    Reference = hb_ao:get(<<"reference">>, Msg2, undefined, Opts),
-    MaxTokens = hb_ao:get(<<"max_tokens">>, Msg2, 512, Opts),
-    TopP = hb_ao:get(<<"top_p">>, Msg2, 0.9, Opts),
+    case extract_required_param(<<"messages">>, Msg2, Opts) of
+        {ok, Messages} ->
+            Reference = hb_ao:get(<<"reference">>, Msg2, undefined, Opts),
+            MaxTokens = hb_ao:get(<<"max_tokens">>, Msg2, 512, Opts),
+            TopP = hb_ao:get(<<"top_p">>, Msg2, 0.9, Opts),
 
-    case nif_chat(Messages, #{top_p => TopP, n_predict => MaxTokens}) of
-        {ok, Content} -> {ok, build_response(Content, Reference)};
-        {error, Reason} -> {error, Reason}
+            case nif_chat(Messages, #{top_p => TopP, n_predict => MaxTokens}) of
+                {ok, Content} -> {ok, build_response(Content, Reference)};
+                {error, Reason} -> {error, Reason}
+            end;
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %% @doc
@@ -78,17 +86,18 @@ nif_chat(_Messages, _Params) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @doc
-%% Extracts a required parameter from the message.
-%% @param ParamName The name of the parameter to extract.
-%% @param Msg The message containing the parameters.
-%% @param Opts The options for the request.
-%% @spec extract_required_param(binary(), map(), list()) -> term()
+%% Extracts a required parameter from the message. Returns `{ok, Value}` if the
+%% parameter is found, or `{error, {missing_required_param, ParamName}}` if it's not.
+%% @param ParamName The name of the parameter to extract (binary).
+%% @param Msg The message (map) containing the parameters.
+%% @param Opts The options (list) for the request.
+%% @spec extract_required_param(binary(), map(), list()) -> {ok, term()} | {error, {missing_required_param, binary()}}
 extract_required_param(ParamName, Msg, Opts) ->
     case hb_ao:get(ParamName, Msg, undefined, Opts) of
         undefined -> 
-            throw({missing_required_param, ParamName});
+            {error, {missing_required_param, ParamName}};
         Value -> 
-            Value
+            {ok, Value}
     end.
 
 %% @doc
