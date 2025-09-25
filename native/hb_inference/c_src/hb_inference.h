@@ -12,7 +12,6 @@ struct hb_instance;
 
 // Parameters for text generation
 struct hb_generate_params {
-    float temp;
     float top_p;
     int32_t n_predict;
     // Add other sampler parameters here
