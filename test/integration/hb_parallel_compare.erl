@@ -51,12 +51,12 @@ compare_processes(ProcessList, MaxWorkers) ->
 start_supervised(MaxWorkers) ->
     %% Then add the parallel module child dynamically
     ChildSpec = #{
-        id => parallel_hb_compare,
-        start => {parallel_hb_compare, start_link, [MaxWorkers]},
+        id => ?MODULE,
+        start => {?MODULE, start_link, [MaxWorkers]},
         restart => permanent,
         shutdown => 5000,
         type => worker,
-        modules => [parallel_hb_compare]
+        modules => [?MODULE]
     },
     supervisor:start_child(hb_sup, ChildSpec).
 
@@ -164,7 +164,7 @@ spawn_workers(State) ->
 %% @doc Worker function that performs the actual comparison
 worker_function(ProcessId) ->
     try
-        legacy_hb_compare:compare_testnet(ProcessId)
+        hb_legacy_compare:compare_testnet(ProcessId)
     catch
         Class:Reason:Stacktrace ->
             io:format("Error in worker for process ~s: ~p:~p~n~p~n", 
