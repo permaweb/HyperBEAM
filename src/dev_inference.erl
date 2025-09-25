@@ -7,8 +7,11 @@
 %%% @end
 %%%-------------------------------------------------------------------
 -module(dev_inference).
--export([info/0, chat/3, completion/3]).
+-export([info/0, chat/3, completion/3, load_model/2]).
 -on_load(init/0).
+-include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
+
 -define(DEFAULT_MODEL, <<"gemma-3-270m-it-F16.gguf">>).
 
 init() ->
@@ -34,10 +37,8 @@ completion(_Msg1, Msg2, Opts) ->
     Reference = hb_ao:get(<<"reference">>, Msg2, undefined, Opts),
     MaxTokens = hb_ao:get(<<"max_tokens">>, Msg2, 512, Opts),
     TopP = hb_ao:get(<<"top_p">>, Msg2, 0.9, Opts),
-    ModelFile = hb_ao:get(<<"model">>, Msg2, ?DEFAULT_MODEL, Opts),
-    ModelPath = filename:join(["models", ModelFile]),
 
-    case nif_completion(ModelPath, Prompt, #{top_p => TopP, n_predict => MaxTokens}) of
+    case nif_completion(Prompt, #{top_p => TopP, n_predict => MaxTokens}) of
         {ok, Content} -> {ok, build_response(Content, Reference)};
         {error, Reason} -> {error, Reason}
     end.
@@ -53,18 +54,27 @@ chat(_Msg1, Msg2, Opts) ->
     Reference = hb_ao:get(<<"reference">>, Msg2, undefined, Opts),
     MaxTokens = hb_ao:get(<<"max_tokens">>, Msg2, 512, Opts),
     TopP = hb_ao:get(<<"top_p">>, Msg2, 0.9, Opts),
-    ModelFile = hb_ao:get(<<"model">>, Msg2, ?DEFAULT_MODEL, Opts),
-    ModelPath = filename:join(["models", ModelFile]),
 
-    case nif_chat(ModelPath, Messages, #{top_p => TopP, n_predict => MaxTokens}) of
+    case nif_chat(Messages, #{top_p => TopP, n_predict => MaxTokens}) of
         {ok, Content} -> {ok, build_response(Content, Reference)};
         {error, Reason} -> {error, Reason}
     end.
 
-nif_completion(_ModelPath, _Prompt, _Params) ->
+%% @doc
+%% Loads a language model and sets it as the active model.
+%% @param ModelPath The path to the model file.
+%% @param Params A map of parameters for loading the model.
+%% @spec load_model(binary(), map()) -> ok | {error, term()}
+load_model(ModelPath, Params) ->
+    nif_load_model(ModelPath, Params).
+
+nif_load_model(_ModelPath, _Params) ->
     erlang:nif_error(nif_not_loaded).
 
-nif_chat(_ModelPath, _Messages, _Params) ->
+nif_completion(_Prompt, _Params) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_chat(_Messages, _Params) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @doc
@@ -107,7 +117,11 @@ nif_test_() ->
      fun() ->
              ModelPath = get_model_path(),
              case filelib:is_regular(ModelPath) of
-                 true -> {ok, ModelPath};
+                 true -> 
+                     case load_model(ModelPath, #{}) of
+                         ok -> ok;
+                         {error, Reason} -> {skip, lists:flatten(io_lib:format("Failed to load model: ~p", [Reason]))}
+                     end;
                  false -> {skip, lists:flatten(io_lib:format("Model file not found at ~s", [ModelPath]))}
              end
      end,
@@ -116,26 +130,30 @@ nif_test_() ->
         case Result of
             {skip, _Reason} ->
                 [];
-            {ok, ModelPath} ->
+            ok ->
                 [
-                    {"Completion NIF", {timeout, 60, fun() -> test_completion_nif(ModelPath) end}},
-                    {"Chat NIF", {timeout, 60, fun() -> test_chat_nif(ModelPath) end}}
+                    {"Completion NIF", {timeout, 60, fun() -> test_completion_nif() end}},
+                    {"Chat NIF", {timeout, 60, fun() -> test_chat_nif() end}}
                 ]
         end
      end
     }.
 
-test_completion_nif(ModelPath) ->
+test_completion_nif() ->
     Prompt = <<"What is the capital of France? Answer concisely.">>, 
     Params = #{top_p => 0.9, n_predict => 20},
-    ?assertMatch({ok, _}, nif_completion(ModelPath, Prompt, Params)).
+    Result = nif_completion(Prompt, Params),
+    ?event(dev_inference, {completion_result, Result}),
+    ?assertMatch({ok, _}, Result).
 
-test_chat_nif(ModelPath) ->
+test_chat_nif() ->
     Messages = [
         #{<<"role">> => <<"system">>, <<"content">> => <<"You are a helpful assistant.">>},
         #{<<"role">> => <<"user">>, <<"content">> => <<"What is the capital of France? Answer concisely." >>}
     ],
     Params = #{top_p => 0.9, n_predict => 20},
-    ?assertMatch({ok, _}, nif_chat(ModelPath, Messages, Params)).
+    Result = nif_chat(Messages, Params),
+    ?event(dev_inference, {chat_result, Result}),
+    ?assertMatch({ok, _}, Result).
 
 -endif.
