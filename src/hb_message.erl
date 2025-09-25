@@ -1,6 +1,6 @@
 
 %%% @doc This module acts an adapter between messages, as modeled in the
-%%% AO-Core protocol, and their uderlying binary representations and formats.
+%%% AO-Core protocol, and their underlying binary representations and formats.
 %%% 
 %%% Unless you are implementing a new message serialization codec, you should
 %%% not need to interact with this module directly. Instead, use the
@@ -12,7 +12,7 @@
 %%% types of message formats:
 %%% 
 %%%     - Richly typed AO-Core structured messages.
-%%%     - Arweave transations.
+%%%     - Arweave transactions.
 %%%     - ANS-104 data items.
 %%%     - HTTP Signed Messages.
 %%%     - Flat Maps.
