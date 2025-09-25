@@ -50,3 +50,7 @@ mkdocs-site-manifest.csv
 .qwen
 .specify
 .env
+specs
+models
+GEMINI.md
+native/hb_inference/build
