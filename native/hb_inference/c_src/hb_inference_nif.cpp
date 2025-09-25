@@ -171,13 +171,15 @@ static ERL_NIF_TERM nif_completion(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
         return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "no_model_loaded"));
     }
 
-    const char* result = completion(current_instance, prompt_str.c_str(), gen_params); // Use gen_params
-
-    ERL_NIF_TERM ret;
-    if (result) {
-        ret = enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_string(env, result, ERL_NIF_LATIN1));
-    } else {
-        ret = enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "completion_failed"));
+            std::string result_str = completion(current_instance, prompt_str.c_str(), gen_params); // Now returns std::string
+    
+            ERL_NIF_TERM ret;
+            if (result_str.rfind("Error:", 0) == 0) { // Check if the string starts with "Error:"
+                ret = enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_string(env, result_str.c_str(), ERL_NIF_LATIN1));
+            } else {
+                ErlNifBinary output_bin;
+                enif_alloc_binary(result_str.length(), &output_bin);        memcpy(output_bin.data, result_str.c_str(), result_str.length());
+        ret = enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_binary(env, &output_bin));
     }
 
     enif_mutex_unlock(mutex);
@@ -237,13 +239,16 @@ static ERL_NIF_TERM nif_chat(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]
         return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "no_model_loaded"));
     }
 
-    const char* result = chat(current_instance, messages_vec.data(), messages_vec.size(), gen_params); // Use gen_params
+    std::string result_str = chat(current_instance, messages_vec.data(), messages_vec.size(), gen_params); // Now returns std::string
 
     ERL_NIF_TERM ret;
-    if (result) {
-        ret = enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_string(env, result, ERL_NIF_LATIN1));
+    if (result_str.rfind("Error:", 0) == 0) { // Check if the string starts with "Error:"
+        ret = enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_string(env, result_str.c_str(), ERL_NIF_LATIN1));
     } else {
-        ret = enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "chat_failed"));
+        ErlNifBinary output_bin;
+        enif_alloc_binary(result_str.length(), &output_bin);
+        memcpy(output_bin.data, result_str.c_str(), result_str.length());
+        ret = enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_binary(env, &output_bin));
     }
 
     enif_mutex_unlock(mutex);

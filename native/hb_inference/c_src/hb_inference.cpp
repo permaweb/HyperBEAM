@@ -69,7 +69,7 @@ void free_model(struct hb_instance* instance) {
 }
 
 // Stubs for chat and completion
-const char* chat(
+std::string chat(
     struct hb_instance* instance,
     const struct llama_chat_message* messages,
     size_t n_messages,
@@ -97,7 +97,7 @@ const char* chat(
     return generate(instance, buf.data(), params);
 }
 
-const char* completion(
+std::string completion(
     struct hb_instance* instance,
     const char* prompt,
     struct hb_generate_params params
@@ -108,7 +108,7 @@ const char* completion(
     return chat(instance, messages, 1, params);
 }
 
-const char* generate(
+std::string generate(
     struct hb_instance* instance,
     const char* prompt,
     struct hb_generate_params params
@@ -128,10 +128,8 @@ const char* generate(
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(params.top_p, 1));
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.0f));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(1234));
-    // llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, 1.5f, 0.0f, 0.0f));
 
-    static std::string result_str; // not thread safe
-    result_str = "";
+    std::string result_str; // Local string, not static
 
     const bool is_first = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) == -1;
 
@@ -191,5 +189,5 @@ const char* generate(
     }
 
     llama_sampler_free(smpl);
-    return result_str.c_str();
+    return result_str;
 }

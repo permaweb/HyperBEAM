@@ -2,6 +2,7 @@
 #define HB_INFERENCE_H
 
 #include "llama.h"
+#include <string>
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,20 +31,20 @@ int load_model(
 void free_model(struct hb_instance* instance);
 
 // Chat and Completion APIs
-const char* chat(
+std::string chat(
     struct hb_instance* instance,
     const struct llama_chat_message* messages,
     size_t n_messages,
     struct hb_generate_params params
 );
 
-const char* generate(
+std::string generate(
     struct hb_instance* instance,
     const char* prompt,
     struct hb_generate_params params
 );
 
-const char* completion(
+std::string completion(
     struct hb_instance* instance,
     const char* prompt,
     struct hb_generate_params params

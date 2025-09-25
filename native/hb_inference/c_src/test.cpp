@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string> // Added for std::string
+#include <iostream> // Added for std::cout
 #include "hb_inference.h"
 
 // Helper to create default model parameters
@@ -26,18 +28,18 @@ static struct hb_generate_params get_default_generate_params() {
 }
 
 void run_completion_test(struct hb_instance* instance) {
-    printf("\n--- Running Completion Test ---\n");
+    std::cout << "\n--- Running Completion Test ---\n";
     const char* prompt = "/no_think What's Arweave? Answer concisely.";
     struct hb_generate_params gen_params = get_default_generate_params();
 
-    printf("Prompt: %s\n", prompt);
-    const char* result = completion(instance, prompt, gen_params);
-    printf("Result: %s\n", result);
-    printf("--- Completion Test Finished ---\n");
+    std::cout << "Prompt: " << prompt << "\n";
+    std::string result = completion(instance, prompt, gen_params); // Now returns std::string
+    std::cout << "Result: " << result << "\n";
+    std::cout << "--- Completion Test Finished ---\n";
 }
 
 void run_chat_test(struct hb_instance* instance) {
-    printf("\n--- Running Chat Test ---\n");
+    std::cout << "\n--- Running Chat Test ---\n";
     struct llama_chat_message messages[] = {
         {"system", "/no_think You are an assistant who say no to everything."},
         {"user", "What is the capital of France?"},
@@ -47,17 +49,17 @@ void run_chat_test(struct hb_instance* instance) {
     size_t n_messages = sizeof(messages) / sizeof(messages[0]);
     struct hb_generate_params gen_params = get_default_generate_params();
 
-    printf("Chatting with %zu messages...\n", n_messages);
-    const char* result = chat(instance, messages, n_messages, gen_params);
-    printf("Assistant: %s\n", result);
-    printf("--- Chat Test Finished ---\n");
+    std::cout << "Chatting with " << n_messages << " messages...\n";
+    std::string result = chat(instance, messages, n_messages, gen_params); // Now returns std::string
+    std::cout << "Assistant: " << result << "\n";
+    std::cout << "--- Chat Test Finished ---\n";
 }
 
 
 int main(int argc, char* argv[]) {
     struct hb_instance* instance = init();
     if (!instance) {
-        fprintf(stderr, "Failed to initialize instance\n");
+        std::cerr << "Failed to initialize instance\n";
         return 1;
     }
 
@@ -67,9 +69,9 @@ int main(int argc, char* argv[]) {
     struct llama_model_params model_params = get_default_model_params();
     struct llama_context_params ctx_params = get_default_context_params();
 
-    printf("Loading model: %s\n", gemma_model_path);
+    std::cout << "Loading model: " << gemma_model_path << "\n";
     if (load_model(instance, gemma_model_path, model_params, ctx_params) != 0) {
-        fprintf(stderr, "Failed to load model\n");
+        std::cerr << "Failed to load model\n";
         destroy(instance);
         return 1;
     }
@@ -79,8 +81,9 @@ int main(int argc, char* argv[]) {
 
     // Free the current model before loading a new one
     free_model(instance);
+    std::cout << "Loading model: " << qwen3_model_path << "\n";
     if (load_model(instance, qwen3_model_path, model_params, ctx_params) != 0) {
-        fprintf(stderr, "Failed to load model\n");
+        std::cerr << "Failed to load model\n";
         destroy(instance);
         return 1;
     }

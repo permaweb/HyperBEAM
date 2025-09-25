@@ -17,10 +17,9 @@ target_include_directories(hb_inference PUBLIC
 
 
 # Build the test executable
-add_executable(test c_src/test.c)
+add_executable(test c_src/test.cpp)
 target_link_libraries(test PRIVATE hb_inference llama)
 
-install(TARGETS hb_inference LIBRARY DESTINATION lib)
 install(TARGETS test RUNTIME DESTINATION bin)
 
 # Erlang NIF specific paths
