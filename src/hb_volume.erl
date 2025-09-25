@@ -436,9 +436,9 @@ mount_opened_volume(Partition, MountPoint, VolumeName) ->
     DeviceMapperPath = "/dev/mapper/" ++ VolumeNameStr,
 
     maybe
-        {create_mount_point_directory, ok} ?= {create_mount_point_directory, filelib:ensure_path(MountPointStr)},
-        {ensure_ext4_filesystem_exists, ok} ?= {ensure_ext4_filesystem_exists, ensure_ext4_filesystem_exists(DeviceMapperPath)},
-        {mount_partition, {ok, _}} ?= {mount_partition, safe_exec("mount " ++ DeviceMapperPath ++ " " ++ MountPointStr)},
+        {_, ok} ?= {create_mount_point_directory, filelib:ensure_path(MountPointStr)},
+        {_, ok} ?= {ensure_ext4_filesystem_exists, ensure_ext4_filesystem_exists(DeviceMapperPath)},
+        {_, {ok, _}} ?= {mount_partition, safe_exec("mount " ++ DeviceMapperPath ++ " " ++ MountPointStr)},
         {ok, #{
                 <<"status">> => 200,
                 <<"message">> => 
@@ -459,9 +459,9 @@ mount_opened_volume(Partition, MountPoint, VolumeName) ->
             ),
             safe_exec("cryptsetup luksClose " ++ VolumeNameStr),
             {error, <<"Failed to create mount point directory">>};
-        {get_block_device_info, {error, Error}} -> 
+        {ensure_ext4_filesystem_exists, {error, Error}} ->
             ?event(debug_volume, 
-                {create_and_format_partition, get_block_device_info_error, 
+                {create_and_format_partition, ensure_ext4_filesystem_exists_error,
                     {error, Error}
                 }
             ),
@@ -479,9 +479,9 @@ mount_opened_volume(Partition, MountPoint, VolumeName) ->
 
 ensure_ext4_filesystem_exists(DeviceMapperPath) ->
     maybe
-        {get_block_device_info, {ok, BlockDeviceInfo}} ?= {get_block_device_info, safe_exec("blkid " ++ DeviceMapperPath)},
+        {_, {ok, BlockDeviceInfo}} ?= {get_block_device_info, safe_exec("blkid " ++ DeviceMapperPath)},
         FileSystemFound ?= string:find(BlockDeviceInfo, "TYPE="),
-        {maybe_create_ext4_filesystem, {ok, _}} ?= {maybe_create_ext4_filesystem, maybe_create_ext4_filesystem(FileSystemFound, DeviceMapperPath)},
+        {_, {ok, _}} ?= {maybe_create_ext4_filesystem, maybe_create_ext4_filesystem(FileSystemFound, DeviceMapperPath)},
         ok
     else
         {get_block_device_info, {error, Error}} -> 
@@ -530,7 +530,7 @@ change_node_store(StorePath, CurrentStore) ->
     ?event(debug_volume, {change_node_store, creating_directory, StorePath}),
 
     maybe
-        {create_store_directory, ok} ?= {create_store_directory, filelib:ensure_path(StorePathStr)},
+        {_, ok} ?= {create_store_directory, filelib:ensure_path(StorePathStr)},
         NewStore ?= update_store_config(CurrentStore, StorePath),
         {ok, #{
             <<"status">> => 200,

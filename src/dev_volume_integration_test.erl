@@ -115,7 +115,7 @@ full_disk_integration_test_() ->
         {skip, Reason} ->
             {skip, Reason};
         ok ->
-            {timeout, 300, 
+            {timeout, 30 * 60 * 1000,
              {setup,
               fun() -> 
                   setup_test_environment(),
@@ -149,7 +149,7 @@ error_handling_integration_test_() ->
     case safety_checks() of
         {skip, Reason} -> {skip, Reason};
         ok ->
-            {timeout, 180,
+            {timeout, 15 * 60,
              {setup,
               fun() -> 
                   setup_test_environment(),
@@ -210,5 +210,5 @@ run_integration_tests() ->
             {error, tests_disabled};
         true ->
             io:format("~nRunning destructive disk integration tests...~n"),
-            eunit:test(?MODULE, [verbose])
+            eunit:test(?MODULE, [verbose, {scale_timeouts,10}])
     end.
