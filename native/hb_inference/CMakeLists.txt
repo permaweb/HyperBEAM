@@ -22,3 +22,15 @@ target_link_libraries(test PRIVATE hb_inference llama)
 
 install(TARGETS hb_inference LIBRARY DESTINATION lib)
 install(TARGETS test RUNTIME DESTINATION bin)
+
+# Erlang NIF specific paths
+set(ERLANG_INCLUDE_DIR "/usr/local/lib/erlang/usr/include")
+include_directories(${ERLANG_INCLUDE_DIR})
+
+# Build the NIF as a shared library
+add_library(hb_inference_nif MODULE c_src/hb_inference_nif.cpp)
+set_target_properties(hb_inference_nif PROPERTIES PREFIX "")
+target_link_libraries(hb_inference_nif PRIVATE hb_inference llama)
+
+# Install the NIF library
+install(TARGETS hb_inference_nif LIBRARY DESTINATION lib)
