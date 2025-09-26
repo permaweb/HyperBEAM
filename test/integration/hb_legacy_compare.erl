@@ -150,7 +150,7 @@ get_mainnet_result(ProcessId, Nonce, Attempt) ->
         false -> "https://tee-1.forward.computer"
     end,
     MainnetUrl = MainnetBase ++ "/" ++ ProcessId ++ "~process@1.0/compute&slot=" ++ 
-                 integer_to_list(Nonce) ++ "/results/json",
+                 integer_to_list(Nonce) ++ "?require-codec=application/json&accept-bundle=true",
     io:format("Fetching mainnet result... ~s~n", [MainnetUrl]),
     
     case httpc:request(get, {MainnetUrl, []}, [], []) of
@@ -172,7 +172,7 @@ get_whitezone_result(MessageId, ProcessId, WhiteZone) ->
 
 get_mainnet_result_production(ProcessId, Nonce) ->
     MainnetUrl = "https://tee-1.forward.computer/" ++ ProcessId ++ 
-                 "~process@1.0/compute&slot=" ++ integer_to_list(Nonce) ++ "/results/json",
+                 "~process@1.0/compute&slot=" ++ integer_to_list(Nonce) ++ "?require-codec=application/json&accept-bundle=true",
     io:format("Fetching mainnet result... ~s~n", [MainnetUrl]),
     
     case httpc:request(get, {MainnetUrl, []}, [], []) of
