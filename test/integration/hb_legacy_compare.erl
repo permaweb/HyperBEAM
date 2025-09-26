@@ -59,7 +59,7 @@ compare_legacy_at_nonce_hb(ProcessId, Nonce, testnet) ->
     io:format("Got message id ~s~n", [MessageId]),
     
     TestnetResult = get_testnet_result(MessageId, ProcessId, 1),
-    MainnetResult = get_mainnet_result(ProcessId, Nonce),
+    MainnetResult = get_mainnet_result(ProcessId, Nonce, 1),
     
     io:format("Fetched testnet result~n"),
     io:format("Fetched mainnet result~n"),
@@ -140,10 +140,11 @@ get_testnet_result(MessageId, ProcessId, Attempt) ->
             hb_json:decode(list_to_binary(Body));
         _Error when Attempt < 3 ->
             get_testnet_result(MessageId, ProcessId, Attempt + 1);
-        _ -> throw({error, "Failed to fetch testnet result"})
+        _ -> 
+            throw({error, "Failed to fetch testnet result"})
     end.
 
-get_mainnet_result(ProcessId, Nonce) ->
+get_mainnet_result(ProcessId, Nonce, Attempt) ->
     MainnetBase = case ?LOCAL_MAINNET of
         true -> "http://localhost:8734";
         false -> "https://tee-1.forward.computer"
@@ -155,7 +156,10 @@ get_mainnet_result(ProcessId, Nonce) ->
     case httpc:request(get, {MainnetUrl, []}, [], []) of
         {ok, {{_, 200, _}, _, Body}} ->
             hb_json:decode(list_to_binary(Body));
-        _ -> throw({error, "Failed to fetch mainnet result"})
+        _Error when Attempt < 3 ->
+            get_mainnet_result(ProcessId, Nonce, Attempt + 1);
+        _ -> 
+            throw({error, "Failed to fetch mainnet result"})
     end.
 
 get_whitezone_result(MessageId, ProcessId, WhiteZone) ->
