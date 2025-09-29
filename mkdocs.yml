@@ -18,20 +18,24 @@ nav:
       - Intro to HyperBEAM: "build/introduction/what-is-hyperbeam.md"
       - Intro to AO-Core: "build/introduction/what-is-ao-core.md"
       - Getting Started:
-          - "Core Capabilities": "build/hyperbeam-capabilities.md"
-          - Building ao Processes: "build/building-on-ao.md"
-          - Pathing in HyperBEAM: "build/pathing-in-hyperbeam.md"
+          - "Core Capabilities": "build/getting-started/hyperbeam-capabilities.md"
+          - Building ao Processes: "build/getting-started/building-on-ao.md"
+          - Pathing in HyperBEAM: "build/getting-started/pathing-in-hyperbeam.md"
       - Devices:
           - "Overview": "build/devices/hyperbeam-devices.md"
-          - "Core Devices":
-              - ~meta@1.0: "build/devices/meta-at-1-0.md"
-              - ~process@1.0: "build/devices/process-at-1-0.md"
-              - ~message@1.0: "build/devices/message-at-1-0.md"
-              - ~wasm64@1.0: "build/devices/wasm64-at-1-0.md"
-              - ~lua@5.3a: "build/devices/lua-at-5-3a.md"
-              - ~json@1.0: "build/devices/json-at-1-0.md"
-              - ~scheduler@1.0: "build/devices/scheduler-at-1-0.md"
-              - ~relay@1.0: "build/devices/relay-at-1-0.md"
+          - "Foundational Devices":
+              - ~meta@1.0: "build/devices/foundational/meta-at-1-0.md"
+              - ~process@1.0: "build/devices/foundational/process-at-1-0.md"
+              - ~message@1.0: "build/devices/foundational/message-at-1-0.md"
+              - ~wasm64@1.0: "build/devices/foundational/wasm64-at-1-0.md"
+              - ~lua@5.3a: "build/devices/foundational/lua-at-5-3a.md"
+              - ~json@1.0: "build/devices/foundational/json-at-1-0.md"
+              - ~scheduler@1.0: "build/devices/foundational/scheduler-at-1-0.md"
+              - ~relay@1.0: "build/devices/foundational/relay-at-1-0.md"
+          - "Application Features":
+              - "Authentication Ecosystem": "build/devices/application-features/auth-ecosystem-at-1-0.md"
+              - "Data Discovery": "build/devices/application-features/data-discovery-at-1-0.md"
+              - "Data Replication": "build/devices/application-features/data-replication-at-1-0.md"
           - Building Devices: "build/devices/building-devices.md"
       - Reference:
           - FAQ: "build/reference/faq.md"
