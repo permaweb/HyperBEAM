@@ -138,7 +138,7 @@ get_testnet_result(MessageId, ProcessId, Attempt) ->
     case httpc:request(get, {TestnetUrl, []}, [], []) of
         {ok, {{_, 200, _}, _, Body}} ->
             hb_json:decode(list_to_binary(Body));
-        {ok, {{_, Status, _}, _, Body}} when Status == 425 orelse Status == 503->
+        {ok, {{_, Status, _}, _, Body}} when Status == 422 orelse Status == 425 orelse Status == 503->
             hb_json:decode(list_to_binary(Body));
         _Error when Attempt < 3 ->
             get_testnet_result(MessageId, ProcessId, Attempt + 1);
