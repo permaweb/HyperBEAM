@@ -39,10 +39,12 @@ compare_nonces(ProcessId, LatestNonce, Target) ->
     Result = 
         lists:foldl(fun(Nonce, Res) ->
             maybe undefined ?= Res,
+                undefined ?= persistent_term:get({?MODULE, ProcessId}, undefined),
                 case compare_legacy_at_nonce_hb(ProcessId, Nonce, Target) of
                     #{mismatches := Map} = Res when map_size(Map) > 0 ->
                         #{Nonce => Res};
                     _Matches ->
+                        persistent_term:put({?MODULE, ProcessId}, Nonce),
                         undefined
                 end
             end
@@ -140,8 +142,8 @@ get_testnet_result(MessageId, ProcessId, Attempt) ->
             hb_json:decode(list_to_binary(Body));
         _Error when Attempt < 3 ->
             get_testnet_result(MessageId, ProcessId, Attempt + 1);
-        _ -> 
-            throw({error, "Failed to fetch testnet result"})
+        {error, Reason} -> 
+            throw({error, "Failed to fetch testnet result", Reason})
     end.
 
 get_mainnet_result(ProcessId, Nonce, Attempt) ->
@@ -158,8 +160,8 @@ get_mainnet_result(ProcessId, Nonce, Attempt) ->
             hb_json:decode(list_to_binary(Body));
         _Error when Attempt < 3 ->
             get_mainnet_result(ProcessId, Nonce, Attempt + 1);
-        _ -> 
-            throw({error, "Failed to fetch mainnet result"})
+        {error, Reason} -> 
+            throw({error, "Failed to fetch mainnet result", Reason})
     end.
 
 get_whitezone_result(MessageId, ProcessId, WhiteZone) ->
