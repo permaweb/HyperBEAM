@@ -364,25 +364,6 @@ scope(_) -> scope().
 %% @param Path Binary prefix to search for
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
 -spec list(map(), binary()) -> {ok, [binary()]} | {error, term()}.
-list(Opts, <<"/">>) ->
-    #{ <<"db">> := DBInstance } = find_env(Opts),
-    case elmdb:match_prefix(DBInstance, <<"group:">>) of
-        {ok, Children} ->
-            Groups = lists:filtermap(
-                fun(<<"group:", Group/binary>>) ->
-                    case binary:split(Group, <<"/">>, [global]) of
-                        [GroupNoSlash] -> {true, GroupNoSlash};
-                        [GroupSlashRemoved, <<>>] -> {true, GroupSlashRemoved};
-                        _ -> false
-                    end
-                end,
-                Children
-            ),
-            {ok, Groups};
-        not_found ->
-            {ok, []}  % Handle both old and new format
-    end;
-
 list(Opts, Path) ->
     % Check if Path is a link and resolve it if necessary
     ResolvedPath =
