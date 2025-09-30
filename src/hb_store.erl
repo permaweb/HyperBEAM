@@ -309,17 +309,19 @@ match(Modules, Match) -> call_function(Modules, match, [Match]).
 sync(#{<<"store-module">> := hb_store_lmdb} = FromStore, ToStore) ->
     ?event({sync_start, FromStore, ToStore}),
     FromStoreOpts = maps:put(<<"resolve">>, false, FromStore),
-    case hb_store_lmdb:iterate_start(FromStoreOpts, <<>>, 1000) of
-        {ok, {KVList, Continuation}} ->
-            % Links = [{Key, Value} || {Key, Value} <- KVList, type(FromStore, Key) == link],
-            % ?debug_print({links, Links}),
-            maybe
-                ok ?= sync_kv_entries(ToStore, KVList),
-                sync_continue(FromStoreOpts, ToStore, Continuation)
-            end;
-        Error ->
-            ?debug_print(Error),
-            {error, sync_failed}
+    Res = hb_store_lmdb:fold_while(FromStoreOpts, fun({Key, Value}, {ok, Acc}) ->
+        case hb_store:write(ToStore, Key, Value) of
+            ok -> 
+                {cont, {ok, Acc + 1}};
+            Error -> 
+                ?event({sync_error, Error}),
+                {halt, {error, sync_failed}} 
+        end
+    end, {ok, 0}),
+    maybe 
+        {ok, Count} ?= Res,
+        ?event({sync_success, Count}),
+        ok
     end;
 
 sync(#{<<"store-module">> := hb_store_fs} = FromStore, ToStore) ->
@@ -331,41 +333,6 @@ sync(#{<<"store-module">> := hb_store_fs} = FromStore, ToStore) ->
             [] -> ok;
             FailedKeyValues -> {error, {sync_failed, FailedKeyValues}}
         end
-    end.
-
-sync_kv_entries(ToStore, KVList) ->
-    ?event({sync_entries, <<"/">>, KVList}),
-    KeysNotSynced = 
-        lists:dropwhile(fun({Key, Value}) ->
-            case hb_store:write(ToStore, Key, Value) of
-                ok -> true;
-                Error -> 
-                    ?event({sync_failed, Error}),
-                    false
-            end
-        end, KVList),
-    case KeysNotSynced of
-        [] -> ok;
-        _ -> {error, {sync_failed, hd(KeysNotSynced)}}
-    end.
-
-sync_continue(FromStore, ToStore, Continuation) ->
-    case hb_store_lmdb:iterate_cont(FromStore, Continuation, 1000) of
-        {ok, {KVList, not_found}} ->
-            sync_kv_entries(ToStore, KVList);
-
-        {ok, {KVList, NewContinuation}} ->
-            maybe 
-                ok ?= sync_kv_entries(ToStore, KVList),
-                sync_continue(FromStore, ToStore, NewContinuation)
-            end;
-
-        not_found ->
-            ok;
-
-        Error ->
-            ?debug_print(Error),
-            {error, iterate_failed}
     end.
 
 sync_fs_entries(Entries, ParentDir, FromStore, ToStore) ->

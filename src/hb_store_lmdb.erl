@@ -21,7 +21,7 @@
 
 %% Public API exports
 -export([start/1, stop/1, scope/0, scope/1, reset/1]).
--export([read/2, write/3, flush/1, list/2, match/2, fold/2, iterate_start/3, iterate_cont/3]).
+-export([read/2, write/3, flush/1, list/2, match/2, fold_while/3]).
 -export([make_group/2, make_link/3, type/2]).
 -export([path/2, add_path/3, resolve/2]).
 
@@ -36,7 +36,7 @@
 -define(DEFAULT_MAX_FLUSH_TIME, 50).            % Maximum time between flushes
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
 -define(MAX_PENDING_WRITES, 400).               % Force flush after x pending
--define(FOLD_YIELD_INTERVAL, 100).              % Yield every x keys
+-define(FOLD_CHUNK_SIZE, 100).                  % Iterator chunk size for folding
 
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
@@ -420,32 +420,42 @@ match(Opts, MatchKVs) ->
         not_found -> not_found
     end.
 
-fold(Opts, _Fun) ->
+-spec fold_while(Opts :: map(), Fun :: fun(), Acc0 :: term()) -> 
+    {ok, term()} | not_found | {error, term(), binary()}.
+fold_while(Opts, Fun, Acc0) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
+    maybe
+        ok ?= elmdb:flush(DBInstance),
+        {ok, IterRes} ?= elmdb:iterate_start(DBInstance, <<>>, ?FOLD_CHUNK_SIZE),
+        % Links = [{Key, Value} || {Key, Value} <- KVList, type(FromStore, Key) == link],
+        % ?debug_print({links, Links}),
+        fold_chunks(DBInstance, Fun, Acc0, IterRes)
+    end.
+
+fold_chunks(DBInstance, Fun, Acc0, {KVList, Continuation}) ->
+    case do_fold_while(Fun, Acc0, KVList) of
+        {cont, Acc1} ->
+            fold_continue(DBInstance, Fun, Acc1, Continuation);
+        {halt, Res} ->
+            Res
+    end.
+
+do_fold_while(Fun, AccIn, [{Key, Value}]) ->
+    Fun({Key, Value}, AccIn);
+
+do_fold_while(Fun, AccIn, [KV | KVList]) ->
     maybe 
-        {ok, Iter} ?= elmdb:iterator(DBInstance, <<>>),
-        ?debug_print(elmdb:iterator_next(Iter)),
-        elmdb:iterator_close(Iter)
-    end,
-    Res = elmdb:iterate_start(DBInstance, <<>>, 100),
-    ?debug_print({fold, Res}).
+        {cont, AccOut} ?= Fun(KV, AccIn),
+        do_fold_while(Fun, AccOut, KVList)
+    end.
 
--type key_value() :: {binary(), binary()}.
--type continuation() :: tuple() | not_found.
--type ok_iteration() :: {ok, [key_value()], continuation()}.
-
--spec iterate_start(DBInstance :: term(), KeyPrefix :: binary(), Limit :: integer()) -> 
-    ok_iteration() | not_found | {error, term(), binary()}.
-iterate_start(Opts, Key, Limit) ->
-    #{ <<"db">> := DBInstance } = find_env(Opts),
-    elmdb:flush(DBInstance),
-    elmdb:iterate_start(DBInstance, Key, Limit).
-
--spec iterate_cont(DBInstance :: term(), Continuation :: continuation(), Limit :: integer()) -> 
-    ok_iteration() | not_found | {error, term(), binary()}.
-iterate_cont(Opts, Continuation, Limit) ->
-    #{ <<"db">> := DBInstance } = find_env(Opts),
-    elmdb:iterate_cont(DBInstance, Continuation, Limit).
+fold_continue(_DBInstance, _Fun, Acc1, not_found) -> 
+    Acc1;
+fold_continue(DBInstance, Fun, Acc1, Continuation) ->
+    maybe
+        {ok, IterRes} ?= elmdb:iterate_cont(DBInstance, Continuation, ?FOLD_CHUNK_SIZE),
+        fold_chunks(DBInstance, Fun, Acc1, IterRes)
+    end.
 
 %% @doc Create a group entry that can contain other keys hierarchically.
 %%

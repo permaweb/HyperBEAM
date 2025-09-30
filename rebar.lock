@@ -14,7 +14,7 @@
   1},
  {<<"elmdb">>,
   {git,"https://github.com/twilson63/elmdb-rs.git",
-       {ref,"e52542ac24356fd52d7c843852b09417d278f2ac"}},
+       {ref,"5255868638e91b4dff24163467765d780f8a6f4a"}},
   0},
  {<<"graphql">>,{pkg,<<"graphql_erl">>,<<"0.17.1">>},0},
  {<<"gun">>,{pkg,<<"gun">>,<<"2.2.0">>},0},
