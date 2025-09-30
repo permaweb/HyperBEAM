@@ -21,7 +21,7 @@
 
 %% Public API exports
 -export([start/1, stop/1, scope/0, scope/1, reset/1]).
--export([read/2, write/3, flush/1, list/2, match/2, iterate_start/3, iterate_cont/3]).
+-export([read/2, write/3, flush/1, list/2, match/2, fold/2, iterate_start/3, iterate_cont/3]).
 -export([make_group/2, make_link/3, type/2]).
 -export([path/2, add_path/3, resolve/2]).
 
@@ -438,6 +438,16 @@ match(Opts, MatchKVs) ->
             {ok, Matches};
         not_found -> not_found
     end.
+
+fold(Opts, _Fun) ->
+    #{ <<"db">> := DBInstance } = find_env(Opts),
+    maybe 
+        {ok, Iter} ?= elmdb:iterator(DBInstance, <<>>),
+        ?debug_print(elmdb:iterator_next(Iter)),
+        elmdb:iterator_close(Iter)
+    end,
+    Res = elmdb:iterate_start(DBInstance, <<>>, 100),
+    ?debug_print({fold, Res}).
 
 -type key_value() :: {binary(), binary()}.
 -type continuation() :: tuple() | not_found.
