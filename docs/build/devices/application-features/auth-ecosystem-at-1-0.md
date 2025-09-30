@@ -84,12 +84,13 @@ The authentication workflow: HTTP request with `&!` → auth-hook intercepts →
 
 ## Security Considerations
 
-!!! warning "Trust Model"
-    Intended for deployment in Trusted Execution Environments (TEE) with `~snp@1.0` or trusted nodes. Private keys never leave server memory. All operations create cryptographically auditable signatures.
 
 **Security Layers:** Provider authentication (Cookie/HTTP) → Access control messages → Controller verification → Request signing (RSA-PSS/HMAC)
 
 **Best Practices:** HTTPS-only, secure cookie attributes, strong PBKDF2 parameters, session key rotation, audit logging
+
+!!! warning "Trust Model"
+    Intended for deployment in Trusted Execution Environments (TEE) with `~snp@1.0` or trusted nodes. Private keys never leave server memory. All operations create cryptographically auditable signatures.
 
 ## Configuration Examples
 
@@ -125,14 +126,6 @@ You control the trust model. Deploy in TEE for trustless environments or trusted
 **For End Users:**
 
 Single-click access to blockchain applications with traditional web experience. No seed phrases to manage, no browser extensions to install. Sessions persist across devices when using `non-volatile` storage mode. Authentication state syncs via cookies or HTTP headers.
-
-## Troubleshooting
-
-**401 Unauthorized:** Check PBKDF2 iteration count matches, verify cookie transmission in browser tools, confirm `when` conditions match request
-
-**Sessions Not Persisting:** Set `persist: "non-volatile"`, adjust SameSite attribute, use first-party cookie context
-
-**Slow Performance:** Lower PBKDF2 iterations (keep > 600K), enable wallet caching, implement rate limiting
 
 ## See Also
 

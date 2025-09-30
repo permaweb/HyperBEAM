@@ -128,61 +128,6 @@ The query device implements several optimization strategies to ensure fast searc
 
 Queries operate within the node's security context and respect access control policies. Sensitive keys are excluded by default from search results. The underlying cache implements query limits and rate limiting to prevent resource exhaustion. All queries are subject to the node's authentication and authorization framework.
 
-## Troubleshooting
-
-### No Results Returned
-
-**Symptom**: Query returns empty results when data should exist
-
-**Common Causes**:
-
-* Incorrect key names (case-sensitive)
-* Messages not yet indexed in cache
-* Default `exclude` parameter filtering out search keys
-* Cache store not properly initialized
-
-**Solutions**:
-
-* Verify exact key names match cached message format
-* Wait for cache indexing to complete after replication
-* Explicitly specify `exclude` parameter to override defaults
-* Check cache device status and storage backend
-
-### Query Performance Issues
-
-**Symptom**: Slow query response times
-
-**Common Causes**:
-
-* Returning full messages instead of paths
-* No indexes on frequently queried keys
-* Large result sets without pagination
-* Inefficient nested field queries
-
-**Solutions**:
-
-* Use `return: "paths"` and fetch full messages only when needed
-* Configure appropriate indexes in cache store
-* Implement pagination for large datasets
-* Optimize query patterns to use indexed fields
-
-### GraphQL Queries Fail
-
-**Symptom**: GraphQL endpoint returns errors
-
-**Common Causes**:
-
-* Invalid GraphQL syntax
-* Missing required variables
-* Schema validation failures
-* `dev_query_graphql` module not loaded
-
-**Solutions**:
-
-* Validate GraphQL syntax using online validators
-* Ensure all required variables are provided
-* Check GraphQL schema matches expected format
-* Verify device dependencies are properly loaded
 
 ## Practical Implications
 
