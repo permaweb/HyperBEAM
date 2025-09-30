@@ -104,13 +104,23 @@ request(Method, Peer, Path, RawMessage, Opts) ->
         ),
     StartTime = os:system_time(millisecond),
     % Perform the HTTP request.
-    {_ErlStatus, Status, Headers, Body} = hb_http_client:req(Req, Opts),
-    % Process the response.
-    EndTime = os:system_time(millisecond),
+    case hb_http_client:req(Req, Opts) of
+        {_ErlStatus, Status, Headers, Body} ->
+            % Process the response.
+            EndTime = os:system_time(millisecond),
+            process_http_response(StartTime, EndTime, Method, Peer, Path, Status, Headers, Body, Opts);
+        {error, Reason} ->
+            ?event(http_error, {request_failed, {peer, Peer}, {path, Path}, {reason, Reason}}),
+            {error, Reason}
+    end.
+
+process_http_response(StartTime, EndTime, Method, Peer, Path, Status, Headers, Body, Opts) ->
     ?event(http_outbound,
         {
             http_response,
-            {req, Req},
+            {method, Method},
+            {peer, Peer},
+            {path, Path},
             {response,
                 #{
                     status => Status,
