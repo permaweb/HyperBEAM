@@ -66,17 +66,39 @@ get(Trie, Req, Opts) ->
 %% @doc Find the longest match for a key in a message representing a layer of 
 %% the trie.
 longest_match(Key, Trie, Opts) ->
-    longest_match(no_match, Key, hb_maps:keys(Trie, Opts) -- [<<"device">>], Opts).
-longest_match(Best, _Key, [], _Opts) -> Best;
-longest_match(_Best, Key, [Key | _Keys], _Opts) -> Key;
-longest_match(Best, Key, [XKey | Keys], Opts) ->
-    case binary:longest_common_prefix([XKey, Key]) of
-        NewLength when
-                (is_binary(Best) andalso NewLength > byte_size(Best)) orelse
-                (Best == no_match andalso NewLength > 0) ->
-            longest_match(binary:part(Key, 0, NewLength), Key, Keys, Opts);
-        _ ->
-            longest_match(Best, Key, Keys, Opts)
+    TrieKeys = hb_maps:keys(Trie, Opts) -- [<<"device">>],
+    longest_match_optimized(Key, TrieKeys).
+
+%% @doc Optimized prefix matching with early termination and better performance
+longest_match_optimized(Key, TrieKeys) ->
+    case lists:member(Key, TrieKeys) of
+        true -> Key;
+        false ->
+            SortedKeys = 
+                lists:sort(
+                    fun(A, B) -> 
+                        byte_size(A) >= byte_size(B) 
+                    end, 
+                    TrieKeys
+                ),
+            longest_match_sorted(Key, SortedKeys, no_match, 0)
+    end.
+
+%% @doc Find longest match with early termination
+longest_match_sorted(_Key, [], Best, _BestLen) -> Best;
+longest_match_sorted(Key, [XKey | Keys], Best, BestLen) ->
+    %% Early termination: if remaining keys are shorter than current best, stop
+    case byte_size(XKey) =< BestLen of
+        true -> Best;
+        false ->
+            PrefixLen = binary:longest_common_prefix([XKey, Key]),
+            case PrefixLen > BestLen of
+                true ->
+                    NewBest = binary:part(Key, 0, PrefixLen),
+                    longest_match_sorted(Key, Keys, NewBest, PrefixLen);
+                false ->
+                    longest_match_sorted(Key, Keys, Best, BestLen)
+            end
     end.
 
 %% @doc Set keys and their values in the trie. The `set-depth' key determines
