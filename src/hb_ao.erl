@@ -872,31 +872,6 @@ error_infinite(Msg1, Msg2, Opts) ->
         }
     }.
 
-error_invalid_intermediate_status(Msg1, Msg2, Msg3, RemainingPath, Opts) ->
-    ?event(
-        ao_core,
-        {error, {type, invalid_intermediate_status},
-            {msg2, Msg2},
-            {msg3, Msg3},
-            {remaining_path, RemainingPath},
-            {opts, Opts}
-        },
-        Opts
-    ),
-    ?event(ao_result, 
-        {intermediate_failure, {msg1, Msg1},
-            {msg2, Msg2}, {msg3, Msg3},
-            {remaining_path, RemainingPath}, {opts, Opts}}),
-    {
-        error,
-        #{
-            <<"status">> => 422,
-            <<"body">> => Msg3,
-            <<"key">> => hb_maps:get(<<"path">>, Msg2, <<"Key unknown.">>, Opts),
-            <<"remaining-path">> => RemainingPath
-        }
-    }.
-
 %% @doc Handle an error in a device call.
 error_execution(ExecGroup, Msg2, Whence, {Class, Exception, Stacktrace}, Opts) ->
     Error = {error, Whence, {Class, Exception, Stacktrace}},
@@ -1024,7 +999,12 @@ keys(Msg, Opts, remove) ->
 %% `HashPath' for each step.
 set(RawMsg1, RawMsg2, Opts) when is_map(RawMsg2) ->
     Msg1 = normalize_keys(RawMsg1, Opts),
-    Msg2 = hb_maps:without([<<"hashpath">>, <<"priv">>], normalize_keys(RawMsg2, Opts), Opts),
+    Msg2 =
+        hb_maps:without(
+            [<<"hashpath">>, <<"priv">>],
+            normalize_keys(RawMsg2, Opts),
+            Opts
+        ),
     ?event(ao_internal, {set_called, {msg1, Msg1}, {msg2, Msg2}}, Opts),
     % Get the next key to set. 
     case keys(Msg2, internal_opts(Opts)) of
@@ -1074,22 +1054,31 @@ deep_set(Msg, [Key], Value, Opts) ->
 deep_set(Msg, [Key|Rest], Value, Opts) ->
     case resolve(Msg, Key, Opts) of 
         {ok, SubMsg} ->
-            ?event(
+            ?event(debug_set,
                 {traversing_deeper_to_set,
                     {current_key, Key},
                     {current_value, SubMsg},
                     {rest, Rest}
-                }
+                },
+                Opts
             ),
-            Res = device_set(Msg, Key, deep_set(SubMsg, Rest, Value, Opts), <<"explicit">>, Opts),
-            ?event({deep_set_result, {msg, Msg}, {key, Key}, {res, Res}}),
+            Res =
+                device_set(
+                    Msg,
+                    Key,
+                    deep_set(SubMsg, Rest, Value, Opts),
+                    <<"explicit">>,
+                    Opts
+                ),
+            ?event(debug_set, {deep_set, {msg, Msg}, {key, Key}, {res, Res}}, Opts),
             Res;
         _ ->
-            ?event(
+            ?event(debug_set,
                 {creating_new_map,
                     {current_key, Key},
                     {rest, Rest}
-                }
+                },
+                Opts
             ),
             Msg#{ Key => deep_set(#{}, Rest, Value, Opts) }
     end.
@@ -1116,16 +1105,18 @@ device_set(Msg, Key, Value, Mode, Opts) ->
             <<"deep">> -> ReqWithoutMode;
             <<"explicit">> -> ReqWithoutMode#{ <<"set-mode">> => Mode }
         end,
-	?event(
-        ao_internal,
+    ?event(
+        debug_set,
         {
             calling_device_set,
-            {msg, Msg},
-            {applying_set, Req}
+            {base, Msg},
+            {key, Key},
+            {value, Value},
+            {full_req, Req}
         },
         Opts
     ),
-	Res =
+    Res =
         hb_util:ok(
             resolve(
                 Msg,
@@ -1134,12 +1125,12 @@ device_set(Msg, Key, Value, Mode, Opts) ->
             ),
             internal_opts(Opts)
         ),
-	?event(
-        ao_internal,
+    ?event(
+        debug_set,
         {device_set_result, Res},
         Opts
     ),
-	Res.
+    Res.
 
 %% @doc Remove a key from a message, using its underlying device.
 remove(Msg, Key) -> remove(Msg, Key, #{}).

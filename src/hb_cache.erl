@@ -380,14 +380,7 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either a
 %% richly typed map or a direct binary.
 read(Path, Opts) ->
-    case store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts) of
-        not_found -> not_found;
-        {ok, Res} ->
-            %?event({applying_types_to_read_message, Res}),
-            %Structured = dev_codec_structured:to(Res),
-            %?event({finished_read, Structured}),
-            {ok, Res}
-    end.
+    store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts).
 
 %% @doc List all of the subpaths of a given path and return a map of keys and
 %% links to the subpaths, including their types.
@@ -600,15 +593,15 @@ types_to_implicit(Types) ->
         Types
     ).
 
-%% @doc Read the result of a computation, using hueristics. The supported
-%% hueristics are as follows:
+%% @doc Read the result of a computation, using heuristics. The supported
+%% heuristics are as follows:
 %% 1. If the base message is an ID, we try to determine if the message has an
-%% if the message has an explicit device. If it does not, we can simply read the
-%% key and return it if it exists, as this is the behavior of `message@1.0'.
+%% explicit device. If it does not, we can simply read the key and return it if
+%% it exists, as this is the behavior of `message@1.0'.
 %% 2. If the base message is loaded (a map), we determine if it has an explicit,
 %% non-direct data access device. If it does, we simply read the key from the
 %% message and return it if it exists.
-%% 2. If the message has an explicit device, we attempt to read the hashpath to
+%% 3. If the message has an explicit device, we attempt to read the hashpath to
 %% see if it has already been computed.
 read_resolved(BaseMsg, Key, Opts) when is_binary(Key) ->
     read_resolved(BaseMsg, #{ <<"path">> => Key }, Opts);

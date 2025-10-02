@@ -90,11 +90,12 @@ do_push(PrimaryProcess, Assignment, Opts) ->
         }
     ),
     ?event(push, {push_computing_outbox, {process_id, ID}, {slot, Slot}}),
-    {Status, Result} = hb_ao:resolve(
-        {as, <<"process@1.0">>, PrimaryProcess},
-        #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
-        Opts#{ hashpath => ignore }
-    ),
+    {Status, Result} =
+        hb_ao:resolve(
+            {as, <<"process@1.0">>, PrimaryProcess},
+            #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
+            Opts#{ hashpath => ignore }
+        ),
     % Determine if we should include the full compute result in our response.
     IncludeDepth = hb_ao:get(<<"result-depth">>, Assignment, 1, Opts),
     AdditionalRes =
@@ -515,7 +516,7 @@ apply_security(authority, Msg, TargetProcess, Codec, Opts) ->
             ?event(push, {found_authority, {authority, Authority}}, Opts),
             commit_result(
                 Msg,
-                hb_util:binary_to_addresses(Authority),
+                hb_util:binary_to_strings(Authority),
                 Codec,
                 Opts
             )
@@ -641,16 +642,7 @@ full_push_test_() ->
         Opts = #{
             process_async_cache => false,
             priv_wallet => hb:wallet(),
-            cache_control => <<"always">>,
-            store => [
-                #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
-                #{ <<"store-module">> => hb_store_gateway,
-                    <<"store">> => #{
-                        <<"store-module">> => hb_store_fs,
-                        <<"name">> => <<"cache-TEST">>
-                    }
-                }
-            ]
+            cache_control => <<"always">>
         },
         Msg1 = dev_process:test_aos_process(Opts),
         hb_cache:write(Msg1, Opts),

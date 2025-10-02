@@ -16,7 +16,35 @@ init(Msg1, _Msg2, _Opts) ->
 %% with snapshots triggered only when HyperBEAM requests them. Subsequently,
 %% to load a snapshot, we just need to return the original message.
 normalize(Msg1, _Msg2, Opts) ->
-    hb_ao:set(Msg1, #{ <<"snapshot">> => unset }, Opts).
+    case hb_maps:find(<<"snapshot">>, Msg1, Opts) of
+        error -> {ok, Msg1};
+        {ok, Snapshot} ->
+            Unset = hb_ao:set(Msg1, #{ <<"snapshot">> => unset }, Opts),
+            case hb_maps:get(<<"type">>, Snapshot, Opts) == <<"Checkpoint">> of
+                false -> Unset;
+                true ->
+                    load_state(Snapshot, Opts),
+                    Unset
+            end
+    end.
+
+%% @doc Attempt to load a snapshot into the delegated compute server.
+load_state(Snapshot, Opts) ->
+    ?event(debug_load_snapshot, {loading_snapshot, {snapshot, Snapshot}}),
+    Body = hb_maps:get(<<"data">>, Snapshot, Opts),
+    Headers = hb_maps:without([<<"data">>], Snapshot, Opts),
+    Res = do_relay(
+        <<"POST">>,
+        <<"/state">>,
+        Body,
+        Headers,
+        Opts#{
+            hashpath => ignore,
+            cache_control => [<<"no-store">>, <<"no-cache">>]
+        }
+    ),
+    ?event(debug_load_snapshot, {load_result, Res}),
+    Res.
 
 %% @doc Call the delegated server to compute the result. The endpoint is
 %% `POST /compute' and the body is the JSON-encoded message that we want to
@@ -95,18 +123,29 @@ do_dryrun(ProcID, Msg2, Opts) ->
     ),
     extract_json_res(Response, Opts).
 
-do_relay(Method, Path, Body, AOS2, Opts) ->
+do_relay(Method, Path, Body, Headers, Opts) ->
+    ContentType =
+        hb_maps:get(
+            <<"content-type">>,
+            Headers,
+            <<"application/json">>,
+            Opts
+        ),
     hb_ao:resolve(
         #{
             <<"device">> => <<"relay@1.0">>,
-            <<"content-type">> => <<"application/json">>
+            <<"content-type">> => ContentType
         },
-        AOS2#{
+        Headers#{
             <<"path">> => <<"call">>,
-            <<"relay-method">> => Method,
-            <<"relay-body">> => Body,
-            <<"relay-path">> => Path,
-            <<"content-type">> => <<"application/json">>
+            <<"target">> => <<"payload">>,
+            <<"payload">> =>
+                Headers#{
+                    <<"path">> => Path,
+                    <<"method">> => Method,
+                    <<"body">> => Body,
+                    <<"content-type">> => ContentType
+                }
         },
         Opts
     ).

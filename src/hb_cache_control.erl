@@ -248,9 +248,9 @@ cache_source_to_cache_settings({opts, Opts}, _) ->
         _ -> CCMap
     end;
 cache_source_to_cache_settings(Msg, Opts) ->
-    case dev_message:get(<<"cache-control">>, Msg, Opts) of
+    case hb_maps:find(<<"cache-control">>, Msg, Opts) of
         {ok, CC} -> specifiers_to_cache_settings(CC);
-        {error, not_found} -> #{}
+        _ -> #{}
     end.
 
 %% @doc Convert a cache control list as received via HTTP headers into a 

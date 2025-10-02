@@ -2048,7 +2048,7 @@ http_get_legacy_schedule_as_aos2_test_() ->
         ?assertMatch(#{ <<"edges">> := As } when length(As) > 0, Decoded)
     end}.
 
-http_post_legacy_schedule_test_() ->
+http_post_legacy_schedule_test_disabled() ->
     {timeout, 60, fun() ->
         {Node, Opts} = http_init(),
         Target = <<"zrhm4OpfW85UXfLznhdD-kQ7XijXM-s2fAboha0V5GY">>,

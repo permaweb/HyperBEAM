@@ -10,6 +10,7 @@
 -module(hb_escape).
 -export([encode/1, decode/1, encode_keys/2, decode_keys/2]).
 -export([encode_quotes/1, decode_quotes/1]).
+-export([encode_ampersand/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -35,6 +36,13 @@ decode_quotes([]) -> [];
 decode_quotes([$\\, $\" | Rest]) -> [$\" | decode_quotes(Rest)];
 decode_quotes([$\" | Rest]) -> decode_quotes(Rest);
 decode_quotes([C | Rest]) -> [C | decode_quotes(Rest)].
+
+%% @doc Encode ampersands as &amp; for XML output.
+encode_ampersand(String) when is_binary(String) ->
+    list_to_binary(encode_ampersand(binary_to_list(String)));
+encode_ampersand([]) -> [];
+encode_ampersand([$& | Rest]) -> [$&, $a, $m, $p, $; | encode_ampersand(Rest)];
+encode_ampersand([C | Rest]) -> [C | encode_ampersand(Rest)].
 
 %% @doc Return a message with all of its keys decoded.
 decode_keys(Msg, Opts) when is_map(Msg) ->

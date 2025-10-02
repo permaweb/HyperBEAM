@@ -8,7 +8,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Takes a message and ensures that it is normalized:
+%% @doc Takes a structured message and ensures that its sub-message links are
+%% normalized to TABM form:
 %% 
 %% - All literal (binary) lazily-loadable values are in-memory.
 %% - All submaps are represented as links, optionally offloading their local 

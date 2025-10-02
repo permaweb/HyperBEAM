@@ -380,7 +380,7 @@ compute_slot(ProcID, State, RawInputMsg, ReqMsg, Opts) ->
             undefined -> RawInputMsg#{ <<"path">> => <<"compute">> };
             _ -> RawInputMsg
         end,
-    ?event(compute,{input_msg, InputMsg}),
+    ?event(compute, {input_msg, InputMsg}),
     ?event(compute, {executing, {proc_id, ProcID}, {slot, NextSlot}}, Opts),
     % Unset the previous results.
     UnsetResults = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
