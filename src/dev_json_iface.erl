@@ -134,35 +134,42 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                         {CommitmentOwner, CommitmentSignature}
                 end
         end,
-    Last =
-        hb_ao:get(
-            <<"anchor">>,
+    {Last, Data, Target, From} =
+        hb_ao:get_many(
+            [<<"anchor">>, <<"data">>, <<"target">>, <<"from-process">>],
             {as, <<"message@1.0">>, MsgWithoutCommitments},
-            <<>>,
+            [<<>>, <<>>, <<>>, hb_util:encode(Owner)],
             Opts
         ),
-    Data =
-        hb_ao:get(
-            <<"data">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
-            <<>>,
-            Opts
-        ),
-    Target =
-        hb_ao:get(
-            <<"target">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
-            <<>>,
-            Opts
-        ),
-    % Set "From" if From-Process is Tag or set with "Owner" address
-    From =
-        hb_ao:get(
-            <<"from-process">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
-            hb_util:encode(Owner),
-            Opts
-        ),
+    % Last =
+    %     hb_ao:get(
+    %         <<"anchor">>,
+    %         {as, <<"message@1.0">>, MsgWithoutCommitments},
+    %         <<>>,
+    %         Opts
+    %     ),
+    % Data =
+    %     hb_ao:get(
+    %         <<"data">>,
+    %         {as, <<"message@1.0">>, MsgWithoutCommitments},
+    %         <<>>,
+    %         Opts
+    %     ),
+    % Target =
+    %     hb_ao:get(
+    %         <<"target">>,
+    %         {as, <<"message@1.0">>, MsgWithoutCommitments},
+    %         <<>>,
+    %         Opts
+    %     ),
+    % % Set "From" if From-Process is Tag or set with "Owner" address
+    % From =
+    %     hb_ao:get(
+    %         <<"from-process">>,
+    %         {as, <<"message@1.0">>, MsgWithoutCommitments},
+    %         hb_util:encode(Owner),
+    %         Opts
+    %     ),
     #{
         <<"Id">> => safe_to_id(ID),
         % NOTE: In Arweave TXs, these are called "last_tx"
