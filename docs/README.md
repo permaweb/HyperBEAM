@@ -3,15 +3,35 @@
 
 HyperBEAM uses [MkDocs](https://www.mkdocs.org/) with the [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) theme to build its documentation site.
 
-Building the documentation requires Python 3 and pip. It's recommended to use a virtual environment:
+### Setup with uv (Recommended)
+
+The documentation uses [uv](https://github.com/astral-sh/uv) for Python dependency management with locked dependencies.
 
 ```bash
-# Create and activate a virtual environment (optional but recommended)
+# Install dependencies (from docs/ directory)
+cd docs
+uv sync
+
+# Serve documentation locally
+uv run mkdocs serve -f ../mkdocs.yml
+```
+
+The documentation will be available at http://127.0.0.1:8000/
+
+### Alternative Setup with pip
+
+If you prefer using pip, you can set up a virtual environment manually:
+
+```bash
+# Create and activate a virtual environment
 python3 -m venv venv
 source venv/bin/activate  # (macOS/Linux) On Windows use `venv\Scripts\activate`
 
 # Install required packages
 pip3 install mkdocs mkdocs-material mkdocs-git-revision-date-localized-plugin
+
+# Serve documentation (from project root)
+mkdocs serve
 
 # Deactivate the virtual environment when done
 # deactivate
@@ -84,14 +104,17 @@ To contribute documentation to HyperBEAM, follow these steps:
    - Follow the existing indentation and format
 
 5. **Test Your Changes**
-   - Set up a local development environment:
+   - Set up a local development environment (using uv):
+     ```bash
+     cd docs
+     uv sync
+     uv run mkdocs serve -f ../mkdocs.yml
+     ```
+   - Or using pip:
      ```bash
      python3 -m venv venv
      source venv/bin/activate
      pip3 install mkdocs mkdocs-material mkdocs-git-revision-date-localized-plugin
-     ```
-   - Start the docs server
-     ```bash
      mkdocs serve
      ```
 

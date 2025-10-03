@@ -114,7 +114,7 @@ h6 {
 }
 
 .md-content h2 {
-    border-top: 1px solid var(--border-color);
+    /* border-top: 1px solid var(--border-color); */
     padding-top: 1.5rem;
 }
 
@@ -122,20 +122,20 @@ h6 {
 h4,
 h5,
 h6 {
-    border-top: 1px solid var(--border-color-alt);
+    /* border-top: 1px solid var(--border-color-alt); */
     padding-top: 1rem;
 }
 
 /* Match border opacity to tabs border in dark mode */
 [data-md-color-scheme="slate"] .md-content h2 {
-    border-top: 1px solid var(--border-color) !important;
+    /* border-top: 1px solid var(--border-color) !important; */
 }
 
 [data-md-color-scheme="slate"] .md-content h3,
 [data-md-color-scheme="slate"] h4,
 [data-md-color-scheme="slate"] h5,
 [data-md-color-scheme="slate"] h6 {
-    border-top: 1px solid var(--border-color) !important;
+    /* border-top: 1px solid var(--border-color) !important; */
 }
 
 /* --- Text Elements --- */
@@ -2053,7 +2053,7 @@ kbd {
 [data-md-color-scheme="slate"] h4,
 [data-md-color-scheme="slate"] h5,
 [data-md-color-scheme="slate"] h6 {
-    border-top: 1px solid var(--border-color) !important;
+    /* border-top: 1px solid var(--border-color) !important; */
 }
 
 [data-md-color-scheme="slate"] .md-tabs {

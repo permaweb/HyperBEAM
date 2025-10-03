@@ -1,0 +1,10 @@
+[project]
+name = "hyperbeam-docs"
+version = "0.1.0"
+description = "HyperBEAM documentation built with MkDocs Material"
+requires-python = ">=3.13"
+dependencies = [
+    "mkdocs>=1.6.0",
+    "mkdocs-material>=9.6.20",
+    "mkdocs-git-revision-date-localized-plugin>=1.4.7",
+]
