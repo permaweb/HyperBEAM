@@ -21,7 +21,7 @@
 
 %% Public API exports
 -export([start/1, stop/1, scope/0, scope/1, reset/1]).
--export([read/2, write/3, list/2, match/2]).
+-export([read/2, write/3, flush/1, list/2, match/2, fold_while/3]).
 -export([make_group/2, make_link/3, type/2]).
 -export([path/2, add_path/3, resolve/2]).
 
@@ -36,7 +36,7 @@
 -define(DEFAULT_MAX_FLUSH_TIME, 50).            % Maximum time between flushes
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
 -define(MAX_PENDING_WRITES, 400).               % Force flush after x pending
--define(FOLD_YIELD_INTERVAL, 100).              % Yield every x keys
+-define(FOLD_CHUNK_SIZE, 100).                  % Iterator chunk size for folding
 
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
@@ -55,13 +55,18 @@ start(Opts = #{ <<"name">> := DataDir }) ->
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
     ok = filelib:ensure_dir(filename:join(DataDirPath, "dummy")),
+    NoSyncParam =
+        case maps:get(<<"no-sync">>, Opts, true) of
+            true -> [no_sync];
+            false -> []
+        end,
     % Create the LMDB environment with specified size limit
     {ok, Env} =
         elmdb:env_open(
             DataDirPath,
             [
                 {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
-                no_mem_init, no_sync
+                no_mem_init | NoSyncParam
             ]
         ),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
@@ -142,6 +147,22 @@ write(Opts, Path, Value) ->
                 }
             ),
             retry
+    end.
+
+-spec flush(map()) -> ok | {error, flush_failed}.
+flush(Opts) ->
+    #{ <<"env">> := DBEnv } = find_env(Opts),
+    case elmdb:env_sync(DBEnv) of
+        ok -> ok;
+        {error, Type, Description} ->
+            ?event(
+                error,
+                {lmdb_error,
+                    {type, Type},
+                    {description, Description}
+                }
+            ),
+            {error, flush_failed}
     end.
 
 %% @doc Read a value from the database by key, with automatic link resolution.
@@ -373,7 +394,6 @@ list(Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:list(DBInstance, SearchPath) of
         {ok, Children} -> {ok, Children};
-        {error, not_found} -> {ok, []};  % Normalize new error format
         not_found -> {ok, []}  % Handle both old and new format
     end.
 
@@ -397,10 +417,45 @@ match(Opts, MatchKVs) ->
         {ok, Matches} ->
             ?event({elmdb_matched, Matches}),
             {ok, Matches};
-        {error, not_found} -> not_found;
         not_found -> not_found
     end.
 
+-spec fold_while(Opts :: map(), Fun :: fun(), Acc0 :: term()) -> 
+    {ok, term()} | not_found | {error, term(), binary()}.
+fold_while(Opts, Fun, Acc0) ->
+    #{ <<"db">> := DBInstance } = find_env(Opts),
+    maybe
+        ok ?= elmdb:flush(DBInstance),
+        {ok, IterRes} ?= elmdb:iterate_start(DBInstance, <<>>, ?FOLD_CHUNK_SIZE),
+        % Links = [{Key, Value} || {Key, Value} <- KVList, type(FromStore, Key) == link],
+        % ?debug_print({links, Links}),
+        fold_chunks(DBInstance, Fun, Acc0, IterRes)
+    end.
+
+fold_chunks(DBInstance, Fun, Acc0, {KVList, Continuation}) ->
+    case do_fold_while(Fun, Acc0, KVList) of
+        {cont, Acc1} ->
+            fold_continue(DBInstance, Fun, Acc1, Continuation);
+        {halt, Res} ->
+            Res
+    end.
+
+do_fold_while(Fun, AccIn, [{Key, Value}]) ->
+    Fun({Key, Value}, AccIn);
+
+do_fold_while(Fun, AccIn, [KV | KVList]) ->
+    maybe 
+        {cont, AccOut} ?= Fun(KV, AccIn),
+        do_fold_while(Fun, AccOut, KVList)
+    end.
+
+fold_continue(_DBInstance, _Fun, Acc1, not_found) -> 
+    Acc1;
+fold_continue(DBInstance, Fun, Acc1, Continuation) ->
+    maybe
+        {ok, IterRes} ?= elmdb:iterate_cont(DBInstance, Continuation, ?FOLD_CHUNK_SIZE),
+        fold_chunks(DBInstance, Fun, Acc1, IterRes)
+    end.
 
 %% @doc Create a group entry that can contain other keys hierarchically.
 %%
@@ -1133,3 +1188,17 @@ read_follow_test() ->
     {ok, Value3} = read(StoreOpts2, <<"HelloLink">>),
     ?assertEqual(Value3, <<"Hello">>),
     ok = stop(StoreOpts).
+%% @doc Test that list function resolves links correctly
+flush_test() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/flush">>,
+        <<"capacity">> => ?DEFAULT_SIZE
+    },
+    reset(StoreOpts),
+    write(StoreOpts, <<"key1">>, <<"value1">>),
+    write(StoreOpts, <<"key2">>, <<"value2">>),
+    write(StoreOpts, <<"key3">>, <<"value3">>),
+    ?assertEqual(ok, flush(StoreOpts)),
+    ?assertEqual({ok, <<"value1">>}, read(StoreOpts, <<"key1">>)),
+    stop(StoreOpts).

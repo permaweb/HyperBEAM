@@ -302,7 +302,7 @@ default_message() ->
                 ?DEFAULT_PRIMARY_STORE,
                 #{
                     <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-mainnet">>
+                    <<"name">> => <<"cache-mainnet/fs">>
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,

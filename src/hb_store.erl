@@ -306,17 +306,36 @@ list(Modules, Path) -> call_function(Modules, list, [Path]).
 match(Modules, Match) -> call_function(Modules, match, [Match]).
 
 %% @doc Copies the contents of one store to another.
-sync(FromStore, ToStore) ->
+sync(#{<<"store-module">> := hb_store_lmdb} = FromStore, ToStore) ->
     ?event({sync_start, FromStore, ToStore}),
     FromStoreOpts = maps:put(<<"resolve">>, false, FromStore),
-    {ok, Entries} = hb_store:list(FromStore, <<"/">>),
-    ValidEntries = lists:filter(fun(Key) -> Key =/= <<"lmdb">> end, Entries),
-    case sync_entries(ValidEntries, <<"/">>, FromStoreOpts, ToStore) of
-        [] -> ok;
-        FailedKeyValues -> {error, {sync_failed, FailedKeyValues}}
+    Res = hb_store_lmdb:fold_while(FromStoreOpts, fun({Key, Value}, {ok, Acc}) ->
+        case hb_store:write(ToStore, Key, Value) of
+            ok -> 
+                {cont, {ok, Acc + 1}};
+            Error -> 
+                ?event({sync_error, Error}),
+                {halt, {error, sync_failed}} 
+        end
+    end, {ok, 0}),
+    maybe 
+        {ok, Count} ?= Res,
+        ?event({sync_success, Count}),
+        ok
+    end;
+
+sync(#{<<"store-module">> := hb_store_fs} = FromStore, ToStore) ->
+    ?event({sync_start, FromStore, ToStore}),
+    FromStoreOpts = maps:put(<<"resolve">>, false, FromStore),
+    maybe
+        {ok, Entries} ?= hb_store:list(FromStore, <<"/">>),
+        case sync_fs_entries(Entries, <<"/">>, FromStoreOpts, ToStore) of
+            [] -> ok;
+            FailedKeyValues -> {error, {sync_failed, FailedKeyValues}}
+        end
     end.
 
-sync_entries(Entries, ParentDir, FromStore, ToStore) ->
+sync_fs_entries(Entries, ParentDir, FromStore, ToStore) ->
     ?event({sync_entries, ParentDir, Entries}),
     lists:foldl(fun(Key, Acc) ->
         NewPath =
@@ -342,7 +361,7 @@ sync_entries(Entries, ParentDir, FromStore, ToStore) ->
                 case hb_store:make_group(ToStore, NewPath) of
                     ok ->
                         {ok, Entries2} = hb_store:list(FromStore, NewPath),
-                        Acc ++ sync_entries(Entries2, NewPath, FromStore, ToStore);
+                        Acc ++ sync_fs_entries(Entries2, NewPath, FromStore, ToStore);
                     _Error ->
                         [{NewPath, undefined} | Acc]
                 end;
@@ -628,12 +647,75 @@ hb_store_sync_test(_Store) ->
     hb_store:stop(FromStore),
     hb_store:stop(ToStore).
 
+%% @doc Test the hb_store:sync function by syncing from hb_store_lmdb to hb_store_lmdb
+hb_store_lmdb_sync_test(_Store) ->
+    % Generate unique names to avoid conflicts
+    TestId = integer_to_binary(erlang:system_time(microsecond)),
+    % Set up FromStore (hb_store_lmdb) with resolve=false as specified
+    FromStore = #{
+        <<"store-module">> => hb_store_lmdb, 
+        <<"name">> => <<"cache-lmdb-sync-from-", TestId/binary>>, 
+        <<"resolve">> => false
+    },
+    % Set up ToStore (hb_store_lmdb)
+    ToStore = #{
+        <<"store-module">> => hb_store_lmdb, 
+        <<"name">> => <<"cache-lmdb-sync-to-", TestId/binary>>
+    },
+    
+    % Clean up any existing data
+    hb_store:reset(FromStore),
+    hb_store:reset(ToStore),
+    
+    % Start both stores
+    hb_store:start(FromStore),
+    hb_store:start(ToStore),
+    
+    % Populate FromStore with data
+    ok = hb_store:write(FromStore, <<"key1">>, <<"value1">>),
+    ok = hb_store:write(FromStore, <<"key2">>, <<"value2">>),
+    ok = hb_store:write(FromStore, <<"nested/key3">>, <<"value3">>),
+    ok = hb_store:write(FromStore, <<"deep/nested/key4">>, <<"value4">>),
+    
+    % Create some links
+    ok = hb_store:make_link(FromStore, <<"key1">>, <<"link-to-key1">>),
+    ok = hb_store:make_link(FromStore, <<"nested/key3">>, <<"link-to-nested">>),
+    
+    % Perform the sync operation
+    Result = hb_store:sync(FromStore, ToStore),
+    ?assertEqual(ok, Result),
+    
+    % Verify that all data exists in ToStore
+    {ok, Value1} = hb_store:read(ToStore, <<"key1">>),
+    ?assertEqual(<<"value1">>, Value1),
+    
+    {ok, Value2} = hb_store:read(ToStore, <<"key2">>),
+    ?assertEqual(<<"value2">>, Value2),
+    
+    {ok, Value3} = hb_store:read(ToStore, <<"nested/key3">>),
+    ?assertEqual(<<"value3">>, Value3),
+    
+    {ok, Value4} = hb_store:read(ToStore, <<"deep/nested/key4">>),
+    ?assertEqual(<<"value4">>, Value4),
+    
+    % Verify that links work in ToStore
+    {ok, LinkValue1} = hb_store:read(ToStore, <<"link-to-key1">>),
+    ?assertEqual(<<"value1">>, LinkValue1),
+    
+    {ok, LinkValue3} = hb_store:read(ToStore, <<"link-to-nested">>),
+    ?assertEqual(<<"value3">>, LinkValue3),
+    
+    % Clean up
+    hb_store:stop(FromStore),
+    hb_store:stop(ToStore).
+
 store_suite_test_() ->
     generate_test_suite([
         {"simple path resolution", fun simple_path_resolution_test/1},
         {"resursive path resolution", fun resursive_path_resolution_test/1},
         {"hierarchical path resolution", fun hierarchical_path_resolution_test/1},
-        {"hb_store sync", fun hb_store_sync_test/1}
+        {"hb_store sync", fun hb_store_sync_test/1},
+        {"hb_store lmdb sync", fun hb_store_lmdb_sync_test/1}
     ]).
 
 benchmark_suite_test_() ->
