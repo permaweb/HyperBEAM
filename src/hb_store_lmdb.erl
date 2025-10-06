@@ -477,8 +477,7 @@ fold_continue(DBInstance, Fun, Acc1, Continuation) ->
 make_group(Opts, <<"/", GroupName/binary>>) when is_map(Opts) ->
     make_group(Opts, GroupName);
 make_group(Opts, GroupName) when is_map(Opts), is_binary(GroupName) ->
-    write(Opts, GroupName, <<"group">>),
-    write(Opts, <<"group:", GroupName/binary>>, <<"">>);
+    write(Opts, GroupName, <<"group">>);
 make_group(_, _) ->
     {error, {badarg, <<"StoreOps must be map and GroupName must be a binary">>}}.
 
