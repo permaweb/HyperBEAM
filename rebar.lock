@@ -9,7 +9,7 @@
  {<<"ddskerl">>,{pkg,<<"ddskerl">>,<<"0.4.2">>},1},
  {<<"elmdb">>,
   {git,"https://github.com/twilson63/elmdb-rs.git",
-       {branch, main}},
+       {ref,"5255868638e91b4dff24163467765d780f8a6f4a"}},
   0},
  {<<"graphql">>,{pkg,<<"graphql_erl">>,<<"0.17.1">>},0},
  {<<"gun">>,{pkg,<<"gun">>,<<"2.2.0">>},0},
