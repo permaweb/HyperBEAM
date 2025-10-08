@@ -67,7 +67,7 @@ ping_once(Msg1, _Msg2, Opts) ->
 send_ping(Opts) ->
     ?event({debug_send_ping_start, "Function called"}),
     % Get the node's wallet for signing - fall back to hb:wallet() if not in Opts
-    Wallet = case hb_opts:get(priv_wallet, undefined, Opts) of
+        Wallet = case hb_opts:get(priv_wallet, undefined, Opts) of
         undefined -> hb:wallet();
         W -> W
     end,
@@ -169,8 +169,7 @@ send_ping(Opts) ->
                         <<"class">> => Class,
                         <<"reason">> => Reason
                     }}
-            end
-    end.
+            end.
 
 %%% Tests
 
