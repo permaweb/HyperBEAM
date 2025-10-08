@@ -66,14 +66,13 @@ ping_once(Msg1, _Msg2, Opts) ->
 %% This properly signs the message with the node's wallet before sending.
 send_ping(Opts) ->
     ?event({debug_send_ping_start, "Function called"}),
-    % Get the node's wallet for signing
-    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
-    case Wallet of
-        no_viable_wallet ->
-            {error, <<"No wallet available for signing ping message">>};
-        _ ->
-            % Get the node's address from the wallet
-            NodeAddress = hb_util:id(ar_wallet:to_address(Wallet)),
+    % Get the node's wallet for signing - fall back to hb:wallet() if not in Opts
+    Wallet = case hb_opts:get(priv_wallet, undefined, Opts) of
+        undefined -> hb:wallet();
+        W -> W
+    end,
+    % Get the node's address from the wallet
+    NodeAddress = hb_util:id(ar_wallet:to_address(Wallet)),
             
             % Get host and port information
             Host = hb_opts:get(host, <<"unknown">>, Opts),
