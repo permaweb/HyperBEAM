@@ -13,11 +13,7 @@
 %% @doc Device info export specification.
 info(_) ->
     #{
-        exports => [info, ping_once],
-        handlers => #{
-            <<"info">> => fun info/3,
-            <<"ping_once">> => fun ping_once/3
-        }
+        exports => [info, ping_once]
     }.
 
 %% @doc Return device information.
