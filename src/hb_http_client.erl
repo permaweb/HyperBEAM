@@ -3,7 +3,7 @@
 -module(hb_http_client).
 -behaviour(gen_server).
 -include("include/hb.hrl").
--export([start_link/1, req/2]).
+-export([start_link/1, request/2]).
 -export([init/1, handle_cast/2, handle_call/3, handle_info/2, terminate/2]).
 
 -record(state, {
@@ -12,6 +12,9 @@
 	opts = #{}
 }).
 
+-define(DEFAULT_RETRIES, 0).
+-define(DEFAULT_RETRY_TIME, 1000).
+
 %%% ==================================================================
 %%% Public interface.
 %%% ==================================================================
@@ -19,14 +22,42 @@
 start_link(Opts) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
 
-req(Args, Opts) -> req(Args, false, Opts).
-req(Args, ReestablishedConnection, Opts) ->
-    case hb_opts:get(http_client, gun, Opts) of
-        gun -> gun_req(Args, ReestablishedConnection, Opts);
-        httpc -> httpc_req(Args, ReestablishedConnection, Opts)
+request(Args, Opts) ->
+    request(Args, hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts), Opts).
+request(Args, RemainingRetries, Opts) ->
+    case do_request(Args, Opts) of
+        {error, Details} -> maybe_retry(RemainingRetries, Args, Details, Opts);
+        {ok, Status, Headers, Body} -> {ok, Status, Headers, Body}
     end.
 
-httpc_req(Args, _, Opts) ->
+do_request(Args, Opts) ->
+    case hb_opts:get(http_client, gun, Opts) of
+        gun -> gun_req(Args, Opts);
+        httpc -> httpc_req(Args, Opts)
+    end.
+
+maybe_retry(0, _, ErrDetails, _) -> {error, ErrDetails};
+maybe_retry(Remaining, Args, ErrDetails, Opts) ->
+    RetryBaseTime = hb_opts:get(http_retry_time, ?DEFAULT_RETRY_TIME, Opts),
+    RetryTime =
+        case hb_opts:get(http_retry_mode, backoff, Opts) of
+            constant -> RetryBaseTime;
+            backoff ->
+                BaseRetries = hb_opts:get(http_retry, ?DEFAULT_RETRIES, Opts),
+                RetryBaseTime * (1 + (BaseRetries - Remaining))
+        end,
+    ?event(
+        warning,
+        {retrying_http_request,
+            {after_ms, RetryTime},
+            {error, ErrDetails},
+            {request, Args}
+        }
+    ),
+    timer:sleep(RetryTime),
+    request(Args, Remaining - 1, Opts).
+
+httpc_req(Args, Opts) ->
     #{
         peer := Peer,
         path := Path,
@@ -104,6 +135,8 @@ httpc_req(Args, _, Opts) ->
             {error, Reason}
     end.
 
+gun_req(Args, Opts) ->
+    gun_req(Args, false, Opts).
 gun_req(Args, ReestablishedConnection, Opts) ->
 	StartTime = os:system_time(millisecond),
 	#{ peer := Peer, path := Path, method := Method } = Args,
@@ -111,14 +144,12 @@ gun_req(Args, ReestablishedConnection, Opts) ->
         case catch gen_server:call(?MODULE, {get_connection, Args, Opts}, infinity) of
             {ok, PID} ->
                 ar_rate_limiter:throttle(Peer, Path, Opts),
-                case request(PID, Args, Opts) of
+                case do_gun_request(PID, Args, Opts) of
                     {error, Error} when Error == {shutdown, normal};
                             Error == noproc ->
                         case ReestablishedConnection of
-                            true ->
-                                {error, client_error};
-                            false ->
-                                req(Args, true, Opts)
+                            true -> {error, client_error};
+                            false -> gun_req(Args, true, Opts)
                         end;
                     Reply ->
                         Reply
@@ -585,7 +616,7 @@ method_to_bin(patch) ->
 method_to_bin(_) ->
 	<<"unknown">>.
 
-request(PID, Args, Opts) ->
+do_gun_request(PID, Args, Opts) ->
 	Timer =
         inet:start_timer(
             hb_opts:get(http_request_send_timeout, no_request_send_timeout, Opts)

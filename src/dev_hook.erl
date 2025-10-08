@@ -94,8 +94,15 @@ find(_Base, Req, Opts) ->
     HookName = maps:get(maps:get(<<"target">>, Req, <<"body">>), Req),
     case maps:get(HookName, hb_opts:get(on, #{}, Opts), []) of
         Handler when is_map(Handler) -> 
-            % If a single handler is found, wrap it in a list.
-            [Handler];
+            case hb_util:is_ordered_list(Handler, Opts) of
+                true ->
+                    % If the term is an ordered list message (containing only
+                    % numbered map keys sequentially), convert it to a list.
+                    hb_util:message_to_ordered_list(Handler, Opts);
+                false ->
+                    % If a single handler is found, wrap it in a list.
+                    [Handler]
+            end;
         Handlers when is_list(Handlers) -> 
             % If multiple handlers are found, return them as is
             Handlers;
@@ -157,12 +164,12 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % committed before execution.
         BaseReq =
             Req#{
-                <<"path">> => hb_ao:get(<<"path">>, Handler, HookName, Opts),
-                <<"method">> => hb_ao:get(<<"method">>, Handler, <<"GET">>, Opts)
+                <<"path">> => hb_maps:get(<<"path">>, Handler, HookName, Opts),
+                <<"method">> => hb_maps:get(<<"method">>, Handler, <<"GET">>, Opts)
             },
         CommitReqBin = 
             hb_util:bin(
-                hb_ao:get(<<"hook/commit-request">>, Handler, <<"false">>, Opts)
+                hb_maps:get(<<"hook/commit-request">>, Handler, <<"false">>, Opts)
             ),
         {PreparedBase, PreparedReq} =
             case CommitReqBin of
@@ -197,7 +204,7 @@ execute_handler(HookName, Handler, Req, Opts) ->
                 {res, Res}
             }
         ),
-        case {Status, hb_ao:get(<<"hook/result">>, Handler, <<"return">>, Opts)} of
+        case {Status, hb_util:deep_get(<<"hook/result">>, Handler, <<"return">>, Opts)} of
             {ok, <<"ignore">>} -> {Status, Req};
             {ok, <<"return">>} -> {Status, Res};
             {ok, <<"error">>} -> {error, Res};

@@ -18,7 +18,7 @@ read(ProcID, SlotRef, Opts) ->
 %% @doc Write a process computation result to the cache.
 write(ProcID, Slot, Msg, Opts) ->
     % Write the item to the cache in the root of the store.
-    {ok, Root} = hb_cache:write(Msg, Opts),
+    {ok, Root} = hb_cache:write(hb_private:reset(Msg), Opts),
     % Link the item to the path in the store by slot number.
     SlotNumPath = path(ProcID, Slot, Opts),
     hb_cache:link(Root, SlotNumPath, Opts),
@@ -26,7 +26,7 @@ write(ProcID, Slot, Msg, Opts) ->
     MsgIDPath =
         path(
             ProcID,
-            ID = hb_util:human_id(hb_ao:get(id, Msg, Opts)),
+            ID = hb_message:id(Msg, uncommitted, Opts),
             Opts
         ),
     ?event(

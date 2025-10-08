@@ -1372,13 +1372,13 @@ encode_balance_table(Size, Codec, Opts) ->
             _ <- lists:seq(1, Size)
         },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    ?event(debug, {encoded, {explicit, Encoded}}),
+    ?event({encoded, {explicit, Encoded}}),
     Decoded =
         hb_message:uncommitted(
             hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
             Opts
         ),
-    ?event(debug, {decoded, {explicit, Decoded}}),
+    ?event({decoded, {explicit, Decoded}}),
     ?assert(hb_message:match(Msg, Decoded, if_present, Opts)).
 
 encode_small_balance_table_test(Codec, Opts) ->
@@ -1402,7 +1402,7 @@ sign_links_test(Codec, Opts) ->
         <<"submap+link">> => hb_util:human_id(crypto:strong_rand_bytes(32))
     },
     Signed = hb_message:commit(Msg, Opts, Codec),
-    ?event(debug, {signed, Signed}),
+    ?event({signed, Signed}),
     ?assert(hb_message:verify(Signed, all, Opts)).
 
 bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) ->
@@ -1424,8 +1424,8 @@ bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) -
             maps:without([<<"bundle">>], Codec)
         ),
     SignedBundled = hb_message:commit(Msg, Opts, Codec),
-    ?event(debug, {signed_no_bundle, SignedNoBundle}),
-    ?event(debug, {signed_bundled, SignedBundled}),
+    ?event({signed_no_bundle, SignedNoBundle}),
+    ?event({signed_bundled, SignedBundled}),
     {ok, UnbundledID, _} =
         hb_message:commitment(
             #{ <<"type">> => SignatureType },
@@ -1438,8 +1438,8 @@ bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) -
             SignedBundled,
             Opts
         ),
-    ?event(debug, {unbundled_id, UnbundledID}),
-    ?event(debug, {bundled_id, BundledID}),
+    ?event({unbundled_id, UnbundledID}),
+    ?event({bundled_id, BundledID}),
     ?assertNotEqual(UnbundledID, BundledID);
 bundled_and_unbundled_ids_differ_test(_Codec, _Opts) ->
     skip.

@@ -24,9 +24,19 @@
 -define(DEFAULT_PRINT_OPTS, [error, http_error]).
 -else.
 -define(DEFAULT_PRINT_OPTS,
-    [error, http_error, http_short, compute_short, push_short]
+    [
+        error, http_error, cron_error,
+        http_short, compute_short, push_short, copycat_short
+    ]
 ).
 -endif.
+
+-ifdef(AO_PROFILING).
+-define(DEFAULT_TRACE_TYPE, ao).
+-else.
+-define(DEFAULT_TRACE_TYPE, erlang).
+-endif.
+
 -define(DEFAULT_PRIMARY_STORE, #{
     <<"name">> => <<"cache-mainnet/lmdb">>,
     <<"store-module">> => hb_store_lmdb
@@ -121,6 +131,7 @@ default_message() ->
         %% Preloaded devices for the node to use. These names override
         %% resolution of devices via ID to the default implementations.
         preloaded_devices => [
+            #{<<"name">> => <<"arweave@2.9-pre">>, <<"module">> => dev_arweave},
             #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
             #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
@@ -167,6 +178,7 @@ default_message() ->
             #{<<"name">> => <<"stack@1.0">>, <<"module">> => dev_stack},
             #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
+            #{<<"name">> => <<"trie@1.0">>, <<"module">> => dev_trie},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
             #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
@@ -193,7 +205,7 @@ default_message() ->
         %% HTTP request options
         http_connect_timeout => 5000,
         http_keepalive => 120000,
-        http_request_send_timeout => 60000,
+        http_request_send_timeout => 300_000,
         port => 8734,
         wasm_allow_aot => false,
         %% Options for the relay device
@@ -213,6 +225,7 @@ default_message() ->
         debug_print_indent => 2,
         stack_print_prefixes => ["hb", "dev", "ar", "maps"],
         debug_print_trace => short, % `short` | `false`. Has performance impact.
+        debug_trace_type => ?DEFAULT_TRACE_TYPE,
         short_trace_len => 20,
         debug_metadata => true,
         debug_ids => true,
@@ -238,6 +251,16 @@ default_message() ->
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
             #{
+                % Routes for the genesis-wasm device to use a local CU, if requested.
+                <<"template">> => <<"/dry-run.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
+            },
+            #{
+                % Routes for the genesis-wasm device to use a local CU, if requested.
+                <<"template">> => <<"/state.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
+            },
+            #{
                 % Routes for GraphQL requests to use a remote GraphQL API.
                 <<"template">> => <<"/graphql">>,
                 <<"nodes">> =>
@@ -255,6 +278,16 @@ default_message() ->
                             <<"opts">> => #{ http_client => gun, protocol => http2 }
                         }
                     ]
+            },
+            #{
+                % Routes for Arweave transaction requests to use a remote gateway.
+                <<"template">> => <<"/arweave">>,
+                <<"node">> =>
+                    #{
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => <<"https://arweave.net">>,
+                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                    }
             },
             #{
                 % Routes for raw data requests to use a remote gateway.
@@ -329,7 +362,12 @@ default_message() ->
                             #{ <<"device">> => <<"http-auth@1.0">> }
                     }
             }
-        }
+        },
+        genesis_wasm_import_authorities =>
+            [
+                <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>,
+                <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
+            ]
         % Should the node track and expose prometheus metrics?
         % We do not set this explicitly, so that the hb_features:test() value
         % can be used to determine if we should expose metrics instead,

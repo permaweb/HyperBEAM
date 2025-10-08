@@ -224,7 +224,7 @@ admissible_status(Status, Statuses) when is_list(Statuses) ->
 %% adheres to it. Else, return `true'.
 admissible_response(_Response, undefined, _Opts) -> true;
 admissible_response(Response, Msg, Opts) ->
-    Path = hb_ao:get(<<"path">>, Msg, <<"is-admissible">>, Opts),
+    Path = hb_maps:get(<<"path">>, Msg, <<"is-admissible">>, Opts),
     Req = Response#{ <<"path">> => Path },
     Base = hb_message:without_unless_signed([<<"path">>], Msg, Opts),
     ?event(debug_multi,

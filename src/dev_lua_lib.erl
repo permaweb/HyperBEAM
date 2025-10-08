@@ -55,7 +55,11 @@ install(Base, State, Opts) ->
                 )
         end,
     ?event({adding_ao_core_resolver, {device_sandbox, AdmissibleDevs}}),
-    ExecOpts = Opts#{ preloaded_devices => AdmissibleDevs },
+    ExecOpts =
+        Opts#{
+            preloaded_devices => AdmissibleDevs,
+            hashpath => ignore
+        },
     % Initialize the AO-Core resolver.
     BaseAOTable =
         case luerl:get_table_keys_dec([ao], State) of

@@ -178,12 +178,14 @@ eflame_profile(Fun, Req, Opts) ->
     % path is not set, we use Erlang's short string encoding of the function.
     Name =
         case hb_maps:get(<<"path">>, Req, undefined, Opts) of
-            undefined -> hb_util:bin(io_lib:format("~p", [Fun]));
+            undefined ->
+                hb_escape:encode(hb_util:bin(io_lib:format("~p", [Fun])));
             Path ->
-                case hb_maps:get(Path, Req, undefined, Opts) of
-                    undefined -> hb_util:bin(Path);
-                    EvalPath -> hb_util:bin(EvalPath)
-                end
+                hb_escape:encode_ampersand(
+                    hb_escape:encode_quotes(
+                        hb_maps:get(Path, Req, Path, Opts)
+                    )
+                )
         end,
     StackToFlameScript = hb_util:bin(filename:join(EflameDir, "flamegraph.pl")),
     FlameArg =
@@ -197,7 +199,7 @@ eflame_profile(Fun, Req, Opts) ->
                 "cat ", (hb_util:bin(File))/binary,
                 " | uniq -c | awk '{print $2, \" \", $1}' | ",
                 StackToFlameScript/binary, " ", FlameArg/binary,
-                " --title=\"", Name/binary, "\""
+                " --title=\"", Name/binary, "\" 2>/dev/null"
             >>
         ),
     Flame = hb_util:bin(os:cmd(PreparedCommand)),
@@ -283,15 +285,15 @@ eprof_profile(Fun, Req, Opts) ->
 %% @doc Profile using HyperBEAM's events.
 event_profile(Fun, Req, Opts) ->
     Start = hb_event:counters(),
-    Fun(),
+    Res = Fun(),
     End = hb_event:counters(),
     Diff = hb_message:diff(Start, End, Opts),
     case return_mode(Req, Opts) of
         <<"message">> ->
             {ok, Diff};
-        <<"console">> ->
+        _ ->
             hb_format:print(Diff),
-            {ok, Diff}
+            Res
     end.
 
 %%% Engine helpers: Generalized tools useful for multiple engines.

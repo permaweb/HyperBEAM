@@ -1,6 +1,6 @@
 
 %%% @doc This module acts an adapter between messages, as modeled in the
-%%% AO-Core protocol, and their uderlying binary representations and formats.
+%%% AO-Core protocol, and their underlying binary representations and formats.
 %%% 
 %%% Unless you are implementing a new message serialization codec, you should
 %%% not need to interact with this module directly. Instead, use the
@@ -12,7 +12,7 @@
 %%% types of message formats:
 %%% 
 %%%     - Richly typed AO-Core structured messages.
-%%%     - Arweave transations.
+%%%     - Arweave transactions.
 %%%     - ANS-104 data items.
 %%%     - HTTP Signed Messages.
 %%%     - Flat Maps.
@@ -161,7 +161,7 @@ conversion_spec_to_req(Spec, Opts) ->
             case Device of
                 tabm -> tabm;
                 _ ->
-                    hb_ao:message_to_device(
+                    hb_ao_device:message_to_device(
                         #{
                             <<"device">> => Device
                         },
@@ -249,11 +249,13 @@ with_only_committed(Msg, Opts) when is_map(Msg) ->
                 % Add the ao-body-key to the committed list if it is not
                 % already present.
                 ?event(debug_bundle, {committed_keys, CommittedKeys, {msg, Msg}}),
-                {ok, hb_maps:with(
-                    CommittedKeys ++ [<<"commitments">>],
-                    Msg,
-					Opts
-                )}
+                {ok,
+                    with_links(
+                        [<<"commitments">> | CommittedKeys],
+                        Msg,
+                        Opts
+                    )
+                }
             catch Class:Reason:St ->
                 {error,
                     {could_not_normalize,
@@ -269,6 +271,21 @@ with_only_committed(Msg, Opts) when is_map(Msg) ->
 with_only_committed(Msg, _) ->
     % If the message is not a map, it cannot be signed.
     {ok, Msg}.
+
+%% @doc Filter keys from a map that do not match either the list of keys or
+%% their relative `+link` variants.
+with_links(Keys, Map, Opts) ->
+    hb_maps:with(
+        Keys ++
+            lists:map(
+                fun(Key) ->
+                    <<(hb_link:remove_link_specifier(Key))/binary, "+link">>
+                end,
+                Keys
+            ),
+        Map,
+        Opts
+    ).
 
 %% @doc Return the message with only the specified committers attached.
 with_only_committers(Msg, Committers) ->
@@ -329,11 +346,10 @@ commit(Msg, Opts, Spec) ->
                         none ->
                             case hb_maps:get(<<"device">>, Spec, none, Opts) of
                                 none ->
-                                    throw(
-                                        {
-                                            no_commitment_device_in_codec_spec,
-                                            Spec
-                                        }
+                                    hb_opts:get(
+                                        commitment_device,
+                                        no_viable_commitment_device,
+                                        Opts
                                     );
                                 Device -> Device
                             end;
@@ -436,7 +452,10 @@ match(Map1, Map2, Mode) ->
     match(Map1, Map2, Mode, #{}).
 match(Map1, Map2, Mode, Opts) ->
     try unsafe_match(Map1, Map2, Mode, [], Opts)
-    catch _:Details -> Details
+    catch
+        throw:{mismatch, Type, Path, Val1, Val2} ->
+            {mismatch, Type, Path, Val1, Val2};
+        _:Details:St -> {error, {Details, {trace, St}}}
     end.
 
 %% @doc Match two maps, returning `true' if they match, or throwing an error
@@ -502,14 +521,15 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
                                         {'_', '_'} -> true;
                                         _ ->
                                             throw(
-                                                {value_mismatch,
+                                                {mismatch,
+                                                    value,
                                                     hb_format:short_id(
                                                         hb_path:to_binary(
                                                             Path ++ [Key]
                                                         )
                                                     ),
-                                                    {val1, Val1},
-                                                    {val2, Val2}
+                                                    Val1,
+                                                    Val2
                                                 }
                                             )
                                     end
@@ -520,10 +540,11 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
             );
         false ->
             throw(
-                {keys_mismatch,
-                    {path, hb_format:short_id(hb_path:to_binary(Path))},
-                    {keys1, Keys1},
-                    {keys2, Keys2}
+                {mismatch,
+                    keys,
+                    hb_format:short_id(hb_path:to_binary(Path)),
+                    Keys1,
+                    Keys2
                 }
             )
     end.

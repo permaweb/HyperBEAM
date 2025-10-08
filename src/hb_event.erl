@@ -121,17 +121,19 @@ increment(Topic, Message, _Opts, Count) ->
 %% **extremely** expensive, so it should only be used in very specific cases.
 %% Do not ship code that calls this function to prod.
 increment_callers(Topic) ->
+    increment_callers(Topic, erlang).
+increment_callers(Topic, Type) ->
     BinTopic = hb_util:bin(Topic),
     increment(
         <<BinTopic/binary, "-call-paths">>,
-        hb_format:trace_short(),
+        hb_format:trace_short(Type),
         #{}
     ),
     lists:foreach(
         fun(Caller) ->
             increment(<<BinTopic/binary, "-callers">>, Caller, #{})
         end,
-        hb_format:trace_to_list(hb_format:get_trace())
+        hb_format:trace_to_list(hb_format:get_trace(Type))
     ).
 
 %% @doc Return a message containing the current counter values for all logged

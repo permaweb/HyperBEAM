@@ -414,3 +414,15 @@ unsorted_tag_map_test() ->
     {ok, Decoded} = dev_codec_ans104:to(TABM, #{}, #{}),
     ?event(debug_test, {decoded, Decoded}),
     ?assert(ar_bundles:verify_item(Decoded)).
+
+field_and_tag_ordering_test() ->
+    UnsignedTABM = #{
+        <<"a">> => <<"value1">>,
+        <<"z">> => <<"value2">>,
+        <<"target">> => <<"NON-ID-TARGET">>
+    },
+        
+    Wallet = hb:wallet(),
+    SignedTABM = hb_message:commit(
+        UnsignedTABM, #{priv_wallet => Wallet}, <<"ans104@1.0">>),
+    ?assert(hb_message:verify(SignedTABM)).

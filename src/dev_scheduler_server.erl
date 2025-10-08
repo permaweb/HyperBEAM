@@ -206,7 +206,8 @@ do_assign(State, Message, ReplyPID) ->
                         % Note: Local time on the SU, not Arweave
                         <<"timestamp">> => scheduler_time(),
                         <<"hash-chain">> => hb_util:id(HashChain),
-                        <<"body">> => OnlyAttested
+                        <<"body">> => OnlyAttested,
+                        <<"type">> => <<"Assignment">>
                     },
                     State
                 ),

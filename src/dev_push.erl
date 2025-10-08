@@ -90,11 +90,12 @@ do_push(PrimaryProcess, Assignment, Opts) ->
         }
     ),
     ?event(push, {push_computing_outbox, {process_id, ID}, {slot, Slot}}),
-    {Status, Result} = hb_ao:resolve(
-        {as, <<"process@1.0">>, PrimaryProcess},
-        #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
-        Opts#{ hashpath => ignore }
-    ),
+    {Status, Result} =
+        hb_ao:resolve(
+            {as, <<"process@1.0">>, PrimaryProcess},
+            #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
+            Opts#{ hashpath => ignore }
+        ),
     % Determine if we should include the full compute result in our response.
     IncludeDepth = hb_ao:get(<<"result-depth">>, Assignment, 1, Opts),
     AdditionalRes =
@@ -208,10 +209,8 @@ do_push(PrimaryProcess, Assignment, Opts) ->
 maybe_evaluate_message(Message, Opts) ->
     case hb_ao:get(<<"resolve">>, Message, Opts) of
         not_found -> 
-            ?event(x, {not_found, {msg, Message}    }),
             {ok, Message};
         ResolvePath ->
-            ?event(x, {resolve_path, ResolvePath, {msg, Message}}),
             ReqMsg =
                 maps:without(
                     [<<"target">>],
@@ -362,7 +361,7 @@ calculate_base_id(GivenProcess, Opts) ->
     BaseProcess = maps:without([<<"authority">>, <<"scheduler">>], Process),
     {ok, BaseID} = hb_ao:resolve(
         BaseProcess,
-        #{ <<"path">> => <<"id">>, <<"commitments">> => <<"none">> },
+        #{ <<"path">> => <<"id">> },
         Opts
     ),
     ?event({push_generated_base, {id, BaseID}, {base, BaseProcess}}),
@@ -517,7 +516,7 @@ apply_security(authority, Msg, TargetProcess, Codec, Opts) ->
             ?event(push, {found_authority, {authority, Authority}}, Opts),
             commit_result(
                 Msg,
-                hb_util:binary_to_addresses(Authority),
+                hb_util:binary_to_strings(Authority),
                 Codec,
                 Opts
             )
@@ -643,16 +642,7 @@ full_push_test_() ->
         Opts = #{
             process_async_cache => false,
             priv_wallet => hb:wallet(),
-            cache_control => <<"always">>,
-            store => [
-                #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
-                #{ <<"store-module">> => hb_store_gateway,
-                    <<"store">> => #{
-                        <<"store-module">> => hb_store_fs,
-                        <<"name">> => <<"cache-TEST">>
-                    }
-                }
-            ]
+            cache_control => <<"always">>
         },
         Msg1 = dev_process:test_aos_process(Opts),
         hb_cache:write(Msg1, Opts),
@@ -715,7 +705,7 @@ push_as_identity_test_() ->
                     scheduler => [SchedulingID, ComputeID]
                 }
             ),
-        ?event(debug, {msg1, Msg1}),
+        ?event({msg1, Msg1}),
         % Perform the remainder of the test as with `full_push_test_/0'.
         hb_cache:write(Msg1, Opts),
         {ok, SchedInit} =
@@ -1004,10 +994,14 @@ nested_push_prompts_encoding_change() ->
     Msg = hb_message:commit(#{
         <<"path">> => <<"push">>,
         <<"method">> => <<"POST">>,
-        <<"body">> => #{
-            <<"target">> => hb_message:id(Msg1, all, Opts),
-            <<"action">> => <<"Ping">>
-        }
+        <<"body">> =>
+            hb_message:commit(
+                #{
+                    <<"target">> => hb_message:id(Msg1, all, Opts),
+                    <<"action">> => <<"Ping">>
+                },
+                Opts
+            )
     }, Opts),
     ?event(push, {msg1, Msg}),
     Res2 =

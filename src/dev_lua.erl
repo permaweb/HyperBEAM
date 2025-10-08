@@ -159,7 +159,10 @@ initialize(Base, Modules, Opts) ->
                 {ok, _, StateOut} =
                     luerl:do_dec(
                         ModuleBin,
-                        [{name, hb_util:list(ModuleID)}],
+                        [
+                            {name, hb_util:list(ModuleID)},
+                            {file, hb_util:list(ModuleID)}
+                        ],
                         StateIn
                     ),
                 StateOut
@@ -326,12 +329,7 @@ snapshot(Base, _Req, Opts) ->
         not_found ->
             {error, <<"Cannot snapshot Lua state: state not initialized.">>};
         State ->
-            {ok,
-                #{
-                    <<"body">> =>
-                        term_to_binary(luerl:externalize(State))
-                }
-            }
+            {ok, #{ <<"body">> => term_to_binary(luerl:externalize(State)) }}
     end.
 
 %% @doc Restore the Lua state from a snapshot, if it exists.
@@ -369,13 +367,26 @@ normalize(Base, _Req, RawOpts) ->
     end.
 
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message.
+decode(EncMsg, _Opts) when is_list(EncMsg) andalso length(EncMsg) == 0 ->
+    % The value is an empty table, so we assume it is a message rather than
+    % a list.
+    #{};
 decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
-    decode(maps:map(fun(_, V) -> decode(V, Opts) end, maps:from_list(EncMsg)), Opts);
+    decode(
+        maps:map(
+            fun(_, V) -> decode(V, Opts) end,
+            maps:from_list(EncMsg)
+        ),
+        Opts
+    );
 decode(Msg, Opts) when is_map(Msg) ->
     % If the message is an ordered list encoded as a map, decode it to a list.
     case hb_util:is_ordered_list(Msg, Opts) of
         true ->
-            lists:map(fun(V) -> decode(V, Opts) end, hb_util:message_to_ordered_list(Msg));
+            lists:map(
+                fun(V) -> decode(V, Opts) end,
+                hb_util:message_to_ordered_list(Msg)
+            );
         false ->
             Msg
     end;

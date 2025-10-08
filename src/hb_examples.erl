@@ -14,8 +14,8 @@
 %% 5. The received message is signed by the host using http-sig and validates
 %%    correctly.
 relay_with_payments_test_() ->
-    {timeout, 30, fun relay_with_payments_test/0}.
-relay_with_payments_test() ->
+    {timeout, 30, fun relay_with_payments/0}.
+relay_with_payments() ->
     HostWallet = ar_wallet:new(),
     ClientWallet = ar_wallet:new(),
     ClientAddress = hb_util:human_id(ar_wallet:to_address(ClientWallet)),
@@ -228,7 +228,7 @@ relay_schedule_ans104_test() ->
                         <<"path">> => <<"location">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
-                        <<"accept-codec">> => <<"ans104@1.0">>,
+                        <<"require-codec">> => <<"ans104@1.0">>,
                         <<"hook">> => #{
                             <<"result">> => <<"ignore">>,
                             <<"commit-request">> => true

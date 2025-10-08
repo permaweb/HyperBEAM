@@ -64,28 +64,72 @@ events(_, _Req, _Opts) ->
     {ok, hb_event:counters()}.
 
 %% @doc Employ HyperBEAM's internal pretty printer to format a message.
+%% 
+%% The request and node message can also be printed if desired by changing the
+%% `format` key in the `format` call. This can be achieved easily using the
+%% default key semantics:
+%% ```
+%% GET /.../~hyperbuddy@1.0/format=request
+%% ```
+%% Or a list of environment components:
+%% ```
+%% GET /.../~hyperbuddy@1.0/format+list=request,node
+%% ```
+%% Valid components are `base`, `request`, and `node`. The string `all` can also
+%% be used to quickly include all of the components.
+%% 
+%% The `truncate-keys` key can also be used to truncate the number of keys
+%% printed for each component. The default value is `infinity` (print all keys).
+%% ```
+%% GET /.../~hyperbuddy@1.0/format=request?truncate-keys=20
+%% ```
 format(Base, Req, Opts) ->
-    LoadedBase = hb_cache:ensure_all_loaded(Base, Opts),
-    LoadedReq = hb_cache:ensure_all_loaded(Req, Opts),
+    % Find the scope of the environment that should be printed.
+    Scope =
+        lists:map(
+            fun hb_util:bin/1,
+            case hb_maps:get(<<"format">>, Req, <<"base">>, Opts) of
+                <<"all">> -> [<<"base">>, <<"request">>, <<"node">>];
+                Messages when is_list(Messages) -> Messages;
+                SingleScope -> [SingleScope]
+            end
+        ),
+    ?event(debug_format, {using_scope, Scope}),
+    CombinedMsg =
+        hb_maps:with(
+            Scope,
+            #{
+                <<"base">> => maps:without([<<"device">>], hb_private:reset(Base)),
+                <<"request">> => maps:without([<<"path">>], hb_private:reset(Req)),
+                <<"node">> => hb_private:reset(Opts)
+            },
+            Opts
+        ),
+    MsgBeforeLoad =
+        if map_size(CombinedMsg) == 1 ->
+            hb_maps:get(hd(maps:keys(CombinedMsg)), CombinedMsg, #{}, Opts);
+        true ->
+            CombinedMsg
+        end,
+    MsgLoaded = hb_cache:ensure_all_loaded(MsgBeforeLoad, Opts),
+    TruncateKeys =
+        hb_maps:get(
+            <<"truncate-keys">>,
+            Req,
+            hb_opts:get(debug_print_truncate, infinity, Opts),
+            Opts
+        ),
+    ?event(debug_format, {using_truncation, TruncateKeys}),
     {ok,
         #{
             <<"body">> =>
                 hb_util:bin(
                     hb_format:message(
-                        #{
-                            <<"base">> =>
-                                maps:without(
-                                    [<<"device">>],
-                                    hb_private:reset(LoadedBase)),
-                            <<"request">> =>
-                                maps:without(
-                                    [<<"path">>],
-                                    hb_private:reset(LoadedReq)
-                                )
-                        },
+                        MsgLoaded,
                         Opts#{
                             linkify_mode => discard,
-                            cache_control => [<<"no-cache">>, <<"no-store">>]
+                            cache_control => [<<"no-cache">>, <<"no-store">>],
+                            debug_print_truncate => TruncateKeys
                         }
                     )
                 )

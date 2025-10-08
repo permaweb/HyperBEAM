@@ -55,6 +55,8 @@ ensure_loaded(Msg) ->
     ensure_loaded(Msg, #{}).
 ensure_loaded(Msg, Opts) ->
     ensure_loaded([], Msg, Opts).
+ensure_loaded(Ref, {Status, Msg}, Opts) when Status == ok; Status == error ->
+    {Status, ensure_loaded(Ref, Msg, Opts)};
 ensure_loaded(Ref,
         Lk = {link, ID, LkOpts = #{ <<"type">> := <<"link">>, <<"lazy">> := Lazy }},
         RawOpts) ->
@@ -133,7 +135,7 @@ report_ensure_loaded_not_found(Ref, Lk, Opts) ->
     throw(
         {necessary_message_not_found,
             hb_path:to_binary(lists:reverse(Ref)),
-            hb_link:format_unresolved(Lk)
+            hb_link:format_unresolved(Lk, Opts, 0)
         }
     ).
 
@@ -161,7 +163,7 @@ ensure_all_loaded(Ref, Msg, Opts) ->
 %% @doc List all items in a directory, assuming they are numbered.
 list_numbered(Path, Opts) ->
     SlotDir = hb_store:path(hb_opts:get(store, no_viable_store, Opts), Path),
-    [ to_integer(Name) || Name <- list(SlotDir, Opts) ].
+    [ hb_util:int(Name) || Name <- list(SlotDir, Opts) ].
 
 %% @doc List all items under a given path.
 list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) ->
@@ -212,30 +214,26 @@ generate_binary_path(Bin, Opts) ->
 %% the commitments of the inner messages. We do not, however, store the IDs from
 %% commitments on signed _inner_ messages. We may wish to revisit this.
 write(RawMsg, Opts) when is_map(RawMsg) ->
-    TABM = hb_message:convert(RawMsg, tabm, <<"structured@1.0">>, Opts),
-    case hb_message:with_only_committed(TABM, Opts) of
-        {ok, Msg} ->
-            ?event(debug_cache, {writing_full_message, {msg, Msg}}),
-            %try
-                do_write_message(
-                    TABM,
-                    hb_opts:get(store, no_viable_store, Opts),
-                    Opts
-                );
-            % catch
-            %     Type:Reason:Stacktrace ->
-            %         ?event(error,
-            %             {cache_write_error,
-            %                 {type, Type},
-            %                 {reason, Reason},
-            %                 {stacktrace, Stacktrace}
-            %             },
-            %             Opts
-            %         ),
-            %         {error, no_viable_store}
-            % end;
-        {error, Err} ->
-            {error, Err}
+    {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
+    TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
+    ?event(debug_cache, {writing_full_message, {msg, TABM}}),
+    try
+        do_write_message(
+            TABM,
+            hb_opts:get(store, no_viable_store, Opts),
+            Opts
+        )
+    catch
+        Type:Reason:Stacktrace ->
+            ?event(error,
+                {cache_write_error,
+                    {type, Type},
+                    {reason, Reason},
+                    {stacktrace, {trace, Stacktrace}}
+                },
+                Opts
+            ),
+            erlang:raise(Type, Reason, Stacktrace)
     end;
 write(List, Opts) when is_list(List) ->
     write(hb_message:convert(List, tabm, <<"structured@1.0">>, Opts), Opts);
@@ -382,14 +380,7 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either a
 %% richly typed map or a direct binary.
 read(Path, Opts) ->
-    case store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts) of
-        not_found -> not_found;
-        {ok, Res} ->
-            %?event({applying_types_to_read_message, Res}),
-            %Structured = dev_codec_structured:to(Res),
-            %?event({finished_read, Structured}),
-            {ok, Res}
-    end.
+    store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts).
 
 %% @doc List all of the subpaths of a given path and return a map of keys and
 %% links to the subpaths, including their types.
@@ -397,9 +388,9 @@ store_read(_Path, no_viable_store, _) ->
     not_found;
 store_read(Path, Store, Opts) ->
     ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
-    ?event({read_resolved,
+    ?event({reading,
         {original_path, {string, PathBin}},
-        {resolved_path, ResolvedFullPath},
+        {fully_resolved_path, ResolvedFullPath},
         {store, Store}
     }),
     case hb_store:type(Store, ResolvedFullPath) of
@@ -602,17 +593,96 @@ types_to_implicit(Types) ->
         Types
     ).
 
-%% @doc Read the output of a prior computation, given Msg1, Msg2, and some
-%% options.
-read_resolved(MsgID1, MsgID2, Opts) when ?IS_ID(MsgID1) and ?IS_ID(MsgID2) ->
-    ?event({cache_lookup, {msg1, MsgID1}, {msg2, MsgID2}, {opts, Opts}}),
-    read(<<MsgID1/binary, "/", MsgID2/binary>>, Opts);
-read_resolved(MsgID1, Msg2, Opts) when ?IS_ID(MsgID1) and is_map(Msg2) ->
-    {ok, MsgID2} = dev_message:id(Msg2, #{ <<"committers">> => <<"all">> }, Opts),
-    read(<<MsgID1/binary, "/", MsgID2/binary>>, Opts);
-read_resolved(Msg1, Msg2, Opts) when is_map(Msg1) and is_map(Msg2) ->
-    read(hb_path:hashpath(Msg1, Msg2, Opts), Opts);
-read_resolved(_, _, _) -> not_found.
+%% @doc Read the result of a computation, using heuristics. The supported
+%% heuristics are as follows:
+%% 1. If the base message is an ID, we try to determine if the message has an
+%% explicit device. If it does not, we can simply read the key and return it if
+%% it exists, as this is the behavior of `message@1.0'.
+%% 2. If the base message is loaded (a map), we determine if it has an explicit,
+%% non-direct data access device. If it does, we simply read the key from the
+%% message and return it if it exists.
+%% 3. If the message has an explicit device, we attempt to read the hashpath to
+%% see if it has already been computed.
+read_resolved(BaseMsg, Key, Opts) when is_binary(Key) ->
+    read_resolved(BaseMsg, #{ <<"path">> => Key }, Opts);
+read_resolved({link, ID, LinkOpts}, Req, Opts) ->
+    read_resolved(ID, Req, maps:merge(LinkOpts, Opts));
+read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsgID) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    NormKey = hb_ao:normalize_key(Key, Opts),
+    case hb_ao_device:is_direct_key_access(BaseMsgID, Req, Opts, Store) of
+        unknown -> miss;
+        false ->
+            ?event(read_cached,
+                {found_non_message_device,
+                    {key, NormKey}
+                }
+            ),
+            read_hashpath(BaseMsgID, Req, Opts);
+        true ->
+            % Either the message does not exist in the store, or there is no
+            % explicit device in the message. If the message exists this implies
+            % that the default (`message@1.0`) device will be used to execute
+            % the key. Subsequently, we can simply read the key and return it if
+            % it exists.
+            ?event(read_cached,
+                {skipping_execution_store_lookup,
+                    {base_msg, BaseMsgID},
+                    {key, NormKey}
+                }
+            ),
+            KeyPath = hb_store:resolve(Store, [BaseMsgID, Key]),
+            {hit, read(KeyPath, Opts)}
+    end;
+read_resolved(BaseMsg, Req = #{ <<"path">> := Key }, Opts) when is_map(BaseMsg) ->
+    % The base message is loaded, so we determine if it has an explicit device
+    % and perform a direct lookup if it does not.
+    NormKey = hb_ao:normalize_key(Key, Opts),
+    case hb_ao_device:is_direct_key_access(BaseMsg, Req, Opts) of
+        false -> read_hashpath(BaseMsg, Req, Opts);
+        true ->
+            ?event(read_cached,
+                {skip_execution_memory_lookup,
+                    {path, NormKey}
+                }
+            ),
+            {hit, read_in_memory_key(BaseMsg, NormKey, Opts)}
+    end;
+read_resolved(Base, Req, Opts) ->
+    read_hashpath(Base, Req, Opts).
+
+%% @doc Return a key from an in-memory message, returning the same form as
+%% a store read (`{Status, Value}').
+read_in_memory_key(BaseMsg, NormKey, _Opts) ->
+    % For now, just wrap maps:find.
+    case maps:find(NormKey, BaseMsg) of
+        error ->
+            ?event(read_cached, {key_not_found, {key, NormKey}}),
+            not_found;
+        {ok, Value} ->
+            ?event(read_cached, {key_found, {key, NormKey}}),
+            {ok, Value}
+    end.
+
+%% @doc Read the output of a prior computation, given BaseMsg and Req.
+read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) ->
+    ?event({cache_lookup, {msg1, BaseMsgID}, {msg2, ReqID}, {opts, Opts}}),
+    case read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts) of
+        {ok, Msg} -> {hit, {ok, Msg}};
+        not_found -> miss
+    end;
+read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
+    {ok, ReqID} = dev_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
+    case read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts) of
+        {ok, Msg} -> {hit, {ok, Msg}};
+        not_found -> miss
+    end;
+read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
+    case read(hb_path:hashpath(BaseMsg, Req, Opts), Opts) of
+        {ok, Msg} -> {hit, {ok, Msg}};
+        not_found -> miss
+    end;
+read_hashpath(_, _, _) -> miss.
 
 %% @doc Make a link from one path to another in the store.
 %% Note: Argument order is `link(Src, Dst, Opts)'.
@@ -622,11 +692,6 @@ link(Existing, New, Opts) ->
         Existing,
         New
     ).
-
-to_integer(Value) when is_list(Value) ->
-    list_to_integer(Value);
-to_integer(Value) when is_binary(Value) ->
-    binary_to_integer(Value).
 
 %%% Tests
 

@@ -3,11 +3,13 @@
 -export([is_link_key/1, remove_link_specifier/1]).
 -export([normalize/2, normalize/3]).
 -export([decode_all_links/1]).
--export([format/1, format/2, format_unresolved/1]).
+-export([format/1, format/2, format/3]).
+-export([format_unresolved/1, format_unresolved/2, format_unresolved/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Takes a message and ensures that it is normalized:
+%% @doc Takes a structured message and ensures that its sub-message links are
+%% normalized to TABM form:
 %% 
 %% - All literal (binary) lazily-loadable values are in-memory.
 %% - All submaps are represented as links, optionally offloading their local 
@@ -143,19 +145,30 @@ remove_link_specifier(Key) ->
 %% before printing.
 format(Link) -> format(Link, #{}).
 format(Link, Opts) ->
+    format(Link, Opts, 0).
+format(Link, Opts, Indent) ->
     case hb_opts:get(debug_resolve_links, false, Opts) of
         true ->
-            try hb_format:message(hb_cache:ensure_all_loaded(Link, Opts), Opts)
+            try
+                hb_format:message(
+                    hb_cache:ensure_all_loaded(Link, Opts),
+                    Opts,
+                    Indent
+                )
             catch
-                _:_ -> << "!UNRESOLVABLE! ", (format_unresolved(Link))/binary >>
+                _:_ -> << "!UNRESOLVABLE! ", (format_unresolved(Link, Opts))/binary >>
             end;
-        false -> format_unresolved(Link)
+        false -> format_unresolved(Link, Opts, Indent)
     end.
 
 %% @doc Format a link without resolving it.
-format_unresolved({link, ID, Opts}) ->
+format_unresolved(Link) ->
+    format_unresolved(Link, #{}).
+format_unresolved({link, ID, Opts}, BaseOpts) ->
+    format_unresolved({link, ID, Opts}, BaseOpts, 0).
+format_unresolved({link, ID, Opts}, BaseOpts, Indent) ->
     hb_util:bin(
-        io_lib:format(
+        hb_format:indent(
             "~s~s: ~s",
             [
                 case maps:get(<<"lazy">>, Opts, false) of
@@ -167,7 +180,9 @@ format_unresolved({link, ID, Opts}) ->
                     Type -> <<" (to ", (hb_util:bin(Type))/binary, ")" >>
                 end,
                 ID
-            ]
+            ],
+            BaseOpts,
+            Indent
         )
     ).
 

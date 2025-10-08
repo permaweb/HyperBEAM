@@ -117,7 +117,8 @@ mul(Msg1, Msg2) ->
     {ok, #{ <<"state">> => State, <<"results">> => [Arg1 * Arg2] }}.
 
 %% @doc Do nothing when asked to snapshot.
-snapshot(_Msg1, _Msg2, _Opts) ->
+snapshot(Msg1, Msg2, _Opts) ->
+    ?event({snapshot_called, {msg1, Msg1}, {msg2, Msg2}}),
     {ok, #{}}.
 
 %% @doc Set the `postprocessor-called' key to true in the HTTP server.

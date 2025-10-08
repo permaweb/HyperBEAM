@@ -324,7 +324,7 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
             % The message has no body or content-type set. Resolve the `index`
             % key upon it to derive it.
             Structured = hb_message:convert(TABM, <<"structured@1.0">>, Opts),
-            try hb_ao:resolve(Structured, #{ <<"path">> => <<"index">> }, Opts) of
+            try hb_ao:resolve(Structured, Req#{ <<"path">> => <<"index">> }, Opts) of
                 {ok, IndexMsg} ->
                     % The index message has been calculated successfully. Convert
                     % it to TABM format.

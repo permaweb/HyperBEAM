@@ -10,6 +10,7 @@ scope(_) -> remote.
 resolve(_, Key) -> Key.
 
 list(StoreOpts, Key) ->
+    ?event(store_gateway, executing_list),
     case read(StoreOpts, Key) of
         not_found -> not_found;
         {ok, Message} -> {ok, hb_maps:keys(Message, StoreOpts)}
@@ -19,7 +20,7 @@ list(StoreOpts, Key) ->
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
 type(StoreOpts, Key) ->
-    ?event({type, StoreOpts, Key}),
+    ?event(store_gateway, executing_type),
     case read(StoreOpts, Key) of
         not_found -> not_found;
         {ok, Data} ->
@@ -41,37 +42,79 @@ type(StoreOpts, Key) ->
 
 %% @doc Read the data at the given key from the GraphQL route. Will only attempt
 %% to read the data if the key is an ID.
-read(StoreOpts, Key) ->
+read(BaseStoreOpts, Key) ->
+    StoreOpts = opts(BaseStoreOpts),
     case hb_path:term_to_path_parts(Key, StoreOpts) of
-        [ID] when ?IS_ID(ID) ->
-            ?event({read, StoreOpts, Key}),
-            case hb_gateway_client:read(Key, StoreOpts) of
-                {error, _} -> not_found;
+        [ID|Rest] when ?IS_ID(ID) ->
+            ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
+            case hb_gateway_client:read(ID, StoreOpts) of
+                {error, _} ->
+                    ?event({read_not_found, {key, ID}}),
+                    not_found;
                 {ok, Message} ->
-                    ?event(remote_read, {got_message_from_gateway, Message}),
-                    try maybe_cache(StoreOpts, Message) catch _:_ -> ignored end,
-                    {ok, Message}
+                    ?event({read_found, {key, ID}}),
+                    try hb_store_remote_node:maybe_cache(StoreOpts, Message)
+                    catch _:_ -> ignored end,
+                    case Rest of
+                        [] -> {ok, Message};
+                        _ ->
+                            case hb_util:deep_get(Rest, Message, StoreOpts) of
+                                not_found -> not_found;
+                                Value -> {ok, Value}
+                            end
+                    end
             end;
         _ ->
             ?event({ignoring_non_id, Key}),
             not_found
     end.
 
-%% @doc Cache the data if the cache is enabled. The `store' option may either
-%% be `false' to disable local caching, or a store definition to use as the
-%% cache.
-maybe_cache(StoreOpts, Data) ->
-    ?event({maybe_cache, StoreOpts, Data}),
-    % Check if the local store is in our store options.
-    case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
-        false -> do_nothing;
-        Store ->
-            ?event({writing_message_to_local_cache, Data}),
-            case hb_cache:write(Data, #{ store => Store }) of
-                {ok, _} -> Data;
-                {error, Err} ->
-                    ?event(warning, {error_writing_to_local_gateway_cache, Err}),
-                    Data
+%% @doc Normalize the routes in the given `Opts`.
+opts(Opts) ->
+    case hb_maps:find(<<"node">>, Opts) of
+        error -> Opts;
+        {ok, Node} ->
+            case hb_maps:get(<<"node-type">>, Opts, <<"arweave">>, Opts) of
+                <<"arweave">> ->
+                    Opts#{
+                        routes => [
+                            #{
+                                % Routes for GraphQL requests to use the remote
+                                % server's GraphQL API.
+                                <<"template">> => <<"/graphql">>,
+                                <<"nodes">> => [#{ <<"prefix">> => Node }]
+                            },
+                            #{
+                                <<"template">> => <<"/raw">>,
+                                <<"nodes">> => [#{ <<"prefix">> => Node }]
+                            }
+                        ]
+                    };
+                <<"ao">> ->
+                    Opts#{
+                        routes => [
+                            #{
+                                <<"template">> => <<"/graphql">>,
+                                <<"nodes">> =>
+                                    [
+                                        #{
+                                            <<"prefix">> =>
+                                                <<Node/binary, "/~query@1.0">>
+                                        }
+                                    ]
+                            },
+                            #{
+                                <<"template">> => <<"/raw">>,
+                                <<"nodes">> =>
+                                [
+                                    #{
+                                        <<"match">> => <<"^/raw">>,
+                                        <<"with">> => Node
+                                    }
+                                ]
+                            }
+                        ]
+                    }
             end
     end.
 
@@ -319,5 +362,42 @@ verifiability_test() ->
             <<"httpsig@1.0">>,
             #{}
         ),
-    ?event(debug, {verifying, {structured, Structured}, {original, Message}}),
+    ?event({verifying, {structured, Structured}, {original, Message}}),
     ?assert(hb_message:verify(Structured)).
+
+%% @doc Test that another HyperBEAM node offering the `~query@1.0' device can
+%% be used as a store.
+remote_hyperbeam_node_ans104_test() ->
+    ServerOpts =
+        #{
+            priv_wallet => ar_wallet:new(),
+            store => hb_test_utils:test_store()
+        },
+    Server = hb_http_server:start_node(ServerOpts),
+    Msg =
+        hb_message:commit(
+            #{
+                <<"hello">> => <<"world">>
+            },
+            ServerOpts,
+            #{ <<"commitment-device">> => <<"ans104@1.0">> }
+        ),
+    {ok, ID} = hb_cache:write(Msg, ServerOpts),
+    {ok, ReadMsg} = hb_cache:read(ID, ServerOpts),
+    ?assert(hb_message:verify(ReadMsg)),
+    LocalStore = hb_test_utils:test_store(),
+    ClientOpts =
+        #{
+            store =>
+                [
+                    #{
+                        <<"store-module">> => hb_store_gateway,
+                        <<"node">> => Server,
+                        <<"node-type">> => <<"ao">>,
+                        <<"local-store">> => [LocalStore]
+                    }
+                ]
+        },
+    {ok, Msg2} = hb_cache:read(ID, ClientOpts),
+    ?assert(hb_message:verify(Msg2)),
+    ?assert(hb_message:match(Msg, Msg2)).

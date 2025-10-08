@@ -100,6 +100,7 @@ move(Mode, Msg1, Msg2, Opts) ->
         % Get the source of the patches from the message. Makes the `maybe'
         % statement return `{error, not_found}' if the source is not found.
         {ok, Source} ?= hb_ao:resolve(FromMsg, PatchFrom, Opts),
+        ?event({source, Source}),
         % Find all messages with the PATCH request.
         {ToWrite, NewSourceValue} =
             case Mode of
@@ -111,7 +112,17 @@ move(Mode, Msg1, Msg2, Opts) ->
                             Device = hb_ao:get(<<"device">>, Msg, Opts)
                                 == <<"patch@1.0">>,
                             if Method orelse Device ->
-                                {PatchAcc#{Key => Msg}, NewSourceAcc};
+                                {
+                                    PatchAcc#{
+                                        Key =>
+                                            hb_maps:without(
+                                                [<<"commitments">>, <<"Tags">>],
+                                                Msg,
+                                                Opts
+                                            )
+                                    },
+                                    NewSourceAcc
+                                };
                             true ->
                                 {PatchAcc, NewSourceAcc#{ Key => Msg }}
                             end
@@ -160,6 +171,7 @@ move(Mode, Msg1, Msg2, Opts) ->
                         ToWrite
                     )
             end,
+        ?event({to_write, ToWriteMod}),
         % Find the target to apply the patches to, and apply them.
         PatchedResult =
             hb_ao:set(
@@ -342,3 +354,55 @@ req_prefix_test() ->
         not_found,
         hb_ao:get(<<"results/outbox/1">>, ResolvedState, #{})
     ).
+
+custom_set_patch_test() ->
+    hb:init(),
+    % Apply a patch from a message containing a device with a custom `set' key
+    % (the `~trie@1.0' device in this example).
+    ID1 = hb_util:human_id(<<0:256>>),
+    ID2 = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    State0 = #{
+        <<"device">> => <<"patch@1.0">>,
+        <<"results">> => #{
+            <<"outbox">> => #{
+                <<"1">> => #{
+                    <<"device">> => <<"patch@1.0">>,
+                    <<"balances">> => #{
+                        <<"device">> => <<"trie@1.0">>
+                    }
+                },
+                <<"2">> => #{
+                    <<"device">> => <<"patch@1.0">>,
+                    <<"balances">> => #{
+                        <<"A">> => <<"50">>,
+                        ID2 => <<"250">>
+                    }
+                }
+            }
+        },
+        <<"other-message">> => <<"other-value">>,
+        <<"patch-from">> => <<"/results/outbox">>
+    },
+    {ok, State1} = hb_ao:resolve(State0, <<"compute">>, #{}),
+    ?event(debug_test, {resolved_state, State1}),
+    ?assertEqual(<<"50">>, hb_ao:get(<<"balances/A">>, State1, #{})),
+    ?assertEqual(<<"250">>, hb_ao:get(<<"balances/", ID2/binary>>, State1, #{})),
+    State2 =
+        State1#{
+            <<"results">> => #{
+                <<"outbox">> => #{
+                    <<"1">> => #{
+                        <<"device">> => <<"patch@1.0">>,
+                        <<"balances">> => #{
+                            ID1 => <<"1">>,
+                            ID2 => <<"500">>
+                        }
+                    }
+                }
+            }
+        },
+    {ok, State3} = hb_ao:resolve(State2, <<"compute">>, #{}),
+    ?event(debug_test, {resolved_state, State3}),
+    ?assertEqual(<<"1">>, hb_ao:get(<<"balances/", ID1/binary>>, State3, #{})),
+    ?assertEqual(<<"50">>, hb_ao:get(<<"balances/A">>, State3, #{})),
+    ?assertEqual(<<"500">>, hb_ao:get(<<"balances/", ID2/binary>>, State3, #{})).
