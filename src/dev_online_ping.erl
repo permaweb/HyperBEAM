@@ -108,8 +108,8 @@ send_ping(Opts) ->
     
     try
         ?event({debug_start_of_try_block, "Starting ping process"}),
-        % Sign the message with the node's wallet using ans104 commitment device
-        CommitmentDevice = hb_opts:get(commitment_device, <<"ans104@1.0">>, OptsWithWallet),
+        % Always use ans104 commitment for this device
+        CommitmentDevice = <<"ans104@1.0">>,
         {ok, SignedMessage} = dev_message:commit(
             UnsignedPingMessage,
             #{ <<"commitment-device">> => CommitmentDevice },
