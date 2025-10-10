@@ -2,7 +2,7 @@
 %%% processes, using HyperBEAM infrastructure. This allows existing `legacynet'
 %%% AO process definitions to be used in HyperBEAM.
 -module(dev_genesis_wasm).
--export([init/3, compute/3, normalize/3, snapshot/3, import/3]).
+-export([init/3, compute/3, normalize/3, snapshot/3, import/3, terminate/0]).
 -export([latest_checkpoint/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
@@ -480,11 +480,13 @@ collect_events(Port) ->
 collect_events(Port, Acc) ->
     receive
         {Port, {data, Data}} ->
+            persistent_term:put({?MODULE, port}, Port),
             collect_events(Port,
                 log_server_events(<<Acc/binary, Data/binary>>)
             );
         stop ->
             port_close(Port),
+            persistent_term:erase({?MODULE, port}),
             ?event(genesis_wasm_stopped, {pid, self()}),
             ok
     end.
@@ -497,6 +499,11 @@ log_server_events([Line | Rest]) ->
     ?event(genesis_wasm_server, {server_logged, {string, Line}}),
     log_server_events(Rest).
 
+terminate() ->
+    case persistent_term:get({?MODULE, port}, undefined) of
+        undefined -> ok;
+        Port -> port_close(Port)
+    end.
 %%% Tests
 -ifdef(ENABLE_GENESIS_WASM).
 

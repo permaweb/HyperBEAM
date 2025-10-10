@@ -7,7 +7,7 @@
 
 -behaviour(application).
 
--export([start/2, stop/1]).
+-export([start/2, prep_stop/1, stop/1]).
 
 -include("include/hb.hrl").
 
@@ -17,6 +17,10 @@ start(_StartType, _StartArgs) ->
     ok = dev_scheduler_registry:start(),
     _TimestampServer = ar_timestamp:start(),
     {ok, _} = hb_http_server:start().
+
+prep_stop(State) ->
+    dev_genesis_wasm:terminate(),
+    State.
 
 stop(_State) ->
     ok.
