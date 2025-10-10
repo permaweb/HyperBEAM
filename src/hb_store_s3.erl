@@ -28,7 +28,6 @@
 -define(DEFAULT_REGION, <<"us-east-1">>).
 -define(DEFAULT_ENDPOINT, <<"https://s3.amazonaws.com">>).
 -define(MAX_LINK_DEPTH, 100).
--define(LINK_PREFIX, <<"lnk/">>).
 -define(LINK_MARKER, <<"link:">>).
 
 %%%-----------------------------------------------------------------------------
@@ -197,7 +196,12 @@ build_s3_key(<<>>, Key) ->
     hb_store:join(Key);
 build_s3_key(Prefix, Key) ->
     Path = hb_store:join(Key),
-    <<Prefix/binary, Path/binary>>.
+    % Ensure prefix ends with / for proper key namespacing
+    PrefixWithSlash = case binary:last(Prefix) of
+        $/ -> Prefix;
+        _ -> <<Prefix/binary, "/">>
+    end,
+    <<PrefixWithSlash/binary, Path/binary>>.
 
 %%%-----------------------------------------------------------------------------
 %%% Link Support (Phase 4)
@@ -215,22 +219,19 @@ read_with_links(_Opts, _Key, Depth) when Depth > ?MAX_LINK_DEPTH ->
     ?event(error, {too_many_links, {depth, Depth}}),
     not_found;
 read_with_links(Opts, Key, Depth) ->
-    % First, check if there's a link at lnk/{key}
-    LinkKey = <<?LINK_PREFIX/binary, (hb_util:bin(Key))/binary>>,
-
-    case read_direct(Opts, LinkKey) of
-        {ok, LinkValue} ->
-            case is_link(LinkValue) of
+    % Read the key directly
+    case read_direct(Opts, Key) of
+        {ok, Value} ->
+            % Check if it's a link
+            case is_link(Value) of
                 {true, Target} ->
                     ?event(store_s3, {follow_link, {from, Key}, {to, Target}}),
                     read_with_links(Opts, Target, Depth + 1);
                 false ->
-                    % Shouldn't happen - lnk/ should only contain links
-                    {ok, LinkValue}
+                    {ok, Value}
             end;
         not_found ->
-            % No link, try direct read
-            read_direct(Opts, Key)
+            not_found
     end.
 
 %% Direct read without link resolution
@@ -257,22 +258,18 @@ read_direct(Opts, Key) ->
     end.
 
 %% @doc Create a symbolic link from New to Existing.
-%% Links are stored in the "lnk/" namespace with value "link:{target}".
+%% Links are stored as values with "link:" prefix.
 -spec make_link(opts(), key(), key()) -> ok | {error, term()}.
 make_link(Opts, Existing, New) ->
     % Convert to binary if needed
     ExistingBin = hb_util:bin(hb_store:join(Existing)),
-    NewBin = hb_util:bin(hb_store:join(New)),
 
-    % Build link value
+    % Build link value with marker
     LinkValue = <<?LINK_MARKER/binary, ExistingBin/binary>>,
-
-    % Store in link namespace
-    LinkKey = <<?LINK_PREFIX/binary, NewBin/binary>>,
 
     ?event(store_s3, {make_link, {from, New}, {to, Existing}}),
 
-    write(Opts, LinkKey, LinkValue).
+    write(Opts, New, LinkValue).
 
 %% @doc Check if a value is a link and extract the target.
 %% Returns {true, Target} or false.
@@ -314,11 +311,10 @@ list(Opts, Path) ->
     try
         #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
 
-        % First check if Path is a link
-        LinkPath = <<?LINK_PREFIX/binary, (hb_util:bin(Path))/binary>>,
-        ResolvedPath = case read_direct(Opts, LinkPath) of
-            {ok, LinkValue} ->
-                case is_link(LinkValue) of
+        % Check if Path is a link and resolve it
+        ResolvedPath = case read_direct(Opts, Path) of
+            {ok, Value} ->
+                case is_link(Value) of
                     {true, Target} ->
                         Target;
                     false ->
@@ -366,21 +362,22 @@ ensure_trailing_slash(Path) ->
 
 %% @doc Extract immediate children from S3 list response.
 %% Returns only the child names, not full paths.
+%% Returns both objects (files) and common prefixes (directories), like file:list_dir().
 extract_children(Prefix, S3Response) ->
-    % Get regular objects
+    % Get regular objects (actual files)
     Contents = proplists:get_value(contents, S3Response, []),
 
     % Get common prefixes (subdirectories)
     CommonPrefixes = proplists:get_value(common_prefixes, S3Response, []),
 
-    % Extract object names
+    % Extract object names - only immediate children
     Objects = lists:filtermap(
         fun(Obj) ->
             Key = list_to_binary(proplists:get_value(key, Obj, "")),
             case strip_prefix(Prefix, Key) of
                 <<>> -> false;
                 Child ->
-                    % Only include if it's an immediate child
+                    % Only include if it's an immediate child (no / in name)
                     case binary:match(Child, <<"/">>) of
                         nomatch -> {true, Child};
                         _ -> false
@@ -390,7 +387,7 @@ extract_children(Prefix, S3Response) ->
         Contents
     ),
 
-    % Extract directory names
+    % Extract directory names (common prefixes)
     Dirs = lists:filtermap(
         fun(P) ->
             PrefixBin = list_to_binary(proplists:get_value(prefix, P, "")),
@@ -408,7 +405,7 @@ extract_children(Prefix, S3Response) ->
         CommonPrefixes
     ),
 
-    % Return unique sorted list
+    % Return unique sorted list (both files and directories, like file:list_dir)
     lists:usort(Objects ++ Dirs).
 
 %% @doc Remove a prefix from a binary if it matches.
@@ -428,24 +425,21 @@ strip_prefix(Prefix, Bin) ->
 type(Opts, Key) when is_list(Key) ->
     type(Opts, hb_store:join(Key));
 type(Opts, Key) ->
-    % First check if it's a link and resolve it
-    LinkKey = <<?LINK_PREFIX/binary, (hb_util:bin(Key))/binary>>,
-    ResolvedKey = case read_direct(Opts, LinkKey) of
-        {ok, LinkValue} ->
-            case is_link(LinkValue) of
-                {true, Target} -> Target;
-                false -> Key
-            end;
-        not_found -> Key
-    end,
-
     % Try to read the key directly
-    case read_direct(Opts, ResolvedKey) of
-        {ok, _Value} ->
-            simple;
+    case read_direct(Opts, Key) of
+        {ok, Value} ->
+            % Check if it's a link and resolve it
+            case is_link(Value) of
+                {true, Target} ->
+                    % Recursively check the target's type
+                    type(Opts, Target);
+                false ->
+                    % It's a simple value
+                    simple
+            end;
         not_found ->
-            % Check if it has children (is a directory)
-            case has_children(Opts, ResolvedKey) of
+            % Check if it has children (is a composite/directory)
+            case has_children(Opts, Key) of
                 true -> composite;
                 false -> not_found
             end
@@ -480,46 +474,48 @@ has_children(Opts, Path) ->
 %% Follows links in each path segment except the last.
 -spec resolve(opts(), key()) -> binary().
 resolve(Opts, Path) when is_list(Path) ->
-    case resolve_path_segments(Opts, Path, 0) of
-        {ok, Resolved} -> hb_store:join(Resolved);
-        {error, _} -> hb_store:join(Path)
-    end;
+    resolve(Opts, hb_store:join(Path));
 resolve(Opts, Path) when is_binary(Path) ->
     Parts = binary:split(Path, <<"/">>, [global]),
-    resolve(Opts, Parts).
+    case resolve_path_segments(Opts, Parts, 0) of
+        {ok, Resolved} -> Resolved;
+        {error, _} -> Path
+    end.
 
-%% Internal path resolution
+%% Internal path resolution that resolves all segments including the last
 resolve_path_segments(_Opts, _Path, Depth) when Depth > ?MAX_LINK_DEPTH ->
     {error, too_many_redirects};
 resolve_path_segments(_Opts, [], _Depth) ->
-    {ok, []};
-resolve_path_segments(_Opts, [Last], _Depth) ->
-    % Don't resolve the last segment
-    {ok, [Last]};
-resolve_path_segments(Opts, [Head|Tail], Depth) ->
-    % Check if Head is a link
-    LinkKey = <<?LINK_PREFIX/binary, Head/binary>>,
-    case read_direct(Opts, LinkKey) of
-        {ok, LinkValue} ->
-            case is_link(LinkValue) of
+    {ok, <<>>};
+resolve_path_segments(Opts, Parts, Depth) ->
+    resolve_path_accumulate(Opts, Parts, <<>>, Depth).
+
+% Accumulator-based resolution
+resolve_path_accumulate(_Opts, [], Acc, _Depth) ->
+    {ok, Acc};
+resolve_path_accumulate(_Opts, _Parts, _Acc, Depth) when Depth > ?MAX_LINK_DEPTH ->
+    {error, too_many_redirects};
+resolve_path_accumulate(Opts, [Head|Tail], Acc, Depth) ->
+    % Build the current path segment
+    CurrentPath = case Acc of
+        <<>> -> Head;
+        _ -> <<Acc/binary, "/", Head/binary>>
+    end,
+
+    % Check if current path is a link
+    case read_direct(Opts, CurrentPath) of
+        {ok, Value} ->
+            case is_link(Value) of
                 {true, Target} ->
-                    % Replace Head with target and continue
-                    TargetParts = binary:split(Target, <<"/">>, [global]),
-                    NewPath = TargetParts ++ Tail,
-                    resolve_path_segments(Opts, NewPath, Depth + 1);
+                    % It's a link - replace accumulated path with target and continue
+                    resolve_path_accumulate(Opts, Tail, Target, Depth + 1);
                 false ->
-                    % Not a link, continue with rest
-                    case resolve_path_segments(Opts, Tail, Depth) of
-                        {ok, Rest} -> {ok, [Head|Rest]};
-                        Error -> Error
-                    end
+                    % It's a regular value, continue accumulating
+                    resolve_path_accumulate(Opts, Tail, CurrentPath, Depth)
             end;
         not_found ->
-            % Not a link, continue with rest
-            case resolve_path_segments(Opts, Tail, Depth) of
-                {ok, Rest} -> {ok, [Head|Rest]};
-                Error -> Error
-            end
+            % Path segment doesn't exist as a link, continue accumulating
+            resolve_path_accumulate(Opts, Tail, CurrentPath, Depth)
     end.
 
 %% @doc Convert path to canonical form.
@@ -588,12 +584,14 @@ delete_all_objects(Opts) ->
             ok
     end.
 
-%% @doc Return the scope of this store (always remote for S3).
--spec scope() -> remote.
-scope() -> remote.
+%% @doc Return the scope of this store.
+%% Defaults to local to match filesystem behavior, but can be overridden in config.
+-spec scope() -> local.
+scope() -> local.
 
--spec scope(opts()) -> remote.
-scope(_Opts) -> remote.
+-spec scope(opts()) -> local | remote.
+scope(#{ <<"scope">> := Scope }) -> Scope;
+scope(_Opts) -> scope().
 
 %% @doc Match keys based on a template.
 %% Simple implementation - just returns not_found for now.
