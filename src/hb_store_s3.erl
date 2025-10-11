@@ -29,6 +29,9 @@
 -define(DEFAULT_ENDPOINT, <<"https://s3.amazonaws.com">>).
 -define(MAX_LINK_DEPTH, 100).
 -define(LINK_MARKER, <<"link:">>).
+%% Namespace for storing link objects separately to avoid file/prefix collisions
+-define(LINKS_NS, <<"links/">>).
+-define(GROUPS_NS, <<"groups/">>).
 
 %%%-----------------------------------------------------------------------------
 %%% Configuration and Initialization (Phase 2)
@@ -39,31 +42,28 @@
 %% It validates the configuration and tests the connection.
 -spec start(opts()) -> ok | {error, term()}.
 start(Opts) ->
-    try
-        % Step 1: Validate required configuration keys
-        ok = validate_config(Opts),
-
-        % Step 2: Create erlcloud configuration
+    maybe
+        ok ?= validate_config(Opts),
         Config = make_erlcloud_config(Opts),
-
-        % Step 3: Test bucket access
         Bucket = maps:get(<<"bucket">>, Opts),
-        ok = test_bucket_access(Bucket, Config),
-
-        % Step 4: Store configuration for later use
+        ok ?= test_bucket_access(Bucket, Config),
         StoreRef = get_store_ref(Opts),
-        persistent_term:put(StoreRef, #{
+        _ = persistent_term:put(StoreRef, #{
             bucket => Bucket,
             prefix => maps:get(<<"prefix">>, Opts, <<>>),
             config => Config
         }),
 
-        ?event(store_s3, {started, {bucket, Bucket}}),
-        ok
-    catch
-        error:Reason ->
-            ?event(error, {s3_start_failed, {reason, Reason}}),
-            {error, Reason}
+        ?event(store_s3, {started, {bucket, Bucket}, {prefix, maps:get(<<"prefix">>, Opts, <<>>)}}),
+        {ok, #{
+            module => ?MODULE,
+            bucket => Bucket,
+            prefix => maps:get(<<"prefix">>, Opts, <<>>)
+        }}
+    else
+        Error ->
+            ?event(error, {s3_start_failed, {reason, Error}}),
+            {error, Error}
     end.
 
 %% @doc Validate that all required configuration keys are present.
@@ -80,19 +80,15 @@ validate_config(Opts) ->
 
 %% @doc Build erlcloud AWS configuration from our options.
 make_erlcloud_config(Opts) ->
-    % Get configuration values with defaults
-    AccessKey = binary_to_list(maps:get(<<"access-key-id">>, Opts)),
-    SecretKey = binary_to_list(maps:get(<<"secret-access-key">>, Opts)),
-    Region = binary_to_list(maps:get(<<"region">>, Opts, ?DEFAULT_REGION)),
+    AccessKey = hb_util:list(maps:get(<<"access-key-id">>, Opts)),
+    SecretKey = hb_util:list(maps:get(<<"secret-access-key">>, Opts)),
+    Region = hb_util:list(maps:get(<<"region">>, Opts, ?DEFAULT_REGION)),
     Endpoint = maps:get(<<"endpoint">>, Opts, ?DEFAULT_ENDPOINT),
 
-    % Parse endpoint URL
     {Scheme, Host, Port} = parse_endpoint(Endpoint),
 
-    % Create base configuration
     BaseConfig = erlcloud_s3:new(AccessKey, SecretKey, Host, Port),
 
-    % Add additional settings
     BaseConfig#aws_config{
         s3_scheme = Scheme,
         s3_bucket_after_host = false,
@@ -104,7 +100,7 @@ make_erlcloud_config(Opts) ->
 %% @doc Parse an endpoint URL into scheme, host, and port.
 %% Example: "https://s3.amazonaws.com" -> {"https://", "s3.amazonaws.com", 443}
 parse_endpoint(Endpoint) when is_binary(Endpoint) ->
-    parse_endpoint(binary_to_list(Endpoint));
+    parse_endpoint(hb_util:list(Endpoint));
 parse_endpoint(Endpoint) when is_list(Endpoint) ->
     case string:split(Endpoint, "://") of
         [Scheme, HostPort] ->
@@ -113,7 +109,6 @@ parse_endpoint(Endpoint) when is_list(Endpoint) ->
                     Port = list_to_integer(PortStr),
                     {Scheme ++ "://", Host, Port};
                 [Host] ->
-                    % Default port based on scheme
                     DefaultPort = case Scheme of
                         "https" -> 443;
                         "http" -> 80
@@ -121,14 +116,12 @@ parse_endpoint(Endpoint) when is_list(Endpoint) ->
                     {Scheme ++ "://", Host, DefaultPort}
             end;
         [HostOnly] ->
-            % No scheme provided, assume HTTP
             {"http://", HostOnly, 80}
     end.
 
 %% @doc Test that we can access the configured bucket.
 test_bucket_access(Bucket, Config) ->
-    BucketStr = binary_to_list(Bucket),
-    % Try to list objects with max-keys=1 to minimize data transfer
+    BucketStr = hb_util:list(Bucket),
     case erlcloud_s3:list_objects(BucketStr, [{max_keys, 1}], Config) of
         L when is_list(L) ->
             ok;
@@ -140,8 +133,8 @@ test_bucket_access(Bucket, Config) ->
 
 %% @doc Get a unique reference for this store instance.
 get_store_ref(Opts) ->
-    Bucket = maps:get(<<"bucket">>, Opts),
-    Prefix = maps:get(<<"prefix">>, Opts, <<>>),
+    Bucket = hb_util:bin(maps:get(<<"bucket">>, Opts)),
+    Prefix = hb_util:bin(maps:get(<<"prefix">>, Opts, <<>>)),
     {?MODULE, Bucket, Prefix}.
 
 %% @doc Get stored configuration from persistent_term.
@@ -161,34 +154,27 @@ get_config(Opts) ->
 %% @doc Write a value to a key in S3.
 -spec write(opts(), key(), value()) -> ok | {error, term()}.
 write(Opts, Key, Value) when is_list(Key) ->
-    % Convert list paths to binary
     write(Opts, hb_store:join(Key), Value);
 write(Opts, Key, Value) ->
-    try
-        % Get stored configuration
+    maybe
         #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
-
-        % Build full S3 key with prefix
-        FullKey = build_s3_key(Prefix, Key),
-
-        % Write to S3
-        BucketStr = binary_to_list(Bucket),
-        KeyStr = binary_to_list(FullKey),
-
+        RelKey = hb_store:join(Key),
+        FullKey = case RelKey of
+            <<"data/", _/binary>> -> build_s3_key(Prefix, RelKey);
+            _ -> build_groups_key(Prefix, RelKey)
+        end,
+        BucketStr = hb_util:list(Bucket),
+        KeyStr = hb_util:list(FullKey),
         ?event(store_s3, {write, {key, FullKey}, {size, byte_size(Value)}}),
-
-        case erlcloud_s3:put_object(BucketStr, KeyStr, Value, [], Config) of
-            L when is_list(L) ->
-                % Success - erlcloud returns a proplist
-                ok;
-            {error, Reason} ->
-                ?event(error, {s3_write_failed, {key, FullKey}, {reason, Reason}}),
-                {error, Reason}
-        end
-    catch
-        error:CatchReason ->
-            ?event(error, {s3_write_error, {key, Key}, {reason, CatchReason}}),
-            {error, CatchReason}
+        ok ?= case erlcloud_s3:put_object(BucketStr, KeyStr, Value, [], Config) of
+            L when is_list(L) -> ok;
+            {error, Reason} -> error(Reason)
+        end,
+        ok
+    else
+        Error ->
+            ?event(error, {s3_write_error, {key, Key}, {reason, Error}}),
+            {error, Error}
     end.
 
 %% @doc Build full S3 key with optional prefix.
@@ -196,12 +182,33 @@ build_s3_key(<<>>, Key) ->
     hb_store:join(Key);
 build_s3_key(Prefix, Key) ->
     Path = hb_store:join(Key),
-    % Ensure prefix ends with / for proper key namespacing
     PrefixWithSlash = case binary:last(Prefix) of
         $/ -> Prefix;
         _ -> <<Prefix/binary, "/">>
     end,
     <<PrefixWithSlash/binary, Path/binary>>.
+
+%% @doc Build an S3 key under the links namespace for a logical key.
+build_links_key(<<>>, Key) ->
+    <<?LINKS_NS/binary, (hb_store:join(Key))/binary>>;
+build_links_key(Prefix, Key) ->
+    Path = hb_store:join(Key),
+    PrefixWithSlash = case binary:last(Prefix) of
+        $/ -> Prefix;
+        _ -> <<Prefix/binary, "/">>
+    end,
+    <<PrefixWithSlash/binary, ?LINKS_NS/binary, Path/binary>>.
+
+%% @doc Build an S3 key under the groups namespace for a logical key.
+build_groups_key(<<>>, Key) ->
+    <<?GROUPS_NS/binary, (hb_store:join(Key))/binary>>;
+build_groups_key(Prefix, Key) ->
+    Path = hb_store:join(Key),
+    PrefixWithSlash = case binary:last(Prefix) of
+        $/ -> Prefix;
+        _ -> <<Prefix/binary, "/">>
+    end,
+    <<PrefixWithSlash/binary, ?GROUPS_NS/binary, Path/binary>>.
 
 %%%-----------------------------------------------------------------------------
 %%% Link Support (Phase 4)
@@ -219,13 +226,10 @@ read_with_links(_Opts, _Key, Depth) when Depth > ?MAX_LINK_DEPTH ->
     ?event(error, {too_many_links, {depth, Depth}}),
     not_found;
 read_with_links(Opts, Key, Depth) ->
-    % Read the key directly
     case read_direct(Opts, Key) of
         {ok, Value} ->
-            % Check if it's a link
             case is_link(Value) of
                 {true, Target} ->
-                    ?event(store_s3, {follow_link, {from, Key}, {to, Target}}),
                     read_with_links(Opts, Target, Depth + 1);
                 false ->
                     {ok, Value}
@@ -238,22 +242,34 @@ read_with_links(Opts, Key, Depth) ->
 read_direct(Opts, Key) ->
     try
         #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
-
-        FullKey = build_s3_key(Prefix, Key),
-        BucketStr = binary_to_list(Bucket),
-        KeyStr = binary_to_list(FullKey),
-
+        BucketStr = hb_util:list(Bucket),
+        {FullKey, IsDataKey} = case Key of
+            <<"data/", _/binary>> ->
+                {build_s3_key(Prefix, Key), true};
+            _ ->
+                HasSlash = (binary:match(hb_store:join(Key), <<"/">>) =/= nomatch),
+                NsKey = case HasSlash of
+                    true -> build_groups_key(Prefix, Key);
+                    false -> build_links_key(Prefix, Key)
+                end,
+                {NsKey, false}
+        end,
+        KeyStr = hb_util:list(FullKey),
         case erlcloud_s3:get_object(BucketStr, KeyStr, [], Config) of
             L when is_list(L) ->
                 Content = proplists:get_value(content, L),
                 {ok, hb_util:bin(Content)};
             {error, {aws_error, {http_error, 404, _, _}}} ->
                 not_found;
-            {error, _Reason} ->
+            {error, Reason} ->
+                case IsDataKey of
+                    false -> ?event(error, {s3_read_error, {key, Key}, {reason, Reason}});
+                    true -> ok
+                end,
                 not_found
         end
     catch
-        error:_CatchReason ->
+        _:_ ->
             not_found
     end.
 
@@ -261,15 +277,23 @@ read_direct(Opts, Key) ->
 %% Links are stored as values with "link:" prefix.
 -spec make_link(opts(), key(), key()) -> ok | {error, term()}.
 make_link(Opts, Existing, New) ->
-    % Convert to binary if needed
     ExistingBin = hb_util:bin(hb_store:join(Existing)),
-
-    % Build link value with marker
     LinkValue = <<?LINK_MARKER/binary, ExistingBin/binary>>,
-
     ?event(store_s3, {make_link, {from, New}, {to, Existing}}),
-
-    write(Opts, New, LinkValue).
+    maybe
+        #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
+        BucketStr = hb_util:list(Bucket),
+        HasSlash = (binary:match(hb_store:join(New), <<"/">>) =/= nomatch),
+        NsKey = case HasSlash of
+            true -> build_groups_key(Prefix, New);
+            false -> build_links_key(Prefix, New)
+        end,
+        NsKeyStr = hb_util:list(NsKey),
+        _ = erlcloud_s3:put_object(BucketStr, NsKeyStr, LinkValue, [], Config),
+        ok
+    else
+        _ -> {error, make_link_failed}
+    end.
 
 %% @doc Check if a value is a link and extract the target.
 %% Returns {true, Target} or false.
@@ -298,8 +322,6 @@ is_link(Value) ->
 %% Groups are detected by listing operations.
 -spec make_group(opts(), key()) -> ok.
 make_group(_Opts, _Path) ->
-    % S3 doesn't need explicit directory creation
-    % They exist implicitly when objects are stored with that prefix
     ok.
 
 %% @doc List immediate children under a given path.
@@ -308,10 +330,8 @@ make_group(_Opts, _Path) ->
 list(Opts, Path) when is_list(Path) ->
     list(Opts, hb_store:join(Path));
 list(Opts, Path) ->
-    try
+    maybe
         #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
-
-        % Check if Path is a link and resolve it
         ResolvedPath = case read_direct(Opts, Path) of
             {ok, Value} ->
                 case is_link(Value) of
@@ -323,21 +343,11 @@ list(Opts, Path) ->
             not_found ->
                 Path
         end,
-
-        % Build S3 prefix for listing
-        FullPath = build_s3_key(Prefix, ResolvedPath),
-
-        % Ensure path ends with / for S3 listing
+        FullPath = build_groups_key(Prefix, ResolvedPath),
         SearchPrefix = ensure_trailing_slash(FullPath),
-
-        BucketStr = binary_to_list(Bucket),
-        PrefixStr = binary_to_list(SearchPrefix),
-
-        ?event(store_s3, {list, {prefix, SearchPrefix}}),
-
-        % Use delimiter to get only immediate children
+        BucketStr = hb_util:list(Bucket),
+        PrefixStr = hb_util:list(SearchPrefix),
         ListOpts = [{prefix, PrefixStr}, {delimiter, "/"}],
-
         case erlcloud_s3:list_objects(BucketStr, ListOpts, Config) of
             L when is_list(L) ->
                 Children = extract_children(SearchPrefix, L),
@@ -345,8 +355,8 @@ list(Opts, Path) ->
             {error, _Reason} ->
                 {ok, []}
         end
-    catch
-        error:Reason ->
+    else
+        Reason ->
             ?event(error, {s3_list_error, {path, Path}, {reason, Reason}}),
             {error, Reason}
     end.
@@ -364,20 +374,14 @@ ensure_trailing_slash(Path) ->
 %% Returns only the child names, not full paths.
 %% Returns both objects (files) and common prefixes (directories), like file:list_dir().
 extract_children(Prefix, S3Response) ->
-    % Get regular objects (actual files)
     Contents = proplists:get_value(contents, S3Response, []),
-
-    % Get common prefixes (subdirectories)
     CommonPrefixes = proplists:get_value(common_prefixes, S3Response, []),
-
-    % Extract object names - only immediate children
     Objects = lists:filtermap(
         fun(Obj) ->
-            Key = list_to_binary(proplists:get_value(key, Obj, "")),
+            Key = hb_util:bin(proplists:get_value(key, Obj, "")),
             case strip_prefix(Prefix, Key) of
                 <<>> -> false;
                 Child ->
-                    % Only include if it's an immediate child (no / in name)
                     case binary:match(Child, <<"/">>) of
                         nomatch -> {true, Child};
                         _ -> false
@@ -387,14 +391,12 @@ extract_children(Prefix, S3Response) ->
         Contents
     ),
 
-    % Extract directory names (common prefixes)
     Dirs = lists:filtermap(
         fun(P) ->
-            PrefixBin = list_to_binary(proplists:get_value(prefix, P, "")),
+            PrefixBin = hb_util:bin(proplists:get_value(prefix, P, "")),
             case strip_prefix(Prefix, PrefixBin) of
                 <<>> -> false;
                 Child ->
-                    % Remove trailing slash from directory name
                     ChildName = case binary:last(Child) of
                         $/ -> binary:part(Child, 0, byte_size(Child) - 1);
                         _ -> Child
@@ -404,8 +406,6 @@ extract_children(Prefix, S3Response) ->
         end,
         CommonPrefixes
     ),
-
-    % Return unique sorted list (both files and directories, like file:list_dir)
     lists:usort(Objects ++ Dirs).
 
 %% @doc Remove a prefix from a binary if it matches.
@@ -425,45 +425,66 @@ strip_prefix(Prefix, Bin) ->
 type(Opts, Key) when is_list(Key) ->
     type(Opts, hb_store:join(Key));
 type(Opts, Key) ->
-    % Try to read the key directly
-    case read_direct(Opts, Key) of
-        {ok, Value} ->
-            % Check if it's a link and resolve it
-            case is_link(Value) of
-                {true, Target} ->
-                    % Recursively check the target's type
-                    type(Opts, Target);
+    case Key of
+        <<"data/", _/binary>> ->
+            case head_exists(Opts, Key) of
+                true ->
+                    simple;
                 false ->
-                    % It's a simple value
-                    simple
+                    not_found
             end;
-        not_found ->
-            % Check if it has children (is a composite/directory)
-            case has_children(Opts, Key) of
-                true -> composite;
-                false -> not_found
+        _ ->
+            case read_direct(Opts, Key) of
+                {ok, Value} ->
+                    case is_link(Value) of
+                        {true, Target} ->
+                            type(Opts, Target);
+                        false ->
+                            simple
+                    end;
+                not_found ->
+                    case has_children(Opts, Key) of
+                        true ->
+                            composite;
+                        false ->
+                            not_found
+                    end
             end
+    end.
+
+%% @doc HEAD check for object existence without downloading content
+head_exists(Opts, Key) ->
+    try
+        #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
+        FullKey = build_s3_key(Prefix, Key),
+        BucketStr = hb_util:list(Bucket),
+        KeyStr = hb_util:list(FullKey),
+        case erlcloud_s3:head_object(BucketStr, KeyStr, [], Config) of
+            L when is_list(L) -> true;
+            _ -> false
+        end
+    catch
+        _:_ -> false
     end.
 
 %% @doc Check if a path has any children (is a directory).
 has_children(Opts, Path) ->
-    #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
-
-    FullPath = build_s3_key(Prefix, Path),
-    SearchPrefix = ensure_trailing_slash(FullPath),
-
-    BucketStr = binary_to_list(Bucket),
-    PrefixStr = binary_to_list(SearchPrefix),
-
-    % List with max-keys=1 to check if anything exists
-    ListOpts = [{prefix, PrefixStr}, {max_keys, 1}],
-
-    case erlcloud_s3:list_objects(BucketStr, ListOpts, Config) of
-        L when is_list(L) ->
-            Contents = proplists:get_value(contents, L, []),
-            length(Contents) > 0;
-        _ ->
-            false
+    try
+        #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
+        FullPath = build_groups_key(Prefix, Path),
+        SearchPrefix = ensure_trailing_slash(FullPath),
+        BucketStr = hb_util:list(Bucket),
+        PrefixStr = hb_util:list(SearchPrefix),
+        ListOpts = [{prefix, PrefixStr}, {max_keys, 1}],
+        case erlcloud_s3:list_objects(BucketStr, ListOpts, Config) of
+            L when is_list(L) ->
+                Contents = proplists:get_value(contents, L, []),
+                Contents =/= [];
+            _ ->
+                false
+        end
+    catch
+        _:_ -> false
     end.
 
 %%%-----------------------------------------------------------------------------
@@ -490,31 +511,26 @@ resolve_path_segments(_Opts, [], _Depth) ->
 resolve_path_segments(Opts, Parts, Depth) ->
     resolve_path_accumulate(Opts, Parts, <<>>, Depth).
 
-% Accumulator-based resolution
 resolve_path_accumulate(_Opts, [], Acc, _Depth) ->
     {ok, Acc};
+resolve_path_accumulate(_Opts, FullPath = [<<"data">> | _], <<>>, _Depth) ->
+    {ok, hb_store:join(FullPath)};
 resolve_path_accumulate(_Opts, _Parts, _Acc, Depth) when Depth > ?MAX_LINK_DEPTH ->
     {error, too_many_redirects};
 resolve_path_accumulate(Opts, [Head|Tail], Acc, Depth) ->
-    % Build the current path segment
     CurrentPath = case Acc of
         <<>> -> Head;
         _ -> <<Acc/binary, "/", Head/binary>>
     end,
-
-    % Check if current path is a link
     case read_direct(Opts, CurrentPath) of
         {ok, Value} ->
             case is_link(Value) of
                 {true, Target} ->
-                    % It's a link - replace accumulated path with target and continue
                     resolve_path_accumulate(Opts, Tail, Target, Depth + 1);
                 false ->
-                    % It's a regular value, continue accumulating
                     resolve_path_accumulate(Opts, Tail, CurrentPath, Depth)
             end;
         not_found ->
-            % Path segment doesn't exist as a link, continue accumulating
             resolve_path_accumulate(Opts, Tail, CurrentPath, Depth)
     end.
 
@@ -555,7 +571,6 @@ stop(Opts) ->
 reset(Opts) ->
     case maps:get(<<"dangerous_reset">>, Opts, false) of
         true ->
-            % Only proceed if explicitly confirmed
             delete_all_objects(Opts);
         false ->
             {error, reset_not_confirmed}
@@ -563,17 +578,12 @@ reset(Opts) ->
 
 delete_all_objects(Opts) ->
     #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
-
-    BucketStr = binary_to_list(Bucket),
-    PrefixStr = binary_to_list(Prefix),
-
-    % List all objects with prefix
+    BucketStr = hb_util:list(Bucket),
+    PrefixStr = hb_util:list(Prefix),
     case erlcloud_s3:list_objects(BucketStr, [{prefix, PrefixStr}], Config) of
         L when is_list(L) ->
             Contents = proplists:get_value(contents, L, []),
             Keys = [proplists:get_value(key, Obj) || Obj <- Contents],
-
-            % Delete all objects
             case Keys of
                 [] -> ok;
                 _ ->
@@ -597,6 +607,4 @@ scope(_Opts) -> scope().
 %% Simple implementation - just returns not_found for now.
 -spec match(opts(), map()) -> {ok, [binary()]} | not_found.
 match(_Opts, _Template) ->
-    % This would require listing all objects and checking each one
-    % For MVP, we'll skip this feature
     not_found.
