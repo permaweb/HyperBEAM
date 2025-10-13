@@ -622,7 +622,7 @@ delete_all_objects(Opts) ->
             case Keys of
                 [] -> ok;
                 _ ->
-                    erlcloud_s3:delete_objects(BucketStr, Keys, Config),
+                    erlcloud_s3:delete_objects_batch(BucketStr, Keys, Config),
                     ok
             end;
         _ ->
