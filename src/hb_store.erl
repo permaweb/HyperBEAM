@@ -840,8 +840,8 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
                 lists:foldl(
                     fun({MsgID, Msg}, Count) -> 
                         case hb_cache:read(MsgID, Opts) of
-                            {ok, Msg1} ->
-                                case hb_cache:ensure_all_loaded(Msg1, Opts) of
+                            {ok, Base} ->
+                                case hb_cache:ensure_all_loaded(Base, Opts) of
                                     Msg -> Count;
                                     _ -> Count + 1
                                 end;

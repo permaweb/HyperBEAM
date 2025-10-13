@@ -5,6 +5,7 @@
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
 -export([key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
+-export([is_printable_string/1]).
 -export([find_value/2, find_value/3]).
 -export([deep_merge/3, deep_set/4, deep_get/3, deep_get/4]).
 -export([number/1, list_to_numbered_message/1]).
@@ -232,6 +233,13 @@ safe_decode(E) ->
         _:_ -> {error, invalid}
     end.
 
+%% @doc Determine whether a binary contains only unicode printable characters.
+is_printable_string(Bin) when is_binary(Bin) ->
+    case unicode:characters_to_binary(Bin) of
+        {error, _, _} -> false;
+        _ -> true
+    end.
+
 %% @doc Convert a binary to a hex string. Do not use this for anything other than
 %% generating a lower-case, non-special character id. It should not become part of
 %% the core protocol. We use b64u for efficient encoding.
@@ -340,10 +348,14 @@ list_to_numbered_message(List) ->
 is_ordered_list(Msg, _Opts) when is_list(Msg) -> true;
 is_ordered_list(Msg, Opts) ->
     is_ordered_list(1, hb_ao:normalize_keys(Msg, Opts), Opts).
-is_ordered_list(_, Msg, _Opts) when map_size(Msg) == 0 -> true;
 is_ordered_list(N, Msg, _Opts) ->
     case maps:get(NormKey = hb_ao:normalize_key(N), Msg, not_found) of
-        not_found -> false;
+        not_found ->
+            WithoutPriv = hb_private:reset(Msg),
+            case maps:without([<<"commitments">>, <<"ao-types">>], WithoutPriv) of
+                EmptyMsg when map_size(EmptyMsg) == 0 -> true;
+                _ -> false
+            end;
         _ ->
             is_ordered_list(
                 N + 1,

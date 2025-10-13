@@ -18,7 +18,7 @@ read(ProcID, SlotRef, Opts) ->
 %% @doc Write a process computation result to the cache.
 write(ProcID, Slot, Msg, Opts) ->
     % Write the item to the cache in the root of the store.
-    {ok, Root} = hb_cache:write(Msg, Opts),
+    {ok, Root} = hb_cache:write(hb_private:reset(Msg), Opts),
     % Link the item to the path in the store by slot number.
     SlotNumPath = path(ProcID, Slot, Opts),
     hb_cache:link(Root, SlotNumPath, Opts),
@@ -193,32 +193,32 @@ find_latest_outputs(Opts) ->
     % Create messages for the slots, with only the middle slot having a
     % `/Process' field, while the top slot has a `/Deep/Process' field.
     Msg0 = #{ <<"Results">> => #{ <<"Result-Number">> => 0 } },
-    Msg1 =
+    Base =
         #{ 
             <<"Results">> => #{ <<"Result-Number">> => 1 }, 
             <<"Process">> => Proc1 
         },
-    Msg2 =
+    Req =
         #{ 
             <<"Results">> => #{ <<"Result-Number">> => 2 }, 
             <<"Deep">> => #{ <<"Process">> => Proc1 } 
         },
     % Write the messages to the cache.
     {ok, _} = write(ProcID, 0, Msg0, Opts),
-    {ok, _} = write(ProcID, 1, Msg1, Opts),
-    {ok, _} = write(ProcID, 2, Msg2, Opts),
+    {ok, _} = write(ProcID, 1, Base, Opts),
+    {ok, _} = write(ProcID, 2, Req, Opts),
     ?event(wrote_items),
     % Read the messages with various qualifiers.
-    {ok, 2, ReadMsg2} = latest(ProcID, Opts),
-    ?event({read_latest, ReadMsg2}),
-    ?assert(hb_message:match(Msg2, ReadMsg2)),
+    {ok, 2, ReadReq} = latest(ProcID, Opts),
+    ?event({read_latest, ReadReq}),
+    ?assert(hb_message:match(Req, ReadReq)),
     ?event(read_latest_slot_without_qualifiers),
-    {ok, 1, ReadMsg1Required} = latest(ProcID, <<"Process">>, Opts),
-    ?event({read_latest_with_process, ReadMsg1Required}),
-    ?assert(hb_message:match(Msg1, ReadMsg1Required)),
+    {ok, 1, ReadBaseRequired} = latest(ProcID, <<"Process">>, Opts),
+    ?event({read_latest_with_process, ReadBaseRequired}),
+    ?assert(hb_message:match(Base, ReadBaseRequired)),
     ?event(read_latest_slot_with_shallow_key),
-    {ok, 2, ReadMsg2Required} = latest(ProcID, <<"Deep/Process">>, Opts),
-    ?assert(hb_message:match(Msg2, ReadMsg2Required)),
+    {ok, 2, ReadReqRequired} = latest(ProcID, <<"Deep/Process">>, Opts),
+    ?assert(hb_message:match(Req, ReadReqRequired)),
     ?event(read_latest_slot_with_deep_key),
-    {ok, 1, ReadMsg1} = latest(ProcID, [], 1, Opts),
-    ?assert(hb_message:match(Msg1, ReadMsg1)).
+    {ok, 1, ReadBase} = latest(ProcID, [], 1, Opts),
+    ?assert(hb_message:match(Base, ReadBase)).

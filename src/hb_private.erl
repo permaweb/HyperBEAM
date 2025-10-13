@@ -66,16 +66,16 @@ set(Msg, PrivMap, Opts) ->
 %% second message will override the keys in the first message. The base keys
 %% from the first message will be preserved, but the keys in the second message
 %% will be lost.
-merge(Msg1, Msg2, Opts) ->
+merge(Base, Req, Opts) ->
     % Merge the private elements of the two messages.
     Merged =
         hb_util:deep_merge(
-            from_message(Msg1),
-            from_message(Msg2),
+            from_message(Base),
+            from_message(Req),
             opts(Opts)
         ),
     % Set the merged private element on the first message.
-    set_priv(Msg1, Merged).
+    set_priv(Base, Merged).
 
 %% @doc Helper function for setting the complete private element of a message.
 set_priv(Msg, PrivMap)

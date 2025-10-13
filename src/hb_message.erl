@@ -487,8 +487,8 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
             {keys2, Keys2},
             {mode, Mode},
             {primary_keys_present, PrimaryKeysPresent},
-            {msg1, Map1},
-            {msg2, Map2}
+            {base, Map1},
+            {req, Map2}
         }
     ),
     case (Keys1 == Keys2) or (Mode == only_present) or PrimaryKeysPresent of
@@ -556,10 +556,10 @@ matchable_keys(Map) ->
 %% across nested messages. If the values are non-numeric, the new value is 
 %% returned if the values are different. Keys found only in the first message
 %% are dropped, as they have 'changed' to absence.
-diff(Msg1, Msg2, Opts) when is_map(Msg1) andalso is_map(Msg2) ->
+diff(Base, Req, Opts) when is_map(Base) andalso is_map(Req) ->
     maps:filtermap(
         fun(Key, Val2) ->
-            case hb_maps:get(Key, Msg1, not_found, Opts) of
+            case hb_maps:get(Key, Base, not_found, Opts) of
                 Val2 ->
                     % The key is present in both maps, and the values match.
                     false;
@@ -580,7 +580,7 @@ diff(Msg1, Msg2, Opts) when is_map(Msg1) andalso is_map(Msg2) ->
                     {true, Val2}
             end
         end,
-        Msg2
+        Req
     );
 diff(_Val1, _Val2, _Opts) ->
     not_found.

@@ -437,6 +437,6 @@ do_is_direct_key_access(_, _, _) ->
 
 %% @doc The default device is the identity device, which simply returns the
 %% value associated with any key as it exists in its Erlang map. It should also
-%% implement the `set' key, which returns a `Message3' with the values changed
-%% according to the `Message2' passed to it.
+%% implement the `set' key, which returns a `Result' with the values changed
+%% according to the `Request' passed to it.
 default() -> dev_message.

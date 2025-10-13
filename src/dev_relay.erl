@@ -170,7 +170,7 @@ cast(M1, M2, Opts) ->
     {ok, <<"OK">>}.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
-request(_Msg1, Msg2, Opts) ->
+request(_Base, Req, Opts) ->
     {ok,
         #{
             <<"body">> =>
@@ -180,7 +180,7 @@ request(_Msg1, Msg2, Opts) ->
                         <<"path">> => <<"call">>,
                         <<"target">> => <<"body">>,
                         <<"body">> =>
-                            hb_ao:get(<<"request">>, Msg2, Opts#{ hashpath => ignore })
+                            hb_ao:get(<<"request">>, Req, Opts#{ hashpath => ignore })
                     }
                 ]
         }

@@ -213,6 +213,6 @@ offload_list_test() ->
     },
     TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
     Linkified = normalize(TABM, offload, Opts),
-    Msg2 = hb_message:convert(Linkified, <<"structured@1.0">>, tabm, Opts),
-    Res = hb_cache:ensure_all_loaded(Msg2, Opts),
+    Req = hb_message:convert(Linkified, <<"structured@1.0">>, tabm, Opts),
+    Res = hb_cache:ensure_all_loaded(Req, Opts),
     ?assertEqual(Msg, Res).

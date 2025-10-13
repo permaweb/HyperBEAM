@@ -442,7 +442,7 @@ binary(Bin) ->
                     end
                 ),
             PrintSegment =
-                case is_human_binary(Printable) of
+                case hb_util:is_printable_string(Printable) of
                     true -> Printable;
                     false -> hb_util:encode(Printable)
                 end,
@@ -880,13 +880,6 @@ short_id(<< "/", SingleElemHashpath/binary >>) ->
     end;
 short_id(Key) when byte_size(Key) < 43 -> Key;
 short_id(_) -> undefined.
-
-%% @doc Determine whether a binary is human-readable.
-is_human_binary(Bin) when is_binary(Bin) ->
-    case unicode:characters_to_binary(Bin) of
-        {error, _, _} -> false;
-        _ -> true
-    end.
 
 %% Determine the maximum number of keys to print for messages, given a node
 %% `Opts`.

@@ -10,37 +10,37 @@
 %% @doc Returns a group name for a request. The worker is responsible for all
 %% computation work on the same process on a single node, so we use the
 %% process ID as the group name.
-group(Msg1, undefined, Opts) ->
-    hb_persistent:default_grouper(Msg1, undefined, Opts);
-group(Msg1, Msg2, Opts) ->
+group(Base, undefined, Opts) ->
+    hb_persistent:default_grouper(Base, undefined, Opts);
+group(Base, Req, Opts) ->
     case hb_opts:get(process_workers, false, Opts) of
         false ->
-            hb_persistent:default_grouper(Msg1, Msg2, Opts);
+            hb_persistent:default_grouper(Base, Req, Opts);
         true ->
-            case Msg2 of
+            case Req of
                 undefined ->
-                    hb_persistent:default_grouper(Msg1, undefined, Opts);
+                    hb_persistent:default_grouper(Base, undefined, Opts);
                 _ ->
-                    case hb_path:matches(<<"compute">>, hb_path:hd(Msg2, Opts)) of
+                    case hb_path:matches(<<"compute">>, hb_path:hd(Req, Opts)) of
                         true ->
-                            process_to_group_name(Msg1, Opts);
+                            process_to_group_name(Base, Opts);
                         _ ->
-                            hb_persistent:default_grouper(Msg1, Msg2, Opts)
+                            hb_persistent:default_grouper(Base, Req, Opts)
                     end
             end
     end.
 
-process_to_group_name(Msg1, Opts) ->
-    Initialized = dev_process:ensure_process_key(Msg1, Opts),
+process_to_group_name(Base, Opts) ->
+    Initialized = dev_process:ensure_process_key(Base, Opts),
     ProcMsg = hb_ao:get(<<"process">>, Initialized, Opts#{ hashpath => ignore }),
     ID = hb_message:id(ProcMsg, all),
-    ?event({process_to_group_name, {id, ID}, {msg1, Msg1}}),
+    ?event({process_to_group_name, {id, ID}, {base, Base}}),
     hb_util:human_id(ID).
 
 %% @doc Spawn a new worker process. This is called after the end of the first
 %% execution of `hb_ao:resolve/3', so the state we are given is the
 %% already current.
-server(GroupName, Msg1, Opts) ->
+server(GroupName, Base, Opts) ->
     ServerOpts = Opts#{
         await_inprogress => false,
         spawn_worker => false,
@@ -51,8 +51,8 @@ server(GroupName, Msg1, Opts) ->
     Timeout = hb_opts:get(process_worker_max_idle, 300_000, Opts),
     ?event(worker, {waiting_for_req, {group, GroupName}}),
     receive
-        {resolve, Listener, GroupName, Msg2, ListenerOpts} ->
-            TargetSlot = hb_ao:get(<<"slot">>, Msg2, Opts),
+        {resolve, Listener, GroupName, Req, ListenerOpts} ->
+            TargetSlot = hb_ao:get(<<"slot">>, Req, Opts),
             ?event(worker,
                 {work_received,
                     {group, GroupName},
@@ -62,42 +62,42 @@ server(GroupName, Msg1, Opts) ->
             ),
             Res =
                 hb_ao:resolve(
-                    Msg1,
+                    Base,
                     #{ <<"path">> => <<"compute">>, <<"slot">> => TargetSlot },
                     hb_maps:merge(ListenerOpts, ServerOpts, Opts)
                 ),
-            ?event(worker, {work_done, {group, GroupName}, {req, Msg2}, {res, Res}}),
+            ?event(worker, {work_done, {group, GroupName}, {req, Req}, {res, Res}}),
             send_notification(Listener, GroupName, TargetSlot, Res),
             server(
                 GroupName,
                 case Res of
-                    {ok, Msg3} -> Msg3;
-                    _ -> Msg1
+                    {ok, Res} -> Res;
+                    _ -> Base
                 end,
                 Opts
             );
         stop ->
-            ?event(worker, {stopping, {group, GroupName}, {msg1, Msg1}}),
+            ?event(worker, {stopping, {group, GroupName}, {base, Base}}),
             exit(normal)
     after Timeout ->
         % We have hit the in-memory persistence timeout. Generate a snapshot
         % of the current process state and ensure it is cached.
         hb_ao:resolve(
-            Msg1,
+            Base,
             <<"snapshot">>,
             ServerOpts#{ <<"cache-control">> => [<<"store">>] }
         ),
         % Return the current process state.
-        {ok, Msg1}
+        {ok, Base}
     end.
 
 %% @doc Await a resolution from a worker executing the `process@1.0' device.
-await(Worker, GroupName, Msg1, Msg2, Opts) ->
-    case hb_path:matches(<<"compute">>, hb_path:hd(Msg2, Opts)) of
+await(Worker, GroupName, Base, Req, Opts) ->
+    case hb_path:matches(<<"compute">>, hb_path:hd(Req, Opts)) of
         false -> 
-            hb_persistent:default_await(Worker, GroupName, Msg1, Msg2, Opts);
+            hb_persistent:default_await(Worker, GroupName, Base, Req, Opts);
         true ->
-            TargetSlot = hb_ao:get(<<"slot">>, Msg2, any, Opts),
+            TargetSlot = hb_ao:get(<<"slot">>, Req, any, Opts),
             ?event({awaiting_compute, 
                 {worker, Worker},
                 {group, GroupName},
@@ -118,7 +118,7 @@ await(Worker, GroupName, Msg1, Msg2, Opts) ->
                         {worker, Worker},
                         {group, GroupName}
                     }),
-                    await(Worker, GroupName, Msg1, Msg2, Opts);
+                    await(Worker, GroupName, Base, Req, Opts);
                 {'DOWN', _R, process, Worker, _Reason} ->
                     ?event(compute_debug,
                         {leader_died,
@@ -132,18 +132,18 @@ await(Worker, GroupName, Msg1, Msg2, Opts) ->
     end.
 
 %% @doc Notify any waiters for a specific slot of the computed results.
-notify_compute(GroupName, SlotToNotify, Msg3, Opts) ->
-    notify_compute(GroupName, SlotToNotify, Msg3, Opts, 0).
-notify_compute(GroupName, SlotToNotify, Msg3, Opts, Count) ->
+notify_compute(GroupName, SlotToNotify, Res, Opts) ->
+    notify_compute(GroupName, SlotToNotify, Res, Opts, 0).
+notify_compute(GroupName, SlotToNotify, Res, Opts, Count) ->
     ?event({notifying_of_computed_slot, {group, GroupName}, {slot, SlotToNotify}}),
     receive
         {resolve, Listener, GroupName, #{ <<"slot">> := SlotToNotify }, _ListenerOpts} ->
-            send_notification(Listener, GroupName, SlotToNotify, Msg3),
-            notify_compute(GroupName, SlotToNotify, Msg3, Opts, Count + 1);
+            send_notification(Listener, GroupName, SlotToNotify, Res),
+            notify_compute(GroupName, SlotToNotify, Res, Opts, Count + 1);
         {resolve, Listener, GroupName, Msg, _ListenerOpts}
                 when is_map(Msg) andalso not is_map_key(<<"slot">>, Msg) ->
-            send_notification(Listener, GroupName, SlotToNotify, Msg3),
-            notify_compute(GroupName, SlotToNotify, Msg3, Opts, Count + 1)
+            send_notification(Listener, GroupName, SlotToNotify, Res),
+            notify_compute(GroupName, SlotToNotify, Res, Opts, Count + 1)
     after 0 ->
         ?event(worker_short,
             {finished_notifying,
@@ -154,9 +154,9 @@ notify_compute(GroupName, SlotToNotify, Msg3, Opts, Count) ->
         )
     end.
 
-send_notification(Listener, GroupName, SlotToNotify, Msg3) ->
+send_notification(Listener, GroupName, SlotToNotify, Res) ->
     ?event({sending_notification, {group, GroupName}, {slot, SlotToNotify}}),
-    Listener ! {resolved, self(), GroupName, {slot, SlotToNotify}, Msg3}.
+    Listener ! {resolved, self(), GroupName, {slot, SlotToNotify}, Res}.
 
 %% @doc Stop a worker process.
 stop(Worker) ->

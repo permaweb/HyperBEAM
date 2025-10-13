@@ -398,6 +398,6 @@ remote_hyperbeam_node_ans104_test() ->
                     }
                 ]
         },
-    {ok, Msg2} = hb_cache:read(ID, ClientOpts),
-    ?assert(hb_message:verify(Msg2)),
-    ?assert(hb_message:match(Msg, Msg2)).
+    {ok, Req} = hb_cache:read(ID, ClientOpts),
+    ?assert(hb_message:verify(Req)),
+    ?assert(hb_message:match(Msg, Req)).

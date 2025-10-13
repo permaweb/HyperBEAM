@@ -380,7 +380,6 @@ handle_request(RawReq, Body, ServerID) ->
                     {cowboy_req, {explicit, Req}, {body, {string, Body}}}
                 }
             ),
-            TracePID = hb_tracer:start_trace(),
             % Parse the HTTP request into HyerBEAM's message format.
             ReqSingleton =
                 try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg)
@@ -399,15 +398,13 @@ handle_request(RawReq, Body, ServerID) ->
                     {parsed_singleton,
                         {req_singleton, ReqSingleton},
                         {accept_codec, CommitmentCodec}},
-                    #{trace => TracePID}
+                    #{}
                 ),
-                % hb_tracer:record_step(TracePID, request_parsing),
                 % Invoke the meta@1.0 device to handle the request.
                 {ok, Res} =
                     dev_meta:handle(
                         NodeMsg#{
-                            commitment_device => CommitmentCodec,
-                            trace => TracePID
+                            commitment_device => CommitmentCodec
                         },
                         ReqSingleton
                     ),

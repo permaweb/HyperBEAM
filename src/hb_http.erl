@@ -104,7 +104,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
         ),
     StartTime = os:system_time(millisecond),
     % Perform the HTTP request.
-    {_ErlStatus, Status, Headers, Body} = hb_http_client:req(Req, Opts),
+    {_ErlStatus, Status, Headers, Body} = hb_http_client:request(Req, Opts),
     % Process the response.
     EndTime = os:system_time(millisecond),
     ?event(http_outbound,

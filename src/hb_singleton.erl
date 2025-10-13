@@ -681,11 +681,11 @@ multiple_messages_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_Base, Msg1, Msg2, Msg3] = Msgs,
+    [_Base, Base, Msg2, Res] = Msgs,
     ?assert(lists:all(fun is_map/1, Msgs)),
-    ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg1)),
+    ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Base)),
     ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg2)),
-    ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg3)).
+    ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Res)).
 
 %%% Advanced key syntax tests
 
@@ -696,10 +696,10 @@ scoped_key_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg1, not_found)),
+    [_, Base, Msg2, Res] = Msgs,
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Base, not_found)),
     ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg2, not_found)),
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg3, not_found)).
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Res, not_found)).
 
 typed_key_test() ->
     Req = #{
@@ -708,10 +708,10 @@ typed_key_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg1, not_found)),
+    [_, Base, Msg2, Res] = Msgs,
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Base, not_found)),
     ?assertEqual(123, hb_maps:get(<<"test-key">>, Msg2, not_found)),
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg3, not_found)).
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Res, not_found)).
 
 subpath_in_key_test() ->
     Req = #{
@@ -720,8 +720,8 @@ subpath_in_key_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg1, not_found)),
+    [_, Base, Msg2, Res] = Msgs,
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Base, not_found)),
     ?assertEqual(
         {resolve,
             [
@@ -733,7 +733,7 @@ subpath_in_key_test() ->
         },
         hb_maps:get(<<"test-key">>, Msg2, not_found)
     ),
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg3, not_found)).
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Res, not_found)).
 
 %%% Advanced path syntax tests
 
@@ -743,8 +743,8 @@ subpath_in_path_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
-    ?assertEqual(<<"a">>, hb_maps:get(<<"path">>, Msg1)),
+    [_, Base, Msg2, Res] = Msgs,
+    ?assertEqual(<<"a">>, hb_maps:get(<<"path">>, Base)),
     ?assertEqual(
         {resolve,
             [
@@ -756,7 +756,7 @@ subpath_in_path_test() ->
         },
         Msg2
     ),
-    ?assertEqual(<<"z">>, hb_maps:get(<<"path">>, Msg3)).
+    ?assertEqual(<<"z">>, hb_maps:get(<<"path">>, Res)).
 
 inlined_keys_test() ->
     Req = #{
@@ -765,10 +765,10 @@ inlined_keys_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
+    [_, Base, Msg2, Res] = Msgs,
     ?assertEqual(<<"v1">>, hb_maps:get(<<"k1">>, Msg2)),
-    ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Msg3)),
-    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Msg1, not_found)),
+    ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Res)),
+    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Base, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"k2">>, Msg2, not_found)).
 
 inlined_quoted_key_test() ->
@@ -778,10 +778,10 @@ inlined_quoted_key_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
+    [_, Base, Msg2, Res] = Msgs,
     ?assertEqual(<<"v/1">>, hb_maps:get(<<"k1">>, Msg2)),
-    ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Msg3)),
-    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Msg1, not_found)),
+    ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Res)),
+    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Base, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"k2">>, Msg2, not_found)),
     ReqB = #{
         <<"method">> => <<"POST">>,
@@ -798,11 +798,11 @@ inlined_assumed_key_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
+    [_, Base, Msg2, Res] = Msgs,
     ?event({parsed, Msgs}),
     ?assertEqual(<<"4">>, hb_maps:get(<<"b">>, Msg2)),
-    ?assertEqual(not_found, hb_maps:get(<<"b">>, Msg1, not_found)),
-    ?assertEqual(not_found, hb_maps:get(<<"b">>, Msg3, not_found)),
+    ?assertEqual(not_found, hb_maps:get(<<"b">>, Base, not_found)),
+    ?assertEqual(not_found, hb_maps:get(<<"b">>, Res, not_found)),
     ReqB = #{
         <<"method">> => <<"POST">>,
         <<"path">> => <<"/a/b+integer=4/c&k2=v2">>
@@ -823,9 +823,9 @@ multiple_inlined_keys_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(3, length(Msgs)),
-    [_, Msg1, Msg2] = Msgs,
-    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Msg1, not_found)),
-    ?assertEqual(not_found, hb_maps:get(<<"k2">>, Msg1, not_found)),
+    [_, Base, Msg2] = Msgs,
+    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Base, not_found)),
+    ?assertEqual(not_found, hb_maps:get(<<"k2">>, Base, not_found)),
     ?assertEqual(<<"v1">>, hb_maps:get(<<"k1">>, Msg2, not_found)),
     ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Msg2, not_found)).
 
@@ -854,9 +854,9 @@ path_parts_test() ->
     ?assertEqual(
         [
             <<"IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q">>,
-            <<"msg2">>
+            <<"req">>
         ],
-        path_parts($/, <<"/IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q/msg2">>)
+        path_parts($/, <<"/IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q/req">>)
     ),
     ?assertEqual(
         [<<"a">>, <<"b&K1=V1">>, <<"c&K2=V2">>],

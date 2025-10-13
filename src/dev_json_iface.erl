@@ -107,19 +107,24 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     MsgWithoutCommitments = hb_maps:without([<<"commitments">>], TABM, Opts),
     ID = hb_message:id(RawMsg, all),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
-	{Owner, Signature} =
+	{Owner, Signature, PublicKey} =
         case hb_message:signers(RawMsg, Opts) of
-            [] -> {<<>>, <<>>};
+            [] -> {<<>>, <<>>, <<>>};
             [Signer|_] ->
                 {ok, _, Commitment} =
                     hb_message:commitment(Signer, RawMsg, Opts),
                 CommitmentSignature =
                     hb_ao:get(<<"signature">>, Commitment, <<>>, Opts),
+                CommitmentKeyId =
+                    dev_codec_httpsig_keyid:remove_scheme_prefix(
+                        hb_ao:get(<<"keyid">>, Commitment, <<>>, Opts)
+                    ),
                 case lists:member(owner_as_address, Features) of
                     true -> 
                         {
                             hb_util:native_id(Signer),
-                            CommitmentSignature
+                            CommitmentSignature,
+                            CommitmentKeyId
                         };
                     false ->
                         CommitmentOwner =
@@ -131,7 +136,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                                 no_signing_public_key_found_in_commitment,
                                 Opts
                             ),
-                        {CommitmentOwner, CommitmentSignature}
+                        {CommitmentOwner, CommitmentSignature, CommitmentKeyId}
                 end
         end,
     Last =
@@ -141,13 +146,18 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             <<>>,
             Opts
         ),
-    Data =
+    DataBytes =
         hb_ao:get(
             <<"data">>,
             {as, <<"message@1.0">>, MsgWithoutCommitments},
             <<>>,
             Opts
         ),
+    Data =
+        case hb_util:is_printable_string(DataBytes) of
+            true -> DataBytes;
+            false -> null 
+        end,
     Target =
         hb_ao:get(
             <<"target">>,
@@ -178,9 +188,9 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                 0 -> <<>>;
                 512 -> hb_util:encode(Signature);
                 _ -> Signature
-            end
+            end,
+        <<"PublicKey">> => PublicKey
     }.
-
 %% @doc Prepare the tags of a message as a key-value list, for use in the 
 %% construction of the JSON-Struct message.
 prepare_tags(Msg, Opts) ->
@@ -457,7 +467,7 @@ generate_stack(File, _Mode, RawOpts) ->
     test_init(),
     Msg0 = dev_wasm:cache_wasm_image(File, Opts),
     Image = hb_ao:get(<<"image">>, Msg0, Opts),
-    Msg1 = Msg0#{
+    Base = Msg0#{
         <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> =>
             [
@@ -478,8 +488,8 @@ generate_stack(File, _Mode, RawOpts) ->
                 <<"authority">> => hb:address()
             }, Opts)
     },
-    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, Opts),
-    Msg2.
+    {ok, Req} = hb_ao:resolve(Base, <<"init">>, Opts),
+    Req.
 
 generate_aos_msg(ProcID, Code) ->
     generate_aos_msg(ProcID, Code, #{}).
@@ -501,14 +511,14 @@ basic_aos_call_test_() ->
 		Msg = generate_stack("test/aos-2-pure-xs.wasm"),
 		Proc = hb_ao:get(<<"process">>, Msg, #{ hashpath => ignore }),
 		ProcID = hb_message:id(Proc, all),
-		{ok, Msg3} =
+		{ok, Res} =
 			hb_ao:resolve(
 				Msg,
 				generate_aos_msg(ProcID, <<"return 1+1">>),
 				#{}
 			),
-		?event({res, Msg3}),
-		Data = hb_ao:get(<<"results/data">>, Msg3, #{}),
+		?event({res, Res}),
+		Data = hb_ao:get(<<"results/data">>, Res, #{}),
 		?assertEqual(<<"2">>, Data)
 	end}.
 
@@ -526,10 +536,10 @@ aos_stack_benchmark_test_() ->
                 Msg,
                 Opts
             ),
-        Msg2 = generate_aos_msg(ProcID, <<"return 1+1">>, Opts),
+        Req = generate_aos_msg(ProcID, <<"return 1+1">>, Opts),
         Iterations =
             hb_test_utils:benchmark(
-                fun() -> hb_ao:resolve(Initialized, Msg2, Opts) end,
+                fun() -> hb_ao:resolve(Initialized, Req, Opts) end,
                 BenchTime
             ),
         hb_test_utils:benchmark_print(

@@ -35,21 +35,36 @@ info() ->
 %% as it recurses.
 get(Key, Trie, Req, Opts) ->
     get(Trie, Req#{ <<"key">> => Key }, Opts).
-get(Trie, Req, Opts) ->
+get(Link, Req, Opts) when ?IS_LINK(Link) ->
+    get(hb_cache:ensure_loaded(Link, Opts), Req, Opts);
+get(Node, Req, Opts) ->
     case hb_maps:find(<<"key">>, Req, Opts) of
         error -> {error, <<"`key' parameter is required for trie lookup.">>};
-        {ok, <<>>} -> {ok, Trie};
+        {ok, <<>>} ->
+            % We have reached the end of the key characters. Return the current
+            % node.
+            {ok, Node};
+        {ok, RemainingKey} when not is_map(Node) ->
+            % We have more characters to resolve, but the current node is not a
+            % message, so we cannot continue.
+            ?event(debug_trie,
+                {not_found,
+                    {node, Node},
+                    {remaining_key, RemainingKey}
+                }
+            ),
+            {error, not_found};
         {ok, Key} ->
             % If we have a key to search for, find the longest prefix match
             % amongst the keys in the trie and recurse, until there are no more
             % bytes of the key to match on.
-            case longest_match(Key, Trie, Opts) of
+            case longest_match(Key, Node, Opts) of
                 <<>> -> {error, not_found};
                 Prefix ->
                     % Find the child node and the remaining key.
                     get(
                         remove_prefix(Prefix, Key),
-                        hb_maps:get(Prefix, Trie, Opts),
+                        hb_maps:get(Prefix, Node, #{}, Opts),
                         #{},
                         Opts
                     )
@@ -257,6 +272,31 @@ set_multiple_test() ->
                 #{}
             ),
             primary
+        )
+    ).
+
+not_found_test() ->
+    hb:init(),
+    ?assertEqual(
+        not_found,
+        hb_ao:get(
+            <<"ac">>,
+            #{
+                <<"device">> => <<"trie@1.0">>,
+                <<"a">> => #{ <<"b">> => <<"layer-2">> }
+            },
+            #{}
+        )
+    ),
+    ?assertEqual(
+        not_found,
+        hb_ao:get(
+            <<"abcde">>,
+            #{
+                <<"device">> => <<"trie@1.0">>,
+                <<"a">> => #{ <<"b">> => <<"layer-2">> }
+            },
+            #{}
         )
     ).
 

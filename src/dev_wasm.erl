@@ -43,7 +43,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Export all functions aside the `instance/3' function.
-info(_Msg1, _Opts) ->
+info(_Base, _Opts) ->
     #{
         excludes => [instance]
     }.
@@ -70,7 +70,7 @@ init(M1, M2, Opts) ->
                                     InPrefix/binary,
                                     "/image."
                                 >>,
-                                {msg1, M1}
+                                {base, M1}
                             }
                         );
                     Bin when is_binary(Bin) -> Bin
@@ -123,19 +123,19 @@ init(M1, M2, Opts) ->
     }.
 
 %% @doc Take a BEAMR import call and resolve it using `hb_ao'.
-default_import_resolver(Msg1, Msg2, Opts) ->
+default_import_resolver(Base, Req, Opts) ->
     #{
         instance := WASM,
         module := Module,
         func := Func,
         args := Args,
         func_sig := Signature
-    } = Msg2,
-    Prefix = dev_stack:prefix(Msg1, Msg2, Opts),
-    {ok, Msg3} =
+    } = Req,
+    Prefix = dev_stack:prefix(Base, Req, Opts),
+    {ok, Res} =
         hb_ao:resolve(
             hb_private:set(
-                Msg1,
+                Base,
                 #{ <<Prefix/binary, "/instance">> => WASM },
                 Opts
             ),
@@ -148,8 +148,8 @@ default_import_resolver(Msg1, Msg2, Opts) ->
             },
             Opts
         ),
-    NextState = hb_ao:get(state, Msg3, Opts),
-    Response = hb_ao:get(results, Msg3, Opts),
+    NextState = hb_ao:get(state, Res, Opts),
+    Response = hb_ao:get(results, Res, Opts),
     {ok, Response, NextState}.
 
 %% @doc Call the WASM executor with a message that has been prepared by a prior
@@ -248,7 +248,7 @@ normalize(RawM1, M2, Opts) ->
                     end,
                 ?event(
                     {no_instance_attempting_to_get_snapshot,
-                        {msg1, RawM1}, {device_key, DeviceKey}
+                        {base, RawM1}, {device_key, DeviceKey}
                     }
                 ),
                 Memory = 
@@ -307,14 +307,14 @@ instance(M1, M2, Opts) ->
 %% @doc Handle standard library calls by:
 %% 1. Adding the right prefix to the path from BEAMR.
 %% 2. Adding the state to the message at the stdlib path.
-%% 3. Resolving the adjusted-path-Msg2 against the added-state-Msg1.
+%% 3. Resolving the adjusted-path-Req against the added-state-Base.
 %% 4. If it succeeds, return the new state from the message.
 %% 5. If it fails with `not_found', call the stub handler.
-import(Msg1, Msg2, Opts) ->
+import(Base, Req, Opts) ->
     % 1. Adjust the path to the stdlib.
-    ModName = hb_ao:get(<<"module">>, Msg2, Opts),
-    FuncName = hb_ao:get(<<"func">>, Msg2, Opts),
-    Prefix = dev_stack:prefix(Msg1, Msg2, Opts),
+    ModName = hb_ao:get(<<"module">>, Req, Opts),
+    FuncName = hb_ao:get(<<"func">>, Req, Opts),
+    Prefix = dev_stack:prefix(Base, Req, Opts),
     AdjustedPath =
         <<
             Prefix/binary,
@@ -324,41 +324,41 @@ import(Msg1, Msg2, Opts) ->
             FuncName/binary
         >>,
     StatePath = << Prefix/binary, "/stdlib/", ModName/binary, "/state" >>,
-    AdjustedMsg2 = Msg2#{ <<"path">> => AdjustedPath },
+    AdjustedReq = Req#{ <<"path">> => AdjustedPath },
     % 2. Add the current state to the message at the stdlib path.
-    AdjustedMsg1 =
+    AdjustedBase =
         hb_ao:set(
-            Msg1,
-            #{ StatePath => Msg1 },
+            Base,
+            #{ StatePath => Base },
             Opts#{ hashpath => ignore }
         ),
-    ?event({state_added_msg1, AdjustedMsg1, AdjustedMsg2}),
+    ?event({state_added_base, AdjustedBase, AdjustedReq}),
     % 3. Resolve the adjusted path against the added state.
-    case hb_ao:resolve(AdjustedMsg1, AdjustedMsg2, Opts) of
+    case hb_ao:resolve(AdjustedBase, AdjustedReq, Opts) of
         {ok, Res} ->
             % 4. Success. Return.
             {ok, Res};
         {error, not_found} ->
             ?event(stdlib_not_found),
             % 5. Failure. Call the stub handler.
-            undefined_import_stub(Msg1, Msg2, Opts)
+            undefined_import_stub(Base, Req, Opts)
     end.
 
 %% @doc Log the call to the standard library as an event, and write the
 %% call details into the message.
-undefined_import_stub(Msg1, Msg2, Opts) ->
-    ?event({unimplemented_dev_wasm_call, {msg1, Msg1}, {msg2, Msg2}}),
-    Prefix = dev_stack:prefix(Msg1, Msg2, Opts),
+undefined_import_stub(Base, Req, Opts) ->
+    ?event({unimplemented_dev_wasm_call, {base, Base}, {req, Req}}),
+    Prefix = dev_stack:prefix(Base, Req, Opts),
     UndefinedCallsPath =
         <<"state/results/", Prefix/binary, "/undefined-calls">>,
-    Msg3 = hb_ao:set(
-        Msg1,
+    Res = hb_ao:set(
+        Base,
         #{
             UndefinedCallsPath =>
                 [
-                    Msg2
+                    Req
                 |
-                    case hb_ao:get(UndefinedCallsPath, Msg1, Opts) of
+                    case hb_ao:get(UndefinedCallsPath, Base, Opts) of
                         not_found -> [];
                         X -> X
                     end
@@ -366,7 +366,7 @@ undefined_import_stub(Msg1, Msg2, Opts) ->
         },
         Opts
     ),
-    {ok, #{ state => Msg3, results => [0] }}.
+    {ok, #{ state => Res, results => [0] }}.
 
 %%% Tests
 
@@ -378,15 +378,15 @@ init() ->
 input_prefix_test() ->
     init(),
     #{ <<"image">> := ImageID } = cache_wasm_image("test/test.wasm"),
-    Msg1 =
+    Base =
         #{
             <<"device">> => <<"wasm-64@1.0">>,
             <<"input-prefix">> => <<"test-in">>,
             <<"test-in">> => #{ <<"image">> => ImageID }
         },
-    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, #{}),
-    ?event({after_init, Msg2}),
-    Priv = hb_private:from_message(Msg2),
+    {ok, Req} = hb_ao:resolve(Base, <<"init">>, #{}),
+    ?event({after_init, Req}),
+    Priv = hb_private:from_message(Req),
     ?assertMatch(
         {ok, Instance} when is_pid(Instance),
         hb_ao:resolve(Priv, <<"instance">>, #{})
@@ -401,16 +401,16 @@ input_prefix_test() ->
 %% Device-Key) work
 process_prefixes_test() ->
     init(),
-    Msg1 =
+    Base =
         #{
             <<"device">> => <<"wasm-64@1.0">>,
             <<"output-prefix">> => <<"wasm">>,
             <<"input-prefix">> => <<"process">>,
             <<"process">> => cache_wasm_image("test/test.wasm")
         },
-    {ok, Msg3} = hb_ao:resolve(Msg1, <<"init">>, #{}),
-    ?event({after_init, Msg3}),
-    Priv = hb_private:from_message(Msg3),
+    {ok, Res} = hb_ao:resolve(Base, <<"init">>, #{}),
+    ?event({after_init, Res}),
+    Priv = hb_private:from_message(Res),
     ?assertMatch(
         {ok, Instance} when is_pid(Instance),
         hb_ao:resolve(Priv, <<"wasm/instance">>, #{})
@@ -424,9 +424,9 @@ process_prefixes_test() ->
 init_test() ->
     init(),
     Msg = cache_wasm_image("test/test.wasm"),
-    {ok, Msg1} = hb_ao:resolve(Msg, <<"init">>, #{}),
-    ?event({after_init, Msg1}),
-    Priv = hb_private:from_message(Msg1),
+    {ok, Base} = hb_ao:resolve(Msg, <<"init">>, #{}),
+    ?event({after_init, Base}),
+    Priv = hb_private:from_message(Base),
     ?assertMatch(
         {ok, Instance} when is_pid(Instance),
         hb_ao:resolve(Priv, <<"instance">>, #{})
@@ -466,10 +466,10 @@ benchmark_test() ->
     BenchTime = 0.5,
     init(),
     Msg0 = cache_wasm_image("test/test-64.wasm"),
-    {ok, Msg1} = hb_ao:resolve(Msg0, <<"init">>, #{}),
-    Msg2 =
+    {ok, Base} = hb_ao:resolve(Msg0, <<"init">>, #{}),
+    Req =
         hb_maps:merge(
-            Msg1,
+            Base,
             #{
                 <<"function">> => <<"fac">>,
                 <<"parameters">> => [5.0]
@@ -479,7 +479,7 @@ benchmark_test() ->
     Iterations =
         hb_test_utils:benchmark(
             fun() ->
-                hb_ao:resolve(Msg2, <<"compute">>, #{})
+                hb_ao:resolve(Req, <<"compute">>, #{})
             end,
             BenchTime
         ),
@@ -498,10 +498,10 @@ state_export_and_restore_test() ->
     % Generate a WASM message. We use the pow_calculator because it has a 
     % reasonable amount of memory to work with.
     Msg0 = cache_wasm_image("test/pow_calculator.wasm"),
-    {ok, Msg1} = hb_ao:resolve(Msg0, <<"init">>, #{}),
-    Msg2 =
+    {ok, Base} = hb_ao:resolve(Msg0, <<"init">>, #{}),
+    Req =
         hb_maps:merge(
-            Msg1,
+            Base,
             Extras = #{
                 <<"function">> => <<"pow">>,
                 <<"parameters">> => [2, 2],
@@ -513,17 +513,17 @@ state_export_and_restore_test() ->
             },
 			#{}
         ),
-    ?event({after_setup, Msg2}),
+    ?event({after_setup, Req}),
     % Compute a computation and export the state.
-    {ok, Msg3a} = hb_ao:resolve(Msg2, <<"compute">>, #{}),
-    ?assertEqual([4], hb_ao:get(<<"results/output">>, Msg3a, #{})),
-    {ok, State} = hb_ao:resolve(Msg3a, <<"snapshot">>, #{}),
+    {ok, Resa} = hb_ao:resolve(Req, <<"compute">>, #{}),
+    ?assertEqual([4], hb_ao:get(<<"results/output">>, Resa, #{})),
+    {ok, State} = hb_ao:resolve(Resa, <<"snapshot">>, #{}),
     ?event({state_res, State}),
     % Restore the state without calling Init.
-    NewMsg1 = hb_maps:merge(Msg0, Extras#{ <<"snapshot">> => State }, #{}),
+    NewBase = hb_maps:merge(Msg0, Extras#{ <<"snapshot">> => State }, #{}),
     ?assertEqual(
         {ok, [4]},
-        hb_ao:resolve(NewMsg1, <<"compute/results/output">>, #{})
+        hb_ao:resolve(NewBase, <<"compute/results/output">>, #{})
     ).
 
 %%% Test helpers
@@ -542,11 +542,11 @@ cache_wasm_image(Image, Opts) ->
 test_run_wasm(File, Func, Params, AdditionalMsg) ->
     init(),
     Msg0 = cache_wasm_image(File),
-    {ok, Msg1} = hb_ao:resolve(Msg0, <<"init">>, #{}),
-    ?event({after_init, Msg1}),
-    Msg2 =
+    {ok, Base} = hb_ao:resolve(Msg0, <<"init">>, #{}),
+    ?event({after_init, Base}),
+    Req =
         hb_maps:merge(
-            Msg1,
+            Base,
             hb_ao:set(
                 #{
                     <<"function">> => Func,
@@ -557,7 +557,7 @@ test_run_wasm(File, Func, Params, AdditionalMsg) ->
             ),
 			#{}
         ),
-    ?event({after_setup, Msg2}),
-    {ok, StateRes} = hb_ao:resolve(Msg2, <<"compute">>, #{}),
+    ?event({after_setup, Req}),
+    {ok, StateRes} = hb_ao:resolve(Req, <<"compute">>, #{}),
     ?event({after_resolve, StateRes}),
     hb_ao:resolve(StateRes, <<"results/output">>, #{}).

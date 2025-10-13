@@ -215,7 +215,6 @@ adopt_node_message(Request, NodeMsg) ->
 %% After execution, we run the node's `response' hook on the result of
 %% the request before returning the result it grants back to the user.
 handle_resolve(Req, Msgs, NodeMsg) ->
-    TracePID = hb_opts:get(trace, no_tracer_set, NodeMsg),
     % Apply the pre-processor to the request.
     ?event(http_request,
         {resolve_hook,
@@ -237,7 +236,7 @@ handle_resolve(Req, Msgs, NodeMsg) ->
             Res =
                 hb_ao:resolve_many(
                     PreProcessedMsg,
-                    HTTPOpts#{ force_message => true, trace => TracePID }
+                    HTTPOpts#{ force_message => true }
                 ),
             {ok, StatusEmbeddedRes} = embed_status(Res, NodeMsg),
             AfterResolveOpts = hb_http_server:get_opts(NodeMsg),

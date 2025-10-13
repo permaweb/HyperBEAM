@@ -666,7 +666,7 @@ read_in_memory_key(BaseMsg, NormKey, _Opts) ->
 
 %% @doc Read the output of a prior computation, given BaseMsg and Req.
 read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) ->
-    ?event({cache_lookup, {msg1, BaseMsgID}, {msg2, ReqID}, {opts, Opts}}),
+    ?event({cache_lookup, {base, BaseMsgID}, {req, ReqID}, {opts, Opts}}),
     case read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts) of
         {ok, Msg} -> {hit, {ok, Msg}};
         not_found -> miss

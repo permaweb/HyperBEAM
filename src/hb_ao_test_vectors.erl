@@ -573,11 +573,11 @@ deep_set_new_messages_test() ->
     Opts = hb_maps:get(opts, hd(test_opts())),
     % Test that new messages are created when the path does not exist.
     Msg0 = #{ <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } } },
-    Msg1 = hb_ao:set(Msg0, <<"d/e">>, <<"3">>, Opts),
-    Msg2 = hb_ao:set(Msg1, <<"d/f">>, <<"4">>, Opts),
+    Base = hb_ao:set(Msg0, <<"d/e">>, <<"3">>, Opts),
+    Req = hb_ao:set(Base, <<"d/f">>, <<"4">>, Opts),
     ?assert(
         hb_message:match(
-            Msg2,
+            Req,
             #{ 
                 <<"a">> =>
                     #{
@@ -591,8 +591,8 @@ deep_set_new_messages_test() ->
             }
         )
     ),
-    Msg3 = hb_ao:set(
-        Msg2,
+    Res = hb_ao:set(
+        Req,
         #{ 
             <<"z/a">> => <<"0">>,
             <<"z/b">> => <<"1">>,
@@ -602,7 +602,7 @@ deep_set_new_messages_test() ->
     ),
     ?assert(
         hb_message:match(
-            Msg3,
+            Res,
             #{
                 <<"a">> => #{ <<"b">> => #{ <<"c">> => <<"1">> } },
                 <<"d">> => #{ <<"e">> => <<"3">>, <<"f">> => <<"4">> },
@@ -619,12 +619,12 @@ deep_set_new_messages_test() ->
 deep_set_with_device_test(Opts) ->
     Device = #{
         set =>
-            fun(Msg1, Msg2) ->
+            fun(Base, Req) ->
                 % A device where the set function modifies the key
                 % and adds a modified flag.
                 {Key, Val} =
-                    hd(hb_maps:to_list(hb_maps:without([<<"path">>, <<"priv">>], Msg2, Opts), Opts)),
-                {ok, Msg1#{ Key => Val, <<"modified">> => true }}
+                    hd(hb_maps:to_list(hb_maps:without([<<"path">>, <<"priv">>], Req, Opts), Opts)),
+                {ok, Base#{ Key => Val, <<"modified">> => true }}
             end
     },
     % A message with an interspersed custom device: A and C have it,
@@ -668,10 +668,10 @@ device_exports_test(Opts) ->
 		info => fun() -> #{ exports => [set] } end,
 		set => fun(_, _) -> {ok, <<"SET">>} end
 	},
-	Msg2 = #{ <<"device">> => Dev },
-	?assert(hb_ao_device:is_exported(Msg2, Dev, info, Opts)),
-	?assert(hb_ao_device:is_exported(Msg2, Dev, set, Opts)),
-	?assert(not hb_ao_device:is_exported(Msg2, Dev, not_exported, Opts)),
+	Req = #{ <<"device">> => Dev },
+	?assert(hb_ao_device:is_exported(Req, Dev, info, Opts)),
+	?assert(hb_ao_device:is_exported(Req, Dev, set, Opts)),
+	?assert(not hb_ao_device:is_exported(Req, Dev, not_exported, Opts)),
     Dev2 = #{
         info =>
             fun() ->
@@ -684,17 +684,17 @@ device_exports_test(Opts) ->
                 }
             end
     },
-    Msg3 = #{ <<"device">> => Dev2, <<"test1">> => <<"BAD1">>, <<"test3">> => <<"GOOD3">> },
-    ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test1">>, Msg3, Opts)),
-    ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test2">>, Msg3, Opts)),
-    ?assertEqual(<<"GOOD3">>, hb_ao:get(<<"test3">>, Msg3, Opts)),
+    Res = #{ <<"device">> => Dev2, <<"test1">> => <<"BAD1">>, <<"test3">> => <<"GOOD3">> },
+    ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test1">>, Res, Opts)),
+    ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test2">>, Res, Opts)),
+    ?assertEqual(<<"GOOD3">>, hb_ao:get(<<"test3">>, Res, Opts)),
     ?assertEqual(<<"GOOD4">>,
         hb_ao:get(
             <<"test4">>,
-            hb_ao:set(Msg3, <<"test4">>, <<"GOOD4">>, Opts)
+            hb_ao:set(Res, <<"test4">>, <<"GOOD4">>, Opts)
         )
     ),
-    ?assertEqual(not_found, hb_ao:get(<<"test5">>, Msg3, Opts)).
+    ?assertEqual(not_found, hb_ao:get(<<"test5">>, Res, Opts)).
 
 device_excludes_test(Opts) ->
     % Create a device that returns an identifiable message for any key, but also

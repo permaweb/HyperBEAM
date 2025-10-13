@@ -176,9 +176,9 @@ call(WASM, FuncRef, Args, ImportFun, StateMsg, Opts)
     end.
 
 %% @doc Stub import function for the WASM executor.
-stub(Msg1, _Msg2, _Opts) ->
+stub(Base, _Req, _Opts) ->
     ?event(stub_stdlib_called),
-    {ok, [0], Msg1}.
+    {ok, [0], Base}.
 
 %% @doc Synchonously monitor the WASM executor for a call result and any
 %% imports that need to be handled.
@@ -190,7 +190,7 @@ monitor_call(WASM, ImportFun, StateMsg, Opts) ->
         {import, Module, Func, Args, Signature} ->
             ?event({import_called, Module, Func, Args, Signature}),
             try
-                {ok, Res, StateMsg2} =
+                {ok, Res, StateReq} =
                     ImportFun(StateMsg,
                         #{
                             instance => WASM,
@@ -203,7 +203,7 @@ monitor_call(WASM, ImportFun, StateMsg, Opts) ->
                     ),
                 ?event({import_ret, Module, Func, {args, Args}, {res, Res}}),
                 dispatch_response(WASM, Res),
-                monitor_call(WASM, ImportFun, StateMsg2, Opts)
+                monitor_call(WASM, ImportFun, StateReq, Opts)
             catch
                 Err:Reason:Stack ->
                     % Signal the WASM executor to stop.
@@ -275,8 +275,8 @@ imported_function_test() ->
     {ok, WASM, _Imports, _Exports} = start(File),
     {ok, [Result], _} =
         call(WASM, <<"pow">>, [2, 5],
-            fun(Msg1, #{ args := [Arg1, Arg2] }, _Opts) ->
-                {ok, [Arg1 * Arg2], Msg1}
+            fun(Base, #{ args := [Arg1, Arg2] }, _Opts) ->
+                {ok, [Arg1 * Arg2], Base}
             end),
     ?assertEqual(32, Result).
 

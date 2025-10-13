@@ -14,7 +14,7 @@
 %%% Allowing users to store and retrieve not only arbitrary bytes, but also to
 %%% perform execution of computation upon that data:
 %%% 
-%%% 	`Hyperbeam(Message1, Message2) => Message3'
+%%% 	`Hyperbeam(Base, Request) => Result'
 %%% 
 %%% When Hyperbeam executes a message, it will return a new message containing
 %%% the result of that execution, as well as signed commitments of its

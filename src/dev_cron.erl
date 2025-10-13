@@ -7,9 +7,9 @@
 
 %% @doc Exported function for getting device info.
 info(_) -> 
-	#{ exports => [<<"info">>, <<"once">>, <<"every">>, <<"stop">>] }.
+	#{ default => fun handler/4 }.
 
-info(_Msg1, _Msg2, _Opts) ->
+info(_Base, _Req, _Opts) ->
 	InfoBody = #{
 		<<"description">> => <<"Cron device for scheduling messages">>,
 		<<"version">> => <<"1.0">>,
@@ -22,32 +22,44 @@ info(_Msg1, _Msg2, _Opts) ->
 	},
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
+%% @doc Default handler: Assume that the key is an interval descriptor.
+handler(<<"set">>, Base, Req, Opts) -> dev_message:set(Base, Req, Opts);
+handler(<<"keys">>, Base, _Req, _Opts) -> dev_message:keys(Base);
+handler(Interval, Base, Req, Opts) ->
+    every(Base, Req#{ <<"interval">> => Interval }, Opts).
+
 %% @doc Exported function for scheduling a one-time message.
-once(_Msg1, Msg2, Opts) ->
-	case hb_ao:get(<<"cron-path">>, Msg2, Opts) of
+once(_Base, Req, Opts) ->
+	case extract_path(<<"once">>, Req, Opts) of
 		not_found ->
 			{error, <<"No cron path found in message.">>};
 		CronPath ->
-			ReqMsgID = hb_message:id(Msg2, all, Opts),
+			ReqMsgID = hb_message:id(Req, all, Opts),
 			% make the path specific for the end device to be used
-			ModifiedMsg2 =
+			ModifiedReq =
                 maps:remove(
                     <<"cron-path">>,
-                    maps:put(<<"path">>, CronPath, Msg2)
+                    maps:put(<<"path">>, CronPath, Req)
                 ),
 			Name = {<<"cron@1.0">>, ReqMsgID},
-			Pid = spawn(fun() -> once_worker(CronPath, ModifiedMsg2, Opts) end),
+			Pid = spawn(fun() -> once_worker(CronPath, ModifiedReq, Opts) end),
 			hb_name:register(Name, Pid),
-			{ok, ReqMsgID}
+			{
+                ok,
+                #{
+                    <<"status">> => 200,
+                    <<"cache-control">> => [<<"no-store">>],
+                    <<"body">> => ReqMsgID
+                }
+            }
 	end.
 
 %% @doc Internal function for scheduling a one-time message.
 once_worker(Path, Req, Opts) ->
 	% Directly call the meta device on the newly constructed 'singleton', just
     % as hb_http_server does.
-    TracePID = hb_tracer:start_trace(),
 	try
-		dev_meta:handle(Opts#{ trace => TracePID }, Req#{ <<"path">> => Path})
+		dev_meta:handle(Opts, Req#{ <<"path">> => Path})
 	catch
 		Class:Reason:Stacktrace ->
 			?event(
@@ -61,10 +73,10 @@ once_worker(Path, Req, Opts) ->
 
 
 %% @doc Exported function for scheduling a recurring message.
-every(_Msg1, Msg2, Opts) ->
+every(_Base, Req, Opts) ->
 	case {
-		hb_ao:get(<<"cron-path">>, Msg2, Opts),
-		hb_ao:get(<<"interval">>, Msg2, Opts)
+		extract_path(Req, Opts),
+		hb_ao:get(<<"interval">>, Req, Opts)
 	} of
 		{not_found, _} -> 
 			{error, <<"No cron path found in message.">>};
@@ -78,27 +90,38 @@ every(_Msg1, Msg2, Opts) ->
 				true ->
 					ok
 				end,
-				ReqMsgID = hb_message:id(Msg2, all, Opts),
-				ModifiedMsg2 =
-                    maps:remove(
-                        <<"cron-path">>,
-                        maps:remove(<<"interval">>, Msg2)
+				ReqMsgID = hb_message:id(Req, all, Opts),
+				ModifiedReq =
+                    hb_maps:without(
+                        [
+                            <<"interval">>,
+                            <<"cron-path">>,
+                            hb_maps:get(<<"every">>, Req, <<"every">>, Opts)
+                        ],
+                        Req,
+                        Opts
                     ),
-				TracePID = hb_tracer:start_trace(),
 				Pid =
                     spawn(
                         fun() ->
                             every_worker_loop(
                                 CronPath,
-                                ModifiedMsg2,
-                                Opts#{ trace => TracePID },
+                                ModifiedReq,
+                                Opts,
                                 IntervalMillis
                             )
                         end
                     ),
 				Name = {<<"cron@1.0">>, ReqMsgID},
 				hb_name:register(Name, Pid),
-				{ok, ReqMsgID}
+				{
+                    ok,
+                    #{
+                        <<"status">> => 200,
+                        <<"cache-control">> => [<<"no-store">>],
+                        <<"body">> => ReqMsgID
+                    }
+                }
 			catch
 				_:{invalid_time_unit, Unit} ->
                     {error, <<"Invalid time unit: ", Unit/binary>>};
@@ -110,8 +133,8 @@ every(_Msg1, Msg2, Opts) ->
 	end.
 
 %% @doc Exported function for stopping a scheduled task.
-stop(_Msg1, Msg2, Opts) ->
-	case hb_ao:get(<<"task">>, Msg2, Opts) of
+stop(_Base, Req, Opts) ->
+	case hb_ao:get(<<"task">>, Req, Opts) of
 		not_found ->
 			{error, <<"No task ID found in message.">>};
 		TaskID ->
@@ -171,6 +194,13 @@ parse_time(BinString) ->
 		_ -> throw({invalid_time_unit, UnitStr})
 	end.
 
+%% @doc Extract the path from the request message, given the name of the key
+%% that was invoked.
+extract_path(Req, Opts) ->
+    extract_path(hb_maps:get(<<"path">>, Req, Opts), Req, Opts).
+extract_path(Key, Req, Opts) ->
+    hb_ao:get_first([{Req, Key}, {Req, <<"cron-path">>}], Opts).
+
 %%% Tests
 
 stop_once_test() ->
@@ -183,7 +213,7 @@ stop_once_test() ->
 	% Create a "once" task targeting the delay function
 	OnceUrlPath = <<"/~cron@1.0/once?test-id=", TestWorkerNameId/binary,
 				 "&cron-path=/~test-device@1.0/delay">>,
-	{ok, OnceTaskID} = hb_http:get(Node, OnceUrlPath, #{}),
+	{ok, #{ <<"body">> := OnceTaskID }} = hb_http:get(Node, OnceUrlPath, #{}),
 	?event({cron_stop_once_test_created, {task_id, OnceTaskID}}),
 	% Give a short delay to ensure the task has started and called handle,
     % entering the sleep
@@ -221,7 +251,7 @@ stop_every_test() ->
 	EveryUrlPath = <<"/~cron@1.0/every?test-id=", TestWorkerNameId/binary, 
 				   "&interval=500-milliseconds",
 				   "&cron-path=/~test-device@1.0/increment_counter">>,
-	{ok, CronTaskID} = hb_http:get(Node, EveryUrlPath, #{}),
+	{ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
 	?event({cron_stop_every_test_created, CronTaskID}),
 	% Verify the cron worker process was registered and is alive
 	CronWorkerPid = hb_name:lookup({<<"cron@1.0">>, CronTaskID}),
@@ -266,11 +296,15 @@ once_executed_test() ->
 	% register the worker with the id
 	hb_name:register({<<"test">>, ID}, PID),
 	% Construct the URL path with the dynamic ID
-	UrlPath = <<"/~cron@1.0/once?test-id=", ID/binary,
-			"&cron-path=/~test-device@1.0/update_state">>,
+	UrlPath =
+        <<
+            "/~cron@1.0/once=\"/~test-device@1.0/update_state\"",
+            "?test-id=",
+            ID/binary
+        >>,
 	% this should call the worker via the test device
 	% the test device should look up the worker via the id given 
-	{ok, _ReqMsgId} = hb_http:get(Node, UrlPath, #{}),
+	{ok, #{ <<"body">> := _ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
 	% wait for the request to be processed
 	timer:sleep(1000),
 	% send a message to the worker to get the state
@@ -292,11 +326,15 @@ every_worker_loop_test() ->
 	PID = spawn(fun test_worker/0),
 	ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
 	hb_name:register({<<"test">>, ID}, PID),
-	UrlPath = <<"/~cron@1.0/every?test-id=", ID/binary, 
-		"&interval=500-milliseconds",
-		"&cron-path=/~test-device@1.0/increment_counter">>,
+	UrlPath =
+        <<
+            "/~cron@1.0/500-milliseconds", 
+		    "=\"/~test-device@1.0/increment_counter\"",
+            "?test-id=",
+            ID/binary
+        >>,
 	?event({cron_every_test_send_url, UrlPath}),
-	{ok, ReqMsgId} = hb_http:get(Node, UrlPath, #{}),
+	{ok, #{ <<"body">> := ReqMsgId }} = hb_http:get(Node, UrlPath, #{}),
 	?event({cron_every_test_get_done, {req_id, ReqMsgId}}),
 	timer:sleep(1500),
 	PID ! {get, self()},

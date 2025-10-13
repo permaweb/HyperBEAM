@@ -11,13 +11,13 @@
 -define(STATUS_TIMEOUT, 100).
 
 %% @doc Initialize the device.
-init(Msg, _Msg2, _Opts) -> {ok, Msg}.
+init(Msg, _Req, _Opts) -> {ok, Msg}.
 
 %% @doc Normalize the device.
-normalize(Msg, Msg2, Opts) ->
+normalize(Msg, Req, Opts) ->
     case ensure_started(Opts) of
         true ->
-            dev_delegated_compute:normalize(Msg, Msg2, Opts);
+            dev_delegated_compute:normalize(Msg, Req, Opts);
         false ->
             {error, #{
                 <<"status">> => 500,
@@ -27,18 +27,18 @@ normalize(Msg, Msg2, Opts) ->
 
 %% @doc Genesis-wasm device compute handler.
 %% Normal compute execution through external CU with state persistence
-compute(Msg, Msg2, Opts) ->
+compute(Msg, Req, Opts) ->
     % Validate whether the genesis-wasm feature is enabled.
-    case delegate_request(Msg, Msg2, Opts) of
-        {ok, Msg3} ->
+    case delegate_request(Msg, Req, Opts) of
+        {ok, Res} ->
             % Resolve the `patch@1.0' device.
             {ok, Msg4} =
                 hb_ao:resolve(
-                    Msg3,
+                    Res,
                     {
                         as,
                         <<"patch@1.0">>,
-                        Msg2#{ <<"patch-from">> => <<"/results/outbox">> }
+                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
                     },
                     Opts
                 ),
@@ -50,16 +50,16 @@ compute(Msg, Msg2, Opts) ->
     end.
 
 %% @doc Snapshot the state of the process via the `delegated-compute@1.0' device.
-snapshot(Msg, Msg2, Opts) ->
-    delegate_request(Msg, Msg2, Opts).
+snapshot(Msg, Req, Opts) ->
+    delegate_request(Msg, Req, Opts).
 
 %% @doc Proxy a request to the delegated-compute@1.0 device, ensuring that
 %% the server is running.
-delegate_request(Msg, Msg2, Opts) ->
+delegate_request(Msg, Req, Opts) ->
     % Validate whether the genesis-wasm feature is enabled.
     case ensure_started(Opts) of
         true ->
-            do_compute(Msg, Msg2, Opts);
+            do_compute(Msg, Req, Opts);
         false ->
             % Return an error if the genesis-wasm feature is disabled.
             {error, #{
@@ -72,17 +72,17 @@ delegate_request(Msg, Msg2, Opts) ->
 
 
 %% @doc Handle normal compute execution with state persistence (GET method).
-do_compute(Msg, Msg2, Opts) ->
+do_compute(Msg, Req, Opts) ->
     % Resolve the `delegated-compute@1.0' device.
-    case hb_ao:resolve(Msg, {as, <<"delegated-compute@1.0">>, Msg2}, Opts) of
-        {ok, Msg3} ->
+    case hb_ao:resolve(Msg, {as, <<"delegated-compute@1.0">>, Req}, Opts) of
+        {ok, Res} ->
             PatchResult = 
                 hb_ao:resolve(
-                    Msg3,
+                    Res,
                     {
                         as,
                         <<"patch@1.0">>,
-                        Msg2#{ <<"patch-from">> => <<"/results/outbox">> }
+                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
                     },
                     Opts
                 ),
@@ -622,12 +622,12 @@ test_genesis_wasm_process() ->
         #{ priv_wallet => Wallet }
     ).
 
-schedule_test_message(Msg1, Text) ->
-    schedule_test_message(Msg1, Text, #{}).
-schedule_test_message(Msg1, Text, MsgBase) ->
+schedule_test_message(Base, Text) ->
+    schedule_test_message(Base, Text, #{}).
+schedule_test_message(Base, Text, MsgBase) ->
     Wallet = hb:wallet(),
     UncommittedBase = hb_message:uncommitted(MsgBase),
-    Msg2 =
+    Req =
         hb_message:commit(#{
                 <<"path">> => <<"schedule">>,
                 <<"method">> => <<"POST">>,
@@ -642,16 +642,16 @@ schedule_test_message(Msg1, Text, MsgBase) ->
             },
             #{ priv_wallet => Wallet }
         ),
-    hb_ao:resolve(Msg1, Msg2, #{}).
+    hb_ao:resolve(Base, Req, #{}).
 
-schedule_aos_call(Msg1, Code) ->
-    schedule_aos_call(Msg1, Code, <<"Eval">>, #{}).
-schedule_aos_call(Msg1, Code, Action) ->
-    schedule_aos_call(Msg1, Code, Action, #{}).
-schedule_aos_call(Msg1, Code, Action, Opts) ->
+schedule_aos_call(Base, Code) ->
+    schedule_aos_call(Base, Code, <<"Eval">>, #{}).
+schedule_aos_call(Base, Code, Action) ->
+    schedule_aos_call(Base, Code, Action, #{}).
+schedule_aos_call(Base, Code, Action, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    ProcID = hb_message:id(Msg1, all),
-    Msg2 =
+    ProcID = hb_message:id(Base, all),
+    Req =
         hb_message:commit(
             #{
                 <<"action">> => Action,
@@ -661,7 +661,7 @@ schedule_aos_call(Msg1, Code, Action, Opts) ->
             },
             #{ priv_wallet => Wallet }
         ),
-    schedule_test_message(Msg1, <<"TEST MSG">>, Msg2).
+    schedule_test_message(Base, <<"TEST MSG">>, Req).
 
 spawn_and_execute_slot_test_() ->
     { timeout, 900, fun spawn_and_execute_slot/0 }.
@@ -672,22 +672,22 @@ spawn_and_execute_slot() ->
         cache_control => <<"always">>,
         store => hb_opts:get(store)
     },
-    Msg1 = test_genesis_wasm_process(),
-    hb_cache:write(Msg1, Opts),
+    Base = test_genesis_wasm_process(),
+    hb_cache:write(Base, Opts),
     {ok, _SchedInit} = 
         hb_ao:resolve(
-            Msg1,
+            Base,
             #{
                 <<"method">> => <<"POST">>,
                 <<"path">> => <<"schedule">>,
-                <<"body">> => Msg1
+                <<"body">> => Base
             },
             Opts
         ),
-    {ok, _} = schedule_aos_call(Msg1, <<"return 1+1">>),
-    {ok, _} = schedule_aos_call(Msg1, <<"return 2+2">>),
+    {ok, _} = schedule_aos_call(Base, <<"return 1+1">>),
+    {ok, _} = schedule_aos_call(Base, <<"return 2+2">>),
     {ok, SchedulerRes} =
-        hb_ao:resolve(Msg1, #{
+        hb_ao:resolve(Base, #{
             <<"method">> => <<"GET">>,
             <<"path">> => <<"schedule">>
         }, Opts),
@@ -705,7 +705,7 @@ spawn_and_execute_slot() ->
         <<"return 2+2">>,
         hb_ao:get(<<"assignments/2/body/data">>, SchedulerRes)
     ),
-    {ok, Result} = hb_ao:resolve(Msg1, #{ <<"path">> => <<"now">> }, Opts),
+    {ok, Result} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
     ?assertEqual(<<"4">>, hb_ao:get(<<"results/data">>, Result)).
 
 compare_result_genesis_wasm_and_wasm_test_() ->
