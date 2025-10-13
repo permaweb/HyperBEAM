@@ -382,6 +382,7 @@ make_group(Opts, Path) ->
 list(Opts, Path) when is_list(Path) ->
     list(Opts, hb_store:join(Path));
 list(Opts, Path) ->
+    UnwantedChildren = [<<"empty_group">>],
     maybe
         #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
         ResolvedPath = case read_direct(Opts, Path) of
@@ -403,7 +404,7 @@ list(Opts, Path) ->
         case erlcloud_s3:list_objects(BucketStr, ListOpts, Config) of
             L when is_list(L) ->
                 Children = extract_children(SearchPrefix, L),
-                {ok, Children -- [<<"empty_group">>]};
+                {ok, Children -- UnwantedChildren};
             {error, _Reason} ->
                 {ok, []}
         end

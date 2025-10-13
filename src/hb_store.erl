@@ -434,6 +434,11 @@ test_stores() ->
         },
         (hb_test_utils:test_store(hb_store_ets))#{
             <<"benchmark-scale">> => 0.01
+        },
+        %% Should S3 be under a feature flag? 
+        (hb_test_utils:test_store(hb_store_s3))#{
+            %% NOTE: To be tuned
+            <<"benchmark-scale">> => 0.005
         }
     ] ++ rocks_stores().
 
@@ -453,8 +458,10 @@ generate_test_suite(Suite) ->
     generate_test_suite(Suite, test_stores()).
 generate_test_suite(Suite, Stores) ->
     hb:init(),
-    lists:map(
+    L = lists:map(
         fun(Store = #{<<"store-module">> := Mod}) ->
+                BinaryMod = atom_to_binary(Mod),
+                erlang:display(<<"Store: ", BinaryMod/binary>>),
             {foreach,
                 fun() ->
                     hb_store:start(Store)
@@ -481,7 +488,9 @@ generate_test_suite(Suite, Stores) ->
             }
         end,
         Stores
-    ).
+    ),
+    %erlang:display(L),
+    L.
 
 %%% Tests
 
