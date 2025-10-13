@@ -369,7 +369,11 @@ is_link(Value) ->
 %% In S3, directories don't really exist, so this is a no-op.
 %% Groups are detected by listing operations.
 -spec make_group(opts(), key()) -> ok.
-make_group(_Opts, _Path) ->
+make_group(Opts, Path) ->
+    % NOTE: We need a way to just create an empty group.
+    % This is also ignored when tried to retrieve a list of 
+    % keys for a given path.
+    write(Opts, <<Path/binary, "/empty_group">>, <<"group">>),
     ok.
 
 %% @doc List immediate children under a given path.
@@ -399,7 +403,7 @@ list(Opts, Path) ->
         case erlcloud_s3:list_objects(BucketStr, ListOpts, Config) of
             L when is_list(L) ->
                 Children = extract_children(SearchPrefix, L),
-                {ok, Children};
+                {ok, Children -- [<<"empty_group">>]};
             {error, _Reason} ->
                 {ok, []}
         end
