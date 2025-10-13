@@ -226,49 +226,62 @@ build_groups_key(Prefix, Key) ->
 
 %% @doc Read a value from S3, following links if necessary.
 -spec read(opts(), key()) -> {ok, value()} | not_found.
+% TODO: Remove, we don't need this match anymore.
 read(_Opts, []) -> not_found; 
+
 read(Opts, Key) when is_list(Key) ->
     read(Opts, hb_store:join(Key));
 read(Opts, Key) ->
-    read_with_links(Opts, Key, 0).
+    read_with_links(Opts, Key, 0, false).
 
 %% Internal read that tracks link depth to prevent infinite loops
-read_with_links(_Opts, _Key, Depth) when Depth > ?MAX_LINK_DEPTH ->
+read_with_links(_Opts, _Key, Depth, _IsSubFolderLinkSearchMode) when Depth > ?MAX_LINK_DEPTH ->
     ?event(error, {too_many_links, {depth, Depth}}),
     not_found;
-read_with_links(Opts, Key, Depth) ->
+read_with_links(Opts, Key, Depth, IsSubFolderLinkSearchMode) ->
     ?event(store_s3, {read_key, Key}),
     case read_direct(Opts, Key) of
         {ok, Value} ->
             case is_link(Value) of
                 {true, Target} ->
                     ?event(store_s3, {link_found, Target}),
-                    read_with_links(Opts, Target, Depth + 1);
+                    read_with_links(Opts, Target, Depth + 1, IsSubFolderLinkSearchMode);
                 false ->
                     {ok, Value}
             end;
         not_found ->
             %% NOTE: We need to create a more complex test for deep linking
-            ?event(store_s3, {not_found, {key, Key}, {depth, Depth}}),
+            ?event(store_s3, {not_found, 
+                              {key, Key}, 
+                              {depth, Depth}, 
+                              {is_sub_folder_link_search_mode, IsSubFolderLinkSearchMode}}),
             %% TODO: This Depth might not be the best case to handle this scenario 
             %% where we go back to try to find the link to then resolve forward 
             %% (attach the end key back to the proper path).
-            case Depth > 0 of 
+            case IsSubFolderLinkSearchMode of 
                 true -> 
                     {resolved_link_key, Key};
                 false -> 
-                    [EndKey | ReversedNewKey] = lists:reverse(binary:split(Key, <<"/">>, [global])),
-                    NewKey = lists:reverse(ReversedNewKey),
-                    ?event(store_s3, {check_new_key, NewKey}),
-                    case read(Opts, NewKey) of
-                        {ok, _Value} -> 
-                            %% NOTE: When the key has a value, what should we do? We still 
-                            %% need to resolve 
-                            throw("Unhandled case when the previous key has information stored");
-                        {resolved_link_key, Value} -> 
-                            read(Opts, <<Value/binary, "/", EndKey/binary>>);
-                        not_found -> 
-                            not_found
+                    case lists:reverse(binary:split(Key, <<"/">>, [global])) of 
+                        [_] -> 
+                            %% Doesn't matter looking further down
+                            not_found;
+                        [EndKey | ReversedNewKey] -> 
+                            NewKey = lists:reverse(ReversedNewKey),
+                            ?event(store_s3, {check_new_key, NewKey}),
+                            case read_with_links(Opts, NewKey, Depth, true) of
+                                {ok, _Value} -> 
+                                    %% NOTE: When the key has a value, what should we do? We still 
+                                    %% need to resolve 
+                                    throw("Unhandled case when the previous key has information stored");
+                                {resolved_link_key, NewKey} -> 
+                                    not_found;
+                                {resolved_link_key, Value} -> 
+                                    ?event(store_s3, {{resolved_link_key, Value}, {end_key, EndKey}}),
+                                    read(Opts, <<Value/binary, "/", EndKey/binary>>);
+                                not_found -> 
+                                    not_found
+                            end
                     end
             end
     end.
@@ -817,7 +830,7 @@ link_key_list_test() ->
 %% This functionality enables transparent redirection at the directory level,
 %% allowing reorganization of hierarchical data without breaking existing
 %% access patterns.
-path_traversal_link_test_disabled() ->
+path_traversal_link_test() ->
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
@@ -832,7 +845,7 @@ path_traversal_link_test_disabled() ->
     ok = stop(StoreOpts).
 
 %% @doc Test that matches the exact hb_store hierarchical test pattern
-exact_hb_store_test_disabled() ->
+exact_hb_store_test() ->
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     % Follow exact same pattern as hb_store test
@@ -863,9 +876,9 @@ exact_hb_store_test_disabled() ->
 cache_style_test() ->
     hb:init(),
     StoreOpts = default_test_opts(),
-    reset(StoreOpts),
     % Start the store
     hb_store:start(StoreOpts),
+    reset(StoreOpts),
     % Test writing through hb_store interface  
     ok = hb_store:write(StoreOpts, <<"test-key">>, <<"test-value">>),
     % Test reading through hb_store interface
@@ -1019,7 +1032,7 @@ cache_debug_test() ->
     stop(StoreOpts).
 
 %% @doc Isolated test focusing on the exact cache issue
-isolated_type_debug_test_disabled() ->
+isolated_type_debug_test() ->
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
