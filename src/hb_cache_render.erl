@@ -257,7 +257,7 @@ get_graph_data(Base, MaxSize, Opts) ->
                     <<"id">> => ID,
                     <<"label">> => get_label(hb_util:bin(ID)),
                     <<"type">> => get_node_type(Color),
-                    <<"data">> => iolist_to_binary(io_lib:format("~p", [hb_cache:read(ID, Opts)]))
+                    <<"data">> => iolist_to_binary(hb_format:term(hb_cache:read(ID, Opts)))
                 }
             ||
                 {ID, {_, Color}} <- NodesList
@@ -276,7 +276,7 @@ get_graph_data(Base, MaxSize, Opts) ->
         fun({From, To, Label}) ->
             % Read cache data for the source node
             SourceData = case hb_cache:read(To, Opts) of
-                {ok, Data} -> iolist_to_binary(io_lib:format("~p", [Data]));
+                {ok, Data} -> hb_format:term(Data);
                 not_found ->  <<"">>;
                 _ -> <<"">>
             end,
