@@ -215,6 +215,13 @@ notify(GroupName, Req, Res, Opts) ->
         false ->
             ok
     end,
+    % Call notification dispatch for external listeners (non-blocking)
+    dev_hook:on(<<"on-notify">>, #{
+        <<"group">> => GroupName,
+        <<"request">> => Msg2,
+        <<"result">> => Msg3,
+        <<"timestamp">> => erlang:system_time(millisecond)
+    }, Opts),
     receive
         {resolve, Listener, GroupName, Req, _ListenerOpts} ->
             ?event({notifying_listener, {listener, Listener}, {group, GroupName}}),
@@ -224,6 +231,7 @@ notify(GroupName, Req, Res, Opts) ->
         ?event(finished_notify),
         ok
     end.
+
 
 %% @doc Forward requests to a newly delegated execution process.
 forward_work(NewPID, Opts) ->
@@ -485,6 +493,53 @@ persistent_worker_test() ->
     ?assertNotEqual(Res1, Res2),
     ?assertNotEqual(Res2, Res3),
     ?assert(T1 - T0 >= (3*TestTime)).
+
+%% @doc Test notification dispatch integration
+notification_dispatch_test() ->
+    % Ensure clean state first
+    dev_notify:stop_notification_manager(),
+    timer:sleep(50),
+    
+    % Test with notify_device disabled
+    Opts1 = #{},
+    dev_hook:on(<<"on-notify">>, #{
+        <<"group">> => <<"test-group">>,
+        <<"request">> => #{},
+        <<"result">> => #{},
+        <<"timestamp">> => erlang:system_time(millisecond)
+    }, Opts1),
+    % Should complete without error
+    
+    % Test with notify_device enabled but manager not started
+    Opts2 = #{ notify_device => <<"notify@1.0">> },
+    GroupName = <<"test-group-2">>,
+    Msg2 = #{ <<"path">> => <<"/test">>, <<"data">> => <<"request">> },
+    Msg3 = #{ <<"result">> => <<"success">> },
+    
+    % Should not crash even if manager not available
+    dev_hook:on(<<"on-notify">>, #{
+        <<"group">> => GroupName,
+        <<"request">> => Msg2,
+        <<"result">> => Msg3,
+        <<"timestamp">> => erlang:system_time(millisecond)
+    }, Opts2),
+    
+    % Test with manager running
+    dev_notify:start_notification_manager(),
+    dev_hook:on(<<"on-notify">>, #{
+        <<"group">> => GroupName,
+        <<"request">> => Msg2,
+        <<"result">> => Msg3,
+        <<"timestamp">> => erlang:system_time(millisecond)
+    }, Opts2),
+    timer:sleep(10), % Allow dispatch to process
+    
+    % Manager should still be alive
+    ManagerPid = hb_name:lookup({dev_notify, notification_manager}),
+    ?assert(ManagerPid =/= undefined),
+    ?assert(is_process_alive(ManagerPid)),
+    
+    dev_notify:stop_notification_manager().
 
 spawn_after_execution_test() ->
     ?event(<<"">>),

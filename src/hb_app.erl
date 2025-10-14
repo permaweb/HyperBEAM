@@ -19,4 +19,6 @@ start(_StartType, _StartArgs) ->
     {ok, _} = hb_http_server:start().
 
 stop(_State) ->
+    % Stop notification manager if running
+    dev_notify:stop_notification_manager(),
     ok.
