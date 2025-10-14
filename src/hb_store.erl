@@ -438,7 +438,13 @@ test_stores() ->
         %% Should S3 be under a feature flag? 
         (hb_test_utils:test_store(hb_store_s3))#{
             %% NOTE: To be tuned
-            <<"benchmark-scale">> => 0.005
+            <<"benchmark-scale">> => 0.005,
+            %% Default config
+            <<"bucket">> => <<"hb-s3">>,
+            <<"access-key-id">> => <<"niko">>,
+            <<"secret-access-key">> => <<"minio-niko-rocks">>,
+            <<"endpoint">> => <<"localhost:9000">>,
+            <<"dangerous_reset">> => true
         }
     ] ++ rocks_stores().
 
@@ -458,10 +464,8 @@ generate_test_suite(Suite) ->
     generate_test_suite(Suite, test_stores()).
 generate_test_suite(Suite, Stores) ->
     hb:init(),
-    L = lists:map(
+    lists:map(
         fun(Store = #{<<"store-module">> := Mod}) ->
-                BinaryMod = atom_to_binary(Mod),
-                erlang:display(<<"Store: ", BinaryMod/binary>>),
             {foreach,
                 fun() ->
                     hb_store:start(Store)
@@ -488,9 +492,7 @@ generate_test_suite(Suite, Stores) ->
             }
         end,
         Stores
-    ),
-    %erlang:display(L),
-    L.
+    ).
 
 %%% Tests
 
