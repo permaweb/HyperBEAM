@@ -970,7 +970,9 @@ test_message_with_list(Store) ->
     {ok, RetrievedItem} = read(Path, Opts),
     ?assert(hb_message:match(Msg, RetrievedItem, strict, Opts)).
 
-test_match_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->
+test_match_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->    
+    Module = map_get(<<"store-module">>, Store),
+    ?event({test_skip, {module, Module}}),
     skip;
 test_match_message(Store) ->
     hb_store:reset(Store),
@@ -998,6 +1000,8 @@ test_match_message(Store) ->
     ?assertEqual([ID2b], MatchedItems2).
 
 test_match_linked_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->
+    Module = map_get(<<"store-module">>, Store),
+    ?event({test_skip, {module, Module}}),
     skip;
 test_match_linked_message(Store) ->
     hb_store:reset(Store),
@@ -1024,6 +1028,8 @@ test_match_linked_message(Store) ->
     ).
 
 test_match_typed_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->
+    Module = map_get(<<"store-module">>, Store),
+    ?event({test_skip, {module, Module}}),
     skip;
 test_match_typed_message(Store) ->
     hb_store:reset(Store),
