@@ -7,6 +7,8 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"  # Exposing Prometheus on port 9090
+    env_file:
+      - .env
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
 
