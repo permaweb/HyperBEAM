@@ -988,7 +988,9 @@ test_message_with_list(Store) ->
     {ok, RetrievedItem} = read(Path, Opts),
     ?assert(hb_message:match(Msg, RetrievedItem, strict, Opts)).
 
-test_match_message(#{<<"store-module">> := Module}) when Module =/= hb_store_lmdb, Module =/= hb_store_s3 ->
+test_match_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->    
+    Module = map_get(<<"store-module">>, Store),
+    ?event({test_skip, {module, Module}}),
     skip;
 test_match_message(Store) ->
     hb_store:reset(Store),
@@ -1015,8 +1017,9 @@ test_match_message(Store) ->
     ?assertEqual(1, length(MatchedItems2)),
     ?assertEqual([ID2b], MatchedItems2).
 
-test_match_linked_message(#{<<"store-module">> := Module}) when Module =/= hb_store_lmdb, Module =/= hb_store_s3 ->
-    erlang:display("skip test_match_linked_message"),
+test_match_linked_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->
+    Module = map_get(<<"store-module">>, Store),
+    ?event({test_skip, {module, Module}}),
     skip;
 test_match_linked_message(Store) ->
     hb_store:reset(Store),
@@ -1042,7 +1045,9 @@ test_match_linked_message(Store) ->
         ensure_all_loaded(Read2, Opts)
     ).
 
-test_match_typed_message(#{<<"store-module">> := Module}) when Module =/= hb_store_lmdb, Module =/= hb_store_s3 ->
+test_match_typed_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_lmdb ->
+    Module = map_get(<<"store-module">>, Store),
+    ?event({test_skip, {module, Module}}),
     skip;
 test_match_typed_message(Store) ->
     hb_store:reset(Store),
