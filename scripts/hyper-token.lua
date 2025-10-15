@@ -866,18 +866,25 @@ end
 --- Index function, called by the `~process@1.0` device for scheduled messages.
 --- We route any `action' to the appropriate function based on the request path.
 function compute(base, assignment)
-    ao.event({ "compute called",
-        { balance = base.balance, ledgers = base.ledgers } })
-
-    assignment.body.action = string.lower(assignment.body.action or "")
+    local action = string.lower(assignment.body.action or "")
+    ao.event(
+        {
+            "compute called",
+            {
+                balance = base.balance,
+                ledgers = base.ledgers,
+                action = action
+            }
+        }
+    )
     
-    if assignment.body.action == "credit-notice" then
+    if action == "credit-notice" then
         return _G["credit-notice"](base, assignment)
-    elseif assignment.body.action == "transfer" then
+    elseif action == "transfer" then
         return transfer(base, assignment)
-    elseif assignment.body.action == "register" then
+    elseif action == "register" then
         return register(base, assignment)
-    elseif assignment.body.action == "register-remote" then
+    elseif action == "register-remote" then
         return _G["register-remote"](base, assignment)
     else
         -- Handle unknown `action' values.
