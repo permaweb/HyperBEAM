@@ -477,20 +477,17 @@ reply(InitReq, TABMReq, Status, RawMessage, Opts) ->
             Message,
             Opts
         ),
-    % Get the CORS request headers from the message, if they exist.
-    ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
-    HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
-    EncodedHeaders = hb_private:reset(HeadersWithCors),
+    RespHeaders = response_headers(Req, HeadersBeforeCors, Opts),
     ?event(http,
         {http_replying,
             {status, {explicit, Status}},
             {path, hb_maps:get(<<"path">>, Req, undefined_path, Opts)},
             {raw_message, RawMessage},
-            {enc_headers, {explicit, EncodedHeaders}},
+            {enc_headers, {explicit, RespHeaders}},
             {enc_body, EncodedBody}
         }
     ),
-    ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
+    ReqBeforeStream = Req#{ resp_headers => RespHeaders },
     PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
     cowboy_req:stream_body(EncodedBody, nofin, PostStreamReq),
     EndTime = os:system_time(millisecond),
@@ -1038,6 +1035,27 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
             }
     end.
 
+response_headers(Req, HeadersBeforeCors, Opts) ->
+    % Get the CORS request headers from the message, if they exist.
+    ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
+    HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
+    EncodedHeaders = hb_private:reset(HeadersWithCors),
+    normalize_header_values(EncodedHeaders).
+
+normalize_header_values(Headers) ->
+    maps:map(fun(_Key, Value) -> 
+        case Value =/= <<>> andalso binary:last(Value) =:= $\n of
+            true -> 
+                TrimBin = binary:part(Value, 0, byte_size(Value) - 1),
+                case TrimBin =/= <<>> andalso binary:last(TrimBin) =:= $\r of
+                    true -> binary:part(TrimBin, 0, byte_size(TrimBin) - 1);
+                    false -> TrimBin
+                end;
+            false -> 
+                Value
+        end
+    end, Headers).
+    
 %%% Tests
 
 simple_ao_resolve_unsigned_test() ->
