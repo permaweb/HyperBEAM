@@ -5,11 +5,13 @@
 %%% @end
 %%%-----------------------------------------------------------------------------
 -module(hb_store_s3).
+-behaviour(hb_store).
 
 %% Store behavior callbacks
 -export([start/1, stop/1, reset/1, scope/0, scope/1]).
 -export([read/2, write/3, list/2, type/2]).
 -export([make_group/2, make_link/3, resolve/2]).
+-export([path/2, add_path/3]).
 -export([default_test_opts/0]).
 
 %% Helper functions
@@ -26,6 +28,7 @@
 %% Configuration defaults
 -define(DEFAULT_REGION, <<"us-east-1">>).
 -define(DEFAULT_ENDPOINT, <<"https://s3.amazonaws.com">>).
+-define(DEFAULT_FORCE_PATH_STYLE, false).
 -define(MAX_REDIRECTS, 100).                   % Only resolve 1000 links to data
 -define(LINK_MARKER, <<"link:">>).
 %% Namespace for storing link objects separately to avoid file/prefix collisions
@@ -47,6 +50,10 @@ start(Opts) ->
         SecretKey = hb_util:list(maps:get(<<"priv_secret_access_key">>, Opts)),
         Region = hb_util:list(maps:get(<<"region">>, Opts, ?DEFAULT_REGION)),
         Endpoint = maps:get(<<"endpoint">>, Opts, ?DEFAULT_ENDPOINT),
+        ForcePathStyle = case maps:get(<<"force_path_style">>, Opts, ?DEFAULT_FORCE_PATH_STYLE) of
+            true -> path;
+            false -> auto
+        end,
         #{
             scheme := Scheme, 
             host := Host, 
@@ -56,7 +63,7 @@ start(Opts) ->
         Config = BaseConfig#aws_config{
             s3_scheme = hb_util:list(hb_util:list(Scheme) ++ "://"),
             s3_bucket_after_host = false,
-            s3_bucket_access_method = path,
+            s3_bucket_access_method = ForcePathStyle,
             aws_region = Region,
             http_client = httpc
         },
@@ -101,7 +108,7 @@ test_bucket_access(Bucket, Config) ->
     catch 
         _Class:Reason -> 
             case Reason of 
-                {error, {aws_error, {http_error, 404, _, _}}} ->
+                {aws_error, {http_error, 404, _, _}} ->
                     error({bucket_not_found, Bucket});
                 {aws_error, {socket_error, {failed_connect,
                     [{to_address,{"localhost", _ }},
@@ -133,10 +140,10 @@ get_config(Opts) ->
 %%%-----------------------------------------------------------------------------
 
 %% @doc Write a value to a key in S3.
--spec write(opts(), key(), value()) -> ok | {error, term()}.
+-spec write(opts(), key(), value()) -> ok | retry.
 write(Opts, Key, Value) when is_list(Key) ->
     write(Opts, hb_store:join(Key), Value);
-write(Opts, Key, Value) ->
+write(Opts, Key, Value) when is_binary(Key) ->
     maybe
         #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
 
@@ -161,7 +168,7 @@ write(Opts, Key, Value) ->
     else
         Error ->
             ?event(error, {s3_write_error, {key, Key}, {reason, Error}}),
-            {error, Error}
+            retry
     end.
 
 %% @doc Build full S3 key with optional prefix.
@@ -202,16 +209,14 @@ build_groups_key(Prefix, Key) ->
 %%%-----------------------------------------------------------------------------
 
 %% @doc Read a value from S3, following links if necessary.
--spec read(opts(), key()) -> {ok, value()} | {error, any()} | not_found.
+-spec read(opts(), key()) -> {ok, value()} | not_found.
 read(Opts, Key) when is_list(Key) ->
     read(Opts, hb_store:join(Key));
-read(Opts, Key) ->
+read(Opts, Key) when is_binary(Key) ->
     % Try direct read first (fast path for non-link paths)
     case read_with_links(Opts, Key) of
         {ok, Value} ->
             {ok, Value};
-        {error, Reason} ->
-            {error, Reason};
         not_found ->
             try
                 PathParts = binary:split(Key, <<"/">>, [global]),
@@ -247,17 +252,10 @@ read_with_links(Opts, Path) ->
                    % Extract the target key and recursively resolve the link
                    read_with_links(Opts, Link);
                 false ->
-                    % Check if this is a group marker - groups should not be
-                    % readable as simple values
-                    case has_children(Opts, Value) of
-                        <<"group">> -> not_found;
-                        _ -> {ok, Value}
-                    end
+                    {ok, Value}
             end;
         not_found ->
-            not_found;
-        {error, Reason} -> 
-            {error, Reason}
+            not_found
     end.
 
 %% @doc Helper function to convert to a path
@@ -270,16 +268,16 @@ to_path(Path) when is_binary(Path) ->
 read_direct(Opts, Key) ->
     #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
     BucketStr = hb_util:list(Bucket),
-    {FullKey, IsDataKey} = case Key of
+    FullKey = case Key of
         <<"data/", _/binary>> ->
-            {build_s3_key(Prefix, Key), true};
+            build_s3_key(Prefix, Key);
         _ ->
             HasSlash = (binary:match(hb_store:join(Key), <<"/">>) =/= nomatch),
             NsKey = case HasSlash of
                 true -> build_groups_key(Prefix, Key);
                 false -> build_links_key(Prefix, Key)
             end,
-            {NsKey, false}
+            NsKey
     end,
     KeyStr = hb_util:list(FullKey),
     try erlcloud_s3:get_object(BucketStr, KeyStr, [], Config) of
@@ -290,11 +288,9 @@ read_direct(Opts, Key) ->
         _:{aws_error, {http_error, 404, _, _}} ->
             not_found;
         _:Reason ->
-            case IsDataKey of
-                false -> ?event(error, {s3_read_error, {key, Key}, {reason, Reason}});
-                true -> ok
-            end,
-            {error, Reason}
+            ?event(error, {s3_read_error, {key, Key}, {reason, Reason}}),
+            %% To enable store chain fallback
+            not_found
     end.
 
 %% @doc Create a symbolic link from New to Existing.
@@ -313,7 +309,9 @@ make_link(Opts, Existing, New) ->
             false -> build_links_key(Prefix, New)
         end,
         NsKeyStr = hb_util:list(NsKey),
-        _ = erlcloud_s3:put_object(BucketStr, NsKeyStr, LinkValue, [], Config),
+        ok ?= try erlcloud_s3:put_object(BucketStr, NsKeyStr, LinkValue, [], Config) of 
+                L when is_list(L) -> ok
+            catch _Class:Reason -> {error, Reason} end,
         ok
     else
         _ -> {error, make_link_failed}
@@ -346,10 +344,9 @@ is_link(Value) ->
 %% Groups are detected by listing operations.
 -spec make_group(opts(), key()) -> ok.
 make_group(Opts, Path) ->
-    % NOTE: We need a way to just create an empty group.
-    % This is also ignored when tried to retrieve a list of 
-    % keys for a given path.
-    write(Opts, <<Path/binary, "/empty_group">>, <<"group">>),
+    % NOTE: We need to write to a file to has_children 
+    % can consider this a group. 
+    write(Opts, <<Path/binary, "/empty_group">>, <<"empty">>),
     ok.
 
 %% @doc List immediate children under a given path.
@@ -358,6 +355,7 @@ make_group(Opts, Path) ->
 list(Opts, Path) when is_list(Path) ->
     list(Opts, hb_store:join(Path));
 list(Opts, Path) ->
+    %% Check make_group note.
     UnwantedChildren = [<<"empty_group">>],
     maybe
         #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
@@ -377,12 +375,13 @@ list(Opts, Path) ->
         BucketStr = hb_util:list(Bucket),
         PrefixStr = hb_util:list(SearchPrefix),
         ListOpts = [{prefix, PrefixStr}, {delimiter, "/"}],
-        case erlcloud_s3:list_objects(BucketStr, ListOpts, Config) of
+        try erlcloud_s3:list_objects(BucketStr, ListOpts, Config) of
             L when is_list(L) ->
                 Children = extract_children(SearchPrefix, L),
-                {ok, Children -- UnwantedChildren};
-            {error, _Reason} ->
-                {ok, []}
+                {ok, Children -- UnwantedChildren}
+        catch
+            _Class:ErrorReason  ->
+                {error, ErrorReason}
         end
     else
         Reason ->
@@ -490,10 +489,7 @@ head_exists(Opts, Key) ->
         FullKey = build_s3_key(Prefix, Key),
         BucketStr = hb_util:list(Bucket),
         KeyStr = hb_util:list(FullKey),
-        case erlcloud_s3:head_object(BucketStr, KeyStr, [], Config) of
-            L when is_list(L) -> true;
-            _ -> false
-        end
+        is_list(erlcloud_s3:head_object(BucketStr, KeyStr, [], Config))
     catch
         _:_ -> false
     end.
@@ -510,9 +506,7 @@ has_children(Opts, Path) ->
         case erlcloud_s3:list_objects(BucketStr, ListOpts, Config) of
             L when is_list(L) ->
                 Contents = proplists:get_value(contents, L, []),
-                Contents =/= [];
-            _ ->
-                false
+                Contents =/= []
         end
     catch
         _:_ -> false
@@ -568,6 +562,26 @@ resolve_path_accumulate(Opts, [Head|Tail], Acc, Depth) ->
             resolve_path_accumulate(Opts, Tail, CurrentPath, Depth)
     end.
 
+%% @doc Convert path to canonical form.
+-spec path(opts(), key()) -> binary().
+path(_Opts, Path) ->
+    hb_store:join(Path).
+
+%% @doc Add two path components together.
+-spec add_path(opts(), key(), key()) -> list().
+add_path(_Opts, Path1, Path2) when is_list(Path1), is_list(Path2) ->
+    Path1 ++ Path2;
+add_path(_Opts, Path1, Path2) ->
+    P1 = case is_binary(Path1) of
+        true -> binary:split(Path1, <<"/">>, [global]);
+        false -> Path1
+    end,
+    P2 = case is_binary(Path2) of
+        true -> binary:split(Path2, <<"/">>, [global]);
+        false -> Path2
+    end,
+    P1 ++ P2.
+
 %%%-----------------------------------------------------------------------------
 %%% Remaining Functions (Phase 8)
 %%%-----------------------------------------------------------------------------
@@ -594,7 +608,7 @@ delete_all_objects(Opts) ->
     #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
     BucketStr = hb_util:list(Bucket),
     PrefixStr = hb_util:list(Prefix),
-    case erlcloud_s3:list_objects(BucketStr, [{prefix, PrefixStr}], Config) of
+    try erlcloud_s3:list_objects(BucketStr, [{prefix, PrefixStr}], Config) of
         L when is_list(L) ->
             Contents = proplists:get_value(contents, L, []),
             Keys = [proplists:get_value(key, Obj) || Obj <- Contents],
@@ -603,9 +617,9 @@ delete_all_objects(Opts) ->
                 _ ->
                     erlcloud_s3:delete_objects_batch(BucketStr, Keys, Config),
                     ok
-            end;
-        _ ->
-            ok
+            end
+    catch _Class:Reason ->
+        {error, Reason}
     end.
 
 %% @doc Return the scope of this store.
@@ -639,7 +653,8 @@ default_test_opts() ->
         <<"priv_access_key_id">> => <<"minioadmin">>,
         <<"priv_secret_access_key">> => <<"minioadmin">>,
         <<"endpoint">> => <<"http://localhost:9000">>,
-        <<"dangerous_reset">> => true
+        <<"dangerous_reset">> => true,
+        <<"force_path_style">> => true
      }.
 
 -ifdef(ENABLE_S3).
@@ -694,13 +709,12 @@ failed_write_test() ->
     ok = meck:new(erlcloud_s3, [unstick, passthrough]),
     XMLBody = <<"">>,
     ok = meck:expect(erlcloud_s3, put_object, fun(_, _, _, _, _) -> 
-        error({aws_error,{http_error, 404, "Not Found", XMLBody}}) end),
+        error({aws_error,{http_error, 400, "Bad Request", XMLBody}}) end),
 
     Result = write(StoreOpts, Key, Value),
-    ?assertMatch({error, _}, Result),
-
-    % TODO: Not sure why this validation fails
-    %?assert(meck:validate(erlcloud_s3)),
+    ?assertMatch(retry, Result),
+    
+    ?assert(meck:called(erlcloud_s3, put_object, ['_', '_', '_', '_', '_'])),
     ok = meck:unload(erlcloud_s3),
     ok = stop(StoreOpts).
 
@@ -716,14 +730,11 @@ failed_read_test() ->
         error({aws_error,{http_error, 400, "Bad Request", XMLBody}}) end),
 
     Result = read(StoreOpts, Key),
-    ?assertMatch({error, {aws_error, {http_error, 400, _, _}}}, Result),
+    ?assertMatch(not_found, Result),
 
-
-    % TODO: Not sure why this validation fails
-    %?assert(meck:validate(erlcloud_s3)),
+    ?assert(meck:called(erlcloud_s3, get_object, ['_', '_', '_', '_'])),
     ok = meck:unload(erlcloud_s3),
     ok = stop(StoreOpts).
-
 
 %% @doc List test - verifies prefix-based key listing functionality.
 %%

@@ -462,8 +462,7 @@ rocks_stores() -> [].
 -ifdef(ENABLE_S3).
 s3_stores() ->
     [(hb_store_s3:default_test_opts())#{
-        %% NOTE: To be tuned
-        <<"benchmark-scale">> => 0.005
+        <<"benchmark-scale">> => 0.01
     }].
 -else.
 s3_stores() -> [].
@@ -476,7 +475,9 @@ generate_test_suite(Suite, Stores) ->
         fun(Store = #{<<"store-module">> := Mod}) ->
             {foreach,
                 fun() ->
-                    hb_store:start(Store)
+                    hb_store:start(Store),
+                    % If the test fails, the store isn't cleared.
+                    hb_store:reset(Store)
                 end,
                 fun(_) ->
                     hb_store:reset(Store)
