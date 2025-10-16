@@ -27,7 +27,7 @@ local function ensure_defaults(state)
     state.routes = state.routes or {}
     state["is-admissible"] =
         state["is-admissible"] or {
-			path = "/default",
+			path = "default",
             default = "true"
         }
     state["sampling-rate"] = state["sampling-rate"] or 0.1

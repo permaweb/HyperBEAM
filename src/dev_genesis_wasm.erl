@@ -2,7 +2,8 @@
 %%% processes, using HyperBEAM infrastructure. This allows existing `legacynet'
 %%% AO process definitions to be used in HyperBEAM.
 -module(dev_genesis_wasm).
--export([init/3, compute/3, normalize/3, snapshot/3]).
+-export([init/3, compute/3, normalize/3, snapshot/3, import/3]).
+-export([latest_checkpoint/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -10,26 +11,34 @@
 -define(STATUS_TIMEOUT, 100).
 
 %% @doc Initialize the device.
-init(Msg, _Msg2, _Opts) -> {ok, Msg}.
+init(Msg, _Req, _Opts) -> {ok, Msg}.
 
 %% @doc Normalize the device.
-normalize(Msg, Msg2, Opts) ->
-    dev_delegated_compute:normalize(Msg, Msg2, Opts).
+normalize(Msg, Req, Opts) ->
+    case ensure_started(Opts) of
+        true ->
+            dev_delegated_compute:normalize(Msg, Req, Opts);
+        false ->
+            {error, #{
+                <<"status">> => 500,
+                <<"message">> => <<"Genesis-wasm server not running.">>
+            }}
+    end.
 
 %% @doc Genesis-wasm device compute handler.
 %% Normal compute execution through external CU with state persistence
-compute(Msg, Msg2, Opts) ->
+compute(Msg, Req, Opts) ->
     % Validate whether the genesis-wasm feature is enabled.
-    case delegate_request(Msg, Msg2, Opts) of
-        {ok, Msg3} ->
+    case delegate_request(Msg, Req, Opts) of
+        {ok, Res} ->
             % Resolve the `patch@1.0' device.
             {ok, Msg4} =
                 hb_ao:resolve(
-                    Msg3,
+                    Res,
                     {
                         as,
                         <<"patch@1.0">>,
-                        Msg2#{ <<"patch-from">> => <<"/results/outbox">> }
+                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
                     },
                     Opts
                 ),
@@ -41,16 +50,16 @@ compute(Msg, Msg2, Opts) ->
     end.
 
 %% @doc Snapshot the state of the process via the `delegated-compute@1.0' device.
-snapshot(Msg, Msg2, Opts) ->
-    delegate_request(Msg, Msg2, Opts).
+snapshot(Msg, Req, Opts) ->
+    delegate_request(Msg, Req, Opts).
 
 %% @doc Proxy a request to the delegated-compute@1.0 device, ensuring that
 %% the server is running.
-delegate_request(Msg, Msg2, Opts) ->
+delegate_request(Msg, Req, Opts) ->
     % Validate whether the genesis-wasm feature is enabled.
     case ensure_started(Opts) of
         true ->
-            do_compute(Msg, Msg2, Opts);
+            do_compute(Msg, Req, Opts);
         false ->
             % Return an error if the genesis-wasm feature is disabled.
             {error, #{
@@ -63,17 +72,17 @@ delegate_request(Msg, Msg2, Opts) ->
 
 
 %% @doc Handle normal compute execution with state persistence (GET method).
-do_compute(Msg, Msg2, Opts) ->
+do_compute(Msg, Req, Opts) ->
     % Resolve the `delegated-compute@1.0' device.
-    case hb_ao:resolve(Msg, {as, <<"delegated-compute@1.0">>, Msg2}, Opts) of
-        {ok, Msg3} ->
+    case hb_ao:resolve(Msg, {as, <<"delegated-compute@1.0">>, Req}, Opts) of
+        {ok, Res} ->
             PatchResult = 
                 hb_ao:resolve(
-                    Msg3,
+                    Res,
                     {
                         as,
                         <<"patch@1.0">>,
-                        Msg2#{ <<"patch-from">> => <<"/results/outbox">> }
+                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
                     },
                     Opts
                 ),
@@ -198,7 +207,7 @@ ensure_started(Opts) ->
                                                 hb_util:list(
                                                     hb_opts:get(
                                                         genesis_wasm_log_level,
-                                                        "error",
+                                                        "debug",
                                                         Opts
                                                     )
                                                 )
@@ -215,7 +224,34 @@ ensure_started(Opts) ->
                                                 )
                                             },
 											{"DISABLE_PROCESS_FILE_CHECKPOINT_CREATION", "false"},
-											{"PROCESS_MEMORY_FILE_CHECKPOINTS_DIR", CheckpointDir}
+											{"PROCESS_MEMORY_FILE_CHECKPOINTS_DIR", CheckpointDir},
+                                            {"PROCESS_MEMORY_CACHE_MAX_SIZE",
+                                                hb_util:list(
+                                                    hb_opts:get(
+                                                        genesis_wasm_memory_cache_max_size,
+                                                        "12_000_000_000",
+                                                        Opts
+                                                    )
+                                                )
+                                            },
+                                            {"PROCESS_WASM_SUPPORTED_EXTENSIONS",
+                                                hb_util:list(
+                                                    hb_opts:get(
+                                                        genesis_wasm_supported_extensions,
+                                                        "WeaveDrive",
+                                                        Opts
+                                                    )
+                                                )
+                                            },
+                                            {"PROCESS_WASM_MEMORY_MAX_LIMIT",
+                                                hb_util:list(
+                                                    hb_opts:get(
+                                                        genesis_wasm_memory_max_limit,
+                                                        "24_000_000_000",
+                                                        Opts
+                                                    )
+                                                )
+                                            }
                                         ]
                                     }
                                 ]
@@ -244,6 +280,148 @@ ensure_started(Opts) ->
             ),
             ?event({genesis_wasm_started, {pid, PID}}),
             true
+    end.
+
+%% @doc Find either a specific checkpoint by its ID, or find the most recent
+%% checkpoint via GraphQL.
+import(Base, Req, Opts) ->
+    PassedProcID = hb_maps:find(<<"process-id">>, Req, Opts),
+    ProcMsg =
+        case PassedProcID of
+            {ok, ProcessId} ->
+                {ok, CacheProcMsg} = hb_cache:read(ProcessId, Opts),
+                CacheProcMsg;
+            error ->
+                Base
+        end,
+    case hb_maps:find(<<"import">>, Req, Opts) of
+        {ok, ImportID} ->
+            case hb_cache:read(ImportID, Opts) of
+                {ok, CheckpointMessage} ->
+                    do_import(ProcMsg, CheckpointMessage, Opts);
+                not_found -> {error, not_found}
+            end;
+        error ->
+            ProcID = dev_process:process_id(ProcMsg, #{}, Opts),
+            case latest_checkpoint(ProcID, Opts) of
+                {ok, CheckpointMessage} ->
+                    do_import(ProcMsg, CheckpointMessage, Opts);
+                Err -> Err
+            end
+    end.
+
+%% @doc Find the most recent legacy checkpoint for a process.
+latest_checkpoint(ProcID, Opts) ->
+    case hb_opts:get(genesis_wasm_import_authorities, [], Opts) of
+        [] -> {error, no_import_authorities};
+        TrustedSigners -> latest_checkpoint(ProcID, TrustedSigners, Opts)
+    end.
+latest_checkpoint(ProcID, TrustedSigners, Opts) ->
+    Query =
+        <<
+            <<"""
+            query($ProcID: String!, $TrustedSigners: [String!]) {
+                transactions(
+                    tags: [
+                        { name: "Type" values: ["Checkpoint"] },
+                        { name: "Process" values: [$ProcID] }
+                    ],
+                    owners: $TrustedSigners,
+                    first: 1,
+                    sort: HEIGHT_DESC
+                ){
+                edges {
+            """>>/binary,
+            (hb_gateway_client:item_spec())/binary,
+            """
+                }
+            }}
+        """>>,
+    Variables =
+        #{
+            <<"ProcID">> => ProcID,
+            <<"TrustedSigners">> => TrustedSigners
+        },
+    case hb_gateway_client:query(Query, Variables, Opts) of
+        {error, Reason} ->
+            {error, Reason};
+        {ok, GqlMsg} ->
+            ?event(debug_proc_id, {gql_msg, GqlMsg}),
+            case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
+                not_found -> {error, not_found};
+                Item -> hb_gateway_client:result_to_message(Item, Opts)
+            end
+    end.
+
+%% @doc Validate whether a checkpoint message is signed by a trusted snapshot
+%% authority and is for a `ao.TN.1' process or has `execution-device' set to
+%% `genesis-wasm@1.0', then normalize into a state snapshot.
+%% Save the state snapshot into the store.
+do_import(Proc, CheckpointMessage, Opts) ->
+    maybe
+        % Validate that the process is a valid target for importing a checkpoint.
+        Variant = hb_maps:get(<<"variant">>, Proc, false, Opts),
+        ExecutionDevice = hb_maps:get(<<"execution-device">>, Proc, false, Opts),
+        true ?=
+            (Variant == <<"ao.TN.1">>) orelse
+            (ExecutionDevice == <<"genesis-wasm@1.0">>) orelse
+            invalid_import_target,
+        CheckpointSigners = hb_message:signers(CheckpointMessage, Opts),
+        % Validate that the checkpoint message is signed by a trusted snapshot
+        % authority, and targets this process.
+        TrustedSigners = hb_opts:get(genesis_wasm_import_authorities, [], Opts),
+        true ?=
+            lists:any(
+                fun(Signer) -> lists:member(Signer, TrustedSigners) end,
+                CheckpointSigners
+            ) orelse untrusted,
+        true ?= hb_message:verify(CheckpointMessage, all, Opts) orelse unverified,
+        CheckpointTargetProcID = hb_maps:get(<<"process">>, CheckpointMessage, Opts),
+        ProcID = dev_process:process_id(Proc, #{}, Opts),
+        true ?= CheckpointTargetProcID == ProcID orelse process_mismatch,
+        % Normalize the checkpoint message into a process state message with 
+        % a state snapshot.
+        {ok, SlotBin} ?= hb_maps:find(<<"nonce">>, CheckpointMessage, Opts),
+        Slot = hb_util:int(SlotBin),
+        InitializedProc = dev_process:ensure_process_key(Proc, Opts),
+        WithSnapshot =
+            InitializedProc#{
+                <<"at-slot">> => Slot,
+                <<"snapshot">> => CheckpointMessage
+            },
+        % Save the state snapshot into the store.
+        {ok, _} ?= dev_process_cache:write(ProcID, Slot, WithSnapshot, Opts),
+        % Return the normalized process message.
+        {ok, WithSnapshot}
+    else
+        invalid_import_target ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<
+                        "Process is not a valid target for importing a "
+                        "`~genesis-wasm@1.0' checkpoint."
+                    >>
+            }};
+        process_mismatch ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<"Checkpoint message targets a different process.">>
+            }};
+        unverified ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<"Checkpoint message is not verifiable.">>
+            }};
+        untrusted ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> =>
+                    <<"Checkpoint message is not signed by a trusted snapshot "
+                        "authority.">>
+            }}
     end.
 
 %% @doc Check if the genesis-wasm server is running, using the cached process ID
@@ -320,8 +498,40 @@ log_server_events([Line | Rest]) ->
     log_server_events(Rest).
 
 %%% Tests
-
 -ifdef(ENABLE_GENESIS_WASM).
+
+import_legacy_checkpoint_test_() ->
+    { timeout, 900, fun import_legacy_checkpoint/0 }.
+import_legacy_checkpoint() ->
+    application:ensure_all_started(hb),
+    Opts = #{
+        priv_wallet => hb:wallet(),
+        genesis_wasm_import_authorities =>
+            [
+                <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>,
+                <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
+            ]
+    },
+    ProcID = <<"NTE-RcHEeO15MYMUbXwWytRxn_IUJmXPKPOFVc5qZcg">>,
+    {ok, ProcWithCheckpoint} =
+        hb_ao:resolve(
+           <<"~genesis-wasm@1.0/import&process-id=", ProcID/binary>>,
+           Opts
+        ),
+    ?assertMatch(
+        Slot when Slot > 0,
+        hb_maps:get(<<"at-slot">>, ProcWithCheckpoint)
+    ),
+    ?assertMatch(
+        #{ <<"data">> := Data } when byte_size(Data) > 0,
+        hb_maps:get(<<"snapshot">>, ProcWithCheckpoint)
+    ),
+    ?assertMatch(
+        {ok, Slot, _} when Slot > 0,
+        dev_process_cache:latest(ProcID, Opts)
+    ),
+    {ok, _} = hb_ao:resolve(<<ProcID/binary, "~process@1.0/now">>, Opts).
+
 test_base_process() ->
     test_base_process(#{}).
 test_base_process(Opts) ->
@@ -412,12 +622,12 @@ test_genesis_wasm_process() ->
         #{ priv_wallet => Wallet }
     ).
 
-schedule_test_message(Msg1, Text) ->
-    schedule_test_message(Msg1, Text, #{}).
-schedule_test_message(Msg1, Text, MsgBase) ->
+schedule_test_message(Base, Text) ->
+    schedule_test_message(Base, Text, #{}).
+schedule_test_message(Base, Text, MsgBase) ->
     Wallet = hb:wallet(),
     UncommittedBase = hb_message:uncommitted(MsgBase),
-    Msg2 =
+    Req =
         hb_message:commit(#{
                 <<"path">> => <<"schedule">>,
                 <<"method">> => <<"POST">>,
@@ -432,25 +642,26 @@ schedule_test_message(Msg1, Text, MsgBase) ->
             },
             #{ priv_wallet => Wallet }
         ),
-    hb_ao:resolve(Msg1, Msg2, #{}).
+    hb_ao:resolve(Base, Req, #{}).
 
-schedule_aos_call(Msg1, Code) ->
-    schedule_aos_call(Msg1, Code, <<"Eval">>, #{}).
-schedule_aos_call(Msg1, Code, Action) ->
-    schedule_aos_call(Msg1, Code, Action, #{}).
-schedule_aos_call(Msg1, Code, Action, Opts) ->
+schedule_aos_call(Base, Code) ->
+    schedule_aos_call(Base, Code, <<"Eval">>, #{}).
+schedule_aos_call(Base, Code, Action) ->
+    schedule_aos_call(Base, Code, Action, #{}).
+schedule_aos_call(Base, Code, Action, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    ProcID = hb_message:id(Msg1, all),
-    Msg2 =
+    ProcID = hb_message:id(Base, all),
+    Req =
         hb_message:commit(
             #{
                 <<"action">> => Action,
                 <<"data">> => Code,
-                <<"target">> => ProcID
+                <<"target">> => ProcID,
+                <<"timestamp">> => os:system_time(millisecond)
             },
             #{ priv_wallet => Wallet }
         ),
-    schedule_test_message(Msg1, <<"TEST MSG">>, Msg2).
+    schedule_test_message(Base, <<"TEST MSG">>, Req).
 
 spawn_and_execute_slot_test_() ->
     { timeout, 900, fun spawn_and_execute_slot/0 }.
@@ -461,22 +672,22 @@ spawn_and_execute_slot() ->
         cache_control => <<"always">>,
         store => hb_opts:get(store)
     },
-    Msg1 = test_genesis_wasm_process(),
-    hb_cache:write(Msg1, Opts),
+    Base = test_genesis_wasm_process(),
+    hb_cache:write(Base, Opts),
     {ok, _SchedInit} = 
         hb_ao:resolve(
-            Msg1,
+            Base,
             #{
                 <<"method">> => <<"POST">>,
                 <<"path">> => <<"schedule">>,
-                <<"body">> => Msg1
+                <<"body">> => Base
             },
             Opts
         ),
-    {ok, _} = schedule_aos_call(Msg1, <<"return 1+1">>),
-    {ok, _} = schedule_aos_call(Msg1, <<"return 2+2">>),
+    {ok, _} = schedule_aos_call(Base, <<"return 1+1">>),
+    {ok, _} = schedule_aos_call(Base, <<"return 2+2">>),
     {ok, SchedulerRes} =
-        hb_ao:resolve(Msg1, #{
+        hb_ao:resolve(Base, #{
             <<"method">> => <<"GET">>,
             <<"path">> => <<"schedule">>
         }, Opts),
@@ -494,7 +705,7 @@ spawn_and_execute_slot() ->
         <<"return 2+2">>,
         hb_ao:get(<<"assignments/2/body/data">>, SchedulerRes)
     ),
-    {ok, Result} = hb_ao:resolve(Msg1, #{ <<"path">> => <<"now">> }, Opts),
+    {ok, Result} = hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts),
     ?assertEqual(<<"4">>, hb_ao:get(<<"results/data">>, Result)).
 
 compare_result_genesis_wasm_and_wasm_test_() ->

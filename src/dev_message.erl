@@ -80,7 +80,7 @@ index(Msg, Req, Opts) ->
 %% (`httpsig@1.0') is used.
 %% 
 %% Note: This function _does not_ use AO-Core's `get/3' function, as it
-%% as it would require significant computation. We may want to change this
+%% would require significant computation. We may want to change this
 %% if/when non-map message structures are created.
 id(Base) -> id(Base, #{}).
 id(Base, Req) -> id(Base, Req, #{}).
@@ -89,7 +89,7 @@ id(Base, _, NodeOpts) when is_binary(Base) ->
     % format of the message ID return.
     {ok, hb_util:human_id(hb_path:hashpath(Base, NodeOpts))};
 id(RawBase, Req, NodeOpts) ->
-    % Ensure that the base message is a normalized before proceeding.
+    % Ensure that the base message is normalized before proceeding.
     IDOpts = NodeOpts#{ linkify_mode => discard },
     Base =
         ensure_commitments_loaded(
@@ -110,7 +110,7 @@ id(RawBase, Req, NodeOpts) ->
     case hb_maps:keys(Commitments) of
         [] ->
             % If there are no commitments, we must (re)calculate the ID.
-            ?event(id, no_commitments_found_in_id_call),
+            ?event(debug_id, no_commitments_found_in_id_call),
             calculate_id(hb_maps:without([<<"commitments">>], ModBase), Req, IDOpts);
         IDs ->
             % Accumulate the relevant IDs into a single value. This is performed 
@@ -125,7 +125,7 @@ id(RawBase, Req, NodeOpts) ->
             % accumulation function starts with a buffer of zero encoded as a 
             % 256-bit binary. Subsequently, a single ID on its own 'accumulates' 
             % to itself.
-            ?event(id, {accumulating_existing_ids, IDs}),
+            ?event(debug_id, {accumulating_existing_ids, IDs}),
             {ok,
                 hb_util:human_id(
                     hb_crypto:accumulate(
@@ -148,9 +148,9 @@ calculate_id(Base, Req, NodeOpts) ->
     % set. We can tell if the device is not set (or is the default) by checking 
     % whether the device module is the same as this module.
     DevMod =
-        case hb_ao:message_to_device(#{ <<"device">> => IDMod }, NodeOpts) of
+        case hb_ao_device:message_to_device(#{ <<"device">> => IDMod }, NodeOpts) of
             ?MODULE ->
-                hb_ao:message_to_device(
+                hb_ao_device:message_to_device(
                     #{ <<"device">> => ?DEFAULT_ID_DEVICE },
                     NodeOpts
                 );
@@ -158,18 +158,23 @@ calculate_id(Base, Req, NodeOpts) ->
         end,
     % Apply the function's default `commit' function with the appropriate arguments.
     % If it doesn't exist, error.
-    case hb_ao:find_exported_function(Base, DevMod, commit, 3, NodeOpts) of
+    case hb_ao_device:find_exported_function(Base, DevMod, commit, 3, NodeOpts) of
         {ok, Fun} ->
-            ?event(id, {called_id_device, IDMod}, NodeOpts),
+            ?event(debug_id, {called_id_device, IDMod}, NodeOpts),
             {ok, #{ <<"commitments">> := Comms} } = 
                 apply(
                     Fun,
-                    hb_ao:truncate_args(
+                    hb_ao_device:truncate_args(
                         Fun,
                         [Base, Req#{ <<"type">> => <<"unsigned">> }, NodeOpts]
                     )
                 ),
-            ?event(id, {generated_id, {type, unsigned}, {commitments, maps:keys(Comms)}}),
+            ?event(debug_id,
+                {generated_id,
+                    {type, unsigned},
+                    {commitments, maps:keys(Comms)}
+                }
+            ),
             {ok, hd(maps:keys(Comms))};
         not_found -> throw({id, id_resolver_not_found_for_device, DevMod})
     end.
@@ -248,9 +253,15 @@ commit(Self, Req, Opts) ->
     % We _do not_ set the `device' key in the message, as the device will be
     % part of the commitment. Instead, we find the device module's `commit'
     % function and apply it.
-    CommitOpts = Opts#{ linkify_mode => offload },
-    AttMod = hb_ao:message_to_device(#{ <<"device">> => AttDev }, CommitOpts),
-    {ok, AttFun} = hb_ao:find_exported_function(Base, AttMod, commit, 3, CommitOpts),
+    CommitOpts =
+        case hb_maps:get(<<"type">>, Req, <<"signed">>) of
+            <<"unsigned">> ->
+                Opts#{ linkify_mode => discard };
+            _ ->
+                Opts#{ linkify_mode => offload }
+        end,
+    AttMod = hb_ao_device:message_to_device(#{ <<"device">> => AttDev }, CommitOpts),
+    {ok, AttFun} = hb_ao_device:find_exported_function(Base, AttMod, commit, 3, CommitOpts),
     % Encode to a TABM
     Loaded =
         ensure_commitments_loaded(
@@ -260,7 +271,7 @@ commit(Self, Req, Opts) ->
     {ok, Committed} =
         apply(
             AttFun,
-            hb_ao:truncate_args(
+            hb_ao_device:truncate_args(
                 AttFun,
                 [
                     Loaded,
@@ -339,12 +350,12 @@ verify_commitment(Base, Commitment, Opts) ->
             Opts
         ),
     AttMod =
-        hb_ao:message_to_device(
+        hb_ao_device:message_to_device(
             #{ <<"device">> => AttDev },
             Opts
         ),
     {ok, AttFun} =
-        hb_ao:find_exported_function(
+        hb_ao_device:find_exported_function(
             Base,
             AttMod,
             verify,
@@ -577,8 +588,8 @@ commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) ->
 
 %% @doc Deep merge keys in a message. Takes a map of key-value pairs and sets
 %% them in the message, overwriting any existing values.
-set(Message1, NewValuesMsg, Opts) ->
-    OriginalPriv = hb_private:from_message(Message1),
+set(Base, NewValuesMsg, Opts) ->
+    OriginalPriv = hb_private:from_message(Base),
 	% Filter keys that are in the default device (this one).
     {ok, NewValuesKeys} = keys(NewValuesMsg, Opts),
 	KeysToSet =
@@ -594,7 +605,7 @@ set(Message1, NewValuesMsg, Opts) ->
 	ConflictingKeys =
 		lists:filter(
 			fun(Key) -> lists:member(Key, KeysToSet) end,
-			hb_maps:keys(Message1, Opts)
+			hb_maps:keys(Base, Opts)
 		),
     UnsetKeys =
         lists:filter(
@@ -604,16 +615,16 @@ set(Message1, NewValuesMsg, Opts) ->
                     _ -> false
                 end
             end,
-            hb_maps:keys(Message1, Opts)
+            hb_maps:keys(Base, Opts)
         ),
     % Base message with keys-to-unset removed
-    BaseValues = hb_maps:without(UnsetKeys, Message1, Opts),
+    BaseValues = hb_maps:without(UnsetKeys, Base, Opts),
     ?event(message_set,
         {performing_set,
             {conflicting_keys, ConflictingKeys},
             {keys_to_unset, UnsetKeys},
             {new_values, NewValuesMsg},
-            {original_message, Message1}
+            {original_message, Base}
         }
     ),
     % Create the map of new values
@@ -632,7 +643,7 @@ set(Message1, NewValuesMsg, Opts) ->
     % Caclulate if the keys to be set conflict with any committed keys.
     {ok, CommittedKeys} =
         committed(
-            Message1,
+            Base,
             #{
                 <<"committers">> => <<"all">>
             },
@@ -642,7 +653,7 @@ set(Message1, NewValuesMsg, Opts) ->
         {setting,
             {committed_keys, CommittedKeys},
             {keys_to_set, KeysToSet},
-            {message, Message1}
+            {message, Base}
         }
     ),
     OverwrittenCommittedKeys =
@@ -664,7 +675,7 @@ set(Message1, NewValuesMsg, Opts) ->
         hb_private:set_priv(
             case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of
                 <<"explicit">> -> maps:merge(BaseValues, NewValues);
-                _ -> hb_util:deep_merge(BaseValues, NewValues, Opts)
+                _ -> do_deep_merge(BaseValues, NewValues, Opts)
             end,
             OriginalPriv
         ),
@@ -675,18 +686,63 @@ set(Message1, NewValuesMsg, Opts) ->
         _ ->
             % We did overwrite some keys, but do their values match the original?
             % If not, we must remove the commitments.
-            case hb_message:match(Merged, Message1, Opts) of
+            case hb_message:match(Merged, Base, Opts) of
                 true ->
                     ?event(message_set, {set_keys_matched, {merged, Merged}}),
                     {ok, Merged};
+                % {error, {Details, {trace, Stacktrace}}} ->
+                %     erlang:raise(error, Details, Stacktrace);
+                % {mismatch, Type, Path, Val1, Val2} ->
+                %     ?event(
+                %         set_conflict,
+                %         {set_conflict_removing_commitments,
+                %             {merged, Merged},
+                %             {mismatch, Type},
+                %             {path, Path},
+                %             {expected, Val1},
+                %             {received, Val2}
+                %         }
+                %     ),
                 _ ->
-                    ?event(
-                        message_set,
-                        {set_conflict_removing_commitments, {merged, Merged}}
-                    ),
                     {ok, hb_maps:without([<<"commitments">>], Merged, Opts)}
             end
     end.
+
+%% @doc Deep merge keys in a message, utilizing the set device of any child
+%% keys that are themselves messages.
+do_deep_merge(BaseValues, NewValues, Opts) ->
+    {WithNestedMerges, StillToDeepMerge} =
+        maps:fold(
+            fun(Key, NewValue, {Acc, ToDeepMerge})
+                    when is_map(NewValue)
+                    andalso is_map(map_get(Key, Acc)) ->
+                {
+                    Acc#{
+                        Key =>
+                            hb_util:ok(
+                                hb_ao:resolve(
+                                    map_get(Key, Acc),
+                                    NewValue#{
+                                        <<"path">> => <<"set">>
+                                    },
+                                    Opts
+                                ),
+                                Opts
+                            )
+                    },
+                    ToDeepMerge
+                };
+            (Key, _, {Acc, ToDeepMerge}) ->
+                {Acc, [Key | ToDeepMerge]}
+            end,
+            {BaseValues, []},
+            NewValues
+        ),
+    hb_util:deep_merge(
+        WithNestedMerges,
+        maps:with(StillToDeepMerge, NewValues),
+        Opts
+    ).
 
 %% @doc Special case of `set/3' for setting the `path' key. This cannot be set
 %% using the normal `set' function, as the `path' is a reserved key, used to
@@ -719,13 +775,13 @@ set_path(Base, Value, Opts) when not is_map(Value) ->
     end.
 
 %% @doc Remove a key or keys from a message.
-remove(Message1, Key) ->
-	remove(Message1, Key, #{}).
+remove(Base, Key) ->
+	remove(Base, Key, #{}).
 
-remove(Message1, #{ <<"item">> := Key }, Opts) ->
-    remove(Message1, #{ <<"items">> => [Key] }, Opts);
-remove(Message1, #{ <<"items">> := Keys }, Opts) ->
-    { ok, hb_maps:without(Keys, Message1, Opts) }.
+remove(Base, #{ <<"item">> := Key }, Opts) ->
+    remove(Base, #{ <<"items">> => [Key] }, Opts);
+remove(Base, #{ <<"items">> := Keys }, Opts) ->
+    { ok, hb_maps:without(Keys, Base, Opts) }.
 
 %% @doc Get the public keys of a message.
 keys(Msg) ->
@@ -749,7 +805,7 @@ keys(Msg, Opts) ->
 %% underlying Erlang map. First check the public keys, then check case-
 %% insensitively if the key is a binary.
 get(Key, Msg, Opts) -> get(Key, Msg, #{ <<"path">> => <<"get">> }, Opts).
-get(Key, Msg, _Msg2, Opts) ->
+get(Key, Msg, _Req, Opts) ->
     case hb_private:is_private(Key) of
         true -> {error, not_found};
         false ->
@@ -833,48 +889,48 @@ remove_test() ->
     ).
 
 set_conflicting_keys_test() ->
-	Msg1 = #{ <<"dangerous">> => <<"Value1">> },
-	Msg2 = #{ <<"path">> => <<"set">>, <<"dangerous">> => <<"Value2">> },
+	Base = #{ <<"dangerous">> => <<"Value1">> },
+	Req = #{ <<"path">> => <<"set">>, <<"dangerous">> => <<"Value2">> },
 	?assertMatch({ok, #{ <<"dangerous">> := <<"Value2">> }},
-		hb_ao:resolve(Msg1, Msg2, #{})).
+		hb_ao:resolve(Base, Req, #{})).
 
 unset_with_set_test() ->
-	Msg1 = #{ <<"dangerous">> => <<"Value1">> },
-	Msg2 = #{ <<"path">> => <<"set">>, <<"dangerous">> => unset },
-	?assertMatch({ok, Msg3} when ?IS_EMPTY_MESSAGE(Msg3),
-		hb_ao:resolve(Msg1, Msg2, #{ hashpath => ignore })).
+	Base = #{ <<"dangerous">> => <<"Value1">> },
+	Req = #{ <<"path">> => <<"set">>, <<"dangerous">> => unset },
+	?assertMatch({ok, Res} when ?IS_EMPTY_MESSAGE(Res),
+		hb_ao:resolve(Base, Req, #{ hashpath => ignore })).
 
 deep_unset_test() ->
     Opts = #{ hashpath => ignore },
-    Msg1 = #{
+    Base = #{
         <<"test-key1">> => <<"Value1">>,
         <<"deep">> => #{
             <<"test-key2">> => <<"Value2">>,
             <<"test-key3">> => <<"Value3">>
         }
     },
-    Msg2 = hb_ao:set(Msg1, #{ <<"deep/test-key2">> => unset }, Opts),
+    Req = hb_ao:set(Base, #{ <<"deep/test-key2">> => unset }, Opts),
     ?assertEqual(#{
             <<"test-key1">> => <<"Value1">>,
             <<"deep">> => #{ <<"test-key3">> => <<"Value3">> }
         },
-        Msg2
+        Req
     ),
-    Msg3 = hb_ao:set(Msg2, <<"deep/test-key3">>, unset, Opts),
+    Res = hb_ao:set(Req, <<"deep/test-key3">>, unset, Opts),
     ?assertEqual(#{
             <<"test-key1">> => <<"Value1">>,
             <<"deep">> => #{}
         },
-        Msg3
+        Res
     ),
-    Msg4 = hb_ao:set(Msg3, #{ <<"deep">> => unset }, Opts),
+    Msg4 = hb_ao:set(Res, #{ <<"deep">> => unset }, Opts),
     ?assertEqual(#{ <<"test-key1">> => <<"Value1">> }, Msg4).
 
 set_ignore_undefined_test() ->
-	Msg1 = #{ <<"test-key">> => <<"Value1">> },
-	Msg2 = #{ <<"path">> => <<"set">>, <<"test-key">> => undefined },
+	Base = #{ <<"test-key">> => <<"Value1">> },
+	Req = #{ <<"path">> => <<"set">>, <<"test-key">> => undefined },
 	?assertEqual(#{ <<"test-key">> => <<"Value1">> },
-		hb_private:reset(hb_util:ok(set(Msg1, Msg2, #{ hashpath => ignore })))).
+		hb_private:reset(hb_util:ok(set(Base, Req, #{ hashpath => ignore })))).
 
 verify_test() ->
     Unsigned = #{ <<"a">> => <<"b">> },

@@ -32,10 +32,20 @@
 %% @doc Exported function for getting device info, controls which functions are
 %% exposed via the device API.
 info(_) -> 
-    #{ exports => [info, routes, route, match, register, preprocess] }.
+    #{
+        exports =>
+            [
+                <<"info">>,
+                <<"routes">>,
+                <<"route">>,
+                <<"match">>,
+                <<"register">>,
+                <<"preprocess">>
+            ]
+    }.
 
 %% @doc HTTP info response providing information about this device
-info(_Msg1, _Msg2, _Opts) ->
+info(_Base, _Req, _Opts) ->
     InfoBody = #{
         <<"description">> => <<"Router device for handling outbound message routing">>,
         <<"version">> => <<"1.0">>,
@@ -503,8 +513,8 @@ binary_to_bignum(Bin) when ?IS_ID(Bin) ->
     Num.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
-preprocess(Msg1, Msg2, Opts) ->
-    Req = hb_ao:get(<<"request">>, Msg2, Opts#{ hashpath => ignore }),
+preprocess(Base, RawReq, Opts) ->
+    Req = hb_ao:get(<<"request">>, RawReq, Opts#{ hashpath => ignore }),
     ?event(debug_preprocess, {called_preprocess,Req}),
     TemplateRoutes = load_routes(Opts),
     ?event(debug_preprocess, {template_routes, TemplateRoutes}),
@@ -518,7 +528,11 @@ preprocess(Msg1, Msg2, Opts) ->
                     ?event(debug_preprocess, executing_locally),
                     {ok, #{
                         <<"body">> =>
-                            hb_ao:get(<<"body">>, Msg2, Opts#{ hashpath => ignore })
+                            hb_ao:get(
+                                <<"body">>,
+                                RawReq,
+                                Opts#{ hashpath => ignore }
+                            )
                     }};
                 <<"error">> ->
                     ?event(debug_preprocess, preprocessor_returning_error),
@@ -537,7 +551,7 @@ preprocess(Msg1, Msg2, Opts) ->
                 hb_util:atom(
                     hb_ao:get_first(
                         [
-                            {Msg1, <<"commit-request">>}
+                            {Base, <<"commit-request">>}
                         ],
                         false,
                         Opts

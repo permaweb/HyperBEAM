@@ -1,6 +1,6 @@
 
 %%% @doc This module acts an adapter between messages, as modeled in the
-%%% AO-Core protocol, and their uderlying binary representations and formats.
+%%% AO-Core protocol, and their underlying binary representations and formats.
 %%% 
 %%% Unless you are implementing a new message serialization codec, you should
 %%% not need to interact with this module directly. Instead, use the
@@ -12,7 +12,7 @@
 %%% types of message formats:
 %%% 
 %%%     - Richly typed AO-Core structured messages.
-%%%     - Arweave transations.
+%%%     - Arweave transactions.
 %%%     - ANS-104 data items.
 %%%     - HTTP Signed Messages.
 %%%     - Flat Maps.
@@ -161,7 +161,7 @@ conversion_spec_to_req(Spec, Opts) ->
             case Device of
                 tabm -> tabm;
                 _ ->
-                    hb_ao:message_to_device(
+                    hb_ao_device:message_to_device(
                         #{
                             <<"device">> => Device
                         },
@@ -346,11 +346,10 @@ commit(Msg, Opts, Spec) ->
                         none ->
                             case hb_maps:get(<<"device">>, Spec, none, Opts) of
                                 none ->
-                                    throw(
-                                        {
-                                            no_commitment_device_in_codec_spec,
-                                            Spec
-                                        }
+                                    hb_opts:get(
+                                        commitment_device,
+                                        no_viable_commitment_device,
+                                        Opts
                                     );
                                 Device -> Device
                             end;
@@ -453,7 +452,10 @@ match(Map1, Map2, Mode) ->
     match(Map1, Map2, Mode, #{}).
 match(Map1, Map2, Mode, Opts) ->
     try unsafe_match(Map1, Map2, Mode, [], Opts)
-    catch _:Details -> Details
+    catch
+        throw:{mismatch, Type, Path, Val1, Val2} ->
+            {mismatch, Type, Path, Val1, Val2};
+        _:Details:St -> {error, {Details, {trace, St}}}
     end.
 
 %% @doc Match two maps, returning `true' if they match, or throwing an error
@@ -485,8 +487,8 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
             {keys2, Keys2},
             {mode, Mode},
             {primary_keys_present, PrimaryKeysPresent},
-            {msg1, Map1},
-            {msg2, Map2}
+            {base, Map1},
+            {req, Map2}
         }
     ),
     case (Keys1 == Keys2) or (Mode == only_present) or PrimaryKeysPresent of
@@ -519,14 +521,15 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
                                         {'_', '_'} -> true;
                                         _ ->
                                             throw(
-                                                {value_mismatch,
+                                                {mismatch,
+                                                    value,
                                                     hb_format:short_id(
                                                         hb_path:to_binary(
                                                             Path ++ [Key]
                                                         )
                                                     ),
-                                                    {val1, Val1},
-                                                    {val2, Val2}
+                                                    Val1,
+                                                    Val2
                                                 }
                                             )
                                     end
@@ -537,10 +540,11 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
             );
         false ->
             throw(
-                {keys_mismatch,
-                    {path, hb_format:short_id(hb_path:to_binary(Path))},
-                    {keys1, Keys1},
-                    {keys2, Keys2}
+                {mismatch,
+                    keys,
+                    hb_format:short_id(hb_path:to_binary(Path)),
+                    Keys1,
+                    Keys2
                 }
             )
     end.
@@ -552,10 +556,10 @@ matchable_keys(Map) ->
 %% across nested messages. If the values are non-numeric, the new value is 
 %% returned if the values are different. Keys found only in the first message
 %% are dropped, as they have 'changed' to absence.
-diff(Msg1, Msg2, Opts) when is_map(Msg1) andalso is_map(Msg2) ->
+diff(Base, Req, Opts) when is_map(Base) andalso is_map(Req) ->
     maps:filtermap(
         fun(Key, Val2) ->
-            case hb_maps:get(Key, Msg1, not_found, Opts) of
+            case hb_maps:get(Key, Base, not_found, Opts) of
                 Val2 ->
                     % The key is present in both maps, and the values match.
                     false;
@@ -576,7 +580,7 @@ diff(Msg1, Msg2, Opts) when is_map(Msg1) andalso is_map(Msg2) ->
                     {true, Val2}
             end
         end,
-        Msg2
+        Req
     );
 diff(_Val1, _Val2, _Opts) ->
     not_found.

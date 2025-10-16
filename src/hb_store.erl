@@ -386,14 +386,12 @@ apply_store_function(Mod, Store, Function, Args, AttemptsRemaining) ->
     catch Class:Reason:Stacktrace ->
         ?event(store_error,
             {store_call_failed_retrying,
-                #{
-                    store => Store,
-                    function => Function,
-                    args => Args,
-                    class => Class,
-                    reason => Reason,
-                    stacktrace => Stacktrace
-                }
+                {store, Store},
+                {function, Function},
+                {args, Args},
+                {class, Class},
+                {reason, Reason},
+                {stacktrace, {trace, Stacktrace}}
             }
         ),
         retry(Mod, Store, Function, Args, AttemptsRemaining)
@@ -842,8 +840,8 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
                 lists:foldl(
                     fun({MsgID, Msg}, Count) -> 
                         case hb_cache:read(MsgID, Opts) of
-                            {ok, Msg1} ->
-                                case hb_cache:ensure_all_loaded(Msg1, Opts) of
+                            {ok, Base} ->
+                                case hb_cache:ensure_all_loaded(Base, Opts) of
                                     Msg -> Count;
                                     _ -> Count + 1
                                 end;

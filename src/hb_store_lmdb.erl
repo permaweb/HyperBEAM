@@ -1029,7 +1029,7 @@ isolated_type_debug_test() ->
     reset(StoreOpts),
     % Create the exact scenario from user's description:
     % 1. A message ID with nested structure
-    MessageID = <<"message123">>,
+    MessageID = <<"Base23">>,
     make_group(StoreOpts, MessageID),
     % 2. Create nested groups for "commitments" and "other-test-key"
     CommitmentsPath = <<MessageID/binary, "/commitments">>,

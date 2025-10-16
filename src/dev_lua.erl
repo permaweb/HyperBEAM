@@ -344,7 +344,7 @@ normalize(Base, _Req, RawOpts) ->
                 end,
             ?event(snapshot,
                 {attempting_to_restore_lua_state,
-                    {msg1, Base}, {device_key, DeviceKey}
+                    {base, Base}, {device_key, DeviceKey}
                 }
             ),
             SerializedState =
@@ -842,7 +842,7 @@ generate_test_message(Process, Opts, MsgBase) ->
 generate_stack(File) ->
     Wallet = hb:wallet(),
     {ok, Module} = file:read_file(File),
-    Msg1 = #{
+    Base = #{
         <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> =>
             [
@@ -865,8 +865,8 @@ generate_stack(File) ->
                 <<"authority">> => hb:address()
             }, Wallet)
     },
-    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, #{}),
-    Msg2.
+    {ok, Req} = hb_ao:resolve(Base, <<"init">>, #{}),
+    Req.
 
 % execute_aos_call(Base) ->
 %     Req =

@@ -98,11 +98,11 @@ augment_definition(BaseDef, Opts) ->
             )
         ),
     SchedulersFromBase =
-        hb_util:binary_to_addresses(
+        hb_util:binary_to_strings(
             hb_ao:get(<<"scheduler">>, BaseDef, <<>>, Opts)
         ),
     AuthoritiesFromBase =
-        hb_util:binary_to_addresses(
+        hb_util:binary_to_strings(
             hb_ao:get(<<"authority">>, BaseDef, <<>>, Opts)
         ),
     Schedulers = (SchedulersFromBase -- [Address]) ++ [Address],

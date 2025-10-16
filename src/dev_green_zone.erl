@@ -18,7 +18,17 @@
 %% @param _ Ignored parameter
 %% @returns A map with the `exports' key containing a list of allowed functions
 info(_) -> 
-    #{ exports => [info, init, join, become, key, is_trusted] }.
+    #{
+        exports =>
+            [
+                <<"info">>,
+                <<"init">>,
+                <<"join">>,
+                <<"become">>,
+                <<"key">>,
+                <<"is_trusted">>
+            ]
+    }.
 
 %% @doc Provides information about the green zone device and its API.
 %%
@@ -27,11 +37,11 @@ info(_) ->
 %% 2. Version information
 %% 3. Available API endpoints with their parameters and descriptions
 %%
-%% @param _Msg1 Ignored parameter
-%% @param _Msg2 Ignored parameter
+%% @param _Base Ignored parameter
+%% @param _Req Ignored parameter
 %% @param _Opts A map of configuration options
 %% @returns {ok, Map} containing the device information and documentation
-info(_Msg1, _Msg2, _Opts) ->
+info(_Base, _Req, _Opts) ->
     InfoBody = #{
         <<"description">> => 
             <<"Green Zone secure communication and identity management for trusted nodes">>,

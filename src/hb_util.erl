@@ -3,8 +3,9 @@
 -export([int/1, float/1, atom/1, bin/1, list/1, map/1]).
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
--export([key_to_atom/1, key_to_atom/2, binary_to_addresses/1]).
+-export([key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
 -export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
+-export([is_printable_string/1]).
 -export([find_value/2, find_value/3]).
 -export([deep_merge/3, deep_set/4, deep_get/3, deep_get/4]).
 -export([number/1, list_to_numbered_message/1]).
@@ -21,7 +22,7 @@
 -export([count/2, mean/1, stddev/1, variance/1, weighted_random/1]).
 -export([unique/1]).
 -export([split_depth_string_aware/2, split_depth_string_aware_single/2]).
--export([split_escaped_single/2]).
+-export([unquote/1, split_escaped_single/2]).
 -export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -export([all_atoms/0, binary_is_atom/1]).
 -export([lower_case_key_map/2]).
@@ -114,7 +115,7 @@ until(Condition, Count) ->
 until(Condition, Fun, Count) ->
     case Condition() of
         false ->
-            case apply(Fun, hb_ao:truncate_args(Fun, [Count])) of
+            case apply(Fun, hb_ao_device:truncate_args(Fun, [Count])) of
                 {count, AddToCount} ->
                     until(Condition, Fun, Count + AddToCount);
                 _ ->
@@ -232,6 +233,13 @@ safe_decode(E) ->
         _:_ -> {error, invalid}
     end.
 
+%% @doc Determine whether a binary contains only unicode printable characters.
+is_printable_string(Bin) when is_binary(Bin) ->
+    case unicode:characters_to_binary(Bin) of
+        {error, _, _} -> false;
+        _ -> true
+    end.
+
 %% @doc Convert a binary to a hex string. Do not use this for anything other than
 %% generating a lower-case, non-special character id. It should not become part of
 %% the core protocol. We use b64u for efficient encoding.
@@ -312,7 +320,7 @@ find_target_path(Msg, Opts) ->
 %% Returns true/false for map templates, or regex match result for binary templates.
 template_matches(ToMatch, Template, _Opts) when is_map(Template) ->
     case hb_message:match(Template, ToMatch, primary) of
-        {value_mismatch, _Key, _Val1, _Val2} -> false;
+        {mismatch, value, _Key, _Val1, _Val2} -> false;
         Match -> Match
     end;
 template_matches(ToMatch, Regex, Opts) when is_binary(Regex) ->
@@ -340,10 +348,14 @@ list_to_numbered_message(List) ->
 is_ordered_list(Msg, _Opts) when is_list(Msg) -> true;
 is_ordered_list(Msg, Opts) ->
     is_ordered_list(1, hb_ao:normalize_keys(Msg, Opts), Opts).
-is_ordered_list(_, Msg, _Opts) when map_size(Msg) == 0 -> true;
 is_ordered_list(N, Msg, _Opts) ->
     case maps:get(NormKey = hb_ao:normalize_key(N), Msg, not_found) of
-        not_found -> false;
+        not_found ->
+            WithoutPriv = hb_private:reset(Msg),
+            case maps:without([<<"commitments">>, <<"ao-types">>], WithoutPriv) of
+                EmptyMsg when map_size(EmptyMsg) == 0 -> true;
+                _ -> false
+            end;
         _ ->
             is_ordered_list(
                 N + 1,
@@ -569,7 +581,7 @@ pick_weighted([{_Item, Weight}|Rest], Remaining) ->
 
 %% @doc Serialize the given list of addresses to a binary, using the structured
 %% fields format.
-addresses_to_binary(List) when is_list(List) ->
+strings_to_binary(List) when is_list(List) ->
     try
         iolist_to_binary(
             hb_structured_fields:list(
@@ -588,32 +600,38 @@ addresses_to_binary(List) when is_list(List) ->
 %% @doc Parse a list from a binary. First attempts to parse the binary as a
 %% structured-fields list, and if that fails, it attempts to parse the list as
 %% a comma-separated value, stripping quotes and whitespace.
-binary_to_addresses(List) when is_list(List) ->
+binary_to_strings(List) when is_list(List) ->
     % If the argument is already a list, return it.
-    binary_to_addresses(List);
-binary_to_addresses(List) when is_binary(List) ->
+    List;
+binary_to_strings(Bin) when is_binary(Bin) ->
     try 
         Res = lists:map(
             fun({item, {string, Item}, []}) ->
                 Item
             end,
-            hb_structured_fields:parse_list(List)
+            hb_structured_fields:parse_list(Bin)
         ),
         Res
     catch
         _:_ ->
         try
-            binary:split(
-                binary:replace(List, <<"\"">>, <<"">>, [global]),
-                <<",">>,
-                [global, trim_all]
+            lists:map(
+                fun unquote/1,
+                split_depth_string_aware(<<",">>, Bin)
             )
         catch
             _:_ ->
-                error({cannot_parse_list, List})
+                error({cannot_parse_list, Bin})
         end
     end.
 
+%% @doc Unquote a binary string.
+unquote(<<"\"", Inner/binary>>) ->
+    case binary:last(Inner) of
+        $" -> binary:part(Inner, 0, byte_size(Inner) - 1);
+        _ -> Inner
+    end;
+unquote(Bin) -> Bin.
 
 %% @doc Extract all of the parts from the binary, given (a list of) separators.
 split_depth_string_aware(_Sep, <<>>) -> [];

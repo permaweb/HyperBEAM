@@ -239,7 +239,7 @@ new_server(RawNodeMsg) ->
     ),
     {ok, Listener, Port}.
 
-start_http3(ServerID, ProtoOpts, _NodeMsg) ->
+start_http3(ServerID, ProtoOpts, NodeMsg) ->
     ?event(http, {start_http3, ServerID}),
     Parent = self(),
     ServerPID =
@@ -250,34 +250,34 @@ start_http3(ServerID, ProtoOpts, _NodeMsg) ->
                 TransOpts = #{
                     socket_opts => [
                         {certfile, "test/test-tls.pem"},
-                        {keyfile, "test/test-tls.key"}
+                        {keyfile, "test/test-tls.key"},
+                        {port, Port = hb_opts:get(port, 8734, NodeMsg)}
                     ]
                 },
                 ProtoOpts
             ),
-            {ok, {_, GivenPort}} = quicer:sockname(Listener),
             ranch_server:set_new_listener_opts(
                 ServerID,
                 1024,
                 ranch:normalize_opts(
-                    hb_maps:to_list(TransOpts#{ port => GivenPort })
+                    hb_maps:to_list(TransOpts#{ port => Port })
                 ),
                 ProtoOpts,
                 []
             ),
-            ranch_server:set_addr(ServerID, {<<"localhost">>, GivenPort}),
+            ranch_server:set_addr(ServerID, {<<"localhost">>, Port}),
             % Bypass ranch's requirement to have a connection supervisor define
             % to support updating protocol opts.
             % Quicer doesn't use a connection supervisor, so we just spawn one
             % that does nothing.
             ConnSup = spawn(fun() -> http3_conn_sup_loop() end),
             ranch_server:set_connections_sup(ServerID, ConnSup),
-            Parent ! {ok, GivenPort},
+            Parent ! {ok, Port},
             receive stop -> stopped end
         end),
-    receive {ok, GivenPort} -> {ok, GivenPort, ServerPID}
+    receive {ok, Port} -> {ok, Port, ServerPID}
     after 2000 ->
-        {error, {timeout, staring_http3_server, ServerID}}
+        {error, {timeout, starting_http3_server, ServerID}}
     end.
 
 http3_conn_sup_loop() ->
@@ -380,7 +380,6 @@ handle_request(RawReq, Body, ServerID) ->
                     {cowboy_req, {explicit, Req}, {body, {string, Body}}}
                 }
             ),
-            TracePID = hb_tracer:start_trace(),
             % Parse the HTTP request into HyerBEAM's message format.
             ReqSingleton =
                 try hb_http:req_to_tabm_singleton(Req, Body, NodeMsg)
@@ -399,15 +398,13 @@ handle_request(RawReq, Body, ServerID) ->
                     {parsed_singleton,
                         {req_singleton, ReqSingleton},
                         {accept_codec, CommitmentCodec}},
-                    #{trace => TracePID}
+                    #{}
                 ),
-                % hb_tracer:record_step(TracePID, request_parsing),
                 % Invoke the meta@1.0 device to handle the request.
                 {ok, Res} =
                     dev_meta:handle(
                         NodeMsg#{
-                            commitment_device => CommitmentCodec,
-                            trace => TracePID
+                            commitment_device => CommitmentCodec
                         },
                         ReqSingleton
                     ),
@@ -646,14 +643,16 @@ set_opts_test() ->
     ?assert(Key3 == <<"world3">>).
 
 restart_server_test() ->
+    % We force HTTP2, overriding the HTTP3 feature, because HTTP3 restarts don't work yet.
     Wallet = ar_wallet:new(),
     BaseOpts = #{
         <<"test-key">> => <<"server-1">>,
-        priv_wallet => Wallet
+        priv_wallet => Wallet,
+        protocol => http2
     },
     _ = start_node(BaseOpts),
     N2 = start_node(BaseOpts#{ <<"test-key">> => <<"server-2">> }),
     ?assertEqual(
         {ok, <<"server-2">>},
-        hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{})
+        hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{protocol => http2})
     ).

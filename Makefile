@@ -27,7 +27,7 @@ WAMR_VERSION = WAMR-2.2.0-wasi-nn
 WAMR_DIR = _build/wamr
 WASI_NN_DIR = _build/wasi_nn
 
-GENESIS_WASM_BRANCH = feat/http-checkpoint
+GENESIS_WASM_BRANCH = feat/hb-unit
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
 GENESIS_WASM_SERVER_DIR = _build/genesis_wasm/genesis-wasm-server
 

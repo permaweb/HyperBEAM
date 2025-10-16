@@ -104,7 +104,7 @@ request(Method, Peer, Path, RawMessage, Opts) ->
         ),
     StartTime = os:system_time(millisecond),
     % Perform the HTTP request.
-    {_ErlStatus, Status, Headers, Body} = hb_http_client:req(Req, Opts),
+    {_ErlStatus, Status, Headers, Body} = hb_http_client:request(Req, Opts),
     % Process the response.
     EndTime = os:system_time(millisecond),
     ?event(http_outbound,
@@ -265,15 +265,19 @@ outbound_result_to_message(<<"httpsig@1.0">>, Status, Headers, Body, Opts) ->
 
 %% @doc Convert a HTTP response to a httpsig message.
 http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
-    (hb_message:convert(
+    BinStatus = hb_util:bin(Status),
+    BodyMap = case byte_size(Body) of
+        0 -> #{};
+        _ -> #{ <<"body">> => Body }
+    end,
+    ConvertFrom = 
         hb_maps:merge(
-            HeaderMap#{ <<"status">> => hb_util:bin(Status) },
-            case Body of
-                <<>> -> #{};
-                _ -> #{ <<"body">> => Body }
-            end,
+            HeaderMap#{ <<"status">> => BinStatus },
+            BodyMap,
 			Opts
         ),
+    (hb_message:convert(
+        ConvertFrom,
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
         <<"httpsig@1.0">>,
         Opts
@@ -642,10 +646,12 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     case AcceptBundle of
                         true ->
                             #{
+                                <<"path">> => <<"to">>,
                                 <<"bundle">> => true
                             };
                         false ->
-                            #{
+                            TABMReq#{
+                                <<"path">> => <<"to">>,
                                 <<"index">> =>
                                     hb_opts:get(generate_index, true, Opts)
                             }
@@ -754,7 +760,7 @@ mime_to_codec(<<"application/", Mime/binary>>, Opts) ->
             nomatch -> << Mime/binary, "@1.0" >>;
             _ -> Mime
         end,
-    case hb_ao:load_device(Name, Opts) of
+    case hb_ao_device:load(Name, Opts) of
         {ok, _} -> Name;
         {error, _} ->
             Default = default_codec(Opts),
@@ -1187,7 +1193,7 @@ send_large_signed_request_test() ->
             hb_http_server:start_node(),
             <<"/node-message/short_trace_len">>,
             Req,
-            #{ http_client => httpc }
+            #{ http_client => gun }
         )
     ).
 

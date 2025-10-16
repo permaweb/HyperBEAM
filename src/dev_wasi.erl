@@ -68,8 +68,8 @@ init(M1, _M2, Opts) ->
         ),
     {ok, CompleteMsg}.
 
-compute(Msg1) ->
-    {ok, Msg1}.
+compute(Base) ->
+    {ok, Base}.
 
 %% @doc Return the stdout buffer from a state message.
 stdout(M) ->
@@ -77,17 +77,17 @@ stdout(M) ->
 
 %% @doc Adds a file descriptor to the state message.
 %path_open(M, Instance, [FDPtr, LookupFlag, PathPtr|_]) ->
-path_open(Msg1, Msg2, Opts) ->
-    FDs = hb_ao:get(<<"file-descriptors">>, Msg1, Opts),
-    Instance = hb_private:get(<<"instance">>, Msg1, Opts),
-    [FDPtr, LookupFlag, PathPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
+path_open(Base, Req, Opts) ->
+    FDs = hb_ao:get(<<"file-descriptors">>, Base, Opts),
+    Instance = hb_private:get(<<"instance">>, Base, Opts),
+    [FDPtr, LookupFlag, PathPtr|_] = hb_ao:get(<<"args">>, Req, Opts),
     ?event({path_open, FDPtr, LookupFlag, PathPtr}),
     Path = hb_beamr_io:read_string(Instance, PathPtr),
     ?event({path_open, Path}),
     FD = #{
         <<"index">> := Index
     } =
-        case hb_ao:get(<<"vfs/", Path/binary>>, Msg1, Opts) of
+        case hb_ao:get(<<"vfs/", Path/binary>>, Base, Opts) of
             not_found ->
                 #{
                     <<"index">> => length(hb_ao:keys(FDs)) + 1,
@@ -101,7 +101,7 @@ path_open(Msg1, Msg2, Opts) ->
         #{
             <<"state">> =>
                 hb_ao:set(
-                    Msg1,
+                    Base,
                     <<"vfs/", Path/binary>>,
                     FD
                 ),
@@ -111,12 +111,12 @@ path_open(Msg1, Msg2, Opts) ->
 
 %% @doc WASM stdlib implementation of `fd_write', using the WASI-p1 standard
 %% interface.
-fd_write(Msg1, Msg2, Opts) ->
-    State = hb_ao:get(<<"state">>, Msg1, Opts),
+fd_write(Base, Req, Opts) ->
+    State = hb_ao:get(<<"state">>, Base, Opts),
     Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
-    [FD, Ptr, Vecs, RetPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
+    [FD, Ptr, Vecs, RetPtr|_] = hb_ao:get(<<"args">>, Req, Opts),
     ?event({fd_write, {fd, FD}, {ptr, Ptr}, {vecs, Vecs}, {retptr, RetPtr}}),
-    Signature = hb_ao:get(<<"func-sig">>, Msg2, Opts),
+    Signature = hb_ao:get(<<"func-sig">>, Req, Opts),
     ?event({signature, Signature}),
     fd_write(State, Instance, [FD, Ptr, Vecs, RetPtr], 0, Opts).
 
@@ -165,11 +165,11 @@ fd_write(S, Instance, [FDnum, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
     ).
 
 %% @doc Read from a file using the WASI-p1 standard interface.
-fd_read(Msg1, Msg2, Opts) ->
-    State = hb_ao:get(<<"state">>, Msg1, Opts),
+fd_read(Base, Req, Opts) ->
+    State = hb_ao:get(<<"state">>, Base, Opts),
     Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
-    [FD, VecsPtr, NumVecs, RetPtr|_] = hb_ao:get(<<"args">>, Msg2, Opts),
-    Signature = hb_ao:get(<<"func-sig">>, Msg2, Opts),
+    [FD, VecsPtr, NumVecs, RetPtr|_] = hb_ao:get(<<"args">>, Req, Opts),
+    Signature = hb_ao:get(<<"func-sig">>, Req, Opts),
     ?event({signature, Signature}),
     fd_read(State, Instance, [FD, VecsPtr, NumVecs, RetPtr], 0, Opts).
 
@@ -218,9 +218,9 @@ parse_iovec(Instance, Ptr) ->
     {BinPtr, Len}.
 
 %%% Misc WASI-preview-1 handlers.
-clock_time_get(Msg1, _Msg2, Opts) ->
+clock_time_get(Base, _Req, Opts) ->
     ?event({clock_time_get, {returning, 1}}),
-    State = hb_ao:get(<<"state">>, Msg1, Opts),
+    State = hb_ao:get(<<"state">>, Base, Opts),
     {ok, #{ <<"state">> => State, <<"results">> => [1] }}.
 
 %%% Tests
@@ -231,7 +231,7 @@ init() ->
 generate_wasi_stack(File, Func, Params) ->
     init(),
     Msg0 = dev_wasm:cache_wasm_image(File),
-    Msg1 = Msg0#{
+    Base = Msg0#{
         <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> => [<<"wasi@1.0">>, <<"wasm-64@1.0">>],
         <<"output-prefixes">> => [<<"wasm">>, <<"wasm">>],
@@ -239,13 +239,13 @@ generate_wasi_stack(File, Func, Params) ->
         <<"function">> => Func,
         <<"params">> => Params
     },
-    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, #{}),
-    Msg2.
+    {ok, Req} = hb_ao:resolve(Base, <<"init">>, #{}),
+    Req.
 
 vfs_is_serializable_test() ->
     StackMsg = generate_wasi_stack("test/test-print.wasm", <<"hello">>, []),
     VFSMsg = hb_ao:get(<<"vfs">>, StackMsg),
-    VFSMsg2 =
+    VFSReq =
         hb_message:minimize(
             hb_message:convert(
                 hb_message:convert(VFSMsg, <<"httpsig@1.0">>, #{}),
@@ -253,13 +253,13 @@ vfs_is_serializable_test() ->
                 <<"httpsig@1.0">>,
                 #{})
         ),
-    ?assert(hb_message:match(VFSMsg, VFSMsg2)).
+    ?assert(hb_message:match(VFSMsg, VFSReq)).
 
 wasi_stack_is_serializable_test() ->
     Msg = generate_wasi_stack("test/test-print.wasm", <<"hello">>, []),
     HTTPSigMsg = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
-    Msg2 = hb_message:convert(HTTPSigMsg, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
-    ?assert(hb_message:match(Msg, Msg2)).
+    Req = hb_message:convert(HTTPSigMsg, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
+    ?assert(hb_message:match(Msg, Req)).
 
 basic_aos_exec_test() ->
     Init = generate_wasi_stack("test/aos-2-pure-xs.wasm", <<"handle">>, []),
