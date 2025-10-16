@@ -446,7 +446,7 @@ test_stores() ->
             <<"endpoint">> => <<"localhost:9000">>,
             <<"dangerous_reset">> => true
         }
-    ] ++ rocks_stores().
+    ] ++ rocks_stores() ++ s3_stores().
 
 -ifdef(ENABLE_ROCKSDB).
 rocks_stores() ->
@@ -459,7 +459,15 @@ rocks_stores() ->
 -else.
 rocks_stores() -> [].
 -endif.
-
+-ifdef(ENABLE_S3).
+s3_stores() ->
+    [(hb_store_s3:default_test_opts())#{
+        %% NOTE: To be tuned
+        <<"benchmark-scale">> => 0.005
+    }].
+-else.
+s3_stores() -> [].
+-endif.
 generate_test_suite(Suite) ->
     generate_test_suite(Suite, test_stores()).
 generate_test_suite(Suite, Stores) ->
