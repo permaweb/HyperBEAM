@@ -856,7 +856,7 @@ error_infinite(Base, Req, Opts) ->
 
 %% @doc Handle an error in a device call.
 error_execution(ExecGroup, Req, Whence, {Class, Exception, Stacktrace}, Opts) ->
-    Error = {error, Whence, {Class, Exception, Stacktrace}},
+    Error = {error, Whence, {Class, Exception, {trace, Stacktrace}}},
     hb_persistent:unregister_notify(ExecGroup, Req, Error, Opts),
     ?event(ao_core, {handle_error, Error, {opts, Opts}}, Opts),
     case hb_opts:get(error_strategy, throw, Opts) of
