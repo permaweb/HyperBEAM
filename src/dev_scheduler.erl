@@ -1697,8 +1697,7 @@ register_location_on_boot_test() ->
             on =>
                 #{
                     <<"start">> => #{
-                        <<"device">> => <<"scheduler@1.0">>,
-                        <<"path">> => <<"location">>,
+                        <<"path">> => <<"~scheduler@1.0/location">>,
                         <<"method">> => <<"POST">>,
                         <<"target">> => <<"self">>,
                         <<"require-codec">> => <<"ans104@1.0">>,

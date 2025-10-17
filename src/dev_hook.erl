@@ -119,9 +119,7 @@ execute_handlers(_HookName, [], Req, _Opts) ->
     % If no handlers remain, return the final request with ok status
     {ok, Req};
 execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
-    % Execute the current handler
-    ?event(hook, {executing_handler, HookName, Handler, Req}),
-    % Check the status of the execution
+    % Execute the current handler and check the status of the execution
     case execute_handler(HookName, Handler, Req, Opts) of
         {ok, NewReq} ->
             % If status is ok, continue with the next handler
@@ -136,8 +134,8 @@ execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
             {failure,
                 <<
                     "Handler for hook `",
-                        (hb_ao:normalize_key(HookName))/binary,
-                        "` returned unexpected result."
+                    (hb_ao:normalize_key(HookName))/binary,
+                    "` returned unexpected result."
                 >>
             }
     end.
@@ -157,19 +155,19 @@ execute_handler(<<"step">>, Handler, Req, Opts = #{ on := On = #{ <<"step">> := 
     );
 execute_handler(HookName, Handler, Req, Opts) ->
     try
-        % Resolve the handler message, setting the path to the handler name if
-        % it is not already set. We ensure to ignore the hashpath such that the
-        % handler does not affect the hashpath of a request's output. If the
-        % `hook/commit` key is set to `true`, the handler request will be
-        % committed before execution.
-        BaseReq =
-            Req#{
-                <<"path">> =>
-                    hb_maps:get(<<"path">>, Handler, HookName, Opts),
-                <<"method">> =>
-                    hb_maps:get(<<"method">>, Handler, <<"GET">>, Opts)
-            },
-        CommitReqBin = 
+        ModHandler =
+            hb_maps:without(
+                [<<"hook">>],
+                Handler#{
+                    <<"path">> => hb_maps:get(<<"path">>, Handler, HookName, Opts)
+                }
+            ),
+        Msgs =
+            case hb_singleton:from(ModHandler, Opts) of
+                [] -> [Handler];
+                Parsed -> Parsed
+            end,
+        ShouldCommit = 
             hb_util:bin(
                 hb_util:deep_get(
                     <<"hook/commit-request">>,
@@ -178,30 +176,33 @@ execute_handler(HookName, Handler, Req, Opts) ->
                     Opts
                 )
             ),
-        {PreparedBase, PreparedReq} =
-            case CommitReqBin of
-                <<"true">> ->
-                    {
-                        case hb_message:signers(Handler, Opts) of
-                            [] -> hb_message:commit(Handler, Opts);
-                            _ -> Handler
-                        end,
-                        hb_message:commit(BaseReq, Opts)
-                    };
-                <<"false">> -> {Handler, BaseReq}
-            end,
+        CommittedMsgs =
+            lists:map(
+                fun F({as, Dev, M}) -> {as, Dev, F(M)};
+                    F(M) ->
+                    case ShouldCommit of
+                        <<"always">> -> hb_message:commit(M, Opts);
+                        <<"true">> ->
+                            case hb_message:signers(M, Opts) of
+                                [] -> hb_message:commit(M, Opts);
+                                _ -> M
+                            end;
+                        <<"false">> -> M
+                    end
+                end,
+                Msgs
+            ),
         ?event(hook,
-            {resolving_handler, 
+            {resolving_handler,
                 {name, HookName},
                 {handler, Handler},
-                {req, {explicit, PreparedReq}}
+                {req, {explicit, CommittedMsgs}}
             }
         ),
         % Resolve the prepared request upon the handler.
         {Status, Res} =
-            hb_ao:resolve(
-                PreparedBase,
-                PreparedReq,
+            hb_ao:resolve_many(
+                CommittedMsgs,
                 Opts#{ hashpath => ignore }
             ),
         ?event(hook,
@@ -211,7 +212,14 @@ execute_handler(HookName, Handler, Req, Opts) ->
                 {res, Res}
             }
         ),
-        case {Status, hb_util:deep_get(<<"hook/result">>, Handler, <<"return">>, Opts)} of
+        ResultForm =
+            hb_util:deep_get(
+                <<"hook/result">>,
+                Handler,
+                <<"return">>,
+                Opts
+            ),
+        case {Status, ResultForm} of
             {ok, <<"ignore">>} -> {Status, Req};
             {ok, <<"return">>} -> {Status, Res};
             {ok, <<"error">>} -> {error, Res};
@@ -259,7 +267,7 @@ single_handler_test() ->
     Req = #{ <<"test">> => <<"value">> },
     Opts = #{ on => #{ <<"test-hook">> => Handler }},
     {ok, Result} = on(<<"test-hook">>, Req, Opts),
-    ?assertEqual(true, maps:get(<<"handler_executed">>, Result)).
+    ?assertEqual({ok, true}, maps:find(<<"handler_executed">>, Result)).
 
 %% @doc Test that multiple handlers form a pipeline
 multiple_handlers_test() ->
@@ -283,8 +291,8 @@ multiple_handlers_test() ->
     Req = #{ <<"test">> => <<"value">> },
     Opts = #{ on => #{ <<"test-hook">> => [Handler1, Handler2] }},
     {ok, Result} = on(<<"test-hook">>, Req, Opts),
-    ?assertEqual(true, maps:get(<<"handler1">>, Result)),
-    ?assertEqual(true, maps:get(<<"handler2">>, Result)).
+    ?assertEqual({ok, true}, maps:find(<<"handler1">>, Result)),
+    ?assertEqual({ok, true}, maps:find(<<"handler2">>, Result)).
 
 %% @doc Test that pipeline execution halts on error
 halt_on_error_test() ->
@@ -315,5 +323,4 @@ halt_on_error_test() ->
     },
     Req = #{ <<"test">> => <<"value">> },
     Opts = #{ on => #{ <<"test-hook">> => [Handler1, Handler2, Handler3] }},
-    {error, Result} = on(<<"test-hook">>, Req, Opts),
-    ?assertEqual(<<"Error in handler2">>, Result).
+    ?assertEqual({error, <<"Error in handler2">>}, on(<<"test-hook">>, Req, Opts)).
