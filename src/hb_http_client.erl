@@ -196,7 +196,6 @@ record_duration(Details, Opts) ->
                             GetFormat,
                             [
                                 <<"request-method">>,
-                                <<"request-path">>,
                                 <<"status-class">>
                             ]
                         ),
@@ -292,7 +291,7 @@ init_prometheus(Opts) ->
 	prometheus_histogram:new([
 		{name, http_request_duration_seconds},
 		{buckets, [0.01, 0.1, 0.5, 1, 5, 10, 30, 60]},
-        {labels, [http_method, route, status_class]},
+        {labels, [http_method, status_class]},
 		{
 			help,
 			"The total duration of an hb_http_client:req call. This includes more than"
