@@ -29,6 +29,7 @@
 -define(DEFAULT_REGION, <<"us-east-1">>).
 -define(DEFAULT_ENDPOINT, <<"https://s3.amazonaws.com">>).
 -define(DEFAULT_FORCE_PATH_STYLE, false).
+-define(DEFAULT_PREFIX, <<>>).
 -define(MAX_REDIRECTS, 100).                   % Only resolve 1000 links to data
 -define(LINK_MARKER, <<"link:">>).
 %% Namespace for storing link objects separately to avoid file/prefix collisions
@@ -50,6 +51,8 @@ start(Opts) ->
         SecretKey = hb_util:list(maps:get(<<"priv_secret_access_key">>, Opts)),
         Region = hb_util:list(maps:get(<<"region">>, Opts, ?DEFAULT_REGION)),
         Endpoint = maps:get(<<"endpoint">>, Opts, ?DEFAULT_ENDPOINT),
+        Prefix = maps:get(<<"prefix">>, Opts, ?DEFAULT_PREFIX),
+        Bucket = maps:get(<<"bucket">>, Opts),
         ForcePathStyle = case maps:get(<<"force_path_style">>, Opts, ?DEFAULT_FORCE_PATH_STYLE) of
             true -> path;
             false -> auto
@@ -67,20 +70,18 @@ start(Opts) ->
             aws_region = Region,
             http_client = httpc
         },
-        Bucket = maps:get(<<"bucket">>, Opts),
         ok ?= test_bucket_access(Bucket, Config),
         StoreRef = get_store_ref(Opts),
-        _ = persistent_term:put(StoreRef, #{
+        ok ?= persistent_term:put(StoreRef, #{
             bucket => Bucket,
-            prefix => maps:get(<<"prefix">>, Opts, <<>>),
+            prefix => Prefix,
             config => Config
         }),
-
-        ?event(store_s3, {started, {bucket, Bucket}, {prefix, maps:get(<<"prefix">>, Opts, <<>>)}}),
+        ?event(store_s3, {started, {bucket, Bucket}, {prefix, Prefix}}),
         {ok, #{
             module => ?MODULE,
             bucket => Bucket,
-            prefix => maps:get(<<"prefix">>, Opts, <<>>)
+            prefix => Prefix
         }}
     else
         Error ->
@@ -122,7 +123,7 @@ test_bucket_access(Bucket, Config) ->
 %% @doc Get a unique reference for this store instance.
 get_store_ref(Opts) ->
     Bucket = hb_util:bin(maps:get(<<"bucket">>, Opts)),
-    Prefix = hb_util:bin(maps:get(<<"prefix">>, Opts, <<>>)),
+    Prefix = hb_util:bin(maps:get(<<"prefix">>, Opts, ?DEFAULT_PREFIX)),
     {?MODULE, Bucket, Prefix}.
 
 %% @doc Get stored configuration from persistent_term.
