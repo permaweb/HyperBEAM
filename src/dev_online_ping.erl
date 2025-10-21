@@ -9,18 +9,14 @@
 
 %% =========================
 %% info/1 — atom-key lookups
+%% (ALL clauses contiguous; semicolons between, final period)
 %% =========================
-%% These clauses mirror the other devices so hb_ao/hb_persistent can
-%% read name/version/exports/group/persistence without nils.
-
 info(name)        -> <<"online-ping">>;
 info(version)     -> <<"1.0">>;
-info(exports)     -> [info, 'ping-once'].
-
-%% Grouping for hb_persistent (atom keys, not binaries)
+info(exports)     -> [info, 'ping-once'];
+%% Grouping for hb_persistent (atom keys)
 info(group)       -> <<"device:online-ping@1.0">>;
-info(persistence) -> #{ group => <<"device:online-ping@1.0">> }.
-
+info(persistence) -> #{ group => <<"device:online-ping@1.0">> };
 %% Public paths for docs/routers that read info(paths)
 info(paths) ->
     #{
@@ -36,7 +32,6 @@ info(paths) ->
         }
       }
     };
-
 %% Top-level map (for UIs that call info(_)); keep atom keys consistent
 info(_) ->
     #{
@@ -51,15 +46,12 @@ info(_) ->
 %% =========================
 %% call/3 — public dispatcher
 %% =========================
-%% Hyphenated public methods dispatch here (like your other devices).
-
 call(<<"ping-once">>, Msg, Ctx) -> ping_once(Msg, Ctx, #{});
 call(_, _Msg, _Ctx)             -> {error, not_found}.
 
 %% =========================
 %% Implementation
 %% =========================
-
 %% Msg = #{ <<"url">> := <<"...">> }
 ping_once(Msg, _Ctx, _Opts) when is_map(Msg) ->
     case maps:get(<<"url">>, Msg, undefined) of
@@ -76,7 +68,6 @@ ping_once(Msg, _Ctx, _Opts) when is_map(Msg) ->
 %% =========================
 %% Helpers
 %% =========================
-
 do_http_ping(Url) when is_list(Url) ->
     ensure_inets_started(),
     {Micros, Result} =
@@ -104,6 +95,6 @@ do_http_ping(Url) when is_list(Url) ->
 ensure_inets_started() ->
     case application:ensure_all_started(inets) of
         {ok, _}    -> ok;
-        {error, _} -> ok;
+        {error, _} -> ok;  %% already started
         _          -> ok
     end.
