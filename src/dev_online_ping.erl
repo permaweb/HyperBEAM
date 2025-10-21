@@ -16,11 +16,11 @@ info(_) ->
     #{
         <<"name">>    => <<"online-ping">>,
         <<"version">> => <<"1.0">>,
-        %% Publicly exposed methods (hyphenated)
+        %% Publicly exposed methods (hyphenated — team rule: no underscores)
         exports       => [info, 'ping-once']
     }.
 
-%% Rich info by key (arity 2, not 3)
+%% Rich info by key (arity 2)
 info(<<"name">>,    _) -> <<"online-ping">>;
 info(<<"version">>, _) -> <<"1.0">>;
 info(<<"exports">>, _) -> [info, 'ping-once'];
@@ -57,7 +57,18 @@ info(<<"examples">>, _) ->
       }
     ];
 
-%% Catch-all
+%% === Persistence metadata (fixes bad map: undefined in hb_persistent) ===
+info(<<"persistence">>, _) ->
+    #{
+      <<"group">> => <<"device:online-ping@1.0">>
+      %% add more later if needed, e.g. <<"scope">> => <<"node">>
+    };
+
+%% (Compat) Some builds also read a flat group key
+info(<<"group">>, _) ->
+    <<"device:online-ping@1.0">>;
+
+%% Catch-all MUST be last
 info(_, _) -> undefined.
 
 %%====================================================================
@@ -72,8 +83,8 @@ ping_once(Msg, _Ctx, _Opts) when is_map(Msg) ->
         undefined ->
             {error, #{
                <<"status">> => 400,
-               <<"ok">>      => false,
-               <<"error">>   => <<"missing 'url'">>
+               <<"ok">>     => false,
+               <<"error">>  => <<"missing 'url'">>
             }};
         UrlBin when is_binary(UrlBin) ->
             Url = binary_to_list(UrlBin),
@@ -111,6 +122,6 @@ do_http_ping(Url) when is_list(Url) ->
 ensure_inets_started() ->
     case application:ensure_all_started(inets) of
         {ok, _}    -> ok;
-        {error, _} -> ok;  %% already started or not needed
+        {error, _} -> ok;  %% already started or fine
         _          -> ok
     end.
