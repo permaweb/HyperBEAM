@@ -1,7 +1,7 @@
 %%--------------------------------------------------------------------
 %% HyperBEAM Device: online-ping@1.0
 %% Public API:  /~online-ping@1.0/ping-once
-%% Internals:   ping_once/3 (maps from the hyphenated path)
+%% Internals:   ping_once/3
 %%--------------------------------------------------------------------
 -module(dev_online_ping).
 
@@ -11,22 +11,39 @@
 %% Public metadata
 %%====================================================================
 
-%% Minimal top-level info used by HB for discovery
 info(_) ->
+    %% Provide a full top-level map (for code paths that only call info/1)
     #{
-        <<"name">>    => <<"online-ping">>,
-        <<"version">> => <<"1.0">>,
-        %% Publicly exposed methods (hyphenated — team rule: no underscores)
-        exports       => [info, 'ping-once']
+        <<"name">>        => <<"online-ping">>,
+        <<"version">>     => <<"1.0">>,
+        exports           => [info, 'ping-once'],
+        %% Include persistence here too so callers that only read info/1 succeed
+        <<"persistence">> => #{ <<"group">> => <<"device:online-ping@1.0">> },
+        %% compat: some versions also read a flat "group" here
+        <<"group">>       => <<"device:online-ping@1.0">>
     }.
 
-%% Rich info by key (arity 2)
-info(<<"name">>,    _) -> <<"online-ping">>;
-info(<<"version">>, _) -> <<"1.0">>;
-info(<<"exports">>, _) -> [info, 'ping-once'];
+%% Rich info by key (accept BOTH atom and binary keys)
 
-%% Public paths the router exposes.
-%% Keep the hyphenated key and explicitly bind to the internal handler.
+%% names/versions
+info(<<"name">>,    _) -> <<"online-ping">>;
+info(name,          _) -> <<"online-ping">>;
+info(<<"version">>, _) -> <<"1.0">>;
+info(version,       _) -> <<"1.0">>;
+
+%% exports (public API methods — hyphenated)
+info(<<"exports">>, _) -> [info, 'ping-once'];
+info(exports,       _) -> [info, 'ping-once'];
+
+%% persistence (nested) — the resolver/hb_persistent reads this
+info(<<"persistence">>, _) -> #{ <<"group">> => <<"device:online-ping@1.0">> };
+info(persistence,       _) -> #{ <<"group">> => <<"device:online-ping@1.0">> };
+
+%% compat: some builds read a flat group key
+info(<<"group">>, _) -> <<"device:online-ping@1.0">>;
+info(group,       _) -> <<"device:online-ping@1.0">>;
+
+%% Public paths (map hyphenated path -> internal handler)
 info(<<"paths">>,  _) ->
     #{
       <<"ping-once">> => #{
@@ -39,12 +56,12 @@ info(<<"paths">>,  _) ->
                <<"description">> => <<"Full URL to ping via HTTP GET.">>
             }
          },
-         %% Explicit mapping from public path -> internal function
          handler => ping_once
       }
     };
+info(paths,        Ctx) -> info(<<"paths">>, Ctx);
 
-%% Optional examples for self-doc UIs
+%% examples
 info(<<"examples">>, _) ->
     [
       #{
@@ -56,28 +73,17 @@ info(<<"examples">>, _) ->
         }
       }
     ];
+info(examples,       Ctx) -> info(<<"examples">>, Ctx);
 
-%% === Persistence metadata (fixes bad map: undefined in hb_persistent) ===
-info(<<"persistence">>, _) ->
-    #{
-      <<"group">> => <<"device:online-ping@1.0">>
-      %% add more later if needed, e.g. <<"scope">> => <<"node">>
-    };
-
-%% (Compat) Some builds also read a flat group key
-info(<<"group">>, _) ->
-    <<"device:online-ping@1.0">>;
-
-%% Catch-all MUST be last
+%% catch-all
 info(_, _) -> undefined.
 
 %%====================================================================
-%% Public method (internal implementation)
+%% Method implementation
 %%====================================================================
 
 %% Msg  := #{ <<"url">> := <<"...">> }
-%% Ctx  := runtime context (unused)
-%% Opts := optional opts (unused)
+%% Ctx/Opts kept for interface parity
 ping_once(Msg, _Ctx, _Opts) when is_map(Msg) ->
     case maps:get(<<"url">>, Msg, undefined) of
         undefined ->
@@ -122,6 +128,6 @@ do_http_ping(Url) when is_list(Url) ->
 ensure_inets_started() ->
     case application:ensure_all_started(inets) of
         {ok, _}    -> ok;
-        {error, _} -> ok;  %% already started or fine
+        {error, _} -> ok;
         _          -> ok
     end.
