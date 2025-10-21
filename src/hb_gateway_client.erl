@@ -1,23 +1,13 @@
 %%% @doc Implementation of Arweave's GraphQL API to gain access to specific 
 %%% items of data stored on the network.
-%%% 
+%%%
 %%% This module must be used to get full HyperBEAM `structured@1.0' form messages
 %%% from data items stored on the network, as Arweave gateways do not presently
 %%% expose all necessary fields to retrieve this information outside of the
 %%% GraphQL API. When gateways integrate serving in `httpsig@1.0' form, this
 %%% module will be deprecated.
--module(hb_gateway_client).
-%% Raw access primitives:
--export([query/2, query/3, query/4, query/5]).
--export([read/2, data/2, result_to_message/2, item_spec/0]).
-%% Application-specific data access functions:
--export([scheduler_location/2]).
--include_lib("include/hb.hrl").
--include_lib("eunit/include/eunit.hrl").
-
-%% @doc Get a data item (including data and tags) by its ID, using the node's
-%% GraphQL peers.
-%% It uses the following GraphQL schema:
+%%% 
+%%% It uses the following GraphQL schema:
 %% type Transaction {
 %%   id: ID!
 %%   anchor: String!
@@ -33,6 +23,23 @@
 %%   winston: String!
 %%   ar: String!
 %% }
+%% type MetaData {
+%%   size: String!
+%%   type: String
+%% }
+%% For more please check scripts/schema.gql
+%%% 
+-module(hb_gateway_client).
+%% Raw access primitives:
+-export([query/2, query/3, query/4, query/5]).
+-export([read/2, data/2, result_to_message/2, item_spec/0]).
+%% Application-specific data access functions:
+-export([scheduler_location/2]).
+-include_lib("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
+
+%% @doc Get a data item (including data and tags) by its ID, using the node's
+%% GraphQL peers.
 read(ID, Opts) ->
     {Query, Variables} = case maps:is_key(<<"subindex">>, Opts) of
       true -> 
@@ -241,7 +248,7 @@ result_to_message(ExpectedID, Item, Opts) ->
     % We have the headers, so we can get the data.
     Data =
         case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
-            #{ <<"size">> := Zero } when Zero =:= <<"0">> orelse Zero =:= 0 -> <<>>;
+            #{ <<"size">> := <<"0">>} -> <<>>;
             BinData when is_binary(BinData) -> BinData;
             _ ->
                 {ok, Bytes} = data(ExpectedID, Opts),

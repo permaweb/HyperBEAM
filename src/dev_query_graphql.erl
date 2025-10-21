@@ -1,5 +1,7 @@
-%%% @doc A GraphQL interface for querying a node's cache. Accessible through the
-%%% `~query@1.0/graphql' device key.
+%%% @doc A GraphQL interface for querying a node's cache. 
+%%% It is accessible through the `~query@1.0/graphql' device key and uses the
+%%% schema defined at scripts/schema.gql
+%%% 
 -module(dev_query_graphql).
 %%% AO-Core API:
 -export([handle/3]).
