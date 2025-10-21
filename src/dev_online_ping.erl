@@ -1,7 +1,7 @@
 %%--------------------------------------------------------------------
 %% Device: online-ping@1.0
 %% Public API:  /~online-ping@1.0/ping-once
-%% Pattern:     matches other working devices (info/1 + call/3 + group)
+%% Pattern:     info/1 (atom keys) + call/3 dispatcher + ping_once/3
 %%--------------------------------------------------------------------
 -module(dev_online_ping).
 
@@ -9,15 +9,16 @@
 
 %% =========================
 %% info/1 — atom-key lookups
-%% (ALL clauses contiguous; semicolons between, final period)
+%% (all clauses contiguous; semicolons between; final period)
 %% =========================
 info(name)        -> <<"online-ping">>;
 info(version)     -> <<"1.0">>;
+%% keep public API hyphenated; router uses call/3 to map → ping_once/3
 info(exports)     -> [info, 'ping-once'];
-%% Grouping for hb_persistent (atom keys)
+%% persistence/group used by hb_persistent
 info(group)       -> <<"device:online-ping@1.0">>;
 info(persistence) -> #{ group => <<"device:online-ping@1.0">> };
-%% Public paths for docs/routers that read info(paths)
+%% router/docs path index (public key stays hyphenated)
 info(paths) ->
     #{
       <<"ping-once">> => #{
@@ -32,7 +33,7 @@ info(paths) ->
         }
       }
     };
-%% Top-level map (for UIs that call info(_)); keep atom keys consistent
+%% top-level map for UIs that call info(_)
 info(_) ->
     #{
       name        => info(name),
@@ -44,13 +45,13 @@ info(_) ->
     }.
 
 %% =========================
-%% call/3 — public dispatcher
+%% call/3 — dispatch hyphenated methods
 %% =========================
 call(<<"ping-once">>, Msg, Ctx) -> ping_once(Msg, Ctx, #{});
 call(_, _Msg, _Ctx)             -> {error, not_found}.
 
 %% =========================
-%% Implementation
+%% impl
 %% =========================
 %% Msg = #{ <<"url">> := <<"...">> }
 ping_once(Msg, _Ctx, _Opts) when is_map(Msg) ->
@@ -62,13 +63,13 @@ ping_once(Msg, _Ctx, _Opts) when is_map(Msg) ->
               <<"error">>  => <<"missing 'url'">>
             }};
         UrlBin when is_binary(UrlBin) ->
-            do_http_ping(binary_to_list(UrlBin))
+            do_http_get(binary_to_list(UrlBin))
     end.
 
 %% =========================
-%% Helpers
+%% helpers
 %% =========================
-do_http_ping(Url) when is_list(Url) ->
+do_http_get(Url) when is_list(Url) ->
     ensure_inets_started(),
     {Micros, Result} =
         timer:tc(fun() ->
@@ -76,7 +77,7 @@ do_http_ping(Url) when is_list(Url) ->
         end),
     Ms = Micros div 1000,
     case Result of
-        {ok, {{_V, Code, _Reason}, _Hdrs, _Body}} ->
+        {ok, {{_Vsn, Code, _Reason}, _Hdrs, _Body}} ->
             Ok = (Code >= 200) andalso (Code =< 299),
             {ok, #{
               <<"status">>      => Code,
@@ -95,6 +96,6 @@ do_http_ping(Url) when is_list(Url) ->
 ensure_inets_started() ->
     case application:ensure_all_started(inets) of
         {ok, _}    -> ok;
-        {error, _} -> ok;  %% already started
+        {error, _} -> ok;
         _          -> ok
     end.
