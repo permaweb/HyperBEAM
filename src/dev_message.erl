@@ -218,14 +218,11 @@ id_device(_, _) ->
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
 committers(#{ <<"commitments">> := Commitments }, _, NodeOpts) ->
-    ?event(debug_commitments, {calculating_committers, {commitments, Commitments}}),
     {ok,
         hb_maps:values(
             hb_maps:filtermap(
                 fun(_ID, Commitment) ->
-                    Committer = maps:get(<<"committer">>, Commitment, undefined),
-                    ?event(debug_commitments, {committers, {committer, Committer}}),
-                    case Committer of
+                    case maps:get(<<"committer">>, Commitment, undefined) of
                         undefined -> false;
                         Committer -> {true, Committer}
                     end
@@ -460,7 +457,7 @@ commitment_ids_from_request(Base, Req, Opts) ->
             X when is_list(X) -> X;
             CommitterDescriptor -> hb_ao:normalize_key(CommitterDescriptor)
         end,
-    RawReqCommitments = maps:get(<<"commitments">>, Req, <<"none">>),
+    RawReqCommitments = maps:get(<<"commitment-ids">>, Req, <<"none">>),
     ReqCommitments =
         case RawReqCommitments of
             X2 when is_list(X2) -> X2;
@@ -487,7 +484,6 @@ commitment_ids_from_request(Base, Req, Opts) ->
                 ?event(no_commitment_ids_for_committers),
                 [];
             <<"all">> ->
-                ?event(debug_commitments, {getting_commitment_ids_for_all_committers}),
                 {ok, Committers} = committers(Base, Req, Opts),
                 ?event(debug_commitments, {commitment_ids_from_committers, Committers}),
                 commitment_ids_from_committers(Committers, Commitments, Opts);

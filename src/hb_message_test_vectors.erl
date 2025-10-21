@@ -9,8 +9,8 @@
 %% Disable/enable as needed.
 run_test() ->
     hb:init(),
-    nested_structured_fields_test(
-        #{ <<"device">> => <<"json@1.0">>, <<"bundle">> => true },
+    encode_small_balance_table_test(
+        #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
         test_opts(normal)
     ).
 
@@ -1365,21 +1365,23 @@ priv_survives_conversion_test(Codec, Opts) ->
 
 encode_balance_table(Size, Codec, Opts) ->
     Msg =
-        #{
-            hb_util:encode(crypto:strong_rand_bytes(32)) =>
-                rand:uniform(1_000_000_000_000_000)
-        ||
-            _ <- lists:seq(1, Size)
-        },
-    Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
-    ?event({encoded, {explicit, Encoded}}),
-    Decoded =
-        hb_message:uncommitted(
-            hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
-            Opts
+        hb_message:commit(
+            #{
+                hb_util:encode(crypto:strong_rand_bytes(32)) =>
+                    rand:uniform(1_000_000_000_000_000)
+            ||
+                _ <- lists:seq(1, Size)
+            },
+            Opts,
+            Codec
         ),
-    ?event({decoded, {explicit, Decoded}}),
-    ?assert(hb_message:match(Msg, Decoded, if_present, Opts)).
+    Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
+    ?event({encoded, Encoded}),
+    Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
+    ?event({decoded, Decoded}),
+    {ok, OnlyCommitted} = hb_message:with_only_committed(Decoded, Opts),
+    ?event({only_committed, OnlyCommitted}),
+    ?assert(hb_message:match(Msg, OnlyCommitted, if_present, Opts)).
 
 encode_small_balance_table_test(Codec, Opts) ->
     encode_balance_table(5, Codec, Opts).

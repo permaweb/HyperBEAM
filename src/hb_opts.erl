@@ -226,7 +226,7 @@ default_message() ->
         debug_trace_type => ?DEFAULT_TRACE_TYPE,
         short_trace_len => 20,
         debug_metadata => true,
-        debug_ids => true,
+        debug_ids => false,
         debug_committers => true,
         debug_show_priv => if_present,
         debug_resolve_links => true,

@@ -50,17 +50,16 @@ from(HTTP, _Req, Opts) ->
     {OrderedBodyKeys, BodyTABM} = body_to_tabm(HTTP, Opts),
     % Merge the body keys with the headers.
     WithBodyKeys = maps:merge(Headers, BodyTABM),
-    % Decode the `ao-ids' key into a map. `ao-ids' is an encoding of literal
-    % binaries whose keys (given that they are IDs) cannot be distributed as
-    % HTTP headers.
-    WithIDs = ungroup_ids(WithBodyKeys, Opts),
+    % Decode percent-encoded headers.
+    WithIDs = decode_ids(WithBodyKeys, Opts),
     % Remove the signature-related headers, such that they can be reconstructed
     % from the commitments.
-    MsgWithoutSigs = hb_maps:without(
-        [<<"signature">>, <<"signature-input">>, <<"commitments">>],
-        WithIDs,
-        Opts
-    ),
+    MsgWithoutSigs =
+        hb_maps:without(
+            [<<"signature">>, <<"signature-input">>, <<"commitments">>],
+            WithIDs,
+            Opts
+        ),
     % Finally, we need to add the signatures to the TABM.
     Commitments =
         dev_codec_httpsig_siginfo:siginfo_to_commitments(
@@ -372,20 +371,22 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
     % asking for a bundle.
     Msg =
         case hb_util:atom(hb_maps:get(<<"bundle">>, Req, false, Opts)) of
-            false -> TABM;
+            false -> encode_ids(TABM);
             true ->
                 % Convert back to the fully loaded structured@1.0 message, then
                 % convert to TABM with bundling enabled.
                 Structured = hb_message:convert(TABM, <<"structured@1.0">>, Opts),
                 Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
-                hb_message:convert(
-                    Loaded,
-                    tabm,
-                    #{
-                        <<"device">> => <<"structured@1.0">>,
-                        <<"bundle">> => true
-                    },
-                    Opts
+                encode_ids(
+                    hb_message:convert(
+                        Loaded,
+                        tabm,
+                        #{
+                            <<"device">> => <<"structured@1.0">>,
+                            <<"bundle">> => true
+                        },
+                        Opts
+                    )
                 )
         end,
     % Group the IDs into a dictionary, so that they can be distributed as
@@ -402,36 +403,36 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
             Msg,
             Opts
         ),
-    WithGroupedIDs = group_ids(Stripped),
-    ?event({grouped, WithGroupedIDs}),
-    {InlineFieldHdrs, InlineKey} = inline_key(WithGroupedIDs),
+    {InlineFieldHdrs, InlineKey} = inline_key(Stripped),
     Intermediate =
         do_to(
-            WithGroupedIDs,
+            Stripped,
             FormatOpts ++ [{inline, InlineFieldHdrs, InlineKey}],
             Opts
         ),
     % Finally, add the signatures to the encoded HTTP message with the
     % commitments from the original message.
-    CommitmentsMap = case maps:get(<<"commitments">>, Msg, undefined) of
-        undefined ->
-            case maps:get(<<"signature">>, Msg, undefined) of
-                undefined -> #{};
-                Signature ->
-                    MaybeBundleTag = maps:with([<<"bundle">>], Msg),
-                    #{
-                        Signature => MaybeBundleTag#{
-                            <<"signature">> => Signature,
-                            <<"committed">> => maps:get(<<"committed">>, Msg, #{}),
-                            <<"keyid">> => maps:get(<<"keyid">>, Msg, <<>>),
-                            <<"commitment-device">> => <<"httpsig@1.0">>,
-                            <<"type">> => maps:get(<<"type">>, Msg, <<>>)
+    CommitmentsMap =
+        case maps:get(<<"commitments">>, Msg, undefined) of
+            undefined ->
+                case maps:get(<<"signature">>, Msg, undefined) of
+                    undefined -> #{};
+                    Signature ->
+                        MaybeBundleTag = maps:with([<<"bundle">>], Msg),
+                        #{
+                            Signature => MaybeBundleTag#{
+                                <<"signature">> => Signature,
+                                <<"keyid">> => maps:get(<<"keyid">>, Msg, <<>>),
+                                <<"commitment-device">> => <<"httpsig@1.0">>,
+                                <<"type">> => maps:get(<<"type">>, Msg, <<>>),
+                                <<"committed">> =>
+                                    maps:get(<<"committed">>, Msg, #{})
+                            }
                         }
-                    }
-            end;
-        Commitments ->
-            Commitments
-    end,
+                end;
+            Commitments ->
+                Commitments
+        end,
     ?event({converting_commitments_to_siginfo, Msg}),
     {ok,
         maps:merge(
@@ -563,50 +564,26 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
     ?event({final_body_map, {msg, Enc2}}),
     Enc2.
 
-%% @doc Group all elements with:
-%% 1. A key that ?IS_ID returns true for, and
-%% 2. A value that is immediate
-%% into a combined SF dict-_like_ structure. If not encoded, these keys would 
-%% be sent as headers and lower-cased, losing their comparability against the
-%% original keys. The structure follows all SF dict rules, except that it allows
-%% for keys to contain capitals. The HyperBEAM SF parser will accept these keys,
-%% but standard RFC 8741 parsers will not. Subsequently, the resulting `ao-cased'
-%% key is not added to the `ao-types' map.
-group_ids(Map) ->
+%% @doc Transform all ID fields into their percent-encoded form.
+encode_ids(Msg) ->
     % Find all keys that are IDs.
-    IDDict = maps:filter(fun(K, V) -> ?IS_ID(K) andalso is_binary(V) end, Map),
-    % Convert the dictionary into a list of key-value pairs
-    IDDictStruct =
+    maps:from_list(
         lists:map(
-            fun({K, V}) ->
-                {K, {item, {string, V}, []}}
+            fun({K, V}) when ?IS_ID(K) -> {hb_escape:encode(K), V};
+                ({K, V}) -> {K, V}
             end,
-            maps:to_list(IDDict)
-        ),
-    % Convert the list of key-value pairs into a binary
-    IDBin = iolist_to_binary(hb_structured_fields:dictionary(IDDictStruct)),
-    % Remove the encoded keys from the map
-    Stripped = maps:without(maps:keys(IDDict), Map),
-    % Add the ID binary to the map if it is not empty
-    case map_size(IDDict) of
-        0 -> Stripped;
-        _ -> Stripped#{ <<"ao-ids">> => IDBin }
-    end.
+            maps:to_list(Msg)
+        )
+    ).
 
-%% @doc Decode the `ao-ids' key into a map.
-ungroup_ids(Msg = #{ <<"ao-ids">> := IDBin }, Opts) ->
-    % Extract the ID binary from the Map
-    EncodedIDsMap = hb_structured_fields:parse_dictionary(IDBin),
-    % Convert the value back into a raw binary
-    IDsMap =
+% @doc Decode all ID fields from their percent-encoded form.
+decode_ids(Msg, _Opts) ->
+    maps:from_list(
         lists:map(
-            fun({K, {item, {string, Bin}, _}}) -> {K, Bin} end,
-            EncodedIDsMap
-        ),
-    % Add the decoded IDs to the Map and remove the `ao-ids' key
-    hb_maps:merge(hb_maps:without([<<"ao-ids">>], Msg, Opts), hb_maps:from_list(IDsMap), Opts);
-
-ungroup_ids(Msg, _Opts) -> Msg.
+            fun({K, V}) -> {hb_escape:decode(K), V} end,
+            maps:to_list(Msg)
+        )
+    ).
 
 %% @doc Merge maps at the same level, if possible.
 group_maps(Map) ->
