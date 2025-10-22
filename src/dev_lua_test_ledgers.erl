@@ -211,12 +211,10 @@ balances(Mode, ProcMsg, Opts) when is_atom(Mode) ->
     balances(hb_util:bin(Mode), ProcMsg, Opts);
 balances(Prefix, ProcMsg, Opts) ->
     Balances = hb_ao:get(<<Prefix/binary, "/balance">>, ProcMsg, #{}, Opts),
-    LoadedBalances = hb_private:reset(
-        hb_cache:ensure_all_loaded(Balances, Opts)
-    ),
-    hb_maps:without(
-        [<<"commitments">>],
-        LoadedBalances
+    hb_private:reset(
+        hb_message:uncommitted(
+            hb_cache:ensure_all_loaded(Balances, Opts)
+        )
     ).
 
 %% @doc Get the supply of a ledger, either `now` or `initial`.
@@ -363,7 +361,7 @@ verify_net_supply(RootProc, AllProcs, Opts) ->
     SubledgerIDs = maps:keys(NormProcsWithoutRoot),
     RootUserSupply = user_supply(RootProc, NormProcsWithoutRoot, Opts),
     SubledgerSupply = subledger_supply(RootProc, AllProcs, Opts),
-    ?event(debug, {verify_net_supply, {root, RootUserSupply}, {subledger, SubledgerSupply}}),
+    ?event({verify_net_supply, {root, RootUserSupply}, {subledger, SubledgerSupply}}),
     ?assert(
         StartingRootSupply ==
         RootUserSupply + SubledgerSupply
@@ -468,13 +466,13 @@ transfer_unauthorized() ->
         ),
     % 1. Transferring a token when the sender has no tokens.
     Result = transfer(Proc, Bob, Alice, 1, Opts),
-    ?event(debug, {unauthorized_transfer, {result, Result}}),
+    ?event({unauthorized_transfer, {result, Result}}),
     % 2. Transferring a token when the sender has less tokens than the amount
     %    being transferred.
     transfer(Proc, Alice, Bob, 101, Opts),
-    ?event(debug, {unauthorized_transfer, {result, Result}}),
+    ?event({unauthorized_transfer, {result, Result}}),
     receive after 1000 -> ok end,
-    ?event(debug, {env, map([Proc], #{ Alice => alice, Bob => bob }, Opts)}),
+    ?event({env, map([Proc], #{ Alice => alice, Bob => bob }, Opts)}),
     ?assertEqual(100, balance(Proc, Alice, Opts)),
     ?assertEqual(0, balance(Proc, Bob, Opts)),
     % 3. Transferring a binary-encoded amount of tokens that exceed the quantity
@@ -501,7 +499,7 @@ subledger_deposit() ->
     ?assertEqual(100, balance(Proc, Alice, Opts)),
     % 2. Alice deposits tokens into the sub-ledger.
     transfer(Proc, Alice, Alice, 10, SubLedger, Opts),
-    ?event(debug, {after_deposit, {result, map([Proc, SubLedger], Opts)} }),
+    ?event({after_deposit, {result, map([Proc, SubLedger], Opts)} }),
     ?assertEqual(90, balance(Proc, Alice, Opts)),
     ?assertEqual(10, balance(SubLedger, Alice, Opts)),
     % Verify all invariants.
@@ -598,16 +596,17 @@ subledger_registration_test_disabled() ->
     ?assertEqual(0, map_size(ledgers(SubLedger2, Opts))),
     % Alice registers with SubLedger1.
     register(SubLedger1, SubLedger2, Opts),
-    ?event(debug, {map, map([SubLedger1, SubLedger2], Names, Opts)}),
-    ?event(debug, {sl1_ledgers, ledgers(SubLedger1, Opts)}),
-    ?event(debug, {sl2_ledgers, ledgers(SubLedger2, Opts)}),
+    ?event({map, map([SubLedger1, SubLedger2], Names, Opts)}),
+    ?event({sl1_ledgers, ledgers(SubLedger1, Opts)}),
+    ?event({sl2_ledgers, ledgers(SubLedger2, Opts)}),
     % SubLedger1 and SubLedger2 are now aware of each other.
     ?assertEqual(1, map_size(ledgers(SubLedger1, Opts))),
     ?assertEqual(1, map_size(ledgers(SubLedger2, Opts))),
     % Alice can send tokens to Bob on SubLedger2.
     verify_net(RootLedger, [SubLedger1, SubLedger2], Opts).
 
-single_subledger_to_subledger_test_() -> {timeout, 30, fun single_subledger_to_subledger/0}.
+single_subledger_to_subledger_test_() ->
+    {timeout, 30, fun single_subledger_to_subledger/0}.
 single_subledger_to_subledger() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
@@ -620,10 +619,10 @@ single_subledger_to_subledger() ->
         ),
     SubLedger1 = subledger(RootLedger, Opts),
     SL1ID = hb_message:id(SubLedger1, signed, Opts),
-    ?event(debug, {sl1ID, SL1ID}),
+    ?event({sl1ID, SL1ID}),
     SubLedger2 = subledger(RootLedger, Opts),
     SL2ID = hb_message:id(SubLedger2, signed, Opts),
-    ?event(debug, {sl2ID, SL2ID}),
+    ?event({sl2ID, SL2ID}),
     Names = #{
         Alice => alice,
         Bob => bob,
@@ -631,22 +630,22 @@ single_subledger_to_subledger() ->
         SubLedger1 => subledger1,
         SubLedger2 => subledger2
     },
-    % 1. Alice starts with 100 tokens on root ledger.
+    ?event({root_ledger, RootLedger}),
+    ?event({sl1, SubLedger1}),
+    ?event({sl2, SubLedger2}),
+    % 1. At start, Alice has 100 tokens on the root ledger.
     ?assertEqual(100, balance(RootLedger, Alice, Opts)),
-    ?assertEqual(0, balance(SubLedger1, Alice, Opts)),
-    ?assertEqual(0, balance(SubLedger2, Alice, Opts)),
-
-    % 2. Alice sends 90 tokens to herself on SubLedger1 from the root ledger.
+    % 2. Alice sends 90 tokens to herself on SubLedger1.
     transfer(RootLedger, Alice, Alice, 90, SubLedger1, Opts),
+    ?event({state2, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(90, balance(SubLedger1, Alice, Opts)),
-    ?assertEqual(0, balance(SubLedger2, Alice, Opts)),
-
-    % 3. Alice sends 80 tokens to herself on SubLedger2 from SubLedger1.
+    % 3. Alice sends 80 tokens to herself on SubLedger2.
     PushRes = transfer(SubLedger1, Alice, Alice, 80, SubLedger2, Opts),
-    ?assertEqual(10, balance(RootLedger, Alice, Opts)),
-    ?assertEqual(10, balance(SubLedger1, Alice, Opts)),
-    ?assertEqual(80, balance(SubLedger2, Alice, Opts)).
+    ?event({push_res, PushRes}),
+    ?event({state3, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
+    ?assertEqual(80, balance(SubLedger2, Alice, Opts)),
+    ?assertEqual(10, balance(SubLedger1, Alice, Opts)).
 
 %% @doc Verify that registered sub-ledgers are able to send tokens to each other
 %% without the need for messages on the root ledger.

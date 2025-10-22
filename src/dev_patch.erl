@@ -28,25 +28,25 @@
 -include_lib("include/hb.hrl").
 
 %% @doc Necessary hooks for compliance with the `execution-device' standard.
-init(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
-normalize(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
-snapshot(Msg1, _Msg2, _Opts) -> {ok, Msg1}.
-compute(Msg1, Msg2, Opts) -> patches(Msg1, Msg2, Opts).
+init(Base, _Req, _Opts) -> {ok, Base}.
+normalize(Base, _Req, _Opts) -> {ok, Base}.
+snapshot(Base, _Req, _Opts) -> {ok, Base}.
+compute(Base, Req, Opts) -> patches(Base, Req, Opts).
 
 %% @doc Get the value found at the `patch-from' key of the message, or the
 %% `from' key if the former is not present. Remove it from the message and set
 %% the new source to the value found.
-all(Msg1, Msg2, Opts) ->
-    move(all, Msg1, Msg2, Opts).
+all(Base, Req, Opts) ->
+    move(all, Base, Req, Opts).
 
 %% @doc Find relevant `PATCH' messages in the given source key of the execution
 %% and request messages, and apply them to the given destination key of the
 %% request.
-patches(Msg1, Msg2, Opts) ->
-    move(patches, Msg1, Msg2, Opts).
+patches(Base, Req, Opts) ->
+    move(patches, Base, Req, Opts).
 
 %% @doc Unified executor for the `all' and `patches' modes.
-move(Mode, Msg1, Msg2, Opts) ->
+move(Mode, Base, Req, Opts) ->
     maybe
         % Find the input paths.
         % For `from' we parse the path to see if it is relative to the request
@@ -55,10 +55,10 @@ move(Mode, Msg1, Msg2, Opts) ->
         RawPatchFrom =
             hb_ao:get_first(
                 [
-                    {Msg2, <<"patch-from">>},
-                    {Msg1, <<"patch-from">>},
-                    {Msg2, <<"from">>},
-                    {Msg1, <<"from">>}
+                    {Req, <<"patch-from">>},
+                    {Base, <<"patch-from">>},
+                    {Req, <<"from">>},
+                    {Base, <<"from">>}
                 ],
                 <<"/">>,
                 Opts
@@ -68,14 +68,14 @@ move(Mode, Msg1, Msg2, Opts) ->
                 [BinKey|RestKeys] ->
                     case binary:split(BinKey, <<":">>) of
                         [<<"base">>, RestKey] ->
-                            {Msg1, [RestKey|RestKeys]};
+                            {Base, [RestKey|RestKeys]};
                         [<<"req">>, RestKey] ->
-                            {Msg2, [RestKey|RestKeys]};
+                            {Req, [RestKey|RestKeys]};
                         _ ->
-                            {Msg1, RawPatchFrom}
+                            {Base, RawPatchFrom}
                     end;
                 _ ->
-                    {Msg1, RawPatchFrom}
+                    {Base, RawPatchFrom}
             end,
         ?event({patch_from_parts, {explicit, PatchFromParts}}),
         PatchFrom =
@@ -87,10 +87,10 @@ move(Mode, Msg1, Msg2, Opts) ->
         PatchTo =
             hb_ao:get_first(
                 [
-                    {Msg2, <<"patch-to">>},
-                    {Msg1, <<"patch-to">>},
-                    {Msg2, <<"to">>},
-                    {Msg1, <<"to">>}
+                    {Req, <<"patch-to">>},
+                    {Base, <<"patch-to">>},
+                    {Req, <<"to">>},
+                    {Base, <<"to">>}
                 ],
                 <<"/">>,
                 Opts
@@ -100,6 +100,7 @@ move(Mode, Msg1, Msg2, Opts) ->
         % Get the source of the patches from the message. Makes the `maybe'
         % statement return `{error, not_found}' if the source is not found.
         {ok, Source} ?= hb_ao:resolve(FromMsg, PatchFrom, Opts),
+        ?event({source, Source}),
         % Find all messages with the PATCH request.
         {ToWrite, NewSourceValue} =
             case Mode of
@@ -111,7 +112,17 @@ move(Mode, Msg1, Msg2, Opts) ->
                             Device = hb_ao:get(<<"device">>, Msg, Opts)
                                 == <<"patch@1.0">>,
                             if Method orelse Device ->
-                                {PatchAcc#{Key => Msg}, NewSourceAcc};
+                                {
+                                    PatchAcc#{
+                                        Key =>
+                                            hb_maps:without(
+                                                [<<"commitments">>, <<"Tags">>],
+                                                Msg,
+                                                Opts
+                                            )
+                                    },
+                                    NewSourceAcc
+                                };
                             true ->
                                 {PatchAcc, NewSourceAcc#{ Key => Msg }}
                             end
@@ -160,6 +171,7 @@ move(Mode, Msg1, Msg2, Opts) ->
                         ToWrite
                     )
             end,
+        ?event({to_write, ToWriteMod}),
         % Find the target to apply the patches to, and apply them.
         PatchedResult =
             hb_ao:set(
@@ -342,3 +354,55 @@ req_prefix_test() ->
         not_found,
         hb_ao:get(<<"results/outbox/1">>, ResolvedState, #{})
     ).
+
+custom_set_patch_test() ->
+    hb:init(),
+    % Apply a patch from a message containing a device with a custom `set' key
+    % (the `~trie@1.0' device in this example).
+    ID1 = hb_util:human_id(<<0:256>>),
+    ID2 = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    State0 = #{
+        <<"device">> => <<"patch@1.0">>,
+        <<"results">> => #{
+            <<"outbox">> => #{
+                <<"1">> => #{
+                    <<"device">> => <<"patch@1.0">>,
+                    <<"balances">> => #{
+                        <<"device">> => <<"trie@1.0">>
+                    }
+                },
+                <<"2">> => #{
+                    <<"device">> => <<"patch@1.0">>,
+                    <<"balances">> => #{
+                        <<"A">> => <<"50">>,
+                        ID2 => <<"250">>
+                    }
+                }
+            }
+        },
+        <<"other-message">> => <<"other-value">>,
+        <<"patch-from">> => <<"/results/outbox">>
+    },
+    {ok, State1} = hb_ao:resolve(State0, <<"compute">>, #{}),
+    ?event(debug_test, {resolved_state, State1}),
+    ?assertEqual(<<"50">>, hb_ao:get(<<"balances/A">>, State1, #{})),
+    ?assertEqual(<<"250">>, hb_ao:get(<<"balances/", ID2/binary>>, State1, #{})),
+    State2 =
+        State1#{
+            <<"results">> => #{
+                <<"outbox">> => #{
+                    <<"1">> => #{
+                        <<"device">> => <<"patch@1.0">>,
+                        <<"balances">> => #{
+                            ID1 => <<"1">>,
+                            ID2 => <<"500">>
+                        }
+                    }
+                }
+            }
+        },
+    {ok, State3} = hb_ao:resolve(State2, <<"compute">>, #{}),
+    ?event(debug_test, {resolved_state, State3}),
+    ?assertEqual(<<"1">>, hb_ao:get(<<"balances/", ID1/binary>>, State3, #{})),
+    ?assertEqual(<<"50">>, hb_ao:get(<<"balances/A">>, State3, #{})),
+    ?assertEqual(<<"500">>, hb_ao:get(<<"balances/", ID2/binary>>, State3, #{})).

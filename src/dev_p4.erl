@@ -460,7 +460,7 @@ hyper_token_ledger() ->
     Node =
         hb_http_server:start_node(
             Opts = #{
-                store => StoreOpts,
+                store => [hb_test_utils:test_store()],
                 priv_wallet => HostWallet,
                 p4_non_chargable_routes =>
                     [

@@ -22,7 +22,12 @@
 %%% - `first-message': Return the first message of the matches.
 %%% - `boolean': Return a boolean indicating whether any matches were found.
 -module(dev_query).
+%%% Message matching API:
 -export([info/1, only/3, all/3, base/3]).
+%%% GraphQL API:
+-export([graphql/3, has_results/3]).
+%%% Test setup:
+-export([test_setup/0]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -37,6 +42,32 @@ info(_Opts) ->
         excludes => [<<"keys">>, <<"set">>],
         default => fun default/4
     }.
+
+%% @doc Execute the query via GraphQL.
+graphql(Req, Base, Opts) ->
+    dev_query_graphql:handle(Req, Base, Opts).
+
+%% @doc Return whether a GraphQL esponse in a message has transaction results.
+%% This key is used in HB's gateway client multirequest configuration to
+%% determine if the response from the node should be considered admissible.
+has_results(Base, Req, Opts) ->
+    JSON =
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, Base}, <<"body">>},
+                {{as, <<"message@1.0">>, Req}, <<"body">>}
+            ],
+            <<"{}">>,
+            Opts
+        ),
+    Decoded = hb_json:decode(JSON),
+    ?event(debug_multi, {has_results, {decoded_json, Decoded}}),
+    case Decoded of
+        #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Nodes } } }
+                when length(Nodes) > 0 ->
+            {ok, true};
+        _ -> {ok, false}
+    end.
 
 %% @doc Search for the keys specified in the request message.
 default(_, Base, Req, Opts) ->
@@ -146,7 +177,7 @@ match(UserSpec, _Base, Req, Opts) ->
 %%% Tests
 
 %% @doc Return test options with a test store.
-setup() ->
+test_setup() ->
     Store = hb_test_utils:test_store(hb_store_lmdb),
     Opts = #{ store => Store, priv_wallet => hb:wallet() },
     % Write a simple message.
@@ -178,7 +209,7 @@ setup() ->
 
 %% @doc Search for and find a basic test key.
 basic_test() ->
-    {ok, Opts, _} = setup(),
+    {ok, Opts, _} = test_setup(),
     {ok, [ID]} = hb_ao:resolve(<<"~query@1.0/all?basic=binary-value">>, Opts),
     {ok, Read} = hb_cache:read(ID, Opts),
     ?assertEqual(<<"binary-value">>, hb_maps:get(<<"basic">>, Read)),
@@ -193,7 +224,7 @@ basic_test() ->
 
 %% @doc Ensure that we can search for and match only a single key.
 only_test() ->
-    {ok, Opts, _} = setup(),
+    {ok, Opts, _} = test_setup(),
     {ok, [Msg]} =
         hb_ao:resolve(
             <<"~query@1.0/only=basic&basic=binary-value&wrong=1&return=messages">>,
@@ -204,7 +235,7 @@ only_test() ->
 
 %% @doc Ensure that we can specify multiple keys to match.
 multiple_test() ->
-    {ok, Opts, _} = setup(),
+    {ok, Opts, _} = test_setup(),
     {ok, [Msg]} =
         hb_ao:resolve(
             <<
@@ -220,7 +251,7 @@ multiple_test() ->
 
 %% @doc Search for and find a nested test key.
 nested_test() ->
-    {ok, Opts, _} = setup(),
+    {ok, Opts, _} = test_setup(),
     {ok, [MsgWithNested]} =
         hb_ao:resolve(
             <<"~query@1.0/all?test-key=test-value&return=messages">>,
@@ -234,7 +265,7 @@ nested_test() ->
 
 %% @doc Search for and find a list message with typed elements.
 list_test() ->
-    {ok, Opts, _} = setup(),
+    {ok, Opts, _} = test_setup(),
     {ok, [Msg]} =
         hb_ao:resolve(
             <<"~query@1.0/all?2+integer=2&3+atom=ok&return=messages">>,
@@ -246,7 +277,7 @@ list_test() ->
 %% @doc Ensure user's can opt not to specify a key to resolve, instead specifying
 %% only the matchable keys in the message.
 return_key_test() ->
-    {ok, Opts, _} = setup(),
+    {ok, Opts, _} = test_setup(),
     {ok, [ID]} =
         hb_ao:resolve(
             <<"~query@1.0/basic=binary-value">>,
@@ -258,7 +289,7 @@ return_key_test() ->
 
 %% @doc Validate the functioning of various return types.
 return_types_test() ->
-    {ok, Opts, _} = setup(),
+    {ok, Opts, _} = test_setup(),
     {ok, [Msg]} =
         hb_ao:resolve(
             <<"~query@1.0/basic=binary-value&return=messages">>,
@@ -289,7 +320,7 @@ return_types_test() ->
     ok.
 
 http_test() ->
-    {ok, Opts, _} = setup(),
+    {ok, Opts, _} = test_setup(),
     Node = hb_http_server:start_node(Opts),
     {ok, Msg} =
         hb_http:get(

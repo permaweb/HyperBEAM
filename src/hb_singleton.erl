@@ -33,7 +33,7 @@
 %%%         - N.Key+res=(/a/b/c) => #{ Key => (resolve /a/b/c), ... }
 %%% </pre>
 -module(hb_singleton).
--export([from/2, to/1]).
+-export([from/2, from_path/1, to/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(MAX_SEGMENT_LENGTH, 512).
@@ -137,12 +137,13 @@ from(RawMsg, Opts) when is_binary(RawMsg) ->
 from(RawMsg, Opts) ->
     RawPath = hb_maps:get(<<"path">>, RawMsg, <<>>),
     ?event(parsing, {raw_path, RawPath}),
-    {ok, Path, Query} = parse_full_path(RawPath),
+    {ok, Path, Query} = from_path(RawPath),
     ?event(parsing, {parsed_path, Path, Query}),
-    MsgWithoutBasePath = hb_maps:merge(
-        hb_maps:remove(<<"path">>, RawMsg),
-        Query
-    ),
+    MsgWithoutBasePath =
+        hb_maps:merge(
+            hb_maps:remove(<<"path">>, RawMsg),
+            Query
+        ),
     % 2. Decode, split, and sanitize path segments. Each yields one step message.
     RawMsgs =
         lists:flatten(
@@ -166,20 +167,23 @@ from(RawMsg, Opts) ->
     Result.
 
 %% @doc Parse the relative reference into path, query, and fragment.
-parse_full_path(RelativeRef) ->
+from_path(RelativeRef) ->
     %?event(parsing, {raw_relative_ref, RawRelativeRef}),
     %RelativeRef = hb_escape:decode(RawRelativeRef),
     Decoded = decode_string(RelativeRef),
     ?event(parsing, {parsed_relative_ref, Decoded}),
     {Path, QKVList} =
         case hb_util:split_depth_string_aware_single("?", Decoded) of
-            {_Sep, P, QStr} -> {P, cowboy_req:parse_qs(#{ qs => QStr })};
-            {no_match, P, <<>>} -> {P, []}
+            {no_match, P, <<>>} -> {P, []};
+            {_Sep, P, QStr} -> {P, cowboy_req:parse_qs(#{ qs => QStr })}
         end,
     {
         ok,
         path_parts($/, Path),
-        hb_maps:from_list(QKVList)
+        maps:map(
+            fun(_, Val) -> hb_util:unquote(Val) end,
+            hb_maps:from_list(QKVList)
+        )
     }.
 
 %% @doc Step 2: Decode, split and sanitize the path. Split by `/' but avoid
@@ -387,18 +391,10 @@ parse_inlined_key_val(Bin, Opts) ->
     case part([$=, $&], Bin) of
         {no_match, K, <<>>} -> {K, true};
         {$=, K, RawV} ->
-            V = unquote(RawV),
+            V = hb_util:unquote(RawV),
             {_, Key, Val} = maybe_typed(K, maybe_subpath(V, Opts), Opts),
             {Key, Val}
     end.
-
-%% @doc Unquote a string.
-unquote(<<"\"", Inner/binary>>) ->
-    case binary:last(Inner) of
-        $" -> binary:part(Inner, 0, byte_size(Inner) - 1);
-        _ -> Inner
-    end;
-unquote(Bin) -> Bin.
 
 %% @doc Attempt Cowboy URL decode, then sanitize the result.
 decode_string(B) ->
@@ -436,8 +432,9 @@ maybe_typed(Key, Value, Opts) ->
                         OnlyKey,
                         {resolve, from(#{ <<"path">> => Subpath }, Opts)}
                     };
-                {_T, Bin} when is_binary(Bin) ->
-                    {typed, OnlyKey, dev_codec_structured:decode_value(Type, Bin)}
+                {_T, RawValue} when is_binary(RawValue) ->
+                    Decoded = hb_escape:decode_quotes(RawValue),
+                    {typed, OnlyKey, dev_codec_structured:decode_value(Type, Decoded)}
             end
     end.
 
@@ -684,11 +681,11 @@ multiple_messages_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_Base, Msg1, Msg2, Msg3] = Msgs,
+    [_Base, Base, Msg2, Res] = Msgs,
     ?assert(lists:all(fun is_map/1, Msgs)),
-    ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg1)),
+    ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Base)),
     ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg2)),
-    ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg3)).
+    ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Res)).
 
 %%% Advanced key syntax tests
 
@@ -699,10 +696,10 @@ scoped_key_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg1, not_found)),
+    [_, Base, Msg2, Res] = Msgs,
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Base, not_found)),
     ?assertEqual(<<"test-value">>, hb_maps:get(<<"test-key">>, Msg2, not_found)),
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg3, not_found)).
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Res, not_found)).
 
 typed_key_test() ->
     Req = #{
@@ -711,10 +708,10 @@ typed_key_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg1, not_found)),
+    [_, Base, Msg2, Res] = Msgs,
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Base, not_found)),
     ?assertEqual(123, hb_maps:get(<<"test-key">>, Msg2, not_found)),
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg3, not_found)).
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Res, not_found)).
 
 subpath_in_key_test() ->
     Req = #{
@@ -723,8 +720,8 @@ subpath_in_key_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg1, not_found)),
+    [_, Base, Msg2, Res] = Msgs,
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Base, not_found)),
     ?assertEqual(
         {resolve,
             [
@@ -736,7 +733,7 @@ subpath_in_key_test() ->
         },
         hb_maps:get(<<"test-key">>, Msg2, not_found)
     ),
-    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Msg3, not_found)).
+    ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Res, not_found)).
 
 %%% Advanced path syntax tests
 
@@ -746,8 +743,8 @@ subpath_in_path_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
-    ?assertEqual(<<"a">>, hb_maps:get(<<"path">>, Msg1)),
+    [_, Base, Msg2, Res] = Msgs,
+    ?assertEqual(<<"a">>, hb_maps:get(<<"path">>, Base)),
     ?assertEqual(
         {resolve,
             [
@@ -759,7 +756,7 @@ subpath_in_path_test() ->
         },
         Msg2
     ),
-    ?assertEqual(<<"z">>, hb_maps:get(<<"path">>, Msg3)).
+    ?assertEqual(<<"z">>, hb_maps:get(<<"path">>, Res)).
 
 inlined_keys_test() ->
     Req = #{
@@ -768,10 +765,10 @@ inlined_keys_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
+    [_, Base, Msg2, Res] = Msgs,
     ?assertEqual(<<"v1">>, hb_maps:get(<<"k1">>, Msg2)),
-    ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Msg3)),
-    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Msg1, not_found)),
+    ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Res)),
+    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Base, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"k2">>, Msg2, not_found)).
 
 inlined_quoted_key_test() ->
@@ -781,10 +778,10 @@ inlined_quoted_key_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
+    [_, Base, Msg2, Res] = Msgs,
     ?assertEqual(<<"v/1">>, hb_maps:get(<<"k1">>, Msg2)),
-    ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Msg3)),
-    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Msg1, not_found)),
+    ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Res)),
+    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Base, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"k2">>, Msg2, not_found)),
     ReqB = #{
         <<"method">> => <<"POST">>,
@@ -801,11 +798,11 @@ inlined_assumed_key_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
-    [_, Msg1, Msg2, Msg3] = Msgs,
+    [_, Base, Msg2, Res] = Msgs,
     ?event({parsed, Msgs}),
     ?assertEqual(<<"4">>, hb_maps:get(<<"b">>, Msg2)),
-    ?assertEqual(not_found, hb_maps:get(<<"b">>, Msg1, not_found)),
-    ?assertEqual(not_found, hb_maps:get(<<"b">>, Msg3, not_found)),
+    ?assertEqual(not_found, hb_maps:get(<<"b">>, Base, not_found)),
+    ?assertEqual(not_found, hb_maps:get(<<"b">>, Res, not_found)),
     ReqB = #{
         <<"method">> => <<"POST">>,
         <<"path">> => <<"/a/b+integer=4/c&k2=v2">>
@@ -826,9 +823,9 @@ multiple_inlined_keys_test() ->
     },
     Msgs = from(Req, #{}),
     ?assertEqual(3, length(Msgs)),
-    [_, Msg1, Msg2] = Msgs,
-    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Msg1, not_found)),
-    ?assertEqual(not_found, hb_maps:get(<<"k2">>, Msg1, not_found)),
+    [_, Base, Msg2] = Msgs,
+    ?assertEqual(not_found, hb_maps:get(<<"k1">>, Base, not_found)),
+    ?assertEqual(not_found, hb_maps:get(<<"k2">>, Base, not_found)),
     ?assertEqual(<<"v1">>, hb_maps:get(<<"k1">>, Msg2, not_found)),
     ?assertEqual(<<"v2">>, hb_maps:get(<<"k2">>, Msg2, not_found)).
 
@@ -857,9 +854,9 @@ path_parts_test() ->
     ?assertEqual(
         [
             <<"IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q">>,
-            <<"msg2">>
+            <<"req">>
         ],
-        path_parts($/, <<"/IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q/msg2">>)
+        path_parts($/, <<"/IYkkrqlZNW_J-4T-5eFApZOMRl5P4VjvrcOXWvIqB1Q/req">>)
     ),
     ?assertEqual(
         [<<"a">>, <<"b&K1=V1">>, <<"c&K2=V2">>],

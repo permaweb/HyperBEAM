@@ -159,7 +159,10 @@ initialize(Base, Modules, Opts) ->
                 {ok, _, StateOut} =
                     luerl:do_dec(
                         ModuleBin,
-                        [{name, hb_util:list(ModuleID)}],
+                        [
+                            {name, hb_util:list(ModuleID)},
+                            {file, hb_util:list(ModuleID)}
+                        ],
                         StateIn
                     ),
                 StateOut
@@ -348,12 +351,7 @@ snapshot(Base, _Req, Opts) ->
         not_found ->
             {error, <<"Cannot snapshot Lua state: state not initialized.">>};
         State ->
-            {ok,
-                #{
-                    <<"body">> =>
-                        term_to_binary(luerl:externalize(State))
-                }
-            }
+            {ok, #{ <<"body">> => term_to_binary(luerl:externalize(State)) }}
     end.
 
 %% @doc Restore the Lua state from a snapshot, if it exists.
@@ -368,7 +366,7 @@ normalize(Base, _Req, RawOpts) ->
                 end,
             ?event(snapshot,
                 {attempting_to_restore_lua_state,
-                    {msg1, Base}, {device_key, DeviceKey}
+                    {base, Base}, {device_key, DeviceKey}
                 }
             ),
             SerializedState =
@@ -391,36 +389,53 @@ normalize(Base, _Req, RawOpts) ->
     end.
 
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message.
-decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
-    decode(maps:map(fun(_, V) -> decode(V, Opts) end, maps:from_list(EncMsg)), Opts);
-decode(Msg, Opts) when is_map(Msg) ->
+decode(EncMsg, Opts) ->
+    hb_message:normalize_commitments(do_decode(EncMsg, Opts), Opts, verify).
+do_decode(EncMsg, _Opts) when is_list(EncMsg) andalso length(EncMsg) == 0 ->
+    % The value is an empty table, so we assume it is a message rather than
+    % a list.
+    #{};
+do_decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
+    do_decode(
+        maps:map(
+            fun(_, V) -> do_decode(V, Opts) end,
+            maps:from_list(EncMsg)
+        ),
+        Opts
+    );
+do_decode(Msg, Opts) when is_map(Msg) ->
     % If the message is an ordered list encoded as a map, decode it to a list.
     case hb_util:is_ordered_list(Msg, Opts) of
         true ->
-            lists:map(fun(V) -> decode(V, Opts) end, hb_util:message_to_ordered_list(Msg));
+            lists:map(
+                fun(V) -> do_decode(V, Opts) end,
+                hb_util:message_to_ordered_list(Msg)
+            );
         false ->
             Msg
     end;
-decode(Other, _Opts) ->
+do_decode(Other, _Opts) ->
     Other.
 
 %% @doc Encode a HyperBEAM `structured@1.0' message into a Lua term.
-encode(Map, Opts) when is_map(Map) ->
+encode(Map, Opts) ->
+    hb_message:normalize_commitments(do_encode(Map, Opts), Opts).
+do_encode(Map, Opts) when is_map(Map) ->
     hb_cache:ensure_all_loaded(
         case hb_util:is_ordered_list(Map, Opts) of
-            true -> encode(hb_util:message_to_ordered_list(Map), Opts);
-            false -> maps:to_list(maps:map(fun(_, V) -> encode(V, Opts) end, Map))
+            true -> do_encode(hb_util:message_to_ordered_list(Map), Opts);
+            false -> maps:to_list(maps:map(fun(_, V) -> do_encode(V, Opts) end, Map))
         end,
         Opts
     );
-encode(List, Opts) when is_list(List) ->
+do_encode(List, Opts) when is_list(List) ->
     hb_cache:ensure_all_loaded(
-        lists:map(fun(V) -> encode(V, Opts) end, List),
+        lists:map(fun(V) -> do_encode(V, Opts) end, List),
         Opts
     );
-encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
+do_encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
     hb_util:bin(Atom);
-encode(Other, _Opts) ->
+do_encode(Other, _Opts) ->
     Other.
 
 %% @doc Parse a Lua stack trace into a list of messages.
@@ -474,6 +489,31 @@ simple_invocation_test() ->
         <<"parameters">> => []
     },
     ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})).
+
+post_invocation_message_validation_test() ->
+    {ok, Script} = file:read_file("test/test.lua"),
+    Opts = #{ priv_wallet => hb:wallet() },
+    Base =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"lua@5.3a">>,
+                <<"module">> => #{
+                    <<"content-type">> => <<"application/lua">>,
+                    <<"body">> => Script
+                },
+                <<"test-key">> => <<"test-value-1">>
+            },
+            Opts
+        ),
+    {ok, UnsignedID} = hb_cache:write(Base, Opts),
+    ?event({base, {msg, Base}, {unsigned_id, UnsignedID}}),
+    {ok, Res} = hb_ao:resolve(Base, <<"mutate_test_key">>, Opts),
+    {ok, ResID} = hb_cache:write(Res, Opts),
+    ?event({res_id, ResID}),
+    {ok, ReadMsg} = hb_cache:read(UnsignedID, Opts),
+    ?assertEqual(<<"test-value-1">>, hb_ao:get(<<"test-key">>, ReadMsg, Opts)),
+    ?assert(length(hb_message:signers(Res, Opts)) == 0),
+    ?assert(hb_message:verify(Res, all, Opts)).
 
 load_modules_by_id_test_() ->
     {timeout, 30, fun load_modules_by_id/0}.
@@ -853,7 +893,7 @@ generate_test_message(Process, Opts, MsgBase) ->
 generate_stack(File) ->
     Wallet = hb:wallet(),
     {ok, Module} = file:read_file(File),
-    Msg1 = #{
+    Base = #{
         <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> =>
             [
@@ -876,8 +916,8 @@ generate_stack(File) ->
                 <<"authority">> => hb:address()
             }, Wallet)
     },
-    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, #{}),
-    Msg2.
+    {ok, Req} = hb_ao:resolve(Base, <<"init">>, #{}),
+    Req.
 
 % execute_aos_call(Base) ->
 %     Req =

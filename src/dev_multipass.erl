@@ -28,13 +28,13 @@ handle(_Key, M1, _M2, Opts) ->
 %%% Tests
 
 basic_multipass_test() ->
-    Msg1 =
+    Base =
         #{
             <<"device">> => <<"multipass@1.0">>,
             <<"passes">> => 2,
             <<"pass">> => 1
         },
-    Msg2 = Msg1#{ <<"pass">> => 2 },
-    ?assertMatch({pass, _}, hb_ao:resolve(Msg1, <<"Compute">>, #{})),
+    Req = Base#{ <<"pass">> => 2 },
+    ?assertMatch({pass, _}, hb_ao:resolve(Base, <<"Compute">>, #{})),
     ?event(alive),
-    ?assertMatch({ok, _}, hb_ao:resolve(Msg2, <<"Compute">>, #{})).
+    ?assertMatch({ok, _}, hb_ao:resolve(Req, <<"Compute">>, #{})).

@@ -163,9 +163,8 @@ aos2_to_assignment(A, RawOpts) ->
                     Opts
                 )
         end,
-    NormalizedMessage = aos2_normalize_types(Message),
     ?event({message, Message}),
-    NormalizedAssignment#{ <<"body">> => NormalizedMessage }.
+    NormalizedAssignment#{ <<"body">> => Message }.
 
 %% @doc The `hb_gateway_client' module expects all JSON structures to at least
 %% have a `data' field. This function ensures that.

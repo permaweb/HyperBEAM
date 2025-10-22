@@ -1,5 +1,13 @@
 %%% @doc A device implementing the codec interface (to/1, from/1) for 
-%%% HyperBEAM's internal, richly typed message format.
+%%% HyperBEAM's internal, richly typed message format. Supported rich types are:
+%%% - `integer'
+%%% - `float'
+%%% - `atom'
+%%% - `list'
+%%% 
+%%% Encoding to TABM can be limited to a subset of types (with other types
+%%% passing through in their rich representation) by specifying the types 
+%%% that should be encoded with the `encode-types' request key.
 %%% 
 %%% This format mirrors HTTP Structured Fields, aside from its limitations of 
 %%% compound type depths, as well as limited floating point representations.
@@ -15,6 +23,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(SUPPORTED_TYPES, [<<"integer">>, <<"float">>, <<"atom">>, <<"list">>]).
+
 %%% Route signature functions to the `dev_codec_httpsig' module
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
@@ -22,26 +32,42 @@ verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(List, Req, Opts) when is_list(List) ->
-    % If the message to encode is a list, we encode it as if it is a map, then
-    % add the `.' key to the `ao-types' field, indicating that this message is
-    % a list.
-    {ok, DecodedAsMap} = from(hb_util:list_to_numbered_message(List), Req, Opts),
-    AOTypes = decode_ao_types(DecodedAsMap, Opts),
-    {ok,
-        DecodedAsMap#{
-            <<"ao-types">> =>
-                encode_ao_types(
-                    AOTypes#{
-                        <<".">> => <<"list">>
-                    },
-                    Opts
-                )
-        }
-    };
+    % Encode the list as a map, then -- if our request indicates that we are
+    % encoding lists -- add the `.' key to the `ao-types' field, indicating
+    % that this message is a list and return. Otherwise, if the downstream
+    % encoding did not set its own `ao-types' field, we convert the message
+    % back to a list.
+    {ok, DecodedAsMap} =
+        from(
+            hb_util:list_to_numbered_message(List),
+            Req,
+            Opts
+        ),
+    EncodingLists = lists:member(<<"list">>, find_encode_types(Req, Opts)),
+    EncodingHasAOTypes = hb_maps:is_key(<<"ao-types">>, DecodedAsMap, Opts),
+    case EncodingLists orelse EncodingHasAOTypes of
+        true ->
+            AOTypes = decode_ao_types(DecodedAsMap, Opts),
+            {ok, DecodedAsMap#{
+                <<"ao-types">> =>
+                    encode_ao_types(
+                        AOTypes#{
+                            <<".">> => <<"list">>
+                        },
+                        Opts
+                    )
+                }
+            };
+        false ->
+            % If the downstream encoding did not set its own `ao-types' field
+            % we return the message as a list.
+            {ok, hb_util:numbered_keys_to_list(DecodedAsMap, Opts)}
+    end;
 from(Msg, Req, Opts) when is_map(Msg) ->
     % Normalize the message, offloading links to the cache.
     NormLinks = hb_link:normalize(Msg, linkify_mode(Req, Opts), Opts),
     NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
+    EncodeTypes = find_encode_types(Req, Opts),
     {Types, Values} = lists:foldl(
         fun (Key, {Types, Values}) ->
             case hb_maps:find(Key, NormKeysMap, Opts) of
@@ -51,12 +77,18 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                     ?event({from_recursing, {nested, Nested}}),
                     {Types, [{Key, hb_util:ok(from(Nested, Req, Opts))} | Values]};
                 {ok, Value} when
-                        is_atom(Value) or is_integer(Value)
-                        or is_float(Value) ->
+                        is_atom(Value) or is_integer(Value) or is_float(Value) ->
                     BinKey = hb_ao:normalize_key(Key),
                     ?event({encode_value, Value}),
-                    {Type, BinValue} = encode_value(Value),
-                    {[{BinKey, Type} | Types], [{BinKey, BinValue} | Values]};
+                    case maybe_encode_value(Value, EncodeTypes) of
+                        {Type, BinValue} ->
+                            {
+                                [{BinKey, Type} | Types],
+                                [{BinKey, BinValue} | Values]
+                            };
+                        skip ->
+                            {Types, [{Key, Value} | Values]}
+                    end;
                 {ok, {resolve, Operations}} when is_list(Operations) ->
                     {Types, [{Key, {resolve, Operations}} | Values]};
                 {ok, Function} when is_function(Function) ->
@@ -115,6 +147,17 @@ from(Msg, Req, Opts) when is_map(Msg) ->
     };
 from(Other, _Req, _Opts) -> {ok, hb_path:to_binary(Other)}.
 
+%% @doc Find the types that should be encoded from the request and options.
+find_encode_types(Req, Opts) ->
+    hb_maps:get(<<"encode-types">>, Req, ?SUPPORTED_TYPES, Opts).
+
+%% @doc Determine the type for a value.
+type(Int) when is_integer(Int) -> <<"integer">>;
+type(Float) when is_float(Float) -> <<"float">>;
+type(Atom) when is_atom(Atom) -> <<"atom">>;
+type(List) when is_list(List) -> <<"list">>;
+type(Other) -> Other.
+
 %% @doc Discern the linkify mode from the request and the options.
 linkify_mode(Req, Opts) ->
     case hb_maps:get(<<"bundle">>, Req, not_found, Opts) of
@@ -129,6 +172,11 @@ linkify_mode(Req, Opts) ->
 
 %% @doc Convert a TABM into a native HyperBEAM message.
 to(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
+to(TABM0, Req, Opts) when is_list(TABM0) ->
+    % If we receive a list, we convert it to a message and run `to/3' on it. 
+    % Finally, we convert the result back to a list.
+    {ok, TABM1} = to(hb_util:list_to_numbered_message(TABM0), Req, Opts),
+    {ok, hb_util:numbered_keys_to_list(TABM1, Opts)};
 to(TABM0, Req, Opts) ->
     Types = decode_ao_types(TABM0, Opts),
     % Decode all links to their HyperBEAM-native, resolvable form.
@@ -180,8 +228,10 @@ encode_ao_types(Types, _Opts) ->
         )
     )).
 
-%% @doc Parse the `ao-types' field of a TABM and return a map of keys and their
-%% types
+%% @doc Parse the `ao-types' field of a TABM if present, and return a map of
+%% keys and their types. If the given value is a list, we return an empty map
+%% as there can be no `ao-types'.
+decode_ao_types(List, _Opts) when is_list(List) -> #{};
 decode_ao_types(Msg, Opts) when is_map(Msg) ->
     decode_ao_types(hb_maps:get(<<"ao-types">>, Msg, <<>>, Opts), Opts);
 decode_ao_types(Bin, _Opts) when is_binary(Bin) ->
@@ -205,8 +255,6 @@ is_list_from_ao_types(Types, _Opts) ->
     end.
 
 %% @doc Find the implicit keys of a TABM.
-implicit_keys(Req) ->
-    implicit_keys(Req, #{}).
 implicit_keys(Req, Opts) ->
     hb_maps:keys(
         hb_maps:filtermap(
@@ -218,6 +266,13 @@ implicit_keys(Req, Opts) ->
         ),
 		Opts
     ).
+
+%% @doc Encode a value if it is in the list of supported types.
+maybe_encode_value(Value, EncodeTypes) ->
+    case lists:member(type(Value), EncodeTypes) of
+        true -> encode_value(Value);
+        false -> skip
+    end.
 
 %% @doc Convert a term to a binary representation, emitting its type for
 %% serialization as a separate tag.

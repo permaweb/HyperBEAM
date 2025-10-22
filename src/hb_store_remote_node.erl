@@ -5,6 +5,8 @@
 %%% to upload it to an Arweave bundler to ensure persistence, too.
 -module(hb_store_remote_node).
 -export([scope/1, type/2, read/2, write/3, make_link/3, resolve/2]).
+%%% Public utilities.
+-export([maybe_cache/2, maybe_cache/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -12,10 +14,9 @@
 %%
 %% For the remote store, the scope is always `remote'.
 %%
-%% @param Arg An arbitrary parameter (ignored).
+%% @param StoreOpts A message with the store options (ignored).
 %% @returns remote.
-scope(Arg) ->
-    ?event({remote_scope, {arg, Arg}}),
+scope(_StoreOpts) ->
     remote.
 
 %% @doc Resolve a key path in the remote store.
@@ -52,16 +53,67 @@ type(Opts = #{ <<"node">> := Node }, Key) ->
 %% @param Key The key to read.
 %% @returns {ok, Msg} on success or not_found if the key is missing.
 read(Opts = #{ <<"node">> := Node }, Key) ->
-    ?event({remote_read, {node, Node}, {key, Key}}),
-    case hb_http:get(Node, #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key }, Opts) of
+    ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
+    HTTPRes =
+        hb_http:get(
+            Node,
+            #{ <<"path">> => <<"/~cache@1.0/read">>, <<"target">> => Key },
+            Opts
+        ),
+    case HTTPRes of
         {ok, Res} ->
             % returning the whole response to get the test-key
             {ok, Msg} = hb_message:with_only_committed(Res, Opts),
-            ?event({read, {result, Msg, response, Res}}),
+            ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
+            maybe_cache(Opts, Msg, [Key]),
             {ok, Msg};
         {error, _Err} ->
-            ?event({read, {result, not_found}}),
+            ?event(store_remote_node, {read_not_found, {key, Key}}),
             not_found
+    end.
+
+%% @doc Cache the data if the cache is enabled. The `local-store' option may
+%% either be `false' or a store definition to use as the local cache. Additional
+%% paths may be provided that should be linked to the data.
+maybe_cache(StoreOpts, Data) ->
+    maybe_cache(StoreOpts, Data, []).
+maybe_cache(StoreOpts, Data, Links) ->
+    ?event({maybe_cache, StoreOpts, Data}),
+    % Check if the local store is in our store options.
+    case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
+        false ->
+            skipped;
+        Store ->
+            case hb_cache:write(Data, #{ store => Store }) of
+                {ok, RootPath} ->
+                    % Remove the base path from the links.
+                    LinksWithoutRootPath =
+                        lists:filter(
+                            fun(Link) -> Link /= RootPath end,
+                            Links
+                        ),
+                    ?event(store_remote_node, cached_received),
+                    LinkResults =
+                        lists:filter(
+                            fun(Link) ->
+                                hb_store:make_link(Store, RootPath, Link) == false
+                            end,
+                            LinksWithoutRootPath
+                        ),
+                    ?event(store_remote_node,
+                        {linked_cached,
+                            {failed_links, LinkResults}
+                        }
+                    ),
+                    case LinkResults of
+                        [] -> ok;
+                        _ -> {failed_links, LinkResults}
+                    end;
+                {error, Err} ->
+                    ?event(store_remote_node, error_on_local_cache_write),
+                    ?event(warning, {error_caching_remote_node_data, Err}),
+                    {error, Err}
+            end
     end.
 
 %% @doc Write a key to the remote node.
@@ -86,7 +138,7 @@ write(Opts = #{ <<"node">> := Node }, Key, Value) ->
     case hb_http:post(Node, SignedMsg, Opts) of
         {ok, Response} ->
             Status = hb_ao:get(<<"status">>, Response, 0, #{}),
-            ?event({write, {response, Response}}),
+            ?event(store_remote_node, {write_completed, {response, Response}}),
             case Status of
                 200 -> ok;
                 _ -> {error, {unexpected_status, Status}}
@@ -115,13 +167,13 @@ make_link(Opts = #{ <<"node">> := Node }, Source, Destination) ->
     case hb_http:post(Node, SignedMsg, Opts) of
         {ok, Response} ->
             Status = hb_ao:get(<<"status">>, Response, 0, #{}),
-            ?event({make_remote_link, {response, Response}}),
+            ?event(store_remote_node, {make_link_completed, {response, Response}}),
             case Status of
                 200 -> ok;
                 _ -> {error, {unexpected_status, Status}}
             end;
         {error, Err} ->
-            ?event({make_remote_link, {error, Err}}),
+            ?event(store_remote_node, {make_link_error, {error, Err}}),
             {error, Err}
     end.
 

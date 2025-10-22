@@ -7,6 +7,13 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+%%% By default, we wait 10 seconds for a response from the scheduler before
+%%% throwing an error on the client. If the scheduler is not able to sequence
+%%% the message within this time, it will be discarded upon recipient by the
+%%% server. This avoids situations in which the client did not receive 
+%%% confirmation of the assignment, but the scheduler still processes it.
+-define(DEFAULT_TIMEOUT, 10000).
+
 %% @doc Start a scheduling server for a given computation.
 start(ProcID, Proc, Opts) ->
     ?event(scheduling, {starting_scheduling_server, {proc_id, ProcID}}),
@@ -96,10 +103,20 @@ commitment_wallets(ProcMsg, Opts) ->
 schedule(AOProcID, Message) when is_binary(AOProcID) ->
     schedule(dev_scheduler_registry:find(AOProcID), Message);
 schedule(ErlangProcID, Message) ->
-    ErlangProcID ! {schedule, Message, self()},
+    ?event(
+        {scheduling_message,
+            {proc_id, ErlangProcID},
+            {message, Message},
+            {is_alive, is_process_alive(ErlangProcID)}
+        }
+    ),
+    AbortTime = scheduler_time() + ?DEFAULT_TIMEOUT,
+    ErlangProcID ! {schedule, Message, self(), AbortTime},
     receive
         {scheduled, Message, Assignment} ->
             Assignment
+    after ?DEFAULT_TIMEOUT ->
+        throw({scheduler_timeout, {proc_id, ErlangProcID}, {message, Message}})
     end.
 
 %% @doc Get the current slot from the scheduling server.
@@ -116,8 +133,23 @@ stop(ProcID) ->
 %% returns the current slot.
 server(State) ->
     receive
-        {schedule, Message, Reply} ->
-            server(assign(State, Message, Reply));
+        {schedule, Message, Reply, AbortTime} ->
+            case SchedTime = scheduler_time() > AbortTime of
+                true ->
+                    % Ignore scheduling requests if they are too old. The
+                    % `abort-time' signals to us that the client has already
+                    % given up on the request, so in order to maintain
+                    % predictability we ignore it.
+                    ?event(error,
+                        {received_old_schedule_request,
+                            {abort_time, AbortTime},
+                            {sched_time, SchedTime}
+                        }
+                    ),
+                    server(State);
+                false ->
+                    server(assign(State, Message, Reply))
+            end;
         {info, Reply} ->
             Reply ! {info, State},
             server(State);
@@ -161,7 +193,7 @@ do_assign(State, Message, ReplyPID) ->
                         <<"path">> =>
                             case hb_path:from_message(request, Message, Opts) of
                                 undefined -> <<"compute">>;
-                                Path -> Path
+                                Path -> hb_path:to_binary(Path)
                             end,
                         <<"data-protocol">> => <<"ao">>,
                         <<"variant">> => <<"ao.N.1">>,
@@ -172,9 +204,10 @@ do_assign(State, Message, ReplyPID) ->
                         <<"block-hash">> => hb_util:human_id(Hash),
                         <<"block-timestamp">> => Timestamp,
                         % Note: Local time on the SU, not Arweave
-                        <<"timestamp">> => erlang:system_time(millisecond),
+                        <<"timestamp">> => scheduler_time(),
                         <<"hash-chain">> => hb_util:id(HashChain),
-                        <<"body">> => OnlyAttested
+                        <<"body">> => OnlyAttested,
+                        <<"type">> => <<"Assignment">>
                     },
                     State
                 ),
@@ -257,6 +290,10 @@ next_hashchain(HashChain, Message, Opts) ->
         sha256,
         << HashChain/binary, ID/binary >>
     ).
+
+%% @doc Return the current time in milliseconds.
+scheduler_time() ->
+    erlang:system_time(millisecond).
 
 %% TESTS
 

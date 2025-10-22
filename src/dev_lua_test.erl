@@ -154,7 +154,7 @@ exec_test(State, Function) ->
     case Status of
         ok -> ok;
         error ->
-            hb_format:debug_print(Result, <<"Lua">>, Function, 1),
+            hb_format:print(Result, <<"Lua">>, Function, 1),
             ?assertEqual(
                 ok,
                 Status

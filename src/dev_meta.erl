@@ -23,7 +23,7 @@
 %% info call will match the three-argument version of the function. If in the 
 %% future the `request' is added as an argument to AO-Core's internal `info'
 %% function, we will need to find a different approach.
-info(_) -> #{ exports => [info, build] }.
+info(_) -> #{ exports => [<<"info">>, <<"build">>] }.
 
 %% @doc Utility function for determining if a request is from the `operator' of
 %% the node.
@@ -215,7 +215,6 @@ adopt_node_message(Request, NodeMsg) ->
 %% After execution, we run the node's `response' hook on the result of
 %% the request before returning the result it grants back to the user.
 handle_resolve(Req, Msgs, NodeMsg) ->
-    TracePID = hb_opts:get(trace, no_tracer_set, NodeMsg),
     % Apply the pre-processor to the request.
     ?event(http_request,
         {resolve_hook,
@@ -237,10 +236,9 @@ handle_resolve(Req, Msgs, NodeMsg) ->
             Res =
                 hb_ao:resolve_many(
                     PreProcessedMsg,
-                    HTTPOpts#{ force_message => true, trace => TracePID }
+                    HTTPOpts#{ force_message => true }
                 ),
             {ok, StatusEmbeddedRes} = embed_status(Res, NodeMsg),
-            ?event(http_request, {res, StatusEmbeddedRes}),
             AfterResolveOpts = hb_http_server:get_opts(NodeMsg),
             % Apply the post-processor to the result.
             Output = maybe_sign(
@@ -255,7 +253,12 @@ handle_resolve(Req, Msgs, NodeMsg) ->
                 ),
                 NodeMsg
             ),
-            ?event(http_request, {response, Output}),
+            ?event(http_request,
+                {http_request,
+                    {request, Req},
+                    {result, Output}
+                }
+            ),
             Output;
         Res -> embed_status(hb_ao:force_message(Res, NodeMsg), NodeMsg)
     end.

@@ -13,21 +13,21 @@
 %%% and the current message. This means that each message in the HashPath is
 %%% dependent on all previous messages.
 %%% <pre>
-%%%     Msg1.HashPath = Msg1.ID
-%%%     Msg3.HashPath = Msg1.Hash(Msg1.HashPath, Msg2.ID)
-%%%     Msg3.{...} = AO-Core.apply(Msg1, Msg2)
+%%%     Base.HashPath = Base.ID
+%%%     Res.HashPath = Base.Hash(Base.HashPath, Req.ID)
+%%%     Res.{...} = AO-Core.apply(Base, Req)
 %%%     ...
 %%% </pre>
 %%% 
 %%% A message's ID itself includes its HashPath, leading to the mixing of
-%%% a Msg2's merkle list into the resulting Msg3's HashPath. This allows a single
+%%% a Req's merkle list into the resulting Res's HashPath. This allows a single
 %%% message to represent a history _tree_ of all of the messages that were
 %%% applied to generate it -- rather than just a linear history.
 %%% 
 %%% A message may also specify its own algorithm for generating its HashPath,
 %%% which allows for custom logic to be used for representing the history of a
-%%% message. When Msg2's are applied to a Msg1, the resulting Msg3's HashPath
-%%% will be generated according to Msg1's algorithm choice.
+%%% message. When Req's are applied to a Base, the resulting Res's HashPath
+%%% will be generated according to Base's algorithm choice.
 -module(hb_path).
 -export([hashpath/2, hashpath/3, hashpath/4, hashpath_alg/2]).
 -export([hd/2, tl/2]).
@@ -41,12 +41,12 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Extract the first key from a `Message2''s `Path' field.
+%% @doc Extract the first key from a `Request''s `Path' field.
 %% Note: This function uses the `dev_message:get/2' function, rather than 
 %% a generic call as the path should always be an explicit key in the message.
-hd(Msg2, Opts) ->
-    %?event({key_from_path, Msg2, Opts}),
-    case pop_request(Msg2, Opts) of
+hd(Req, Opts) ->
+    %?event({key_from_path, Req, Opts}),
+    case pop_request(Req, Opts) of
         undefined -> undefined;
         {Head, _} ->
             % `term_to_path' returns the full path, so we need to take the
@@ -59,8 +59,8 @@ hd(Msg2, Opts) ->
 %% transformation. Subsequently, the message's IDs will not be verifiable 
 %% after executing this transformation.
 %% This may or may not be the mainnet behavior we want.
-tl(Msg2, Opts) when is_map(Msg2) ->
-    case pop_request(Msg2, Opts) of
+tl(Req, Opts) when is_map(Req) ->
+    case pop_request(Req, Opts) of
         undefined -> undefined;
         {_, Rest} -> Rest
     end;
@@ -95,13 +95,13 @@ priv_store_remaining(Msg, RemainingPath, Opts) ->
             }
     }.
 
-%%% @doc Add an ID of a Msg2 to the HashPath of another message.
+%%% @doc Add an ID of a Req to the HashPath of another message.
 hashpath(Bin, _Opts) when is_binary(Bin) ->
     % Default hashpath for a binary message is its SHA2-256 hash.
     hb_util:human_id(hb_crypto:sha256(Bin));
-hashpath(RawMsg1, Opts) ->
-    Msg1 = hb_ao:normalize_keys(RawMsg1, Opts),
-    case hb_private:from_message(Msg1) of
+hashpath(RawBase, Opts) ->
+    Base = hb_ao:normalize_keys(RawBase, Opts),
+    case hb_private:from_message(Base) of
         #{ <<"hashpath">> := HP } -> HP;
         _ ->
             % Note: We do not use `hb_message:id' here because it will call
@@ -110,7 +110,7 @@ hashpath(RawMsg1, Opts) ->
                 hb_util:human_id(
                     hb_util:ok(
                         dev_message:id(
-                            Msg1,
+                            Base,
                             #{ <<"commitments">> => <<"all">> },
                             Opts
                         )
@@ -120,7 +120,7 @@ hashpath(RawMsg1, Opts) ->
                 A:B:ST ->
                     throw(
                         {badarg,
-                            {unsupported_type, Msg1},
+                            {unsupported_type, Base},
                             {error, A},
                             {details, B},
                             {stacktrace, ST}
@@ -128,33 +128,33 @@ hashpath(RawMsg1, Opts) ->
                     )
             end
     end.
-hashpath(Msg1, Msg2, Opts) when is_map(Msg1) ->
-    Msg1Hashpath = hashpath(Msg1, Opts),
-    HashpathAlg = hashpath_alg(Msg1, Opts),
-    hashpath(Msg1Hashpath, Msg2, HashpathAlg, Opts);
-hashpath(Msg1, Msg2, Opts) ->
-    throw({hashpath_not_viable, Msg1, Msg2, Opts}).
-hashpath(Msg1, Msg2, HashpathAlg, Opts) when is_map(Msg2) ->
-    Msg2WithoutMeta = hb_maps:without(?AO_CORE_KEYS, Msg2, Opts),
-    ReqPath = from_message(request, Msg2, Opts),
-    case {map_size(Msg2WithoutMeta), ReqPath} of
+hashpath(Base, Req, Opts) when is_map(Base) ->
+    BaseHashpath = hashpath(Base, Opts),
+    HashpathAlg = hashpath_alg(Base, Opts),
+    hashpath(BaseHashpath, Req, HashpathAlg, Opts);
+hashpath(Base, Req, Opts) ->
+    throw({hashpath_not_viable, Base, Req, Opts}).
+hashpath(Base, Req, HashpathAlg, Opts) when is_map(Req) ->
+    ReqWithoutMeta = hb_maps:without(?AO_CORE_KEYS, Req, Opts),
+    ReqPath = from_message(request, Req, Opts),
+    case {map_size(ReqWithoutMeta), ReqPath} of
         {0, _} when ReqPath =/= undefined ->
-            hashpath(Msg1, to_binary(hd(ReqPath)), HashpathAlg, Opts);
+            hashpath(Base, to_binary(hd(ReqPath)), HashpathAlg, Opts);
         _ ->
-            {ok, Msg2ID} =
+            {ok, ReqID} =
                 dev_message:id(
-                    Msg2,
+                    Req,
                     #{ <<"commitments">> => <<"all">> },
                     Opts
                 ),
-            hashpath(Msg1, hb_util:human_id(Msg2ID), HashpathAlg, Opts)
+            hashpath(Base, hb_util:human_id(ReqID), HashpathAlg, Opts)
     end;
-hashpath(Msg1Hashpath, HumanMsg2ID, HashpathAlg, Opts) ->
-    ?event({hashpath, {msg1hp, {explicit, Msg1Hashpath}}, {msg2id, {explicit, HumanMsg2ID}}}),
+hashpath(BaseHashpath, HumanReqID, HashpathAlg, Opts) ->
+    ?event({hashpath, {basehp, {explicit, BaseHashpath}}, {reqid, {explicit, HumanReqID}}}),
     HP = 
-        case term_to_path_parts(Msg1Hashpath, Opts) of
+        case term_to_path_parts(BaseHashpath, Opts) of
             [_] ->
-                << Msg1Hashpath/binary, "/", HumanMsg2ID/binary >>;
+                << BaseHashpath/binary, "/", HumanReqID/binary >>;
             [Prev1, Prev2] ->
                 % Calculate the new base of the hashpath. We check whether the key is
                 % a human-readable binary ID, or a path part, and convert or pass
@@ -168,9 +168,9 @@ hashpath(Msg1Hashpath, HumanMsg2ID, HashpathAlg, Opts) ->
                         end
                     ),
                 HumanNewBase = hb_util:human_id(NativeNewBase),
-                << HumanNewBase/binary, "/", HumanMsg2ID/binary >>
+                << HumanNewBase/binary, "/", HumanReqID/binary >>
         end,
-    ?event({generated_hashpath, HP, {msg1hp, Msg1Hashpath}, {msg2id, HumanMsg2ID}}),
+    ?event({generated_hashpath, HP, {basehp, BaseHashpath}, {reqid, HumanReqID}}),
     HP.
 
 %%% @doc Get the hashpath function for a message from its HashPath-Alg.
@@ -218,13 +218,13 @@ queue_request(Msg, Path, Opts) ->
 	
 %%% @doc Verify the HashPath of a message, given a list of messages that
 %%% represent its history.
-verify_hashpath([Msg1, Msg2, Msg3|Rest], Opts) ->
-    CorrectHashpath = hashpath(Msg1, Msg2, Opts),
-    FromMsg3 = from_message(hashpath, Msg3, Opts),
-    CorrectHashpath == FromMsg3 andalso
+verify_hashpath([Base, Req, Res|Rest], Opts) ->
+    CorrectHashpath = hashpath(Base, Req, Opts),
+    FromRes = from_message(hashpath, Res, Opts),
+    CorrectHashpath == FromRes andalso
         case Rest of
             [] -> true;
-            _ -> verify_hashpath([Msg2, Msg3|Rest], Opts)
+            _ -> verify_hashpath([Req, Res|Rest], Opts)
         end.
 
 %% @doc Extract the request path or hashpath from a message. We do not use
@@ -330,34 +330,34 @@ normalize(Path) ->
 
 %%% TESTS
 hashpath_test() ->
-    Msg1 = #{ priv => #{<<"empty">> => <<"message">>} },
-    Msg2 = #{ priv => #{<<"exciting">> => <<"message2">>} },
-    Hashpath = hashpath(Msg1, Msg2, #{}),
+    Base = #{ priv => #{<<"empty">> => <<"message">>} },
+    Req = #{ priv => #{<<"exciting">> => <<"Request">>} },
+    Hashpath = hashpath(Base, Req, #{}),
     ?assert(is_binary(Hashpath) andalso byte_size(Hashpath) == 87).
 
-hashpath_direct_msg2_test() ->
-    Msg1 = #{ <<"base">> => <<"message">> },
-    Msg2 = #{ <<"path">> => <<"base">> },
-    Hashpath = hashpath(Msg1, Msg2, #{}),
+hashpath_direct_req_test() ->
+    Base = #{ <<"base">> => <<"message">> },
+    Req = #{ <<"path">> => <<"base">> },
+    Hashpath = hashpath(Base, Req, #{}),
     [_, KeyName] = term_to_path_parts(Hashpath),
     ?assert(matches(KeyName, <<"base">>)).
 
 multiple_hashpaths_test() ->
-    Msg1 = #{ <<"empty">> => <<"message">> },
-    Msg2 = #{ <<"exciting">> => <<"message2">> },
-    Msg3 = #{ priv => #{<<"hashpath">> => hashpath(Msg1, Msg2, #{}) } },
+    Base = #{ <<"empty">> => <<"message">> },
+    Req = #{ <<"exciting">> => <<"Request">> },
+    Res = #{ priv => #{<<"hashpath">> => hashpath(Base, Req, #{}) } },
     Msg4 = #{ <<"exciting">> => <<"message4">> },
-    Msg5 = hashpath(Msg3, Msg4, #{}),
+    Msg5 = hashpath(Res, Msg4, #{}),
     ?assert(is_binary(Msg5)).
 
 verify_hashpath_test() ->
-    Msg1 = #{ <<"test">> => <<"initial">> },
-    Msg2 = #{ <<"firstapplied">> => <<"msg2">> },
-    Msg3 = #{ priv => #{<<"hashpath">> => hashpath(Msg1, Msg2, #{})} },
-    Msg4 = #{ priv => #{<<"hashpath">> => hashpath(Msg2, Msg3, #{})} },
-    Msg3Fake = #{ priv => #{<<"hashpath">> => hashpath(Msg4, Msg2, #{})} },
-    ?assert(verify_hashpath([Msg1, Msg2, Msg3, Msg4], #{})),
-    ?assertNot(verify_hashpath([Msg1, Msg2, Msg3Fake, Msg4], #{})).
+    Base = #{ <<"test">> => <<"initial">> },
+    Req = #{ <<"firstapplied">> => <<"req">> },
+    Res = #{ priv => #{<<"hashpath">> => hashpath(Base, Req, #{})} },
+    Msg4 = #{ priv => #{<<"hashpath">> => hashpath(Req, Res, #{})} },
+    ResFake = #{ priv => #{<<"hashpath">> => hashpath(Msg4, Req, #{})} },
+    ?assert(verify_hashpath([Base, Req, Res, Msg4], #{})),
+    ?assertNot(verify_hashpath([Base, Req, ResFake, Msg4], #{})).
 
 validate_path_transitions(X, Opts) ->
     {Head, X2} = pop_request(X, Opts),
@@ -406,14 +406,14 @@ term_to_path_parts_test() ->
     ?assertEqual([], term_to_path_parts(<<"/">>)).
 
 % calculate_multistage_hashpath_test() ->
-%     Msg1 = #{ <<"base">> => <<"message">> },
-%     Msg2 = #{ <<"path">> => <<"2">> },
-%     Msg3 = #{ <<"path">> => <<"3">> },
+%     Base = #{ <<"base">> => <<"message">> },
+%     Req = #{ <<"path">> => <<"2">> },
+%     Res = #{ <<"path">> => <<"3">> },
 %     Msg4 = #{ <<"path">> => <<"4">> },
-%     Msg5 = hashpath(Msg1, [Msg2, Msg3, Msg4], #{}),
+%     Msg5 = hashpath(Base, [Req, Res, Msg4], #{}),
 %     ?assert(is_binary(Msg5)),
-%     Msg3Path = <<"3">>,
-%     Msg5b = hashpath(Msg1, [Msg2, Msg3Path, Msg4]),
+%     ResPath = <<"3">>,
+%     Msg5b = hashpath(Base, [Req, ResPath, Msg4]),
 %     ?assertEqual(Msg5, Msg5b).
 
 regex_matches_test() ->

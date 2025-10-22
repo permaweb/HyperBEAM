@@ -123,7 +123,7 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
     write(Opts, PathBin, Value);
 write(Opts, Path, Value) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
-    ?event(debug, {elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
+    ?event({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
     case elmdb:put(DBInstance, Path, Value) of
         ok -> ok;
         {error, Type, Description} ->
@@ -384,10 +384,10 @@ match(Opts, MatchKVs) ->
             end,
             MatchKVs
         ),
-    ?event(debug, {elmdb_match, MatchKVs}),
+    ?event({elmdb_match, MatchKVs}),
     case elmdb:match(DBInstance, WithPrefixes) of
         {ok, Matches} ->
-            ?event(debug, {elmdb_matched, Matches}),
+            ?event({elmdb_matched, Matches}),
             {ok, Matches};
         {error, not_found} -> not_found;
         not_found -> not_found
@@ -549,7 +549,7 @@ close_environment(StoreKey, DataDir) ->
         {ok, {Env, DBInstance}} ->
             close_and_cleanup(Env, DBInstance, StoreKey, DataDir);
         not_found ->
-            ?event(debug, {lmdb_stop_not_found_in_persistent_term, DataDir}),
+            ?event({lmdb_stop_not_found_in_persistent_term, DataDir}),
             safe_close_by_name(DataDir)
     end,
     ok.
@@ -566,13 +566,13 @@ safe_get_persistent_term(Key) ->
 close_and_cleanup(Env, DBInstance, StoreKey, DataDir) ->
     % Close DB instance first if it exists
     DBCloseResult = safe_close_db(DBInstance),
-    ?event(debug, {db_close_result, DBCloseResult}),
+    ?event({db_close_result, DBCloseResult}),
     % Then close the environment
     EnvCloseResult = safe_close_env(Env),
     persistent_term:erase(StoreKey),
     case EnvCloseResult of
-        ok -> ?event(debug, {lmdb_stop_success, DataDir});
-        {error, Reason} -> ?event(debug, {lmdb_stop_error, Reason})
+        ok -> ?event({lmdb_stop_success, DataDir});
+        {error, Reason} -> ?event({lmdb_stop_error, Reason})
     end.
 
 %% Close DB instance with error capture
@@ -828,26 +828,26 @@ exact_hb_store_test() ->
         <<"capacity">> => ?DEFAULT_SIZE
     },
     % Follow exact same pattern as hb_store test
-    ?event(debug, step1_make_group),
+    ?event(step1_make_group),
     make_group(StoreOpts, <<"test-dir1">>),
-    ?event(debug, step2_write_file),
+    ?event(step2_write_file),
     write(StoreOpts, [<<"test-dir1">>, <<"test-file">>], <<"test-data">>),
-    ?event(debug, step3_make_link),
+    ?event(step3_make_link),
     make_link(StoreOpts, [<<"test-dir1">>], <<"test-link">>),
     % Debug: test that the link behaves like the target (groups are unreadable)
-    ?event(debug, step4_check_link),
+    ?event(step4_check_link),
     LinkResult = read(StoreOpts, <<"test-link">>),
-    ?event(debug, {link_result, LinkResult}),
+    ?event({link_result, LinkResult}),
     % Since test-dir1 is a group and groups are unreadable, the link should also be unreadable
     ?assertEqual(not_found, LinkResult),
     % Debug: test intermediate steps
-    ?event(debug, step5_test_direct_read),
+    ?event(step5_test_direct_read),
     DirectResult = read(StoreOpts, <<"test-dir1/test-file">>),
-    ?event(debug, {direct_result, DirectResult}),
+    ?event({direct_result, DirectResult}),
     % This should work: reading via the link path  
-    ?event(debug, step6_test_link_read),
+    ?event(step6_test_link_read),
     Result = read(StoreOpts, [<<"test-link">>, <<"test-file">>]),
-    ?event(debug, {final_result, Result}),
+    ?event({final_result, Result}),
     ?assertEqual({ok, <<"test-data">>}, Result),
     {unset, _} = stop(StoreOpts).
 
@@ -1030,7 +1030,7 @@ isolated_type_debug_test() ->
     reset(StoreOpts),
     % Create the exact scenario from user's description:
     % 1. A message ID with nested structure
-    MessageID = <<"message123">>,
+    MessageID = <<"Base23">>,
     make_group(StoreOpts, MessageID),
     % 2. Create nested groups for "commitments" and "other-test-key"
     CommitmentsPath = <<MessageID/binary, "/commitments">>,

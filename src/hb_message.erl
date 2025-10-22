@@ -1,6 +1,6 @@
 
 %%% @doc This module acts an adapter between messages, as modeled in the
-%%% AO-Core protocol, and their uderlying binary representations and formats.
+%%% AO-Core protocol, and their underlying binary representations and formats.
 %%% 
 %%% Unless you are implementing a new message serialization codec, you should
 %%% not need to interact with this module directly. Instead, use the
@@ -12,7 +12,7 @@
 %%% types of message formats:
 %%% 
 %%%     - Richly typed AO-Core structured messages.
-%%%     - Arweave transations.
+%%%     - Arweave transactions.
 %%%     - ANS-104 data items.
 %%%     - HTTP Signed Messages.
 %%%     - Flat Maps.
@@ -60,9 +60,10 @@
 -export([convert/3, convert/4, uncommitted/1, uncommitted/2, committed/3]).
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
 -export([verify/1, verify/2, verify/3, commit/2, commit/3, signers/2, type/1, minimize/1]).
--export([commitment/2, commitment/3, with_only_committed/2, is_signed_key/3]).
--export([without_unless_signed/3]).
--export([with_commitments/3, without_commitments/3, normalize_commitments/2]).
+-export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
+-export([commitment/2, commitment/3, commitments/3]).
+-export([with_only_committed/2, without_unless_signed/3]).
+-export([with_commitments/3, without_commitments/3]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
 -export([default_tx_list/0, filter_default_keys/1]).
@@ -141,7 +142,6 @@ restore_priv(Msg, OldPriv, Opts) ->
     ?event({new_priv, NewPriv}),
     Msg#{ <<"priv">> => NewPriv }.
 
-
 %% @doc Get a codec device and request params from the given conversion request. 
 %% Expects conversion spec to either be a binary codec name, or a map with a
 %% `device' key and other parameters. Additionally honors the `always_bundle'
@@ -161,7 +161,7 @@ conversion_spec_to_req(Spec, Opts) ->
             case Device of
                 tabm -> tabm;
                 _ ->
-                    hb_ao:message_to_device(
+                    hb_ao_device:message_to_device(
                         #{
                             <<"device">> => Device
                         },
@@ -201,46 +201,84 @@ id(Msg, RawCommitters, Opts) ->
 %% unsigned ID present. By forcing this work to occur in strategically positioned
 %% places, we avoid the need to recalculate the IDs for every `hb_message:id`
 %% call.
-normalize_commitments(Msg, _Opts) when is_map(Msg) andalso map_size(Msg) == 0 ->
+normalize_commitments(Msg, Opts) ->
+    normalize_commitments(Msg, Opts, passive).
+normalize_commitments(Msg, _Opts, _) when is_map(Msg) andalso map_size(Msg) == 0 ->
     Msg;
-normalize_commitments(Msg = #{<<"priv">> := _}, _Opts) when map_size(Msg) == 1 ->
+normalize_commitments(Msg = #{<<"priv">> := _}, _Opts, _) when map_size(Msg) == 1 ->
     Msg;
-normalize_commitments(Msg, Opts) when is_map(Msg) ->
+normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
+    ?event(debug_normalize_commitments, {normalize_commitments, {msg, Msg}}),
     NormMsg = 
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
                 Val;
-               (_Key, Val) -> normalize_commitments(Val, Opts)
+               (_Key, Val) -> normalize_commitments(Val, Opts, Mode)
             end,
             Msg
         ),
-    MessageWithoutHmac = 
-        without_commitments(
-            #{ <<"type">> => <<"hmac-sha256">> },
-            NormMsg,
-            Opts
-        ),
-    {ok, #{ <<"commitments">> := Commitments }} =
-        dev_message:commit(
-            MessageWithoutHmac,
-            #{ 
-                <<"type">> => <<"hmac-sha256">>,
-                <<"bundle">> => hb_maps:get(<<"bundle">>, Opts, false, Opts) 
-            },
-            Opts
-        ),
-    MessageWithoutHmac#{
-        <<"commitments">> =>
-            hb_maps:merge(
-                Commitments,
-                hb_maps:get(<<"commitments">>, MessageWithoutHmac, #{}, Opts),
-                Opts
-            )
-    };
-normalize_commitments(Msg, Opts) when is_list(Msg) ->
-    lists:map(fun(X) -> normalize_commitments(X, Opts) end, Msg);
-normalize_commitments(Msg, _Opts) ->
+    do_normalize_commitments(NormMsg, Opts, Mode);
+normalize_commitments(Msg, Opts, Mode) when is_list(Msg) ->
+    ?event(debug_normalize_commitments, {normalize_commitments, {list, Msg}}),
+    lists:map(fun(X) -> normalize_commitments(X, Opts, Mode) end, Msg);
+normalize_commitments(Msg, _Opts, _Mode) ->
     Msg.
+
+do_normalize_commitments(Msg, Opts, passive) ->
+    ?event(debug_normalize_commitments, {passive, {msg, Msg}}),
+    case hb_maps:get(<<"commitments">>, Msg, not_found, Opts) of
+        not_found ->
+            {ok, #{ <<"commitments">> := Commitments }} =
+                dev_message:commit(
+                    Msg,
+                    #{ <<"type">> => <<"unsigned">> },
+                    Opts
+                ),
+            Msg#{ <<"commitments">> => Commitments };
+        _ -> Msg
+    end;
+do_normalize_commitments(Msg, _Opts, verify) when ?IS_EMPTY_MESSAGE(Msg) ->
+    Msg;
+do_normalize_commitments(Msg, Opts, verify) ->
+    {ok, #{ <<"commitments">> := NormCommitments }} =
+        dev_message:commit(
+            uncommitted(Msg),
+            #{ <<"type">> => <<"unsigned">> },
+            Opts
+        ),
+    ?event(normalization, {normalizing_commitments, verify}),
+    [NormID] = hb_maps:keys(NormCommitments, Opts),
+    MsgCommIDs = hb_maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts),
+    case lists:member(NormID, MsgCommIDs) of
+        true -> Msg;
+        false ->
+            attach_phash2(Msg#{ <<"commitments">> => NormCommitments }, Opts)
+    end;
+do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
+    ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
+    ?event(normalization,
+        {normalizing_commitments,
+            {expected_hash, ExpectedHash},
+            {priv, hb_private:from_message(Msg)}
+        }
+    ),
+    case hb_private:get(<<"last-phash2">>, Msg, not_found, Opts) of
+        not_found ->
+            attach_phash2(Msg, ExpectedHash, Opts);
+        ExpectedHash ->
+            Msg;
+        _DifferingHash ->
+            MsgWithHash = attach_phash2(Msg, ExpectedHash, Opts),
+            do_normalize_commitments(MsgWithHash, Opts, verify)
+    end.
+
+%% @doc Annotate a message with its phash2 value in the `priv' sub-map,
+%% calculating it if necessary.
+attach_phash2(Msg, Opts) ->
+    ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
+    attach_phash2(Msg, ExpectedHash, Opts).
+attach_phash2(Msg, ExpectedHash, Opts) ->
+    hb_private:set(Msg, <<"last-phash2">>, ExpectedHash, Opts).
 
 %% @doc Return a message with only the committed keys. If no commitments are
 %% present, the message is returned unchanged. This means that you need to
@@ -259,17 +297,19 @@ with_only_committed(Msg, Opts) when is_map(Msg) ->
                 CommittedKeys =
                     hb_message:committed(
                         Msg,
-                        #{ <<"commitments">> => <<"all">> },
+                        #{ <<"commitment-ids">> => <<"all">> },
                         Opts
                     ),
                 % Add the ao-body-key to the committed list if it is not
                 % already present.
                 ?event(debug_bundle, {committed_keys, CommittedKeys, {msg, Msg}}),
-                {ok, hb_maps:with(
-                    CommittedKeys ++ [<<"commitments">>],
-                    Msg,
-					Opts
-                )}
+                {ok,
+                    with_links(
+                        [<<"commitments">> | CommittedKeys],
+                        Msg,
+                        Opts
+                    )
+                }
             catch Class:Reason:St ->
                 {error,
                     {could_not_normalize,
@@ -285,6 +325,21 @@ with_only_committed(Msg, Opts) when is_map(Msg) ->
 with_only_committed(Msg, _) ->
     % If the message is not a map, it cannot be signed.
     {ok, Msg}.
+
+%% @doc Filter keys from a map that do not match either the list of keys or
+%% their relative `+link` variants.
+with_links(Keys, Map, Opts) ->
+    hb_maps:with(
+        Keys ++
+            lists:map(
+                fun(Key) ->
+                    <<(hb_link:remove_link_specifier(Key))/binary, "+link">>
+                end,
+                Keys
+            ),
+        Map,
+        Opts
+    ).
 
 %% @doc Return the message with only the specified committers attached.
 with_only_committers(Msg, Committers) ->
@@ -371,7 +426,7 @@ committed(Msg, all, Opts) ->
 committed(Msg, none, Opts) ->
     committed(Msg, #{ <<"committers">> => <<"none">> }, Opts);
 committed(Msg, List, Opts) when is_list(List) ->
-    committed(Msg, #{ <<"commitments">> => List }, Opts);
+    committed(Msg, #{ <<"commitment-ids">> => List }, Opts);
 committed(Msg, CommittersMsg, Opts) ->
     ?event(
         {committed,
@@ -457,9 +512,14 @@ match(Map1, Map2, Mode) ->
     match(Map1, Map2, Mode, #{}).
 match(Map1, Map2, Mode, Opts) ->
     try unsafe_match(Map1, Map2, Mode, [], Opts)
-    catch _:Details -> Details
+    catch
+        throw:{mismatch, Type, Path, Val1, Val2} ->
+            {mismatch, Type, Path, Val1, Val2};
+        _:Details:St -> {error, {Details, {trace, St}}}
     end.
 
+%% @doc Match two maps, returning `true' if they match, or throwing an error
+%% if they do not.
 unsafe_match(Map1, Map2, Mode, Path, Opts) ->
     Keys1 =
         hb_maps:keys(
@@ -487,8 +547,8 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
             {keys2, Keys2},
             {mode, Mode},
             {primary_keys_present, PrimaryKeysPresent},
-            {msg1, Map1},
-            {msg2, Map2}
+            {base, Map1},
+            {req, Map2}
         }
     ),
     case (Keys1 == Keys2) or (Mode == only_present) or PrimaryKeysPresent of
@@ -496,8 +556,16 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
             lists:all(
                 fun(Key) ->
                     ?event(match, {matching_key, Key}),
-                    Val1 = hb_ao:normalize_keys(hb_maps:get(Key, NormMap1, not_found, Opts), Opts),
-                    Val2 = hb_ao:normalize_keys(hb_maps:get(Key, NormMap2, not_found, Opts), Opts),
+                    Val1 =
+                        hb_ao:normalize_keys(
+                            hb_maps:get(Key, NormMap1, not_found, Opts),
+                            Opts
+                        ),
+                    Val2 =
+                        hb_ao:normalize_keys(
+                            hb_maps:get(Key, NormMap2, not_found, Opts),
+                            Opts
+                        ),
                     BothPresent = (Val1 =/= not_found) and (Val2 =/= not_found),
                     case (not BothPresent) and (Mode == only_present) of
                         true -> true;
@@ -506,18 +574,22 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
                                 true ->
                                     unsafe_match(Val1, Val2, Mode, Path ++ [Key], Opts);
                                 false ->
-                                    case Val1 == Val2 of
-                                        true -> true;
-                                        false ->
+                                    case {Val1, Val2} of
+                                        {V, V} -> true;
+                                        {V, '_'} when V =/= not_found -> true;
+                                        {'_', V} when V =/= not_found -> true;
+                                        {'_', '_'} -> true;
+                                        _ ->
                                             throw(
-                                                {value_mismatch,
+                                                {mismatch,
+                                                    value,
                                                     hb_format:short_id(
                                                         hb_path:to_binary(
                                                             Path ++ [Key]
                                                         )
                                                     ),
-                                                    {val1, Val1},
-                                                    {val2, Val2}
+                                                    Val1,
+                                                    Val2
                                                 }
                                             )
                                     end
@@ -528,10 +600,11 @@ unsafe_match(Map1, Map2, Mode, Path, Opts) ->
             );
         false ->
             throw(
-                {keys_mismatch,
-                    {path, hb_format:short_id(hb_path:to_binary(Path))},
-                    {keys1, Keys1},
-                    {keys2, Keys2}
+                {mismatch,
+                    keys,
+                    hb_format:short_id(hb_path:to_binary(Path)),
+                    Keys1,
+                    Keys2
                 }
             )
     end.
@@ -543,10 +616,10 @@ matchable_keys(Map) ->
 %% across nested messages. If the values are non-numeric, the new value is 
 %% returned if the values are different. Keys found only in the first message
 %% are dropped, as they have 'changed' to absence.
-diff(Msg1, Msg2, Opts) when is_map(Msg1) andalso is_map(Msg2) ->
+diff(Base, Req, Opts) when is_map(Base) andalso is_map(Req) ->
     maps:filtermap(
         fun(Key, Val2) ->
-            case hb_maps:get(Key, Msg1, not_found, Opts) of
+            case hb_maps:get(Key, Base, not_found, Opts) of
                 Val2 ->
                     % The key is present in both maps, and the values match.
                     false;
@@ -567,7 +640,7 @@ diff(Msg1, Msg2, Opts) when is_map(Msg1) andalso is_map(Msg2) ->
                     {true, Val2}
             end
         end,
-        Msg2
+        Req
     );
 diff(_Val1, _Val2, _Opts) ->
     not_found.
@@ -626,39 +699,45 @@ commitment(ID, Msg) ->
     commitment(ID, Msg, #{}).
 commitment(ID, Link, Opts) when ?IS_LINK(Link) ->
     commitment(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
-commitment(ID, Msg, Opts)
-        when is_binary(ID),
-        map_get(ID, map_get(<<"commitments">>, Msg)) /= undefined ->
+commitment(ID, #{ <<"commitments">> := Commitments }, Opts)
+        when is_binary(ID), is_map_key(ID, Commitments) ->
     hb_maps:get(
         ID,
-        hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+        Commitments,
         not_found,
         Opts
     );
-commitment(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
-    commitment(#{ <<"committer">> => CommitterID }, Msg, Opts);
-commitment(Spec, #{ <<"commitments">> := Commitments }, Opts) ->
-    Matches =
-        hb_maps:filtermap(
-            fun(ID, CommMsg) ->
-                case match(Spec, CommMsg, primary) of
-                    true -> {true, {ID, CommMsg}};
-                    _ -> false
-                end
-            end,
-            Commitments,
-            Opts
-        ),
-    case hb_maps:values(Matches, Opts) of
-        [] -> not_found;
-        [{ID, Commitment}] -> {ok, ID, Commitment};
-        _ ->
+commitment(Spec, Msg, Opts) ->
+    Matches = commitments(Spec, Msg, Opts),
+    ?event(debug_commitment, {commitment, {spec, Spec}, {matches, Matches}}),
+    if
+        map_size(Matches) == 0 -> not_found;
+        map_size(Matches) == 1 ->
+            CommID = hd(hb_maps:keys(Matches)),
+            {ok, CommID, hb_util:ok(hb_maps:find(CommID, Matches, Opts))};
+        true ->
             ?event(commitment, {multiple_matches, {matches, Matches}}),
             multiple_matches
-    end;
-commitment(_Spec, _Msg, _Opts) ->
-    % The message has no commitments, so the spec can never match.
-    not_found.
+    end.
+
+%% @doc Return a list of all commitments that match the spec.
+commitments(ID, Link, Opts) when ?IS_LINK(Link) ->
+    commitments(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
+commitments(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
+    commitments(#{ <<"committer">> => CommitterID }, Msg, Opts);
+commitments(Spec, #{ <<"commitments">> := Commitments }, Opts) ->
+    hb_maps:filtermap(
+        fun(_ID, CommMsg) ->
+            case match(Spec, CommMsg, primary, Opts) of
+                true -> {true, CommMsg};
+                _ -> false
+            end
+        end,
+        Commitments,
+        Opts
+    );
+commitments(_Spec, _Msg, _Opts) ->
+    #{}.
 
 %% @doc Return the devices for which there are commitments on a message.
 commitment_devices(#{ <<"commitments">> := Commitments }, Opts) ->

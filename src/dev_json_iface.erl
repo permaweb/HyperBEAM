@@ -107,28 +107,64 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     MsgWithoutCommitments = hb_maps:without([<<"commitments">>], TABM, Opts),
     ID = hb_message:id(RawMsg, all, Opts),
     ?event({encoding, {id, ID}, {msg, RawMsg}}),
-    Last = hb_ao:get(<<"anchor">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
-	Owner =
+	{Owner, Signature, PublicKey} =
         case hb_message:signers(RawMsg, Opts) of
-            [] -> <<>>;
+            [] -> {<<>>, <<>>, <<>>};
             [Signer|_] ->
+                {ok, _, Commitment} =
+                    hb_message:commitment(Signer, RawMsg, Opts),
+                CommitmentSignature =
+                    hb_ao:get(<<"signature">>, Commitment, <<>>, Opts),
+                CommitmentKeyId =
+                    dev_codec_httpsig_keyid:remove_scheme_prefix(
+                        hb_ao:get(<<"keyid">>, Commitment, <<>>, Opts)
+                    ),
                 case lists:member(owner_as_address, Features) of
-                    true -> hb_util:native_id(Signer);
+                    true -> 
+                        {
+                            hb_util:native_id(Signer),
+                            CommitmentSignature,
+                            CommitmentKeyId
+                        };
                     false ->
-                        {ok, Commitment} =
-                            hb_message:commitment(Signer, RawMsg, Opts),
-                        hb_ao:get_first(
-                            [
-                                {Commitment, <<"key">>},
-                                {Commitment, <<"owner">>}
-                            ],
-                            no_signing_public_key_found_in_commitment,
-                            Opts
-                        )
+                        CommitmentOwner =
+                            hb_ao:get_first(
+                                [
+                                    {Commitment, <<"key">>},
+                                    {Commitment, <<"owner">>}
+                                ],
+                                no_signing_public_key_found_in_commitment,
+                                Opts
+                            ),
+                        {CommitmentOwner, CommitmentSignature, CommitmentKeyId}
                 end
         end,
-    Data = hb_ao:get(<<"data">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
-    Target = hb_ao:get(<<"target">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
+    Last =
+        hb_ao:get(
+            <<"anchor">>,
+            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            <<>>,
+            Opts
+        ),
+    DataBytes =
+        hb_ao:get(
+            <<"data">>,
+            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            <<>>,
+            Opts
+        ),
+    Data =
+        case hb_util:is_printable_string(DataBytes) of
+            true -> DataBytes;
+            false -> null 
+        end,
+    Target =
+        hb_ao:get(
+            <<"target">>,
+            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            <<>>,
+            Opts
+        ),
     % Set "From" if From-Process is Tag or set with "Owner" address
     From =
         hb_ao:get(
@@ -137,7 +173,6 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             hb_util:encode(Owner),
             Opts
         ),
-    Sig = hb_ao:get(<<"signature">>, {as, <<"message@1.0">>, MsgWithoutCommitments}, <<>>, Opts),
     #{
         <<"Id">> => safe_to_id(ID),
         % NOTE: In Arweave TXs, these are called "last_tx"
@@ -149,13 +184,13 @@ message_to_json_struct(RawMsg, Features, Opts) ->
         <<"Target">> => safe_to_id(Target),
         <<"Data">> => Data,
         <<"Signature">> =>
-            case byte_size(Sig) of
+            case byte_size(Signature) of
                 0 -> <<>>;
-                512 -> hb_util:encode(Sig);
-                _ -> Sig
-            end
+                512 -> hb_util:encode(Signature);
+                _ -> Signature
+            end,
+        <<"PublicKey">> => PublicKey
     }.
-
 %% @doc Prepare the tags of a message as a key-value list, for use in the 
 %% construction of the JSON-Struct message.
 prepare_tags(Msg, Opts) ->
@@ -433,7 +468,7 @@ generate_stack(File, _Mode, RawOpts) ->
     Opts = #{ priv_wallet => hb:wallet() },
     Msg0 = dev_wasm:cache_wasm_image(File),
     Image = hb_ao:get(<<"image">>, Msg0, Opts),
-    Msg1 = Msg0#{
+    Base = Msg0#{
         <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> =>
             [
@@ -454,8 +489,8 @@ generate_stack(File, _Mode, RawOpts) ->
                 <<"authority">> => hb:address()
             }, Opts)
     },
-    {ok, Msg2} = hb_ao:resolve(Msg1, <<"init">>, Opts),
-    Msg2.
+    {ok, Req} = hb_ao:resolve(Base, <<"init">>, Opts),
+    Req.
 
 generate_aos_msg(ProcID, Code) ->
     Opts = #{ priv_wallet => hb:wallet() },
@@ -478,14 +513,14 @@ basic_aos_call_test_() ->
 		Msg = generate_stack("test/aos-2-pure-xs.wasm"),
 		Proc = hb_ao:get(<<"process">>, Msg, #{ hashpath => ignore }),
 		ProcID = hb_message:id(Proc, all),
-		{ok, Msg3} =
+		{ok, Res} =
 			hb_ao:resolve(
 				Msg,
 				generate_aos_msg(ProcID, <<"return 1+1">>),
 				#{}
 			),
-		?event({res, Msg3}),
-		Data = hb_ao:get(<<"results/data">>, Msg3, #{}),
+		?event({res, Res}),
+		Data = hb_ao:get(<<"results/data">>, Res, #{}),
 		?assertEqual(<<"2">>, Data)
 	end}.
 
@@ -503,10 +538,10 @@ aos_stack_benchmark_test_() ->
                 Msg,
                 Opts
             ),
-        Msg2 = generate_aos_msg(ProcID, <<"return 1+1">>, Opts),
+        Req = generate_aos_msg(ProcID, <<"return 1+1">>, Opts),
         Iterations =
             hb_test_utils:benchmark(
-                fun() -> hb_ao:resolve(Initialized, Msg2, Opts) end,
+                fun() -> hb_ao:resolve(Initialized, Req, Opts) end,
                 BenchTime
             ),
         hb_test_utils:benchmark_print(

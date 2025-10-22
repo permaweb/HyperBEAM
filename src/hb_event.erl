@@ -31,7 +31,6 @@ log(Topic, X, Mod, Func, Line, Opts) ->
         true -> hb_format:print(X, Mod, Func, Line, Opts);
         false -> X
     end,
-	%handle_tracer(Topic, X, Opts),
     try increment(Topic, X, Opts) catch _:_ -> ok end,
     % Return the logged value to the caller. This allows callers to insert 
     % `?event(...)' macros into the flow of other executions, without having to
@@ -55,33 +54,6 @@ should_print(Topic, Opts) ->
             erlang:put({event_print, Topic}, {cached, Result}),
             Result
     end.
-
-handle_tracer(Topic, X, Opts) ->
-	AllowedTopics = [http, ao_result],
-	case lists:member(Topic, AllowedTopics) of
-		true -> 
-			case hb_opts:get(trace, undefined, Opts) of
-				undefined -> 
-					case tuple_to_list(X) of
-						[_ | Rest] -> 
-							try
-								Map = maps:from_list(Rest),
-								TopicOpts = hb_opts:get(opts, #{}, Map),
-								case hb_opts:get(trace, undefined, TopicOpts) of
-									undefined ->  ok;
-									TracePID ->
-                                        hb_tracer:record_step(TracePID, {Topic, X})
-								end
-							catch
-								_:_ -> ok
-							end;
-						_ -> 
-							ok
-					end;
-				TracePID -> hb_tracer:record_step(TracePID, {Topic, X})
-			end;
-		_ -> ok
-	end.
 
 %% @doc Increment the counter for the given topic and message. Registers the
 %% counter if it doesn't exist. If the topic is `global', the message is ignored.
@@ -121,17 +93,19 @@ increment(Topic, Message, _Opts, Count) ->
 %% **extremely** expensive, so it should only be used in very specific cases.
 %% Do not ship code that calls this function to prod.
 increment_callers(Topic) ->
+    increment_callers(Topic, erlang).
+increment_callers(Topic, Type) ->
     BinTopic = hb_util:bin(Topic),
     increment(
         <<BinTopic/binary, "-call-paths">>,
-        hb_format:trace_short(),
+        hb_format:trace_short(Type),
         #{}
     ),
     lists:foreach(
         fun(Caller) ->
             increment(<<BinTopic/binary, "-callers">>, Caller, #{})
         end,
-        hb_format:trace_to_list(hb_format:get_trace())
+        hb_format:trace_to_list(hb_format:get_trace(Type))
     ).
 
 %% @doc Return a message containing the current counter values for all logged

@@ -28,7 +28,7 @@ info(_) ->
 
 %% @doc Exports a default_handler function that can be used to test the
 %% handler resolution mechanism.
-info(_Msg1, _Msg2, _Opts) ->
+info(_Base, _Req, _Opts) ->
 	InfoBody = #{
 		<<"description">> => <<"Test device for testing the AO-Core framework">>,
 		<<"version">> => <<"1.0">>,
@@ -66,13 +66,13 @@ test_func(_) ->
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
 %% slot number in the results key.
-compute(Msg1, Msg2, Opts) ->
-    AssignmentSlot = hb_ao:get(<<"slot">>, Msg2, Opts),
-    Seen = hb_ao:get(<<"already-seen">>, Msg1, Opts),
-    ?event({compute_called, {msg1, Msg1}, {msg2, Msg2}, {opts, Opts}}),
+compute(Base, Req, Opts) ->
+    AssignmentSlot = hb_ao:get(<<"slot">>, Req, Opts),
+    Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
+    ?event({compute_called, {base, Base}, {req, Req}, {opts, Opts}}),
     {ok,
         hb_ao:set(
-            Msg1,
+            Base,
             #{
                 <<"random-key">> => <<"random-value">>,
                 <<"results">> =>
@@ -84,13 +84,13 @@ compute(Msg1, Msg2, Opts) ->
     }.
 
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
-init(Msg, _Msg2, Opts) ->
+init(Msg, _Req, Opts) ->
     ?event({init_called_on_dev_test, Msg}),
     {ok, hb_ao:set(Msg, #{ <<"already-seen">> => [] }, Opts)}.
 
 %% @doc Example `restore/3' handler. Sets the hidden key `Test/Started' to the
 %% value of `Current-Slot' and checks whether the `Already-Seen' key is valid.
-restore(Msg, _Msg2, Opts) ->
+restore(Msg, _Req, Opts) ->
     ?event({restore_called_on_dev_test, Msg}),
     case hb_ao:get(<<"already-seen">>, Msg, Opts) of
         not_found ->
@@ -109,15 +109,16 @@ restore(Msg, _Msg2, Opts) ->
 
 %% @doc Example implementation of an `imported' function for a WASM
 %% executor.
-mul(Msg1, Msg2) ->
+mul(Base, Req) ->
     ?event(mul_called),
-    State = hb_ao:get(<<"state">>, Msg1, #{ hashpath => ignore }),
-    [Arg1, Arg2] = hb_ao:get(<<"args">>, Msg2, #{ hashpath => ignore }),
+    State = hb_ao:get(<<"state">>, Base, #{ hashpath => ignore }),
+    [Arg1, Arg2] = hb_ao:get(<<"args">>, Req, #{ hashpath => ignore }),
     ?event({mul_called, {state, State}, {args, [Arg1, Arg2]}}),
     {ok, #{ <<"state">> => State, <<"results">> => [Arg1 * Arg2] }}.
 
 %% @doc Do nothing when asked to snapshot.
-snapshot(_Msg1, _Msg2, _Opts) ->
+snapshot(Base, Req, _Opts) ->
+    ?event({snapshot_called, {base, Base}, {req, Req}}),
     {ok, #{}}.
 
 %% @doc Set the `postprocessor-called' key to true in the HTTP server.
@@ -127,8 +128,8 @@ postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
     {ok, Msgs}.
 
 %% @doc Find a test worker's PID and send it an update message.
-update_state(_Msg, Msg2, _Opts) ->
-    case hb_ao:get(<<"test-id">>, Msg2) of
+update_state(_Msg, Req, _Opts) ->
+    case hb_ao:get(<<"test-id">>, Req) of
         not_found ->
             {error, <<"No test ID found in message.">>};
         ID ->
@@ -137,14 +138,14 @@ update_state(_Msg, Msg2, _Opts) ->
                 undefined ->
                     {error, <<"No test worker found.">>};
                 Pid ->
-                    Pid ! {update, Msg2},
+                    Pid ! {update, Req},
                     {ok, Pid}
             end
     end.
 
 %% @doc Find a test worker's PID and send it an increment message.
-increment_counter(_Msg1, Msg2, _Opts) ->
-    case hb_ao:get(<<"test-id">>, Msg2) of
+increment_counter(_Base, Req, _Opts) ->
+    case hb_ao:get(<<"test-id">>, Req) of
         not_found ->
             {error, <<"No test ID found in message.">>};
         ID ->
@@ -162,11 +163,11 @@ increment_counter(_Msg1, Msg2, _Opts) ->
 
 %% @doc Does nothing, just sleeps `Req/duration or 750' ms and returns the 
 %% appropriate form in order to be used as a hook.
-delay(Msg1, Req, Opts) ->
+delay(Base, Req, Opts) ->
     Duration =
         hb_ao:get_first(
             [
-                {Msg1, <<"duration">>},
+                {Base, <<"duration">>},
                 {Req, <<"duration">>}
             ],
             750,
@@ -176,7 +177,7 @@ delay(Msg1, Req, Opts) ->
     timer:sleep(Duration),
     ?event({delay, waking}),
     Return =
-        case hb_ao:get(<<"return">>, Msg1, Opts) of
+        case hb_ao:get(<<"return">>, Base, Opts) of
             not_found ->
                 hb_ao:get(<<"body">>, Req, #{ <<"result">> => <<"slept">> }, Opts);
             ReturnMsgs ->
@@ -200,8 +201,8 @@ device_with_function_key_module_test() ->
 
 compute_test() ->
     Msg0 = #{ <<"device">> => <<"test-device@1.0">> },
-    {ok, Msg1} = hb_ao:resolve(Msg0, init, #{}),
-    Msg2 =
+    {ok, Base} = hb_ao:resolve(Msg0, init, #{}),
+    Req =
         hb_ao:set(
             #{ <<"path">> => <<"compute">> },
             #{
@@ -210,8 +211,8 @@ compute_test() ->
             },
             #{}
         ),
-    {ok, Msg3} = hb_ao:resolve(Msg1, Msg2, #{}),
-    ?assertEqual(1, hb_ao:get(<<"results/assignment-slot">>, Msg3, #{})),
+    {ok, Res} = hb_ao:resolve(Base, Req, #{}),
+    ?assertEqual(1, hb_ao:get(<<"results/assignment-slot">>, Res, #{})),
     Msg4 =
         hb_ao:set(
             #{ <<"path">> => <<"compute">> },
@@ -221,11 +222,11 @@ compute_test() ->
             },
             #{}
         ),
-    {ok, Msg5} = hb_ao:resolve(Msg3, Msg4, #{}),
+    {ok, Msg5} = hb_ao:resolve(Res, Msg4, #{}),
     ?assertEqual(2, hb_ao:get(<<"results/assignment-slot">>, Msg5, #{})),
     ?assertEqual([2, 1], hb_ao:get(<<"already-seen">>, Msg5, #{})).
 
 restore_test() ->
-    Msg1 = #{ <<"device">> => <<"test-device@1.0">>, <<"already-seen">> => [1] },
-    {ok, Msg3} = hb_ao:resolve(Msg1, <<"restore">>, #{}),
-    ?assertEqual([1], hb_private:get(<<"test-key/started-state">>, Msg3, #{})).
+    Base = #{ <<"device">> => <<"test-device@1.0">>, <<"already-seen">> => [1] },
+    {ok, Res} = hb_ao:resolve(Base, <<"restore">>, #{}),
+    ?assertEqual([1], hb_private:get(<<"test-key/started-state">>, Res, #{})).

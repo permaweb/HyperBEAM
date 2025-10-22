@@ -109,27 +109,34 @@ call(M1, RawM2, Opts) ->
             not_found -> hb_maps:without([<<"device">>], TargetMod2);
             _ -> TargetMod2#{<<"device">> => RelayDevice}
         end,
-    TargetMod4 =
+    TargetMod4 = 
+        hb_maps:without(
+            [<<"commitments">>],
+            TargetMod3,
+            Opts
+        ),
+    TargetMod5 =
         case Commit of
             true ->
                 case hb_opts:get(relay_allow_commit_request, false, Opts) of
                     true ->
-                        ?event(debug_relay, {recommitting, TargetMod3}, Opts),
-                        Committed = hb_message:commit(TargetMod3, Opts),
+                        ?event(debug_relay, {recommitting, TargetMod4}, Opts),
+                        Committed = hb_message:commit(TargetMod4, Opts),
                         ?event(debug_relay, {relay_call, {committed, Committed}}, Opts),
                         true = hb_message:verify(Committed, all),
                         Committed;
                     false ->
                         throw(relay_commit_request_not_allowed)
                 end;
-            false -> TargetMod3
+            false -> TargetMod4
         end,
-    ?event(debug_relay, {relay_call, {without_http_params, TargetMod3}}),
-    ?event(debug_relay, {relay_call, {with_http_params, TargetMod4}}),
-    true = hb_message:verify(TargetMod4),
+    ?event(debug_relay, {relay_call, {without_http_params, TargetMod4}}),
+    ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
+    true = hb_message:verify(TargetMod5),
+
     ?event(debug_relay, {relay_call, {verified, true}}),
     Client =
-        case hb_ao:get(<<"http-client">>, BaseTarget, Opts) of
+        case hb_maps:get(<<"http-client">>, BaseTarget, not_found, Opts) of
             not_found -> hb_opts:get(relay_http_client, Opts);
             RequestedClient -> RequestedClient
         end,
@@ -138,14 +145,14 @@ call(M1, RawM2, Opts) ->
     HTTPOpts = Opts#{ http_client => Client, http_only_result => false },
     Res = case RelayPeer of
         not_found ->
-            hb_http:request(TargetMod4, HTTPOpts);
+            hb_http:request(TargetMod5, HTTPOpts);
         _ ->
             ?event(debug_relay, {relaying_to_peer, RelayPeer}),
             hb_http:request(
                 RelayMethod,
                 RelayPeer,
                 RelayPath,
-                TargetMod4,
+                TargetMod5,
                 HTTPOpts
             )
     end,
@@ -163,7 +170,7 @@ cast(M1, M2, Opts) ->
     {ok, <<"OK">>}.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
-request(_Msg1, Msg2, Opts) ->
+request(_Base, Req, Opts) ->
     {ok,
         #{
             <<"body">> =>
@@ -173,7 +180,7 @@ request(_Msg1, Msg2, Opts) ->
                         <<"path">> => <<"call">>,
                         <<"target">> => <<"body">>,
                         <<"body">> =>
-                            hb_ao:get(<<"request">>, Msg2, Opts#{ hashpath => ignore })
+                            hb_ao:get(<<"request">>, Req, Opts#{ hashpath => ignore })
                     }
                 ]
         }

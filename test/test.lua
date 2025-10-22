@@ -13,6 +13,11 @@ function assoctable()
     }
 end
 
+function mutate_test_key(state)
+    state["test-key"] = "test-value-2"
+    return state
+end
+
 function error_response()
     return "error", "Very bad, but Lua caught it."
 end
