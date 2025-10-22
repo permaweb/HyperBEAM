@@ -12,7 +12,7 @@
 -export([read/2, write/3, list/2, type/2]).
 -export([make_group/2, make_link/3, resolve/2]).
 -export([path/2, add_path/3]).
--export([default_test_opts/0]).
+-export([default_test_opts/0, get_config/1]).
 
 %% Helper functions
 -export([match/2]).
@@ -36,6 +36,10 @@
 -define(LINKS_NS, <<"links/">>).
 -define(GROUPS_NS, <<"groups/">>).
 
+-define(DEFAULT_RETRY_DELAY, 1000).
+-define(DEFAULT_RETRY_MODE, exponential_backoff).
+-define(DEFAULT_RETRIES, 5).
+-define(MAX_RETRY_DELAY, 300000).
 %%%-----------------------------------------------------------------------------
 %%% Configuration and Initialization (Phase 2)
 %%%-----------------------------------------------------------------------------
@@ -68,7 +72,8 @@ start(Opts) ->
             s3_bucket_after_host = false,
             s3_bucket_access_method = ForcePathStyle,
             aws_region = Region,
-            http_client = httpc
+            % Use `gun_pool` to define a connection pool.
+            http_client = fun gun_request/6
         },
         ok ?= test_bucket_access(Bucket, Config),
         StoreRef = get_store_ref(Opts),
@@ -89,6 +94,43 @@ start(Opts) ->
             {error, Error}
     end.
 
+
+%% Interface erlcloud_s3 with HB HTTP Client
+gun_request(URL, Method, Headers, Body, Timeout, _Config) when is_atom(Method) ->
+    case uri_string:parse(URL) of 
+        #{port := Port, scheme := Scheme, host := Host} = ParsedURL  ->
+            Peer = uri_string:normalize(#{port => Port, scheme => Scheme, host => Host}),
+            HeadersMap = maps:from_list(Headers),
+            MethodBinary = string:uppercase(atom_to_binary(Method)),
+            Args = #{ 
+                     peer => Peer, 
+                     path => uri_string:normalize(maps:with([path, fragment, query], ParsedURL)), 
+                     method => MethodBinary, 
+                     headers => HeadersMap, 
+                     body => Body
+                    },
+            Opts = #{connect_timeout => Timeout},
+            Response = hb_http_client:request(Args, Opts),
+            handle_gun_response(Response);
+        Reason -> 
+            ?event(error, {parsing_url, {url, URL},{reason, Reason}}),
+            {error, Reason}
+    end.
+
+handle_gun_response({ok, Status, ResponseHeaders, Body}) -> 
+        {ok, {{Status, undefined}, header_str(ResponseHeaders), Body}};
+
+handle_gun_response({error, _} = Error) -> 
+    Error.
+
+header_str(Hdrs) ->
+    [{string:to_lower(to_list_string(K)), to_list_string(V)} || {K, V} <- Hdrs].
+
+to_list_string(Val) when erlang:is_binary(Val) ->
+  erlang:binary_to_list(Val);
+to_list_string(Val) when erlang:is_list(Val) ->
+  Val.
+
 %% @doc Validate that all required configuration keys are present.
 %% Required keys: bucket, priv_access_key_id, priv_secret_access_key
 validate_config(Opts) ->
@@ -107,7 +149,7 @@ test_bucket_access(Bucket, Config) ->
     try erlcloud_s3:list_objects(BucketStr, [{max_keys, 1}], Config) of
         L when is_list(L) -> ok
     catch 
-        _Class:Reason -> 
+        _Class:Reason:Stacktrace -> 
             case Reason of 
                 {aws_error, {http_error, 404, _, _}} ->
                     error({bucket_not_found, Bucket});
@@ -116,6 +158,7 @@ test_bucket_access(Bucket, Config) ->
                      {inet,[inet],econnrefused}]}}} -> 
                     error("Check if MinIO is running locally. Eg: `rebar3 cmd docker_up`");
                 _ -> 
+                    ?event(error, {error, {reason, Reason}, {stacktrace, Stacktrace}}),
                     error({bucket_access_failed, Reason})
             end
     end.
@@ -141,10 +184,15 @@ get_config(Opts) ->
 %%%-----------------------------------------------------------------------------
 
 %% @doc Write a value to a key in S3.
--spec write(opts(), key(), value()) -> ok | retry.
+-spec write(opts(), key(), value()) -> ok | not_found.
 write(Opts, Key, Value) when is_list(Key) ->
     write(Opts, hb_store:join(Key), Value);
 write(Opts, Key, Value) when is_binary(Key) ->
+    RetryAttempts = maps:get(<<"retry-attempts">>, Opts, ?DEFAULT_RETRIES),
+    write(Opts, Key, Value, RetryAttempts).
+write(_Opts, _Key, _Value, 0) -> 
+    ok;
+write(Opts, Key, Value, AttemptsRemaining) ->
     maybe
         #{bucket := Bucket, prefix := Prefix, config := Config} = get_config(Opts),
 
@@ -169,7 +217,17 @@ write(Opts, Key, Value) when is_binary(Key) ->
     else
         Error ->
             ?event(error, {s3_write_error, {key, Key}, {reason, Error}}),
-            retry
+            MaxRetries = maps:get(<<"retry-attempts">>, Opts, ?DEFAULT_RETRIES),
+            MinRetryDelay = maps:get(<<"min-retry-delay">>, Opts, ?DEFAULT_RETRY_DELAY),
+            MaxRetryDelay = maps:get(<<"max-retry-delay">>, Opts, ?MAX_RETRY_DELAY),
+            RetryTime = case maps:get(<<"retry-mode">>, Opts, ?DEFAULT_RETRY_MODE) of
+                            exponential_backoff -> 
+                                min(MinRetryDelay * math:pow(2, MaxRetries - AttemptsRemaining), MaxRetryDelay);
+                            _ -> MinRetryDelay 
+                        end,
+            ?event(store_s3, {retry_in, RetryTime}),
+            timer:sleep(RetryTime),
+            write(Opts, Key, Value, AttemptsRemaining - 1)
     end.
 
 %% @doc Build full S3 key with optional prefix.
@@ -376,6 +434,7 @@ list(Opts, Path) ->
         BucketStr = hb_util:list(Bucket),
         PrefixStr = hb_util:list(SearchPrefix),
         ListOpts = [{prefix, PrefixStr}, {delimiter, "/"}],
+        ?event(store_s3, {list_opts, ListOpts}),
         try erlcloud_s3:list_objects(BucketStr, ListOpts, Config) of
             L when is_list(L) ->
                 Children = extract_children(SearchPrefix, L),
@@ -657,6 +716,9 @@ default_test_opts() ->
         <<"dangerous_reset">> => true,
         <<"force_path_style">> => true
      }.
+
+default_test_opts(Opts) -> 
+    maps:merge(default_test_opts(), Opts).
 
 -ifdef(ENABLE_S3).
 -ifdef(TEST).

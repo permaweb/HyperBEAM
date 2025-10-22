@@ -494,8 +494,8 @@ store_read(Target, Path, Store, Opts) ->
             ?event({reading_data, ResolvedFullPath}),
             case hb_store:read(Store, ResolvedFullPath) of
                 {ok, Bin} -> {ok, Bin};
-                not_found -> not_found;
-                failure -> failure
+                failure -> failure;
+                not_found -> not_found
             end;
         composite ->
             ?event({reading_composite, ResolvedFullPath}),
