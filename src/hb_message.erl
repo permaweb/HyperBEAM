@@ -222,24 +222,48 @@ normalize_commitments(Msg, _Opts, _Mode) ->
 
 do_normalize_commitments(Msg, Opts, passive) ->
     ?event(debug_normalize_commitments, {passive, {msg, Msg}}),
-    case hb_maps:get(<<"commitments">>, Msg, not_found, Opts) of
-        not_found ->
-            {ok, #{ <<"commitments">> := Commitments }} =
-                dev_message:commit(
-                    Msg,
-                    #{ <<"type">> => <<"unsigned">> },
-                    Opts
-                ),
-            Msg#{ <<"commitments">> => Commitments };
-        _ -> Msg
-    end;
+    MessageWithoutHmac = 
+        without_commitments(
+            #{ <<"type">> => <<"hmac-sha256">> },
+            Msg,
+            Opts
+        ),
+    {ok, #{ <<"commitments">> := Commitments }} =
+        dev_message:commit(
+            MessageWithoutHmac,
+            #{ 
+                <<"type">> => <<"hmac-sha256">>,
+                <<"bundle">> => hb_maps:get(<<"bundle">>, Opts, false, Opts) 
+            },
+            Opts
+        ),
+    MessageWithoutHmac#{
+        <<"commitments">> =>
+            hb_maps:merge(
+                Commitments,
+                hb_maps:get(<<"commitments">>, MessageWithoutHmac, #{}, Opts),
+                Opts
+            )
+        };
 do_normalize_commitments(Msg, _Opts, verify) when ?IS_EMPTY_MESSAGE(Msg) ->
     Msg;
 do_normalize_commitments(Msg, Opts, verify) ->
-    {ok, #{ <<"commitments">> := NormCommitments }} =
+    MessageWithoutHmac = 
+        without_commitments(
+            #{ <<"type">> => <<"hmac-sha256">> },
+            Msg,
+            Opts
+        ),
+    {ok, #{ <<"commitments">> := Commitments }} =
         dev_message:commit(
-            uncommitted(Msg),
+            MessageWithoutHmac,
             #{ <<"type">> => <<"unsigned">> },
+            Opts
+        ),
+    NormCommitments = 
+        hb_maps:merge(
+            Commitments,
+            hb_maps:get(<<"commitments">>, MessageWithoutHmac, #{}, Opts),
             Opts
         ),
     ?event(normalization, {normalizing_commitments, verify}),
@@ -248,7 +272,10 @@ do_normalize_commitments(Msg, Opts, verify) ->
     case lists:member(NormID, MsgCommIDs) of
         true -> Msg;
         false ->
-            attach_phash2(Msg#{ <<"commitments">> => NormCommitments }, Opts)
+            attach_phash2(
+                MessageWithoutHmac#{ <<"commitments">> => NormCommitments },
+                Opts
+            )
     end;
 do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
     ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
