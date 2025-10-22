@@ -109,9 +109,9 @@ To create a release with profiles:
 rebar3 as rocksdb,genesis_wasm release
 
 # Run S3 integration tests (make sure you have docker-compose installed)
-docker-compose -f test/docker-compose.yml -d up
+docker-compose -f test/docker-compose-s3.yml up -d
 rebar3 as s3 eunit --module hb_store_s3
-docker-compose -f test/docker-compose.yml -d down
+docker-compose -f test/docker-compose-s3.yml down -d
 ```
 
 Note: Profiles modify compile-time options that get baked into the release. Choose the profiles you need before starting HyperBEAM.
@@ -317,9 +317,7 @@ Add `--cover` to the eunit command to generate test coverage data.
 To generate the HTML report, run the command `cover`.
 
 ```
-```
 rebar3 as s3 eunit --module hb_store_s3 --cover, cover
-```
 ```
 
 ## Documentation
