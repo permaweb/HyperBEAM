@@ -87,8 +87,8 @@ HyperBEAM supports several optional build profiles that enable additional featur
 
 - `genesis_wasm`: Enables Genesis WebAssembly support
 - `rocksdb`: Enables RocksDB storage backend (adds RocksDB v1.8.0 dependency)
+- `s3`: Enables S3 storage backend
 - `http3`: Enables HTTP/3 support via QUIC protocol
-
 
 Using these profiles allows you to optimize HyperBEAM for your specific use case without adding unnecessary dependencies to the base installation.
 
@@ -107,6 +107,11 @@ To create a release with profiles:
 ```bash
 # Create release with profiles
 rebar3 as rocksdb,genesis_wasm release
+
+# Run S3 integration tests (make sure you have docker-compose installed)
+docker-compose -f test/docker-compose-s3.yml up -d
+rebar3 as s3 eunit --module hb_store_s3
+docker-compose -f test/docker-compose-s3.yml down -d
 ```
 
 Note: Profiles modify compile-time options that get baked into the release. Choose the profiles you need before starting HyperBEAM.
@@ -265,6 +270,55 @@ schedule of another execution.
 
 Details on other devices found in the pre-loaded set can be located in their 
 respective documentation.
+
+## Testing
+
+### Running tests
+
+Specific tests can be ran with `--test` parameter:
+
+```
+rebar3 eunit --test hb_store_lmdb:link_fragment_test
+```
+
+All tests inside a module can be ran with `--module` parameter:
+
+```
+rebar3 eunit --module hb_store_lmdb
+```
+
+To run multiple module append a comma:
+
+```
+rebar3 eunit --module hb_store_lmdb,hb_store_lru
+```
+
+Some tests might need extra profiles to be enabled before running it:
+
+```
+rebar3 as s3 eunit --module hb_store_s3
+```
+
+It might also need external dependencies like MinIO to be up and running:
+
+```
+rebar3 as s3 cmd docker_up, eunit --module hb_store_s3, cmd docker_down
+```
+
+To test generator tests, you need to add `-g` to the eunit command:
+
+```
+rebar3 eunit -g hb_cache:cache_suite_test_
+```
+
+### Generating test coverage report
+
+Add `--cover` to the eunit command to generate test coverage data.
+To generate the HTML report, run the command `cover`.
+
+```
+rebar3 as s3 eunit --module hb_store_s3 --cover, cover
+```
 
 ## Documentation
 
