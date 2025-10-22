@@ -104,3 +104,31 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 	fi
 	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."
+
+SGLANG_VERSION = v0.5.3.post3
+SGLANG_DIR = _build/sglang
+SGLANG_REPO = https://github.com/sgl-project/sglang.git
+
+# Set up SGLang inference environment
+setup-inference: $(SGLANG_DIR)
+	@if ! command -v python3 > /dev/null; then \
+		echo "Error: Python3 is not installed. Please install Python3 before continuing."; \
+		echo "For Ubuntu/Debian, you can install it with:"; \
+		echo "  sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv"; \
+		exit 1; \
+	fi
+	@if ! command -v pip > /dev/null; then \
+		echo "Error: pip is not installed. Please install pip before continuing."; \
+		echo "For Ubuntu/Debian, you can install it with:"; \
+		echo "  sudo apt-get install -y python3-pip"; \
+		exit 1; \
+	fi
+	@cd $(SGLANG_DIR) && \
+		pip install --upgrade pip && \
+		pip install -e "python" > /dev/null 2>&1 && \
+		echo "Installed SGLang $(SGLANG_VERSION) for inference backend."
+
+$(SGLANG_DIR):
+	@echo "Cloning SGLang repository..." && \
+		git clone -b $(SGLANG_VERSION) $(SGLANG_REPO) $(SGLANG_DIR) --single-branch && \
+		echo "Extracted SGLang $(SGLANG_VERSION) to $(SGLANG_DIR)"
