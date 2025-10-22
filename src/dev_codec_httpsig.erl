@@ -618,8 +618,14 @@ commit_secret_key_test() ->
 
 multicommitted_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
-    Signed1 = hb_message:commit(Msg, #{ priv_wallet => Wallet1 = ar_wallet:new() }),
-    Signed2 = hb_message:commit(Signed1, #{ priv_wallet => Wallet2 = ar_wallet:new() }),
+    Signed1 = hb_message:commit(
+        Msg,
+        #{ priv_wallet => Wallet1 = ar_wallet:new() }
+    ),
+    Signed2 = hb_message:commit(
+        Signed1,
+        #{ priv_wallet => Wallet2 = ar_wallet:new() }
+    ),
     Addr1 = hb_util:human_id(ar_wallet:to_address(Wallet1)),
     Addr2 = hb_util:human_id(ar_wallet:to_address(Wallet2)),
     ?event({signed_msg, Signed2}),

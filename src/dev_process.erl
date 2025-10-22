@@ -332,7 +332,6 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                         <<"attempted-slot">> => NextSlot
                     }};
                 {ok, #{ <<"body">> := SlotMsg, <<"state">> := State }} ->
-                    ?event(transfer_test, {compute_to_slot_slotmsg, SlotMsg}),
                     % Compute the next single state transition.
                     case compute_slot(ProcID, State, SlotMsg, Req, Opts) of
                         {ok, NewState} ->
@@ -627,13 +626,11 @@ ensure_loaded(Base, Req, Opts) ->
                     % the public component of a message) into memory.
                     % Do not update the hashpath while we do this, and remove
                     % the snapshot key after we have normalized the message.
-                    ?event(debug_charge, {maybe_loaded_snapshot_msg, MaybeLoadedSnapshotMsg}),
                     LoadedSnapshotMsg =
                         hb_cache:ensure_all_loaded(
                             MaybeLoadedSnapshotMsg,
                             Opts
                         ),
-                    ?event(debug_charge, {loaded_snapshot_msg, hb_maps:without([<<"priv">>, <<"module">>], LoadedSnapshotMsg)}),
                     Process = hb_maps:get(<<"process">>, LoadedSnapshotMsg, Opts),
                     #{ <<"commitments">> := HmacCommits} =
                         hb_message:with_commitments(
