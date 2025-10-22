@@ -176,7 +176,7 @@ gun_req(Args, ReestablishedConnection, Opts) ->
                     Reply ->
                         Reply
                 end;
-            {'EXIT', Reason} ->
+            {'EXIT', _} ->
                 {error, client_error};
             Error ->
                 Error

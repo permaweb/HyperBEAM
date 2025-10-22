@@ -87,7 +87,7 @@ HyperBEAM supports several optional build profiles that enable additional featur
 
 - `genesis_wasm`: Enables Genesis WebAssembly support
 - `rocksdb`: Enables RocksDB storage backend (adds RocksDB v1.8.0 dependency)
-- `s3`: Enables S3 storage backend 
+- `s3`: Enables S3 storage backend
 - `http3`: Enables HTTP/3 support via QUIC protocol
 
 Using these profiles allows you to optimize HyperBEAM for your specific use case without adding unnecessary dependencies to the base installation.
@@ -109,7 +109,9 @@ To create a release with profiles:
 rebar3 as rocksdb,genesis_wasm release
 
 # Run S3 integration tests (make sure you have docker-compose installed)
-rebar3 as s3 cmd docker_up, eunit --module hb_store_s3, cmd docker_down
+docker-compose -f test/docker-compose.yml -d up
+rebar3 as s3 eunit --module hb_store_s3
+docker-compose -f test/docker-compose.yml -d down
 ```
 
 Note: Profiles modify compile-time options that get baked into the release. Choose the profiles you need before starting HyperBEAM.
@@ -269,9 +271,9 @@ schedule of another execution.
 Details on other devices found in the pre-loaded set can be located in their 
 respective documentation.
 
-## Testing 
+## Testing
 
-### Running tests 
+### Running tests
 
 Specific tests can be ran with `--test` parameter:
 
@@ -309,9 +311,9 @@ To test generator tests, you need to add `-g` to the eunit command:
 rebar3 eunit -g hb_cache:cache_suite_test_
 ```
 
-### Generating test coverage report 
+### Generating test coverage report
 
-Add `--cover` to the eunit command to generate test coverage data. 
+Add `--cover` to the eunit command to generate test coverage data.
 To generate the HTML report, run the command `cover`.
 
 ```

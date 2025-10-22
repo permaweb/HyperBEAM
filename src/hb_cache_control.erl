@@ -136,13 +136,11 @@ perform_cache_write(Base, Req, Res, Opts) ->
     hb_cache:write(Req, Opts),
     case Res of
         <<_/binary>> ->
-            Store = hb_opts:get(store, no_viable_store, Opts),
-            HP = hb_path:hashpath(Base, Req, Opts),
-            DataPath = <<"data/", (hb_path:hashpath(Res, Opts))/binary>>,
-            case hb_store:type(Store, DataPath) of
-                simple -> hb_store:make_link(Store, DataPath, HP);
-                _ -> hb_cache:write_binary(HP, Res, Opts)
-            end;
+            hb_cache:write_binary(
+                hb_path:hashpath(Base, Req, Opts),
+                Res,
+                Opts
+            );
         Map when is_map(Map) ->
             hb_cache:write(Res, Opts);
         _ ->

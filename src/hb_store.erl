@@ -481,8 +481,7 @@ generate_test_suite(Suite, Stores) ->
                     hb_store:reset(Store)
                 end,
                 fun(_) ->
-                    %hb_store:reset(Store)
-                    ok
+                    hb_store:reset(Store)
                     % hb_store:stop(Store)
                 end,
                 [
@@ -539,8 +538,8 @@ store_suite_test_() ->
 
 benchmark_suite_test_() ->
     generate_test_suite([
-        %{"benchmark key read write", fun benchmark_key_read_write/1},
-        %{"benchmark list", fun benchmark_list/1},
+        {"benchmark key read write", fun benchmark_key_read_write/1},
+        {"benchmark list", fun benchmark_list/1},
         {"benchmark message read write", fun benchmark_message_read_write/1}
     ]).
 

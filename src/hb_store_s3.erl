@@ -30,16 +30,16 @@
 -define(DEFAULT_ENDPOINT, <<"https://s3.amazonaws.com">>).
 -define(DEFAULT_FORCE_PATH_STYLE, false).
 -define(DEFAULT_PREFIX, <<>>).
--define(MAX_REDIRECTS, 100).                   % Only resolve 1000 links to data
+-define(MAX_REDIRECTS, 100).                    % Only resolve 1000 links to data
 -define(LINK_MARKER, <<"link:">>).
 %% Namespace for storing link objects separately to avoid file/prefix collisions
 -define(LINKS_NS, <<"links/">>).
 -define(GROUPS_NS, <<"groups/">>).
 
--define(DEFAULT_RETRY_DELAY, 1000).
--define(DEFAULT_RETRY_MODE, exponential_backoff).
--define(DEFAULT_RETRIES, 5).
--define(MAX_RETRY_DELAY, 300000).
+-define(DEFAULT_RETRY_DELAY, 1000).             % Wait for 1 second before retry.
+-define(DEFAULT_RETRY_MODE, exp_backoff).
+-define(DEFAULT_RETRIES, 5).                    % Retries for 5 times until it returns.
+-define(DEFAULT_MAX_RETRY_DELAY, 300000).       % Max 5 minutes waiting to retry.
 %%%-----------------------------------------------------------------------------
 %%% Configuration and Initialization (Phase 2)
 %%%-----------------------------------------------------------------------------
@@ -97,28 +97,28 @@ start(Opts) ->
 
 %% Interface erlcloud_s3 with HB HTTP Client
 gun_request(URL, Method, Headers, Body, Timeout, _Config) when is_atom(Method) ->
-    case uri_string:parse(URL) of 
-        #{port := Port, scheme := Scheme, host := Host} = ParsedURL  ->
+    case uri_string:parse(URL) of
+        #{port := Port, scheme := Scheme, host := Host} = ParsedURL ->
             Peer = uri_string:normalize(#{port => Port, scheme => Scheme, host => Host}),
             HeadersMap = maps:from_list(Headers),
             MethodBinary = string:uppercase(atom_to_binary(Method)),
-            Args = #{ 
-                     peer => Peer, 
-                     path => uri_string:normalize(maps:with([path, fragment, query], ParsedURL)), 
-                     method => MethodBinary, 
-                     headers => HeadersMap, 
+            Args = #{
+                     peer => Peer,
+                     path => uri_string:normalize(maps:with([path, fragment, query], ParsedURL)),
+                     method => MethodBinary,
+                     headers => HeadersMap,
                      body => Body
                     },
             Opts = #{connect_timeout => Timeout},
             Response = hb_http_client:request(Args, Opts),
             handle_gun_response(Response);
-        Reason -> 
-            ?event(error, {parsing_url, {url, URL},{reason, Reason}}),
+        Reason ->
+            ?event(error, {parsing_url, {url, URL}, {reason, Reason}}),
             {error, Reason}
     end.
 
-handle_gun_response({ok, Status, ResponseHeaders, Body}) -> 
-        {ok, {{Status, undefined}, header_str(ResponseHeaders), Body}};
+handle_gun_response({ok, Status, ResponseHeaders, Body}) ->
+    {ok, {{Status, undefined}, header_str(ResponseHeaders), Body}};
 
 handle_gun_response({error, _} = Error) -> 
     Error.
@@ -127,9 +127,9 @@ header_str(Hdrs) ->
     [{string:to_lower(to_list_string(K)), to_list_string(V)} || {K, V} <- Hdrs].
 
 to_list_string(Val) when erlang:is_binary(Val) ->
-  erlang:binary_to_list(Val);
+    erlang:binary_to_list(Val);
 to_list_string(Val) when erlang:is_list(Val) ->
-  Val.
+    Val.
 
 %% @doc Validate that all required configuration keys are present.
 %% Required keys: bucket, priv_access_key_id, priv_secret_access_key
@@ -148,16 +148,16 @@ test_bucket_access(Bucket, Config) ->
     BucketStr = hb_util:list(Bucket),
     try erlcloud_s3:list_objects(BucketStr, [{max_keys, 1}], Config) of
         L when is_list(L) -> ok
-    catch 
-        _Class:Reason:Stacktrace -> 
-            case Reason of 
+    catch
+        _Class:Reason:Stacktrace ->
+            case Reason of
                 {aws_error, {http_error, 404, _, _}} ->
                     error({bucket_not_found, Bucket});
                 {aws_error, {socket_error, {failed_connect,
                     [{to_address,{"localhost", _ }},
-                     {inet,[inet],econnrefused}]}}} -> 
+                     {inet,[inet],econnrefused}]}}} ->
                     error("Check if MinIO is running locally. Eg: `rebar3 cmd docker_up`");
-                _ -> 
+                _ ->
                     ?event(error, {error, {reason, Reason}, {stacktrace, Stacktrace}}),
                     error({bucket_access_failed, Reason})
             end
@@ -190,7 +190,7 @@ write(Opts, Key, Value) when is_list(Key) ->
 write(Opts, Key, Value) when is_binary(Key) ->
     RetryAttempts = maps:get(<<"retry-attempts">>, Opts, ?DEFAULT_RETRIES),
     write(Opts, Key, Value, RetryAttempts).
-write(_Opts, _Key, _Value, 0) -> 
+write(_Opts, _Key, _Value, 0) ->
     ok;
 write(Opts, Key, Value, AttemptsRemaining) ->
     maybe
@@ -201,7 +201,7 @@ write(Opts, Key, Value, AttemptsRemaining) ->
         RelKey = hb_store:join(Key),
         FullKey = case RelKey of
             <<"data/", _/binary>> -> build_s3_key(Prefix, RelKey);
-            _ -> 
+            _ ->
                 case HasSlash of
                     true -> build_groups_key(Prefix, RelKey);
                     false -> build_links_key(Prefix, RelKey)
@@ -219,11 +219,11 @@ write(Opts, Key, Value, AttemptsRemaining) ->
             ?event(error, {s3_write_error, {key, Key}, {reason, Error}}),
             MaxRetries = maps:get(<<"retry-attempts">>, Opts, ?DEFAULT_RETRIES),
             MinRetryDelay = maps:get(<<"min-retry-delay">>, Opts, ?DEFAULT_RETRY_DELAY),
-            MaxRetryDelay = maps:get(<<"max-retry-delay">>, Opts, ?MAX_RETRY_DELAY),
+            MaxRetryDelay = maps:get(<<"max-retry-delay">>, Opts, ?DEFAULT_MAX_RETRY_DELAY),
             RetryTime = case maps:get(<<"retry-mode">>, Opts, ?DEFAULT_RETRY_MODE) of
-                            exponential_backoff -> 
+                            exp_backoff ->
                                 min(MinRetryDelay * math:pow(2, MaxRetries - AttemptsRemaining), MaxRetryDelay);
-                            _ -> MinRetryDelay 
+                            _ -> MinRetryDelay
                         end,
             ?event(store_s3, {retry_in, RetryTime}),
             timer:sleep(RetryTime),
@@ -290,7 +290,7 @@ read(Opts, Key) when is_binary(Key) ->
                 Class:Reason:Stacktrace ->
                     ?event(error,
                         {
-                            resolve_path_links_failed, 
+                            resolve_path_links_failed,
                             {class, Class},
                             {reason, Reason},
                             {stacktrace, Stacktrace},
@@ -307,7 +307,7 @@ read_with_links(Opts, Path) ->
         {ok, Value} ->
             % Check if this value is actually a link to another key
             case is_link(Value) of
-                {true, Link} -> 
+                {true, Link} ->
                    % Extract the target key and recursively resolve the link
                    read_with_links(Opts, Link);
                 false ->
@@ -368,7 +368,7 @@ make_link(Opts, Existing, New) ->
             false -> build_links_key(Prefix, New)
         end,
         NsKeyStr = hb_util:list(NsKey),
-        ok ?= try erlcloud_s3:put_object(BucketStr, NsKeyStr, LinkValue, [], Config) of 
+        ok ?= try erlcloud_s3:put_object(BucketStr, NsKeyStr, LinkValue, [], Config) of
                 L when is_list(L) -> ok
             catch _Class:Reason -> {error, Reason} end,
         ok
@@ -403,8 +403,7 @@ is_link(Value) ->
 %% Groups are detected by listing operations.
 -spec make_group(opts(), key()) -> ok.
 make_group(Opts, Path) ->
-    % NOTE: We need to write to a file to has_children 
-    % can consider this a group. 
+    % We need to write to a file to has_children can consider this a group.
     write(Opts, <<Path/binary, "/empty_group">>, <<"empty">>),
     ok.
 
@@ -588,7 +587,7 @@ resolve(Opts, Path) when is_binary(Path) ->
         {error, _} -> Path
     end.
 
-resolve_path_segments(Opts, Path) -> 
+resolve_path_segments(Opts, Path) ->
     resolve_path_segments(Opts, Path, 0).
 %% Internal path resolution that resolves all segments including the last
 resolve_path_segments(_Opts, _Path, Depth) when Depth > ?MAX_REDIRECTS ->
@@ -717,9 +716,6 @@ default_test_opts() ->
         <<"force_path_style">> => true
      }.
 
-default_test_opts(Opts) -> 
-    maps:merge(default_test_opts(), Opts).
-
 -ifdef(ENABLE_S3).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -743,7 +739,7 @@ basic_test() ->
     ?assertEqual(Value, Response),
     ok = stop(StoreOpts).
 
-not_found_test() -> 
+not_found_test() ->
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
@@ -762,7 +758,7 @@ bucket_not_found_test() ->
     ?assertError({bucket_access_failed, {aws_error, {http_error, 400, "Bad Request", _}}}, start(StoreOpts)),
     ok = stop(StoreOpts).
 
-failed_write_test() -> 
+failed_write_test() ->
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
@@ -771,17 +767,17 @@ failed_write_test() ->
 
     ok = meck:new(erlcloud_s3, [unstick, passthrough]),
     XMLBody = <<"">>,
-    ok = meck:expect(erlcloud_s3, put_object, fun(_, _, _, _, _) -> 
+    ok = meck:expect(erlcloud_s3, put_object, fun(_, _, _, _, _) ->
         error({aws_error,{http_error, 400, "Bad Request", XMLBody}}) end),
 
     Result = write(StoreOpts, Key, Value),
     ?assertMatch(retry, Result),
-    
+
     ?assert(meck:called(erlcloud_s3, put_object, ['_', '_', '_', '_', '_'])),
     ok = meck:unload(erlcloud_s3),
     ok = stop(StoreOpts).
 
-failed_read_test() -> 
+failed_read_test() ->
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
@@ -822,7 +818,7 @@ list_test() ->
     % Create other top-level directories
     write(StoreOpts, <<"foo/bar">>, <<"baz">>),
     write(StoreOpts, <<"beep/boop">>, <<"bam">>),
-    read(StoreOpts, <<"colors">>), 
+    read(StoreOpts, <<"colors">>),
     % Test listing colors/ - should return immediate children only
     {ok, ListResult} = list(StoreOpts, <<"colors">>),
     ?event({list_result, ListResult}),
@@ -844,7 +840,7 @@ list_test() ->
 
 %% @doc Group test - verifies group creation and type detection.
 %%
-%% This test creates a group entry and verifies that it is correctly identified 
+%% This test creates a group entry and verifies that it is correctly identified
 %% as a composite type and cannot be read directly (like filesystem directories).
 group_test() ->
     StoreOpts = default_test_opts(),
@@ -927,8 +923,8 @@ link_key_list_test() ->
 %% @doc Path traversal link test - verifies link resolution during path traversal.
 %%
 %% This test verifies that when reading a path as a list, intermediate path
-%% segments that are links get resolved correctly. For example, if "link" 
-%% is a symbolic link to "group", then reading ["link", "key"] should 
+%% segments that are links get resolved correctly. For example, if "link"
+%% is a symbolic link to "group", then reading ["link", "key"] should
 %% resolve to reading ["group", "key"].
 %%
 %% This functionality enables transparent redirection at the directory level,
@@ -969,7 +965,7 @@ exact_hb_store_test() ->
     ?event(step5_test_direct_read),
     DirectResult = read(StoreOpts, <<"test-dir1/test-file">>),
     ?event({direct_result, DirectResult}),
-    % This should work: reading via the link path  
+    % This should work: reading via the link path
     ?event(step6_test_link_read),
     Result = read(StoreOpts, [<<"test-link">>, <<"test-file">>]),
     ?event({final_result, Result}),
@@ -983,7 +979,7 @@ cache_style_test() ->
     % Start the store
     hb_store:start(StoreOpts),
     reset(StoreOpts),
-    % Test writing through hb_store interface  
+    % Test writing through hb_store interface
     ok = hb_store:write(StoreOpts, <<"test-key">>, <<"test-value">>),
     % Test reading through hb_store interface
     Result = hb_store:read(StoreOpts, <<"test-key">>),
@@ -994,7 +990,7 @@ cache_style_test() ->
 %% @doc Test nested map storage with cache-like linking behavior
 %%
 %% This test demonstrates how to store a nested map structure where:
-%% 1. Each value is stored at data/{hash_of_value} 
+%% 1. Each value is stored at data/{hash_of_value}
 %% 2. Links are created to compose the values back into the original map structure
 %% 3. Reading the composed structure reconstructs the original nested map
 nested_map_cache_test() ->
@@ -1012,7 +1008,7 @@ nested_map_cache_test() ->
             },
             <<"key2">> => #{
               <<"alg">> => <<"hmac">>,
-              <<"commiter">> => <<"unique-id-2">>              
+              <<"commiter">> => <<"unique-id-2">>
             }
         },
         <<"other-key">> => #{
@@ -1070,7 +1066,7 @@ nested_map_cache_test() ->
     ?assertEqual(<<"Foo">>, TargetValueRead),
     % Verify commitments is a composite
     ?assertEqual(composite, type(StoreOpts, <<"root/commitments">>)),
-    % Verify other-key is a composite  
+    % Verify other-key is a composite
     ?assertEqual(composite, type(StoreOpts, <<"root/other-key">>)),
     % Step 4: Test programmatic reconstruction of the nested map
     ReconstructedMap = reconstruct_map(StoreOpts, <<"root">>),
