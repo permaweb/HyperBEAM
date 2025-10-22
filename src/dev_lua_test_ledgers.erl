@@ -207,7 +207,11 @@ balances(Mode, ProcMsg, Opts) when is_atom(Mode) ->
     balances(hb_util:bin(Mode), ProcMsg, Opts);
 balances(Prefix, ProcMsg, Opts) ->
     Balances = hb_ao:get(<<Prefix/binary, "/balance">>, ProcMsg, #{}, Opts),
-    hb_private:reset(hb_cache:ensure_all_loaded(Balances, Opts)).
+    hb_private:reset(
+        hb_message:uncommitted(
+            hb_cache:ensure_all_loaded(Balances, Opts)
+        )
+    ).
 
 %% @doc Get the supply of a ledger, either `now` or `initial`.
 supply(ProcMsg, Opts) ->
@@ -591,7 +595,8 @@ subledger_registration_test_disabled() ->
     % Alice can send tokens to Bob on SubLedger2.
     verify_net(RootLedger, [SubLedger1, SubLedger2], Opts).
 
-single_subledger_to_subledger_test_() -> {timeout, 30, fun single_subledger_to_subledger/0}.
+single_subledger_to_subledger_test_() ->
+    {timeout, 30, fun single_subledger_to_subledger/0}.
 single_subledger_to_subledger() ->
     Opts = test_opts(),
     Alice = ar_wallet:new(),
@@ -618,16 +623,17 @@ single_subledger_to_subledger() ->
     ?event({root_ledger, RootLedger}),
     ?event({sl1, SubLedger1}),
     ?event({sl2, SubLedger2}),
+    % 1. At start, Alice has 100 tokens on the root ledger.
     ?assertEqual(100, balance(RootLedger, Alice, Opts)),
     % 2. Alice sends 90 tokens to herself on SubLedger1.
-    ?event({transfer_1}),
     transfer(RootLedger, Alice, Alice, 90, SubLedger1, Opts),
+    ?event({state2, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
     ?assertEqual(10, balance(RootLedger, Alice, Opts)),
     ?assertEqual(90, balance(SubLedger1, Alice, Opts)),
-    ?event({transfer_2}),
+    % 3. Alice sends 80 tokens to herself on SubLedger2.
     PushRes = transfer(SubLedger1, Alice, Alice, 80, SubLedger2, Opts),
     ?event({push_res, PushRes}),
-    ?event({map, map([RootLedger, SubLedger1, SubLedger2], Opts)}),
+    ?event({state3, map([RootLedger, SubLedger1, SubLedger2], Names, Opts)}),
     ?assertEqual(80, balance(SubLedger2, Alice, Opts)),
     ?assertEqual(10, balance(SubLedger1, Alice, Opts)).
 

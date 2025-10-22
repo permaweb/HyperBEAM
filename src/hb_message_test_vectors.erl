@@ -10,7 +10,7 @@
 run_test() ->
     hb:init(),
     encode_small_balance_table_test(
-        #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
+        #{ <<"device">> => <<"httpsig@1.0">> },
         test_opts(normal)
     ).
 

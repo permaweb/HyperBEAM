@@ -381,10 +381,9 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
     % of being added to the body. These keys will need to be removed from the
     % `committed' list and re-added where the `content-digest' was in the
     % `from_siginfo_keys' call.
-    UnescapedKeysBeforeSigInfo = decode_committed_keys(EncodedKeys, Opts),
     BodyKeys =
         lists:filter(
-            fun(Key) -> not key_present(Key, UnescapedKeysBeforeSigInfo) end,
+            fun(Key) -> not key_present(Key, Encoded) end,
             RawInputs
         ),
     KeysForCommitment =
@@ -414,20 +413,18 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
 %% @doc Decode the committed keys from their percent-encoded form, for use in
 %% the `committed` key of the commitment.
 decode_committed_keys(ModCommittedKeys, _Opts) when is_list(ModCommittedKeys) ->
-    lists:map(fun hb_escape:decode/1, ModCommittedKeys);
-decode_committed_keys(ModCommittedKeys, Opts) when is_map(ModCommittedKeys) ->
-    hb_util:list_to_numbered_message(
-        decode_committed_keys(
-            hb_util:message_to_ordered_list(ModCommittedKeys, Opts),
-            Opts
-        )
-    ).
+    lists:map(fun hb_escape:decode/1, ModCommittedKeys).
 
 %% @doc Calculate if a key or its `+link' TABM variant is present in a message.
-key_present(Key, Keys) ->
-    NormalizedKey = hb_ao:normalize_key(hb_escape:decode(Key)),
-    lists:member(NormalizedKey, Keys)
-        orelse lists:member(<<NormalizedKey/binary, "+link">>, Keys).
+key_present(Key, Keys) -> key_present(true, Key, Keys).
+key_present(TryEncoded, Key, Msg) ->
+    if is_map_key(Key, Msg) orelse is_map_key(<<Key/binary, "+link">>, Msg) ->
+        true;
+    TryEncoded ->
+        key_present(false, hb_escape:encode(Key), Msg);
+    true ->
+        false
+    end.
 
 %% @doc create the signature base that will be signed in order to create the
 %% Signature and SignatureInput.

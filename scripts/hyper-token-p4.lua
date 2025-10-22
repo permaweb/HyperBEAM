@@ -13,21 +13,25 @@
 -- 3. Debit the source account.
 -- 4. Increment the balance of the recipient account.
 function charge(base, assignment)
-    ao.event("debug_charge", { "Charge received: ", { assignment = assignment } })
+    ao.event({ "debug_charge", { "Charging", { assignment = assignment } } })
+
+    -- Verify that the request is signed by the admin.
     local admin = base.admin
+    local charge_req = assignment.body
+    local _, committers = ao.resolve(charge_req, "committers")
+    ao.event({ "debug_charge", { "Validating charge requester: ", {
+        admin = admin,
+        committers = committers,
+        ["charge-request"] = charge_req,
+    } }})
+    
+    if count_common(committers, admin) ~= 1 then
+        return "error", base
+    end
+
     local status, res, request = validate_request(base, assignment)
     if status ~= "ok" then
         return status, res
-    end
-
-    -- Verify that the request is signed by the admin.
-    local committers = ao.get("committers", {"as", "message@1.0", assignment.body})
-    ao.event("debug_charge", { "Validating request: ", {
-        committers = committers,
-        admin = admin
-    } })
-    if count_common(committers, admin) ~= 1 then
-        return "error", base
     end
 
     -- Ensure that the quantity and account are present in the request.
