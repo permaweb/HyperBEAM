@@ -1230,8 +1230,8 @@ aos_state_patch_test_() ->
                 >>
         }, Opts))#{ <<"path">> => <<"schedule">>, <<"method">> => <<"POST">> },
         {ok, _} = hb_ao:resolve(Base, Req, Opts),
-        Res = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
-        {ok, Res} = hb_ao:resolve(Base, Res, Opts),
+        Req2 = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
+        {ok, Res} = hb_ao:resolve(Base, Req2, Opts),
         ?event({computed_message, Res}),
         {ok, Data} = hb_ao:resolve(Res, <<"x">>, Opts),
         ?event({computed_data, Data}),

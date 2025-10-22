@@ -167,8 +167,16 @@ lookup_spawn_test() ->
             ?TEST_NAME,
             Opts
         ),
-    LoadedProcess1 = hb_cache:ensure_all_loaded(Process1, Opts),
-    LoadedProcess2 = hb_cache:ensure_all_loaded(Process2, Opts),
+    LoadedProcess1 =
+        hb_cache:read_all_commitments(
+            hb_cache:ensure_all_loaded(Process1, Opts),
+            Opts
+        ),
+    LoadedProcess2 =
+        hb_cache:read_all_commitments(
+            hb_cache:ensure_all_loaded(Process2, Opts),
+            Opts
+        ),
     ?event(lookup_spawn, {match, { p1, LoadedProcess1 }, { p2, LoadedProcess2 }}),
     ?assertEqual(
         hb_message:normalize_commitments(

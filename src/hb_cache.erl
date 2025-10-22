@@ -858,7 +858,10 @@ test_store_simple_signed_message(Store) ->
     MatchResSigned =
         hb_message:match(
             Item,
-            hb_message:normalize_commitments(RetrievedItemSigned, Opts),
+            hb_message:normalize_commitments(
+                hb_cache:read_all_commitments(RetrievedItemSigned, Opts),
+                Opts
+            ),
             strict,
             Opts
         ),
