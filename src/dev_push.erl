@@ -744,7 +744,7 @@ push_as_identity_test_() ->
         Assignment =
             hb_ao:get(
                 <<"schedule/assignments/2">>,
-                Msg1,
+                Base,
                 Opts
             ),
         Committers = hb_ao:get(

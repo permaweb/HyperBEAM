@@ -245,7 +245,7 @@ generate_wasi_stack(File, Func, Params) ->
 vfs_is_serializable_test() ->
     StackMsg = generate_wasi_stack("test/test-print.wasm", <<"hello">>, []),
     VFSMsg = hb_message:normalize_commitments(hb_ao:get(<<"vfs">>, StackMsg), #{}),
-    VFSMsg2 =
+    VFSReq =
         hb_message:minimize(
             hb_message:convert(
                 hb_message:convert(VFSMsg, <<"httpsig@1.0">>, #{}),

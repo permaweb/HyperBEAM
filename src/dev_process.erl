@@ -680,7 +680,7 @@ run_as(Key, Base, Req, Opts) ->
     % This sets up the device context for the specific operation type.
     PreparedMsg =
         hb_util:deep_merge(
-            ensure_process_key(Msg1, Opts),
+            ensure_process_key(Base, Opts),
             #{
                 <<"device">> =>
                     DeviceSet =
@@ -1131,9 +1131,9 @@ aos_browsable_state_test_() ->
                 }
             ]
         },
-        Msg1 = test_aos_process(Opts),
+        Base = test_aos_process(Opts),
         schedule_aos_call(
-            Msg1,
+            Base,
             <<"table.insert(ao.outbox.Messages, { target = ao.id, ",
                 "action = \"State\", ",
                 "data = { deep = 4, bool = true } })">>,
@@ -1142,7 +1142,7 @@ aos_browsable_state_test_() ->
         Req = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
         {ok, Res} =
             hb_ao:resolve_many(
-                [Msg1, Msg2, <<"results">>, <<"outbox">>, 1, <<"data">>, <<"deep">>],
+                [Base, Req, <<"results">>, <<"outbox">>, 1, <<"data">>, <<"deep">>],
                 Opts#{ cache_control => <<"always">> }
             ),
         ID = hb_message:id(Base),
@@ -1179,8 +1179,8 @@ aos_state_access_via_http_test_() ->
                     "}})">>,
             <<"target">> => ProcID
         }, Opts),
-        {ok, Msg3} = hb_http:post(Node, << ProcID/binary, "/schedule">>, Msg2, Opts),
-        ?event({schedule_msg_res, {msg3, Msg3}}),
+        {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, Req, Opts),
+        ?event({schedule_msg_res, {res, Res}}),
         {ok, Msg4} =
             hb_http:get(
                 Node,
@@ -1214,7 +1214,7 @@ aos_state_patch_test_() ->
             <<"store-module">> => hb_store_fs,
             <<"name">> => <<"cache-TEST">>
         }] },
-        Msg1Raw = test_aos_process(Opts, [
+        BaseRaw = test_aos_process(Opts, [
             <<"wasi@1.0">>,
             <<"json-iface@1.0">>,
             <<"wasm-64@1.0">>,
@@ -1234,13 +1234,12 @@ aos_state_patch_test_() ->
                     "table.insert(ao.outbox.Messages, "
                         "{ method = \"PATCH\", x = \"banana\" })"
                 >>
-        }, Wallet))#{ <<"path">> => <<"schedule">>, <<"method">> => <<"POST">> },
+        }, Opts))#{ <<"path">> => <<"schedule">>, <<"method">> => <<"POST">> },
         {ok, _} = hb_ao:resolve(Base, Req, #{}),
         Res = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
         {ok, Msg4} = hb_ao:resolve(Base, Res, #{}),
         ?event({computed_message, {res, Msg4}}),
         {ok, Data} = hb_ao:resolve(Msg4, <<"x">>, #{}),
-        {ok, Msg1} = hb_message:with_only_committed(Msg1Raw, Opts),
         ?event({computed_data, Data}),
         ?assertEqual(<<"banana">>, Data)
     end}.
@@ -1394,20 +1393,20 @@ aos_persistent_worker_benchmark_test_() ->
                 <<"name">> => <<"cache-TEST">>
             }]
         },
-        Msg1 = test_aos_process(Opts),
-        schedule_aos_call(Msg1, <<"X=1337">>, Opts),
-        FirstSlotMsg2 = #{
+        Base = test_aos_process(Opts),
+        schedule_aos_call(Base, <<"X=1337">>, Opts),
+        FirstSlotReq = #{
             <<"path">> => <<"compute">>,
             <<"slot">> => 0
         },
         ?assertMatch(
             {ok, _},
-            hb_ao:resolve(Msg1, FirstSlotMsg2, Opts#{ spawn_worker => true })
+            hb_ao:resolve(Base, FirstSlotReq, Opts#{ spawn_worker => true })
         ),
         Iterations = hb_test_utils:benchmark(
             fun(Iteration) ->
                 schedule_aos_call(
-                    Msg1,
+                    Base,
                     <<"return X + ", (integer_to_binary(Iteration))/binary>>,
                     Opts
                 ),

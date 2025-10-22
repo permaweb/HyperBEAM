@@ -78,6 +78,7 @@ router(_, Base, Req, Opts) ->
 %% assignment. Assumes that Base is a `dev_process' or similar message, having
 %% a `Current-Slot' key. It stores a local cache of the schedule in the
 %% `priv/To-Process' key.
+next(Base, Req, Opts) ->
     ?event(debug_next, {scheduler_next_called, {base, Base}, {req, Req}}),
     ?event(next, started_next),
     ?event(next_profiling, started_next),
@@ -1844,8 +1845,8 @@ get_local_schedule_test() ->
                 <<"test-key">> => <<"Test-Val-2">>
             }, Opts)
     },
-    ?assertMatch({ok, _}, hb_ao:resolve(Msg1, Msg2, Opts)),
-    ?assertMatch({ok, _}, hb_ao:resolve(Msg1, Msg3, Opts)),
+    ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, Opts)),
+    ?assertMatch({ok, _}, hb_ao:resolve(Base, Res, Opts)),
     ?assertMatch(
         {ok, _},
         hb_ao:resolve(Base, #{
@@ -1888,7 +1889,7 @@ register_scheduler_test() ->
     {ok, Res} = hb_http:post(Node, Base, #{}),
     ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res).
 
-http_post_schedule_sign(Node, Msg, ProcessMsg, Wallet) ->
+http_post_schedule_sign(Node, Msg, ProcessMsg, Opts) ->
     Base = hb_message:commit(#{
         <<"path">> => <<"/~scheduler@1.0/schedule">>,
         <<"method">> => <<"POST">>,
@@ -1902,7 +1903,7 @@ http_post_schedule_sign(Node, Msg, ProcessMsg, Wallet) ->
                 Opts
             )
     }, Opts),
-    hb_http:post(Node, Msg1, Opts).
+    hb_http:post(Node, Base, Opts).
 
 http_get_slot(N, PMsg) ->
     ID = hb_message:id(PMsg, all),

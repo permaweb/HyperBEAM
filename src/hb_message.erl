@@ -201,11 +201,10 @@ id(Msg, RawCommitters, Opts) ->
 %% unsigned ID present. By forcing this work to occur in strategically positioned
 %% places, we avoid the need to recalculate the IDs for every `hb_message:id`
 %% call.
-normalize_commitments(Msg, _Opts) when is_map(Msg) andalso map_size(Msg) == 0 ->
-    Msg;
-normalize_commitments(Msg = #{<<"priv">> := _}, _Opts) when map_size(Msg) == 1 ->
-    Msg;
-normalize_commitments(Msg, Opts) when is_map(Msg) ->
+normalize_commitments(Msg, Opts) ->
+    normalize_commitments(Msg, Opts, passive).
+normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
+    ?event(debug_normalize_commitments, {normalize_commitments, {msg, Msg}}),
     NormMsg = 
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
@@ -214,33 +213,60 @@ normalize_commitments(Msg, Opts) when is_map(Msg) ->
             end,
             Msg
         ),
-    MessageWithoutHmac = 
-        without_commitments(
-            #{ <<"type">> => <<"hmac-sha256">> },
-            NormMsg,
-            Opts
-        ),
-    {ok, #{ <<"commitments">> := Commitments }} =
-        dev_message:commit(
-            MessageWithoutHmac,
-            #{ 
-                <<"type">> => <<"hmac-sha256">>,
-                <<"bundle">> => hb_maps:get(<<"bundle">>, Opts, false, Opts) 
-            },
-            Opts
-        ),
-    MessageWithoutHmac#{
-        <<"commitments">> =>
-            hb_maps:merge(
-                Commitments,
-                hb_maps:get(<<"commitments">>, MessageWithoutHmac, #{}, Opts),
-                Opts
-            )
-    };
-normalize_commitments(Msg, Opts) when is_list(Msg) ->
-    lists:map(fun(X) -> normalize_commitments(X, Opts) end, Msg);
-normalize_commitments(Msg, _Opts) ->
+    do_normalize_commitments(NormMsg, Opts, Mode);
+normalize_commitments(Msg, Opts, Mode) when is_list(Msg) ->
+    ?event(debug_normalize_commitments, {normalize_commitments, {list, Msg}}),
+    lists:map(fun(X) -> normalize_commitments(X, Opts, Mode) end, Msg);
+normalize_commitments(Msg, _Opts, _Mode) ->
     Msg.
+
+do_normalize_commitments(Msg, Opts, passive) ->
+    ?event(debug_normalize_commitments, {passive, {msg, Msg}}),
+    case hb_maps:get(<<"commitments">>, Msg, not_found, Opts) of
+        not_found ->
+            {ok, #{ <<"commitments">> := Commitments }} =
+                dev_message:commit(
+                    Msg,
+                    #{ <<"type">> => <<"unsigned">> },
+                    Opts
+                ),
+            Msg#{ <<"commitments">> => Commitments };
+        _ -> Msg
+    end;
+do_normalize_commitments(Msg, _Opts, verify) when ?IS_EMPTY_MESSAGE(Msg) ->
+    Msg;
+do_normalize_commitments(Msg, Opts, verify) ->
+    {ok, #{ <<"commitments">> := NormCommitments }} =
+        dev_message:commit(
+            uncommitted(Msg),
+            #{ <<"type">> => <<"unsigned">> },
+            Opts
+        ),
+    ?event(normalization, {normalizing_commitments, verify}),
+    [NormID] = hb_maps:keys(NormCommitments, Opts),
+    MsgCommIDs = hb_maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts),
+    case lists:member(NormID, MsgCommIDs) of
+        true -> Msg;
+        false ->
+            attach_phash2(Msg#{ <<"commitments">> => NormCommitments }, Opts)
+    end;
+do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
+    ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
+    ?event(normalization,
+        {normalizing_commitments,
+            {expected_hash, ExpectedHash},
+            {priv, hb_private:from_message(Msg)}
+        }
+    ),
+    case hb_private:get(<<"last-phash2">>, Msg, not_found, Opts) of
+        not_found ->
+            attach_phash2(Msg, ExpectedHash, Opts);
+        ExpectedHash ->
+            Msg;
+        _DifferingHash ->
+            MsgWithHash = attach_phash2(Msg, ExpectedHash, Opts),
+            do_normalize_commitments(MsgWithHash, Opts, verify)
+    end.
 
 %% @doc Annotate a message with its phash2 value in the `priv' sub-map,
 %% calculating it if necessary.
