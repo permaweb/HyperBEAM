@@ -66,7 +66,6 @@ read(Path) ->
 write(Opts, PathComponents, Value) ->
     Path = add_prefix(Opts, PathComponents),
     ?event({writing, Path, byte_size(Value)}),
-    ?event(debug_fs, {writing_key_fs, {path, Path}, {value, Value}}),
     filelib:ensure_dir(Path),
     ok = file:write_file(Path, Value).
 
@@ -106,11 +105,8 @@ resolve(Opts, CurrPath, [Next|Rest]) ->
         {ok, RawLink} ->
             Link = remove_prefix(Opts, RawLink),
             resolve(Opts, Link, Rest);
-        % {error, enoent} ->
-            % case Rest of
-            %     [] -> not_found;
-            %     _ -> resolve(Opts, PathPart, Rest)
-            % end;
+        {error, enoent} ->
+            not_found;
         _ ->
             resolve(Opts, PathPart, Rest)
     end.

@@ -477,8 +477,7 @@ verify_nested_complex_signed_test(Codec, Opts) ->
             <<"parameters">> => #{
                 <<"a">> => 1
             },
-            % TODO: Figure out why this is needed.
-            <<"inner-content-type">> => <<"application/html">>,
+            <<"content-type">> => <<"application/html">>,
             <<"body">> =>
                 <<
                     """

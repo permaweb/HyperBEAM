@@ -644,7 +644,7 @@ parse_redirect(Location, Opts) ->
 
 full_push_test_() ->
     {timeout, 30, fun() ->
-        hb:init(),
+        dev_process:init(),
         Opts = #{
             process_async_cache => false,
             priv_wallet => hb:wallet(),

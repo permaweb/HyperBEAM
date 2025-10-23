@@ -127,6 +127,7 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
     write(Opts, PathBin, Value);
 write(Opts, Path, Value) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
+    ?event({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
     case elmdb:put(DBInstance, Path, Value) of
         ok -> ok;
         {error, Type, Description} ->
@@ -167,7 +168,7 @@ read(Opts, PathParts) when is_list(PathParts) ->
     read(Opts, to_path(PathParts));
 read(Opts, Path) ->
     % Try direct read first (fast path for non-link paths)
-    Result = case read_with_links(Opts, Path) of
+    case read_with_links(Opts, Path) of
         {ok, Value} -> 
             {ok, Value};
         not_found ->
@@ -194,9 +195,7 @@ read(Opts, Path) ->
                     % If link resolution fails, return not_found
                     not_found
             end
-    end,
-    ?event(debug_lmdb, {reading_key, {path, Path}, {result, Result}}),
-    Result.
+    end.
 
 %% @doc Helper function to check if a value is a link and extract the target.
 is_link(Value) ->

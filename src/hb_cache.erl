@@ -306,6 +306,7 @@ write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
     ),
     maps:map(
         fun(BaseCommID, Commitment) ->
+            ?event(debug_cache, {writing_commitment, {commitment, Commitment}}),
             {ok, CommMsgID} = do_write_message(Commitment, Store, Opts),
             hb_store:make_link(
                 Store,
@@ -334,14 +335,12 @@ write_key(Base, Key, HPAlg, Value, Store, Opts) ->
 %% separately, then write each to the store.
 prepare_commitments(RawCommitments, Opts) ->
     Commitments = ensure_all_loaded(RawCommitments, Opts),
-    PreparedCommitments = 
-        maps:map(
-            fun(_, StructuredCommitment) ->
-                hb_message:convert(StructuredCommitment, tabm, Opts)
-            end,
-            Commitments
-        ),
-    PreparedCommitments.
+    maps:map(
+        fun(_, StructuredCommitment) ->
+            hb_message:convert(StructuredCommitment, tabm, Opts)
+        end,
+        Commitments
+    ).
 
 %% @doc Generate the commitment path for a given base path.
 commitment_path(Base, Opts) ->
@@ -849,12 +848,7 @@ test_store_simple_signed_message(Store) ->
     % ?assert(MatchRes),
     {ok, CommittedID} = dev_message:id(Item, #{ <<"committers">> => [Address] }, Opts),
     {ok, RetrievedItemSigned} = read(CommittedID, Opts),
-    ?event(debug_test,
-        {retreived_signed_message,
-            {expected, Item},
-            {got, RetrievedItemSigned}
-        }
-    ),
+    ?event({retrieved_signed_message, {expected, Item}, {got, RetrievedItemSigned}}),
     MatchResSigned =
         hb_message:match(
             Item,
@@ -862,7 +856,6 @@ test_store_simple_signed_message(Store) ->
             strict,
             Opts
         ),
-    ?event(debug_test, {match_result_signed, MatchResSigned}),
     ?assert(MatchResSigned),
     ok.
 

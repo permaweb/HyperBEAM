@@ -873,8 +873,7 @@ function compute(base, assignment)
             {
                 balance = base.balance,
                 ledgers = base.ledgers,
-                action = action,
-                assignment = assignment
+                action = action
             }
         }
     )

@@ -1115,7 +1115,6 @@ dynamic_router() ->
     % Ensure that computation is done by the exec node.
     {ok, ResMsg} = hb_http:get(Node, <<"/c?c+list=1">>, ExecOpts),
     Signers = hb_message:signers(ResMsg, ExecOpts),
-    ?event(debug_dynrouter, {match, {signers, Signers}, {exec_addr, ExecNodeAddr}}),
     ?assertEqual([ExecNodeAddr], Signers).
 
 %% @doc Demonstrates routing tables being dynamically created and adjusted

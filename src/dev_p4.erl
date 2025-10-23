@@ -445,18 +445,13 @@ hyper_token_ledger() ->
             },
             <<"ledger-path">> => <<"/ledger~node-process@1.0">>
         },
-    StoreOpts = [
-        #{
-            <<"name">> => <<"cache-mainnet">>,
-            <<"store-module">> => hb_store_lmdb
-        }
-    ],
     % Start the node with the processor and the `local-process' ledger 
     % (component 2) running the `hyper-token.lua' and `hyper-token-p4.lua'
     % scripts. `hyper-token.lua' implements the core token ledger, while
     % `hyper-token-p4.lua' implements the `charge' function that `p4@1.0' will
     % call to charge a user's account upon charges. We initialize the ledger
     % with 100 tokens for Alice.
+    StoreOpts = [hb_test_utils:test_store()],
     Node =
         hb_http_server:start_node(
             Opts = #{

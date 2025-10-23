@@ -261,8 +261,8 @@ do_assign(State, Message, ReplyPID) ->
 
 %% @doc Commit to the assignment using all of our appropriate wallets.
 commit_assignment(BaseAssignment, State) ->
-    Opts = maps:get(opts, State),
     Wallets = maps:get(wallets, State),
+    Opts = maps:get(opts, State),
     lists:foldr(
         fun(Wallet, Assignment) ->
             hb_message:commit(Assignment, Opts#{ priv_wallet => Wallet })

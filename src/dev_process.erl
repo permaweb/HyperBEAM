@@ -550,11 +550,7 @@ now(RawBase, Req, Opts) ->
                     ?event(compute_short,
                         {serving_latest_cached_state,
                             {proc_id, ProcessID},
-                            {slot, LatestSlot},
-                            {
-                                loaded_latest_msg, 
-                                hb_cache:ensure_all_loaded(LatestMsg, Opts)
-                            }
+                            {slot, LatestSlot}
                         },
                         Opts
                     ),
@@ -1057,7 +1053,7 @@ http_wasm_process_by_id_test() ->
         process_async_cache => false,
         store => #{
             <<"store-module">> => hb_store_fs,
-            <<"name">> => <<"cache-TEST">>
+            <<"name">> => <<"cache-mainnet">>
         }
     }),
     Wallet = ar_wallet:new(),
@@ -1098,39 +1094,27 @@ http_wasm_process_by_id_test() ->
 aos_compute_test_() ->
     {timeout, 30, fun() ->
         init(),
-        Opts = #{
-            store => [#{
-                <<"store-module">> => hb_store_fs,
-                <<"name">> => <<"cache-TEST">>
-            }]
-        },
-        Msg1 = test_aos_process(Opts),
-        schedule_aos_call(Msg1, <<"return 1+1">>, Opts),
-        schedule_aos_call(Msg1, <<"return 2+2">>, Opts),
-        Msg2 = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
-        {ok, Msg3} = hb_ao:resolve(Msg1, Msg2, Opts),
-        {ok, Res} = hb_ao:resolve(Msg3, <<"results">>, Opts),
-        ?event({computed_message, {msg3, Res}}),
-        {ok, Data} = hb_ao:resolve(Res, <<"data">>, Opts),
+        Opts = #{ store => [hb_test_utils:test_store()] },
+        Base = test_aos_process(Opts),
+        schedule_aos_call(Base, <<"return 1+1">>, Opts),
+        schedule_aos_call(Base, <<"return 2+2">>, Opts),
+        Req = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
+        {ok, Res1} = hb_ao:resolve(Base, Req, Opts),
+        {ok, Res2} = hb_ao:resolve(Res1, <<"results">>, Opts),
+        ?event({computed_message, {res2, Res2}}),
+        {ok, Data} = hb_ao:resolve(Res2, <<"data">>, Opts),
         ?event({computed_data, Data}),
         ?assertEqual(<<"2">>, Data),
         Msg4 = #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
-        {ok, Msg5} = hb_ao:resolve(Msg1, Msg4, Opts),
-        ?assertEqual(<<"4">>, hb_ao:get(<<"results/data">>, Msg5, Opts)),
-        {ok, Msg5}
+        {ok, Res3} = hb_ao:resolve(Base, Msg4, Opts),
+        ?assertEqual(<<"4">>, hb_ao:get(<<"results/data">>, Res3, Opts)),
+        {ok, Res3}
     end}.
 
 aos_browsable_state_test_() ->
     {timeout, 30, fun() ->
         init(),
-        Opts = #{
-            store => [
-                #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-BROWSABLE-TEST">>
-                }
-            ]
-        },
+        Opts = #{ store => [hb_test_utils:test_store()] },
         Base = test_aos_process(Opts),
         schedule_aos_call(
             Base,
@@ -1159,7 +1143,7 @@ aos_state_access_via_http_test_() ->
             cache_control => <<"always">>,
             store => #{
                 <<"store-module">> => hb_store_fs,
-                <<"name">> => <<"cache-TEST">>
+                <<"name">> => <<"cache-mainnet">>
             },
             force_signed_requests => true
         }),
@@ -1384,12 +1368,7 @@ aos_persistent_worker_benchmark_test_() ->
     {timeout, 30, fun() ->
         BenchTime = 5,
         init(),
-        Opts = #{
-            store => [#{
-                <<"store-module">> => hb_store_fs,
-                <<"name">> => <<"cache-TEST">>
-            }]
-        },
+        Opts = #{ store => [hb_test_utils:test_store()] },
         Base = test_aos_process(Opts),
         schedule_aos_call(Base, <<"X=1337">>, Opts),
         FirstSlotReq = #{
