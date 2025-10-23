@@ -56,7 +56,7 @@ class SGLangManager:
             print(f"Error starting SGLang server: {e}")
             return False
 
-    def _wait_for_ready(self, timeout: int = 60) -> bool:
+    def _wait_for_ready(self, timeout: int = 300) -> bool:
         """Wait for SGLang server to be ready."""
         start_time = time.time()
 
@@ -108,9 +108,13 @@ class OpenAIProxyHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Handle POST requests - proxy to SGLang OpenAI-compatible endpoint."""
-        if self.path == "/v1/responses" or self.path.startswith("/v1/chat/completions"):
+        print(f"Received POST request to: {self.path}")
+        if (self.path.startswith("/v1/completions") or 
+            self.path.startswith("/v1/chat/completions") or
+            self.path == "/v1/responses"):
             self._proxy_to_sglang()
         else:
+            print(f"Path {self.path} not matched, returning 404")
             self._send_error(404, "Not Found")
 
     def do_GET(self):
@@ -130,6 +134,9 @@ class OpenAIProxyHandler(BaseHTTPRequestHandler):
             # Read request body
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length)
+            
+            print(f"Proxying to SGLang: {self.path}")
+            print(f"Request body: {post_data.decode('utf-8', errors='replace')}")
 
             # Prepare SGLang URL
             sglang_url = f"{self.sglang_manager.base_url}{self.path}"
