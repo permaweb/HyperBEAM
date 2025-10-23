@@ -113,7 +113,7 @@ subledger(Root, Extra, Opts) ->
                 },
                 Extra
             ),
-            #{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
+            Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
         ),
     hb_cache:write(Proc, Opts),
     Proc.
@@ -141,7 +141,7 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
             <<"recipient">> => XferRecipient,
             <<"quantity">> => Quantity
         },
-        #{ priv_wallet => Sender }
+        Opts#{ priv_wallet => Sender }
     ),
     Xfer =
         hb_message:commit(
@@ -149,7 +149,7 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
                 <<"path">> => <<"push">>,
                 <<"body">> => XferBody
             },
-            #{ priv_wallet => Sender }
+            Opts#{ priv_wallet => Sender }
         ),
     hb_ao:resolve(
         ProcMsg,
@@ -422,7 +422,7 @@ normalize_without_root(RootProc, Procs) ->
 %% recipients via remote stores. This improves test performance.
 test_opts() ->
     hb:init(),
-    #{}.
+    #{ priv_wallet => hb:wallet(), store => [hb_test_utils:test_store()] }.
 
 %%% Test cases.
 

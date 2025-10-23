@@ -1210,10 +1210,7 @@ aos_state_access_via_http_test_() ->
 aos_state_patch_test_() ->
     {timeout, 30, fun() ->
         init(),
-        Opts = #{ priv_wallet => hb:wallet(), store => [#{
-            <<"store-module">> => hb_store_fs,
-            <<"name">> => <<"cache-TEST">>
-        }] },
+        Opts = #{ priv_wallet => hb:wallet(), store => [hb_test_utils:test_store()] },
         BaseRaw = test_aos_process(Opts, [
             <<"wasi@1.0">>,
             <<"json-iface@1.0">>,

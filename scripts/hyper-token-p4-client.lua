@@ -3,14 +3,13 @@
 
 -- Find the user's balance in the current ledger state.
 function balance(base, request)
-    ao.event({ "Client received balance request" })
     local status, res = ao.resolve({
         path =
             base["ledger-path"]
             .. "/now/balance/"
             .. request["target"]
     })
-    ao.event({ "Client received balance response",
+    ao.event({ "client received balance response", 
         { status = status, res = res, target = request["target"] } }
     )
     -- If the balance request fails (most likely because the user has no balance),
@@ -26,7 +25,7 @@ end
 -- Charge the user's balance in the current ledger state.
 function charge(base, request)
     ao.event("debug_charge", {
-        "Client starting charge",
+        "client starting charge",
         { request = request, base = base }
     })
     local status, res = ao.resolve({

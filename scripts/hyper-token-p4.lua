@@ -51,7 +51,7 @@ function charge(base, assignment)
     -- cost of an execution at lower than its actual cost. Subsequently, the
     -- ledger should at least debit the source, even if the source may not
     -- deposit to restore this balance.
-    ao.event({ "Debit request validated, balances before charge: ", { balances = base.balance } })
+    ao.event({ "Debit request validated: ", { assignment = assignment } })
     base.balance = base.balance or {}
     base.balance[request.account] =
         (base.balance[request.account] or 0) - request.quantity
@@ -59,6 +59,7 @@ function charge(base, assignment)
     -- Increment the balance of the recipient account.
     base.balance[request.recipient] =
         (base.balance[request.recipient] or 0) + request.quantity
-    ao.event({ "Debit request processed, balances after charge: ", { balances = base.balance } })
+
+    ao.event("debug_charge", { "Charge processed: ", { balances = base.balance } })
     return "ok", base
 end
