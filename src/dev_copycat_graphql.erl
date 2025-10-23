@@ -8,6 +8,7 @@
 -define(SUPPORTED_FILTERS,
     [<<"query">>, <<"tag">>, <<"owner">>, <<"recipient">>, <<"all">>]
 ).
+-define(COPYCAT_CACHE_PREFIX, <<"~copycat@1.0">>).
 
 %% @doc Takes a GraphQL query, optionally with a node address, and curses through
 %% each of the messages returned by the query, indexing them into the node's
@@ -75,6 +76,20 @@ index_graphql(Total, Query, Vars, Node, OpName, Opts) ->
                 fun(ParsedMsg) ->
                     try
                         {ok, _} = hb_cache:write(ParsedMsg, Opts),
+                        maybe 
+                            <<"Assignment">> ?= maps:get(<<"type">>, ParsedMsg, undefined),
+                            ProcID = maps:get(<<"process">>, ParsedMsg),
+                            Slot = maps:get(<<"nonce">>, ParsedMsg),
+                            Store = hb_opts:get(store, no_viable_store, Opts),
+                            Path = hb_store:path(Store, [
+                                ?COPYCAT_CACHE_PREFIX,
+                                <<"assignments">>,
+                                ProcID,
+                                Slot
+                            ]),
+                            AssignmentId = hd(maps:keys(maps:get(<<"commitments">>, ParsedMsg))),
+                            hb_store:write(Store, Path, AssignmentId)
+                        end,
                         true
                     catch
                         error:Reason ->
