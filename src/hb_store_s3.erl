@@ -71,7 +71,7 @@ start(Opts) ->
             s3_bucket_access_method = ForcePathStyle,
             aws_region = Region,
             % Use `gun_pool` to define a connection pool.
-            http_client = httpc%fun gun_request/6
+            http_client = fun gun_request/6
         },
         ok ?= test_bucket_access(Bucket, Config),
         StoreRef = get_store_ref(Opts),
@@ -692,7 +692,7 @@ default_test_opts() ->
 %% back to verify correctness, and cleans up by stopping the database. It
 %% serves as a sanity check that the basic storage mechanism is working.
 
-init() -> 
+init() ->
     application:ensure_all_started(hb).
 
 basic_test() ->
@@ -722,7 +722,7 @@ not_found_test() ->
 bucket_not_found_test() ->
     init(),
     StoreOpts = (default_test_opts())#{<<"bucket">> => <<"invalid_bucket">>},
-    ?assertError({bucket_access_failed, {aws_error, {http_error, 400, "Bad Request", _}}}, start(StoreOpts)),
+    ?assertError({bucket_access_failed, {aws_error, {http_error, 400, _, _}}}, start(StoreOpts)),
     ok = stop(StoreOpts).
 
 failed_write_test() ->

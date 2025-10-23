@@ -579,7 +579,6 @@ start_node(Opts) ->
         os_mon
     ]),
     hb:init(),
-    hb_sup:start_link(Opts),
     ServerOpts = set_default_opts(Opts),
     {ok, _Listener, Port} = new_server(ServerOpts),
     <<"http://localhost:", (hb_util:bin(Port))/binary, "/">>.
