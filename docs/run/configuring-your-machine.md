@@ -16,9 +16,29 @@ port: 8080
 
 % Specify the Arweave key file
 priv_key_location: /path/to/your/wallet.json
+
+% Maps can be used with forward dash (/)
+default_store/lmdb/ao-types: store-module=atom
+default_store/lmdb/store-module: hb_store_lmdb
+default_store/lmdb/name: /tmp/store
+
+% Lists can be used with dot (.) and sequential integer key map
+store/ao-types: .=list
+store/1/ao-types: store-module=atom
+store/1/store-module: hb_store_lmdb
+store/1/name: /tmp/store
+
+store/2/ao-types: store-module=atom
+store/2/store-module: hb_store_s3
+store/2/bucket: hb-s3
+store/2/priv_access_key_id: minioadmin
+store/2/priv_secret_access_key: minioadmin
+store/2/endpoint: http://localhost:9000
+store/2/force_path_style: true
+store/2/region: us-east-1
 ```
 
-Below is a reference of commonly used configuration keys. Remember that `config.flat` only supports the following value types (Atoms, Strings, Integers, Booleans, Maps). For Lists, you must use environment variables.
+Below is a reference of commonly used configuration keys. Remember that `config.flat` only supports the following value types (Atoms, Strings, Integers, Booleans, Maps and List). For more complex structures, you must use environment variables.
 
 ### Core Configuration
 
