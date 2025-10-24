@@ -512,14 +512,23 @@ import_legacy_checkpoint() ->
                 <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
             ]
     },
-    ProcID = <<"NTE-RcHEeO15MYMUbXwWytRxn_IUJmXPKPOFVc5qZcg">>,
+    % Process with 12 slots
+    ProcID = <<"0Y6DdqejAqhmdlq6aJiFCOb3cIKYoPm49_Fzt08AvMs">>,
+    % Checkpoint at slot 10
+    CheckpointID = <<"p4GUwmzKf4RaD5xtGpTucGhdwukgAtIAclkhTk3Qv2Y">>,
+    ExpectedSlot = 10,
     {ok, ProcWithCheckpoint} =
         hb_ao:resolve(
-           <<"~genesis-wasm@1.0/import&process-id=", ProcID/binary>>,
-           Opts
+            <<
+                "~genesis-wasm@1.0/import=",
+                CheckpointID/binary,
+                "&process-id=",
+                ProcID/binary
+            >>,
+            Opts
         ),
     ?assertMatch(
-        Slot when Slot > 0,
+        ExpectedSlot,
         hb_maps:get(<<"at-slot">>, ProcWithCheckpoint)
     ),
     ?assertMatch(
@@ -530,7 +539,31 @@ import_legacy_checkpoint() ->
         {ok, Slot, _} when Slot > 0,
         dev_process_cache:latest(ProcID, Opts)
     ),
-    {ok, _} = hb_ao:resolve(<<ProcID/binary, "~process@1.0/now">>, Opts).
+    {ok, ActualSlot} =
+        hb_ao:resolve(<<ProcID/binary, "~process@1.0/compute/at-slot">>, Opts),
+    ?assertEqual(ExpectedSlot, ActualSlot),
+    NextSlot = hb_util:bin(ActualSlot + 1),
+    {ok, OutboxTarget} =
+        hb_ao:resolve(
+            <<
+                ProcID/binary,
+                "~process@1.0/compute&slot=",
+                NextSlot/binary,
+                "/results/outbox/1/Target"
+            >>,
+            Opts
+        ),
+    % The next slot (11) pushes a message targeting the below process.
+    ?assertEqual(OutboxTarget, <<"_s_pwnSLoguEEst3QpZiTAoWhRc4iRawVxOnzU443IM">>),
+    % Attempting to compute the previous slot should throw an error.
+    PreviousSlot = hb_util:bin(ActualSlot - 1),
+    ?assertThrow(
+        _,
+        hb_ao:resolve(
+            <<ProcID/binary, "~process@1.0/compute&slot=", PreviousSlot/binary>>,
+            Opts
+        )
+    ).
 
 test_base_process() ->
     test_base_process(#{}).

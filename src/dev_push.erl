@@ -358,13 +358,19 @@ calculate_base_id(GivenProcess, Opts) ->
             not_found -> GivenProcess;
             Proc -> Proc
         end,
-    BaseProcess = maps:without([<<"authority">>, <<"scheduler">>], Process),
-    {ok, BaseID} = hb_ao:resolve(
-        BaseProcess,
-        #{ <<"path">> => <<"id">> },
-        Opts
-    ),
-    ?event({push_generated_base, {id, BaseID}, {base, BaseProcess}}),
+    BaseProcess =
+        hb_ao:set(
+            Process,
+            #{ <<"authority">> => unset, <<"scheduler">> => unset },
+            Opts#{ hashpath => ignore }
+        ),
+    {ok, BaseID} =
+        hb_ao:resolve(
+            BaseProcess,
+            #{ <<"path">> => <<"id">>, <<"committers">> => <<"none">> },
+            Opts
+        ),
+    ?event(debug_base, {push_generated_base, {id, BaseID}, {base, BaseProcess}}),
     BaseID.
 
 %% @doc Add the necessary keys to the message to be scheduled, then schedule it.

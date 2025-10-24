@@ -1154,7 +1154,6 @@ normalize_keys(Base, Opts) when is_list(Base) ->
         ),
 		Opts
 	);
-
 normalize_keys(Map, Opts) when is_map(Map) ->
     hb_maps:from_list(
         lists:map(

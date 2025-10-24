@@ -1,308 +1,429 @@
-%%% @doc Implements a multi-layer prefix tree for efficiently storing large
-%%% datasets in nested messages.
-%%% 
-%%% Each element of the trie is available using simply resolving its name,
-%%% despite the underlying data structure. Additionally, calling the AO-Core
-%%% `set' function will correctly handle putting the values into the correct
-%%% locations in the tree, re-generating only the necessary identifiers.
-%%% 
-%%% In this implementation of the `trie' structure, `set'ting a value over a
-%%% node in the tree that would otherwise be a prefix branch will fully replace
-%%% any existing values at that node. For example:
-%%% 
-%%% ```
-%%%     Trie = #{ aaa => 1, aab => 2, aba => 3 }
-%%%     set(Trie, #{ aa => 4 }) => #{ aa => 4, aba => 3 }
-%%% ```
-%%% 
-%%% The depth of the prefix trie can be configured by using the `set-depth' key
-%%% in the `set' request.
+%%% @doc Implements a radix trie.
+%%%
+%%% This implementation features an optimization which reduces the total number
+%%% of messages required to represent the trie by collapsing leaf nodes into
+%%% their parent messages -- i.e., "implicit" leaf nodes. This requires some
+%%% special case handling during insertion and retrieval, but it can reduce the
+%%% total number of messages by more than half.
+%%%
+%%% Recall that r = 2 ^ x, so a radix-256 trie compares bits in chunks of 8 and
+%%% thus each internal node can have at most 256 children; a radix-2 trie compares
+%%% bits in chunks of 1 and thus each internal node can have at most 2 children.
+%%% (The number of children are defined by the number of permutations given by an
+%%% N-bit chunk comparison -- e.g., a 2-bit comparison yields paths
+%%% `{00, 11, 01, 10}`, which is why each node in a radix-4 trie can have at-most
+%%% 4 children!)
 -module(dev_trie).
--export([info/0, get/3, set/3]).
+-export([info/0, set/3, get/3, get/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%%% @doc How many prefix layers should new keys be separated into by default?
--define(DEFAULT_LAYERS, 2).
+%%% @doc What default radix shall we use for the data structure? Setting this to
+%%% a value other than 256 will result in undefined behavior.
+%%% Sub-byte chunking for divisors of 8 (radix-2, radix-4, radix-16) seems to work,
+%%% but cannot be properly normalized.
+-define(RADIX, 256).
 
 info() ->
     #{
         default => fun get/4
-    }.
+     }.
 
-%% @doc Get the value of a key from the trie in a base message. The function
-%% calls recursively to find the value, matching the largest prefix of the key
-%% as it recurses.
+%% @doc Get the value associated with a key from a trie represented in a base
+%% message.
 get(Key, Trie, Req, Opts) ->
-    get(Trie, Req#{ <<"key">> => Key }, Opts).
-get(Link, Req, Opts) when ?IS_LINK(Link) ->
-    get(hb_cache:ensure_loaded(Link, Opts), Req, Opts);
-get(Node, Req, Opts) ->
+    get(Trie, Req#{<<"key">> => Key}, Opts).
+get(TrieNode, Req, Opts) ->
     case hb_maps:find(<<"key">>, Req, Opts) of
-        error -> {error, <<"`key' parameter is required for trie lookup.">>};
-        {ok, <<>>} ->
-            % We have reached the end of the key characters. Return the current
-            % node.
-            {ok, Node};
-        {ok, RemainingKey} when not is_map(Node) ->
-            % We have more characters to resolve, but the current node is not a
-            % message, so we cannot continue.
-            ?event(debug_trie,
-                {not_found,
-                    {node, Node},
-                    {remaining_key, RemainingKey}
-                }
-            ),
-            {error, not_found};
-        {ok, Key} ->
-            % If we have a key to search for, find the longest prefix match
-            % amongst the keys in the trie and recurse, until there are no more
-            % bytes of the key to match on.
-            case longest_match(Key, Node, Opts) of
-                <<>> -> {error, not_found};
-                Prefix ->
-                    % Find the child node and the remaining key.
-                    get(
-                        remove_prefix(Prefix, Key),
-                        hb_maps:get(Prefix, Node, #{}, Opts),
-                        #{},
-                        Opts
-                    )
+        error -> {error, <<"'key' parameter is required for trie lookup.">>};
+        {ok, Key} -> retrieve(TrieNode, Key, Opts)
+    end.
+
+%% @doc Set keys and their values in the trie.
+set(Trie, Req, Opts) ->
+    Insertable = hb_maps:without([<<"path">>], Req, Opts),
+    KeyVals = hb_maps:to_list(Insertable, Opts),
+    {ok, do_set(Trie, KeyVals, Opts)}.
+do_set(Trie, [], Opts) ->
+    Trie,
+    Linkified = hb_message:convert(
+        Trie,
+        <<"structured@1.0">>,
+        <<"structured@1.0">>,
+        Opts
+    ),
+    WithoutHMac = hb_message:without_commitments(
+        #{<<"type">> => <<"unsigned">>},
+        Linkified,
+        Opts
+    ),
+    hb_message:commit(WithoutHMac, Opts, #{<<"type">> => <<"unsigned">>});
+do_set(Trie, [{Key, Val} | KeyVals], Opts) ->
+    NewTrie = insert(Trie, Key, Val, Opts),
+    do_set(NewTrie, KeyVals, Opts).
+
+insert(TrieNode, Key, Val, Opts) ->
+    insert(TrieNode, Key, Val, Opts, 0).
+insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
+    <<_KeyPrefix:KeyPrefixSizeAcc/bitstring, KeySuffix/bitstring>> = Key,
+    EdgeLabels = edges(TrieNode, Opts),
+    ChunkSize = round(math:log2(?RADIX)),
+    case longest_prefix_match(KeySuffix, EdgeLabels, ChunkSize) of
+        % NO MATCH: This internal node has no traversible children, because its
+        % edge labels do not match any portion of what remains to be matched of
+        % our key. If we've matched the entire length of our key on our way here,
+        % then it seems we're trying to insert a key which corresponds to the
+        % value kept at this very internal node, so we insert it here.
+        % If not, we add an edge to a new leaf node that's labeled with the remaining
+        % key suffix, and we insert our value into that leaf node. Note the implicit
+        % leaf node! In a world with explicit leaf nodes, it would look like:
+        % TrieNode#{KeySuffix => #{<<"node-value">> => Val}}
+        {EdgeLabel, MatchSize} when MatchSize =:= 0 ->
+            case bit_size(KeySuffix) > 0 of
+                true ->
+                    % Implicit leaf node creation!
+                    TrieNode#{KeySuffix => Val};
+                false ->
+                    TrieNode#{<<"node-value">> => Val}
+            end;
+        % FULL MATCH: There is a child of this node with an edge label that
+        % completely matches *some portion* of what remains to be matched in our
+        % key. If the child is a normal node, this is the straightforward recursive
+        % case -- we simply traverse to that child and continue. But if the child
+        % is an implicit leaf node, we've reached a base case: if the edge label
+        % to the implicit leaf node is exactly the same size as the remaining key
+        % suffix, then we've effectively discovered that the key we're trying to
+        % insert already exists, and its value is kept in an implicit leaf node,
+        % so we simply update it. If the edge label *isn't* the same size, we must
+        % transform the implicit leaf node into an internal node which marks the
+        % terminal value for its key, and add to it an edge representing the
+        % remaining key suffix which maps to a new implicit leaf node.
+        {EdgeLabel, MatchSize} when MatchSize =:= bit_size(EdgeLabel) ->
+            SubTrie = hb_maps:get(EdgeLabel, TrieNode, undefined, Opts),
+            case is_map(SubTrie) of
+                false ->
+                    if
+                        bit_size(KeySuffix) =:= bit_size(EdgeLabel) ->
+                            TrieNode#{EdgeLabel => Val};
+                        true ->
+                            <<
+                                _KeySuffixPrefix:MatchSize/bitstring,
+                                KeySuffixSuffix/bitstring
+                            >> = KeySuffix,
+                            TrieNode#{
+                                EdgeLabel =>
+                                    #{
+                                        <<"node-value">> => SubTrie,
+                                        KeySuffixSuffix => Val
+                                    }
+                            }
+                    end;
+                true ->
+                    NewSubTrie =
+                        insert(
+                            SubTrie,
+                            Key,
+                            Val,
+                            Opts,
+                            bit_size(EdgeLabel) + KeyPrefixSizeAcc
+                        ),
+                    TrieNode#{EdgeLabel => NewSubTrie}
+            end;
+        % PARTIAL MATCH: There is a child of this node with an edge label that
+        % partially matches *some portion* of what remains to be matched in our
+        % key. This is the node splitting case. We detach the subtrie rooted at
+        % the child, transform its dangling edge label into the common portion of
+        % the edge label and what remains to be matched in our key, and reattach
+        % the new subtrie under a new child.
+        {EdgeLabel, MatchSize} ->
+            SubTrie = hb_maps:get(EdgeLabel, TrieNode, undefined, Opts),
+            NewTrie = hb_maps:remove(EdgeLabel, TrieNode, Opts),
+            <<
+                EdgeLabelPrefix:MatchSize/bitstring,
+                EdgeLabelSuffix/bitstring
+            >> = EdgeLabel,
+            <<
+                _KeySuffixPrefix:MatchSize/bitstring,
+                KeySuffixSuffix/bitstring
+            >> = KeySuffix,
+            case bit_size(KeySuffixSuffix) > 0 of
+                true ->
+                    NewTrie#{
+                        EdgeLabelPrefix => #{
+                            EdgeLabelSuffix => SubTrie,
+                            % Implicit leaf node!
+                            KeySuffixSuffix => Val
+                        }
+                    };
+                false ->
+                    NewTrie#{
+                        EdgeLabelPrefix => #{
+                            EdgeLabelSuffix => SubTrie,
+                            <<"node-value">> => Val
+                        }
+                    }
             end
     end.
 
-%% @doc Find the longest match for a key in a message representing a layer of 
-%% the trie.
-longest_match(Key, Trie, Opts) ->
-    longest_match(<<>>, Key, hb_maps:keys(Trie, Opts) -- [<<"device">>], Opts).
-longest_match(Best, _Key, [], _Opts) -> Best;
-longest_match(_Best, Key, [Key | _Keys], _Opts) -> Key;
-longest_match(Best, Key, [XKey | Keys], Opts) ->
-    case binary:longest_common_prefix([XKey, Key]) of
-        NewLength when NewLength > byte_size(Best) ->
-            longest_match(binary:part(Key, 0, NewLength), Key, Keys, Opts);
-        _ ->
-            longest_match(Best, Key, Keys, Opts)
+retrieve(TrieNode, Key, Opts) ->
+    retrieve(TrieNode, Key, Opts, 0).
+retrieve(TrieNode, Key, Opts, KeyPrefixSizeAcc) ->
+    case KeyPrefixSizeAcc >= bit_size(Key) of
+        true ->
+            hb_maps:get(<<"node-value">>, TrieNode, {error, not_found}, Opts);
+        false ->
+            EdgeLabels = edges(TrieNode, Opts),
+            <<_KeyPrefix:KeyPrefixSizeAcc/bitstring, KeySuffix/bitstring>> = Key,
+            ChunkSize = round(math:log2(?RADIX)),
+            case longest_prefix_match(KeySuffix, EdgeLabels, ChunkSize) of
+                {_EdgeLabel, MatchSize} when MatchSize =:= 0 ->
+                    {error, not_found};
+                {EdgeLabel, MatchSize} when MatchSize =:= bit_size(EdgeLabel) ->
+                    SubTrie = hb_maps:get(EdgeLabel, TrieNode, undefined, Opts),
+                    % Special case handling for implicit leaf nodes: if the
+                    % child node corresponding to the edge label is not a map, and
+                    % the edge label is *precisely* the same size as the remaining
+                    % key suffix, then SubTrie is an implicit leaf node -- i.e.,
+                    % it's the value associated with the key we're searching for.
+                    % When the edge label is not the same size as the remaining key
+                    % suffix, that indicates a search for a nonexistent key with
+                    % a partial prefix match on an implicit leaf node -- i.e.,
+                    % if "car" is an implicit leaf node but we searched for "card".
+                    case is_map(SubTrie) of
+                        false ->
+                            if
+                                bit_size(KeySuffix) =:= bit_size(EdgeLabel) ->
+                                    SubTrie;
+                                true ->
+                                    {error, not_found}
+                            end;
+                        true ->
+                            retrieve(
+                                SubTrie,
+                                Key,
+                                Opts,
+                                bit_size(EdgeLabel) + KeyPrefixSizeAcc
+                            )
+                    end;
+                _ -> {error, not_found}
+            end
     end.
 
-%% @doc Set keys and their values in the trie. The `set-depth' key determines
-%% how many layers of the trie the keys should be separated into.
-set(Base, Req, Opts) ->
-    {ok, do_set(Base, filter_short(Req, Opts), Opts)}.
-do_set(Link, Req, Opts) when ?IS_LINK(Link) ->
-    do_set(hb_cache:ensure_loaded(Link, Opts), Req, Opts);
-do_set(NonTrie, Req, Opts) when not is_map(NonTrie) ->
-    % We are attempting to set a value on a non-trie, so we wipe the entire
-    % base and replace it with a new trie.
-    do_set(#{}, Req, Opts);
-do_set(Trie, Req, Opts) ->
-    Insertable = hb_maps:without([<<"set-depth">>, <<"path">>], Req, Opts),
-    ?event(debug_trie, {set, {trie, Trie}, {inserting, Insertable}}),
-    Depth = hb_maps:get(<<"set-depth">>, Req, ?DEFAULT_LAYERS, Opts),
-    % If we are setting a terminal value (indicated by the presence of an empty
-    % string key or a depth of 0), we simply return it.
-    case {hb_maps:find(<<>>, Insertable, Opts), Depth} of
-        {{ok, Terminal}, _} -> Terminal;
-        {_, 0} -> hb_ao:set(Trie, Insertable, Opts);
-        {_, SetDepth} ->
-            % Split keys from the request into groups for each sub-branch of the
-            % trie that they should be inserted into. Each group is then inserted
-            % in a single recursive call.
-            % After all groups are inserted, the new trie has its commitments
-            % normalized and is returned.
-            NewTrie =
-                hb_maps:fold(
-                    fun(Subkey, SubReq, Acc) ->
-                        Acc#{
-                            Subkey =>
-                                do_set(
-                                    hb_maps:get(Subkey, Acc, #{}, Opts),
-                                    SubReq#{
-                                        <<"set-depth">> => SetDepth - 1
-                                    },
-                                    Opts
-                                )
-                        }
-                    end,
-                    Trie,
-                    group_keys(Trie, Insertable, Opts),
-                    Opts
-                ),
-            Linkified =
-                hb_message:convert(
-                    NewTrie,
-                    <<"structured@1.0">>,
-                    <<"structured@1.0">>,
-                    Opts
-                ),
-            WithoutHMac =
-                hb_message:without_commitments(
-                    #{ <<"type">> => <<"unsigned">> },
-                    Linkified,
-                    Opts
-                ),
-            hb_message:commit(WithoutHMac, Opts, #{ <<"type">> => <<"unsigned">> })
-    end.
-
-%% @doc Filter all keys that are shorter than the default prefix depth.
-filter_short(Req, _Opts) ->
-    maps:filter(
-        fun(Key, _Value) -> byte_size(Key) >= ?DEFAULT_LAYERS end,
-        Req
-    ).
-
-%% @doc Take a request of keys and values, then return a new map of requests
-%% with keys split into sub-requests for each best-matching sub-trie of the base.
-%% The keys in each sub-request should be updated to have the group prefix
-%% removed.
-%% 
-%% For example, given the following setup:
-%% ```
-%% Trie = #{ <<"a">> => Trie2, <<"b">> => Trie3 }
-%% Req = #{ <<"a1">> => 1, <<"a2">> => 2, <<"b1">> => 3, <<"b2">> => 4 }
-%% ```
-%% The function should return:
-%% ```
-%% #{
-%%     <<"a">> => #{ <<"1">> => 1, <<"2">> => 2 },
-%%     <<"b">> => #{ <<"1">> => 3, <<"2">> => 4 }
-%% }
-%% ```
-group_keys(Trie, Req, Opts) ->
-    SubReqs = 
-        maps:groups_from_list(
-            fun(ReqKey) ->
-                case longest_match(ReqKey, Trie, Opts) of
-                    <<>> -> binary:part(ReqKey, 0, 1);
-                    BestMatch -> BestMatch
-                end
-            end,
-            hb_maps:keys(Req, Opts) -- [<<>>, <<"set-depth">>]
-        ),
-    Res = maps:map(
-        fun(Subkey, SubKeys) ->
-            maps:from_list(
-                lists:map(
-                    fun(SubReqKey) ->
-                        {
-                            remove_prefix(Subkey, SubReqKey),
-                            hb_maps:get(SubReqKey, Req, Opts)
-                        }
-                    end,
-                    SubKeys
-                )
-            )
-        end,
-        SubReqs
+%% @doc Get a list of edge labels for a given trie node.
+edges(TrieNode, Opts) when not is_map(TrieNode) -> [];
+edges(TrieNode, Opts) ->
+    Filtered = hb_maps:without(
+        [
+            <<"node-value">>,
+            <<"device">>,
+            <<"commitments">>,
+            <<"priv">>,
+            <<"hashpath">>
+        ],
+        TrieNode,
+        Opts
     ),
-    ?event({grouped_keys, {explicit, Res}}),
-    Res.
+    hb_maps:keys(Filtered).
 
-remove_prefix(Prefix, Key) ->
-    binary:part(
-        Key,
-        byte_size(Prefix),
-        byte_size(Key) - byte_size(Prefix)
-    ).
+%% @doc Compute the longest common binary prefix of A and B, comparing chunks of
+%% N bits.
+bitwise_lcp(A, B, N) ->
+    bitwise_lcp(A, B, N, 0).
+bitwise_lcp(A, B, N, Acc) ->
+    case {A, B} of
+        {<<ChunkA:N, RestA/bits>>, <<ChunkB:N, RestB/bits>>} when ChunkA =:= ChunkB ->
+            bitwise_lcp(RestA, RestB, N, Acc + N);
+        _ -> Acc
+    end.
+
+%% @doc For a given key and list of edge labels, determine which edge label presents
+%% the longest prefix match, comparing chunks of N bits. Returns a 2-tuple of
+%% {edge label, commonality in bits}.
+longest_prefix_match(Key, EdgeLabels, N) ->
+    longest_prefix_match({<<>>, 0}, Key, EdgeLabels, N).
+longest_prefix_match(Best, _Key, [], _N) -> Best;
+longest_prefix_match({BestLabel, BestSize}, Key, [EdgeLabel | EdgeLabels], N) ->
+    case bitwise_lcp(Key, EdgeLabel, N) of
+        Size when Size > BestSize ->
+            longest_prefix_match({EdgeLabel, Size}, Key, EdgeLabels, N);
+        _ ->
+            longest_prefix_match({BestLabel, BestSize}, Key, EdgeLabels, N)
+    end.
 
 %%% Tests
 
-immediate_get_test() ->
-    ?assertEqual(
-        1,
-        hb_ao:get(
-            <<"abc">>,
-            #{
-                <<"device">> => <<"trie@1.0">>,
-                <<"abc">> => 1
-            },
-            #{}
-        )
-    ).
+count_nodes(TrieNode, Opts) when not is_map(TrieNode) -> 0;
+count_nodes(TrieNode, Opts) ->
+    EdgeLabels = edges(TrieNode, Opts),
+    CountsChildren =
+        [
+            count_nodes(hb_maps:get(EdgeLabel, TrieNode, undefined, Opts), Opts)
+        ||
+            EdgeLabel <- EdgeLabels
+        ],
+    1 + lists:sum(CountsChildren).
 
-immediate_set_test() ->
-    ?assert(
-        hb_message:match(
-            #{ <<"a">> => 1, <<"b">> => 2 },
-            hb_ao:set(
-                #{ <<"device">> => <<"trie@1.0">>, <<"a">> => 1},
-                #{ <<"b">> => 2 },
-                #{}
-            ),
-            primary
-        )
-    ).
+verify_nodes(TrieNode, Opts) when not is_map(TrieNode) -> true;
+verify_nodes(TrieNode, Opts) ->
+    ThisNode = hb_message:verify(TrieNode),
+    EdgeLabels = edges(TrieNode, Opts),
+    ChildResults =
+        [
+            verify_nodes(hb_maps:get(EdgeLabel, TrieNode, undefined, Opts), Opts)
+        ||
+            EdgeLabel <- EdgeLabels
+        ],
+    lists:all(fun(X) -> X =:= true end, [ThisNode] ++ ChildResults).
 
-second_layer_get_test() ->
-    ?assertEqual(
-        <<"layer-2">>,
-        hb_ao:get(
-            <<"ab">>,
-            #{
-                <<"device">> => <<"trie@1.0">>,
-                <<"a">> => #{ <<"b">> => <<"layer-2">> }
-            },
-            #{}
-        )
-    ).
-
-second_layer_set_test() ->
-    ?assert(
-        hb_message:match(
-            #{ <<"a">> => #{ <<"b">> => 2, <<"c">> => 3 } },
-            hb_ao:set(
-                #{ <<"device">> => <<"trie@1.0">>, <<"a">> => #{ <<"b">> => 2 } },
-                #{ <<"ac">> => 3 },
-                #{}
-            ),
-            primary
-        )
-    ).
-
-set_multiple_test() ->
-    ?assert(
-        hb_message:match(
-            #{
-                <<"a">> => #{ <<"b">> => 2, <<"c">> => 3, <<"d">> => 4 },
-                <<"b">> => #{ <<"a">> => 5 }
-            },
-            hb_ao:set(
-                #{ <<"device">> => <<"trie@1.0">>, <<"a">> => #{ <<"b">> => 2 } },
-                #{ <<"ac">> => 3, <<"ad">> => 4, <<"ba">> => 5 },
-                #{}
-            ),
-            primary
-        )
-    ).
-
-not_found_test() ->
-    hb:init(),
-    ?assertEqual(
-        not_found,
-        hb_ao:get(
-            <<"ac">>,
-            #{
-                <<"device">> => <<"trie@1.0">>,
-                <<"a">> => #{ <<"b">> => <<"layer-2">> }
-            },
-            #{}
-        )
+node_count_forwards_test() ->
+    Trie = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{
+            <<"car">> => 31337,
+            <<"card">> => 90210,
+            <<"cardano">> => 666,
+            <<"carmex">> => 8675309,
+            <<"camshaft">> => 777,
+            <<"zebra">> => 0
+         },
+         #{}
     ),
     ?assertEqual(
-        not_found,
-        hb_ao:get(
-            <<"abcde">>,
-            #{
-                <<"device">> => <<"trie@1.0">>,
-                <<"a">> => #{ <<"b">> => <<"layer-2">> }
-            },
-            #{}
-        )
+        4,
+        count_nodes(Trie, #{})
     ).
+
+node_count_backwards_test() ->
+    Trie = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{
+            <<"zebra">> => 0,
+            <<"camshaft">> => 777,
+            <<"carmex">> => 8675309,
+            <<"cardano">> => 666,
+            <<"card">> => 90210,
+            <<"car">> => 31337
+         },
+         #{}
+    ),
+    ?assertEqual(
+        4,
+        count_nodes(Trie, #{})
+    ).
+
+basic_topology_forwards_test() ->
+    Trie = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{
+            <<"car">> => 31337,
+            <<"card">> => 90210,
+            <<"cardano">> => 666,
+            <<"carmex">> => 8675309,
+            <<"camshaft">> => 777,
+            <<"zebra">> => 0
+         },
+         #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"zebra">> => 0,
+                <<"ca">> => #{
+                    <<"mshaft">> => 777,
+                    <<"r">> => #{
+                        <<"node-value">> => 31337,
+                        <<"mex">> => 8675309,
+                        <<"d">> => #{
+                            <<"node-value">> => 90210,
+                            <<"ano">> => 666
+                        }
+                    }
+                }
+            },
+            Trie,
+            primary
+       )
+    ).
+
+basic_topology_backwards_test() ->
+    Trie = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{
+            <<"zebra">> => 0,
+            <<"camshaft">> => 777,
+            <<"carmex">> => 8675309,
+            <<"cardano">> => 666,
+            <<"card">> => 90210,
+            <<"car">> => 31337
+         },
+         #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"zebra">> => 0,
+                <<"ca">> => #{
+                    <<"mshaft">> => 777,
+                    <<"r">> => #{
+                        <<"node-value">> => 31337,
+                        <<"mex">> => 8675309,
+                        <<"d">> => #{
+                            <<"node-value">> => 90210,
+                            <<"ano">> => 666
+                        }
+                    }
+                }
+            },
+            Trie,
+            primary
+       )
+    ).
+
+basic_retrievability_test() ->
+    Trie = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{
+            <<"car">> => 31337,
+            <<"card">> => 90210,
+            <<"cardano">> => 666,
+            <<"carmex">> => 8675309,
+            <<"camshaft">> => 777,
+            <<"zebra">> => 0
+         },
+         #{}
+    ),
+    ?assertEqual(31337, hb_ao:get(<<"car">>, Trie, #{})),
+    ?assertEqual(90210, hb_ao:get(<<"card">>, Trie, #{})),
+    ?assertEqual(666, hb_ao:get(<<"cardano">>, Trie, #{})),
+    ?assertEqual(8675309, hb_ao:get(<<"carmex">>, Trie, #{})),
+    ?assertEqual(777, hb_ao:get(<<"camshaft">>, Trie, #{})),
+    ?assertEqual(0, hb_ao:get(<<"zebra">>, Trie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"cardd">>, Trie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"ca">>, Trie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"c">>, Trie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"zebraa">>, Trie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"z">>, Trie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"cardan">>, Trie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"cardana">>, Trie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"carm">>, Trie, #{})).
+
+verify_test() ->
+    Trie = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{
+            <<"car">> => 31337,
+            <<"card">> => 90210,
+            <<"cardano">> => 666,
+            <<"carmex">> => 8675309,
+            <<"camshaft">> => 777,
+            <<"zebra">> => 0
+         },
+         #{}
+    ),
+    ?assert(verify_nodes(Trie, #{})).
 
 large_balance_table_test() ->
     TotalBalances = 3_000,
-    ?event(debug_trie, {large_balance_table_test, {total_balances, TotalBalances}}),
     Balances =
         maps:from_list(
             [
@@ -314,22 +435,20 @@ large_balance_table_test() ->
                 _ <- lists:seq(1, TotalBalances)
             ]
         ),
-    ?event({created_balances, {keys, maps:size(Balances)}}),
     {ok, BaseTrie} =
         hb_ao:resolve(
             #{ <<"device">> => <<"trie@1.0">> },
             Balances#{ <<"path">> => <<"set">> },
             #{}
         ),
-    ?event(debug_trie, {created_trie, maps:size(BaseTrie)}),
-    UpdateBalanceA = 
+    UpdateBalanceA =
         lists:nth(
-            rand:uniform(TotalBalances), 
+            rand:uniform(TotalBalances),
             maps:keys(Balances)
         ),
-    UpdateBalanceB = 
+    UpdateBalanceB =
         lists:nth(
-            rand:uniform(TotalBalances), 
+            rand:uniform(TotalBalances),
             maps:keys(Balances)
         ),
     UpdatedTrie =
@@ -341,8 +460,6 @@ large_balance_table_test() ->
             },
             #{}
         ),
-    ?event(debug_trie, {updated_trie, maps:size(UpdatedTrie)}),
-    ?event(debug_trie, {checking_updates, {keys, [UpdateBalanceA, UpdateBalanceB]}}),
     ?assertEqual(
         <<"0">>,
         hb_ao:get(UpdateBalanceA, UpdatedTrie, #{})
@@ -354,254 +471,365 @@ large_balance_table_test() ->
     ),
     ?event(debug_trie, {checked_update, UpdateBalanceB}).
 
-%% @doc Test robust updating of existing terminal values plus adding new ones
-update_existing_values_test() ->
-    InitialTrie = #{
-        <<"device">> => <<"trie@1.0">>,
-        <<"alice">> => <<"100">>,
-        <<"bob">> => <<"200">>,
-        <<"charlie">> => <<"300">>
-    },
-    UpdatedTrie =
-        hb_ao:set(
-            InitialTrie,
+insertion_cases_test() ->
+    Trie1 = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{<<"toronto">> => 1},
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{<<"toronto">> => 1},
+            Trie1,
+            primary
+        )
+    ),
+    Trie2 = hb_ao:set(
+        Trie1,
+        #{<<"to">> => 2},
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{<<"to">> => #{<<"node-value">> => 2, <<"ronto">> => 1}},
+            Trie2,
+            primary
+        )
+    ),
+    Trie3 = hb_ao:set(
+        Trie2,
+        #{<<"apple">> => 3},
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
             #{
-                <<"alice">> => <<"150">>,    % Update existing terminal value
-                <<"bob">> => <<"250">>,      % Update another existing value  
-                <<"diana">> => <<"400">>,    % Add completely new value
-                <<"eve">> => <<"500">>,      % Add another new value
-                <<"frank">> => <<"600">>     % Add third new value
+                <<"apple">> => 3,
+                <<"to">> => #{<<"node-value">> => 2, <<"ronto">> => 1}
             },
-            #{}
-        ),
-    ?assertEqual(<<"150">>, hb_ao:get(<<"alice">>, UpdatedTrie, #{})),
-    ?assertEqual(<<"250">>, hb_ao:get(<<"bob">>, UpdatedTrie, #{})),
-    ?assertEqual(<<"400">>, hb_ao:get(<<"diana">>, UpdatedTrie, #{})),
-    ?assertEqual(<<"500">>, hb_ao:get(<<"eve">>, UpdatedTrie, #{})),
-    ?assertEqual(<<"600">>, hb_ao:get(<<"frank">>, UpdatedTrie, #{})),    
-    % Verify charlie still exists (wasn't touched in this update)
-    ?assertEqual(<<"300">>, hb_ao:get(<<"charlie">>, UpdatedTrie, #{})),
-    % Test another round of updates to ensure robustness
-    FinalTrie =
-        hb_ao:set(
+            Trie3,
+            primary
+        )
+    ),
+    Trie4 = hb_ao:set(
+        Trie3,
+        #{<<"town">> => 4},
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"apple">> => 3,
+                <<"to">> => #{
+                    <<"node-value">> => 2,
+                    <<"ronto">> => 1,
+                    <<"wn">> => 4
+                }
+            },
+            Trie4,
+            primary
+        )
+    ),
+    Trie5 = hb_ao:set(
+        Trie4,
+        #{<<"torrent">> => 5},
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"apple">> => 3,
+                <<"to">> => #{
+                    <<"r">> => #{<<"rent">> => 5, <<"onto">> => 1},
+                    <<"node-value">> => 2,
+                    <<"wn">> => 4
+                }
+            },
+            Trie5,
+            primary
+        )
+    ),
+    Trie6 = hb_ao:set(
+        Trie5,
+        #{<<"tor">> => 6},
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"apple">> => 3,
+                <<"to">> => #{
+                    <<"r">> => #{
+                        <<"rent">> => 5,
+                        <<"onto">> => 1,
+                        <<"node-value">> => 6
+                    },
+                    <<"node-value">> => 2,
+                    <<"wn">> => 4
+                }
+            },
+            Trie6,
+            primary
+        )
+    ),
+    Trie7 = hb_ao:set(
+        Trie6,
+        #{<<"a">> => 7},
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+             #{
+                <<"a">> => #{<<"pple">> => 3, <<"node-value">> => 7},
+                <<"to">> => #{
+                    <<"r">> => #{
+                        <<"rent">> => 5,
+                        <<"onto">> => 1,
+                        <<"node-value">> => 6
+                    },
+                    <<"node-value">> => 2,
+                    <<"wn">> => 4
+                }
+            },
+            Trie7,
+            primary
+        )
+    ),
+    Trie8 = hb_ao:set(
+        Trie7,
+        #{<<"app">> => 8},
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"a">> => #{
+                    <<"pp">> => #{<<"node-value">> => 8, <<"le">> => 3},
+                    <<"node-value">> => 7
+                },
+                <<"to">> => #{
+                    <<"r">> => #{
+                        <<"rent">> => 5,
+                        <<"onto">> => 1,
+                        <<"node-value">> => 6
+                    },
+                    <<"node-value">> => 2,
+                    <<"wn">> => 4
+                }
+            },
+            Trie8,
+            primary
+        )
+    ),
+    Trie9 = hb_ao:set(
+        Trie8,
+        #{<<"t">> => 9},
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"a">> => #{
+                    <<"pp">> => #{<<"node-value">> => 8, <<"le">> => 3},
+                    <<"node-value">> => 7
+                },
+                <<"t">> => #{
+                    <<"node-value">> => 9,
+                    <<"o">> => #{
+                        <<"r">> => #{
+                            <<"rent">> => 5,
+                            <<"onto">> => 1,
+                            <<"node-value">> => 6
+                        },
+                        <<"node-value">> => 2,
+                        <<"wn">> => 4
+                    }
+                }
+            },
+            Trie9,
+            primary
+        )
+    ).
+
+% In insertion_cases_test(), we constructed a complex trie, one key at a time.
+% Here we compare the resultant topology to the same trie constructed *in bulk*.
+forwards_bulk_insertion_test() ->
+    Trie = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{
+            <<"toronto">> => 1,
+            <<"to">> => 2,
+            <<"apple">> => 3,
+            <<"town">> => 4,
+            <<"torrent">> => 5,
+            <<"tor">> => 6,
+            <<"a">> => 7,
+            <<"app">> => 8,
+            <<"t">> => 9
+        },
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"a">> => #{
+                    <<"pp">> => #{<<"node-value">> => 8, <<"le">> => 3},
+                    <<"node-value">> => 7
+                },
+                <<"t">> => #{
+                    <<"node-value">> => 9,
+                    <<"o">> => #{
+                        <<"r">> => #{
+                            <<"rent">> => 5,
+                            <<"onto">> => 1,
+                            <<"node-value">> => 6
+                        },
+                        <<"node-value">> => 2,
+                        <<"wn">> => 4
+                    }
+                }
+            },
+            Trie,
+            primary
+        )
+    ).
+
+% Same as fowards_bulk_insertion_test(), except we bulk load the trie with the
+% keys reversed.
+backwards_bulk_insertion_test() ->
+    Trie = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{
+            <<"t">> => 9,
+            <<"app">> => 8,
+            <<"a">> => 7,
+            <<"tor">> => 6,
+            <<"torrent">> => 5,
+            <<"town">> => 4,
+            <<"apple">> => 3,
+            <<"to">> => 2,
+            <<"toronto">> => 1
+        },
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"a">> => #{
+                    <<"pp">> => #{<<"node-value">> => 8, <<"le">> => 3},
+                    <<"node-value">> => 7
+                },
+                <<"t">> => #{
+                    <<"node-value">> => 9,
+                    <<"o">> => #{
+                        <<"r">> => #{
+                            <<"rent">> => 5,
+                            <<"onto">> => 1,
+                            <<"node-value">> => 6
+                        },
+                        <<"node-value">> => 2,
+                        <<"wn">> => 4
+                    }
+                }
+            },
+            Trie,
+            primary
+        )
+    ).
+
+bulk_update_cases_test() ->
+    Trie = hb_ao:set(
+        #{<<"device">> => <<"trie@1.0">>},
+        #{
+            <<"toronto">> => 1,
+            <<"to">> => 2,
+            <<"apple">> => 3,
+            <<"town">> => 4,
+            <<"torrent">> => 5,
+            <<"tor">> => 6,
+            <<"a">> => 7,
+            <<"app">> => 8,
+            <<"t">> => 9
+        },
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"a">> => #{
+                    <<"pp">> => #{<<"node-value">> => 8, <<"le">> => 3},
+                    <<"node-value">> => 7
+                },
+                <<"t">> => #{
+                    <<"node-value">> => 9,
+                    <<"o">> => #{
+                        <<"r">> => #{
+                            <<"rent">> => 5,
+                            <<"onto">> => 1,
+                            <<"node-value">> => 6
+                        },
+                        <<"node-value">> => 2,
+                        <<"wn">> => 4
+                    }
+                }
+            },
+            Trie,
+            primary
+        )
+    ),
+    UpdatedTrie = hb_ao:set(
+        Trie,
+        #{
+            <<"toronto">> => 40,
+            <<"to">> => 50,
+            <<"apple">> => 60,
+            <<"town">> => 70,
+            <<"torrent">> => 80,
+            <<"tor">> => 90,
+            <<"a">> => 100,
+            <<"app">> => 110,
+            <<"t">> => 120
+        },
+        #{}
+    ),
+    ?assert(
+        hb_message:match(
+            #{
+                <<"a">> => #{
+                    <<"pp">> => #{<<"node-value">> => 110, <<"le">> => 60},
+                    <<"node-value">> => 100
+                },
+                <<"t">> => #{
+                    <<"node-value">> => 120,
+                    <<"o">> => #{
+                        <<"r">> => #{
+                            <<"rent">> => 80,
+                            <<"onto">> => 40,
+                            <<"node-value">> => 90
+                        },
+                        <<"node-value">> => 50,
+                        <<"wn">> => 70
+                    }
+                }
+            },
             UpdatedTrie,
-            #{
-                <<"alice">> => <<"175">>,    % Update alice again
-                <<"frank">> => <<"600">>     % Add yet another new value
-            },
-            #{}
-        ),
-    % Verify the second round of updates
-    AliceResult = hb_ao:get(<<"alice">>, FinalTrie, #{}),
-    FrankResult = hb_ao:get(<<"frank">>, FinalTrie, #{}),
-    ?event(debug_trie, {alice_retrieval, AliceResult}),
-    ?event(debug_trie, {frank_retrieval, FrankResult}),
-    ?assertEqual(<<"175">>, AliceResult),
-    ?assertEqual(<<"600">>, FrankResult),
-    % Ensure all other values are still intact
-    ?assertEqual(<<"250">>, hb_ao:get(<<"bob">>, FinalTrie, #{})),
-    ?assertEqual(<<"300">>, hb_ao:get(<<"charlie">>, FinalTrie, #{})),
-    ?assertEqual(<<"400">>, hb_ao:get(<<"diana">>, FinalTrie, #{})),
-    ?assertEqual(<<"500">>, hb_ao:get(<<"eve">>, FinalTrie, #{})).
-
-%% @doc Test commitment integrity after setting and re-setting keys
-commitment_integrity_test() ->
-    Wallet = hb:wallet(),
-    InitialMsg = hb_message:commit(#{
-        <<"device">> => <<"trie@1.0">>,
-        <<"key1">> => <<"value1">>,
-        <<"key2">> => <<"value2">>
-    }, Wallet),
-    % Verify initial commitments exist
-    InitialCommitted = hb_message:committed(InitialMsg, all, #{}),
-    ?assert(length(InitialCommitted) > 0),
-    % Update the trie with individual key updates
-    UpdatedMsg =
-        hb_ao:set(
-            InitialMsg,
-            #{
-                <<"key1">> => <<"updated-value1">>,
-                <<"key3">> => <<"new-value3">>
-            },
-            #{}
-        ),
-    % Verify commitments are maintained after update
-    UpdatedCommitted = hb_message:committed(UpdatedMsg, all, #{}),
-    ?assert(length(UpdatedCommitted) > 0),
-    ?assertEqual(
-        <<"updated-value1">>,
-        hb_ao:get(<<"key1">>, UpdatedMsg, #{})
+            primary
+        )
     ),
-    ?assertEqual(
-        <<"value2">>,
-        hb_ao:get(<<"key2">>, UpdatedMsg, #{})
-    ),
-    ?assertEqual(
-        <<"new-value3">>,
-        hb_ao:get(<<"key3">>, UpdatedMsg, #{})
-    ).
-
-%% @doc Test keys shorter than the default prefix depth
-short_keys_test() ->
-    % Test single-byte keys (shorter than DEFAULT_LAYERS = 2)
-    ShortKeyTrie = #{
-        <<"device">> => <<"trie@1.0">>
-    },
-    % Insert single-byte keys
-    UpdatedTrie =
-        hb_ao:set(
-            ShortKeyTrie,
-            #{
-                <<"a">> => <<"value-a">>,
-                <<"b">> => <<"value-b">>,
-                <<"0">> => <<"value-0">>,
-                <<"1">> => <<"value-1">>
-            },
-            #{}
-        ),
-    % Verify all short keys can be retrieved
-    ?assertEqual(
-        <<"value-a">>,
-        hb_ao:get(<<"a">>, UpdatedTrie, #{})
-    ),
-    ?assertEqual(
-        <<"value-b">>,
-        hb_ao:get(<<"b">>, UpdatedTrie, #{})
-    ),
-    ?assertEqual(
-        <<"value-0">>,
-        hb_ao:get(<<"0">>, UpdatedTrie, #{})
-    ),
-    ?assertEqual(
-        <<"value-1">>,
-        hb_ao:get(<<"1">>, UpdatedTrie, #{})
-    ).
-
-%% @doc Test that mixed key lengths work with trie depth calculation
-mixed_key_lengths_test() ->
-    Trie0 =
-        hb_ao:set(
-            #{
-                <<"device">> => <<"trie@1.0">>
-            },
-            #{
-                <<"x">> => <<"single">>,
-                <<"yz">> => <<"double">>,
-                <<"abc">> => <<"triple">>
-            },
-            #{}
-        ),
-    ?assertEqual(<<"single">>, hb_ao:get(<<"x">>, Trie0, #{})),
-    ?assertEqual(<<"double">>, hb_ao:get(<<"yz">>, Trie0, #{})),
-    ?assertEqual(<<"triple">>, hb_ao:get(<<"abc">>, Trie0, #{})),
-    % Update a short key value.
-    Trie1 =
-        hb_ao:set(
-            Trie0,
-            #{
-                <<"x">> => <<"updated-single">>,
-                <<"ab">> => <<"overwritten-trie">>
-            },
-            #{}
-        ),
-    ?assertEqual(<<"updated-single">>, hb_ao:get(<<"x">>, Trie1, #{})),
-    ?assertEqual(<<"overwritten-trie">>, hb_ao:get(<<"ab">>, Trie1, #{})).
-
-%% @doc Test trie behavior with custom set-depth
-custom_depth_test() ->
-    Trie = #{
-        <<"device">> => <<"trie@1.0">>
-    },
-    UpdatedTrie =
-        hb_ao:set(
-            Trie,
-            #{
-                <<"set-depth">> => 1,
-                <<"very-long-key-1">> => <<"value1">>,
-                <<"very-long-key-2">> => <<"value2">>,
-                <<"different-prefix">> => <<"value3">>
-            },
-            #{}
-        ),
-    ?assertEqual(
-        <<"value1">>, 
-        hb_ao:get(<<"very-long-key-1">>, UpdatedTrie, #{})
-    ),
-    ?assertEqual(
-        <<"value2">>, 
-        hb_ao:get(<<"very-long-key-2">>, UpdatedTrie, #{})
-    ),
-    ?assertEqual(
-        <<"value3">>, 
-        hb_ao:get(<<"different-prefix">>, UpdatedTrie, #{})
-    ).
-
-%% @doc Test error conditions and boundary cases  
-error_conditions_test() ->
-    Trie = #{
-        <<"device">> => <<"trie@1.0">>
-    },
-    ?assertEqual(
-        not_found,
-        hb_ao:get(<<"nonexistent">>, Trie, #{})
-    ),
-    ZeroDepthTrie =
-        hb_ao:set(
-            Trie,
-            #{
-                <<"set-depth">> => 0,
-                <<"key1">> => <<"value1">>,
-                <<"key2">> => <<"value2">>
-            },
-            #{}
-        ),
-    ?assertEqual(<<"value1">>, hb_ao:get(<<"key1">>, ZeroDepthTrie, #{})),
-    ?assertEqual(<<"value2">>, hb_ao:get(<<"key2">>, ZeroDepthTrie, #{})). 
-
-%% @doc Test the critical single-byte key case (like "0" in AO token)
-single_byte_key_test() ->
-    Trie = #{
-        <<"device">> => <<"trie@1.0">>
-    },
-    UpdatedTrie =
-        hb_ao:set(
-            Trie,
-            #{
-                <<"0">> => <<"zero-balance">>,
-                <<"1">> => <<"one-balance">>,
-                <<"abc">> => <<"normal-key">>
-            },
-            #{}
-        ),
-    ?assertEqual(<<"zero-balance">>, hb_ao:get(<<"0">>, UpdatedTrie, #{})),
-    ?assertEqual(<<"one-balance">>, hb_ao:get(<<"1">>, UpdatedTrie, #{})),
-    ?assertEqual(<<"normal-key">>, hb_ao:get(<<"abc">>, UpdatedTrie, #{})).
-
-%% @doc Test trie structural integrity with deeper nesting
-deep_nesting_test() ->
-    Trie = #{
-        <<"device">> => <<"trie@1.0">>
-    },
-    Step1 =
-        hb_ao:set(
-            Trie,
-            #{ <<"level1">> => <<"value1">> },
-            #{}
-        ),
-    
-    Step2 =
-        hb_ao:set(
-            Step1,
-            #{ <<"level2">> => <<"value2">> },
-            #{}
-        ),
-    ?assertEqual(<<"value1">>, hb_ao:get(<<"level1">>, Step2, #{})),
-    ?assertEqual(<<"value2">>, hb_ao:get(<<"level2">>, Step2, #{})),
-    Step3 =
-        hb_ao:set(
-            Trie,
-            #{ <<"level1a">> => <<"value1a">>, <<"level1b">> => <<"value1b">> },
-            #{}
-        ),
-    ?assertEqual(<<"value1a">>, hb_ao:get(<<"level1a">>, Step3, #{})),
-    ?assertEqual(<<"value1b">>, hb_ao:get(<<"level1b">>, Step3, #{})).
+    ?assertEqual(40, hb_ao:get(<<"toronto">>, UpdatedTrie, #{})),
+    ?assertEqual(50, hb_ao:get(<<"to">>, UpdatedTrie, #{})),
+    ?assertEqual(60, hb_ao:get(<<"apple">>, UpdatedTrie, #{})),
+    ?assertEqual(70, hb_ao:get(<<"town">>, UpdatedTrie, #{})),
+    ?assertEqual(80, hb_ao:get(<<"torrent">>, UpdatedTrie, #{})),
+    ?assertEqual(90, hb_ao:get(<<"tor">>, UpdatedTrie, #{})),
+    ?assertEqual(100, hb_ao:get(<<"a">>, UpdatedTrie, #{})),
+    ?assertEqual(110, hb_ao:get(<<"app">>, UpdatedTrie, #{})),
+    ?assertEqual(120, hb_ao:get(<<"t">>, UpdatedTrie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"ap">>, UpdatedTrie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"appple">>, UpdatedTrie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"top">>, UpdatedTrie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"torontor">>, UpdatedTrie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"townn">>, UpdatedTrie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"toro">>, UpdatedTrie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"appapp">>, UpdatedTrie, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"tt">>, UpdatedTrie, #{})).

@@ -27,10 +27,8 @@ commit(Device, Secret, Base, Req, Opts) ->
         case map_size(ExistingComms) of
             0 -> Base;
             _ ->
-                hb_message:uncommitted(
-                    hb_message:with_only_committed(Base, Opts),
-                    Opts
-                )
+                {ok, CommittedBase} = hb_message:with_only_committed(Base, Opts),
+                hb_message:uncommitted(CommittedBase, Opts)
         end,
     % Commit the message with the given key.
     CommittedMsg =

@@ -193,7 +193,7 @@ do_assign(State, Message, ReplyPID) ->
                         <<"path">> =>
                             case hb_path:from_message(request, Message, Opts) of
                                 undefined -> <<"compute">>;
-                                Path -> Path
+                                Path -> hb_path:to_binary(Path)
                             end,
                         <<"data-protocol">> => <<"ao">>,
                         <<"variant">> => <<"ao.N.1">>,
