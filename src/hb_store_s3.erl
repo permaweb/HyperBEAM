@@ -43,7 +43,7 @@
 %% Configuration defaults
 -define(DEFAULT_REGION, <<"us-east-1">>).
 -define(DEFAULT_ENDPOINT, <<"https://s3.amazonaws.com">>).
--define(DEFAULT_FORCE_PATH_STYLE, false).
+-define(DEFAULT_FORCE_PATH_STYLE, <<"false">>).
 -define(MAX_REDIRECTS, 100).                    % Only resolve 1000 links to data
 -define(LINK_MARKER, <<"link:">>).
 %% Namespace for storing link objects separately to avoid file collisions
@@ -71,8 +71,8 @@ start(Opts) ->
         Endpoint = maps:get(<<"endpoint">>, Opts, ?DEFAULT_ENDPOINT),
         Bucket = maps:get(<<"bucket">>, Opts),
         ForcePathStyle = case maps:get(<<"force_path_style">>, Opts, ?DEFAULT_FORCE_PATH_STYLE) of
-            true -> path;
-            false -> auto
+            <<"true">> -> path;
+            <<"false">> -> auto
         end,
         #{
             scheme := Scheme,
@@ -694,7 +694,7 @@ default_test_opts() ->
         <<"priv_secret_access_key">> => <<"minioadmin">>,
         <<"endpoint">> => <<"http://localhost:9000">>,
         <<"dangerous_reset">> => true,
-        <<"force_path_style">> => true
+        <<"force_path_style">> => <<"true">>
      }.
 
 -ifdef(ENABLE_S3).
