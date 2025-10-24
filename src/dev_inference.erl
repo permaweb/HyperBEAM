@@ -1,54 +1,23 @@
-%%% @doc A device that provides inference capabilities by interfacing with
-%%% the HyperBEAM inference server. This device manages the lifecycle of the
-%%% inference server and provides OpenAI-compatible API endpoints for
-%%% text generation and other inference tasks.
-%%%
-%%% HTTP Endpoints:
-%%% - /~inference@1.0/completions - OpenAI-compatible completions API
-%%% - /~inference@1.0/chat - Chat completions API
-%%% - /~inference@1.0/health - Server health check
 -module(dev_inference).
--export([info/1, completions/3, chat/3, health/3, stop/0]).
+-export([info/1, completions/3, chat/3, health/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
-%%% Timeout for inference server status check.
 -define(STATUS_TIMEOUT, 100).
 
-%%% Key for storing the inference server port in the process dictionary.
--define(INFERENCE_PORT_KEY, inference_server_port).
-
-%% @doc Device information and exported endpoints.
 info(_Opts) ->
     #{
         exports => [<<"completions">>, <<"chat">>, <<"health">>],
-        description => <<"HyperBEAM inference device providing OpenAI-compatible API endpoints">>,
+        description => <<"Inference device with OpenAI-compatible API">>,
         version => <<"1.0">>
     }.
 
-%% @doc OpenAI-compatible completions endpoint.
-%% Accessible via HTTP: POST /~inference@1.0/completions
 completions(Base, Req, Opts) ->
     handle_inference_request(Base, Req, Opts, <<"/v1/completions">>).
 
-%% @doc OpenAI-compatible chat completions endpoint.
-%% Accessible via HTTP: POST /~inference@1.0/chat
 chat(Base, Req, Opts) ->
     handle_inference_request(Base, Req, Opts, <<"/v1/chat/completions">>).
-
-%% @doc Stop the inference server and clean up resources.
-stop() ->
-    % Find the registered inference server process
-    case hb_name:find(<<"inference@1.0">>) of
-        {ok, PID} when is_pid(PID) ->
-            PID ! stop,
-            ok;
-        _ ->
-            ok
-    end.
-
-%% @doc Health check endpoint.
-%% Accessible via HTTP: GET /~inference@1.0/health
+    
 health(_Base, _Req, Opts) ->
     case ensure_started(Opts) of
         true ->
@@ -57,63 +26,27 @@ health(_Base, _Req, Opts) ->
                 <<"timestamp">> => os:system_time(millisecond)
             }};
         false ->
-            {error, #{
-                <<"status">> => 503,
-                <<"message">> => <<"Inference server not available">>
-            }}
+            {error, #{<<"status">> => 503, <<"message">> => <<"Server not available">>}}
     end.
 
-%% @doc Handle inference requests by proxying to the inference server.
 handle_inference_request(Base, Req, Opts, InferencePath) ->
-    % Ensure inference server is running
     case ensure_started(Opts) of
-        true ->
-            do_inference_request(Base, Req, Opts, InferencePath);
-        false ->
-            {error, #{
-                <<"status">> => 503,
-                <<"message">> => <<"Inference server not available">>
-            }}
+        true -> do_inference_request(Base, Req, Opts, InferencePath);
+        false -> {error, #{<<"status">> => 503, <<"message">> => <<"Server not available">>}}
     end.
 
-%% @doc Execute inference request through relay device.
-do_inference_request(Base, Req, Opts, InferencePath) ->
-    % HyperBEAM parses JSON body and puts fields at the top level
-    % We need to extract them and rebuild the JSON body for the inference server
+do_inference_request(_Base, Req, Opts, InferencePath) ->
     Body = case hb_ao:get(<<"body">>, Req, not_found, Opts) of
-        not_found ->
-            % No body field, extract inference parameters from top-level
-            InferenceParams = extract_inference_params(Req, Opts),
-            hb_json:encode(InferenceParams);
-        ExistingBody when is_binary(ExistingBody) ->
-            % Body already exists as binary
-            ExistingBody;
-        ExistingBody when is_map(ExistingBody) ->
-            % Body is a map, encode it
-            hb_json:encode(ExistingBody)
+        not_found -> hb_json:encode(extract_inference_params(Req, Opts));
+        ExistingBody when is_binary(ExistingBody) -> ExistingBody;
+        ExistingBody when is_map(ExistingBody) -> hb_json:encode(ExistingBody)
     end,
-    
-    ?event(inference, {inference_request_body, {body, {string, Body}}, {req, Req}}),
     Headers = prepare_inference_headers(Req, Opts),
+    Response = do_relay(<<"POST">>, InferencePath, Body, Headers, 
+        Opts#{hashpath => ignore, cache_control => [<<"no-store">>, <<"no-cache">>]}),
+    handle_inference_response(Response, Opts).
 
-    % Send request to inference server via relay
-    Response = do_relay(
-        <<"POST">>,
-        InferencePath,
-        Body,
-        Headers,
-        Opts#{
-            hashpath => ignore,
-            cache_control => [<<"no-store">>, <<"no-cache">>]
-        }
-    ),
-
-    handle_inference_response(Base, Response, Opts).
-
-%% @doc Extract inference parameters from the request message.
-%% HyperBEAM puts JSON fields at the top level, so we need to extract them.
 extract_inference_params(Req, Opts) ->
-    % Common fields for inference requests
     ParamKeys = [
         <<"model">>, <<"prompt">>, <<"messages">>, <<"max_tokens">>,
         <<"temperature">>, <<"top_p">>, <<"n">>, <<"stream">>,
@@ -121,9 +54,7 @@ extract_inference_params(Req, Opts) ->
         <<"logit_bias">>, <<"user">>, <<"seed">>, <<"top_k">>,
         <<"repetition_penalty">>, <<"length_penalty">>, <<"early_stopping">>
     ],
-    
-    % Extract all inference-related parameters
-    Params = lists:foldl(
+    lists:foldl(
         fun(Key, Acc) ->
             case hb_ao:get(Key, Req, not_found, Opts) of
                 not_found -> Acc;
@@ -132,48 +63,25 @@ extract_inference_params(Req, Opts) ->
         end,
         #{},
         ParamKeys
-    ),
-    
-    % Ensure we have at least a model parameter
-    case maps:size(Params) of
-        0 -> #{};
-        _ -> Params
-    end.
+    ).
 
-%% @doc Prepare headers for the inference server request.
 prepare_inference_headers(Req, Opts) ->
-    % Extract relevant headers from the request
     Headers = hb_maps:without([<<"body">>, <<"path">>, <<"method">>], Req, Opts),
-
-    % Ensure content-type is set appropriately
     DefaultHeaders = #{
         <<"content-type">> => <<"application/json">>,
         <<"accept">> => <<"application/json">>
     },
-
     maps:merge(DefaultHeaders, Headers).
 
-%% @doc Send request to inference server via relay device.
 do_relay(Method, Path, Body, Headers, Opts) ->
-    ContentType = hb_maps:get(
-        <<"content-type">>,
-        Headers,
-        <<"application/json">>,
-        Opts
-    ),
-
-    % Get the inference proxy server address
+    ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/json">>, Opts),
     ProxyHost = hb_opts:get(inference_proxy_host, "127.0.0.1", Opts),
     ProxyPort = hb_opts:get(inference_proxy_port, 8080, Opts),
     ProxyHostBin = iolist_to_binary(ProxyHost),
     ProxyPortBin = integer_to_binary(ProxyPort),
     PeerURL = <<"http://", ProxyHostBin/binary, ":", ProxyPortBin/binary>>,
-
     hb_ao:resolve(
-        #{
-            <<"device">> => <<"relay@1.0">>,
-            <<"content-type">> => ContentType
-        },
+        #{<<"device">> => <<"relay@1.0">>, <<"content-type">> => ContentType},
         Headers#{
             <<"path">> => <<"call">>,
             <<"target">> => <<"payload">>,
@@ -188,293 +96,133 @@ do_relay(Method, Path, Body, Headers, Opts) ->
         Opts
     ).
 
-%% @doc Handle the response from the inference server.
-handle_inference_response(Base, Response, Opts) ->
+handle_inference_response(Response, Opts) ->
     case Response of
         {ok, Res} ->
-            % Use hb_ao:get to resolve any link structures in the body
-            Body = hb_ao:get(<<"body">>, Res, Opts),
-            % Get other response headers (status, content-type, etc.)
-            Status = hb_ao:get(<<"status">>, Res, 200, Opts),
-            ContentType = hb_ao:get(<<"content-type">>, Res, <<"application/json">>, Opts),
-            
-            % Return the response directly as the result
             {ok, #{
-                <<"status">> => Status,
-                <<"content-type">> => ContentType,
-                <<"body">> => Body
+                <<"status">> => hb_ao:get(<<"status">>, Res, 200, Opts),
+                <<"content-type">> => hb_ao:get(<<"content-type">>, Res, <<"application/json">>, Opts),
+                <<"body">> => hb_ao:get(<<"body">>, Res, Opts)
             }};
         {error, Error} when is_map(Error) ->
-            % Extract error details, resolving any link structures
-            ErrorBody = hb_ao:get(<<"body">>, Error, <<"Unknown error">>, Opts),
-            ErrorStatus = hb_ao:get(<<"status">>, Error, 500, Opts),
-            ErrorMessage = hb_ao:get(<<"message">>, Error, <<"Inference request failed">>, Opts),
             {error, #{
-                <<"status">> => ErrorStatus,
-                <<"message">> => ErrorMessage,
-                <<"details">> => ErrorBody
+                <<"status">> => hb_ao:get(<<"status">>, Error, 500, Opts),
+                <<"message">> => hb_ao:get(<<"message">>, Error, <<"Request failed">>, Opts),
+                <<"details">> => hb_ao:get(<<"body">>, Error, <<"Unknown error">>, Opts)
             }};
         {error, Error} ->
-            % Handle non-map errors (strings, atoms, etc.)
             {error, #{
                 <<"status">> => 500,
-                <<"message">> => <<"Inference request failed">>,
+                <<"message">> => <<"Request failed">>,
                 <<"details">> => hb_util:bin(Error)
             }}
     end.
 
-%% @doc Start the inference server process.
 start_inference_server(InferenceServerDir, Opts) ->
-    % Get configuration options
-    ModelPath = hb_opts:get(inference_model_path, "", Opts),
-    SGLangHost = hb_opts:get(inference_sglang_host, "127.0.0.1", Opts),
-    SGLangPort = hb_opts:get(inference_sglang_port, 30000, Opts),
-    ProxyHost = hb_opts:get(inference_proxy_host, "127.0.0.1", Opts),
-    ProxyPort = hb_opts:get(inference_proxy_port, 8080, Opts),
+    ModelPath = hb_util:list(hb_opts:get(inference_model_path, "", Opts)),
+    ProxyPort = integer_to_list(hb_opts:get(inference_proxy_port, 8080, Opts)),
+    BackendPort = integer_to_list(hb_opts:get(inference_backend_port, 30000, Opts)),
+    UvExe = find_uv_executable(),
+    LaunchScript = filename:join([InferenceServerDir, "launch-monitored.sh"]),
+    Port = open_port(
+        {spawn_executable, LaunchScript},
+        [binary, use_stdio, stderr_to_stdout, exit_status, {cd, InferenceServerDir},
+         {args, [UvExe, "run", "deterministic-inference-server",
+                 "--model-path", ModelPath, "--proxy-port", ProxyPort,
+                 "--backend-port", BackendPort]}]
+    ),
+    collect_server_events(Port).
 
-    % Convert binary values to strings for port arguments
-    ModelPathStr = binary_to_list(iolist_to_binary(ModelPath)),
-    SGLangHostStr = binary_to_list(iolist_to_binary(SGLangHost)),
-    ProxyHostStr = binary_to_list(iolist_to_binary(ProxyHost)),
-
-    % Verify the inference server script exists
-    ScriptPath = filename:join([InferenceServerDir, "hb_inference_server.py"]),
-    case filelib:is_file(ScriptPath) of
-        false ->
-            exit({inference_server_script_not_found, ScriptPath});
-        true ->
-            ok
-    end,
-
-    % Find Python executable
-    PythonExe = find_python_executable(),
-
-    % Build the command to start the inference server
-    try
-        Port = open_port(
-            {spawn_executable, PythonExe},
-            [
-                binary,
-                use_stdio,
-                stderr_to_stdout,
-                exit_status,
-                {args, [
-                    ScriptPath,
-                    "--model-path", ModelPathStr,
-                    "--sglang-host", SGLangHostStr,
-                    "--sglang-port", integer_to_list(SGLangPort),
-                    "--proxy-host", ProxyHostStr,
-                    "--proxy-port", integer_to_list(ProxyPort)
-                ]},
-                {env, [
-                    {"PYTHONPATH", InferenceServerDir}
-                ]}
-            ]),
-        % Store the port in process dictionary for cleanup
-        put(?INFERENCE_PORT_KEY, Port),
-        ?event(inference, {inference_server_started, {port, Port}}),
-        collect_server_events(Port)
-    catch
-        error:Reason ->
-            exit({inference_server_failed_to_start, Reason})
-    end.
-
-%% @doc Ensure the local inference server is live. If not, start it.
 ensure_started(Opts) ->
-    case is_inference_server_running(Opts) of
-        true ->
-            true;
+    {ok, Cwd} = file:get_cwd(),
+    InferenceServerDir = determine_inference_server_dir(Cwd),
+    IsRunning = is_inference_server_running(Opts),
+    InferenceProc = is_pid(hb_name:lookup(<<"inference-server@1.0">>)),
+    case IsRunning orelse InferenceProc of
+        true -> true;
         false ->
-            {ok, Cwd} = file:get_cwd(),
-            InferenceServerDir = determine_inference_server_dir(Cwd, Opts),
             PID = spawn(fun() -> start_inference_server(InferenceServerDir, Opts) end),
-            hb_name:register(<<"inference@1.0">>, PID),
-            % Wait for the server to start
-            hb_util:until(
-                fun() ->
-                    receive after 2000 -> ok end,
-                    is_inference_server_running(Opts)
-                end
-            ),
+            hb_name:register(<<"inference-server@1.0">>, PID),
+            hb_util:until(fun() ->
+                receive after 2000 -> ok end,
+                is_inference_server_running(Opts)
+            end),
             true
     end.
 
-%% @doc Determine the inference server directory based on build mode.
-determine_inference_server_dir(Cwd, Opts) ->
+determine_inference_server_dir(Cwd) ->
     case init:get_argument(mode) of
-        {ok, [["embedded"]]} ->
-            % We're in release mode
-            filename:join([Cwd, "hb_inference"]);
+        {ok, [["embedded"]]} -> filename:join([Cwd, "deterministic-inference"]);
         _ ->
-            % We're in development mode - look in the native directory
-            DevPath = filename:join([Cwd, "native", "hb_inference"]),
+            DevPath = filename:join([Cwd, "_build", "deterministic-inference"]),
             case filelib:is_dir(DevPath) of
                 true -> DevPath;
-                false -> filename:join([Cwd, "hb_inference"]) % Fallback
+                false -> filename:join([Cwd, "deterministic-inference"])
             end
     end.
 
-%% @doc Check if the inference server is running.
 is_inference_server_running(Opts) ->
-    check_server_status_async(Opts).
-
-%% @doc Asynchronously check the server status to avoid hanging.
-check_server_status_async(Opts) ->
-    case get(inference_server_pid) of
+    case get(inference_server_status) of
         undefined ->
             Parent = self(),
-            PID = spawn(fun() ->
-                Parent ! {ok, self(), check_server_status(Opts)}
-            end),
+            PID = spawn(fun() -> Parent ! {ok, self(), check_health(Opts)} end),
             receive
                 {ok, PID, Status} ->
-                    put(inference_server_pid, Status),
+                    put(inference_server_status, Status),
                     Status
             after ?STATUS_TIMEOUT ->
                 erlang:exit(PID, kill),
                 false
             end;
-        Status -> 
-            Status
+        _ -> true
     end.
 
-%% @doc Check if the inference server is running by requesting its health endpoint.
-check_server_status(Opts) ->
-    ServerPort = hb_opts:get(inference_proxy_port, 8080, Opts),
-    case gen_tcp:connect("localhost", ServerPort, [], 1000) of
-        {ok, Socket} ->
-            gen_tcp:close(Socket),
-            check_http_health(ServerPort, Opts);
-        {error, _Reason} ->
-            false
-    end.
-
-%% @doc Check the HTTP health endpoint after confirming TCP connectivity.
-check_http_health(ServerPort, Opts) ->
-    HealthURL = <<"http://localhost:", (hb_util:bin(ServerPort))/binary, "/health">>,
-    try hb_http:get(HealthURL, Opts) of
-        {ok, Res} ->
-            Status = hb_maps:get(<<"status">>, Res, 0, Opts),
-            Status =:= 200;
-        {error, Res} ->
-            Status = hb_maps:get(<<"status">>, Res, 0, Opts),
-            Server = hb_maps:get(<<"server">>, Res, <<"">>, Opts),
-            case Status of
-                404 ->
-                    % 404 from Python server means server is running but wrong endpoint
-                    binary:match(Server, <<"Python">>) =/= nomatch;
-                _ when Status >= 500 ->
-                    true;
-                _ ->
-                    false
-            end;
-        _Err ->
-            false
+check_health(Opts) ->
+    ServerPort = integer_to_binary(hb_opts:get(inference_proxy_port, 8080, Opts)),
+    try hb_http:get(<<"http://localhost:", ServerPort/binary, "/health">>, Opts) of
+        {ok, _} -> true;
+        _ -> false
     catch
-        _:_Err ->
-            false
+        _:_ -> false
     end.
 
-%% @doc Collect events from the server port and log them.
 collect_server_events(Port) ->
     collect_server_events(Port, <<>>).
 
 collect_server_events(Port, Acc) ->
     receive
         {Port, {data, Data}} ->
-            NewAcc = <<Acc/binary, Data/binary>>,
-            % Log server output for debugging
-            case binary:split(Data, <<"\n">>, [global]) of
-                Lines when length(Lines) > 0 ->
-                    [?event(inference, {inference_server_output, {line, Line}}) || Line <- Lines, byte_size(Line) > 0];
-                _ -> ok
-            end,
-            collect_server_events(Port, NewAcc);
-        {Port, {exit_status, Status}} ->
-            ?event(inference, {inference_server_exited, {status, Status}}),
-            port_close(Port),
-            ok;
+            collect_server_events(Port, log_server_events(<<Acc/binary, Data/binary>>));
         stop ->
-            ?event(inference, {inference_server_stopping}),
-            % Send interrupt signal to Python process
-            case erlang:port_info(Port, os_pid) of
-                {os_pid, OsPid} ->
-                    ?event(inference, {killing_inference_server, {os_pid, OsPid}}),
-                    os:cmd("kill -TERM " ++ integer_to_list(OsPid)),
-                    % Wait a bit for graceful shutdown
-                    receive
-                        {Port, {exit_status, _}} -> ok
-                    after 5000 ->
-                        % Force kill if still running
-                        os:cmd("kill -KILL " ++ integer_to_list(OsPid))
-                    end;
-                _ -> ok
-            end,
-            catch port_close(Port),
+            port_close(Port),
             ok
     end.
 
-%% @doc Find a working Python executable.
-find_python_executable() ->
-    % Try common Python executable names in order of preference
-    Candidates = ["python3", "/usr/bin/python3", "/usr/local/bin/python3", "python"],
-    find_working_python(Candidates).
+log_server_events(Bin) when is_binary(Bin) ->
+    log_server_events(binary:split(Bin, <<"\n">>, [global]));
+log_server_events([Remaining]) -> Remaining;
+log_server_events([Line | Rest]) ->
+    ?event(inference, {server_logged, {string, Line}}),
+    log_server_events(Rest).
 
-%% @doc Find the first working Python executable from a list of candidates.
-find_working_python([]) ->
-    error(no_python_executable_found);
-find_working_python([Candidate | Rest]) ->
-    case os:find_executable(Candidate) of
-        false ->
-            find_working_python(Rest);
-        Path ->
-            Path
+find_uv_executable() ->
+    HomePath = os:getenv("HOME"),
+    Candidates = ["uv", filename:join([HomePath, ".cargo", "bin", "uv"]),
+                  filename:join([HomePath, ".local", "bin", "uv"]), "/usr/local/bin/uv"],
+    case lists:search(fun(C) -> os:find_executable(C) =/= false end, Candidates) of
+        {value, Found} -> os:find_executable(Found);
+        false -> error(uv_executable_not_found)
     end.
 
-%%% Tests
 -ifdef(ENABLE_INFERENCE).
 
-inference_completions_test_() ->
-    {timeout, 300, fun test_inference_completions/0}.
+inference_test_() ->
+    {timeout, 300, fun test_inference/0}.
 
-test_inference_completions() ->
+test_inference() ->
     application:ensure_all_started(hb),
-    Opts = #{
-        inference_model_path => "/path/to/model", % Mock path for testing
-        inference_proxy_port => 8080
-    },
-
-    % Test health endpoint
+    Opts = #{inference_model_path => "/path/to/model", inference_proxy_port => 8080},
     {ok, HealthResult} = health(#{}, #{}, Opts),
-    ?assertMatch(#{<<"status">> := <<"healthy">>}, HealthResult),
-
-    % Test completions endpoint
-    CompletionReq = #{
-        <<"body">> => <<"{\"model\":\"test\",\"prompt\":\"Hello world\",\"max_tokens\":100}">>,
-        <<"content-type">> => <<"application/json">>
-    },
-
-    BaseMsg = #{},
-    {ok, Result} = completions(BaseMsg, CompletionReq, Opts),
-    ?assertMatch(#{<<"results">> := #{<<"data">> := _}}, Result).
-
-inference_chat_test_() ->
-    {timeout, 300, fun test_inference_chat/0}.
-
-test_inference_chat() ->
-    application:ensure_all_started(hb),
-    Opts = #{
-        inference_proxy_port => 8080
-    },
-
-    % Test chat endpoint
-    ChatReq = #{
-        <<"body">> => <<"{\"model\":\"test\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}">>,
-        <<"content-type">> => <<"application/json">>
-    },
-
-    BaseMsg = #{},
-    {ok, Result} = chat(BaseMsg, ChatReq, Opts),
-    ?assertMatch(#{<<"results">> := #{<<"data">> := _}}, Result).
+    ?assertMatch(#{<<"server">> := <<"running">>}, HealthResult).
 
 -endif.

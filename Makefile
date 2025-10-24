@@ -105,30 +105,30 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."
 
-SGLANG_VERSION = v0.5.3.post3
-SGLANG_DIR = _build/sglang
-SGLANG_REPO = https://github.com/sgl-project/sglang.git
+DETERMINISTIC_INFERENCE_BRANCH = main
+DETERMINISTIC_INFERENCE_DIR = _build/deterministic-inference
+DETERMINISTIC_INFERENCE_REPO = https://github.com/apuslabs/deterministic-inference.git
 
-# Set up SGLang inference environment
-setup-inference: $(SGLANG_DIR)
+# Set up deterministic-inference environment
+setup-inference: $(DETERMINISTIC_INFERENCE_DIR)
 	@if ! command -v python3 > /dev/null; then \
 		echo "Error: Python3 is not installed. Please install Python3 before continuing."; \
 		echo "For Ubuntu/Debian, you can install it with:"; \
 		echo "  sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv"; \
 		exit 1; \
 	fi
-	@if ! command -v pip > /dev/null; then \
-		echo "Error: pip is not installed. Please install pip before continuing."; \
-		echo "For Ubuntu/Debian, you can install it with:"; \
-		echo "  sudo apt-get install -y python3-pip"; \
-		exit 1; \
+	@if ! command -v uv > /dev/null; then \
+		echo "Installing uv package manager..."; \
+		curl -LsSf https://astral.sh/uv/install.sh | sh; \
 	fi
-	@cd $(SGLANG_DIR) && \
-		pip install --upgrade pip && \
-		pip install -e "python" > /dev/null 2>&1 && \
-		echo "Installed SGLang $(SGLANG_VERSION) for inference backend."
+	@cd $(DETERMINISTIC_INFERENCE_DIR) && \
+		uv sync && \
+		echo "Installed deterministic-inference package with uv."
+	@cp native/deterministic-inference/launch-monitored.sh $(DETERMINISTIC_INFERENCE_DIR)/ && \
+		chmod +x $(DETERMINISTIC_INFERENCE_DIR)/launch-monitored.sh && \
+		echo "Copied launch script to deterministic-inference directory."
 
-$(SGLANG_DIR):
-	@echo "Cloning SGLang repository..." && \
-		git clone -b $(SGLANG_VERSION) $(SGLANG_REPO) $(SGLANG_DIR) --single-branch && \
-		echo "Extracted SGLang $(SGLANG_VERSION) to $(SGLANG_DIR)"
+$(DETERMINISTIC_INFERENCE_DIR):
+	@echo "Cloning deterministic-inference repository..." && \
+		git clone -b $(DETERMINISTIC_INFERENCE_BRANCH) $(DETERMINISTIC_INFERENCE_REPO) $(DETERMINISTIC_INFERENCE_DIR) --single-branch && \
+		echo "Extracted deterministic-inference to $(DETERMINISTIC_INFERENCE_DIR)"
