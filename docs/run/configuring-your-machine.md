@@ -4,28 +4,21 @@ This guide details the various ways to configure your HyperBEAM node's behavior,
 
 ## Configuration (`config.flat`)
 
-The primary way to configure your HyperBEAM node is through a `config.flat` file located in the node's working directory or specified by the `HB_CONFIG_LOCATION` environment variable.
+The primary way to configure your HyperBEAM node is through a `config.flat` file located in the node's working directory or specified by the `HB_CONFIG` environment variable.
 
-This file uses a simple `Key = Value.` format (note the period at the end of each line).
+This file uses a simple `Key: Value` format.
 
 **Example `config.flat`:**
 
-```erlang
+```
 % Set the HTTP port
-port = 8080.
+port: 8080
 
 % Specify the Arweave key file
-priv_key_location = "/path/to/your/wallet.json".
-
-% Set the data store directory
-% Note: Storage configuration can be complex. See below.
-% store = [{local, [{root, <<"./node_data_mainnet">>}]}]. % Example of complex config, not for config.flat
-
-% Enable verbose logging for specific modules
-% debug_print = [hb_http, dev_router]. % Example of complex config, not for config.flat
+priv_key_location: /path/to/your/wallet.json
 ```
 
-Below is a reference of commonly used configuration keys. Remember that `config.flat` only supports simple key-value pairs (Atoms, Strings, Integers, Booleans). For complex configurations (Lists, Maps), you must use environment variables or `hb:start_mainnet/1`.
+Below is a reference of commonly used configuration keys. Remember that `config.flat` only supports the following value types (Atoms, Strings, Integers, Booleans, Maps). For Lists, you must use environment variables.
 
 ### Core Configuration
 
