@@ -21,7 +21,7 @@
 %%% Note: Session history is managed by llamacpp_session_manager to ensure
 %%% persistence across different HyperBEAM processes.
 -module(dev_llamacpp).
--export([info/0, chat/3, completion/3, load_model/3, read_model_by_ID/2]).
+-export([info/1, chat/3, completion/3, load_model/3, read_model_by_ID/2]).
 -export([init_session_table/0]). % For testing
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -31,9 +31,9 @@
 -define(DEFAULT_MODEL, <<"models/qwen2.5-14b-instruct-q2_k.gguf">>).
 
 %% @doc Device metadata and exported functions.
-info() ->
+info(_Opts) ->
     #{
-        exports => [chat, completion, load_model]
+        exports => [<<"chat">>, <<"completion">>, <<"load_model">>]
     }.
 
 %% @doc Handles completion requests to llama.cpp server.

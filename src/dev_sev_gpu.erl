@@ -20,8 +20,8 @@
 %%
 %% @param _ Ignored parameter.
 %% @returns Map of exported functions.
-info(_) -> 
-    #{ exports => [info, generate, verify] }.
+info(_Opts) -> 
+    #{ exports => [<<"info">>, <<"generate">>, <<"verify">>] }.
 
 %% @doc HTTP info response providing information about this device.
 %% Returns metadata about the NVIDIA GPU TEE Attestation Device, including
