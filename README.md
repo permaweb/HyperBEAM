@@ -267,57 +267,6 @@ schedule of another execution.
 Details on other devices found in the pre-loaded set can be located in their 
 respective documentation.
 
-## Testing
-
-### Running tests
-
-Specific tests can be ran with `--test` parameter:
-
-```
-rebar3 eunit --test hb_store_lmdb:link_fragment_test
-```
-
-All tests inside a module can be ran with `--module` parameter:
-
-```
-rebar3 eunit --module hb_store_lmdb
-```
-
-To run multiple module append a comma:
-
-```
-rebar3 eunit --module hb_store_lmdb,hb_store_lru
-```
-
-Some tests might need extra profiles to be enabled before running it:
-
-```
-rebar3 as s3 eunit --module hb_store_s3
-```
-
-It might also need external dependencies like MinIO to be up and running:
-
-```
-docker-compose -f test/docker-compose-s3.yml up -d
-rebar3 as s3 eunit --module hb_store_s3
-docker-compose -f test/docker-compose-s3.yml down -d
-```
-
-To test generator tests, you need to add `-g` to the eunit command:
-
-```
-rebar3 eunit -g hb_cache:cache_suite_test_
-```
-
-### Generating test coverage report
-
-Add `--cover` to the eunit command to generate test coverage data.
-To generate the HTML report, run the command `cover`.
-
-```
-rebar3 as s3 eunit --module hb_store_s3 --cover, cover
-```
-
 ## Documentation
 
 HyperBEAM uses [MkDocs](https://www.mkdocs.org/) with the [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) theme to build its documentation site. All documentation source files are located in the `docs/` directory.

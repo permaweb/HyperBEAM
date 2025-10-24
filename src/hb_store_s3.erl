@@ -2,6 +2,21 @@
 %%% @doc S3-backed implementation of the HyperBEAM store behavior.
 %%% This module provides persistent storage using Amazon S3 or compatible
 %%% object storage services (MinIO, Wasabi, etc.).
+%%%
+%%% To run tests enable the `s3` profile.
+%%%
+%%% ```
+%%% rebar3 as s3 eunit --module hb_store_s3
+%%% ```
+%%%
+%%% It might also need external dependencies like MinIO to be up and running:
+%%%
+%%% ```
+%%% docker-compose -f test/docker-compose-s3.yml up -d
+%%% rebar3 as s3 eunit --module hb_store_s3
+%%% docker-compose -f test/docker-compose-s3.yml down -d
+%%% ```
+%%%
 %%% @end
 %%%-----------------------------------------------------------------------------
 -module(hb_store_s3).
