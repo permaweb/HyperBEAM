@@ -262,6 +262,11 @@ default_message() ->
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
             #{
+                % Routes for the inference device to use a local inference server.
+                <<"template">> => <<"/v1/.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:8080">> }
+            },
+            #{
                 % Routes for GraphQL requests to use a remote GraphQL API.
                 <<"template">> => <<"/graphql">>,
                 <<"nodes">> =>

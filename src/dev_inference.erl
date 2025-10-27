@@ -53,7 +53,7 @@ do_inference_request(_Base, Req, Opts, InferencePath) ->
         ExistingBody when is_binary(ExistingBody) -> ExistingBody;
         ExistingBody when is_map(ExistingBody) -> hb_json:encode(ExistingBody)
     end,
-    Headers = prepare_inference_headers(Req, Opts),
+    Headers = #{},
     Response = do_relay(<<"POST">>, InferencePath, Body, Headers, 
         Opts#{hashpath => ignore, cache_control => [<<"no-store">>, <<"no-cache">>]}),
     handle_inference_response(Response, Opts).
@@ -77,21 +77,8 @@ extract_inference_params(Req, Opts) ->
         ParamKeys
     ).
 
-prepare_inference_headers(Req, Opts) ->
-    Headers = hb_maps:without([<<"body">>, <<"path">>, <<"method">>], Req, Opts),
-    DefaultHeaders = #{
-        <<"content-type">> => <<"application/json">>,
-        <<"accept">> => <<"application/json">>
-    },
-    maps:merge(DefaultHeaders, Headers).
-
 do_relay(Method, Path, Body, Headers, Opts) ->
     ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/json">>, Opts),
-    ProxyHost = hb_opts:get(inference_proxy_host, "127.0.0.1", Opts),
-    ProxyPort = hb_opts:get(inference_proxy_port, 8080, Opts),
-    ProxyHostBin = iolist_to_binary(ProxyHost),
-    ProxyPortBin = integer_to_binary(ProxyPort),
-    PeerURL = <<"http://", ProxyHostBin/binary, ":", ProxyPortBin/binary>>,
     hb_ao:resolve(
         #{<<"device">> => <<"relay@1.0">>, <<"content-type">> => ContentType},
         Headers#{
@@ -101,8 +88,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
                 <<"path">> => Path,
                 <<"method">> => Method,
                 <<"body">> => Body,
-                <<"content-type">> => ContentType,
-                <<"peer">> => PeerURL
+                <<"content-type">> => ContentType
             }
         },
         Opts
