@@ -16,19 +16,20 @@
 %%% transaction is dispatched.
 -module(dev_bundler).
 -export([tx/3, item/3]).
+-include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %%% Default options.
 -define(SERVER_NAME, bundler_server).
 -define(DEFAULT_MAX_SIZE, 100_000_000). % 100 MB.
 -define(DEFAULT_MAX_IDLE_TIME, 300_000). % 5 minutes.
 -define(DEFAULT_MAX_ITEMS, 1000).
--define(COMMITMENT_DEVICE, <<"ans104@1.0">>).
 
 %%% Public interface.
 
 %% @doc An alias for `item/3'.
-tx(Msg, Req, Opts) ->
-    item(Msg, Req, Opts).
+tx(Base, Req, Opts) ->
+    item(Base, Req, Opts).
 
 %% @doc Implements an Arweave/`up.arweave.net'-compatible endpoint for
 %% bundling messages. 
@@ -81,19 +82,12 @@ server(State = #{ max_idle_time := MaxIdleTime }, Opts) ->
 %% @doc Add an item to the queue. Update the state with the new queue and
 %% approximate total byte size of the queue.
 add_item(Req, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
-    NewItemSize =
-        byte_size(
-            hb_message:convert(
-                Req,
-                #{ <<"device">> => ?COMMITMENT_DEVICE, <<"bundle">> => true },
-                <<"structured@1.0">>,
-                Opts
-            )
-        ),
-    {ok, _} = hb_cache:write(Req, Opts),
+    {ok, TABM} = dev_codec_ans104:deserialize(Req, #{}, Opts),
+    ItemSize = erlang:external_size(TABM),
+    {ok, _} = hb_cache:write(TABM, Opts),
     State#{
-        queue => [Req | Queue],
-        bytes => Bytes + NewItemSize
+        queue => [TABM | Queue],
+        bytes => Bytes + ItemSize
     }.
 
 %% @doc Dispatch the queue if it is ready.
@@ -113,16 +107,101 @@ dispatchable(_State, _Opts) ->
 
 %% @doc Dispatch the queue.
 dispatch(State = #{ queue := Q }, Opts) ->
-    TX =
-        hb_message:commit(
-            Q,
-            Opts,
-            #{ <<"commitment-device">> => ?COMMITMENT_DEVICE, <<"bundle">> => true }
-        ),
-    {ok, _} =
+    {ok, Bundle} = dev_codec_tx:to(lists:reverse(Q), #{}, Opts),
+    Price = hb_util:ok(get_price(Bundle#tx.data_size, Opts)),
+    Anchor = hb_util:ok(get_anchor(Opts)),
+    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
+    Signed = ar_tx:sign(Bundle#tx{ anchor = Anchor, reward = Price }, Wallet),
+    TABM = hb_message:convert(Signed, tabm, #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }, Opts),
+    {ok, Result} =
         hb_ao:resolve(
-            #{ <<"device">> => <<"arweave@1.0">> },
-            TX#{ <<"path">> => <<"tx">>, <<"method">> => <<"POST">> },
+            #{ <<"device">> => <<"arweave@2.9-pre">> },
+            TABM#{ <<"path">> => <<"tx">>, <<"method">> => <<"POST">> },
             Opts
         ),
     server(State#{ queue => [], bytes => 0 }, Opts).
+
+get_price(DataSize, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"path">> => <<"get_price">>, <<"size">> => DataSize },
+        Opts
+    ).
+
+get_anchor(Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9-pre">> },
+        #{ <<"path">> => <<"/tx_anchor">> },
+        Opts
+    ).
+
+basic_test() ->
+    ServerOpts = #{
+        bundler_max_items => 3,
+        priv_wallet => hb:wallet()
+    },
+    ClientOpts = #{},
+    Node = hb_http_server:start_node(ServerOpts),
+
+
+
+    Serialized1 = ar_bundles:serialize(
+        ar_bundles:sign_item(#tx{
+            data = <<"ONE">>,
+            tags = [{<<"tag1">>, <<"value1">>}]
+        }, hb:wallet())
+    ),
+
+    Serialized2 = ar_bundles:serialize(
+        ar_bundles:sign_item(#tx{
+            data = <<"TWO">>,
+            tags = [{<<"tag2">>, <<"value2">>}]
+        }, hb:wallet())
+    ),
+
+    Serialized3 = ar_bundles:serialize(
+        ar_bundles:sign_item(#tx{
+            data = <<"THREE">>,
+            tags = [{<<"tag3">>, <<"value3">>}]
+        }, hb:wallet())
+    ),
+
+    Result1 = hb_http:post(
+        Node,
+        #{
+            <<"device">> => <<"bundler@1.0">>,
+            <<"path">> => <<"/tx">>,
+            <<"content-type">> => <<"application/octet-stream">>,
+            <<"body">> => Serialized1
+        },
+        ClientOpts
+    ),
+    ?event(debug_test, {result, Result1}),
+
+    Result2 = hb_http:post(
+        Node,
+        #{
+            <<"device">> => <<"bundler@1.0">>,
+            <<"path">> => <<"/tx">>,
+            <<"content-type">> => <<"application/octet-stream">>,
+            <<"body">> => Serialized2
+        },
+        ClientOpts
+    ),
+    ?event(debug_test, {result, Result2}),
+
+    Result3 = hb_http:post(
+        Node,
+        #{
+            <<"device">> => <<"bundler@1.0">>,
+            <<"path">> => <<"/tx">>,
+            <<"content-type">> => <<"application/octet-stream">>,
+            <<"body">> => Serialized3
+        },
+        ClientOpts
+    ),
+    ?event(debug_test, {result, Result3}),
+
+    timer:sleep(5000),
+
+    ok.

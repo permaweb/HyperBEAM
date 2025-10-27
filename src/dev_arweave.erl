@@ -4,7 +4,7 @@
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
--export([tx/3, block/3, current/3, status/3]).
+-export([tx/3, block/3, current/3, status/3, get_price/3, tx_anchor/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -26,7 +26,7 @@ tx(Base, Request, Opts) ->
 post_tx(_Base, Request, Opts) ->
     case hb_client:upload(Request, Opts) of
         Res = {ok, _} ->
-            ?event(arweave, {uploaded, Request}),
+            ?event(arweave, {{uploaded, Request}, {result, Res}}),
             CacheRes = hb_cache:write(Request, Opts),
             ?event(arweave,
                 {cache_uploaded_message,
@@ -164,6 +164,26 @@ block({height, Height}, Opts) ->
 current(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/block/current">>, Opts).
 
+get_price(Base, Request, Opts) ->
+    Size =
+        hb_ao:get_first(
+            [
+                {Request, <<"size">>},
+                {Base, <<"size">>}
+            ],
+            not_found,
+            Opts
+        ),
+    case Size of
+        not_found ->
+            {error, not_found};
+        _ ->
+            request(<<"GET">>, <<"/price/", (hb_util:bin(Size))/binary>>, Opts)
+    end.
+
+tx_anchor(_Base, _Request, Opts) ->
+    request(<<"GET">>, <<"/tx_anchor">>, Opts).
+
 %%% Internal Functions
 
 %% @doc Find the transaction ID to retrieve from Arweave based on the request or
@@ -241,6 +261,12 @@ to_message(Path = <<"/block/", _/binary>>, {ok, #{ <<"body">> := Body }}, Opts) 
         }
     ),
     {ok, Block};
+to_message(<<"/price/", _/binary>>, {ok, #{ <<"body">> := Body }}, _Opts) ->
+    Price = hb_util:int(Body),
+    {ok, Price};
+to_message(<<"/tx_anchor">>, {ok, #{ <<"body">> := Body }}, _Opts) ->
+    Anchor = hb_util:decode(Body),
+    {ok, Anchor};
 to_message(Path, {ok, #{ <<"body">> := Body }}, Opts) ->
     % All other responses that are `OK' status are converted from JSON to an
     % AO-Core message.
@@ -309,7 +335,7 @@ post_ans104_tx_test() ->
 
 get_tx_basic_data_test() ->
     Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx?tx=ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+    Path = <<"/~arweave@2.9-pre/tx=ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
     {ok, Structured} = hb_http:get(Node, Path, #{}),
     ?event(debug_test, {structured_tx, Structured}),
     ?assert(hb_message:verify(Structured, all, #{})),
@@ -330,7 +356,7 @@ get_tx_basic_data_test() ->
 
 get_tx_rsa_nested_bundle_test() ->
     Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx&tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    Path = <<"/~arweave@2.9-pre/tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
     {ok, Root} = hb_http:get(Node, Path, #{}),
     ?event(debug_test, {root, Root}),
     ?assert(hb_message:verify(Root, all, #{})),
@@ -367,7 +393,7 @@ get_tx_rsa_nested_bundle_test() ->
 get_tx_rsa_large_bundle_test_disabled() ->
     {timeout, 300, fun() ->
         Node = hb_http_server:start_node(),
-        Path = <<"/~arweave@2.9-pre/tx&tx=VifINXnMxLwJXOjHG5uM0JssiylR8qvajjj7HlzQvZA">>,
+        Path = <<"/~arweave@2.9-pre/tx=VifINXnMxLwJXOjHG5uM0JssiylR8qvajjj7HlzQvZA">>,
         {ok, Root} = hb_http:get(Node, Path, #{}),
         ?event(debug_test, {root, Root}),
         ?assert(hb_message:verify(Root, all, #{})),
@@ -376,6 +402,6 @@ get_tx_rsa_large_bundle_test_disabled() ->
 
 get_bad_tx_test() ->
     Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9-pre/tx?tx=INVALID-ID">>,
+    Path = <<"/~arweave@2.9-pre/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
     ?assertEqual({error, not_found}, Res).

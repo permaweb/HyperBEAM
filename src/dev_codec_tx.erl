@@ -143,6 +143,19 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     enforce_valid_tx(FinalTX),
     ?event({to_result, FinalTX}),
     {ok, FinalTX};
+%% @doc List of ans104 items is bundled into a single L1 transaction.
+to(RawList, Req, Opts) when is_list(RawList) ->
+    List = lists:map(
+        fun(Item) -> hb_util:ok(dev_codec_ans104:to(Item, Req, Opts)) end,
+        RawList),
+    OrderedMap = hb_util:list_to_numbered_message(List),
+    TX = #tx{
+        format = 2,
+        data = OrderedMap
+    },
+    Bundle = dev_arweave_common:normalize(TX),
+    ?event({to_result, Bundle}),
+    {ok, Bundle};
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
     

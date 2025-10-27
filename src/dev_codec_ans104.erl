@@ -129,7 +129,7 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
-    ?event({to, {inbound, RawTABM}, {req, Req}, {opts, Opts}}),
+    ?event({to, {inbound, RawTABM}, {req, Req}}),
     MaybeCommitment = hb_message:commitment(
         #{ <<"commitment-device">> => <<"ans104@1.0">> },
         RawTABM,

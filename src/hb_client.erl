@@ -127,7 +127,45 @@ upload(Serialized, Opts, <<"ans104@1.0">>) when is_binary(Serialized) ->
             http_client =>
                 hb_opts:get(bundler_ans104_http_client, httpc, Opts)
         }
+    );
+upload(Msg, Opts, <<"tx@1.0">>) when is_map(Msg) ->
+    ?event({msg_to_convert, Msg}),
+    Converted = hb_message:convert(Msg, <<"tx@1.0">>, Opts),
+    ?event({msg_to_tx_res, {converted, Converted}}),
+    JSON = ar_tx:tx_to_json_struct(Converted#tx{ data = <<>> }),
+    Serialized = hb_json:encode(JSON),
+    ?event({converted_msg_to_tx, Serialized}),
+    case upload(Serialized, Opts, <<"tx@1.0">>) of
+        {ok, Response} ->
+            upload_chunks(Converted, Opts),
+            {ok, Response};
+        Elsewise ->
+             %% apparently Elsewise is a standard convention for handling
+             %% "everything else" in Erlang? Happy to do it differently.
+            Elsewise
+    end;
+upload(Serialized, Opts, <<"tx@1.0">>) when is_binary(Serialized) ->
+    ?event({uploading_item, Serialized}),
+    hb_http:post(
+        hb_opts:get(gateway, not_found, Opts),
+        #{
+            <<"path">> => <<"/tx">>,
+            <<"body">> => Serialized
+        },
+        Opts#{
+            http_client =>
+                hb_opts:get(bundler_ans104_http_client, httpc, Opts)
+        }
     ).
+
+upload_chunks(TX, Opts) ->
+    ?event(debug_test, {uploading_chunks, TX}),
+    DataSize = TX#tx.data_size,
+    Chunk = TX#tx.data,
+    DataRoot = TX#tx.data_root,
+    Offset = 0,
+    DataPath = <<>>,
+    ok.
 
 %%% Tests
 
