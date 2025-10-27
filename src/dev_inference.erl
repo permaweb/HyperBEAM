@@ -13,10 +13,22 @@ info(_Opts) ->
     }.
 
 completions(Base, Req, Opts) ->
-    handle_inference_request(Base, Req, Opts, <<"/v1/completions">>).
+    case hb_ao:get(<<"chat-mode">>, Base, false, Opts) of
+        true ->
+            handle_inference_request(Base, Req, Opts, <<"/v1/chat/completions">>);
+        false ->
+            handle_inference_request(Base, Req, Opts, <<"/v1/completions">>)
+    end.
 
 chat(Base, Req, Opts) ->
-    handle_inference_request(Base, Req, Opts, <<"/v1/chat/completions">>).
+    {ok, hb_util:deep_merge(
+        Base, 
+        Req#{
+            <<"device">> => <<"inference@1.0">>,
+            <<"chat-mode">> => true
+        }, 
+        Opts
+    )}.
     
 health(_Base, _Req, Opts) ->
     case ensure_started(Opts) of
@@ -85,7 +97,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
         Headers#{
             <<"path">> => <<"call">>,
             <<"target">> => <<"payload">>,
-            <<"payload">> => Headers#{
+            <<"payload">> => #{
                 <<"path">> => Path,
                 <<"method">> => Method,
                 <<"body">> => Body,
