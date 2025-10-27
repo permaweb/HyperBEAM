@@ -176,8 +176,10 @@ is_inference_server_running(Opts) ->
     end.
 
 check_health(Opts) ->
-    ServerPort = integer_to_binary(hb_opts:get(inference_proxy_port, 8080, Opts)),
-    try hb_http:get(<<"http://localhost:", ServerPort/binary, "/health">>, Opts) of
+    ProxyPort = hb_opts:get(inference_proxy_port, 8080, Opts),
+    ProxyPortBin = integer_to_binary(ProxyPort),
+    HealthURL = <<"http://localhost:", ProxyPortBin/binary, "/health">>,
+    try hb_http:get(HealthURL, Opts#{hashpath => ignore}) of
         {ok, _} -> true;
         _ -> false
     catch
