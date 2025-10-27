@@ -3,7 +3,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
--define(STATUS_TIMEOUT, 100).
+-define(HEALTH_CHECK_TIMEOUT, 5000).
 
 info(_Opts) ->
     #{
@@ -15,9 +15,9 @@ info(_Opts) ->
 completions(Base, Req, Opts) ->
     case hb_ao:get(<<"chat-mode">>, Base, false, Opts) of
         true ->
-            handle_inference_request(Base, Req, Opts, <<"/v1/chat/completions">>);
+            do_inference_request(Base, Req, Opts, <<"/v1/chat/completions">>);
         false ->
-            handle_inference_request(Base, Req, Opts, <<"/v1/completions">>)
+            do_inference_request(Base, Req, Opts, <<"/v1/completions">>)
     end.
 
 chat(Base, Req, Opts) ->
@@ -33,19 +33,19 @@ chat(Base, Req, Opts) ->
 health(_Base, _Req, Opts) ->
     case ensure_started(Opts) of
         true ->
-            {ok, #{
-                <<"server">> => <<"running">>,
-                <<"timestamp">> => os:system_time(millisecond)
-            }};
+            case is_inference_server_healthy(Opts) of
+                true ->
+                    {ok, #{
+                        <<"server">> => <<"running">>,
+                        <<"timestamp">> => os:system_time(millisecond)
+                    }};
+                false ->
+                    {error, #{<<"status">> => 503, <<"message">> => <<"Server starting or unhealthy">>}}
+            end;
         false ->
-            {error, #{<<"status">> => 503, <<"message">> => <<"Server not available">>}}
+            {error, #{<<"status">> => 503, <<"message">> => <<"Server failed to start">>}}
     end.
 
-handle_inference_request(Base, Req, Opts, InferencePath) ->
-    case ensure_started(Opts) of
-        true -> do_inference_request(Base, Req, Opts, InferencePath);
-        false -> {error, #{<<"status">> => 503, <<"message">> => <<"Server not available">>}}
-    end.
 
 do_inference_request(_Base, Req, Opts, InferencePath) ->
     Body = case hb_ao:get(<<"body">>, Req, not_found, Opts) of
@@ -132,20 +132,37 @@ start_inference_server(InferenceServerDir, Opts) ->
     collect_server_events(Port).
 
 ensure_started(Opts) ->
-    {ok, Cwd} = file:get_cwd(),
-    InferenceServerDir = determine_inference_server_dir(Cwd),
-    IsRunning = is_inference_server_running(Opts),
-    InferenceProc = is_pid(hb_name:lookup(<<"inference-server@1.0">>)),
-    case IsRunning orelse InferenceProc of
-        true -> true;
+    case is_inference_server_healthy(Opts) of
+        true -> 
+            true;
         false ->
+            {ok, Cwd} = file:get_cwd(),
+            InferenceServerDir = determine_inference_server_dir(Cwd),
+            InferenceProc = hb_name:lookup(<<"inference-server@1.0">>),
+            
+            case is_pid(InferenceProc) of
+                true -> 
+                    InferenceProc ! stop,
+                    hb_name:unregister(<<"inference-server@1.0">>);
+                false -> ok
+            end,
+            
             PID = spawn(fun() -> start_inference_server(InferenceServerDir, Opts) end),
             hb_name:register(<<"inference-server@1.0">>, PID),
-            hb_util:until(fun() ->
-                receive after 2000 -> ok end,
-                is_inference_server_running(Opts)
-            end),
-            true
+            
+            wait_for_healthy(Opts, 300, 0)
+    end.
+
+wait_for_healthy(_Opts, 0, _Attempt) -> 
+    false;
+wait_for_healthy(Opts, RetriesLeft, Attempt) ->
+    case Attempt of
+        0 -> ok;
+        _ -> receive after 1000 -> ok end
+    end,
+    case is_inference_server_healthy(Opts) of
+        true -> true;
+        false -> wait_for_healthy(Opts, RetriesLeft - 1, Attempt + 1)
     end.
 
 determine_inference_server_dir(Cwd) ->
@@ -159,29 +176,39 @@ determine_inference_server_dir(Cwd) ->
             end
     end.
 
-is_inference_server_running(Opts) ->
-    case get(inference_server_status) of
-        undefined ->
-            Parent = self(),
-            PID = spawn(fun() -> Parent ! {ok, self(), check_health(Opts)} end),
-            receive
-                {ok, PID, Status} ->
-                    put(inference_server_status, Status),
-                    Status
-            after ?STATUS_TIMEOUT ->
-                erlang:exit(PID, kill),
-                false
-            end;
-        _ -> true
+is_inference_server_healthy(Opts) ->
+    Parent = self(),
+    PID = spawn(fun() -> 
+        Result = check_health(Opts),
+        Parent ! {health_result, self(), Result}
+    end),
+    receive
+        {health_result, PID, Status} ->
+            Status
+    after ?HEALTH_CHECK_TIMEOUT ->
+        erlang:exit(PID, kill),
+        false
     end.
 
 check_health(Opts) ->
     ProxyPort = hb_opts:get(inference_proxy_port, 8080, Opts),
-    ProxyPortBin = integer_to_binary(ProxyPort),
-    HealthURL = <<"http://localhost:", ProxyPortBin/binary, "/health">>,
-    try hb_http:get(HealthURL, Opts#{hashpath => ignore}) of
-        {ok, _} -> true;
-        _ -> false
+    Peer = iolist_to_binary(["http://localhost:", integer_to_list(ProxyPort)]),
+    try
+        case hb_http_client:request(
+            #{
+                method => <<"GET">>,
+                peer => Peer,
+                path => <<"/health">>,
+                headers => #{},
+                body => <<>>
+            },
+            Opts
+        ) of
+            {ok, Status, _Headers, _Body} ->
+                Status >= 200 andalso Status < 300;
+            {error, _Details} ->
+                false
+        end
     catch
         _:_ -> false
     end.
