@@ -160,12 +160,61 @@ upload(Serialized, Opts, <<"tx@1.0">>) when is_binary(Serialized) ->
 
 upload_chunks(TX, Opts) ->
     ?event(debug_test, {uploading_chunks, TX}),
-    DataSize = TX#tx.data_size,
-    Chunk = TX#tx.data,
+    Data = TX#tx.data,
     DataRoot = TX#tx.data_root,
-    Offset = 0,
-    DataPath = <<>>,
+    TXSize = TX#tx.data_size,
+    
+    %% Step 1-3: Split data into chunks, assign offsets, and generate chunk IDs
+    Chunks = ar_tx:chunk_binary(?DATA_CHUNK_SIZE, Data),
+    SizeTaggedChunks = ar_tx:chunks_to_size_tagged_chunks(Chunks),
+    SizeTaggedChunkIDs = ar_tx:sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
+    
+    %% Step 4: Build the Merkle tree
+    {_Root, DataTree} = ar_merkle:generate_tree(SizeTaggedChunkIDs),
+    
+    %% Step 5: Upload each chunk with its proof
+    lists:foreach(
+        fun({Chunk, Offset}) ->
+            case Chunk of
+                <<>> ->
+                    %% Skip empty chunks (artifacts of chunking when data
+                    %% is evenly divisible by chunk size)
+                    ok;
+                _ ->
+                    %% Generate the Merkle path (proof) for this chunk
+                    %% Use Offset - 1 as the destination byte
+                    DataPath = ar_merkle:generate_path(DataRoot, Offset - 1, DataTree),
+                    
+                    %% Upload the chunk with its proof
+                    upload_chunk(DataRoot, DataPath, Chunk, Offset - 1, TXSize, Opts)
+            end
+        end,
+        SizeTaggedChunks
+    ),
     ok.
+
+%% Upload a single chunk with its proof to the Arweave network
+upload_chunk(DataRoot, DataPath, Chunk, Offset, TXSize, Opts) ->
+    Proof = #{
+        <<"chunk">> => hb_util:encode(Chunk),
+        <<"data_path">> => hb_util:encode(DataPath),
+        <<"offset">> => integer_to_binary(Offset),
+        <<"data_size">> => integer_to_binary(TXSize),
+        <<"data_root">> => hb_util:encode(DataRoot)
+    },
+    Serialized = hb_json:encode(Proof),
+    ?event(debug, {uploading_chunk, {explicit, Serialized}}),
+    hb_http:post(
+        hb_opts:get(gateway, not_found, Opts),
+        #{
+            <<"path">> => <<"/chunk">>,
+            <<"body">> => Serialized
+        },
+        Opts#{
+            http_client =>
+                hb_opts:get(bundler_ans104_http_client, httpc, Opts)
+        }
+    ).
 
 %%% Tests
 
