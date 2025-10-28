@@ -36,7 +36,7 @@ health(_Base, _Req, Opts) ->
             case is_inference_server_healthy(Opts) of
                 true ->
                     {ok, #{
-                        <<"server">> => <<"running">>,
+                        <<"status">> => <<"healthy">>,
                         <<"timestamp">> => os:system_time(millisecond)
                     }};
                 false ->
