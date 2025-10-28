@@ -107,16 +107,26 @@ dispatchable(_State, _Opts) ->
 
 %% @doc Dispatch the queue.
 dispatch(State = #{ queue := Q }, Opts) ->
-    {ok, Bundle} = dev_codec_tx:to(lists:reverse(Q), #{}, Opts),
+    % Lists aren't handled well, so to avoid an ao-types key being inserted,
+    % we'll convert the list to a nummbered message explicitly.
+    OrderedMap = hb_util:list_to_numbered_message(lists:reverse(Q)),
+    % Convert to a #tx so we can get the data_size and use it to query the
+    % upload price.
+    Bundle = hb_message:convert(OrderedMap, #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }, Opts),
     Price = hb_util:ok(get_price(Bundle#tx.data_size, Opts)),
     Anchor = hb_util:ok(get_anchor(Opts)),
-    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
-    Signed = ar_tx:sign(Bundle#tx{ anchor = Anchor, reward = Price }, Wallet),
-    TABM = hb_message:convert(Signed, tabm, #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }, Opts),
+    % Now that we have the #tx record ready to go, convert back to a message...
+    Msg = hb_message:convert(
+        Bundle#tx{ anchor = Anchor, reward = Price },
+        #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
+        Opts),
+    % ...and commit it
+    Committed = hb_message:commit(Msg, Opts, #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }),
     {ok, Result} =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9-pre">> },
-            TABM#{ <<"path">> => <<"tx">>, <<"method">> => <<"POST">> },
+            Committed#{ <<"path">> => <<"/tx">>, <<"method">> => <<"POST">> },
             Opts
         ),
     server(State#{ queue => [], bytes => 0 }, Opts).
@@ -124,7 +134,7 @@ dispatch(State = #{ queue := Q }, Opts) ->
 get_price(DataSize, Opts) ->
     hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9-pre">> },
-        #{ <<"path">> => <<"get_price">>, <<"size">> => DataSize },
+        #{ <<"path">> => <<"/price">>, <<"size">> => DataSize },
         Opts
     ).
 

@@ -139,10 +139,7 @@ upload(Msg, Opts, <<"tx@1.0">>) when is_map(Msg) ->
         {ok, Response} ->
             upload_chunks(Converted, Opts),
             {ok, Response};
-        Elsewise ->
-             %% apparently Elsewise is a standard convention for handling
-             %% "everything else" in Erlang? Happy to do it differently.
-            Elsewise
+        Else -> Else
     end;
 upload(Serialized, Opts, <<"tx@1.0">>) when is_binary(Serialized) ->
     ?event({uploading_item, Serialized}),

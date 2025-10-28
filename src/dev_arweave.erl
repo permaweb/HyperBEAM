@@ -4,7 +4,7 @@
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
--export([tx/3, block/3, current/3, status/3, get_price/3, tx_anchor/3]).
+-export([tx/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -164,7 +164,7 @@ block({height, Height}, Opts) ->
 current(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/block/current">>, Opts).
 
-get_price(Base, Request, Opts) ->
+price(Base, Request, Opts) ->
     Size =
         hb_ao:get_first(
             [
