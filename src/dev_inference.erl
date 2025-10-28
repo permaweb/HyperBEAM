@@ -66,7 +66,7 @@ extract_inference_params(Req, Opts) ->
         <<"logit_bias">>, <<"user">>, <<"seed">>, <<"top_k">>,
         <<"repetition_penalty">>, <<"length_penalty">>, <<"early_stopping">>
     ],
-    lists:foldl(
+    Params = lists:foldl(
         fun(Key, Acc) ->
             case hb_ao:get(Key, Req, not_found, Opts) of
                 not_found -> Acc;
@@ -75,7 +75,8 @@ extract_inference_params(Req, Opts) ->
         end,
         #{},
         ParamKeys
-    ).
+    ),
+    hb_cache:ensure_all_loaded(Params, Opts).
 
 do_relay(Method, Path, Body, Headers, Opts) ->
     ContentType = hb_maps:get(<<"content-type">>, Headers, <<"application/json">>, Opts),
