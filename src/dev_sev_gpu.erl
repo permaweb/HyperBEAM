@@ -23,32 +23,6 @@
 info(_) -> 
     #{ exports => [info, generate, verify] }.
 
-%% @doc HTTP info response providing information about this device.
-%% Returns metadata about the NVIDIA GPU TEE Attestation Device, including
-%% version and available API methods.
-%%
-%% @param _Msg1 Ignored.
-%% @param _Msg2 Ignored.
-%% @param _Opts Ignored.
-%% @returns {ok, InfoBody} with device metadata.
-info(_Msg1, _Msg2, _Opts) ->
-    InfoBody = #{
-        <<"description">> => <<"NVIDIA GPU TEE Attestation Device">>,
-        <<"version">> => <<"1.0">>,
-        <<"api">> => #{
-            <<"generate">> => #{
-                <<"description">> => <<"Generate NVIDIA GPU TEE attestation token">>
-            },
-            <<"verify">> => #{
-                <<"description">> => <<"Verify NVIDIA GPU TEE attestation token">>,
-                <<"required_params">> => #{
-                    <<"token">> => <<"Attestation token to verify">>
-                }
-            }
-        }
-    },
-    {ok, InfoBody}.
-
 %%--------------------------------------------------------------------
 %% NV Token Generation
 %%--------------------------------------------------------------------
@@ -179,11 +153,11 @@ call_python_attestation(Action, Data) ->
         ok = file:write_file(TempFile, RequestJSON),
         
         % Use shell command with temp file
-        ShellCmd = lists:flatten(io_lib:format("cat ~s |  python3 ~s && rm ~s", 
+        ShellCmd = lists:flatten(io_lib:format("cat ~s | python3 ~s 2>/dev/null && rm ~s", 
             [TempFile, filename:join(ScriptDir, "main.py"), TempFile])),
         
         Port = open_port({spawn, ShellCmd}, 
-            [binary, use_stdio, stderr_to_stdout, {cd, ScriptDir}]),
+            [binary, use_stdio, {cd, ScriptDir}]),
         
         % Wait for response
         Result = receive
