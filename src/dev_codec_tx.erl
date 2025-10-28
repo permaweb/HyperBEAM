@@ -16,7 +16,6 @@ commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
-    ?event(debug_test, {commit, {msg, {explicit, Msg}}, {req, Req}}),
     % Convert the given message to an L1 TX record, sign it, and convert
     % it back to a structured message.
     {ok, TX} = to(hb_private:reset(Msg), Req, Opts),

@@ -112,7 +112,8 @@ dispatch(State = #{ queue := Q }, Opts) ->
     OrderedMap = hb_util:list_to_numbered_message(lists:reverse(Q)),
     % Convert to a #tx so we can get the data_size and use it to query the
     % upload price.
-    Bundle = hb_message:convert(OrderedMap, #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }, Opts),
+    Bundle = hb_message:convert(OrderedMap,
+        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }, Opts),
     Price = hb_util:ok(get_price(Bundle#tx.data_size, Opts)),
     Anchor = hb_util:ok(get_anchor(Opts)),
     % Now that we have the #tx record ready to go, convert back to a message...
@@ -123,7 +124,7 @@ dispatch(State = #{ queue := Q }, Opts) ->
         Opts),
     % ...and commit it
     Committed = hb_message:commit(Msg, Opts, #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }),
-    {ok, Result} =
+    {ok, _} =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9-pre">> },
             Committed#{ <<"path">> => <<"/tx">>, <<"method">> => <<"POST">> },
@@ -145,104 +146,109 @@ get_anchor(Opts) ->
         Opts
     ).
 
+%%%===================================================================
+%%% Tests
+%%%===================================================================
+
 basic_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
     %% Start a simple HTTP server to capture chunk and tx uploads
     Endpoints = [
         {"/chunk", chunk},
-        {"/tx", tx}
+        {"/tx", tx},
+        {"/price/:size", price, {200, integer_to_binary(Price)}},
+        {"/tx_anchor", tx_anchor, {200, hb_util:encode(Anchor)}}
     ],
-    {ok, MockServer, CollectorPID} = hb_test_utils:start_mock_server(Endpoints),
-    
+    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
     try
         ServerOpts = #{
             bundler_max_items => 3,
             priv_wallet => hb:wallet(),
-            gateway => MockServer
+            gateway => MockServer,
+            routes => [
+                #{
+                    <<"template">> => <<"/arweave">>,
+                    <<"node">> => #{
+                        <<"match">> => <<"^/arweave">>,
+                        <<"with">> => MockServer,
+                        <<"opts">> => #{ 
+                            http_client => httpc, protocol => http2 }
+                    }
+                }
+            ]
         },
         ClientOpts = #{},
         Node = hb_http_server:start_node(ServerOpts),
-
-        Serialized1 = ar_bundles:serialize(
-            ar_bundles:sign_item(#tx{
-                data = <<"ONE">>,
-                tags = [{<<"tag1">>, <<"value1">>}]
-            }, hb:wallet())
-        ),
-
-        Serialized2 = ar_bundles:serialize(
-            ar_bundles:sign_item(#tx{
-                data = <<"TWO">>,
-                tags = [{<<"tag2">>, <<"value2">>}]
-            }, hb:wallet())
-        ),
-
-        Serialized3 = ar_bundles:serialize(
-            ar_bundles:sign_item(#tx{
-                data = <<"THREE">>,
-                tags = [{<<"tag3">>, <<"value3">>}]
-            }, hb:wallet())
-        ),
-
-        Result1 = hb_http:post(
-            Node,
-            #{
-                <<"device">> => <<"bundler@1.0">>,
-                <<"path">> => <<"/tx">>,
-                <<"content-type">> => <<"application/octet-stream">>,
-                <<"body">> => Serialized1
-            },
-            ClientOpts
-        ),
-        ?event(debug_test, {result, Result1}),
-
-        Result2 = hb_http:post(
-            Node,
-            #{
-                <<"device">> => <<"bundler@1.0">>,
-                <<"path">> => <<"/tx">>,
-                <<"content-type">> => <<"application/octet-stream">>,
-                <<"body">> => Serialized2
-            },
-            ClientOpts
-        ),
-        ?event(debug_test, {result, Result2}),
-
-        Result3 = hb_http:post(
-            Node,
-            #{
-                <<"device">> => <<"bundler@1.0">>,
-                <<"path">> => <<"/tx">>,
-                <<"content-type">> => <<"application/octet-stream">>,
-                <<"body">> => Serialized3
-            },
-            ClientOpts
-        ),
-        ?event(debug_test, {result, Result3}),
-
+        %% Upload 3 data items across 4 chunks.
+        Data1 = rand:bytes(floor(2.5 * ?DATA_CHUNK_SIZE)),
+        Wallet1 = hb:wallet(),
+        Item1 = #tx{
+            data = Data1,
+            tags = [{<<"tag1">>, <<"value1">>}]
+        },
+        ?assertMatch({ok, _}, post_data_item(Node, Item1, Wallet1, ClientOpts)),
+        Data2 = rand:bytes(?DATA_CHUNK_SIZE),
+        Wallet2 = hb:wallet(),
+        Item2 = #tx{
+            data = Data2,
+            tags = [{<<"tag2">>, <<"value2">>}]
+        },
+        ?assertMatch({ok, _}, post_data_item(Node, Item2, Wallet2, ClientOpts)),
+        Data3 = rand:bytes(floor(0.25 * ?DATA_CHUNK_SIZE)),
+        Wallet3 = hb:wallet(),
+        Item3 = #tx{
+            data = Data3,
+            tags = [{<<"tag3">>, <<"value3">>}]
+        },
+        ?assertMatch({ok, _}, post_data_item(Node, Item3, Wallet3, ClientOpts)),
         %% Wait for bundling and chunk upload to complete
         timer:sleep(5000),
-
         %% Retrieve collected data
-        TXs = hb_test_utils:get_mock_requests(CollectorPID, tx),
-        Chunks = hb_test_utils:get_mock_requests(CollectorPID, chunk),
-        ?event(debug_test, {collected_txs, {explicit, TXs}}),
-        ?event(debug_test, {collected_chunks, {explicit, Chunks}}),
+        TXs = hb_mock_server:get_requests(ServerHandle, tx),
+        Proofs = hb_mock_server:get_requests(ServerHandle, chunk),
         ?assertEqual(1, length(TXs)),
-        ?assertEqual(1, length(Chunks)),
-
-        TXJSON = hb_json:decode(hd(TXs)),
-        TX = ar_tx:json_struct_to_tx(TXJSON),
+        ?assertEqual(4, length(Proofs)),
+        %% Reconstitute the transaction with its data from the POSTed payloads.
+        TXBinary = maps:get(<<"body">>, hd(TXs)),
+        TXJSON = hb_json:decode(TXBinary),
+        TXHeader = ar_tx:json_struct_to_tx(TXJSON),
+        %% Decode all chunks and concatenate into one binary
+        Chunks = lists:map(
+            fun(ChunkRequest) ->
+                ProofBinary = maps:get(<<"body">>, ChunkRequest),
+                ProofJSON = hb_json:decode(ProofBinary),
+                hb_util:decode(maps:get(<<"chunk">>, ProofJSON))
+            end,
+            Proofs
+        ),
+        DataBinary = iolist_to_binary(Chunks),
+        TX = TXHeader#tx{ data = DataBinary },
         ?assert(ar_tx:verify(TX)),
-        ?event(debug_test, {tx, {explicit, TX}}),
+        ?assertEqual(Anchor, TX#tx.anchor),
+        ?assertEqual(Price, TX#tx.reward),
+        ?event(debug_test, {tx,TX}),
         TXStructured = hb_message:convert(
             TX, <<"structured@1.0">>, <<"tx@1.0">>, ClientOpts),
-        ?event(debug_test, {tx_structured, {explicit, TXStructured}}),
-
-
-
-        
+        ?event(debug_test, {tx_structured, TXStructured}),
+        ?assert(hb_message:verify(TXStructured, all, ClientOpts)),
         ok
     after
         %% Always cleanup, even if test fails
-        hb_test_utils:stop_mock_server(CollectorPID)
+        hb_mock_server:stop(ServerHandle)
     end.
+
+post_data_item(Node, Item, Wallet, Opts) ->
+    Serialized = ar_bundles:serialize(
+        ar_bundles:sign_item(Item, Wallet)
+    ),
+    hb_http:post(
+        Node,
+        #{
+            <<"device">> => <<"bundler@1.0">>,
+            <<"path">> => <<"/tx">>,
+            <<"content-type">> => <<"application/octet-stream">>,
+            <<"body">> => Serialized
+        },
+        Opts
+    ).
