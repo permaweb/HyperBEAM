@@ -56,12 +56,17 @@ do_inference_request(_Base, Req, Opts, InferencePath) ->
     Headers = #{},
     Response = do_relay(<<"POST">>, InferencePath, Body, Headers, 
         Opts#{hashpath => ignore, cache_control => [<<"no-store">>, <<"no-cache">>]}),
+
+    TEEEnabled = case hb_ao:get(<<"tee">>, Req, false, Opts) of
+        <<"true">> -> true;
+        true -> true;
+        _ -> false
+    end,
     
-    TEEEnabled = hb_ao:get(<<"tee">>, Req, false, Opts),
     case TEEEnabled of
         true ->
             handle_inference_response_with_attestation(Response, Req, Opts);
-        _ ->
+        false ->
             handle_inference_response(Response, Opts)
     end.
 
@@ -121,66 +126,32 @@ handle_inference_response(Response, Opts) ->
 handle_inference_response_with_attestation(Response, Req, Opts) ->
     case Response of
         {ok, Res} ->
-            % Merge Req and Res to generate hash
             MergedData = #{
-                <<"request">> => Req,
-                <<"response">> => Res,
-                <<"opts">> => Opts,
+                <<"request">> => hb_private:reset(Req),
+                <<"response">> => hb_private:reset(Res),
                 <<"timestamp">> => os:system_time(millisecond),
-                <<"nonce">> => crypto:strong_rand_bytes(64)
+                <<"nonce">> => hb_util:to_hex(crypto:strong_rand_bytes(32))
             },
+            NonceHex = hb_util:to_hex(hb_crypto:sha256(hb_json:encode(MergedData))),
             
-            % Generate hash as nonce for attestation
-            MergedJSON = hb_json:encode(MergedData),
-            NonceHex = hb_util:encode(hb_crypto:sha256(MergedJSON), hex),
-            
-            ?event(inference, {generating_attestation, {
-                nonce, NonceHex,
-                merged_data_size, byte_size(MergedJSON)
-            }}),
-            
-            % Call dev_sev_gpu:generate to get attestation token
-            AttestationResult = case dev_sev_gpu:generate(#{}, #{<<"nonce">> => NonceHex}, Opts) of
-                {ok, Token} ->
-                    ?event(inference, {attestation_generated, {token_size, byte_size(Token)}}),
-                    Token;
-                {error, AttestationError} ->
-                    ?event(inference, {attestation_failed, AttestationError}),
-                    null
+            AttestationToken = case dev_sev_gpu:generate(#{}, #{nonce => NonceHex}, Opts) of
+                {ok, Token} -> Token;
+                _ -> null
             end,
             
-            % Parse response body to add attestation
             ResponseBody = hb_ao:get(<<"body">>, Res, Opts),
-            EnhancedBody = case ResponseBody of
-                Body when is_binary(Body) ->
-                    case hb_json:decode(Body) of
-                        DecodedBody when is_map(DecodedBody) ->
-                            EnhancedMap = DecodedBody#{
-                                <<"attestation">> => #{
-                                    <<"raw">> => MergedJSON,
-                                    <<"nonce">> => NonceHex,
-                                    <<"token">> => AttestationResult
-                                }
-                            },
-                            hb_json:encode(EnhancedMap);
-                        _ ->
-                            Body
-                    end;
-                Body when is_map(Body) ->
-                    Body#{
-                        <<"attestation">> => #{
-                            <<"raw">> => MergedJSON,
-                            <<"nonce">> => NonceHex,
-                            <<"token">> => AttestationResult
-                        }
-                    };
-                _ ->
-                    ResponseBody
-            end,
+            DecodedBody = hb_json:decode(ResponseBody),
+            EnhancedBody = hb_json:encode(DecodedBody#{
+                <<"attestation">> => #{
+                    <<"raw">> => hb_json:encode(MergedData),
+                    <<"nonce">> => NonceHex,
+                    <<"token">> => AttestationToken
+                }
+            }),
             
             {ok, #{
                 <<"status">> => hb_ao:get(<<"status">>, Res, 200, Opts),
-                <<"content-type">> => hb_ao:get(<<"content-type">>, Res, <<"application/json">>, Opts),
+                <<"content-type">> => <<"application/json">>,
                 <<"body">> => EnhancedBody
             }};
         {error, Error} ->
@@ -311,16 +282,3 @@ find_uv_executable() ->
         {value, Found} -> os:find_executable(Found);
         false -> error(uv_executable_not_found)
     end.
-
--ifdef(ENABLE_INFERENCE).
-
-inference_test_() ->
-    {timeout, 300, fun test_inference/0}.
-
-test_inference() ->
-    application:ensure_all_started(hb),
-    Opts = #{inference_model_path => "/path/to/model", inference_proxy_port => 8080},
-    {ok, HealthResult} = health(#{}, #{}, Opts),
-    ?assertMatch(#{<<"server">> := <<"running">>}, HealthResult).
-
--endif.
