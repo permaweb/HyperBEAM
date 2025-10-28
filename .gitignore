@@ -30,7 +30,7 @@ rebar3.crashdump
 
 native/hb_beamr/*.o
 native/hb_beamr/*.d
-
+!native/dev_sev_gpu/NVGPULocalv4Policy.json
 priv/*
 .DS_STORE
 cache-*

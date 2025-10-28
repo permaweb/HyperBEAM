@@ -109,8 +109,7 @@ DETERMINISTIC_INFERENCE_BRANCH = main
 DETERMINISTIC_INFERENCE_DIR = _build/deterministic-inference
 DETERMINISTIC_INFERENCE_REPO = https://github.com/apuslabs/deterministic-inference.git
 
-# Set up deterministic-inference environment
-setup-inference: $(DETERMINISTIC_INFERENCE_DIR)
+setup-python:
 	@if ! command -v python3 > /dev/null; then \
 		echo "Error: Python3 is not installed. Please install Python3 before continuing."; \
 		echo "For Ubuntu/Debian, you can install it with:"; \
@@ -121,6 +120,10 @@ setup-inference: $(DETERMINISTIC_INFERENCE_DIR)
 		echo "Installing uv package manager..."; \
 		curl -LsSf https://astral.sh/uv/install.sh | sh; \
 	fi
+
+# Set up deterministic-inference environment
+setup-inference: setup-python $(DETERMINISTIC_INFERENCE_DIR)
+	@echo "Setting up deterministic-inference..." && \
 	@cd $(DETERMINISTIC_INFERENCE_DIR) && \
 		uv sync && \
 		echo "Installed deterministic-inference package with uv."
@@ -132,3 +135,10 @@ $(DETERMINISTIC_INFERENCE_DIR):
 	@echo "Cloning deterministic-inference repository..." && \
 		git clone -b $(DETERMINISTIC_INFERENCE_BRANCH) $(DETERMINISTIC_INFERENCE_REPO) $(DETERMINISTIC_INFERENCE_DIR) --single-branch && \
 		echo "Extracted deterministic-inference to $(DETERMINISTIC_INFERENCE_DIR)"
+
+CC_DIR = native/dev_sev_gpu
+# Set up dev_sev_gpu environment
+setup-cc: $(CC_DIR)
+	@echo "Setting up dev_sev_gpu..." && \
+		pip3 install nv-attestation-sdk  && \
+	echo "Installed dev_sev_gpu successfully."
