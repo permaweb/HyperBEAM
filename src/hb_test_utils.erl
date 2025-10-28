@@ -7,6 +7,9 @@
 -export([benchmark/1, benchmark/2, benchmark/3, benchmark_iterations/2]).
 -export([benchmark_print/2, benchmark_print/3, benchmark_print/4]).
 -export([compare_events/3, compare_events/4, compare_events/5]).
+-export([start_mock_server/1, stop_mock_server/1, get_mock_requests/2]).
+%% Cowboy handler for mock server
+-export([init/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -254,3 +257,65 @@ format_time(Time) when is_integer(Time) ->
     hb_util:human_int(Time) ++ "s";
 format_time(Time) ->
     hb_util:human_int(Time * 1000) ++ "ms".
+
+%%%===================================================================
+%%% Mock HTTP Server for Testing
+%%%===================================================================
+
+%% @doc Start a generic mock HTTP server that collects request bodies.
+%% Usage: start_mock_server([{"/endpoint", endpoint_tag}, ...])
+%% Returns: {ok, ServerURL, CollectorPID}
+start_mock_server(Endpoints) ->
+    %% Ensure cowboy/ranch are started
+    application:ensure_all_started(cowboy),
+    
+    CollectorPID = spawn(fun() -> collect_loop(#{}) end),
+    Port = 18765,  % Use a fixed test port
+    Routes = [{Path, ?MODULE, {Tag, CollectorPID}} || {Path, Tag} <- Endpoints],
+    Dispatch = cowboy_router:compile([{'_', Routes}]),
+    {ok, _} = cowboy:start_clear(
+        mock_server_listener,
+        [{port, Port}],
+        #{env => #{dispatch => Dispatch}}
+    ),
+    ServerURL = iolist_to_binary(io_lib:format("http://localhost:~p", [Port])),
+    {ok, ServerURL, CollectorPID}.
+
+%% @doc Stop the mock server and cleanup.
+stop_mock_server(CollectorPID) ->
+    cowboy:stop_listener(mock_server_listener),
+    CollectorPID ! stop.
+
+%% @doc Get all requests collected for a given endpoint tag.
+%% Clears the accumulated requests after returning them.
+get_mock_requests(CollectorPID, Tag) ->
+    CollectorPID ! {get_requests, Tag, self()},
+    receive
+        {requests, Requests} -> Requests
+    after 1000 -> []
+    end.
+
+%% @doc Collector process loop for mock server.
+collect_loop(State) ->
+    receive
+        {request, Tag, Body} ->
+            Requests = maps:get(Tag, State, []),
+            collect_loop(State#{Tag => [Body | Requests]});
+        {get_requests, Tag, From} ->
+            Requests = maps:get(Tag, State, []),
+            From ! {requests, lists:reverse(Requests)},
+            %% Clear the requests for this tag after returning them
+            collect_loop(maps:remove(Tag, State));
+        stop -> ok
+    end.
+%%%===================================================================
+%%% Cowboy Handler Callback (Required for mock_server)
+%%%===================================================================
+
+%% @doc Cowboy handler callback - DO NOT CALL DIRECTLY.
+%% This is invoked automatically by Cowboy when requests arrive at the mock server.
+%% See start_mock_server/1 for usage.
+init(Req0, {Tag, CollectorPID} = State) ->
+    {ok, Body, Req} = cowboy_req:read_body(Req0),
+    CollectorPID ! {request, Tag, Body},
+    {ok, cowboy_req:reply(200, #{}, <<"OK">>, Req), State}.

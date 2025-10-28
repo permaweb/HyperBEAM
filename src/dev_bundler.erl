@@ -136,72 +136,103 @@ get_anchor(Opts) ->
     ).
 
 basic_test() ->
-    ServerOpts = #{
-        bundler_max_items => 3,
-        priv_wallet => hb:wallet()
-    },
-    ClientOpts = #{},
-    Node = hb_http_server:start_node(ServerOpts),
-
-
-
-    Serialized1 = ar_bundles:serialize(
-        ar_bundles:sign_item(#tx{
-            data = <<"ONE">>,
-            tags = [{<<"tag1">>, <<"value1">>}]
-        }, hb:wallet())
-    ),
-
-    Serialized2 = ar_bundles:serialize(
-        ar_bundles:sign_item(#tx{
-            data = <<"TWO">>,
-            tags = [{<<"tag2">>, <<"value2">>}]
-        }, hb:wallet())
-    ),
-
-    Serialized3 = ar_bundles:serialize(
-        ar_bundles:sign_item(#tx{
-            data = <<"THREE">>,
-            tags = [{<<"tag3">>, <<"value3">>}]
-        }, hb:wallet())
-    ),
-
-    Result1 = hb_http:post(
-        Node,
-        #{
-            <<"device">> => <<"bundler@1.0">>,
-            <<"path">> => <<"/tx">>,
-            <<"content-type">> => <<"application/octet-stream">>,
-            <<"body">> => Serialized1
+    %% Start a simple HTTP server to capture chunk and tx uploads
+    Endpoints = [
+        {"/chunk", chunk},
+        {"/tx", tx}
+    ],
+    {ok, MockServer, CollectorPID} = hb_test_utils:start_mock_server(Endpoints),
+    
+    try
+        ServerOpts = #{
+            bundler_max_items => 3,
+            priv_wallet => hb:wallet(),
+            gateway => MockServer
         },
-        ClientOpts
-    ),
-    ?event(debug_test, {result, Result1}),
+        ClientOpts = #{},
+        Node = hb_http_server:start_node(ServerOpts),
 
-    Result2 = hb_http:post(
-        Node,
-        #{
-            <<"device">> => <<"bundler@1.0">>,
-            <<"path">> => <<"/tx">>,
-            <<"content-type">> => <<"application/octet-stream">>,
-            <<"body">> => Serialized2
-        },
-        ClientOpts
-    ),
-    ?event(debug_test, {result, Result2}),
+        Serialized1 = ar_bundles:serialize(
+            ar_bundles:sign_item(#tx{
+                data = <<"ONE">>,
+                tags = [{<<"tag1">>, <<"value1">>}]
+            }, hb:wallet())
+        ),
 
-    Result3 = hb_http:post(
-        Node,
-        #{
-            <<"device">> => <<"bundler@1.0">>,
-            <<"path">> => <<"/tx">>,
-            <<"content-type">> => <<"application/octet-stream">>,
-            <<"body">> => Serialized3
-        },
-        ClientOpts
-    ),
-    ?event(debug_test, {result, Result3}),
+        Serialized2 = ar_bundles:serialize(
+            ar_bundles:sign_item(#tx{
+                data = <<"TWO">>,
+                tags = [{<<"tag2">>, <<"value2">>}]
+            }, hb:wallet())
+        ),
 
-    timer:sleep(5000),
+        Serialized3 = ar_bundles:serialize(
+            ar_bundles:sign_item(#tx{
+                data = <<"THREE">>,
+                tags = [{<<"tag3">>, <<"value3">>}]
+            }, hb:wallet())
+        ),
 
-    ok.
+        Result1 = hb_http:post(
+            Node,
+            #{
+                <<"device">> => <<"bundler@1.0">>,
+                <<"path">> => <<"/tx">>,
+                <<"content-type">> => <<"application/octet-stream">>,
+                <<"body">> => Serialized1
+            },
+            ClientOpts
+        ),
+        ?event(debug_test, {result, Result1}),
+
+        Result2 = hb_http:post(
+            Node,
+            #{
+                <<"device">> => <<"bundler@1.0">>,
+                <<"path">> => <<"/tx">>,
+                <<"content-type">> => <<"application/octet-stream">>,
+                <<"body">> => Serialized2
+            },
+            ClientOpts
+        ),
+        ?event(debug_test, {result, Result2}),
+
+        Result3 = hb_http:post(
+            Node,
+            #{
+                <<"device">> => <<"bundler@1.0">>,
+                <<"path">> => <<"/tx">>,
+                <<"content-type">> => <<"application/octet-stream">>,
+                <<"body">> => Serialized3
+            },
+            ClientOpts
+        ),
+        ?event(debug_test, {result, Result3}),
+
+        %% Wait for bundling and chunk upload to complete
+        timer:sleep(5000),
+
+        %% Retrieve collected data
+        TXs = hb_test_utils:get_mock_requests(CollectorPID, tx),
+        Chunks = hb_test_utils:get_mock_requests(CollectorPID, chunk),
+        ?event(debug_test, {collected_txs, {explicit, TXs}}),
+        ?event(debug_test, {collected_chunks, {explicit, Chunks}}),
+        ?assertEqual(1, length(TXs)),
+        ?assertEqual(1, length(Chunks)),
+
+        TXJSON = hb_json:decode(hd(TXs)),
+        TX = ar_tx:json_struct_to_tx(TXJSON),
+        ?assert(ar_tx:verify(TX)),
+        ?event(debug_test, {tx, {explicit, TX}}),
+        TXStructured = hb_message:convert(
+            TX, <<"structured@1.0">>, <<"tx@1.0">>, ClientOpts),
+        ?event(debug_test, {tx_structured, {explicit, TXStructured}}),
+
+
+
+        
+        ok
+    after
+        %% Always cleanup, even if test fails
+        hb_test_utils:stop_mock_server(CollectorPID)
+    end.
