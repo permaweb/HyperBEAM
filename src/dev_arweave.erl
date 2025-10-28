@@ -4,7 +4,7 @@
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
--export([tx/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([tx/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -23,10 +23,25 @@ tx(Base, Request, Opts) ->
 %% @doc Upload a transaction to Arweave, using the node's default bundler (see
 %% `hb_client:upload/2' for more details). Ensures that uploaded transactions are
 %% stored in the local cache after a successful response has been received.
-post_tx(_Base, Request, Opts) ->
-    case hb_client:upload(Request, Opts) of
-        Res = {ok, _} ->
-            ?event(arweave, {{uploaded, Request}, {result, Res}}),
+post_tx(Base, Request, Opts) ->
+    ?event({request, Request}),
+    TX = hb_message:convert(Request, <<"tx@1.0">>, Opts),
+    ?event({tx, TX}),
+    JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
+    Serialized = hb_json:encode(JSON),
+    ?event({serialized_tx, Serialized}),
+    TXResponse = hb_http:post(
+        hb_opts:get(gateway, not_found, Opts),
+        #{
+            <<"path">> => <<"/tx">>,
+            <<"body">> => Serialized
+        },
+        Opts
+    ),
+    case TXResponse of
+        {ok, _} ->
+            post_chunks(Base, TX, Opts),
+            ?event(arweave, {{uploaded, Request}, {result, TXResponse}}),
             CacheRes = hb_cache:write(Request, Opts),
             ?event(arweave,
                 {cache_uploaded_message,
@@ -38,9 +53,8 @@ post_tx(_Base, Request, Opts) ->
                     }
                 }
             ),
-            Res;
-        Res ->
-            Res
+            TXResponse;
+        Else -> Else
     end.
 
 %% @doc Get a transaction ID from the Arweave node, as indicated by the `tx` key
@@ -54,6 +68,59 @@ get_tx(Base, Request, Opts) ->
         not_found -> {error, not_found};
         TXID -> request(<<"GET">>, <<"/tx/", TXID/binary>>, Opts)
     end.
+
+chunk(Base, Request, Opts) ->
+    case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
+        <<"POST">> -> post_chunk(Base, Request, Opts);
+        <<"GET">> -> throw(not_implemented)
+    end.
+
+post_chunks(Base, TX, Opts) ->
+    ?event({uploading_chunks, TX}),
+    Data = TX#tx.data,
+    DataRoot = TX#tx.data_root,
+    TXSize = TX#tx.data_size,
+    %% Split data into chunks, assign offsets, generate chunk IDs, and
+    %% build Merkle tree
+    Chunks = ar_tx:chunk_binary(?DATA_CHUNK_SIZE, Data),
+    SizeTaggedChunks = ar_tx:chunks_to_size_tagged_chunks(Chunks),
+    SizeTaggedChunkIDs = ar_tx:sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
+    {_Root, DataTree} = ar_merkle:generate_tree(SizeTaggedChunkIDs),
+    %% Upload each chunk with its proof
+    lists:foreach(
+        fun({Chunk, Offset}) ->
+            case Chunk of
+                <<>> ->
+                    %% Skip empty chunks (artifacts of chunking when data
+                    %% is evenly divisible by chunk size)
+                    ok;
+                _ ->
+                    %% Generate the Merkle path (proof) for this chunk
+                    DataPath = ar_merkle:generate_path(DataRoot, Offset - 1, DataTree),
+                    Proof = #{
+                        <<"chunk">> => hb_util:encode(Chunk),
+                        <<"data_path">> => hb_util:encode(DataPath),
+                        <<"offset">> => integer_to_binary(Offset),
+                        <<"data_size">> => integer_to_binary(TXSize),
+                        <<"data_root">> => hb_util:encode(DataRoot)
+                    },
+                    post_chunk(Base, Proof, Opts)
+            end
+        end,
+        SizeTaggedChunks
+    ).
+
+post_chunk(_Base, Request, Opts) ->
+    Serialized = hb_json:encode(Request),
+    ?event({uploading_chunk, {explicit, Serialized}}),
+    hb_http:post(
+        hb_opts:get(gateway, not_found, Opts),
+        #{
+            <<"path">> => <<"/chunk">>,
+            <<"body">> => Serialized
+        },
+        Opts
+    ).
 
 %% @doc Handle the optional adding of data to the transaction header, depending
 %% on the request. Semantics of the `data' key are described in the `get_tx/3'
