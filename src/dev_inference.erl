@@ -56,7 +56,14 @@ do_inference_request(_Base, Req, Opts, InferencePath) ->
     Headers = #{},
     Response = do_relay(<<"POST">>, InferencePath, Body, Headers, 
         Opts#{hashpath => ignore, cache_control => [<<"no-store">>, <<"no-cache">>]}),
-    handle_inference_response(Response, Opts).
+    
+    TEEEnabled = hb_ao:get(<<"tee">>, Req, false, Opts),
+    case TEEEnabled of
+        true ->
+            handle_inference_response_with_attestation(Response, Req, Opts);
+        _ ->
+            handle_inference_response(Response, Opts)
+    end.
 
 extract_inference_params(Req, Opts) ->
     ParamKeys = [
@@ -103,18 +110,81 @@ handle_inference_response(Response, Opts) ->
                 <<"content-type">> => hb_ao:get(<<"content-type">>, Res, <<"application/json">>, Opts),
                 <<"body">> => hb_ao:get(<<"body">>, Res, Opts)
             }};
-        {error, Error} when is_map(Error) ->
-            {error, #{
-                <<"status">> => hb_ao:get(<<"status">>, Error, 500, Opts),
-                <<"message">> => hb_ao:get(<<"message">>, Error, <<"Request failed">>, Opts),
-                <<"details">> => hb_ao:get(<<"body">>, Error, <<"Unknown error">>, Opts)
-            }};
         {error, Error} ->
             {error, #{
                 <<"status">> => 500,
                 <<"message">> => <<"Request failed">>,
                 <<"details">> => hb_util:bin(Error)
             }}
+    end.
+
+handle_inference_response_with_attestation(Response, Req, Opts) ->
+    case Response of
+        {ok, Res} ->
+            % Merge Req and Res to generate hash
+            MergedData = #{
+                <<"request">> => Req,
+                <<"response">> => Res,
+                <<"opts">> => Opts,
+                <<"timestamp">> => os:system_time(millisecond),
+                <<"nonce">> => crypto:strong_rand_bytes(64)
+            },
+            
+            % Generate hash as nonce for attestation
+            MergedJSON = hb_json:encode(MergedData),
+            NonceHex = hb_util:encode(hb_crypto:sha256(MergedJSON), hex),
+            
+            ?event(inference, {generating_attestation, {
+                nonce, NonceHex,
+                merged_data_size, byte_size(MergedJSON)
+            }}),
+            
+            % Call dev_sev_gpu:generate to get attestation token
+            AttestationResult = case dev_sev_gpu:generate(#{}, #{<<"nonce">> => NonceHex}, Opts) of
+                {ok, Token} ->
+                    ?event(inference, {attestation_generated, {token_size, byte_size(Token)}}),
+                    Token;
+                {error, AttestationError} ->
+                    ?event(inference, {attestation_failed, AttestationError}),
+                    null
+            end,
+            
+            % Parse response body to add attestation
+            ResponseBody = hb_ao:get(<<"body">>, Res, Opts),
+            EnhancedBody = case ResponseBody of
+                Body when is_binary(Body) ->
+                    case hb_json:decode(Body) of
+                        DecodedBody when is_map(DecodedBody) ->
+                            EnhancedMap = DecodedBody#{
+                                <<"attestation">> => #{
+                                    <<"raw">> => MergedJSON,
+                                    <<"nonce">> => NonceHex,
+                                    <<"token">> => AttestationResult
+                                }
+                            },
+                            hb_json:encode(EnhancedMap);
+                        _ ->
+                            Body
+                    end;
+                Body when is_map(Body) ->
+                    Body#{
+                        <<"attestation">> => #{
+                            <<"raw">> => MergedJSON,
+                            <<"nonce">> => NonceHex,
+                            <<"token">> => AttestationResult
+                        }
+                    };
+                _ ->
+                    ResponseBody
+            end,
+            
+            {ok, #{
+                <<"status">> => hb_ao:get(<<"status">>, Res, 200, Opts),
+                <<"content-type">> => hb_ao:get(<<"content-type">>, Res, <<"application/json">>, Opts),
+                <<"body">> => EnhancedBody
+            }};
+        {error, Error} ->
+            handle_inference_response({error, Error}, Opts)
     end.
 
 start_inference_server(InferenceServerDir, Opts) ->

@@ -123,7 +123,7 @@ setup-python:
 
 # Set up deterministic-inference environment
 setup-inference: setup-python $(DETERMINISTIC_INFERENCE_DIR)
-	@echo "Setting up deterministic-inference..." && \
+	@echo "Setting up deterministic-inference..."
 	@cd $(DETERMINISTIC_INFERENCE_DIR) && \
 		uv sync && \
 		echo "Installed deterministic-inference package with uv."
