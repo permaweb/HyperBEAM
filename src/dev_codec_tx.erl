@@ -16,6 +16,7 @@ commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"rsa-pss-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"rsa-pss-sha256">> }, Opts) ->
+    ?event(debug_test, {commit, {msg, {explicit, Msg}}, {req, Req}}),
     % Convert the given message to an L1 TX record, sign it, and convert
     % it back to a structured message.
     {ok, TX} = to(hb_private:reset(Msg), Req, Opts),
@@ -143,19 +144,6 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     enforce_valid_tx(FinalTX),
     ?event({to_result, FinalTX}),
     {ok, FinalTX};
-%% @doc List of ans104 items is bundled into a single L1 transaction.
-to(RawList, Req, Opts) when is_list(RawList) ->
-    List = lists:map(
-        fun(Item) -> hb_util:ok(dev_codec_ans104:to(Item, Req, Opts)) end,
-        RawList),
-    OrderedMap = hb_util:list_to_numbered_message(List),
-    TX = #tx{
-        format = 2,
-        data = OrderedMap
-    },
-    Bundle = dev_arweave_common:normalize(TX),
-    ?event({to_result, Bundle}),
-    {ok, Bundle};
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
     
