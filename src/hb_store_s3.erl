@@ -247,16 +247,23 @@ wait_before_next_retry(Opts, AttemptsRemaining) ->
 
 %% @doc Read a value from S3, following links if necessary.
 -spec read(opts(), key()) -> {ok, value()} | not_found.
-read(Opts, Key) when is_list(Key) ->
-    read(Opts, hb_store:join(Key));
-read(Opts, Key) when is_binary(Key) ->
+read(Opts, Key) ->
+    read(Opts, Key, false).
+
+-spec read(opts(), key(), boolean()) -> {ok, value()} | not_found | group.
+read(Opts, Key, ReturnGroup) ->
+    NormalizedKey = case is_list(Key) of
+        true -> hb_store:join(Key);
+        false -> Key 
+    end,
     % Try direct read first (fast path for non-link paths)
-    case read_with_links(Opts, Key) of
+    ?event(store_s3, {s3_read, {key, NormalizedKey}}),
+    Result = case read_with_links(Opts, NormalizedKey) of
         {ok, Value} ->
             {ok, Value};
-        not_found ->
+        Value when Value == not_found orelse Value == group ->
             try
-                PathParts = binary:split(Key, <<"/">>, [global]),
+                PathParts = binary:split(NormalizedKey, <<"/">>, [global]),
                 case resolve_path_segments(Opts, PathParts) of
                     {ok, ResolvedPathParts} ->
                         ResolvedPathBin = to_path(ResolvedPathParts),
@@ -271,12 +278,21 @@ read(Opts, Key) when is_binary(Key) ->
                             {class, Class},
                             {reason, Reason},
                             {stacktrace, Stacktrace},
-                            {key, Key}
+                            {key, NormalizedKey}
                         }
                     ),
                     % If link resolution fails, return not_found
                     not_found
             end
+    end,
+    case Result of
+        group ->
+            case ReturnGroup of
+                true -> group;
+                false -> not_found
+            end;
+        _ ->
+            Result
     end.
 
 read_with_links(Opts, Path) ->
@@ -291,7 +307,13 @@ read_with_links(Opts, Path) ->
                     {ok, Value}
             end;
         not_found ->
-            not_found
+            %% Folders in S3 don't return a value 
+            %% so we check for our group key.
+            GroupKey = create_make_group_key(Path),
+            case head_exists(Opts, GroupKey) of
+                true -> group;
+                false -> not_found
+            end
     end.
 
 %% @doc Helper function to convert to a path
@@ -305,7 +327,7 @@ read_direct(Opts, Key) ->
     #{bucket := Bucket, config := Config} = get_config(Opts),
     BucketStr = hb_util:list(Bucket),
     KeyStr = hb_util:list(Key),
-    ?event(store_s3, {s3_read, {key, Key}}),
+    ?event(store_s3, {s3_read_direct, {key, Key}}),
     try erlcloud_s3:get_object(BucketStr, KeyStr, [], Config) of
         Response when is_list(Response) ->
             Content = proplists:get_value(content, Response),
@@ -517,22 +539,10 @@ strip_prefix(Prefix, Bin) ->
 type(Opts, Key) when is_list(Key) ->
     type(Opts, hb_store:join(Key));
 type(Opts, Key) ->
-    case read_direct(Opts, Key) of
-        {ok, Value} ->
-            case is_link(Value) of
-                {true, Target} ->
-                    type(Opts, Target);
-                false ->
-                    simple
-            end;
-        not_found ->
-            GroupKey = create_make_group_key(Key),
-            case head_exists(Opts, GroupKey) of
-                true ->
-                    composite;
-                false ->
-                    not_found
-            end
+    case read(Opts, Key, true) of
+        {ok, _Value} -> simple;
+        group -> composite;
+        not_found -> not_found
     end.
 
 %% @doc HEAD check for object existence without downloading content
