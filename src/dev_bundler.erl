@@ -57,9 +57,12 @@ ensure_server(Opts) ->
 init(Opts) ->
     server(
         #{
-            max_size => hb_opts:get(bundler_max_size, ?DEFAULT_MAX_SIZE, Opts),
-            max_idle_time => hb_opts:get(bundler_max_idle_time, ?DEFAULT_MAX_IDLE_TIME, Opts),
-            max_items => hb_opts:get(bundler_max_items, ?DEFAULT_MAX_ITEMS, Opts),
+            max_size => hb_opts:get(
+                bundler_max_size, ?DEFAULT_MAX_SIZE, Opts),
+            max_idle_time => hb_opts:get(
+                bundler_max_idle_time, ?DEFAULT_MAX_IDLE_TIME, Opts),
+            max_items => hb_opts:get(
+                bundler_max_items, ?DEFAULT_MAX_ITEMS, Opts),
             queue => [],
             bytes => 0
         },
@@ -99,9 +102,11 @@ maybe_dispatch(State, Opts) ->
     end.
 
 %% @doc Returns whether the queue is dispatchable.
-dispatchable(#{ queue := Q, max_items := MaxLen }, Opts) when length(Q) >= MaxLen ->
+dispatchable(#{ queue := Q, max_items := MaxLen }, Opts)
+        when length(Q) >= MaxLen ->
     true;
-dispatchable(#{ bytes := Bytes, max_size := MaxSize }, Opts) when Bytes >= MaxSize ->
+dispatchable(#{ bytes := Bytes, max_size := MaxSize }, Opts)
+        when Bytes >= MaxSize ->
     true;
 dispatchable(_State, _Opts) ->
     false.
@@ -124,11 +129,16 @@ dispatch(State = #{ queue := Q }, Opts) ->
         #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
         Opts),
     % ...and commit it
-    Committed = hb_message:commit(Msg, Opts, #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }),
+    Committed = hb_message:commit(Msg, Opts,
+        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }),
+    ?event({posting_tx, Committed}),
     {ok, _} =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9-pre">> },
-            Committed#{ <<"path">> => <<"/tx">>, <<"method">> => <<"POST">> },
+            Committed#{ 
+                <<"path">> => <<"/tx">>,
+                <<"method">> => <<"POST">>
+            },
             Opts
         ),
     server(State#{ queue => [], bytes => 0 }, Opts).
@@ -154,33 +164,14 @@ get_anchor(Opts) ->
 basic_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    %% Start a simple HTTP server to capture chunk and tx uploads
-    Endpoints = [
-        {"/chunk", chunk},
-        {"/tx", tx},
-        {"/price/:size", price, {200, integer_to_binary(Price)}},
-        {"/tx_anchor", tx_anchor, {200, hb_util:encode(Anchor)}}
-    ],
-    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
+    % NodeOpts redirects arweave gateway requests to the mock server.
+    {ServerHandle, NodeOpts} = start_gateway_mock_server(Price, Anchor),
     try
-        ServerOpts = #{
-            bundler_max_items => 3,
-            priv_wallet => hb:wallet(),
-            gateway => MockServer,
-            routes => [
-                #{
-                    <<"template">> => <<"/arweave">>,
-                    <<"node">> => #{
-                        <<"match">> => <<"^/arweave">>,
-                        <<"with">> => MockServer,
-                        <<"opts">> => #{ 
-                            http_client => httpc, protocol => http2 }
-                    }
-                }
-            ]
-        },
         ClientOpts = #{},
-        Node = hb_http_server:start_node(ServerOpts),
+        Node = hb_http_server:start_node(NodeOpts#{
+            bundler_max_items => 3,
+            priv_wallet => hb:wallet()
+        }),
         %% Upload 3 data items across 4 chunks.
         Data1 = rand:bytes(floor(2.5 * ?DATA_CHUNK_SIZE)),
         Wallet1 = hb:wallet(),
@@ -253,3 +244,27 @@ post_data_item(Node, Item, Wallet, Opts) ->
         },
         Opts
     ).
+
+start_gateway_mock_server(Price, Anchor) ->
+    Endpoints = [
+        {"/chunk", chunk},
+        {"/tx", tx},
+        {"/price/:size", price, {200, integer_to_binary(Price)}},
+        {"/tx_anchor", tx_anchor, {200, hb_util:encode(Anchor)}}
+    ],
+    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
+    NodeOpts = #{
+        gateway => MockServer,
+        routes => [
+            #{
+                <<"template">> => <<"/arweave">>,
+                <<"node">> => #{
+                    <<"match">> => <<"^/arweave">>,
+                    <<"with">> => MockServer,
+                    <<"opts">> => #{ 
+                        http_client => httpc, protocol => http2 }
+                }
+            }
+        ]
+    },
+    {ServerHandle, NodeOpts}.

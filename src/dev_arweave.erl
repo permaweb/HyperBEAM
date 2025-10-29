@@ -20,11 +20,21 @@ tx(Base, Request, Opts) ->
         <<"GET">> -> get_tx(Base, Request, Opts)
     end.
 
-%% @doc Upload a transaction to Arweave, using the node's default bundler (see
-%% `hb_client:upload/2' for more details). Ensures that uploaded transactions are
-%% stored in the local cache after a successful response has been received.
+%% @doc Upload either an ans104 or an L1 transaction to Arweave.
+%% Ensures that uploaded transactions are stored in the local cache after a
+%% successful response has been received.
+%% 
+%% Note: When uploaading ans104 transactions, this function will use the
+%% node's default bundler. If instead you want to use this node as a bundler
+%% you should use the ~bundler@1.0 device.
 post_tx(Base, Request, Opts) ->
-    ?event({request, Request}),
+    case hb_message:commitment_devices(Request, Opts) of
+        [Device] -> post_tx(Base, Request, Opts, Device);
+        _ -> {error, too_many_commitment_devices}
+    end.
+
+post_tx(Base, Request, Opts, <<"tx@1.0">>) ->
+    ?event({{request, Request}, {base, Base}}),
     TX = hb_message:convert(Request, <<"tx@1.0">>, Opts),
     ?event({tx, TX}),
     JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
@@ -41,9 +51,9 @@ post_tx(Base, Request, Opts) ->
     case TXResponse of
         {ok, _} ->
             post_chunks(Base, TX, Opts),
-            ?event(arweave, {{uploaded, Request}, {result, TXResponse}}),
+            ?event({{uploaded, Request}, {result, TXResponse}}),
             CacheRes = hb_cache:write(Request, Opts),
-            ?event(arweave,
+            ?event(
                 {cache_uploaded_message,
                     {msg, Request},
                     {status,
@@ -55,7 +65,25 @@ post_tx(Base, Request, Opts) ->
             ),
             TXResponse;
         Else -> Else
-    end.
+    end;
+post_tx(Base, Request, Opts, <<"ans104@1.0">>) ->
+    ?event({{request, Request}, {base, Base}, {opts, Opts}}),
+    TX = hb_message:convert(Request, <<"ans104@1.0">>, Opts),
+    ?event({tx, TX}),
+    Serialized = ar_bundles:serialize(TX),
+    ?event({serialized_tx, Serialized}),
+    hb_http:post(
+        hb_opts:get(bundler_ans104, not_found, Opts),
+        #{
+            <<"path">> => <<"/tx">>,
+            <<"content-type">> => <<"application/octet-stream">>,
+            <<"body">> => Serialized
+        },
+        Opts#{
+            http_client =>
+                hb_opts:get(bundler_ans104_http_client, httpc, Opts)
+        }
+    ).
 
 %% @doc Get a transaction ID from the Arweave node, as indicated by the `tx` key
 %% in the request or base message. If the `data' key is present and set to
@@ -72,7 +100,7 @@ get_tx(Base, Request, Opts) ->
 chunk(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"POST">> -> post_chunk(Base, Request, Opts);
-        <<"GET">> -> throw(not_implemented)
+        <<"GET">> -> {error, not_implemented}
     end.
 
 post_chunks(Base, TX, Opts) ->
@@ -153,7 +181,6 @@ add_data(TXID, TXHeader, Opts) ->
         {ok, Data} ->
             TX = TXHeader#tx{ data = Data },
             ?event(
-                arweave,
                 {retrieved_tx_with_data,
                     {id, TXID},
                     {data_size, byte_size(Data)},
@@ -162,7 +189,7 @@ add_data(TXID, TXHeader, Opts) ->
             ),
             {ok, TX};
         {error, Reason} ->
-            ?event(arweave,
+            ?event(
                 {data_retrieval_failed_after_header,
                     {id, TXID},
                     {error, Reason}
@@ -173,7 +200,7 @@ add_data(TXID, TXHeader, Opts) ->
 
 %% @doc Retrieve the data of a transaction from Arweave.
 data(TXID, Opts) ->
-    ?event(arweave, {retrieving_tx_data, {tx, TXID}}),
+    ?event({retrieving_tx_data, {tx, TXID}}),
     request(<<"GET">>, <<"/raw/", TXID/binary>>, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
@@ -209,7 +236,7 @@ block(Base, Request, Opts) ->
 block({id, ID}, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Block} ->
-            ?event(arweave, {retrieved_block_from_cache, {id, ID}}),
+            ?event({retrieved_block_from_cache, {id, ID}}),
             {ok, Block};
         not_found ->
             request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
@@ -217,7 +244,7 @@ block({id, ID}, Opts) ->
 block({height, Height}, Opts) ->
     case dev_arweave_block_cache:read(Height, Opts) of
         {ok, Block} ->
-            ?event(arweave, {retrieved_block_from_cache, {height, Height}}),
+            ?event({retrieved_block_from_cache, {height, Height}}),
             {ok, Block};
         not_found ->
             request(
@@ -270,7 +297,7 @@ find_txid(Base, Request, Opts) ->
 %% a `content-type' header. Subsequently, we parse the response manually and
 %% pass it back as a message.
 request(Method, Path, Opts) ->
-    ?event(arweave, {arweave_request, {method, Method}, {path, Path}}),
+    ?event({arweave_request, {method, Method}, {path, Path}}),
     Res =
         hb_http:request(
             #{
@@ -286,7 +313,7 @@ to_message(_Path, {error, #{ <<"status">> := 404 }}, _Opts) ->
     {error, not_found};
 to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts) ->
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
-    ?event(arweave,
+    ?event(
         {arweave_tx_response,
             {path, Path},
             {raw_body, {explicit, Body}},
@@ -305,7 +332,7 @@ to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts) 
         )
     };
 to_message(Path = <<"/raw/", _/binary>>, {ok, #{ <<"body">> := Body }}, _Opts) ->
-    ?event(arweave,
+    ?event(
         {arweave_raw_response,
             {path, Path},
             {data_size, byte_size(Body)}
@@ -314,14 +341,14 @@ to_message(Path = <<"/raw/", _/binary>>, {ok, #{ <<"body">> := Body }}, _Opts) -
     {ok, Body};
 to_message(Path = <<"/block/", _/binary>>, {ok, #{ <<"body">> := Body }}, Opts) ->
     Block = hb_message:convert(Body, <<"structured@1.0">>, <<"json@1.0">>, Opts),
-    ?event(arweave,
+    ?event(
         {arweave_block_response,
             {path, Path},
             {block, Block}
         }
     ),
     CacheRes = dev_arweave_block_cache:write(Block, Opts),
-    ?event(arweave,
+    ?event(
         {cached_arweave_block,
             {path, Path},
             {result, CacheRes}
@@ -337,7 +364,7 @@ to_message(<<"/tx_anchor">>, {ok, #{ <<"body">> := Body }}, _Opts) ->
 to_message(Path, {ok, #{ <<"body">> := Body }}, Opts) ->
     % All other responses that are `OK' status are converted from JSON to an
     % AO-Core message.
-    ?event(arweave,
+    ?event(
         {arweave_json_response,
             {path, Path},
             {body_size, byte_size(Body)}
