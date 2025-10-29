@@ -29,7 +29,7 @@ start(Endpoints) ->
     NormalizedEndpoints = lists:map(
         fun
             ({Path, Tag, {Status, Body}}) -> {Path, Tag, {Status, Body}};
-            ({Path, Tag}) -> {Path, Tag, {200, <<"OK">>}}
+            ({Path, Tag}) -> {Path, Tag, {200, <<>>}}
         end,
         Endpoints
     ),

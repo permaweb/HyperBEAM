@@ -82,11 +82,12 @@ server(State = #{ max_idle_time := MaxIdleTime }, Opts) ->
 %% @doc Add an item to the queue. Update the state with the new queue and
 %% approximate total byte size of the queue.
 add_item(Req, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
-    {ok, TABM} = dev_codec_ans104:deserialize(Req, #{}, Opts),
-    ItemSize = erlang:external_size(TABM),
-    {ok, _} = hb_cache:write(TABM, Opts),
+    {ok, Item} = hb_message:with_only_committed(Req, Opts),
+    ItemSize = erlang:external_size(Item),
+    ?event({adding_item, {item_size, ItemSize}, {req, Req}, {item, Item}}),
+    {ok, _} = hb_cache:write(Item, Opts),
     State#{
-        queue => [TABM | Queue],
+        queue => [Item | Queue],
         bytes => Bytes + ItemSize
     }.
 
@@ -246,7 +247,7 @@ post_data_item(Node, Item, Wallet, Opts) ->
         Node,
         #{
             <<"device">> => <<"bundler@1.0">>,
-            <<"path">> => <<"/tx">>,
+            <<"path">> => <<"/tx?codec-device=ans104@1.0">>,
             <<"content-type">> => <<"application/octet-stream">>,
             <<"body">> => Serialized
         },
