@@ -113,6 +113,8 @@ upload(Msg, Opts, <<"ans104@1.0">>) when is_map(Msg) ->
         Msg#{ <<"path">> => <<"/tx">>, <<"method">> => <<"POST">> },
         Opts
     );
+upload(Msg, Opts, <<"ans104@1.0">>) when is_binary(Msg) ->
+    dev_arweave:post_binary_ans104(Msg, Opts);
 upload(Msg, Opts, <<"tx@1.0">>) when is_map(Msg) ->
     hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9-pre">> },

@@ -5,6 +5,7 @@
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
 -export([tx/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([post_binary_ans104/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -30,7 +31,12 @@ tx(Base, Request, Opts) ->
 post_tx(Base, Request, Opts) ->
     case hb_message:commitment_devices(Request, Opts) of
         [Device] -> post_tx(Base, Request, Opts, Device);
-        _ -> {error, too_many_commitment_devices}
+        [] -> 
+            ?event({no_commitment_devices}),
+            {error, no_commitment_devices};
+        Devices ->
+            ?event({too_many_commitment_devices, Devices}),
+            {error, too_many_commitment_devices}
     end.
 
 post_tx(Base, Request, Opts, <<"tx@1.0">>) ->
@@ -72,12 +78,15 @@ post_tx(Base, Request, Opts, <<"ans104@1.0">>) ->
     ?event({tx, TX}),
     Serialized = ar_bundles:serialize(TX),
     ?event({serialized_tx, Serialized}),
+    post_binary_ans104(Serialized, Opts).
+
+post_binary_ans104(SerializedTX, Opts) ->
     hb_http:post(
         hb_opts:get(bundler_ans104, not_found, Opts),
         #{
             <<"path">> => <<"/tx">>,
             <<"content-type">> => <<"application/octet-stream">>,
-            <<"body">> => Serialized
+            <<"body">> => SerializedTX
         },
         Opts#{
             http_client =>
