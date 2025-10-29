@@ -11,6 +11,7 @@
 -- Global state
 Stakes = Stakes or {}           -- address -> array of {id, amount, lock_duration, stake_time}
 Unstaking = Unstaking or {}     -- address -> {timestamp -> [{amount, release_at, msgId}]}
+UnstakingByTime = UnstakingByTime or {}  -- timestamp -> [{user, amount, vault_id, msgId}]
 TokenProcess = TokenProcess or ""
 Admin = Admin or ""
 
@@ -241,10 +242,20 @@ function unstake(base, assignment)
     for _, op in ipairs(unstake_operations) do
         local release_at = assignment.timestamp + op.lock_duration
 
+        -- Store in user index (for queries)
         Unstaking[from][release_at] = Unstaking[from][release_at] or {}
         table.insert(Unstaking[from][release_at], {
             amount = op.amount,
             release_at = release_at,
+            vault_id = op.vault_id,
+            msgId = unstakeMsgId
+        })
+
+        -- Store in time index (for efficient finalization)
+        UnstakingByTime[release_at] = UnstakingByTime[release_at] or {}
+        table.insert(UnstakingByTime[release_at], {
+            user = from,
+            amount = op.amount,
             vault_id = op.vault_id,
             msgId = unstakeMsgId
         })
@@ -364,32 +375,35 @@ local function auto_finalize(base, assignment)
     local timestamp = assignment.timestamp
     local processed = 0
 
-    for user, unstaking_records in pairs(Unstaking) do
-        for release_time, entries in pairs(unstaking_records) do
-            if release_time <= timestamp then
-                local total = 0
-                for _, entry in ipairs(entries) do
-                    total = total + entry.amount
-                    base = send(base, {
-                        target = TokenProcess,
-                        action = "Transfer",
-                        recipient = user,
-                        quantity = entry.amount
-                    })
-                    processed = processed + 1
-                end
+    -- Iterate only through timestamps that are ready
+    for release_time, entries in pairs(UnstakingByTime) do
+        if release_time <= timestamp then
+            local user_totals = {}
 
-                if total > 0 then
-                    base = send(base, {
-                        target = user,
-                        action = "Auto-Withdraw-Success",
-                        quantity = total,
-                        ["release-at"] = release_time
-                    })
-                end
-
-                Unstaking[user][release_time] = nil
+            for _, entry in ipairs(entries) do
+                local user = entry.user
+                user_totals[user] = (user_totals[user] or 0) + entry.amount
+                processed = processed + 1
             end
+            for user, total in pairs(user_totals) do
+                base = send(base, {
+                    target = TokenProcess,
+                    action = "Transfer",
+                    recipient = user,
+                    quantity = total
+                })
+
+                base = send(base, {
+                    target = user,
+                    action = "Auto-Withdraw-Success",
+                    quantity = total,
+                    ["release-at"] = release_time
+                })
+                if Unstaking[user] then
+                    Unstaking[user][release_time] = nil
+                end
+            end
+            UnstakingByTime[release_time] = nil
         end
     end
 
