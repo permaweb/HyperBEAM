@@ -198,15 +198,16 @@ function unstake(base, assignment)
         })
     end
 
-    -- Pull from stakes using FIFO (oldest first)
+    -- Pull from stakes using FIFO (oldest first) - O(n) single pass
     local remaining = quantity
     local unstake_operations = {}
-    local i = 1
+    local new_stakes = {}  -- Build new array instead of removing (avoids O(n²))
 
-    while remaining > 0 and i <= #Stakes[from] do
-        local vault = Stakes[from][i]
-
-        if vault.amount <= remaining then
+    for _, vault in ipairs(Stakes[from]) do
+        if remaining <= 0 then
+            -- No more to unstake, keep remaining vaults
+            table.insert(new_stakes, vault)
+        elseif vault.amount <= remaining then
             -- Take entire vault
             table.insert(unstake_operations, {
                 vault_id = vault.id,
@@ -214,9 +215,7 @@ function unstake(base, assignment)
                 lock_duration = vault.lock_duration
             })
             remaining = remaining - vault.amount
-            -- Remove vault
-            table.remove(Stakes[from], i)
-            -- Don't increment i since we removed an element
+            -- Don't add to new_stakes (effectively removed)
         else
             -- Take partial amount from vault
             table.insert(unstake_operations, {
@@ -224,11 +223,19 @@ function unstake(base, assignment)
                 amount = remaining,
                 lock_duration = vault.lock_duration
             })
-            vault.amount = vault.amount - remaining
+            -- Add reduced vault to new_stakes
+            table.insert(new_stakes, {
+                id = vault.id,
+                amount = vault.amount - remaining,
+                lock_duration = vault.lock_duration,
+                stake_time = vault.stake_time
+            })
             remaining = 0
-            i = i + 1
         end
     end
+
+    -- Replace old stakes array with new one
+    Stakes[from] = new_stakes
 
     -- Create unstaking entries with cooldown based on each vault's lock_duration
     Unstaking[from] = Unstaking[from] or {}
@@ -320,33 +327,42 @@ function slash(base, assignment)
 
     local original_total = get_total_staked(target)
 
-    -- Slash from stakes using FIFO (oldest first)
+    -- Slash from stakes using FIFO (oldest first) - O(n) single pass
     local remaining = amount
     local slashed_vaults = {}
-    local i = 1
+    local new_stakes = {}  -- Build new array instead of removing (avoids O(n²))
 
-    while remaining > 0 and i <= #Stakes[target] do
-        local vault = Stakes[target][i]
-
-        if vault.amount <= remaining then
+    for _, vault in ipairs(Stakes[target]) do
+        if remaining <= 0 then
+            -- No more to slash, keep remaining vaults
+            table.insert(new_stakes, vault)
+        elseif vault.amount <= remaining then
             -- Slash entire vault
             table.insert(slashed_vaults, {
                 vault_id = vault.id,
                 amount = vault.amount
             })
             remaining = remaining - vault.amount
-            table.remove(Stakes[target], i)
+            -- Don't add to new_stakes (effectively removed)
         else
             -- Partially slash vault
             table.insert(slashed_vaults, {
                 vault_id = vault.id,
                 amount = remaining
             })
-            vault.amount = vault.amount - remaining
+            -- Add reduced vault to new_stakes
+            table.insert(new_stakes, {
+                id = vault.id,
+                amount = vault.amount - remaining,
+                lock_duration = vault.lock_duration,
+                stake_time = vault.stake_time
+            })
             remaining = 0
-            i = i + 1
         end
     end
+
+    -- Replace old stakes array with new one
+    Stakes[target] = new_stakes
 
     local actual_slashed = amount - remaining
     local new_total = get_total_staked(target)
