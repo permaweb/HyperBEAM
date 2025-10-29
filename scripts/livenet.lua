@@ -1,12 +1,15 @@
---- Livenet v0: Simple staking with cooldown and slashing
+--- Livenet v0: Non-fungible staking with cooldown and slashing
 ---
 --- Core features:
---- 1. Stake: Lock tokens (prevents transfer)
+--- 1. Stake: Lock tokens as individual non-fungible vaults
 --- 2. Unstake: Start cooldown timer (auto-withdraws after cooldown)
 --- 3. Slash: Admin can reduce staked amounts
+---
+--- Each stake is tracked separately with its own lock_duration
+--- Unstaking uses FIFO (first-in-first-out) from oldest stakes
 
 -- Global state
-Stakes = Stakes or {}           -- address -> {amount, lock_duration, stake_time}
+Stakes = Stakes or {}           -- address -> array of {id, amount, lock_duration, stake_time}
 Unstaking = Unstaking or {}     -- address -> {timestamp -> [{amount, release_at, msgId}]}
 TokenProcess = TokenProcess or ""
 Admin = Admin or ""
@@ -27,29 +30,23 @@ local function log_result(base, status, message)
     return base
 end
 
--- Normalize a quantity value to ensure it is a proper integer.
--- Returns either the normalized integer value or nil and an error message.
+-- Normalize a quantity value to ensure it is a proper integer
 local function normalize_int(value)
     local num
-    -- Handle string conversion
     if type(value) == "string" then
-        -- Check for decimal part (not allowed)
         if string.find(value, "%.") then
             return nil
         end
-        -- Convert to number
         num = tonumber(value)
         if not num then
             return nil
         end
     elseif type(value) == "number" then
         num = value
-        -- Check if it's an integer
         if num ~= math.floor(num) then
             return nil
         end
     else
-        -- Any other type is invalid.
         return nil
     end
 
@@ -72,11 +69,27 @@ end
 
 -- Get lock duration from request (default 24 hours)
 local function get_lock_duration(request)
-    local lock_duration = normalize_int(request["X-LockDuration"] or request["x-lock-duration"])
+    local lock_duration = 
+        normalize_int(
+            request["X-LockDuration"] or request["x-lock-duration"]
+        )
     return lock_duration or 86400000  -- Default: 24 hours in milliseconds
 end
 
--- Stake: Lock tokens via Credit-Notice
+-- Get total staked amount for a user
+local function get_total_staked(address)
+    if not Stakes[address] then
+        return 0
+    end
+
+    local total = 0
+    for _, vault in ipairs(Stakes[address]) do
+        total = total + vault.amount
+    end
+    return total
+end
+
+-- Stake: Lock tokens via Credit-Notice as individual vault
 function stake(base, assignment)
     base = init_results(base)
     local request = assignment.body
@@ -108,48 +121,64 @@ function stake(base, assignment)
         })
     end
 
-    -- Get lock duration
+    -- Get lock duration for this stake
     local lock_duration = get_lock_duration(request)
 
-    -- Update stake
-    local current = Stakes[request.sender] or { amount = 0, stake_time = assignment.timestamp }
-    current.amount = current.amount + quantity
-    current.lock_duration = lock_duration
-    Stakes[request.sender] = current
+    -- Get stake ID (message ID)
+    local _, stakeId = 
+        ao.resolve(
+            assignment, 
+            { path = "id", commitments = "all" }
+        )
+
+    -- Initialize Stakes array for user if needed
+    Stakes[request.sender] = Stakes[request.sender] or {}
+
+    -- Add new stake vault (non-fungible)
+    table.insert(Stakes[request.sender], {
+        id = stakeId,
+        amount = quantity,
+        lock_duration = lock_duration,
+        stake_time = assignment.timestamp
+    })
+
+    local total_staked = get_total_staked(request.sender)
 
     base = send(base, {
         target = request.sender,
         action = "Stake-Success",
-        quantity = current.amount,
+        ["stake-id"] = stakeId,
+        quantity = quantity,
+        ["total-staked"] = total_staked,
         ["lock-duration"] = lock_duration
     })
 
     return "ok", log_result(base, "ok", {
         message = "Stake successful",
         user = request.sender,
+        stake_id = stakeId,
         quantity = quantity,
-        total = current.amount
+        total_staked = total_staked
     })
 end
 
--- Unstake: Start cooldown period
+-- Unstake: Start cooldown period (FIFO - pulls from oldest stakes first)
 function unstake(base, assignment)
     base = init_results(base)
     local request = assignment.body
-    
+
     -- Get sender
     local from = request.from
-    -- Check stake exists
-    if not Stakes[from] then
+
+    -- Check stakes exist
+    if not Stakes[from] or #Stakes[from] == 0 then
         return "error", log_result(base, "error", {
             message = "No stake found",
             user = from
         })
     end
 
-    local stake = Stakes[from]
-
-    -- Normalize quantity
+    -- Normalize quantity to unstake
     local quantity = normalize_int(request.quantity)
     if not quantity or quantity <= 0 then
         return "error", log_result(base, "error", {
@@ -159,61 +188,92 @@ function unstake(base, assignment)
     end
 
     -- Check sufficient stake
-    if stake.amount < quantity then
+    local total_staked = get_total_staked(from)
+    if total_staked < quantity then
         return "error", log_result(base, "error", {
             message = "Insufficient stake",
             requested = quantity,
-            available = stake.amount
+            available = total_staked
         })
     end
 
-    -- Reduce staked amount
-    Stakes[from].amount = stake.amount - quantity
+    -- Pull from stakes using FIFO (oldest first)
+    local remaining = quantity
+    local unstake_operations = {}
+    local i = 1
 
-    -- Calculate release time
-    local release_at = assignment.timestamp + stake.lock_duration
+    while remaining > 0 and i <= #Stakes[from] do
+        local vault = Stakes[from][i]
 
-    -- Get message ID
-    local _, msgId = ao.resolve(assignment, { path = "id", commitments = "all" })
+        if vault.amount <= remaining then
+            -- Take entire vault
+            table.insert(unstake_operations, {
+                vault_id = vault.id,
+                amount = vault.amount,
+                lock_duration = vault.lock_duration
+            })
+            remaining = remaining - vault.amount
+            -- Remove vault
+            table.remove(Stakes[from], i)
+            -- Don't increment i since we removed an element
+        else
+            -- Take partial amount from vault
+            table.insert(unstake_operations, {
+                vault_id = vault.id,
+                amount = remaining,
+                lock_duration = vault.lock_duration
+            })
+            vault.amount = vault.amount - remaining
+            remaining = 0
+            i = i + 1
+        end
+    end
 
-    -- Add to unstaking queue
+    -- Create unstaking entries with cooldown based on each vault's lock_duration
     Unstaking[from] = Unstaking[from] or {}
-    Unstaking[from][release_at] = Unstaking[from][release_at] or {}
-    table.insert(Unstaking[from][release_at], {
-        amount = quantity,
-        release_at = release_at,
-        msgId = msgId
-    })
+
+    -- Get message ID for unstake operation
+    local _, unstakeMsgId = 
+        ao.resolve(
+            assignment, 
+            { path = "id", commitments = "all" }
+        )
+    for _, op in ipairs(unstake_operations) do
+        local release_at = assignment.timestamp + op.lock_duration
+
+        Unstaking[from][release_at] = Unstaking[from][release_at] or {}
+        table.insert(Unstaking[from][release_at], {
+            amount = op.amount,
+            release_at = release_at,
+            vault_id = op.vault_id,
+            msgId = unstakeMsgId
+        })
+    end
 
     base = send(base, {
         target = from,
         action = "Unstake-Initiated",
         quantity = quantity,
-        ["release-at"] = release_at,
-        ["remaining-staked"] = Stakes[from].amount
+        ["unstake-operations"] = unstake_operations,
+        ["remaining-staked"] = get_total_staked(from)
     })
 
     return "ok", log_result(base, "ok", {
         message = "Unstake initiated",
         user = from,
         quantity = quantity,
-        release_at = release_at
+        operations = unstake_operations,
+        remaining_staked = get_total_staked(from)
     })
 end
 
--- Slash: Admin reduces staked amount
+-- Slash: Admin reduces staked amount (FIFO from oldest stakes)
 function slash(base, assignment)
     base = init_results(base)
     local request = assignment.body
 
     -- Check admin
-    local from = ao.get("committers", request)
-    if #from == 0 then
-        return "error", log_result(base, "error", {
-            message = "No committer found" 
-        })
-    end
-    from = from[1]
+    local from = request.from
 
     if from ~= Admin then
         return "error", log_result(base, "error", {
@@ -223,7 +283,7 @@ function slash(base, assignment)
         })
     end
 
-    -- Get target
+    -- Get target user to slash
     local target = request.target or request["target-user"]
     if not target then
         return "error", log_result(base, "error", {
@@ -231,14 +291,14 @@ function slash(base, assignment)
         })
     end
 
-    if not Stakes[target] then
+    if not Stakes[target] or #Stakes[target] == 0 then
         return "error", log_result(base, "error", {
             message = "Target has no stake",
             target = target
         })
     end
 
-    -- Normalize amount
+    -- Normalize slash amount
     local amount = normalize_int(request.quantity or request.amount)
     if not amount or amount <= 0 then
         return "error", log_result(base, "error", {
@@ -247,29 +307,55 @@ function slash(base, assignment)
         })
     end
 
-    local original = Stakes[target].amount
+    local original_total = get_total_staked(target)
 
-    -- Slash
-    if amount >= Stakes[target].amount then
-        Stakes[target].amount = 0
-        amount = original
-    else
-        Stakes[target].amount = Stakes[target].amount - amount
+    -- Slash from stakes using FIFO (oldest first)
+    local remaining = amount
+    local slashed_vaults = {}
+    local i = 1
+
+    while remaining > 0 and i <= #Stakes[target] do
+        local vault = Stakes[target][i]
+
+        if vault.amount <= remaining then
+            -- Slash entire vault
+            table.insert(slashed_vaults, {
+                vault_id = vault.id,
+                amount = vault.amount
+            })
+            remaining = remaining - vault.amount
+            table.remove(Stakes[target], i)
+        else
+            -- Partially slash vault
+            table.insert(slashed_vaults, {
+                vault_id = vault.id,
+                amount = remaining
+            })
+            vault.amount = vault.amount - remaining
+            remaining = 0
+            i = i + 1
+        end
     end
+
+    local actual_slashed = amount - remaining
+    local new_total = get_total_staked(target)
 
     base = send(base, {
         target = target,
         action = "Stake-Slashed",
-        amount = amount,
-        remaining = Stakes[target].amount,
+        amount = actual_slashed,
+        remaining = new_total,
+        ["slashed-vaults"] = slashed_vaults,
         reason = request.reason or "Admin penalty"
     })
 
     return "ok", log_result(base, "ok", {
         message = "Slash successful",
         target = target,
-        slashed = amount,
-        remaining = Stakes[target].amount
+        slashed = actual_slashed,
+        remaining = new_total,
+        original = original_total,
+        vaults = slashed_vaults
     })
 end
 
@@ -335,11 +421,11 @@ function compute(base, assignment)
     else
         -- Initialization or unknown action
         if assignment.slot == 0 then
-            TokenProcess = 
+            TokenProcess =
                 base.token_process_id or base["token-process-id"] or TokenProcess
             Admin = base.authority or base.admin or Admin
-            ao.event({ 
-                "Livenet initialized", 
+            ao.event({
+                "Livenet initialized",
                 { token = TokenProcess, admin = Admin }
             })
         end
