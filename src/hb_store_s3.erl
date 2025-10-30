@@ -18,8 +18,9 @@
 %%%
 %%% @end
 -module(hb_store_s3).
--behaviour(hb_store).
 
+-ifdef(ENABLE_S3).
+-behaviour(hb_store).
 %% Store behavior callbacks
 -export([start/1, stop/1, reset/1, scope/0, scope/1]).
 -export([read/2, write/3, list/2, type/2]).
@@ -45,8 +46,6 @@
 -define(MAX_REDIRECTS, 100).                    % Only resolve 1000 links to data
 -define(LINK_MARKER, <<"link:">>).
 %% Namespace for storing link objects separately to avoid file collisions
--define(LINKS_NS, <<"links/">>).
--define(GROUPS_NS, <<"groups/">>).
 -define(CREATE_GROUP_KEY, <<"make_group">>).
 
 -define(DEFAULT_RETRY_DELAY, 1000).             % Wait for 1 second before retry.
@@ -719,7 +718,6 @@ default_test_opts() ->
         <<"force_path_style">> => <<"true">>
      }.
 
--ifdef(ENABLE_S3).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
