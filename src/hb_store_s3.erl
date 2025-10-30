@@ -54,6 +54,8 @@
 -define(DEFAULT_RETRIES, 5).                    % Retries for 5 times until it returns.
 -define(DEFAULT_MAX_RETRY_DELAY, 300000).       % Max 5 minutes waiting to retry.
 
+-define(SHARD_CUT, 4).
+
 %% @doc Initialize the S3 store connection.
 %% This function is called when the store is first accessed.
 %% It validates the configuration and tests the connection.
@@ -159,8 +161,8 @@ validate_config(Opts) ->
 %% @doc Test that we can access the configured bucket.
 test_bucket_access(Bucket, Config) ->
     BucketStr = hb_util:list(Bucket),
-    try erlcloud_s3:list_objects(BucketStr, [{max_keys, 1}], Config) of
-        L when is_list(L) -> ok
+    try erlcloud_s3:head_bucket(BucketStr, Config) of
+        Response when is_list(Response) -> ok
     catch
         Class:Reason:Stacktrace ->
             case Reason of
@@ -200,36 +202,38 @@ write(Opts, Key, Value) when is_list(Key) ->
 write(Opts, Key, Value) when is_binary(Key) ->
     RetryAttempts = maps:get(<<"retry-attempts">>, Opts, ?DEFAULT_RETRIES),
     write(Opts, Key, Value, RetryAttempts).
-write(_Opts, _Key, _Value, 0) ->
+write(_Opts, Key, _Value, 0) ->
+    ?event(warning, {max_retries_reached_s3_write, {key, Key}}),
     ok;
 write(Opts, Key, Value, AttemptsRemaining) ->
     #{bucket := Bucket, config := Config} = get_config(Opts),
     BucketStr = hb_util:list(Bucket),
-    KeyStr = hb_util:list(Key),
-    ?event(store_s3, 
-        {s3_write, 
-            {key, Key}, 
-            {size, byte_size(Value)}, 
+    ShardedKey = shard_key(Key),
+    ShardedKeyStr = hb_util:list(ShardedKey),
+    ?event(store_s3,
+        {s3_write,
+            {key, Key},
+            {size, byte_size(Value)},
             {value, Value}
         }
     ),
-    try erlcloud_s3:put_object(BucketStr, KeyStr, Value, [], Config) of
+    try erlcloud_s3:put_object(BucketStr, ShardedKeyStr, Value, [], Config) of
         L when is_list(L) -> ok
-    catch 
-        Class:Reason -> 
-        ?event(error, 
-            {s3_write_error, 
-                {key, Key}, 
-                {class, Class},
-                {reason, Reason}
-            }
-        ),
-        wait_before_next_retry(Opts, AttemptsRemaining),
-        write(Opts, Key, Value, AttemptsRemaining - 1)
+    catch
+        Class:Reason ->
+            ?event(error,
+                {s3_write_error,
+                    {key, Key},
+                    {class, Class},
+                    {reason, Reason}
+                }
+            ),
+            wait_before_next_retry(Opts, AttemptsRemaining),
+            write(Opts, Key, Value, AttemptsRemaining - 1)
     end.
 
 %% @doc Retry logic
-wait_before_next_retry(Opts, AttemptsRemaining) -> 
+wait_before_next_retry(Opts, AttemptsRemaining) ->
     MaxRetries = maps:get(<<"retry-attempts">>, Opts, ?DEFAULT_RETRIES),
     MinRetryDelay = maps:get(<<"min-retry-delay">>, Opts, ?DEFAULT_RETRY_DELAY),
     MaxRetryDelay = maps:get(<<"max-retry-delay">>, Opts, ?DEFAULT_MAX_RETRY_DELAY),
@@ -239,7 +243,7 @@ wait_before_next_retry(Opts, AttemptsRemaining) ->
                 MinRetryDelay * round(math:pow(2, MaxRetries - AttemptsRemaining)),
                 MaxRetryDelay
             );
-        _ -> 
+        _ ->
             MinRetryDelay
     end,
     ?event(store_s3, {retry_in, RetryTime}),
@@ -254,7 +258,7 @@ read(Opts, Key) ->
 read(Opts, Key, ReturnGroup) ->
     NormalizedKey = case is_list(Key) of
         true -> hb_store:join(Key);
-        false -> Key 
+        false -> Key
     end,
     % Try direct read first (fast path for non-link paths)
     ?event(store_s3, {s3_read, {key, NormalizedKey}}),
@@ -307,7 +311,7 @@ read_with_links(Opts, Path) ->
                     {ok, Value}
             end;
         not_found ->
-            %% Folders in S3 don't return a value 
+            %% Folders in S3 don't return a value
             %% so we check for our group key.
             GroupKey = create_make_group_key(Path),
             case head_exists(Opts, GroupKey) of
@@ -326,9 +330,10 @@ to_path(Path) when is_binary(Path) ->
 read_direct(Opts, Key) ->
     #{bucket := Bucket, config := Config} = get_config(Opts),
     BucketStr = hb_util:list(Bucket),
-    KeyStr = hb_util:list(Key),
-    ?event(store_s3, {s3_read_direct, {key, Key}}),
-    try erlcloud_s3:get_object(BucketStr, KeyStr, [], Config) of
+    ShardedKey = shard_key(Key),
+    ShardedKeyStr = hb_util:list(ShardedKey),
+    ?event(store_s3, {s3_read_direct, {key, Key}, {sharded_key, ShardedKey}}),
+    try erlcloud_s3:get_object(BucketStr, ShardedKeyStr, [], Config) of
         Response when is_list(Response) ->
             Content = proplists:get_value(content, Response),
             {ok, hb_util:bin(Content)}
@@ -340,6 +345,14 @@ read_direct(Opts, Key) ->
             %% To enable store chain fallback
             not_found
     end.
+
+-spec shard_key(binary()) -> binary().
+shard_key(<<"data/", DataKey/binary>>) ->
+    shard_key(DataKey);
+shard_key(Key) when is_binary(Key) ->
+    Part1 = string:slice(Key, 0, ?SHARD_CUT),
+    Part2 = string:slice(Key, ?SHARD_CUT),
+    <<Part1/binary, "/", Part2/binary>>.
 
 %% @doc Ensure all parent groups exist for a given path.
 %%
@@ -354,7 +367,7 @@ read_direct(Opts, Key) ->
 ensure_parent_groups(Opts, Path) ->
     PathParts = binary:split(Path, <<"/">>, [global]),
     case PathParts of
-        [_] -> 
+        [_] ->
             % Single segment, no parents to create
             ok;
         _ ->
@@ -432,11 +445,12 @@ create_make_group_key(Path) ->
     PathSlashed = ensure_trailing_slash(Path),
     <<PathSlashed/binary, ?CREATE_GROUP_KEY/binary>>.
 
-delete_object(Opts, Path) -> 
+delete_object(Opts, Key) when is_binary(Key) ->
     #{bucket := Bucket, config := Config} = get_config(Opts),
     BucketStr = hb_util:list(Bucket),
-    PathStr = hb_util:list(Path),
-    erlcloud_s3:delete_object(BucketStr, PathStr, Config).
+    ShardedKey = shard_key(Key),
+    ShardedKeyStr = hb_util:list(ShardedKey),
+    erlcloud_s3:delete_object(BucketStr, ShardedKeyStr, Config).
 
 %% @doc List immediate children under a given path.
 %% Treats the path as a directory prefix.
@@ -458,18 +472,19 @@ list(Opts, Path) ->
     end,
     FullPath = ResolvedPath,
     SearchPrefix = ensure_trailing_slash(FullPath),
+    ShardedSearchPrefix = shard_key(SearchPrefix),
     BucketStr = hb_util:list(Bucket),
-    PrefixStr = hb_util:list(SearchPrefix),
-    ListOpts = [{prefix, PrefixStr}, {delimiter, "/"}],
-    ?event(store_s3, {list_opts, {Opts, ListOpts}}),
+    ShardedSearchPrefixStr = hb_util:list(ShardedSearchPrefix),
+    ListOpts = [{prefix, ShardedSearchPrefixStr}, {delimiter, "/"}],
+    ?event(store_s3, {list_opts, {list_opts, ListOpts}}),
     try erlcloud_s3:list_objects(BucketStr, ListOpts, Config) of
-        L when is_list(L) ->
-            Children = extract_children(SearchPrefix, L),
+        Response when is_list(Response) ->
+            Children = extract_children(ShardedSearchPrefix, Response),
             {ok, Children -- RemoveChildren}
     catch
         Class:Reason2:Stacktrace ->
-            ?event(error, 
-                {s3_error_listing, 
+            ?event(error,
+                {s3_error_listing,
                     {path, Path},
                     {class, Class},
                     {reason, Reason2},
@@ -512,7 +527,7 @@ extract_children(Prefix, S3Response) ->
         fun(P) ->
             PrefixBin = hb_util:bin(proplists:get_value(prefix, P, "")),
             case strip_prefix(Prefix, PrefixBin) of
-                <<>> -> 
+                <<>> ->
                     false;
                 Child ->
                     ChildName = case binary:last(Child) of
@@ -548,13 +563,14 @@ type(Opts, Key) ->
 %% @doc HEAD check for object existence without downloading content
 head_exists(Opts, Key) when is_list(Key) ->
     head_exists(Opts, hb_store:join(Key));
-head_exists(Opts, Key) ->
+head_exists(Opts, Key) when is_binary(Key) ->
     #{bucket := Bucket, config := Config} = get_config(Opts),
     BucketStr = hb_util:list(Bucket),
-    KeyStr = hb_util:list(Key),
+    ShardedKey = shard_key(Key),
+    ShardedKeyStr = hb_util:list(ShardedKey),
     ?event(store_s3, {head_exists, {key, Key}}),
     try
-        is_list(erlcloud_s3:head_object(BucketStr, KeyStr, [], Config))
+        is_list(erlcloud_s3:head_object(BucketStr, ShardedKeyStr, [], Config))
     catch
         _:_ -> false
     end.
@@ -651,16 +667,17 @@ delete_all_objects(Opts) ->
             Contents = proplists:get_value(contents, Response, []),
             Keys = [proplists:get_value(key, Obj) || Obj <- Contents],
             case Keys of
-                [] -> ok;
+                [] ->
+                    ok;
                 _ ->
                     erlcloud_s3:delete_objects_batch(BucketStr, Keys, Config),
                     ok
             end
     catch Class:Reason:Stacktrace ->
-        ?event(error, 
-            {deleting_all_objects, 
-                {class, Class}, 
-                {reason, Reason}, 
+        ?event(error,
+            {deleting_all_objects,
+                {class, Class},
+                {reason, Reason},
                 {stacktrace, Stacktrace}
             }
         ),
@@ -716,18 +733,42 @@ init() ->
     %% Needed to use the gun http client used by HB.
     application:ensure_all_started(hb).
 
-basic_test() ->
+sharding_test() ->
     init(),
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
-    Value = <<"world">>,
-    Key = <<"hello">>,
-    ?event(s3_test, {{key, Key},{value, Value}}),
+
+    Value = <<"value">>,
+    Key = <<"TWaabU6nSWpn7zPaiWSd9gQkfNwa1t3onrDRNB-bFiI">>,
+    %% Write
     Res = write(StoreOpts, Key, Value),
-    ?assertEqual(ok, Res),
+
+    %% Confirm sharding
+
+    #{bucket := Bucket, config := Config} = get_config(StoreOpts),
+    Result = erlcloud_s3:head_object(
+      hb_util:list(Bucket),
+      "TWaa/bU6nSWpn7zPaiWSd9gQkfNwa1t3onrDRNB-bFiI",
+      Config
+     ),
+    ?assert(is_list(Result)),
+
+    %% Read
     {ok, Response} = read(StoreOpts, Key),
     ?assertEqual(Value, Response),
+    %% Head
+    ?assert(head_exists(StoreOpts, Key)),
+    %% Delete
+    delete_object(StoreOpts, Key),
+    ?assertNot(head_exists(StoreOpts, Key)),
+    % Group
+    GroupKey = <<"UDgFxz7qUcB_TijjDfhUpXD3UGXpw8Xq6OrpoDiv3Y0">>,
+    make_group(StoreOpts, GroupKey),
+    write(StoreOpts, <<GroupKey/binary, "/", "content-type">>, <<"application/json">>),
+    %% List
+    R = list(StoreOpts, GroupKey),
+    ?assertEqual({ok,[<<"content-type">>]}, R),
     ok = stop(StoreOpts).
 
 not_found_test() ->
