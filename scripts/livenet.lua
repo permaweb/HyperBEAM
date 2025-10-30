@@ -8,6 +8,9 @@
 --- Each stake is tracked separately with its own lock_duration
 --- Unstaking uses FIFO (first-in-first-out) from oldest stakes
 
+-- Constants
+local DEFAULT_LOCK_DURATION = 86400000  -- 24 hours in milliseconds
+
 -- Global state
 Stakes = Stakes or {}           -- address -> array of {id, amount, lock_duration, stake_time}
 Unstaking = Unstaking or {}     -- address -> {timestamp -> [{amount, release_at, msgId}]}
@@ -70,11 +73,11 @@ end
 
 -- Get lock duration from request (default 24 hours)
 local function get_lock_duration(request)
-    local lock_duration = 
+    local lock_duration =
         normalize_int(
             request["X-LockDuration"] or request["x-lock-duration"]
         )
-    return lock_duration or 86400000  -- Default: 24 hours in milliseconds
+    return lock_duration or DEFAULT_LOCK_DURATION
 end
 
 -- Get total staked amount for a user
@@ -88,6 +91,77 @@ local function get_total_staked(address)
         total = total + vault.amount
     end
     return total
+end
+
+-- Remove vaults using FIFO and return operations + remaining vaults
+-- Returns: {operations = [...], new_vaults = [...]}
+local function remove_vaults_fifo(vaults, amount)
+    local remaining = amount
+    local operations = {}
+    local new_vaults = {}
+
+    for _, vault in ipairs(vaults) do
+        if remaining <= 0 then
+            -- No more to remove, keep remaining vaults
+            table.insert(new_vaults, vault)
+        elseif vault.amount <= remaining then
+            -- Take entire vault
+            table.insert(operations, {
+                vault_id = vault.id,
+                amount = vault.amount,
+                lock_duration = vault.lock_duration
+            })
+            remaining = remaining - vault.amount
+            -- Don't add to new_vaults (effectively removed)
+        else
+            -- Take partial amount from vault
+            table.insert(operations, {
+                vault_id = vault.id,
+                amount = remaining,
+                lock_duration = vault.lock_duration
+            })
+            -- Add reduced vault to new_vaults
+            table.insert(new_vaults, {
+                id = vault.id,
+                amount = vault.amount - remaining,
+                lock_duration = vault.lock_duration,
+                stake_time = vault.stake_time
+            })
+            remaining = 0
+        end
+    end
+
+    return {
+        operations = operations,
+        new_vaults = new_vaults
+    }
+end
+
+-- Add unstaking records to both user and time indexes
+local function add_to_unstaking_indexes(user, operations, base_timestamp, msgId)
+    Unstaking[user] = Unstaking[user] or {}
+
+    for _, op in ipairs(operations) do
+        local release_at = base_timestamp + op.lock_duration
+
+        -- Store in user index (for queries)
+        Unstaking[user][release_at] = Unstaking[user][release_at] or {}
+        table.insert(Unstaking[user][release_at], {
+            amount = op.amount,
+            release_at = release_at,
+            vault_id = op.vault_id,
+            msgId = msgId
+        })
+
+        -- Store in time index (for efficient finalization)
+        UnstakingByTime[release_at] = UnstakingByTime[release_at] or {}
+        table.insert(UnstakingByTime[release_at], {
+            user = user,
+            amount = op.amount,
+            vault_id = op.vault_id,
+            msgId = msgId
+        })
+    end
 end
 
 -- Stake: Lock tokens via Credit-Notice as individual vault
@@ -198,81 +272,25 @@ function unstake(base, assignment)
         })
     end
 
-    -- Pull from stakes using FIFO (oldest first) - O(n) single pass
-    local remaining = quantity
-    local unstake_operations = {}
-    local new_stakes = {}  -- Build new array instead of removing (avoids O(n²))
-
-    for _, vault in ipairs(Stakes[from]) do
-        if remaining <= 0 then
-            -- No more to unstake, keep remaining vaults
-            table.insert(new_stakes, vault)
-        elseif vault.amount <= remaining then
-            -- Take entire vault
-            table.insert(unstake_operations, {
-                vault_id = vault.id,
-                amount = vault.amount,
-                lock_duration = vault.lock_duration
-            })
-            remaining = remaining - vault.amount
-            -- Don't add to new_stakes (effectively removed)
-        else
-            -- Take partial amount from vault
-            table.insert(unstake_operations, {
-                vault_id = vault.id,
-                amount = remaining,
-                lock_duration = vault.lock_duration
-            })
-            -- Add reduced vault to new_stakes
-            table.insert(new_stakes, {
-                id = vault.id,
-                amount = vault.amount - remaining,
-                lock_duration = vault.lock_duration,
-                stake_time = vault.stake_time
-            })
-            remaining = 0
-        end
-    end
-
-    -- Replace old stakes array with new one
-    Stakes[from] = new_stakes
-
-    -- Create unstaking entries with cooldown based on each vault's lock_duration
-    Unstaking[from] = Unstaking[from] or {}
+    -- Remove vaults using FIFO - O(n) single pass
+    local result = remove_vaults_fifo(Stakes[from], quantity)
+    Stakes[from] = result.new_vaults
 
     -- Get message ID for unstake operation
-    local _, unstakeMsgId = 
+    local _, unstakeMsgId =
         ao.resolve(
-            assignment, 
+            assignment,
             { path = "id", commitments = "all" }
         )
-    for _, op in ipairs(unstake_operations) do
-        local release_at = assignment.timestamp + op.lock_duration
 
-        -- Store in user index (for queries)
-        Unstaking[from][release_at] = Unstaking[from][release_at] or {}
-        table.insert(Unstaking[from][release_at], {
-            amount = op.amount,
-            release_at = release_at,
-            vault_id = op.vault_id,
-            msgId = unstakeMsgId
-        })
-
-        -- Store in time index (for efficient finalization)
-        UnstakingByTime[release_at] = UnstakingByTime[release_at] or {}
-        table.insert(UnstakingByTime[release_at], {
-            user = from,
-            amount = op.amount,
-            vault_id = op.vault_id,
-            msgId = unstakeMsgId
-        })
-    end
+    -- Add to dual indexes (user and time)
+    add_to_unstaking_indexes(from, result.operations, assignment.timestamp, unstakeMsgId)
 
     base = send(base, {
         target = from,
         action = "Unstake-Initiated",
         quantity = quantity,
-        ["unstake-operations"] = unstake_operations,
+        ["unstake-operations"] = result.operations,
         ["remaining-staked"] = get_total_staked(from)
     })
 
@@ -280,7 +298,7 @@ function unstake(base, assignment)
         message = "Unstake initiated",
         user = from,
         quantity = quantity,
-        operations = unstake_operations,
+        operations = result.operations,
         remaining_staked = get_total_staked(from)
     })
 end
@@ -327,44 +345,11 @@ function slash(base, assignment)
 
     local original_total = get_total_staked(target)
 
-    -- Slash from stakes using FIFO (oldest first) - O(n) single pass
-    local remaining = amount
-    local slashed_vaults = {}
-    local new_stakes = {}  -- Build new array instead of removing (avoids O(n²))
+    -- Remove vaults using FIFO - O(n) single pass
+    local result = remove_vaults_fifo(Stakes[target], amount)
+    Stakes[target] = result.new_vaults
 
-    for _, vault in ipairs(Stakes[target]) do
-        if remaining <= 0 then
-            -- No more to slash, keep remaining vaults
-            table.insert(new_stakes, vault)
-        elseif vault.amount <= remaining then
-            -- Slash entire vault
-            table.insert(slashed_vaults, {
-                vault_id = vault.id,
-                amount = vault.amount
-            })
-            remaining = remaining - vault.amount
-            -- Don't add to new_stakes (effectively removed)
-        else
-            -- Partially slash vault
-            table.insert(slashed_vaults, {
-                vault_id = vault.id,
-                amount = remaining
-            })
-            -- Add reduced vault to new_stakes
-            table.insert(new_stakes, {
-                id = vault.id,
-                amount = vault.amount - remaining,
-                lock_duration = vault.lock_duration,
-                stake_time = vault.stake_time
-            })
-            remaining = 0
-        end
-    end
-
-    -- Replace old stakes array with new one
-    Stakes[target] = new_stakes
-
-    local actual_slashed = amount - remaining
+    local actual_slashed = amount
     local new_total = get_total_staked(target)
 
     base = send(base, {
@@ -372,7 +357,7 @@ function slash(base, assignment)
         action = "Stake-Slashed",
         amount = actual_slashed,
         remaining = new_total,
-        ["slashed-vaults"] = slashed_vaults,
+        ["slashed-vaults"] = result.operations,
         reason = request.reason or "Admin penalty"
     })
 
@@ -382,7 +367,7 @@ function slash(base, assignment)
         slashed = actual_slashed,
         remaining = new_total,
         original = original_total,
-        vaults = slashed_vaults
+        vaults = result.operations
     })
 end
 
