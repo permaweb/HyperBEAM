@@ -53,6 +53,14 @@ ensure_server(Opts) ->
         PID -> PID
     end.
 
+stop_server() ->
+    case hb_name:lookup(?SERVER_NAME) of
+        undefined -> ok;
+        PID ->
+            PID ! stop,
+            hb_name:unregister(?SERVER_NAME)
+    end.
+
 %% @doc Initialize the bundler server.
 init(Opts) ->
     server(
@@ -161,45 +169,73 @@ get_anchor(Opts) ->
 %%% Tests
 %%%===================================================================
 
-basic_test() ->
+bundle_count_test() ->
+    test_bundle(#{ bundler_max_items => 3 }).
+
+bundle_size_test() ->
+    test_bundle(#{ bundler_max_size => floor(3.6 * ?DATA_CHUNK_SIZE) }).
+
+test_bundle(Opts) ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
     {ServerHandle, NodeOpts} = start_gateway_mock_server(Price, Anchor),
     try
         ClientOpts = #{},
-        Node = hb_http_server:start_node(NodeOpts#{
-            bundler_max_items => 3,
+        NodeOpts2 = maps:merge(NodeOpts, Opts),
+        Node = hb_http_server:start_node(NodeOpts2#{
             priv_wallet => hb:wallet()
         }),
         %% Upload 3 data items across 4 chunks.
         Data1 = rand:bytes(floor(2.5 * ?DATA_CHUNK_SIZE)),
         Wallet1 = hb:wallet(),
-        Item1 = #tx{
-            data = Data1,
-            tags = [{<<"tag1">>, <<"value1">>}]
-        },
-        ?assertMatch({ok, _}, post_data_item(Node, Item1, Wallet1, ClientOpts)),
+        Item1 = ar_bundles:sign_item(
+            #tx{
+                data = Data1,
+                tags = [{<<"tag1">>, <<"value1">>}]
+            },
+            Wallet1
+        ),
+        ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
         Data2 = rand:bytes(?DATA_CHUNK_SIZE),
         Wallet2 = hb:wallet(),
-        Item2 = #tx{
-            data = Data2,
-            tags = [{<<"tag2">>, <<"value2">>}]
-        },
-        ?assertMatch({ok, _}, post_data_item(Node, Item2, Wallet2, ClientOpts)),
+        Item2 = ar_bundles:sign_item(
+            #tx{
+                data = Data2,
+                tags = [{<<"tag2">>, <<"value2">>}]
+            },
+            Wallet2
+        ),
+        ?assertMatch({ok, _}, post_data_item(Node, Item2, ClientOpts)),
         Data3 = rand:bytes(floor(0.25 * ?DATA_CHUNK_SIZE)),
         Wallet3 = hb:wallet(),
-        Item3 = #tx{
-            data = Data3,
-            tags = [{<<"tag3">>, <<"value3">>}]
-        },
-        ?assertMatch({ok, _}, post_data_item(Node, Item3, Wallet3, ClientOpts)),
-        %% Wait for bundling and chunk upload to complete
-        timer:sleep(5000),
-        %% Retrieve collected data
+        Item3 = ar_bundles:sign_item(
+            #tx{
+                data = Data3,
+                tags = [{<<"tag3">>, <<"value3">>}]
+            },
+            Wallet3
+        ),
+        ?assertMatch({ok, _}, post_data_item(Node, Item3, ClientOpts)),
+        %% Wait for expected transaction
+        hb_util:wait_until(
+            fun() ->
+                Requests = hb_mock_server:get_requests(ServerHandle, tx),
+                length(Requests) >= 1
+            end,
+            5000
+        ),
         TXs = hb_mock_server:get_requests(ServerHandle, tx),
-        Proofs = hb_mock_server:get_requests(ServerHandle, chunk),
         ?assertEqual(1, length(TXs)),
+        %% Wait for expected chunks
+        hb_util:wait_until(
+            fun() ->
+                Requests = hb_mock_server:get_requests(ServerHandle, chunk),
+                length(Requests) >= 4
+            end,
+            5000
+        ),
+        Proofs = hb_mock_server:get_requests(ServerHandle, chunk),
         ?assertEqual(4, length(Proofs)),
         %% Reconstitute the transaction with its data from the POSTed payloads.
         TXBinary = maps:get(<<"body">>, hd(TXs)),
@@ -224,16 +260,29 @@ basic_test() ->
             TX, <<"structured@1.0">>, <<"tx@1.0">>, ClientOpts),
         ?event(debug_test, {tx_structured, TXStructured}),
         ?assert(hb_message:verify(TXStructured, all, ClientOpts)),
+        %% Verify individual data items in the bundle
+        BundleDeserialized = ar_bundles:deserialize(TX),
+        ?event(debug_test, {bundle_deserialized, BundleDeserialized}),
+        ?assertEqual(3, maps:size(BundleDeserialized#tx.data)),
+        #{<<"1">> := BundledItem1, <<"2">> := BundledItem2, <<"3">> := BundledItem3} = 
+            BundleDeserialized#tx.data,
+        %% Verify each data item's signature
+        ?assert(ar_bundles:verify_item(BundledItem1)),
+        ?assert(ar_bundles:verify_item(BundledItem2)),
+        ?assert(ar_bundles:verify_item(BundledItem3)),
+        %% Verify that the data items match the original items
+        ?assertEqual(Item1, BundledItem1),
+        ?assertEqual(Item2, BundledItem2),
+        ?assertEqual(Item3, BundledItem3),
         ok
     after
         %% Always cleanup, even if test fails
-        hb_mock_server:stop(ServerHandle)
+        hb_mock_server:stop(ServerHandle),
+        stop_server()
     end.
 
-post_data_item(Node, Item, Wallet, Opts) ->
-    Serialized = ar_bundles:serialize(
-        ar_bundles:sign_item(Item, Wallet)
-    ),
+post_data_item(Node, Item, Opts) ->
+    Serialized = ar_bundles:serialize(Item),
     hb_http:post(
         Node,
         #{

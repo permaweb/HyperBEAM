@@ -53,7 +53,7 @@ stop({CollectorPID, ListenerID}) ->
     CollectorPID ! stop.
 
 %% @doc Get all requests collected for a given endpoint tag.
-%% Clears the accumulated requests after returning them.
+%% Returns the accumulated requests without clearing them.
 %% Takes the ServerHandle returned from start/1.
 get_requests({CollectorPID, _ListenerID}, Tag) ->
     CollectorPID ! {get_requests, Tag, self()},
@@ -75,8 +75,8 @@ collect_loop(State) ->
         {get_requests, Tag, From} ->
             Requests = maps:get(Tag, State, []),
             From ! {requests, lists:reverse(Requests)},
-            %% Clear the requests for this tag after returning them
-            collect_loop(maps:remove(Tag, State));
+            %% Keep the requests in state (don't clear them)
+            collect_loop(State);
         stop -> ok
     end.
 
