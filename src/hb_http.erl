@@ -561,21 +561,16 @@ reply_handle_cookies(Req, Message, Opts) ->
 
 %% @doc Add permissive CORS headers to a message, if the message has not already
 %% specified CORS headers.
-add_cors_headers(Msg, ReqHdr, Opts) ->
+add_cors_headers(Msg, _ReqHdr, Opts) ->
     CorHeaders = #{
         <<"access-control-allow-origin">> => <<"*">>,
         <<"access-control-allow-methods">> => <<"GET, POST, PUT, DELETE, OPTIONS">>,
-        <<"access-control-expose-headers">> => <<"*">>
+        <<"access-control-expose-headers">> => <<"*">>,
+        <<"access-control-allow-headers">> => <<"*">>
     },
-     WithAllowHeaders = case ReqHdr of
-        <<>> -> CorHeaders;
-        _ -> CorHeaders#{
-             <<"access-control-allow-headers">> => ReqHdr
-        }
-    end,
     % Keys in the given message will overwrite the defaults listed below if 
     % included, due to `hb_maps:merge''s precidence order.
-    hb_maps:merge(WithAllowHeaders, Msg, Opts).
+    hb_maps:merge(CorHeaders, Msg, Opts).
 
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, Message, Opts) ->
