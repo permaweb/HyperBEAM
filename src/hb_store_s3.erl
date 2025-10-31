@@ -19,7 +19,12 @@
 %%% @end
 -module(hb_store_s3).
 
--ifdef(ENABLE_S3).
+-ifndef(ENABLE_S3).
+-export([start/1]).
+
+start(_) -> error(s3_profile_not_enabled).
+
+-else.
 -behaviour(hb_store).
 %% Store behavior callbacks
 -export([start/1, stop/1, reset/1, scope/0, scope/1]).
@@ -347,12 +352,34 @@ read_direct(Opts, Key) ->
 
 -spec shard_key(binary()) -> binary().
 shard_key(<<"data/", DataKey/binary>>) ->
-    shard_key(DataKey);
-shard_key(Key) when is_binary(Key) ->
+    ShardedKey = shard_key(DataKey),
+    <<"data/", ShardedKey/binary>>;
+shard_key(Key) when is_binary(Key) andalso byte_size(Key) > ?SHARD_CUT ->
+    % Only shard the first part of the path
+    case binary:split(Key, <<"/">>) of
+        [FirstKey, Rest] ->
+            ShardedKey = shard_key_inner(FirstKey),
+            <<ShardedKey/binary, "/", Rest/binary>>;
+        _ ->
+            shard_key_inner(Key)
+    end;
+shard_key(<<"data">>) -> <<"data">>;
+shard_key(Key)->
+    ShardCut = integer_to_binary(?SHARD_CUT),
+    ?event(error,
+        {invalid_key_for_sharding,
+            {key, Key},
+            {reason,
+                <<"Should be a binary with min length of ",
+                    ShardCut/binary>>}
+        }
+    ),
+    error({invalid_key_for_sharding, Key}).
+
+shard_key_inner(Key) ->
     Part1 = string:slice(Key, 0, ?SHARD_CUT),
     Part2 = string:slice(Key, ?SHARD_CUT),
     <<Part1/binary, "/", Part2/binary>>.
-
 %% @doc Ensure all parent groups exist for a given path.
 %%
 %% This function creates the necessary parent groups for a path, similar to
@@ -560,8 +587,6 @@ type(Opts, Key) ->
     end.
 
 %% @doc HEAD check for object existence without downloading content
-head_exists(Opts, Key) when is_list(Key) ->
-    head_exists(Opts, hb_store:join(Key));
 head_exists(Opts, Key) when is_binary(Key) ->
     #{bucket := Bucket, config := Config} = get_config(Opts),
     BucketStr = hb_util:list(Bucket),
@@ -589,35 +614,39 @@ resolve(Opts, Path) when is_binary(Path) ->
 resolve_path_segments(Opts, Path) ->
     resolve_path_segments(Opts, Path, 0).
 %% Internal path resolution that resolves all segments including the last
-resolve_path_segments(_Opts, _Path, Depth) when Depth > ?MAX_REDIRECTS ->
+resolve_path_segments(_Opts, _Parts, Depth) when Depth > ?MAX_REDIRECTS ->
     {error, too_many_redirects};
-resolve_path_segments(_Opts, [], _Depth) ->
-    {ok, <<>>};
+resolve_path_segments(_Opts, [LastSegment], _Depth) ->
+    {ok, hb_store:path(LastSegment)};
 resolve_path_segments(Opts, Parts, Depth) ->
-    resolve_path_accumulate(Opts, Parts, <<>>, Depth).
+    resolve_path_accumulate(Opts, Parts, [], Depth).
 
 %% Internal helper that accumulates the resolved path
-resolve_path_accumulate(_Opts, [], Acc, _Depth) ->
-    {ok, Acc};
+resolve_path_accumulate(_Opts, [], AccPath, _Depth) ->
+    {ok, hb_store:path(lists:reverse(AccPath))};
 resolve_path_accumulate(_Opts, FullPath = [<<"data">> | _], <<>>, _Depth) ->
     {ok, hb_store:join(FullPath)};
-resolve_path_accumulate(_Opts, _Parts, _Acc, Depth) when Depth > ?MAX_REDIRECTS ->
-    {error, too_many_redirects};
-resolve_path_accumulate(Opts, [Head|Tail], Acc, Depth) ->
-    CurrentPath = case Acc of
-        <<>> -> Head;
-        _ -> <<Acc/binary, "/", Head/binary>>
-    end,
-    case read_direct(Opts, CurrentPath) of
+resolve_path_accumulate(Opts, [Head|Tail], AccPath, Depth) ->
+    % Build the accumulated path so far
+    CurrentPath = lists:reverse([Head | AccPath]),
+    CurrentPathBin = to_path(CurrentPath),
+    % Check if the accumulated path (not just the segment) is a link
+    case read_direct(Opts, CurrentPathBin) of
         {ok, Value} ->
             case is_link(Value) of
-                {true, Target} ->
-                    resolve_path_accumulate(Opts, Tail, Target, Depth + 1);
+                {true, Link} ->
+                    % The accumulated path is a link! Resolve it
+                    LinkSegments = binary:split(Link, <<"/">>, [global]),
+                    % Replace the accumulated path with the link target and
+                    % continue with remaining segments
+                    NewPath = LinkSegments ++ Tail,
+
+                    resolve_path_segments(Opts, NewPath, Depth + 1);
                 false ->
-                    resolve_path_accumulate(Opts, Tail, CurrentPath, Depth)
+                    resolve_path_accumulate(Opts, Tail, [Head | AccPath], Depth)
             end;
         not_found ->
-            resolve_path_accumulate(Opts, Tail, CurrentPath, Depth)
+            resolve_path_accumulate(Opts, Tail, [Head | AccPath], Depth)
     end.
 
 %% @doc Convert path to canonical form.
@@ -740,7 +769,7 @@ sharding_test() ->
     Value = <<"value">>,
     Key = <<"TWaabU6nSWpn7zPaiWSd9gQkfNwa1t3onrDRNB-bFiI">>,
     %% Write
-    Res = write(StoreOpts, Key, Value),
+    ok = write(StoreOpts, Key, Value),
 
     %% Confirm sharding
 
@@ -790,7 +819,7 @@ failed_write_test() ->
     StoreOpts = (default_test_opts())#{<<"retry-attempts">> => 2},
     start(StoreOpts),
     reset(StoreOpts),
-    Key = <<"write_test">>,
+    Key = hb_message:id(#{}),
     Value = <<"value">>,
 
     ok = meck:new(erlcloud_s3, [unstick, passthrough]),
@@ -811,7 +840,7 @@ failed_read_test() ->
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
-    Key = <<"read_test">>,
+    Key = hb_message:id(#{}),
 
     ok = meck:new(erlcloud_s3, [passthrough]),
     XMLBody = <<"">>,
@@ -835,35 +864,38 @@ list_test() ->
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
-    ?assertEqual({ok, []}, list(StoreOpts, <<"colors">>)),
+    GroupName = hb_message:id(#{key => <<"colors">>}),
+    ?assertEqual({ok, []}, list(StoreOpts, GroupName)),
     % Create immediate children under colors/
-    write(StoreOpts, <<"colors/red">>, <<"1">>),
-    write(StoreOpts, <<"colors/blue">>, <<"2">>),
-    write(StoreOpts, <<"colors/green">>, <<"3">>),
+    write(StoreOpts, <<GroupName/binary, "/red">>, <<"1">>),
+    write(StoreOpts, <<GroupName/binary, "/blue">>, <<"2">>),
+    write(StoreOpts, <<GroupName/binary, "/green">>, <<"3">>),
     % Create nested directories under colors/ - these should show up as immediate children
-    write(StoreOpts, <<"colors/multi/foo">>, <<"4">>),
-    write(StoreOpts, <<"colors/multi/bar">>, <<"5">>),
-    write(StoreOpts, <<"colors/primary/red">>, <<"6">>),
-    write(StoreOpts, <<"colors/primary/blue">>, <<"7">>),
-    write(StoreOpts, <<"colors/nested/deep/value">>, <<"8">>),
+    write(StoreOpts, <<GroupName/binary, "/multi/foo">>, <<"4">>),
+    write(StoreOpts, <<GroupName/binary, "/multi/bar">>, <<"5">>),
+    write(StoreOpts, <<GroupName/binary, "/primary/red">>, <<"6">>),
+    write(StoreOpts, <<GroupName/binary, "/primary/blue">>, <<"7">>),
+    write(StoreOpts, <<GroupName/binary, "/nested/deep/value">>, <<"8">>),
     % Create other top-level directories
-    write(StoreOpts, <<"foo/bar">>, <<"baz">>),
-    write(StoreOpts, <<"beep/boop">>, <<"bam">>),
-    read(StoreOpts, <<"colors">>),
+    FooKey = hb_message:id(#{key => <<"foobar">>}),
+    BeepKey = hb_message:id(#{key => <<"beepboop">>}),
+    write(StoreOpts, <<FooKey/binary, "/bar">>, <<"baz">>),
+    write(StoreOpts, <<BeepKey/binary, "/boop">>, <<"bam">>),
+    read(StoreOpts, GroupName),
     % Test listing colors/ - should return immediate children only
-    {ok, ListResult} = list(StoreOpts, <<"colors">>),
+    {ok, ListResult} = list(StoreOpts, GroupName),
     ?event({list_result, ListResult}),
     % Expected: red, blue, green (files) + multi, primary, nested (directories)
     % Should NOT include deeply nested items like foo, bar, deep, value
     ExpectedChildren = [<<"blue">>, <<"green">>, <<"multi">>, <<"nested">>, <<"primary">>, <<"red">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedChildren) end, ListResult)),
     % Test listing a nested directory - should only show immediate children
-    {ok, NestedListResult} = list(StoreOpts, <<"colors/multi">>),
+    {ok, NestedListResult} = list(StoreOpts, <<GroupName/binary, "/multi">>),
     ?event({nested_list_result, NestedListResult}),
     ExpectedNestedChildren = [<<"bar">>, <<"foo">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedNestedChildren) end, NestedListResult)),
     % Test listing a deeper nested directory
-    {ok, DeepListResult} = list(StoreOpts, <<"colors/nested">>),
+    {ok, DeepListResult} = list(StoreOpts, <<GroupName/binary, "/nested">>),
     ?event({deep_list_result, DeepListResult}),
     ExpectedDeepChildren = [<<"deep">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedDeepChildren) end, DeepListResult)),
@@ -894,9 +926,9 @@ link_test() ->
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
-    write(StoreOpts, <<"foo/bar/baz">>, <<"Bam">>),
-    make_link(StoreOpts, <<"foo/bar/baz">>, <<"foo/beep/baz">>),
-    {ok, Result} = read(StoreOpts, <<"foo/beep/baz">>),
+    write(StoreOpts, <<"foooo/bar/baz">>, <<"Bam">>),
+    make_link(StoreOpts, <<"foooo/bar/baz">>, <<"foooo/beep/baz">>),
+    {ok, Result} = read(StoreOpts, <<"foooo/beep/baz">>),
     ?event({ result, Result}),
     ?assertEqual(<<"Bam">>, Result).
 
@@ -905,8 +937,8 @@ link_fragment_test() ->
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
-    ok = write(StoreOpts, [<<"data">>, <<"bar">>, <<"baz">>], <<"Bam">>),
-    ok = make_link(StoreOpts, [<<"data">>, <<"bar">>], <<"my-link">>),
+    ok = write(StoreOpts, [<<"data">>, <<"barrr">>, <<"baz">>], <<"Bam">>),
+    ok = make_link(StoreOpts, [<<"data">>, <<"barrr">>], <<"my-link">>),
     {ok, Result} = read(StoreOpts, [<<"my-link">>, <<"baz">>]),
     ?event({ result, Result}),
     ?assertEqual(<<"Bam">>, Result).
@@ -974,9 +1006,9 @@ path_traversal_link_test() ->
     % Create the actual data at group/key
     write(StoreOpts, [<<"group">>, <<"key">>], <<"target-value">>),
     % Create a link from "link" to "group"
-    make_link(StoreOpts, <<"group">>, <<"link">>),
+    make_link(StoreOpts, <<"group">>, <<"link1">>),
     % Reading via the link path should resolve to the target value
-    {ok, Result} = read(StoreOpts, [<<"link">>, <<"key">>]),
+    {ok, Result} = read(StoreOpts, [<<"link1">>, <<"key">>]),
     ?event({path_traversal_result, Result}),
     ?assertEqual(<<"target-value">>, Result),
     ok = stop(StoreOpts).
@@ -1077,39 +1109,39 @@ nested_map_cache_test() ->
     write(StoreOpts, <<"data/", OtherKeyHash/binary>>, OtherKeyValue),
     % Step 2: Create the nested structure with groups and links
     % Create the root group
-    make_group(StoreOpts, <<"root">>),
+    make_group(StoreOpts, <<"rooot">>),
     % Create links for the root level keys
-    make_link(StoreOpts, <<"data/", TargetHash/binary>>, <<"root/target">>),
+    make_link(StoreOpts, <<"data/", TargetHash/binary>>, <<"rooot/target">>),
     % Create the commitments subgroup
-    make_group(StoreOpts, <<"root/commitments">>),
+    make_group(StoreOpts, <<"rooot/commitments">>),
     % Create the key1 subgroup within commitments
-    make_group(StoreOpts, <<"root/commitments/key1">>),
-    make_link(StoreOpts, <<"data/", AlgHash1/binary>>, <<"root/commitments/key1/alg">>),
-    make_link(StoreOpts, <<"data/", CommitterHash1/binary>>, <<"root/commitments/key1/committer">>),
+    make_group(StoreOpts, <<"rooot/commitments/key1">>),
+    make_link(StoreOpts, <<"data/", AlgHash1/binary>>, <<"rooot/commitments/key1/alg">>),
+    make_link(StoreOpts, <<"data/", CommitterHash1/binary>>, <<"rooot/commitments/key1/committer">>),
     % Create the key2 subgroup within commitments
-    make_group(StoreOpts, <<"root/commitments/key2">>),
-    make_link(StoreOpts, <<"data/", AlgHash2/binary>>, <<"root/commitments/key2/alg">>),
-    make_link(StoreOpts, <<"data/", CommitterHash2/binary>>, <<"root/commitments/key2/commiter">>),
+    make_group(StoreOpts, <<"rooot/commitments/key2">>),
+    make_link(StoreOpts, <<"data/", AlgHash2/binary>>, <<"rooot/commitments/key2/alg">>),
+    make_link(StoreOpts, <<"data/", CommitterHash2/binary>>, <<"rooot/commitments/key2/commiter">>),
     % Create the other-key subgroup
-    make_group(StoreOpts, <<"root/other-key">>),
-    make_link(StoreOpts, <<"data/", OtherKeyHash/binary>>, <<"root/other-key/other-key-key">>),
+    make_group(StoreOpts, <<"rooot/other-key">>),
+    make_link(StoreOpts, <<"data/", OtherKeyHash/binary>>, <<"rooot/other-key/other-key-key">>),
     % Step 3: Test reading the structure back
     % Verify the root is a composite
-    ?assertEqual(composite, type(StoreOpts, <<"root">>)),
+    ?assertEqual(composite, type(StoreOpts, <<"rooot">>)),
     % List the root contents
-    {ok, RootKeys} = list(StoreOpts, <<"root">>),
+    {ok, RootKeys} = list(StoreOpts, <<"rooot">>),
     ?event({root_keys, RootKeys}),
     ExpectedRootKeys = [<<"commitments">>, <<"other-key">>, <<"target">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedRootKeys) end, RootKeys)),
     % Read the target directly
-    {ok, TargetValueRead} = read(StoreOpts, <<"root/target">>),
+    {ok, TargetValueRead} = read(StoreOpts, <<"rooot/target">>),
     ?assertEqual(<<"Foo">>, TargetValueRead),
     % Verify commitments is a composite
-    ?assertEqual(composite, type(StoreOpts, <<"root/commitments">>)),
+    ?assertEqual(composite, type(StoreOpts, <<"rooot/commitments">>)),
     % Verify other-key is a composite
-    ?assertEqual(composite, type(StoreOpts, <<"root/other-key">>)),
+    ?assertEqual(composite, type(StoreOpts, <<"rooot/other-key">>)),
     % Step 4: Test programmatic reconstruction of the nested map
-    ReconstructedMap = reconstruct_map(StoreOpts, <<"root">>),
+    ReconstructedMap = reconstruct_map(StoreOpts, <<"rooot">>),
     ?event({reconstructed_map, ReconstructedMap}),
     % Verify the reconstructed map matches the original structure
     ?assert(hb_message:match(OriginalMap, ReconstructedMap)),
@@ -1233,5 +1265,74 @@ list_with_link_test() ->
     ?event({link_children, LinkChildren}),
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
     stop(StoreOpts).
+
+resolve_bellow_max_test() ->
+    init(),
+    StoreOpts = default_test_opts(),
+
+    start(StoreOpts),
+    reset(StoreOpts),
+
+    GroupName = hb_message:id(#{}),
+    make_group(StoreOpts, GroupName),
+    Key1 = <<GroupName/binary, "/key">>,
+    ok = write(StoreOpts, Key1, <<"Value">>),
+    LastLink = lists:foldl(
+      fun (ID, Link) ->
+        BinID = integer_to_binary(ID),
+        NewLink = <<"link_", BinID/binary>>,
+        make_link(StoreOpts, Link, NewLink),
+        NewLink
+      end,
+      GroupName,
+      lists:seq(1, 88)
+    ),
+    PathToResolve = <<LastLink/binary, "/key">>,
+    Result = resolve(StoreOpts, PathToResolve),
+    % Return the resolved link path
+    ?assertEqual(Key1, Result).
+
+resolve_above_max_test() ->
+    init(),
+    StoreOpts = default_test_opts(),
+
+    start(StoreOpts),
+    reset(StoreOpts),
+
+    GroupName = hb_message:id(#{}),
+    make_group(StoreOpts, GroupName),
+    Key1 = <<GroupName/binary, "/key">>,
+    ok = write(StoreOpts, Key1, <<"Value">>),
+    LastLink = lists:foldl(
+      fun (ID, Link) ->
+        BinID = integer_to_binary(ID),
+        NewLink = <<"link_", BinID/binary>>,
+        make_link(StoreOpts, Link, NewLink),
+        NewLink
+      end,
+      GroupName,
+      lists:seq(1, ?MAX_REDIRECTS + 1)
+    ),
+    PathToResolve = <<LastLink/binary, "/key">>,
+    Result = resolve(StoreOpts, PathToResolve),
+    % Return the same path as given
+    ?assertEqual(PathToResolve, Result).
+
+shard_key_test() ->
+    InvalidKey1 = <<"data/xpto">>,
+    ?assertError({invalid_key_for_sharding, <<"xpto">>}, shard_key(InvalidKey1)),
+    InvalidKey2 = <<"xpto">>,
+    ?assertException(error, {invalid_key_for_sharding, InvalidKey2}, shard_key(InvalidKey2)),
+    Key1 = <<"data/xpto1">>,
+    ?assertEqual(<<"data/xpto/1">>, shard_key(Key1)),
+    Key2 = <<"xpto1">>,
+    ?assertEqual(<<"xpto/1">>, shard_key(Key2)),
+    %% Only first key is sharded.
+    Key3 = <<"xpto1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>,
+    ?assertEqual(<<"xpto/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>, shard_key(Key3)),
+    Key4 = <<"data/xpto1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>,
+    ?assertEqual(<<"data/xpto/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>, shard_key(Key4)),
+    ok.
+
 -endif.
 -endif.
