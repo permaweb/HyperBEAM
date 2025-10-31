@@ -127,9 +127,6 @@ setup-inference: setup-python $(DETERMINISTIC_INFERENCE_DIR)
 	@cd $(DETERMINISTIC_INFERENCE_DIR) && \
 		uv sync && \
 		echo "Installed deterministic-inference package with uv."
-	@cp native/deterministic-inference/launch-monitored.sh $(DETERMINISTIC_INFERENCE_DIR)/ && \
-		chmod +x $(DETERMINISTIC_INFERENCE_DIR)/launch-monitored.sh && \
-		echo "Copied launch script to deterministic-inference directory."
 
 $(DETERMINISTIC_INFERENCE_DIR):
 	@echo "Cloning deterministic-inference repository..." && \

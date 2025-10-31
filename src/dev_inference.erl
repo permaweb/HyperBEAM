@@ -15,7 +15,6 @@ info(_Opts) ->
     }.
 
 completions(Base, Req, Opts) ->
-    ensure_started(Opts),
     Path = case hb_ao:get(<<"chat-mode">>, Base, false, Opts) of
         true -> <<"/v1/chat/completions">>;
         false -> <<"/v1/completions">>
@@ -33,7 +32,6 @@ chat(Base, Req, Opts) ->
     )}.
 
 health(_Base, _Req, Opts) ->
-    ensure_started(Opts),
     forward_health_check(Opts).
 
 
@@ -175,86 +173,3 @@ add_attestation({ok, Res}, Req, Opts) ->
     }};
 add_attestation({error, Error}, _Req, Opts) ->
     format_response({error, Error}, Opts).
-
-%% Server lifecycle management
-
-ensure_started(Opts) ->
-    case hb_name:lookup(<<"inference-server@1.0">>) of
-        Pid when is_pid(Pid) ->
-            case is_process_alive(Pid) of
-                true -> ok;
-                false ->
-                    hb_name:unregister(<<"inference-server@1.0">>),
-                    start_server(Opts)
-            end;
-        _ ->
-            start_server(Opts)
-    end.
-
-start_server(Opts) ->
-    {ok, Cwd} = file:get_cwd(),
-    ServerDir = determine_server_dir(Cwd),
-    Pid = spawn_link(fun() -> run_server(ServerDir, Opts) end),
-    hb_name:register(<<"inference-server@1.0">>, Pid),
-    ok.
-
-run_server(ServerDir, Opts) ->
-    ModelPath = maps:get(<<"model_name">>, hb_opts:get(inference_opts, #{}, Opts)),
-    UvExe = find_uv_executable(),
-    LaunchScript = filename:join([ServerDir, "launch-monitored.sh"]),
-    
-    Port = open_port(
-        {spawn_executable, LaunchScript},
-        [binary, use_stdio, stderr_to_stdout, exit_status, {cd, ServerDir},
-         {args, [UvExe, "run", "deterministic-inference-server",
-                 "--model-path", ModelPath, 
-                 "--proxy-port", ?SERVER_PORT]}]
-    ),
-    collect_server_events(Port).
-
-determine_server_dir(Cwd) ->
-    case init:get_argument(mode) of
-        {ok, [["embedded"]]} -> 
-            filename:join([Cwd, "deterministic-inference"]);
-        _ ->
-            DevPath = filename:join([Cwd, "_build", "deterministic-inference"]),
-            case filelib:is_dir(DevPath) of
-                true -> DevPath;
-                false -> filename:join([Cwd, "deterministic-inference"])
-            end
-    end.
-
-collect_server_events(Port) ->
-    collect_server_events(Port, <<>>).
-
-collect_server_events(Port, Acc) ->
-    receive
-        {Port, {data, Data}} ->
-            NewAcc = log_server_output(<<Acc/binary, Data/binary>>),
-            collect_server_events(Port, NewAcc);
-        {Port, {exit_status, _Status}} ->
-            ok
-    end.
-
-log_server_output(Binary) ->
-    Lines = binary:split(Binary, <<"\n">>, [global]),
-    log_lines(Lines).
-
-log_lines([Remaining]) -> 
-    Remaining;
-log_lines([Line | Rest]) ->
-    ?event(inference, {server_logged, {string, Line}}),
-    log_lines(Rest).
-
-find_uv_executable() ->
-    HomePath = os:getenv("HOME"),
-    Candidates = [
-        "uv",
-        filename:join([HomePath, ".cargo", "bin", "uv"]),
-        filename:join([HomePath, ".local", "bin", "uv"]),
-        "/usr/local/bin/uv"
-    ],
-    case lists:search(fun(C) -> os:find_executable(C) =/= false end, Candidates) of
-        {value, Found} -> os:find_executable(Found);
-        false -> error(uv_executable_not_found)
-    end.
