@@ -133,7 +133,6 @@ call(M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {without_http_params, TargetMod4}}),
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
-
     ?event(debug_relay, {relay_call, {verified, true}}),
     Client =
         case hb_maps:get(<<"http-client">>, BaseTarget, not_found, Opts) of
@@ -305,3 +304,61 @@ commit_request_test() ->
         ),
     ?event({res, Res}),
     ?assertEqual(<<"value">>, Res).
+
+relay_failover_test() ->
+    application:ensure_all_started([hb]),
+    PeerWallet = ar_wallet:new(),
+    RelayWallet = ar_wallet:new(),
+    Peer = hb_http_server:start_node(#{ priv_wallet => PeerWallet }),
+    Node =
+        hb_http_server:start_node(NodeOpts = #{
+            relay_allow_commit_request => true,
+            priv_wallet => RelayWallet,
+            routes =>
+                [
+                    #{
+                        <<"template">> => <<"/~meta@1.0/info.*">>,
+                        <<"nodes">> => [
+                            #{
+                                % Note: Will need update when Google runs 
+                                % HyperBEAM.
+                                <<"prefix">> => <<"http://google.com/">>
+                            },
+                            #{
+                                <<"prefix">> => <<"http://doesnotroute.invalid/">>
+                            },
+                            #{
+                                <<"prefix">> => Peer
+                            }
+                        ]
+                    }
+                ],
+            on => #{
+                <<"request">> =>
+                    #{
+                        <<"device">> => <<"router@1.0">>,
+                        <<"path">> => <<"preprocess">>,
+                        <<"commit-request">> => true
+                    }
+                }
+        }),
+    % Validate that the server can forward requests through the `hb_http:get` API.
+    {ok, DirectRecvdAddr} =
+        hb_http:request(
+            #{ <<"path">> => <<"~meta@1.0/info/address">> },
+            NodeOpts
+        ),
+    ?assertEqual(hb_util:human_id(PeerWallet), DirectRecvdAddr),
+    % Validate that the relay device is able to forward requests to the peer.
+    {ok, RelayRecvdAddr} =
+        hb_http:get(
+            Node,
+            <<"~relay@1.0/call?relay-path=~meta@1.0/info/address">>,
+            #{}
+        ),
+    ?assertEqual(hb_util:human_id(PeerWallet), RelayRecvdAddr),
+    ?hr(),
+    timer:sleep(100),
+    % Validate that the server forwards requests from clients to the peer.
+    {ok, ClientRecvdAddr} = hb_http:get(Node, <<"~meta@1.0/info/address">>, #{}),
+    ?assertEqual(hb_util:human_id(PeerWallet), ClientRecvdAddr).
