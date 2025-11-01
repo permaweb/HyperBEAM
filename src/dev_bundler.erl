@@ -193,6 +193,34 @@ price_error_test() ->
 
 anchor_error_test() ->
     test_api_error({200, <<"12345">>}, {500, <<"error">>}).
+
+unsigned_dataitem_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    % NodeOpts redirects arweave gateway requests to the mock server.
+    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+        {200, integer_to_binary(Price)},
+        {200, hb_util:encode(Anchor)}
+    ),
+    try
+        ClientOpts = #{},
+        Node = hb_http_server:start_node(NodeOpts#{
+            priv_wallet => hb:wallet()
+        }),
+        Item = #tx{
+                data = <<"testdata">>,
+                tags = [{<<"tag1">>, <<"value1">>}]
+            },
+        % This should probably be a 4XX error, but for now the hb_http_server
+        % throws an exception when a message is not signed.
+        Response = post_data_item(Node, Item, ClientOpts),
+        ?assertMatch(
+            {failure, #{ <<"status">> := 500 }},
+            Response)
+    after
+        hb_mock_server:stop(ServerHandle),
+        stop_server()
+    end.
     
 test_bundle(Opts) ->
     Anchor = rand:bytes(32),
