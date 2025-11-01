@@ -156,12 +156,15 @@ distributions_to_outbox(State, Distributions, Opts) ->
                 <<"results">> =>
                     #{
                         <<"outbox">> =>
-                            #{
-                                <<"target">> => Client,
-                                <<"action">> => <<"mint-batch">>,
-                                <<"content-type">> => <<"text/csv">>,
-                                <<"body">> => to_csv(Distributions, Opts)
-                            }
+                            [
+                                #{
+                                    <<"target">> => Client,
+                                    <<"action">> => <<"mint-batch">>,
+                                    <<"content-type">> => <<"text/csv">>,
+                                    <<"body">> => to_csv(Distributions, Opts)
+                                }
+                            ],
+                        <<"distributions">> => Distributions
                     }
             },
             Opts
