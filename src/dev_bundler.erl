@@ -84,6 +84,10 @@ server(State = #{ max_idle_time := MaxIdleTime }, Opts) ->
         {item, From, Ref, _Base, Req} ->
             From ! {response, Ref, {ok, <<"Message queued.">>}},
             server(maybe_dispatch(add_item(Req, State, Opts), Opts), Opts);
+        {get_state, From, Ref} ->
+            % Only used in tests.
+            From ! {response, Ref, State},
+            server(State, Opts);
         stop ->
             exit(normal)
     after MaxIdleTime ->
@@ -128,11 +132,20 @@ dispatch(State = #{ queue := Q }, Opts) ->
     % upload price.
     Bundle = hb_message:convert(OrderedMap,
         #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }, Opts),
-    Price = hb_util:ok(get_price(Bundle#tx.data_size, Opts)),
-    Anchor = hb_util:ok(get_anchor(Opts)),
+    case {get_price(Bundle#tx.data_size, Opts), get_anchor(Opts)} of
+        {{ok, Price}, {ok, Anchor}} ->
+            dispatch_bundle(
+                Bundle#tx{ anchor = Anchor, reward = Price }, State, Opts);
+        {PriceError, AnchorError} ->
+            ?event({unable_to_dispatch,
+                {price_error, PriceError}, {anchor_error, AnchorError}}),
+            server(State, Opts)
+    end.
+
+dispatch_bundle(Bundle, State, Opts) ->
     % Now that we have the #tx record ready to go, convert back to a message...
     Msg = hb_message:convert(
-        Bundle#tx{ anchor = Anchor, reward = Price },
+        Bundle,
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
         #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
         Opts),
@@ -175,11 +188,20 @@ bundle_count_test() ->
 bundle_size_test() ->
     test_bundle(#{ bundler_max_size => floor(3.6 * ?DATA_CHUNK_SIZE) }).
 
+price_error_test() ->
+    test_api_error({500, <<"error">>}, {200, hb_util:encode(rand:bytes(32))}).
+
+anchor_error_test() ->
+    test_api_error({200, <<"12345">>}, {500, <<"error">>}).
+    
 test_bundle(Opts) ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_gateway_mock_server(Price, Anchor),
+    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+        {200, integer_to_binary(Price)},
+        {200, hb_util:encode(Anchor)}
+    ),
     try
         ClientOpts = #{},
         NodeOpts2 = maps:merge(NodeOpts, Opts),
@@ -217,25 +239,10 @@ test_bundle(Opts) ->
             Wallet3
         ),
         ?assertMatch({ok, _}, post_data_item(Node, Item3, ClientOpts)),
-        %% Wait for expected transaction
-        hb_util:wait_until(
-            fun() ->
-                Requests = hb_mock_server:get_requests(ServerHandle, tx),
-                length(Requests) >= 1
-            end,
-            5000
-        ),
-        TXs = hb_mock_server:get_requests(ServerHandle, tx),
+        TXs = get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
         %% Wait for expected chunks
-        hb_util:wait_until(
-            fun() ->
-                Requests = hb_mock_server:get_requests(ServerHandle, chunk),
-                length(Requests) >= 4
-            end,
-            5000
-        ),
-        Proofs = hb_mock_server:get_requests(ServerHandle, chunk),
+        Proofs = get_requests(chunk, 4, ServerHandle),
         ?assertEqual(4, length(Proofs)),
         %% Reconstitute the transaction with its data from the POSTed payloads.
         TXBinary = maps:get(<<"body">>, hd(TXs)),
@@ -281,6 +288,46 @@ test_bundle(Opts) ->
         stop_server()
     end.
 
+test_api_error(PriceResponse, AnchorResponse) ->
+    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+        PriceResponse,
+        AnchorResponse
+    ),
+    try
+        ClientOpts = #{},
+        Node = hb_http_server:start_node(NodeOpts#{
+            priv_wallet => hb:wallet(),
+            bundler_max_items => 1
+        }),
+        Data1 = rand:bytes(floor(2.5 * ?DATA_CHUNK_SIZE)),
+        Wallet1 = hb:wallet(),
+        Item1 = ar_bundles:sign_item(
+            #tx{
+                data = Data1,
+                tags = [{<<"tag1">>, <<"value1">>}]
+            },
+            Wallet1
+        ),
+        ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
+        % Since the price endpoint is throwing an error, no bundles should be
+        % posted and no chunks should be posted.
+        TXs = get_requests(tx, 1, ServerHandle),
+        ?assertEqual([], TXs),
+        Chunks = get_requests(chunk, 1, ServerHandle),
+        ?assertEqual([], Chunks),
+        % The item should still be in the bundler queue.
+        ItemStructured = hb_message:convert(
+            Item1, <<"structured@1.0">>, <<"ans104@1.0">>, ClientOpts),
+        #{ queue := Queue, bytes := Bytes } = get_state(ClientOpts),
+        ?assertEqual([ItemStructured], Queue),
+        ?assertEqual(657070, Bytes),
+        ok
+    after
+        %% Always cleanup, even if test fails
+        hb_mock_server:stop(ServerHandle),
+        stop_server()
+    end.
+
 post_data_item(Node, Item, Opts) ->
     Serialized = ar_bundles:serialize(Item),
     hb_http:post(
@@ -294,12 +341,23 @@ post_data_item(Node, Item, Opts) ->
         Opts
     ).
 
+get_requests(Type, Count, ServerHandle) ->
+    %% Wait for expected transaction
+    hb_util:wait_until(
+        fun() ->
+            Requests = hb_mock_server:get_requests(ServerHandle, Type),
+            length(Requests) >= Count
+        end,
+        5000
+    ),
+    hb_mock_server:get_requests(ServerHandle, Type).
+
 start_gateway_mock_server(Price, Anchor) ->
     Endpoints = [
         {"/chunk", chunk},
         {"/tx", tx},
-        {"/price/:size", price, {200, integer_to_binary(Price)}},
-        {"/tx_anchor", tx_anchor, {200, hb_util:encode(Anchor)}}
+        {"/price/:size", price, Price},
+        {"/tx_anchor", tx_anchor, Anchor}
     ],
     {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
     NodeOpts = #{
@@ -317,3 +375,10 @@ start_gateway_mock_server(Price, Anchor) ->
         ]
     },
     {ServerHandle, NodeOpts}.
+
+get_state(Opts) ->
+    PID = ensure_server(Opts),
+    PID ! {get_state, self(), Ref = make_ref()},
+    receive
+        {response, Ref, Res} -> Res
+    end.

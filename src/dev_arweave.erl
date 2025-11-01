@@ -320,6 +320,10 @@ request(Method, Path, Opts) ->
 %% @doc Transform a response from the Arweave node into an AO-Core message.
 to_message(_Path, {error, #{ <<"status">> := 404 }}, _Opts) ->
     {error, not_found};
+to_message(_Path, {error, _}, _Opts) ->
+    {error, client_error};
+to_message(_Path, {failure, _}, _Opts) ->
+    {error, server_error};
 to_message(Path = <<"/tx/", TXID/binary>>, {ok, #{ <<"body">> := Body }}, Opts) ->
     TXHeader = ar_tx:json_struct_to_tx(hb_json:decode(Body)),
     ?event(
