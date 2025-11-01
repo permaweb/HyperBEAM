@@ -4,24 +4,32 @@
 %%% all mathematical operations without loss of precision or conversion.
 -module(dev_mint_math).
 -export([should_mint/3, mint/3]).
+-include("include/hb.hrl").
+-define(UNITS_TO_TOKENS(X), X / 1_000_000_000_000).
+-define(TOKENS_TO_UNITS(X), X * 1_000_000_000_000).
 
 %% @doc Determine if we should execute the next mint cycle.
 should_mint(State, Req, Opts) ->
     % Gather the current state of the mint process.
-    LastCycle = hb_util:int(hb_maps:get(<<"cycle">>, State, Opts)),
+    Cycle = hb_util:int(hb_maps:get(<<"cycle">>, State, Opts)),
     PeriodMs = hb_util:int(hb_maps:get(<<"period">>, State, Opts)),
     StartTimeMs = hb_util:int(hb_maps:get(<<"start-time">>, State, Opts)),
     CurrentTimeMs = hb_util:int(hb_maps:get(<<"timestamp">>, Req, Opts)),
     % Calculate whether we have exceeded the timestamp of the next cycle.
-    NextCycleTimeMs = StartTimeMs + (LastCycle * PeriodMs),
+    NextCycleTimeMs = StartTimeMs + (Cycle * PeriodMs),
     CurrentTimeMs >= NextCycleTimeMs.
 
 %% @doc Perform a single mint cycle, returning a new state containing updated 
 %% metadata and instructions to the `Client` address.
 mint(State, _Req, Opts) ->
+    Cycle = hb_util:int(hb_maps:get(<<"cycle">>, State, Opts)),
+    AlreadyMinted = hb_util:int(hb_maps:get(<<"minted">>, State, Opts)),
+    ?event(debug, {starting_mint_cycle, {cycle, Cycle}, {state, State}}),
     TotalToDistribute = units_to_distribute(State, Opts),
+    ?event(debug, {tokens_to_distribute, ?UNITS_TO_TOKENS(TotalToDistribute)}),
     % Calculate the number of units to issue in total for each resource.
     UnitsPerResource = units_per_resource(TotalToDistribute, State, Opts),
+    ?event(debug, {units_per_resource, UnitsPerResource}),
     % Calculate the distribution per address of units assigned to each resource.
     ResourceDistributions =
         hb_maps:map(
@@ -30,7 +38,7 @@ mint(State, _Req, Opts) ->
                 % return an empty `~trie@1.0` message.
                 Addresses =
                     hb_util:deep_get(
-                        <<"addresses/", Resource/binary>>,
+                        <<"balances/", Resource/binary>>,
                         State,
                         #{ <<"device">> => <<"trie@1.0">> },
                         Opts
@@ -42,18 +50,27 @@ mint(State, _Req, Opts) ->
             end,
             UnitsPerResource
         ),
+    ?event(debug, {resource_distributions, ResourceDistributions}),
     Distributions = lists:flatten(ResourceDistributions),
+    ?event(debug, {combined_distributions, Distributions}),
     {ok, Outbox, Allocated} = distributions_to_outbox(State, Distributions, Opts),
-    Remainder = TotalToDistribute - Allocated,
+    DustCarriedForward = TotalToDistribute - Allocated,
+    NewMintedSupply = AlreadyMinted + Allocated,
+    ?event(mint_short,
+        {mint_cycle_complete,
+            {cycles, Cycle},
+            {allocated_units, ?UNITS_TO_TOKENS(Allocated)},
+            {dust_carried_forward, ?UNITS_TO_TOKENS(DustCarriedForward)},
+            {new_minted_supply, ?UNITS_TO_TOKENS(NewMintedSupply)},
+            {distributions, length(Distributions)}
+        }
+    ),
     NewState =
         hb_ao:set(
             State,
             #{
-                <<"cycle">> =>
-                    hb_util:int(hb_maps:get(<<"cycle">>, State, Opts)) + 1,
-                <<"minted">> =>
-                    hb_util:int(hb_maps:get(<<"minted">>, State, Opts))
-                        + Allocated,
+                <<"cycle">> => Cycle + 1,
+                <<"minted">> => NewMintedSupply,
                 <<"outbox">> => Outbox
             },
             Opts
@@ -62,14 +79,14 @@ mint(State, _Req, Opts) ->
 
 %% @doc Return the total number of units to distribute.
 units_to_distribute(State, Opts) ->
-    TotalSupply = hb_util:int(hb_maps:get(<<"total">>, State, Opts)),
+    MintTotal = hb_util:int(hb_maps:get(<<"mint-total">>, State, Opts)),
     AlreadyMinted = hb_util:int(hb_maps:get(<<"minted">>, State, Opts)),
     CycleProportionNumerator =
         hb_util:int(hb_maps:get(<<"cycle-proportion">>, State, Opts)),
     CycleProportionDenominator =
         hb_util:int(hb_maps:get(<<"cycle-proportion-denominator">>, State, Opts)),
-    CycleProportion = CycleProportionNumerator / CycleProportionDenominator,
-    Remaining = TotalSupply - AlreadyMinted,
+    CycleProportion = CycleProportionNumerator div CycleProportionDenominator,
+    Remaining = MintTotal - AlreadyMinted,
     floor(Remaining * CycleProportion).
 
 %% @doc Return the number of units to distribute accross the addresses in each
@@ -79,23 +96,26 @@ units_per_resource(TotalToDistribute, State, Opts) ->
         hb_private:reset(hb_message:uncommitted(
             hb_maps:get(<<"resources">>, State, Opts)
         )),
-    TotalWeights =
-        lists:sum(
-            hb_maps:values(
-                hb_private:reset(hb_message:uncommitted(
-                    hb_maps:get(<<"resources">>, State, Opts)
-                ))
-            )
+    ResourceWeights =
+        hb_maps:map(
+            fun(_ResourceID, Resource) ->
+                hb_util:int(hb_maps:get(<<"weight">>, Resource, Opts))
+            end,
+            Resources
         ),
+    TotalWeights = lists:sum(hb_maps:values(ResourceWeights)),
     hb_maps:map(
         fun(_Resource, Weight) ->
             floor((TotalToDistribute * Weight) div TotalWeights)
         end,
-        Resources
+        ResourceWeights
     ).
 
 %% @doc Return the number of units to distribute for each address in a resource.
-units_per_address(Resource, UnitsForResource, Addresses, Opts) ->
+units_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
+    ?event(debug, {units_for_resource, UnitsForResource}),
+    Accounts = hb_ao:keys(hb_message:uncommitted(BalanceMessages), Opts),
+    ?event(debug, {addresses, Accounts}),
     TotalQuantity =
         lists:sum(
             hb_maps:values(
@@ -125,7 +145,7 @@ units_per_address(Resource, UnitsForResource, Addresses, Opts) ->
                         Opts
                     ),
                 % Calculate units to mint for the address.
-                Proportion = Quantity / TotalQuantity,
+                Proportion = Quantity div TotalQuantity,
                 Units = floor(UnitsForResource * Proportion),
                 % Return the mint message for the address, containing:
                 % -> The number of units to mint.
@@ -147,7 +167,6 @@ units_per_address(Resource, UnitsForResource, Addresses, Opts) ->
 %% @doc Convert a list of distributions to outbox messages that can be pushed
 %% to the `Client` process.
 distributions_to_outbox(State, Distributions, Opts) ->
-    Client = hb_maps:get(<<"client">>, State, Opts),
     {
         ok,
         hb_ao:set(
@@ -158,7 +177,8 @@ distributions_to_outbox(State, Distributions, Opts) ->
                         <<"outbox">> =>
                             [
                                 #{
-                                    <<"target">> => Client,
+                                    <<"target">> =>
+                                        hb_maps:get(<<"client">>, State, Opts),
                                     <<"action">> => <<"mint-batch">>,
                                     <<"content-type">> => <<"text/csv">>,
                                     <<"body">> => to_csv(Distributions, Opts)
