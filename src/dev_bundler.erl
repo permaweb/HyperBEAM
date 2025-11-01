@@ -153,7 +153,7 @@ dispatch_bundle(Bundle, State, Opts) ->
     Committed = hb_message:commit(Msg, Opts,
         #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }),
     ?event({posting_tx, Committed}),
-    {ok, _} =
+    PostTXResponse =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9-pre">> },
             Committed#{ 
@@ -162,7 +162,13 @@ dispatch_bundle(Bundle, State, Opts) ->
             },
             Opts
         ),
-    server(State#{ queue => [], bytes => 0 }, Opts).
+    case PostTXResponse of
+        {ok, _} ->
+            server(State#{ queue => [], bytes => 0 }, Opts);
+        {_, Error} ->
+            ?event({unable_to_dispatch, {tx_error, Error}}),
+            server(State, Opts)
+    end.
 
 get_price(DataSize, Opts) ->
     hb_ao:resolve(
@@ -189,18 +195,70 @@ bundle_size_test() ->
     test_bundle(#{ bundler_max_size => floor(3.6 * ?DATA_CHUNK_SIZE) }).
 
 price_error_test() ->
-    test_api_error({500, <<"error">>}, {200, hb_util:encode(rand:bytes(32))}).
+    test_api_error(#{
+        price => {500, <<"error">>},
+        tx_anchor => {200, hb_util:encode(rand:bytes(32))}
+    }).
 
 anchor_error_test() ->
-    test_api_error({200, <<"12345">>}, {500, <<"error">>}).
+    test_api_error(#{
+        price => {200, <<"12345">>},
+        tx_anchor => {500, <<"error">>}
+    }).
+
+tx_error_test() ->
+    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+        #{
+            tx => {400, <<"Transaction verification failed.">>},
+            price => {200, <<"12345">>},
+            tx_anchor => {200, hb_util:encode(rand:bytes(32))}
+        }
+    ),
+    try
+        ClientOpts = #{},
+        Node = hb_http_server:start_node(NodeOpts#{
+            priv_wallet => hb:wallet(),
+            bundler_max_items => 1
+        }),
+        Data1 = rand:bytes(floor(2.5 * ?DATA_CHUNK_SIZE)),
+        Wallet1 = hb:wallet(),
+        Item1 = ar_bundles:sign_item(
+            #tx{
+                data = Data1,
+                tags = [{<<"tag1">>, <<"value1">>}]
+            },
+            Wallet1
+        ),
+        ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
+        % We attempted to post the tx, so it will show up in the mocked
+        % requests. But since the verificaiton failed, the data item should
+        % still be queued.
+        TXs = get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        Chunks = get_requests(chunk, 1, ServerHandle),
+        ?assertEqual([], Chunks),
+        % The item should still be in the bundler queue.
+        ItemStructured = hb_message:convert(
+            Item1, <<"structured@1.0">>, <<"ans104@1.0">>, ClientOpts),
+        #{ queue := Queue, bytes := Bytes } = get_state(ClientOpts),
+        ?assertEqual([ItemStructured], Queue),
+        ?assertEqual(657070, Bytes),
+        ok
+    after
+        %% Always cleanup, even if test fails
+        hb_mock_server:stop(ServerHandle),
+        stop_server()
+    end.
 
 unsigned_dataitem_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
     {ServerHandle, NodeOpts} = start_gateway_mock_server(
-        {200, integer_to_binary(Price)},
-        {200, hb_util:encode(Anchor)}
+        #{
+            price => {200, integer_to_binary(Price)},
+            tx_anchor => {200, hb_util:encode(Anchor)}
+        }
     ),
     try
         ClientOpts = #{},
@@ -221,14 +279,16 @@ unsigned_dataitem_test() ->
         hb_mock_server:stop(ServerHandle),
         stop_server()
     end.
-    
+
 test_bundle(Opts) ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
     {ServerHandle, NodeOpts} = start_gateway_mock_server(
-        {200, integer_to_binary(Price)},
-        {200, hb_util:encode(Anchor)}
+        #{
+            price => {200, integer_to_binary(Price)},
+            tx_anchor => {200, hb_util:encode(Anchor)}
+        }
     ),
     try
         ClientOpts = #{},
@@ -316,11 +376,8 @@ test_bundle(Opts) ->
         stop_server()
     end.
 
-test_api_error(PriceResponse, AnchorResponse) ->
-    {ServerHandle, NodeOpts} = start_gateway_mock_server(
-        PriceResponse,
-        AnchorResponse
-    ),
+test_api_error(Responses) ->
+    {ServerHandle, NodeOpts} = start_gateway_mock_server(Responses),
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
@@ -337,8 +394,8 @@ test_api_error(PriceResponse, AnchorResponse) ->
             Wallet1
         ),
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
-        % Since the price endpoint is throwing an error, no bundles should be
-        % posted and no chunks should be posted.
+        % Since thre was an error either before or while posting the tx,
+        % no bundles should be posted and no chunks should be posted.
         TXs = get_requests(tx, 1, ServerHandle),
         ?assertEqual([], TXs),
         Chunks = get_requests(chunk, 1, ServerHandle),
@@ -380,12 +437,13 @@ get_requests(Type, Count, ServerHandle) ->
     ),
     hb_mock_server:get_requests(ServerHandle, Type).
 
-start_gateway_mock_server(Price, Anchor) ->
+start_gateway_mock_server(Responses) ->
+    DefaultResponse = {200, <<>>},
     Endpoints = [
-        {"/chunk", chunk},
-        {"/tx", tx},
-        {"/price/:size", price, Price},
-        {"/tx_anchor", tx_anchor, Anchor}
+        {"/chunk", chunk, maps:get(chunk, Responses, DefaultResponse)},
+        {"/tx", tx, maps:get(tx, Responses, DefaultResponse)},
+        {"/price/:size", price, maps:get(price, Responses, DefaultResponse)},
+        {"/tx_anchor", tx_anchor, maps:get(tx_anchor, Responses, DefaultResponse)}
     ],
     {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
     NodeOpts = #{
