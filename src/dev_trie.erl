@@ -14,7 +14,7 @@
 %%% `{00, 11, 01, 10}`, which is why each node in a radix-4 trie can have at-most
 %%% 4 children!)
 -module(dev_trie).
--export([info/0, set/3, get/3, get/4]).
+-export([info/0, set/3, get/3, get/4, from/3, to/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -38,6 +38,47 @@ get(TrieNode, Req, Opts) ->
         error -> {error, <<"'key' parameter is required for trie lookup.">>};
         {ok, Key} -> retrieve(TrieNode, Key, Opts)
     end.
+
+%% @doc Convert a `~trie@1.0` into a flat message containing every key-value
+%% pair in the trie.
+from(Trie, Req, Opts) ->
+    {ok, from(<<>>, Trie, Req, Opts)}.
+from(Prefix, Trie, Req, Opts) when is_map(Trie) ->
+    hb_maps:fold(
+        fun(<<"node-value">>, Val, Acc) ->
+            Acc#{ Prefix => Val };
+        (Key, Inner, Acc) when is_map(Inner) ->
+            case hb_maps:get(<<"device">>, Inner, Opts) of
+                <<"trie@1.0">> ->
+                    hb_maps:merge(
+                        Acc,
+                        from(
+                            <<Prefix/bitstring, Key/bitstring>>,
+                            Inner,
+                            Req,
+                            Opts
+                        ),
+                        Opts
+                    );
+                _ ->
+                    Acc#{ <<Prefix/bitstring, Key/bitstring>> => Inner }
+            end;
+        (Key, Val, Acc) ->
+            Acc#{ <<Prefix/bitstring, Key/bitstring>> => Val }
+        end,
+        #{},
+        hb_maps:without(
+            [<<"device">>],
+            hb_message:uncommitted(hb_private:reset(Trie)),
+            Opts
+        ),
+        Opts
+    ).
+
+%% @doc Convert a flat message into a `~trie@1.0` message. Proxies to a `set`
+%% call.
+to(FlatMsg, _Req, Opts) ->
+    set(#{<<"device">> => <<"trie@1.0">>}, FlatMsg, Opts).
 
 %% @doc Set keys and their values in the trie.
 set(Trie, Req, Opts) ->
@@ -70,9 +111,15 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
             case bit_size(KeySuffix) > 0 of
                 true ->
                     % Implicit leaf node creation!
-                    TrieNode#{KeySuffix => Val};
+                    TrieNode#{
+                        <<"device">> => <<"trie@1.0">>,
+                        KeySuffix => Val
+                    };
                 false ->
-                    TrieNode#{<<"node-value">> => Val}
+                    TrieNode#{
+                        <<"device">> => <<"trie@1.0">>,
+                        <<"node-value">> => Val
+                    }
             end;
         % FULL MATCH: There is a child of this node with an edge label that
         % completely matches *some portion* of what remains to be matched in our
@@ -92,7 +139,10 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
                 false ->
                     if
                         bit_size(KeySuffix) =:= bit_size(EdgeLabel) ->
-                            TrieNode#{EdgeLabel => Val};
+                            TrieNode#{
+                                <<"device">> => <<"trie@1.0">>,
+                                EdgeLabel => Val
+                            };
                         true ->
                             <<
                                 _KeySuffixPrefix:MatchSize/bitstring,
@@ -101,6 +151,7 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
                             TrieNode#{
                                 EdgeLabel =>
                                     #{
+                                        <<"device">> => <<"trie@1.0">>,
                                         <<"node-value">> => SubTrie,
                                         KeySuffixSuffix => Val
                                     }
@@ -115,7 +166,10 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
                             Opts,
                             bit_size(EdgeLabel) + KeyPrefixSizeAcc
                         ),
-                    TrieNode#{EdgeLabel => NewSubTrie}
+                    TrieNode#{
+                        <<"device">> => <<"trie@1.0">>,
+                        EdgeLabel => NewSubTrie
+                    }
             end;
         % PARTIAL MATCH: There is a child of this node with an edge label that
         % partially matches *some portion* of what remains to be matched in our
@@ -137,7 +191,9 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
             case bit_size(KeySuffixSuffix) > 0 of
                 true ->
                     NewTrie#{
+                        <<"device">> => <<"trie@1.0">>,
                         EdgeLabelPrefix => #{
+                            <<"device">> => <<"trie@1.0">>,
                             EdgeLabelSuffix => SubTrie,
                             % Implicit leaf node!
                             KeySuffixSuffix => Val
@@ -145,7 +201,9 @@ insert(TrieNode, Key, Val, Opts, KeyPrefixSizeAcc) ->
                     };
                 false ->
                     NewTrie#{
+                        <<"device">> => <<"trie@1.0">>,
                         EdgeLabelPrefix => #{
+                            <<"device">> => <<"trie@1.0">>,
                             EdgeLabelSuffix => SubTrie,
                             <<"node-value">> => Val
                         }
@@ -198,7 +256,7 @@ retrieve(TrieNode, Key, Opts, KeyPrefixSizeAcc) ->
     end.
 
 %% @doc Get a list of edge labels for a given trie node.
-edges(TrieNode, Opts) when not is_map(TrieNode) -> [];
+edges(TrieNode, _Opts) when not is_map(TrieNode) -> [];
 edges(TrieNode, Opts) ->
     Filtered = hb_maps:without(
         [
@@ -370,7 +428,7 @@ basic_topology_backwards_test() ->
 basic_retrievability_test() ->
     Trie = hb_ao:set(
         #{<<"device">> => <<"trie@1.0">>},
-        #{
+        FlatMsg = #{
             <<"car">> => 31337,
             <<"card">> => 90210,
             <<"cardano">> => 666,
@@ -393,7 +451,8 @@ basic_retrievability_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"z">>, Trie, #{})),
     ?assertEqual(not_found, hb_ao:get(<<"cardan">>, Trie, #{})),
     ?assertEqual(not_found, hb_ao:get(<<"cardana">>, Trie, #{})),
-    ?assertEqual(not_found, hb_ao:get(<<"carm">>, Trie, #{})).
+    ?assertEqual(not_found, hb_ao:get(<<"carm">>, Trie, #{})),
+    ?assertEqual({ok, FlatMsg}, from(Trie, #{}, #{})).
 
 verify_test() ->
     Trie = hb_ao:set(
