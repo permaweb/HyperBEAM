@@ -16,16 +16,10 @@
 -module(dev_mint).
 -export([compute/3]).
 
--define(AO_TO_ARMS(X), X * 1_000_000_000_000).
--define(ARMS_TO_AO(X), X div 1_000_000_000_000).
-
 compute(State, Req, Opts) ->
     maybe
         {ok, _} = hb_ao:resolve({as, <<"security@1.0">>, State}, Req, Opts),
         {ok, NewState} = maybe_mint(State, Req, Opts)
-    else
-        {error, Reason} ->
-            {error, Reason}
     end.
 
 %%% Internal functions
@@ -40,45 +34,3 @@ maybe_mint(State, Req, Opts) ->
             end;
         false -> {ok, State}
     end.
-
-%%% Test Utilities
-
-%% @doc Return a random resource ID in human-readable (43-character) format.
-random_id() ->
-    hb_util:human_id(crypto:strong_rand_bytes(32)).
-
-%% @doc Generate a set of random resource weights.
-random_resources(N) ->
-    random_resources(N, 10_000_000).
-random_resources(N, Max) ->
-    lists:map(
-        fun(_) ->
-            {
-                random_id(),
-                #{
-                    <<"weight">> => rand:uniform(?AO_TO_ARMS(Max)),
-                    <<"oracle">> => random_id()
-                }
-            }
-        end,
-        lists:seq(1, N)
-    ).
-
-%%% Tests
-
-single_resource_test() ->
-    ResID = hb_util:human_id(crypto:strong_rand_bytes(32)),
-    Client = random_id(),
-    State = #{
-        <<"device">> => <<"mint@1.0">>,
-        <<"client">> => Client,
-        <<"resources">> => #{
-            ResID => #{
-                <<"weight">> => 1,
-                <<"oracle">> => <<"oracle1">>
-            }
-        },
-        <<"total-supply">> => ?AO_TO_ARMS(1_000_000_000),
-        <<"period">> => 1000,
-        <<"start-time">> => 1714339200
-    },
