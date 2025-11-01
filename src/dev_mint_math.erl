@@ -43,17 +43,16 @@ mint(State, _Req, Opts) ->
                         #{ <<"device">> => <<"trie@1.0">> },
                         Opts
                     ),
-                % Calculate the number of units from the resource to distribute
-                % to each address.
-                {ok, Dists} = units_per_address(Resource, Units, Addresses, Opts),
-                Dists
+                % Calculate a distribution message for each address in the resource.
+                distribution_per_address(Resource, Units, Addresses, Opts)
             end,
             UnitsPerResource
         ),
     ?event(debug, {resource_distributions, ResourceDistributions}),
-    Distributions = lists:flatten(ResourceDistributions),
+    Distributions = lists:flatten(hb_maps:values(ResourceDistributions)),
+    Allocated = distributions_to_total_units(Distributions, Opts),
     ?event(debug, {combined_distributions, Distributions}),
-    {ok, Outbox, Allocated} = distributions_to_outbox(State, Distributions, Opts),
+    {ok, Results} = distributions_to_results(State, Distributions, Opts),
     DustCarriedForward = TotalToDistribute - Allocated,
     NewMintedSupply = AlreadyMinted + Allocated,
     ?event(mint_short,
@@ -71,7 +70,7 @@ mint(State, _Req, Opts) ->
             #{
                 <<"cycle">> => Cycle + 1,
                 <<"minted">> => NewMintedSupply,
-                <<"outbox">> => Outbox
+                <<"results">> => Results
             },
             Opts
         ),
@@ -112,9 +111,20 @@ units_per_resource(TotalToDistribute, State, Opts) ->
     ).
 
 %% @doc Return the number of units to distribute for each address in a resource.
-units_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
+distribution_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
     ?event(debug, {units_for_resource, UnitsForResource}),
-    Accounts = hb_ao:keys(hb_message:uncommitted(BalanceMessages), Opts),
+    % Get the accounts from the balance messages. Note that we are careful to
+    % ensure that the hashpath is not generated and that we do not write to the
+    % store, such that no IDs or writes are performed.
+    {ok, Accounts} =
+        hb_ao:resolve(
+            BalanceMessages,
+            <<"from">>,
+            Opts#{
+                hashpath => ignore,
+                cache_control => [<<"no-cache">>, <<"no-store">>]
+            }
+        ),
     ?event(debug, {addresses, Accounts}),
     TotalQuantity =
         lists:sum(
@@ -125,7 +135,7 @@ units_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
                             hb_maps:get(<<"quantity">>, AddressDetails, 0, Opts)
                         )
                     end,
-                    Addresses
+                    Accounts
                 )
             )
         ),
@@ -159,36 +169,38 @@ units_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
                     <<"reason">> => Resource
                 }
             end,
-            Addresses
+            Accounts
         ),
         Opts
     ).
 
+%% @doc Calculate the total number of units to mint from a list of distributions.
+distributions_to_total_units(Distributions, Opts) ->
+    lists:sum(
+        lists:map(
+            fun(D) -> hb_util:int(hb_maps:get(<<"quantity">>, D, Opts)) end,
+            Distributions
+        )
+    ).
+
 %% @doc Convert a list of distributions to outbox messages that can be pushed
 %% to the `Client` process.
-distributions_to_outbox(State, Distributions, Opts) ->
+distributions_to_results(State, Distributions, Opts) ->
     {
         ok,
-        hb_ao:set(
-            State,
-            #{
-                <<"results">> =>
+        #{
+            <<"outbox">> =>
+                [
                     #{
-                        <<"outbox">> =>
-                            [
-                                #{
-                                    <<"target">> =>
-                                        hb_maps:get(<<"client">>, State, Opts),
-                                    <<"action">> => <<"mint-batch">>,
-                                    <<"content-type">> => <<"text/csv">>,
-                                    <<"body">> => to_csv(Distributions, Opts)
-                                }
-                            ],
-                        <<"distributions">> => Distributions
+                        <<"target">> =>
+                            hb_maps:get(<<"client">>, State, Opts),
+                        <<"action">> => <<"mint-batch">>,
+                        <<"content-type">> => <<"text/csv">>,
+                        <<"body">> => to_csv(Distributions, Opts)
                     }
-            },
-            Opts
-        )
+                ],
+            <<"distributions">> => Distributions
+        }
     }.
 
 %% @doc Convert a list of mint messages to a single CSV string.
@@ -197,7 +209,7 @@ to_csv(Msgs, Opts) ->
         lists:map(
             fun(M) ->
                 Recpt = hb_util:human_id(hb_maps:get(<<"recipient">>, M, Opts)),
-                Quantity = hb_maps:get(<<"quantity">>, M, Opts),
+                Quantity = hb_util:bin(hb_maps:get(<<"quantity">>, M, Opts)),
                 Minter = hb_util:human_id(hb_maps:get(<<"minter">>, M, Opts)),
                 Reason = hb_util:human_id(hb_maps:get(<<"reason">>, M, Opts)),
                 <<

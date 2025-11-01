@@ -1,6 +1,7 @@
 %%% @doc Test utilities and vectors for the `~mint@1.0` device.
 -module(dev_mint_test_vectors).
 -include_lib("eunit/include/eunit.hrl").
+-include("include/hb.hrl").
 
 -define(AO_TO_ARMS(X), X * 1_000_000_000_000).
 -define(ARMS_TO_AO(X), X div 1_000_000_000_000).
@@ -185,10 +186,11 @@ single_resource_single_account_test() ->
             #{},
             #{}
         ),
+    ?event(debug_test, {after_mint, NewS}),
     ?assertMatch(
         #{
             <<"quantity">> := ?AO_TO_ARMS(1),
             <<"recipient">> := AccID
         },
-        hb_ao:get(<<"results/distributions/", AccID/binary>>, NewS, #{})
+        hb_ao:get(<<"results/distributions/1">>, NewS, #{})
     ).
