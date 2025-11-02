@@ -9,6 +9,16 @@
 
 %%% Test Utilities
 
+mint(Params) ->
+    mint(Params, #{}).
+mint(Params, Opts) ->
+    mint_cycles(generate_state(Params, #{}), 1, Opts).
+mint_cycles(State, 0, _Opts) -> State;
+mint_cycles(State, CyclesRemaining, Opts) ->
+    {ok, NewS} = dev_mint_math:mint(State, #{}, Opts),
+    mint_cycles(NewS, CyclesRemaining - 1, Opts).
+
+
 %% @doc Return random ID(s) in human-readable (43-character) format.
 random_id() -> hb_util:human_id(crypto:strong_rand_bytes(32)).
 random_ids(N) -> [ random_id() || _ <- lists:seq(1, N) ].
@@ -169,28 +179,58 @@ generate_state(Params, Opts) ->
 
 %%% Tests
 
-single_resource_single_account_test() ->
+single_account_test() ->
     hb:init(),
-    AccID = random_id(),
-    ResID = random_id(),
-    {ok, NewS} =
-        dev_mint_math:mint(
-            generate_state(
-                #{
-                    resources => [ResID],
-                    accounts => [AccID],
-                    total_supply => 1
-                },
-                #{}
-            ),
-            #{},
-            #{}
+    State =
+        mint(
+            #{
+                resources => [random_id()],
+                accounts => [Acc = random_id()],
+                total_supply => 1
+            }
         ),
-    ?event(debug_test, {after_mint, NewS}),
+    ?event(debug_test, {after_mint, State}),
     ?assertMatch(
         #{
             <<"quantity">> := ?AO_TO_ARMS(1),
-            <<"recipient">> := AccID
+            <<"recipient">> := Acc
         },
-        hb_ao:get(<<"results/distributions/1">>, NewS, #{})
+        hb_ao:get(<<"results/distributions/1">>, State, #{})
     ).
+
+multiple_equal_accounts_test() ->
+    hb:init(),
+    ResID = random_id(),
+    State =
+        mint(
+            #{
+                resources => [ResID],
+                accounts =>
+                    #{
+                        ResID => #{
+                            Acc1 = random_id() => #{
+                                <<"quantity">> => ?AO_TO_ARMS(1)
+                            },
+                            Acc2 = random_id() => #{
+                                <<"quantity">> => ?AO_TO_ARMS(1)
+                            }
+                        }
+                    },
+                total_supply => 2
+            }
+        ),
+    ?event(debug_test, {after_mint, State}),
+    ?assertMatch(
+        [
+            #{
+                <<"quantity">> := ?AO_TO_ARMS(1),
+                <<"recipient">> := Acc1
+            },
+            #{
+                <<"quantity">> := ?AO_TO_ARMS(1),
+                <<"recipient">> := Acc2
+            }
+        ],
+        hb_ao:get(<<"results/distributions">>, State, #{})
+    ).
+

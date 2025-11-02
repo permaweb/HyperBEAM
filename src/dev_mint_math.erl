@@ -139,6 +139,7 @@ distribution_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
                 )
             )
         ),
+    ?event(debug, {total_quantity, TotalQuantity}),
     hb_maps:values(
         hb_maps:map(
             fun(Minter, AddressDetails) ->
