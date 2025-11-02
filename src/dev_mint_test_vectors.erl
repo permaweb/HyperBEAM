@@ -73,22 +73,37 @@ generate_resources(Resources, GlobalSpec) when is_map(Resources) ->
         Resources
     ).
 
+%% @doc Normalize account specifications into a per-resource map.
+%% Handles three input formats:
+%% 1. undefined: Generate random accounts for each resource
+%% 2. List of account IDs: Use same accounts for all resources
+%% 3. Map: Either per-resource #{ResID => Accounts} or global #{AccID => Details}
+normalize_accounts_for_resources(undefined, Resources, DefaultCount, _Opts) ->
+    DefaultAccounts = random_ids(DefaultCount),
+    hb_maps:map(fun(_, _) -> DefaultAccounts end, Resources);
+normalize_accounts_for_resources(Accounts, Resources, _DefaultCount, _Opts)
+    when is_list(Accounts) ->
+    hb_maps:map(fun(_, _) -> Accounts end, Resources);
+normalize_accounts_for_resources(AccountMap, Resources, _DefaultCount, Opts)
+    when is_map(AccountMap) ->
+    ResourceIDs = maps:keys(Resources),
+    IsPerResource = lists:any(
+        fun(ResID) -> maps:is_key(ResID, AccountMap) end,
+        ResourceIDs
+    ),
+    if IsPerResource ->
+        AccountMap;
+    true ->
+        hb_maps:map(fun(_, _) -> AccountMap end, Resources, Opts)
+    end.
+
 %% @doc For each resource, generate a set of balances for each account.
-generate_all_balances(_, #{ balances := Balances }, _) ->
-    Balances;
-generate_all_balances(Resources, Params, Opts) ->
-    Accounts =
-        case maps:find(accounts, Params) of
-            {ok, AccountSpecs} -> AccountSpecs;
-            error -> random_ids(maps:get(account_count, Params, 10))
-        end,
+%% AccountsPerResource must be in normalized format: #{ResourceID => Accounts}.
+generate_all_balances(Resources, AccountsPerResource, Opts) ->
     hb_maps:map(
-        fun(_, _) ->
-            generate_balances(
-                Accounts,
-                maps:get(max_balance, Params, 1_000_000_000),
-                Opts
-            )
+        fun(ResourceID, _ResourceDetails) ->
+            Accounts = maps:get(ResourceID, AccountsPerResource),
+            generate_balances(Accounts, 1_000_000_000, Opts)
         end,
         Resources
     ).
@@ -156,7 +171,24 @@ generate_state(Params, Opts) ->
                 maps:get(resource_count, Params, 2)
             )
         ),
-    Balances = generate_all_balances(Resources, Params, Opts),
+    % Generate or use explicit balances
+    Balances =
+        case maps:find(balances, Params) of
+            {ok, ExplicitBalances} ->
+                ExplicitBalances;
+            error ->
+                % Generate balances from account specifications
+                % Normalize account specifications to per-resource format
+                AccountsPerResource =
+                    normalize_accounts_for_resources(
+                        maps:get(accounts, Params, undefined),
+                        Resources,
+                        maps:get(account_count, Params, 10),
+                        Opts
+                    ),
+                generate_all_balances(Resources, AccountsPerResource, Opts)
+        end,
+    ?event(generating_state, { balances, Balances}),
     #{
         <<"device">> => <<"mint@1.0">>,
         <<"cycle">> => maps:get(cycle, Params, 0),
