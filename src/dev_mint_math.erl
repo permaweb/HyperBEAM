@@ -156,8 +156,10 @@ distribution_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
                         Opts
                     ),
                 % Calculate units to mint for the address.
-                Proportion = Quantity div TotalQuantity,
-                Units = floor(UnitsForResource * Proportion),
+                % We are mutiplying before because the way div operator works,
+                % It will return 0 if Q < TQ which will be most of the time
+                % So rather we multiply before division
+                Units = floor((UnitsForResource * Quantity) div TotalQuantity),
                 % Return the mint message for the address, containing:
                 % -> The number of units to mint.
                 % -> The address of the recipient.
