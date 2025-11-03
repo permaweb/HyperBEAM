@@ -99,7 +99,7 @@ normalize(TX = #tx{data = Bin}) when is_binary(Bin) ->
 normalize(TX) ->
     ?event({normalize, TX}),
     {ItemType, SerializedTX} = serialize_data(TX, true),
-    ?event({serialized_tx, ItemType, SerializedTX}),
+    ?event(debug_test, {serialized_tx, ItemType, SerializedTX}),
     NormalizedTX = maybe_add_bundle_tags(ItemType, SerializedTX),
     ?event({normalized_tx, NormalizedTX}),
     normalize(NormalizedTX).
@@ -118,7 +118,7 @@ serialize_data(Item = #tx{data = Data}, NormalizeChildren) ->
                 {list, convert_bundle_map_to_list(Data)};
             {_, true, false} ->
                 % Unsigned transaction with list data
-                {list, convert_bundle_list_to_map(Data)};
+                {list, Data};
             {_, false, true} ->
                 {map, Data};
             _ ->

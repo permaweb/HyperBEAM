@@ -124,14 +124,18 @@ dispatchable(_State, _Opts) ->
     false.
 
 %% @doc Dispatch the queue.
+dispatch(State = #{ queue := [] }, Opts) ->
+    ?event({skipping_empty_queue}),
+    server(State, Opts);
 dispatch(State = #{ queue := Q }, Opts) ->
     % Lists aren't handled well, so to avoid an ao-types key being inserted,
     % we'll convert the list to a nummbered message explicitly.
     OrderedMap = hb_util:list_to_numbered_message(lists:reverse(Q)),
     % Convert to a #tx so we can get the data_size and use it to query the
     % upload price.
-    Bundle = hb_message:convert(OrderedMap,
-        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }, Opts),
+    % Bundle = hb_message:convert(OrderedMap,
+    %     #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }, Opts),
+    {ok, Bundle} = dev_codec_tx:to(lists:reverse(Q), #{}, Opts),
     case {get_price(Bundle#tx.data_size, Opts), get_anchor(Opts)} of
         {{ok, Price}, {ok, Anchor}} ->
             dispatch_bundle(
@@ -143,16 +147,21 @@ dispatch(State = #{ queue := Q }, Opts) ->
     end.
 
 dispatch_bundle(Bundle, State, Opts) ->
+    ?event(debug_test, {dispatching_bundle, {bundle, Bundle}}),
+    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
+    Signed = ar_tx:sign(Bundle, Wallet),
     % Now that we have the #tx record ready to go, convert back to a message...
-    Msg = hb_message:convert(
-        Bundle,
+    % Committed = hb_message:convert(
+    %     Bundle,
+    Committed = hb_message:convert(
+        Signed,
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
         #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
         Opts),
     % ...and commit it
-    Committed = hb_message:commit(Msg, Opts,
-        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }),
-    ?event({posting_tx, Committed}),
+    % Committed = hb_message:commit(Msg, Opts,
+    %     #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }),
+    ?event(debug_test, {posting_tx, Committed}),
     PostTXResponse =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9-pre">> },
@@ -369,6 +378,9 @@ test_bundle(Opts) ->
         ?assertEqual(Item1, BundledItem1),
         ?assertEqual(Item2, BundledItem2),
         ?assertEqual(Item3, BundledItem3),
+
+        ?assertEqual(undefined, TX#tx.manifest),
+        ?assertEqual(undefined, BundleDeserialized#tx.manifest),
         ok
     after
         %% Always cleanup, even if test fails
