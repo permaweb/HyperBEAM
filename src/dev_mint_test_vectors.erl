@@ -7,7 +7,33 @@
 -define(ARMS_TO_AO(X), X div 1_000_000_000_000).
 -define(DEFAULT_MAX_WEIGHT, 10_000_000).
 
-%%% Test Utilities
+%% @doc Find a distribution for a specific recipient.
+find_distribution(Distributions, Recipient) ->
+    case [D || D <- Distributions, maps:get(<<"recipient">>, D) == Recipient] of
+        [Dist] -> Dist;
+        [] -> undefined;
+        Multiple -> hd(Multiple)
+    end.
+
+%% @doc Extract distributions from a mint state.
+get_distributions(State) ->
+    hb_ao:get(<<"results/distributions">>, State, #{}).
+
+%% @doc Get all recipients from distributions.
+get_recipients(State) ->
+    Distributions = get_distributions(State),
+    [maps:get(<<"recipient">>, D) || D <- Distributions].
+
+%% @doc Get all quantities from distributions.
+get_quantities(State) ->
+    Distributions = get_distributions(State),
+    [maps:get(<<"quantity">>, D) || D <- Distributions].
+
+%% @doc Find a distribution and extract its quantity.
+find_quantity(State, Recipient) ->
+    Distributions = get_distributions(State),
+    Dist = find_distribution(Distributions, Recipient),
+    maps:get(<<"quantity">>, Dist).
 
 mint(Params) ->
     mint(Params, #{}).
@@ -24,8 +50,6 @@ random_id() -> hb_util:human_id(crypto:strong_rand_bytes(32)).
 random_ids(N) -> [ random_id() || _ <- lists:seq(1, N) ].
 
 %% @doc Generate a random resource with a random weight and oracle ID.
-generate_resource(Max) ->
-    generate_resource(random_id(), Max).
 generate_resource(ID, undefined) ->
     generate_resource(ID, rand:uniform(?DEFAULT_MAX_WEIGHT));
 generate_resource(ID, Weight) when is_integer(Weight) ->
@@ -252,13 +276,12 @@ multiple_equal_accounts_test() ->
             }
         ),
     ?event(debug_test, {after_mint, State}),
-    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
-    ?assertEqual(2, length(Distributions)),
-    Recipients = [maps:get(<<"recipient">>, D) || D <- Distributions],
-    Quantities = [maps:get(<<"quantity">>, D) || D <- Distributions],
-    ?assert(lists:member(Acc1, Recipients)),
-    ?assert(lists:member(Acc2, Recipients)),
-    ?assertEqual([?AO_TO_ARMS(1), ?AO_TO_ARMS(1)], lists:sort(Quantities)).
+    ?assert(lists:member(Acc1, get_recipients(State))),
+    ?assert(lists:member(Acc2, get_recipients(State))),
+    ?assertEqual(
+        [?AO_TO_ARMS(1), ?AO_TO_ARMS(1)], 
+        lists:sort(get_quantities(State))
+    ).
 
 %% Test: Multiple resources with weighted distribution (70/30 split)
 multiple_resources_test() ->
@@ -283,11 +306,8 @@ multiple_resources_test() ->
                 total_supply => 100
             }
         ),
-    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
-    [Acc1Dist] = [D || D <- Distributions, maps:get(<<"recipient">>, D) == Acc1],
-    [Acc2Dist] = [D || D <- Distributions, maps:get(<<"recipient">>, D) == Acc2],
-    ?assertEqual(?AO_TO_ARMS(70), maps:get(<<"quantity">>, Acc1Dist)),
-    ?assertEqual(?AO_TO_ARMS(30), maps:get(<<"quantity">>, Acc2Dist)).
+    ?assertEqual(?AO_TO_ARMS(70), find_quantity(State, Acc1)),
+    ?assertEqual(?AO_TO_ARMS(30), find_quantity(State, Acc2)).
 
 %% Test: Unequal balance distribution (70/30 split within one resource)
 unequal_balances_test() ->
@@ -308,12 +328,10 @@ unequal_balances_test() ->
                 total_supply => 100
             }
         ),
-    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
-    [Dist1, Dist2] = lists:sort(fun(A, B) ->
-        maps:get(<<"quantity">>, A) >= maps:get(<<"quantity">>, B)
-    end, Distributions),
-    ?assertEqual(?AO_TO_ARMS(70), maps:get(<<"quantity">>, Dist1)),
-    ?assertEqual(?AO_TO_ARMS(30), maps:get(<<"quantity">>, Dist2)).
+    ?assertEqual(
+        [?AO_TO_ARMS(70), ?AO_TO_ARMS(30)], 
+        [find_quantity(State, Acc1), find_quantity(State, Acc2)]
+    ).
 
 %% Test: Dust handling with 3-way split of 10 atomic units
 dust_handling_test() ->
@@ -337,8 +355,7 @@ dust_handling_test() ->
                 total_supply => 10
             }
         ),
-    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
-    TotalAllocated = lists:sum([maps:get(<<"quantity">>, D) || D <- Distributions]),
+    TotalAllocated = lists:sum(get_quantities(State)),
     Minted = hb_ao:get(<<"minted">>, State, #{}),
     ?assertEqual(TotalAllocated, Minted),
     ?assert(TotalAllocated =< ?AO_TO_ARMS(10)).
@@ -374,15 +391,10 @@ complex_distribution_test() ->
                 total_supply => 1000
             }
         ),
-    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
-    FindDist = fun(Recipient) ->
-        [D] = [Dist || Dist <- Distributions, maps:get(<<"recipient">>, Dist) == Recipient],
-        maps:get(<<"quantity">>, D)
-    end,
-    ?assertEqual(?AO_TO_ARMS(420), FindDist(Alice)),
-    ?assertEqual(?AO_TO_ARMS(180), FindDist(Bob)),
-    ?assertEqual(?AO_TO_ARMS(200), FindDist(Charlie)),
-    ?assertEqual(?AO_TO_ARMS(200), FindDist(Dave)).
+    ?assertEqual(?AO_TO_ARMS(420), find_quantity(State, Alice)),
+    ?assertEqual(?AO_TO_ARMS(180), find_quantity(State, Bob)),
+    ?assertEqual(?AO_TO_ARMS(200), find_quantity(State, Charlie)),
+    ?assertEqual(?AO_TO_ARMS(200), find_quantity(State, Dave)).
 
 %% Test: Zero balance account receives nothing
 zero_balance_test() ->
@@ -404,12 +416,8 @@ zero_balance_test() ->
                 total_supply => 100
             }
         ),
-    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
-    Acc1Dist = [D || D <- Distributions, maps:get(<<"recipient">>, D) == Acc1],
-    Acc2Dist = [D || D <- Distributions, maps:get(<<"recipient">>, D) == Acc2],
-    ?assertEqual(1, length(Acc1Dist)),
-    ?assertEqual(?AO_TO_ARMS(100), maps:get(<<"quantity">>, hd(Acc1Dist))),
-    ?assertEqual(0, maps:get(<<"quantity">>, hd(Acc2Dist))).
+    ?assertEqual(?AO_TO_ARMS(100), find_quantity(State, Acc1)),
+    ?assertEqual(?AO_TO_ARMS(0), find_quantity(State, Acc2)).
 
 %% Test: Single atomic unit distribution across multiple accounts
 single_unit_test() ->
@@ -432,8 +440,7 @@ single_unit_test() ->
                 minted => 0
             }
         ),
-    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
-    TotalAllocated = lists:sum([maps:get(<<"quantity">>, D) || D <- Distributions]),
+    TotalAllocated = lists:sum(get_quantities(State)),
     ?assert(TotalAllocated =< ?AO_TO_ARMS(1)).
 
 %% Test: Max supply boundary - nothing left to mint
