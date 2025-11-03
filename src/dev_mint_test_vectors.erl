@@ -3,47 +3,32 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
--define(AO_TO_ARMS(X), X * 1_000_000_000_000).
+-define(AO_TO_ARMS(X), (trunc((X * 1_000_000_000_000)))).
 -define(ARMS_TO_AO(X), X div 1_000_000_000_000).
 -define(DEFAULT_MAX_WEIGHT, 10_000_000).
+-define(DEFAULT_TOLERANCE_ARMS, 100_000_000_000).
 
-%% @doc Find a distribution for a specific recipient.
-find_distribution(Distributions, Recipient) ->
-    case [D || D <- Distributions, maps:get(<<"recipient">>, D) == Recipient] of
-        [Dist] -> Dist;
-        [] -> undefined;
-        Multiple -> hd(Multiple)
-    end.
+%%% Test helpers.
 
-%% @doc Extract distributions from a mint state.
-get_distributions(State) ->
-    hb_ao:get(<<"results/distributions">>, State, #{}).
-
-%% @doc Get all recipients from distributions.
-get_recipients(State) ->
-    Distributions = get_distributions(State),
-    [maps:get(<<"recipient">>, D) || D <- Distributions].
-
-%% @doc Get all quantities from distributions.
-get_quantities(State) ->
-    Distributions = get_distributions(State),
-    [maps:get(<<"quantity">>, D) || D <- Distributions].
-
-%% @doc Find a distribution and extract its quantity.
-find_quantity(State, Recipient) ->
-    Distributions = get_distributions(State),
-    Dist = find_distribution(Distributions, Recipient),
-    maps:get(<<"quantity">>, Dist).
-
+%% @doc Mint a given number of cycles, given either a parameter map or a state.
 mint(Params) ->
-    mint(Params, #{}).
-mint(Params, Opts) ->
-    mint_cycles(generate_state(Params, #{}), 1, Opts).
-mint_cycles(State, 0, _Opts) -> State;
-mint_cycles(State, CyclesRemaining, Opts) ->
+    mint(Params, 1).
+mint(Params, Cycles) ->
+    mint(Params, Cycles, #{}).
+mint(Params, Cycles, Opts) when not is_map_key(<<"device">>, Params) ->
+    ?event(debug_test, {generating_state, {params, Params}}),
+    State = generate_state(Params, Opts),
+    ?event(debug_test, {generated_state, {bytes, erlang:external_size(State)}}),
+    mint(State, Cycles, Opts);
+mint(State, 0, _Opts) -> State;
+mint(State, CyclesRemaining, Opts) ->
     {ok, NewS} = dev_mint_math:mint(State, #{}, Opts),
-    mint_cycles(NewS, CyclesRemaining - 1, Opts).
+    mint(NewS, CyclesRemaining - 1, Opts).
 
+within_tolerance(Expected, Actual) ->
+    within_tolerance(Expected, Actual, ?DEFAULT_TOLERANCE_ARMS).
+within_tolerance(Expected, Actual, Tolerance) ->
+    abs(Expected - Actual) =< Tolerance.
 
 %% @doc Return random ID(s) in human-readable (43-character) format.
 random_id() -> hb_util:human_id(crypto:strong_rand_bytes(32)).
@@ -143,9 +128,9 @@ generate_balances(AccountIDs, Max, Opts) when is_list(AccountIDs) ->
         Opts
     );
 generate_balances(Accounts, Max, Opts) when is_map(Accounts) ->
-    hb_ao:set(
+    hb_util:ok(hb_ao:resolve(
         #{ <<"device">> => <<"trie@1.0">> },
-        hb_maps:map(
+        (hb_maps:map(
             fun(AccountID, Account) ->
                 Account#{
                     <<"quantity">> =>
@@ -165,9 +150,9 @@ generate_balances(Accounts, Max, Opts) when is_map(Accounts) ->
                 }
             end,
             Accounts
-        ),
+        ))#{ <<"path">> => <<"set">> },
         Opts
-    ).
+    )).
 
 %% @doc Generate an initial state for `~mint@1.0` execution with randomized
 %% parameters within given bounds. The `Params` map is used to override the
@@ -222,16 +207,32 @@ generate_state(Params, Opts) ->
             maps:get(cycle_proportion_denominator, Params, 1),
         <<"mint-total">> =>
             ?AO_TO_ARMS(maps:get(total_supply, Params, 1_000_000_000)),
-        <<"minted">> =>
-            ?AO_TO_ARMS(maps:get(minted, Params, 0)),
-        <<"client">> =>
-            maps:get(client, Params, random_id()),
+        <<"minted">> => ?AO_TO_ARMS(maps:get(minted, Params, 0)),
+        <<"client">> => maps:get(client, Params, random_id()),
         <<"resources">> => Resources,
         <<"balances">> => Balances,
-        <<"total-supply">> => ?AO_TO_ARMS(1_000_000_000),
+        <<"total-supply">> =>
+            ?AO_TO_ARMS(maps:get(total_supply, Params, 1_000_000_000)),
         <<"period">> => 1000,
         <<"start-time">> => os:system_time(millisecond)
     }.
+
+%% @doc Find a distribution for a specific recipient.
+find_distribution(Distributions, Recipient) ->
+    case [D || D <- Distributions, maps:get(<<"recipient">>, D) == Recipient] of
+        [Dist] -> Dist;
+        [] -> undefined;
+        Multiple -> hd(Multiple)
+    end.
+
+%% @doc Get all recipients from distributions.
+get_recipients(State) ->
+    [maps:get(<<"recipient">>, D) || D <- dev_mint_stats:get_distributions(State)].
+
+%% @doc Find a distribution and extract its quantity.
+find_quantity(State, Recipient) ->
+    Dist = find_distribution(dev_mint_stats:get_distributions(State), Recipient),
+    maps:get(<<"quantity">>, Dist).
 
 %%% Tests
 
@@ -246,9 +247,10 @@ single_account_test() ->
             }
         ),
     ?event(debug_test, {after_mint, State}),
+    Expected = ?AO_TO_ARMS(1),
     ?assertMatch(
         #{
-            <<"quantity">> := ?AO_TO_ARMS(1),
+            <<"quantity">> := Expected,
             <<"recipient">> := Acc
         },
         hb_ao:get(<<"results/distributions/1">>, State, #{})
@@ -280,10 +282,10 @@ multiple_equal_accounts_test() ->
     ?assert(lists:member(Acc2, get_recipients(State))),
     ?assertEqual(
         [?AO_TO_ARMS(1), ?AO_TO_ARMS(1)], 
-        lists:sort(get_quantities(State))
+        lists:sort(dev_mint_stats:get_quantities(State))
     ).
 
-%% Test: Multiple resources with weighted distribution (70/30 split)
+%% Test: Multiple resources with weighted distribution (70/30 split).
 multiple_resources_test() ->
     hb:init(),
     Res1 = random_id(),
@@ -309,7 +311,7 @@ multiple_resources_test() ->
     ?assertEqual(?AO_TO_ARMS(70), find_quantity(State, Acc1)),
     ?assertEqual(?AO_TO_ARMS(30), find_quantity(State, Acc2)).
 
-%% Test: Unequal balance distribution (70/30 split within one resource)
+%% Test: Unequal balance distribution (70/30 split within one resource).
 unequal_balances_test() ->
     hb:init(),
     ResID = random_id(),
@@ -333,7 +335,7 @@ unequal_balances_test() ->
         [find_quantity(State, Acc1), find_quantity(State, Acc2)]
     ).
 
-%% Test: Dust handling with 3-way split of 10 atomic units
+%% Test: Dust handling with 3-way split of 10 atomic units.
 dust_handling_test() ->
     hb:init(),
     ResID = random_id(),
@@ -355,12 +357,13 @@ dust_handling_test() ->
                 total_supply => 10
             }
         ),
-    TotalAllocated = lists:sum(get_quantities(State)),
+    TotalAllocated = lists:sum(dev_mint_stats:get_quantities(State)),
     Minted = hb_ao:get(<<"minted">>, State, #{}),
     ?assertEqual(TotalAllocated, Minted),
     ?assert(TotalAllocated =< ?AO_TO_ARMS(10)).
 
-%% Test: Complex scenario with 2 resources, 4 accounts, varied weights and balances
+%% Test: Complex scenario with 2 resources, 4 accounts, varied weights and
+%% balances.
 complex_distribution_test() ->
     hb:init(),
     ResA = random_id(),
@@ -396,7 +399,7 @@ complex_distribution_test() ->
     ?assertEqual(?AO_TO_ARMS(200), find_quantity(State, Charlie)),
     ?assertEqual(?AO_TO_ARMS(200), find_quantity(State, Dave)).
 
-%% Test: Zero balance account receives nothing
+%% Test: Zero balance account receives nothing.
 zero_balance_test() ->
     hb:init(),
     ResID = random_id(),
@@ -409,8 +412,8 @@ zero_balance_test() ->
                 accounts =>
                     #{
                         ResID => #{
-                            Acc1 => #{<<"quantity">> => ?AO_TO_ARMS(100)},
-                            Acc2 => #{<<"quantity">> => 0}
+                            Acc1 => #{ <<"quantity">> => ?AO_TO_ARMS(100) },
+                            Acc2 => #{ <<"quantity">> => 0 }
                         }
                     },
                 total_supply => 100
@@ -419,7 +422,7 @@ zero_balance_test() ->
     ?assertEqual(?AO_TO_ARMS(100), find_quantity(State, Acc1)),
     ?assertEqual(?AO_TO_ARMS(0), find_quantity(State, Acc2)).
 
-%% Test: Single atomic unit distribution across multiple accounts
+%% Test: Single token unit per account.
 single_unit_test() ->
     hb:init(),
     ResID = random_id(),
@@ -431,17 +434,24 @@ single_unit_test() ->
                 accounts =>
                     #{
                         ResID =>
-                            maps:from_list([
-                                {Acc, #{<<"quantity">> => Qty}}
-                                || {Acc, Qty} <- Accounts
-                            ])
+                            maps:from_list(
+                                [
+                                    {Acc, #{ <<"quantity">> => Qty }}
+                                ||
+                                    {Acc, Qty} <- Accounts
+                                ]
+                            )
                     },
-                total_supply => 1,
-                minted => 0
+                total_supply => 11
             }
         ),
-    TotalAllocated = lists:sum(get_quantities(State)),
-    ?assert(TotalAllocated =< ?AO_TO_ARMS(1)).
+    ?assert(
+        lists:all(
+            fun(Qty) -> Qty == ?AO_TO_ARMS(1.1) end,
+            dev_mint_stats:get_quantities(State)
+        )
+    ),
+    ?assert(lists:sum(dev_mint_stats:get_quantities(State)) == ?AO_TO_ARMS(11)).
 
 %% Test: Max supply boundary - nothing left to mint
 max_supply_test() ->
@@ -458,8 +468,47 @@ max_supply_test() ->
             }
         ),
     ?assertEqual(?AO_TO_ARMS(TotalSupply), hb_ao:get(<<"minted">>, State1, #{})),
-    State2 = mint_cycles(State1, 1, #{}),
+    State2 = mint(State1),
     Minted2 = hb_ao:get(<<"minted">>, State2, #{}),
     ?assertEqual(?AO_TO_ARMS(TotalSupply), Minted2),
     ?assert(Minted2 =< ?AO_TO_ARMS(TotalSupply)).
 
+supply_to_mint_test_() ->
+    {timeout, 600, fun supply_to_mint/0}.
+supply_to_mint() ->
+    hb:init(),
+    Num = 1,
+    Den = 2048, % Emit 1/(2^11) of the remaining supply in each cycle.
+    TotalSupply = 21_000_000,  % in tokens; will be converted via ?AO_TO_ARMS/1
+    Tolerance = ?AO_TO_ARMS(1/1_000_000_000), % Use 1 billionth of a token as tolerance.
+    Years = 5, % The number of years worth of mint cycles to test.
+    Params =
+        #{
+            resources => [random_id()],
+            account_count => 1,
+            total_supply => TotalSupply,
+            cycle_proportion => Num,
+            cycle_proportion_denominator => Den
+        },
+    % Initialize state once (no cycles yet).
+    State0 = mint(Params, 0),
+    TotalUnits = ?AO_TO_ARMS(TotalSupply),
+    RemainingUnits0 = TotalUnits,
+    Minted0 = hb_ao:get(<<"minted">>, State0, #{}),
+    % Check per-day minted and cumulative minted for the specified number of years.
+    lists:foldl(
+        fun(_Day, {S, RemainingUnits, MintedPrev}) ->
+            NewState = mint(S, 1),
+            MintedNew = hb_ao:get(<<"minted">>, NewState, #{}),
+            DailyActual = MintedNew - MintedPrev,
+            DailyExpected = RemainingUnits div Den,
+            NewRemainingUnits = RemainingUnits - DailyExpected,
+            MintedExpected = TotalUnits - NewRemainingUnits,
+            ?assert(within_tolerance(DailyExpected, DailyActual, Tolerance)),
+            ?assert(within_tolerance(MintedExpected, MintedNew, Tolerance)),
+            {NewState, NewRemainingUnits, MintedNew}
+        end,
+        {State0, RemainingUnits0, Minted0},
+        lists:seq(1, 365 * Years)
+    ),
+    ok.
