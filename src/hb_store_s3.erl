@@ -48,16 +48,16 @@ start(_) -> error(s3_profile_not_enabled).
 -define(DEFAULT_REGION, <<"us-east-1">>).
 -define(DEFAULT_ENDPOINT, <<"https://s3.amazonaws.com">>).
 -define(DEFAULT_FORCE_PATH_STYLE, <<"false">>).
--define(MAX_REDIRECTS, 100).                    % Only resolve 1000 links to data
--define(LINK_MARKER, <<"link:">>).
-%% Namespace for storing link objects separately to avoid file collisions
--define(CREATE_GROUP_KEY, <<"make_group">>).
-
+-define(MAX_REDIRECTS, 100).
 -define(DEFAULT_RETRY_DELAY, 1000).             % Wait for 1 second before retry.
 -define(DEFAULT_RETRY_MODE, exp_backoff).
 -define(DEFAULT_RETRIES, 5).                    % Retries for 5 times until it returns.
 -define(DEFAULT_MAX_RETRY_DELAY, 300000).       % Max 5 minutes waiting to retry.
-
+-define(LINK_MARKER, <<"link:">>).
+% Key that symbolizes a group, since in S3 directories doesn't exist.
+-define(CREATE_GROUP_KEY, <<"make_group">>).
+% Split the first key into at 2, one with 4 byte size, and the other
+% with the remaining
 -define(SHARD_CUT, 4).
 
 %% @doc Initialize the S3 store connection.
@@ -87,7 +87,7 @@ start(Opts) ->
             s3_bucket_after_host = false,
             s3_bucket_access_method = ForcePathStyle,
             aws_region = Region,
-            % Use `gun_pool` to define a connection pool.
+            % Use `gun_pool` to define a connection pool. Default is `httpc`
             http_client = fun gun_request/6
         },
         ok ?= test_bucket_access(Bucket, Config),
@@ -222,7 +222,7 @@ write(Opts, Key, Value, AttemptsRemaining) ->
         }
     ),
     try erlcloud_s3:put_object(BucketStr, ShardedKeyStr, Value, [], Config) of
-        L when is_list(L) -> ok
+        Response when is_list(Response) -> ok
     catch
         Class:Reason ->
             ?event(error,
@@ -350,6 +350,15 @@ read_direct(Opts, Key) ->
             not_found
     end.
 
+%% @doc Shardk the first key (excluding `data`) into 2 parts defined
+%% by ?SHARD_CUT:
+%% - String with ?SHARD_CUT length
+%% - String with the reamining length
+%%
+%% NOTE: Keys with byte size of 4 or less aren't supported (excepted `data`).
+%%
+%% > shard_key(<<"UDgFxz7qUcB_TijjDfhUpXD3UGXpw8Xq6OrpoDiv3Y0">>).
+%% <<"UDgF/xz7qUcB_TijjDfhUpXD3UGXpw8Xq6OrpoDiv3Y0">>
 -spec shard_key(binary()) -> binary().
 shard_key(<<"data/", DataKey/binary>>) ->
     ShardedKey = shard_key(DataKey),
@@ -459,8 +468,7 @@ is_link(Value) ->
     end.
 
 %% @doc Create a group (virtual directory).
-%% In S3, directories don't really exist, so this is a no-op.
-%% Groups are detected by listing operations.
+%% In S3, directories don't really exist. We create a file to represent them.
 -spec make_group(opts(), key()) -> ok.
 make_group(Opts, Path) ->
     GroupKey = create_make_group_key(Path),
@@ -594,7 +602,8 @@ head_exists(Opts, Key) when is_binary(Key) ->
     ShardedKeyStr = hb_util:list(ShardedKey),
     ?event(store_s3, {head_exists, {key, Key}}),
     try
-        is_list(erlcloud_s3:head_object(BucketStr, ShardedKeyStr, [], Config))
+        Response = erlcloud_s3:head_object(BucketStr, ShardedKeyStr, [], Config),
+        is_list(Response)
     catch
         _:_ -> false
     end.
