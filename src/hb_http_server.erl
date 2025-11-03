@@ -331,7 +331,7 @@ init(Req, ServerID) ->
 %% @doc Helper to grab the full body of a HTTP request, even if it's chunked.
 read_body(Req) -> read_body(Req, <<>>).
 read_body(Req0, Acc) ->
-    case cowboy_req:read_body(Req0) of
+    case cowboy_req:read_body(Req0, #{length => 64000000, period => 60000}) of
         {ok, Data, _Req} -> {ok, << Acc/binary, Data/binary >>};
         {more, Data, Req} -> read_body(Req, << Acc/binary, Data/binary >>)
     end.
