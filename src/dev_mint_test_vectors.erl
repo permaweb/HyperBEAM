@@ -259,3 +259,200 @@ multiple_equal_accounts_test() ->
     ?assert(lists:member(Acc1, Recipients)),
     ?assert(lists:member(Acc2, Recipients)),
     ?assertEqual([?AO_TO_ARMS(1), ?AO_TO_ARMS(1)], lists:sort(Quantities)).
+
+%% Test: Multiple resources with weighted distribution (70/30 split)
+multiple_resources_test() ->
+    hb:init(),
+    Res1 = random_id(),
+    Res2 = random_id(),
+    Acc1 = random_id(),
+    Acc2 = random_id(),
+    State =
+        mint(
+            #{
+                resources =>
+                    #{
+                        Res1 => #{<<"weight">> => 70},
+                        Res2 => #{<<"weight">> => 30}
+                    },
+                accounts =>
+                    #{
+                        Res1 => #{Acc1 => #{<<"quantity">> => ?AO_TO_ARMS(1)}},
+                        Res2 => #{Acc2 => #{<<"quantity">> => ?AO_TO_ARMS(1)}}
+                    },
+                total_supply => 100
+            }
+        ),
+    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
+    [Acc1Dist] = [D || D <- Distributions, maps:get(<<"recipient">>, D) == Acc1],
+    [Acc2Dist] = [D || D <- Distributions, maps:get(<<"recipient">>, D) == Acc2],
+    ?assertEqual(?AO_TO_ARMS(70), maps:get(<<"quantity">>, Acc1Dist)),
+    ?assertEqual(?AO_TO_ARMS(30), maps:get(<<"quantity">>, Acc2Dist)).
+
+%% Test: Unequal balance distribution (70/30 split within one resource)
+unequal_balances_test() ->
+    hb:init(),
+    ResID = random_id(),
+    Acc1 = random_id(),
+    Acc2 = random_id(),
+    State =
+        mint(
+            #{
+                resources => [ResID],
+                accounts =>
+                    #{
+                        ResID => #{
+                            Acc1 => #{<<"quantity">> => ?AO_TO_ARMS(70)},
+                            Acc2 => #{<<"quantity">> => ?AO_TO_ARMS(30)}}
+                    },
+                total_supply => 100
+            }
+        ),
+    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
+    [Dist1, Dist2] = lists:sort(fun(A, B) ->
+        maps:get(<<"quantity">>, A) >= maps:get(<<"quantity">>, B)
+    end, Distributions),
+    ?assertEqual(?AO_TO_ARMS(70), maps:get(<<"quantity">>, Dist1)),
+    ?assertEqual(?AO_TO_ARMS(30), maps:get(<<"quantity">>, Dist2)).
+
+%% Test: Dust handling with 3-way split of 10 atomic units
+dust_handling_test() ->
+    hb:init(),
+    ResID = random_id(),
+    Acc1 = random_id(),
+    Acc2 = random_id(),
+    Acc3 = random_id(),
+    State =
+        mint(
+            #{
+                resources => [ResID],
+                accounts =>
+                    #{
+                        ResID => #{
+                            Acc1 => #{<<"quantity">> => 1},
+                            Acc2 => #{<<"quantity">> => 1},
+                            Acc3 => #{<<"quantity">> => 1}
+                        }
+                    },
+                total_supply => 10
+            }
+        ),
+    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
+    TotalAllocated = lists:sum([maps:get(<<"quantity">>, D) || D <- Distributions]),
+    Minted = hb_ao:get(<<"minted">>, State, #{}),
+    ?assertEqual(TotalAllocated, Minted),
+    ?assert(TotalAllocated =< ?AO_TO_ARMS(10)).
+
+%% Test: Complex scenario with 2 resources, 4 accounts, varied weights and balances
+complex_distribution_test() ->
+    hb:init(),
+    ResA = random_id(),
+    ResB = random_id(),
+    Alice = random_id(),
+    Bob = random_id(),
+    Charlie = random_id(),
+    Dave = random_id(),
+    State =
+        mint(
+            #{
+                resources =>
+                    #{
+                        ResA => #{<<"weight">> => 60},
+                        ResB => #{<<"weight">> => 40}
+                    },
+                accounts =>
+                    #{
+                        ResA => #{
+                            Alice => #{<<"quantity">> => ?AO_TO_ARMS(70)},
+                            Bob => #{<<"quantity">> => ?AO_TO_ARMS(30)}
+                        },
+                        ResB => #{
+                            Charlie => #{<<"quantity">> => ?AO_TO_ARMS(50)},
+                            Dave => #{<<"quantity">> => ?AO_TO_ARMS(50)}
+                        }
+                    },
+                total_supply => 1000
+            }
+        ),
+    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
+    FindDist = fun(Recipient) ->
+        [D] = [Dist || Dist <- Distributions, maps:get(<<"recipient">>, Dist) == Recipient],
+        maps:get(<<"quantity">>, D)
+    end,
+    ?assertEqual(?AO_TO_ARMS(420), FindDist(Alice)),
+    ?assertEqual(?AO_TO_ARMS(180), FindDist(Bob)),
+    ?assertEqual(?AO_TO_ARMS(200), FindDist(Charlie)),
+    ?assertEqual(?AO_TO_ARMS(200), FindDist(Dave)).
+
+%% Test: Zero balance account receives nothing
+zero_balance_test() ->
+    hb:init(),
+    ResID = random_id(),
+    Acc1 = random_id(),
+    Acc2 = random_id(),
+    State =
+        mint(
+            #{
+                resources => [ResID],
+                accounts =>
+                    #{
+                        ResID => #{
+                            Acc1 => #{<<"quantity">> => ?AO_TO_ARMS(100)},
+                            Acc2 => #{<<"quantity">> => 0}
+                        }
+                    },
+                total_supply => 100
+            }
+        ),
+    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
+    Acc1Dist = [D || D <- Distributions, maps:get(<<"recipient">>, D) == Acc1],
+    Acc2Dist = [D || D <- Distributions, maps:get(<<"recipient">>, D) == Acc2],
+    ?assertEqual(1, length(Acc1Dist)),
+    ?assertEqual(?AO_TO_ARMS(100), maps:get(<<"quantity">>, hd(Acc1Dist))),
+    ?assertEqual(0, maps:get(<<"quantity">>, hd(Acc2Dist))).
+
+%% Test: Single atomic unit distribution across multiple accounts
+single_unit_test() ->
+    hb:init(),
+    ResID = random_id(),
+    Accounts = [{random_id(), 1} || _ <- lists:seq(1, 10)],
+    State =
+        mint(
+            #{
+                resources => [ResID],
+                accounts =>
+                    #{
+                        ResID =>
+                            maps:from_list([
+                                {Acc, #{<<"quantity">> => Qty}}
+                                || {Acc, Qty} <- Accounts
+                            ])
+                    },
+                total_supply => 1,
+                minted => 0
+            }
+        ),
+    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
+    TotalAllocated = lists:sum([maps:get(<<"quantity">>, D) || D <- Distributions]),
+    ?assert(TotalAllocated =< ?AO_TO_ARMS(1)).
+
+%% Test: Max supply boundary - nothing left to mint
+max_supply_test() ->
+    hb:init(),
+    TotalSupply = 1000,
+    Acc = random_id(),
+    State1 =
+        mint(
+            #{
+                resources => [random_id()],
+                accounts => [Acc],
+                total_supply => TotalSupply,
+                minted => 0
+            }
+        ),
+    ?assertEqual(?AO_TO_ARMS(TotalSupply), hb_ao:get(<<"minted">>, State1, #{})),
+    State2 = mint_cycles(State1, 1, #{}),
+    Minted2 = hb_ao:get(<<"minted">>, State2, #{}),
+    ?assertEqual(?AO_TO_ARMS(TotalSupply), Minted2),
+    ?assert(Minted2 =< ?AO_TO_ARMS(TotalSupply)).
+
