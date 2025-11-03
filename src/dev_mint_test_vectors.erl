@@ -252,17 +252,10 @@ multiple_equal_accounts_test() ->
             }
         ),
     ?event(debug_test, {after_mint, State}),
-    ?assertMatch(
-        [
-            #{
-                <<"quantity">> := ?AO_TO_ARMS(1),
-                <<"recipient">> := Acc1
-            },
-            #{
-                <<"quantity">> := ?AO_TO_ARMS(1),
-                <<"recipient">> := Acc2
-            }
-        ],
-        hb_ao:get(<<"results/distributions">>, State, #{})
-    ).
-
+    Distributions = hb_ao:get(<<"results/distributions">>, State, #{}),
+    ?assertEqual(2, length(Distributions)),
+    Recipients = [maps:get(<<"recipient">>, D) || D <- Distributions],
+    Quantities = [maps:get(<<"quantity">>, D) || D <- Distributions],
+    ?assert(lists:member(Acc1, Recipients)),
+    ?assert(lists:member(Acc2, Recipients)),
+    ?assertEqual([?AO_TO_ARMS(1), ?AO_TO_ARMS(1)], lists:sort(Quantities)).
