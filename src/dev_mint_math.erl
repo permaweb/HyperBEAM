@@ -5,8 +5,7 @@
 -module(dev_mint_math).
 -export([should_mint/3, mint/3]).
 -include("include/hb.hrl").
--define(UNITS_TO_TOKENS(X), X / 1_000_000_000_000).
--define(TOKENS_TO_UNITS(X), X * 1_000_000_000_000).
+-define(UNITS_TO_PRINTABLE(X), X).
 
 %% @doc Determine if we should execute the next mint cycle.
 should_mint(State, Req, Opts) ->
@@ -24,9 +23,15 @@ should_mint(State, Req, Opts) ->
 mint(State, _Req, Opts) ->
     Cycle = hb_util:int(hb_maps:get(<<"cycle">>, State, Opts)),
     AlreadyMinted = hb_util:int(hb_maps:get(<<"minted">>, State, Opts)),
-    ?event(debug, {starting_mint_cycle, {cycle, Cycle}, {state, State}}),
+    ?event(debug,
+        {starting_mint_cycle,
+            {already_minted, AlreadyMinted},
+            {cycle, Cycle},
+            {state, State}
+        }
+    ),
     TotalToDistribute = units_to_distribute(State, Opts),
-    ?event(debug, {tokens_to_distribute, ?UNITS_TO_TOKENS(TotalToDistribute)}),
+    ?event(debug, {tokens_to_distribute, ?UNITS_TO_PRINTABLE(TotalToDistribute)}),
     % Calculate the number of units to issue in total for each resource.
     UnitsPerResource = units_per_resource(TotalToDistribute, State, Opts),
     ?event(debug, {units_per_resource, UnitsPerResource}),
@@ -55,15 +60,6 @@ mint(State, _Req, Opts) ->
     {ok, Results} = distributions_to_results(State, Distributions, Opts),
     DustCarriedForward = TotalToDistribute - Allocated,
     NewMintedSupply = AlreadyMinted + Allocated,
-    ?event(mint_short,
-        {mint_cycle_complete,
-            {cycles, Cycle},
-            {allocated_units, ?UNITS_TO_TOKENS(Allocated)},
-            {dust_carried_forward, ?UNITS_TO_TOKENS(DustCarriedForward)},
-            {new_minted_supply, ?UNITS_TO_TOKENS(NewMintedSupply)},
-            {distributions, length(Distributions)}
-        }
-    ),
     NewState =
         hb_ao:set(
             State,
@@ -74,7 +70,22 @@ mint(State, _Req, Opts) ->
             },
             Opts
         ),
-    {ok, NewState}.
+    CheckRes = dev_mint_stats:sanity_check(State, NewState, Opts),
+    ?event(mint_short,
+        {mint_cycle_complete,
+            {sanity_check, CheckRes},
+            {cycles, Cycle},
+            {supply_to_mint, ?UNITS_TO_PRINTABLE(TotalToDistribute)},
+            {allocated_units, ?UNITS_TO_PRINTABLE(Allocated)},
+            {dust_carried_forward, ?UNITS_TO_PRINTABLE(DustCarriedForward)},
+            {new_minted_supply, ?UNITS_TO_PRINTABLE(NewMintedSupply)},
+            {distributions, length(Distributions)}
+        }
+    ),
+    case CheckRes of
+        ok -> {ok, NewState};
+        {error, Reason} -> {error, Reason}
+    end.
 
 %% @doc Return the total number of units to distribute.
 units_to_distribute(State, Opts) ->
@@ -84,9 +95,8 @@ units_to_distribute(State, Opts) ->
         hb_util:int(hb_maps:get(<<"cycle-proportion">>, State, Opts)),
     CycleProportionDenominator =
         hb_util:int(hb_maps:get(<<"cycle-proportion-denominator">>, State, Opts)),
-    CycleProportion = CycleProportionNumerator div CycleProportionDenominator,
     Remaining = MintTotal - AlreadyMinted,
-    floor(Remaining * CycleProportion).
+    (Remaining * CycleProportionNumerator) div CycleProportionDenominator.
 
 %% @doc Return the number of units to distribute accross the addresses in each
 %% resource of the state.
@@ -105,7 +115,7 @@ units_per_resource(TotalToDistribute, State, Opts) ->
     TotalWeights = lists:sum(hb_maps:values(ResourceWeights)),
     hb_maps:map(
         fun(_Resource, Weight) ->
-            floor((TotalToDistribute * Weight) div TotalWeights)
+            (TotalToDistribute * Weight) div TotalWeights
         end,
         ResourceWeights
     ).
@@ -156,10 +166,10 @@ distribution_per_address(Resource, UnitsForResource, BalanceMessages, Opts) ->
                         Opts
                     ),
                 % Calculate units to mint for the address.
-                % We are mutiplying before because the way div operator works,
-                % It will return 0 if Q < TQ which will be most of the time
-                % So rather we multiply before division
-                Units = floor((UnitsForResource * Quantity) div TotalQuantity),
+                % We are mutiplying before because of the way the div operator
+                % works, it will return 0 if Q < TQ which will be most of the
+                % time. Subsequently, instead we multiply before division.
+                Units = (UnitsForResource * Quantity) div TotalQuantity,
                 % Return the mint message for the address, containing:
                 % -> The number of units to mint.
                 % -> The address of the recipient.
