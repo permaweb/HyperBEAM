@@ -289,6 +289,88 @@ unsigned_dataitem_test() ->
         stop_server()
     end.
 
+idle_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    % NodeOpts redirects arweave gateway requests to the mock server.
+    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+        #{
+            price => {200, integer_to_binary(Price)},
+            tx_anchor => {200, hb_util:encode(Anchor)}
+        }
+    ),
+    try
+        ClientOpts = #{},
+        Node = hb_http_server:start_node(NodeOpts#{
+            bundler_max_idle_time => 10000,
+            priv_wallet => hb:wallet()
+        }),
+        %% Upload 1 data items across 2 chunks.
+        Data1 = rand:bytes(floor(1.5 * ?DATA_CHUNK_SIZE)),
+        Wallet1 = hb:wallet(),
+        Item1 = ar_bundles:sign_item(
+            #tx{
+                data = Data1,
+                tags = [{<<"tag1">>, <<"value1">>}]
+            },
+            Wallet1
+        ),
+        ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
+        % Wait just to give the server a chance to post a transaction
+        % (but it shouldn't)
+        timer:sleep(2000),
+        ?assertEqual(0, length(get_requests(tx, 0, ServerHandle))),
+        ?assertEqual(0, length(get_requests(chunk, 0, ServerHandle))),
+        % Wait gain to give the server a chance to trip the max idle time.
+        % It should *now* post a transaction.
+        timer:sleep(8000),
+        TXs = get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        %% Wait for expected chunks
+        Proofs = get_requests(chunk, 2, ServerHandle),
+        ?assertEqual(2, length(Proofs)),
+        %% Reconstitute the transaction with its data from the POSTed payloads.
+        TXBinary = maps:get(<<"body">>, hd(TXs)),
+        TXJSON = hb_json:decode(TXBinary),
+        TXHeader = ar_tx:json_struct_to_tx(TXJSON),
+        %% Decode all chunks and concatenate into one binary
+        Chunks = lists:map(
+            fun(ChunkRequest) ->
+                ProofBinary = maps:get(<<"body">>, ChunkRequest),
+                ProofJSON = hb_json:decode(ProofBinary),
+                hb_util:decode(maps:get(<<"chunk">>, ProofJSON))
+            end,
+            Proofs
+        ),
+        DataBinary = iolist_to_binary(Chunks),
+        TX = TXHeader#tx{ data = DataBinary },
+        ?assert(ar_tx:verify(TX)),
+        ?assertEqual(Anchor, TX#tx.anchor),
+        ?assertEqual(Price, TX#tx.reward),
+        ?event(debug_test, {tx,TX}),
+        TXStructured = hb_message:convert(
+            TX, <<"structured@1.0">>, <<"tx@1.0">>, ClientOpts),
+        ?event(debug_test, {tx_structured, TXStructured}),
+        ?assert(hb_message:verify(TXStructured, all, ClientOpts)),
+        %% Verify individual data items in the bundle
+        BundleDeserialized = ar_bundles:deserialize(TX),
+        ?event(debug_test, {bundle_deserialized, BundleDeserialized}),
+        ?assertEqual(1, maps:size(BundleDeserialized#tx.data)),
+        #{<<"1">> := BundledItem1} = BundleDeserialized#tx.data,
+        %% Verify each data item's signature
+        ?assert(ar_bundles:verify_item(BundledItem1)),
+        %% Verify that the data items match the original items
+        ?assertEqual(Item1, BundledItem1),
+        ?assertEqual(undefined, TX#tx.manifest),
+        ?assertEqual(undefined, BundleDeserialized#tx.manifest),
+        ok
+    after
+        %% Always cleanup, even if test fails
+        hb_mock_server:stop(ServerHandle),
+        stop_server()
+    end.
+    
+
 test_bundle(Opts) ->
     Anchor = rand:bytes(32),
     Price = 12345,
