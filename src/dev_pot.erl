@@ -44,14 +44,7 @@ core_test() ->
     report(S6),
     S7 = modify(Addr1, -2, S6),
     report(S7),
-    S8 = drip(S7#{ <<"t">> => 4 }),
-    report(S8),
-    S9 = set_rate(2.0, S8),
-    report(S9),
-    S10 = drip(S9#{ <<"t">> => 5 }),
-    report(S10),
-    S11 = set_rate(1.0, S10),
-    report(S11).
+    S8 = drip(S7#{ <<"t">> => 4 }).
 
 report(S) ->
     ?event(
@@ -68,29 +61,21 @@ report(S) ->
 pie(Human, Chi) -> Human / Chi.
 unpie(Normalized, ChiN) -> Normalized * ChiN.
 
-set_rate(Rate, S) ->
-    (drip(S))#{ <<"rate">> => Rate }.
+drip(S = #{ <<"t">> := T, <<"last-drip">> := Last }) when T =:= Last -> S;
+drip(S) ->
+    % TODO: Can this be an integral of the rate function?
+    drip(drip_once(S)).
 
-drip(S = #{
-        <<"last-drip">> := Last,
-        <<"chi">> := Chi,
-        <<"t">> := T,
-        <<"rate">> := Rate }) ->
-    NewChi = Chi * math:pow(Rate, T - Last),
-    S#{ <<"chi">> => NewChi, <<"last-drip">> => T }.
+drip_once(S = #{ <<"chi">> := Chi, <<"last-drip">> := Last }) ->
+    Supply = supply(S),
+    NewTokens = rate(S),
+    Multiplier = NewTokens / Supply,
+    NewChi = Chi * (1 + Multiplier),
+    S#{ <<"chi">> => NewChi, <<"last-drip">> => Last + 1 }.
 
-%%% Mint Model.
-
-% mint(#{ <<"t">> := _ }) ->
-%     % TODO: Static rate for now.
-%     1.
-
-% mint_between(Start, End, S) ->
-%     % TODO: Can this be an integral of the rate function?
-%     lists:sum(
-%         lists:map(fun(T) -> mint(S#{ <<"t">> => T }) end,
-%         lists:seq(Start, End))
-%     ).
+rate(_) ->
+    % Statically mint one new token proportionate to ownership, for now.
+    1.
 
 %%% Helpers.
 
