@@ -57,6 +57,7 @@ report(S) ->
     ?event(
         {report,
             {t, maps:get(<<"t">>, S)},
+            {supply, supply(S)},
             {balances, balances(S)},
             {state, S}
         }
@@ -64,11 +65,8 @@ report(S) ->
 
 %%% Pot Model.
 
-pie(Balance, Chi) ->
-    Balance / Chi.
-
-% balance(Normalized, ChiN) ->
-%     Normalized * ChiN.
+pie(Human, Chi) -> Human / Chi.
+unpie(Normalized, ChiN) -> Normalized * ChiN.
 
 set_rate(Rate, S) ->
     (drip(S))#{ <<"rate">> => Rate }.
@@ -99,20 +97,22 @@ drip(S = #{
 balance(Addr, #{ <<"chi">> := Chi, <<"balances">> := Balances }) ->
     maps:get(Addr, Balances, 0) * Chi.
 
+supply(#{ <<"total">> := Total, <<"chi">> := Chi }) ->
+    unpie(Total, Chi).
+
 balances(S) ->
     maps:map(
         fun(Addr, _) -> balance(Addr, S) end,
         maps:get(<<"balances">>, S, #{})
     ).
 
-supply(#{ <<"total">> := Total, <<"chi">> := Chi }) ->
-    Total * Chi.
-
-modify(Addr, Amount, S) ->
+modify(Addr, Amount, S = #{ <<"chi">> := Chi }) ->
     ExistingBalance = balance(Addr, NewS = drip(S)),
+    Supply = supply(NewS),
     NewBalance = ExistingBalance + Amount,
     ?event(
         {modify,
+            {supply, Supply},
             {addr, Addr},
             {existing_balance, ExistingBalance},
             {amount, Amount},
@@ -126,5 +126,5 @@ modify(Addr, Amount, S) ->
                 pie(NewBalance, maps:get(<<"chi">>, NewS)),
                 maps:get(<<"balances">>, NewS, #{})
             ),
-        <<"total">> => maps:get(<<"total">>, NewS, 0) + Amount
+        <<"total">> => pie(Supply + Amount, Chi)
     }.
