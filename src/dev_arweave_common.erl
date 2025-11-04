@@ -99,7 +99,7 @@ normalize(TX = #tx{data = Bin}) when is_binary(Bin) ->
 normalize(TX) ->
     ?event({normalize, TX}),
     {ItemType, SerializedTX} = serialize_data(TX, true),
-    ?event(debug_test, {serialized_tx, ItemType, SerializedTX}),
+    ?event({serialized_tx, ItemType, SerializedTX}),
     NormalizedTX = maybe_add_bundle_tags(ItemType, SerializedTX),
     ?event({normalized_tx, NormalizedTX}),
     normalize(NormalizedTX).
