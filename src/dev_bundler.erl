@@ -128,13 +128,10 @@ dispatch(State = #{ queue := [] }, Opts) ->
     ?event({skipping_empty_queue}),
     server(State, Opts);
 dispatch(State = #{ queue := Q }, Opts) ->
-    % Lists aren't handled well, so to avoid an ao-types key being inserted,
-    % we'll convert the list to a nummbered message explicitly.
-    OrderedMap = hb_util:list_to_numbered_message(lists:reverse(Q)),
-    % Convert to a #tx so we can get the data_size and use it to query the
-    % upload price.
-    % Bundle = hb_message:convert(OrderedMap,
-    %     #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }, Opts),
+    % Use dev_codec_tx:to directly to build a bundled L1 transaction from
+    % a list of dataitems. We do this rather than hb_message:convert because
+    % hb_message doesn't handle lists natively - and it's tricky to get it
+    % to manage the data conversions idempotently.
     {ok, Bundle} = dev_codec_tx:to(lists:reverse(Q), #{}, Opts),
     case {get_price(Bundle#tx.data_size, Opts), get_anchor(Opts)} of
         {{ok, Price}, {ok, Anchor}} ->
@@ -150,17 +147,12 @@ dispatch_bundle(Bundle, State, Opts) ->
     ?event(debug_test, {dispatching_bundle, {bundle, Bundle}}),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     Signed = ar_tx:sign(Bundle, Wallet),
-    % Now that we have the #tx record ready to go, convert back to a message...
-    % Committed = hb_message:convert(
-    %     Bundle,
+    % Now that we have the #tx record ready to go, convert back to a message
     Committed = hb_message:convert(
         Signed,
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
         #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
         Opts),
-    % ...and commit it
-    % Committed = hb_message:commit(Msg, Opts,
-    %     #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true }),
     ?event(debug_test, {posting_tx, Committed}),
     PostTXResponse =
         hb_ao:resolve(
