@@ -61,42 +61,53 @@
 -module(dev_pot).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-export([drip/3]).
 
 %% @doc Demonstrate minting using the chi-proportional model and a single resource.
 chi_proportional_mint_test() ->
     Addr1 = <<"addr1">>,
     Addr2 = <<"addr2">>,
+    ResourceID = <<"resource1">>,
+    Opts = #{},
     S0 = #{
+        <<"device">> => <<"pot@1.0">>,
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"chi">> => 0,
         <<"mint-cap">> => 100,
         <<"mint-prop">> => 0.5,
-        <<"deposits">> => #{ },
+        <<"resources">> => #{
+            ResourceID => #{
+                <<"chi">> => 0,
+                <<"weight">> => 1,
+                <<"total-deposits">> => 0,
+                <<"deposits">> => #{ }
+            }
+        },
         <<"balances">> => #{ }
     },
-    S1 = modify_deposit(Addr1, 10, S0),
-    S2 = modify_deposit(Addr2, 10, S1),
-    S3 = drip(S2#{ <<"t">> => 1 }),
+    S1 = modify_deposit(Addr1, ResourceID, 10, S0, Opts),
+    S2 = modify_deposit(Addr2, ResourceID, 10, S1, Opts),
+    {ok, S3} = hb_ao:resolve(S2, <<"drip">>, Opts),
     report(S3),
     ?assertEqual(25.0, balance(Addr1, S3)),
     ?assertEqual(25.0, balance(Addr2, S3)),
-    S4 = drip(S3#{ <<"t">> => 2 }),
+    S4 = drip(S3, #{ <<"t">> => 2 }, Opts),
     report(S4),
     ?assertEqual(37.5, balance(Addr1, S4)),
     ?assertEqual(37.5, balance(Addr2, S4)),
     % Set Addr1 to have 75% of the total deposits.
-    S5 = modify_deposit(Addr1, 20, S4),
+    S5 = modify_deposit(Addr1, ResourceID, 20, S4, Opts),
     NewExpectedB1 = ((25 / 2) * (3 / 4)) + 37.5,
-    S6 = drip(S5#{ <<"t">> => 3 }),
+    S6 = drip(S5, #{ <<"t">> => 3 }, Opts),
     report(S6),
     ?assertEqual(NewExpectedB1, balance(Addr1, S6)),
     % Set both to be equal again.
-    S7 = modify_deposit(Addr1, -20, S6),
+    S7 = modify_deposit(Addr1, ResourceID, -20, S6, Opts),
     report(S7),
     Addr1BalPreFinal = balance(Addr1, S7),
     Addr2BalPreFinal = balance(Addr2, S7),
-    S8 = drip(S7#{ <<"t">> => 4 }),
+    S8 = drip(S7, #{ <<"t">> => 4 }, Opts),
     % Ensure that they were again minted equal quantities.
     Addr1Diff = balance(Addr1, S8) - Addr1BalPreFinal,
     Addr2Diff = balance(Addr2, S8) - Addr2BalPreFinal,
@@ -113,29 +124,32 @@ drip_test() ->
 report(S) ->
     ?event(
         {report,
-            {t, maps:get(<<"t">>, S)},
-            {last_drip, maps:get(<<"last-drip">>, S)},
-            {chi, maps:get(<<"chi">>, S)},
+            {t, hb_maps:get(<<"t">>, S)},
+            {last_drip, hb_maps:get(<<"last-drip">>, S)},
+            {chi, hb_maps:get(<<"chi">>, S)},
             {balances, balances(S)},
             {deposits, deposits(S)},
-            {minted, maps:get(<<"minted">>, S)}
+            {minted, hb_maps:get(<<"minted">>, S)}
         }
     ).
 
 %%% Pot Model.
 
-drip(S = #{ <<"t">> := T, <<"last-drip">> := Last }) when T =:= Last -> S;
+drip(State, _Req, Opts) ->
+    {ok, drip(State, Opts)}.
+
+drip(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _Opts) when T =:= Last -> S;
 drip(S = #{
         <<"chi">> := Chi,
         <<"t">> := T,
         <<"mint-cap">> := Max,
         <<"mint-prop">> := Proportion
-    }) ->
-    Minted = maps:get(<<"minted">>, S, 0),
-    LastT = maps:get(<<"last-drip">>, S, 0),
+    }, Opts) ->
+    Minted = hb_maps:get(<<"minted">>, S, 0, Opts),
+    LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
     ToMint = units_minted_between(Minted, Max, Proportion, LastT, T),
     S#{
-        <<"chi">> => Chi + reward_units_per_resource_unit(ToMint, S),
+        <<"chi">> => Chi + reward_units_per_resource_unit(ToMint, S, Opts),
         <<"last-drip">> => T,
         <<"minted">> => Minted + ToMint
     }.
@@ -145,16 +159,31 @@ units_minted_between(Minted, Max, Proportion, LastT, T) ->
     Remaining = Max - Minted,
     Remaining * (1 - math:pow(1 - Proportion, Steps)).
 
-reward_units_per_resource_unit(ToMint, S) ->
-    ToMint * (1 / maps:get(<<"total-deposits">>, S, 0)).
+reward_units_per_resource_unit(ToMint, S, Opts) ->
+    ToMint * (1 / hb_maps:get(<<"total-deposits">>, S, 0, Opts)).
 
-modify_deposit(Addr, Amount, S) ->
+modify_deposit(Addr, ResourceID, Amount, S, Opts) ->
     NewS = #{
         <<"balances">> := Balances,
-        <<"deposits">> := Deposits,
-        <<"chi">> := CurrentChi
-    } = drip(S),
-    ExistingDeposit = deposit(Addr, NewS),
+        <<"chi">> := CurrentChi,
+        <<"resources">> := Resources
+    } = drip(S, Opts),
+    % GET /resources/ID/deposits
+    Deposits =
+        hb_ao:get(
+            <<"/resources/", ResourceID/binary, "/deposits">>,
+            NewS,
+            #{},
+            Opts
+        ),
+    ExistingTotalDeposits =
+        hb_ao:get(
+            <<"/resources/", ResourceID/binary, "/total-deposits">>,
+            S,
+            0,
+            Opts
+        ),
+    ExistingDeposit = deposit(Addr, ResourceID, NewS),
     NewDeposit = ExistingDeposit + Amount,
     Balance = balance(Addr, NewS),
     ?event(
@@ -168,24 +197,34 @@ modify_deposit(Addr, Amount, S) ->
     ),
     NewS#{
         <<"deposits">> =>
-            Deposits#{
-                Addr => #{
-                    <<"deposit">> => NewDeposit,
-                    <<"chi0">> => CurrentChi
+            Resources#{
+                ResourceID => #{
+                    <<"deposits">> =>
+                        Deposits#{
+                            Addr => #{
+                                <<"deposit">> => NewDeposit,
+                                <<"chi0">> => CurrentChi
+                            }
+                        },
+                    <<"total-deposits">> => ExistingTotalDeposits + Amount
                 }
             },
-        <<"balances">> => Balances#{ Addr => Balance },
-        <<"total-deposits">> => maps:get(<<"total-deposits">>, NewS, 0) + Amount
+        <<"balances">> => Balances#{ Addr => Balance }
     }.
 
 %%% Helpers.
 
-deposit(Addr, #{ <<"deposits">> := Ds }) ->
-    maps:get(<<"deposit">>, maps:get(Addr, Ds, #{ <<"deposit">> => 0 }), 0).
+deposit(Addr, ResourceID, S) ->
+    hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
+        S,
+        #{},
+        #{}
+    ).
 
 balance(Addr, #{ <<"balances">> := Bs, <<"deposits">> := Ds, <<"chi">> := ChiN }) ->
-    ExistingBalance = maps:get(Addr, Bs, 0),
-    case maps:find(Addr, Ds) of
+    ExistingBalance = hb_maps:get(Addr, Bs, 0),
+    case hb_maps:find(Addr, Ds) of
         error -> ExistingBalance;
         {ok, #{ <<"deposit">> := Deposit, <<"chi0">> := Chi0 }} ->
             ?no_prod("Remove all floating point arithmetic."),
@@ -194,7 +233,9 @@ balance(Addr, #{ <<"balances">> := Bs, <<"deposits">> := Ds, <<"chi">> := ChiN }
     end.
 
 balances(S = #{ <<"balances">> := Bs }) ->
-    maps:map(fun(Addr, _) -> balance(Addr, S) end, Bs).
+    hb_maps:map(fun(Addr, _) -> balance(Addr, S) end, Bs).
 
-deposits(S = #{ <<"deposits">> := Ds }) ->
-    maps:map(fun(Addr, _) -> deposit(Addr, S) end, Ds).
+deposits(S) ->
+    hb_maps:map(fun(ResourceID, _) -> deposits(ResourceID, S) end, S).
+deposits(ResourceID, S = #{ <<"deposits">> := Ds }) ->
+    hb_maps:map(fun(Addr, _) -> deposit(Addr, ResourceID, S) end, Ds).
