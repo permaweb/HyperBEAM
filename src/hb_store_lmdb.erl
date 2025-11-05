@@ -37,6 +37,7 @@
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
 -define(MAX_PENDING_WRITES, 400).               % Force flush after x pending
 -define(FOLD_YIELD_INTERVAL, 100).              % Yield every x keys
+-define(DEFAULT_MAX_READERS, 1024).             % Default max readers for LMDB env
 
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
@@ -61,6 +62,7 @@ start(Opts = #{ <<"name">> := DataDir }) ->
             DataDirPath,
             [
                 {map_size, maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE)},
+                {max_readers, maps:get(<<"max_readers">>, Opts, ?DEFAULT_MAX_READERS)},
                 no_mem_init, no_sync
             ]
         ),
