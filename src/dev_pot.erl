@@ -37,7 +37,8 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-core_test() ->
+%% @doc Demonstrate minting using the chi-proportional model and a single resource.
+chi_proportional_mint_test() ->
     Addr1 = <<"addr1">>,
     Addr2 = <<"addr2">>,
     S0 = #{
@@ -51,17 +52,30 @@ core_test() ->
     },
     S1 = modify_deposit(Addr1, 10, S0),
     S2 = modify_deposit(Addr2, 10, S1),
-    report(S2),
     S3 = drip(S2#{ <<"t">> => 1 }),
     report(S3),
+    ?assertEqual(25.0, balance(Addr1, S3)),
+    ?assertEqual(25.0, balance(Addr2, S3)),
     S4 = drip(S3#{ <<"t">> => 2 }),
     report(S4),
+    ?assertEqual(37.5, balance(Addr1, S4)),
+    ?assertEqual(37.5, balance(Addr2, S4)),
+    % Set Addr1 to have 75% of the total deposits.
     S5 = modify_deposit(Addr1, 20, S4),
+    NewExpectedB1 = ((25 / 2) * (3 / 4)) + 37.5,
     S6 = drip(S5#{ <<"t">> => 3 }),
     report(S6),
+    ?assertEqual(NewExpectedB1, balance(Addr1, S6)),
+    % Set both to be equal again.
     S7 = modify_deposit(Addr1, -20, S6),
+    report(S7),
+    Addr1BalPreFinal = balance(Addr1, S7),
+    Addr2BalPreFinal = balance(Addr2, S7),
     S8 = drip(S7#{ <<"t">> => 4 }),
-    report(S8).
+    % Ensure that they were again minted equal quantities.
+    Addr1Diff = balance(Addr1, S8) - Addr1BalPreFinal,
+    Addr2Diff = balance(Addr2, S8) - Addr2BalPreFinal,
+    ?assertEqual(Addr1Diff, Addr2Diff).
 
 drip_test() ->
     ?assertEqual(50.0, units_minted_between(0, 100, 0.5, 0, 1)),
@@ -75,9 +89,11 @@ report(S) ->
     ?event(
         {report,
             {t, maps:get(<<"t">>, S)},
+            {last_drip, maps:get(<<"last-drip">>, S)},
+            {chi, maps:get(<<"chi">>, S)},
             {balances, balances(S)},
             {deposits, deposits(S)},
-            {state, S}
+            {minted, maps:get(<<"minted">>, S)}
         }
     ).
 
