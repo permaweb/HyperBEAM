@@ -98,6 +98,9 @@ chi_proportional_mint_test() ->
     ?assertEqual(37.5, balance(Addr2, S4)),
     % Set Addr1 to have 75% of the total deposits.
     S5 = modify_deposit(Addr1, ResourceID, 20, S4, Opts),
+    % Calculate the expected balance for Addr1. It is 50% of the remaining supply
+    % to mint (25 units), multiplied by the proportion of the total deposits that
+    % Addr1 has (3/4), plus the existing balance (37.5).
     NewExpectedB1 = ((25 / 2) * (3 / 4)) + 37.5,
     S6 = drip(S5, #{ <<"t">> => 3 }, Opts),
     report(S6),
