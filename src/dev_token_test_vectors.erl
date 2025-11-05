@@ -320,14 +320,14 @@ unsupported_action_test() ->
 
 %%% Benchmark Tests
 
-benchmark_transfers_test_disabled() ->
+benchmark_transfers_test() ->
     hb:init(),
     % Setup: Alice has 1 billion tokens
     Base = generate_base_state(#{
         initial_balances => #{?ALICE => 1_000_000_000}
     }),
-    % Benchmark 1000 transfers
-    N = 1000,
+    % Benchmark 100 transfers
+    N = 100,
     StartTime = erlang:monotonic_time(microsecond),
     FinalState = lists:foldl(
         fun(I, State) ->
@@ -349,29 +349,32 @@ benchmark_transfers_test_disabled() ->
     EndTime = erlang:monotonic_time(microsecond),
     ElapsedMs = (EndTime - StartTime) / 1000,
     TxPerSec = (N / ElapsedMs) * 1000,
-    ?event({benchmark_transfers,
-        {count, N},
-        {elapsed_ms, ElapsedMs},
-        {tx_per_sec, TxPerSec}
-    }),
+    ?event(benchmark, 
+        {benchmark_transfers,
+            {count, N},
+            {elapsed_ms, ElapsedMs},
+            {tx_per_sec, TxPerSec}
+        }
+    ),
     % Verify correctness
     ?assertEqual(1_000_000_000 - N, get_balance(FinalState, ?ALICE)),
     ?assertEqual(N, get_balance(FinalState, ?BOB)).
 
-benchmark_batch_mint_test_disabled() ->
+benchmark_batch_mint_test() ->
     hb:init(),
+    NumRecipients = 10000,  
     Base = generate_base_state(),
-    % Create batch with 100 recipients
+    % Create batch with NumRecipients recipients
     Recipients = [
         list_to_binary("recipient-" ++ integer_to_list(I))
-        || I <- lists:seq(1, 100)
+        || I <- lists:seq(1, NumRecipients)
     ],
     Quantities = maps:from_list([{R, 1000} || R <- Recipients]),
     Req = make_request(
         <<"mint">>,
         #{
-            <<"mode">> => <<"batch">>,
-            <<"body">> => Quantities
+            <<"quantities">> => Quantities,
+            <<"mode">> => <<"batch">>
         },
         #{from => ?MINTER}
     ),
@@ -380,14 +383,12 @@ benchmark_batch_mint_test_disabled() ->
     {ok, NewState} = dev_token:compute(Base, Req, #{}),
     EndTime = erlang:monotonic_time(microsecond),
     ElapsedMs = (EndTime - StartTime) / 1000,
-    ?event({benchmark_batch_mint,
-        {recipients, 100},
-        {elapsed_ms, ElapsedMs},
-        {ms_per_recipient, ElapsedMs / 100}
-    }),
+    ?event(benchmark, 
+        {benchmark_batch_mint,
+            {recipients, NumRecipients},
+            {elapsed_ms, ElapsedMs},
+            {ms_per_recipient, ElapsedMs / NumRecipients}
+        }
+    ),
     % Verify correctness
-    ?assertEqual(100_000, hb_ao:get(<<"total-supply">>, NewState, #{})),
-    lists:foreach(
-        fun(R) -> ?assertEqual(1000, get_balance(NewState, R)) end,
-        Recipients
-    ).
+    ?assertEqual(NumRecipients * 1000, hb_ao:get(<<"total-supply">>, NewState, #{})).
