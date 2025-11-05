@@ -99,7 +99,7 @@
 -export([force_message/2]).
 %%% Shortcuts and tools:
 -export([keys/1, keys/2, keys/3]).
--export([get/2, get/3, get/4, get_first/2, get_first/3]).
+-export([get/2, get/3, get/4, get_first/2, get_first/3, get_many/4]).
 -export([set/3, set/4, remove/2, remove/3]).
 %%% Exports for tests in hb_ao_test_vectors.erl:
 -export([deep_set/4]).
@@ -936,6 +936,28 @@ get_first([{Base, Path}|Msgs], Default, Opts) ->
         Value -> Value
     end.
 
+%% @doc Get the values of multiple paths from a message, only calling set once.
+%% Takes a list of paths, a message, a list of defaults, and options.
+%% Returns a tuple of values in the same order.
+%% This is more efficient than calling get/4 multiple times when working with
+%% {as, Device, Msg} tuples because set is only called once.
+get_many(Paths, {as, Device, Msg}, Defaults, Opts) ->
+    ModifiedMsg = set(
+        Msg,
+        #{ <<"device">> => Device },
+        internal_opts(Opts)
+    ),
+    get_many(Paths, ModifiedMsg, Defaults, Opts);
+get_many(Paths, Msg, Defaults, Opts) ->
+    list_to_tuple(
+        lists:zipwith(
+            fun(Path, Default) ->
+                get(Path, Msg, Default, Opts)
+            end,
+            Paths,
+            Defaults
+        )
+    ).
 %% @doc Shortcut to get the list of keys from a message.
 keys(Msg) -> keys(Msg, #{}).
 keys(Msg, Opts) -> keys(Msg, Opts, keep).

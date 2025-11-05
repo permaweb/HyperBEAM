@@ -139,18 +139,16 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                         {CommitmentOwner, CommitmentSignature, CommitmentKeyId}
                 end
         end,
-    Last =
-        hb_ao:get(
-            <<"anchor">>,
+    {Last, DataBytes, Target, From} = 
+        hb_ao:get_many(
+            [
+                <<"anchor">>,
+                <<"data">>,
+                <<"target">>,
+                <<"from-process">>
+            ],
             {as, <<"message@1.0">>, MsgWithoutCommitments},
-            <<>>,
-            Opts
-        ),
-    DataBytes =
-        hb_ao:get(
-            <<"data">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
-            <<>>,
+            [<<>>, <<>>, <<>>, hb_util:encode(Owner)],
             Opts
         ),
     Data =
@@ -158,21 +156,6 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             true -> DataBytes;
             false -> null 
         end,
-    Target =
-        hb_ao:get(
-            <<"target">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
-            <<>>,
-            Opts
-        ),
-    % Set "From" if From-Process is Tag or set with "Owner" address
-    From =
-        hb_ao:get(
-            <<"from-process">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
-            hb_util:encode(Owner),
-            Opts
-        ),
     #{
         <<"Id">> => safe_to_id(ID),
         % NOTE: In Arweave TXs, these are called "last_tx"
