@@ -19,7 +19,7 @@
 %%% 5. When the balance or deposit is modified in any way, first accrue the yield
 %%%    to the existing balance. Then perform the operation.
 %%% 
-%%% This device supports delegating resources to other addresses, allowing for
+%%% This device will support delegating resources to other addresses, allowing for
 %%% mechanisms like yield-swaps etc to be created downstream. Each delegation
 %%% triggers a `Delegation-Notice` message to be sent to the recipient of the
 %%% delegation, as well as a proportional increase in the recipient's `deposit`
@@ -33,6 +33,31 @@
 %%% their own mints using the same `pot` functionality as the parent, depositors
 %%% in the original process can earn their yield in the form of `child` mints.
 %%% Each mint can operate asynchronously and in real-time.
+%%% 
+%%% The structure of the state is as follows:
+%%% 
+%%% /resources/ID/chi: The current chi factor for every deposit in the resource.
+%%% /resources/ID/weight: The weight of the resource in the minting process.
+%%% /resources/ID/total-deposits: The total quantity of units deposited of the
+%%% resource.
+%%% /resources/ID/deposits/ADDR/quantity: The quantity of the resource deposited
+%%% by a specific address.
+%%% /resources/ID/deposits/ADDR/chi0: The initial chi factor at the time of the
+%%% deposit.
+%%% /balances/ADDR: The current minted asset balance of an address.
+%%% /minted: The total number of units minted.
+%%% /mint-cap: The maximum number of units that can be minted.
+%%% /mint-prop: The proportion of the mint-cap that is minted per time-step.
+%%% /last-drip: The last time the drip function was called.
+%%% /t: The current time-step.
+%%% 
+%%% TODO:
+%%% - Add support for multiple resources: Each should have a chi, a set of 
+%%%   deposits, and a resource-weight.
+%%% - Implement support for delegations, as described in the documentation above.
+%%% - Add `secure-set` (set guarded by address) for resource-weights and 
+%%%   supported resources.
+%%% - 
 -module(dev_pot).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
