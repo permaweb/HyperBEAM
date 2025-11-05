@@ -44,6 +44,8 @@ core_test() ->
         <<"t">> => 0,
         <<"last-drip">> => 0,
         <<"chi">> => 0,
+        <<"mint-cap">> => 100,
+        <<"mint-prop">> => 0.5,
         <<"deposits">> => #{ },
         <<"balances">> => #{ }
     },
@@ -61,6 +63,14 @@ core_test() ->
     S8 = drip(S7#{ <<"t">> => 4 }),
     report(S8).
 
+drip_test() ->
+    ?assertEqual(50.0, units_minted_between(0, 100, 0.5, 0, 1)),
+    ?assertEqual(75.0, units_minted_between(0, 100, 0.5, 0, 2)),
+    ?assertEqual(87.5, units_minted_between(0, 100, 0.5, 0, 3)),
+    Period1 = units_minted_between(0, 100, 0.5, 0, 2),
+    Period2 = units_minted_between(Period1, 100, 0.5, 2, 3),
+    ?assertEqual(87.5, Period1 + Period2).
+
 report(S) ->
     ?event(
         {report,
@@ -74,40 +84,28 @@ report(S) ->
 %%% Pot Model.
 
 drip(S = #{ <<"t">> := T, <<"last-drip">> := Last }) when T =:= Last -> S;
-drip(S) ->
-    % TODO: Can this be an integral of the rate function?
-    drip(drip_once(S)).
+drip(S = #{
+        <<"chi">> := Chi,
+        <<"t">> := T,
+        <<"mint-cap">> := Max,
+        <<"mint-prop">> := Proportion
+    }) ->
+    Minted = maps:get(<<"minted">>, S, 0),
+    LastT = maps:get(<<"last-drip">>, S, 0),
+    ToMint = units_minted_between(Minted, Max, Proportion, LastT, T),
+    S#{
+        <<"chi">> => Chi + reward_units_per_resource_unit(ToMint, S),
+        <<"last-drip">> => T,
+        <<"minted">> => Minted + ToMint
+    }.
 
-drip_once(S = #{ <<"chi">> := Chi, <<"last-drip">> := Last }) ->
-    NewChi = Chi + reward_per_unit_per_timestep(S),
-    S#{ <<"chi">> => NewChi, <<"last-drip">> => Last + 1 }.
+units_minted_between(Minted, Max, Proportion, LastT, T) ->
+    Steps = max(T - LastT, 0),
+    Remaining = Max - Minted,
+    Remaining * (1 - math:pow(1 - Proportion, Steps)).
 
-reward_per_unit_per_timestep(#{ <<"total">> := Total }) ->
-    % Statically mint one new token proportionate to ownership, for now.
-    1 * (1 / Total).
-
-delegate(FromAddr, TargetAddr, Qty, S) ->
-    % Accrue before modifying deposits
-    S1 = drip(S),
-    Delegations0 = maps:get(<<"delegations">>, S1, #{}),
-    FromDelegations0 = maps:get(FromAddr, Delegations0, #{}),
-    ExistingQty = maps:get(TargetAddr, FromDelegations0, 0),
-    Delta = Qty - ExistingQty,
-    % Move Delta from FromAddr to TargetAddr (can be negative to reverse)
-    S2 = modify_deposit(FromAddr, -Delta, S1),
-    S3 = modify_deposit(TargetAddr, Delta, S2),
-    ?event({delegation_notice, {from, FromAddr}, {to, TargetAddr}, {quantity, Qty}}),
-    UpdatedFromDelegations =
-        case Qty of
-            0 -> maps:remove(TargetAddr, FromDelegations0);
-            _ -> FromDelegations0#{ TargetAddr => Qty }
-        end,
-    UpdatedDelegations =
-        case map_size(UpdatedFromDelegations) of
-            0 -> maps:remove(FromAddr, Delegations0);
-            _ -> Delegations0#{ FromAddr => UpdatedFromDelegations }
-        end,
-    S3#{ <<"delegations">> => UpdatedDelegations }.
+reward_units_per_resource_unit(ToMint, S) ->
+    ToMint * (1 / maps:get(<<"total-deposits">>, S, 0)).
 
 modify_deposit(Addr, Amount, S) ->
     NewS = #{
@@ -136,7 +134,7 @@ modify_deposit(Addr, Amount, S) ->
                 }
             },
         <<"balances">> => Balances#{ Addr => Balance },
-        <<"total">> => maps:get(<<"total">>, NewS, 0) + Amount
+        <<"total-deposits">> => maps:get(<<"total-deposits">>, NewS, 0) + Amount
     }.
 
 %%% Helpers.
