@@ -29,11 +29,10 @@ core_test() ->
         <<"last-drip">> => 0,
         <<"chi">> => Chi0,
         <<"rate">> => 1.1,
-        <<"balances">> => #{ },
-        <<"total">> => 0
+        <<"balances">> => #{ }
     },
-    S1 = modify(Addr1, 1, S0),
-    S2 = modify(Addr2, 1, S1),
+    S1 = modify(Addr1, 10, S0),
+    S2 = modify(Addr2, 10, S1),
     report(S2),
     S3 = drip(S2#{ <<"t">> => 1 }),
     report(S3),
@@ -44,14 +43,14 @@ core_test() ->
     report(S6),
     S7 = modify(Addr1, -2, S6),
     report(S7),
-    S8 = drip(S7#{ <<"t">> => 4 }).
+    _S8 = drip(S7#{ <<"t">> => 4 }).
 
 report(S) ->
     ?event(
         {report,
             {t, maps:get(<<"t">>, S)},
-            {supply, supply(S)},
-            {balances, balances(S)},
+            {balances, balances(deposit, S)},
+            {reward_balances, balances(reward, S)},
             {state, S}
         }
     ).
@@ -59,7 +58,7 @@ report(S) ->
 %%% Pot Model.
 
 pie(Human, Chi) -> Human / Chi.
-unpie(Normalized, ChiN) -> Normalized * ChiN.
+unpie(Normalized, Chi) -> Normalized * Chi.
 
 drip(S = #{ <<"t">> := T, <<"last-drip">> := Last }) when T =:= Last -> S;
 drip(S) ->
@@ -67,49 +66,59 @@ drip(S) ->
     drip(drip_once(S)).
 
 drip_once(S = #{ <<"chi">> := Chi, <<"last-drip">> := Last }) ->
-    Supply = supply(S),
-    NewTokens = rate(S),
-    Multiplier = NewTokens / Supply,
-    NewChi = Chi * (1 + Multiplier),
+    NewChi = Chi * (1 + rate(S)),
     S#{ <<"chi">> => NewChi, <<"last-drip">> => Last + 1 }.
 
-rate(_) ->
+rate(_S = #{ <<"last-drip">> := _ }) ->
     % Statically mint one new token proportionate to ownership, for now.
-    1.
+    0.1.
 
 %%% Helpers.
 
-balance(Addr, #{ <<"chi">> := Chi, <<"balances">> := Balances }) ->
-    maps:get(Addr, Balances, 0) * Chi.
+balance(deposit, Addr, #{ <<"balances">> := Balances }) ->
+    case maps:find(Addr, Balances) of
+        {ok, #{ <<"deposit">> := Deposit }} -> Deposit;
+        error -> 0
+    end;
+balance(reward, Addr, #{ <<"balances">> := Balances, <<"chi">> := ChiN }) ->
+    case maps:find(Addr, Balances) of
+        {ok, Entry = #{ <<"deposit">> := Deposit, <<"chi0">> := Chi0 }} ->
+            % Calculate the acrued yield and add it to the existing reward balance.
+            Yield = unpie(pie(Deposit, Chi0), ChiN) - Deposit,
+            Yield + maps:get(<<"reward">>, Entry, 0);
+        error -> 0
+    end.
 
-supply(#{ <<"total">> := Total, <<"chi">> := Chi }) ->
-    unpie(Total, Chi).
-
-balances(S) ->
+balances(Token, S) ->
     maps:map(
-        fun(Addr, _) -> balance(Addr, S) end,
+        fun(Addr, _) -> balance(Token, Addr, S) end,
         maps:get(<<"balances">>, S, #{})
     ).
 
-modify(Addr, Amount, S = #{ <<"chi">> := Chi }) ->
-    ExistingBalance = balance(Addr, NewS = drip(S)),
-    Supply = supply(NewS),
-    NewBalance = ExistingBalance + Amount,
+modify(Addr, Amount, S) ->
+    ExistingDeposit = balance(deposit, Addr, NewS = drip(S)),
+    ExistingReward = balance(reward, Addr, NewS),
+    NewDeposit = ExistingDeposit + Amount,
     ?event(
         {modify,
-            {supply, Supply},
             {addr, Addr},
-            {existing_balance, ExistingBalance},
+            {existing_reward, ExistingReward},
+            {existing_deposit, ExistingDeposit},
             {amount, Amount},
-            {new_balance, NewBalance}
+            {new_deposit, NewDeposit}
         }
     ),
+    CurrentChi = maps:get(<<"chi">>, NewS),
+    NewEntry = #{
+        <<"deposit">> => NewDeposit,
+        <<"chi0">> => CurrentChi,
+        <<"reward">> => ExistingReward
+    },
+    NewBalances = maps:put(
+        Addr,
+        NewEntry,
+        maps:get(<<"balances">>, NewS, #{})
+    ),
     NewS#{
-        <<"balances">> =>
-            maps:put(
-                Addr,
-                pie(NewBalance, maps:get(<<"chi">>, NewS)),
-                maps:get(<<"balances">>, NewS, #{})
-            ),
-        <<"total">> => pie(Supply + Amount, Chi)
+        <<"balances">> => NewBalances
     }.
