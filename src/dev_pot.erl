@@ -5,7 +5,7 @@
 %%% 
 %%% h/t to MakerDAO's DSR and MCD rate accumulation system for some inspiration.
 %%% 
-%%% The core is this:
+%%% The core minting model is this:
 %%% 1. Maintain a list of all balances for `resources` that lead to the minting
 %%%    of tokens.
 %%% 2. With each balance, store the `chi` factor at the time of creation.
@@ -18,6 +18,21 @@
 %%%    balance: `total-balance = (chi - chi0) * deposit + existing-balance`.
 %%% 5. When the balance or deposit is modified in any way, first accrue the yield
 %%%    to the existing balance. Then perform the operation.
+%%% 
+%%% This device supports delegating resources to other addresses, allowing for
+%%% mechanisms like yield-swaps etc to be created downstream. Each delegation
+%%% triggers a `Delegation-Notice` message to be sent to the recipient of the
+%%% delegation, as well as a proportional increase in the recipient's `deposit`
+%%% value. Reciprocally, the delegator's `deposit` value is decreased by the same
+%%% amount, while the delegation itself is recorded in the `delegations`
+%%% message. When a delegation is revoked, this setup is reversed and a new
+%%% `Delegation-Notice` message is sent with `quantity` set to zero.
+%%% 
+%%% This structure allows downstream minting processes to credit `Delegation-Notice`s
+%%% as deposits in their own mechanism. By tracking the delegators and performing
+%%% their own mints using the same `pot` functionality as the parent, depositors
+%%% in the original process can earn their yield in the form of `child` mints.
+%%% Each mint can operate asynchronously and in real-time.
 -module(dev_pot).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
