@@ -118,16 +118,62 @@ perform_mint(Base, Quantities, Opts) ->
     maybe
         true ?=
             lists:all(
-                fun({_, Q}) -> is_integer(Q) andalso (Q >= 0) end,
+                fun(Q) -> is_integer(Q) andalso (Q >= 0) end,
                 hb_maps:values(Quantities)
             )
             orelse {error, <<"Mint quantities must be non-negative integers.">>},
-        todo
-        % {ok, ExistingBalance} = hb_ao:get(Path, Base, 0, Opts),
-        % {ok, NewBase} ?= hb_ao:resolve(
-        %     Base,
-        %     Opts
-        % )
+        % Get current balances trie
+        Balances =
+            hb_ao:get(
+                <<"balances">>,
+                Base,
+                #{ <<"device">> => <<"trie@1.0">> },
+                Opts
+            ),
+        % Calculate new balances for all recipients
+        NewBalanceMap =
+            hb_maps:map(
+                fun(Recipient, MintQuantity) ->
+                    CurrentBalance = hb_ao:get(Recipient, Balances, 0, Opts),
+                    CurrentBalance + MintQuantity
+                end,
+                Quantities
+            ),
+        % Update balances in the trie
+        {ok, NewBalances} ?= hb_ao:resolve(Balances, NewBalanceMap, Opts),
+        % Calculate total minted in this operation
+        TotalMinted = lists:sum(hb_maps:values(Quantities)),
+        % Update total supply
+        CurrentSupply = hb_ao:get(<<"total-supply">>, Base, 0, Opts),
+        NewSupply = CurrentSupply + TotalMinted,
+        % Update base state with new balances and supply
+        NewBaseWithBalances = 
+            hb_maps:put(
+                <<"balances">>, 
+                NewBalances, 
+                Base, 
+                Opts
+            ),
+        NewBaseWithBalAndSupply = 
+            hb_maps:put(
+                <<"total-supply">>, 
+                NewSupply, 
+                NewBaseWithBalances, 
+                Opts
+            ),
+        % Send mint notices for each recipient
+        Notices =
+            lists:map(
+                fun({Recipient, Quantity}) ->
+                    #{
+                        <<"action">> => <<"Mint-Notice">>,
+                        <<"recipient">> => Recipient,
+                        <<"quantity">> => Quantity
+                    }
+                end,
+                maps:to_list(Quantities)
+            ),
+        send(Notices, NewBaseWithBalAndSupply, Opts)
     end.
 
 secure_set(Base, Req, Opts) ->
