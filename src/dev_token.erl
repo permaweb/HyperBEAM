@@ -117,15 +117,21 @@ mint_single(Base, Req, Opts) ->
     perform_mint(Base, #{ To => Quantity }, Opts).
 
 mint_batch(Base, Req, Opts) ->
-    {ok, Quantities} = hb_ao:resolve(Req, <<"body">>, Opts),
+    {ok, Quantities} = hb_ao:resolve(Req, <<"quantities">>, Opts),
     perform_mint(Base, Quantities, Opts).
 
-perform_mint(Base, Quantities, Opts) ->
+perform_mint(Base, RawQuantities, Opts) ->
     maybe
+        % Filter to only account-quantity pairs
+        Quantities = maps:filter(
+            fun(K, V) -> is_binary(K) andalso is_integer(V) end,
+            RawQuantities
+        ),
+        ?event({filtered_quantities, Quantities}),
         true ?=
             lists:all(
                 fun(Q) -> is_integer(Q) andalso (Q >= 0) end,
-                hb_maps:values(Quantities)
+                maps:values(Quantities)
             )
             orelse {error, <<"Mint quantities must be non-negative integers.">>},
         % Get current balances trie

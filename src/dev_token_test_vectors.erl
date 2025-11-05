@@ -176,20 +176,24 @@ mint_single_unauthorized_test() ->
 
 mint_batch_test() ->
     hb:init(),
-    Base = generate_base_state(),
+    Base = generate_base_state(#{
+        total_supply => 100,
+        initial_balances => #{?ALICE => 100}
+    }),
     Quantities = #{
-        ?ALICE => 500,
-        ?BOB => 300,
-        ?CHARLIE => 200
-    },
+            ?ALICE => 400,
+            ?BOB => 300,
+            ?CHARLIE => 200
+        },
     Req = make_request(
         <<"mint">>,
         #{
-            <<"mode">> => <<"batch">>,
-            <<"body">> => Quantities
+            <<"quantities">> => Quantities,
+            <<"mode">> => <<"batch">>
         },
         #{from => ?MINTER}
     ),
+    ?event({base, Base, req, Req}),
     {ok, NewState} = dev_token:compute(Base, Req, #{}),
     ?assertEqual(500, get_balance(NewState, ?ALICE)),
     ?assertEqual(300, get_balance(NewState, ?BOB)),
