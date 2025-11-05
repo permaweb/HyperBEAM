@@ -146,7 +146,12 @@ perform_mint(Base, Quantities, Opts) ->
                 Quantities
             ),
         % Update balances in the trie
-        {ok, NewBalances} ?= hb_ao:resolve(Balances, NewBalanceMap, Opts),
+        {ok, NewBalances} ?=
+            hb_ao:resolve(
+                Balances,
+                NewBalanceMap#{<<"path">> => <<"set">>},
+                Opts
+            ),
         % Calculate total minted in this operation
         TotalMinted = lists:sum(hb_maps:values(Quantities)),
         % Update total supply
