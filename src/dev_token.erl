@@ -176,8 +176,31 @@ perform_mint(Base, Quantities, Opts) ->
         send(Notices, NewBaseWithBalAndSupply, Opts)
     end.
 
-secure_set(Base, Req, Opts) ->
-    todo.
+secure_set(Base, Assignment, Opts) ->
+    maybe
+        {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
+        {ok, Base} ?= enforce_set_authority(Base, Req, Opts),
+        {ok, Updates} ?= hb_ao:resolve(Req, <<"updates">>, Opts),
+        % Apply updates to base state
+        NewBase = hb_maps:merge(Base, Updates, Opts),
+        {ok, NewBase}
+    end.
+
+enforce_set_authority(Base, Req, Opts) ->
+    Setter = hb_ao:get(<<"from">>, Req, Opts),
+    % Check if setter is the owner (or mint-authority as fallback)
+    Owner = hb_ao:get(<<"owner">>, Base, Opts),
+    MintAuthority = hb_ao:get(<<"mint-authority">>, Base, Opts),
+    case {Owner, MintAuthority} of
+        {not_found, not_found} ->
+            {error, <<"No owner or mint-authority found.">>};
+        {Setter, _} ->
+            {ok, Base};
+        {_, Setter} ->
+            {ok, Base};
+        _ ->
+            {error, <<"Set authority mismatch.">>}
+    end.
 
 %%% Process helper functions.
 
