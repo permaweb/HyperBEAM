@@ -38,68 +38,59 @@ transfer(Base, Assignment, Opts) ->
         {ok, Recipient} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
         ?event({req, Req, from, From}),
-        % Check if this is a self-transfer and skip balance updates if so
-        NewBase =
-            case From =:= Recipient of
-                true ->
-                    % Self-transfer: no balance changes needed
-                    Base;
-                false ->
-                    maybe
-                        % Normal transfer: update balances
-                        Balances =
-                            hb_ao:get(
-                                <<"balances">>,
-                                Base,
-                                #{ <<"device">> => <<"trie@1.0">> },
-                                Opts
-                            ),
-                        ?event({balances_structure, Balances}),
-                        SenderBalance = hb_ao:get(From, Balances, 0, Opts),
-                        RecipientBalance = hb_ao:get(Recipient, Balances, 0, Opts),
-                        ?event({transfer_balances, {from, From}, {sender_balance, SenderBalance}, {recipient_balance, RecipientBalance}}),
-                        % Sanity check the transfer request.
-                        true ?=
-                            (is_integer(SenderBalance) and is_integer(RecipientBalance))
-                                orelse {error, <<"Invalid balance types.">>},
-                        true ?=
-                            (is_integer(Quantity) and (Quantity >= 0))
-                                orelse {error, <<"Quantity must be a non-negative integer.">>},
-                        true ?=
-                            (SenderBalance >= Quantity) orelse {error, <<"Insufficient balance.">>},
-                        % Update the balances.
-                        ?event({balnces, Balances}),
-                        {ok, NewBalances} ?=
-                            hb_ao:resolve(
-                                Balances,
-                                #{
-                                    <<"path">> => <<"set">>,
-                                    From => SenderBalance - Quantity,
-                                    Recipient => RecipientBalance + Quantity
-                                },
-                                Opts
-                            ),
-                        % Update the base state.
-                        hb_maps:put(<<"balances">>, NewBalances, Base, Opts)
-                    end 
-            end,
-        send(
-            [
-                #{
-                    <<"action">> => <<"Credit-Notice">>,
-                    <<"sender">> => From,
-                    <<"recipient">> => Recipient
-                },
-                #{
-                    <<"action">> => <<"Debit-Notice">>,
-                    <<"recipient">> => Recipient,
-                    <<"quantity">> => Quantity
-                }
-            ],
-            NewBase,
-            Opts
-        )
+        % Handle self-transfer: skip balance updates
+        case From =:= Recipient of
+            true ->
+                send(transfer_notices(From, Recipient, Quantity), Base, Opts);
+            false ->
+                transfer_between_accounts(Base, From, Recipient, Quantity, Opts)
+        end
     end.
+
+transfer_between_accounts(Base, From, Recipient, Quantity, Opts) ->
+    maybe
+        % Retrieve balances from the base state.
+        Balances = hb_ao:get(<<"balances">>, Base, #{ <<"device">> => <<"trie@1.0">> }, Opts),
+        ?event({balances_structure, Balances}),
+        SenderBalance = hb_ao:get(From, Balances, 0, Opts),
+        RecipientBalance = hb_ao:get(Recipient, Balances, 0, Opts),
+        ?event({transfer_balances, {from, From}, {sender_balance, SenderBalance},
+                {recipient_balance, RecipientBalance}}),
+        % Sanity check the transfer request.
+        true ?= (is_integer(SenderBalance) and is_integer(RecipientBalance))
+            orelse {error, <<"Invalid balance types.">>},
+        true ?= (is_integer(Quantity) and (Quantity >= 0))
+            orelse {error, <<"Quantity must be a non-negative integer.">>},
+        true ?= (SenderBalance >= Quantity) orelse {error, <<"Insufficient balance.">>},
+        % Update the balances.
+        {ok, NewBalances} ?=
+            hb_ao:resolve(
+                Balances,
+                #{
+                    <<"path">> => <<"set">>,
+                    From => SenderBalance - Quantity,
+                    Recipient => RecipientBalance + Quantity
+                },
+                Opts
+            ),
+        % Update the base state and send notices.
+        NewBase = hb_maps:put(<<"balances">>, NewBalances, Base, Opts),
+        send(transfer_notices(From, Recipient, Quantity), NewBase, Opts)
+    end.
+
+transfer_notices(From, Recipient, Quantity) ->
+    [
+        #{
+            <<"action">> => <<"Credit-Notice">>,
+            <<"sender">> => From,
+            <<"recipient">> => Recipient
+        },
+        #{
+            <<"action">> => <<"Debit-Notice">>,
+            <<"recipient">> => Recipient,
+            <<"quantity">> => Quantity
+        }
+    ].
 
 mint(Base, Assignment, Opts) ->
     maybe
