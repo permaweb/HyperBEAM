@@ -1084,7 +1084,7 @@ simple_ao_resolve_signed_test() ->
     {ok, Res} =
         post(
             URL,
-            hb_message:commit(TestMsg, Wallet),
+            hb_message:commit(TestMsg, #{ priv_wallet => Wallet }),
             #{}
         ),
     ?assertEqual(<<"Value1">>, Res).
@@ -1103,7 +1103,7 @@ nested_ao_resolve_test() ->
                             <<"key3">> => <<"Value2">>
                         }
                     }
-            }, Wallet),
+            }, #{ priv_wallet => Wallet }),
             #{}
         ),
     ?assertEqual(<<"Value2">>, Res).
@@ -1119,7 +1119,7 @@ wasm_compute_request(ImageFile, Func, Params, ResultPath) ->
         <<"function">> => Func,
         <<"parameters">> => Params,
         <<"body">> => Bin
-    }, Wallet).
+    }, #{ priv_wallet => Wallet }).
 
 run_wasm_unsigned_test() ->
     Node = hb_http_server:start_node(#{force_signed => false}),

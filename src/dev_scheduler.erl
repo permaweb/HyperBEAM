@@ -1761,7 +1761,7 @@ schedule_message_and_get_slot_test() ->
             hb_message:commit(#{
                 <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"true">>
-            }, hb:wallet())
+            }, #{ priv_wallet => hb:wallet() })
     },
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
@@ -1828,7 +1828,7 @@ redirect_from_graphql() ->
                             <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>,
                         <<"test-key">> => <<"Test-Val">>
                     },
-                    hb:wallet()
+                    #{ priv_wallet => hb:wallet() }
                 )
             },
             #{
@@ -1847,7 +1847,7 @@ get_local_schedule_test() ->
             hb_message:commit(#{
                 <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"Test-Val">>
-            }, hb:wallet())
+            }, #{ priv_wallet => hb:wallet() })
     },
     Res = #{
         <<"path">> => <<"schedule">>,
@@ -1856,7 +1856,7 @@ get_local_schedule_test() ->
             hb_message:commit(#{
                 <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"Test-Val-2">>
-            }, hb:wallet())
+            }, #{ priv_wallet => hb:wallet() })
     },
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Res, #{})),
@@ -1891,18 +1891,18 @@ http_init(Opts) ->
 
 register_scheduler_test() ->
     start(),
-    {Node, Wallet} = http_init(),
+    {Node, Opts} = http_init(),
     Base = hb_message:commit(#{
         <<"path">> => <<"/~scheduler@1.0/location">>,
         <<"url">> => <<"https://hyperbeam-test-ignore.com">>,
         <<"method">> => <<"POST">>,
         <<"nonce">> => 1,
         <<"require-codec">> => <<"ans104@1.0">>
-    }, Wallet),
-    {ok, Res} = hb_http:post(Node, Base, #{}),
+    }, Opts),
+    {ok, Res} = hb_http:post(Node, Base, Opts),
     ?assertMatch(#{ <<"url">> := Location } when is_binary(Location), Res).
 
-http_post_schedule_sign(Node, Msg, ProcessMsg, Wallet) ->
+http_post_schedule_sign(Node, Msg, ProcessMsg, Opts) ->
     Base = hb_message:commit(#{
         <<"path">> => <<"/~scheduler@1.0/schedule">>,
         <<"method">> => <<"POST">>,
@@ -1913,9 +1913,9 @@ http_post_schedule_sign(Node, Msg, ProcessMsg, Wallet) ->
                         hb_util:human_id(hb_message:id(ProcessMsg, all)),
                     <<"type">> => <<"Message">>
                 },
-                Wallet
+                Opts
             )
-    }, Wallet),
+    }, Opts),
     hb_http:post(Node, Base, #{}).
 
 http_get_slot(N, PMsg) ->
@@ -1925,7 +1925,7 @@ http_get_slot(N, PMsg) ->
         <<"path">> => <<"/~scheduler@1.0/slot">>,
         <<"method">> => <<"GET">>,
         <<"target">> => ID
-    }, Wallet), #{}).
+    }, #{ priv_wallet => Wallet }), #{}).
 
 http_get_schedule(N, PMsg, From, To) ->
     http_get_schedule(N, PMsg, From, To, <<"application/http">>).
@@ -1940,7 +1940,7 @@ http_get_schedule(N, PMsg, From, To, Format) ->
         <<"from">> => From,
         <<"to">> => To,
         <<"accept">> => Format
-    }, Wallet), #{}).
+    }, #{ priv_wallet => Wallet }), #{}).
 
 http_get_schedule_redirect_test_() ->
     {timeout, 60, fun http_get_schedule_redirect/0}.
@@ -1963,6 +1963,7 @@ http_get_schedule_redirect() ->
 http_post_schedule_test_() ->
     {timeout, 60, fun http_post_schedule/0}.
 http_post_schedule() ->
+    start(),
     {N, Opts} = http_init(),
     PMsg = hb_message:commit(test_process(Opts), Opts),
     Base = hb_message:commit(#{
