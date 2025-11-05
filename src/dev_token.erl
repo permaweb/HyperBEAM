@@ -15,7 +15,7 @@ compute(Base, Req, Opts) ->
     end.
 
 %% @doc Enforce the security constraints of the base state upon the request.
-enforce_security(Base, Req, Opts) ->
+enforce_security(Base, _Req, _Opts) ->
     {ok, Base}.
 
 %% @doc Route the request to the appropriate key resolution function, depending
@@ -50,18 +50,30 @@ transfer(Base, Assignment, Opts) ->
 transfer_between_accounts(Base, From, Recipient, Quantity, Opts) ->
     maybe
         % Retrieve balances from the base state.
-        Balances = hb_ao:get(<<"balances">>, Base, #{ <<"device">> => <<"trie@1.0">> }, Opts),
+        Balances = 
+            hb_ao:get(
+                <<"balances">>, 
+                Base, 
+                #{ <<"device">> => <<"trie@1.0">> }, 
+                Opts
+            ),
         ?event({balances_structure, Balances}),
         SenderBalance = hb_ao:get(From, Balances, 0, Opts),
         RecipientBalance = hb_ao:get(Recipient, Balances, 0, Opts),
-        ?event({transfer_balances, {from, From}, {sender_balance, SenderBalance},
-                {recipient_balance, RecipientBalance}}),
+        ?event(
+            {transfer_balances, 
+                {from, From}, 
+                {sender_balance, SenderBalance},
+                {recipient_balance, RecipientBalance}
+            }
+        ),
         % Sanity check the transfer request.
         true ?= (is_integer(SenderBalance) and is_integer(RecipientBalance))
             orelse {error, <<"Invalid balance types.">>},
         true ?= (is_integer(Quantity) and (Quantity >= 0))
             orelse {error, <<"Quantity must be a non-negative integer.">>},
-        true ?= (SenderBalance >= Quantity) orelse {error, <<"Insufficient balance.">>},
+        true ?= (SenderBalance >= Quantity) 
+            orelse {error, <<"Insufficient balance.">>},
         % Update the balances.
         {ok, NewBalances} ?=
             hb_ao:resolve(
