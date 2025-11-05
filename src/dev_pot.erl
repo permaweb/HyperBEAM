@@ -25,12 +25,11 @@
 core_test() ->
     Addr1 = <<"addr1">>,
     Addr2 = <<"addr2">>,
-    Chi0 = 1,
     S0 = #{
         <<"t">> => 0,
         <<"last-drip">> => 0,
-        <<"chi">> => Chi0,
-        <<"rate">> => 1.1,
+        <<"chi">> => 0,
+        <<"deposits">> => #{ },
         <<"balances">> => #{ }
     },
     S1 = modify(Addr1, 10, S0),
@@ -40,10 +39,10 @@ core_test() ->
     report(S3),
     S4 = drip(S3#{ <<"t">> => 2 }),
     report(S4),
-    S5 = modify(Addr1, 30, S4),
+    S5 = modify(Addr1, 20, S4),
     S6 = drip(S5#{ <<"t">> => 3 }),
     report(S6),
-    S7 = modify(Addr1, -30, S6),
+    S7 = modify(Addr1, -20, S6),
     S8 = drip(S7#{ <<"t">> => 4 }),
     report(S8).
 
@@ -51,8 +50,8 @@ report(S) ->
     ?event(
         {report,
             {t, maps:get(<<"t">>, S)},
-            {balances, balances(deposit, S)},
-            {reward_balances, balances(reward, S)},
+            {balances, balances(S)},
+            {deposits, deposits(S)},
             {state, S}
         }
     ).
@@ -65,59 +64,60 @@ drip(S) ->
     drip(drip_once(S)).
 
 drip_once(S = #{ <<"chi">> := Chi, <<"last-drip">> := Last }) ->
-    NewChi = Chi + reward_per_unit(S),
+    NewChi = Chi + reward_per_unit_per_timestep(S),
     S#{ <<"chi">> => NewChi, <<"last-drip">> => Last + 1 }.
 
-reward_per_unit(_S = #{ <<"last-drip">> := _, <<"total">> := Total }) ->
+reward_per_unit_per_timestep(#{ <<"total">> := Total }) ->
     % Statically mint one new token proportionate to ownership, for now.
     1 * (1 / Total).
 
-%%% Helpers.
-
-balance(deposit, Addr, #{ <<"balances">> := Balances }) ->
-    case maps:find(Addr, Balances) of
-        {ok, #{ <<"deposit">> := Deposit }} -> Deposit;
-        error -> 0
-    end;
-balance(reward, Addr, #{ <<"balances">> := Balances, <<"chi">> := ChiN }) ->
-    case maps:find(Addr, Balances) of
-        {ok, #{ <<"deposit">> := Deposit, <<"chi0">> := Chi0, <<"reward">> := Existing }} ->
-            Yield = (ChiN - Chi0) * Deposit,
-            Existing + Yield;
-        error -> 0
-    end.
-
-balances(Token, S) ->
-    maps:map(
-        fun(Addr, _) -> balance(Token, Addr, S) end,
-        maps:get(<<"balances">>, S, #{})
-    ).
-
 modify(Addr, Amount, S) ->
-    ExistingDeposit = balance(deposit, Addr, NewS = drip(S)),
-    ExistingReward = balance(reward, Addr, NewS),
+    NewS = #{
+        <<"balances">> := Balances,
+        <<"deposits">> := Deposits,
+        <<"chi">> := CurrentChi
+    } = drip(S),
+    ExistingDeposit = deposit(Addr, NewS),
     NewDeposit = ExistingDeposit + Amount,
+    Balance = balance(Addr, NewS),
     ?event(
         {modify,
             {addr, Addr},
-            {existing_reward, ExistingReward},
-            {existing_deposit, ExistingDeposit},
+            {balance, Balance},
+            {deposit, ExistingDeposit},
             {amount, Amount},
             {new_deposit, NewDeposit}
         }
     ),
-    CurrentChi = maps:get(<<"chi">>, NewS),
-    NewEntry = #{
-        <<"deposit">> => NewDeposit,
-        <<"chi0">> => CurrentChi,
-        <<"reward">> => ExistingReward
-    },
-    NewBalances = maps:put(
-        Addr,
-        NewEntry,
-        maps:get(<<"balances">>, NewS, #{})
-    ),
     NewS#{
-        <<"balances">> => NewBalances,
+        <<"deposits">> =>
+            Deposits#{
+                Addr => #{
+                    <<"deposit">> => NewDeposit,
+                    <<"chi0">> => CurrentChi
+                }
+            },
+        <<"balances">> => Balances#{ Addr => Balance },
         <<"total">> => maps:get(<<"total">>, NewS, 0) + Amount
     }.
+
+%%% Helpers.
+
+deposit(Addr, #{ <<"deposits">> := Ds }) ->
+    maps:get(<<"deposit">>, maps:get(Addr, Ds, #{ <<"deposit">> => 0 }), 0).
+
+balance(Addr, #{ <<"balances">> := Bs, <<"deposits">> := Ds, <<"chi">> := ChiN }) ->
+    ExistingBalance = maps:get(Addr, Bs, 0),
+    case maps:find(Addr, Ds) of
+        error -> ExistingBalance;
+        {ok, #{ <<"deposit">> := Deposit, <<"chi0">> := Chi0 }} ->
+            ?no_prod("Remove all floating point arithmetic."),
+            Yield = (ChiN - Chi0) * Deposit,
+            ExistingBalance + Yield
+    end.
+
+balances(S = #{ <<"balances">> := Bs }) ->
+    maps:map(fun(Addr, _) -> balance(Addr, S) end, Bs).
+
+deposits(S = #{ <<"deposits">> := Ds }) ->
+    maps:map(fun(Addr, _) -> deposit(Addr, S) end, Ds).
