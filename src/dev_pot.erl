@@ -140,7 +140,6 @@ drip(State, _Req, Opts) ->
 
 drip(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _Opts) when T =:= Last -> S;
 drip(S = #{
-        <<"chi">> := Chi,
         <<"t">> := T,
         <<"mint-cap">> := Max,
         <<"mint-prop">> := Proportion
@@ -148,8 +147,19 @@ drip(S = #{
     Minted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
     ToMint = units_minted_between(Minted, Max, Proportion, LastT, T),
+    % Update chi factor for each resource
+    ExistingResources = hb_maps:get(<<"resources">>, S, #{}, Opts),
+    NewResources =
+        hb_maps:map(
+            fun(_ResourceID, Resource = #{<<"chi">> := ExistingChi}) ->
+                NewChi =
+                    ExistingChi + reward_units_per_resource_unit(ToMint, S, Opts),
+                Resource#{<<"chi">> => NewChi}
+            end,
+            ExistingResources
+        ),
     S#{
-        <<"chi">> => Chi + reward_units_per_resource_unit(ToMint, S, Opts),
+        <<"resources">> => NewResources,
         <<"last-drip">> => T,
         <<"minted">> => Minted + ToMint
     }.
@@ -165,9 +175,15 @@ reward_units_per_resource_unit(ToMint, S, Opts) ->
 modify_deposit(Addr, ResourceID, Amount, S, Opts) ->
     NewS = #{
         <<"balances">> := Balances,
-        <<"chi">> := CurrentChi,
         <<"resources">> := Resources
     } = drip(S, Opts),
+    CurrentChi =
+        hb_ao:get(
+            <<"/resources/", ResourceID/binary, "/chi">>,
+            NewS,
+            1,
+            Opts
+        ),
     % GET /resources/ID/deposits
     Deposits =
         hb_ao:get(
@@ -196,7 +212,7 @@ modify_deposit(Addr, ResourceID, Amount, S, Opts) ->
         }
     ),
     NewS#{
-        <<"deposits">> =>
+        <<"resources">> =>
             Resources#{
                 ResourceID => #{
                     <<"deposits">> =>
