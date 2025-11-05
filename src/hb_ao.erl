@@ -901,7 +901,7 @@ force_message({Status, Map}, _Opts) ->
 %% 
 %% Additionally, this function supports the `{as, Device, Msg}' syntax, which
 %% allows the key to be resolved using another device to resolve the key,
-%% while maintaining the tracability of the `HashPath' of the output message.
+%% while maintaining the traceability of the `HashPath' of the output message.
 %% 
 %% Returns the value of the key if it is found, otherwise returns the default
 %% provided by the user, or `not_found' if no default is provided.
