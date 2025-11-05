@@ -2,9 +2,9 @@
 %%% notions from the MakerDAO DSR and MCD rate accumulation system.
 %%% 
 %%% The theory is this:
-%%% 1. The period between changes in the state of deposits provides periods in
-%%%    which the state of the mint (and thus the rate of yield accrual) is stable.
-%%% 2. Rather than eagerly at every mint timestep, yield accrual can thus be 
+%%% 1. The period between changes in the state of deposits represent opportunities
+%%%    to calculate multiple yield periods in a single operation.
+%%% 2. Rather than eagerly at every mint timestep, yield accrual can be 
 %%%    calculated instead at the end of each stable period. Even though the rate
 %%%    of yield decays slightly per timestep, the summation of that yield should
 %%%    be nonetheless calculable efficiently.
