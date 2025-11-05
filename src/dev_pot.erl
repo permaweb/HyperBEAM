@@ -47,17 +47,17 @@ core_test() ->
         <<"deposits">> => #{ },
         <<"balances">> => #{ }
     },
-    S1 = modify(Addr1, 10, S0),
-    S2 = modify(Addr2, 10, S1),
+    S1 = modify_deposit(Addr1, 10, S0),
+    S2 = modify_deposit(Addr2, 10, S1),
     report(S2),
     S3 = drip(S2#{ <<"t">> => 1 }),
     report(S3),
     S4 = drip(S3#{ <<"t">> => 2 }),
     report(S4),
-    S5 = modify(Addr1, 20, S4),
+    S5 = modify_deposit(Addr1, 20, S4),
     S6 = drip(S5#{ <<"t">> => 3 }),
     report(S6),
-    S7 = modify(Addr1, -20, S6),
+    S7 = modify_deposit(Addr1, -20, S6),
     S8 = drip(S7#{ <<"t">> => 4 }),
     report(S8).
 
@@ -86,7 +86,30 @@ reward_per_unit_per_timestep(#{ <<"total">> := Total }) ->
     % Statically mint one new token proportionate to ownership, for now.
     1 * (1 / Total).
 
-modify(Addr, Amount, S) ->
+delegate(FromAddr, TargetAddr, Qty, S) ->
+    % Accrue before modifying deposits
+    S1 = drip(S),
+    Delegations0 = maps:get(<<"delegations">>, S1, #{}),
+    FromDelegations0 = maps:get(FromAddr, Delegations0, #{}),
+    ExistingQty = maps:get(TargetAddr, FromDelegations0, 0),
+    Delta = Qty - ExistingQty,
+    % Move Delta from FromAddr to TargetAddr (can be negative to reverse)
+    S2 = modify_deposit(FromAddr, -Delta, S1),
+    S3 = modify_deposit(TargetAddr, Delta, S2),
+    ?event({delegation_notice, {from, FromAddr}, {to, TargetAddr}, {quantity, Qty}}),
+    UpdatedFromDelegations =
+        case Qty of
+            0 -> maps:remove(TargetAddr, FromDelegations0);
+            _ -> FromDelegations0#{ TargetAddr => Qty }
+        end,
+    UpdatedDelegations =
+        case map_size(UpdatedFromDelegations) of
+            0 -> maps:remove(FromAddr, Delegations0);
+            _ -> Delegations0#{ FromAddr => UpdatedFromDelegations }
+        end,
+    S3#{ <<"delegations">> => UpdatedDelegations }.
+
+modify_deposit(Addr, Amount, S) ->
     NewS = #{
         <<"balances">> := Balances,
         <<"deposits">> := Deposits,
