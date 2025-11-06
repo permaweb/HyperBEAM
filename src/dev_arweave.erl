@@ -25,7 +25,7 @@ tx(Base, Request, Opts) ->
 %% Ensures that uploaded transactions are stored in the local cache after a
 %% successful response has been received.
 %% 
-%% Note: When uploaading ans104 transactions, this function will use the
+%% Note: When uploading ans104 transactions, this function will use the
 %% node's default bundler. If instead you want to use this node as a bundler
 %% you should use the ~bundler@1.0 device.
 post_tx(Base, Request, Opts) ->
@@ -45,7 +45,7 @@ post_tx(Base, Request, Opts, <<"tx@1.0">>) ->
     ?event({tx, TX}),
     JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),
     Serialized = hb_json:encode(JSON),
-    ?event({serialized_tx, Serialized}),
+    ?event({serialized_tx, {explicit, Serialized}}),
     TXResponse = hb_http:post(
         hb_opts:get(gateway, not_found, Opts),
         #{
