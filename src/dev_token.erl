@@ -21,10 +21,11 @@ enforce_security(Base, _Req, _Opts) ->
 %% @doc Route the request to the appropriate key resolution function, depending
 %% upon the `action' specified.
 route(Base, Req, Opts) ->
-    case hb_util:atom(ActionBin = hb_ao:get(<<"action">>, Req, Opts)) of
-        transfer -> transfer(Base, Req, Opts);
-        mint -> mint(Base, Req, Opts);
-        set -> secure_set(Base, Req, Opts);
+    ActionBin = hb_ao:get(<<"action">>, Req, Opts),
+    case ActionBin of
+        <<"transfer">> -> transfer(Base, Req, Opts);
+        <<"mint">> -> mint(Base, Req, Opts);
+        <<"set">> -> secure_set(Base, Req, Opts);
         _ ->
             ?event(warning, {unsupported_token_action, ActionBin}),
             {error, <<"Unsupported token action: `", ActionBin/binary, "'.">>}
