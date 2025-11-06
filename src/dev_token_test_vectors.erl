@@ -93,7 +93,11 @@ transfer_basic_test() ->
         #{from => ?ALICE}
     ),
     ?event({calling_compute}),
-    ?event({base_state_balances, hb_ao:get(<<"balances">>, Base, #{}), Base, Req}),
+    ?event({base_state_balances, 
+        hb_ao:get(<<"balances">>, Base, #{}), 
+        Base, 
+        Req
+    }),
     ComputeResult = dev_token:compute(Base, Req, #{}),
     ?event({compute_result, ComputeResult}),
     {ok, NewState} = ComputeResult,
@@ -1235,10 +1239,16 @@ notices_match_actual_state_changes_test() ->
     Outbox = hb_ao:get(<<"results/outbox">>, State, #{}),
     ?assertEqual(2, length(Outbox)),
     [CreditNotice, DebitNotice] = Outbox,
-    ?assertEqual(<<"Credit-Notice">>, hb_ao:get(<<"action">>, CreditNotice, #{})),
+    ?assertEqual(
+        <<"Credit-Notice">>, 
+        hb_ao:get(<<"action">>, CreditNotice, #{})
+    ),
     ?assertEqual(?ALICE, hb_ao:get(<<"sender">>, CreditNotice, #{})),
     ?assertEqual(?BOB, hb_ao:get(<<"recipient">>, CreditNotice, #{})),
-    ?assertEqual(<<"Debit-Notice">>, hb_ao:get(<<"action">>, DebitNotice, #{})),
+    ?assertEqual(
+        <<"Debit-Notice">>, 
+        hb_ao:get(<<"action">>, DebitNotice, #{})
+    ),
     ?assertEqual(?BOB, hb_ao:get(<<"recipient">>, DebitNotice, #{})),
     ?assertEqual(300, hb_ao:get(<<"quantity">>, DebitNotice, #{})),
     ?assertEqual(700, get_balance(State, ?ALICE)),
@@ -1265,7 +1275,10 @@ batch_mint_notice_count_matches_test() ->
     ?assertEqual(3, length(Outbox)),
     lists:foreach(
         fun(Notice) ->
-            ?assertEqual(<<"Mint-Notice">>, hb_ao:get(<<"action">>, Notice, #{}))
+            ?assertEqual(
+                <<"Mint-Notice">>, 
+                hb_ao:get(<<"action">>, Notice, #{})
+            )
         end,
         Outbox
     ).
@@ -1422,7 +1435,10 @@ owner_change_revokes_old_owner_test() ->
         #{<<"updates">> => #{<<"name">> => <<"Old Owner Try">>}},
         #{from => ?OWNER}
     ),
-    ?assertMatch({error, <<"Set authority mismatch.">>}, dev_token:compute(State1, Req2, #{})),
+    ?assertMatch(
+        {error, <<"Set authority mismatch.">>}, 
+        dev_token:compute(State1, Req2, #{})
+    ),
     Req3 = make_request(
         <<"set">>,
         #{<<"updates">> => #{<<"name">> => <<"New Owner Success">>}},
