@@ -1,4 +1,4 @@
-%%% @doc An experimental real-time on-demand minting model. Instead of minting
+ %%% @doc An experimental real-time on-demand minting model. Instead of minting
 %%% all tokens eagerly, this model mints tokens only on-demand. In doing so,
 %%% it significantly reduces the computational and message-passing complexity of the
 %%% system.
@@ -187,6 +187,200 @@ drip_test() ->
     Period2 = units_minted_between(Period1, 100, 0.5, 2, 3),
     ?assertEqual(87.5, Period1 + Period2).
 
+delegate_test() ->
+    AddrAlice = <<"alice">>,
+    AddrBob = <<"bob">>,
+    ResourceHydrogen = <<"hydrogen">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = #{
+        <<"device">> => <<"pot@1.0">>,
+        <<"t">> => 0,
+        <<"last-drip">> => 0,
+        <<"chi">> => 0,
+        <<"mint-cap">> => 100,
+        <<"mint-prop">> => 0.5,
+        <<"tw">> => 0,
+        <<"resources">> => #{
+            ResourceHydrogen => #{
+                <<"chi">> => 0,
+                <<"weight">> => 1,
+                <<"total-deposits">> => 200,
+                <<"deposits">> => #{ 
+                    AddrAlice => #{
+                        <<"quantity">> => 200,
+                        <<"chi0">> => 0
+                    },
+                    AddrBob => #{
+                        <<"quantity">> => 0,
+                        <<"chi0">> => 0
+                    }
+                }
+            },
+            ResourceOxygen => #{
+                <<"chi">> => 0,
+                <<"weight">> => 1,
+                <<"total-deposits">> => 50,
+                <<"deposits">> => #{
+                    AddrAlice => #{
+                        <<"quantity">> => 25,
+                        <<"chi0">> => 0
+                    },
+                    AddrBob => #{
+                        <<"quantity">> => 25,
+                        <<"chi0">> => 0
+                    }
+                }
+            }
+        },
+        <<"balances">> => #{ }
+    },
+    S1 = delegate(AddrAlice, AddrBob, ResourceHydrogen, 20, S0, Opts),
+    ?assertEqual(
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceHydrogen/binary, 
+                "/deposits/", 
+                AddrAlice/binary, 
+                "/delegations/", 
+                AddrBob/binary,
+                "/quantity"
+            >>,
+            S1,
+            0,
+            Opts
+        ),
+        20
+    ),
+    ?assertEqual(
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceHydrogen/binary, 
+                "/deposits/", 
+                AddrAlice/binary, 
+                "/quantity"
+            >>,
+            S1,
+            0,
+            Opts
+        ),
+        180
+    ),
+    ?assertEqual(
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceHydrogen/binary, 
+                "/deposits/", 
+                AddrBob/binary,
+                "/quantity"
+            >>,
+            S1,
+            0,
+            Opts
+        ),
+        20
+    ),
+    S2 = delegate(AddrAlice, AddrBob, ResourceHydrogen, -10, S1, Opts),
+    ?assertEqual(
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceHydrogen/binary, 
+                "/deposits/", 
+                AddrAlice/binary, 
+                "/delegations/", 
+                AddrBob/binary,
+                "/quantity"
+            >>,
+            S2,
+            0,
+            Opts
+        ),
+        10
+    ),
+    ?assertEqual(
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceHydrogen/binary, 
+                "/deposits/", 
+                AddrAlice/binary, 
+                "/quantity"
+            >>,
+            S2,
+            0,
+            Opts
+        ),
+        190
+    ),
+    ?assertEqual(
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceHydrogen/binary, 
+                "/deposits/", 
+                AddrBob/binary,
+                "/quantity"
+            >>,
+            S2,
+            0,
+            Opts
+        ),
+        10
+    ),
+    S3 = delegate(AddrBob, AddrAlice, ResourceOxygen, 21, S2, Opts),
+    ?assertEqual(
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceOxygen/binary, 
+                "/deposits/", 
+                AddrBob/binary, 
+                "/delegations/", 
+                AddrAlice/binary,
+                "/quantity"
+            >>,
+            S3,
+            0,
+            Opts
+        ),
+        21
+    ),
+    ?assertEqual(
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceOxygen/binary, 
+                "/deposits/", 
+                AddrAlice/binary, 
+                "/quantity"
+            >>,
+            S3,
+            0,
+            Opts
+        ),
+        46
+    ),
+    ?assertEqual(
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceOxygen/binary, 
+                "/deposits/", 
+                AddrBob/binary,
+                "/quantity"
+            >>,
+            S3,
+            0,
+            Opts
+        ),
+        4
+    ).
+
+
 report(S) ->
     ?event(
         {report,
@@ -272,12 +466,13 @@ modify_deposit(Addr, ResourceID, Amount, S, Opts) ->
         ),
     ResR0 = hb_maps:get(ResourceID, ResourcesReset, #{}),
     ResRDeposits0 = hb_maps:get(<<"deposits">>, ResR0, #{}),
+    ExistingUserDeposits = hb_maps:get(Addr, ResRDeposits0, #{}),
     ResRChi = hb_maps:get(<<"weight">>, ResR0, 0) * Chi,
     ResRTotal0 = hb_maps:get(<<"total-deposits">>, ResR0, 0),
     ResR1 = ResR0#{
         <<"deposits">> =>
             ResRDeposits0#{
-                Addr => #{
+                Addr => ExistingUserDeposits#{
                     <<"quantity">> => NewDepositQty,
                     <<"chi0">> => ResRChi
                 }
@@ -292,6 +487,42 @@ modify_deposit(Addr, ResourceID, Amount, S, Opts) ->
         <<"tw">> => Tw0 + (WeightR * Amount),
         <<"balances">> => Balances0#{ Addr => RealizedBalance }
     }.
+
+delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
+    S0 = modify_deposit(FromAddr, ResourceID, -Amount, S, Opts),
+    S1 = modify_deposit(ToAddr, ResourceID, Amount, S0, Opts),
+    ExistingQuantity = hb_ao:get(
+        <<
+            "/resources/", 
+            ResourceID/binary, 
+            "/deposits/", 
+            FromAddr/binary, 
+            "/delegations/", 
+            ToAddr/binary,
+            "/quantity"
+        >>,
+        S1,
+        0,
+        Opts
+    ),
+    hb_ao:set(
+        S1,
+        #{<<"resources">> => #{
+                ResourceID => #{
+                    <<"deposits">> => #{
+                        FromAddr => #{
+                            <<"delegations">> => #{
+                                ToAddr => #{
+                                    <<"quantity">> => ExistingQuantity + Amount
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        Opts
+    ).
 
 %%% Helpers.
 
