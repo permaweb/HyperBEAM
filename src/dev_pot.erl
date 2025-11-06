@@ -388,6 +388,55 @@ liquidate_delegations_test() ->
     ?assertEqual(0, deposit(<<"bob">>, <<"oxygen">>, S3)),
     ?assertEqual(0, deposit(<<"charlie">>, <<"oxygen">>, S3)).
 
+multiple_delegations_liquidation_test() ->
+    S0 = #{
+        <<"device">> => <<"pot@1.0">>,
+        <<"t">> => 0,
+        <<"last-drip">> => 0,
+        <<"chi">> => 0,
+        <<"mint-cap">> => 100,
+        <<"mint-prop">> => 0.5,
+        <<"tw">> => 0,
+        <<"resources">> => #{
+            <<"oxygen">> => #{
+                <<"chi">> => 0,
+                <<"weight">> => 1,
+                <<"total-deposits">> => 2,
+                <<"deposits">> => #{ 
+                    <<"alice">> => #{
+                        <<"quantity">> => 2,
+                        <<"chi0">> => 0
+                    },
+                    <<"bob">> => #{
+                        <<"quantity">> => 0,
+                        <<"chi0">> => 0
+                    },
+                    <<"charlie">> => #{
+                        <<"quantity">> => 0,
+                        <<"chi0">> => 0
+                    },
+                    <<"denis">> => #{
+                        <<"quantity">> => 0,
+                        <<"chi0">> => 0
+                    }
+                }
+            }
+        },
+        <<"balances">> => #{ }
+    },
+    S1 = delegate(<<"alice">>, <<"bob">>, <<"oxygen">>, 2, S0, #{}),
+    S2 = delegate(<<"bob">>, <<"charlie">>, <<"oxygen">>, 1, S1, #{}),
+    S3 = delegate(<<"bob">>, <<"denis">>, <<"oxygen">>, 1, S2, #{}),
+    S4 = delegate(<<"denis">>, <<"alice">>, <<"oxygen">>, 1, S3, #{}),
+    report(S4),
+    ?assertEqual(1, deposit(<<"alice">>, <<"oxygen">>, S4)),
+    ?assertEqual(1, deposit(<<"charlie">>, <<"oxygen">>, S4)),
+    S5 = delegate(<<"alice">>, <<"bob">>, <<"oxygen">>, -2, S4, #{}),
+    ?assertEqual(2, deposit(<<"alice">>, <<"oxygen">>, S5)),
+    ?assertEqual(0, deposit(<<"bob">>, <<"oxygen">>, S5)),
+    ?assertEqual(0, deposit(<<"charlie">>, <<"oxygen">>, S5)),
+    ?assertEqual(0, deposit(<<"denis">>, <<"oxygen">>, S5)).
+
 cyclic_delegation_test() ->
     S0 = #{
         <<"device">> => <<"pot@1.0">>,
