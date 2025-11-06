@@ -244,8 +244,7 @@ delegate_test() ->
                 "/deposits/", 
                 AddrAlice/binary, 
                 "/delegations/", 
-                AddrBob/binary,
-                "/quantity"
+                AddrBob/binary
             >>,
             S1,
             0,
@@ -259,8 +258,7 @@ delegate_test() ->
                 "/resources/", 
                 ResourceHydrogen/binary, 
                 "/deposits/", 
-                AddrAlice/binary, 
-                "/quantity"
+                AddrAlice/binary
             >>,
             S1,
             0,
@@ -274,8 +272,7 @@ delegate_test() ->
                 "/resources/", 
                 ResourceHydrogen/binary, 
                 "/deposits/", 
-                AddrBob/binary,
-                "/quantity"
+                AddrBob/binary
             >>,
             S1,
             0,
@@ -292,8 +289,7 @@ delegate_test() ->
                 "/deposits/", 
                 AddrAlice/binary, 
                 "/delegations/", 
-                AddrBob/binary,
-                "/quantity"
+                AddrBob/binary
             >>,
             S2,
             0,
@@ -307,8 +303,7 @@ delegate_test() ->
                 "/resources/", 
                 ResourceHydrogen/binary, 
                 "/deposits/", 
-                AddrAlice/binary, 
-                "/quantity"
+                AddrAlice/binary
             >>,
             S2,
             0,
@@ -322,8 +317,7 @@ delegate_test() ->
                 "/resources/", 
                 ResourceHydrogen/binary, 
                 "/deposits/", 
-                AddrBob/binary,
-                "/quantity"
+                AddrBob/binary
             >>,
             S2,
             0,
@@ -340,8 +334,7 @@ delegate_test() ->
                 "/deposits/", 
                 AddrBob/binary, 
                 "/delegations/", 
-                AddrAlice/binary,
-                "/quantity"
+                AddrAlice/binary
             >>,
             S3,
             0,
@@ -349,37 +342,129 @@ delegate_test() ->
         ),
         21
     ),
-    ?assertEqual(
-        hb_ao:get(
-            <<
-                "/resources/", 
-                ResourceOxygen/binary, 
-                "/deposits/", 
-                AddrAlice/binary, 
-                "/quantity"
-            >>,
-            S3,
-            0,
-            Opts
-        ),
-        46
-    ),
-    ?assertEqual(
-        hb_ao:get(
-            <<
-                "/resources/", 
-                ResourceOxygen/binary, 
-                "/deposits/", 
-                AddrBob/binary,
-                "/quantity"
-            >>,
-            S3,
-            0,
-            Opts
-        ),
-        4
-    ).
+    ?assertEqual(46, deposit(AddrAlice, ResourceOxygen, S3)),
+    ?assertEqual(4, deposit(AddrBob, ResourceOxygen, S3)).
 
+liquidate_delegations_test() ->
+    S0 = #{
+        <<"device">> => <<"pot@1.0">>,
+        <<"t">> => 0,
+        <<"last-drip">> => 0,
+        <<"chi">> => 0,
+        <<"mint-cap">> => 100,
+        <<"mint-prop">> => 0.5,
+        <<"tw">> => 0,
+        <<"resources">> => #{
+            <<"oxygen">> => #{
+                <<"chi">> => 0,
+                <<"weight">> => 1,
+                <<"total-deposits">> => 1,
+                <<"deposits">> => #{ 
+                    <<"alice">> => #{
+                        <<"quantity">> => 1,
+                        <<"chi0">> => 0
+                    },
+                    <<"bob">> => #{
+                        <<"quantity">> => 0,
+                        <<"chi0">> => 0
+                    },
+                    <<"charlie">> => #{
+                        <<"quantity">> => 0,
+                        <<"chi0">> => 0
+                    }
+                }
+            }
+        },
+        <<"balances">> => #{ }
+    },
+    S1 = delegate(<<"alice">>, <<"bob">>, <<"oxygen">>, 1, S0, #{}),
+    S2 = delegate(<<"bob">>, <<"charlie">>, <<"oxygen">>, 1, S1, #{}),
+    report(S2),
+    ?hr(),
+    S3 = delegate(<<"alice">>, <<"bob">>, <<"oxygen">>, -1, S2, #{}),
+    ?hr(),
+    report(S3).
+
+cyclic_delegation_test() ->
+    S0 = #{
+        <<"device">> => <<"pot@1.0">>,
+        <<"t">> => 0,
+        <<"last-drip">> => 0,
+        <<"chi">> => 0,
+        <<"mint-cap">> => 100,
+        <<"mint-prop">> => 0.5,
+        <<"tw">> => 0,
+        <<"resources">> => #{
+            <<"oxygen">> => #{
+                <<"chi">> => 0,
+                <<"weight">> => 1,
+                <<"total-deposits">> => 1,
+                <<"deposits">> => #{ 
+                    <<"alice">> => #{
+                        <<"quantity">> => 1,
+                        <<"chi0">> => 0
+                    },
+                    <<"bob">> => #{
+                        <<"quantity">> => 0,
+                        <<"chi0">> => 0
+                    }
+                }
+            }
+        },
+        <<"balances">> => #{ }
+    },
+    S1 = delegate(<<"alice">>, <<"bob">>, <<"oxygen">>, 1, S0, #{}),
+    S2 = delegate(<<"bob">>, <<"alice">>, <<"oxygen">>, 1, S1, #{}),
+    S3 = delegate(<<"alice">>, <<"bob">>, <<"oxygen">>, 1, S2, #{}),
+    S4 = delegate(<<"bob">>, <<"alice">>, <<"oxygen">>, 1, S3, #{}),
+    ?assertEqual(1, deposit(<<"alice">>, <<"oxygen">>, S4)),
+    ?assertEqual(0, deposit(<<"bob">>, <<"oxygen">>, S4)),
+    report(S4),
+    S5 = delegate(<<"bob">>, <<"alice">>, <<"oxygen">>, -2, S4, #{}),
+    report(S5),
+    ?assertEqual(0, deposit(<<"alice">>, <<"oxygen">>, S5)),
+    ?assertEqual(1, deposit(<<"bob">>, <<"oxygen">>, S5)).
+
+remove_deposit_while_delegated_test() ->
+    S0 = #{
+        <<"device">> => <<"pot@1.0">>,
+        <<"t">> => 0,
+        <<"last-drip">> => 0,
+        <<"chi">> => 0,
+        <<"mint-cap">> => 100,
+        <<"mint-prop">> => 0.5,
+        <<"tw">> => 0,
+        <<"resources">> => #{
+            <<"oxygen">> => #{
+                <<"chi">> => 0,
+                <<"weight">> => 1,
+                <<"total-deposits">> => 3,
+                <<"deposits">> => #{ 
+                    <<"alice">> => #{
+                        <<"quantity">> => 3,
+                        <<"chi0">> => 0
+                    },
+                    <<"bob">> => #{
+                        <<"quantity">> => 0,
+                        <<"chi0">> => 0
+                    }
+                }
+            }
+        },
+        <<"balances">> => #{ }
+    },
+    S1 = delegate(<<"alice">>, <<"bob">>, <<"oxygen">>, 3, S0, #{}),
+    S2 = delegate(<<"bob">>, <<"charlie">>, <<"oxygen">>, 2, S1, #{}),
+    S3 = delegate(<<"charlie">>, <<"alice">>, <<"oxygen">>, 1, S2, #{}),
+    report(S1),
+    ?assertEqual(1, deposit(<<"alice">>, <<"oxygen">>, S3)),
+    ?assertEqual(1, deposit(<<"bob">>, <<"oxygen">>, S3)),
+    ?assertEqual(1, deposit(<<"charlie">>, <<"oxygen">>, S3)),
+    S4 = modify_deposit(<<"alice">>, <<"oxygen">>, -3, S3, #{}),
+    report(S4),
+    ?assertEqual(0, deposit(<<"alice">>, <<"oxygen">>, S4)),
+    ?assertEqual(0, deposit(<<"bob">>, <<"oxygen">>, S4)),
+    ?assertEqual(0, deposit(<<"charlie">>, <<"oxygen">>, S4)).
 
 report(S) ->
     ?event(
@@ -482,45 +567,154 @@ modify_deposit(Addr, ResourceID, Amount, S, Opts) ->
     Resources1 = ResourcesReset#{ ResourceID => ResR1 },
     WeightR = hb_maps:get(<<"weight">>, ResR0, 0),
     Tw0 = hb_maps:get(<<"tw">>, NewS0),
-    NewS0#{
-        <<"resources">> => Resources1,
-        <<"tw">> => Tw0 + (WeightR * Amount),
-        <<"balances">> => Balances0#{ Addr => RealizedBalance }
-    }.
+    maybe_liquidate_delegations(
+        Addr,
+        ResourceID,
+        NewS0#{
+            <<"resources">> => Resources1,
+            <<"tw">> => Tw0 + (WeightR * Amount),
+            <<"balances">> => Balances0#{ Addr => RealizedBalance }
+        },
+        Opts
+    ).
 
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
-    S0 = modify_deposit(FromAddr, ResourceID, -Amount, S, Opts),
-    S1 = modify_deposit(ToAddr, ResourceID, Amount, S0, Opts),
-    ExistingQuantity = hb_ao:get(
-        <<
-            "/resources/", 
-            ResourceID/binary, 
-            "/deposits/", 
-            FromAddr/binary, 
-            "/delegations/", 
-            ToAddr/binary,
-            "/quantity"
-        >>,
-        S1,
-        0,
-        Opts
+    ?event(
+        {delegating,
+            {from_addr, FromAddr},
+            {to_addr, ToAddr},
+            {resource_id, ResourceID},
+            {amount, Amount}
+        }
     ),
-    hb_ao:set(
-        S1,
-        #{<<"resources">> => #{
-                ResourceID => #{
-                    <<"deposits">> => #{
-                        FromAddr => #{
-                            <<"delegations">> => #{
-                                ToAddr => #{
-                                    <<"quantity">> => ExistingQuantity + Amount
-                                }
+    S0 = modify_deposit(FromAddr, ResourceID, -Amount, S, Opts),
+    S1Unnormalized = modify_deposit(ToAddr, ResourceID, Amount, S0, Opts),
+    S1 =
+        maybe_liquidate_delegations(
+            deposit(ToAddr, ResourceID, S1Unnormalized),
+            ToAddr,
+            ResourceID,
+            S1Unnormalized,
+            Opts
+        ),
+    ExistingQuantity =
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceID/binary, 
+                "/deposits/", 
+                FromAddr/binary, 
+                "/delegations/", 
+                ToAddr/binary
+            >>,
+            S1,
+            0,
+            Opts
+        ),
+    ExistingDelegations =
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceID/binary, 
+                "/deposits/", 
+                FromAddr/binary, 
+                "/delegations">>,
+            S1,
+            #{},
+            Opts
+        ),
+    NewS1 =
+        hb_ao:set(
+            S1,
+            #{<<"resources">> => #{
+                    ResourceID => #{
+                        <<"deposits">> => #{
+                            FromAddr => #{
+                                <<"delegations">> =>
+                                    ExistingDelegations#{
+                                        ToAddr => ExistingQuantity + Amount
+                                    }
                             }
                         }
                     }
                 }
-            }
-        },
+            },
+            Opts
+        ),
+    maybe_liquidate_delegations(
+        FromAddr,
+        ResourceID,
+        NewS1,
+        Opts
+    ).
+
+%% @doc Recursively liquidate delegations as necessary until the deposit for
+%% a delegating address is non-negative.
+maybe_liquidate_delegations(Addr, ResourceID, S, Opts) ->
+    maybe_liquidate_delegations(
+        deposit(Addr, ResourceID, S),
+        Addr,
+        ResourceID,
+        S,
+        Opts
+    ).
+maybe_liquidate_delegations(Deposit, Addr, _Res, S, _Opts) when Deposit >= 0 ->
+    ?event({no_liquidation_necessary, {deposit, Deposit}, {addr, Addr}}),
+    S;
+maybe_liquidate_delegations(Deposit, Addr, ResourceID, S, Opts) ->
+    Overdraw = abs(Deposit),
+    % Find the existing delegations for this address.
+    ExistingDelegations =
+        hb_ao:get(
+            <<
+                "/resources/", 
+                ResourceID/binary, 
+                "/deposits/", 
+                Addr/binary, 
+                "/delegations">>,
+            S,
+            #{},
+            Opts
+        ),
+    % Determine the largest delegation to liquidate.
+    LargestDelegation =
+        lists:max(
+            hb_maps:values(
+                hb_private:reset(ExistingDelegations)
+            )
+        ),
+    {LargestDelegationAddr, _} =
+        lists:keyfind(
+            LargestDelegation,
+            2,
+            hb_maps:to_list(ExistingDelegations)
+        ),
+    RevokeAmount = min(Overdraw, LargestDelegation),
+    ?event(
+        {liquidating_delegation,
+            {addr, Addr},
+            {overdrawn, Overdraw},
+            {recouping, RevokeAmount},
+            {largest_delegation, LargestDelegation},
+            {delegated_to, LargestDelegationAddr}
+        }
+    ),
+    % Revoke the largest delegation.
+    NewS =
+        delegate(
+            Addr,
+            LargestDelegationAddr,
+            ResourceID,
+            -RevokeAmount,
+            S,
+            Opts
+        ),
+    % Recursively liquidate the remaining quantity.
+    maybe_liquidate_delegations(
+        Deposit + RevokeAmount,
+        Addr,
+        ResourceID,
+        NewS,
         Opts
     ).
 
