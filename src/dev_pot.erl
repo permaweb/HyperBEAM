@@ -53,7 +53,6 @@
 %%% /tw: The total weighted deposits (sum over resources of weight * total-deposits).
 %%% 
 %%% TODO:
-%%% - Implement support for delegations, as described in the documentation above.
 %%% - Add `secure-set` (set guarded by address) for resource-weights and 
 %%%   supported resources.
 -module(dev_pot).
@@ -258,7 +257,8 @@ delegate_test() ->
                 "/resources/", 
                 ResourceHydrogen/binary, 
                 "/deposits/", 
-                AddrAlice/binary
+                AddrAlice/binary,
+                "/quantity"
             >>,
             S1,
             0,
@@ -267,21 +267,23 @@ delegate_test() ->
         180
     ),
     ?assertEqual(
+        20,
         hb_ao:get(
             <<
                 "/resources/", 
                 ResourceHydrogen/binary, 
                 "/deposits/", 
-                AddrBob/binary
+                AddrBob/binary,
+                "/quantity"
             >>,
             S1,
             0,
             Opts
-        ),
-        20
+        )
     ),
     S2 = delegate(AddrAlice, AddrBob, ResourceHydrogen, -10, S1, Opts),
     ?assertEqual(
+        10,
         hb_ao:get(
             <<
                 "/resources/", 
@@ -294,39 +296,41 @@ delegate_test() ->
             S2,
             0,
             Opts
-        ),
-        10
+        )
     ),
     ?assertEqual(
+        190,
         hb_ao:get(
             <<
                 "/resources/", 
                 ResourceHydrogen/binary, 
                 "/deposits/", 
-                AddrAlice/binary
+                AddrAlice/binary,
+                "/quantity"
             >>,
             S2,
             0,
             Opts
-        ),
-        190
+        )
     ),
     ?assertEqual(
+        10,
         hb_ao:get(
             <<
                 "/resources/", 
                 ResourceHydrogen/binary, 
                 "/deposits/", 
-                AddrBob/binary
+                AddrBob/binary,
+                "/quantity"
             >>,
             S2,
             0,
             Opts
-        ),
-        10
+        )
     ),
     S3 = delegate(AddrBob, AddrAlice, ResourceOxygen, 21, S2, Opts),
     ?assertEqual(
+        21,
         hb_ao:get(
             <<
                 "/resources/", 
@@ -339,8 +343,7 @@ delegate_test() ->
             S3,
             0,
             Opts
-        ),
-        21
+        )
     ),
     ?assertEqual(46, deposit(AddrAlice, ResourceOxygen, S3)),
     ?assertEqual(4, deposit(AddrBob, ResourceOxygen, S3)).
@@ -380,10 +383,10 @@ liquidate_delegations_test() ->
     S1 = delegate(<<"alice">>, <<"bob">>, <<"oxygen">>, 1, S0, #{}),
     S2 = delegate(<<"bob">>, <<"charlie">>, <<"oxygen">>, 1, S1, #{}),
     report(S2),
-    ?hr(),
     S3 = delegate(<<"alice">>, <<"bob">>, <<"oxygen">>, -1, S2, #{}),
-    ?hr(),
-    report(S3).
+    ?assertEqual(1, deposit(<<"alice">>, <<"oxygen">>, S3)),
+    ?assertEqual(0, deposit(<<"bob">>, <<"oxygen">>, S3)),
+    ?assertEqual(0, deposit(<<"charlie">>, <<"oxygen">>, S3)).
 
 cyclic_delegation_test() ->
     S0 = #{
