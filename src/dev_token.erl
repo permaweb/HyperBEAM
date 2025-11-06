@@ -125,13 +125,17 @@ enforce_mint_authority(Base, Req, Opts) ->
     end.
 
 mint_single(Base, Req, Opts) ->
-    {ok, To} = hb_ao:resolve(Req, <<"recipient">>, Opts),
-    {ok, Quantity} = hb_ao:resolve(Req, <<"quantity">>, Opts),
-    perform_mint(Base, #{ To => Quantity }, Opts).
+    maybe
+        {ok, To} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
+        {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
+        perform_mint(Base, #{ To => Quantity }, Opts)
+    end.
 
 mint_batch(Base, Req, Opts) ->
-    {ok, Quantities} = hb_ao:resolve(Req, <<"quantities">>, Opts),
-    perform_mint(Base, Quantities, Opts).
+    maybe
+        {ok, Quantities} ?= hb_ao:resolve(Req, <<"quantities">>, Opts),
+        perform_mint(Base, Quantities, Opts)
+    end.
 
 perform_mint(Base, RawQuantities, Opts) ->
     maybe
