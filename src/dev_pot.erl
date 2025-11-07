@@ -538,55 +538,55 @@ inverted_index_test() ->
     S1 = modify_deposit(AddrAlice, ResourceHydrogen, 5, S0, Opts),
     ?assert(
         hb_message:match(
-            #{ResourceHydrogen => true},
-            resource_index(AddrAlice, S1),
+            #{ <<"deposits">> => #{ ResourceHydrogen => 5 } },
+            user(AddrAlice, S1, Opts),
             primary
         )
     ),
     S2 = modify_deposit(AddrAlice, ResourceOxygen, 2, S1, Opts),
     ?assert(
         hb_message:match(
-            #{ResourceHydrogen => true, ResourceOxygen => true},
-            resource_index(AddrAlice, S2),
+            #{ <<"deposits">> => #{ ResourceHydrogen => 5, ResourceOxygen => 2 } },
+            user(AddrAlice, S2, Opts),
             primary
         )
     ),
     S3 = modify_deposit(AddrBob, ResourceHydrogen, 777, S2, Opts),
     ?assert(
         hb_message:match(
-            #{ResourceHydrogen => true},
-            resource_index(AddrBob, S3),
+            #{ <<"deposits">> => #{ ResourceHydrogen => 777 } },
+            user(AddrBob, S3, Opts),
             primary
         )
     ),
     S4 = modify_deposit(AddrAlice, ResourceHydrogen, -4, S3, Opts),
     ?assert(
         hb_message:match(
-            #{ResourceHydrogen => true, ResourceOxygen => true},
-            resource_index(AddrAlice, S4),
+            #{ <<"deposits">> => #{ ResourceHydrogen => 1, ResourceOxygen => 2 } },
+            user(AddrAlice, S4, Opts),
             primary
         )
     ),
     S5 = modify_deposit(AddrAlice, ResourceHydrogen, -1, S4, Opts),
     ?assert(
         hb_message:match(
-            #{ResourceOxygen => true},
-            resource_index(AddrAlice, S5),
+            #{ <<"deposits">> => #{ <<"oxygen">> => 2 } },
+            user(AddrAlice, S5, Opts),
             primary
         )
     ),
     ?assert(
         hb_message:match(
-            #{ResourceHydrogen => true},
-            resource_index(AddrBob, S5),
+            #{ <<"deposits">> => #{ ResourceHydrogen => 777 } },
+            user(AddrBob, S5, Opts),
             primary
         )
     ),
     S6 = modify_deposit(AddrBob, ResourceHydrogen, -777, S5, Opts),
     ?assert(
         hb_message:match(
-            #{},
-            resource_index(AddrBob, S6),
+            #{ <<"deposits">> => #{} },
+            user(AddrBob, S6, Opts),
             primary
         )
     ).
@@ -644,14 +644,14 @@ units_minted_between(Minted, Max, Proportion, LastT, T) ->
     Remaining = Max - Minted,
     Remaining * (1 - math:pow(1 - Proportion, Steps)).
 
-modify_deposit(Addr, ResourceID, Amount, S, Opts) ->
-    NewS0 = drip(S, Opts),
-    #{ <<"balances">> := Balances0, <<"resources">> := Resources0 } = NewS0,
-    ExistingDeposit = deposit(Addr, ResourceID, NewS0),
+modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
+    S1 = drip(S0, Opts),
+    #{ <<"balances">> := Balances0, <<"resources">> := Resources0 } = S1,
+    ExistingDeposit = deposit(Addr, ResourceID, S1),
     NewDepositQty = ExistingDeposit + Amount,
-    RealizedBalance = balance(Addr, NewS0),
+    RealizedBalance = balance(Addr, S1),
     % Reset chi0 for this address across all resources to current chi
-    Chi = hb_maps:get(<<"chi">>, NewS0, 0),
+    Chi = hb_maps:get(<<"chi">>, S1, 0),
     ResourcesReset =
         hb_maps:map(
             fun(_ResID, Res) ->
@@ -691,32 +691,21 @@ modify_deposit(Addr, ResourceID, Amount, S, Opts) ->
     },
     Resources1 = ResourcesReset#{ ResourceID => ResR1 },
     WeightR = hb_maps:get(<<"weight">>, ResR0, 0),
-    Tw0 = hb_maps:get(<<"tw">>, NewS0),
-    Liquidated = maybe_liquidate_delegations(
-        Addr,
-        ResourceID,
-        NewS0#{
+    Tw0 = hb_maps:get(<<"tw">>, S1),
+    S2 =
+        S1#{
             <<"resources">> => Resources1,
             <<"tw">> => Tw0 + (WeightR * Amount),
             <<"balances">> => Balances0#{ Addr => RealizedBalance }
         },
-        Opts
-    ),
-    ResourcesInvertedIndex = hb_maps:get(<<"deposits">>, Liquidated, #{}),
-    ExistingUserResources = hb_maps:get(Addr, ResourcesInvertedIndex, #{}),
-    FinalDeposit = deposit(Addr, ResourceID, Liquidated),
-    NewUserResources =
-        if
-            FinalDeposit > 0 ->
-                ExistingUserResources#{ResourceID => true};
-            true ->
-                hb_maps:remove(ResourceID, ExistingUserResources, ExistingUserResources)
-        end,
-    Liquidated#{
-        <<"deposits">> => ResourcesInvertedIndex#{
-            Addr => NewUserResources
-        }
-    }.
+    S3 =
+        maybe_liquidate_delegations(
+            Addr,
+            ResourceID,
+            S2,
+            Opts
+        ),
+    set_user_deposit(Addr, ResourceID, deposit(Addr, ResourceID, S3), S3, Opts).
 
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
     ?event(
@@ -915,10 +904,43 @@ resource_chis(S = #{ <<"resources">> := Resources }) ->
         Resources
     ).
 
-resource_index(Addr, S) ->
-    hb_ao:get(
-        <<"/deposits/", Addr/binary>>,
+user(Addr, S, Opts) ->
+    hb_ao:get(<<"/users/", Addr/binary>>, S, #{}, Opts).
+
+set_user_deposit(Addr, ResourceID, Quantity, S, Opts) ->
+    U = user(Addr, S, Opts),
+    Delegations =
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                Addr/binary,
+                "/delegations"
+            >>,
+            S,
+            #{},
+            Opts
+        ),
+    hb_ao:set(
         S,
-        #{},
-        #{}
+        <<"users/", Addr/binary, "/deposits/", ResourceID/binary>>,
+        if Quantity == 0 andalso ?IS_EMPTY_MESSAGE(Delegations) -> unset;
+        true -> Quantity
+        end,
+        Opts
+    ).
+
+set_user_delegations(Addr, Delegations, S, Opts) ->
+    U = user(Addr, S, Opts),
+    NewU =
+        U#{
+            <<"delegations">> =>
+                Delegations
+        },
+    hb_ao:set(
+        S,
+        <<"/users/", Addr/binary>>,
+        NewU,
+        Opts
     ).
