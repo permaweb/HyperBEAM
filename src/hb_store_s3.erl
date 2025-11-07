@@ -21,9 +21,7 @@
 
 -ifndef(ENABLE_S3).
 -export([start/1]).
-
 start(_) -> error(s3_profile_not_enabled).
-
 -else.
 -behaviour(hb_store).
 %% Store behavior callbacks
@@ -32,9 +30,6 @@ start(_) -> error(s3_profile_not_enabled).
 -export([make_group/2, make_link/3, resolve/2]).
 -export([path/2, add_path/3]).
 -export([default_test_opts/0, get_config/1]).
-
-%% Helper functions
--export([match/2]).
 
 -include("include/hb.hrl").
 -include_lib("erlcloud/include/erlcloud_aws.hrl").
@@ -200,7 +195,7 @@ get_config(Opts) ->
     end.
 
 %% @doc Write a value to a key in S3.
--spec write(opts(), key(), value()) -> ok.
+-spec write(opts(), key(), value()) -> ok | no_return.
 write(Opts, Key, Value) when is_list(Key) ->
     write(Opts, hb_store:join(Key), Value);
 write(Opts, Key, Value) when is_binary(Key) ->
@@ -208,7 +203,7 @@ write(Opts, Key, Value) when is_binary(Key) ->
     write(Opts, Key, Value, RetryAttempts).
 write(_Opts, Key, _Value, 0) ->
     ?event(warning, {max_retries_reached_s3_write, {key, Key}}),
-    ok;
+    erlang:error({max_retries_reached_s3_write, {key, Key}});
 write(Opts, Key, Value, AttemptsRemaining) ->
     #{bucket := Bucket, config := Config} = get_config(Opts),
     BucketStr = hb_util:list(Bucket),
@@ -372,6 +367,7 @@ shard_key(Key) when is_binary(Key) andalso byte_size(Key) > ?SHARD_CUT ->
         _ ->
             shard_key_inner(Key)
     end;
+%% Data and computer are more specific prefixes, that will not be sharded
 shard_key(<<"data">>) -> <<"data">>;
 shard_key(Key)->
     ShardCut = integer_to_binary(?SHARD_CUT),
@@ -420,7 +416,6 @@ create_parent_groups(Opts, Current, [Next | Rest]) ->
     GroupKey = create_make_group_key(GroupPath),
     GroupPathValue = read_direct(Opts, GroupPath),
     GroupKeyValue = read_direct(Opts, GroupKey),
-
     % Only create group if it doesn't already exist.
     case {GroupPathValue, GroupKeyValue} of
         {not_found, not_found} ->
@@ -649,7 +644,6 @@ resolve_path_accumulate(Opts, [Head|Tail], AccPath, Depth) ->
                     % Replace the accumulated path with the link target and
                     % continue with remaining segments
                     NewPath = LinkSegments ++ Tail,
-
                     resolve_path_segments(Opts, NewPath, Depth + 1);
                 false ->
                     resolve_path_accumulate(Opts, Tail, [Head | AccPath], Depth)
@@ -696,6 +690,7 @@ reset(Opts) ->
             {error, reset_not_confirmed}
     end.
 
+%% @doc Delete all objects from a bucket.
 delete_all_objects(Opts) ->
     #{bucket := Bucket, config := Config} = get_config(Opts),
     BucketStr = hb_util:list(Bucket),
@@ -730,12 +725,6 @@ scope() -> local.
 scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_Opts) -> scope().
 
-%% @doc Match keys based on a template.
-%% Simple implementation - just returns not_found for now.
--spec match(opts(), map()) -> {ok, [binary()]} | not_found.
-match(_Opts, _Template) ->
-    not_found.
-
 %% @doc Integration test suite demonstrating basic store operations.
 %%
 %% The following functions implement integration tests using EUnit to verify that
@@ -744,7 +733,6 @@ match(_Opts, _Template) ->
 %% resolution, and type detection.
 %%
 %% Be sure that minio io server is running before executing the integration tests.
-
 default_test_opts() ->
     #{
         <<"store-module">> => ?MODULE,
@@ -764,24 +752,21 @@ default_test_opts() ->
 %% This test creates a temporary database, writes a key-value pair, reads it
 %% back to verify correctness, and cleans up by stopping the database. It
 %% serves as a sanity check that the basic storage mechanism is working.
-
 init() ->
     %% Needed to use the gun http client used by HB.
     application:ensure_all_started(hb).
 
-sharding_test() ->
+%% @doc Testing default operations for basic store functions.
+simple_test() ->
     init(),
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
-
     Value = <<"value">>,
     Key = <<"TWaabU6nSWpn7zPaiWSd9gQkfNwa1t3onrDRNB-bFiI">>,
     %% Write
     ok = write(StoreOpts, Key, Value),
-
     %% Confirm sharding
-
     #{bucket := Bucket, config := Config} = get_config(StoreOpts),
     Result = erlcloud_s3:head_object(
       hb_util:list(Bucket),
@@ -789,7 +774,6 @@ sharding_test() ->
       Config
      ),
     ?assert(is_list(Result)),
-
     %% Read
     {ok, Response} = read(StoreOpts, Key),
     ?assertEqual(Value, Response),
@@ -801,12 +785,14 @@ sharding_test() ->
     % Group
     GroupKey = <<"UDgFxz7qUcB_TijjDfhUpXD3UGXpw8Xq6OrpoDiv3Y0">>,
     make_group(StoreOpts, GroupKey),
-    write(StoreOpts, <<GroupKey/binary, "/", "content-type">>, <<"application/json">>),
+    Key2 = add_path(#{}, GroupKey, <<"content-type">>),
+    write(StoreOpts, Key2, <<"application/json">>),
     %% List
     R = list(StoreOpts, GroupKey),
     ?assertEqual({ok,[<<"content-type">>]}, R),
     ok = stop(StoreOpts).
 
+%% @doc Testing reading a value where key doesn't exists.
 not_found_test() ->
     init(),
     StoreOpts = default_test_opts(),
@@ -817,12 +803,15 @@ not_found_test() ->
     ?assertEqual(not_found, Result),
     ok = stop(StoreOpts).
 
+%% @doc Testing starting store with a bucket that doesn't exists.
 bucket_not_found_test() ->
     init(),
     StoreOpts = (default_test_opts())#{<<"bucket">> => <<"invalid_bucket">>},
     ?assertError({bucket_access_failed, {aws_error, {http_error, 400, _, _}}}, start(StoreOpts)),
     ok = stop(StoreOpts).
 
+%% @doc Test a failure in writing a key/value to the store. It should 
+%% retry writing it.
 failed_write_test() ->
     init(),
     StoreOpts = (default_test_opts())#{<<"retry-attempts">> => 2},
@@ -830,36 +819,44 @@ failed_write_test() ->
     reset(StoreOpts),
     Key = hb_message:id(#{}),
     Value = <<"value">>,
-
+    % Mock S3 dependency to return 400 error
     ok = meck:new(erlcloud_s3, [unstick, passthrough]),
     XMLBody = <<"">>,
     ok = meck:expect(erlcloud_s3, put_object, fun(_, _, _, _, _) ->
         error({aws_error,{http_error, 400, "Bad Request", XMLBody}}) end),
-
-    {Time, Result} = timer:tc(fun() -> write(StoreOpts, Key, Value) end, second),
+    % Make sure it spends time retry write to the store 
+    {Time, Result} = timer:tc(fun() -> 
+        ?assertError(
+           {max_retries_reached_s3_write, {key, Key}}, 
+           write(StoreOpts, Key, Value)
+        ) 
+        end,
+        millisecond
+    ),
     ?assertMatch(ok, Result),
-    ?assert(Time >= 3),
-
+    ?assert(Time >= 3*?DEFAULT_RETRY_DELAY),
     ?assert(meck:called(erlcloud_s3, put_object, ['_', '_', '_', '_', '_'])),
+    % Unload and stop store
     ok = meck:unload(erlcloud_s3),
     ok = stop(StoreOpts).
 
+%% @doc Test a failure in reading a key from S3 datasource.
 failed_read_test() ->
     init(),
     StoreOpts = default_test_opts(),
     start(StoreOpts),
     reset(StoreOpts),
     Key = hb_message:id(#{}),
-
+    % Mock S3 dependency to return 400 error
     ok = meck:new(erlcloud_s3, [passthrough]),
     XMLBody = <<"">>,
     ok = meck:expect(erlcloud_s3, get_object, fun(_, _, _, _) ->
         error({aws_error,{http_error, 400, "Bad Request", XMLBody}}) end),
-
+    % Read key and test result
     Result = read(StoreOpts, Key),
     ?assertMatch(not_found, Result),
-
     ?assert(meck:called(erlcloud_s3, get_object, ['_', '_', '_', '_'])),
+    % Unload and stop store
     ok = meck:unload(erlcloud_s3),
     ok = stop(StoreOpts).
 
@@ -1058,7 +1055,7 @@ cache_style_test() ->
     StoreOpts = default_test_opts(),
     % Start the store
     hb_store:start(StoreOpts),
-    reset(StoreOpts),
+    hb_store:reset(StoreOpts),
     % Test writing through hb_store interface
     ok = hb_store:write(StoreOpts, <<"test-key">>, <<"test-value">>),
     % Test reading through hb_store interface
@@ -1275,17 +1272,18 @@ list_with_link_test() ->
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
     stop(StoreOpts).
 
-resolve_bellow_max_test() ->
+%% Test if resolves link bellow the maxmimum number of link redirection.
+resolve_bellow_max_redirect_test() ->
     init(),
     StoreOpts = default_test_opts(),
-
     start(StoreOpts),
     reset(StoreOpts),
-
+    % Create a group with a children
     GroupName = hb_message:id(#{}),
     make_group(StoreOpts, GroupName),
     Key1 = <<GroupName/binary, "/key">>,
     ok = write(StoreOpts, Key1, <<"Value">>),
+    % Create a link chain (a link that refers the previous one)
     LastLink = lists:foldl(
       fun (ID, Link) ->
         BinID = integer_to_binary(ID),
@@ -1294,24 +1292,27 @@ resolve_bellow_max_test() ->
         NewLink
       end,
       GroupName,
-      lists:seq(1, 88)
+      lists:seq(1, ?MAX_REDIRECTS)
     ),
+    % Resolve link path
     PathToResolve = <<LastLink/binary, "/key">>,
     Result = resolve(StoreOpts, PathToResolve),
     % Return the resolved link path
     ?assertEqual(Key1, Result).
 
-resolve_above_max_test() ->
+%% Test if returns the same path when number of redirection is above the 
+%% maximum defined.
+resolve_above_max_redirect_test() ->
     init(),
     StoreOpts = default_test_opts(),
-
     start(StoreOpts),
     reset(StoreOpts),
-
+    % Create a group with a children
     GroupName = hb_message:id(#{}),
     make_group(StoreOpts, GroupName),
     Key1 = <<GroupName/binary, "/key">>,
     ok = write(StoreOpts, Key1, <<"Value">>),
+    % Create a link chain (a link that refers the previous one)
     LastLink = lists:foldl(
       fun (ID, Link) ->
         BinID = integer_to_binary(ID),
@@ -1322,26 +1323,32 @@ resolve_above_max_test() ->
       GroupName,
       lists:seq(1, ?MAX_REDIRECTS + 1)
     ),
+    % Resolve link path
     PathToResolve = <<LastLink/binary, "/key">>,
     Result = resolve(StoreOpts, PathToResolve),
     % Return the same path as given
     ?assertEqual(PathToResolve, Result).
 
-shard_key_test() ->
+%% @doc Test invalid keys, defined by keys with length less or equal 
+%% to ?SHARD_CUT
+invalid_sharded_key_test() ->
     InvalidKey1 = <<"data/xpto">>,
     ?assertError({invalid_key_for_sharding, <<"xpto">>}, shard_key(InvalidKey1)),
     InvalidKey2 = <<"xpto">>,
-    ?assertException(error, {invalid_key_for_sharding, InvalidKey2}, shard_key(InvalidKey2)),
+    ?assertException(error, {invalid_key_for_sharding, InvalidKey2}, shard_key(InvalidKey2)).
+
+%% @doc Shard valid keys.
+shard_key_test() ->
     Key1 = <<"data/xpto1">>,
     ?assertEqual(<<"data/xpto/1">>, shard_key(Key1)),
     Key2 = <<"xpto1">>,
-    ?assertEqual(<<"xpto/1">>, shard_key(Key2)),
-    %% Only first key is sharded.
-    Key3 = <<"xpto1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>,
-    ?assertEqual(<<"xpto/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>, shard_key(Key3)),
-    Key4 = <<"data/xpto1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>,
-    ?assertEqual(<<"data/xpto/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>, shard_key(Key4)),
-    ok.
+    ?assertEqual(<<"xpto/1">>, shard_key(Key2)).
 
+%% @doc Test that only shards the first Key (second when it starts with `data/`)
+only_first_key_is_sharded_test() ->
+    Key1 = <<"xpto1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>,
+    ?assertEqual(<<"xpto/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>, shard_key(Key1)),
+    Key2 = <<"data/xpto1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>,
+    ?assertEqual(<<"data/xpto/1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">>, shard_key(Key2)).
 -endif.
 -endif.
