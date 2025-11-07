@@ -12,7 +12,12 @@
 
 %% @doc Start a generic mock HTTP server that collects request bodies.
 %% Usage: start([{"/endpoint", endpoint_tag, {status, body}}, ...])
+%%        start([{"/endpoint", endpoint_tag, fun(Req) -> {Status, Body} end}, ...])
 %%        start([{"/endpoint", endpoint_tag}, ...]) for default {200, <<"OK">>}
+%%
+%% Response formats:
+%%   {Status, Body}     - Static response
+%%   fun(Req) -> ...    - Function called with request map, returns {Status, Body}
 %%
 %% Paths support Cowboy route patterns:
 %%   "/price/:amount"  - Matches /price/123, /price/abc, etc.
@@ -28,8 +33,12 @@ start(Endpoints) ->
     ListenerID = make_ref(),
     NormalizedEndpoints = lists:map(
         fun
-            ({Path, Tag, {Status, Body}}) -> {Path, Tag, {Status, Body}};
-            ({Path, Tag}) -> {Path, Tag, {200, <<>>}}
+            ({Path, Tag, Response}) when is_function(Response) -> 
+                {Path, Tag, Response};
+            ({Path, Tag, {Status, Body}}) -> 
+                {Path, Tag, {Status, Body}};
+            ({Path, Tag}) -> 
+                {Path, Tag, {200, <<>>}}
         end,
         Endpoints
     ),
@@ -81,13 +90,13 @@ collect_loop(State) ->
     end.
 
 %% @doc Convert a cowboy request to a message (i.e. just convert the atom
-%% keys to binaries)
-request_to_message(Req) ->
+%% keys to binaries and add the body)
+request_to_message(Req, Body) ->
     maps:fold(
         fun(Key, Value, Acc) ->
             maps:put(hb_util:bin(Key), Value, Acc)
         end,
-        #{},
+        #{<<"body">> => Body},
         Req
     ).
 
@@ -98,9 +107,14 @@ request_to_message(Req) ->
 %% @doc Cowboy handler callback - DO NOT CALL DIRECTLY.
 %% This is invoked automatically by Cowboy when requests arrive at the 
 %% mock server. See start/1 for usage.
-init(Req0, {Tag, {StatusCode, ResponseBody}, CollectorPID} = State) ->
+init(Req0, {Tag, Response, CollectorPID} = State) ->
     {ok, Body, Req} = cowboy_req:read_body(Req0),
-    Msg = request_to_message(Req),
-    CollectorPID ! {request, Tag, Msg#{<<"body">> => Body}},
+    Msg = request_to_message(Req, Body),
+    CollectorPID ! {request, Tag, Msg},
+    %% Determine the response - either call the function or use the static value
+    {StatusCode, ResponseBody} = case is_function(Response) of
+        true -> Response(Msg);
+        false -> Response
+    end,
     {ok, cowboy_req:reply(StatusCode, #{}, ResponseBody, Req), State}.
 

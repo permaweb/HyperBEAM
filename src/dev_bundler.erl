@@ -21,6 +21,7 @@
 
 %%% Default options.
 -define(SERVER_NAME, bundler_server).
+-define(DISPATCHER_NAME, bundler_dispatcher).
 -define(DEFAULT_MAX_SIZE, 100_000_000). % 100 MB.
 -define(DEFAULT_MAX_IDLE_TIME, 300_000). % 5 minutes.
 -define(DEFAULT_MAX_ITEMS, 1000).
@@ -126,25 +127,57 @@ dispatchable(_State, _Opts) ->
 %% @doc Dispatch the queue.
 dispatch(State = #{ queue := [] }, Opts) ->
     ?event({skipping_empty_queue}),
-    server(State, Opts);
+    State;
 dispatch(State = #{ queue := Q }, Opts) ->
-    % Use dev_codec_tx:to directly to build a bundled L1 transaction from
-    % a list of dataitems. We do this rather than hb_message:convert because
-    % hb_message doesn't handle lists natively - and it's tricky to get it
-    % to manage the data conversions idempotently.
-    {ok, Bundle} = dev_codec_tx:to(lists:reverse(Q), #{}, Opts),
-    case {get_price(Bundle#tx.data_size, Opts), get_anchor(Opts)} of
-        {{ok, Price}, {ok, Anchor}} ->
-            dispatch_bundle(
-                Bundle#tx{ anchor = Anchor, reward = Price }, State, Opts);
-        {PriceError, AnchorError} ->
-            ?event({unable_to_dispatch,
-                {price_error, PriceError}, {anchor_error, AnchorError}}),
-            server(State, Opts)
+    PID = ensure_dispatcher(),
+    PID ! {dispatch, Q, Opts},
+    State#{ queue => [] }.
+
+%% @doc Return the PID of the dispatch server. If the server is not running,
+%% it is started and registered with the name `?SERVER_NAME'.
+ensure_dispatcher() ->
+    case hb_name:lookup(?DISPATCHER_NAME) of
+        undefined ->
+            PID = spawn(fun() -> dispatcher() end),
+            hb_name:register(?DISPATCHER_NAME, PID),
+            hb_name:lookup(?DISPATCHER_NAME);
+        PID -> PID
     end.
 
-dispatch_bundle(Bundle, State, Opts) ->
-    ?event(debug_test, {dispatching_bundle, {bundle, Bundle}}),
+stop_dispatcher() ->
+    case hb_name:lookup(?DISPATCHER_NAME) of
+        undefined -> ok;
+        PID ->
+            PID ! stop,
+            hb_name:unregister(?DISPATCHER_NAME)
+    end.
+
+%% @doc The main loop of the bundler server. Simply waits for messages to be
+%% added to the queue, and then dispatches them when the queue is large enough.
+dispatcher() ->
+    receive
+        {dispatch, Q, Opts} ->
+            ?event(blah, {dispatching}),
+            % Use dev_codec_tx:to directly to build a bundled L1 transaction from
+            % a list of dataitems. We do this rather than hb_message:convert because
+            % hb_message doesn't handle lists natively - and it's tricky to get it
+            % to manage the data conversions idempotently.
+            {ok, Bundle} = dev_codec_tx:to(lists:reverse(Q), #{}, #{}),
+            case {get_price(Bundle#tx.data_size, Opts), get_anchor(Opts)} of
+                {{ok, Price}, {ok, Anchor}} ->
+                    dispatch_bundle(
+                        Bundle#tx{ anchor = Anchor, reward = Price }, Opts);
+                {PriceError, AnchorError} ->
+                    ?event({unable_to_dispatch,
+                        {price_error, PriceError}, {anchor_error, AnchorError}})
+            end,
+            dispatcher();
+        stop ->
+            exit(normal)
+    end.
+
+dispatch_bundle(Bundle, Opts) ->
+    ?event({dispatching_bundle, {bundle, Bundle}}),
     Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
     Signed = ar_tx:sign(Bundle, Wallet),
     % Now that we have the #tx record ready to go, convert back to a message
@@ -153,7 +186,7 @@ dispatch_bundle(Bundle, State, Opts) ->
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
         #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
         Opts),
-    ?event(debug_test, {posting_tx, Committed}),
+    ?event({posting_tx, Committed}),
     PostTXResponse =
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9-pre">> },
@@ -163,12 +196,12 @@ dispatch_bundle(Bundle, State, Opts) ->
             },
             Opts
         ),
+    ?event(blah, {dispatched}),
     case PostTXResponse of
         {ok, _} ->
-            server(State#{ queue => [], bytes => 0 }, Opts);
+            ok;
         {_, Error} ->
-            ?event({unable_to_dispatch, {tx_error, Error}}),
-            server(State, Opts)
+            ?event({unable_to_dispatch, {tx_error, Error}})
     end.
 
 get_price(DataSize, Opts) ->
@@ -221,15 +254,7 @@ tx_error_test() ->
             priv_wallet => hb:wallet(),
             bundler_max_items => 1
         }),
-        Data1 = rand:bytes(floor(2.5 * ?DATA_CHUNK_SIZE)),
-        Wallet1 = hb:wallet(),
-        Item1 = ar_bundles:sign_item(
-            #tx{
-                data = Data1,
-                tags = [{<<"tag1">>, <<"value1">>}]
-            },
-            Wallet1
-        ),
+        Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
         % We attempted to post the tx, so it will show up in the mocked
         % requests. But since the verificaiton failed, the data item should
@@ -238,17 +263,13 @@ tx_error_test() ->
         ?assertEqual(1, length(TXs)),
         Chunks = get_requests(chunk, 1, ServerHandle),
         ?assertEqual([], Chunks),
-        % The item should still be in the bundler queue.
-        ItemStructured = hb_message:convert(
-            Item1, <<"structured@1.0">>, <<"ans104@1.0">>, ClientOpts),
-        #{ queue := Queue, bytes := Bytes } = get_state(ClientOpts),
-        ?assertEqual([ItemStructured], Queue),
-        ?assertEqual(657070, Bytes),
+        % Now that we dispatch asynchronously, an error won't cause the
+        % Item to remain in the queue. Instead we'll rely on the retry
+        % logic to pick it up.
         ok
     after
         %% Always cleanup, even if test fails
-        hb_mock_server:stop(ServerHandle),
-        stop_server()
+        stop_test_servers(ServerHandle)
     end.
 
 unsigned_dataitem_test() ->
@@ -277,8 +298,8 @@ unsigned_dataitem_test() ->
             {failure, #{ <<"status">> := 500 }},
             Response)
     after
-        hb_mock_server:stop(ServerHandle),
-        stop_server()
+        %% Always cleanup, even if test fails
+        stop_test_servers(ServerHandle)
     end.
 
 idle_test() ->
@@ -298,15 +319,7 @@ idle_test() ->
             priv_wallet => hb:wallet()
         }),
         %% Upload 1 data items across 2 chunks.
-        Data1 = rand:bytes(floor(1.5 * ?DATA_CHUNK_SIZE)),
-        Wallet1 = hb:wallet(),
-        Item1 = ar_bundles:sign_item(
-            #tx{
-                data = Data1,
-                tags = [{<<"tag1">>, <<"value1">>}]
-            },
-            Wallet1
-        ),
+        Item1 = new_data_item(1, floor(1.5 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
         % Wait just to give the server a chance to post a transaction
         % (but it shouldn't)
@@ -321,47 +334,75 @@ idle_test() ->
         %% Wait for expected chunks
         Proofs = get_requests(chunk, 2, ServerHandle),
         ?assertEqual(2, length(Proofs)),
-        %% Reconstitute the transaction with its data from the POSTed payloads.
-        TXBinary = maps:get(<<"body">>, hd(TXs)),
-        TXJSON = hb_json:decode(TXBinary),
-        TXHeader = ar_tx:json_struct_to_tx(TXJSON),
-        %% Decode all chunks and concatenate into one binary
-        Chunks = lists:map(
-            fun(ChunkRequest) ->
-                ProofBinary = maps:get(<<"body">>, ChunkRequest),
-                ProofJSON = hb_json:decode(ProofBinary),
-                hb_util:decode(maps:get(<<"chunk">>, ProofJSON))
-            end,
-            Proofs
-        ),
-        DataBinary = iolist_to_binary(Chunks),
-        TX = TXHeader#tx{ data = DataBinary },
-        ?assert(ar_tx:verify(TX)),
-        ?assertEqual(Anchor, TX#tx.anchor),
-        ?assertEqual(Price, TX#tx.reward),
-        ?event(debug_test, {tx,TX}),
-        TXStructured = hb_message:convert(
-            TX, <<"structured@1.0">>, <<"tx@1.0">>, ClientOpts),
-        ?event(debug_test, {tx_structured, TXStructured}),
-        ?assert(hb_message:verify(TXStructured, all, ClientOpts)),
-        %% Verify individual data items in the bundle
-        BundleDeserialized = ar_bundles:deserialize(TX),
-        ?event(debug_test, {bundle_deserialized, BundleDeserialized}),
-        ?assertEqual(1, maps:size(BundleDeserialized#tx.data)),
-        #{<<"1">> := BundledItem1} = BundleDeserialized#tx.data,
-        %% Verify each data item's signature
-        ?assert(ar_bundles:verify_item(BundledItem1)),
-        %% Verify that the data items match the original items
-        ?assertEqual(Item1, BundledItem1),
-        ?assertEqual(undefined, TX#tx.manifest),
-        ?assertEqual(undefined, BundleDeserialized#tx.manifest),
+        assert_bundle([Item1], Anchor, Price, hd(TXs), Proofs, ClientOpts),
         ok
     after
         %% Always cleanup, even if test fails
-        hb_mock_server:stop(ServerHandle),
-        stop_server()
+        stop_test_servers(ServerHandle)
     end.
-    
+
+dispatch_blocking_test() ->
+    BlockTime = 10000,
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    % NodeOpts redirects arweave gateway requests to the mock server.
+    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+        #{
+            price => {200, integer_to_binary(Price)},
+            tx_anchor => {200, hb_util:encode(Anchor)},
+            tx => fun(_Req) ->
+                timer:sleep(BlockTime),
+                {200, <<"Transaction posted">>}
+            end
+        }
+    ),
+    try
+        ClientOpts = #{},
+        Node = hb_http_server:start_node(NodeOpts#{
+            priv_wallet => hb:wallet(),
+            bundler_max_items => 3
+        }),
+        %% Upload 4 data items and time each post
+        Item1 = new_data_item(1, 10),
+        {Time1, {ok, _}} =
+            timer:tc(fun() -> post_data_item(Node, Item1, ClientOpts) end),
+        Item2 = new_data_item(2, 10),
+        {Time2, {ok, _}} = 
+            timer:tc(fun() -> post_data_item(Node, Item2, ClientOpts) end),
+        Item3 = new_data_item(3, 10),
+        {Time3, {ok, _}} =
+            timer:tc(fun() -> post_data_item(Node, Item3, ClientOpts) end),
+        Item4 = new_data_item(4, 10),
+        {Time4, {ok, _}} =
+            timer:tc(fun() -> post_data_item(Node, Item4, ClientOpts) end),
+        %% Assert that the 4th item takes no longer than twice the slowest of
+        %% the first 3. This verifies that we aren't blocking on the tx
+        %% bundle dispatching.
+        Slowest = lists:max([Time1, Time2, Time3]),
+        ?event(debug_test, {post_times,
+            {item1, Time1}, {item2, Time2}, {item3, Time3}, {item4, Time4},
+            {slowest, Slowest}, {max_allowed, 2 * Slowest}
+        }),
+        ?assert(Time4 =< 2 * Slowest),
+        timer:sleep(BlockTime),
+        TXs = get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        %% Wait for expected chunks
+        Proofs = get_requests(chunk, 1, ServerHandle),
+        ?assertEqual(1, length(Proofs)),
+        assert_bundle(
+            [Item1, Item2, Item3],
+            Anchor, Price, hd(TXs), Proofs, ClientOpts),
+        ok
+    after
+        %% Always cleanup, even if test fails
+        stop_test_servers(ServerHandle)
+    end.
+
+stop_test_servers(ServerHandle) ->
+    hb_mock_server:stop(ServerHandle),
+    stop_server(),
+    stop_dispatcher().
 
 test_bundle(Opts) ->
     Anchor = rand:bytes(32),
@@ -380,81 +421,19 @@ test_bundle(Opts) ->
             priv_wallet => hb:wallet()
         }),
         %% Upload 3 data items across 4 chunks.
-        Data1 = rand:bytes(floor(2.5 * ?DATA_CHUNK_SIZE)),
-        Wallet1 = hb:wallet(),
-        Item1 = ar_bundles:sign_item(
-            #tx{
-                data = Data1,
-                tags = [{<<"tag1">>, <<"value1">>}]
-            },
-            Wallet1
-        ),
+        Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
-        Data2 = rand:bytes(?DATA_CHUNK_SIZE),
-        Wallet2 = hb:wallet(),
-        Item2 = ar_bundles:sign_item(
-            #tx{
-                data = Data2,
-                tags = [{<<"tag2">>, <<"value2">>}]
-            },
-            Wallet2
-        ),
+        Item2 = new_data_item(2, ?DATA_CHUNK_SIZE),
         ?assertMatch({ok, _}, post_data_item(Node, Item2, ClientOpts)),
-        Data3 = rand:bytes(floor(0.25 * ?DATA_CHUNK_SIZE)),
-        Wallet3 = hb:wallet(),
-        Item3 = ar_bundles:sign_item(
-            #tx{
-                data = Data3,
-                tags = [{<<"tag3">>, <<"value3">>}]
-            },
-            Wallet3
-        ),
+        Item3 = new_data_item(3, floor(0.25 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item3, ClientOpts)),
         TXs = get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
         %% Wait for expected chunks
         Proofs = get_requests(chunk, 4, ServerHandle),
         ?assertEqual(4, length(Proofs)),
-        %% Reconstitute the transaction with its data from the POSTed payloads.
-        TXBinary = maps:get(<<"body">>, hd(TXs)),
-        TXJSON = hb_json:decode(TXBinary),
-        TXHeader = ar_tx:json_struct_to_tx(TXJSON),
-        %% Decode all chunks and concatenate into one binary
-        Chunks = lists:map(
-            fun(ChunkRequest) ->
-                ProofBinary = maps:get(<<"body">>, ChunkRequest),
-                ProofJSON = hb_json:decode(ProofBinary),
-                hb_util:decode(maps:get(<<"chunk">>, ProofJSON))
-            end,
-            Proofs
-        ),
-        DataBinary = iolist_to_binary(Chunks),
-        TX = TXHeader#tx{ data = DataBinary },
-        ?assert(ar_tx:verify(TX)),
-        ?assertEqual(Anchor, TX#tx.anchor),
-        ?assertEqual(Price, TX#tx.reward),
-        ?event(debug_test, {tx,TX}),
-        TXStructured = hb_message:convert(
-            TX, <<"structured@1.0">>, <<"tx@1.0">>, ClientOpts),
-        ?event(debug_test, {tx_structured, TXStructured}),
-        ?assert(hb_message:verify(TXStructured, all, ClientOpts)),
-        %% Verify individual data items in the bundle
-        BundleDeserialized = ar_bundles:deserialize(TX),
-        ?event(debug_test, {bundle_deserialized, BundleDeserialized}),
-        ?assertEqual(3, maps:size(BundleDeserialized#tx.data)),
-        #{<<"1">> := BundledItem1, <<"2">> := BundledItem2, <<"3">> := BundledItem3} = 
-            BundleDeserialized#tx.data,
-        %% Verify each data item's signature
-        ?assert(ar_bundles:verify_item(BundledItem1)),
-        ?assert(ar_bundles:verify_item(BundledItem2)),
-        ?assert(ar_bundles:verify_item(BundledItem3)),
-        %% Verify that the data items match the original items
-        ?assertEqual(Item1, BundledItem1),
-        ?assertEqual(Item2, BundledItem2),
-        ?assertEqual(Item3, BundledItem3),
-
-        ?assertEqual(undefined, TX#tx.manifest),
-        ?assertEqual(undefined, BundleDeserialized#tx.manifest),
+        assert_bundle(
+            [Item1, Item2, Item3], Anchor, Price, hd(TXs), Proofs, ClientOpts),
         ok
     after
         %% Always cleanup, even if test fails
@@ -470,15 +449,7 @@ test_api_error(Responses) ->
             priv_wallet => hb:wallet(),
             bundler_max_items => 1
         }),
-        Data1 = rand:bytes(floor(2.5 * ?DATA_CHUNK_SIZE)),
-        Wallet1 = hb:wallet(),
-        Item1 = ar_bundles:sign_item(
-            #tx{
-                data = Data1,
-                tags = [{<<"tag1">>, <<"value1">>}]
-            },
-            Wallet1
-        ),
+        Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
         % Since thre was an error either before or while posting the tx,
         % no bundles should be posted and no chunks should be posted.
@@ -486,18 +457,27 @@ test_api_error(Responses) ->
         ?assertEqual([], TXs),
         Chunks = get_requests(chunk, 1, ServerHandle),
         ?assertEqual([], Chunks),
-        % The item should still be in the bundler queue.
-        ItemStructured = hb_message:convert(
-            Item1, <<"structured@1.0">>, <<"ans104@1.0">>, ClientOpts),
-        #{ queue := Queue, bytes := Bytes } = get_state(ClientOpts),
-        ?assertEqual([ItemStructured], Queue),
-        ?assertEqual(657070, Bytes),
+        % Now that we dispatch asynchronously, an error won't cause the
+        % Item to remain in the queue. Instead we'll rely on the retry
+        % logic to pick it up.
         ok
     after
         %% Always cleanup, even if test fails
         hb_mock_server:stop(ServerHandle),
         stop_server()
     end.
+
+new_data_item(Index, Size) ->
+    Data = rand:bytes(Size),
+    Tag = <<"tag", (integer_to_binary(Index))/binary>>,
+    Value = <<"value", (integer_to_binary(Index))/binary>>,
+    ar_bundles:sign_item(
+        #tx{
+            data = Data,
+            tags = [{Tag, Value}]
+        },
+        hb:wallet()
+    ).
 
 post_data_item(Node, Item, Opts) ->
     Serialized = ar_bundles:serialize(Item),
@@ -511,6 +491,48 @@ post_data_item(Node, Item, Opts) ->
         },
         Opts
     ).
+
+assert_bundle(ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
+    %% Reconstitute the transaction with its data from the POSTed payloads.
+    TXBinary = maps:get(<<"body">>, TXRequest),
+    TXJSON = hb_json:decode(TXBinary),
+    TXHeader = ar_tx:json_struct_to_tx(TXJSON),
+    %% Decode all chunks and concatenate into one binary
+    Chunks = lists:map(
+        fun(ChunkRequest) ->
+            ProofBinary = maps:get(<<"body">>, ChunkRequest),
+            ProofJSON = hb_json:decode(ProofBinary),
+            hb_util:decode(maps:get(<<"chunk">>, ProofJSON))
+        end,
+        Proofs
+    ),
+    DataBinary = iolist_to_binary(Chunks),
+    TX = TXHeader#tx{ data = DataBinary },
+    ?assert(ar_tx:verify(TX)),
+    ?assertEqual(Anchor, TX#tx.anchor),
+    ?assertEqual(Price, TX#tx.reward),
+    ?event(debug_test, {tx,TX}),
+    TXStructured = hb_message:convert(
+        TX, <<"structured@1.0">>, <<"tx@1.0">>, ClientOpts),
+    ?event(debug_test, {tx_structured, TXStructured}),
+    ?assert(hb_message:verify(TXStructured, all, ClientOpts)),
+    %% Verify individual data items in the bundle
+    BundleDeserialized = ar_bundles:deserialize(TX),
+    ?event(debug_test, {bundle_deserialized, BundleDeserialized}),
+    ?assertEqual(length(ExpectedItems), maps:size(BundleDeserialized#tx.data)),
+    %% Verify each data item's signature and match with expected items
+    lists:foreach(
+        fun({Index, ExpectedItem}) ->
+            Key = integer_to_binary(Index),
+            BundledItem = maps:get(Key, BundleDeserialized#tx.data),
+            ?assert(ar_bundles:verify_item(BundledItem)),
+            ?assertEqual(ExpectedItem, BundledItem)
+        end,
+        lists:zip(lists:seq(1, length(ExpectedItems)), ExpectedItems)
+    ),
+
+    ?assertEqual(undefined, TX#tx.manifest),
+    ?assertEqual(undefined, BundleDeserialized#tx.manifest).
 
 get_requests(Type, Count, ServerHandle) ->
     %% Wait for expected transaction
