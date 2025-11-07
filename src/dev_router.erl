@@ -397,10 +397,17 @@ match(Base, Req, Opts) ->
     end.
 
 match_routes(ToMatch, Routes, Opts) ->
+    Keys =
+        case hb_util:is_ordered_list(Routes, Opts) of
+            true ->
+                lists:seq(1, length(hb_util:message_to_ordered_list(Routes, Opts)));
+            false ->
+                hb_ao:keys(hb_ao:normalize_keys(Routes, Opts))
+        end,
     match_routes(
         hb_cache:ensure_all_loaded(ToMatch, Opts),
         hb_cache:ensure_all_loaded(Routes, Opts),
-        hb_ao:keys(hb_ao:normalize_keys(Routes, Opts)),
+        Keys,
         Opts
     ).
 match_routes(#{ <<"path">> := Explicit = <<"http://", _/binary>> }, _, _, _) ->
