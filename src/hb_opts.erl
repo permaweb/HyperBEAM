@@ -186,6 +186,7 @@ default_message() ->
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
             #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois},
+            #{<<"name">> => <<"sev_gpu@1.0">>, <<"module">> => dev_sev_gpu},
             #{<<"name">> => <<"inference@1.0">>, <<"module">> => dev_inference}
         ],
         %% Default execution cache control options
