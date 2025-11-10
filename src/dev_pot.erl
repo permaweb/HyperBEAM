@@ -80,52 +80,49 @@ drip(S = #{
         <<"mint-cap">> := Max,
         <<"mint-prop">> := Proportion
     }, Opts) ->
-    Minted = hb_maps:get(<<"minted">>, S, 0, Opts),
+    AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
-    Steps = max(T - LastT, 0),
-    case Steps =:= 0 of
-        true -> S;
-        false ->
-            ToMint = units_minted_between(Minted, Max, Proportion, LastT, T),
-            TW = hb_maps:get(<<"tw">>, S),
-            ?event({minting, {to_mint, ToMint}, {total_weight, TW}}),
-            DeltaM = case TW of 0 -> 0; _ -> ToMint / TW end,
-            M0 = hb_maps:get(<<"chi">>, S, 0, Opts),
-            R = S#{
-                <<"chi">> => M0 + DeltaM,
-                <<"last-drip">> => T,
-                <<"minted">> => Minted + ToMint
-            },
-            ?event({new_state, R}),
-            R
-    end.
+    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
+    ToMint = units_minted_between(AlreadyMinted, Max, Proportion, LastT, T),
+    ?event({minting, {to_mint, ToMint}, {total_weight, TotalWeightedUnits}}),
+    S#{
+        <<"minted-per-weighted-unit">> =>
+            hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts) +
+            (ToMint / TotalWeightedUnits),
+        <<"last-drip">> => T,
+        <<"minted">> => AlreadyMinted + ToMint
+    }.
 
 balance(Addr, S) ->
-    ExistingBalance = hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}), 0),
+    hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}), 0)
+        + unclaimed_yield(Addr, S, #{}).
+
+unclaimed_yield(Addr, S, Opts) ->
     ResourceIDs =
         hb_maps:keys(
             hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, #{}),
             #{}
         ),
-    Chi = hb_maps:get(<<"chi">>, S, 0),
-    ExistingBalance + 
-        lists:sum(
-            lists:map(
-                fun(ResourceID) ->
-                    Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, #{}),
-                    ResW = hb_maps:get(<<"weight">>, Res, 0),
-                    ChiEff = ResW * Chi,
-                    Deposits = hb_maps:get(<<"deposits">>, Res, #{}),
-                    case hb_maps:find(Addr, Deposits) of
-                        error -> 0;
-                        {ok, #{ <<"quantity">> := Qty, <<"chi0">> := Chi0 }} ->
-                            ?no_prod("Remove all floating point arithmetic."),
-                            (ChiEff - Chi0) * Qty
-                    end
-                end,
-                ResourceIDs
-            )
-        ).
+    MintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts),
+    lists:sum(
+        lists:map(
+            fun(ResID) ->
+                unclaimed_yield(Addr, ResID, MintedPerWeightedUnit, S, Opts)
+            end,
+            ResourceIDs
+        )
+    ).
+unclaimed_yield(Addr, ResourceID, MintedPerWeightedUnit, S, Opts) ->
+    Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
+    ResW = hb_maps:get(<<"weight">>, Res, 0),
+    AccruedYield = ResW * MintedPerWeightedUnit,
+    Deposits = hb_maps:get(<<"deposits">>, Res, #{}),
+    case hb_maps:find(Addr, Deposits) of
+        error -> 0;
+        {ok, #{ <<"quantity">> := Qty, <<"chi0">> := MintedPerWeightedUnitAtDeposit }} ->
+            ?no_prod("Remove all floating point arithmetic."),
+            (AccruedYield - MintedPerWeightedUnitAtDeposit) * Qty
+    end.
 
 units_minted_between(Minted, Max, Proportion, LastT, T) ->
     Steps = max(T - LastT, 0),
@@ -134,55 +131,48 @@ units_minted_between(Minted, Max, Proportion, LastT, T) ->
 
 modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
     S1 = drip(S0, Opts),
-    #{ <<"balances">> := Balances0, <<"resources">> := Resources0 } = S1,
+    #{ <<"balances">> := Balances, <<"resources">> := Resources } = S1,
     ExistingDeposit = deposit(Addr, ResourceID, S1),
-    NewDepositQty = ExistingDeposit + Amount,
-    RealizedBalance = balance(Addr, S1),
-    % Reset chi0 for this address across all resources to current chi
-    Chi = hb_maps:get(<<"chi">>, S1, 0, Opts),
+    MintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S1, 0, Opts),
+    BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
+    NewBalance =
+        BaseBalance +
+        unclaimed_yield(Addr, ResourceID, MintedPerWeightedUnit, S1, Opts),
     NewResources =
-        hb_maps:map(
-            fun(XResID, Res) ->
-                IsDepositRes = XResID =:= ResourceID,
-                ResDeposits = hb_maps:get(<<"deposits">>, Res, #{}),
-                Entry = hb_maps:get(Addr, ResDeposits, #{}, Opts),
-                case IsDepositRes orelse not ?IS_EMPTY_MESSAGE(Entry) of
-                    false -> Res;
-                    true ->
-                        ResWeight = hb_maps:get(<<"weight">>, Res, 0),
-                        NewChi0 = ResWeight * Chi,
-                        TotalDeposits = hb_maps:get(<<"total-deposits">>, Res, 0, Opts),
-                        Res#{
-                            <<"deposits">> =>
-                                ResDeposits#{
-                                    Addr =>
-                                        Entry#{
-                                            <<"chi0">> => NewChi0,
-                                            <<"quantity">> =>
-                                                if IsDepositRes -> NewDepositQty;
-                                                true ->
-                                                    hb_maps:get(<<"quantity">>, Entry, 0, Opts)
-                                                end
-                                        }
-                                },
-                            <<"total-deposits">> =>
-                                TotalDeposits +
-                                    if IsDepositRes -> Amount;
-                                    true -> 0
-                                    end
-                        }
-                end
-            end,
-            Resources0
+        hb_ao:set(
+            Resources,
+            #{
+                ResourceID =>
+                    #{
+                        <<"total-deposits">> =>
+                            Amount +
+                                hb_ao:get(
+                                    <<ResourceID/binary, "/total-deposits">>,
+                                    Resources,
+                                    0,
+                                    Opts
+                                ),
+                        <<"deposits">> =>
+                            #{
+                                Addr =>
+                                    #{
+                                        <<"quantity">> => ExistingDeposit + Amount,
+                                        <<"chi0">> => MintedPerWeightedUnit
+                                    }
+                            }
+                    }
+            },
+            Opts
         ),
     ?event({new_resources, NewResources}),
     WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
-    Tw0 = hb_maps:get(<<"tw">>, S1),
+    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
+    NewTotalWeightedUnits = TotalWeightedUnits + (WeightR * Amount),
     S2 =
         S1#{
             <<"resources">> => NewResources,
-            <<"tw">> => Tw0 + (WeightR * Amount),
-            <<"balances">> => Balances0#{ Addr => RealizedBalance }
+            <<"total-weighted-units">> => NewTotalWeightedUnits,
+            <<"balances">> => Balances#{ Addr => NewBalance }
         },
     S3 =
         maybe_liquidate_delegations(
