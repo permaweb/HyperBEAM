@@ -100,6 +100,33 @@ drip(S = #{
             R
     end.
 
+balance(Addr, S) ->
+    ExistingBalance = hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}), 0),
+    ResourceIDs =
+        hb_maps:keys(
+            hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, #{}),
+            #{}
+        ),
+    Chi = hb_maps:get(<<"chi">>, S, 0),
+    ExistingBalance + 
+        lists:sum(
+            lists:map(
+                fun(ResourceID) ->
+                    Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, #{}),
+                    ResW = hb_maps:get(<<"weight">>, Res, 0),
+                    ChiEff = ResW * Chi,
+                    Deposits = hb_maps:get(<<"deposits">>, Res, #{}),
+                    case hb_maps:find(Addr, Deposits) of
+                        error -> 0;
+                        {ok, #{ <<"quantity">> := Qty, <<"chi0">> := Chi0 }} ->
+                            ?no_prod("Remove all floating point arithmetic."),
+                            (ChiEff - Chi0) * Qty
+                    end
+                end,
+                ResourceIDs
+            )
+        ).
+
 units_minted_between(Minted, Max, Proportion, LastT, T) ->
     Steps = max(T - LastT, 0),
     Remaining = Max - Minted,
@@ -300,29 +327,6 @@ deposit(Addr, ResourceID, S) ->
         #{}
     ).
 
-balance(Addr, S) ->
-    ExistingBalance = hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}), 0),
-    Resources = hb_maps:get(<<"resources">>, S, #{}),
-    Chi = hb_maps:get(<<"chi">>, S, 0),
-    Yield =
-        lists:sum(
-            lists:map(
-                fun(Res) ->
-                    ResW = hb_maps:get(<<"weight">>, Res, 0),
-                    ChiEff = ResW * Chi,
-                    Deposits = hb_maps:get(<<"deposits">>, Res, #{}),
-                    case hb_maps:find(Addr, Deposits) of
-                        error -> 0;
-                        {ok, #{ <<"quantity">> := Qty, <<"chi0">> := Chi0 }} ->
-                            ?no_prod("Remove all floating point arithmetic."),
-                            (ChiEff - Chi0) * Qty
-                    end
-                end,
-                hb_maps:values(Resources)
-            )
-        ),
-    ExistingBalance + Yield.
-
 balances(S = #{ <<"balances">> := Bs }) ->
     hb_maps:map(fun(Addr, _) -> balance(Addr, S) end, Bs).
 
@@ -364,15 +368,9 @@ set_user_deposit(Addr, ResourceID, Quantity, S, Opts) ->
     ).
 
 set_user_delegations(Addr, Delegations, S, Opts) ->
-    U = user(Addr, S, Opts),
-    NewU =
-        U#{
-            <<"delegations">> =>
-                Delegations
-        },
     hb_ao:set(
         S,
-        <<"/users/", Addr/binary>>,
-        NewU,
+        <<"/users/", Addr/binary, "/delegations">>,
+        Delegations,
         Opts
     ).
