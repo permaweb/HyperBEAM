@@ -39,6 +39,9 @@ transfer(Base, Assignment, Opts) ->
         {ok, Recipient} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
         ?event({req, Req, from, From}),
+        true ?= validate_address(Recipient),
+        true ?= (is_integer(Quantity) and (Quantity >= 0))
+            orelse {error, <<"Quantity must be a non-negative integer.">>},
         % Handle self-transfer: skip balance updates
         case From =:= Recipient of
             true ->
@@ -128,6 +131,9 @@ mint_single(Base, Req, Opts) ->
     maybe
         {ok, To} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
+        true ?= (is_integer(Quantity) and (Quantity >= 0))
+            orelse {error, <<"Quantity must be a non-negative integer.">>},
+        true ?= validate_address(To),
         perform_mint(Base, #{ To => Quantity }, Opts)
     end.
 
@@ -247,3 +253,21 @@ send(Msgs, Base, Opts) ->
         ok,
         hb_ao:set(Base, <<"results/outbox">>, NewOutbox, Opts)
     }.
+
+%% @doc Validate address format for security
+validate_address(Address) when is_binary(Address) ->
+    case byte_size(Address) of
+        0 -> {error, <<"Recipient address cannot be empty.">>};
+        _ ->
+            % Check for path separators (security: prevent path traversal)
+            case binary:match(Address, [<<"/">>, <<"\\">>]) of
+                nomatch -> true; 
+                _ -> 
+                    {
+                        error, 
+                        <<"Recipient address cannot contain path separators.">>
+                    }
+            end
+    end;
+validate_address(_) ->
+    {error, <<"Recipient address must be a binary.">>}.
