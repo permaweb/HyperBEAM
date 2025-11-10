@@ -62,7 +62,7 @@
 -export([drip/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([modify_deposit/5, delegate/6, maybe_liquidate_delegations/5]).
--export([units_minted_between/5, set_user_deposit/5, set_user_delegations/4]).
+-export([units_minted_between/5, update_deposit_index/5]).
 -export([user/3, balance/2, balances/1, deposit/3, deposits/1, deposits/2]).
 %%% Pot Model.
 
@@ -181,7 +181,7 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
             S2,
             Opts
         ),
-    set_user_deposit(Addr, ResourceID, deposit(Addr, ResourceID, S3), S3, Opts).
+    update_deposit_index(Addr, ResourceID, deposit(Addr, ResourceID, S3), S3, Opts).
 
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
     ?event(
@@ -334,7 +334,7 @@ deposits(ResourceID, S) ->
 user(Addr, S, Opts) ->
     hb_ao:get(<<"/users/", Addr/binary>>, S, #{}, Opts).
 
-set_user_deposit(Addr, ResourceID, Quantity, S, Opts) ->
+update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
     Delegations =
         hb_ao:get(
             <<
@@ -354,13 +354,5 @@ set_user_deposit(Addr, ResourceID, Quantity, S, Opts) ->
         if Quantity == 0 andalso ?IS_EMPTY_MESSAGE(Delegations) -> unset;
         true -> Quantity
         end,
-        Opts
-    ).
-
-set_user_delegations(Addr, Delegations, S, Opts) ->
-    hb_ao:set(
-        S,
-        <<"/users/", Addr/binary, "/delegations">>,
-        Delegations,
         Opts
     ).
