@@ -740,34 +740,18 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
             0,
             Opts
         ),
-    ExistingDelegations =
-        hb_ao:get(
-            <<
-                "/resources/", 
-                ResourceID/binary, 
-                "/deposits/", 
-                FromAddr/binary, 
-                "/delegations">>,
-            S1,
-            #{},
-            Opts
-        ),
     NewS1 =
         hb_ao:set(
             S1,
-            #{<<"resources">> => #{
-                    ResourceID => #{
-                        <<"deposits">> => #{
-                            FromAddr => #{
-                                <<"delegations">> =>
-                                    ExistingDelegations#{
-                                        ToAddr => ExistingQuantity + Amount
-                                    }
-                            }
-                        }
-                    }
-                }
-            },
+            <<
+                "/resources/",
+                ResourceID/binary,
+                "/deposits/",
+                FromAddr/binary,
+                "/delegations/",
+                ToAddr/binary
+            >>,
+            ExistingQuantity + Amount,
             Opts
         ),
     maybe_liquidate_delegations(
