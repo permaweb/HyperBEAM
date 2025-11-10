@@ -1447,6 +1447,477 @@ owner_change_revokes_old_owner_test() ->
     {ok, State2} = dev_token:compute(State1, Req3, #{}),
     ?assertEqual(<<"New Owner Success">>, hb_ao:get(<<"name">>, State2, #{})).
 
+%% @doc Transfer to single character address should succeed
+transfer_to_single_char_address_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    SingleChar = <<"_">>,
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => SingleChar,
+            <<"quantity">> => 100
+        },
+        #{from => ?ALICE}
+    ),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    ?assertEqual(900, get_balance(State, ?ALICE)),
+    ?assertEqual(100, get_balance(State, SingleChar)).
+
+%% @doc Transfer to short address (7 chars) should succeed
+transfer_to_short_address_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    ShortAddr = <<"BADFOOD">>,
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ShortAddr,
+            <<"quantity">> => 100
+        },
+        #{from => ?ALICE}
+    ),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    ?assertEqual(900, get_balance(State, ?ALICE)),
+    ?assertEqual(100, get_balance(State, ShortAddr)).
+
+%% @doc Transfer to maximum length address (128 chars) should succeed
+transfer_to_max_length_address_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    % 128-char address - use list_to_binary with duplicate
+    MaxAddr = list_to_binary(lists:duplicate(128, $A)),
+    ?assertEqual(128, byte_size(MaxAddr)),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => MaxAddr,
+            <<"quantity">> => 100
+        },
+        #{from => ?ALICE}
+    ),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    ?assertEqual(900, get_balance(State, ?ALICE)),
+    ?assertEqual(100, get_balance(State, MaxAddr)).
+
+%% @doc Transfer to standard Arweave address
+transfer_to_arweave_address_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    ArweaveAddr = <<"1seRanklLU_1VTGkEk7P0xAwMJfA7owA1JHW5KyZKlY">>,
+    ?assertEqual(43, byte_size(ArweaveAddr)),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ArweaveAddr,
+            <<"quantity">> => 100
+        },
+        #{from => ?ALICE}
+    ),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    ?assertEqual(900, get_balance(State, ?ALICE)),
+    ?assertEqual(100, get_balance(State, ArweaveAddr)).
+
+%% @doc Transfer to empty address should fail
+transfer_to_empty_address_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => <<>>,
+            <<"quantity">> => 100
+        },
+        #{from => ?ALICE}
+    ),
+    % Empty address should be rejected
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch({error, <<"Recipient address cannot be empty.">>}, Result),
+    % Balance unchanged
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Transfer to address with special characters should succeed
+transfer_to_special_chars_address_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    SpecialAddr = <<"alice@example.com">>,
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => SpecialAddr,
+            <<"quantity">> => 100
+        },
+        #{from => ?ALICE}
+    ),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    ?assertEqual(900, get_balance(State, ?ALICE)),
+    ?assertEqual(100, get_balance(State, SpecialAddr)).
+
+%% @doc Transfer to path-like address should fail
+transfer_to_path_traversal_address_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    PathAddr = <<"../../root">>,
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => PathAddr,
+            <<"quantity">> => 100
+        },
+        #{from => ?ALICE}
+    ),
+    % Path-like addresses should be rejected for security
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch(
+        {error, <<"Recipient address cannot contain path separators.">>}, 
+        Result
+    ),
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Mint to single character address should succeed
+mint_to_single_char_address_test() ->
+    hb:init(),
+    Base = generate_base_state(),
+    SingleChar = <<"x">>,
+    Req = make_request(
+        <<"mint">>,
+        #{
+            <<"mode">> => <<"single">>,
+            <<"recipient">> => SingleChar,
+            <<"quantity">> => 1000
+        },
+        #{from => ?MINTER}
+    ),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    ?assertEqual(1000, get_balance(State, SingleChar)),
+    ?assertEqual(1000, hb_ao:get(<<"total-supply">>, State, #{})).
+
+%% @doc Mint to max length address should succeed
+mint_to_max_length_address_test() ->
+    hb:init(),
+    Base = generate_base_state(),
+    MaxAddr = binary:copy(<<"A">>, 128),
+    Req = make_request(
+        <<"mint">>,
+        #{
+            <<"mode">> => <<"single">>,
+            <<"recipient">> => MaxAddr,
+            <<"quantity">> => 1000
+        },
+        #{from => ?MINTER}
+    ),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    ?assertEqual(1000, get_balance(State, MaxAddr)).
+    
+%% @doc Transfer with string quantity should fail
+transfer_string_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => <<"100">>  % String, not integer
+        },
+        #{from => ?ALICE}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch({error, _}, Result),
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Transfer with negative string quantity should fail
+transfer_negative_string_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => <<"-100">>
+        },
+        #{from => ?ALICE}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch({error, _}, Result),
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Transfer with mixed type string quantity should fail
+transfer_mixed_string_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => <<"-1000FOO">>
+        },
+        #{from => ?ALICE}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch({error, _}, Result),
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Transfer with quoted zero string should fail
+transfer_quoted_zero_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => <<"\"0\"">>
+        },
+        #{from => ?ALICE}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch({error, _}, Result),
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Transfer with float quantity should fail
+transfer_float_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => 100.5  % Float
+        },
+        #{from => ?ALICE}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch({error, _}, Result),
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Transfer with float string quantity should fail
+transfer_float_string_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => <<"100.5">>
+        },
+        #{from => ?ALICE}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch({error, _}, Result),
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Transfer with scientific notation string should fail
+transfer_scientific_notation_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => <<"1e10">>
+        },
+        #{from => ?ALICE}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch({error, _}, Result),
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Transfer with atom quantity should fail
+transfer_atom_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => hundred 
+        },
+        #{from => ?ALICE}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch({error, _}, Result),
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Transfer with list quantity should fail
+transfer_list_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => [100] 
+        },
+        #{from => ?ALICE}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch({error, _}, Result),
+    ?assertEqual(1000, get_balance(Base, ?ALICE)).
+
+%% @doc Mint with string quantity should fail
+mint_string_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(),
+    Req = make_request(
+        <<"mint">>,
+        #{
+            <<"mode">> => <<"single">>,
+            <<"recipient">> => ?ALICE,
+            <<"quantity">> => <<"1000">>
+        },
+        #{from => ?MINTER}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch(
+        {error, <<"Quantity must be a non-negative integer.">>}, 
+        Result
+    ),
+    ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, #{})).
+
+%% @doc Mint with float quantity should fail
+mint_float_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(),
+    Req = make_request(
+        <<"mint">>,
+        #{
+            <<"mode">> => <<"single">>,
+            <<"recipient">> => ?ALICE,
+            <<"quantity">> => 1000.5
+        },
+        #{from => ?MINTER}
+    ),
+    Result = dev_token:compute(Base, Req, #{}),
+    ?assertMatch(
+        {error, <<"Quantity must be a non-negative integer.">>}, 
+        Result
+    ),
+    ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, #{})).
+
+%% @doc Duplicate recipient in map - last value should win
+transfer_duplicate_recipient_in_body_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Body = #{
+        <<"recipient">> => ?CHARLIE, 
+        <<"quantity">> => 100
+    },
+    BodyWithDupe = Body#{<<"recipient">> => ?BOB},  
+    Req = make_request(<<"transfer">>, BodyWithDupe, #{from => ?ALICE}),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    % Should use last value (Bob)
+    ?assertEqual(900, get_balance(State, ?ALICE)),
+    ?assertEqual(100, get_balance(State, ?BOB)),
+    ?assertEqual(0, get_balance(State, ?CHARLIE)).
+
+%% @doc Duplicate quantity in map - last value should win
+transfer_duplicate_quantity_in_body_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Body = #{
+        <<"recipient">> => ?BOB,
+        <<"quantity">> => 1 
+    },
+    BodyWithDupe = Body#{<<"quantity">> => 200},  
+    Req = make_request(<<"transfer">>, BodyWithDupe, #{from => ?ALICE}),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    % Should use last value (200)
+    ?assertEqual(800, get_balance(State, ?ALICE)),
+    ?assertEqual(200, get_balance(State, ?BOB)).
+
+%% @doc Duplicate recipient in mint should use last value
+mint_duplicate_recipient_test() ->
+    hb:init(),
+    Base = generate_base_state(),
+    Body = #{
+        <<"mode">> => <<"single">>,
+        <<"recipient">> => ?CHARLIE,  
+        <<"quantity">> => 1000
+    },
+    BodyWithDupe = Body#{<<"recipient">> => ?ALICE}, 
+    Req = make_request(<<"mint">>, BodyWithDupe, #{from => ?MINTER}),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    % Should mint to Alice (last value)
+    ?assertEqual(1000, get_balance(State, ?ALICE)),
+    ?assertEqual(0, get_balance(State, ?CHARLIE)).
+
+%% @doc Duplicate quantity in mint should use last value
+mint_duplicate_quantity_test() ->
+    hb:init(),
+    Base = generate_base_state(),
+    Body = #{
+        <<"mode">> => <<"single">>,
+        <<"recipient">> => ?ALICE,
+        <<"quantity">> => 100 
+    },
+    BodyWithDupe = Body#{<<"quantity">> => 5000}, 
+    Req = make_request(<<"mint">>, BodyWithDupe, #{from => ?MINTER}),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    % Should mint 5000 (last value)
+    ?assertEqual(5000, get_balance(State, ?ALICE)),
+    ?assertEqual(5000, hb_ao:get(<<"total-supply">>, State, #{})).
+
+%% @doc Batch mint with mixed valid and invalid quantities
+mint_batch_mixed_valid_invalid_quantities_test() ->
+    hb:init(),
+    Base = generate_base_state(),
+    Req = make_request(
+        <<"mint">>,
+        #{
+            <<"mode">> => <<"batch">>,
+            <<"quantities">> => #{
+                ?ALICE => 1000,           
+                ?BOB => <<"500">>,        
+                ?CHARLIE => 2000,         
+                <<"device">> => <<"foo">>,
+                <<"path">> => <<"bar">>    
+            }
+        },
+        #{from => ?MINTER}
+    ),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    % Should mint only to valid integer quantities
+    ?assertEqual(1000, get_balance(State, ?ALICE)),
+    ?assertEqual(0, get_balance(State, ?BOB)),
+    ?assertEqual(2000, get_balance(State, ?CHARLIE)),
+    % Total supply should be only valid mints
+    ?assertEqual(3000, hb_ao:get(<<"total-supply">>, State, #{})).
+
 %%% Benchmark Tests
 benchmark_transfers_test() ->
     hb:init(),
@@ -1458,7 +1929,7 @@ benchmark_transfers_test() ->
     N = 100,
     StartTime = erlang:monotonic_time(microsecond),
     FinalState = lists:foldl(
-        fun(I, State) ->
+        fun(_I, State) ->
             Req = make_request(
                 <<"transfer">>,
                 #{
@@ -1522,4 +1993,3 @@ benchmark_batch_mint_test() ->
         NumRecipients * 1000, 
         hb_ao:get(<<"total-supply">>, NewState, #{})
     ).
-
