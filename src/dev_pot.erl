@@ -619,8 +619,7 @@ drip(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _Opts) when T =:= Last -> S
 drip(S = #{
         <<"t">> := T,
         <<"mint-cap">> := Max,
-        <<"mint-prop">> := Proportion,
-        <<"resources">> := _Resources
+        <<"mint-prop">> := Proportion
     }, Opts) ->
     Minted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
@@ -892,7 +891,6 @@ user(Addr, S, Opts) ->
     hb_ao:get(<<"/users/", Addr/binary>>, S, #{}, Opts).
 
 set_user_deposit(Addr, ResourceID, Quantity, S, Opts) ->
-    U = user(Addr, S, Opts),
     Delegations =
         hb_ao:get(
             <<
