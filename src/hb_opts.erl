@@ -302,10 +302,6 @@ default_message() ->
             [
                 ?DEFAULT_PRIMARY_STORE,
                 #{
-                    <<"store-module">> => hb_store_remote_node,
-                    <<"name">> => <<"https://scheduler.forward.computer">>
-                },
-                #{
                     <<"store-module">> => hb_store_fs,
                     <<"name">> => <<"cache-mainnet">>
                 },
