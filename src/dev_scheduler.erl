@@ -890,8 +890,8 @@ find_remote_scheduler(ProcID, [Scheduler | Rest], Opts) ->
     case find_remote_scheduler(ProcID, Rest, Opts) of
         {error, not_found} ->
             find_remote_scheduler(ProcID, Scheduler, Opts);
-        {ok, Redirect} ->
-            {ok, Redirect}
+        {redirect, Redirect} ->
+            {redirect, Redirect}
     end;
 find_remote_scheduler(ProcID, Scheduler, Opts) ->
     % Parse the scheduler location to see if it has a hint. If there is a hint,
@@ -901,7 +901,14 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
             % We have a hint. Construct a redirect message.
             generate_redirect(ProcID, Hint, Opts);
         not_found ->
-            case dev_scheduler_cache:read_location(Scheduler, Opts) of
+            NormalizedScheduler =
+                case Scheduler of
+                    [S] when is_binary(S) ->
+                        string:trim(S);
+                    S when is_binary(S) ->
+                        string:trim(S)
+                end,
+            case dev_scheduler_cache:read_location(NormalizedScheduler, Opts) of
                 {ok, SchedMsg} ->
                     % We have a cached scheduler location. Use it to construct a
                     % redirect message.
@@ -909,7 +916,7 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
                 not_found ->
                     % We have not yet cached the location for this address.
                     % Find it via the gateway.
-                    case hb_gateway_client:scheduler_location(Scheduler, Opts) of
+                    case hb_gateway_client:scheduler_location(NormalizedScheduler, Opts) of
                         {ok, SchedMsg} ->
                             % We have found the location. Cache it and use it to
                             % construct a redirect message.
@@ -1484,6 +1491,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
                                 hb_json:decode(
                                     hb_ao:get(<<"body">>, AssignmentRes, Opts)
                                 ),
+                            ?event({assignment_json, AssignmentJSON}),
                             Assignment =
                                 dev_scheduler_formats:aos2_to_assignment(
                                     AssignmentJSON,
