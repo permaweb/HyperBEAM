@@ -532,7 +532,18 @@ inverted_index_test() ->
         <<"mint-cap">> => 100,
         <<"mint-prop">> => 0.5,
         <<"tw">> => 0,
-        <<"resources">> => #{ },
+        <<"resources">> => #{
+            <<"hydrogen">> => #{
+                <<"weight">> => 1,
+                <<"total-deposits">> => 0,
+                <<"deposits">> => #{ }
+            },
+            <<"oxygen">> => #{
+                <<"weight">> => 1,
+                <<"total-deposits">> => 0,
+                <<"deposits">> => #{ }
+            }
+        },
         <<"balances">> => #{ }
     },
     S1 = modify_deposit(AddrAlice, ResourceHydrogen, 5, S0, Opts),
