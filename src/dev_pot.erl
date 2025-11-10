@@ -596,7 +596,6 @@ report(S) ->
         {report,
             {t, hb_maps:get(<<"t">>, S)},
             {last_drip, hb_maps:get(<<"last-drip">>, S)},
-            {chi, resource_chis(S)},
             {tw, hb_maps:get(<<"tw">>, S)},
             {balances, balances(S)},
             {deposits, deposits(S)},
@@ -629,13 +628,16 @@ drip(S = #{
         false ->
             ToMint = units_minted_between(Minted, Max, Proportion, LastT, T),
             TW = hb_maps:get(<<"tw">>, S),
+            ?event({minting, {to_mint, ToMint}, {total_weight, TW}}),
             DeltaM = case TW of 0 -> 0; _ -> ToMint / TW end,
             M0 = hb_maps:get(<<"chi">>, S, 0, Opts),
-            S#{
+            R = S#{
                 <<"chi">> => M0 + DeltaM,
                 <<"last-drip">> => T,
                 <<"minted">> => Minted + ToMint
-            }
+            },
+            ?event({new_state, R}),
+            R
     end.
 
 units_minted_between(Minted, Max, Proportion, LastT, T) ->
@@ -650,50 +652,48 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
     NewDepositQty = ExistingDeposit + Amount,
     RealizedBalance = balance(Addr, S1),
     % Reset chi0 for this address across all resources to current chi
-    Chi = hb_maps:get(<<"chi">>, S1, 0),
-    ResourcesReset =
+    Chi = hb_maps:get(<<"chi">>, S1, 0, Opts),
+    NewResources =
         hb_maps:map(
-            fun(_ResID, Res) ->
+            fun(XResID, Res) ->
+                IsDepositRes = XResID =:= ResourceID,
                 ResDeposits = hb_maps:get(<<"deposits">>, Res, #{}),
-                case hb_maps:find(Addr, ResDeposits) of
-                    error -> Res;
-                    {ok, Entry} ->
+                Entry = hb_maps:get(Addr, ResDeposits, #{}, Opts),
+                case IsDepositRes orelse not ?IS_EMPTY_MESSAGE(Entry) of
+                    false -> Res;
+                    true ->
                         ResWeight = hb_maps:get(<<"weight">>, Res, 0),
-                        ResChi = ResWeight * Chi,
+                        NewChi0 = ResWeight * Chi,
+                        TotalDeposits = hb_maps:get(<<"total-deposits">>, Res, 0, Opts),
                         Res#{
                             <<"deposits">> =>
                                 ResDeposits#{
                                     Addr =>
                                         Entry#{
-                                            <<"chi0">> => ResChi
+                                            <<"chi0">> => NewChi0,
+                                            <<"quantity">> =>
+                                                if IsDepositRes -> NewDepositQty;
+                                                true ->
+                                                    hb_maps:get(<<"quantity">>, Entry, 0, Opts)
+                                                end
                                         }
-                                }
+                                },
+                            <<"total-deposits">> =>
+                                TotalDeposits +
+                                    if IsDepositRes -> Amount;
+                                    true -> 0
+                                    end
                         }
                 end
             end,
             Resources0
         ),
-    ResR0 = hb_maps:get(ResourceID, ResourcesReset, #{}),
-    ResRDeposits0 = hb_maps:get(<<"deposits">>, ResR0, #{}),
-    ExistingUserDeposits = hb_maps:get(Addr, ResRDeposits0, #{}),
-    ResRChi = hb_maps:get(<<"weight">>, ResR0, 0) * Chi,
-    ResRTotal0 = hb_maps:get(<<"total-deposits">>, ResR0, 0),
-    ResR1 = ResR0#{
-        <<"deposits">> =>
-            ResRDeposits0#{
-                Addr => ExistingUserDeposits#{
-                    <<"quantity">> => NewDepositQty,
-                    <<"chi0">> => ResRChi
-                }
-            },
-        <<"total-deposits">> => ResRTotal0 + Amount
-    },
-    Resources1 = ResourcesReset#{ ResourceID => ResR1 },
-    WeightR = hb_maps:get(<<"weight">>, ResR0, 0),
+    ?event({new_resources, NewResources}),
+    WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
     Tw0 = hb_maps:get(<<"tw">>, S1),
     S2 =
         S1#{
-            <<"resources">> => Resources1,
+            <<"resources">> => NewResources,
             <<"tw">> => Tw0 + (WeightR * Amount),
             <<"balances">> => Balances0#{ Addr => RealizedBalance }
         },
@@ -876,16 +876,6 @@ deposits(ResourceID, S) ->
         #{}
     ),
     hb_maps:map(fun(Addr, _) -> deposit(Addr, ResourceID, S) end, Ds).
-
-resource_chis(S = #{ <<"resources">> := Resources }) ->
-    Chi = hb_maps:get(<<"chi">>, S, 0),
-    hb_maps:map(
-        fun(_ResID, Res) ->
-            W = hb_maps:get(<<"weight">>, Res, 0),
-            W * Chi
-        end,
-        Resources
-    ).
 
 user(Addr, S, Opts) ->
     hb_ao:get(<<"/users/", Addr/binary>>, S, #{}, Opts).
