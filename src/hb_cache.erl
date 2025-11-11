@@ -484,9 +484,9 @@ store_read(_Target, _Path, no_viable_store, _) ->
     not_found;
 store_read(_Target, _Path, [], _) ->
     not_found;
-store_read(Target, Path, Store, Opts) when not is_list(Store) ->
+store_read(Target, Path, Store, Opts) when is_map(Store) ->
     store_read(Target, Path, [Store], Opts);
-store_read(Target, Path, [Store | Rest], Opts) ->
+store_read(Target, Path, [Store | ReaminingStores], Opts) ->
     ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
     ?event({reading,
         {original_path, {string, PathBin}},
@@ -540,7 +540,7 @@ store_read(Target, Path, [Store | Rest], Opts) ->
     end,
     case ResolvedFullPathContent of
         {ok, _} = Response -> Response;
-        not_found -> store_read(Target, Path, Rest, Opts)
+        not_found -> store_read(Target, Path, ReaminingStores, Opts)
     end.
 
 %% @doc Prepare a set of links from a listing of subpaths.
@@ -1115,16 +1115,43 @@ run_test() ->
     Store = hb_test_utils:test_store(),
     test_match_typed_message(Store).
 
-multiple_stores_store_read_test() ->
+%% @doc Initialize multiple stores
+get_multiple_stores() -> 
     Store1 = hb_test_utils:test_store(hb_store_lmdb, <<"store1">>),
     Store2 = hb_test_utils:test_store(hb_store_lmdb, <<"store2">>),
+    [Store1, Store2].
 
+%% @doc Shutdown multiple stores
+shutdown_stores([]) -> ok;
+shutdown_stores([Store | RemainingStores]) -> 
+    hb_store:reset(Store),
+    hb_store:stop(Store),
+    shutdown_stores(RemainingStores).
+
+%% @doc Read value from Store1 and Store2 when is only available in Store2
+multiple_stores_store_read_test() ->
+    [Store1, Store2] = Stores = get_multiple_stores(),
+    %% Write test data
     hb_store:make_group(Store2, <<"group1">>),
     hb_store:write(Store2, <<"data/final_id">>, <<"data">>),
     hb_store:make_link(Store2, <<"data/final_id">>, <<"group1/data">>),
     hb_store:make_link(Store2, <<"group1">>, <<"random_id">>),
-
+    %% Check result
     Opts = #{},
     Path = <<"random_id">>,
     Content = store_read(Path, [Store1, Store2], Opts),
-    ?assertMatch({ok, #{<<"data">> := _}}, Content).
+    ?assertMatch({ok, #{<<"data">> := _}}, Content),
+    shutdown_stores(Stores).
+
+multiple_store_list_test() ->
+    [_Store1, Store2] = Stores = get_multiple_stores(),
+    %% Write test data
+    hb_store:make_group(Store2, <<"group1">>),
+    hb_store:write(Store2, <<"data/final_id">>, <<"data">>),
+    hb_store:make_link(Store2, <<"data/final_id">>, <<"group1/data">>),
+    hb_store:make_link(Store2, <<"group1">>, <<"random_id">>),
+    %% Check result
+    Path = <<"random_id">>,
+    Result = list(Path, Stores),
+    ?assertEqual([<<"data">>], Result),
+    shutdown_stores(Stores).
