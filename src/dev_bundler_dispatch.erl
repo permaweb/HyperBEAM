@@ -44,6 +44,7 @@
 -define(DEFAULT_NUM_WORKERS, 5).
 -define(DEFAULT_RETRY_BASE_DELAY_MS, 1000).
 -define(DEFAULT_RETRY_MAX_DELAY_MS, 600000). % 10 minutes
+-define(DEFAULT_RETRY_JITTER, 0.25). % ±25% jitter
 
 %% @doc Dispatch the queue.
 dispatch([], _Opts) ->
@@ -146,7 +147,6 @@ dispatcher(State) ->
 
 %% @doc Enqueue a task to the task queue.
 enqueue_task(Task, State) ->
-    ?event({enqueue_task, format_task(Task)}),
     Queue = State#state.task_queue,
     State#state{task_queue = queue:in(Task, Queue)}.
 
@@ -214,9 +214,15 @@ handle_task_failed(WorkerPID, Task, Reason, State) ->
     % Calculate exponential backoff delay
     BaseDelay = hb_opts:get(retry_base_delay_ms, ?DEFAULT_RETRY_BASE_DELAY_MS, Opts),
     MaxDelay = hb_opts:get(retry_max_delay_ms, ?DEFAULT_RETRY_MAX_DELAY_MS, Opts),
-    % Compute delay: min(base * 2^retry_count, max_delay)
-    Delay = min(BaseDelay * (1 bsl RetryCount), MaxDelay),
-    ?event({task_failed_retrying, format_task(Task), {reason, Reason}, 
+    Jitter = hb_opts:get(retry_jitter, ?DEFAULT_RETRY_JITTER, Opts),
+    % Compute base delay with exponential backoff: min(base * 2^retry_count, max_delay)
+    BaseDelayWithBackoff = min(BaseDelay * (1 bsl RetryCount), MaxDelay),
+    % Apply jitter: delay * (1 + random(-jitter, +jitter))
+    % This distributes the delay across [delay * (1-jitter), delay * (1+jitter)]
+    JitterFactor = (rand:uniform() * 2 - 1) * Jitter,  % Random value in [-jitter, +jitter]
+    Delay = round(BaseDelayWithBackoff * (1 + JitterFactor)),
+    ?event({task_failed_retrying, format_task(Task),
+            {reason, {explicit, Reason}}, 
             {retry_count, RetryCount}, {delay_ms, Delay}}),
     % Update worker to idle
     State1 = State#state{
@@ -347,7 +353,7 @@ execute_task(#task{type = build_tx, data = Items}) ->
 
 execute_task(#task{type = post_tx, data = TX, opts = Opts} = Task) ->
     try
-        ?event({execute_task, format_task(Task), Opts}),
+        ?event({execute_task, format_task(Task)}),
         % Get price and anchor
         DataSize = TX#tx.data_size,
         PriceResult = get_price(DataSize, Opts),
@@ -396,7 +402,7 @@ execute_task(#task{type = build_proofs, data = TX, opts = _Opts} = Task) ->
         % Calculate chunks and proofs
         Data = TX#tx.data,
         DataRoot = TX#tx.data_root,
-        TXSize = TX#tx.data_size,
+        DataSize = TX#tx.data_size,
         Chunks = ar_tx:chunk_binary(?DATA_CHUNK_SIZE, Data),
         SizeTaggedChunks = ar_tx:chunks_to_size_tagged_chunks(Chunks),
         SizeTaggedChunkIDs = ar_tx:sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
@@ -407,12 +413,13 @@ execute_task(#task{type = build_proofs, data = TX, opts = _Opts} = Task) ->
                 case Chunk of
                     <<>> -> false;
                     _ ->
-                        DataPath = ar_merkle:generate_path(DataRoot, Offset - 1, DataTree),
+                        DataPath = ar_merkle:generate_path(
+                            DataRoot, Offset - 1, DataTree),
                         Proof = #{
                             chunk => Chunk,
                             data_path => DataPath,
-                            offset => Offset,
-                            data_size => TXSize,
+                            offset => Offset - 1,
+                            data_size => DataSize,
                             data_root => DataRoot
                         },
                         {true, Proof}
@@ -602,7 +609,8 @@ post_tx_post_failure_retry_test() ->
         % Use short retry delays for testing (100ms base, with exponential backoff)
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            retry_base_delay_ms => 100
+            retry_base_delay_ms => 100,
+            retry_jitter => 0  % Disable jitter for deterministic tests
         },
         hb_http_server:start_node(Opts),
         Items = [new_data_item(1, 10)],
@@ -715,7 +723,8 @@ one_bundle_fails_others_continue_test() ->
         % Use short retry delays for testing (100ms base, with exponential backoff)
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            retry_base_delay_ms => 100
+            retry_base_delay_ms => 100,
+            retry_jitter => 0  % Disable jitter for deterministic tests
         },
         hb_http_server:start_node(Opts),
         % Dispatch first bundle (will keep failing)
@@ -794,7 +803,8 @@ exponential_backoff_timing_test() ->
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
             retry_base_delay_ms => 1000,
-            retry_max_delay_ms => 5000  % Cap at 500ms
+            retry_max_delay_ms => 5000,  % Cap at 5000ms
+            retry_jitter => 0  % Disable jitter for deterministic tests
         },
         hb_http_server:start_node(Opts),
         Items = [new_data_item(1, 10)],
@@ -850,7 +860,8 @@ independent_task_retry_counts_test() ->
         persistent_term:put(independent_total_attempts, 0),
         Opts = NodeOpts#{
             priv_wallet => hb:wallet(),
-            retry_base_delay_ms => 1000
+            retry_base_delay_ms => 1000,
+            retry_jitter => 0  % Disable jitter for deterministic tests
         },
         hb_http_server:start_node(Opts),
         % Dispatch first bundle (will fail twice and retry)

@@ -111,41 +111,6 @@ chunk(Base, Request, Opts) ->
         <<"GET">> -> {error, not_implemented}
     end.
 
-post_chunks(Base, TX, Opts) ->
-    ?event({uploading_chunks, TX}),
-    Data = TX#tx.data,
-    DataRoot = TX#tx.data_root,
-    TXSize = TX#tx.data_size,
-    %% Split data into chunks, assign offsets, generate chunk IDs, and
-    %% build Merkle tree
-    Chunks = ar_tx:chunk_binary(?DATA_CHUNK_SIZE, Data),
-    SizeTaggedChunks = ar_tx:chunks_to_size_tagged_chunks(Chunks),
-    SizeTaggedChunkIDs = ar_tx:sized_chunks_to_sized_chunk_ids(SizeTaggedChunks),
-    {_Root, DataTree} = ar_merkle:generate_tree(SizeTaggedChunkIDs),
-    %% Upload each chunk with its proof
-    lists:foreach(
-        fun({Chunk, Offset}) ->
-            case Chunk of
-                <<>> ->
-                    %% Skip empty chunks (artifacts of chunking when data
-                    %% is evenly divisible by chunk size)
-                    ok;
-                _ ->
-                    %% Generate the Merkle path (proof) for this chunk
-                    DataPath = ar_merkle:generate_path(DataRoot, Offset - 1, DataTree),
-                    Proof = #{
-                        <<"chunk">> => hb_util:encode(Chunk),
-                        <<"data_path">> => hb_util:encode(DataPath),
-                        <<"offset">> => integer_to_binary(Offset),
-                        <<"data_size">> => integer_to_binary(TXSize),
-                        <<"data_root">> => hb_util:encode(DataRoot)
-                    },
-                    post_chunk(Base, Proof, Opts)
-            end
-        end,
-        SizeTaggedChunks
-    ).
-
 post_chunk(_Base, Request, Opts) ->
     Serialized = hb_json:encode(Request),
     ?event({uploading_chunk, {explicit, Serialized}}),
@@ -157,32 +122,6 @@ post_chunk(_Base, Request, Opts) ->
         },
         Opts
     ).
-
-%% @doc Handle the optional adding of data to the transaction header, depending
-%% on the request. Semantics of the `data' key are described in the `get_tx/3'
-%% documentation.
-maybe_add_data(TXID, TXHeader, Base, Request, Opts) ->
-    GetData =
-        hb_util:atom(hb_ao:get_first(
-            [
-                {Request, <<"data">>},
-                {Base, <<"data">>}
-            ],
-            true,
-            Opts
-        )),
-    case hb_util:atom(GetData) of
-        false ->
-            {ok, TXHeader};
-        _ ->
-            case add_data(TXID, TXHeader, Opts) of
-                {ok, TX} -> {ok, TX};
-                {error, Reason} ->
-                    if GetData =/= always -> {ok, TXHeader};
-                    true -> {error, Reason}
-                    end
-            end
-    end.
 
 add_data(TXID, TXHeader, Opts) ->
     case data(TXID, Opts) of

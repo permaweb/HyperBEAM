@@ -404,6 +404,14 @@ assert_bundle(ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
             ProofJSON = hb_json:decode(ProofBinary),
             Offset = binary_to_integer(maps:get(<<"offset">>, ProofJSON)),
             Chunk = hb_util:decode(maps:get(<<"chunk">>, ProofJSON)),
+            DataRoot = hb_util:decode(maps:get(<<"data_root">>, ProofJSON)),
+            DataSize = binary_to_integer(maps:get(<<"data_size">>, ProofJSON)),
+            DataPath = hb_util:decode(maps:get(<<"data_path">>, ProofJSON)),
+            Valid = ar_merkle:validate_path(DataRoot, Offset, DataSize, DataPath),
+            ?assertNotEqual(false, Valid),
+            {ChunkID, StartOffset, EndOffset} = Valid,
+            ?assertEqual(ChunkID, ar_tx:generate_chunk_id(Chunk)),
+            ?assertEqual(EndOffset - StartOffset, byte_size(Chunk)),
             {Offset, Chunk}
         end,
         Proofs
