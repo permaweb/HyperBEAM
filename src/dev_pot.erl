@@ -82,16 +82,60 @@ drip(S = #{
     }, Opts) ->
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
-    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
+    TotalWeightedTimeUnits =
+        hb_maps:get(<<"total-weighted-units">>, S, 0, Opts) * (T - LastT),
     ToMint = units_minted_between(AlreadyMinted, Max, Proportion, LastT, T),
-    ?event({minting, {to_mint, ToMint}, {total_weighted_units, TotalWeightedUnits}}),
+    MintedPerWeightedTimeUnit = ToMint / TotalWeightedTimeUnits,
+    ?event(
+        {minting,
+            {to_mint, ToMint},
+            {total_weighted_time_units, TotalWeightedTimeUnits},
+            {minted_per_weighted_time_unit, MintedPerWeightedTimeUnit}
+        }),
     S#{
         <<"minted-per-weighted-unit">> =>
             hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts) +
-            (ToMint / TotalWeightedUnits),
+                MintedPerWeightedTimeUnit,
         <<"last-drip">> => T,
         <<"minted">> => AlreadyMinted + ToMint
     }.
+
+drip_resource(ResourceID, S, Opts) ->
+    % Get the current time and the resource.
+    T = hb_maps:get(<<"t">>, S, 0, Opts),
+    Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S, #{}, Opts),
+    % Accumulate the weight-time since the last resource-specific drip.
+    OldAccumulatedWeightTime =
+        hb_maps:get(<<"accumulated-weight-time">>, Resource, 0, Opts),
+    Weight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
+    LastWeightTimeDrip = hb_maps:get(<<"last-weight-time-drip">>, S, 0, Opts),
+    TimeDelta = T - LastWeightTimeDrip,
+    WeightTimeDelta = (T - LastWeightTimeDrip) * Weight,
+    NewAccumulatedWeightTime = OldAccumulatedWeightTime + WeightTimeDelta,
+    ?event(
+        {drip_resource,
+            {resource_id, ResourceID},
+            {last_resource_drip, LastWeightTimeDrip},
+            {old_accumulated_weight_time, OldAccumulatedWeightTime},
+            {weight, Weight},
+            {time_delta, TimeDelta},
+            {weight_time_delta, WeightTimeDelta},
+            {accumulated_weight_time, NewAccumulatedWeightTime}
+        }
+    ),
+    hb_ao:set(
+        S,
+        #{
+            <<"resources">> => #{
+                ResourceID =>
+                    Resource#{
+                        <<"accumulated-weight-time">> => NewAccumulatedWeightTime,
+                        <<"last-weight-time-drip">> => T
+                    }
+            }
+        },
+        Opts
+    ).
 
 balance(Addr, S) ->
     hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}), 0)
@@ -100,31 +144,36 @@ balance(Addr, S) ->
 unclaimed_yield(Addr, S, Opts) ->
     ResourceIDs =
         hb_maps:keys(
-            hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, #{}),
-            #{}
+            hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, Opts),
+            Opts
         ),
     MintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts),
     lists:sum(
         lists:map(
             fun(ResID) ->
-                unclaimed_yield(Addr, ResID, MintedPerWeightedUnit, S, Opts)
+                DrippedS = drip_resource(ResID, S, Opts),
+                unclaimed_yield(Addr, ResID, MintedPerWeightedUnit, DrippedS, Opts)
             end,
             ResourceIDs
         )
     ).
 unclaimed_yield(Addr, ResourceID, MintedPerWeightedUnit, S, Opts) ->
     Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
-    ResW = hb_maps:get(<<"weight">>, Res, 0),
-    Deposits = hb_maps:get(<<"deposits">>, Res, #{}),
+    AccumulatedWeightTime = hb_maps:get(<<"accumulated-weight-time">>, Res, 0, Opts),
+    Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
     case hb_maps:find(Addr, Deposits) of
         error -> 0;
         {ok, #{
                 <<"quantity">> := Qty,
                 <<"minted-per-weighted-unit-at-deposit">> :=
-                    MintedPerWeightedUnitAtDeposit
+                    MintedPerWeightedUnitAtDeposit,
+                <<"accumulated-weight-time-at-deposit">> :=
+                    AccumulatedWeightTimeAtDeposit
             }} ->
             ?no_prod("Remove all floating point arithmetic."),
-            ResW * Qty * (MintedPerWeightedUnit - MintedPerWeightedUnitAtDeposit) 
+            Qty *
+                (MintedPerWeightedUnit - MintedPerWeightedUnitAtDeposit) *
+                (AccumulatedWeightTime - AccumulatedWeightTimeAtDeposit)
     end.
 
 units_minted_between(Minted, Max, Proportion, LastT, T) ->
@@ -134,13 +183,20 @@ units_minted_between(Minted, Max, Proportion, LastT, T) ->
 
 modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
     S1 = drip(S0, Opts),
-    #{ <<"balances">> := Balances, <<"resources">> := Resources } = S1,
-    ExistingDeposit = deposit(Addr, ResourceID, S1),
-    MintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S1, 0, Opts),
+    S = drip_resource(ResourceID, S1, Opts),
+    #{ <<"balances">> := Balances, <<"resources">> := Resources } = S,
+    ExistingDeposit = deposit(Addr, ResourceID, S),
+    MintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts),
     BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
     NewBalance =
-        BaseBalance +
-        unclaimed_yield(Addr, ResourceID, MintedPerWeightedUnit, S1, Opts),
+        BaseBalance + unclaimed_yield(Addr, ResourceID, MintedPerWeightedUnit, S, Opts),
+    AccumulatedWeightTime =
+        hb_ao:get(
+            <<ResourceID/binary, "/accumulated-weight-time">>,
+            Resources,
+            0,
+            Opts
+        ),
     NewResources =
         hb_ao:set(
             Resources,
@@ -161,16 +217,18 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
                                     #{
                                         <<"quantity">> => ExistingDeposit + Amount,
                                         <<"minted-per-weighted-unit-at-deposit">> =>
-                                            MintedPerWeightedUnit
+                                            MintedPerWeightedUnit,
+                                        <<"accumulated-weight-time-at-deposit">> =>
+                                            AccumulatedWeightTime
                                     }
                             }
                     }
             },
             Opts
         ),
-    ?event({new_resources, NewResources}),
+    ?event({resources_after_modify_deposit, NewResources}),
     WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
-    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
+    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
     S2 =
         S1#{
             <<"resources">> => NewResources,
@@ -187,21 +245,27 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
     update_deposit_index(Addr, ResourceID, deposit(Addr, ResourceID, S3), S3, Opts).
 
 set_weight(ResourceID, Weight, S, Opts) ->
-    S1 = drip(S, Opts),
-    ResourceDeposits = hb_ao:get(<<ResourceID/binary, "/total-deposits">>, S1, 0, Opts),
+    % Run the global drip to ensure the state is up to date.
+    S0 = drip(S, Opts),
+    S1 = drip_resource(ResourceID, S0, Opts),
+    % Calculate the new total deposited units for the weighted global counter
+    % (`/total-weighted-units').
+    Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S1, #{}, Opts),
+    OldWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
+    ResourceDeposits = hb_ao:get(<<"total-deposits">>, Resource, 0, Opts),
+    % Update the total weighted units counter. Subtract the deposits at the old
+    % weight first, then add the deposits at the new weight.
     LastTotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
-    LastWeight = hb_ao:get(<<ResourceID/binary, "/weight">>, S1, 0, Opts),
     NewTotalWeightedUnits =
         LastTotalWeightedUnits
-            - (LastWeight * ResourceDeposits)
+            - (OldWeight * ResourceDeposits)
             + (Weight * ResourceDeposits),
+    % Update the resource and the global weighted units counter.
     hb_ao:set(
         S1,
         #{
             <<"resources">> => #{
-                ResourceID => #{
-                    <<"weight">> => Weight
-                }
+                ResourceID => Resource#{ <<"weight">> => Weight }
             },
             <<"total-weighted-units">> => NewTotalWeightedUnits
         },
