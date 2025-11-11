@@ -188,6 +188,7 @@ list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) 
             list(Path, Store)
     end;
 list(Path, Store) ->
+    % TODO: Fix seperate store requests
     ResolvedPath = hb_store:resolve(Store, Path),
     case hb_store:list(Store, ResolvedPath) of
         {ok, Names} -> Names;
@@ -431,6 +432,7 @@ read_all_commitments(Msg, Opts) ->
     UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
     CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     AlreadyLoaded = hb_maps:keys(CurrentCommitments, Opts),
+    % TODO: Fix seperate store requests
     CommitmentsPath =
         hb_store:resolve(
             Store,
@@ -480,14 +482,18 @@ store_read(Path, Store, Opts) ->
     store_read(Path, Path, Store, Opts).
 store_read(_Target, _Path, no_viable_store, _) ->
     not_found;
-store_read(Target, Path, Store, Opts) ->
+store_read(_Target, _Path, [], _) ->
+    not_found;
+store_read(Target, Path, Store, Opts) when not is_list(Store) ->
+    store_read(Target, Path, [Store], Opts);
+store_read(Target, Path, [Store | Rest], Opts) ->
     ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
     ?event({reading,
         {original_path, {string, PathBin}},
         {fully_resolved_path, ResolvedFullPath},
         {store, Store}
     }),
-    case hb_store:type(Store, ResolvedFullPath) of
+    ResolvedFullPathContent = case hb_store:type(Store, ResolvedFullPath) of
         failure -> failure;
         not_found -> not_found;
         simple ->
@@ -531,6 +537,10 @@ store_read(Target, Path, Store, Opts) ->
                     ?event({empty_composite_message, ResolvedFullPath}),
                     {ok, #{}}
             end
+    end,
+    case ResolvedFullPathContent of
+        {ok, _} = Response -> Response;
+        not_found -> store_read(Target, Path, Rest, Opts)
     end.
 
 %% @doc Prepare a set of links from a listing of subpaths.
@@ -1104,3 +1114,17 @@ test_device_map_cannot_be_written_test() ->
 run_test() ->
     Store = hb_test_utils:test_store(),
     test_match_typed_message(Store).
+
+multiple_stores_store_read_test() ->
+    Store1 = hb_test_utils:test_store(hb_store_lmdb, <<"store1">>),
+    Store2 = hb_test_utils:test_store(hb_store_lmdb, <<"store2">>),
+
+    hb_store:make_group(Store2, <<"group1">>),
+    hb_store:write(Store2, <<"data/final_id">>, <<"data">>),
+    hb_store:make_link(Store2, <<"data/final_id">>, <<"group1/data">>),
+    hb_store:make_link(Store2, <<"group1">>, <<"random_id">>),
+
+    Opts = #{},
+    Path = <<"random_id">>,
+    Content = store_read(Path, [Store1, Store2], Opts),
+    ?assertMatch({ok, #{<<"data">> := _}}, Content).
