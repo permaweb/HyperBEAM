@@ -3,7 +3,7 @@
 %%% node Opts. It applies these settings when asked to maybe store/lookup in 
 %%% response to a request.
 -module(hb_cache_control).
--export([maybe_store/4, maybe_lookup/3]).
+-export([maybe_store/4, maybe_lookup/3, is_fresh/3, timestamp/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -11,6 +11,7 @@
 %%% following settings.
 -define(DEFAULT_STORE_OPT, false).
 -define(DEFAULT_LOOKUP_OPT,  true).
+-define(DEFAULT_MAX_AGE, 0).
 
 %%% Public API
 
@@ -98,7 +99,49 @@ lookup(Base, Req, Opts) ->
             end
     end.
 
+%% @doc Determine whether a candidate response message is fresh enough to return
+%% based on the request message's cache control settings.
+is_fresh(Res, Req, Opts) ->
+    #{ <<"max-age">> := MaxAge } = derive_cache_settings([Req], Opts),
+    ResultAge = derive_result_age(Res, Opts),
+    ?event(is_fresh, {is_fresh, {result_age, ResultAge}, {max_age, MaxAge}}),
+    case ResultAge =< MaxAge of
+        true -> {true, Res#{ <<"age">> => ResultAge }};
+        false -> false
+    end.
+
 %%% Internal functions
+
+%% @doc Determine the age of a result message. Looking first for a `last-modified'
+%% timestamp, or alternatively a `date' key.
+derive_result_age(Res, Opts) ->
+    ResultTime =
+        case hb_maps:find(<<"last-modified">>, Res, Opts) of
+            {ok, LastModified} -> parse_timestamp(LastModified);
+            error ->
+                case hb_maps:find(<<"date">>, Res, Opts) of
+                    {ok, Date} -> parse_timestamp(Date);
+                    error -> undefined
+                end
+        end,
+    case ResultTime of
+        undefined -> undefined;
+        _ -> erlang:system_time(second) - ResultTime
+    end.
+
+%% @doc Create a timestamp date-time string at the present moment.
+timestamp() ->
+    cowboy_clock:rfc1123().
+
+%% Constants for converting between Gregorian seconds and system time seconds.
+%% Taken from the Erlang `calendar' module in `stdlib-6.0.1'.
+-define(DAYS_FROM_0_TO_1970, 719528).
+-define(SECONDS_PER_DAY, 86400).
+-define(SECONDS_FROM_0_TO_1970, (?DAYS_FROM_0_TO_1970*?SECONDS_PER_DAY)).
+%% @doc Parse a cache-control-relevant date-time string into the local time.
+parse_timestamp(Time) ->
+    DateTime = cow_date:parse_date(Time),
+    calendar:datetime_to_gregorian_seconds(DateTime) - ?SECONDS_FROM_0_TO_1970.
 
 %% @doc Dispatch the cache write to a worker process if requested.
 %% Invoke the appropriate cache write function based on the type of the message.
@@ -206,8 +249,9 @@ is_explicit_lookup(Base, #{ <<"path">> := Key }, Opts) ->
     end.
 
 %% @doc Derive cache settings from a series of option sources and the opts,
-%% honoring precidence order. The Opts is used as the first source. Returns a
-%% map with `store' and `lookup' keys, each of which is a boolean.
+%% honoring precedence order. The `Opts' is used as the first source. Returns a
+%% message with `store' and `lookup' keys, each of which is a boolean.
+%% Additionally, if present in the sources a `max-age' key is returned.
 %% 
 %% For example, if the last source has a `no_store', the first expresses no
 %% preference, but the Opts has `cache_control => [always]', then the result 
@@ -217,7 +261,11 @@ derive_cache_settings(SourceList, Opts) ->
         fun(Source, Acc) ->
             maybe_set(Acc, cache_source_to_cache_settings(Source, Opts), Opts)
         end,
-        #{ <<"store">> => ?DEFAULT_STORE_OPT, <<"lookup">> => ?DEFAULT_LOOKUP_OPT },
+        #{
+            <<"store">> => ?DEFAULT_STORE_OPT,
+            <<"lookup">> => ?DEFAULT_LOOKUP_OPT,
+            <<"max-age">> => ?DEFAULT_MAX_AGE
+        },
         [{opts, Opts}|lists:filter(fun erlang:is_map/1, SourceList)]
     ).
 
@@ -255,10 +303,18 @@ cache_source_to_cache_settings(Msg, Opts) ->
 
 %% @doc Convert a cache control list as received via HTTP headers into a 
 %% normalized map of simply whether we should store and/or lookup the result.
+specifiers_to_cache_settings(CCLine) when is_binary(CCLine) ->
+    specifiers_to_cache_settings(
+        hb_util:split_depth_string_aware([$,, $ ], CCLine)
+    );
 specifiers_to_cache_settings(CCSpecifier) when not is_list(CCSpecifier) ->
     specifiers_to_cache_settings([CCSpecifier]);
 specifiers_to_cache_settings(RawCCList) ->
-    CCList = lists:map(fun hb_ao:normalize_key/1, RawCCList),
+    CCList =
+        lists:map(
+            fun hb_ao:normalize_key/1,
+            RawCCList
+        ),
     #{
         <<"store">> =>
             case lists:member(<<"always">>, CCList) of
@@ -290,8 +346,23 @@ specifiers_to_cache_settings(RawCCList) ->
             case lists:member(<<"only-if-cached">>, CCList) of
                 true -> true;
                 false -> undefined
-            end
+            end,
+        <<"max-age">> => max_age(CCList)
     }.
+
+%% @doc Determine the max-age from a cache control specifier list, if present.
+max_age(CCList) ->
+    Results =
+        lists:filtermap(
+            fun(<<"max-age=", Age/binary>>) -> {true, hb_util:int(Age)};
+               (_) -> false
+            end,
+            CCList
+        ),
+    case Results of
+        [] -> undefined;
+        [Age] -> Age
+    end.
 
 %%% Tests
 

@@ -935,10 +935,9 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
     end.
 
 %% @doc Returns information about the current slot for a process.
-slot(M1, M2, Opts) ->
-    ?event({getting_current_slot, {msg, M1}}),
-    ProcID = find_target_id(M1, M2, Opts),
-    case find_server(ProcID, M1, Opts) of
+slot(Base, Req, Opts) ->
+    ?event({getting_current_slot, {base, Base}, {req, Req}}),
+    case find_server(ProcID = find_target_id(Base, Req, Opts), Base, Opts) of
         {local, PID} ->
             ?event({getting_current_slot, {proc_id, ProcID}}),
             {Timestamp, Height, Hash} = ar_timestamp:get(),
@@ -954,10 +953,26 @@ slot(M1, M2, Opts) ->
                 <<"addresses">> => lists:map(fun hb_util:human_id/1, Wallets)
             }};
         {redirect, Redirect} ->
-            case hb_opts:get(scheduler_follow_redirects, true, Opts) of
-                false -> {ok, Redirect};
-                true -> remote_slot(ProcID, Redirect, Opts)
+            case maybe_cached_slot(ProcID, Req, Opts) of
+                {ok, SlotInfo} -> {ok, SlotInfo};
+                not_found ->
+                    case hb_opts:get(scheduler_follow_redirects, true, Opts) of
+                        false -> {ok, Redirect};
+                        true -> remote_slot(ProcID, Redirect, Opts)
+                    end
             end
+    end.
+
+%% @doc Maybe return a cached slot info message for a process if it is available
+%% and within the relevant time window.
+maybe_cached_slot(ProcID, Req, Opts) ->
+    case dev_scheduler_cache:read_info(ProcID, Opts) of
+        {ok, SlotInfo} ->
+            case hb_cache_control:is_fresh(SlotInfo, Req, Opts) of
+                {true, FreshSlotInfo} -> {ok, FreshSlotInfo};
+                false -> not_found
+            end;
+        not_found -> not_found
     end.
 
 %% @doc Get the current slot from a remote scheduler.
@@ -1001,14 +1016,19 @@ remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
                             Opts
                         ),
                     ?event({got_slot_response, {assignment, A}}),
-                    {ok, #{
-                        <<"process">> => ProcID,
-                        <<"current">> => hb_maps:get(<<"slot">>, A, undefined, Opts),
-                        <<"timestamp">> => hb_maps:get(<<"timestamp">>, A, undefined, Opts),
-                        <<"block-height">> => hb_maps:get(<<"block-height">>, A, undefined, Opts),
-                        <<"block-hash">> => hb_util:encode(<<0:256>>),
-                        <<"cache-control">> => <<"no-store">>
-                    }};
+                    SlotInfo =
+                        #{
+                            <<"process">> => ProcID,
+                            <<"current">> =>
+                                hb_maps:get(<<"slot">>, A, undefined, Opts),
+                            <<"timestamp">> =>
+                                hb_maps:get(<<"timestamp">>, A, undefined, Opts),
+                            <<"block-height">> =>
+                                hb_maps:get(<<"block-height">>, A, undefined, Opts),
+                            <<"block-hash">> => hb_util:encode(<<0:256>>)
+                        },
+                    dev_scheduler_cache:write_info(ProcID, SlotInfo, Opts),
+                    {ok, SlotInfo#{ <<"cache-control">> => <<"no-store">> }};
                 307 ->
                     ?event({generating_new_redirect, {redirect, Res}}),
                     % Maintain the same variant, but generate the redirect using

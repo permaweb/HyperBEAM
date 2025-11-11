@@ -1,7 +1,8 @@
 %%% @doc A module that provides a cache for scheduler assignments and locations.
 -module(dev_scheduler_cache).
--export([write/2, write_spawn/2, write_location/2]).
+-export([write/2, write_spawn/2, write_location/2, write_info/3, write_info/4]).
 -export([read/3, read_location/2]).
+-export([read_info/2]).
 -export([list/2, latest/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -58,6 +59,47 @@ write(RawAssignment, RawOpts) ->
             ?event(error, {failed_to_write_assignment, {reason, Reason}}),
             {error, Reason}
     end.
+
+%% @doc Write the slot info message to the cache, along with the present
+%% timestamp (if not provided by caller).
+write_info(ProcID, SlotInfo, Opts) ->
+    write_info(ProcID, SlotInfo, hb_cache_control:timestamp(), Opts).
+write_info(ProcID, SlotInfo, Time, RawOpts) ->
+    Opts = opts(RawOpts),
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    {ok, SlotInfoMsgID} =
+        hb_cache:write(
+            SlotInfo#{ <<"last-modified">> => Time },
+            Opts
+        ),
+    hb_store:make_link(
+        Store,
+        SlotInfoMsgID,
+        hb_store:path(
+            Store,
+            [
+                ?SCHEDULER_CACHE_PREFIX,
+                <<"info">>,
+                hb_util:human_id(ProcID)
+            ]
+        )
+    ),
+    ok.
+
+%% @doc Read the latest slot info message from the cache for a process.
+read_info(ProcID, RawOpts) ->
+    Opts = opts(RawOpts),
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    ResolvedPath =
+        hb_store:resolve(
+            Store,
+            hb_store:path(Store, [
+                ?SCHEDULER_CACHE_PREFIX,
+                <<"info">>,
+                hb_util:human_id(ProcID)
+            ])
+        ),
+    hb_cache:read(ResolvedPath, Opts).
 
 %% @doc Write the initial assignment message to the cache.
 write_spawn(RawInitMessage, Opts) ->
@@ -134,11 +176,12 @@ latest(ProcID, RawOpts) ->
                     {assignment_num, AssignmentNum}
                 }
             ),
-            {ok, Assignment} = dev_scheduler_cache:read(
-                ProcID,
-                AssignmentNum,
-                Opts
-            ),
+            {ok, Assignment} =
+                dev_scheduler_cache:read(
+                    ProcID,
+                    AssignmentNum,
+                    Opts
+                ),
             {
                 AssignmentNum,
                 hb_ao:get(

@@ -3,9 +3,62 @@
 %%% convenient interface for reading the result of a process at a given slot or
 %%% message ID.
 -module(dev_process_cache).
--export([latest/2, latest/3, latest/4, read/2, read/3, write/4]).
+-export([info/1, latest/2, latest/3, latest/4, read/2, read/3, write/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
+
+%% @doc Return a list of all known processes and states on this machine.
+info(Opts) ->
+    % Scope = hb_opts:get(process_cache_scope, local, Opts),
+    % UnscopedStore = hb_opts:get(store, no_viable_store, Opts),
+    % ScopedStore = hb_store:scope(UnscopedStore, Scope),
+    Listed = hb_cache:list(<<"computed">>, Opts),
+    ProcIDs =
+        hb_util:unique(
+            lists:map(
+                fun(Path) ->
+                    case hb_path:term_to_path_parts(Path, Opts) of
+                        [<<"computed">>, ProcID|_] -> ProcID;
+                        [ProcID|_] -> ProcID
+                    end
+                end,
+                Listed
+            )
+        ),
+    ?event({known_processes, {proc_ids, ProcIDs}}),
+    Res =
+        hb_maps:from_list(
+            lists:map(
+                fun(ProcID) -> {ProcID, info_single(ProcID, Opts)} end,
+                ProcIDs
+            )
+        ),
+    {ok, Res}.
+
+%% @doc Return the state of a single process on this machine by its ID.
+info_single(ProcID, Opts) ->
+    {ok, LatestResultSlot, _} = latest(ProcID, Opts),
+    {ok, LatestSnapshotSlot, _} =
+        latest(
+            ProcID,
+            [<<"snapshot+link">>],
+            Opts
+        ),
+    {LatestAssignment, _} = dev_scheduler_cache:latest(ProcID, Opts),
+    {ok, SlotInfo} = dev_scheduler_cache:read_info(ProcID, Opts),
+    #{
+        <<"cached">> => #{
+            <<"result">> => LatestResultSlot,
+            <<"snapshot">> => LatestSnapshotSlot,
+            <<"assignment">> => LatestAssignment
+        },
+        <<"latest">> =>
+            hb_maps:with(
+                [<<"current">>, <<"last-modified">>],
+                SlotInfo,
+                Opts
+            )
+    }.
 
 %% @doc Read the result of a process at a given slot.
 read(ProcID, Opts) ->

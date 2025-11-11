@@ -47,8 +47,8 @@
 %%%                      assignments, in addition to `/Results'.
 -module(dev_process).
 %%% Public API
--export([info/1, as/3, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
--export([ensure_process_key/2]).
+-export([info/3, as/3, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
+-export([info/1, ensure_process_key/2]).
 %%% Public utilities
 -export([as_process/2, process_id/3]).
 %%% Test helpers
@@ -87,6 +87,19 @@ info(_Base) ->
                 <<"push">>
             ]
     }.
+
+%% @doc Return a nested message describing the state of the processes on this
+%% node.
+%% Schema:
+%% ```
+%% count: Number of processes on this machine.
+%% known/ID/computed: Last computed slot.
+%% known/ID/scheduled: Last cached assignment slot.
+%% known/ID/checkpoint: Last computed slot with a snapshot.
+%% '''
+info(_, _, Opts) ->
+    {ok, Known} = dev_process_cache:info(Opts),
+    {ok, Known#{ <<"count">> => hb_maps:size(Known, Opts) }}.
 
 %% @doc Return the process state with the device swapped out for the device
 %% of the given key.
@@ -531,7 +544,7 @@ now(RawBase, Req, Opts) ->
             {ok, CurrentSlot} =
                 hb_ao:resolve(
                     Base,
-                    #{ <<"path">> => <<"slot/current">> },
+                    Req#{ <<"path">> => <<"slot/current">> },
                     Opts
                 ),
             ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
