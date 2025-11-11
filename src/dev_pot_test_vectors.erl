@@ -121,6 +121,42 @@ multiple_resources_test() ->
     Addr2Diff = dev_pot:balance(Addr2, S8) - Addr2BalPreFinal,
     ?assertEqual(Addr1Diff, Addr2Diff).
 
+multiresource_modified_weight_test() ->
+    Opts = #{},
+    S0 = #{
+        <<"device">> => <<"pot@1.0">>,
+        <<"t">> => 0,
+        <<"last-drip">> => 0,
+        <<"chi">> => 0,
+        <<"mint-cap">> => 100,
+        <<"mint-prop">> => 0.5,
+        <<"tw">> => 0,
+        <<"resources">> => #{
+            <<"oxygen">> => #{
+                <<"weight">> => 1,
+                <<"total-deposits">> => 0,
+                <<"deposits">> => #{ }
+            },
+            <<"hydrogen">> => #{
+                <<"weight">> => 1,
+                <<"total-deposits">> => 0,
+                <<"deposits">> => #{ }
+            }
+        },
+        <<"balances">> => #{ }
+    },
+    S1 = dev_pot:modify_deposit(<<"alice">>, <<"oxygen">>, 10, S0, Opts),
+    S1b = dev_pot:modify_deposit(<<"bob">>, <<"oxygen">>, 10, S1, Opts),
+    S2 = dev_pot:modify_deposit(<<"alice">>, <<"hydrogen">>, 10, S1b, Opts),
+    S2b = dev_pot:modify_deposit(<<"bob">>, <<"hydrogen">>, 10, S2, Opts),
+    {ok, S3} = hb_ao:resolve(S2b, <<"drip">>, Opts),
+    report(S3),
+    ?assertEqual(25.0, dev_pot:balance(<<"alice">>, S3)),
+    ?assertEqual(25.0, dev_pot:balance(<<"bob">>, S3)),
+    S4 = dev_pot:set_weight(<<"oxygen">>, 10, S3, Opts),
+    {ok, S5} = hb_ao:resolve(S4, <<"drip">>, Opts),
+    report(S5).
+
 drip_test() ->
     ?assertEqual(50.0, dev_pot:units_minted_between(0, 100, 0.5, 0, 1)),
     ?assertEqual(75.0, dev_pot:units_minted_between(0, 100, 0.5, 0, 2)),
@@ -151,11 +187,11 @@ delegate_test() ->
                 <<"deposits">> => #{ 
                     AddrAlice => #{
                         <<"quantity">> => 200,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     },
                     AddrBob => #{
                         <<"quantity">> => 0,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     }
                 }
             },
@@ -166,11 +202,11 @@ delegate_test() ->
                 <<"deposits">> => #{
                     AddrAlice => #{
                         <<"quantity">> => 25,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     },
                     AddrBob => #{
                         <<"quantity">> => 25,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     }
                 }
             }
@@ -308,15 +344,15 @@ liquidate_delegations_test() ->
                 <<"deposits">> => #{ 
                     <<"alice">> => #{
                         <<"quantity">> => 1,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     },
                     <<"charlie">> => #{
                         <<"quantity">> => 0,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     }
                 }
             }
@@ -348,19 +384,19 @@ multiple_delegations_liquidation_test() ->
                 <<"deposits">> => #{ 
                     <<"alice">> => #{
                         <<"quantity">> => 2,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     },
                     <<"charlie">> => #{
                         <<"quantity">> => 0,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     },
                     <<"denis">> => #{
                         <<"quantity">> => 0,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     }
                 }
             }
@@ -397,11 +433,11 @@ cyclic_delegation_test() ->
                 <<"deposits">> => #{ 
                     <<"alice">> => #{
                         <<"quantity">> => 1,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     }
                 }
             }
@@ -437,11 +473,11 @@ remove_deposit_while_delegated_test() ->
                 <<"deposits">> => #{ 
                     <<"alice">> => #{
                         <<"quantity">> => 3,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
-                        <<"chi0">> => 0
+                        <<"minted-per-weighted-unit-at-deposit">> => 0
                     }
                 }
             }

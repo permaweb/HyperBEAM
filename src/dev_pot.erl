@@ -61,18 +61,18 @@
 %%% Public API.
 -export([drip/3]).
 %%% `~pot@1.0` Private Utilities.
--export([modify_deposit/5, delegate/6, maybe_liquidate_delegations/5]).
+-export([modify_deposit/5, delegate/6, maybe_liquidate_delegations/5, set_weight/4]).
 -export([units_minted_between/5, update_deposit_index/5]).
 -export([user/3, balance/2, balances/1, deposit/3, deposits/1, deposits/2]).
 %%% Pot Model.
 
 drip(State, Req, Opts) ->
-    SWithTime =
+    StateWithNewTime =
         case is_map(Req) andalso hb_maps:find(<<"t">>, Req) of
             {ok, TReq} -> State#{ <<"t">> => TReq };
             _ -> State#{ <<"t">> => hb_maps:get(<<"t">>, State, 0) + 1 }
         end,
-    drip(SWithTime, Opts).
+    drip(StateWithNewTime, Opts).
 
 drip(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _Opts) when T =:= Last -> S;
 drip(S = #{
@@ -84,7 +84,7 @@ drip(S = #{
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
     ToMint = units_minted_between(AlreadyMinted, Max, Proportion, LastT, T),
-    ?event({minting, {to_mint, ToMint}, {total_weight, TotalWeightedUnits}}),
+    ?event({minting, {to_mint, ToMint}, {total_weighted_units, TotalWeightedUnits}}),
     S#{
         <<"minted-per-weighted-unit">> =>
             hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts) +
@@ -115,13 +115,16 @@ unclaimed_yield(Addr, S, Opts) ->
 unclaimed_yield(Addr, ResourceID, MintedPerWeightedUnit, S, Opts) ->
     Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
     ResW = hb_maps:get(<<"weight">>, Res, 0),
-    AccruedYield = ResW * MintedPerWeightedUnit,
     Deposits = hb_maps:get(<<"deposits">>, Res, #{}),
     case hb_maps:find(Addr, Deposits) of
         error -> 0;
-        {ok, #{ <<"quantity">> := Qty, <<"chi0">> := MintedPerWeightedUnitAtDeposit }} ->
+        {ok, #{
+                <<"quantity">> := Qty,
+                <<"minted-per-weighted-unit-at-deposit">> :=
+                    MintedPerWeightedUnitAtDeposit
+            }} ->
             ?no_prod("Remove all floating point arithmetic."),
-            (AccruedYield - MintedPerWeightedUnitAtDeposit) * Qty
+            ResW * Qty * (MintedPerWeightedUnit - MintedPerWeightedUnitAtDeposit) 
     end.
 
 units_minted_between(Minted, Max, Proportion, LastT, T) ->
@@ -157,7 +160,8 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
                                 Addr =>
                                     #{
                                         <<"quantity">> => ExistingDeposit + Amount,
-                                        <<"chi0">> => MintedPerWeightedUnit
+                                        <<"minted-per-weighted-unit-at-deposit">> =>
+                                            MintedPerWeightedUnit
                                     }
                             }
                     }
@@ -167,11 +171,10 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
     ?event({new_resources, NewResources}),
     WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
-    NewTotalWeightedUnits = TotalWeightedUnits + (WeightR * Amount),
     S2 =
         S1#{
             <<"resources">> => NewResources,
-            <<"total-weighted-units">> => NewTotalWeightedUnits,
+            <<"total-weighted-units">> => TotalWeightedUnits + (WeightR * Amount),
             <<"balances">> => Balances#{ Addr => NewBalance }
         },
     S3 =
@@ -182,6 +185,28 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
             Opts
         ),
     update_deposit_index(Addr, ResourceID, deposit(Addr, ResourceID, S3), S3, Opts).
+
+set_weight(ResourceID, Weight, S, Opts) ->
+    S1 = drip(S, Opts),
+    ResourceDeposits = hb_ao:get(<<ResourceID/binary, "/total-deposits">>, S1, 0, Opts),
+    LastTotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
+    LastWeight = hb_ao:get(<<ResourceID/binary, "/weight">>, S1, 0, Opts),
+    NewTotalWeightedUnits =
+        LastTotalWeightedUnits
+            - (LastWeight * ResourceDeposits)
+            + (Weight * ResourceDeposits),
+    hb_ao:set(
+        S1,
+        #{
+            <<"resources">> => #{
+                ResourceID => #{
+                    <<"weight">> => Weight
+                }
+            },
+            <<"total-weighted-units">> => NewTotalWeightedUnits
+        },
+        Opts
+    ).
 
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
     ?event(
