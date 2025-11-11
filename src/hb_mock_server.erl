@@ -1,7 +1,7 @@
 %%% @doc Mock HTTP server for testing. Collects request bodies and returns
 %%% configurable responses. 
 -module(hb_mock_server).
--export([start/1, stop/1, get_requests/2]).
+-export([start/1, stop/1, get_requests/2, get_requests/3, get_requests/4]).
 %% Cowboy handler callback
 -export([init/2]).
 -include("include/hb.hrl").
@@ -71,6 +71,20 @@ get_requests({CollectorPID, _ListenerID}, Tag) ->
     after 1000 -> []
     end.
 
+get_requests(Type, Count, ServerHandle) ->
+    get_requests(Type, Count, ServerHandle, 10000).
+
+get_requests(Type, Count, ServerHandle, Timeout) ->
+    %% Wait for expected transaction
+    hb_util:wait_until(
+        fun() ->
+            Requests = get_requests(ServerHandle, Type),
+            length(Requests) >= Count
+        end,
+        Timeout
+    ),
+    get_requests(ServerHandle, Type).
+
 %%%===================================================================
 %%% Internal Functions
 %%%===================================================================
@@ -79,6 +93,7 @@ get_requests({CollectorPID, _ListenerID}, Tag) ->
 collect_loop(State) ->
     receive
         {request, Tag, Body} ->
+            ?event({request, Tag, Body}),
             Requests = maps:get(Tag, State, []),
             collect_loop(State#{Tag => [Body | Requests]});
         {get_requests, Tag, From} ->

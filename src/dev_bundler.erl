@@ -84,10 +84,6 @@ server(State = #{ max_idle_time := MaxIdleTime }, Opts) ->
         {item, From, Ref, _Base, Req} ->
             From ! {response, Ref, {ok, <<"Message queued.">>}},
             server(maybe_dispatch(add_item(Req, State, Opts), Opts), Opts);
-        {get_state, From, Ref} ->
-            % Only used in tests.
-            From ! {response, Ref, State},
-            server(State, Opts);
         stop ->
             exit(normal)
     after MaxIdleTime ->
@@ -151,7 +147,7 @@ anchor_error_test() ->
     }).
 
 tx_error_test() ->
-    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+    {ServerHandle, NodeOpts} = start_mock_gateway(
         #{
             tx => {400, <<"Transaction verification failed.">>},
             price => {200, <<"12345">>},
@@ -168,9 +164,9 @@ tx_error_test() ->
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
         % After a tx request fails it should be retried indefinitely. We'll
         % wait for a few retries then continue.
-        TXs = get_requests(tx, 4, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 4, ServerHandle),
         ?assert(length(TXs) >= 4),
-        Chunks = get_requests(chunk, 1, ServerHandle),
+        Chunks = hb_mock_server:get_requests(chunk, 1, ServerHandle),
         ?assertEqual([], Chunks),
         ok
     after
@@ -182,7 +178,7 @@ unsigned_dataitem_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+    {ServerHandle, NodeOpts} = start_mock_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -212,7 +208,7 @@ idle_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+    {ServerHandle, NodeOpts} = start_mock_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -230,15 +226,15 @@ idle_test() ->
         % Wait just to give the server a chance to post a transaction
         % (but it shouldn't)
         timer:sleep(2000),
-        ?assertEqual(0, length(get_requests(tx, 0, ServerHandle))),
-        ?assertEqual(0, length(get_requests(chunk, 0, ServerHandle))),
+        ?assertEqual(0, length(hb_mock_server:get_requests(tx, 0, ServerHandle))),
+        ?assertEqual(0, length(hb_mock_server:get_requests(chunk, 0, ServerHandle))),
         % Wait gain to give the server a chance to trip the max idle time.
         % It should *now* post a transaction.
         timer:sleep(8000),
-        TXs = get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
         %% Wait for expected chunks
-        Proofs = get_requests(chunk, 2, ServerHandle),
+        Proofs = hb_mock_server:get_requests(chunk, 2, ServerHandle),
         ?assertEqual(2, length(Proofs)),
         assert_bundle([Item1], Anchor, Price, hd(TXs), Proofs, ClientOpts),
         ok
@@ -252,7 +248,7 @@ dispatch_blocking_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+    {ServerHandle, NodeOpts} = start_mock_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)},
@@ -291,10 +287,10 @@ dispatch_blocking_test() ->
         }),
         ?assert(Time4 =< 2 * Slowest),
         timer:sleep(BlockTime),
-        TXs = get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
         %% Wait for expected chunks
-        Proofs = get_requests(chunk, 1, ServerHandle),
+        Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle),
         ?assertEqual(1, length(Proofs)),
         assert_bundle(
             [Item1, Item2, Item3],
@@ -314,7 +310,7 @@ test_bundle(Opts) ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_gateway_mock_server(
+    {ServerHandle, NodeOpts} = start_mock_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -333,10 +329,10 @@ test_bundle(Opts) ->
         ?assertMatch({ok, _}, post_data_item(Node, Item2, ClientOpts)),
         Item3 = new_data_item(3, floor(0.25 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item3, ClientOpts)),
-        TXs = get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
         ?assertEqual(1, length(TXs)),
         %% Wait for expected chunks
-        Proofs = get_requests(chunk, 4, ServerHandle),
+        Proofs = hb_mock_server:get_requests(chunk, 4, ServerHandle),
         ?assertEqual(4, length(Proofs)),
         assert_bundle(
             [Item1, Item2, Item3], Anchor, Price, hd(TXs), Proofs, ClientOpts),
@@ -347,7 +343,7 @@ test_bundle(Opts) ->
     end.
 
 test_api_error(Responses) ->
-    {ServerHandle, NodeOpts} = start_gateway_mock_server(Responses),
+    {ServerHandle, NodeOpts} = start_mock_gateway(Responses),
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
@@ -358,9 +354,9 @@ test_api_error(Responses) ->
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
         % Since thre was an error either before or while posting the tx,
         % no bundles should be posted and no chunks should be posted.
-        TXs = get_requests(tx, 1, ServerHandle),
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
         ?assertEqual([], TXs),
-        Chunks = get_requests(chunk, 1, ServerHandle),
+        Chunks = hb_mock_server:get_requests(chunk, 1, ServerHandle),
         ?assertEqual([], Chunks),
         % Now that we dispatch asynchronously, an error won't cause the
         % Item to remain in the queue. Instead we'll rely on the retry
@@ -443,18 +439,7 @@ assert_bundle(ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
     ?assertEqual(undefined, TX#tx.manifest),
     ?assertEqual(undefined, BundleDeserialized#tx.manifest).
 
-get_requests(Type, Count, ServerHandle) ->
-    %% Wait for expected transaction
-    hb_util:wait_until(
-        fun() ->
-            Requests = hb_mock_server:get_requests(ServerHandle, Type),
-            length(Requests) >= Count
-        end,
-        5000
-    ),
-    hb_mock_server:get_requests(ServerHandle, Type).
-
-start_gateway_mock_server(Responses) ->
+start_mock_gateway(Responses) ->
     DefaultResponse = {200, <<>>},
     Endpoints = [
         {"/chunk", chunk, maps:get(chunk, Responses, DefaultResponse)},
@@ -471,17 +456,9 @@ start_gateway_mock_server(Responses) ->
                 <<"node">> => #{
                     <<"match">> => <<"^/arweave">>,
                     <<"with">> => MockServer,
-                    <<"opts">> => #{ 
-                        http_client => httpc, protocol => http2 }
+                    <<"opts">> => #{http_client => httpc, protocol => http2}
                 }
             }
         ]
     },
     {ServerHandle, NodeOpts}.
-
-get_state(Opts) ->
-    PID = ensure_server(Opts),
-    PID ! {get_state, self(), Ref = make_ref()},
-    receive
-        {response, Ref, Res} -> Res
-    end.

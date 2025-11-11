@@ -68,6 +68,17 @@ stop_dispatcher() ->
             hb_name:unregister(?DISPATCHER_NAME)
     end.
 
+get_state() ->
+    case hb_name:lookup(?DISPATCHER_NAME) of
+        undefined -> undefined;
+        PID ->
+            PID ! {get_state, self(), Ref = make_ref()},
+            receive
+                {state, Ref, State} -> State
+            after 1000 -> timeout
+            end
+    end.
+
 %% @doc Initialize the dispatcher with worker pool.
 init_dispatcher(Opts) ->
     NumWorkers = hb_opts:get(bundler_workers, ?DEFAULT_NUM_WORKERS, Opts),
@@ -114,6 +125,11 @@ dispatcher(State) ->
         {task_failed, WorkerPID, Task, Reason} ->
             State1 = handle_task_failed(WorkerPID, Task, Reason, State),
             dispatcher(assign_tasks(State1));
+        
+        {get_state, From, Ref} ->
+            From ! {state, Ref, State},
+            dispatcher(State);
+        
         stop ->
             % Stop all workers
             maps:foreach(
@@ -317,7 +333,7 @@ execute_task(#task{type = build_tx, data = Items}) ->
 
 execute_task(#task{type = post_tx, data = TX, opts = Opts} = Task) ->
     try
-        ?event({execute_task, format_task(Task)}),
+        ?event({execute_task, format_task(Task), Opts}),
         % Get price and anchor
         DataSize = TX#tx.data_size,
         PriceResult = get_price(DataSize, Opts),
@@ -445,3 +461,331 @@ get_anchor(Opts) ->
         #{ <<"path">> => <<"/tx_anchor">> },
         Opts
     ).
+
+%%%===================================================================
+%%% Tests
+%%%===================================================================
+
+complete_task_sequence_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        Opts = NodeOpts#{priv_wallet => hb:wallet()},
+        hb_http_server:start_node(Opts),
+        Items = [new_data_item(1, 10), new_data_item(2, 10)],
+        dispatch(Items, Opts),
+        % Wait for TX to be posted
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        % Wait for chunk to be posted
+        Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle),
+        ?assertEqual(1, length(Proofs)),
+        % Verify dispatcher state
+        State = get_state(),
+        ?assertNotEqual(undefined, State),
+        ?assertNotEqual(timeout, State),
+        % All workers should be idle
+        Workers = State#state.workers,
+        IdleWorkers = [PID || {PID, Status} <- maps:to_list(Workers), Status =:= idle],
+        ?assertEqual(maps:size(Workers), length(IdleWorkers)),
+        % Task queue should be empty
+        Queue = State#state.task_queue,
+        ?assert(queue:is_empty(Queue)),
+        % Bundle should be completed and removed
+        Bundles = State#state.bundles,
+        ?assertEqual(0, maps:size(Bundles)),
+        ok
+    after
+        cleanup_dispatcher(ServerHandle)
+    end.
+
+post_tx_price_failure_retry_test() ->
+    Anchor = rand:bytes(32),
+    FailCount = 3,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => fun(_Req) ->
+            Count = persistent_term:get(price_attempts, 0),
+            persistent_term:put(price_attempts, Count + 1),
+            case Count < FailCount of
+                true -> {500, <<"error">>};
+                false -> {200, <<"12345">>}
+            end
+        end,
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        persistent_term:put(price_attempts, 0),
+        Opts = NodeOpts#{priv_wallet => hb:wallet()},
+        hb_http_server:start_node(Opts),
+        Items = [new_data_item(1, 10)],
+        dispatch(Items, Opts),
+        % Wait for TX to eventually be posted
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        % Verify it retried multiple times
+        FinalCount = persistent_term:get(price_attempts, 0),
+        ?assertEqual(FailCount+1, FinalCount),
+        ok
+    after
+        persistent_term:erase(price_attempts),
+        cleanup_dispatcher(ServerHandle)
+    end.
+
+post_tx_anchor_failure_retry_test() ->
+    Price = 12345,
+    FailCount = 3,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => fun(_Req) ->
+            Count = persistent_term:get(anchor_attempts, 0),
+            persistent_term:put(anchor_attempts, Count + 1),
+            case Count < FailCount of
+                true -> {500, <<"error">>};
+                false -> {200, hb_util:encode(rand:bytes(32))}
+            end
+        end
+    }),
+    try
+        persistent_term:put(anchor_attempts, 0),
+        Opts = NodeOpts#{priv_wallet => hb:wallet()},
+        hb_http_server:start_node(Opts),
+        Items = [new_data_item(1, 10)],
+        dispatch(Items, Opts),
+        % Wait for TX to eventually be posted
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        % Verify it retried multiple times
+        FinalCount = persistent_term:get(anchor_attempts, 0),
+        ?assertEqual(FailCount+1, FinalCount),
+        ok
+    after
+        persistent_term:erase(anchor_attempts),
+        cleanup_dispatcher(ServerHandle)
+    end.
+
+post_tx_post_failure_retry_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    FailCount = 4,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            Count = persistent_term:get(tx_attempts, 0),
+            persistent_term:put(tx_attempts, Count + 1),
+            case Count < FailCount of
+                true -> {400, <<"Transaction verification failed">>};
+                false -> {200, <<"OK">>}
+            end
+        end
+    }),
+    try
+        persistent_term:put(tx_attempts, 0),
+        Opts = NodeOpts#{priv_wallet => hb:wallet()},
+        hb_http_server:start_node(Opts),
+        Items = [new_data_item(1, 10)],
+        dispatch(Items, Opts),
+        % Wait for TX to eventually succeed
+        TXs = hb_mock_server:get_requests(tx, FailCount+1, ServerHandle),
+        ?assertEqual(FailCount+1, length(TXs)),
+        % Verify final attempt succeeded
+        FinalCount = persistent_term:get(tx_attempts, 0),
+        ?assertEqual(FailCount+1, FinalCount),
+        ok
+    after
+        persistent_term:erase(tx_attempts),
+        cleanup_dispatcher(ServerHandle)
+    end.
+
+post_proof_failure_retry_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    FailCount = 2,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        chunk => fun(_Req) ->
+            Count = persistent_term:get(chunk_attempts, 0),
+            persistent_term:put(chunk_attempts, Count + 1),
+            case Count < FailCount of
+                true -> {500, <<"error">>};
+                false -> {200, <<"OK">>}
+            end
+        end
+    }),
+    try
+        persistent_term:put(chunk_attempts, 0),
+        Opts = NodeOpts#{priv_wallet => hb:wallet()},
+        hb_http_server:start_node(Opts),
+        % Large enough for multiple chunks
+        Items = [new_data_item(1, floor(4.5 * ?DATA_CHUNK_SIZE))],
+        dispatch(Items, Opts),
+        % Wait for TX
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        % Wait for chunks to eventually succeed
+        Chunks = hb_mock_server:get_requests(chunk, FailCount+5, ServerHandle),
+        ?assertEqual( FailCount+5, length(Chunks)),
+        % Verify retries happened
+        FinalCount = persistent_term:get(chunk_attempts, 0),
+        ?assertEqual(FailCount+5, FinalCount),
+        ok
+    after
+        persistent_term:erase(chunk_attempts),
+        cleanup_dispatcher(ServerHandle)
+    end.
+
+empty_dispatch_test() ->
+    Opts = #{},
+    dispatch([], Opts),
+    % Should not crash
+    ok.
+
+rapid_dispatch_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            timer:sleep(1000),
+            {200, <<"OK">>}
+        end
+    }),
+    try
+        Opts = NodeOpts#{priv_wallet => hb:wallet(), bundler_workers => 3},
+        hb_http_server:start_node(Opts),
+        % Dispatch 10 bundles rapidly
+        lists:foreach(
+            fun(I) ->
+                Items = [new_data_item(I, 10)],
+                dispatch(Items, Opts)
+            end,
+            lists:seq(1, 10)
+        ),
+        
+        % Wait for all 10 TXs
+        TXs = hb_mock_server:get_requests(tx, 10, ServerHandle),
+        ?assertEqual(10, length(TXs)),
+        ok
+    after
+        cleanup_dispatcher(ServerHandle)
+    end.
+
+one_bundle_fails_others_continue_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            timer:sleep(1000),
+            % First TX fails, second succeeds
+            Count = persistent_term:get(tx_mixed_attempts, 0),
+            persistent_term:put(tx_mixed_attempts, Count + 1),
+            case Count of
+                0 -> {200, <<"OK">>};  % Second bundle succeeds
+                _ -> {400, <<"fail">>}  % First bundle keeps failing
+            end
+        end
+    }),
+    try
+        persistent_term:put(tx_mixed_attempts, 0),
+        Opts = NodeOpts#{priv_wallet => hb:wallet()},
+        hb_http_server:start_node(Opts),
+        % Dispatch first bundle (will keep failing)
+        Items1 = [new_data_item(1, 10)],
+        dispatch(Items1, Opts),
+        % Dispatch second bundle (will succeed)
+        Items2 = [new_data_item(2, 10)],
+        dispatch(Items2, Opts),
+        % Wait for at least 5 TX attempts (1 success + multiple retries)
+        TXs = hb_mock_server:get_requests(tx, 5, ServerHandle),
+        ?assert(length(TXs) >= 5),
+        ok
+    after
+        persistent_term:erase(tx_mixed_attempts),
+        cleanup_dispatcher(ServerHandle)
+    end.
+
+parallel_task_execution_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    SleepTime = 1000,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        chunk => fun(_Req) ->
+            timer:sleep(SleepTime),
+            {200, <<"OK">>}
+        end
+    }),
+    try
+        Opts = NodeOpts#{priv_wallet => hb:wallet(), bundler_workers => 5},
+        hb_http_server:start_node(Opts),
+        % Dispatch 3 bundles, each with 2 chunks
+        lists:foreach(
+            fun(I) ->
+                Items = [new_data_item(I, 10)],
+                dispatch(Items, Opts)
+            end,
+            lists:seq(1, 10)
+        ),
+        % With 3 workers and 1s delay, 10 chunks should complete in ~2s not 9s
+        StartTime = erlang:system_time(millisecond),
+        Chunks = hb_mock_server:get_requests(chunk, 10, ServerHandle),
+        ElapsedTime = erlang:system_time(millisecond) - StartTime,
+        ?assertEqual(10, length(Chunks)),
+        % Should take ~2-3 seconds with parallelism, not 9+
+        ?assert(ElapsedTime < 5000, "ElapsedTime: " ++ integer_to_list(ElapsedTime)),
+        ok
+    after
+        cleanup_dispatcher(ServerHandle)
+    end.
+
+%%% Test Helper Functions
+
+new_data_item(Index, Size) ->
+    Data = rand:bytes(Size),
+    Tag = <<"tag", (integer_to_binary(Index))/binary>>,
+    Value = <<"value", (integer_to_binary(Index))/binary>>,
+    ar_bundles:sign_item(
+        #tx{
+            data = Data,
+            tags = [{Tag, Value}]
+        },
+        hb:wallet()
+    ).
+
+start_mock_gateway(Responses) ->
+    DefaultResponse = {200, <<>>},
+    Endpoints = [
+        {"/chunk", chunk, maps:get(chunk, Responses, DefaultResponse)},
+        {"/tx", tx, maps:get(tx, Responses, DefaultResponse)},
+        {"/price/:size", price, maps:get(price, Responses, DefaultResponse)},
+        {"/tx_anchor", tx_anchor, maps:get(tx_anchor, Responses, DefaultResponse)}
+    ],
+    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
+    NodeOpts = #{
+        gateway => MockServer,
+        routes => [
+            #{
+                <<"template">> => <<"/arweave">>,
+                <<"node">> => #{
+                    <<"match">> => <<"^/arweave">>,
+                    <<"with">> => MockServer,
+                    <<"opts">> => #{http_client => httpc, protocol => http2}
+                }
+            }
+        ]
+    },
+    {ServerHandle, NodeOpts}.
+
+cleanup_dispatcher(ServerHandle) ->
+    stop_dispatcher(),
+    timer:sleep(100), % Ensure dispatcher fully stops
+    hb_mock_server:stop(ServerHandle).
