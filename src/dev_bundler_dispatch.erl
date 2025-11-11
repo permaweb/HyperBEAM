@@ -20,7 +20,8 @@
     bundle_id,           % ID of the bundle this task belongs to
     type,                % Task type: build_tx | post_tx | build_proofs | post_proof
     data,                % Task-specific data (map)
-    opts                 % Configuration options
+    opts,                % Configuration options
+    retry_count = 0      % Number of times this task has been retried
 }).
 
 %%% Proof record to track individual proof seeding status.
@@ -41,6 +42,8 @@
 %%% Default options.
 -define(DISPATCHER_NAME, bundler_dispatcher).
 -define(DEFAULT_NUM_WORKERS, 5).
+-define(DEFAULT_RETRY_BASE_DELAY_MS, 1000).
+-define(DEFAULT_RETRY_MAX_DELAY_MS, 600000). % 10 minutes
 
 %% @doc Dispatch the queue.
 dispatch([], _Opts) ->
@@ -125,11 +128,13 @@ dispatcher(State) ->
         {task_failed, WorkerPID, Task, Reason} ->
             State1 = handle_task_failed(WorkerPID, Task, Reason, State),
             dispatcher(assign_tasks(State1));
-        
+        {retry_task, Task} ->
+            % Re-enqueue the task after backoff delay
+            State1 = enqueue_task(Task, State),
+            dispatcher(assign_tasks(State1));
         {get_state, From, Ref} ->
             From ! {state, Ref, State},
             dispatcher(State);
-        
         stop ->
             % Stop all workers
             maps:foreach(
@@ -204,13 +209,23 @@ handle_task_complete(WorkerPID, Task, Result, State) ->
 
 handle_task_failed(WorkerPID, Task, Reason, State) ->
     Workers = State#state.workers,
-    ?event({task_failed_retrying, format_task(Task), {reason, Reason}}),
+    Opts = State#state.opts,
+    RetryCount = Task#task.retry_count,
+    % Calculate exponential backoff delay
+    BaseDelay = hb_opts:get(retry_base_delay_ms, ?DEFAULT_RETRY_BASE_DELAY_MS, Opts),
+    MaxDelay = hb_opts:get(retry_max_delay_ms, ?DEFAULT_RETRY_MAX_DELAY_MS, Opts),
+    % Compute delay: min(base * 2^retry_count, max_delay)
+    Delay = min(BaseDelay * (1 bsl RetryCount), MaxDelay),
+    ?event({task_failed_retrying, format_task(Task), {reason, Reason}, 
+            {retry_count, RetryCount}, {delay_ms, Delay}}),
     % Update worker to idle
     State1 = State#state{
         workers = maps:put(WorkerPID, idle, Workers)
     },
-    % Immediately re-queue the failed task
-    enqueue_task(Task, State1).
+    % Increment retry count and schedule delayed retry
+    Task1 = Task#task{retry_count = RetryCount + 1},
+    erlang:send_after(Delay, self(), {retry_task, Task1}),
+    State1.
 
 task_completed(#task{bundle_id = BundleID, type = build_tx}, Bundle, Result, State) ->
     Bundles = State#state.bundles,
@@ -302,7 +317,6 @@ bundle_complete(BundleID, State) ->
     State#state{
         bundles = maps:remove(BundleID, Bundles)
     }.
-
 
 %%% Worker implementation
 
@@ -585,7 +599,11 @@ post_tx_post_failure_retry_test() ->
     }),
     try
         persistent_term:put(tx_attempts, 0),
-        Opts = NodeOpts#{priv_wallet => hb:wallet()},
+        % Use short retry delays for testing (100ms base, with exponential backoff)
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            retry_base_delay_ms => 100
+        },
         hb_http_server:start_node(Opts),
         Items = [new_data_item(1, 10)],
         dispatch(Items, Opts),
@@ -683,19 +701,22 @@ one_bundle_fails_others_continue_test() ->
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
-            timer:sleep(1000),
             % First TX fails, second succeeds
             Count = persistent_term:get(tx_mixed_attempts, 0),
             persistent_term:put(tx_mixed_attempts, Count + 1),
             case Count of
-                0 -> {200, <<"OK">>};  % Second bundle succeeds
-                _ -> {400, <<"fail">>}  % First bundle keeps failing
+                0 -> {200, <<"OK">>}; 
+                _ -> {400, <<"fail">>}
             end
         end
     }),
     try
         persistent_term:put(tx_mixed_attempts, 0),
-        Opts = NodeOpts#{priv_wallet => hb:wallet()},
+        % Use short retry delays for testing (100ms base, with exponential backoff)
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            retry_base_delay_ms => 100
+        },
         hb_http_server:start_node(Opts),
         % Dispatch first bundle (will keep failing)
         Items1 = [new_data_item(1, 10)],
@@ -705,7 +726,7 @@ one_bundle_fails_others_continue_test() ->
         dispatch(Items2, Opts),
         % Wait for at least 5 TX attempts (1 success + multiple retries)
         TXs = hb_mock_server:get_requests(tx, 5, ServerHandle),
-        ?assert(length(TXs) >= 5),
+        ?assert(length(TXs) >= 5, length(TXs)),
         ok
     after
         persistent_term:erase(tx_mixed_attempts),
@@ -744,6 +765,110 @@ parallel_task_execution_test() ->
         ?assert(ElapsedTime < 5000, "ElapsedTime: " ++ integer_to_list(ElapsedTime)),
         ok
     after
+        cleanup_dispatcher(ServerHandle)
+    end.
+
+exponential_backoff_timing_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    FailCount = 5,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            Count = persistent_term:get(backoff_cap_attempts, 0),
+            Timestamp = erlang:system_time(millisecond),
+            persistent_term:put(backoff_cap_attempts, Count + 1),
+            % Store timestamp of each attempt
+            Timestamps = persistent_term:get(backoff_cap_timestamps, []),
+            persistent_term:put(backoff_cap_timestamps, [Timestamp | Timestamps]),
+            case Count < FailCount of
+                true -> {400, <<"fail">>};
+                false -> {200, <<"OK">>}
+            end
+        end
+    }),
+    try
+        persistent_term:put(backoff_cap_attempts, 0),
+        persistent_term:put(backoff_cap_timestamps, []),
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            retry_base_delay_ms => 1000,
+            retry_max_delay_ms => 5000  % Cap at 500ms
+        },
+        hb_http_server:start_node(Opts),
+        Items = [new_data_item(1, 10)],
+        dispatch(Items, Opts),
+        % Wait for TX to eventually succeed
+        TXs = hb_mock_server:get_requests(tx, FailCount+1, ServerHandle, 30000),
+        ?assertEqual(FailCount+1, length(TXs)),
+        % Verify backoff respects cap
+        Timestamps = lists:reverse(persistent_term:get(backoff_cap_timestamps, [])),
+        ?assertEqual(6, length(Timestamps)),
+        [T1, T2, T3, T4, T5, T6] = Timestamps,
+        % Calculate actual delays
+        Delay1 = T2 - T1,
+        Delay2 = T3 - T2,
+        Delay3 = T4 - T3,
+        Delay4 = T5 - T4,
+        Delay5 = T6 - T5,
+        % Expected: ~1000ms, ~2000ms, ~4000ms, ~5000ms (capped), ~5000ms (capped)
+        ?assert(Delay1 >= 800 andalso Delay1 =< 1500, Delay1),
+        ?assert(Delay2 >= 1800 andalso Delay2 =< 2500, Delay2),
+        ?assert(Delay3 >= 3800 andalso Delay3 =< 4500, Delay3),
+        % These should be capped at 5000ms, not 8000ms and 16000ms
+        ?assert(Delay4 >= 4800 andalso Delay4 =< 5500, Delay4),
+        ?assert(Delay5 >= 4800 andalso Delay5 =< 5500, Delay5),
+        ok
+    after
+        persistent_term:erase(backoff_cap_attempts),
+        persistent_term:erase(backoff_cap_timestamps),
+        cleanup_dispatcher(ServerHandle)
+    end.
+
+independent_task_retry_counts_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    % Track which bundles we've seen
+    persistent_term:put(independent_bundle_ids, []),
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)},
+        tx => fun(_Req) ->
+            % Use request ordering to distinguish bundles
+            % First 3 requests are bundle1 (fail, fail, succeed)
+            % 4th request is bundle2 (succeed)
+            Count = persistent_term:get(independent_total_attempts, 0),
+            persistent_term:put(independent_total_attempts, Count + 1),
+            case Count < 2 of
+                true -> {400, <<"fail">>};  % First 2 attempts fail
+                false -> {200, <<"OK">>}    % Rest succeed
+            end
+        end
+    }),
+    try
+        persistent_term:put(independent_total_attempts, 0),
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            retry_base_delay_ms => 1000
+        },
+        hb_http_server:start_node(Opts),
+        % Dispatch first bundle (will fail twice and retry)
+        Items1 = [new_data_item(1, 10)],
+        dispatch(Items1, Opts),
+        % Wait a bit for first bundle to start failing
+        hb_mock_server:get_requests(tx, 3, ServerHandle),
+        % Dispatch second bundle (will succeed on first try since we're past the 2 failures)
+        Items2 = [new_data_item(2, 10)],
+        dispatch(Items2, Opts),
+        % Verify we got all TX requests logged
+        TotalAttempts = 4,
+        TXs = hb_mock_server:get_requests(tx, TotalAttempts, ServerHandle),
+        ?assertEqual(TotalAttempts, length(TXs)),
+        ok
+    after
+        persistent_term:erase(independent_total_attempts),
+        persistent_term:erase(independent_bundle_ids),
         cleanup_dispatcher(ServerHandle)
     end.
 
