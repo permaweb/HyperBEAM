@@ -901,14 +901,7 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
             % We have a hint. Construct a redirect message.
             generate_redirect(ProcID, Hint, Opts);
         not_found ->
-            NormalizedScheduler =
-                case Scheduler of
-                    [S] when is_binary(S) ->
-                        string:trim(S);
-                    S when is_binary(S) ->
-                        string:trim(S)
-                end,
-            case dev_scheduler_cache:read_location(NormalizedScheduler, Opts) of
+            case dev_scheduler_cache:read_location(Scheduler, Opts) of
                 {ok, SchedMsg} ->
                     % We have a cached scheduler location. Use it to construct a
                     % redirect message.
@@ -916,7 +909,7 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
                 not_found ->
                     % We have not yet cached the location for this address.
                     % Find it via the gateway.
-                    case hb_gateway_client:scheduler_location(NormalizedScheduler, Opts) of
+                    case hb_gateway_client:scheduler_location(Scheduler, Opts) of
                         {ok, SchedMsg} ->
                             % We have found the location. Cache it and use it to
                             % construct a redirect message.
