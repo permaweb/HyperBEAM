@@ -1229,8 +1229,7 @@ notices_match_actual_state_changes_test() ->
     Req = make_request(
         <<"transfer">>,
         #{
-            <<"from">> => ?ALICE, 
-            <<"recipient">> => ?BOB, 
+            <<"recipient">> => ?BOB,
             <<"quantity">> => 300
         },
         #{from => ?ALICE}
@@ -1238,19 +1237,25 @@ notices_match_actual_state_changes_test() ->
     {ok, State} = dev_token:compute(Base, Req, #{}),
     Outbox = hb_ao:get(<<"results/outbox">>, State, #{}),
     ?assertEqual(2, length(Outbox)),
-    [CreditNotice, DebitNotice] = Outbox,
+    % Notice order: [DebitNotice, CreditNotice]
+    [DebitNotice, CreditNotice] = Outbox,
+    % Validate Debit-Notice structure
     ?assertEqual(
-        <<"Credit-Notice">>, 
-        hb_ao:get(<<"action">>, CreditNotice, #{})
-    ),
-    ?assertEqual(?ALICE, hb_ao:get(<<"sender">>, CreditNotice, #{})),
-    ?assertEqual(?BOB, hb_ao:get(<<"recipient">>, CreditNotice, #{})),
-    ?assertEqual(
-        <<"Debit-Notice">>, 
+        <<"Debit-Notice">>,
         hb_ao:get(<<"action">>, DebitNotice, #{})
     ),
     ?assertEqual(?BOB, hb_ao:get(<<"recipient">>, DebitNotice, #{})),
     ?assertEqual(300, hb_ao:get(<<"quantity">>, DebitNotice, #{})),
+    ?assertEqual(?ALICE, hb_ao:get(<<"target">>, DebitNotice, #{})), 
+    % Validate Credit-Notice structure
+    ?assertEqual(
+        <<"Credit-Notice">>,
+        hb_ao:get(<<"action">>, CreditNotice, #{})
+    ),
+    ?assertEqual(?ALICE, hb_ao:get(<<"sender">>, CreditNotice, #{})),
+    ?assertEqual(300, hb_ao:get(<<"quantity">>, CreditNotice, #{})),
+    ?assertEqual(?BOB, hb_ao:get(<<"target">>, CreditNotice, #{})),   
+    % Validate balances updated correctly
     ?assertEqual(700, get_balance(State, ?ALICE)),
     ?assertEqual(300, get_balance(State, ?BOB)).
 

@@ -45,13 +45,24 @@ transfer(Base, Assignment, Opts) ->
         % Handle self-transfer: skip balance updates
         case From =:= Recipient of
             true ->
-                send(transfer_notices(From, Recipient, Quantity), Base, Opts);
+                send(
+                    transfer_notices(From, Recipient, Quantity, Req, Opts),
+                    Base, 
+                    Opts
+                );
             false ->
-                transfer_between_accounts(Base, From, Recipient, Quantity, Opts)
+                transfer_between_accounts(
+                    Base, 
+                    From, 
+                    Recipient, 
+                    Quantity, 
+                    Req, 
+                    Opts
+                )
         end
     end.
 
-transfer_between_accounts(Base, From, Recipient, Quantity, Opts) ->
+transfer_between_accounts(Base, From, Recipient, Quantity, Req, Opts) ->
     maybe
         % Retrieve balances from the base state.
         Balances = 
@@ -91,22 +102,35 @@ transfer_between_accounts(Base, From, Recipient, Quantity, Opts) ->
             ),
         % Update the base state and send notices.
         NewBase = hb_maps:put(<<"balances">>, NewBalances, Base, Opts),
-        send(transfer_notices(From, Recipient, Quantity), NewBase, Opts)
+        send(
+            transfer_notices(From, Recipient, Quantity, Req, Opts), 
+            NewBase, 
+            Opts
+        )
     end.
 
-transfer_notices(From, Recipient, Quantity) ->
-    [
-        #{
-            <<"action">> => <<"Credit-Notice">>,
-            <<"sender">> => From,
-            <<"recipient">> => Recipient
-        },
+transfer_notices(From, Recipient, Quantity, Req, Opts) ->
+    % Extract forwarded tags (X- prefixed fields from request)
+    ForwardedTags = extract_forwarded_tags(Req, Opts),
+    DebitNotice = maps:merge(
         #{
             <<"action">> => <<"Debit-Notice">>,
-            <<"recipient">> => Recipient,
+            <<"recipient">> => Recipient,    
+            <<"quantity">> => Quantity,
+            <<"target">> => From              
+        },
+        ForwardedTags
+    ),
+    CreditNotice = maps:merge(
+        #{
+            <<"target">> => Recipient,       
+            <<"action">> => <<"Credit-Notice">>,
+            <<"sender">> => From,             
             <<"quantity">> => Quantity
-        }
-    ].
+        },
+        ForwardedTags
+    ),
+    [DebitNotice, CreditNotice].
 
 mint(Base, Assignment, Opts) ->
     maybe
@@ -271,3 +295,28 @@ validate_address(Address) when is_binary(Address) ->
     end;
 validate_address(_) ->
     {error, <<"Recipient address must be a binary.">>}.
+
+%% @doc Extract tags with X- prefix for forwarding in notices
+%% Follows AO token spec: tags beginning with "X-" are forwarded
+%% Case-insensitive matching (both "x-" and "X-" are forwarded)
+extract_forwarded_tags(Req, _Opts) ->
+    case is_map(Req) of
+        true ->
+            maps:fold(
+                fun(Key, Value, Acc) when is_binary(Key) ->
+                    case byte_size(Key) >= 2 of
+                        true ->
+                            Prefix = binary:part(Key, 0, 2),
+                            case string:lowercase(Prefix) of
+                                <<"x-">> -> maps:put(Key, Value, Acc);
+                                _ -> Acc
+                            end;
+                        false -> Acc
+                    end;
+                (_Key, _Value, Acc) -> Acc
+                end,
+                #{},
+                Req
+            );
+        false -> #{}
+    end.
