@@ -56,7 +56,6 @@ post_tx(Base, Request, Opts, <<"tx@1.0">>) ->
     ),
     case TXResponse of
         {ok, _} ->
-            post_chunks(Base, TX, Opts),
             ?event({{uploaded, Request}, {result, TXResponse}}),
             CacheRes = hb_cache:write(Request, Opts),
             ?event(

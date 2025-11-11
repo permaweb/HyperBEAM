@@ -21,7 +21,6 @@
 
 %%% Default options.
 -define(SERVER_NAME, bundler_server).
--define(DISPATCHER_NAME, bundler_dispatcher).
 -define(DEFAULT_MAX_SIZE, 100_000_000). % 100 MB.
 -define(DEFAULT_MAX_IDLE_TIME, 300_000). % 5 minutes.
 -define(DEFAULT_MAX_ITEMS, 1000).
@@ -92,7 +91,9 @@ server(State = #{ max_idle_time := MaxIdleTime }, Opts) ->
         stop ->
             exit(normal)
     after MaxIdleTime ->
-        server(dispatch(State, Opts), Opts)
+        Q = maps:get(queue, State),
+        dev_bundler_dispatch:dispatch(Q, Opts),
+        server(State#{ queue => [] }, Opts)
     end.
 
 %% @doc Add an item to the queue. Update the state with the new queue and
@@ -110,113 +111,22 @@ add_item(Req, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
 %% @doc Dispatch the queue if it is ready.
 maybe_dispatch(State, Opts) ->
     case dispatchable(State, Opts) of
-        true -> dispatch(State, Opts);
+        true -> 
+            Q = maps:get(queue, State),
+            dev_bundler_dispatch:dispatch(Q, Opts),
+            State#{ queue => [] };
         false -> State
     end.
 
 %% @doc Returns whether the queue is dispatchable.
-dispatchable(#{ queue := Q, max_items := MaxLen }, Opts)
+dispatchable(#{ queue := Q, max_items := MaxLen }, _Opts)
         when length(Q) >= MaxLen ->
     true;
-dispatchable(#{ bytes := Bytes, max_size := MaxSize }, Opts)
+dispatchable(#{ bytes := Bytes, max_size := MaxSize }, _Opts)
         when Bytes >= MaxSize ->
     true;
 dispatchable(_State, _Opts) ->
     false.
-
-%% @doc Dispatch the queue.
-dispatch(State = #{ queue := [] }, Opts) ->
-    ?event({skipping_empty_queue}),
-    State;
-dispatch(State = #{ queue := Q }, Opts) ->
-    PID = ensure_dispatcher(),
-    PID ! {dispatch, Q, Opts},
-    State#{ queue => [] }.
-
-%% @doc Return the PID of the dispatch server. If the server is not running,
-%% it is started and registered with the name `?SERVER_NAME'.
-ensure_dispatcher() ->
-    case hb_name:lookup(?DISPATCHER_NAME) of
-        undefined ->
-            PID = spawn(fun() -> dispatcher() end),
-            hb_name:register(?DISPATCHER_NAME, PID),
-            hb_name:lookup(?DISPATCHER_NAME);
-        PID -> PID
-    end.
-
-stop_dispatcher() ->
-    case hb_name:lookup(?DISPATCHER_NAME) of
-        undefined -> ok;
-        PID ->
-            PID ! stop,
-            hb_name:unregister(?DISPATCHER_NAME)
-    end.
-
-%% @doc The main loop of the bundler server. Simply waits for messages to be
-%% added to the queue, and then dispatches them when the queue is large enough.
-dispatcher() ->
-    receive
-        {dispatch, Q, Opts} ->
-            ?event(blah, {dispatching}),
-            % Use dev_codec_tx:to directly to build a bundled L1 transaction from
-            % a list of dataitems. We do this rather than hb_message:convert because
-            % hb_message doesn't handle lists natively - and it's tricky to get it
-            % to manage the data conversions idempotently.
-            {ok, Bundle} = dev_codec_tx:to(lists:reverse(Q), #{}, #{}),
-            case {get_price(Bundle#tx.data_size, Opts), get_anchor(Opts)} of
-                {{ok, Price}, {ok, Anchor}} ->
-                    dispatch_bundle(
-                        Bundle#tx{ anchor = Anchor, reward = Price }, Opts);
-                {PriceError, AnchorError} ->
-                    ?event({unable_to_dispatch,
-                        {price_error, PriceError}, {anchor_error, AnchorError}})
-            end,
-            dispatcher();
-        stop ->
-            exit(normal)
-    end.
-
-dispatch_bundle(Bundle, Opts) ->
-    ?event({dispatching_bundle, {bundle, Bundle}}),
-    Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
-    Signed = ar_tx:sign(Bundle, Wallet),
-    % Now that we have the #tx record ready to go, convert back to a message
-    Committed = hb_message:convert(
-        Signed,
-        #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-        #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
-        Opts),
-    ?event({posting_tx, Committed}),
-    PostTXResponse =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"arweave@2.9-pre">> },
-            Committed#{ 
-                <<"path">> => <<"/tx">>,
-                <<"method">> => <<"POST">>
-            },
-            Opts
-        ),
-    ?event(blah, {dispatched}),
-    case PostTXResponse of
-        {ok, _} ->
-            ok;
-        {_, Error} ->
-            ?event({unable_to_dispatch, {tx_error, Error}})
-    end.
-
-get_price(DataSize, Opts) ->
-    hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
-        #{ <<"path">> => <<"/price">>, <<"size">> => DataSize },
-        Opts
-    ).
-
-get_anchor(Opts) ->
-    hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9-pre">> },
-        #{ <<"path">> => <<"/tx_anchor">> },
-        Opts
-    ).
 
 %%%===================================================================
 %%% Tests
@@ -256,16 +166,12 @@ tx_error_test() ->
         }),
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
-        % We attempted to post the tx, so it will show up in the mocked
-        % requests. But since the verificaiton failed, the data item should
-        % still be queued.
-        TXs = get_requests(tx, 1, ServerHandle),
-        ?assertEqual(1, length(TXs)),
+        % After a tx request fails it should be retried indefinitely. We'll
+        % wait for a few retries then continue.
+        TXs = get_requests(tx, 4, ServerHandle),
+        ?assert(length(TXs) >= 4),
         Chunks = get_requests(chunk, 1, ServerHandle),
         ?assertEqual([], Chunks),
-        % Now that we dispatch asynchronously, an error won't cause the
-        % Item to remain in the queue. Instead we'll rely on the retry
-        % logic to pick it up.
         ok
     after
         %% Always cleanup, even if test fails
@@ -402,7 +308,7 @@ dispatch_blocking_test() ->
 stop_test_servers(ServerHandle) ->
     hb_mock_server:stop(ServerHandle),
     stop_server(),
-    stop_dispatcher().
+    dev_bundler_dispatch:stop_dispatcher().
 
 test_bundle(Opts) ->
     Anchor = rand:bytes(32),
@@ -437,8 +343,7 @@ test_bundle(Opts) ->
         ok
     after
         %% Always cleanup, even if test fails
-        hb_mock_server:stop(ServerHandle),
-        stop_server()
+        stop_test_servers(ServerHandle)
     end.
 
 test_api_error(Responses) ->
@@ -463,8 +368,7 @@ test_api_error(Responses) ->
         ok
     after
         %% Always cleanup, even if test fails
-        hb_mock_server:stop(ServerHandle),
-        stop_server()
+        stop_test_servers(ServerHandle)
     end.
 
 new_data_item(Index, Size) ->
@@ -497,17 +401,22 @@ assert_bundle(ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
     TXBinary = maps:get(<<"body">>, TXRequest),
     TXJSON = hb_json:decode(TXBinary),
     TXHeader = ar_tx:json_struct_to_tx(TXJSON),
-    %% Decode all chunks and concatenate into one binary
-    Chunks = lists:map(
+    %% Decode all chunks with their offsets, sort by offset, then concatenate
+    ChunksWithOffsets = lists:map(
         fun(ChunkRequest) ->
             ProofBinary = maps:get(<<"body">>, ChunkRequest),
             ProofJSON = hb_json:decode(ProofBinary),
-            hb_util:decode(maps:get(<<"chunk">>, ProofJSON))
+            Offset = binary_to_integer(maps:get(<<"offset">>, ProofJSON)),
+            Chunk = hb_util:decode(maps:get(<<"chunk">>, ProofJSON)),
+            {Offset, Chunk}
         end,
         Proofs
     ),
+    SortedChunks = lists:sort(fun({O1, _}, {O2, _}) -> O1 =< O2 end, ChunksWithOffsets),
+    Chunks = [Chunk || {_Offset, Chunk} <- SortedChunks],
     DataBinary = iolist_to_binary(Chunks),
     TX = TXHeader#tx{ data = DataBinary },
+    ?event(debug_test, {tx, TX}),
     ?assert(ar_tx:verify(TX)),
     ?assertEqual(Anchor, TX#tx.anchor),
     ?assertEqual(Price, TX#tx.reward),
