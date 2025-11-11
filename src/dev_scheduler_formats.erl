@@ -134,14 +134,24 @@ aos2_to_assignments(ProcID, Body, RawOpts) ->
 %% NOTE: This method is destructive to the verifiability of the assignment.
 aos2_to_assignment(A, RawOpts) ->
     Opts = format_opts(RawOpts),
-    % Unwrap the node if it is provided
-    Node = hb_maps:get(<<"node">>, A, A, Opts),
+    % Unwrap the node if it is provided. Handle GraphQL-style responses with edges.
+    Node = case hb_maps:get(<<"edges">>, A, undefined, Opts) of
+        [FirstEdge | _] when is_map(FirstEdge) ->
+            hb_maps:get(<<"node">>, FirstEdge, A, Opts);
+        undefined ->
+            hb_maps:get(<<"node">>, A, A, Opts);
+        _ ->
+            A
+    end,
     ?event({node, Node}),
+    AssignmentData = hb_maps:get(<<"assignment">>, Node, undefined, Opts),
+    ?event({assignment_data, AssignmentData}),
     {ok, Assignment} =
         hb_gateway_client:result_to_message(
-            aos2_normalize_data(hb_maps:get(<<"assignment">>, Node, undefined, Opts)),
+            aos2_normalize_data(AssignmentData),
             Opts
         ),
+        ?event({result_assignment, Assignment}),
     NormalizedAssignment = aos2_normalize_types(Assignment),
     {ok, Message} =
         case hb_maps:get(<<"message">>, Node, undefined, Opts) of
