@@ -2,7 +2,7 @@
 
 ## Overview
 
-The [`~query@1.0`](./source-code/dev_query.md) device provides flexible search capabilities over cached messages in HyperBEAM. It enables efficient data discovery through multiple matching strategies and return formats, making it the central hub for searching and retrieving messages stored in the node's cache.
+The [`~query@1.0`](../source-code/dev_query.md) device provides flexible search capabilities over cached messages in HyperBEAM. It enables efficient data discovery through multiple matching strategies and return formats, making it the central hub for searching and retrieving messages stored in the node's cache.
 
 ## Core Concept: Message Discovery
 
@@ -145,9 +145,9 @@ Applications built on query device respond instantly even offline. Once data rep
 
 ## See Also
 
-- [`~cache@1.0`](./source-code/dev_cache.md) - Primary data source for query operations
-- [`~store@1.0`](./source-code/dev_store.md) - Underlying persistent storage
-- [`~message@1.0`](./source-code/dev_message.md) - Message format handling
-- [`~copycat@1.0`](./source-code/dev_copycat.md) - Data replication device
+- [`~cache@1.0`](../source-code/dev_cache.md) - Primary data source for query operations
+- [`~store@1.0`](../source-code/dev_store.md) - Underlying persistent storage
+- [`~message@1.0`](../source-code/dev_message.md) - Message format handling
+- [`~copycat@1.0`](../source-code/dev_copycat.md) - Data replication device
 
-[query module](./source-code/dev_query.md)
+[query module](../source-code/dev_query.md)
