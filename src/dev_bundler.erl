@@ -247,7 +247,7 @@ idle_test() ->
         %% Wait for expected chunks
         Proofs = hb_mock_server:get_requests(chunk, 2, ServerHandle),
         ?assertEqual(2, length(Proofs)),
-        assert_bundle([Item1], Anchor, Price, hd(TXs), Proofs, ClientOpts),
+        assert_bundle(Node, [Item1], Anchor, Price, hd(TXs), Proofs, ClientOpts),
         ok
     after
         %% Always cleanup, even if test fails
@@ -304,6 +304,7 @@ dispatch_blocking_test() ->
         Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle),
         ?assertEqual(1, length(Proofs)),
         assert_bundle(
+            Node,
             [Item1, Item2, Item3],
             Anchor, Price, hd(TXs), Proofs, ClientOpts),
         ok
@@ -346,6 +347,7 @@ test_bundle(Opts) ->
         Proofs = hb_mock_server:get_requests(chunk, 4, ServerHandle),
         ?assertEqual(4, length(Proofs)),
         assert_bundle(
+            Node,
             [Item1, Item2, Item3], Anchor, Price, hd(TXs), Proofs, ClientOpts),
         ok
     after
@@ -403,7 +405,7 @@ post_data_item(Node, Item, Opts) ->
         Opts
     ).
 
-assert_bundle(ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
+assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
     %% Reconstitute the transaction with its data from the POSTed payloads.
     TXBinary = maps:get(<<"body">>, TXRequest),
     TXJSON = hb_json:decode(TXBinary),
@@ -454,7 +456,27 @@ assert_bundle(ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
         lists:zip(lists:seq(1, length(ExpectedItems)), ExpectedItems)
     ),
     ?assertEqual(undefined, TX#tx.manifest),
-    ?assertEqual(undefined, BundleDeserialized#tx.manifest).
+    ?assertEqual(undefined, BundleDeserialized#tx.manifest),
+    % Verify that the TX was cached
+    SignedTXID = hb_message:id(TXStructured, signed, ClientOpts),
+    CachedTXFromSignedID = dev_cache:read_from_cache(Node, SignedTXID),
+    ?assert(hb_message:verify(CachedTXFromSignedID, all, ClientOpts)),
+    UnsignedTXID = hb_message:id(TXStructured, unsigned, ClientOpts),
+    CachedTXFromUnsignedID = dev_cache:read_from_cache(Node, UnsignedTXID),
+    ?assert(hb_message:verify(CachedTXFromUnsignedID, all, ClientOpts)),
+    % Verify that the items were cached
+    lists:foreach(
+        fun(Item) ->
+            ItemStructured = hb_message:convert(
+                Item, <<"structured@1.0">>, <<"ans104@1.0">>, ClientOpts),
+            SignedItemID = hb_message:id(ItemStructured, signed, ClientOpts),
+            CachedItemFromSignedID = dev_cache:read_from_cache(Node, SignedItemID),
+            ?assert(hb_message:verify(CachedItemFromSignedID, all, ClientOpts)),
+            UnsignedItemID = hb_message:id(ItemStructured, unsigned, ClientOpts),
+            CachedItemFromUnsignedID = dev_cache:read_from_cache(Node, UnsignedItemID),
+            ?assert(hb_message:verify(CachedItemFromUnsignedID, all, ClientOpts))
+        end, ExpectedItems),
+    ok.
 
 start_mock_gateway(Responses) ->
     DefaultResponse = {200, <<>>},
@@ -479,5 +501,3 @@ start_mock_gateway(Responses) ->
         ]
     },
     {ServerHandle, NodeOpts}.
-
-%%% XXX test read from cache and verify
