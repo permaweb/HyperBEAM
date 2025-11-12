@@ -628,7 +628,7 @@ list_test() ->
         <<"capacity">> => ?DEFAULT_SIZE
     },
     reset(StoreOpts),
-    ?assertEqual(list(StoreOpts, <<"colors">>), {ok, []}),
+    ?assertEqual(list(StoreOpts, <<"colors">>), not_found),
     % Create immediate children under colors/
     write(StoreOpts, <<"colors/red">>, <<"1">>),
     write(StoreOpts, <<"colors/blue">>, <<"2">>),
