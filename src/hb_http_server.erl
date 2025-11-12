@@ -36,6 +36,8 @@ start() ->
             hb_opts:default_message_with_env(),
             Loaded
         ),
+    %% Store config to be reused later
+    persistent_term:put(server_startup_config, MergedConfig),
     %% Apply store defaults before starting store
     StoreOpts = hb_opts:get(store, no_store, MergedConfig),
     StoreDefaults = hb_opts:get(store_defaults, #{}, MergedConfig),

@@ -480,7 +480,10 @@ normalize_default(Default) -> Default.
 %% @doc An abstraction for looking up configuration variables. In the future,
 %% this is the function that we will want to change to support a more dynamic
 %% configuration system.
-config_lookup(Key, Default, _Opts) -> maps:get(Key, default_message(), Default).
+config_lookup(Key, Default, _Opts) ->
+    DefaultConfig = persistent_term:get(server_startup_config, default_message()),
+    DefaultConfig2 = maps:merge(default_message(), DefaultConfig),
+    maps:get(Key, DefaultConfig2, Default).
 
 %% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the 
 %% keys to those in the default message.
