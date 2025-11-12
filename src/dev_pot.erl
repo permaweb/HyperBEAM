@@ -62,7 +62,7 @@
 -export([drip/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([modify_deposit/5, delegate/6, maybe_liquidate_delegations/5, set_weight/4]).
--export([units_minted_between/5, update_deposit_index/5]).
+-export([update_deposit_index/5]).
 -export([user/3, balance/2, balances/1, deposit/3, deposits/1, deposits/2]).
 %%% Pot Model.
 
@@ -82,20 +82,33 @@ drip(S = #{
     }, Opts) ->
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
-    TotalWeightedTimeUnits =
-        hb_maps:get(<<"total-weighted-units">>, S, 0, Opts) * (T - LastT),
-    ToMint = units_minted_between(AlreadyMinted, Max, Proportion, LastT, T),
-    MintedPerWeightedTimeUnit = ToMint / TotalWeightedTimeUnits,
+    TotalWeightedUnits =
+        hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
+    AlreadyMintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts),
+    ToMint =
+        dev_pot_math:units_minted_between(
+            AlreadyMinted,
+            Max,
+            Proportion,
+            LastT,
+            T
+        ),
+    MintedPerWeightedUnit =
+        dev_pot_math:accumulate_reward_per_weighted_unit(
+            ToMint,
+            TotalWeightedUnits,
+            AlreadyMintedPerWeightedUnit
+        ),
     ?event(
         {minting,
             {to_mint, ToMint},
-            {total_weighted_time_units, TotalWeightedTimeUnits},
-            {minted_per_weighted_time_unit, MintedPerWeightedTimeUnit}
+            {total_weighted_units, TotalWeightedUnits},
+            {new_accumulated_reward_per_weighted_unit, MintedPerWeightedUnit},
+            {newly_minted_per_weighted_unit,
+                MintedPerWeightedUnit - AlreadyMintedPerWeightedUnit}
         }),
     S#{
-        <<"minted-per-weighted-unit">> =>
-            hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts) +
-                MintedPerWeightedTimeUnit,
+        <<"minted-per-weighted-unit">> => MintedPerWeightedUnit,
         <<"last-drip">> => T,
         <<"minted">> => AlreadyMinted + ToMint
     }.
@@ -108,10 +121,15 @@ drip_resource(ResourceID, S, Opts) ->
     OldAccumulatedWeightTime =
         hb_maps:get(<<"accumulated-weight-time">>, Resource, 0, Opts),
     Weight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
-    LastWeightTimeDrip = hb_maps:get(<<"last-weight-time-drip">>, S, 0, Opts),
+    LastWeightTimeDrip = hb_maps:get(<<"last-weight-time-drip">>, Resource, 0, Opts),
     TimeDelta = T - LastWeightTimeDrip,
-    WeightTimeDelta = (T - LastWeightTimeDrip) * Weight,
-    NewAccumulatedWeightTime = OldAccumulatedWeightTime + WeightTimeDelta,
+    NewAccumulatedWeightTime =
+        dev_pot_math:accumulate_weight_time(
+            LastWeightTimeDrip,
+            T,
+            Weight,
+            OldAccumulatedWeightTime
+        ),
     ?event(
         {drip_resource,
             {resource_id, ResourceID},
@@ -119,8 +137,7 @@ drip_resource(ResourceID, S, Opts) ->
             {old_accumulated_weight_time, OldAccumulatedWeightTime},
             {weight, Weight},
             {time_delta, TimeDelta},
-            {weight_time_delta, WeightTimeDelta},
-            {accumulated_weight_time, NewAccumulatedWeightTime}
+            {new_accumulated_weight_time, NewAccumulatedWeightTime}
         }
     ),
     hb_ao:set(
@@ -144,20 +161,23 @@ balance(Addr, S) ->
 unclaimed_yield(Addr, S, Opts) ->
     ResourceIDs =
         hb_maps:keys(
-            hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, Opts),
+            hb_private:reset(
+                hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, Opts)
+            ),
             Opts
         ),
-    MintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts),
     lists:sum(
         lists:map(
             fun(ResID) ->
-                DrippedS = drip_resource(ResID, S, Opts),
-                unclaimed_yield(Addr, ResID, MintedPerWeightedUnit, DrippedS, Opts)
+                unclaimed_yield(Addr, ResID, S, Opts)
             end,
             ResourceIDs
         )
     ).
-unclaimed_yield(Addr, ResourceID, MintedPerWeightedUnit, S, Opts) ->
+unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
+    GlobalDrippedS = drip(UndrippedS, Opts),
+    S = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    MintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts),
     Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
     AccumulatedWeightTime = hb_maps:get(<<"accumulated-weight-time">>, Res, 0, Opts),
     Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
@@ -168,28 +188,53 @@ unclaimed_yield(Addr, ResourceID, MintedPerWeightedUnit, S, Opts) ->
                 <<"minted-per-weighted-unit-at-deposit">> :=
                     MintedPerWeightedUnitAtDeposit,
                 <<"accumulated-weight-time-at-deposit">> :=
-                    AccumulatedWeightTimeAtDeposit
+                    AccumulatedWeightTimeAtDeposit,
+                <<"time-at-deposit">> := DepositTime
             }} ->
             ?no_prod("Remove all floating point arithmetic."),
-            Qty *
-                (MintedPerWeightedUnit - MintedPerWeightedUnitAtDeposit) *
-                (AccumulatedWeightTime - AccumulatedWeightTimeAtDeposit)
+            T = hb_maps:get(<<"t">>, S, 0, Opts),
+            case T - DepositTime of
+                X when X =< 0 -> 0;
+                _ ->
+                    AvgWeightDuringDeposit =
+                        dev_pot_math:average_weight_time(
+                            DepositTime,
+                            T,
+                            AccumulatedWeightTimeAtDeposit,
+                            AccumulatedWeightTime
+                        ),
+                    UnclaimedYield =
+                        dev_pot_math:reward_between(
+                            MintedPerWeightedUnitAtDeposit,
+                            MintedPerWeightedUnit,
+                            AvgWeightDuringDeposit,
+                            Qty
+                        ),
+                    ?event(
+                        {unclaimed_yield,
+                            {resource_id, ResourceID},
+                            {addr, Addr},
+                            {minted_per_weighted_unit_at_deposit, MintedPerWeightedUnitAtDeposit},
+                            {minted_per_weighted_unit, MintedPerWeightedUnit},
+                            {avg_weight_during_deposit, AvgWeightDuringDeposit},
+                            {qty, Qty},
+                            {unclaimed_yield, UnclaimedYield}
+                        }),
+                    UnclaimedYield
+            end
     end.
 
-units_minted_between(Minted, Max, Proportion, LastT, T) ->
-    Steps = max(T - LastT, 0),
-    Remaining = Max - Minted,
-    Remaining * (1 - math:pow(1 - Proportion, Steps)).
-
 modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
-    S1 = drip(S0, Opts),
-    S = drip_resource(ResourceID, S1, Opts),
-    #{ <<"balances">> := Balances, <<"resources">> := Resources } = S,
-    ExistingDeposit = deposit(Addr, ResourceID, S),
-    MintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts),
+    % Drip the global state and the resource, then extract necessary components.
+    GlobalDrippedS = drip(S0, Opts),
+    DrippedS = #{
+        <<"balances">> := Balances,
+        <<"resources">> := Resources,
+        <<"t">> := T
+    } = drip_resource(ResourceID, GlobalDrippedS, Opts),
+    ExistingDeposit = deposit(Addr, ResourceID, DrippedS),
     BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
-    NewBalance =
-        BaseBalance + unclaimed_yield(Addr, ResourceID, MintedPerWeightedUnit, S, Opts),
+    NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
     AccumulatedWeightTime =
         hb_ao:get(
             <<ResourceID/binary, "/accumulated-weight-time">>,
@@ -217,9 +262,15 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
                                     #{
                                         <<"quantity">> => ExistingDeposit + Amount,
                                         <<"minted-per-weighted-unit-at-deposit">> =>
-                                            MintedPerWeightedUnit,
+                                            hb_maps:get(
+                                                <<"minted-per-weighted-unit">>,
+                                                DrippedS,
+                                                0,
+                                                Opts
+                                            ),
                                         <<"accumulated-weight-time-at-deposit">> =>
-                                            AccumulatedWeightTime
+                                            AccumulatedWeightTime,
+                                        <<"time-at-deposit">> => T
                                     }
                             }
                     }
@@ -228,21 +279,27 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
         ),
     ?event({resources_after_modify_deposit, NewResources}),
     WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
-    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
-    S2 =
-        S1#{
+    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
+    UpdatedDepositS =
+        DrippedS#{
             <<"resources">> => NewResources,
             <<"total-weighted-units">> => TotalWeightedUnits + (WeightR * Amount),
             <<"balances">> => Balances#{ Addr => NewBalance }
         },
-    S3 =
+    LiquidatedS =
         maybe_liquidate_delegations(
             Addr,
             ResourceID,
-            S2,
+            UpdatedDepositS,
             Opts
         ),
-    update_deposit_index(Addr, ResourceID, deposit(Addr, ResourceID, S3), S3, Opts).
+    update_deposit_index(
+        Addr,
+        ResourceID,
+        deposit(Addr, ResourceID, LiquidatedS),
+        LiquidatedS,
+        Opts
+    ).
 
 set_weight(ResourceID, Weight, S, Opts) ->
     % Run the global drip to ensure the state is up to date.
