@@ -6,9 +6,9 @@ Designed to be **modular**, **composable**, and **extensible**, HyperBEAM lets y
 
 ## **Thinking in HyperBEAM**
 
-While [AO-Core](./introduction/what-is-ao-core.md) establishes the foundational concepts of Messages, Devices, and Paths, building on HyperBEAM can be simplified to four key principles:
+While [AO-Core](https://hyperbeam.arweave.net/build/introduction/what-is-ao-core.html) establishes the foundational concepts of Messages, Devices, and Paths, building on HyperBEAM can be simplified to four key principles:
 
-1.  **Everything is a [message](./introduction/what-is-hyperbeam.html#messages-modular-data-packets).** You can compute on any message by calling its keys by name. The [`device`](./devices/hyperbeam-devices.md) specified in the message determines how these keys are resolved. The default device, `message@1.0`, resolves keys to their literal values within the message.
+1.  **Everything is a [message](https://hyperbeam.arweave.net/build/introduction/what-is-hyperbeam.html#messages-modular-data-packets).** You can compute on any message by calling its keys by name. The [`device`](./devices/hyperbeam-devices.md) specified in the message determines how these keys are resolved. The default device, `message@1.0`, resolves keys to their literal values within the message.
 
 2.  **[Paths](./pathing-in-hyperbeam.md) are pipelines of messages.** A path defines a sequence of 'request' messages to be executed. You can set a key in a message directly within the path using the `&key=value` syntax. Headers and parameters added after a `?` are applied to all messages in the pipeline.
 
@@ -17,7 +17,7 @@ While [AO-Core](./introduction/what-is-ao-core.md) establishes the foundational 
 4.  **Signed responses over HTTP.** The final message in a pipeline is returned as an HTTP response. This response is signed against the [`hashpath`](./pathing-in-hyperbeam.md) that generated it, ensuring the integrity and verifiability of the computation.
 
 > **Ready to build an AO process?**
-> The serverless compute capability is a powerful application of HyperBEAM's modular design. To learn how to create and manage AO processes with WASM or Lua, please refer to the [AO Processes Cookbook](https://cookbook.ao.arweave.net/).
+> The serverless compute capability is a powerful application of HyperBEAM's modular design. To learn how to create and manage AO processes with WASM or Lua, please refer to the [AO Processes Cookbook](https://cookbook_ao.arweave.net/).
 
 ### Modularity: A System of Devices
 
@@ -44,7 +44,7 @@ The request would look something like this:
 
 This path chains together the operations, returning just the computed supply in a single, efficient request.
 
-> Find the full example in the [AO Process Cookbook](https://cookbook_ao.arweave.net/guides/migrating-to-hyperbeam/reading-dynamic-state.html#example-calculating-circulating-supply)
+> Find the full example in the [AO Process Cookbook](https://cookbook_ao.ar.io/welcome/building.html#dynamic-reads-compute-on-demand)
 
 > Learn more about [Pathing in HyperBEAM](./pathing-in-hyperbeam.md).
 
@@ -57,7 +57,7 @@ You can build and deploy your own devices in Erlang to introduce entirely new, h
 
 **Use Case:** You could build a custom device that acts as a bridge to another blockchain's API, allowing your AO processes to interact with external systems seamlessly.
 
-> Learn how to [Build Your Own Device](./devices/building-devices.md).
+> Learn how to [Build Your Own Device](https://hyperbeam.arweave.net/build/devices/building-devices.html).
 
 #### Achieve Raw Performance with Native Code
 For the most demanding, performance-critical tasks, you can write Native Implemented Functions (NIFs) in low-level languages like C or Rust. These NIFs integrate directly with the Erlang VM, offering the highest possible performance.
