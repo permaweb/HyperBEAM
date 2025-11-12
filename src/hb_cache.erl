@@ -187,13 +187,15 @@ list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) 
         Store ->
             list(Path, Store)
     end;
-list(Path, Store) ->
-    % TODO: Fix seperate store requests
+list(Path, Store) when is_map(Store)->
+    list(Path, [Store]);
+list(_Path, []) -> 
+    [];
+list(Path, [Store | RemainingStores]) ->
     ResolvedPath = hb_store:resolve(Store, Path),
     case hb_store:list(Store, ResolvedPath) of
         {ok, Names} -> Names;
-        {error, _} -> [];
-        not_found -> []
+        _ -> list(Path, RemainingStores)
     end.
 
 %% @doc Match a template message against the cache, returning a list of IDs
@@ -432,7 +434,6 @@ read_all_commitments(Msg, Opts) ->
     UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
     CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     AlreadyLoaded = hb_maps:keys(CurrentCommitments, Opts),
-    % TODO: Fix seperate store requests
     CommitmentsPath =
         hb_store:resolve(
             Store,
@@ -486,7 +487,7 @@ store_read(_Target, _Path, [], _) ->
     not_found;
 store_read(Target, Path, Store, Opts) when is_map(Store) ->
     store_read(Target, Path, [Store], Opts);
-store_read(Target, Path, [Store | ReaminingStores], Opts) ->
+store_read(Target, Path, [Store | RemainingStores], Opts) ->
     ResolvedFullPath = hb_store:resolve(Store, PathBin = hb_path:to_binary(Path)),
     ?event({reading,
         {original_path, {string, PathBin}},
@@ -540,7 +541,7 @@ store_read(Target, Path, [Store | ReaminingStores], Opts) ->
     end,
     case ResolvedFullPathContent of
         {ok, _} = Response -> Response;
-        not_found -> store_read(Target, Path, ReaminingStores, Opts)
+        not_found -> store_read(Target, Path, RemainingStores, Opts)
     end.
 
 %% @doc Prepare a set of links from a listing of subpaths.
