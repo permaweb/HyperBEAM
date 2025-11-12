@@ -131,4 +131,4 @@ Single-click access to blockchain applications with traditional web experience. 
 
 - [`~process@1.0`](../foundational/process-at-1-0.md) - Process communication signing
 - [`~query@1.0`](./data-discovery-at-1-0.md) - Authenticated data queries
-- [`~snp@1.0`](./source-code/dev_snp.md) - Trusted execution environment
+- [`~snp@1.0`](../source-code/dev_snp.md) - Trusted execution environment
