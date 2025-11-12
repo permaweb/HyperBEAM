@@ -18,7 +18,7 @@
 %%% Task record representing work to be done by a worker.
 -record(task, {
     bundle_id,           % ID of the bundle this task belongs to
-    type,                % Task type: build_tx | post_tx | build_proofs | post_proof
+    type,                % Task type: post_tx | build_proofs | post_proof
     data,                % Task-specific data (map)
     opts,                % Configuration options
     retry_count = 0      % Number of times this task has been retried
@@ -99,13 +99,15 @@ init_dispatcher(Opts) ->
         bundles = #{},
         opts = Opts
     },
-    dispatcher(State).
+    % Recover any in-progress bundles from cache
+    State1 = recover_bundles(State),
+    dispatcher(State1).
 
 %% @doc The main loop of the dispatcher. Manages task queue and worker pool.
 dispatcher(State) ->
     receive
         {dispatch, Items} ->
-            % Create a new bundle and queue the build_tx task
+            % Create a new bundle and queue the post_tx task
             Opts = State#state.opts,
             BundleID = make_ref(),
             Bundle = #bundle{
@@ -118,8 +120,7 @@ dispatcher(State) ->
             State1 = State#state{
                 bundles = maps:put(BundleID, Bundle, State#state.bundles)
             },
-            % Enqueue the build_tx task
-            Task = #task{bundle_id = BundleID, type = build_tx, data = Items, opts = Opts},
+            Task = #task{bundle_id = BundleID, type = post_tx, data = Items, opts = Opts},
             State2 = enqueue_task(Task, State1),
             % Assign tasks to idle workers
             dispatcher(assign_tasks(State2));
@@ -151,12 +152,10 @@ enqueue_task(Task, State) ->
     State#state{task_queue = queue:in(Task, Queue)}.
 
 %% @doc Format a task for logging.
-format_task(#task{bundle_id = BundleID, type = build_tx, data = Items}) ->
-    {build_tx, {bundle, BundleID}, {items, length(Items)}};
-format_task(#task{bundle_id = BundleID, type = post_tx, data = TX}) ->
-    {post_tx, {bundle, BundleID}, {tx, TX}};
-format_task(#task{bundle_id = BundleID, type = build_proofs, data = TX}) ->
-    {build_proofs, {bundle, BundleID}, {tx, TX}};
+format_task(#task{bundle_id = BundleID, type = post_tx, data = CommittedTX}) ->
+    {post_tx, {bundle, BundleID}, {tx, CommittedTX}};
+format_task(#task{bundle_id = BundleID, type = build_proofs, data = CommittedTX}) ->
+    {build_proofs, {bundle, BundleID}, {tx, CommittedTX}};
 format_task(#task{bundle_id = BundleID, type = post_proof, data = Proof}) ->
     Offset = maps:get(offset, Proof),
     {post_proof, {bundle, BundleID}, {offset, Offset}}.
@@ -233,37 +232,27 @@ handle_task_failed(WorkerPID, Task, Reason, State) ->
     erlang:send_after(Delay, self(), {retry_task, Task1}),
     State1.
 
-task_completed(#task{bundle_id = BundleID, type = build_tx}, Bundle, Result, State) ->
+task_completed(#task{bundle_id = BundleID, type = post_tx}, Bundle, CommittedTX, State) ->
     Bundles = State#state.bundles,
     Opts = State#state.opts,
-    Bundle1 = Bundle#bundle{
-        tx = Result,
-        status = tx_built
-    },
+    dev_bundler_cache:write_tx(CommittedTX, Bundle#bundle.items, Opts),
+    Bundle1 = Bundle#bundle{status = tx_posted, tx = CommittedTX},
     State1 = State#state{
         bundles = maps:put(BundleID, Bundle1, Bundles)
     },
-    PostTXTask = #task{bundle_id = BundleID, type = post_tx, data = Result, opts = Opts},
-    enqueue_task(PostTXTask, State1);
-
-task_completed(#task{bundle_id = BundleID, type = post_tx}, Bundle, TX, State) ->
-    Bundles = State#state.bundles,
-    Opts = State#state.opts,
-    Bundle1 = Bundle#bundle{status = tx_posted, tx = TX},
-    State1 = State#state{
-        bundles = maps:put(BundleID, Bundle1, Bundles)
-    },
-    BuildProofsTask = #task{bundle_id = BundleID, type = build_proofs, data = TX, opts = Opts},
+    BuildProofsTask = #task{
+        bundle_id = BundleID, type = build_proofs,
+        data = CommittedTX, opts = Opts},
     enqueue_task(BuildProofsTask, State1);
 
 task_completed(#task{bundle_id = BundleID, type = build_proofs}, Bundle, Proofs, State) ->
     Bundles = State#state.bundles,
+    Opts = State#state.opts,
     case Proofs of
         [] ->
             % No proofs, bundle complete
             bundle_complete(BundleID, State);
         _ ->
-            Opts = State#state.opts,
             % Proofs built, wrap each in a proof record with offset as key
             ProofsMap = maps:from_list([
                 {maps:get(offset, P), #proof{proof = P, status = pending}} || P <- Proofs
@@ -320,9 +309,65 @@ task_completed(#task{bundle_id = BundleID, type = post_proof, data = ProofData},
 bundle_complete(BundleID, State) ->
     ?event({bundle_complete, BundleID}),
     Bundles = State#state.bundles,
+    Opts = State#state.opts,
+    % Mark bundle as complete in cache
+    case maps:get(BundleID, Bundles, undefined) of
+        undefined -> ok;
+        Bundle ->
+            ok = dev_bundler_cache:complete_tx(Bundle#bundle.tx, Opts)
+    end,
     State#state{
         bundles = maps:remove(BundleID, Bundles)
     }.
+
+%%% Recovery
+
+%% @doc Recover in-progress bundles from cache after a crash.
+recover_bundles(State) ->
+    Opts = State#state.opts,
+    % Reconstruct bundles and enqueue appropriate tasks
+    lists:foldl(
+        fun({TXID, Status}, StateAcc) ->
+            recover_bundle(TXID, Status, StateAcc)
+        end,
+        State,
+        dev_bundler_cache:load_bundle_states(Opts)
+    ).
+
+%% @doc Recover a single bundle based on its cached state.
+recover_bundle(TXID, Status, State) ->
+    Opts = State#state.opts,
+    ?event({recovering_bundle, {tx_id, TXID}, {status, Status}}),
+    try
+        % Load the TX and its items
+        CommittedTX = dev_bundler_cache:load_tx(TXID, Opts),
+        Items = dev_bundler_cache:load_bundled_items(TXID, Opts),
+        % Create a new bundle record
+        BundleID = make_ref(),
+        Bundle = #bundle{
+            id = BundleID,
+            items = Items,
+            status = tx_posted,
+            tx = CommittedTX,
+            proofs = #{}
+        },
+        % Add bundle to state
+        Bundles = State#state.bundles,
+        State1 = State#state{
+            bundles = maps:put(BundleID, Bundle, Bundles)
+        },
+        
+        % Enqueue appropriate task based on status
+        Task = #task{
+            bundle_id = BundleID, type = build_proofs,
+            data = CommittedTX, opts = Opts},
+        enqueue_task(Task, State1)
+    catch
+        _:Error:Stack ->
+            ?event({failed_to_recover_bundle, {tx_id, TXID}, {error, Error}, {stack, Stack}}),
+            % Skip this bundle and continue
+            State
+    end.
 
 %%% Worker implementation
 
@@ -343,18 +388,11 @@ worker_loop() ->
     end.
 
 %% @doc Execute a specific task.
-execute_task(#task{type = build_tx, data = Items}) ->
-    try
-        {ok, TX} = dev_codec_tx:to(lists:reverse(Items), #{}, #{}),
-        {ok, TX}
-    catch
-        _:Err:_Stack -> {error, Err}
-    end;
-
-execute_task(#task{type = post_tx, data = TX, opts = Opts} = Task) ->
+execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
     try
         ?event({execute_task, format_task(Task)}),
         % Get price and anchor
+        {ok, TX} = dev_codec_tx:to(lists:reverse(Items), #{}, #{}),
         DataSize = TX#tx.data_size,
         PriceResult = get_price(DataSize, Opts),
         AnchorResult = get_anchor(Opts),
@@ -378,7 +416,7 @@ execute_task(#task{type = post_tx, data = TX, opts = Opts} = Task) ->
                     Opts
                 ),
                 case PostTXResponse of
-                    {ok, _Result} -> {ok, SignedTX};
+                    {ok, _Result} -> {ok, Committed};
                     {_, ErrorReason} -> {error, ErrorReason}
                 end;
             {PriceErr, AnchorErr} ->
@@ -396,10 +434,12 @@ execute_task(#task{type = post_tx, data = TX, opts = Opts} = Task) ->
             {error, Err}
     end;
 
-execute_task(#task{type = build_proofs, data = TX, opts = _Opts} = Task) ->
+execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task) ->
     try
         ?event({execute_task, format_task(Task)}),
         % Calculate chunks and proofs
+        TX = hb_message:convert(
+            CommittedTX, <<"tx@1.0">>, <<"structured@1.0">>, Opts),
         Data = TX#tx.data,
         DataRoot = TX#tx.data_root,
         DataSize = TX#tx.data_size,
@@ -497,7 +537,7 @@ complete_task_sequence_test() ->
     try
         Opts = NodeOpts#{priv_wallet => hb:wallet()},
         hb_http_server:start_node(Opts),
-        Items = [new_data_item(1, 10), new_data_item(2, 10)],
+        Items = [new_data_item(1, 10, Opts), new_data_item(2, 10, Opts)],
         dispatch(Items, Opts),
         % Wait for TX to be posted
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
@@ -542,7 +582,7 @@ post_tx_price_failure_retry_test() ->
         persistent_term:put(price_attempts, 0),
         Opts = NodeOpts#{priv_wallet => hb:wallet()},
         hb_http_server:start_node(Opts),
-        Items = [new_data_item(1, 10)],
+        Items = [new_data_item(1, 10, Opts)],
         dispatch(Items, Opts),
         % Wait for TX to eventually be posted
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
@@ -574,7 +614,7 @@ post_tx_anchor_failure_retry_test() ->
         persistent_term:put(anchor_attempts, 0),
         Opts = NodeOpts#{priv_wallet => hb:wallet()},
         hb_http_server:start_node(Opts),
-        Items = [new_data_item(1, 10)],
+        Items = [new_data_item(1, 10, Opts)],
         dispatch(Items, Opts),
         % Wait for TX to eventually be posted
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
@@ -613,7 +653,7 @@ post_tx_post_failure_retry_test() ->
             retry_jitter => 0  % Disable jitter for deterministic tests
         },
         hb_http_server:start_node(Opts),
-        Items = [new_data_item(1, 10)],
+        Items = [new_data_item(1, 10, Opts)],
         dispatch(Items, Opts),
         % Wait for TX to eventually succeed
         TXs = hb_mock_server:get_requests(tx, FailCount+1, ServerHandle),
@@ -648,7 +688,7 @@ post_proof_failure_retry_test() ->
         Opts = NodeOpts#{priv_wallet => hb:wallet()},
         hb_http_server:start_node(Opts),
         % Large enough for multiple chunks
-        Items = [new_data_item(1, floor(4.5 * ?DATA_CHUNK_SIZE))],
+        Items = [new_data_item(1, floor(4.5 * ?DATA_CHUNK_SIZE), Opts)],
         dispatch(Items, Opts),
         % Wait for TX
         TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
@@ -688,7 +728,7 @@ rapid_dispatch_test() ->
         % Dispatch 10 bundles rapidly
         lists:foreach(
             fun(I) ->
-                Items = [new_data_item(I, 10)],
+                Items = [new_data_item(I, 10, Opts)],
                 dispatch(Items, Opts)
             end,
             lists:seq(1, 10)
@@ -728,10 +768,10 @@ one_bundle_fails_others_continue_test() ->
         },
         hb_http_server:start_node(Opts),
         % Dispatch first bundle (will keep failing)
-        Items1 = [new_data_item(1, 10)],
+        Items1 = [new_data_item(1, 10, Opts)],
         dispatch(Items1, Opts),
         % Dispatch second bundle (will succeed)
-        Items2 = [new_data_item(2, 10)],
+        Items2 = [new_data_item(2, 10, Opts)],
         dispatch(Items2, Opts),
         % Wait for at least 5 TX attempts (1 success + multiple retries)
         TXs = hb_mock_server:get_requests(tx, 5, ServerHandle),
@@ -760,7 +800,7 @@ parallel_task_execution_test() ->
         % Dispatch 3 bundles, each with 2 chunks
         lists:foreach(
             fun(I) ->
-                Items = [new_data_item(I, 10)],
+                Items = [new_data_item(I, 10, Opts)],
                 dispatch(Items, Opts)
             end,
             lists:seq(1, 10)
@@ -807,7 +847,7 @@ exponential_backoff_timing_test() ->
             retry_jitter => 0  % Disable jitter for deterministic tests
         },
         hb_http_server:start_node(Opts),
-        Items = [new_data_item(1, 10)],
+        Items = [new_data_item(1, 10, Opts)],
         dispatch(Items, Opts),
         % Wait for TX to eventually succeed
         TXs = hb_mock_server:get_requests(tx, FailCount+1, ServerHandle, 30000),
@@ -865,12 +905,12 @@ independent_task_retry_counts_test() ->
         },
         hb_http_server:start_node(Opts),
         % Dispatch first bundle (will fail twice and retry)
-        Items1 = [new_data_item(1, 10)],
+        Items1 = [new_data_item(1, 10, Opts)],
         dispatch(Items1, Opts),
         % Wait a bit for first bundle to start failing
         hb_mock_server:get_requests(tx, 3, ServerHandle),
         % Dispatch second bundle (will succeed on first try since we're past the 2 failures)
-        Items2 = [new_data_item(2, 10)],
+        Items2 = [new_data_item(2, 10, Opts)],
         dispatch(Items2, Opts),
         % Verify we got all TX requests logged
         TotalAttempts = 4,
@@ -885,17 +925,18 @@ independent_task_retry_counts_test() ->
 
 %%% Test Helper Functions
 
-new_data_item(Index, Size) ->
+new_data_item(Index, Size, Opts) ->
     Data = rand:bytes(Size),
     Tag = <<"tag", (integer_to_binary(Index))/binary>>,
     Value = <<"value", (integer_to_binary(Index))/binary>>,
-    ar_bundles:sign_item(
+    Item = ar_bundles:sign_item(
         #tx{
             data = Data,
             tags = [{Tag, Value}]
         },
         hb:wallet()
-    ).
+    ),
+    hb_message:convert(Item, <<"structured@1.0">>, <<"ans104@1.0">>, Opts).
 
 start_mock_gateway(Responses) ->
     DefaultResponse = {200, <<>>},

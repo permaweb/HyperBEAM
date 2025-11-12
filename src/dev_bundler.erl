@@ -63,19 +63,30 @@ stop_server() ->
 
 %% @doc Initialize the bundler server.
 init(Opts) ->
-    server(
-        #{
-            max_size => hb_opts:get(
-                bundler_max_size, ?DEFAULT_MAX_SIZE, Opts),
-            max_idle_time => hb_opts:get(
-                bundler_max_idle_time, ?DEFAULT_MAX_IDLE_TIME, Opts),
-            max_items => hb_opts:get(
-                bundler_max_items, ?DEFAULT_MAX_ITEMS, Opts),
-            queue => [],
-            bytes => 0
-        },
-        Opts
-    ).
+    % Recover any unbundled items from cache
+    UnbundledItems = dev_bundler_cache:load_unbundled_items(Opts),
+    ?event(debug_test, {recovered_unbundled_items, length(UnbundledItems)}),
+    % Calculate total bytes for recovered items
+    RecoveredBytes = lists:foldl(
+        fun(Item, Acc) ->
+            Acc + erlang:external_size(Item)
+        end,
+        0,
+        UnbundledItems
+    ),
+    InitialState = #{
+        max_size => hb_opts:get(
+            bundler_max_size, ?DEFAULT_MAX_SIZE, Opts),
+        max_idle_time => hb_opts:get(
+            bundler_max_idle_time, ?DEFAULT_MAX_IDLE_TIME, Opts),
+        max_items => hb_opts:get(
+            bundler_max_items, ?DEFAULT_MAX_ITEMS, Opts),
+        queue => UnbundledItems,
+        bytes => RecoveredBytes
+    },
+    % If recovered items are ready to dispatch, do so immediately
+    State = maybe_dispatch(InitialState, Opts),
+    server(State, Opts).
 
 %% @doc The main loop of the bundler server. Simply waits for messages to be
 %% added to the queue, and then dispatches them when the queue is large enough.
@@ -98,7 +109,7 @@ add_item(Req, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
     {ok, Item} = hb_message:with_only_committed(Req, Opts),
     ItemSize = erlang:external_size(Item),
     ?event({adding_item, {item_size, ItemSize}, {req, Req}, {item, Item}}),
-    {ok, _} = hb_cache:write(Item, Opts),
+    ok = dev_bundler_cache:write_item(Item, Opts),
     State#{
         queue => [Item | Queue],
         bytes => Bytes + ItemSize
@@ -424,7 +435,6 @@ assert_bundle(ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
     ?assert(ar_tx:verify(TX)),
     ?assertEqual(Anchor, TX#tx.anchor),
     ?assertEqual(Price, TX#tx.reward),
-    ?event(debug_test, {tx,TX}),
     TXStructured = hb_message:convert(
         TX, <<"structured@1.0">>, <<"tx@1.0">>, ClientOpts),
     ?event(debug_test, {tx_structured, TXStructured}),
@@ -443,7 +453,6 @@ assert_bundle(ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
         end,
         lists:zip(lists:seq(1, length(ExpectedItems)), ExpectedItems)
     ),
-
     ?assertEqual(undefined, TX#tx.manifest),
     ?assertEqual(undefined, BundleDeserialized#tx.manifest).
 
@@ -470,3 +479,5 @@ start_mock_gateway(Responses) ->
         ]
     },
     {ServerHandle, NodeOpts}.
+
+%%% XXX test read from cache and verify

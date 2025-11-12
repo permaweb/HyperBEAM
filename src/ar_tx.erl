@@ -3,7 +3,7 @@
 
 -export([sign/2, verify/1, verify_tx_id/2]).
 -export([id/1, id/2, get_owner_address/1, data_root/1]).
--export([generate_signature_data_segment/1]).
+-export([generate_signature_data_segment/1, generate_chunk_id/1]).
 -export([json_struct_to_tx/1, tx_to_json_struct/1]).
 -export([chunk_binary/2, chunks_to_size_tagged_chunks/1, sized_chunks_to_sized_chunk_ids/1]).
 
