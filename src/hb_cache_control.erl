@@ -376,24 +376,52 @@ opts_override_message_settings_test() ->
     Res = msg_with_cc([<<"no-cache">>]),
     Opts = opts_with_cc([<<"always">>]),
     Result = derive_cache_settings([Res, Req], Opts),
-    ?assertEqual(#{<<"store">> => true, <<"lookup">> => true}, Result).
+    ?assertEqual(
+        #{
+            <<"store">> => true,
+            <<"lookup">> => true,
+            <<"max-age">> => ?DEFAULT_MAX_AGE
+        },
+        Result
+    ).
 
 msg_precidence_overrides_test() ->
     Req = msg_with_cc([<<"always">>]),
     Res = msg_with_cc([<<"no-store">>]),  % No restrictions
     Result = derive_cache_settings([Res, Req], opts_with_cc([])),
-    ?assertEqual(#{<<"store">> => false, <<"lookup">> => true}, Result).
+    ?assertEqual(
+        #{
+            <<"store">> => false,
+            <<"lookup">> => true,
+            <<"max-age">> => ?DEFAULT_MAX_AGE
+        },
+        Result
+    ).
 
 %% Test specific directives
 no_store_directive_test() ->
     Msg = msg_with_cc([<<"no-store">>]),
     Result = derive_cache_settings([Msg], opts_with_cc([])),
-    ?assertEqual(#{<<"store">> => false, <<"lookup">> => ?DEFAULT_LOOKUP_OPT}, Result).
+    ?assertEqual(
+        #{
+            <<"store">> => false,
+            <<"lookup">> => ?DEFAULT_LOOKUP_OPT,
+            <<"max-age">> => ?DEFAULT_MAX_AGE
+        },
+        Result
+    ).
 
 no_cache_directive_test() ->
     Msg = msg_with_cc([<<"no-cache">>]),
     Result = derive_cache_settings([Msg], opts_with_cc([])),
-    ?assertEqual(#{<<"store">> => ?DEFAULT_STORE_OPT, <<"lookup">> => false}, Result).
+    ?assertEqual(
+        #{
+            <<"store">> => ?DEFAULT_STORE_OPT,
+            <<"lookup">> => false,
+            <<"max-age">> => ?DEFAULT_MAX_AGE
+        },
+        Result
+    ).
 
 only_if_cached_directive_test() ->
     Msg = msg_with_cc([<<"only-if-cached">>]),
@@ -402,7 +430,8 @@ only_if_cached_directive_test() ->
         #{
             <<"store">> => ?DEFAULT_STORE_OPT,
             <<"lookup">> => ?DEFAULT_LOOKUP_OPT,
-            <<"only-if-cached">> => true
+            <<"only-if-cached">> => true,
+            <<"max-age">> => ?DEFAULT_MAX_AGE
         },
         Result
     ).
@@ -411,7 +440,14 @@ only_if_cached_directive_test() ->
 hashpath_ignore_prevents_storage_test() ->
     Opts = (opts_with_cc([]))#{hashpath => ignore},
     Result = derive_cache_settings([], Opts),
-    ?assertEqual(#{<<"store">> => ?DEFAULT_STORE_OPT, <<"lookup">> => ?DEFAULT_LOOKUP_OPT}, Result).
+    ?assertEqual(
+        #{
+            <<"store">> => ?DEFAULT_STORE_OPT,
+            <<"lookup">> => ?DEFAULT_LOOKUP_OPT,
+            <<"max-age">> => ?DEFAULT_MAX_AGE
+        },
+        Result
+    ).
 
 %% Test multiple directives
 multiple_directives_test() ->
@@ -421,7 +457,8 @@ multiple_directives_test() ->
         #{
             <<"store">> => false,
             <<"lookup">> => false,
-            <<"only-if-cached">> => true
+            <<"only-if-cached">> => true,
+            <<"max-age">> => ?DEFAULT_MAX_AGE
         },
         Result
     ).
@@ -429,11 +466,25 @@ multiple_directives_test() ->
 %% Test empty/missing cases
 empty_message_list_test() ->
     Result = derive_cache_settings([], opts_with_cc([])),
-    ?assertEqual(#{<<"store">> => ?DEFAULT_STORE_OPT, <<"lookup">> => ?DEFAULT_LOOKUP_OPT}, Result).
+    ?assertEqual(
+        #{
+            <<"store">> => ?DEFAULT_STORE_OPT,
+            <<"lookup">> => ?DEFAULT_LOOKUP_OPT,
+            <<"max-age">> => ?DEFAULT_MAX_AGE
+        },
+        Result
+    ).
 
 message_without_cache_control_test() ->
     Result = derive_cache_settings([#{}], opts_with_cc([])),
-    ?assertEqual(#{<<"store">> => ?DEFAULT_STORE_OPT, <<"lookup">> => ?DEFAULT_LOOKUP_OPT}, Result).
+    ?assertEqual(
+        #{
+            <<"store">> => ?DEFAULT_STORE_OPT,
+            <<"lookup">> => ?DEFAULT_LOOKUP_OPT,
+            <<"max-age">> => ?DEFAULT_MAX_AGE
+        },
+        Result
+    ).
 
 %% Test the cache_source_to_cache_setting function directly
 opts_source_cache_control_test() ->
@@ -442,20 +493,28 @@ opts_source_cache_control_test() ->
             {opts, opts_with_cc([<<"no-store">>])},
             #{}
         ),
-    ?assertEqual(#{
-        <<"store">> => false,
-        <<"lookup">> => undefined,
-        <<"only-if-cached">> => undefined
-    }, Result).
+    ?assertEqual(
+        #{
+            <<"store">> => false,
+            <<"lookup">> => undefined,
+            <<"only-if-cached">> => undefined,
+            <<"max-age">> => undefined
+        },
+        Result
+    ).
 
 message_source_cache_control_test() ->
     Msg = msg_with_cc([<<"no-cache">>]),
     Result = cache_source_to_cache_settings(Msg, #{}),
-    ?assertEqual(#{
-        <<"store">> => undefined,
-        <<"lookup">> => false,
-        <<"only-if-cached">> => undefined
-    }, Result).
+    ?assertEqual(
+        #{
+            <<"store">> => undefined,
+            <<"lookup">> => false,
+            <<"only-if-cached">> => undefined,
+            <<"max-age">> => undefined
+        },
+        Result
+    ).
 
 %%% Basic cached AO-Core resolution tests
 
