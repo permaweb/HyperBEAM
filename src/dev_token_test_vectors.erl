@@ -1259,6 +1259,103 @@ notices_match_actual_state_changes_test() ->
     ?assertEqual(700, get_balance(State, ?ALICE)),
     ?assertEqual(300, get_balance(State, ?BOB)).
 
+%% @doc X- prefixed tags are forwarded to transfer notices
+transfer_forwards_x_tags_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => 100,
+            <<"X-Correlation-ID">> => <<"abc123">>,
+            <<"x-request-id">> => <<"req-456">>,
+            <<"X-Custom-Tag">> => <<"custom-value">>,
+            <<"regular-tag">> => <<"should-not-forward">>,
+            <<"Y-Tag">> => <<"also-not-forwarded">>
+        },
+        #{from => ?ALICE}
+    ),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    Outbox = hb_ao:get(<<"results/outbox">>, State, #{}),
+    ?assertEqual(2, length(Outbox)),
+    [DebitNotice, CreditNotice] = Outbox,
+    ?assertEqual(
+        <<"abc123">>, 
+        hb_ao:get(<<"X-Correlation-ID">>, DebitNotice, #{})
+    ),
+    ?assertEqual(
+        <<"req-456">>, 
+        hb_ao:get(<<"x-request-id">>, DebitNotice, #{})
+    ),
+    ?assertEqual(
+        <<"custom-value">>, 
+        hb_ao:get(<<"X-Custom-Tag">>, DebitNotice, #{})
+    ),
+    ?assertEqual(
+        <<"abc123">>, 
+        hb_ao:get(<<"X-Correlation-ID">>, CreditNotice, #{})
+    ),
+    ?assertEqual(
+        <<"req-456">>, 
+        hb_ao:get(<<"x-request-id">>, CreditNotice, #{})
+    ),
+    ?assertEqual(
+        <<"custom-value">>, 
+        hb_ao:get(<<"X-Custom-Tag">>, CreditNotice, #{})
+    ),
+    ?assertEqual(
+        not_found, 
+        hb_ao:get(<<"regular-tag">>, DebitNotice, #{})
+    ),
+    ?assertEqual(
+        not_found, 
+        hb_ao:get(<<"Y-Tag">>, DebitNotice, #{})
+    ),
+    ?assertEqual(
+        not_found, 
+        hb_ao:get(<<"regular-tag">>, CreditNotice, #{})
+    ),
+    ?assertEqual(
+        not_found, 
+        hb_ao:get(<<"Y-Tag">>, CreditNotice, #{})
+    ).
+
+%% @doc Edge cases for X- tag forwarding
+transfer_x_tags_edge_cases_test() ->
+    hb:init(),
+    Base = generate_base_state(#{
+        initial_balances => #{?ALICE => 1000}
+    }),
+    Req = make_request(
+        <<"transfer">>,
+        #{
+            <<"recipient">> => ?BOB,
+            <<"quantity">> => 50,
+            <<"X-">> => <<"just-x-dash">>,  
+            <<"X">> => <<"no-dash">>,        
+            <<"x-empty">> => <<>>,           
+            <<"X-123">> => <<"numeric">>,   
+            <<"X-With-Dashes">> => <<"val">> 
+        },
+        #{from => ?ALICE}
+    ),
+    {ok, State} = dev_token:compute(Base, Req, #{}),
+    Outbox = hb_ao:get(<<"results/outbox">>, State, #{}),
+    [DebitNotice, CreditNotice] = Outbox,
+    ?assertEqual(<<"just-x-dash">>, hb_ao:get(<<"X-">>, DebitNotice, #{})),
+    ?assertEqual(<<"just-x-dash">>, hb_ao:get(<<"X-">>, CreditNotice, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"X">>, DebitNotice, #{})),
+    ?assertEqual(not_found, hb_ao:get(<<"X">>, CreditNotice, #{})),
+    ?assertEqual(<<>>, hb_ao:get(<<"x-empty">>, DebitNotice, #{})),
+    ?assertEqual(<<>>, hb_ao:get(<<"x-empty">>, CreditNotice, #{})),
+    ?assertEqual(<<"numeric">>, hb_ao:get(<<"X-123">>, DebitNotice, #{})),
+    ?assertEqual(<<"numeric">>, hb_ao:get(<<"X-123">>, CreditNotice, #{})),
+    ?assertEqual(<<"val">>, hb_ao:get(<<"X-With-Dashes">>, DebitNotice, #{})),
+    ?assertEqual(<<"val">>, hb_ao:get(<<"X-With-Dashes">>, CreditNotice, #{})).
+
 %% @doc Batch mint generates one notice per recipient
 batch_mint_notice_count_matches_test() ->
     hb:init(),
