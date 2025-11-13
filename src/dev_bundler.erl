@@ -175,6 +175,7 @@ tx_error_test() ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(hb_store_lmdb),
             bundler_max_items => 1
         }),
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
@@ -204,7 +205,8 @@ unsigned_dataitem_test() ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            priv_wallet => hb:wallet()
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(hb_store_lmdb)
         }),
         Item = #tx{
                 data = <<"testdata">>,
@@ -235,7 +237,8 @@ idle_test() ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             bundler_max_idle_time => 10000,
-            priv_wallet => hb:wallet()
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(hb_store_lmdb)
         }),
         %% Upload 1 data items across 2 chunks.
         Item1 = new_data_item(1, floor(1.5 * ?DATA_CHUNK_SIZE)),
@@ -279,6 +282,7 @@ dispatch_blocking_test() ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(hb_store_lmdb),
             bundler_max_items => 3
         }),
         %% Upload 4 data items and time each post
@@ -361,7 +365,8 @@ test_bundle(Opts) ->
         ClientOpts = #{},
         NodeOpts2 = maps:merge(NodeOpts, Opts),
         Node = hb_http_server:start_node(NodeOpts2#{
-            priv_wallet => hb:wallet()
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(hb_store_lmdb)
         }),
         %% Upload 3 data items across 4 chunks.
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
@@ -390,6 +395,7 @@ test_api_error(Responses) ->
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
             priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(hb_store_lmdb),
             bundler_max_items => 1
         }),
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
