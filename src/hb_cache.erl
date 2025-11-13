@@ -187,15 +187,12 @@ list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) 
         Store ->
             list(Path, Store)
     end;
-list(Path, Store) when is_map(Store)->
-    list(Path, [Store]);
-list(_Path, []) -> 
-    [];
-list(Path, [Store | RemainingStores]) ->
+list(Path, Store) ->
     ResolvedPath = hb_store:resolve(Store, Path),
     case hb_store:list(Store, ResolvedPath) of
         {ok, Names} -> Names;
-        _ -> list(Path, RemainingStores)
+        {error, _} -> [];
+        not_found -> []
     end.
 
 %% @doc Match a template message against the cache, returning a list of IDs
@@ -1142,17 +1139,4 @@ multiple_stores_store_read_test() ->
     Path = <<"random_id">>,
     Content = store_read(Path, [Store1, Store2], Opts),
     ?assertMatch({ok, #{<<"data">> := _}}, Content),
-    shutdown_stores(Stores).
-
-multiple_store_list_test() ->
-    [_Store1, Store2] = Stores = get_multiple_stores(),
-    %% Write test data
-    hb_store:make_group(Store2, <<"group1">>),
-    hb_store:write(Store2, <<"data/final_id">>, <<"data">>),
-    hb_store:make_link(Store2, <<"data/final_id">>, <<"group1/data">>),
-    hb_store:make_link(Store2, <<"group1">>, <<"random_id">>),
-    %% Check result
-    Path = <<"random_id">>,
-    Result = list(Path, Stores),
-    ?assertEqual([<<"data">>], Result),
     shutdown_stores(Stores).

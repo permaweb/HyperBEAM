@@ -353,7 +353,7 @@ scope(_) -> scope().
 %% @param StoreOpts Database configuration map
 %% @param Path Binary prefix to search for
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
--spec list(map(), binary()) -> {ok, [binary()]} | not_found.
+-spec list(map(), binary()) -> {ok, [binary()]} | {error, term()}.
 list(Opts, Path) ->
     % Check if Path is a link and resolve it if necessary
     ResolvedPath =
@@ -383,13 +383,9 @@ list(Opts, Path) ->
     % Use native elmdb:list function
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:list(DBInstance, SearchPath) of
-        {ok, Children} ->
-            {ok, Children};
-        {error, not_found} ->
-            not_found;
-        not_found ->
-            % Handle both old and new format
-            not_found
+        {ok, Children} -> {ok, Children};
+        {error, not_found} -> {ok, []};  % Normalize new error format
+        not_found -> {ok, []}  % Handle both old and new format
     end.
 
 %% @doc Match a series of keys and values against the database. Returns 
@@ -628,7 +624,7 @@ list_test() ->
         <<"capacity">> => ?DEFAULT_SIZE
     },
     reset(StoreOpts),
-    ?assertEqual(list(StoreOpts, <<"colors">>), not_found),
+    ?assertEqual(list(StoreOpts, <<"colors">>), {ok, []}),
     % Create immediate children under colors/
     write(StoreOpts, <<"colors/red">>, <<"1">>),
     write(StoreOpts, <<"colors/blue">>, <<"2">>),
