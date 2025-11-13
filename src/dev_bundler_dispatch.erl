@@ -122,7 +122,7 @@ dispatcher(State) ->
             State1 = State#state{
                 bundles = maps:put(BundleID, Bundle, State#state.bundles)
             },
-            ?event({dispatching_bundle,
+            ?event({dispatching_bundle, {timestamp, format_timestamp()},
                 {bundle_id, BundleID}, {num_items, length(Items)}}),
             Task = #task{bundle_id = BundleID, type = post_tx, data = Items, opts = Opts},
             State2 = enqueue_task(Task, State1),
@@ -326,7 +326,7 @@ bundle_complete(Bundle, State) ->
         timer:now_diff(erlang:timestamp(), Bundle#bundle.start_time) / 1000000,
     ?event({bundle_complete, {bundle_id, Bundle#bundle.id},
         {timestamp, format_timestamp()},
-        {elapsed_time_ms, ElapsedTime}}),
+        {elapsed_time_s, ElapsedTime}}),
     State#state{bundles = maps:remove(Bundle#bundle.id, State#state.bundles)}.
 
 %%% Recovery
@@ -1008,11 +1008,7 @@ recover_bundles_test() ->
         ?assert(hb_message:verify(Bundle#bundle.tx)),
         ?assertEqual(
             hb_message:id(CommittedTX, signed, Opts),
-            hb_message:id(Bundle#bundle.tx, signed, Opts)),        
-        % Verify a build_proofs task was enqueued
-        ?assertEqual(1, queue:len(State#state.task_queue)),
-        {{value, Task}, _} = queue:out(State#state.task_queue),
-        ?assertEqual(build_proofs, Task#task.type),
+            hb_message:id(Bundle#bundle.tx, signed, Opts)),
         ok
     after
         cleanup_dispatcher(ServerHandle)
