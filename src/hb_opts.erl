@@ -119,6 +119,11 @@ default_message() ->
         %% execute more messages on a process after it has returned a result.
         %% Options: aggressive, lazy
         compute_mode => lazy,
+        streaming_threshold => 10485760,
+        stream_chunk_size => 1048576,
+        range_default_content_type => <<"application/octet-stream">>,
+        %% Enable HTTP Range support for /{id}/data intercepts
+        range_requests_enabled => true,
         %% Choice of remote nodes for tasks that are not local to hyperbeam.
         gateway => <<"https://arweave.net">>,
         bundler_ans104 => <<"https://up.arweave.net:443">>,

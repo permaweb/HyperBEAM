@@ -378,7 +378,13 @@ handle_request(RawReq, Body, ServerID) ->
         _ ->
             % The request is of normal AO-Core form, so we parse it and invoke
             % the meta@1.0 device to handle it.
-            ?event(http,
+            Path = cowboy_req:path(RawReq),
+            Method = cowboy_req:method(RawReq),
+            case maybe_handle_data_request(Method, Path, Req, NodeMsg) of
+                {ok, _, _} = Reply ->
+                    Reply;
+                pass ->
+                    ?event(http,
                 {
                     http_inbound,
                     {cowboy_req, {explicit, Req}, {body, {string, Body}}}
@@ -412,7 +418,7 @@ handle_request(RawReq, Body, ServerID) ->
                         },
                         ReqSingleton
                     ),
-                hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
+                    hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
             catch
                 Type:Details:Stacktrace ->
                     handle_error(
@@ -424,7 +430,219 @@ handle_request(RawReq, Body, ServerID) ->
                         NodeMsg
                     )
             end
+            end
     end.
+
+maybe_handle_data_request(Method, Path, RawReq, NodeMsg) ->
+    case {hb_opts:get(range_requests_enabled, true, NodeMsg), Method, is_data_request(Path)} of
+        {true, <<"GET">>, {true, DataID}} ->
+            Headers = cowboy_req:headers(RawReq),
+            RangeHeader = case maps:get(<<"range">>, Headers, undefined) of
+                undefined -> maps:get(<<"Range">>, Headers, undefined);
+                V -> V
+            end,
+            handle_data_request(DataID, RangeHeader, RawReq, Path, NodeMsg);
+        _ -> pass
+    end.
+
+handle_data_request(DataID, RangeHeader, RawReq, Path, NodeMsg) ->
+    case hb_data_reader:metadata(DataID, NodeMsg) of
+        {ok, Meta} when is_binary(RangeHeader) ->
+            handle_range_request(DataID, RangeHeader, Meta, RawReq, NodeMsg);
+        {ok, Meta} ->
+            handle_full_request(DataID, Meta, RawReq, Path, NodeMsg);
+        {error, {http_error, 404}} ->
+            {ok, cowboy_req:reply(404, cors_headers(), <<>>, RawReq), no_state};
+        {error, Reason} ->
+            ?event(error, {metadata_fetch_failed, {id, DataID}, {reason, Reason}}),
+            {ok, cowboy_req:reply(500, error_headers(), <<"Range metadata error">>, RawReq), no_state}
+    end.
+
+handle_range_request(DataID, RangeBin, Meta, RawReq, NodeMsg) ->
+    Total = maps:get(size, Meta, 0),
+    case hb_http_range:parse(RangeBin, Total) of
+        {ok, {Start, End}} ->
+            CType = maps:get(content_type, Meta),
+            Threshold = hb_opts:get(streaming_threshold, default_streaming_threshold(), NodeMsg),
+            RangeLen = (End - Start) + 1,
+            case RangeLen > Threshold of
+                true ->
+                    stream_range_request(DataID, Meta, CType, Start, End, RawReq, NodeMsg);
+                false ->
+                    case hb_data_reader:read_range(DataID, RangeBin, Meta, NodeMsg) of
+                        {ok, #{body := Partial, start := RespStart, range_end := RespEnd, total := RespTotal} = RangeInfo} ->
+                            RespContentType = maps:get(content_type, RangeInfo, CType),
+                            ContentRange = hb_http_range:build_content_range(RespStart, RespEnd, RespTotal),
+                            Msg = #{
+                                <<"status">> => 206,
+                                <<"ao-result">> => <<"body">>,
+                                <<"body">> => Partial,
+                                <<"content-type">> => RespContentType,
+                                <<"content-range">> => ContentRange,
+                                <<"accept-ranges">> => <<"bytes">>
+                            },
+                            Signed = hb_message:commit(Msg, NodeMsg),
+                            hb_http:reply(RawReq, #{ <<"path">> => cowboy_req:path(RawReq) }, Signed, NodeMsg);
+                        {error, Reason} ->
+                            ?event(error, {range_request_failed, {id, DataID}, {reason, Reason}}),
+                            hb_http:reply(RawReq, #{ <<"path">> => cowboy_req:path(RawReq) }, #{ <<"status">> => 500, <<"body">> => <<"Range request failed">> }, NodeMsg)
+                    end
+            end;
+        {error, {range_not_satisfiable, _}} ->
+            Unsat = hb_http_range:build_unsatisfied_content_range(Total),
+            Msg = #{ <<"status">> => 416, <<"content-range">> => Unsat },
+            hb_http:reply(RawReq, #{ <<"path">> => cowboy_req:path(RawReq) }, Msg, NodeMsg);
+        {error, invalid_range} ->
+            Msg = #{ <<"status">> => 416, <<"content-range">> => hb_http_range:build_unsatisfied_content_range(Total) },
+            hb_http:reply(RawReq, #{ <<"path">> => cowboy_req:path(RawReq) }, Msg, NodeMsg)
+    end.
+
+stream_range_request(DataID, Meta, CType, Start, End, RawReq, NodeMsg) ->
+    ContentRange = hb_http_range:build_content_range(Start, End, maps:get(size, Meta, 0)),
+    HeaderMsg = #{
+        <<"status">> => 206,
+        <<"ao-result">> => <<"body">>,
+        <<"content-type">> => CType,
+        <<"content-range">> => ContentRange,
+        <<"accept-ranges">> => <<"bytes">>
+    },
+    SignedHeaderMsg = hb_message:commit(HeaderMsg, NodeMsg, #{
+        <<"commitment-device">> => <<"httpsig@1.0">>,
+        <<"committed">> => [<<"ao-result">>, <<"status">>]
+    }),
+    ExtraHeaders = #{
+        <<"accept-ranges">> => <<"bytes">>,
+        <<"content-type">> => CType,
+        <<"content-range">> => ContentRange
+    },
+    ChunkSize0 = hb_data_reader:chunk_size(NodeMsg),
+    StreamFun = fun(StreamReq) ->
+        stream_range_loop(StreamReq, DataID, Meta, Start, End, ChunkSize0, NodeMsg)
+    end,
+    hb_http:reply_streamed_signed(RawReq, #{ <<"path">> => cowboy_req:path(RawReq) }, 206, SignedHeaderMsg, ExtraHeaders, StreamFun, NodeMsg).
+
+stream_range_loop(StreamReq, DataID, Meta, Offset, End, ChunkSize, NodeMsg) when Offset =< End ->
+    MaxSize = End - Offset + 1,
+    ThisSize = case ChunkSize =< MaxSize of true -> ChunkSize; false -> MaxSize end,
+    case hb_data_reader:next_chunk(DataID, Meta, Offset, ThisSize, NodeMsg) of
+        {ok, #{ body := Body, range_end := RangeEnd }} ->
+            IsFinal = RangeEnd >= End,
+            hb_http:send_streamed_response(StreamReq, Body, IsFinal, NodeMsg),
+            case IsFinal of
+                true -> ok;
+                false -> stream_range_loop(StreamReq, DataID, Meta, RangeEnd + 1, End, ChunkSize, NodeMsg)
+            end;
+        {error, _} -> ok
+    end;
+stream_range_loop(_StreamReq, _DataID, _Meta, _Offset, _End, _ChunkSize, _NodeMsg) -> ok.
+
+handle_full_request(DataID, Meta = #{size := Total}, RawReq, Path, NodeMsg) ->
+    CType = maps:get(content_type, Meta),
+    Threshold = hb_opts:get(streaming_threshold, default_streaming_threshold(), NodeMsg),
+    StreamSig = hb_util:atom(hb_opts:get(stream_signature, off, NodeMsg)),
+    ShouldStream = (Total > Threshold) andalso (StreamSig =/= off),
+    case ShouldStream of
+        true ->
+            stream_large_data(DataID, Meta, CType, RawReq, Path, NodeMsg);
+        false ->
+            case hb_data_reader:fetch_full(DataID, Meta, NodeMsg) of
+                {ok, #{data := Data}} ->
+                    Msg = #{
+                        <<"status">> => 200,
+                        <<"ao-result">> => <<"body">>,
+                        <<"body">> => Data,
+                        <<"content-type">> => CType,
+                        <<"accept-ranges">> => <<"bytes">>
+                    },
+                    Signed = hb_message:commit(Msg, NodeMsg),
+                    hb_http:reply(RawReq, #{ <<"path">> => Path }, Signed, NodeMsg);
+                {error, {http_error, 404}} ->
+                    hb_http:reply(RawReq, #{ <<"path">> => Path }, #{ <<"status">> => 404 }, NodeMsg);
+                {error, Reason} ->
+                    ?event(error, {full_data_fetch_failed, {id, DataID}, {reason, Reason}}),
+                    hb_http:reply(RawReq, #{ <<"path">> => Path }, #{ <<"status">> => 500, <<"body">> => <<"Streaming request failed">> }, NodeMsg)
+            end
+    end.
+
+stream_large_data(DataID, Meta, CType, RawReq, Path, NodeMsg) ->
+    ChunkSize = hb_data_reader:chunk_size(NodeMsg),
+    case hb_data_reader:next_chunk(DataID, Meta, 0, ChunkSize, NodeMsg) of
+        {ok, FirstChunk} ->
+            % Sign only header fields (no content-digest). Always use header mode for streaming.
+            ExtraHeaders = #{
+                <<"accept-ranges">> => <<"bytes">>,
+                <<"content-type">> => CType
+            },
+            HeaderMsg = #{
+                <<"status">> => 200,
+                <<"ao-result">> => <<"body">>,
+                <<"content-type">> => CType
+            },
+            CommitSpec = #{
+                <<"commitment-device">> => <<"httpsig@1.0">>,
+                <<"committed">> => [<<"ao-result">>, <<"status">>]
+            },
+            SignedHeaderMsg = hb_message:commit(HeaderMsg, NodeMsg, CommitSpec),
+            StreamFun = fun(StreamReq) ->
+                Body0 = maps:get(body, FirstChunk),
+                Final0 = maps:get(final, FirstChunk, false),
+                hb_http:send_streamed_response(StreamReq, Body0, Final0, NodeMsg),
+                case Final0 of
+                    true -> ok;
+                    false ->
+                        NextOffset = maps:get(range_end, FirstChunk) + 1,
+                        case hb_data_reader:stream_from(
+                            DataID,
+                            Meta,
+                            NextOffset,
+                            fun(Chunk, IsFinal) ->
+                                hb_http:send_streamed_response(StreamReq, Chunk, IsFinal, NodeMsg)
+                            end,
+                            NodeMsg
+                        ) of
+                            {ok, _} -> ok;
+                            {error, Reason} ->
+                                ?event(error,
+                                    {range_stream_failure,
+                                        {id, DataID},
+                                        {offset, NextOffset},
+                                        {reason, Reason}
+                                    }
+                                )
+                        end
+                end
+            end,
+            hb_http:reply_streamed_signed(RawReq, #{ <<"path">> => Path }, 200, SignedHeaderMsg, ExtraHeaders, StreamFun, NodeMsg);
+        {error, {http_error, 404}} ->
+            {ok, cowboy_req:reply(404, cors_headers(), <<>>, RawReq), no_state};
+        {error, done} ->
+            {ok, cowboy_req:reply(404, cors_headers(), <<>>, RawReq), no_state};
+        {error, Reason} ->
+            ?event(error, {prefetch_failed, {id, DataID}, {reason, Reason}}),
+            {ok, cowboy_req:reply(500, error_headers(), <<"Streaming request failed">>, RawReq), no_state}
+    end.
+
+%% @doc Detect if the request path is of the form /{ID}/data or /tx/{ID}/data
+is_data_request(Path) when is_binary(Path) ->
+    Parts = [P || P <- binary:split(Path, <<"/">>, [global]), P =/= <<>>],
+    case Parts of
+        [ID, <<"data">>] -> {true, ID};
+        [<<"tx">>, ID, <<"data">>] -> {true, ID};
+        _ -> false
+    end.
+
+cors_headers() ->
+    #{
+        <<"access-control-allow-origin">> => <<"*">>,
+        <<"access-control-allow-headers">> => <<"*">>,
+        <<"access-control-allow-methods">> => <<"GET, POST, PUT, DELETE, OPTIONS">>
+    }.
+
+error_headers() ->
+    maps:merge(cors_headers(), #{ <<"content-type">> => <<"text/plain">> }).
+
+default_streaming_threshold() ->
+    10 * 1024 * 1024.
 
 %% @doc Return a 500 error response to the client.
 handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
