@@ -36,7 +36,8 @@
     items,               % List of dataitems to bundle
     status,              % Current state (initializing, tx_built, tx_posted, proofs_built)
     tx,                  % The built/signed transaction
-    proofs               % Map of offset => #proof{} records
+    proofs,              % Map of offset => #proof{} records
+    start_time           % The time the bundle was started
 }).
 
 %%% Default options.
@@ -115,7 +116,8 @@ dispatcher(State) ->
                 items = Items,
                 status = initializing,
                 tx = undefined,
-                proofs = #{}
+                proofs = #{},
+                start_time = erlang:timestamp()
             },
             State1 = State#state{
                 bundles = maps:put(BundleID, Bundle, State#state.bundles)
@@ -153,12 +155,21 @@ enqueue_task(Task, State) ->
 
 %% @doc Format a task for logging.
 format_task(#task{bundle_id = BundleID, type = post_tx, data = CommittedTX}) ->
-    {post_tx, {bundle, BundleID}, {tx, CommittedTX}};
+    {post_tx, {timestamp, format_timestamp()}, {bundle, BundleID},
+        {tx, {explicit, hb_message:id(CommittedTX, signed, #{})}}};
 format_task(#task{bundle_id = BundleID, type = build_proofs, data = CommittedTX}) ->
-    {build_proofs, {bundle, BundleID}, {tx, CommittedTX}};
+    {build_proofs, {timestamp, format_timestamp()}, {bundle, BundleID},
+        {tx, {explicit, hb_message:id(CommittedTX, signed, #{})}}};
 format_task(#task{bundle_id = BundleID, type = post_proof, data = Proof}) ->
     Offset = maps:get(offset, Proof),
-    {post_proof, {bundle, BundleID}, {offset, Offset}}.
+    {post_proof, {timestamp, format_timestamp()}, {bundle, BundleID},
+        {offset, Offset}}.
+
+%% @doc Format erlang:timestamp() as a user-friendly RFC3339 string with milliseconds.
+format_timestamp() ->
+    {MegaSecs, Secs, MicroSecs} = erlang:timestamp(),
+    Millisecs = (MegaSecs * 1000000 + Secs) * 1000 + (MicroSecs div 1000),
+    calendar:system_time_to_rfc3339(Millisecs, [{unit, millisecond}, {offset, "Z"}]).
 
 %% @doc Assign tasks to all idle workers until no idle workers
 %% or no tasks remain.
@@ -251,7 +262,7 @@ task_completed(#task{bundle_id = BundleID, type = build_proofs}, Bundle, Proofs,
     case Proofs of
         [] ->
             % No proofs, bundle complete
-            bundle_complete(BundleID, State);
+            bundle_complete(Bundle, State);
         _ ->
             % Proofs built, wrap each in a proof record with offset as key
             ProofsMap = maps:from_list([
@@ -300,25 +311,21 @@ task_completed(#task{bundle_id = BundleID, type = post_proof, data = ProofData},
     ),
     case AllSeeded of
         true ->
-            bundle_complete(BundleID, State1);
+            bundle_complete(Bundle, State1);
         false ->
             State1
     end.
 
 %% @doc Mark a bundle as complete and remove it from state.
-bundle_complete(BundleID, State) ->
-    ?event({bundle_complete, BundleID}),
-    Bundles = State#state.bundles,
+bundle_complete(Bundle, State) ->
+    ElapsedTime = 
+        timer:now_diff(erlang:timestamp(), Bundle#bundle.start_time) / 1000000,
+    ?event({bundle_complete, Bundle#bundle.id,
+        {timestamp, format_timestamp()},
+        {elapsed_time_ms, ElapsedTime}}),
     Opts = State#state.opts,
-    % Mark bundle as complete in cache
-    case maps:get(BundleID, Bundles, undefined) of
-        undefined -> ok;
-        Bundle ->
-            ok = dev_bundler_cache:complete_tx(Bundle#bundle.tx, Opts)
-    end,
-    State#state{
-        bundles = maps:remove(BundleID, Bundles)
-    }.
+    ok = dev_bundler_cache:complete_tx(Bundle#bundle.tx, Opts),
+    State#state{bundles = maps:remove(Bundle#bundle.id, State#state.bundles)}.
 
 %%% Recovery
 

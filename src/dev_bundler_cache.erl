@@ -35,7 +35,7 @@ write_item(Item, Opts) when is_map(Item) ->
     {ok, _} = hb_cache:write(Item, Opts),
     % Use the committed (structured) item for path generation
     Path = item_path(Item, Opts),
-    ?event({write_item, {path, Path}, {item, Item}}),
+    ?event({write_item, {path, Path}}),
     % Create pseudopath with empty bundle reference
     write_pseudopath(Path, <<>>, Opts).
 
@@ -43,7 +43,7 @@ write_item(Item, Opts) when is_map(Item) ->
 link_item_to_tx(Item, TX, Opts) when is_map(Item) and is_map(TX) ->
     Path = item_path(Item, Opts),
     TXID = tx_id(TX, Opts),
-    ?event({link_item_to_tx, {path, Path}, {item, Item}, {tx_id, TXID}}),
+    ?event({link_item_to_tx, {path, Path}, {tx_id, {explicit, TXID}}}),
     write_pseudopath(Path, TXID, Opts).
 
 %% @doc Get the bundle TXID for a data item, or <<>> if not bundled.
@@ -73,7 +73,7 @@ tx_id(TX, Opts) when is_map(TX) ->
     hb_message:id(TX, signed, Opts).
 
 write_tx(TX, Items, Opts) when is_map(TX) ->
-    ?event({write_tx, {tx, TX}, {items, Items}}),
+    ?event({write_tx, {tx, {explicit, hb_message:id(TX, signed, Opts)}}}),
     {ok, _} = hb_cache:write(TX, Opts),
     set_tx_status(TX, <<"posted">>, Opts),
     lists:foreach(
@@ -116,7 +116,6 @@ tx_path(TX, Opts) ->
 %% @doc Load all unbundled items (where bundle = <<>>) from cache.
 %% Returns list of actual Item messages for re-queuing.
 load_unbundled_items(Opts) ->
-    ?event({load_unbundled_items}),
     Store = hb_opts:get(store, no_viable_store, Opts),
     ItemsPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"item">>]),
     
@@ -125,9 +124,7 @@ load_unbundled_items(Opts) ->
         [] -> [];
         List -> List
     end,
-    
-    ?event({load_unbundled_items, {found_items, length(ItemIDs)}}),
-    
+
     % Filter for unbundled items and load them
     lists:filtermap(
         fun(ItemIDStr) ->
@@ -144,10 +141,10 @@ load_unbundled_items(Opts) ->
                     case hb_cache:read(ItemIDStr, Opts) of
                         {ok, Item} ->
                             FullyLoadedItem = hb_cache:ensure_all_loaded(Item, Opts),
-                            ?event({loaded_unbundled_item, {id, ItemIDStr}}),
+                            ?event({loaded_unbundled_item, {id, {explicit, ItemIDStr}}}),
                             {true, FullyLoadedItem};
                         _ ->
-                            ?event({failed_to_load_item, {id, ItemIDStr}}),
+                            ?event({failed_to_load_item, {id, {explicit, ItemIDStr}}}),
                             false
                     end;
                 _ ->
@@ -161,7 +158,6 @@ load_unbundled_items(Opts) ->
 %% @doc Load all bundle TX states from cache.
 %% Returns list of {TXID, Status} tuples.
 load_bundle_states(Opts) ->
-    ?event({load_bundle_states}),
     Store = hb_opts:get(store, no_viable_store, Opts),
     TXRootPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"tx">>]),
     
@@ -170,8 +166,6 @@ load_bundle_states(Opts) ->
         [] -> [];
         List -> List
     end,
-    
-    ?event({load_bundle_states, {found_txs, TXIDs}}),
     
     % Load status for each TX
     lists:filtermap(
@@ -182,7 +176,7 @@ load_bundle_states(Opts) ->
                 <<>> -> false; % Empty status, ignore
                 <<"complete">> -> false; % Skip completed bundles
                 Status ->
-                    ?event({loaded_tx_state, {id, TXID}, {status, Status}}),
+                    ?event({loaded_tx_state, {id, {explicit, TXID}}, {status, Status}}),
                     {true, {TXID, Status}}
             end
         end,
@@ -192,7 +186,6 @@ load_bundle_states(Opts) ->
 %% @doc Load all data items associated with a bundle TX.
 %% Uses the item pseudopaths to find items with matching tx-id.
 load_bundled_items(TXID, Opts) ->
-    ?event({load_bundled_items, {tx_id, TXID}}),
     Store = hb_opts:get(store, no_viable_store, Opts),
     ItemsPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"item">>]),
     
@@ -218,10 +211,10 @@ load_bundled_items(TXID, Opts) ->
                     case hb_cache:read(ItemIDStr, Opts) of
                         {ok, Item} ->
                             FullyLoadedItem = hb_cache:ensure_all_loaded(Item, Opts),
-                            ?event({loaded_tx_item, {tx_id, TXID}, {item_id, ItemIDStr}}),
+                            ?event({loaded_tx_item, {tx_id, {explicit, TXID}}, {item_id, {explicit, ItemIDStr}}}),
                             {true, FullyLoadedItem};
                         _ ->
-                            ?event({failed_to_load_tx_item, {tx_id, TXID}, {item_id, ItemIDStr}}),
+                            ?event({failed_to_load_tx_item, {tx_id, {explicit, TXID}}, {item_id, {explicit, ItemIDStr}}}),
                             false
                     end;
                 _ ->
@@ -234,13 +227,13 @@ load_bundled_items(TXID, Opts) ->
 
 %% @doc Load a TX from cache by its ID.
 load_tx(TXID, Opts) ->
-    ?event({load_tx, {tx_id, TXID}}),
+    ?event({load_tx, {tx_id, {explicit, TXID}}}),
     case hb_cache:read(TXID, Opts) of
         {ok, TX} ->
-            ?event({loaded_tx, {tx_id, TXID}}),
+            ?event({loaded_tx, {tx_id, {explicit, TXID}}}),
             TX;
         _ ->
-            ?event({failed_to_load_tx, {tx_id, TXID}}),
+            ?event({failed_to_load_tx, {tx_id, {explicit, TXID}}}),
             not_found
     end.
 
@@ -250,13 +243,11 @@ load_tx(TXID, Opts) ->
 %% @doc Write a value to a pseudopath.
 write_pseudopath(Path, Value, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    ?event({write_pseudopath, {path, Path}, {value, Value}}),
     hb_store:write(Store, Path, Value).
 
 %% @doc Read a value from a pseudopath.
 read_pseudopath(Path, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    ?event({read_pseudopath, {path, Path}}),
     case hb_store:read(Store, Path) of
         {ok, Value} -> {ok, Value};
         _ -> not_found

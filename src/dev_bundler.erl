@@ -65,7 +65,7 @@ stop_server() ->
 init(Opts) ->
     % Recover any unbundled items from cache
     UnbundledItems = dev_bundler_cache:load_unbundled_items(Opts),
-    ?event(debug_test, {recovered_unbundled_items, length(UnbundledItems)}),
+    ?event({recovered_unbundled_items, length(UnbundledItems)}),
     % Calculate total bytes for recovered items
     RecoveredBytes = lists:foldl(
         fun(Item, Acc) ->
