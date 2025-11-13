@@ -930,6 +930,65 @@ independent_task_retry_counts_test() ->
         cleanup_dispatcher(ServerHandle)
     end.
 
+recover_bundles_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(hb_store_lmdb)
+        },
+        hb_http_server:start_node(Opts),
+        % Create some test items
+        Item1 = new_data_item(1, 10, Opts),
+        Item2 = new_data_item(2, 10, Opts),
+        Item3 = new_data_item(3, 10, Opts),
+        % Write items to cache as unbundled
+        ok = dev_bundler_cache:write_item(Item1, Opts),
+        ok = dev_bundler_cache:write_item(Item2, Opts),
+        ok = dev_bundler_cache:write_item(Item3, Opts),
+        % Create a bundle TX and cache it with posted status
+        {ok, TX} = dev_codec_tx:to(lists:reverse([Item1, Item2, Item3]), #{}, #{}),
+        CommittedTX = hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+        ok = dev_bundler_cache:write_tx(CommittedTX, [Item1, Item2, Item3], Opts),
+        % Create a second bundle that is already complete (should not be recovered)
+        Item4 = new_data_item(4, 10, Opts),
+        ok = dev_bundler_cache:write_item(Item4, Opts),
+        {ok, TX2} = dev_codec_tx:to(lists:reverse([Item4]), #{}, #{}),
+        CommittedTX2 = hb_message:convert(TX2, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
+        ok = dev_bundler_cache:write_tx(CommittedTX2, [Item4], Opts),
+        ok = dev_bundler_cache:complete_tx(CommittedTX2, Opts),
+        % Now initialize dispatcher which should recover only the posted bundle
+        ensure_dispatcher(Opts),
+        State = get_state(),
+        % Get the recovered bundle (should only be 1, not the completed one)
+        ?assertEqual(1, maps:size(State#state.bundles)),
+        [Bundle] = maps:values(State#state.bundles),
+        RecoveredItems = [
+            hb_message:with_commitments(
+                #{ <<"commitment-device">> => <<"ans104@1.0">> }, Item, Opts)
+            || Item <- Bundle#bundle.items],
+        ?assertEqual(
+            lists:sort([Item1, Item2, Item3]),
+            lists:sort(RecoveredItems)),
+        ?assertEqual(tx_posted, Bundle#bundle.status),
+        ?assert(hb_message:verify(Bundle#bundle.tx)),
+        ?assertEqual(
+            hb_message:id(CommittedTX, signed, Opts),
+            hb_message:id(Bundle#bundle.tx, signed, Opts)),        
+        % Verify a build_proofs task was enqueued
+        ?assertEqual(1, queue:len(State#state.task_queue)),
+        {{value, Task}, _} = queue:out(State#state.task_queue),
+        ?assertEqual(build_proofs, Task#task.type),
+        ok
+    after
+        cleanup_dispatcher(ServerHandle)
+    end.
+
 %%% Test Helper Functions
 
 new_data_item(Index, Size, Opts) ->

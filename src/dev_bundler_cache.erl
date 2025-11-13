@@ -231,7 +231,7 @@ load_tx(TXID, Opts) ->
     case hb_cache:read(TXID, Opts) of
         {ok, TX} ->
             ?event({loaded_tx, {tx_id, {explicit, TXID}}}),
-            TX;
+            hb_cache:ensure_all_loaded(TX, Opts);
         _ ->
             ?event({failed_to_load_tx, {tx_id, {explicit, TXID}}}),
             not_found
