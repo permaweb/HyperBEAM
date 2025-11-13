@@ -3,7 +3,7 @@
 %%% generation, and chunk seeding. Failed tasks are automatically re-queued
 %%% for immediate retry until successful.
 -module(dev_bundler_dispatch).
--export([dispatch/2, stop_dispatcher/0]).
+-export([dispatch/2, ensure_dispatcher/1, stop_dispatcher/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -59,7 +59,7 @@ dispatch(Items, Opts) ->
 ensure_dispatcher(Opts) ->
     case hb_name:lookup(?DISPATCHER_NAME) of
         undefined ->
-            PID = spawn(fun() -> init_dispatcher(Opts) end),
+            PID = spawn(fun() -> init(Opts) end),
             hb_name:register(?DISPATCHER_NAME, PID),
             hb_name:lookup(?DISPATCHER_NAME);
         PID -> PID
@@ -85,7 +85,7 @@ get_state() ->
     end.
 
 %% @doc Initialize the dispatcher with worker pool.
-init_dispatcher(Opts) ->
+init(Opts) ->
     NumWorkers = hb_opts:get(bundler_workers, ?DEFAULT_NUM_WORKERS, Opts),
     Workers = lists:map(
         fun(_) ->
@@ -102,7 +102,7 @@ init_dispatcher(Opts) ->
     },
     % Recover any in-progress bundles from cache
     State1 = recover_bundles(State),
-    dispatcher(State1).
+    dispatcher(assign_tasks(State1)).
 
 %% @doc The main loop of the dispatcher. Manages task queue and worker pool.
 dispatcher(State) ->
@@ -122,6 +122,8 @@ dispatcher(State) ->
             State1 = State#state{
                 bundles = maps:put(BundleID, Bundle, State#state.bundles)
             },
+            ?event({dispatching_bundle,
+                {bundle_id, BundleID}, {num_items, length(Items)}}),
             Task = #task{bundle_id = BundleID, type = post_tx, data = Items, opts = Opts},
             State2 = enqueue_task(Task, State1),
             % Assign tasks to idle workers
@@ -318,13 +320,13 @@ task_completed(#task{bundle_id = BundleID, type = post_proof, data = ProofData},
 
 %% @doc Mark a bundle as complete and remove it from state.
 bundle_complete(Bundle, State) ->
-    ElapsedTime = 
-        timer:now_diff(erlang:timestamp(), Bundle#bundle.start_time) / 1000000,
-    ?event({bundle_complete, Bundle#bundle.id,
-        {timestamp, format_timestamp()},
-        {elapsed_time_ms, ElapsedTime}}),
     Opts = State#state.opts,
     ok = dev_bundler_cache:complete_tx(Bundle#bundle.tx, Opts),
+    ElapsedTime = 
+        timer:now_diff(erlang:timestamp(), Bundle#bundle.start_time) / 1000000,
+    ?event({bundle_complete, {bundle_id, Bundle#bundle.id},
+        {timestamp, format_timestamp()},
+        {elapsed_time_ms, ElapsedTime}}),
     State#state{bundles = maps:remove(Bundle#bundle.id, State#state.bundles)}.
 
 %%% Recovery

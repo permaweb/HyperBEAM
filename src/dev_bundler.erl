@@ -63,6 +63,8 @@ stop_server() ->
 
 %% @doc Initialize the bundler server.
 init(Opts) ->
+    % Start the dispatcher to recover any in-progress bundles
+    dev_bundler_dispatch:ensure_dispatcher(Opts),
     % Recover any unbundled items from cache
     {UnbundledItems, RecoveredBytes} = recover_unbundled_items(Opts),
     InitialState = #{
@@ -114,7 +116,8 @@ server(State = #{ max_idle_time := MaxIdleTime }, Opts) ->
 add_item(Req, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
     {ok, Item} = hb_message:with_only_committed(Req, Opts),
     ItemSize = erlang:external_size(Item),
-    ?event({adding_item, {item_size, ItemSize}, {req, Req}, {item, Item}}),
+    ?event({adding_item, {item_size, ItemSize},
+        {item, {explicit, hb_message:id(Item, signed, Opts)}}}),
     ok = dev_bundler_cache:write_item(Item, Opts),
     State#{
         queue => [Item | Queue],
@@ -122,14 +125,31 @@ add_item(Req, State = #{ queue := Queue, bytes := Bytes }, Opts) ->
     }.
 
 %% @doc Dispatch the queue if it is ready.
-maybe_dispatch(State, Opts) ->
+%% Only dispatches up to max_items at a time to respect the limit.
+maybe_dispatch(State = #{queue := Q, max_items := MaxItems}, Opts) ->
     case dispatchable(State, Opts) of
-        true -> 
-            Q = maps:get(queue, State),
-            dev_bundler_dispatch:dispatch(Q, Opts),
-            State#{ queue => [] };
+        true ->
+            % Only dispatch up to max_items, keep the rest in queue
+            {ToDispatch, Remaining} = split_queue(Q, MaxItems),
+            dev_bundler_dispatch:dispatch(ToDispatch, Opts),
+            % Recalculate bytes for remaining items
+            RemainingBytes = lists:foldl(
+                fun(Item, Acc) -> Acc + erlang:external_size(Item) end,
+                0,
+                Remaining
+            ),
+            NewState = State#{queue => Remaining, bytes => RemainingBytes},
+            % Check if we should dispatch again (in case we have more than max_items)
+            maybe_dispatch(NewState, Opts);
         false -> State
     end.
+
+%% @doc Split a queue into items to dispatch (up to max) and remaining items.
+split_queue(Queue, MaxItems) when length(Queue) =< MaxItems ->
+    {Queue, []};
+split_queue(Queue, MaxItems) ->
+    {ToDispatch, Remaining} = lists:split(MaxItems, Queue),
+    {ToDispatch, Remaining}.
 
 %% @doc Returns whether the queue is dispatchable.
 dispatchable(#{ queue := Q, max_items := MaxLen }, _Opts)
@@ -345,6 +365,46 @@ recover_unbundled_items_test() ->
         || Item <- RecoveredItems],
     ?assertEqual(lists:sort([Item1, Item3]), lists:sort(RecoveredItems2)),
     ok.
+
+recover_respects_max_items_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        % Use max_items of 3, so 10 items should dispatch as 3+3+3+1
+        MaxItems = 3,
+        Opts = NodeOpts#{
+            priv_wallet => hb:wallet(),
+            store => hb_test_utils:test_store(hb_store_lmdb),
+            bundler_max_items => MaxItems
+        },
+        % Create and cache 10 unbundled items
+        NumItems = 10,
+        lists:foreach(
+            fun(I) ->
+                Item = hb_message:convert(
+                    new_data_item(I, 10),
+                    <<"structured@1.0">>,
+                    <<"ans104@1.0">>,
+                    Opts
+                ),
+                ok = dev_bundler_cache:write_item(Item, Opts)
+            end,
+            lists:seq(1, NumItems)
+        ),
+        % Start the node and bundler server (which recovers unbundled items)
+        hb_http_server:start_node(Opts),
+        ensure_server(Opts),        
+        % Should dispatch 3 bundles and leave one item in the queue
+        TXs = hb_mock_server:get_requests(tx, 3, ServerHandle),
+        ?assertEqual(3, length(TXs)),
+        ok
+    after
+        stop_test_servers(ServerHandle)
+    end.
 
 stop_test_servers(ServerHandle) ->
     hb_mock_server:stop(ServerHandle),

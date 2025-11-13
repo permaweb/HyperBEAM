@@ -118,13 +118,11 @@ tx_path(TX, Opts) ->
 load_unbundled_items(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     ItemsPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"item">>]),
-    
     % List all item IDs
     ItemIDs = case hb_cache:list(ItemsPath, Opts) of
         [] -> [];
         List -> List
     end,
-
     % Filter for unbundled items and load them
     lists:filtermap(
         fun(ItemIDStr) ->
@@ -160,13 +158,11 @@ load_unbundled_items(Opts) ->
 load_bundle_states(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     TXRootPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"tx">>]),
-    
     % List all TX IDs
     TXIDs = case hb_cache:list(TXRootPath, Opts) of
         [] -> [];
         List -> List
     end,
-    
     % Load status for each TX
     lists:filtermap(
         fun(TXID) ->
@@ -188,13 +184,11 @@ load_bundle_states(Opts) ->
 load_bundled_items(TXID, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     ItemsPath = hb_store:path(Store, [?BUNDLER_PREFIX, <<"item">>]),
-    
     % List all item IDs
     ItemIDs = case hb_cache:list(ItemsPath, Opts) of
         [] -> [];
         List -> List
     end,
-    
     % Filter for items belonging to this TX and load them
     lists:filtermap(
         fun(ItemIDStr) ->
