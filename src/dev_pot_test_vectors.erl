@@ -177,17 +177,14 @@ multiresource_modified_weight_test() ->
         <<"balances">> => #{ }
     },
     S1 = dev_pot:modify_deposit(<<"alice">>, <<"oxygen">>, 1, S0, Opts),
-    %S1b = dev_pot:modify_deposit(<<"bob">>, <<"oxygen">>, 10, S1, Opts),
     S2 = dev_pot:modify_deposit(<<"bob">>, <<"hydrogen">>, 1, S1, Opts),
-    %S2b = dev_pot:modify_deposit(<<"alice">>, <<"hydrogen">>, 10, S2, Opts),
     {ok, S3} = hb_ao:resolve(S2, <<"drip">>, Opts),
-    % report(S3),
-    % ?assertEqual(25.0, dev_pot:balance(<<"alice">>, S3)),
-    % ?assertEqual(25.0, dev_pot:balance(<<"bob">>, S3)),
+    ?assertEqual(50.0, dev_pot:balance(<<"alice">>, S3)),
+    ?assertEqual(0.0, dev_pot:balance(<<"bob">>, S3)),
     S4 = dev_pot:set_weight(<<"hydrogen">>, 1, S3, Opts),
-    report(S4),
     {ok, S5} = hb_ao:resolve(S4, <<"drip">>, Opts),
-    report(S5),
+    ?assertEqual(62.5, dev_pot:balance(<<"alice">>, S5)),
+    ?assertEqual(12.5, dev_pot:balance(<<"bob">>, S5)),
     ok.
 
 delegate_test() ->
