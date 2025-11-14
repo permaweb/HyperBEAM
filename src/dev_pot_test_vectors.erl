@@ -3,6 +3,56 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+drip_global(Acc, ToMint, TotalWeightedUnits) ->
+    Acc + (ToMint / TotalWeightedUnits).
+
+drip_resource(ResourceAcc, GlobalAcc, LastGlobalAcc, Weight) ->
+    ResourceAcc + ((GlobalAcc - LastGlobalAcc) * Weight).
+
+drip_user(Balance, ResourceAcc, LastResourceAcc, UserQty) ->
+    Balance + ((ResourceAcc - LastResourceAcc) * UserQty).
+
+cascade_drip_test() ->
+    % Initial state.
+    UserBalance0 = 0,
+    UserQty0 = 1,
+    ResourceWeight0 = 1,
+    ResourceAcc0 = 0,
+    ResourceLastGlobalAcc0 = 0,
+    GlobalAcc0 = 0,
+    GlobalToMint0 = 50,
+    GlobalTWU0 = 1,
+    % ~~~~~~~~~~~~~ Epoch 1 ~~~~~~~~~~~~~
+    % Drip the global.
+    GlobalAcc1 = drip_global(GlobalAcc0, GlobalToMint0, GlobalTWU0),
+    % Drip the resource.
+    ResourceAcc1 = drip_resource(ResourceAcc0, GlobalAcc1, ResourceLastGlobalAcc0, ResourceWeight0),
+    % Drip the user.
+    UserBalance1 = drip_user(UserBalance0, ResourceAcc1, ResourceAcc0, UserQty0),
+    ?event({results,
+        {global_accumulator, GlobalAcc1},
+        {resource_accumulator, ResourceAcc1},
+        {user_balance, UserBalance1}
+    }),
+    % ~~~~~~~~~~~~~ Epoch 2 ~~~~~~~~~~~~~
+    % Set changed parameters.
+    GlobalToMint1 = 25,
+    GlobalTWU1 = 10,
+    ResourceWeight1 = 10,
+    UserQty1 = 1,
+    % Drip the global.
+    GlobalAcc2 = drip_global(GlobalAcc1, GlobalToMint1, GlobalTWU1),
+    % Drip the resource.
+    ResourceAcc2 = drip_resource(ResourceAcc1, GlobalAcc2, GlobalAcc1, ResourceWeight1),
+    % Drip the user.
+    UserBalance2 = drip_user(UserBalance1, ResourceAcc2, ResourceAcc1, UserQty1),
+    ?event({results,
+        {global_accumulator, GlobalAcc2},
+        {resource_accumulator, ResourceAcc2},
+        {user_balance, UserBalance2}
+    }),
+    ok.
+
 time_weighted_average_test() ->
     T0 = 0,
     Acc0 = 100,
