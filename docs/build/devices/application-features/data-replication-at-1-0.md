@@ -2,7 +2,7 @@
 
 ## Overview
 
-The [`~copycat@1.0`](./source-code/dev_copycat.md) device replicates data from external sources into HyperBEAM node caches. It fetches messages from GraphQL endpoints and Arweave nodes, enabling offline-first applications through local data caching.
+The [`~copycat@1.0`](../source-code/dev_copycat.md) device replicates data from external sources into HyperBEAM node caches. It fetches messages from GraphQL endpoints and Arweave nodes, enabling offline-first applications through local data caching.
 
 ## Core Concept: Data Ingestion
 
@@ -124,8 +124,8 @@ Applications using copycat load faster and work offline. Once data replicates to
 
 ## See Also
 
-- [`~query@1.0`](./source-code/dev_query.md) - For querying replicated data
-- [`~cache@1.0`](./source-code/dev_cache.md) - Storage target for replicated data
-- [`~arweave@2.9-pre`](./source-code/dev_arweave.md) - Arweave node communication
+- [`~query@1.0`](../source-code/dev_query.md) - For querying replicated data
+- [`~cache@1.0`](../source-code/dev_cache.md) - Storage target for replicated data
+- [`~arweave@2.9-pre`](../source-code/dev_arweave.md) - Arweave node communication
 
-[copycat module](./source-code/dev_copycat.md)
+[copycat module](../source-code/dev_copycat.md)

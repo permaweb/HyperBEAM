@@ -21,25 +21,25 @@ Versioning indicates the specific interface and behavior of the device. Changes 
 
 HyperBEAM includes many preloaded devices that provide core functionality. Some key examples include:
 
-*   [`~meta@1.0`](./meta-at-1-0.md): Configures the node itself (hardware specs, supported devices, payment info).
-*   [`~process@1.0`](./process-at-1-0.md): Manages persistent, shared computational states (like traditional smart contracts, but more flexible).
-*   [`~scheduler@1.0`](./scheduler-at-1-0.md): Handles the ordering and execution of messages within a process.
-*   [`~wasm64@1.0`](./wasm64-at-1-0.md): Executes WebAssembly (WASM) code, allowing for complex computations written in languages like Rust, C++, etc.
-*   [`~lua@5.3a`](./lua-at-5-3a.md): Executes Lua scripts.
-*   [`~relay@1.0`](./relay-at-1-0.md): Forwards messages between AO nodes or to external HTTP endpoints.
-*   [`~json@1.0`](./json-at-1-0.md): Provides access to JSON data structures.
-*   [`~message@1.0`](./message-at-1-0.md): Manages message state and processing.
-*   [**Authentication Ecosystem**](./auth-ecosystem-at-1-0.md): Comprehensive wallet-less authentication (`~auth-hook@1.0`, `~secret@1.0`, `~cookie@1.0`, `~http-auth@1.0`).
-*   [**Data Discovery Engine**](./data-discovery-at-1-0.md): Advanced message search and query capabilities (`~query@1.0`).
-*   [**Data Replication Engine**](./data-replication-at-1-0.md): External data ingestion and synchronization (`~copycat@1.0`).
+*   [`~meta@1.0`](./foundational/meta-at-1-0.md): Configures the node itself (hardware specs, supported devices, payment info).
+*   [`~process@1.0`](./foundational/process-at-1-0.md): Manages persistent, shared computational states (like traditional smart contracts, but more flexible).
+*   [`~scheduler@1.0`](./foundational/scheduler-at-1-0.md): Handles the ordering and execution of messages within a process.
+*   [`~wasm64@1.0`](./foundational/wasm64-at-1-0.md): Executes WebAssembly (WASM) code, allowing for complex computations written in languages like Rust, C++, etc.
+*   [`~lua@5.3a`](./foundational/lua-at-5-3a.md): Executes Lua scripts.
+*   [`~relay@1.0`](./foundational/relay-at-1-0.md): Forwards messages between AO nodes or to external HTTP endpoints.
+*   [`~json@1.0`](./foundational/json-at-1-0.md): Provides access to JSON data structures.
+*   [`~message@1.0`](./foundational/message-at-1-0.md): Manages message state and processing.
+*   [**Authentication Ecosystem**](./application-features/auth-ecosystem-at-1-0.md): Comprehensive wallet-less authentication (`~auth-hook@1.0`, `~secret@1.0`, `~cookie@1.0`, `~http-auth@1.0`).
+*   [**Data Discovery Engine**](./application-features/data-discovery-at-1-0.md): Advanced message search and query capabilities (`~query@1.0`).
+*   [**Data Replication Engine**](./application-features/data-replication-at-1-0.md): External data ingestion and synchronization (`~copycat@1.0`).
 *   [`~patch@1.0`](https://cookbook_ao.arweave.net/guides/migrating-to-hyperbeam/exposing-process-state.html): Applies state updates directly to a process, often used for migrating or managing process data.
 
 ## Beyond the Basics
 
 Devices aren't limited to just computation or state management. They can represent more abstract concepts:
 
-*   **Security & Authentication Devices** ([`~snp@1.0`](./source-code/dev_snp.md), [`dev_codec_httpsig`](./source-code/dev_codec_httpsig.md), [**Authentication Ecosystem**](./auth-ecosystem-at-1-0.md)): Handle tasks related to Trusted Execution Environments (TEEs), message signing, wallet-less authentication, and session management, adding layers of security and verification.
-*   **Data Management Devices** ([**Data Discovery Engine**](./data-discovery-at-1-0.md), [**Data Replication Engine**](./data-replication-at-1-0.md)): Provide comprehensive data ingestion, search, and discovery capabilities for building data-rich applications with external source integration.
+*   **Security & Authentication Devices** ([`~snp@1.0`](./source-code/dev_snp.md), [`dev_codec_httpsig`](./source-code/dev_codec_httpsig.md), [**Authentication Ecosystem**](./application-features/auth-ecosystem-at-1-0.md)): Handle tasks related to Trusted Execution Environments (TEEs), message signing, wallet-less authentication, and session management, adding layers of security and verification.
+*   **Data Management Devices** ([**Data Discovery Engine**](./application-features/data-discovery-at-1-0.md), [**Data Replication Engine**](./application-features/data-replication-at-1-0.md)): Provide comprehensive data ingestion, search, and discovery capabilities for building data-rich applications with external source integration.
 *   **Payment/Access Control Devices** ([`~p4@1.0`](./source-code/dev_p4.md), [`~faff@1.0`](./source-code/dev_faff.md)): Manage metering, billing, or access control for node services.
 *   **Workflow/Utility Devices** ([`dev_cron`](./source-code/dev_cron.md), [`dev_stack`](./source-code/dev_stack.md), [`dev_monitor`](./source-code/dev_monitor.md)): Coordinate complex execution flows, schedule tasks, or monitor process activity.
 
@@ -55,7 +55,7 @@ Devices are typically invoked via GET requests. The path specifies which Device 
 /~relay@1.0/call?method=GET&path=https://example.com
 ```
 
-The specific functions or 'keys' available for each Device are documented individually. See the [Devices section](./index.md) for details on specific built-in devices. 
+The specific functions or 'keys' available for each Device are documented individually. See the [Devices section](./source-code/index.md) for details on specific built-in devices. 
 
 ## The Potential of Devices
 
