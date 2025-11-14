@@ -5,19 +5,7 @@
 %%% 
 %%% h/t to MakerDAO's DSR and MCD rate accumulation system for some inspiration.
 %%% 
-%%% The core minting model is this:
-%%% 1. Maintain a list of all balances for `resources` that lead to the minting
-%%%    of tokens.
-%%% 2. With each balance, store the `chi` factor at the time of creation.
-%%% 3. When the `drip` function is called, for each time-step since the last `drip`,
-%%%    calculate the yield that would have accrued to a balance holding one unit
-%%%    of the resource at that time: `rate(TimeStep) * (1/sum(deposits))`.
-%%% 4. When balances are requested or utilized, calculate the accrued yield by
-%%%    subtracting the current `chi` factor and the initial one. Multiply this
-%%%    by the number of units in the deposit. Count this with the existing reward
-%%%    balance: `total-balance = (chi - chi0) * deposit + existing-balance`.
-%%% 5. When the balance or deposit is modified in any way, first accrue the yield
-%%%    to the existing balance. Then perform the operation.
+%%% The core minting model is described in the `dev_pot_math` moduledoc.
 %%% 
 %%% This device will support delegating resources to other addresses, allowing for
 %%% mechanisms like yield-swaps etc to be created downstream. Each delegation
@@ -33,24 +21,6 @@
 %%% their own mints using the same `pot` functionality as the parent, depositors
 %%% in the original process can earn their yield in the form of `child` mints.
 %%% Each mint can operate asynchronously and in real-time.
-%%% 
-%%% The structure of the state is as follows:
-%%% 
-%%% /chi: Global meta-chi accumulator M used to derive effective per-resource chi.
-%%% /resources/ID/weight: The weight of the resource in the minting process.
-%%% /resources/ID/total-deposits: The total quantity of units deposited of the
-%%% resource.
-%%% /resources/ID/deposits/ADDR/quantity: The quantity of the resource deposited
-%%% by a specific address.
-%%% /resources/ID/deposits/ADDR/chi0: The initial chi factor at the time of the
-%%% deposit.
-%%% /balances/ADDR: The current minted asset balance of an address.
-%%% /minted: The total number of units minted.
-%%% /mint-cap: The maximum number of units that can be minted.
-%%% /mint-prop: The proportion of the mint-cap that is minted per time-step.
-%%% /last-drip: The last time the drip function was called.
-%%% /t: The current time-step.
-%%% /tw: The total weighted deposits (sum over resources of weight * total-deposits).
 %%% 
 %%% TODO:
 %%% - Add `secure-set` (set guarded by address) for resource-weights and 
@@ -72,19 +42,18 @@ drip(State, Req, Opts) ->
             {ok, TReq} -> State#{ <<"t">> => TReq };
             _ -> State#{ <<"t">> => hb_maps:get(<<"t">>, State, 0) + 1 }
         end,
-    drip(StateWithNewTime, Opts).
+    drip_global(StateWithNewTime, Opts).
 
-drip(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _Opts) when T =:= Last -> S;
-drip(S = #{
+drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _Opts) when T =:= Last -> S;
+drip_global(S = #{
         <<"t">> := T,
         <<"mint-cap">> := Max,
         <<"mint-prop">> := Proportion
     }, Opts) ->
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
-    TotalWeightedUnits =
-        hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
-    AlreadyMintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts),
+    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
+    GlobalAcc = hb_maps:get(<<"global-reward-accumulator">>, S, 0, Opts),
     ToMint =
         dev_pot_math:units_minted_between(
             AlreadyMinted,
@@ -93,51 +62,42 @@ drip(S = #{
             LastT,
             T
         ),
-    MintedPerWeightedUnit =
-        dev_pot_math:accumulate_reward_per_weighted_unit(
-            ToMint,
-            TotalWeightedUnits,
-            AlreadyMintedPerWeightedUnit
-        ),
+    NewGlobalAcc = dev_pot_math:drip_global(GlobalAcc, ToMint, TotalWeightedUnits),
     ?event(
         {minting,
             {to_mint, ToMint},
             {total_weighted_units, TotalWeightedUnits},
-            {new_accumulated_reward_per_weighted_unit, MintedPerWeightedUnit},
-            {newly_minted_per_weighted_unit,
-                MintedPerWeightedUnit - AlreadyMintedPerWeightedUnit}
+            {old_global_reward_accumulator, GlobalAcc},
+            {new_global_reward_accumulator, NewGlobalAcc}
         }),
     S#{
-        <<"minted-per-weighted-unit">> => MintedPerWeightedUnit,
+        <<"global-reward-accumulator">> => NewGlobalAcc,
         <<"last-drip">> => T,
         <<"minted">> => AlreadyMinted + ToMint
     }.
 
 drip_resource(ResourceID, S, Opts) ->
-    % Get the current time and the resource.
-    T = hb_maps:get(<<"t">>, S, 0, Opts),
+    % Get the resource.
     Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S, #{}, Opts),
-    % Accumulate the weight-time since the last resource-specific drip.
+    % Accumulate the Reward*CurrentWeight since the last global drip.
     OldAccResourceWeight =
-        hb_maps:get(<<"accumulated-weight">>, Resource, 0, Opts),
+        hb_maps:get(<<"resource-reward-accumulator">>, Resource, 0, Opts),
     Weight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
-    LastWeightTimeDrip = hb_maps:get(<<"last-weight-time-drip">>, Resource, 0, Opts),
-    TimeDelta = T - LastWeightTimeDrip,
-    NewAccResourceWeight =
-        dev_pot_math:accumulate_resource_weight(
-            LastWeightTimeDrip,
-            T,
-            Weight,
-            OldAccResourceWeight
+    GlobalAcc = hb_maps:get(<<"global-reward-accumulator">>, S, 0, Opts),
+    LastGlobalAcc = hb_maps:get(<<"last-global-reward-accumulator">>, Resource, 0, Opts),
+    NewResourceAcc =
+        dev_pot_math:drip_resource(
+            OldAccResourceWeight,
+            GlobalAcc,
+            LastGlobalAcc,
+            Weight
         ),
     ?event(
         {drip_resource,
             {resource_id, ResourceID},
-            {last_resource_drip, LastWeightTimeDrip},
             {weight, Weight},
-            {accumulated_resource_weight, OldAccResourceWeight},
-            {time_delta, TimeDelta},
-            {new_accumulated_resource_weight, NewAccResourceWeight}
+            {old_resource_reward_accumulator, OldAccResourceWeight},
+            {new_resource_reward_accumulator, NewResourceAcc}
         }
     ),
     hb_ao:set(
@@ -146,8 +106,8 @@ drip_resource(ResourceID, S, Opts) ->
             <<"resources">> => #{
                 ResourceID =>
                     Resource#{
-                        <<"accumulated-weight">> => NewAccResourceWeight,
-                        <<"last-weight-time-drip">> => T
+                        <<"resource-reward-accumulator">> => NewResourceAcc,
+                        <<"last-global-reward-accumulator">> => GlobalAcc
                     }
             }
         },
@@ -175,71 +135,34 @@ unclaimed_yield(Addr, S, Opts) ->
         )
     ).
 unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
-    GlobalDrippedS = drip(UndrippedS, Opts),
+    GlobalDrippedS = drip_global(UndrippedS, Opts),
     S = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    MintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts),
     Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
-    AccumulatedWeightTime = hb_maps:get(<<"accumulated-weight">>, Res, 0, Opts),
+    ResourceAcc = hb_maps:get(<<"resource-reward-accumulator">>, Res, 0, Opts),
     Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
     case hb_maps:find(Addr, Deposits) of
         error -> 0;
         {ok, #{
                 <<"quantity">> := Qty,
-                <<"minted-per-weighted-unit-at-deposit">> :=
-                    MintedPerWeightedUnitAtDeposit,
-                <<"accumulated-weight-at-deposit">> :=
-                    AccumulatedWeightTimeAtDeposit,
-                <<"time-at-deposit">> := DepositTime
+                <<"last-resource-reward-accumulator">> := LastResourceAcc
             }} ->
             ?no_prod("Remove all floating point arithmetic."),
-            T = hb_maps:get(<<"t">>, S, 0, Opts),
-            case T - DepositTime of
-                X when X =< 0 -> 0;
-                _ ->
-                    UserResourceWeight =
-                        dev_pot_math:user_resource_weight(
-                            DepositTime,
-                            T,
-                            AccumulatedWeightTimeAtDeposit,
-                            AccumulatedWeightTime
-                        ),
-                    UnclaimedYield =
-                        dev_pot_math:reward_between(
-                            DepositTime,
-                            T,
-                            MintedPerWeightedUnitAtDeposit,
-                            MintedPerWeightedUnit,
-                            UserResourceWeight,
-                            Qty
-                        ),
-                    ?event(
-                        {unclaimed_yield,
-                            {resource_id, ResourceID},
-                            {addr, Addr},
-                            {minted_per_weighted_unit_at_deposit, MintedPerWeightedUnitAtDeposit},
-                            {minted_per_weighted_unit, MintedPerWeightedUnit},
-                            {user_resource_weight, UserResourceWeight},
-                            {qty, Qty},
-                            {unclaimed_yield, UnclaimedYield}
-                        }),
-                    UnclaimedYield
-            end
+            dev_pot_math:drip_user(ResourceAcc, LastResourceAcc, Qty)
     end.
 
 modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
     % Drip the global state and the resource, then extract necessary components.
-    GlobalDrippedS = drip(S0, Opts),
+    GlobalDrippedS = drip_global(S0, Opts),
     DrippedS = #{
         <<"balances">> := Balances,
-        <<"resources">> := Resources,
-        <<"t">> := T
+        <<"resources">> := Resources
     } = drip_resource(ResourceID, GlobalDrippedS, Opts),
     ExistingDeposit = deposit(Addr, ResourceID, DrippedS),
     BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
     NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
-    AccumulatedWeightTime =
+    ResourceAcc =
         hb_ao:get(
-            <<ResourceID/binary, "/accumulated-weight">>,
+            <<ResourceID/binary, "/resource-reward-accumulator">>,
             Resources,
             0,
             Opts
@@ -263,16 +186,8 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
                                 Addr =>
                                     #{
                                         <<"quantity">> => ExistingDeposit + Amount,
-                                        <<"minted-per-weighted-unit-at-deposit">> =>
-                                            hb_maps:get(
-                                                <<"minted-per-weighted-unit">>,
-                                                DrippedS,
-                                                0,
-                                                Opts
-                                            ),
-                                        <<"accumulated-weight-at-deposit">> =>
-                                            AccumulatedWeightTime,
-                                        <<"time-at-deposit">> => T
+                                        <<"last-resource-reward-accumulator">> =>
+                                            ResourceAcc
                                     }
                             }
                     }
@@ -305,7 +220,7 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
 
 set_weight(ResourceID, Weight, S, Opts) ->
     % Run the global drip to ensure the state is up to date.
-    S0 = drip(S, Opts),
+    S0 = drip_global(S, Opts),
     S1 = drip_resource(ResourceID, S0, Opts),
     % Calculate the new total deposited units for the weighted global counter
     % (`/total-weighted-units').

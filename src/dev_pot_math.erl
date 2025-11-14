@@ -1,23 +1,28 @@
 %%% @doc Math functions for the dev_pot module. Expresses a model as follows:
 %%% 
-%%% Accumulators.
-%%%     AccResourceW = AccResourceWlast + ((Tn - Tlast) * ResourceW)
-%%%     AccRewardPerWU = AccRewardPerWUlast + (ToMint / GlobalWU)
+%%% Initialization:
+%%%     Global:   Acc = 0
+%%%     Resource: LastGlobal = Global.Acc,
+%%%               Acc = 0
+%%%     User: User.Qty,
+%%%           User.LastResource = Resource.Acc,
+%%%           Global.TWU += User.Qty * Resource.weight
+%%% Drip
+%%%     Global: Acc += ToMint / Global.TWU
+%%%     Resource: Acc += (Global.Acc - LastGlobal) * Weight, LastGlobal = Global.Acc
+%%%     User: Balance += (Resource.Acc - User.LastResource) * User.Qty
 %%% 
-%%% Reward calculation.
-%%%     AccumulatedUserResourceWeight = AccResourceWn - AccResourceWstart
-%%%     DepositTime = Tn - Tlast
-%%%     IssuedDuringDeposit = AccRewardPerWU - AccRewardPerWUstart
-%%%     UserWU = UserQty * (AccumulatedUserResourceWeight / DepositTime)
-%%%     UserReward = IssuedDuringDeposit * UserWU
-%%% 
+%%% Change Weight:
+%%%     1. Drip global.
+%%%     2. Drip resource.
+%%%     3. Resource.weight = NewWeight
 -module(dev_pot_math).
 -export([
-    accumulate_resource_weight/4,
-    accumulate_reward_per_weighted_unit/3,
-    user_resource_weight/4,
-    units_minted_between/5,
-    reward_between/6
+    drip_global/3,
+    drip_resource/4,
+    drip_user/3,
+    drip_user/4,
+    units_minted_between/5
 ]).
 
 units_minted_between(Minted, Max, Proportion, LastT, T) ->
@@ -25,22 +30,13 @@ units_minted_between(Minted, Max, Proportion, LastT, T) ->
     Remaining = Max - Minted,
     Remaining * (1 - math:pow(1 - Proportion, Steps)).
 
-accumulate_resource_weight(PriorTime, Time, CurrentWeight, CurrentAccumulator) ->
-    Steps = Time - PriorTime,
-    CurrentAccumulator + (Steps * CurrentWeight).
+drip_global(Acc, ToMint, TotalWeightedUnits) ->
+    Acc + (ToMint / TotalWeightedUnits).
 
-accumulate_reward_per_weighted_unit(ToMint, TotalWeightedUnits, CurrentAccumulator) ->
-    CurrentAccumulator + (ToMint / TotalWeightedUnits).
+drip_resource(ResourceAcc, GlobalAcc, LastGlobalAcc, Weight) ->
+    ResourceAcc + ((GlobalAcc - LastGlobalAcc) * Weight).
 
-user_resource_weight(_PriorTime, _Time, StartAccumulator, EndAccumulator) ->
-    EndAccumulator - StartAccumulator.
-
-reward_between(PriorTime, Time, MintedPerWeightedUnit0, MintedPerWeightedUnit, UserResourceWeight, Qty) ->
-    % Calculate the time period.
-    Steps = Time - PriorTime,
-    % Calculate the total reward given per weighted unit over the time period.
-    MintedPerWeightedUnitDelta = MintedPerWeightedUnit - MintedPerWeightedUnit0,
-    % Calculate total weighted units of the deposit over the time period.
-    UserWeightedUnits = Qty * (UserResourceWeight / Steps),
-    % Calculate the total reward given for the deposit over the time period.
-    UserWeightedUnits * MintedPerWeightedUnitDelta.
+drip_user(ResourceAcc, LastResourceAcc, UserQty) ->
+    drip_user(0, ResourceAcc, LastResourceAcc, UserQty).
+drip_user(Balance, ResourceAcc, LastResourceAcc, UserQty) ->
+    Balance + ((ResourceAcc - LastResourceAcc) * UserQty).
