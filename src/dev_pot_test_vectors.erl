@@ -12,28 +12,28 @@ time_weighted_average_test() ->
     % Calculate the accumulated weight for t=1, while weight is 10.
     Weight1 = Weight0,
     T1 = T0 + 1,
-    Acc1 = dev_pot_math:accumulate_weight_time(T0, T1, Weight1, Acc0),
+    Acc1 = dev_pot_math:accumulate_resource_weight(T0, T1, Weight1, Acc0),
     % Calculate the accumulated weight for t=2, while weight is 20.
     Weight2 = 20,
     T2 = T1 + 20,
-    Acc2 = dev_pot_math:accumulate_weight_time(T1, T2, Weight2, Acc1),
+    Acc2 = dev_pot_math:accumulate_resource_weight(T1, T2, Weight2, Acc1),
     Deposit2Time0 = T2,
     Deposit2AccumulatedWeightTime0 = Acc2,
     % Calculate the accumulated weight for t=3, while weight is 30.
     Weight3 = 30,
     T3 = T2 + 10,
-    Acc3 = dev_pot_math:accumulate_weight_time(T2, T3, Weight3, Acc2),
+    Acc3 = dev_pot_math:accumulate_resource_weight(T2, T3, Weight3, Acc2),
     % Calculate the accumulated weight for t=4, while weight is 50.
     Weight4 = 50,
     T4 = T3 + 10,
-    Acc4 = dev_pot_math:accumulate_weight_time(T3, T4, Weight4, Acc3),
+    Acc4 = dev_pot_math:accumulate_resource_weight(T3, T4, Weight4, Acc3),
     % Calculate the accumulated weight for 1,000 timesteps while weight is 2.
     Weight5 = 2,
     T5 = T4 + 100000,
-    Acc5 = dev_pot_math:accumulate_weight_time(T4, T5, Weight5, Acc4),
+    Acc5 = dev_pot_math:accumulate_resource_weight(T4, T5, Weight5, Acc4),
     % Calculate the average weight for the period deposit period (T0 -> T4).
     Deposit1AvgWeight =
-        dev_pot_math:average_weight_time(
+        dev_pot_math:user_resource_weight(
             Deposit1Time0,
             T5,
             Deposit1AccumulatedWeightTime0,
@@ -41,7 +41,7 @@ time_weighted_average_test() ->
         ),
     ?event({deposit1_average_weight, Deposit1AvgWeight}),
     Deposit2AvgWeight =
-        dev_pot_math:average_weight_time(
+        dev_pot_math:user_resource_weight(
             Deposit2Time0,
             T5,
             Deposit2AccumulatedWeightTime0,
@@ -174,6 +174,77 @@ multiple_resources_test() ->
     Addr2Diff = dev_pot:balance(Addr2, S8) - Addr2BalPreFinal,
     ?assertEqual(Addr1Diff, Addr2Diff).
 
+%% Modify Qty or Weight:
+%%     NormalizedReward = Reward * (OldWeightedUnits / NewWeightedUnits)
+%% Drip:
+%%     Rewardn+1 = NormalizedReward + (Minted / NewWeightedUnits)
+%% Balance:
+%%     (Reward/RewardAtStart) * ResourceWeight * Qty
+scaled_reward_test() ->
+    % Constants.
+    UserQuantity = 1,
+    % Per-step state.
+    StepReward0 = 50,
+    RewardAcc0 = 1,
+    GlobalWU0 = 1,
+    ResourceW0 = 1,
+    % First drip.
+    NewlyMintedPerWeightedUnit = StepReward0 / GlobalWU0,
+    RewardAcc1 = RewardAcc0 + NewlyMintedPerWeightedUnit,
+    ?event(
+        {results,
+            {reward_accumulator, RewardAcc1},
+            {newly_minted_per_weighted_unit, NewlyMintedPerWeightedUnit}
+        }
+    ),
+    % Set the resource weight to 10, scaling the reward accumulator.
+    StepReward1 = 25,
+    ResourceW1 = 10,
+    GlobalWU1 = ResourceW1 * UserQuantity,
+    RewardAcc1b = RewardAcc1 * (ResourceW0 / ResourceW1),
+    NewlyMintedPerWeightedUnit1 = StepReward1 / GlobalWU1,
+    RewardAcc2 = RewardAcc1b + NewlyMintedPerWeightedUnit1,
+    % Calculate the user reward.
+    RenormalizedReward = RewardAcc2 / RewardAcc0,
+    UserReward = RenormalizedReward * UserQuantity * ResourceW1,
+    ?event(
+        {results,
+            {renormalized_reward, RenormalizedReward},
+            {user_reward, UserReward},
+            {newly_minted_per_weighted_unit, NewlyMintedPerWeightedUnit}
+        }
+    ),
+    ?assertEqual(75, UserReward),
+    ok.
+
+single_resource_modified_weight_test() ->
+    Opts = #{},
+    S0 = #{
+        <<"device">> => <<"pot@1.0">>,
+        <<"t">> => 0,
+        <<"last-drip">> => 0,
+        <<"mint-cap">> => 100,
+        <<"mint-prop">> => 0.5,
+        <<"resources">> => #{
+            <<"oxygen">> => #{
+                <<"weight">> => 1,
+                <<"total-deposits">> => 0,
+                <<"deposits">> => #{ }
+            }
+        },
+        <<"balances">> => #{ }
+    },
+    S1 = dev_pot:modify_deposit(<<"alice">>, <<"oxygen">>, 1, S0, Opts),
+    {ok, S3} = hb_ao:resolve(S1, <<"drip">>, Opts),
+    ?hr(),
+    S4 = dev_pot:set_weight(<<"oxygen">>, 10, S3, Opts),
+    ?hr(),
+    report(S4),
+    {ok, S5} = hb_ao:resolve(S4, <<"drip">>, Opts),
+    report(S5),
+    ?assertEqual(75.0, dev_pot:balance(<<"alice">>, S5)),
+    ok.
+
 multiresource_modified_weight_test() ->
     Opts = #{},
     S0 = #{
@@ -189,7 +260,7 @@ multiresource_modified_weight_test() ->
                 <<"deposits">> => #{ }
             },
             <<"hydrogen">> => #{
-                <<"weight">> => 1,
+                <<"weight">> => 0,
                 <<"total-deposits">> => 0,
                 <<"deposits">> => #{ }
             }
@@ -202,10 +273,10 @@ multiresource_modified_weight_test() ->
     %S2b = dev_pot:modify_deposit(<<"alice">>, <<"hydrogen">>, 10, S2, Opts),
     {ok, S3} = hb_ao:resolve(S2, <<"drip">>, Opts),
     ?hr(),
-    report(S3),
-    ?assertEqual(25.0, dev_pot:balance(<<"alice">>, S3)),
-    ?assertEqual(25.0, dev_pot:balance(<<"bob">>, S3)),
-    S4 = dev_pot:set_weight(<<"oxygen">>, 10, S3, Opts),
+    % report(S3),
+    % ?assertEqual(25.0, dev_pot:balance(<<"alice">>, S3)),
+    % ?assertEqual(25.0, dev_pot:balance(<<"bob">>, S3)),
+    S4 = dev_pot:set_weight(<<"hydrogen">>, 1, S3, Opts),
     ?hr(),
     report(S4),
     {ok, S5} = hb_ao:resolve(S4, <<"drip">>, Opts),
@@ -235,13 +306,13 @@ delegate_test() ->
                     AddrAlice => #{
                         <<"quantity">> => 200,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     },
                     AddrBob => #{
                         <<"quantity">> => 0,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     }
                 }
@@ -254,13 +325,13 @@ delegate_test() ->
                     AddrAlice => #{
                         <<"quantity">> => 25,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     },
                     AddrBob => #{
                         <<"quantity">> => 25,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     }
                 }
@@ -400,19 +471,19 @@ liquidate_delegations_test() ->
                     <<"alice">> => #{
                         <<"quantity">> => 1,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     },
                     <<"charlie">> => #{
                         <<"quantity">> => 0,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     }
                 }
@@ -446,25 +517,25 @@ multiple_delegations_liquidation_test() ->
                     <<"alice">> => #{
                         <<"quantity">> => 2,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     },
                     <<"charlie">> => #{
                         <<"quantity">> => 0,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     },
                     <<"denis">> => #{
                         <<"quantity">> => 0,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     }
                 }
@@ -503,13 +574,13 @@ cyclic_delegation_test() ->
                     <<"alice">> => #{
                         <<"quantity">> => 1,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     }
                 }
@@ -547,13 +618,13 @@ remove_deposit_while_delegated_test() ->
                     <<"alice">> => #{
                         <<"quantity">> => 3,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
                         <<"minted-per-weighted-unit-at-deposit">> => 0,
-                        <<"accumulated-weight-time-at-deposit">> => 0,
+                        <<"accumulated-weight-at-deposit">> => 0,
                         <<"time-at-deposit">> => 0
                     }
                 }

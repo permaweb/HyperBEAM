@@ -118,26 +118,26 @@ drip_resource(ResourceID, S, Opts) ->
     T = hb_maps:get(<<"t">>, S, 0, Opts),
     Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S, #{}, Opts),
     % Accumulate the weight-time since the last resource-specific drip.
-    OldAccumulatedWeightTime =
-        hb_maps:get(<<"accumulated-weight-time">>, Resource, 0, Opts),
+    OldAccResourceWeight =
+        hb_maps:get(<<"accumulated-weight">>, Resource, 0, Opts),
     Weight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
     LastWeightTimeDrip = hb_maps:get(<<"last-weight-time-drip">>, Resource, 0, Opts),
     TimeDelta = T - LastWeightTimeDrip,
-    NewAccumulatedWeightTime =
-        dev_pot_math:accumulate_weight_time(
+    NewAccResourceWeight =
+        dev_pot_math:accumulate_resource_weight(
             LastWeightTimeDrip,
             T,
             Weight,
-            OldAccumulatedWeightTime
+            OldAccResourceWeight
         ),
     ?event(
         {drip_resource,
             {resource_id, ResourceID},
             {last_resource_drip, LastWeightTimeDrip},
-            {old_accumulated_weight_time, OldAccumulatedWeightTime},
             {weight, Weight},
+            {accumulated_resource_weight, OldAccResourceWeight},
             {time_delta, TimeDelta},
-            {new_accumulated_weight_time, NewAccumulatedWeightTime}
+            {new_accumulated_resource_weight, NewAccResourceWeight}
         }
     ),
     hb_ao:set(
@@ -146,7 +146,7 @@ drip_resource(ResourceID, S, Opts) ->
             <<"resources">> => #{
                 ResourceID =>
                     Resource#{
-                        <<"accumulated-weight-time">> => NewAccumulatedWeightTime,
+                        <<"accumulated-weight">> => NewAccResourceWeight,
                         <<"last-weight-time-drip">> => T
                     }
             }
@@ -179,7 +179,7 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     S = drip_resource(ResourceID, GlobalDrippedS, Opts),
     MintedPerWeightedUnit = hb_maps:get(<<"minted-per-weighted-unit">>, S, 0, Opts),
     Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
-    AccumulatedWeightTime = hb_maps:get(<<"accumulated-weight-time">>, Res, 0, Opts),
+    AccumulatedWeightTime = hb_maps:get(<<"accumulated-weight">>, Res, 0, Opts),
     Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
     case hb_maps:find(Addr, Deposits) of
         error -> 0;
@@ -187,7 +187,7 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
                 <<"quantity">> := Qty,
                 <<"minted-per-weighted-unit-at-deposit">> :=
                     MintedPerWeightedUnitAtDeposit,
-                <<"accumulated-weight-time-at-deposit">> :=
+                <<"accumulated-weight-at-deposit">> :=
                     AccumulatedWeightTimeAtDeposit,
                 <<"time-at-deposit">> := DepositTime
             }} ->
@@ -196,8 +196,8 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
             case T - DepositTime of
                 X when X =< 0 -> 0;
                 _ ->
-                    AvgWeightDuringDeposit =
-                        dev_pot_math:average_weight_time(
+                    UserResourceWeight =
+                        dev_pot_math:user_resource_weight(
                             DepositTime,
                             T,
                             AccumulatedWeightTimeAtDeposit,
@@ -205,9 +205,11 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
                         ),
                     UnclaimedYield =
                         dev_pot_math:reward_between(
+                            DepositTime,
+                            T,
                             MintedPerWeightedUnitAtDeposit,
                             MintedPerWeightedUnit,
-                            AvgWeightDuringDeposit,
+                            UserResourceWeight,
                             Qty
                         ),
                     ?event(
@@ -216,7 +218,7 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
                             {addr, Addr},
                             {minted_per_weighted_unit_at_deposit, MintedPerWeightedUnitAtDeposit},
                             {minted_per_weighted_unit, MintedPerWeightedUnit},
-                            {avg_weight_during_deposit, AvgWeightDuringDeposit},
+                            {user_resource_weight, UserResourceWeight},
                             {qty, Qty},
                             {unclaimed_yield, UnclaimedYield}
                         }),
@@ -237,7 +239,7 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
     NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
     AccumulatedWeightTime =
         hb_ao:get(
-            <<ResourceID/binary, "/accumulated-weight-time">>,
+            <<ResourceID/binary, "/accumulated-weight">>,
             Resources,
             0,
             Opts
@@ -268,7 +270,7 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
                                                 0,
                                                 Opts
                                             ),
-                                        <<"accumulated-weight-time-at-deposit">> =>
+                                        <<"accumulated-weight-at-deposit">> =>
                                             AccumulatedWeightTime,
                                         <<"time-at-deposit">> => T
                                     }
