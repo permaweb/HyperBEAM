@@ -204,11 +204,11 @@ simple_delegation_test() ->
                 <<"deposits">> => #{ 
                     AddrAlice => #{
                         <<"quantity">> => 200,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     },
                     AddrBob => #{
                         <<"quantity">> => 0,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     }
                 }
             },
@@ -218,11 +218,11 @@ simple_delegation_test() ->
                 <<"deposits">> => #{
                     AddrAlice => #{
                         <<"quantity">> => 25,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     },
                     AddrBob => #{
                         <<"quantity">> => 25,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     }
                 }
             }
@@ -357,15 +357,15 @@ delegation_liquidation_test() ->
                 <<"deposits">> => #{ 
                     <<"alice">> => #{
                         <<"quantity">> => 1,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     },
                     <<"charlie">> => #{
                         <<"quantity">> => 0,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     }
                 }
             }
@@ -394,19 +394,19 @@ multiple_delegations_liquidation_test() ->
                 <<"deposits">> => #{ 
                     <<"alice">> => #{
                         <<"quantity">> => 2,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     },
                     <<"charlie">> => #{
                         <<"quantity">> => 0,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     },
                     <<"denis">> => #{
                         <<"quantity">> => 0,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     }
                 }
             }
@@ -440,11 +440,11 @@ cyclic_delegations_test() ->
                 <<"deposits">> => #{ 
                     <<"alice">> => #{
                         <<"quantity">> => 1,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     }
                 }
             }
@@ -477,11 +477,11 @@ deposit_removal_while_delegated_test() ->
                 <<"deposits">> => #{ 
                     <<"alice">> => #{
                         <<"quantity">> => 3,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     },
                     <<"bob">> => #{
                         <<"quantity">> => 0,
-                        <<"last-resource-reward-accumulator">> => 0
+                        <<"last-resource-accumulator">> => 0
                     }
                 }
             }

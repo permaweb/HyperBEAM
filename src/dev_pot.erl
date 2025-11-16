@@ -61,7 +61,7 @@ drip_global(S = #{
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
-    GlobalAcc = hb_maps:get(<<"global-reward-accumulator">>, S, 0, Opts),
+    GlobalAcc = hb_maps:get(<<"accumulator">>, S, 0, Opts),
     ToMint =
         dev_pot_math:minted_between(
             AlreadyMinted,
@@ -75,11 +75,11 @@ drip_global(S = #{
         {minting,
             {to_mint, ToMint},
             {total_weighted_units, TotalWeightedUnits},
-            {old_global_reward_accumulator, GlobalAcc},
-            {new_global_reward_accumulator, NewGlobalAcc}
+            {old_global_accumulator, GlobalAcc},
+            {new_global_accumulator, NewGlobalAcc}
         }),
     S#{
-        <<"global-reward-accumulator">> => NewGlobalAcc,
+        <<"accumulator">> => NewGlobalAcc,
         <<"last-drip">> => T,
         <<"minted">> => AlreadyMinted + ToMint
     }.
@@ -89,14 +89,14 @@ drip_resource(ResourceID, S, Opts) ->
     % Get the resource.
     Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S, #{}, Opts),
     % Accumulate the Reward*CurrentWeight since the last global drip.
-    OldAccResourceWeight =
-        hb_maps:get(<<"resource-reward-accumulator">>, Resource, 0, Opts),
+    OldResAcc =
+        hb_maps:get(<<"accumulator">>, Resource, 0, Opts),
     Weight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
-    GlobalAcc = hb_maps:get(<<"global-reward-accumulator">>, S, 0, Opts),
-    LastGlobalAcc = hb_maps:get(<<"last-global-reward-accumulator">>, Resource, 0, Opts),
+    GlobalAcc = hb_maps:get(<<"accumulator">>, S, 0, Opts),
+    LastGlobalAcc = hb_maps:get(<<"last-global-accumulator">>, Resource, 0, Opts),
     NewResourceAcc =
         dev_pot_math:drip_resource(
-            OldAccResourceWeight,
+            OldResAcc,
             GlobalAcc,
             LastGlobalAcc,
             Weight
@@ -105,8 +105,9 @@ drip_resource(ResourceID, S, Opts) ->
         {drip_resource,
             {resource_id, ResourceID},
             {weight, Weight},
-            {old_resource_reward_accumulator, OldAccResourceWeight},
-            {new_resource_reward_accumulator, NewResourceAcc}
+            {global_accumulator, GlobalAcc},
+            {old_resource_accumulator, OldResAcc},
+            {new_resource_accumulator, NewResourceAcc}
         }
     ),
     hb_ao:set(
@@ -115,8 +116,8 @@ drip_resource(ResourceID, S, Opts) ->
             <<"resources">> => #{
                 ResourceID =>
                     Resource#{
-                        <<"resource-reward-accumulator">> => NewResourceAcc,
-                        <<"last-global-reward-accumulator">> => GlobalAcc
+                        <<"accumulator">> => NewResourceAcc,
+                        <<"last-global-accumulator">> => GlobalAcc
                     }
             }
         },
@@ -152,13 +153,13 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     GlobalDrippedS = drip_global(UndrippedS, Opts),
     S = drip_resource(ResourceID, GlobalDrippedS, Opts),
     Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
-    ResourceAcc = hb_maps:get(<<"resource-reward-accumulator">>, Res, 0, Opts),
+    ResourceAcc = hb_maps:get(<<"accumulator">>, Res, 0, Opts),
     Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
     case hb_maps:find(Addr, Deposits) of
         error -> 0;
         {ok, #{
                 <<"quantity">> := Qty,
-                <<"last-resource-reward-accumulator">> := LastResourceAcc
+                <<"last-resource-accumulator">> := LastResourceAcc
             }} ->
             ?no_prod("Remove all floating point arithmetic."),
             dev_pot_math:drip_user(ResourceAcc, LastResourceAcc, Qty)
@@ -177,7 +178,7 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
     NewBalance = BaseBalance + unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
     ResourceAcc =
         hb_ao:get(
-            <<ResourceID/binary, "/resource-reward-accumulator">>,
+            <<ResourceID/binary, "/accumulator">>,
             Resources,
             0,
             Opts
@@ -201,7 +202,7 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
                                 Addr =>
                                     #{
                                         <<"quantity">> => ExistingDeposit + Amount,
-                                        <<"last-resource-reward-accumulator">> =>
+                                        <<"last-resource-accumulator">> =>
                                             ResourceAcc
                                     }
                             }
@@ -424,7 +425,7 @@ send_delegation_notice(Addr, ResourceID, Amount, S, Opts) ->
     hb_ao:set(
         S,
         <<"results/outbox">>,
-        [DelegationNotice | Outbox],
+        [DelegationNotice|Outbox],
         Opts
     ).
 
