@@ -1,31 +1,43 @@
 %%% @doc Math functions for the dev_pot module. Expresses a model as follows:
-%%% 
+%%% ```
 %%% Initialization:
-%%%     Global:   Acc = 0
-%%%     Resource: LastGlobal = Global.Acc,
-%%%               Acc = 0
-%%%     User: User.Qty,
-%%%           User.LastResource = Resource.Acc,
-%%%           Global.TWU += User.Qty * Resource.weight
-%%% Drip
-%%%     Global: Acc += ToMint / Global.TWU
-%%%     Resource: Acc += (Global.Acc - LastGlobal) * Weight, LastGlobal = Global.Acc
-%%%     User: Balance += (Resource.Acc - User.LastResource) * User.Qty
+%%%   Global:     Acc = 0,
+%%%               TWU = 0.
+%%%   Resource:   Acc = 0,
+%%%               LastGlobal = Global.Acc.
+%%%   User: 	  Qty,
+%%%               LastResource = Resource.Acc,
+%%%               Global.TWU += Qty * Resource.Weight.
+%%%            
+%%% Drip:
+%%%   Global:     Acc += ToMint / Global.TWU.
+%%%   Resource:   Acc += (Global.Acc - LastGlobal) * Weight,
+%%%               LastGlobal = Global.Acc.
+%%%   User:       Balance += (Resource.Acc - LastResource) * Qty.
 %%% 
-%%% Change Weight:
-%%%     1. Drip global.
-%%%     2. Drip resource.
-%%%     3. Resource.weight = NewWeight
+%%% Modify:
+%%%   Weight:     Global.drip(),
+%%%               Resource.drip(),
+%%%               Global.TWU -= Resource.weight * Resource.Qty
+%%%               Global.TWU += NewWeight * Resource.Qty
+%%%               Resource.weight = NewWeight.
+%%%          
+%%%   Deposit:    Global.drip(),
+%%%               Resource.drip(),
+%%%               Global.TWU -= User.qty * Resource.Weight,
+%%%               Resource.Qty -= User.qty,
+%%%               User.Initialize(NewQty, Resource)
+%%% 
+%%% Get Balance:  Global.drip(),
+%%%               Resource.drip(),
+%%%               User.drip(),
+%%%               User.balance.
+%%% '''
 -module(dev_pot_math).
--export([
-    drip_global/3,
-    drip_resource/4,
-    drip_user/3,
-    drip_user/4,
-    units_minted_between/5
-]).
+-export([minted_between/5]).
+-export([drip_global/3, drip_resource/4, drip_user/3, drip_user/4]).
 
-units_minted_between(Minted, Max, Proportion, LastT, T) ->
+minted_between(Minted, Max, Proportion, LastT, T) ->
     Steps = max(T - LastT, 0),
     Remaining = Max - Minted,
     Remaining * (1 - math:pow(1 - Proportion, Steps)).

@@ -3,11 +3,13 @@
 %%% it significantly reduces the computational and message-passing complexity of the
 %%% system.
 %%% 
-%%% h/t to MakerDAO's DSR and MCD rate accumulation system for some inspiration.
+%%% h/t to MakerDAO's DSR and MCD rate accumulation system, which implements a
+%%% different model for another problem domain, but whose approach gave some
+%%% inspiration for this model.
 %%% 
 %%% The core minting model is described in the `dev_pot_math` moduledoc.
 %%% 
-%%% This device will support delegating resources to other addresses, allowing for
+%%% This device supports delegating resources to other addresses, allowing for
 %%% mechanisms like yield-swaps etc to be created downstream. Each delegation
 %%% triggers a `Delegation-Notice` message to be sent to the recipient of the
 %%% delegation, as well as a proportional increase in the recipient's `deposit`
@@ -34,8 +36,12 @@
 -export([modify_deposit/5, delegate/6, maybe_liquidate_delegations/5, set_weight/4]).
 -export([update_deposit_index/5]).
 -export([user/3, balance/2, balances/1, deposit/3, deposits/1, deposits/2]).
-%%% Pot Model.
 
+%%% Pot Model Functions.
+
+%% @doc Update the state of the pot to reflect the passage of time from the
+%% last drip to the present moment. Only drips the global state, deferring
+%% per-resource to be executed at resource modification or user drip.
 drip(State, Req, Opts) ->
     StateWithNewTime =
         case is_map(Req) andalso hb_maps:find(<<"t">>, Req) of
@@ -44,6 +50,8 @@ drip(State, Req, Opts) ->
         end,
     drip_global(StateWithNewTime, Opts).
 
+%% @doc Drip the global state of the pot if necessary, returning the state
+%% unchanged if no time has passed since the last drip.
 drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _Opts) when T =:= Last -> S;
 drip_global(S = #{
         <<"t">> := T,
@@ -55,7 +63,7 @@ drip_global(S = #{
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
     GlobalAcc = hb_maps:get(<<"global-reward-accumulator">>, S, 0, Opts),
     ToMint =
-        dev_pot_math:units_minted_between(
+        dev_pot_math:minted_between(
             AlreadyMinted,
             Max,
             Proportion,
@@ -76,6 +84,7 @@ drip_global(S = #{
         <<"minted">> => AlreadyMinted + ToMint
     }.
 
+%% @doc Drip the state of a specific resource in the pot.
 drip_resource(ResourceID, S, Opts) ->
     % Get the resource.
     Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S, #{}, Opts),
@@ -114,10 +123,13 @@ drip_resource(ResourceID, S, Opts) ->
         Opts
     ).
 
+%% @doc Get the balance of a specific address in the pot by combining the base
+%% balance with the unclaimed yield.
 balance(Addr, S) ->
     hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}), 0)
         + unclaimed_yield(Addr, S, #{}).
 
+%% @doc Return the unclaimed yield across all resources for a specific address.
 unclaimed_yield(Addr, S, Opts) ->
     ResourceIDs =
         hb_maps:keys(
@@ -134,6 +146,8 @@ unclaimed_yield(Addr, S, Opts) ->
             ResourceIDs
         )
     ).
+
+%% @doc Return the unclaimed yield for a specific address in a specific resource.
 unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
     GlobalDrippedS = drip_global(UndrippedS, Opts),
     S = drip_resource(ResourceID, GlobalDrippedS, Opts),
@@ -150,6 +164,7 @@ unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
             dev_pot_math:drip_user(ResourceAcc, LastResourceAcc, Qty)
     end.
 
+%% @doc Modify the deposit of a specific address in a specific resource.
 modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
     % Drip the global state and the resource, then extract necessary components.
     GlobalDrippedS = drip_global(S0, Opts),
@@ -218,6 +233,7 @@ modify_deposit(Addr, ResourceID, Amount, S0, Opts) ->
         Opts
     ).
 
+%% @doc Set the weight of a specific resource in the pot.
 set_weight(ResourceID, Weight, S, Opts) ->
     % Run the global drip to ensure the state is up to date.
     S0 = drip_global(S, Opts),
@@ -246,6 +262,7 @@ set_weight(ResourceID, Weight, S, Opts) ->
         Opts
     ).
 
+%% @doc Delegate a specific amount of a resource from one address to another.
 delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
     ?event(
         {delegating,
@@ -279,7 +296,7 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
             0,
             Opts
         ),
-    NewS1 =
+    S2 =
         hb_ao:set(
             S1,
             <<
@@ -293,15 +310,16 @@ delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
             ExistingQuantity + Amount,
             Opts
         ),
+    S3 = send_delegation_notice(ToAddr, ResourceID, Amount, S2, Opts),
     maybe_liquidate_delegations(
         FromAddr,
         ResourceID,
-        NewS1,
+        S3,
         Opts
     ).
 
-%% @doc Recursively liquidate delegations as necessary until the deposit for
-%% a delegating address is non-negative.
+%% @doc Recursively liquidate delegations as necessary until the deposit for a
+%% delegating address is non-negative.
 maybe_liquidate_delegations(Addr, ResourceID, S, Opts) ->
     maybe_liquidate_delegations(
         deposit(Addr, ResourceID, S),
@@ -370,33 +388,7 @@ maybe_liquidate_delegations(Deposit, Addr, ResourceID, S, Opts) ->
         Opts
     ).
 
-%%% Helpers.
-
-deposit(Addr, ResourceID, S) ->
-    hb_ao:get(
-        <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
-        S,
-        0,
-        #{}
-    ).
-
-balances(S = #{ <<"balances">> := Bs }) ->
-    hb_maps:map(fun(Addr, _) -> balance(Addr, S) end, Bs).
-
-deposits(S = #{ <<"resources">> := Resources }) ->
-    hb_maps:map(fun(ResourceID, _) -> deposits(ResourceID, S) end, Resources).
-deposits(ResourceID, S) ->
-    Ds = hb_ao:get(
-        <<"/resources/", ResourceID/binary, "/deposits">>,
-        S,
-        #{},
-        #{}
-    ),
-    hb_maps:map(fun(Addr, _) -> deposit(Addr, ResourceID, S) end, Ds).
-
-user(Addr, S, Opts) ->
-    hb_ao:get(<<"/users/", Addr/binary>>, S, #{}, Opts).
-
+%% @doc Update the inverted index for a specific address in a specific resource.
 update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
     Delegations =
         hb_ao:get(
@@ -419,3 +411,50 @@ update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
         end,
         Opts
     ).
+
+%% @doc Add a new `delegation-notice` to the outbox of the state.
+send_delegation_notice(Addr, ResourceID, Amount, S, Opts) ->
+    Outbox = hb_ao:get(<<"results/outbox">>, S, [], Opts),
+    DelegationNotice = #{
+        <<"target">> => Addr,
+        <<"action">> => <<"delegation-notice">>,
+        <<"quantity">> => Amount,
+        <<"resource">> => ResourceID
+    },
+    hb_ao:set(
+        S,
+        <<"results/outbox">>,
+        [DelegationNotice | Outbox],
+        Opts
+    ).
+
+%%% Helpers.
+
+%% @doc Get the deposit quantity for a specific address in a specific resource.
+deposit(Addr, ResourceID, S) ->
+    hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
+        S,
+        0,
+        #{}
+    ).
+
+%% @doc Get the balances submessage from the state.
+balances(S = #{ <<"balances">> := Bs }) ->
+    hb_maps:map(fun(Addr, _) -> balance(Addr, S) end, Bs).
+
+%% @doc Return only the deposits submessage for all resources in the state.
+deposits(S = #{ <<"resources">> := Resources }) ->
+    hb_maps:map(fun(ResourceID, _) -> deposits(ResourceID, S) end, Resources).
+deposits(ResourceID, S) ->
+    Ds = hb_ao:get(
+        <<"/resources/", ResourceID/binary, "/deposits">>,
+        S,
+        #{},
+        #{}
+    ),
+    hb_maps:map(fun(Addr, _) -> deposit(Addr, ResourceID, S) end, Ds).
+
+%% @doc Return the contents of the inverted index for a specific address.
+user(Addr, S, Opts) ->
+    hb_ao:get(<<"/users/", Addr/binary>>, S, #{}, Opts).
