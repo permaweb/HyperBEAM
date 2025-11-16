@@ -4,14 +4,14 @@
 -include("include/hb.hrl").
 
 mint_quantity_test() ->
-    ?assertEqual(50.0, dev_pot_math:units_minted_between(0, 100, 0.5, 0, 1)),
-    ?assertEqual(75.0, dev_pot_math:units_minted_between(0, 100, 0.5, 0, 2)),
-    ?assertEqual(87.5, dev_pot_math:units_minted_between(0, 100, 0.5, 0, 3)),
-    Period1 = dev_pot_math:units_minted_between(0, 100, 0.5, 0, 2),
-    Period2 = dev_pot_math:units_minted_between(Period1, 100, 0.5, 2, 3),
+    ?assertEqual(50.0, dev_pot_math:minted_between(0, 100, 0.5, 0, 1)),
+    ?assertEqual(75.0, dev_pot_math:minted_between(0, 100, 0.5, 0, 2)),
+    ?assertEqual(87.5, dev_pot_math:minted_between(0, 100, 0.5, 0, 3)),
+    Period1 = dev_pot_math:minted_between(0, 100, 0.5, 0, 2),
+    Period2 = dev_pot_math:minted_between(Period1, 100, 0.5, 2, 3),
     ?assertEqual(87.5, Period1 + Period2).
 
-%% @doc Demonstrate minting using the chi-proportional model and a single resource.
+%% @doc Demonstrate minting using the proportional model and a single resource.
 single_resource_test() ->
     Addr1 = <<"addr1">>,
     Addr2 = <<"addr2">>,
@@ -64,7 +64,7 @@ single_resource_test() ->
     Addr2Diff = dev_pot:balance(Addr2, S8) - Addr2BalPreFinal,
     ?assertEqual(Addr1Diff, Addr2Diff).
 
-%% @doc Demonstrate minting using the chi-proportional model and a single resource.
+%% @doc Demonstrate minting using the proportional model and multiple resources.
 multiple_resources_test() ->
     Addr1 = <<"addr1">>,
     Addr2 = <<"addr2">>,
@@ -75,10 +75,8 @@ multiple_resources_test() ->
         <<"device">> => <<"pot@1.0">>,
         <<"t">> => 0,
         <<"last-drip">> => 0,
-        <<"chi">> => 0,
         <<"mint-cap">> => 100,
         <<"mint-prop">> => 0.5,
-        <<"tw">> => 0,
         <<"resources">> => #{
             ResourceID => #{
                 <<"weight">> => 1,
@@ -187,7 +185,7 @@ multiresource_modified_weight_test() ->
     ?assertEqual(12.5, dev_pot:balance(<<"bob">>, S5)),
     ok.
 
-delegate_test() ->
+simple_delegation_test() ->
     AddrAlice = <<"alice">>,
     AddrBob = <<"bob">>,
     ResourceHydrogen = <<"hydrogen">>,
@@ -197,13 +195,10 @@ delegate_test() ->
         <<"device">> => <<"pot@1.0">>,
         <<"t">> => 0,
         <<"last-drip">> => 0,
-        <<"chi">> => 0,
         <<"mint-cap">> => 100,
         <<"mint-prop">> => 0.5,
-        <<"tw">> => 0,
         <<"resources">> => #{
             ResourceHydrogen => #{
-                <<"chi">> => 0,
                 <<"weight">> => 1,
                 <<"total-deposits">> => 200,
                 <<"deposits">> => #{ 
@@ -218,7 +213,6 @@ delegate_test() ->
                 }
             },
             ResourceOxygen => #{
-                <<"chi">> => 0,
                 <<"weight">> => 1,
                 <<"total-deposits">> => 50,
                 <<"deposits">> => #{
@@ -349,18 +343,15 @@ delegate_test() ->
     ?assertEqual(46, dev_pot:deposit(AddrAlice, ResourceOxygen, S3)),
     ?assertEqual(4, dev_pot:deposit(AddrBob, ResourceOxygen, S3)).
 
-liquidate_delegations_test() ->
+delegation_liquidation_test() ->
     S0 = #{
         <<"device">> => <<"pot@1.0">>,
         <<"t">> => 0,
         <<"last-drip">> => 0,
-        <<"chi">> => 0,
         <<"mint-cap">> => 100,
         <<"mint-prop">> => 0.5,
-        <<"tw">> => 0,
         <<"resources">> => #{
             <<"oxygen">> => #{
-                <<"chi">> => 0,
                 <<"weight">> => 1,
                 <<"total-deposits">> => 1,
                 <<"deposits">> => #{ 
@@ -394,13 +385,10 @@ multiple_delegations_liquidation_test() ->
         <<"device">> => <<"pot@1.0">>,
         <<"t">> => 0,
         <<"last-drip">> => 0,
-        <<"chi">> => 0,
         <<"mint-cap">> => 100,
         <<"mint-prop">> => 0.5,
-        <<"tw">> => 0,
         <<"resources">> => #{
             <<"oxygen">> => #{
-                <<"chi">> => 0,
                 <<"weight">> => 1,
                 <<"total-deposits">> => 2,
                 <<"deposits">> => #{ 
@@ -438,18 +426,15 @@ multiple_delegations_liquidation_test() ->
     ?assertEqual(0, dev_pot:deposit(<<"charlie">>, <<"oxygen">>, S5)),
     ?assertEqual(0, dev_pot:deposit(<<"denis">>, <<"oxygen">>, S5)).
 
-cyclic_delegation_test() ->
+cyclic_delegations_test() ->
     S0 = #{
         <<"device">> => <<"pot@1.0">>,
         <<"t">> => 0,
         <<"last-drip">> => 0,
-        <<"chi">> => 0,
         <<"mint-cap">> => 100,
         <<"mint-prop">> => 0.5,
-        <<"tw">> => 0,
         <<"resources">> => #{
             <<"oxygen">> => #{
-                <<"chi">> => 0,
                 <<"weight">> => 1,
                 <<"total-deposits">> => 1,
                 <<"deposits">> => #{ 
@@ -478,18 +463,15 @@ cyclic_delegation_test() ->
     ?assertEqual(0, dev_pot:deposit(<<"alice">>, <<"oxygen">>, S5)),
     ?assertEqual(1, dev_pot:deposit(<<"bob">>, <<"oxygen">>, S5)).
 
-remove_deposit_while_delegated_test() ->
+deposit_removal_while_delegated_test() ->
     S0 = #{
         <<"device">> => <<"pot@1.0">>,
         <<"t">> => 0,
         <<"last-drip">> => 0,
-        <<"chi">> => 0,
         <<"mint-cap">> => 100,
         <<"mint-prop">> => 0.5,
-        <<"tw">> => 0,
         <<"resources">> => #{
             <<"oxygen">> => #{
-                <<"chi">> => 0,
                 <<"weight">> => 1,
                 <<"total-deposits">> => 3,
                 <<"deposits">> => #{ 
@@ -529,10 +511,8 @@ inverted_index_test() ->
         <<"device">> => <<"pot@1.0">>,
         <<"t">> => 0,
         <<"last-drip">> => 0,
-        <<"chi">> => 0,
         <<"mint-cap">> => 100,
         <<"mint-prop">> => 0.5,
-        <<"tw">> => 0,
         <<"resources">> => #{
             <<"hydrogen">> => #{
                 <<"weight">> => 1,
@@ -608,7 +588,6 @@ report(S) ->
         {report,
             {t, hb_maps:get(<<"t">>, S)},
             {last_drip, hb_maps:get(<<"last-drip">>, S)},
-            {tw, hb_maps:get(<<"tw">>, S)},
             {balances, dev_pot:balances(S)},
             {deposits, dev_pot:deposits(S)},
             {minted, hb_maps:get(<<"minted">>, S)},
